@@ -9549,9 +9549,9 @@ void main() {
 	        if (this.map.data[x]?.[y]) allTiles.push({ x, y });
 	      }
 	    }
-	    const isWater2 = (tile) => WATER_TYPES.includes(this.map.data[tile.x][tile.y].type);
-	    this.buildLandLayer(allTiles.filter((t) => !isWater2(t)));
-	    this.buildWaterLayer(allTiles.filter(isWater2));
+	    const isWater3 = (tile) => WATER_TYPES.includes(this.map.data[tile.x][tile.y].type);
+	    this.buildLandLayer(allTiles.filter((t) => !isWater3(t)));
+	    this.buildWaterLayer(allTiles.filter(isWater3));
 	  }
 	  buildAtlasCellIndex() {
 	    const atlas = this.options.atlas;
@@ -11990,6 +11990,127 @@ void main() {
 	  }
 	};
 
+	// src/world/noise.ts
+	var UINT32_MAX = 4294967295;
+	function seedToUint32(seed) {
+	  const text = String(seed);
+	  let hash = 2166136261;
+	  for (let index = 0; index < text.length; index += 1) {
+	    hash ^= text.charCodeAt(index);
+	    hash = Math.imul(hash, 16777619);
+	  }
+	  return hash >>> 0;
+	}
+	function randomGridValue(seed, x, y) {
+	  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+	  hash = Math.imul(hash ^ hash >>> 15, 739982445);
+	  hash = Math.imul(hash ^ hash >>> 12, 695872825);
+	  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+	}
+	var smooth = (value) => value * value * (3 - 2 * value);
+	var lerp = (from, to, amount) => from + (to - from) * amount;
+	function valueNoise2D(seed, x, y) {
+	  const x0 = Math.floor(x);
+	  const y0 = Math.floor(y);
+	  const tx = smooth(x - x0);
+	  const ty = smooth(y - y0);
+	  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+	  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+	  return lerp(top, bottom, ty);
+	}
+	function fractalNoise2D(seed, x, y, octaves) {
+	  let amplitude = 1;
+	  let frequency = 1;
+	  let total = 0;
+	  let normalization = 0;
+	  for (let octave = 0; octave < octaves; octave += 1) {
+	    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+	    normalization += amplitude;
+	    amplitude *= 0.5;
+	    frequency *= 2;
+	  }
+	  return total / normalization;
+	}
+	function randomAt(seed, x, y, salt) {
+	  return randomGridValue((seed ^ salt) >>> 0, x, y);
+	}
+
+	// src/world/generateWorld.ts
+	var MIN_WORLD_SIZE = 8;
+	var MAX_WORLD_SIZE = 96;
+	var SEA_LEVEL = 0.43;
+	var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
+	function assertDimension(name, value) {
+	  if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+	    throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+	  }
+	}
+	function sampleClimate(seed, x, y, width, height) {
+	  const nx = width === 1 ? 0 : x / (width - 1) * 2 - 1;
+	  const ny = height === 1 ? 0 : y / (height - 1) * 2 - 1;
+	  const edge = Math.max(Math.abs(nx), Math.abs(ny));
+	  const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
+	  const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
+	  const elevation = continent * 0.78 + detail * 0.22 + 0.12 - Math.pow(edge, 3) * 0.58;
+	  const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
+	  const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.07, y * 0.07, 3);
+	  const latitude = Math.abs(ny);
+	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
+	  return { elevation, moisture, temperature };
+	}
+	function classifyTerrain({ elevation, moisture, temperature }) {
+	  if (elevation < SEA_LEVEL) return "sea" /* sea */;
+	  if (elevation > 0.75) return "mountain" /* mountain */;
+	  if (temperature < 0.18) return "snow" /* snow */;
+	  if (temperature < 0.34) return "tundra" /* tundra */;
+	  if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
+	  return "land" /* land */;
+	}
+	function decorateTile(seed, x, y, climate, type) {
+	  const tile = { type };
+	  if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return tile;
+	  const modifiers = [];
+	  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+	  if (lake) {
+	    modifiers.push("lake");
+	  } else {
+	    if (climate.elevation > 0.62) modifiers.push("hill");
+	    const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
+	    if (randomAt(seed, x, y, 668265263) < forestChance) {
+	      modifiers.push("wood");
+	      tile.treeModel = climate.temperature > 0.67 ? "Assets/models/palm" : climate.temperature < 0.4 ? "Assets/models/pinia" : "Assets/models/oak";
+	    }
+	  }
+	  if (modifiers.length > 0) tile.modifiers = modifiers;
+	  return tile;
+	}
+	function generateWorld({ seed, width, height }) {
+	  assertDimension("width", width);
+	  assertDimension("height", height);
+	  const numericSeed = seedToUint32(seed);
+	  const data = {};
+	  for (let x = 0; x < width; x += 1) {
+	    data[x] = {};
+	    for (let y = 0; y < height; y += 1) {
+	      const climate = sampleClimate(numericSeed, x, y, width, height);
+	      const type = classifyTerrain(climate);
+	      data[x][y] = decorateTile(numericSeed, x, y, climate, type);
+	    }
+	  }
+	  for (let x = 0; x < width; x += 1) {
+	    for (let y = 0; y < height; y += 1) {
+	      const tile = data[x][y];
+	      if (tile.type !== "sea" /* sea */) continue;
+	      const touchesLand = getNeighbors(x, y).some(({ x: nx, y: ny }) => {
+	        const neighbor = data[nx]?.[ny];
+	        return neighbor !== void 0 && !isWater2(neighbor.type);
+	      });
+	      if (touchesLand) tile.type = "coastal" /* coastal */;
+	    }
+	  }
+	  return { data, w: width, h: height };
+	}
+
 	exports.EventEmitter = EventEmitter;
 	exports.FogOfWar = FogOfWar;
 	exports.FogState = FogState;
@@ -11999,10 +12120,13 @@ void main() {
 	exports.Land = Land;
 	exports.LandColor = LandColor;
 	exports.LandPriority = LandPriority;
+	exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
+	exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
 	exports.NEIGHBOR_DIRECTIONS = NEIGHBOR_DIRECTIONS;
 	exports.PathFinder = PathFinder;
 	exports.Unit = Unit;
 	exports.UnitActions = UnitActions;
+	exports.generateWorld = generateWorld;
 	exports.getHexCenter = getHexCenter;
 	exports.getNeighborCoords = getNeighborCoords;
 	exports.getNeighbors = getNeighbors;

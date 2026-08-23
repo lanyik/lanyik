@@ -108,3 +108,5 @@ dist
 
 # Local design companion state
 .superpowers/
+.browser-profile*/
+.browser-artifacts/
