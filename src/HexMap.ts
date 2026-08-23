@@ -20,11 +20,13 @@ import {
     InstancedMesh,
     RawShaderMaterial,
     Vector2,
-    Material
+    Material,
+    ACESFilmicToneMapping
 } from "three";
 // MapControls was removed from three.js's examples; OrbitControls configured
 // with swapped mouse buttons (left=pan, right=rotate) reproduces it.
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Sky } from "three/examples/jsm/objects/Sky.js";
 
 import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
@@ -240,6 +242,7 @@ export class HexMap extends EventEmitter {
     private scene: ThreeScene;
     private camera: PerspectiveCamera;
     private controls: OrbitControls;
+    private sky: Sky;
 
     private mapData: MapInfo;
     private atlas: TerrainAtlas;
@@ -253,6 +256,7 @@ export class HexMap extends EventEmitter {
     private worldCopyMaterials: RawShaderMaterial[] = [];
     private worldPatternOffset = new Vector2();
     private pressedMovementKeys = new Set<string>();
+    private forestCullCenter = new Vector3();
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
     private lastHover: Point | null = null;
@@ -289,6 +293,7 @@ export class HexMap extends EventEmitter {
         this.setupScene();
         this.setupCamera();
         this.setupLights();
+        this.setupSky();
         this.setupControls();
         this.setupMarkers();
         this.setupEvents();
@@ -302,12 +307,14 @@ export class HexMap extends EventEmitter {
     //-------------------------------------------------------------------------
     private setupScene(): void {
         this.scene = new ThreeScene();
-        this.scene.background = new Color(0xcccccc);
+        this.scene.background = new Color(0x9fc9e2);
         this.renderer = new WebGLRenderer({ canvas: this.canvas, antialias: true });
+        this.renderer.toneMapping = ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 0.65;
     }
 
     private setupCamera(): void {
-        this.camera = new PerspectiveCamera(60, 1, 10, 2000);
+        this.camera = new PerspectiveCamera(60, 1, 10, 100000);
         this.camera.position.set(900, 500, 1000);
         this.scene.add(this.camera);
     }
@@ -322,6 +329,24 @@ export class HexMap extends EventEmitter {
         this.scene.add(dirLight2);
 
         this.scene.add(new AmbientLight(0x222222));
+    }
+
+    private setupSky(): void {
+        this.sky = new Sky();
+        this.sky.scale.setScalar(450000);
+        this.sky.frustumCulled = false;
+
+        const uniforms = this.sky.material.uniforms;
+        uniforms.turbidity.value = 4.0;
+        uniforms.rayleigh.value = 1.7;
+        uniforms.mieCoefficient.value = 0.002;
+        uniforms.mieDirectionalG.value = 0.76;
+
+        const elevation = 24 * Math.PI / 180;
+        const azimuth = 205 * Math.PI / 180;
+        const sun = new Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
+        uniforms.sunPosition.value.copy(sun);
+        this.scene.add(this.sky);
     }
 
     private setupControls(): void {
@@ -507,6 +532,13 @@ export class HexMap extends EventEmitter {
         return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
     }
 
+    private isShaderWrappedLayer(object: Object3D): boolean {
+        const mesh = object as Mesh;
+        if (!mesh.isMesh) return false;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        return materials.some(material => material instanceof RawShaderMaterial && material.uniforms.worldPeriod);
+    }
+
     private refreshWorldCopies(): void {
         this.clearWorldCopies();
         if (!this.mapData || (!this.mapData.wrapX && !this.mapData.wrapY)) return;
@@ -523,21 +555,14 @@ export class HexMap extends EventEmitter {
                 group.position.set(offsetX, 0, offsetY);
 
                 for (const child of this.terrain?.children ?? []) {
+                    if (this.isShaderWrappedLayer(child)) continue;
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
                 }
                 for (const child of this.forest?.children ?? []) {
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
                 }
-                if (this.grass) {
-                    const grassCopy = new Mesh(this.grass.geometry, this.grass.material);
-                    grassCopy.copy(this.grass, false);
-                    if (Array.isArray(grassCopy.material)) {
-                        grassCopy.material = grassCopy.material.map(material => this.materialForWorldCopy(material, offsetX, offsetY));
-                    } else {
-                        grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
-                    }
-                    group.add(grassCopy);
-                }
+
+                if (group.children.length === 0) continue;
 
                 this.worldCopies.push(group);
                 this.scene.add(group);
@@ -592,6 +617,9 @@ export class HexMap extends EventEmitter {
         this.updateKeyboardMovement(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
+        this.terrain?.setWorldCenter(this.controls.target.x, this.controls.target.z);
+        this.grass?.setWorldCenter(this.controls.target.x, this.controls.target.z);
+        this.updateForestVisibility();
         this.terrain?.update(dtS);
         this.grass?.update(dtS);
         this.emit("frame", { t });
@@ -647,6 +675,24 @@ export class HexMap extends EventEmitter {
         movement.multiplyScalar(speed * dtS);
         this.camera.position.add(movement);
         this.controls.target.add(movement);
+    }
+
+    private updateForestVisibility(): void {
+        const viewDistance = this.camera.position.distanceTo(this.controls.target);
+        const renderDistance = Math.min(2400, Math.max(1200, viewDistance * 2.75));
+
+        this.scene.traverse(object => {
+            const forestChunk = object as InstancedMesh;
+            if (!forestChunk.isInstancedMesh || !forestChunk.name.startsWith("forest-")) return;
+            if (!forestChunk.boundingSphere) forestChunk.computeBoundingSphere();
+            if (!forestChunk.boundingSphere) return;
+
+            forestChunk.updateWorldMatrix(true, false);
+            this.forestCullCenter.copy(forestChunk.boundingSphere.center).applyMatrix4(forestChunk.matrixWorld);
+            const dx = this.forestCullCenter.x - this.controls.target.x;
+            const dz = this.forestCullCenter.z - this.controls.target.z;
+            forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
+        });
     }
 
     //-------------------------------------------------------------------------

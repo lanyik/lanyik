@@ -25,6 +25,8 @@ uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
 uniform vec2 worldOffset; // translation of a repeated toroidal world copy
+uniform vec2 worldCenter;
+uniform vec2 worldPeriod;
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -61,6 +63,13 @@ const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
 const float GOLDEN_ANGLE = 2.399963; // ~137.5 deg, keeps summed waves from lining up
+
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
 
 // Sum of sine waves (NVIDIA GPU Gems ocean approach): height is a sum of sines
 // of the world-space position; the *derivative* of a sine is a cosine of the
@@ -156,7 +165,8 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 worldXZ = offset + position.xz + worldOffset;
+    vec2 tileOffset = nearestWorldOffset(offset);
+    vec2 worldXZ = tileOffset + position.xz + worldOffset;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -181,7 +191,7 @@ void main() {
     // is a positive lift.
     float riseY = beachT * (-waterLevel * 0.5);
 
-    vec3 pos = vec3(offset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), offset.y + position.z);
+    vec3 pos = vec3(tileOffset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), tileOffset.y + position.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));

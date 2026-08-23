@@ -15,6 +15,8 @@ import { MapInfo, Point } from "../interfaces";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
 
+const FOREST_CHUNK_SIZE = 12;
+
 export interface ForestOptions {
     size: number;
     treesPerTile?: number;
@@ -150,65 +152,85 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
         scene.traverse(o => { if ((o as Mesh).isMesh) meshes.push(o as Mesh); });
         if (meshes.length === 0) continue;
 
-        const totalInstances = tiles.length * treesPerTile;
-        const instancedMeshes = meshes.map(mesh => {
+        //Prepare each model part once, then share its baked geometry across
+        //small spatial chunks. Each chunk remains an InstancedMesh, but Three
+        //can now reject off-screen chunks instead of drawing every tree in all
+        //nine toroidal images.
+        const preparedParts = meshes.map(mesh => {
             const geometry = mesh.geometry.clone();
             geometry.applyMatrix4(mesh.matrixWorld); // bake this part's offset within the model
             geometry.applyMatrix4(fixup);             // bake the model's own info.json fine-tuning
-            const instancedMesh = new InstancedMesh(geometry, mesh.material, totalInstances);
-            instancedMesh.instanceMatrix.setUsage(DynamicDrawUsage);
-            instancedMesh.instanceColor = new InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-            instancedMesh.frustumCulled = false;
-            group.add(instancedMesh);
-            return instancedMesh;
+            return { geometry, material: mesh.material };
         });
 
-        const matrix = new Matrix4();
-        const scaleVector = new Vector3();
-        let instance = 0;
-
+        const chunks = new Map<string, Point[]>();
         for (const tile of tiles) {
-            const center = getHexCenter(tile.x, tile.y, size);
-            const placed: Point[] = [];
-            const tileStart = instance;
-            const originalMatrices: Matrix4[] = [];
-            let attempts = 0;
-            const waterValue = waterEdgeValue(map, tile.x, tile.y); // -1 = no water, isInTileWater is then always false
-            const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-            const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-            const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-
-            while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
-                attempts++;
-                const lx = getRandomInt(-size, size);
-                const ly = getRandomInt(-size, size);
-
-                if (pointInPolygon(polygon, [lx, ly]) !== -1) continue; // -1 = inside the polygon
-                if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue; // keep trees out of river/lake water
-                if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-                if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-
-                const overlaps = placed.some(p => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
-                if (overlaps) continue;
-
-                placed.push({ x: lx, y: ly });
-
-                const scale = treeScale * (0.8 + Math.random() * 0.4);
-                matrix.makeRotationY(Math.random() * Math.PI * 2);
-                matrix.scale(scaleVector.set(scale, scale, scale));
-                matrix.setPosition(center.x + lx, 0, center.y + ly);
-
-                for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
-                originalMatrices.push(matrix.clone());
-                instance++;
-            }
-
-            tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
+            const key = `${Math.floor(tile.x / FOREST_CHUNK_SIZE)},${Math.floor(tile.y / FOREST_CHUNK_SIZE)}`;
+            const chunk = chunks.get(key) ?? [];
+            chunk.push(tile);
+            chunks.set(key, chunk);
         }
 
-        for (const instancedMesh of instancedMeshes) {
-            instancedMesh.count = instance;
-            instancedMesh.instanceMatrix.needsUpdate = true;
+        for (const [chunkKey, chunkTiles] of chunks) {
+            const totalInstances = chunkTiles.length * treesPerTile;
+            const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+                const instancedMesh = new InstancedMesh(geometry, material, totalInstances);
+                instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
+                instancedMesh.instanceMatrix.setUsage(DynamicDrawUsage);
+                instancedMesh.instanceColor = new InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
+                group.add(instancedMesh);
+                return instancedMesh;
+            });
+
+            const matrix = new Matrix4();
+            const scaleVector = new Vector3();
+            let instance = 0;
+
+            for (const tile of chunkTiles) {
+                const center = getHexCenter(tile.x, tile.y, size);
+                const placed: Point[] = [];
+                const tileStart = instance;
+                const originalMatrices: Matrix4[] = [];
+                let attempts = 0;
+                const waterValue = waterEdgeValue(map, tile.x, tile.y);
+                const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+                const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+                const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+
+                while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
+                    attempts++;
+                    const lx = getRandomInt(-size, size);
+                    const ly = getRandomInt(-size, size);
+
+                    if (pointInPolygon(polygon, [lx, ly]) !== -1) continue;
+                    if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
+                    if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+                    if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+
+                    const overlaps = placed.some(p => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
+                    if (overlaps) continue;
+
+                    placed.push({ x: lx, y: ly });
+                    const scale = treeScale * (0.8 + Math.random() * 0.4);
+                    matrix.makeRotationY(Math.random() * Math.PI * 2);
+                    matrix.scale(scaleVector.set(scale, scale, scale));
+                    matrix.setPosition(center.x + lx, 0, center.y + ly);
+
+                    for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
+                    originalMatrices.push(matrix.clone());
+                    instance++;
+                }
+
+                tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
+            }
+
+            for (const instancedMesh of instancedMeshes) {
+                instancedMesh.count = instance;
+                instancedMesh.instanceMatrix.needsUpdate = true;
+                instancedMesh.computeBoundingBox();
+                instancedMesh.computeBoundingSphere();
+                instancedMesh.frustumCulled = true;
+            }
         }
     }
 

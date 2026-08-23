@@ -46,6 +46,8 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
 uniform float fogTextureSize;
 uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
+uniform vec2 worldCenter; // camera target on the ground plane
+uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -100,6 +102,16 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
+//Move each logical tile to the nearest toroidal image around the camera. This
+//draws the map exactly once instead of submitting 9 complete copies; crossing
+//a seam only moves far/off-screen instances from one side to the other.
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
+
 vec2 cellIndexToUV(float idx) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
@@ -150,7 +162,7 @@ float saddleTaper(float adjIsMountain, float adjFactor) {
 //  - two octaves of world-space noise multiplying the whole profile into
 //    irregular crags (world-space: continuous across the shared edges too).
 // Kept a pure function of p so main() can finite-difference it for normals.
-float mountainHeightAt(vec2 p) {
+float mountainHeightAt(vec2 p, vec2 tileOffset) {
     float apothem = hexSize * 0.8660254;
     vec3 efA = vec3(dot(p, DIR_SE), dot(p, DIR_S), dot(p, DIR_SW)) / apothem;
     vec3 efB = vec3(dot(p, DIR_NW), dot(p, DIR_N), dot(p, DIR_NE)) / apothem;
@@ -188,7 +200,7 @@ float mountainHeightAt(vec2 p) {
     if (neighborsKindB.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.y);
     if (neighborsKindB.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.z);
 
-    vec2 w = offset + p + worldOffset;
+    vec2 w = tileOffset + p + worldOffset;
     float n = valueNoise(w * (1.6 / hexSize));
     n = 0.65 * n + 0.35 * valueNoise(w * (4.0 / hexSize));
     return h * (0.72 + 1.1 * (n - 0.5));
@@ -283,6 +295,7 @@ float lakeShore(float openMask, vec3 efA, vec3 efB) {
 void main() {
     float apothem = hexSize * 0.8660254;
     vec2 local = position.xz;
+    vec2 tileOffset = nearestWorldOffset(offset);
 
     vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
     vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
@@ -361,16 +374,16 @@ void main() {
         float gate = fogVisible * (riverEdges >= 0.0 ? 0.0 : 1.0);
         if (gate > 0.0) {
             float eps = hexSize * 0.08;
-            float h0 = mountainHeightAt(local);
-            float hx = mountainHeightAt(local + vec2(eps, 0.0));
-            float hz = mountainHeightAt(local + vec2(0.0, eps));
+            float h0 = mountainHeightAt(local, tileOffset);
+            float hx = mountainHeightAt(local + vec2(eps, 0.0), tileOffset);
+            float hz = mountainHeightAt(local + vec2(0.0, eps), tileOffset);
             elevation = h0 * gate;
             raiseY = elevation * mountainHeight;
             mountainSlope = vec2(hx - h0, hz - h0) / eps * mountainHeight * gate;
         }
     }
 
-    vec3 pos = vec3(offset.x + position.x, position.y + sinkY + raiseY, offset.y + position.z);
+    vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through

@@ -406,6 +406,11 @@ export class TerrainMesh extends Group {
             fogMap: { value: this.fogTexture },
             fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
             fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+            worldCenter: { value: new Vector2(0, 0) },
+            worldPeriod: { value: new Vector2(
+                this.map.wrapX ? this.map.w * size * 1.5 : 0,
+                this.map.wrapY ? this.map.h * size * Math.sqrt(3) : 0
+            ) },
             lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
             showGrid: { value: this.options.gridVisible === false ? 0.0 : 1.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
@@ -608,6 +613,11 @@ export class TerrainMesh extends Group {
         this.clock += dtS;
         if (this.waterMaterial) this.waterMaterial.uniforms.uTime.value = this.clock;
         if (this.landMaterial) this.landMaterial.uniforms.uTime.value = this.clock;
+    }
+
+    public setWorldCenter(x: number, y: number): void {
+        this.landMaterial?.uniforms.worldCenter.value.set(x, y);
+        this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
     }
 
     public get gridVisible(): boolean {

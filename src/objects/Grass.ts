@@ -95,6 +95,10 @@ export class GrassField extends Mesh {
         this.grassMaterial.uniforms.uTime.value = this.clock;
     }
 
+    public setWorldCenter(x: number, y: number): void {
+        this.grassMaterial.uniforms.worldCenter.value.set(x, y);
+    }
+
     public get windStrength(): number {
         return this.grassMaterial.uniforms.windStrength.value;
     }
@@ -247,6 +251,11 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     const material = new RawShaderMaterial({
         uniforms: {
             worldOffset: { value: new Vector2(0, 0) },
+            worldCenter: { value: new Vector2(0, 0) },
+            worldPeriod: { value: new Vector2(
+                map.wrapX ? map.w * size * 1.5 : 0,
+                map.wrapY ? map.h * size * Math.sqrt(3) : 0
+            ) },
             uTime: { value: 0 },
             windStrength: { value: windStrength },
             windSpeed: { value: windSpeed },

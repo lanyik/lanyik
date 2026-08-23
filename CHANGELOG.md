@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   patterns retain their phase through the recenter instead of visibly jumping.
 - WASD camera movement, left-click-only tile selection, unrestricted right-drag
   orbit controls, and localized on-screen control hints.
+- Procedural atmospheric sky dome with horizon haze and filmic tone mapping,
+  replacing the flat gray background at low camera angles.
+
+### Changed
+
+- Toroidal terrain and grass now render once: vertex shaders move each logical
+  instance to its nearest wrapped position around the camera instead of drawing
+  nine complete maps.
+- Forest instances are split into spatial chunks and culled by frustum/distance,
+  avoiding millions of invisible far-tree triangles on large worlds.
 
 ## [0.5.0] - 2026-07-19
 

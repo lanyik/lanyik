@@ -1954,6 +1954,317 @@
 	}
 
 	/**
+	 * Represents a skydome for scene backgrounds. Based on [A Practical Analytic Model for Daylight](https://www.researchgate.net/publication/220720443_A_Practical_Analytic_Model_for_Daylight)
+	 * aka The Preetham Model, the de facto standard for analytical skydomes.
+	 *
+	 * Note that this class can only be used with {@link WebGLRenderer}.
+	 * When using {@link WebGPURenderer}, use {@link SkyMesh}.
+	 *
+	 * More references:
+	 *
+	 * - {@link http://simonwallner.at/project/atmospheric-scattering/}
+	 * - {@link http://blenderartists.org/forum/showthread.php?245954-preethams-sky-impementation-HDR}
+	 *
+	 *
+	 * ```js
+	 * const sky = new Sky();
+	 * sky.scale.setScalar( 10000 );
+	 * scene.add( sky );
+	 * ```
+	 *
+	 * It can be useful to hide the sun disc when generating an environment map to avoid artifacts
+	 *
+	 * ```js
+	 * // disable before rendering environment map
+	 * sky.material.uniforms.showSunDisc.value = false;
+	 * // ...
+	 * // re-enable before scene sky box rendering
+	 * sky.material.uniforms.showSunDisc.value = true;
+	 * ```
+	 *
+	 * @augments Mesh
+	 * @three_import import { Sky } from 'three/addons/objects/Sky.js';
+	 */
+	class Sky extends three.Mesh {
+
+		/**
+		 * Constructs a new skydome.
+		 */
+		constructor() {
+
+			const shader = Sky.SkyShader;
+
+			const material = new three.ShaderMaterial( {
+				name: shader.name,
+				uniforms: three.UniformsUtils.clone( shader.uniforms ),
+				vertexShader: shader.vertexShader,
+				fragmentShader: shader.fragmentShader,
+				side: three.BackSide,
+				depthWrite: false
+			} );
+
+			super( new three.BoxGeometry( 1, 1, 1 ), material );
+
+			/**
+			 * This flag can be used for type testing.
+			 *
+			 * @type {boolean}
+			 * @readonly
+			 * @default true
+			 */
+			this.isSky = true;
+
+		}
+
+	}
+
+	Sky.SkyShader = {
+
+		name: 'SkyShader',
+
+		uniforms: {
+			'turbidity': { value: 2 },
+			'rayleigh': { value: 1 },
+			'mieCoefficient': { value: 0.005 },
+			'mieDirectionalG': { value: 0.8 },
+			'sunPosition': { value: new three.Vector3() },
+			'up': { value: new three.Vector3( 0, 1, 0 ) },
+			'cloudScale': { value: 0.0002 },
+			'cloudSpeed': { value: 0.0001 },
+			'cloudCoverage': { value: 0.4 },
+			'cloudDensity': { value: 0.4 },
+			'cloudElevation': { value: 0.5 },
+			'showSunDisc': { value: 1 },
+			'time': { value: 0.0 }
+		},
+
+		vertexShader: /* glsl */`
+		uniform vec3 sunPosition;
+		uniform float rayleigh;
+		uniform float turbidity;
+		uniform float mieCoefficient;
+		uniform vec3 up;
+
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying float vSunfade;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		// constants for atmospheric scattering
+		const float e = 2.71828182845904523536028747135266249775724709369995957;
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		// wavelength of used primaries, according to preetham
+		const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );
+		// this pre-calculation replaces older TotalRayleigh(vec3 lambda) function:
+		// (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn))
+		const vec3 totalRayleigh = vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 );
+
+		// mie stuff
+		// K coefficient for the primaries
+		const float v = 4.0;
+		const vec3 K = vec3( 0.686, 0.678, 0.666 );
+		// MieConst = pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K
+		const vec3 MieConst = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+		// earth shadow hack
+		// cutoffAngle = pi / 1.95;
+		const float cutoffAngle = 1.6110731556870734;
+		const float steepness = 1.5;
+		const float EE = 1000.0;
+
+		float sunIntensity( float zenithAngleCos ) {
+			zenithAngleCos = clamp( zenithAngleCos, -1.0, 1.0 );
+			return EE * max( 0.0, 1.0 - pow( e, -( ( cutoffAngle - acos( zenithAngleCos ) ) / steepness ) ) );
+		}
+
+		vec3 totalMie( float T ) {
+			float c = ( 0.2 * T ) * 10E-18;
+			return 0.434 * c * MieConst;
+		}
+
+		void main() {
+
+			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+			vWorldPosition = worldPosition.xyz;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			gl_Position.z = gl_Position.w; // set z to camera.far
+
+			vSunDirection = normalize( sunPosition );
+
+			vSunE = sunIntensity( dot( vSunDirection, up ) );
+
+			vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
+
+			float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
+
+			// extinction (absorption + out scattering)
+			// rayleigh coefficients
+			vBetaR = totalRayleigh * rayleighCoefficient;
+
+			// mie coefficients
+			vBetaM = totalMie( turbidity ) * mieCoefficient;
+
+		}`,
+
+		fragmentShader: /* glsl */`
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		uniform float mieDirectionalG;
+		uniform vec3 up;
+		uniform float cloudScale;
+		uniform float cloudSpeed;
+		uniform float cloudCoverage;
+		uniform float cloudDensity;
+		uniform float cloudElevation;
+		uniform float showSunDisc;
+		uniform float time;
+
+		// Cloud noise functions
+		float hash( vec2 p ) {
+			return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+		}
+
+		float noise( vec2 p ) {
+			vec2 i = floor( p );
+			vec2 f = fract( p );
+			f = f * f * ( 3.0 - 2.0 * f );
+			float a = hash( i );
+			float b = hash( i + vec2( 1.0, 0.0 ) );
+			float c = hash( i + vec2( 0.0, 1.0 ) );
+			float d = hash( i + vec2( 1.0, 1.0 ) );
+			return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+		}
+
+		float fbm( vec2 p ) {
+			float value = 0.0;
+			float amplitude = 0.5;
+			for ( int i = 0; i < 5; i ++ ) {
+				value += amplitude * noise( p );
+				p *= 2.0;
+				amplitude *= 0.5;
+			}
+			return value;
+		}
+
+		// constants for atmospheric scattering
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		const float n = 1.0003; // refractive index of air
+		const float N = 2.545E25; // number of molecules per unit volume for air at 288.15K and 1013mb (sea level -45 celsius)
+
+		// optical length at zenith for molecules
+		const float rayleighZenithLength = 8.4E3;
+		const float mieZenithLength = 1.25E3;
+		// 66 arc seconds -> degrees, and the cosine of that
+		const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+
+		// 3.0 / ( 16.0 * pi )
+		const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+		// 1.0 / ( 4.0 * pi )
+		const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+		float rayleighPhase( float cosTheta ) {
+			return THREE_OVER_SIXTEENPI * ( 1.0 + pow( cosTheta, 2.0 ) );
+		}
+
+		float hgPhase( float cosTheta, float g ) {
+			float g2 = pow( g, 2.0 );
+			float inverse = 1.0 / pow( 1.0 - 2.0 * g * cosTheta + g2, 1.5 );
+			return ONE_OVER_FOURPI * ( ( 1.0 - g2 ) * inverse );
+		}
+
+		void main() {
+
+			vec3 direction = normalize( vWorldPosition - cameraPosition );
+
+			// optical length
+			// cutoff angle at 90 to avoid singularity in next formula.
+			float zenithAngle = acos( max( 0.0, dot( up, direction ) ) );
+			float inverse = 1.0 / ( cos( zenithAngle ) + 0.15 * pow( 93.885 - ( ( zenithAngle * 180.0 ) / pi ), -1.253 ) );
+			float sR = rayleighZenithLength * inverse;
+			float sM = mieZenithLength * inverse;
+
+			// combined extinction factor
+			vec3 Fex = exp( -( vBetaR * sR + vBetaM * sM ) );
+
+			// in scattering
+			float cosTheta = dot( direction, vSunDirection );
+
+			float rPhase = rayleighPhase( cosTheta * 0.5 + 0.5 );
+			vec3 betaRTheta = vBetaR * rPhase;
+
+			float mPhase = hgPhase( cosTheta, mieDirectionalG );
+			vec3 betaMTheta = vBetaM * mPhase;
+
+			vec3 Lin = pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * ( 1.0 - Fex ), vec3( 1.5 ) );
+			Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * Fex, vec3( 1.0 / 2.0 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );
+
+			// nightsky
+			float theta = acos( direction.y ); // elevation --> y-axis, [-pi/2, pi/2]
+			float phi = atan( direction.z, direction.x ); // azimuth --> x-axis [-pi/2, pi/2]
+			vec2 uv = vec2( phi, theta ) / vec2( 2.0 * pi, pi ) + vec2( 0.5, 0.0 );
+			vec3 L0 = vec3( 0.1 ) * Fex;
+
+			// composition + solar disc
+			float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSunDisc;
+			L0 += ( vSunE * 19000.0 * Fex ) * sundisc;
+
+			vec3 texColor = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
+
+			// Clouds
+			if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
+
+				// Project to cloud plane (higher elevation = clouds appear lower/closer)
+				float elevation = mix( 1.0, 0.1, cloudElevation );
+				vec2 cloudUV = direction.xz / ( direction.y * elevation );
+				cloudUV *= cloudScale;
+				cloudUV += time * cloudSpeed;
+
+				// Multi-octave noise for fluffy clouds
+				float cloudNoise = fbm( cloudUV * 1000.0 );
+				cloudNoise += 0.5 * fbm( cloudUV * 2000.0 + 3.7 );
+				cloudNoise = cloudNoise * 0.5 + 0.5;
+
+				// Apply coverage threshold
+				float cloudMask = smoothstep( 1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cloudNoise );
+
+				// Fade clouds near horizon (adjusted by elevation)
+				float horizonFade = smoothstep( 0.0, 0.1 + 0.2 * cloudElevation, direction.y );
+				cloudMask *= horizonFade;
+
+				// Cloud lighting based on sun position
+				float sunInfluence = dot( direction, vSunDirection ) * 0.5 + 0.5;
+				float daylight = max( 0.0, vSunDirection.y * 2.0 );
+
+				// Base cloud color affected by atmosphere
+				vec3 atmosphereColor = Lin * 0.04;
+				vec3 cloudColor = mix( vec3( 0.3 ), vec3( 1.0 ), daylight );
+				cloudColor = mix( cloudColor, atmosphereColor + vec3( 1.0 ), sunInfluence * 0.5 );
+				cloudColor *= vSunE * 0.00002;
+
+				// Blend clouds with sky
+				texColor = mix( texColor, cloudColor, cloudMask * cloudDensity );
+
+			}
+
+			gl_FragColor = vec4( texColor, 1.0 );
+
+			#include <tonemapping_fragment>
+			#include <colorspace_fragment>
+
+		}`
+
+	};
+
+	/**
 	 * Returns a new indexed geometry based on `TrianglesDrawMode` draw mode.
 	 * This mode corresponds to the `gl.TRIANGLES` primitive in WebGL.
 	 *
@@ -7071,7 +7382,7 @@
 		    y = b - bv;
 		    if(y) {
 		      g[count++] = y;
-		    } 
+		    }
 		    _x = q1 + x;
 		    _bv = _x - q1;
 		    _av = _x - _bv;
@@ -7091,7 +7402,7 @@
 		    g[count++] = q1;
 		  }
 		  if(!count) {
-		    g[count++] = 0.0;  
+		    g[count++] = 0.0;
 		  }
 		  g.length = count;
 		  return g
@@ -7318,7 +7629,7 @@
 		    y = b - bv;
 		    if(y) {
 		      g[count++] = y;
-		    } 
+		    }
 		    _x = q1 + x;
 		    _bv = _x - q1;
 		    _av = _x - _bv;
@@ -7338,7 +7649,7 @@
 		    g[count++] = q1;
 		  }
 		  if(!count) {
-		    g[count++] = 0.0;  
+		    g[count++] = 0.0;
 		  }
 		  g.length = count;
 		  return g
@@ -7506,7 +7817,7 @@
 			  }
 			}
 
-			generateOrientationProc(); 
+			generateOrientationProc();
 		} (orientation));
 		return orientation.exports;
 	}
@@ -7591,7 +7902,7 @@
 		          if(x0 <= x && x <= x1) {
 		            return 0
 		          }
-		          return 1 
+		          return 1
 		        }
 		        lim = j+1;
 		      }
@@ -8148,6 +8459,8 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
 uniform float fogTextureSize;
 uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
+uniform vec2 worldCenter; // camera target on the ground plane
+uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -8202,6 +8515,16 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
+//Move each logical tile to the nearest toroidal image around the camera. This
+//draws the map exactly once instead of submitting 9 complete copies; crossing
+//a seam only moves far/off-screen instances from one side to the other.
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
+
 vec2 cellIndexToUV(float idx) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
@@ -8252,7 +8575,7 @@ float saddleTaper(float adjIsMountain, float adjFactor) {
 //  - two octaves of world-space noise multiplying the whole profile into
 //    irregular crags (world-space: continuous across the shared edges too).
 // Kept a pure function of p so main() can finite-difference it for normals.
-float mountainHeightAt(vec2 p) {
+float mountainHeightAt(vec2 p, vec2 tileOffset) {
     float apothem = hexSize * 0.8660254;
     vec3 efA = vec3(dot(p, DIR_SE), dot(p, DIR_S), dot(p, DIR_SW)) / apothem;
     vec3 efB = vec3(dot(p, DIR_NW), dot(p, DIR_N), dot(p, DIR_NE)) / apothem;
@@ -8290,7 +8613,7 @@ float mountainHeightAt(vec2 p) {
     if (neighborsKindB.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.y);
     if (neighborsKindB.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.z);
 
-    vec2 w = offset + p + worldOffset;
+    vec2 w = tileOffset + p + worldOffset;
     float n = valueNoise(w * (1.6 / hexSize));
     n = 0.65 * n + 0.35 * valueNoise(w * (4.0 / hexSize));
     return h * (0.72 + 1.1 * (n - 0.5));
@@ -8385,6 +8708,7 @@ float lakeShore(float openMask, vec3 efA, vec3 efB) {
 void main() {
     float apothem = hexSize * 0.8660254;
     vec2 local = position.xz;
+    vec2 tileOffset = nearestWorldOffset(offset);
 
     vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
     vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
@@ -8463,16 +8787,16 @@ void main() {
         float gate = fogVisible * (riverEdges >= 0.0 ? 0.0 : 1.0);
         if (gate > 0.0) {
             float eps = hexSize * 0.08;
-            float h0 = mountainHeightAt(local);
-            float hx = mountainHeightAt(local + vec2(eps, 0.0));
-            float hz = mountainHeightAt(local + vec2(0.0, eps));
+            float h0 = mountainHeightAt(local, tileOffset);
+            float hx = mountainHeightAt(local + vec2(eps, 0.0), tileOffset);
+            float hz = mountainHeightAt(local + vec2(0.0, eps), tileOffset);
             elevation = h0 * gate;
             raiseY = elevation * mountainHeight;
             mountainSlope = vec2(hx - h0, hz - h0) / eps * mountainHeight * gate;
         }
     }
 
-    vec3 pos = vec3(offset.x + position.x, position.y + sinkY + raiseY, offset.y + position.z);
+    vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
@@ -9108,6 +9432,8 @@ uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
 uniform vec2 worldOffset; // translation of a repeated toroidal world copy
+uniform vec2 worldCenter;
+uniform vec2 worldPeriod;
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -9144,6 +9470,13 @@ const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
 const float GOLDEN_ANGLE = 2.399963; // ~137.5 deg, keeps summed waves from lining up
+
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
 
 // Sum of sine waves (NVIDIA GPU Gems ocean approach): height is a sum of sines
 // of the world-space position; the *derivative* of a sine is a cosine of the
@@ -9239,7 +9572,8 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 worldXZ = offset + position.xz + worldOffset;
+    vec2 tileOffset = nearestWorldOffset(offset);
+    vec2 worldXZ = tileOffset + position.xz + worldOffset;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -9264,7 +9598,7 @@ void main() {
     // is a positive lift.
     float riseY = beachT * (-waterLevel * 0.5);
 
-    vec3 pos = vec3(offset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), offset.y + position.z);
+    vec3 pos = vec3(tileOffset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), tileOffset.y + position.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
@@ -9727,6 +10061,11 @@ void main() {
 	      fogMap: { value: this.fogTexture },
 	      fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
 	      fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+	      worldCenter: { value: new three.Vector2(0, 0) },
+	      worldPeriod: { value: new three.Vector2(
+	        this.map.wrapX ? this.map.w * size * 1.5 : 0,
+	        this.map.wrapY ? this.map.h * size * Math.sqrt(3) : 0
+	      ) },
 	      lightDir: { value: { x: 0.4, y: 1, z: 0.3 } },
 	      showGrid: { value: this.options.gridVisible === false ? 0 : 1 },
 	      gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
@@ -9902,6 +10241,10 @@ void main() {
 	    this.clock += dtS;
 	    if (this.waterMaterial) this.waterMaterial.uniforms.uTime.value = this.clock;
 	    if (this.landMaterial) this.landMaterial.uniforms.uTime.value = this.clock;
+	  }
+	  setWorldCenter(x, y) {
+	    this.landMaterial?.uniforms.worldCenter.value.set(x, y);
+	    this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
 	  }
 	  get gridVisible() {
 	    return (this.landMaterial ?? this.waterMaterial)?.uniforms.showGrid.value > 0;
@@ -10318,6 +10661,7 @@ void main() {
 	}
 
 	// src/objects/Forest.ts
+	var FOREST_CHUNK_SIZE = 12;
 	var ForestField = class extends three.Group {
 	  constructor(tileRanges, fogDarkenFactor) {
 	    super();
@@ -10382,55 +10726,70 @@ void main() {
 	      if (o.isMesh) meshes.push(o);
 	    });
 	    if (meshes.length === 0) continue;
-	    const totalInstances = tiles.length * treesPerTile;
-	    const instancedMeshes = meshes.map((mesh) => {
+	    const preparedParts = meshes.map((mesh) => {
 	      const geometry = mesh.geometry.clone();
 	      geometry.applyMatrix4(mesh.matrixWorld);
 	      geometry.applyMatrix4(fixup);
-	      const instancedMesh = new three.InstancedMesh(geometry, mesh.material, totalInstances);
-	      instancedMesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
-	      instancedMesh.instanceColor = new three.InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-	      instancedMesh.frustumCulled = false;
-	      group.add(instancedMesh);
-	      return instancedMesh;
+	      return { geometry, material: mesh.material };
 	    });
-	    const matrix = new three.Matrix4();
-	    const scaleVector = new three.Vector3();
-	    let instance = 0;
+	    const chunks = /* @__PURE__ */ new Map();
 	    for (const tile of tiles) {
-	      const center = getHexCenter(tile.x, tile.y, size);
-	      const placed = [];
-	      const tileStart = instance;
-	      const originalMatrices = [];
-	      let attempts = 0;
-	      const waterValue = waterEdgeValue(map, tile.x, tile.y);
-	      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-	      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-	      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-	      while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
-	        attempts++;
-	        const lx = getRandomInt(-size, size);
-	        const ly = getRandomInt(-size, size);
-	        if (pointInPolygon2(polygon, [lx, ly]) !== -1) continue;
-	        if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
-	        if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-	        if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-	        const overlaps = placed.some((p) => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
-	        if (overlaps) continue;
-	        placed.push({ x: lx, y: ly });
-	        const scale = treeScale * (0.8 + Math.random() * 0.4);
-	        matrix.makeRotationY(Math.random() * Math.PI * 2);
-	        matrix.scale(scaleVector.set(scale, scale, scale));
-	        matrix.setPosition(center.x + lx, 0, center.y + ly);
-	        for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
-	        originalMatrices.push(matrix.clone());
-	        instance++;
-	      }
-	      tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
+	      const key = `${Math.floor(tile.x / FOREST_CHUNK_SIZE)},${Math.floor(tile.y / FOREST_CHUNK_SIZE)}`;
+	      const chunk = chunks.get(key) ?? [];
+	      chunk.push(tile);
+	      chunks.set(key, chunk);
 	    }
-	    for (const instancedMesh of instancedMeshes) {
-	      instancedMesh.count = instance;
-	      instancedMesh.instanceMatrix.needsUpdate = true;
+	    for (const [chunkKey, chunkTiles] of chunks) {
+	      const totalInstances = chunkTiles.length * treesPerTile;
+	      const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+	        const instancedMesh = new three.InstancedMesh(geometry, material, totalInstances);
+	        instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
+	        instancedMesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
+	        instancedMesh.instanceColor = new three.InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
+	        group.add(instancedMesh);
+	        return instancedMesh;
+	      });
+	      const matrix = new three.Matrix4();
+	      const scaleVector = new three.Vector3();
+	      let instance = 0;
+	      for (const tile of chunkTiles) {
+	        const center = getHexCenter(tile.x, tile.y, size);
+	        const placed = [];
+	        const tileStart = instance;
+	        const originalMatrices = [];
+	        let attempts = 0;
+	        const waterValue = waterEdgeValue(map, tile.x, tile.y);
+	        const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+	        const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+	        const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+	        while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
+	          attempts++;
+	          const lx = getRandomInt(-size, size);
+	          const ly = getRandomInt(-size, size);
+	          if (pointInPolygon2(polygon, [lx, ly]) !== -1) continue;
+	          if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
+	          if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+	          if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+	          const overlaps = placed.some((p) => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
+	          if (overlaps) continue;
+	          placed.push({ x: lx, y: ly });
+	          const scale = treeScale * (0.8 + Math.random() * 0.4);
+	          matrix.makeRotationY(Math.random() * Math.PI * 2);
+	          matrix.scale(scaleVector.set(scale, scale, scale));
+	          matrix.setPosition(center.x + lx, 0, center.y + ly);
+	          for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
+	          originalMatrices.push(matrix.clone());
+	          instance++;
+	        }
+	        tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
+	      }
+	      for (const instancedMesh of instancedMeshes) {
+	        instancedMesh.count = instance;
+	        instancedMesh.instanceMatrix.needsUpdate = true;
+	        instancedMesh.computeBoundingBox();
+	        instancedMesh.computeBoundingSphere();
+	        instancedMesh.frustumCulled = true;
+	      }
 	    }
 	  }
 	  return group;
@@ -10447,6 +10806,8 @@ uniform float uTime;
 uniform float windStrength;
 uniform float windSpeed;
 uniform vec2 worldOffset;
+uniform vec2 worldCenter;
+uniform vec2 worldPeriod;
 
 // Blade shape authored once in local space (see Grass.ts buildBladeGeometry):
 // x spans [-0.5, 0.5] at the root and tapers to 0 at the tip, y is a plain
@@ -10465,6 +10826,13 @@ varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
 
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
+
 void main() {
     float heightFactor = position.y;
     vec3 p = vec3(position.x * scale.x, position.y * scale.y, position.z * scale.x);
@@ -10476,12 +10844,13 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    float wave = sin(uTime * windSpeed + phase + (offset.x + worldOffset.x + offset.y + worldOffset.y) * 0.015);
+    vec2 bladeOffset = nearestWorldOffset(offset);
+    float wave = sin(uTime * windSpeed + phase + (bladeOffset.x + worldOffset.x + bladeOffset.y + worldOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
     rotated.z += bend * 0.4;
 
-    vec3 worldPos = vec3(offset.x + rotated.x, rotated.y, offset.y + rotated.z);
+    vec3 worldPos = vec3(bladeOffset.x + rotated.x, rotated.y, bladeOffset.y + rotated.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
 
     vHeightFactor = heightFactor;
@@ -10539,6 +10908,9 @@ void main() {
 	  update(dtS) {
 	    this.clock += dtS;
 	    this.grassMaterial.uniforms.uTime.value = this.clock;
+	  }
+	  setWorldCenter(x, y) {
+	    this.grassMaterial.uniforms.worldCenter.value.set(x, y);
 	  }
 	  get windStrength() {
 	    return this.grassMaterial.uniforms.windStrength.value;
@@ -10656,6 +11028,11 @@ void main() {
 	  const material = new three.RawShaderMaterial({
 	    uniforms: {
 	      worldOffset: { value: new three.Vector2(0, 0) },
+	      worldCenter: { value: new three.Vector2(0, 0) },
+	      worldPeriod: { value: new three.Vector2(
+	        map.wrapX ? map.w * size * 1.5 : 0,
+	        map.wrapY ? map.h * size * Math.sqrt(3) : 0
+	      ) },
 	      uTime: { value: 0 },
 	      windStrength: { value: windStrength },
 	      windSpeed: { value: windSpeed },
@@ -10813,6 +11190,7 @@ void main() {
 	    this.worldCopyMaterials = [];
 	    this.worldPatternOffset = new three.Vector2();
 	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
+	    this.forestCullCenter = new three.Vector3();
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
@@ -10838,6 +11216,9 @@ void main() {
 	      this.updateKeyboardMovement(Math.min(dtS, 0.05));
 	      this.controls.update(dtS);
 	      this.wrapCameraToWorld();
+	      this.terrain?.setWorldCenter(this.controls.target.x, this.controls.target.z);
+	      this.grass?.setWorldCenter(this.controls.target.x, this.controls.target.z);
+	      this.updateForestVisibility();
 	      this.terrain?.update(dtS);
 	      this.grass?.update(dtS);
 	      this.emit("frame", { t });
@@ -10932,6 +11313,7 @@ void main() {
 	    this.setupScene();
 	    this.setupCamera();
 	    this.setupLights();
+	    this.setupSky();
 	    this.setupControls();
 	    this.setupMarkers();
 	    this.setupEvents();
@@ -10943,11 +11325,13 @@ void main() {
 	  //-------------------------------------------------------------------------
 	  setupScene() {
 	    this.scene = new three.Scene();
-	    this.scene.background = new three.Color(13421772);
+	    this.scene.background = new three.Color(10471906);
 	    this.renderer = new three.WebGLRenderer({ canvas: this.canvas, antialias: true });
+	    this.renderer.toneMapping = three.ACESFilmicToneMapping;
+	    this.renderer.toneMappingExposure = 0.65;
 	  }
 	  setupCamera() {
-	    this.camera = new three.PerspectiveCamera(60, 1, 10, 2e3);
+	    this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
 	    this.camera.position.set(900, 500, 1e3);
 	    this.scene.add(this.camera);
 	  }
@@ -10959,6 +11343,21 @@ void main() {
 	    dirLight2.position.set(-1, -1, -1);
 	    this.scene.add(dirLight2);
 	    this.scene.add(new three.AmbientLight(2236962));
+	  }
+	  setupSky() {
+	    this.sky = new Sky();
+	    this.sky.scale.setScalar(45e4);
+	    this.sky.frustumCulled = false;
+	    const uniforms = this.sky.material.uniforms;
+	    uniforms.turbidity.value = 4;
+	    uniforms.rayleigh.value = 1.7;
+	    uniforms.mieCoefficient.value = 2e-3;
+	    uniforms.mieDirectionalG.value = 0.76;
+	    const elevation = 24 * Math.PI / 180;
+	    const azimuth = 205 * Math.PI / 180;
+	    const sun = new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
+	    uniforms.sunPosition.value.copy(sun);
+	    this.scene.add(this.sky);
 	  }
 	  setupControls() {
 	    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -11117,6 +11516,12 @@ void main() {
 	    const radius = Math.max(1, Math.ceil(this.controls.maxDistance / period));
 	    return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
 	  }
+	  isShaderWrappedLayer(object) {
+	    const mesh = object;
+	    if (!mesh.isMesh) return false;
+	    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+	    return materials.some((material) => material instanceof three.RawShaderMaterial && material.uniforms.worldPeriod);
+	  }
 	  refreshWorldCopies() {
 	    this.clearWorldCopies();
 	    if (!this.mapData || !this.mapData.wrapX && !this.mapData.wrapY) return;
@@ -11130,21 +11535,13 @@ void main() {
 	        const group = new three.Group();
 	        group.position.set(offsetX, 0, offsetY);
 	        for (const child of this.terrain?.children ?? []) {
+	          if (this.isShaderWrappedLayer(child)) continue;
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
 	        for (const child of this.forest?.children ?? []) {
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
-	        if (this.grass) {
-	          const grassCopy = new three.Mesh(this.grass.geometry, this.grass.material);
-	          grassCopy.copy(this.grass, false);
-	          if (Array.isArray(grassCopy.material)) {
-	            grassCopy.material = grassCopy.material.map((material) => this.materialForWorldCopy(material, offsetX, offsetY));
-	          } else {
-	            grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
-	          }
-	          group.add(grassCopy);
-	        }
+	        if (group.children.length === 0) continue;
 	        this.worldCopies.push(group);
 	        this.scene.add(group);
 	      }
@@ -11199,6 +11596,21 @@ void main() {
 	    movement.multiplyScalar(speed * dtS);
 	    this.camera.position.add(movement);
 	    this.controls.target.add(movement);
+	  }
+	  updateForestVisibility() {
+	    const viewDistance = this.camera.position.distanceTo(this.controls.target);
+	    const renderDistance = Math.min(2400, Math.max(1200, viewDistance * 2.75));
+	    this.scene.traverse((object) => {
+	      const forestChunk = object;
+	      if (!forestChunk.isInstancedMesh || !forestChunk.name.startsWith("forest-")) return;
+	      if (!forestChunk.boundingSphere) forestChunk.computeBoundingSphere();
+	      if (!forestChunk.boundingSphere) return;
+	      forestChunk.updateWorldMatrix(true, false);
+	      this.forestCullCenter.copy(forestChunk.boundingSphere.center).applyMatrix4(forestChunk.matrixWorld);
+	      const dx = this.forestCullCenter.x - this.controls.target.x;
+	      const dz = this.forestCullCenter.z - this.controls.target.z;
+	      forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
+	    });
 	  }
 	  //-------------------------------------------------------------------------
 	  //Public API

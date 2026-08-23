@@ -19,7 +19,9 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 
 ## Features
 
-- **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, seamless repeated rendering, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
+- **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, single-pass shader wrapping for terrain/grass, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
+- **Atmospheric sky** - a procedural sky dome replaces the flat background with blue zenith, atmospheric horizon haze and a physically positioned sun while orbiting down toward the horizon.
+- **Large-world culling** - trees are spatially chunked and distance/frustum culled; off-screen toroidal images are not submitted as complete maps, keeping 96×96 worlds practical.
 - **Instanced terrain** - the whole map is a handful of `InstancedBufferGeometry` draw calls (land, water, grass, trees), with grid lines, land-type edge blending and beach slopes computed in the shaders.
 - **Animated water** - sea/coastal tiles render as a solid-colored, wave-displaced surface (sum-of-sines with analytic normals) with sparkle, fresnel and stylized coastal foam waves rolling towards every shoreline.
 - **Rivers** - mark a grass tile with the `"river"` modifier and it renders an animated water channel with noise-curved banks, a light vegetation strip, a carved 3D riverbed and shallow-to-deep shading. Connectivity is auto-detected from neighbors: rivers merge at junctions, spring from source pools and flow into lakes and the sea.
