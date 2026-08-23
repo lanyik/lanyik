@@ -6,6 +6,7 @@ const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const { HexMap, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
+const controlsHint = document.querySelector("[data-world-controls]");
 
 function readInitialLocale() {
     try {
@@ -120,7 +121,8 @@ async function regenerate() {
         const nextWorld = generateWorld({
             seed: controls.seed,
             width: Number(controls.width),
-            height: Number(controls.height)
+            height: Number(controls.height),
+            topology: "toroidal"
         });
         await map.load(nextWorld);
         currentWorld = nextWorld;
@@ -151,7 +153,7 @@ const languageController = gui.add(controls, "language", languageOptions);
 
 const worldFolder = gui.addFolder("World generation");
 const seedController = worldFolder.add(controls, "seed");
-const widthController = worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
+const widthController = worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 2);
 const heightController = worldFolder.add(controls, "height", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
 const generateController = worldFolder.add(controls, "regenerate");
 worldFolder.open();
@@ -204,6 +206,7 @@ function applyLocale(locale) {
     languageController.updateDisplay();
     document.documentElement.lang = locale;
     document.title = i18n.t("app.title");
+    controlsHint.textContent = i18n.t("status.controlsHint");
     translatedControllers.forEach(([controller, key]) => controller.name(i18n.t(key)));
     translatedFolders.forEach(([folder, key]) => {
         folder.name = i18n.t(key);

@@ -1,5 +1,5 @@
 import { MapInfo, Point } from "../interfaces";
-import { getNeighbors } from "./neighbors";
+import { getMapNeighbors, normalizeMapCoordinates } from "./topology";
 
 //----------------------------------------------------------------------------------
 //Flood-fills outward from (x, y) along hex neighbors up to `range` steps,
@@ -12,19 +12,19 @@ import { getNeighbors } from "./neighbors";
 //tiles it currently reveals.
 //----------------------------------------------------------------------------------
 export function tilesWithinRange(map: MapInfo, x: number, y: number, range: number): Point[] {
-    if (range < 0 || !map.data[x]?.[y]) return [];
+    const origin = normalizeMapCoordinates(map, x, y);
+    if (range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
 
-    const visited = new Set<string>([`${x},${y}`]);
-    const result: Point[] = [{ x, y }];
-    let frontier: Point[] = [{ x, y }];
+    const visited = new Set<string>([`${origin.x},${origin.y}`]);
+    const result: Point[] = [origin];
+    let frontier: Point[] = [origin];
 
     for (let step = 0; step < range; step++) {
         const next: Point[] = [];
         for (const tile of frontier) {
-            for (const n of getNeighbors(tile.x, tile.y)) {
+            for (const n of getMapNeighbors(map, tile.x, tile.y)) {
                 const key = `${n.x},${n.y}`;
                 if (visited.has(key)) continue;
-                if (!map.data[n.x]?.[n.y]) continue;
                 visited.add(key);
                 next.push({ x: n.x, y: n.y });
                 result.push({ x: n.x, y: n.y });

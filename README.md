@@ -9,7 +9,7 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The default page does not start units, pathfinding, turns, or fog-of-war gameplay.
+Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. The default page does not start units, turns, or fog-of-war gameplay.
 
 A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. One draw call per layer, no per-tile meshes.
 
@@ -19,6 +19,7 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 
 ## Features
 
+- **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, seamless repeated rendering, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
 - **Instanced terrain** - the whole map is a handful of `InstancedBufferGeometry` draw calls (land, water, grass, trees), with grid lines, land-type edge blending and beach slopes computed in the shaders.
 - **Animated water** - sea/coastal tiles render as a solid-colored, wave-displaced surface (sum-of-sines with analytic normals) with sparkle, fresnel and stylized coastal foam waves rolling towards every shoreline.
 - **Rivers** - mark a grass tile with the `"river"` modifier and it renders an animated water channel with noise-curved banks, a light vegetation strip, a carved 3D riverbed and shallow-to-deep shading. Connectivity is auto-detected from neighbors: rivers merge at junctions, spring from source pools and flow into lakes and the sea.
@@ -79,7 +80,8 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 
 ```jsonc
 {
-  "w": 39, "h": 34,
+    "w": 40, "h": 34,
+    "wrapX": true, "wrapY": true, // optional; absent/false keeps a bounded map
   "data": {
     "0": {                       // column x
       "0": {                     // row y
@@ -92,6 +94,11 @@ game.on("end_move", payload => console.log("unit arrived", payload));
   }
 }
 ```
+
+Horizontally wrapped flat-top hex maps must have an even width so the staggered
+columns meet with the same parity. `generateWorld({ ..., topology: "toroidal" })`
+enforces this automatically and produces periodic terrain without artificial
+ocean falloff at the four edges.
 
 ### Tile modifiers
 

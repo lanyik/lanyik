@@ -24,6 +24,7 @@ uniform float waveSpeed;
 uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
+uniform vec2 worldOffset; // translation of a repeated toroidal world copy
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -155,7 +156,7 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 worldXZ = offset + position.xz;
+    vec2 worldXZ = offset + position.xz + worldOffset;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -184,7 +185,7 @@ void main() {
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
-    vWorldPos = pos;
+    vWorldPos = pos + vec3(worldOffset.x, 0.0, worldOffset.y);
 
     // Rim distance for the grid line - see terrain.vertex.ts's rimFactor
     // comment: radial distance from center is wrong for a hexagon (it dips to

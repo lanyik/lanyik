@@ -7,7 +7,8 @@ import {
     RawShaderMaterial,
     Color,
     ColorRepresentation,
-    DoubleSide
+    DoubleSide,
+    Vector2
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
@@ -245,6 +246,7 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
 
     const material = new RawShaderMaterial({
         uniforms: {
+            worldOffset: { value: new Vector2(0, 0) },
             uTime: { value: 0 },
             windStrength: { value: windStrength },
             windSpeed: { value: windSpeed },

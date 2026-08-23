@@ -15,7 +15,12 @@ import {
     Object3D,
     ColorRepresentation,
     MOUSE,
-    TOUCH
+    TOUCH,
+    Group,
+    InstancedMesh,
+    RawShaderMaterial,
+    Vector2,
+    Material
 } from "three";
 // MapControls was removed from three.js's examples; OrbitControls configured
 // with swapped mouse buttons (left=pan, right=rotate) reproduces it.
@@ -30,6 +35,7 @@ import { TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
 import { createForest, ForestField } from "./objects/Forest";
 import { GrassField, createGrassField } from "./objects/Grass";
 import { FogState } from "./objects/FogOfWar";
+import { assertWrappableMap, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
 
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
@@ -243,6 +249,10 @@ export class HexMap extends EventEmitter {
     private selector: Mesh;
     private pointer: Mesh;
     private routeLine: Line | undefined;
+    private worldCopies: Group[] = [];
+    private worldCopyMaterials: RawShaderMaterial[] = [];
+    private worldPatternOffset = new Vector2();
+    private pressedMovementKeys = new Set<string>();
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
     private lastHover: Point | null = null;
@@ -316,18 +326,20 @@ export class HexMap extends EventEmitter {
 
     private setupControls(): void {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        // MapControls (removed from three.js) was just OrbitControls with left/right
-        // mouse buttons swapped so left-drag pans instead of rotating.
-        this.controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
+        //Left click belongs exclusively to tile selection. World movement is
+        //handled continuously by WASD; right drag orbits freely and the wheel
+        //keeps the usual dolly/zoom behavior.
+        this.controls.mouseButtons = { LEFT: null, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
         this.controls.touches = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE };
+        this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.screenSpacePanning = false;
         this.controls.minDistance = 100;
         this.controls.maxDistance = 800;
-        this.controls.minAzimuthAngle = 80 * (Math.PI / 180);
-        this.controls.maxAzimuthAngle = 100 * (Math.PI / 180);
-        this.controls.minPolarAngle = 10 * (Math.PI / 180);
-        this.controls.maxPolarAngle = 90 * (Math.PI / 180);
+        this.controls.minAzimuthAngle = -Infinity;
+        this.controls.maxAzimuthAngle = Infinity;
+        this.controls.minPolarAngle = 15 * (Math.PI / 180);
+        this.controls.maxPolarAngle = 85 * (Math.PI / 180);
     }
 
     //The initial camera position/target (set in setupCamera(), before map data
@@ -351,6 +363,188 @@ export class HexMap extends EventEmitter {
         this.controls.update();
     }
 
+    private get worldPeriodX(): number {
+        return this.mapData ? this.mapData.w * this.options.size * 1.5 : 0;
+    }
+
+    private get worldPeriodY(): number {
+        return this.mapData ? this.mapData.h * this.options.size * Math.sqrt(3) : 0;
+    }
+
+    private wrapCameraToWorld(): void {
+        if (!this.mapData) return;
+        let shifted = false;
+        let patternShiftX = 0;
+        let patternShiftY = 0;
+
+        if (this.mapData.wrapX && this.worldPeriodX > 0) {
+            const wrapped = positiveModulo(this.controls.target.x, this.worldPeriodX);
+            const delta = wrapped - this.controls.target.x;
+            if (Math.abs(delta) > 0.0001) {
+                this.controls.target.x += delta;
+                this.camera.position.x += delta;
+                patternShiftX -= delta;
+                shifted = true;
+            }
+        }
+        if (this.mapData.wrapY && this.worldPeriodY > 0) {
+            const wrapped = positiveModulo(this.controls.target.z, this.worldPeriodY);
+            const delta = wrapped - this.controls.target.z;
+            if (Math.abs(delta) > 0.0001) {
+                this.controls.target.z += delta;
+                this.camera.position.z += delta;
+                patternShiftY -= delta;
+                shifted = true;
+            }
+        }
+
+        if (shifted) {
+            this.shiftWorldPattern(patternShiftX, patternShiftY);
+            this.updateMarkerPositions();
+        }
+    }
+
+    private nearestRepeatedCenter(x: number, y: number, reference = this.controls.target): Point {
+        const center = getHexCenter(x, y, this.options.size);
+        if (this.mapData?.wrapX && this.worldPeriodX > 0) {
+            center.x += Math.round((reference.x - center.x) / this.worldPeriodX) * this.worldPeriodX;
+        }
+        if (this.mapData?.wrapY && this.worldPeriodY > 0) {
+            center.y += Math.round((reference.z - center.y) / this.worldPeriodY) * this.worldPeriodY;
+        }
+        return center;
+    }
+
+    private positionMarker(marker: Mesh, tile: Point, reference = this.controls.target): void {
+        const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
+        marker.position.setX(center.x);
+        marker.position.setZ(center.y);
+    }
+
+    private updateMarkerPositions(): void {
+        if (this.lastHover && this.pointer.visible) this.positionMarker(this.pointer, this.lastHover);
+        if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
+    }
+
+    private clearWorldCopies(): void {
+        for (const copy of this.worldCopies) this.scene.remove(copy);
+        for (const material of this.worldCopyMaterials) material.dispose();
+        this.worldCopies = [];
+        this.worldCopyMaterials = [];
+    }
+
+    private materialForWorldCopy(material: Material, offsetX: number, offsetY: number): Material {
+        if (!(material instanceof RawShaderMaterial) || !material.uniforms.worldOffset) return material;
+        const copy = material.clone();
+        //Share every live uniform object with the primary material except the
+        //per-copy translation used by the water shader's camera calculations.
+        copy.uniforms = {
+            ...material.uniforms,
+            worldOffset: { value: new Vector2(
+                this.worldPatternOffset.x + offsetX,
+                this.worldPatternOffset.y + offsetY
+            ) }
+        };
+        this.worldCopyMaterials.push(copy);
+        return copy;
+    }
+
+    private applyWorldPatternToObject(object: Object3D | undefined): void {
+        object?.traverse(child => {
+            const mesh = child as Mesh;
+            if (!mesh.isMesh) return;
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            for (const material of materials) {
+                if (material instanceof RawShaderMaterial && material.uniforms.worldOffset) {
+                    material.uniforms.worldOffset.value.copy(this.worldPatternOffset);
+                }
+            }
+        });
+    }
+
+    private shiftWorldPattern(offsetX: number, offsetY: number): void {
+        if (offsetX === 0 && offsetY === 0) return;
+        this.worldPatternOffset.x += offsetX;
+        this.worldPatternOffset.y += offsetY;
+        this.applyWorldPatternToObject(this.terrain);
+        this.applyWorldPatternToObject(this.grass);
+        for (const material of this.worldCopyMaterials) {
+            material.uniforms.worldOffset.value.x += offsetX;
+            material.uniforms.worldOffset.value.y += offsetY;
+        }
+    }
+
+    private cloneWorldObject(source: Object3D, offsetX: number, offsetY: number): Object3D {
+        let copy: Object3D;
+        if (source instanceof InstancedMesh) {
+            const instancedCopy = new InstancedMesh(source.geometry, source.material, source.count);
+            instancedCopy.copy(source, false);
+            //Fog updates mutate these attributes at runtime. Sharing them keeps
+            //all repeated views synchronized without updating every copy.
+            instancedCopy.instanceMatrix = source.instanceMatrix;
+            instancedCopy.instanceColor = source.instanceColor;
+            instancedCopy.count = source.count;
+            copy = instancedCopy;
+        } else {
+            copy = source.clone(true);
+        }
+
+        copy.traverse(object => {
+            const mesh = object as Mesh;
+            if (!mesh.isMesh) return;
+            if (Array.isArray(mesh.material)) {
+                mesh.material = mesh.material.map(material => this.materialForWorldCopy(material, offsetX, offsetY));
+            } else {
+                mesh.material = this.materialForWorldCopy(mesh.material, offsetX, offsetY);
+            }
+        });
+        return copy;
+    }
+
+    private copyOffsets(wrapped: boolean | undefined, period: number): number[] {
+        if (!wrapped || period <= 0) return [0];
+        const radius = Math.max(1, Math.ceil(this.controls.maxDistance / period));
+        return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
+    }
+
+    private refreshWorldCopies(): void {
+        this.clearWorldCopies();
+        if (!this.mapData || (!this.mapData.wrapX && !this.mapData.wrapY)) return;
+
+        const xOffsets = this.copyOffsets(this.mapData.wrapX, this.worldPeriodX);
+        const yOffsets = this.copyOffsets(this.mapData.wrapY, this.worldPeriodY);
+
+        for (const copyX of xOffsets) {
+            for (const copyY of yOffsets) {
+                if (copyX === 0 && copyY === 0) continue;
+                const offsetX = copyX * this.worldPeriodX;
+                const offsetY = copyY * this.worldPeriodY;
+                const group = new Group();
+                group.position.set(offsetX, 0, offsetY);
+
+                for (const child of this.terrain?.children ?? []) {
+                    group.add(this.cloneWorldObject(child, offsetX, offsetY));
+                }
+                for (const child of this.forest?.children ?? []) {
+                    group.add(this.cloneWorldObject(child, offsetX, offsetY));
+                }
+                if (this.grass) {
+                    const grassCopy = new Mesh(this.grass.geometry, this.grass.material);
+                    grassCopy.copy(this.grass, false);
+                    if (Array.isArray(grassCopy.material)) {
+                        grassCopy.material = grassCopy.material.map(material => this.materialForWorldCopy(material, offsetX, offsetY));
+                    } else {
+                        grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
+                    }
+                    group.add(grassCopy);
+                }
+
+                this.worldCopies.push(group);
+                this.scene.add(group);
+            }
+        }
+    }
+
     private setupMarkers(): void {
         const size = this.options.size;
 
@@ -371,7 +565,11 @@ export class HexMap extends EventEmitter {
 
     private setupEvents(): void {
         window.addEventListener("resize", this.handleResize, { passive: true });
+        window.addEventListener("keydown", this.onKeyDown);
+        window.addEventListener("keyup", this.onKeyUp);
+        window.addEventListener("blur", this.clearMovementKeys);
         this.canvas.addEventListener("mousedown", this.onMouseDown);
+        this.canvas.addEventListener("contextmenu", event => event.preventDefault());
         window.addEventListener("pointermove", this.onPointerMove);
         window.addEventListener("mouseup", this.onMouseUp);
     }
@@ -391,6 +589,9 @@ export class HexMap extends EventEmitter {
         const dtS = this.lastFrameTime === undefined ? 0 : (t - this.lastFrameTime) / 1000;
         this.lastFrameTime = t;
 
+        this.updateKeyboardMovement(Math.min(dtS, 0.05));
+        this.controls.update(dtS);
+        this.wrapCameraToWorld();
         this.terrain?.update(dtS);
         this.grass?.update(dtS);
         this.emit("frame", { t });
@@ -398,10 +599,64 @@ export class HexMap extends EventEmitter {
         window.requestAnimationFrame(this.animate);
     };
 
+    private onKeyDown = (event: KeyboardEvent): void => {
+        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
+        this.pressedMovementKeys.add(event.code);
+        event.preventDefault();
+    };
+
+    private onKeyUp = (event: KeyboardEvent): void => {
+        if (!this.isMovementKey(event.code)) return;
+        this.pressedMovementKeys.delete(event.code);
+        event.preventDefault();
+    };
+
+    private clearMovementKeys = (): void => {
+        this.pressedMovementKeys.clear();
+    };
+
+    private isMovementKey(code: string): boolean {
+        return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
+    }
+
+    private isTextInput(target: EventTarget | null): boolean {
+        if (!(target instanceof HTMLElement)) return false;
+        return target instanceof HTMLInputElement
+            || target instanceof HTMLTextAreaElement
+            || target instanceof HTMLSelectElement
+            || target.isContentEditable;
+    }
+
+    private updateKeyboardMovement(dtS: number): void {
+        if (dtS <= 0 || this.pressedMovementKeys.size === 0) return;
+
+        const forwardAmount = Number(this.pressedMovementKeys.has("KeyW")) - Number(this.pressedMovementKeys.has("KeyS"));
+        const rightAmount = Number(this.pressedMovementKeys.has("KeyD")) - Number(this.pressedMovementKeys.has("KeyA"));
+        if (forwardAmount === 0 && rightAmount === 0) return;
+
+        const forward = this.controls.target.clone().sub(this.camera.position);
+        forward.y = 0;
+        if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
+        else forward.normalize();
+        const right = new Vector3(-forward.z, 0, forward.x);
+        const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
+        if (movement.lengthSq() > 1) movement.normalize();
+
+        const viewDistance = this.camera.position.distanceTo(this.controls.target);
+        const speed = Math.min(900, Math.max(140, viewDistance * 0.9));
+        movement.multiplyScalar(speed * dtS);
+        this.camera.position.add(movement);
+        this.controls.target.add(movement);
+    }
+
     //-------------------------------------------------------------------------
     //Picking (analytic, ground-plane based - see helpers/picking.ts)
     //-------------------------------------------------------------------------
     private onMouseDown = (event: MouseEvent): void => {
+        if (event.button !== 0) {
+            this.mouseDownAt = null;
+            return;
+        }
         this.mouseDownAt = { x: event.clientX, y: event.clientY };
     };
 
@@ -409,7 +664,14 @@ export class HexMap extends EventEmitter {
         const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
         if (!ground) return;
 
-        const tileCoords = pickTile(ground, this.options.size, this.mapData?.w, this.mapData?.h);
+        const tileCoords = pickTile(
+            ground,
+            this.options.size,
+            this.mapData?.w,
+            this.mapData?.h,
+            this.mapData?.wrapX,
+            this.mapData?.wrapY
+        );
         if (!tileCoords) return;
 
         if (this.lastHover && this.lastHover.x === tileCoords.x && this.lastHover.y === tileCoords.y) return;
@@ -418,15 +680,15 @@ export class HexMap extends EventEmitter {
         const tile = this.getTile(tileCoords.x, tileCoords.y);
         if (!tile) return;
 
-        const center = getHexCenter(tileCoords.x, tileCoords.y, this.options.size);
         this.pointer.visible = true;
-        this.pointer.position.setX(center.x);
-        this.pointer.position.setZ(center.y);
+        this.pointer.position.setX(tileCoords.worldX);
+        this.pointer.position.setZ(tileCoords.worldY);
 
         this.emit("hover" satisfies HexMapEventName, { x: tileCoords.x, y: tileCoords.y, tile });
     };
 
     private onMouseUp = (event: MouseEvent): void => {
+        if (event.button !== 0) return;
         const downAt = this.mouseDownAt;
         this.mouseDownAt = null;
         if (!downAt) return;
@@ -438,13 +700,22 @@ export class HexMap extends EventEmitter {
         const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
         if (!ground) return;
 
-        const tileCoords = pickTile(ground, this.options.size, this.mapData?.w, this.mapData?.h);
+        const tileCoords = pickTile(
+            ground,
+            this.options.size,
+            this.mapData?.w,
+            this.mapData?.h,
+            this.mapData?.wrapX,
+            this.mapData?.wrapY
+        );
         if (!tileCoords) return;
 
         const tile = this.getTile(tileCoords.x, tileCoords.y);
         if (!tile) return;
 
         this.selectTile(tileCoords.x, tileCoords.y);
+        this.selector.position.setX(tileCoords.worldX);
+        this.selector.position.setZ(tileCoords.worldY);
         this.emit("click" satisfies HexMapEventName, { x: tileCoords.x, y: tileCoords.y, tile });
     };
 
@@ -456,6 +727,8 @@ export class HexMap extends EventEmitter {
     //atlas descriptor (land-atlas.json) from texturesBaseUrl; textures themselves
     //load in the background as usual for three.js.
     public async load(mapData: MapInfo): Promise<void> {
+        assertWrappableMap(mapData);
+        this.worldPatternOffset.set(0, 0);
         this.mapData = mapData;
         this.fogStates.clear(); // a new map starts with no fog history
         this.frameMap(mapData);
@@ -476,6 +749,7 @@ export class HexMap extends EventEmitter {
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
     private async rebuildTerrain(): Promise<void> {
+        this.clearWorldCopies();
         if (this.terrain) {
             this.scene.remove(this.terrain);
             this.terrain.dispose();
@@ -526,9 +800,11 @@ export class HexMap extends EventEmitter {
             fogDarkenFactor: this.options.fogDarkenFactor,
             fogTextureSize: this.options.fogTextureSize
         });
+        this.applyWorldPatternToObject(this.terrain);
         this.scene.add(this.terrain);
         await this.terrain.loadCities();
         this.reapplyFog(); // the fresh layer defaults to all-Visible
+        this.refreshWorldCopies();
     }
 
     //Tears down and recreates the tree instances from the current tree*
@@ -537,6 +813,7 @@ export class HexMap extends EventEmitter {
     //uniform for them, only a rebuild. Model files are cached (see
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
     private async rebuildForest(): Promise<void> {
+        this.clearWorldCopies();
         if (this.forest) {
             this.scene.remove(this.forest);
             this.forest.traverse(o => (o as unknown as Mesh).geometry?.dispose());
@@ -563,6 +840,7 @@ export class HexMap extends EventEmitter {
             this.scene.add(this.forest);
             this.reapplyFog(); // the fresh layer defaults to all-Visible
         }
+        this.refreshWorldCopies();
     }
 
     //Tears down and recreates the grass field from the current grass* options
@@ -572,6 +850,7 @@ export class HexMap extends EventEmitter {
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
     private rebuildGrass(): void {
+        this.clearWorldCopies();
         if (this.grass) {
             this.scene.remove(this.grass);
             this.grass.dispose();
@@ -592,16 +871,18 @@ export class HexMap extends EventEmitter {
             riverCurvature: this.options.riverCurvature,
             lakeShoreWidth: this.options.lakeShoreWidth
         }) ?? undefined;
+        this.applyWorldPatternToObject(this.grass);
 
         if (this.grass) {
             this.grass.visible = this.options.grassEnabled;
             this.scene.add(this.grass);
             this.reapplyFog(); // the fresh layer defaults to all-Visible
         }
+        this.refreshWorldCopies();
     }
 
     public getTile(x: number, y: number): TileInfo | undefined {
-        return this.mapData?.data[x]?.[y];
+        return this.mapData ? getMapTile(this.mapData, x, y) : undefined;
     }
 
     //-------------------------------------------------------------------------
@@ -957,6 +1238,7 @@ export class HexMap extends EventEmitter {
     public set grassVisible(value: boolean) {
         this.options.grassEnabled = value;
         if (this.grass) this.grass.visible = value;
+        this.refreshWorldCopies();
     }
 
     //Wind uniforms are cheap to update live - no rebuild needed.
@@ -1008,11 +1290,11 @@ export class HexMap extends EventEmitter {
     }
 
     public selectTile(x: number, y: number): void {
-        const center = getHexCenter(x, y, this.options.size);
+        const normalized = this.mapData ? normalizeMapCoordinates(this.mapData, x, y) : { x, y };
+        if (!normalized) return;
         this.selector.visible = true;
-        this.selector.position.setX(center.x);
-        this.selector.position.setZ(center.y);
-        this.lastSelected = { x, y };
+        this.positionMarker(this.selector, normalized);
+        this.lastSelected = normalized;
     }
 
     public get selectedTile(): Point | null {
@@ -1026,9 +1308,12 @@ export class HexMap extends EventEmitter {
     public drawRoutePath(path: Point[]): void {
         this.cleanRoutePath();
 
+        let reference = this.controls.target;
         const points = path.map(p => {
-            const center = getHexCenter(p.x, p.y, this.options.size);
-            return new Vector3(center.x, 10, center.y);
+            const center = this.nearestRepeatedCenter(p.x, p.y, reference);
+            const point = new Vector3(center.x, 10, center.y);
+            reference = point;
+            return point;
         });
 
         const geometry = new BufferGeometry().setFromPoints(points);

@@ -2,11 +2,14 @@
 // reference: https://github.com/nreijmersdal/hexpath
 import { MapInfo, MapInfoData, Point } from "../interfaces";
 import { Land } from "../enums";
+import { positiveModulo } from "./topology";
 
 export class PathFinder {
     private mapSizeX:number;
     private mapSizeY:number;
     private mapArray:MapInfoData;
+    private wrapX:boolean;
+    private wrapY:boolean;
     private firstrowlong:boolean = false;
     private restricted: { [key in Land]:boolean};
     //Optional extra per-tile veto on top of the terrain restrictions - the
@@ -18,6 +21,8 @@ export class PathFinder {
         this.mapSizeX = map.w;
         this.mapSizeY = map.h;
         this.mapArray = map.data;
+        this.wrapX = map.wrapX === true;
+        this.wrapY = map.wrapY === true;
         this.restricted = restricted;
         this.accessible = accessible;
     }
@@ -177,6 +182,8 @@ export class PathFinder {
                         }
                         break;
                 }
+                if (this.wrapX) node_x = positiveModulo(node_x, this.mapSizeX);
+                if (this.wrapY) node_y = positiveModulo(node_y, this.mapSizeY);
                 if (this.hex_accessible(node_x, node_y)) {
                     if (statelist[node_x][node_y] == true) {
                         // Node already open: if reaching it through the tile just
@@ -276,9 +283,19 @@ export class PathFinder {
     // The old Euclidean distance overestimates on a hex grid, making the A*
     // heuristic inadmissible - paths came out longer than needed.
 	private hex_distance(x1:number, y1:number, x2:number, y2:number):number {
-		const dq = x1 - x2;
-		const dr = (y1 - this.row_shift(x1)) - (y2 - this.row_shift(x2));
-		return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+		let best = Infinity;
+		const xCopies = this.wrapX ? [-1, 0, 1] : [0];
+		const yCopies = this.wrapY ? [-1, 0, 1] : [0];
+		for (const copyX of xCopies) {
+			for (const copyY of yCopies) {
+				const targetX = x2 + copyX * this.mapSizeX;
+				const targetY = y2 + copyY * this.mapSizeY;
+				const dq = x1 - targetX;
+				const dr = (y1 - this.row_shift(x1)) - (targetY - this.row_shift(targetX));
+				best = Math.min(best, (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2);
+			}
+		}
+		return best;
 	}
 
     // how far a column's tiles are shifted in axial space (offset -> axial)

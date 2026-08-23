@@ -1,7 +1,7 @@
 import { Land } from "../enums";
-import { getNeighbors } from "../helpers/neighbors";
+import { getMapNeighbors } from "../helpers/topology";
 import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
-import { fractalNoise2D, randomAt, seedToUint32 } from "./noise";
+import { fractalNoise2D, periodicFractalNoise2D, randomAt, seedToUint32 } from "./noise";
 
 export const MIN_WORLD_SIZE = 8;
 export const MAX_WORLD_SIZE = 96;
@@ -10,7 +10,10 @@ export interface WorldGenerationOptions {
     seed: string | number;
     width: number;
     height: number;
+    topology?: WorldTopology;
 }
+
+export type WorldTopology = "bounded" | "toroidal";
 
 interface ClimateSample {
     elevation: number;
@@ -27,7 +30,7 @@ function assertDimension(name: "width" | "height", value: number): void {
     }
 }
 
-function sampleClimate(seed: number, x: number, y: number, width: number, height: number): ClimateSample {
+function sampleBoundedClimate(seed: number, x: number, y: number, width: number, height: number): ClimateSample {
     const nx = width === 1 ? 0 : (x / (width - 1)) * 2 - 1;
     const ny = height === 1 ? 0 : (y / (height - 1)) * 2 - 1;
     const edge = Math.max(Math.abs(nx), Math.abs(ny));
@@ -37,6 +40,51 @@ function sampleClimate(seed: number, x: number, y: number, width: number, height
     const moisture = fractalNoise2D(seed ^ 0xc8013ea4, x * 0.08, y * 0.08, 4);
     const temperatureNoise = fractalNoise2D(seed ^ 0xad90777d, x * 0.07, y * 0.07, 3);
     const latitude = Math.abs(ny);
+    const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
+    return { elevation, moisture, temperature };
+}
+
+function sampleToroidalClimate(seed: number, x: number, y: number, width: number, height: number): ClimateSample {
+    const nx = x / width;
+    const ny = y / height;
+    const cells = (scale: number, dimension: number, minimum: number) => Math.max(minimum, Math.round(dimension * scale));
+    const continent = periodicFractalNoise2D(
+        seed,
+        nx,
+        ny,
+        cells(0.055, width, 2),
+        cells(0.055, height, 2),
+        5
+    );
+    const detail = periodicFractalNoise2D(
+        seed ^ 0xa341316c,
+        nx,
+        ny,
+        cells(0.14, width, 3),
+        cells(0.14, height, 3),
+        3
+    );
+    //No edge falloff: the height field joins itself on all four sides.
+    const elevation = continent * 0.78 + detail * 0.22 + 0.03;
+    const moisture = periodicFractalNoise2D(
+        seed ^ 0xc8013ea4,
+        nx,
+        ny,
+        cells(0.08, width, 2),
+        cells(0.08, height, 2),
+        4
+    );
+    const temperatureNoise = periodicFractalNoise2D(
+        seed ^ 0xad90777d,
+        nx,
+        ny,
+        cells(0.07, width, 2),
+        cells(0.07, height, 2),
+        3
+    );
+    //A periodic climate band keeps the top/bottom seam continuous: the cold
+    //band straddles the seam and the warm equator runs through the middle.
+    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
     const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
     return { elevation, moisture, temperature };
 }
@@ -80,27 +128,35 @@ function decorateTile(seed: number, x: number, y: number, climate: ClimateSample
     return tile;
 }
 
-export function generateWorld({ seed, width, height }: WorldGenerationOptions): MapInfo {
+export function generateWorld({ seed, width, height, topology = "bounded" }: WorldGenerationOptions): MapInfo {
     assertDimension("width", width);
     assertDimension("height", height);
+    if (topology === "toroidal" && width % 2 !== 0) {
+        throw new RangeError("toroidal worlds require an even width");
+    }
 
     const numericSeed = seedToUint32(seed);
     const data: MapInfoData = {};
+    const toroidal = topology === "toroidal";
 
     for (let x = 0; x < width; x += 1) {
         data[x] = {};
         for (let y = 0; y < height; y += 1) {
-            const climate = sampleClimate(numericSeed, x, y, width, height);
+            const climate = toroidal
+                ? sampleToroidalClimate(numericSeed, x, y, width, height)
+                : sampleBoundedClimate(numericSeed, x, y, width, height);
             const type = classifyTerrain(climate);
             data[x][y] = decorateTile(numericSeed, x, y, climate, type);
         }
     }
 
+    const world: MapInfo = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
+
     for (let x = 0; x < width; x += 1) {
         for (let y = 0; y < height; y += 1) {
             const tile = data[x][y];
             if (tile.type !== Land.sea) continue;
-            const touchesLand = getNeighbors(x, y).some(({ x: nx, y: ny }) => {
+            const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
                 const neighbor = data[nx]?.[ny];
                 return neighbor !== undefined && !isWater(neighbor.type);
             });
@@ -108,5 +164,5 @@ export function generateWorld({ seed, width, height }: WorldGenerationOptions): 
         }
     }
 
-    return { data, w: width, h: height };
+    return world;
 }

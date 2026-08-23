@@ -1,6 +1,7 @@
 import { Land } from "../enums";
 import { MapInfo, TileInfo } from "../interfaces";
 import { getNeighborCoords, NeighborDirection } from "./neighbors";
+import { getMapTile } from "./topology";
 
 export interface CoastClearanceOptions {
     beachWidth?: number;
@@ -83,7 +84,7 @@ export function isInCoastalShore(
     size: number,
     options: CoastClearanceOptions = {}
 ): boolean {
-    const tile = map.data[tileX]?.[tileY];
+    const tile = getMapTile(map, tileX, tileY);
     if (!tile || isWater(tile)) return true;
 
     const apothem = size * 0.8660254;
@@ -92,7 +93,7 @@ export function isInCoastalShore(
 
     for (const direction of COAST_DIRECTIONS) {
         const neighbor = getNeighborCoords(tileX, tileY, direction);
-        waterByDirection.set(direction, isWater(map.data[neighbor.x]?.[neighbor.y]));
+        waterByDirection.set(direction, isWater(getMapTile(map, neighbor.x, neighbor.y)));
         const dir = DIRS[direction];
         factorByDirection.set(direction, (localX * dir.x + localY * dir.y) / apothem);
     }
@@ -143,7 +144,7 @@ export function isInLakeShore(
     size: number,
     options: CoastClearanceOptions = {}
 ): boolean {
-    const tile = map.data[tileX]?.[tileY];
+    const tile = getMapTile(map, tileX, tileY);
     if (!tile || isLake(tile)) return true;
 
     const apothem = size * 0.8660254;
@@ -152,7 +153,7 @@ export function isInLakeShore(
 
     for (const direction of COAST_DIRECTIONS) {
         const neighbor = getNeighborCoords(tileX, tileY, direction);
-        lakeByDirection.set(direction, isLake(map.data[neighbor.x]?.[neighbor.y]));
+        lakeByDirection.set(direction, isLake(getMapTile(map, neighbor.x, neighbor.y)));
         const dir = DIRS[direction];
         factorByDirection.set(direction, (localX * dir.x + localY * dir.y) / apothem);
     }

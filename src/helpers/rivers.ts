@@ -1,6 +1,7 @@
 import { MapInfo, TileInfo } from "../interfaces";
 import { Land } from "../enums";
 import { getNeighborCoords, NeighborDirection } from "./neighbors";
+import { getMapTile } from "./topology";
 
 //----------------------------------------------------------------------------------
 //Rivers and lakes: land tiles carrying the free-form "river"/"lake" modifier (see
@@ -55,13 +56,13 @@ function isSeaOrCoastal(tile: TileInfo): boolean {
 
 //The encoded water value for the tile at (x, y) - see the format table above.
 export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
-    const tile = map.data[x]?.[y];
+    const tile = getMapTile(map, x, y);
 
     if (isLakeTile(tile)) {
         let openMask = 0, channelMask = 0;
         MASK_DIRECTIONS.forEach((direction, bit) => {
             const n = getNeighborCoords(x, y, direction);
-            const neighbor = map.data[n.x]?.[n.y];
+            const neighbor = getMapTile(map, n.x, n.y);
             if (!neighbor) return;
             if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
             else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
@@ -73,7 +74,7 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
         let mask = 0;
         MASK_DIRECTIONS.forEach((direction, bit) => {
             const n = getNeighborCoords(x, y, direction);
-            const neighbor = map.data[n.x]?.[n.y];
+            const neighbor = getMapTile(map, n.x, n.y);
             if (!neighbor) return;
             if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
         });
@@ -84,39 +85,39 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
 }
 
 export function riverSeaMouthEdgeValue(map: MapInfo, x: number, y: number): number {
-    const tile = map.data[x]?.[y];
+    const tile = getMapTile(map, x, y);
     if (!isRiverTile(tile)) return 0;
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
         const n = getNeighborCoords(x, y, direction);
-        const neighbor = map.data[n.x]?.[n.y];
+        const neighbor = getMapTile(map, n.x, n.y);
         if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
     });
     return mask;
 }
 
 export function riverLakeMouthEdgeValue(map: MapInfo, x: number, y: number): number {
-    const tile = map.data[x]?.[y];
+    const tile = getMapTile(map, x, y);
     if (!isRiverTile(tile)) return 0;
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
         const n = getNeighborCoords(x, y, direction);
-        const neighbor = map.data[n.x]?.[n.y];
+        const neighbor = getMapTile(map, n.x, n.y);
         if (isLakeTile(neighbor)) mask |= 1 << bit;
     });
     return mask;
 }
 
 export function lakeNeighborEdgeValue(map: MapInfo, x: number, y: number): number {
-    const tile = map.data[x]?.[y];
+    const tile = getMapTile(map, x, y);
     if (!tile || isLakeTile(tile)) return 0;
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
         const n = getNeighborCoords(x, y, direction);
-        if (isLakeTile(map.data[n.x]?.[n.y])) mask |= 1 << bit;
+        if (isLakeTile(getMapTile(map, n.x, n.y))) mask |= 1 << bit;
     });
     return mask;
 }

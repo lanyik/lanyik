@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
     generateWorld,
+    getMapNeighbors,
+    getMapTile,
     getNeighbors,
     Land,
     MAX_WORLD_SIZE,
@@ -58,6 +60,30 @@ describe("generateWorld", () => {
                 expect(tile.type === Land.coastal).toBe(touchesLand);
             }
         }
+    });
+
+    test("generates four-way wrapped worlds with seam-aware coasts", () => {
+        const world = generateWorld({ seed: "round-world", width: 32, height: 24, topology: "toroidal" });
+
+        expect(world.wrapX).toBe(true);
+        expect(world.wrapY).toBe(true);
+        expect(getMapTile(world, -1, 0)).toBe(world.data[world.w - 1][0]);
+        expect(getMapTile(world, 0, world.h)).toBe(world.data[0][0]);
+
+        for (let x = 0; x < world.w; x += 1) {
+            for (let y = 0; y < world.h; y += 1) {
+                const tile = world.data[x][y];
+                if (!isWater(tile.type)) continue;
+                const touchesLand = getMapNeighbors(world, x, y)
+                    .some(neighbor => !isWater(world.data[neighbor.x][neighbor.y].type));
+                expect(tile.type === Land.coastal).toBe(touchesLand);
+            }
+        }
+    });
+
+    test("rejects odd widths for horizontally wrapped hex grids", () => {
+        expect(() => generateWorld({ seed: "x", width: 21, height: 20, topology: "toroidal" }))
+            .toThrow(/even width/);
     });
 
     test.each([

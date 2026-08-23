@@ -48,6 +48,14 @@ body {
     font-size: 12px;
 }
 
+.world-status small {
+    margin-top: 5px;
+    padding-top: 7px;
+    color: #d5e5b9;
+    font-size: 11px;
+    border-top: 1px solid rgba(178, 217, 180, 0.16);
+}
+
 .dg.ac {
     z-index: 10;
 }

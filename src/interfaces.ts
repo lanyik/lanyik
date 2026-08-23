@@ -55,7 +55,16 @@ export interface TileInfo {
 //----------------------------------------------------------------------------------
 interface MapInfoY { [y:number]:TileInfo}
 export interface MapInfoData { [x:number]:MapInfoY }
-export interface MapInfo { data: MapInfoData, w: number, h: number}
+export interface MapInfo {
+    data: MapInfoData,
+    w: number,
+    h: number,
+    //Optional topology flags. Existing/static maps remain bounded when these
+    //are absent; generated toroidal maps opt into coordinate wrapping on both
+    //axes so rendering, picking, neighbors and pathfinding agree at the seam.
+    wrapX?: boolean,
+    wrapY?: boolean
+}
 //----------------------------------------------------------------------------------
 //Where to place a unit on load (the units.json array passed to GameEngine.init/
 //HexMap - just id/type/starting cell). `type` is a model folder path (e.g.

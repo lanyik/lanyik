@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Optional four-way toroidal map topology (`MapInfo.wrapX` / `wrapY`) with
+  periodic procedural noise, seam-aware terrain/coast/river/fog neighbors,
+  repeated rendering, wrapped picking and shortest-path routing across edges.
+- Seamless camera recentering when crossing a world boundary; procedural shader
+  patterns retain their phase through the recenter instead of visibly jumping.
+- WASD camera movement, left-click-only tile selection, unrestricted right-drag
+  orbit controls, and localized on-screen control hints.
+
 ## [0.5.0] - 2026-07-19
 
 ### Added

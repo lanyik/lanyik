@@ -6,6 +6,7 @@ import {
     TextureLoader,
     Vector4,
     Vector3,
+    Vector2,
     Box3,
     Color,
     Group,
@@ -20,6 +21,7 @@ import { MapInfo, TileInfo, Point } from "../interfaces";
 import { Land, LandPriority, LandColor } from "../enums";
 import { getHexCenter } from "../helpers/helpers";
 import { getNeighborCoords } from "../helpers/neighbors";
+import { getMapTile } from "../helpers/topology";
 import { lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, waterEdgeValue } from "../helpers/rivers";
 import { createHexagonGeometry } from "./hexagonGeometry";
 import { makeTextSprite } from "./citysprite";
@@ -268,8 +270,7 @@ export class TerrainMesh extends Group {
     //Atlas cell index for a tile's terrain type. Returns -1 if the tile doesn't
     //exist (used for out-of-map neighbors).
     private cellIndexFor(x: number, y: number): number {
-        const row = this.map.data[x];
-        const tile: TileInfo | undefined = row ? row[y] : undefined;
+        const tile: TileInfo | undefined = getMapTile(this.map, x, y);
         if (!tile) return -1;
         const cell = this.atlasCellIndex[tile.type];
         return cell === undefined ? -1 : cell;
@@ -279,16 +280,14 @@ export class TerrainMesh extends Group {
     //Returns -Infinity for out-of-map neighbors so a border tile never blends
     //towards "nothing".
     private priorityFor(x: number, y: number): number {
-        const row = this.map.data[x];
-        const tile: TileInfo | undefined = row ? row[y] : undefined;
+        const tile: TileInfo | undefined = getMapTile(this.map, x, y);
         return tile ? LandPriority[tile.type] : -Infinity;
     }
 
     //-1 no tile, 0 non-water, 1 sea, 2 coastal - drives the land layer's beach
     //slope and the water layer's edge-color resolution (see shaders).
     private kindFor(x: number, y: number): number {
-        const row = this.map.data[x];
-        const tile: TileInfo | undefined = row ? row[y] : undefined;
+        const tile: TileInfo | undefined = getMapTile(this.map, x, y);
         if (!tile) return -1;
         const waterIndex = WATER_TYPES.indexOf(tile.type);
         return waterIndex === -1 ? 0 : waterIndex + 1;
@@ -461,6 +460,7 @@ export class TerrainMesh extends Group {
 
         this.landMaterial = new RawShaderMaterial({
             uniforms: {
+                worldOffset: { value: new Vector2(0, 0) },
                 landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
                 landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
                 mountainAtlasIndex: { value: this.atlasCellIndex[Land.mountain] ?? -2 },
@@ -507,6 +507,7 @@ export class TerrainMesh extends Group {
 
         this.waterMaterial = new RawShaderMaterial({
             uniforms: {
+                worldOffset: { value: new Vector2(0, 0) },
                 uTime: { value: 0 },
                 waveAmplitude: { value: this.options.waterWaveAmplitude ?? 1.6 },
                 waveFrequency: { value: 0.045 * (this.options.waterWaveFrequency ?? 1.0) },

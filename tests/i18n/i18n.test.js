@@ -19,7 +19,7 @@ describe("i18n", () => {
         const i18n = createI18n({ locale: "zh-CN" });
         expect(i18n.t("status.generated")).toBe("世界已生成");
         expect(i18n.t("status.worldDetail", { width: 42, height: 32, seed: "atlas" }))
-            .toBe("42 × 32 · 种子 atlas");
+            .toBe("42 × 32 · 四向循环 · 种子 atlas");
     });
 
     test("keeps English and Chinese catalogs in sync", () => {

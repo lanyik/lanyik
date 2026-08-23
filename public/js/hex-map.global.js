@@ -7725,42 +7725,6 @@
 	    setTimeout(resolve, ms);
 	  });
 	}
-	var GROUND_PLANE = new three.Plane(new three.Vector3(0, 1, 0), 0);
-	function screenToGround(clientX, clientY, canvas, camera) {
-	  const rect = canvas.getBoundingClientRect();
-	  const ndc = new three.Vector2(
-	    (clientX - rect.left) / rect.width * 2 - 1,
-	    -((clientY - rect.top) / rect.height) * 2 + 1
-	  );
-	  const raycaster = new three.Raycaster();
-	  raycaster.setFromCamera(ndc, camera);
-	  const point = new three.Vector3();
-	  return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
-	}
-	function pickTile(worldPoint, size, mapWidth, mapHeight) {
-	  const approxX = worldPoint.x / (size * 1.5);
-	  const approxY = worldPoint.z / (size * Math.sqrt(3));
-	  const x0 = Math.floor(approxX);
-	  const y0 = Math.floor(approxY);
-	  let best = null;
-	  let bestDist = Infinity;
-	  for (let dx = -1; dx <= 1; dx++) {
-	    for (let dy = -1; dy <= 1; dy++) {
-	      const x = x0 + dx;
-	      const y = y0 + dy;
-	      if (x < 0 || y < 0) continue;
-	      if (mapWidth !== void 0 && x >= mapWidth) continue;
-	      if (mapHeight !== void 0 && y >= mapHeight) continue;
-	      const center = getHexCenter(x, y, size);
-	      const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
-	      if (dist < bestDist) {
-	        bestDist = dist;
-	        best = { x, y };
-	      }
-	    }
-	  }
-	  return best;
-	}
 
 	// src/helpers/neighbors.ts
 	var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
@@ -7783,6 +7747,85 @@
 	}
 	function getNeighbors(x, y) {
 	  return NEIGHBOR_DIRECTIONS.map((direction) => ({ direction, ...getNeighborCoords(x, y, direction) }));
+	}
+
+	// src/helpers/topology.ts
+	function positiveModulo(value, modulus) {
+	  return (value % modulus + modulus) % modulus;
+	}
+	function normalizeMapCoordinates(map, x, y) {
+	  if (map.w <= 0 || map.h <= 0) return null;
+	  let normalizedX = x;
+	  let normalizedY = y;
+	  if (map.wrapX) normalizedX = positiveModulo(normalizedX, map.w);
+	  else if (normalizedX < 0 || normalizedX >= map.w) return null;
+	  if (map.wrapY) normalizedY = positiveModulo(normalizedY, map.h);
+	  else if (normalizedY < 0 || normalizedY >= map.h) return null;
+	  return { x: normalizedX, y: normalizedY };
+	}
+	function getMapTile(map, x, y) {
+	  const normalized = normalizeMapCoordinates(map, x, y);
+	  return normalized ? map.data[normalized.x]?.[normalized.y] : void 0;
+	}
+	function getMapNeighbors(map, x, y) {
+	  const seen = /* @__PURE__ */ new Set();
+	  const neighbors = [];
+	  for (const neighbor of getNeighbors(x, y)) {
+	    const normalized = normalizeMapCoordinates(map, neighbor.x, neighbor.y);
+	    if (!normalized) continue;
+	    const key = `${normalized.x},${normalized.y}`;
+	    if (seen.has(key)) continue;
+	    seen.add(key);
+	    neighbors.push({ ...normalized, direction: neighbor.direction });
+	  }
+	  return neighbors;
+	}
+	function assertWrappableMap(map) {
+	  if (map.wrapX && map.w % 2 !== 0) {
+	    throw new RangeError("wrapX requires an even map width");
+	  }
+	}
+
+	// src/helpers/picking.ts
+	var GROUND_PLANE = new three.Plane(new three.Vector3(0, 1, 0), 0);
+	function screenToGround(clientX, clientY, canvas, camera) {
+	  const rect = canvas.getBoundingClientRect();
+	  const ndc = new three.Vector2(
+	    (clientX - rect.left) / rect.width * 2 - 1,
+	    -((clientY - rect.top) / rect.height) * 2 + 1
+	  );
+	  const raycaster = new three.Raycaster();
+	  raycaster.setFromCamera(ndc, camera);
+	  const point = new three.Vector3();
+	  return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
+	}
+	function pickTile(worldPoint, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
+	  const approxX = worldPoint.x / (size * 1.5);
+	  const approxY = worldPoint.z / (size * Math.sqrt(3));
+	  const x0 = Math.floor(approxX);
+	  const y0 = Math.floor(approxY);
+	  let best = null;
+	  let bestDist = Infinity;
+	  for (let dx = -1; dx <= 1; dx++) {
+	    for (let dy = -1; dy <= 1; dy++) {
+	      const rawX = x0 + dx;
+	      const rawY = y0 + dy;
+	      if (!wrapX && rawX < 0 || !wrapY && rawY < 0) continue;
+	      if (!wrapX && mapWidth !== void 0 && rawX >= mapWidth) continue;
+	      if (!wrapY && mapHeight !== void 0 && rawY >= mapHeight) continue;
+	      if (wrapX && mapWidth === void 0) continue;
+	      if (wrapY && mapHeight === void 0) continue;
+	      const x = wrapX ? positiveModulo(rawX, mapWidth) : rawX;
+	      const y = wrapY ? positiveModulo(rawY, mapHeight) : rawY;
+	      const center = getHexCenter(rawX, rawY, size);
+	      const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
+	      if (dist < bestDist) {
+	        bestDist = dist;
+	        best = { x, y, worldX: center.x, worldY: center.y };
+	      }
+	    }
+	  }
+	  return best;
 	}
 
 	// src/helpers/rivers.ts
@@ -7812,12 +7855,12 @@
 	  return tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */;
 	}
 	function waterEdgeValue(map, x, y) {
-	  const tile = map.data[x]?.[y];
+	  const tile = getMapTile(map, x, y);
 	  if (isLakeTile(tile)) {
 	    let openMask = 0, channelMask = 0;
 	    MASK_DIRECTIONS.forEach((direction, bit) => {
 	      const n = getNeighborCoords(x, y, direction);
-	      const neighbor = map.data[n.x]?.[n.y];
+	      const neighbor = getMapTile(map, n.x, n.y);
 	      if (!neighbor) return;
 	      if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
 	      else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
@@ -7828,7 +7871,7 @@
 	    let mask = 0;
 	    MASK_DIRECTIONS.forEach((direction, bit) => {
 	      const n = getNeighborCoords(x, y, direction);
-	      const neighbor = map.data[n.x]?.[n.y];
+	      const neighbor = getMapTile(map, n.x, n.y);
 	      if (!neighbor) return;
 	      if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
 	    });
@@ -7837,34 +7880,34 @@
 	  return -1;
 	}
 	function riverSeaMouthEdgeValue(map, x, y) {
-	  const tile = map.data[x]?.[y];
+	  const tile = getMapTile(map, x, y);
 	  if (!isRiverTile(tile)) return 0;
 	  let mask = 0;
 	  MASK_DIRECTIONS.forEach((direction, bit) => {
 	    const n = getNeighborCoords(x, y, direction);
-	    const neighbor = map.data[n.x]?.[n.y];
+	    const neighbor = getMapTile(map, n.x, n.y);
 	    if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
 	  });
 	  return mask;
 	}
 	function riverLakeMouthEdgeValue(map, x, y) {
-	  const tile = map.data[x]?.[y];
+	  const tile = getMapTile(map, x, y);
 	  if (!isRiverTile(tile)) return 0;
 	  let mask = 0;
 	  MASK_DIRECTIONS.forEach((direction, bit) => {
 	    const n = getNeighborCoords(x, y, direction);
-	    const neighbor = map.data[n.x]?.[n.y];
+	    const neighbor = getMapTile(map, n.x, n.y);
 	    if (isLakeTile(neighbor)) mask |= 1 << bit;
 	  });
 	  return mask;
 	}
 	function lakeNeighborEdgeValue(map, x, y) {
-	  const tile = map.data[x]?.[y];
+	  const tile = getMapTile(map, x, y);
 	  if (!tile || isLakeTile(tile)) return 0;
 	  let mask = 0;
 	  MASK_DIRECTIONS.forEach((direction, bit) => {
 	    const n = getNeighborCoords(x, y, direction);
-	    if (isLakeTile(map.data[n.x]?.[n.y])) mask |= 1 << bit;
+	    if (isLakeTile(getMapTile(map, n.x, n.y))) mask |= 1 << bit;
 	  });
 	  return mask;
 	}
@@ -8104,6 +8147,7 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // flows continuously across every fogged tile - the image tiles seamlessly on
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
 uniform float fogTextureSize;
+uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -8246,7 +8290,7 @@ float mountainHeightAt(vec2 p) {
     if (neighborsKindB.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.y);
     if (neighborsKindB.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.z);
 
-    vec2 w = offset + p;
+    vec2 w = offset + p + worldOffset;
     float n = valueNoise(w * (1.6 / hexSize));
     n = 0.65 * n + 0.35 * valueNoise(w * (4.0 / hexSize));
     return h * (0.72 + 1.1 * (n - 0.5));
@@ -8474,14 +8518,14 @@ void main() {
     vRiverLakeMouthEdges = riverLakeMouthEdges;
     vLakeNeighborEdges = lakeNeighborEdges;
     vLocal = local;
-    vWorldXZ = pos.xz;
+    vWorldXZ = pos.xz + worldOffset;
     // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
     // upright from this map's camera: the camera's azimuth is locked to ~90deg
     // (see HexMap's setupControls), which puts screen-right along world -Z and
     // screen-up along world -X - mapping u to -z and v to -x orients the
     // texture to the screen and keeps it un-mirrored when viewed from above.
     // Negation is free for a seamlessly wrapping texture (just a phase shift).
-    vFogUV = vec2(-pos.z, -pos.x) / fogTextureSize;
+    vFogUV = vec2(-(pos.z + worldOffset.y), -(pos.x + worldOffset.x)) / fogTextureSize;
 }
 `;
 
@@ -9063,6 +9107,7 @@ uniform float waveSpeed;
 uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
+uniform vec2 worldOffset; // translation of a repeated toroidal world copy
 
 attribute vec3 position;
 attribute vec2 uv;
@@ -9194,7 +9239,7 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 worldXZ = offset + position.xz;
+    vec2 worldXZ = offset + position.xz + worldOffset;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -9223,7 +9268,7 @@ void main() {
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
-    vWorldPos = pos;
+    vWorldPos = pos + vec3(worldOffset.x, 0.0, worldOffset.y);
 
     // Rim distance for the grid line - see terrain.vertex.ts's rimFactor
     // comment: radial distance from center is wrong for a hexagon (it dips to
@@ -9564,8 +9609,7 @@ void main() {
 	  //Atlas cell index for a tile's terrain type. Returns -1 if the tile doesn't
 	  //exist (used for out-of-map neighbors).
 	  cellIndexFor(x, y) {
-	    const row = this.map.data[x];
-	    const tile = row ? row[y] : void 0;
+	    const tile = getMapTile(this.map, x, y);
 	    if (!tile) return -1;
 	    const cell = this.atlasCellIndex[tile.type];
 	    return cell === void 0 ? -1 : cell;
@@ -9574,15 +9618,13 @@ void main() {
 	  //Returns -Infinity for out-of-map neighbors so a border tile never blends
 	  //towards "nothing".
 	  priorityFor(x, y) {
-	    const row = this.map.data[x];
-	    const tile = row ? row[y] : void 0;
+	    const tile = getMapTile(this.map, x, y);
 	    return tile ? LandPriority[tile.type] : -Infinity;
 	  }
 	  //-1 no tile, 0 non-water, 1 sea, 2 coastal - drives the land layer's beach
 	  //slope and the water layer's edge-color resolution (see shaders).
 	  kindFor(x, y) {
-	    const row = this.map.data[x];
-	    const tile = row ? row[y] : void 0;
+	    const tile = getMapTile(this.map, x, y);
 	    if (!tile) return -1;
 	    const waterIndex = WATER_TYPES.indexOf(tile.type);
 	    return waterIndex === -1 ? 0 : waterIndex + 1;
@@ -9731,6 +9773,7 @@ void main() {
 	    tiles.forEach((tile, i) => this.tileIndex.set(`${tile.x},${tile.y}`, i));
 	    this.landMaterial = new three.RawShaderMaterial({
 	      uniforms: {
+	        worldOffset: { value: new three.Vector2(0, 0) },
 	        landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
 	        landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
 	        mountainAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] ?? -2 },
@@ -9773,6 +9816,7 @@ void main() {
 	    tiles.forEach((tile, i) => this.waterTileIndex.set(`${tile.x},${tile.y}`, i));
 	    this.waterMaterial = new three.RawShaderMaterial({
 	      uniforms: {
+	        worldOffset: { value: new three.Vector2(0, 0) },
 	        uTime: { value: 0 },
 	        waveAmplitude: { value: this.options.waterWaveAmplitude ?? 1.6 },
 	        waveFrequency: { value: 0.045 * (this.options.waterWaveFrequency ?? 1) },
@@ -10193,14 +10237,14 @@ void main() {
 	  return mix(Math.max(dA, dB), Math.hypot(dA, dB), clamp(waterCornerRounding, 0, 1));
 	}
 	function isInCoastalShore(map, tileX, tileY, localX, localY, worldX, worldY, size, options = {}) {
-	  const tile = map.data[tileX]?.[tileY];
+	  const tile = getMapTile(map, tileX, tileY);
 	  if (!tile || isWater(tile)) return true;
 	  const apothem = size * 0.8660254;
 	  const waterByDirection = /* @__PURE__ */ new Map();
 	  const factorByDirection = /* @__PURE__ */ new Map();
 	  for (const direction of COAST_DIRECTIONS) {
 	    const neighbor = getNeighborCoords(tileX, tileY, direction);
-	    waterByDirection.set(direction, isWater(map.data[neighbor.x]?.[neighbor.y]));
+	    waterByDirection.set(direction, isWater(getMapTile(map, neighbor.x, neighbor.y)));
 	    const dir = DIRS[direction];
 	    factorByDirection.set(direction, (localX * dir.x + localY * dir.y) / apothem);
 	  }
@@ -10233,14 +10277,14 @@ void main() {
 	  return curvedCoast >= beachStart;
 	}
 	function isInLakeShore(map, tileX, tileY, localX, localY, worldX, worldY, size, options = {}) {
-	  const tile = map.data[tileX]?.[tileY];
+	  const tile = getMapTile(map, tileX, tileY);
 	  if (!tile || isLake(tile)) return true;
 	  const apothem = size * 0.8660254;
 	  const lakeByDirection = /* @__PURE__ */ new Map();
 	  const factorByDirection = /* @__PURE__ */ new Map();
 	  for (const direction of COAST_DIRECTIONS) {
 	    const neighbor = getNeighborCoords(tileX, tileY, direction);
-	    lakeByDirection.set(direction, isLake(map.data[neighbor.x]?.[neighbor.y]));
+	    lakeByDirection.set(direction, isLake(getMapTile(map, neighbor.x, neighbor.y)));
 	    const dir = DIRS[direction];
 	    factorByDirection.set(direction, (localX * dir.x + localY * dir.y) / apothem);
 	  }
@@ -10402,6 +10446,7 @@ uniform mat4 projectionMatrix;
 uniform float uTime;
 uniform float windStrength;
 uniform float windSpeed;
+uniform vec2 worldOffset;
 
 // Blade shape authored once in local space (see Grass.ts buildBladeGeometry):
 // x spans [-0.5, 0.5] at the root and tapers to 0 at the tip, y is a plain
@@ -10431,7 +10476,7 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    float wave = sin(uTime * windSpeed + phase + (offset.x + offset.y) * 0.015);
+    float wave = sin(uTime * windSpeed + phase + (offset.x + worldOffset.x + offset.y + worldOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
     rotated.z += bend * 0.4;
@@ -10610,6 +10655,7 @@ void main() {
 	  geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
 	  const material = new three.RawShaderMaterial({
 	    uniforms: {
+	      worldOffset: { value: new three.Vector2(0, 0) },
 	      uTime: { value: 0 },
 	      windStrength: { value: windStrength },
 	      windSpeed: { value: windSpeed },
@@ -10626,17 +10672,17 @@ void main() {
 
 	// src/helpers/fog.ts
 	function tilesWithinRange(map, x, y, range) {
-	  if (range < 0 || !map.data[x]?.[y]) return [];
-	  const visited = /* @__PURE__ */ new Set([`${x},${y}`]);
-	  const result = [{ x, y }];
-	  let frontier = [{ x, y }];
+	  const origin = normalizeMapCoordinates(map, x, y);
+	  if (range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
+	  const visited = /* @__PURE__ */ new Set([`${origin.x},${origin.y}`]);
+	  const result = [origin];
+	  let frontier = [origin];
 	  for (let step = 0; step < range; step++) {
 	    const next = [];
 	    for (const tile of frontier) {
-	      for (const n of getNeighbors(tile.x, tile.y)) {
+	      for (const n of getMapNeighbors(map, tile.x, tile.y)) {
 	        const key = `${n.x},${n.y}`;
 	        if (visited.has(key)) continue;
-	        if (!map.data[n.x]?.[n.y]) continue;
 	        visited.add(key);
 	        next.push({ x: n.x, y: n.y });
 	        result.push({ x: n.x, y: n.y });
@@ -10763,6 +10809,10 @@ void main() {
 	var HexMap = class extends EventEmitter {
 	  constructor(options) {
 	    super();
+	    this.worldCopies = [];
+	    this.worldCopyMaterials = [];
+	    this.worldPatternOffset = new three.Vector2();
+	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
@@ -10785,34 +10835,61 @@ void main() {
 	    this.animate = (t) => {
 	      const dtS = this.lastFrameTime === void 0 ? 0 : (t - this.lastFrameTime) / 1e3;
 	      this.lastFrameTime = t;
+	      this.updateKeyboardMovement(Math.min(dtS, 0.05));
+	      this.controls.update(dtS);
+	      this.wrapCameraToWorld();
 	      this.terrain?.update(dtS);
 	      this.grass?.update(dtS);
 	      this.emit("frame", { t });
 	      this.renderer.render(this.scene, this.camera);
 	      window.requestAnimationFrame(this.animate);
 	    };
+	    this.onKeyDown = (event) => {
+	      if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
+	      this.pressedMovementKeys.add(event.code);
+	      event.preventDefault();
+	    };
+	    this.onKeyUp = (event) => {
+	      if (!this.isMovementKey(event.code)) return;
+	      this.pressedMovementKeys.delete(event.code);
+	      event.preventDefault();
+	    };
+	    this.clearMovementKeys = () => {
+	      this.pressedMovementKeys.clear();
+	    };
 	    //-------------------------------------------------------------------------
 	    //Picking (analytic, ground-plane based - see helpers/picking.ts)
 	    //-------------------------------------------------------------------------
 	    this.onMouseDown = (event) => {
+	      if (event.button !== 0) {
+	        this.mouseDownAt = null;
+	        return;
+	      }
 	      this.mouseDownAt = { x: event.clientX, y: event.clientY };
 	    };
 	    this.onPointerMove = (event) => {
 	      const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
 	      if (!ground) return;
-	      const tileCoords = pickTile(ground, this.options.size, this.mapData?.w, this.mapData?.h);
+	      const tileCoords = pickTile(
+	        ground,
+	        this.options.size,
+	        this.mapData?.w,
+	        this.mapData?.h,
+	        this.mapData?.wrapX,
+	        this.mapData?.wrapY
+	      );
 	      if (!tileCoords) return;
 	      if (this.lastHover && this.lastHover.x === tileCoords.x && this.lastHover.y === tileCoords.y) return;
 	      this.lastHover = tileCoords;
 	      const tile = this.getTile(tileCoords.x, tileCoords.y);
 	      if (!tile) return;
-	      const center = getHexCenter(tileCoords.x, tileCoords.y, this.options.size);
 	      this.pointer.visible = true;
-	      this.pointer.position.setX(center.x);
-	      this.pointer.position.setZ(center.y);
+	      this.pointer.position.setX(tileCoords.worldX);
+	      this.pointer.position.setZ(tileCoords.worldY);
 	      this.emit("hover", { x: tileCoords.x, y: tileCoords.y, tile });
 	    };
 	    this.onMouseUp = (event) => {
+	      if (event.button !== 0) return;
 	      const downAt = this.mouseDownAt;
 	      this.mouseDownAt = null;
 	      if (!downAt) return;
@@ -10820,11 +10897,20 @@ void main() {
 	      if (dragDistance > 4) return;
 	      const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
 	      if (!ground) return;
-	      const tileCoords = pickTile(ground, this.options.size, this.mapData?.w, this.mapData?.h);
+	      const tileCoords = pickTile(
+	        ground,
+	        this.options.size,
+	        this.mapData?.w,
+	        this.mapData?.h,
+	        this.mapData?.wrapX,
+	        this.mapData?.wrapY
+	      );
 	      if (!tileCoords) return;
 	      const tile = this.getTile(tileCoords.x, tileCoords.y);
 	      if (!tile) return;
 	      this.selectTile(tileCoords.x, tileCoords.y);
+	      this.selector.position.setX(tileCoords.worldX);
+	      this.selector.position.setZ(tileCoords.worldY);
 	      this.emit("click", { x: tileCoords.x, y: tileCoords.y, tile });
 	    };
 	    const waterDepth = options.waterDepth ?? (options.size ?? DEFAULT_OPTIONS.size) * 0.25;
@@ -10876,16 +10962,17 @@ void main() {
 	  }
 	  setupControls() {
 	    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-	    this.controls.mouseButtons = { LEFT: three.MOUSE.PAN, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE };
+	    this.controls.mouseButtons = { LEFT: null, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE };
 	    this.controls.touches = { ONE: three.TOUCH.PAN, TWO: three.TOUCH.DOLLY_ROTATE };
+	    this.controls.enableDamping = true;
 	    this.controls.dampingFactor = 0.05;
 	    this.controls.screenSpacePanning = false;
 	    this.controls.minDistance = 100;
 	    this.controls.maxDistance = 800;
-	    this.controls.minAzimuthAngle = 80 * (Math.PI / 180);
-	    this.controls.maxAzimuthAngle = 100 * (Math.PI / 180);
-	    this.controls.minPolarAngle = 10 * (Math.PI / 180);
-	    this.controls.maxPolarAngle = 90 * (Math.PI / 180);
+	    this.controls.minAzimuthAngle = -Infinity;
+	    this.controls.maxAzimuthAngle = Infinity;
+	    this.controls.minPolarAngle = 15 * (Math.PI / 180);
+	    this.controls.maxPolarAngle = 85 * (Math.PI / 180);
 	  }
 	  //The initial camera position/target (set in setupCamera(), before map data
 	  //is known) looks at world origin, which is only the map's (0,0) corner, not
@@ -10905,6 +10992,164 @@ void main() {
 	    this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
 	    this.controls.update();
 	  }
+	  get worldPeriodX() {
+	    return this.mapData ? this.mapData.w * this.options.size * 1.5 : 0;
+	  }
+	  get worldPeriodY() {
+	    return this.mapData ? this.mapData.h * this.options.size * Math.sqrt(3) : 0;
+	  }
+	  wrapCameraToWorld() {
+	    if (!this.mapData) return;
+	    let shifted = false;
+	    let patternShiftX = 0;
+	    let patternShiftY = 0;
+	    if (this.mapData.wrapX && this.worldPeriodX > 0) {
+	      const wrapped = positiveModulo(this.controls.target.x, this.worldPeriodX);
+	      const delta = wrapped - this.controls.target.x;
+	      if (Math.abs(delta) > 1e-4) {
+	        this.controls.target.x += delta;
+	        this.camera.position.x += delta;
+	        patternShiftX -= delta;
+	        shifted = true;
+	      }
+	    }
+	    if (this.mapData.wrapY && this.worldPeriodY > 0) {
+	      const wrapped = positiveModulo(this.controls.target.z, this.worldPeriodY);
+	      const delta = wrapped - this.controls.target.z;
+	      if (Math.abs(delta) > 1e-4) {
+	        this.controls.target.z += delta;
+	        this.camera.position.z += delta;
+	        patternShiftY -= delta;
+	        shifted = true;
+	      }
+	    }
+	    if (shifted) {
+	      this.shiftWorldPattern(patternShiftX, patternShiftY);
+	      this.updateMarkerPositions();
+	    }
+	  }
+	  nearestRepeatedCenter(x, y, reference = this.controls.target) {
+	    const center = getHexCenter(x, y, this.options.size);
+	    if (this.mapData?.wrapX && this.worldPeriodX > 0) {
+	      center.x += Math.round((reference.x - center.x) / this.worldPeriodX) * this.worldPeriodX;
+	    }
+	    if (this.mapData?.wrapY && this.worldPeriodY > 0) {
+	      center.y += Math.round((reference.z - center.y) / this.worldPeriodY) * this.worldPeriodY;
+	    }
+	    return center;
+	  }
+	  positionMarker(marker, tile, reference = this.controls.target) {
+	    const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
+	    marker.position.setX(center.x);
+	    marker.position.setZ(center.y);
+	  }
+	  updateMarkerPositions() {
+	    if (this.lastHover && this.pointer.visible) this.positionMarker(this.pointer, this.lastHover);
+	    if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
+	  }
+	  clearWorldCopies() {
+	    for (const copy of this.worldCopies) this.scene.remove(copy);
+	    for (const material of this.worldCopyMaterials) material.dispose();
+	    this.worldCopies = [];
+	    this.worldCopyMaterials = [];
+	  }
+	  materialForWorldCopy(material, offsetX, offsetY) {
+	    if (!(material instanceof three.RawShaderMaterial) || !material.uniforms.worldOffset) return material;
+	    const copy = material.clone();
+	    copy.uniforms = {
+	      ...material.uniforms,
+	      worldOffset: { value: new three.Vector2(
+	        this.worldPatternOffset.x + offsetX,
+	        this.worldPatternOffset.y + offsetY
+	      ) }
+	    };
+	    this.worldCopyMaterials.push(copy);
+	    return copy;
+	  }
+	  applyWorldPatternToObject(object) {
+	    object?.traverse((child) => {
+	      const mesh = child;
+	      if (!mesh.isMesh) return;
+	      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+	      for (const material of materials) {
+	        if (material instanceof three.RawShaderMaterial && material.uniforms.worldOffset) {
+	          material.uniforms.worldOffset.value.copy(this.worldPatternOffset);
+	        }
+	      }
+	    });
+	  }
+	  shiftWorldPattern(offsetX, offsetY) {
+	    if (offsetX === 0 && offsetY === 0) return;
+	    this.worldPatternOffset.x += offsetX;
+	    this.worldPatternOffset.y += offsetY;
+	    this.applyWorldPatternToObject(this.terrain);
+	    this.applyWorldPatternToObject(this.grass);
+	    for (const material of this.worldCopyMaterials) {
+	      material.uniforms.worldOffset.value.x += offsetX;
+	      material.uniforms.worldOffset.value.y += offsetY;
+	    }
+	  }
+	  cloneWorldObject(source, offsetX, offsetY) {
+	    let copy;
+	    if (source instanceof three.InstancedMesh) {
+	      const instancedCopy = new three.InstancedMesh(source.geometry, source.material, source.count);
+	      instancedCopy.copy(source, false);
+	      instancedCopy.instanceMatrix = source.instanceMatrix;
+	      instancedCopy.instanceColor = source.instanceColor;
+	      instancedCopy.count = source.count;
+	      copy = instancedCopy;
+	    } else {
+	      copy = source.clone(true);
+	    }
+	    copy.traverse((object) => {
+	      const mesh = object;
+	      if (!mesh.isMesh) return;
+	      if (Array.isArray(mesh.material)) {
+	        mesh.material = mesh.material.map((material) => this.materialForWorldCopy(material, offsetX, offsetY));
+	      } else {
+	        mesh.material = this.materialForWorldCopy(mesh.material, offsetX, offsetY);
+	      }
+	    });
+	    return copy;
+	  }
+	  copyOffsets(wrapped, period) {
+	    if (!wrapped || period <= 0) return [0];
+	    const radius = Math.max(1, Math.ceil(this.controls.maxDistance / period));
+	    return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
+	  }
+	  refreshWorldCopies() {
+	    this.clearWorldCopies();
+	    if (!this.mapData || !this.mapData.wrapX && !this.mapData.wrapY) return;
+	    const xOffsets = this.copyOffsets(this.mapData.wrapX, this.worldPeriodX);
+	    const yOffsets = this.copyOffsets(this.mapData.wrapY, this.worldPeriodY);
+	    for (const copyX of xOffsets) {
+	      for (const copyY of yOffsets) {
+	        if (copyX === 0 && copyY === 0) continue;
+	        const offsetX = copyX * this.worldPeriodX;
+	        const offsetY = copyY * this.worldPeriodY;
+	        const group = new three.Group();
+	        group.position.set(offsetX, 0, offsetY);
+	        for (const child of this.terrain?.children ?? []) {
+	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	        }
+	        for (const child of this.forest?.children ?? []) {
+	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	        }
+	        if (this.grass) {
+	          const grassCopy = new three.Mesh(this.grass.geometry, this.grass.material);
+	          grassCopy.copy(this.grass, false);
+	          if (Array.isArray(grassCopy.material)) {
+	            grassCopy.material = grassCopy.material.map((material) => this.materialForWorldCopy(material, offsetX, offsetY));
+	          } else {
+	            grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
+	          }
+	          group.add(grassCopy);
+	        }
+	        this.worldCopies.push(group);
+	        this.scene.add(group);
+	      }
+	    }
+	  }
 	  setupMarkers() {
 	    const size = this.options.size;
 	    const selectorGeom = new three.RingGeometry(0.97 * size, size, 6, 2);
@@ -10922,9 +11167,38 @@ void main() {
 	  }
 	  setupEvents() {
 	    window.addEventListener("resize", this.handleResize, { passive: true });
+	    window.addEventListener("keydown", this.onKeyDown);
+	    window.addEventListener("keyup", this.onKeyUp);
+	    window.addEventListener("blur", this.clearMovementKeys);
 	    this.canvas.addEventListener("mousedown", this.onMouseDown);
+	    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 	    window.addEventListener("pointermove", this.onPointerMove);
 	    window.addEventListener("mouseup", this.onMouseUp);
+	  }
+	  isMovementKey(code) {
+	    return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
+	  }
+	  isTextInput(target) {
+	    if (!(target instanceof HTMLElement)) return false;
+	    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
+	  }
+	  updateKeyboardMovement(dtS) {
+	    if (dtS <= 0 || this.pressedMovementKeys.size === 0) return;
+	    const forwardAmount = Number(this.pressedMovementKeys.has("KeyW")) - Number(this.pressedMovementKeys.has("KeyS"));
+	    const rightAmount = Number(this.pressedMovementKeys.has("KeyD")) - Number(this.pressedMovementKeys.has("KeyA"));
+	    if (forwardAmount === 0 && rightAmount === 0) return;
+	    const forward = this.controls.target.clone().sub(this.camera.position);
+	    forward.y = 0;
+	    if (forward.lengthSq() < 1e-4) forward.set(0, 0, -1);
+	    else forward.normalize();
+	    const right = new three.Vector3(-forward.z, 0, forward.x);
+	    const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
+	    if (movement.lengthSq() > 1) movement.normalize();
+	    const viewDistance = this.camera.position.distanceTo(this.controls.target);
+	    const speed = Math.min(900, Math.max(140, viewDistance * 0.9));
+	    movement.multiplyScalar(speed * dtS);
+	    this.camera.position.add(movement);
+	    this.controls.target.add(movement);
 	  }
 	  //-------------------------------------------------------------------------
 	  //Public API
@@ -10933,6 +11207,8 @@ void main() {
 	  //atlas descriptor (land-atlas.json) from texturesBaseUrl; textures themselves
 	  //load in the background as usual for three.js.
 	  async load(mapData) {
+	    assertWrappableMap(mapData);
+	    this.worldPatternOffset.set(0, 0);
 	    this.mapData = mapData;
 	    this.fogStates.clear();
 	    this.frameMap(mapData);
@@ -10949,6 +11225,7 @@ void main() {
 	  //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
 	  //(waterWaveAmplitude, beachWidth, etc.)
 	  async rebuildTerrain() {
+	    this.clearWorldCopies();
 	    if (this.terrain) {
 	      this.scene.remove(this.terrain);
 	      this.terrain.dispose();
@@ -10998,9 +11275,11 @@ void main() {
 	      fogDarkenFactor: this.options.fogDarkenFactor,
 	      fogTextureSize: this.options.fogTextureSize
 	    });
+	    this.applyWorldPatternToObject(this.terrain);
 	    this.scene.add(this.terrain);
 	    await this.terrain.loadCities();
 	    this.reapplyFog();
+	    this.refreshWorldCopies();
 	  }
 	  //Tears down and recreates the tree instances from the current tree*
 	  //options. treesPerTile/treeScale are baked into the instanced geometry's
@@ -11008,6 +11287,7 @@ void main() {
 	  //uniform for them, only a rebuild. Model files are cached (see
 	  //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
 	  async rebuildForest() {
+	    this.clearWorldCopies();
 	    if (this.forest) {
 	      this.scene.remove(this.forest);
 	      this.forest.traverse((o) => o.geometry?.dispose());
@@ -11032,6 +11312,7 @@ void main() {
 	      this.scene.add(this.forest);
 	      this.reapplyFog();
 	    }
+	    this.refreshWorldCopies();
 	  }
 	  //Tears down and recreates the grass field from the current grass* options
 	  //against the already-loaded map data. Grass is purely procedural (no
@@ -11040,6 +11321,7 @@ void main() {
 	  //grassBladeHeight setters below) - a rebuild replaces the whole instanced
 	  //geometry, there's no partial/incremental update.
 	  rebuildGrass() {
+	    this.clearWorldCopies();
 	    if (this.grass) {
 	      this.scene.remove(this.grass);
 	      this.grass.dispose();
@@ -11059,14 +11341,16 @@ void main() {
 	      riverCurvature: this.options.riverCurvature,
 	      lakeShoreWidth: this.options.lakeShoreWidth
 	    }) ?? void 0;
+	    this.applyWorldPatternToObject(this.grass);
 	    if (this.grass) {
 	      this.grass.visible = this.options.grassEnabled;
 	      this.scene.add(this.grass);
 	      this.reapplyFog();
 	    }
+	    this.refreshWorldCopies();
 	  }
 	  getTile(x, y) {
-	    return this.mapData?.data[x]?.[y];
+	    return this.mapData ? getMapTile(this.mapData, x, y) : void 0;
 	  }
 	  //-------------------------------------------------------------------------
 	  //Fog of war (see objects/FogOfWar.ts) - updates one tile's terrain, grass
@@ -11381,6 +11665,7 @@ void main() {
 	  set grassVisible(value) {
 	    this.options.grassEnabled = value;
 	    if (this.grass) this.grass.visible = value;
+	    this.refreshWorldCopies();
 	  }
 	  //Wind uniforms are cheap to update live - no rebuild needed.
 	  get grassWindStrength() {
@@ -11421,11 +11706,11 @@ void main() {
 	    this.rebuildGrass();
 	  }
 	  selectTile(x, y) {
-	    const center = getHexCenter(x, y, this.options.size);
+	    const normalized = this.mapData ? normalizeMapCoordinates(this.mapData, x, y) : { x, y };
+	    if (!normalized) return;
 	    this.selector.visible = true;
-	    this.selector.position.setX(center.x);
-	    this.selector.position.setZ(center.y);
-	    this.lastSelected = { x, y };
+	    this.positionMarker(this.selector, normalized);
+	    this.lastSelected = normalized;
 	  }
 	  get selectedTile() {
 	    return this.lastSelected;
@@ -11435,9 +11720,12 @@ void main() {
 	  }
 	  drawRoutePath(path) {
 	    this.cleanRoutePath();
+	    let reference = this.controls.target;
 	    const points = path.map((p) => {
-	      const center = getHexCenter(p.x, p.y, this.options.size);
-	      return new three.Vector3(center.x, 10, center.y);
+	      const center = this.nearestRepeatedCenter(p.x, p.y, reference);
+	      const point = new three.Vector3(center.x, 10, center.y);
+	      reference = point;
+	      return point;
 	    });
 	    const geometry = new three.BufferGeometry().setFromPoints(points);
 	    const material = new three.LineBasicMaterial({ color: 16711680, linewidth: 5 });
@@ -11643,6 +11931,8 @@ void main() {
 	    this.mapSizeX = map.w;
 	    this.mapSizeY = map.h;
 	    this.mapArray = map.data;
+	    this.wrapX = map.wrapX === true;
+	    this.wrapY = map.wrapY === true;
 	    this.restricted = restricted;
 	    this.accessible = accessible;
 	  }
@@ -11783,6 +12073,8 @@ void main() {
 	            }
 	            break;
 	        }
+	        if (this.wrapX) node_x = positiveModulo(node_x, this.mapSizeX);
+	        if (this.wrapY) node_y = positiveModulo(node_y, this.mapSizeY);
 	        if (this.hex_accessible(node_x, node_y)) {
 	          if (statelist[node_x][node_y] == true) {
 	            if (openlist_g[lowest_x][lowest_y] + 10 < openlist_g[node_x][node_y]) {
@@ -11862,9 +12154,19 @@ void main() {
 	  // The old Euclidean distance overestimates on a hex grid, making the A*
 	  // heuristic inadmissible - paths came out longer than needed.
 	  hex_distance(x1, y1, x2, y2) {
-	    const dq = x1 - x2;
-	    const dr = y1 - this.row_shift(x1) - (y2 - this.row_shift(x2));
-	    return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+	    let best = Infinity;
+	    const xCopies = this.wrapX ? [-1, 0, 1] : [0];
+	    const yCopies = this.wrapY ? [-1, 0, 1] : [0];
+	    for (const copyX of xCopies) {
+	      for (const copyY of yCopies) {
+	        const targetX = x2 + copyX * this.mapSizeX;
+	        const targetY = y2 + copyY * this.mapSizeY;
+	        const dq = x1 - targetX;
+	        const dr = y1 - this.row_shift(x1) - (targetY - this.row_shift(targetX));
+	        best = Math.min(best, (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2);
+	      }
+	    }
+	    return best;
 	  }
 	  // how far a column's tiles are shifted in axial space (offset -> axial)
 	  row_shift(x) {
@@ -12009,6 +12311,9 @@ void main() {
 	}
 	var smooth = (value) => value * value * (3 - 2 * value);
 	var lerp = (from, to, amount) => from + (to - from) * amount;
+	function positiveModulo2(value, modulus) {
+	  return (value % modulus + modulus) % modulus;
+	}
 	function valueNoise2D(seed, x, y) {
 	  const x0 = Math.floor(x);
 	  const y0 = Math.floor(y);
@@ -12031,6 +12336,45 @@ void main() {
 	  }
 	  return total / normalization;
 	}
+	function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+	  const px = Math.max(1, Math.round(periodX));
+	  const py = Math.max(1, Math.round(periodY));
+	  const x0 = Math.floor(x);
+	  const y0 = Math.floor(y);
+	  const tx = smooth(x - x0);
+	  const ty = smooth(y - y0);
+	  const sample = (gx, gy) => randomGridValue(
+	    seed,
+	    positiveModulo2(gx, px),
+	    positiveModulo2(gy, py)
+	  );
+	  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+	  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+	  return lerp(top, bottom, ty);
+	}
+	function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+	  const baseCellsX = Math.max(1, Math.round(cellsX));
+	  const baseCellsY = Math.max(1, Math.round(cellsY));
+	  let amplitude = 1;
+	  let frequency = 1;
+	  let total = 0;
+	  let normalization = 0;
+	  for (let octave = 0; octave < octaves; octave += 1) {
+	    const periodX = baseCellsX * frequency;
+	    const periodY = baseCellsY * frequency;
+	    total += periodicValueNoise2D(
+	      seed + Math.imul(octave, 2654435769) >>> 0,
+	      normalizedX * periodX,
+	      normalizedY * periodY,
+	      periodX,
+	      periodY
+	    ) * amplitude;
+	    normalization += amplitude;
+	    amplitude *= 0.5;
+	    frequency *= 2;
+	  }
+	  return total / normalization;
+	}
 	function randomAt(seed, x, y, salt) {
 	  return randomGridValue((seed ^ salt) >>> 0, x, y);
 	}
@@ -12045,7 +12389,7 @@ void main() {
 	    throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
 	  }
 	}
-	function sampleClimate(seed, x, y, width, height) {
+	function sampleBoundedClimate(seed, x, y, width, height) {
 	  const nx = width === 1 ? 0 : x / (width - 1) * 2 - 1;
 	  const ny = height === 1 ? 0 : y / (height - 1) * 2 - 1;
 	  const edge = Math.max(Math.abs(nx), Math.abs(ny));
@@ -12055,6 +12399,47 @@ void main() {
 	  const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
 	  const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.07, y * 0.07, 3);
 	  const latitude = Math.abs(ny);
+	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
+	  return { elevation, moisture, temperature };
+	}
+	function sampleToroidalClimate(seed, x, y, width, height) {
+	  const nx = x / width;
+	  const ny = y / height;
+	  const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
+	  const continent = periodicFractalNoise2D(
+	    seed,
+	    nx,
+	    ny,
+	    cells(0.055, width, 2),
+	    cells(0.055, height, 2),
+	    5
+	  );
+	  const detail = periodicFractalNoise2D(
+	    seed ^ 2738958700,
+	    nx,
+	    ny,
+	    cells(0.14, width, 3),
+	    cells(0.14, height, 3),
+	    3
+	  );
+	  const elevation = continent * 0.78 + detail * 0.22 + 0.03;
+	  const moisture = periodicFractalNoise2D(
+	    seed ^ 3355524772,
+	    nx,
+	    ny,
+	    cells(0.08, width, 2),
+	    cells(0.08, height, 2),
+	    4
+	  );
+	  const temperatureNoise = periodicFractalNoise2D(
+	    seed ^ 2911926141,
+	    nx,
+	    ny,
+	    cells(0.07, width, 2),
+	    cells(0.07, height, 2),
+	    3
+	  );
+	  const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
 	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
 	  return { elevation, moisture, temperature };
 	}
@@ -12084,31 +12469,36 @@ void main() {
 	  if (modifiers.length > 0) tile.modifiers = modifiers;
 	  return tile;
 	}
-	function generateWorld({ seed, width, height }) {
+	function generateWorld({ seed, width, height, topology = "bounded" }) {
 	  assertDimension("width", width);
 	  assertDimension("height", height);
+	  if (topology === "toroidal" && width % 2 !== 0) {
+	    throw new RangeError("toroidal worlds require an even width");
+	  }
 	  const numericSeed = seedToUint32(seed);
 	  const data = {};
+	  const toroidal = topology === "toroidal";
 	  for (let x = 0; x < width; x += 1) {
 	    data[x] = {};
 	    for (let y = 0; y < height; y += 1) {
-	      const climate = sampleClimate(numericSeed, x, y, width, height);
+	      const climate = toroidal ? sampleToroidalClimate(numericSeed, x, y, width, height) : sampleBoundedClimate(numericSeed, x, y, width, height);
 	      const type = classifyTerrain(climate);
 	      data[x][y] = decorateTile(numericSeed, x, y, climate, type);
 	    }
 	  }
+	  const world = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
 	  for (let x = 0; x < width; x += 1) {
 	    for (let y = 0; y < height; y += 1) {
 	      const tile = data[x][y];
 	      if (tile.type !== "sea" /* sea */) continue;
-	      const touchesLand = getNeighbors(x, y).some(({ x: nx, y: ny }) => {
+	      const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
 	        const neighbor = data[nx]?.[ny];
 	        return neighbor !== void 0 && !isWater2(neighbor.type);
 	      });
 	      if (touchesLand) tile.type = "coastal" /* coastal */;
 	    }
 	  }
-	  return { data, w: width, h: height };
+	  return world;
 	}
 
 	exports.EventEmitter = EventEmitter;
@@ -12128,8 +12518,12 @@ void main() {
 	exports.UnitActions = UnitActions;
 	exports.generateWorld = generateWorld;
 	exports.getHexCenter = getHexCenter;
+	exports.getMapNeighbors = getMapNeighbors;
+	exports.getMapTile = getMapTile;
 	exports.getNeighborCoords = getNeighborCoords;
 	exports.getNeighbors = getNeighbors;
+	exports.normalizeMapCoordinates = normalizeMapCoordinates;
+	exports.positiveModulo = positiveModulo;
 
 }));
 //# sourceMappingURL=hex-map.global.js.map
