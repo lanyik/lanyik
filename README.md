@@ -1,5 +1,9 @@
 # three-hex-map
 
+Project repository reference: [lanyik/lanyik](https://github.com/lanyik/lanyik).
+This customized build is based on the original
+[gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map) project.
+
 ## Procedural world demo
 
 This fork starts as a graphics-only Civilization-style world viewer. It keeps the upstream instanced terrain, water, coast, mountain, grass, and forest rendering, and adds deterministic world generation from a seed.
