@@ -218,6 +218,11 @@ export class TerrainMesh extends Group {
     private landMaterial: RawShaderMaterial | undefined;
     private waterMesh: Mesh | undefined;
     private waterMaterial: RawShaderMaterial | undefined;
+    //Distant toroidal repeats use the same instance data/materials as the
+    //primary layers but cheaper shared hex geometry. They are templates only:
+    //HexMap clones them into the surrounding world patches as needed.
+    private worldCopyLayers: Mesh[] = [];
+    private worldCopyGeometries: InstancedBufferGeometry[] = [];
     private tileIndex = new Map<string, number>(); // "x,y" -> instance index (land layer only)
     private waterTileIndex = new Map<string, number>(); // "x,y" -> instance index (water layer only)
     private cityFog = new Map<string, CityFogEntry>(); // "x,y" -> that tile's city model/label
@@ -391,6 +396,50 @@ export class TerrainMesh extends Group {
         return geometry;
     }
 
+    private buildWorldCopyLayer(
+        source: InstancedBufferGeometry,
+        material: RawShaderMaterial,
+        numSubdivisions: number,
+        name: string
+    ): void {
+        const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
+        const geometry = new InstancedBufferGeometry();
+        geometry.setAttribute("position", hexagon.getAttribute("position"));
+        geometry.setAttribute("uv", hexagon.getAttribute("uv"));
+        geometry.setIndex(hexagon.getIndex());
+        geometry.instanceCount = source.instanceCount;
+
+        //All per-tile state stays shared with the primary layer. Fog updates
+        //and future point edits therefore reach every LOD repeat immediately
+        //without walking through every cloned patch.
+        for (const attributeName of [
+            "offset",
+            "style",
+            "neighborsA",
+            "neighborsB",
+            "neighborsPriorityA",
+            "neighborsPriorityB",
+            "neighborsKindA",
+            "neighborsKindB",
+            "riverEdges",
+            "riverSeaMouthEdges",
+            "riverLakeMouthEdges",
+            "lakeNeighborEdges",
+            "fogState"
+        ]) {
+            geometry.setAttribute(attributeName, source.getAttribute(attributeName));
+        }
+
+        const layer = new Mesh(geometry, material);
+        layer.name = name;
+        //The vertex shader recenters instances around the camera, so Three's
+        //static geometry bounds cannot represent the actual patch position.
+        //HexMap performs patch-level frustum/distance visibility instead.
+        layer.frustumCulled = false;
+        this.worldCopyLayers.push(layer);
+        this.worldCopyGeometries.push(geometry);
+    }
+
     private commonUniforms() {
         const atlas = this.options.atlas;
         const size = this.options.size;
@@ -499,6 +548,10 @@ export class TerrainMesh extends Group {
         this.landMesh = new Mesh(geometry, this.landMaterial);
         this.landMesh.frustumCulled = false;
         this.add(this.landMesh);
+        //One quarter of the primary land triangles (subdivision 2 vs 3), used
+        //only beyond the nearest logical world where the reduced detail is not
+        //perceptible but a missing surface edge would be.
+        this.buildWorldCopyLayer(geometry, this.landMaterial, 2, "terrain-world-copy-land");
     }
 
     //Water tiles get a subdivided geometry (more vertices than the flat land
@@ -538,6 +591,7 @@ export class TerrainMesh extends Group {
         this.waterMesh = new Mesh(geometry, this.waterMaterial);
         this.waterMesh.frustumCulled = false;
         this.add(this.waterMesh);
+        this.buildWorldCopyLayer(geometry, this.waterMaterial, 1, "terrain-world-copy-water");
     }
 
     //Places a 3D model + text label on every tile.city (TileInfo.city, see
@@ -936,6 +990,10 @@ export class TerrainMesh extends Group {
         return this.landMesh;
     }
 
+    public getWorldCopyLayers(): readonly Mesh[] {
+        return this.worldCopyLayers;
+    }
+
     //Releases the land/water geometries, materials and atlas texture. City
     //models/labels (also children of this Group) are *not* disposed - their
     //geometry/materials are shared references into loadModel()'s cache (see
@@ -945,6 +1003,7 @@ export class TerrainMesh extends Group {
         this.landMaterial?.dispose();
         this.waterMesh?.geometry.dispose();
         this.waterMaterial?.dispose();
+        for (const geometry of this.worldCopyGeometries) geometry.dispose();
         this.atlasTexture.dispose(); // shared by both materials - dispose once
         this.fogTexture.dispose();
     }

@@ -23,11 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Toroidal terrain and grass now render once: vertex shaders move each logical
-  instance to its nearest wrapped position around the camera instead of drawing
-  nine complete maps.
+- Primary toroidal terrain and grass render once around the camera; only visible
+  neighboring patches receive lower-detail surface copies, instead of drawing
+  nine complete high-detail maps.
 - Forest instances are split into spatial chunks and culled by frustum/distance,
   avoiding millions of invisible far-tree triangles on large worlds.
+
+### Fixed
+
+- Grass now wraps with its owning hex, and frustum-culled low-detail terrain
+  patches remain underneath repeated grass/trees at world boundaries, preventing
+  surface decoration from appearing to float beyond a cut-off ground edge.
 
 ## [0.5.0] - 2026-07-19
 

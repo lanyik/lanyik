@@ -18,6 +18,7 @@ uniform vec2 worldPeriod;
 attribute vec3 position;
 
 attribute vec2 offset;  // world XZ position of this blade's root
+attribute vec2 tileOffset; // canonical center of the blade's owning hex
 attribute float angle;  // random Y rotation, radians - so blades don't all face the same way
 attribute vec2 scale;   // x = width multiplier, y = height multiplier (world units)
 attribute float phase;  // random wind phase offset, see wave below
@@ -46,7 +47,11 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    vec2 bladeOffset = nearestWorldOffset(offset);
+    //Choose the toroidal image from the owning hex center, then preserve this
+    //blade's local displacement inside that hex. Terrain uses the same center
+    //anchor, so decorations cannot hop to the next image before their ground.
+    vec2 wrappedTileOffset = nearestWorldOffset(tileOffset);
+    vec2 bladeOffset = wrappedTileOffset + (offset - tileOffset);
     float wave = sin(uTime * windSpeed + phase + (bladeOffset.x + worldOffset.x + bladeOffset.y + worldOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;

@@ -184,6 +184,12 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     };
 
     const offsets = new Float32Array(totalBlades * 2);
+    //The owning tile center is kept separately from the blade's exact root.
+    //Toroidal wrapping must move a tile and every decoration on it as one
+    //piece; wrapping each root independently lets blades cross the repeat
+    //boundary before their hex does, leaving them apparently floating beside
+    //the last visible ground tile.
+    const tileOffsets = new Float32Array(totalBlades * 2);
     const angles = new Float32Array(totalBlades);
     const scales = new Float32Array(totalBlades * 2);
     const phases = new Float32Array(totalBlades);
@@ -220,6 +226,8 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
 
             offsets[instance * 2 + 0] = center.x + lx;
             offsets[instance * 2 + 1] = center.y + ly;
+            tileOffsets[instance * 2 + 0] = center.x;
+            tileOffsets[instance * 2 + 1] = center.y;
             angles[instance] = Math.random() * Math.PI * 2;
 
             const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
@@ -242,6 +250,7 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     geometry.instanceCount = instance;
 
     geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
+    geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));
     geometry.setAttribute("angle", new InstancedBufferAttribute(angles, 1));
     geometry.setAttribute("scale", new InstancedBufferAttribute(scales, 2));
     geometry.setAttribute("phase", new InstancedBufferAttribute(phases, 1));

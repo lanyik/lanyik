@@ -9909,6 +9909,11 @@ void main() {
 	  constructor(map, options) {
 	    super();
 	    this.options = options;
+	    //Distant toroidal repeats use the same instance data/materials as the
+	    //primary layers but cheaper shared hex geometry. They are templates only:
+	    //HexMap clones them into the surrounding world patches as needed.
+	    this.worldCopyLayers = [];
+	    this.worldCopyGeometries = [];
 	    this.tileIndex = /* @__PURE__ */ new Map();
 	    // "x,y" -> instance index (land layer only)
 	    this.waterTileIndex = /* @__PURE__ */ new Map();
@@ -10046,6 +10051,36 @@ void main() {
 	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
 	    return geometry;
 	  }
+	  buildWorldCopyLayer(source, material, numSubdivisions, name) {
+	    const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
+	    const geometry = new three.InstancedBufferGeometry();
+	    geometry.setAttribute("position", hexagon.getAttribute("position"));
+	    geometry.setAttribute("uv", hexagon.getAttribute("uv"));
+	    geometry.setIndex(hexagon.getIndex());
+	    geometry.instanceCount = source.instanceCount;
+	    for (const attributeName of [
+	      "offset",
+	      "style",
+	      "neighborsA",
+	      "neighborsB",
+	      "neighborsPriorityA",
+	      "neighborsPriorityB",
+	      "neighborsKindA",
+	      "neighborsKindB",
+	      "riverEdges",
+	      "riverSeaMouthEdges",
+	      "riverLakeMouthEdges",
+	      "lakeNeighborEdges",
+	      "fogState"
+	    ]) {
+	      geometry.setAttribute(attributeName, source.getAttribute(attributeName));
+	    }
+	    const layer = new three.Mesh(geometry, material);
+	    layer.name = name;
+	    layer.frustumCulled = false;
+	    this.worldCopyLayers.push(layer);
+	    this.worldCopyGeometries.push(geometry);
+	  }
 	  commonUniforms() {
 	    const atlas = this.options.atlas;
 	    const size = this.options.size;
@@ -10145,6 +10180,7 @@ void main() {
 	    this.landMesh = new three.Mesh(geometry, this.landMaterial);
 	    this.landMesh.frustumCulled = false;
 	    this.add(this.landMesh);
+	    this.buildWorldCopyLayer(geometry, this.landMaterial, 2, "terrain-world-copy-land");
 	  }
 	  //Water tiles get a subdivided geometry (more vertices than the flat land
 	  //hex) so the sum-of-sines wave displacement in water.vertex.ts has enough
@@ -10180,6 +10216,7 @@ void main() {
 	    this.waterMesh = new three.Mesh(geometry, this.waterMaterial);
 	    this.waterMesh.frustumCulled = false;
 	    this.add(this.waterMesh);
+	    this.buildWorldCopyLayer(geometry, this.waterMaterial, 1, "terrain-world-copy-water");
 	  }
 	  //Places a 3D model + text label on every tile.city (TileInfo.city, see
 	  //interfaces.ts) - independent of terrain type, so a city can sit on any
@@ -10520,6 +10557,9 @@ void main() {
 	  get mesh() {
 	    return this.landMesh;
 	  }
+	  getWorldCopyLayers() {
+	    return this.worldCopyLayers;
+	  }
 	  //Releases the land/water geometries, materials and atlas texture. City
 	  //models/labels (also children of this Group) are *not* disposed - their
 	  //geometry/materials are shared references into loadModel()'s cache (see
@@ -10529,6 +10569,7 @@ void main() {
 	    this.landMaterial?.dispose();
 	    this.waterMesh?.geometry.dispose();
 	    this.waterMaterial?.dispose();
+	    for (const geometry of this.worldCopyGeometries) geometry.dispose();
 	    this.atlasTexture.dispose();
 	    this.fogTexture.dispose();
 	  }
@@ -10816,6 +10857,7 @@ uniform vec2 worldPeriod;
 attribute vec3 position;
 
 attribute vec2 offset;  // world XZ position of this blade's root
+attribute vec2 tileOffset; // canonical center of the blade's owning hex
 attribute float angle;  // random Y rotation, radians - so blades don't all face the same way
 attribute vec2 scale;   // x = width multiplier, y = height multiplier (world units)
 attribute float phase;  // random wind phase offset, see wave below
@@ -10844,7 +10886,11 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    vec2 bladeOffset = nearestWorldOffset(offset);
+    //Choose the toroidal image from the owning hex center, then preserve this
+    //blade's local displacement inside that hex. Terrain uses the same center
+    //anchor, so decorations cannot hop to the next image before their ground.
+    vec2 wrappedTileOffset = nearestWorldOffset(tileOffset);
+    vec2 bladeOffset = wrappedTileOffset + (offset - tileOffset);
     float wave = sin(uTime * windSpeed + phase + (bladeOffset.x + worldOffset.x + bladeOffset.y + worldOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
@@ -10979,6 +11025,7 @@ void main() {
 	    lakeShoreWidth: options.lakeShoreWidth ?? 0.18
 	  };
 	  const offsets = new Float32Array(totalBlades * 2);
+	  const tileOffsets = new Float32Array(totalBlades * 2);
 	  const angles = new Float32Array(totalBlades);
 	  const scales = new Float32Array(totalBlades * 2);
 	  const phases = new Float32Array(totalBlades);
@@ -11004,6 +11051,8 @@ void main() {
 	      if (!valid) continue;
 	      offsets[instance * 2 + 0] = center.x + lx;
 	      offsets[instance * 2 + 1] = center.y + ly;
+	      tileOffsets[instance * 2 + 0] = center.x;
+	      tileOffsets[instance * 2 + 1] = center.y;
 	      angles[instance] = Math.random() * Math.PI * 2;
 	      const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
 	      scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
@@ -11020,6 +11069,7 @@ void main() {
 	  geometry.setIndex(blade.getIndex());
 	  geometry.instanceCount = instance;
 	  geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
+	  geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
 	  geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
 	  geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
 	  geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
@@ -11134,6 +11184,7 @@ void main() {
 	};
 
 	// src/HexMap.ts
+	var WORLD_SURFACE_RENDER_DISTANCE = 2400;
 	var DEFAULT_OPTIONS = {
 	  size: 40,
 	  texturesBaseUrl: "textures/",
@@ -11191,6 +11242,9 @@ void main() {
 	    this.worldPatternOffset = new three.Vector2();
 	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
 	    this.forestCullCenter = new three.Vector3();
+	    this.surfaceFrustum = new three.Frustum();
+	    this.surfaceProjection = new three.Matrix4();
+	    this.surfaceBounds = new three.Box3();
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
@@ -11218,6 +11272,7 @@ void main() {
 	      this.wrapCameraToWorld();
 	      this.terrain?.setWorldCenter(this.controls.target.x, this.controls.target.z);
 	      this.grass?.setWorldCenter(this.controls.target.x, this.controls.target.z);
+	      this.updateWorldSurfaceVisibility();
 	      this.updateForestVisibility();
 	      this.terrain?.update(dtS);
 	      this.grass?.update(dtS);
@@ -11513,7 +11568,7 @@ void main() {
 	  }
 	  copyOffsets(wrapped, period) {
 	    if (!wrapped || period <= 0) return [0];
-	    const radius = Math.max(1, Math.ceil(this.controls.maxDistance / period));
+	    const radius = Math.max(1, Math.ceil(WORLD_SURFACE_RENDER_DISTANCE / period));
 	    return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
 	  }
 	  isShaderWrappedLayer(object) {
@@ -11521,6 +11576,17 @@ void main() {
 	    if (!mesh.isMesh) return false;
 	    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 	    return materials.some((material) => material instanceof three.RawShaderMaterial && material.uniforms.worldPeriod);
+	  }
+	  surfacePatchDistance(offsetX, offsetY) {
+	    const size = this.options.size;
+	    const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : 0;
+	    const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : 0;
+	    const dx = this.mapData.wrapX ? Math.max(0, Math.abs(offsetX) - halfX) : 0;
+	    const dy = this.mapData.wrapY ? Math.max(0, Math.abs(offsetY) - halfY) : 0;
+	    return Math.hypot(dx, dy);
+	  }
+	  tagSurfaceCopy(object, offsetX, offsetY, kind) {
+	    object.userData.worldSurfaceCopy = { offsetX, offsetY, kind };
 	  }
 	  refreshWorldCopies() {
 	    this.clearWorldCopies();
@@ -11538,8 +11604,27 @@ void main() {
 	          if (this.isShaderWrappedLayer(child)) continue;
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
+	        const surfacePatchNeeded = this.surfacePatchDistance(offsetX, offsetY) <= WORLD_SURFACE_RENDER_DISTANCE;
+	        if (surfacePatchNeeded) {
+	          for (const layer of this.terrain?.getWorldCopyLayers() ?? []) {
+	            const terrainCopy = this.cloneWorldObject(layer, offsetX, offsetY);
+	            this.tagSurfaceCopy(terrainCopy, offsetX, offsetY, "terrain");
+	            group.add(terrainCopy);
+	          }
+	        }
 	        for (const child of this.forest?.children ?? []) {
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	        }
+	        if (surfacePatchNeeded && this.grass) {
+	          const grassCopy = new three.Mesh(this.grass.geometry, this.grass.material);
+	          grassCopy.copy(this.grass, false);
+	          if (Array.isArray(grassCopy.material)) {
+	            grassCopy.material = grassCopy.material.map((material) => this.materialForWorldCopy(material, offsetX, offsetY));
+	          } else {
+	            grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
+	          }
+	          this.tagSurfaceCopy(grassCopy, offsetX, offsetY, "grass");
+	          group.add(grassCopy);
 	        }
 	        if (group.children.length === 0) continue;
 	        this.worldCopies.push(group);
@@ -11599,7 +11684,7 @@ void main() {
 	  }
 	  updateForestVisibility() {
 	    const viewDistance = this.camera.position.distanceTo(this.controls.target);
-	    const renderDistance = Math.min(2400, Math.max(1200, viewDistance * 2.75));
+	    const renderDistance = Math.min(WORLD_SURFACE_RENDER_DISTANCE, Math.max(1200, viewDistance * 2.75));
 	    this.scene.traverse((object) => {
 	      const forestChunk = object;
 	      if (!forestChunk.isInstancedMesh || !forestChunk.name.startsWith("forest-")) return;
@@ -11611,6 +11696,37 @@ void main() {
 	      const dz = this.forestCullCenter.z - this.controls.target.z;
 	      forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
 	    });
+	  }
+	  updateWorldSurfaceVisibility() {
+	    if (!this.mapData || this.worldCopies.length === 0) return;
+	    this.camera.updateMatrixWorld();
+	    this.surfaceProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+	    this.surfaceFrustum.setFromProjectionMatrix(this.surfaceProjection);
+	    const size = this.options.size;
+	    const first = getHexCenter(0, 0, size);
+	    const last = getHexCenter(this.mapData.w - 1, this.mapData.h - 1, size);
+	    const canonicalCenterX = (first.x + last.x) * 0.5;
+	    const canonicalCenterY = (first.y + last.y) * 0.5;
+	    const canonicalHalfX = Math.abs(last.x - first.x) * 0.5 + size;
+	    const canonicalHalfY = Math.abs(last.y - first.y) * 0.5 + size;
+	    const minY = -Math.max(size * 2, this.terrain?.waterDepth ?? size);
+	    const maxY = Math.max(size * 3, (this.terrain?.mountainHeight ?? size) + size);
+	    for (const group of this.worldCopies) {
+	      group.traverse((object) => {
+	        const patch = object.userData.worldSurfaceCopy;
+	        if (!patch) return;
+	        const centerX = this.mapData.wrapX ? this.controls.target.x + patch.offsetX : canonicalCenterX;
+	        const centerY = this.mapData.wrapY ? this.controls.target.z + patch.offsetY : canonicalCenterY;
+	        const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : canonicalHalfX;
+	        const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : canonicalHalfY;
+	        const dx = Math.max(0, Math.abs(this.controls.target.x - centerX) - halfX);
+	        const dy = Math.max(0, Math.abs(this.controls.target.z - centerY) - halfY);
+	        this.surfaceBounds.min.set(centerX - halfX, minY, centerY - halfY);
+	        this.surfaceBounds.max.set(centerX + halfX, maxY, centerY + halfY);
+	        const patchVisible = Math.hypot(dx, dy) <= WORLD_SURFACE_RENDER_DISTANCE && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
+	        object.visible = patchVisible && (patch.kind !== "grass" || this.options.grassEnabled);
+	      });
+	    }
 	  }
 	  //-------------------------------------------------------------------------
 	  //Public API
