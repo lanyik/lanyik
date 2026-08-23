@@ -1,5 +1,7 @@
 # three-hex-map
 
+English | [简体中文](README.zh-CN.md)
+
 Project repository reference: [lanyik/lanyik](https://github.com/lanyik/lanyik).
 This customized build is based on the original
 [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map) project.
@@ -42,7 +44,7 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 ### Run the demo locally
 
 ```bash
-git clone https://github.com/gunyakov/three-hex-map.git
+git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map
 npm install
 npm run start   # builds the library + demo, then serves ./public
@@ -187,7 +189,9 @@ generator.dispose();
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes - the current version is **0.4.0** (rivers, lakes, war-fog toggle, `wood` moved into `modifiers`, always-animated water).
+See [CHANGELOG.md](CHANGELOG.md) for release notes. The latest tagged version is
+**0.5.0**, with large-world streaming and LOD work currently documented under
+**Unreleased**.
 
 ## Credits
 
