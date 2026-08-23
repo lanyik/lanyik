@@ -23,7 +23,9 @@
     "build": "npm run build:demo",
     "server": "npx http-server public -c-1 -p 3000",
     "start": "npm run build && npm run server",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
@@ -54,7 +56,8 @@
     "stats.js": "^0.17.0",
     "three": "^0.185.1",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "robust-point-in-polygon": "^1.0.3"
