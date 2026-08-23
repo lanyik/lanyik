@@ -22,6 +22,7 @@ import { Land, LandPriority, LandColor } from "../enums";
 import { getHexCenter } from "../helpers/helpers";
 import { getNeighborCoords } from "../helpers/neighbors";
 import { getMapTile } from "../helpers/topology";
+import { getWorldChunkBounds, groupTilesByWorldChunk, tagWorldChunk } from "../helpers/chunks";
 import { lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, waterEdgeValue } from "../helpers/rivers";
 import { createHexagonGeometry } from "./hexagonGeometry";
 import { makeTextSprite } from "./citysprite";
@@ -181,13 +182,13 @@ interface CityFogEntry {
 }
 
 //----------------------------------------------------------------------------------
-//Renders the map as instanced draw calls (InstancedBufferGeometry - a single
-//geometry with instanceCount + InstancedBufferAttribute) instead of a separate
-//Mesh+ExtrudeGeometry+own TextureLoader per tile like the old Hex.ts/HEX(). Grid
-//lines are drawn inside the fragment shaders instead of a RingGeometry mesh per
-//tile (old Grid.ts).
+//Renders the map as spatially streamed 12x12 instanced chunks
+//(InstancedBufferGeometry + InstancedBufferAttribute) instead of either one
+//always-submitted world mesh or a Mesh+ExtrudeGeometry+TextureLoader per tile
+//like the old Hex.ts/HEX(). Grid lines are drawn inside the fragment shaders
+//instead of a RingGeometry mesh per tile (old Grid.ts).
 //
-//Tiles are split into two layers/meshes: a flat "land" layer (grass/sand/
+//Tiles are split into two layer sets: flat "land" chunks (grass/sand/
 //tundra/snow) and an animated "water" layer (sea/coastal, see shaders/water.*.ts - sum-of-sines
 //vertex displacement with analytically derived normals, no normal map, solid
 //colors instead of a texture). Both share the same per-tile neighbor/priority/
@@ -214,17 +215,12 @@ interface CityFogEntry {
 //"what to blend towards" decision.
 //----------------------------------------------------------------------------------
 export class TerrainMesh extends Group {
-    private landMesh: Mesh | undefined;
+    private landChunks: Mesh[] = [];
     private landMaterial: RawShaderMaterial | undefined;
-    private waterMesh: Mesh | undefined;
+    private waterChunks: Mesh[] = [];
     private waterMaterial: RawShaderMaterial | undefined;
-    //Distant toroidal repeats use the same instance data/materials as the
-    //primary layers but cheaper shared hex geometry. They are templates only:
-    //HexMap clones them into the surrounding world patches as needed.
-    private worldCopyLayers: Mesh[] = [];
-    private worldCopyGeometries: InstancedBufferGeometry[] = [];
-    private tileIndex = new Map<string, number>(); // "x,y" -> instance index (land layer only)
-    private waterTileIndex = new Map<string, number>(); // "x,y" -> instance index (water layer only)
+    private tileIndex = new Map<string, { mesh: Mesh, index: number }>();
+    private waterTileIndex = new Map<string, { mesh: Mesh, index: number }>();
     private cityFog = new Map<string, CityFogEntry>(); // "x,y" -> that tile's city model/label
     private fogTexture: Texture;
     private atlasTexture: Texture;
@@ -396,50 +392,6 @@ export class TerrainMesh extends Group {
         return geometry;
     }
 
-    private buildWorldCopyLayer(
-        source: InstancedBufferGeometry,
-        material: RawShaderMaterial,
-        numSubdivisions: number,
-        name: string
-    ): void {
-        const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
-        const geometry = new InstancedBufferGeometry();
-        geometry.setAttribute("position", hexagon.getAttribute("position"));
-        geometry.setAttribute("uv", hexagon.getAttribute("uv"));
-        geometry.setIndex(hexagon.getIndex());
-        geometry.instanceCount = source.instanceCount;
-
-        //All per-tile state stays shared with the primary layer. Fog updates
-        //and future point edits therefore reach every LOD repeat immediately
-        //without walking through every cloned patch.
-        for (const attributeName of [
-            "offset",
-            "style",
-            "neighborsA",
-            "neighborsB",
-            "neighborsPriorityA",
-            "neighborsPriorityB",
-            "neighborsKindA",
-            "neighborsKindB",
-            "riverEdges",
-            "riverSeaMouthEdges",
-            "riverLakeMouthEdges",
-            "lakeNeighborEdges",
-            "fogState"
-        ]) {
-            geometry.setAttribute(attributeName, source.getAttribute(attributeName));
-        }
-
-        const layer = new Mesh(geometry, material);
-        layer.name = name;
-        //The vertex shader recenters instances around the camera, so Three's
-        //static geometry bounds cannot represent the actual patch position.
-        //HexMap performs patch-level frustum/distance visibility instead.
-        layer.frustumCulled = false;
-        this.worldCopyLayers.push(layer);
-        this.worldCopyGeometries.push(geometry);
-    }
-
     private commonUniforms() {
         const atlas = this.options.atlas;
         const size = this.options.size;
@@ -455,11 +407,11 @@ export class TerrainMesh extends Group {
             fogMap: { value: this.fogTexture },
             fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
             fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+            //Physical chunk copies now handle toroidal placement. Leaving the
+            //shader period at zero keeps every tile attached to its canonical
+            //chunk, so chunks can be independently culled and streamed.
             worldCenter: { value: new Vector2(0, 0) },
-            worldPeriod: { value: new Vector2(
-                this.map.wrapX ? this.map.w * size * 1.5 : 0,
-                this.map.wrapY ? this.map.h * size * Math.sqrt(3) : 0
-            ) },
+            worldPeriod: { value: new Vector2(0, 0) },
             lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
             showGrid: { value: this.options.gridVisible === false ? 0.0 : 1.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
@@ -506,12 +458,6 @@ export class TerrainMesh extends Group {
     private buildLandLayer(tiles: Point[]): void {
         if (tiles.length === 0) return;
 
-        //Subdivision 3 (not the water layer's 2): the mountain displacement
-        //needs the extra interior vertices to bend into a smooth peak instead
-        //of a coarse tent.
-        const geometry = this.buildInstancedGeometry(tiles, 3);
-        tiles.forEach((tile, i) => this.tileIndex.set(`${tile.x},${tile.y}`, i));
-
         this.landMaterial = new RawShaderMaterial({
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
@@ -545,13 +491,24 @@ export class TerrainMesh extends Group {
             fragmentShader: TERRAIN_FRAGMENT_SHADER
         });
 
-        this.landMesh = new Mesh(geometry, this.landMaterial);
-        this.landMesh.frustumCulled = false;
-        this.add(this.landMesh);
-        //One quarter of the primary land triangles (subdivision 2 vs 3), used
-        //only beyond the nearest logical world where the reduced detail is not
-        //perceptible but a missing surface edge would be.
-        this.buildWorldCopyLayer(geometry, this.landMaterial, 2, "terrain-world-copy-land");
+        //Subdivision 3 is preserved for every streamed chunk: mountain and
+        //shore quality is identical to the previous full-world mesh. Splitting
+        //only changes submission/culling granularity, not visible geometry.
+        for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+            const geometry = this.buildInstancedGeometry(chunkTiles, 3);
+            const mesh = new Mesh(geometry, this.landMaterial);
+            mesh.name = `terrain-chunk-land-${chunkKey}`;
+            mesh.frustumCulled = false;
+            tagWorldChunk(
+                mesh,
+                chunkKey,
+                "land",
+                getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3)
+            );
+            chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+            this.landChunks.push(mesh);
+            this.add(mesh);
+        }
     }
 
     //Water tiles get a subdivided geometry (more vertices than the flat land
@@ -559,9 +516,6 @@ export class TerrainMesh extends Group {
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     private buildWaterLayer(tiles: Point[]): void {
         if (tiles.length === 0) return;
-
-        const geometry = this.buildInstancedGeometry(tiles, 2);
-        tiles.forEach((tile, i) => this.waterTileIndex.set(`${tile.x},${tile.y}`, i));
 
         this.waterMaterial = new RawShaderMaterial({
             uniforms: {
@@ -588,10 +542,21 @@ export class TerrainMesh extends Group {
             fragmentShader: WATER_FRAGMENT_SHADER
         });
 
-        this.waterMesh = new Mesh(geometry, this.waterMaterial);
-        this.waterMesh.frustumCulled = false;
-        this.add(this.waterMesh);
-        this.buildWorldCopyLayer(geometry, this.waterMaterial, 1, "terrain-world-copy-water");
+        for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+            const geometry = this.buildInstancedGeometry(chunkTiles, 2);
+            const mesh = new Mesh(geometry, this.waterMaterial);
+            mesh.name = `terrain-chunk-water-${chunkKey}`;
+            mesh.frustumCulled = false;
+            tagWorldChunk(
+                mesh,
+                chunkKey,
+                "water",
+                getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size)
+            );
+            chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+            this.waterChunks.push(mesh);
+            this.add(mesh);
+        }
     }
 
     //Places a 3D model + text label on every tile.city (TileInfo.city, see
@@ -943,7 +908,7 @@ export class TerrainMesh extends Group {
     //Index of a tile within the land layer's instanced attributes, for future
     //point updates (e.g. HexMap.setTile) without rebuilding the whole geometry.
     public getInstanceIndex(x: number, y: number): number | undefined {
-        return this.tileIndex.get(`${x},${y}`);
+        return this.tileIndex.get(`${x},${y}`)?.index;
     }
 
     //-------------------------------------------------------------------------
@@ -954,17 +919,17 @@ export class TerrainMesh extends Group {
     public setFogState(x: number, y: number, state: number): void {
         const key = `${x},${y}`;
 
-        const landIdx = this.tileIndex.get(key);
-        if (landIdx !== undefined && this.landMesh) {
-            const attribute = this.landMesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-            attribute.setX(landIdx, state);
+        const landEntry = this.tileIndex.get(key);
+        if (landEntry) {
+            const attribute = landEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+            attribute.setX(landEntry.index, state);
             attribute.needsUpdate = true;
         }
 
-        const waterIdx = this.waterTileIndex.get(key);
-        if (waterIdx !== undefined && this.waterMesh) {
-            const attribute = this.waterMesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-            attribute.setX(waterIdx, state);
+        const waterEntry = this.waterTileIndex.get(key);
+        if (waterEntry) {
+            const attribute = waterEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+            attribute.setX(waterEntry.index, state);
             attribute.needsUpdate = true;
         }
 
@@ -987,11 +952,7 @@ export class TerrainMesh extends Group {
     }
 
     public get mesh(): Mesh | undefined {
-        return this.landMesh;
-    }
-
-    public getWorldCopyLayers(): readonly Mesh[] {
-        return this.worldCopyLayers;
+        return this.landChunks[0];
     }
 
     //Releases the land/water geometries, materials and atlas texture. City
@@ -999,11 +960,10 @@ export class TerrainMesh extends Group {
     //geometry/materials are shared references into loadModel()'s cache (see
     //helpers/models.ts), reused by future loads, not owned by this instance.
     public dispose(): void {
-        this.landMesh?.geometry.dispose();
+        for (const chunk of this.landChunks) chunk.geometry.dispose();
         this.landMaterial?.dispose();
-        this.waterMesh?.geometry.dispose();
+        for (const chunk of this.waterChunks) chunk.geometry.dispose();
         this.waterMaterial?.dispose();
-        for (const geometry of this.worldCopyGeometries) geometry.dispose();
         this.atlasTexture.dispose(); // shared by both materials - dispose once
         this.fogTexture.dispose();
     }

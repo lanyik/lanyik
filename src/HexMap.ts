@@ -41,10 +41,13 @@ import { createForest, ForestField } from "./objects/Forest";
 import { GrassField, createGrassField } from "./objects/Grass";
 import { FogState } from "./objects/FogOfWar";
 import { assertWrappableMap, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
+import { getWorldChunkMetadata } from "./helpers/chunks";
 
 //Repeated forest chunks are distance-culled at this radius. Toroidal surface
 //patches use the same extent so repeated trees/grass cannot outlive their ground.
 const WORLD_SURFACE_RENDER_DISTANCE = 2400;
+const WORLD_CHUNK_GPU_CACHE_LIMIT = 96;
+const WORLD_CHUNK_EVICT_AFTER_FRAMES = 600;
 
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
@@ -261,12 +264,15 @@ export class HexMap extends EventEmitter {
     private routeLine: Line | undefined;
     private worldCopies: Group[] = [];
     private worldCopyMaterials: RawShaderMaterial[] = [];
+    private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
     private pressedMovementKeys = new Set<string>();
     private forestCullCenter = new Vector3();
     private surfaceFrustum = new Frustum();
     private surfaceProjection = new Matrix4();
     private surfaceBounds = new Box3();
+    private chunkVisibilityFrame = 0;
+    private chunkGeometryLastVisible = new Map<BufferGeometry, number>();
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
     private lastHover: Point | null = null;
@@ -466,10 +472,14 @@ export class HexMap extends EventEmitter {
         for (const material of this.worldCopyMaterials) material.dispose();
         this.worldCopies = [];
         this.worldCopyMaterials = [];
+        this.worldCopyMaterialCache.clear();
     }
 
     private materialForWorldCopy(material: Material, offsetX: number, offsetY: number): Material {
         if (!(material instanceof RawShaderMaterial) || !material.uniforms.worldOffset) return material;
+        const cacheKey = `${material.uuid}:${offsetX}:${offsetY}`;
+        const cached = this.worldCopyMaterialCache.get(cacheKey);
+        if (cached) return cached;
         const copy = material.clone();
         //Share every live uniform object with the primary material except the
         //per-copy translation used by the water shader's camera calculations.
@@ -481,6 +491,7 @@ export class HexMap extends EventEmitter {
             ) }
         };
         this.worldCopyMaterials.push(copy);
+        this.worldCopyMaterialCache.set(cacheKey, copy);
         return copy;
     }
 
@@ -542,26 +553,6 @@ export class HexMap extends EventEmitter {
         return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
     }
 
-    private isShaderWrappedLayer(object: Object3D): boolean {
-        const mesh = object as Mesh;
-        if (!mesh.isMesh) return false;
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        return materials.some(material => material instanceof RawShaderMaterial && material.uniforms.worldPeriod);
-    }
-
-    private surfacePatchDistance(offsetX: number, offsetY: number): number {
-        const size = this.options.size;
-        const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : 0;
-        const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : 0;
-        const dx = this.mapData.wrapX ? Math.max(0, Math.abs(offsetX) - halfX) : 0;
-        const dy = this.mapData.wrapY ? Math.max(0, Math.abs(offsetY) - halfY) : 0;
-        return Math.hypot(dx, dy);
-    }
-
-    private tagSurfaceCopy(object: Object3D, offsetX: number, offsetY: number, kind: "terrain" | "grass"): void {
-        object.userData.worldSurfaceCopy = { offsetX, offsetY, kind };
-    }
-
     private refreshWorldCopies(): void {
         this.clearWorldCopies();
         if (!this.mapData || (!this.mapData.wrapX && !this.mapData.wrapY)) return;
@@ -578,36 +569,15 @@ export class HexMap extends EventEmitter {
                 group.position.set(offsetX, 0, offsetY);
 
                 for (const child of this.terrain?.children ?? []) {
-                    if (this.isShaderWrappedLayer(child)) continue;
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
-                }
-
-                //The primary shader-wrapped meshes form one camera-centered
-                //logical world. Cheaper LOD layers fill only surrounding
-                //patches that can contain visible surface decoration, avoiding
-                //both a hard rectangular ground edge and nine full-detail maps.
-                const surfacePatchNeeded = this.surfacePatchDistance(offsetX, offsetY) <= WORLD_SURFACE_RENDER_DISTANCE;
-                if (surfacePatchNeeded) {
-                    for (const layer of this.terrain?.getWorldCopyLayers() ?? []) {
-                        const terrainCopy = this.cloneWorldObject(layer, offsetX, offsetY);
-                        this.tagSurfaceCopy(terrainCopy, offsetX, offsetY, "terrain");
-                        group.add(terrainCopy);
-                    }
                 }
                 for (const child of this.forest?.children ?? []) {
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
                 }
-
-                if (surfacePatchNeeded && this.grass) {
-                    const grassCopy = new Mesh(this.grass.geometry, this.grass.material);
-                    grassCopy.copy(this.grass, false);
-                    if (Array.isArray(grassCopy.material)) {
-                        grassCopy.material = grassCopy.material.map(material => this.materialForWorldCopy(material, offsetX, offsetY));
-                    } else {
-                        grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
+                if (this.grass?.visible) {
+                    for (const child of this.grass.children) {
+                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
                     }
-                    this.tagSurfaceCopy(grassCopy, offsetX, offsetY, "grass");
-                    group.add(grassCopy);
                 }
 
                 if (group.children.length === 0) continue;
@@ -665,9 +635,7 @@ export class HexMap extends EventEmitter {
         this.updateKeyboardMovement(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
-        this.terrain?.setWorldCenter(this.controls.target.x, this.controls.target.z);
-        this.grass?.setWorldCenter(this.controls.target.x, this.controls.target.z);
-        this.updateWorldSurfaceVisibility();
+        this.updateWorldChunkVisibility();
         this.updateForestVisibility();
         this.terrain?.update(dtS);
         this.grass?.update(dtS);
@@ -744,49 +712,61 @@ export class HexMap extends EventEmitter {
         });
     }
 
-    private updateWorldSurfaceVisibility(): void {
-        if (!this.mapData || this.worldCopies.length === 0) return;
+    private updateWorldChunkVisibility(): void {
+        if (!this.mapData) return;
+        this.chunkVisibilityFrame += 1;
+        const visibleGeometries = new Set<BufferGeometry>();
 
         this.camera.updateMatrixWorld();
         this.surfaceProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
         this.surfaceFrustum.setFromProjectionMatrix(this.surfaceProjection);
 
-        const size = this.options.size;
-        const first = getHexCenter(0, 0, size);
-        const last = getHexCenter(this.mapData.w - 1, this.mapData.h - 1, size);
-        const canonicalCenterX = (first.x + last.x) * 0.5;
-        const canonicalCenterY = (first.y + last.y) * 0.5;
-        const canonicalHalfX = Math.abs(last.x - first.x) * 0.5 + size;
-        const canonicalHalfY = Math.abs(last.y - first.y) * 0.5 + size;
-        const minY = -Math.max(size * 2, this.terrain?.waterDepth ?? size);
-        const maxY = Math.max(size * 3, (this.terrain?.mountainHeight ?? size) + size);
+        this.scene.traverse(object => {
+            const chunk = getWorldChunkMetadata(object);
+            if (!chunk) return;
 
-        for (const group of this.worldCopies) {
-            group.traverse(object => {
-                const patch = object.userData.worldSurfaceCopy as {
-                    offsetX: number;
-                    offsetY: number;
-                    kind: "terrain" | "grass";
-                } | undefined;
-                if (!patch) return;
+            object.updateWorldMatrix(true, false);
+            const worldX = object.matrixWorld.elements[12];
+            const worldY = object.matrixWorld.elements[13];
+            const worldZ = object.matrixWorld.elements[14];
+            const bounds = chunk.bounds;
+            this.surfaceBounds.min.set(bounds.minX + worldX, bounds.minY + worldY, bounds.minZ + worldZ);
+            this.surfaceBounds.max.set(bounds.maxX + worldX, bounds.maxY + worldY, bounds.maxZ + worldZ);
 
-                const centerX = this.mapData.wrapX
-                    ? this.controls.target.x + patch.offsetX
-                    : canonicalCenterX;
-                const centerY = this.mapData.wrapY
-                    ? this.controls.target.z + patch.offsetY
-                    : canonicalCenterY;
-                const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : canonicalHalfX;
-                const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : canonicalHalfY;
-                const dx = Math.max(0, Math.abs(this.controls.target.x - centerX) - halfX);
-                const dy = Math.max(0, Math.abs(this.controls.target.z - centerY) - halfY);
+            const dx = Math.max(
+                0,
+                this.surfaceBounds.min.x - this.controls.target.x,
+                this.controls.target.x - this.surfaceBounds.max.x
+            );
+            const dz = Math.max(
+                0,
+                this.surfaceBounds.min.z - this.controls.target.z,
+                this.controls.target.z - this.surfaceBounds.max.z
+            );
+            const visible = Math.hypot(dx, dz) <= WORLD_SURFACE_RENDER_DISTANCE
+                && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
+            object.visible = visible && (chunk.kind !== "grass" || this.options.grassEnabled);
+            const mesh = object as Mesh;
+            if (object.visible && mesh.isMesh) {
+                visibleGeometries.add(mesh.geometry);
+                this.chunkGeometryLastVisible.set(mesh.geometry, this.chunkVisibilityFrame);
+            }
+        });
 
-                this.surfaceBounds.min.set(centerX - halfX, minY, centerY - halfY);
-                this.surfaceBounds.max.set(centerX + halfX, maxY, centerY + halfY);
-                const patchVisible = Math.hypot(dx, dy) <= WORLD_SURFACE_RENDER_DISTANCE
-                    && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
-                object.visible = patchVisible && (patch.kind !== "grass" || this.options.grassEnabled);
-            });
+        //BufferGeometry.dispose() only releases its WebGL allocation; the CPU
+        //attributes remain intact, so a revisited chunk is uploaded again on
+        //demand. Evict old/inactive entries after a grace period and enforce a
+        //hard resident-cache target without ever evicting a visible chunk.
+        const inactive = [...this.chunkGeometryLastVisible.entries()]
+            .filter(([geometry]) => !visibleGeometries.has(geometry))
+            .sort((a, b) => a[1] - b[1]);
+        let excess = Math.max(0, this.chunkGeometryLastVisible.size - WORLD_CHUNK_GPU_CACHE_LIMIT);
+        for (const [geometry, lastVisible] of inactive) {
+            const stale = this.chunkVisibilityFrame - lastVisible >= WORLD_CHUNK_EVICT_AFTER_FRAMES;
+            if (!stale && excess <= 0) break;
+            geometry.dispose();
+            this.chunkGeometryLastVisible.delete(geometry);
+            if (excess > 0) excess--;
         }
     }
 
@@ -891,6 +871,7 @@ export class HexMap extends EventEmitter {
     //(waterWaveAmplitude, beachWidth, etc.)
     private async rebuildTerrain(): Promise<void> {
         this.clearWorldCopies();
+        this.chunkGeometryLastVisible.clear();
         if (this.terrain) {
             this.scene.remove(this.terrain);
             this.terrain.dispose();
@@ -992,6 +973,7 @@ export class HexMap extends EventEmitter {
     //geometry, there's no partial/incremental update.
     private rebuildGrass(): void {
         this.clearWorldCopies();
+        this.chunkGeometryLastVisible.clear();
         if (this.grass) {
             this.scene.remove(this.grass);
             this.grass.dispose();

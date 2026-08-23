@@ -14,8 +14,7 @@ import { loadModel } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
-
-const FOREST_CHUNK_SIZE = 12;
+import { WORLD_CHUNK_SIZE } from "../helpers/chunks";
 
 export interface ForestOptions {
     size: number;
@@ -165,7 +164,7 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
 
         const chunks = new Map<string, Point[]>();
         for (const tile of tiles) {
-            const key = `${Math.floor(tile.x / FOREST_CHUNK_SIZE)},${Math.floor(tile.y / FOREST_CHUNK_SIZE)}`;
+            const key = `${Math.floor(tile.x / WORLD_CHUNK_SIZE)},${Math.floor(tile.y / WORLD_CHUNK_SIZE)}`;
             const chunk = chunks.get(key) ?? [];
             chunk.push(tile);
             chunks.set(key, chunk);

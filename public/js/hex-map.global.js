@@ -8139,6 +8139,45 @@
 	  return best;
 	}
 
+	// src/helpers/chunks.ts
+	var WORLD_CHUNK_SIZE = 12;
+	var WORLD_CHUNK_METADATA = "hexWorldChunk";
+	function getWorldChunkKey(x, y, chunkSize = WORLD_CHUNK_SIZE) {
+	  return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
+	}
+	function groupTilesByWorldChunk(tiles, chunkSize = WORLD_CHUNK_SIZE) {
+	  const chunks = /* @__PURE__ */ new Map();
+	  for (const tile of tiles) {
+	    const key = getWorldChunkKey(tile.x, tile.y, chunkSize);
+	    const chunk = chunks.get(key) ?? [];
+	    chunk.push(tile);
+	    chunks.set(key, chunk);
+	  }
+	  return chunks;
+	}
+	function getWorldChunkBounds(tiles, size, minY, maxY) {
+	  if (tiles.length === 0) throw new Error("Cannot compute bounds for an empty world chunk");
+	  let minX = Infinity;
+	  let maxX = -Infinity;
+	  let minZ = Infinity;
+	  let maxZ = -Infinity;
+	  for (const tile of tiles) {
+	    const center = getHexCenter(tile.x, tile.y, size);
+	    minX = Math.min(minX, center.x - size);
+	    maxX = Math.max(maxX, center.x + size);
+	    minZ = Math.min(minZ, center.y - size);
+	    maxZ = Math.max(maxZ, center.y + size);
+	  }
+	  return { minX, maxX, minY, maxY, minZ, maxZ };
+	}
+	function tagWorldChunk(object, chunkKey, kind, bounds) {
+	  const [chunkX, chunkY] = chunkKey.split(",").map(Number);
+	  object.userData[WORLD_CHUNK_METADATA] = { chunkX, chunkY, kind, bounds };
+	}
+	function getWorldChunkMetadata(object) {
+	  return object.userData[WORLD_CHUNK_METADATA];
+	}
+
 	// src/helpers/rivers.ts
 	var MASK_DIRECTIONS = ["SE", "S", "SW", "NW", "N", "NE"];
 	var LAKE_FLAG = 4096;
@@ -9909,15 +9948,10 @@ void main() {
 	  constructor(map, options) {
 	    super();
 	    this.options = options;
-	    //Distant toroidal repeats use the same instance data/materials as the
-	    //primary layers but cheaper shared hex geometry. They are templates only:
-	    //HexMap clones them into the surrounding world patches as needed.
-	    this.worldCopyLayers = [];
-	    this.worldCopyGeometries = [];
+	    this.landChunks = [];
+	    this.waterChunks = [];
 	    this.tileIndex = /* @__PURE__ */ new Map();
-	    // "x,y" -> instance index (land layer only)
 	    this.waterTileIndex = /* @__PURE__ */ new Map();
-	    // "x,y" -> instance index (water layer only)
 	    this.cityFog = /* @__PURE__ */ new Map();
 	    this.atlasCellIndex = {};
 	    this.clock = 0;
@@ -10051,36 +10085,6 @@ void main() {
 	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
 	    return geometry;
 	  }
-	  buildWorldCopyLayer(source, material, numSubdivisions, name) {
-	    const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
-	    const geometry = new three.InstancedBufferGeometry();
-	    geometry.setAttribute("position", hexagon.getAttribute("position"));
-	    geometry.setAttribute("uv", hexagon.getAttribute("uv"));
-	    geometry.setIndex(hexagon.getIndex());
-	    geometry.instanceCount = source.instanceCount;
-	    for (const attributeName of [
-	      "offset",
-	      "style",
-	      "neighborsA",
-	      "neighborsB",
-	      "neighborsPriorityA",
-	      "neighborsPriorityB",
-	      "neighborsKindA",
-	      "neighborsKindB",
-	      "riverEdges",
-	      "riverSeaMouthEdges",
-	      "riverLakeMouthEdges",
-	      "lakeNeighborEdges",
-	      "fogState"
-	    ]) {
-	      geometry.setAttribute(attributeName, source.getAttribute(attributeName));
-	    }
-	    const layer = new three.Mesh(geometry, material);
-	    layer.name = name;
-	    layer.frustumCulled = false;
-	    this.worldCopyLayers.push(layer);
-	    this.worldCopyGeometries.push(geometry);
-	  }
 	  commonUniforms() {
 	    const atlas = this.options.atlas;
 	    const size = this.options.size;
@@ -10096,11 +10100,11 @@ void main() {
 	      fogMap: { value: this.fogTexture },
 	      fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
 	      fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+	      //Physical chunk copies now handle toroidal placement. Leaving the
+	      //shader period at zero keeps every tile attached to its canonical
+	      //chunk, so chunks can be independently culled and streamed.
 	      worldCenter: { value: new three.Vector2(0, 0) },
-	      worldPeriod: { value: new three.Vector2(
-	        this.map.wrapX ? this.map.w * size * 1.5 : 0,
-	        this.map.wrapY ? this.map.h * size * Math.sqrt(3) : 0
-	      ) },
+	      worldPeriod: { value: new three.Vector2(0, 0) },
 	      lightDir: { value: { x: 0.4, y: 1, z: 0.3 } },
 	      showGrid: { value: this.options.gridVisible === false ? 0 : 1 },
 	      gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
@@ -10143,8 +10147,6 @@ void main() {
 	  //interpolates between those 2 fixed extremes no matter the configured width.
 	  buildLandLayer(tiles) {
 	    if (tiles.length === 0) return;
-	    const geometry = this.buildInstancedGeometry(tiles, 3);
-	    tiles.forEach((tile, i) => this.tileIndex.set(`${tile.x},${tile.y}`, i));
 	    this.landMaterial = new three.RawShaderMaterial({
 	      uniforms: {
 	        worldOffset: { value: new three.Vector2(0, 0) },
@@ -10177,18 +10179,27 @@ void main() {
 	      vertexShader: TERRAIN_VERTEX_SHADER,
 	      fragmentShader: TERRAIN_FRAGMENT_SHADER
 	    });
-	    this.landMesh = new three.Mesh(geometry, this.landMaterial);
-	    this.landMesh.frustumCulled = false;
-	    this.add(this.landMesh);
-	    this.buildWorldCopyLayer(geometry, this.landMaterial, 2, "terrain-world-copy-land");
+	    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+	      const geometry = this.buildInstancedGeometry(chunkTiles, 3);
+	      const mesh = new three.Mesh(geometry, this.landMaterial);
+	      mesh.name = `terrain-chunk-land-${chunkKey}`;
+	      mesh.frustumCulled = false;
+	      tagWorldChunk(
+	        mesh,
+	        chunkKey,
+	        "land",
+	        getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3)
+	      );
+	      chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+	      this.landChunks.push(mesh);
+	      this.add(mesh);
+	    }
 	  }
 	  //Water tiles get a subdivided geometry (more vertices than the flat land
 	  //hex) so the sum-of-sines wave displacement in water.vertex.ts has enough
 	  //resolution to look like a smooth, rounded surface instead of a faceted tent.
 	  buildWaterLayer(tiles) {
 	    if (tiles.length === 0) return;
-	    const geometry = this.buildInstancedGeometry(tiles, 2);
-	    tiles.forEach((tile, i) => this.waterTileIndex.set(`${tile.x},${tile.y}`, i));
 	    this.waterMaterial = new three.RawShaderMaterial({
 	      uniforms: {
 	        worldOffset: { value: new three.Vector2(0, 0) },
@@ -10213,10 +10224,21 @@ void main() {
 	      vertexShader: WATER_VERTEX_SHADER,
 	      fragmentShader: WATER_FRAGMENT_SHADER
 	    });
-	    this.waterMesh = new three.Mesh(geometry, this.waterMaterial);
-	    this.waterMesh.frustumCulled = false;
-	    this.add(this.waterMesh);
-	    this.buildWorldCopyLayer(geometry, this.waterMaterial, 1, "terrain-world-copy-water");
+	    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+	      const geometry = this.buildInstancedGeometry(chunkTiles, 2);
+	      const mesh = new three.Mesh(geometry, this.waterMaterial);
+	      mesh.name = `terrain-chunk-water-${chunkKey}`;
+	      mesh.frustumCulled = false;
+	      tagWorldChunk(
+	        mesh,
+	        chunkKey,
+	        "water",
+	        getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size)
+	      );
+	      chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+	      this.waterChunks.push(mesh);
+	      this.add(mesh);
+	    }
 	  }
 	  //Places a 3D model + text label on every tile.city (TileInfo.city, see
 	  //interfaces.ts) - independent of terrain type, so a city can sit on any
@@ -10519,7 +10541,7 @@ void main() {
 	  //Index of a tile within the land layer's instanced attributes, for future
 	  //point updates (e.g. HexMap.setTile) without rebuilding the whole geometry.
 	  getInstanceIndex(x, y) {
-	    return this.tileIndex.get(`${x},${y}`);
+	    return this.tileIndex.get(`${x},${y}`)?.index;
 	  }
 	  //-------------------------------------------------------------------------
 	  //Fog of war (see FogOfWar.ts) - updates one tile's terrain (land or water,
@@ -10528,16 +10550,16 @@ void main() {
 	  //-------------------------------------------------------------------------
 	  setFogState(x, y, state) {
 	    const key = `${x},${y}`;
-	    const landIdx = this.tileIndex.get(key);
-	    if (landIdx !== void 0 && this.landMesh) {
-	      const attribute = this.landMesh.geometry.getAttribute("fogState");
-	      attribute.setX(landIdx, state);
+	    const landEntry = this.tileIndex.get(key);
+	    if (landEntry) {
+	      const attribute = landEntry.mesh.geometry.getAttribute("fogState");
+	      attribute.setX(landEntry.index, state);
 	      attribute.needsUpdate = true;
 	    }
-	    const waterIdx = this.waterTileIndex.get(key);
-	    if (waterIdx !== void 0 && this.waterMesh) {
-	      const attribute = this.waterMesh.geometry.getAttribute("fogState");
-	      attribute.setX(waterIdx, state);
+	    const waterEntry = this.waterTileIndex.get(key);
+	    if (waterEntry) {
+	      const attribute = waterEntry.mesh.geometry.getAttribute("fogState");
+	      attribute.setX(waterEntry.index, state);
 	      attribute.needsUpdate = true;
 	    }
 	    this.setCityFog(key, state);
@@ -10555,21 +10577,17 @@ void main() {
 	    }
 	  }
 	  get mesh() {
-	    return this.landMesh;
-	  }
-	  getWorldCopyLayers() {
-	    return this.worldCopyLayers;
+	    return this.landChunks[0];
 	  }
 	  //Releases the land/water geometries, materials and atlas texture. City
 	  //models/labels (also children of this Group) are *not* disposed - their
 	  //geometry/materials are shared references into loadModel()'s cache (see
 	  //helpers/models.ts), reused by future loads, not owned by this instance.
 	  dispose() {
-	    this.landMesh?.geometry.dispose();
+	    for (const chunk of this.landChunks) chunk.geometry.dispose();
 	    this.landMaterial?.dispose();
-	    this.waterMesh?.geometry.dispose();
+	    for (const chunk of this.waterChunks) chunk.geometry.dispose();
 	    this.waterMaterial?.dispose();
-	    for (const geometry of this.worldCopyGeometries) geometry.dispose();
 	    this.atlasTexture.dispose();
 	    this.fogTexture.dispose();
 	  }
@@ -10702,7 +10720,6 @@ void main() {
 	}
 
 	// src/objects/Forest.ts
-	var FOREST_CHUNK_SIZE = 12;
 	var ForestField = class extends three.Group {
 	  constructor(tileRanges, fogDarkenFactor) {
 	    super();
@@ -10775,7 +10792,7 @@ void main() {
 	    });
 	    const chunks = /* @__PURE__ */ new Map();
 	    for (const tile of tiles) {
-	      const key = `${Math.floor(tile.x / FOREST_CHUNK_SIZE)},${Math.floor(tile.y / FOREST_CHUNK_SIZE)}`;
+	      const key = `${Math.floor(tile.x / WORLD_CHUNK_SIZE)},${Math.floor(tile.y / WORLD_CHUNK_SIZE)}`;
 	      const chunk = chunks.get(key) ?? [];
 	      chunk.push(tile);
 	      chunks.set(key, chunk);
@@ -10931,13 +10948,14 @@ void main() {
 `;
 
 	// src/objects/Grass.ts
-	var GrassField = class extends three.Mesh {
-	  constructor(geometry, material, tileRanges) {
-	    super(geometry, material);
+	var GrassField = class extends three.Group {
+	  constructor(chunks, material, tileRanges) {
+	    super();
+	    this.chunks = chunks;
 	    this.tileRanges = tileRanges;
 	    this.clock = 0;
 	    this.grassMaterial = material;
-	    this.frustumCulled = false;
+	    for (const chunk of chunks) this.add(chunk);
 	  }
 	  //Updates every blade belonging to (x, y) to the given fog state (see
 	  //FogOfWar.ts) - a plain attribute-slice fill + needsUpdate, no rebuild.
@@ -10945,7 +10963,7 @@ void main() {
 	  setFogState(x, y, state) {
 	    const range = this.tileRanges.get(`${x},${y}`);
 	    if (!range) return;
-	    const attribute = this.geometry.getAttribute("fogState");
+	    const attribute = range.geometry.getAttribute("fogState");
 	    for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
 	    attribute.needsUpdate = true;
 	  }
@@ -10971,7 +10989,7 @@ void main() {
 	    this.grassMaterial.uniforms.windSpeed.value = value;
 	  }
 	  dispose() {
-	    this.geometry.dispose();
+	    for (const chunk of this.chunks) chunk.geometry.dispose();
 	    this.grassMaterial.dispose();
 	  }
 	};
@@ -11017,72 +11035,20 @@ void main() {
 	  }
 	  if (tiles.length === 0) return null;
 	  const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map((p) => [p.x, p.y]);
-	  const totalBlades = tiles.length * density;
 	  const waterOptions = {
 	    riverWidth: options.riverWidth ?? 0.28,
 	    riverBankWidth: options.riverBankWidth ?? 0.14,
 	    riverCurvature: options.riverCurvature ?? 0.5,
 	    lakeShoreWidth: options.lakeShoreWidth ?? 0.18
 	  };
-	  const offsets = new Float32Array(totalBlades * 2);
-	  const tileOffsets = new Float32Array(totalBlades * 2);
-	  const angles = new Float32Array(totalBlades);
-	  const scales = new Float32Array(totalBlades * 2);
-	  const phases = new Float32Array(totalBlades);
-	  const shades = new Float32Array(totalBlades);
-	  const fogStates = new Float32Array(totalBlades).fill(2);
 	  const tileRanges = /* @__PURE__ */ new Map();
-	  let instance = 0;
-	  for (const tile of tiles) {
-	    const center = getHexCenter(tile.x, tile.y, size);
-	    const tileStart = instance;
-	    const waterValue = waterEdgeValue(map, tile.x, tile.y);
-	    const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-	    const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-	    const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-	    for (let i = 0; i < density; i++) {
-	      let lx = 0, ly = 0, attempts = 0, valid = false;
-	      while (!valid && attempts < 20) {
-	        lx = getRandomInt(-size, size);
-	        ly = getRandomInt(-size, size);
-	        valid = pointInPolygon2(polygon, [lx, ly]) === -1 && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
-	        attempts++;
-	      }
-	      if (!valid) continue;
-	      offsets[instance * 2 + 0] = center.x + lx;
-	      offsets[instance * 2 + 1] = center.y + ly;
-	      tileOffsets[instance * 2 + 0] = center.x;
-	      tileOffsets[instance * 2 + 1] = center.y;
-	      angles[instance] = Math.random() * Math.PI * 2;
-	      const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
-	      scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
-	      scales[instance * 2 + 1] = bladeHeight * heightJitter;
-	      phases[instance] = Math.random() * Math.PI * 2;
-	      shades[instance] = 0.75 + Math.random() * 0.35;
-	      instance++;
-	    }
-	    tileRanges.set(`${tile.x},${tile.y}`, { start: tileStart, count: instance - tileStart });
-	  }
-	  const blade = buildBladeGeometry();
-	  const geometry = new three.InstancedBufferGeometry();
-	  geometry.setAttribute("position", blade.getAttribute("position"));
-	  geometry.setIndex(blade.getIndex());
-	  geometry.instanceCount = instance;
-	  geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
-	  geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
-	  geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
-	  geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
-	  geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
-	  geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
-	  geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
 	  const material = new three.RawShaderMaterial({
 	    uniforms: {
 	      worldOffset: { value: new three.Vector2(0, 0) },
 	      worldCenter: { value: new three.Vector2(0, 0) },
-	      worldPeriod: { value: new three.Vector2(
-	        map.wrapX ? map.w * size * 1.5 : 0,
-	        map.wrapY ? map.h * size * Math.sqrt(3) : 0
-	      ) },
+	      //Toroidal placement is performed by physical chunk copies so the
+	      //shader keeps every blade attached to its canonical chunk.
+	      worldPeriod: { value: new three.Vector2(0, 0) },
 	      uTime: { value: 0 },
 	      windStrength: { value: windStrength },
 	      windSpeed: { value: windSpeed },
@@ -11094,7 +11060,73 @@ void main() {
 	    fragmentShader: GRASS_FRAGMENT_SHADER,
 	    side: three.DoubleSide
 	  });
-	  return new GrassField(geometry, material, tileRanges);
+	  const chunks = [];
+	  const blade = buildBladeGeometry();
+	  for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+	    const totalBlades = chunkTiles.length * density;
+	    const offsets = new Float32Array(totalBlades * 2);
+	    const tileOffsets = new Float32Array(totalBlades * 2);
+	    const angles = new Float32Array(totalBlades);
+	    const scales = new Float32Array(totalBlades * 2);
+	    const phases = new Float32Array(totalBlades);
+	    const shades = new Float32Array(totalBlades);
+	    const fogStates = new Float32Array(totalBlades).fill(2);
+	    const pendingRanges = [];
+	    let instance = 0;
+	    for (const tile of chunkTiles) {
+	      const center = getHexCenter(tile.x, tile.y, size);
+	      const tileStart = instance;
+	      const waterValue = waterEdgeValue(map, tile.x, tile.y);
+	      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+	      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+	      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+	      for (let i = 0; i < density; i++) {
+	        let lx = 0, ly = 0, attempts = 0, valid = false;
+	        while (!valid && attempts < 20) {
+	          lx = getRandomInt(-size, size);
+	          ly = getRandomInt(-size, size);
+	          valid = pointInPolygon2(polygon, [lx, ly]) === -1 && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
+	          attempts++;
+	        }
+	        if (!valid) continue;
+	        offsets[instance * 2 + 0] = center.x + lx;
+	        offsets[instance * 2 + 1] = center.y + ly;
+	        tileOffsets[instance * 2 + 0] = center.x;
+	        tileOffsets[instance * 2 + 1] = center.y;
+	        angles[instance] = Math.random() * Math.PI * 2;
+	        const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
+	        scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
+	        scales[instance * 2 + 1] = bladeHeight * heightJitter;
+	        phases[instance] = Math.random() * Math.PI * 2;
+	        shades[instance] = 0.75 + Math.random() * 0.35;
+	        instance++;
+	      }
+	      pendingRanges.push({ key: `${tile.x},${tile.y}`, start: tileStart, count: instance - tileStart });
+	    }
+	    const geometry = new three.InstancedBufferGeometry();
+	    geometry.setAttribute("position", blade.getAttribute("position").clone());
+	    geometry.setIndex(blade.getIndex()?.clone() ?? null);
+	    geometry.instanceCount = instance;
+	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
+	    geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
+	    geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
+	    geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
+	    geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
+	    geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
+	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
+	    for (const range of pendingRanges) tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
+	    const chunk = new three.Mesh(geometry, material);
+	    chunk.name = `grass-chunk-${chunkKey}`;
+	    chunk.frustumCulled = false;
+	    tagWorldChunk(
+	      chunk,
+	      chunkKey,
+	      "grass",
+	      getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation))
+	    );
+	    chunks.push(chunk);
+	  }
+	  return new GrassField(chunks, material, tileRanges);
 	}
 
 	// src/helpers/fog.ts
@@ -11185,6 +11217,8 @@ void main() {
 
 	// src/HexMap.ts
 	var WORLD_SURFACE_RENDER_DISTANCE = 2400;
+	var WORLD_CHUNK_GPU_CACHE_LIMIT = 96;
+	var WORLD_CHUNK_EVICT_AFTER_FRAMES = 600;
 	var DEFAULT_OPTIONS = {
 	  size: 40,
 	  texturesBaseUrl: "textures/",
@@ -11239,12 +11273,15 @@ void main() {
 	    super();
 	    this.worldCopies = [];
 	    this.worldCopyMaterials = [];
+	    this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
 	    this.worldPatternOffset = new three.Vector2();
 	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
 	    this.forestCullCenter = new three.Vector3();
 	    this.surfaceFrustum = new three.Frustum();
 	    this.surfaceProjection = new three.Matrix4();
 	    this.surfaceBounds = new three.Box3();
+	    this.chunkVisibilityFrame = 0;
+	    this.chunkGeometryLastVisible = /* @__PURE__ */ new Map();
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
@@ -11270,9 +11307,7 @@ void main() {
 	      this.updateKeyboardMovement(Math.min(dtS, 0.05));
 	      this.controls.update(dtS);
 	      this.wrapCameraToWorld();
-	      this.terrain?.setWorldCenter(this.controls.target.x, this.controls.target.z);
-	      this.grass?.setWorldCenter(this.controls.target.x, this.controls.target.z);
-	      this.updateWorldSurfaceVisibility();
+	      this.updateWorldChunkVisibility();
 	      this.updateForestVisibility();
 	      this.terrain?.update(dtS);
 	      this.grass?.update(dtS);
@@ -11506,9 +11541,13 @@ void main() {
 	    for (const material of this.worldCopyMaterials) material.dispose();
 	    this.worldCopies = [];
 	    this.worldCopyMaterials = [];
+	    this.worldCopyMaterialCache.clear();
 	  }
 	  materialForWorldCopy(material, offsetX, offsetY) {
 	    if (!(material instanceof three.RawShaderMaterial) || !material.uniforms.worldOffset) return material;
+	    const cacheKey = `${material.uuid}:${offsetX}:${offsetY}`;
+	    const cached = this.worldCopyMaterialCache.get(cacheKey);
+	    if (cached) return cached;
 	    const copy = material.clone();
 	    copy.uniforms = {
 	      ...material.uniforms,
@@ -11518,6 +11557,7 @@ void main() {
 	      ) }
 	    };
 	    this.worldCopyMaterials.push(copy);
+	    this.worldCopyMaterialCache.set(cacheKey, copy);
 	    return copy;
 	  }
 	  applyWorldPatternToObject(object) {
@@ -11571,23 +11611,6 @@ void main() {
 	    const radius = Math.max(1, Math.ceil(WORLD_SURFACE_RENDER_DISTANCE / period));
 	    return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
 	  }
-	  isShaderWrappedLayer(object) {
-	    const mesh = object;
-	    if (!mesh.isMesh) return false;
-	    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-	    return materials.some((material) => material instanceof three.RawShaderMaterial && material.uniforms.worldPeriod);
-	  }
-	  surfacePatchDistance(offsetX, offsetY) {
-	    const size = this.options.size;
-	    const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : 0;
-	    const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : 0;
-	    const dx = this.mapData.wrapX ? Math.max(0, Math.abs(offsetX) - halfX) : 0;
-	    const dy = this.mapData.wrapY ? Math.max(0, Math.abs(offsetY) - halfY) : 0;
-	    return Math.hypot(dx, dy);
-	  }
-	  tagSurfaceCopy(object, offsetX, offsetY, kind) {
-	    object.userData.worldSurfaceCopy = { offsetX, offsetY, kind };
-	  }
 	  refreshWorldCopies() {
 	    this.clearWorldCopies();
 	    if (!this.mapData || !this.mapData.wrapX && !this.mapData.wrapY) return;
@@ -11601,30 +11624,15 @@ void main() {
 	        const group = new three.Group();
 	        group.position.set(offsetX, 0, offsetY);
 	        for (const child of this.terrain?.children ?? []) {
-	          if (this.isShaderWrappedLayer(child)) continue;
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
-	        }
-	        const surfacePatchNeeded = this.surfacePatchDistance(offsetX, offsetY) <= WORLD_SURFACE_RENDER_DISTANCE;
-	        if (surfacePatchNeeded) {
-	          for (const layer of this.terrain?.getWorldCopyLayers() ?? []) {
-	            const terrainCopy = this.cloneWorldObject(layer, offsetX, offsetY);
-	            this.tagSurfaceCopy(terrainCopy, offsetX, offsetY, "terrain");
-	            group.add(terrainCopy);
-	          }
 	        }
 	        for (const child of this.forest?.children ?? []) {
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
-	        if (surfacePatchNeeded && this.grass) {
-	          const grassCopy = new three.Mesh(this.grass.geometry, this.grass.material);
-	          grassCopy.copy(this.grass, false);
-	          if (Array.isArray(grassCopy.material)) {
-	            grassCopy.material = grassCopy.material.map((material) => this.materialForWorldCopy(material, offsetX, offsetY));
-	          } else {
-	            grassCopy.material = this.materialForWorldCopy(grassCopy.material, offsetX, offsetY);
+	        if (this.grass?.visible) {
+	          for (const child of this.grass.children) {
+	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	          }
-	          this.tagSurfaceCopy(grassCopy, offsetX, offsetY, "grass");
-	          group.add(grassCopy);
 	        }
 	        if (group.children.length === 0) continue;
 	        this.worldCopies.push(group);
@@ -11697,35 +11705,49 @@ void main() {
 	      forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
 	    });
 	  }
-	  updateWorldSurfaceVisibility() {
-	    if (!this.mapData || this.worldCopies.length === 0) return;
+	  updateWorldChunkVisibility() {
+	    if (!this.mapData) return;
+	    this.chunkVisibilityFrame += 1;
+	    const visibleGeometries = /* @__PURE__ */ new Set();
 	    this.camera.updateMatrixWorld();
 	    this.surfaceProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
 	    this.surfaceFrustum.setFromProjectionMatrix(this.surfaceProjection);
-	    const size = this.options.size;
-	    const first = getHexCenter(0, 0, size);
-	    const last = getHexCenter(this.mapData.w - 1, this.mapData.h - 1, size);
-	    const canonicalCenterX = (first.x + last.x) * 0.5;
-	    const canonicalCenterY = (first.y + last.y) * 0.5;
-	    const canonicalHalfX = Math.abs(last.x - first.x) * 0.5 + size;
-	    const canonicalHalfY = Math.abs(last.y - first.y) * 0.5 + size;
-	    const minY = -Math.max(size * 2, this.terrain?.waterDepth ?? size);
-	    const maxY = Math.max(size * 3, (this.terrain?.mountainHeight ?? size) + size);
-	    for (const group of this.worldCopies) {
-	      group.traverse((object) => {
-	        const patch = object.userData.worldSurfaceCopy;
-	        if (!patch) return;
-	        const centerX = this.mapData.wrapX ? this.controls.target.x + patch.offsetX : canonicalCenterX;
-	        const centerY = this.mapData.wrapY ? this.controls.target.z + patch.offsetY : canonicalCenterY;
-	        const halfX = this.mapData.wrapX ? this.worldPeriodX * 0.5 + size : canonicalHalfX;
-	        const halfY = this.mapData.wrapY ? this.worldPeriodY * 0.5 + size : canonicalHalfY;
-	        const dx = Math.max(0, Math.abs(this.controls.target.x - centerX) - halfX);
-	        const dy = Math.max(0, Math.abs(this.controls.target.z - centerY) - halfY);
-	        this.surfaceBounds.min.set(centerX - halfX, minY, centerY - halfY);
-	        this.surfaceBounds.max.set(centerX + halfX, maxY, centerY + halfY);
-	        const patchVisible = Math.hypot(dx, dy) <= WORLD_SURFACE_RENDER_DISTANCE && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
-	        object.visible = patchVisible && (patch.kind !== "grass" || this.options.grassEnabled);
-	      });
+	    this.scene.traverse((object) => {
+	      const chunk = getWorldChunkMetadata(object);
+	      if (!chunk) return;
+	      object.updateWorldMatrix(true, false);
+	      const worldX = object.matrixWorld.elements[12];
+	      const worldY = object.matrixWorld.elements[13];
+	      const worldZ = object.matrixWorld.elements[14];
+	      const bounds = chunk.bounds;
+	      this.surfaceBounds.min.set(bounds.minX + worldX, bounds.minY + worldY, bounds.minZ + worldZ);
+	      this.surfaceBounds.max.set(bounds.maxX + worldX, bounds.maxY + worldY, bounds.maxZ + worldZ);
+	      const dx = Math.max(
+	        0,
+	        this.surfaceBounds.min.x - this.controls.target.x,
+	        this.controls.target.x - this.surfaceBounds.max.x
+	      );
+	      const dz = Math.max(
+	        0,
+	        this.surfaceBounds.min.z - this.controls.target.z,
+	        this.controls.target.z - this.surfaceBounds.max.z
+	      );
+	      const visible = Math.hypot(dx, dz) <= WORLD_SURFACE_RENDER_DISTANCE && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
+	      object.visible = visible && (chunk.kind !== "grass" || this.options.grassEnabled);
+	      const mesh = object;
+	      if (object.visible && mesh.isMesh) {
+	        visibleGeometries.add(mesh.geometry);
+	        this.chunkGeometryLastVisible.set(mesh.geometry, this.chunkVisibilityFrame);
+	      }
+	    });
+	    const inactive = [...this.chunkGeometryLastVisible.entries()].filter(([geometry]) => !visibleGeometries.has(geometry)).sort((a, b) => a[1] - b[1]);
+	    let excess = Math.max(0, this.chunkGeometryLastVisible.size - WORLD_CHUNK_GPU_CACHE_LIMIT);
+	    for (const [geometry, lastVisible] of inactive) {
+	      const stale = this.chunkVisibilityFrame - lastVisible >= WORLD_CHUNK_EVICT_AFTER_FRAMES;
+	      if (!stale && excess <= 0) break;
+	      geometry.dispose();
+	      this.chunkGeometryLastVisible.delete(geometry);
+	      if (excess > 0) excess--;
 	    }
 	  }
 	  //-------------------------------------------------------------------------
@@ -11754,6 +11776,7 @@ void main() {
 	  //(waterWaveAmplitude, beachWidth, etc.)
 	  async rebuildTerrain() {
 	    this.clearWorldCopies();
+	    this.chunkGeometryLastVisible.clear();
 	    if (this.terrain) {
 	      this.scene.remove(this.terrain);
 	      this.terrain.dispose();
@@ -11850,6 +11873,7 @@ void main() {
 	  //geometry, there's no partial/incremental update.
 	  rebuildGrass() {
 	    this.clearWorldCopies();
+	    this.chunkGeometryLastVisible.clear();
 	    if (this.grass) {
 	      this.scene.remove(this.grass);
 	      this.grass.dispose();

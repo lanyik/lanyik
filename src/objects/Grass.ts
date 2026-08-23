@@ -8,7 +8,8 @@ import {
     Color,
     ColorRepresentation,
     DoubleSide,
-    Vector2
+    Vector2,
+    Group
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
@@ -18,6 +19,7 @@ import { Land } from "../enums";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
+import { getWorldChunkBounds, groupTilesByWorldChunk, tagWorldChunk } from "../helpers/chunks";
 
 export interface GrassOptions {
     size: number;
@@ -41,7 +43,7 @@ export interface GrassOptions {
     lakeShoreWidth?: number; // default 0.18
 }
 
-interface TileBladeRange { start: number, count: number }
+interface TileBladeRange { geometry: InstancedBufferGeometry, start: number, count: number }
 
 //----------------------------------------------------------------------------------
 //A thin, wind-animated grass layer scattered on top of Land.land ("grass") tiles
@@ -49,9 +51,9 @@ interface TileBladeRange { start: number, count: number }
 //layer (which keeps rendering underneath exactly as before). Skips tiles with a
 //city (a model sits there instead); wood tiles keep their grass (forest floor).
 //
-//One InstancedBufferGeometry / one draw call for every blade on the map - same
-//approach TerrainMesh already uses for hex tiles - rather than a Mesh/Object3D
-//per blade. Each blade is a single 5-vertex tapered shape (see
+//One InstancedBufferGeometry per visible 12x12 world chunk - matching
+//TerrainMesh's streaming granularity - rather than one always-submitted map or
+//a Mesh/Object3D per blade. Each blade is a single 5-vertex tapered shape (see
 //buildBladeGeometry), vertex-colored root->tip instead of textured, since a
 //solid gradient is enough at this scale and needs no extra texture fetch/alpha
 //test. Wind sway is a per-instance phase-shifted sine (grass.vertex.ts) so a
@@ -62,18 +64,18 @@ interface TileBladeRange { start: number, count: number }
 //TerrainMesh.loadCities() this is synchronous and can be rebuilt instantly
 //(e.g. a live GUI slider changing blade density) without an async round-trip.
 //----------------------------------------------------------------------------------
-export class GrassField extends Mesh {
+export class GrassField extends Group {
     private grassMaterial: RawShaderMaterial;
     private clock = 0;
 
     constructor(
-        geometry: InstancedBufferGeometry,
+        private chunks: Mesh[],
         material: RawShaderMaterial,
         private tileRanges: Map<string, TileBladeRange>
     ) {
-        super(geometry, material);
+        super();
         this.grassMaterial = material;
-        this.frustumCulled = false;
+        for (const chunk of chunks) this.add(chunk);
     }
 
     //Updates every blade belonging to (x, y) to the given fog state (see
@@ -83,7 +85,7 @@ export class GrassField extends Mesh {
         const range = this.tileRanges.get(`${x},${y}`);
         if (!range) return;
 
-        const attribute = this.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+        const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
         for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
         attribute.needsUpdate = true;
     }
@@ -114,7 +116,7 @@ export class GrassField extends Mesh {
     }
 
     public dispose(): void {
-        this.geometry.dispose();
+        for (const chunk of this.chunks) chunk.geometry.dispose();
         this.grassMaterial.dispose();
     }
 }
@@ -171,8 +173,6 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     // (see terrain.vertex.ts's beach slope) - keeping clear of the rim avoids
     // blades floating above/poking through that sunken edge.
     const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map(p => [p.x, p.y]);
-    const totalBlades = tiles.length * density;
-
     // On river tiles, keep blades out of the water (its maximum noise-bent
     // reach included - see isInTileWater). Blades landing in the outer bank
     // strip are fine - it's a vegetation band.
@@ -183,88 +183,14 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
         lakeShoreWidth: options.lakeShoreWidth ?? 0.18
     };
 
-    const offsets = new Float32Array(totalBlades * 2);
-    //The owning tile center is kept separately from the blade's exact root.
-    //Toroidal wrapping must move a tile and every decoration on it as one
-    //piece; wrapping each root independently lets blades cross the repeat
-    //boundary before their hex does, leaving them apparently floating beside
-    //the last visible ground tile.
-    const tileOffsets = new Float32Array(totalBlades * 2);
-    const angles = new Float32Array(totalBlades);
-    const scales = new Float32Array(totalBlades * 2);
-    const phases = new Float32Array(totalBlades);
-    const shades = new Float32Array(totalBlades);
-    const fogStates = new Float32Array(totalBlades).fill(2); // default Visible - see FogOfWar.ts
-
     const tileRanges = new Map<string, TileBladeRange>();
-
-    let instance = 0;
-    for (const tile of tiles) {
-        const center = getHexCenter(tile.x, tile.y, size);
-        const tileStart = instance;
-        const waterValue = waterEdgeValue(map, tile.x, tile.y); // -1 = no water, isInTileWater is then always false
-        const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-        const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-        const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-
-        for (let i = 0; i < density; i++) {
-            let lx = 0, ly = 0, attempts = 0, valid = false;
-            while (!valid && attempts < 20) {
-                lx = getRandomInt(-size, size);
-                ly = getRandomInt(-size, size);
-                valid = pointInPolygon(polygon, [lx, ly]) === -1 // -1 = inside the polygon
-                    && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
-                attempts++;
-            }
-            // No dry spot found - DROP the blade rather than placing it at the
-            // last attempt's position: on river tiles the water covers enough
-            // of the hex that the old "place it anyway" fallback dumped a few
-            // blades per tile straight into the channel. The instanced arrays
-            // are simply left oversized; instanceCount below only covers what
-            // was actually placed.
-            if (!valid) continue;
-
-            offsets[instance * 2 + 0] = center.x + lx;
-            offsets[instance * 2 + 1] = center.y + ly;
-            tileOffsets[instance * 2 + 0] = center.x;
-            tileOffsets[instance * 2 + 1] = center.y;
-            angles[instance] = Math.random() * Math.PI * 2;
-
-            const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
-            scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
-            scales[instance * 2 + 1] = bladeHeight * heightJitter;
-
-            phases[instance] = Math.random() * Math.PI * 2;
-            shades[instance] = 0.75 + Math.random() * 0.35;
-
-            instance++;
-        }
-
-        tileRanges.set(`${tile.x},${tile.y}`, { start: tileStart, count: instance - tileStart });
-    }
-
-    const blade = buildBladeGeometry();
-    const geometry = new InstancedBufferGeometry();
-    geometry.setAttribute("position", blade.getAttribute("position"));
-    geometry.setIndex(blade.getIndex());
-    geometry.instanceCount = instance;
-
-    geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
-    geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));
-    geometry.setAttribute("angle", new InstancedBufferAttribute(angles, 1));
-    geometry.setAttribute("scale", new InstancedBufferAttribute(scales, 2));
-    geometry.setAttribute("phase", new InstancedBufferAttribute(phases, 1));
-    geometry.setAttribute("shade", new InstancedBufferAttribute(shades, 1));
-    geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
-
     const material = new RawShaderMaterial({
         uniforms: {
             worldOffset: { value: new Vector2(0, 0) },
             worldCenter: { value: new Vector2(0, 0) },
-            worldPeriod: { value: new Vector2(
-                map.wrapX ? map.w * size * 1.5 : 0,
-                map.wrapY ? map.h * size * Math.sqrt(3) : 0
-            ) },
+            //Toroidal placement is performed by physical chunk copies so the
+            //shader keeps every blade attached to its canonical chunk.
+            worldPeriod: { value: new Vector2(0, 0) },
             uTime: { value: 0 },
             windStrength: { value: windStrength },
             windSpeed: { value: windSpeed },
@@ -277,5 +203,87 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
         side: DoubleSide
     });
 
-    return new GrassField(geometry, material, tileRanges);
+    const chunks: Mesh[] = [];
+    const blade = buildBladeGeometry();
+    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+        const totalBlades = chunkTiles.length * density;
+        const offsets = new Float32Array(totalBlades * 2);
+        const tileOffsets = new Float32Array(totalBlades * 2);
+        const angles = new Float32Array(totalBlades);
+        const scales = new Float32Array(totalBlades * 2);
+        const phases = new Float32Array(totalBlades);
+        const shades = new Float32Array(totalBlades);
+        const fogStates = new Float32Array(totalBlades).fill(2);
+        const pendingRanges: { key: string, start: number, count: number }[] = [];
+
+        let instance = 0;
+        for (const tile of chunkTiles) {
+            const center = getHexCenter(tile.x, tile.y, size);
+            const tileStart = instance;
+            const waterValue = waterEdgeValue(map, tile.x, tile.y);
+            const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+            const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+            const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+
+            for (let i = 0; i < density; i++) {
+                let lx = 0, ly = 0, attempts = 0, valid = false;
+                while (!valid && attempts < 20) {
+                    lx = getRandomInt(-size, size);
+                    ly = getRandomInt(-size, size);
+                    valid = pointInPolygon(polygon, [lx, ly]) === -1
+                        && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
+                    attempts++;
+                }
+                if (!valid) continue;
+
+                offsets[instance * 2 + 0] = center.x + lx;
+                offsets[instance * 2 + 1] = center.y + ly;
+                //Keep the owning center alongside the exact root so any future
+                //shader-side wrapping still moves ground and decoration as one.
+                tileOffsets[instance * 2 + 0] = center.x;
+                tileOffsets[instance * 2 + 1] = center.y;
+                angles[instance] = Math.random() * Math.PI * 2;
+
+                const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
+                scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
+                scales[instance * 2 + 1] = bladeHeight * heightJitter;
+                phases[instance] = Math.random() * Math.PI * 2;
+                shades[instance] = 0.75 + Math.random() * 0.35;
+                instance++;
+            }
+
+            pendingRanges.push({ key: `${tile.x},${tile.y}`, start: tileStart, count: instance - tileStart });
+        }
+
+        const geometry = new InstancedBufferGeometry();
+        //Keep the tiny base blade buffers private to this chunk: GPU-cache
+        //eviction disposes chunk geometries independently, so sharing these
+        //attributes would cause an inactive chunk to invalidate a visible
+        //chunk's five-vertex base buffer as well.
+        geometry.setAttribute("position", blade.getAttribute("position").clone());
+        geometry.setIndex(blade.getIndex()?.clone() ?? null);
+        geometry.instanceCount = instance;
+        geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
+        geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));
+        geometry.setAttribute("angle", new InstancedBufferAttribute(angles, 1));
+        geometry.setAttribute("scale", new InstancedBufferAttribute(scales, 2));
+        geometry.setAttribute("phase", new InstancedBufferAttribute(phases, 1));
+        geometry.setAttribute("shade", new InstancedBufferAttribute(shades, 1));
+        geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
+
+        for (const range of pendingRanges) tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
+
+        const chunk = new Mesh(geometry, material);
+        chunk.name = `grass-chunk-${chunkKey}`;
+        chunk.frustumCulled = false;
+        tagWorldChunk(
+            chunk,
+            chunkKey,
+            "grass",
+            getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation))
+        );
+        chunks.push(chunk);
+    }
+
+    return new GrassField(chunks, material, tileRanges);
 }

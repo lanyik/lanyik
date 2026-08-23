@@ -23,17 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Primary toroidal terrain and grass render once around the camera; only visible
-  neighboring patches receive lower-detail surface copies, instead of drawing
-  nine complete high-detail maps.
+- Terrain, water and grass are split into 12×12 logical chunks with exact
+  full-detail geometry. Only distance/frustum-visible canonical or toroidal
+  chunk copies are submitted, instead of submitting a complete world buffer.
+- Visible chunks upload lazily to WebGL and use a 96-geometry residency cache;
+  inactive GPU buffers are evicted while their CPU attributes remain available
+  for automatic re-upload when revisited.
 - Forest instances are split into spatial chunks and culled by frustum/distance,
   avoiding millions of invisible far-tree triangles on large worlds.
 
 ### Fixed
 
-- Grass now wraps with its owning hex, and frustum-culled low-detail terrain
-  patches remain underneath repeated grass/trees at world boundaries, preventing
-  surface decoration from appearing to float beyond a cut-off ground edge.
+- Grass wraps with its owning hex, and physical terrain/grass chunks share the
+  same toroidal placement and visibility rules as their decorations, preventing
+  surface content from appearing to float beyond a cut-off ground edge.
 
 ## [0.5.0] - 2026-07-19
 

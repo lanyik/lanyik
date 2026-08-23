@@ -19,10 +19,10 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 
 ## Features
 
-- **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, shader-centered primary terrain plus frustum-culled low-detail repeat patches, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
+- **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, physically repeated streamed chunks, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
 - **Atmospheric sky** - a procedural sky dome replaces the flat background with blue zenith, atmospheric horizon haze and a physically positioned sun while orbiting down toward the horizon.
-- **Large-world culling** - trees are spatially chunked and distance/frustum culled; surrounding toroidal surfaces use lower-detail geometry and only visible patches are submitted, keeping 96×96 worlds practical.
-- **Instanced terrain** - the whole map is a handful of `InstancedBufferGeometry` draw calls (land, water, grass, trees), with grid lines, land-type edge blending and beach slopes computed in the shaders.
+- **Streamed world rendering** - terrain, water, grass and trees are split into 12×12 logical chunks; only distance/frustum-visible chunks are submitted and uploaded to the GPU. An LRU-style 96-geometry residency cap releases old WebGL buffers while preserving their CPU attributes for transparent re-upload when revisited.
+- **Instanced terrain** - every visible chunk uses `InstancedBufferGeometry` batches (land, water, grass, trees), with grid lines, land-type edge blending and beach slopes computed in the shaders.
 - **Animated water** - sea/coastal tiles render as a solid-colored, wave-displaced surface (sum-of-sines with analytic normals) with sparkle, fresnel and stylized coastal foam waves rolling towards every shoreline.
 - **Rivers** - mark a grass tile with the `"river"` modifier and it renders an animated water channel with noise-curved banks, a light vegetation strip, a carved 3D riverbed and shallow-to-deep shading. Connectivity is auto-detected from neighbors: rivers merge at junctions, spring from source pools and flow into lakes and the sea.
 - **Lakes** - the `"lake"` modifier fills a tile with water except a noise-curved grass shore rim; neighboring lake tiles merge into one body and river channels visibly open through the shore.
