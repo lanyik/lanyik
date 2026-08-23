@@ -34,3 +34,6 @@ export type {
 export { getHexCenter, HEXPolygon } from "./helpers/helpers";
 export { getNeighborCoords, getNeighbors, NEIGHBOR_DIRECTIONS } from "./helpers/neighbors";
 export type { NeighborDirection, Neighbor } from "./helpers/neighbors";
+
+export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateWorld";
+export type { WorldGenerationOptions } from "./world/generateWorld";
