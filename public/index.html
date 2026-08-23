@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+    <title>Three HEX Map</title>
+    <link rel="stylesheet" href="js/vendor/dat.gui.css">
+    <style>
+        /* set margin to 0 and overflow to hidden, to go fullscreen */
+        body {
+            margin: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+        }
+
+        .scene__canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<canvas class="scene__canvas" game-scene></canvas>
+
+<!--
+    This page loads three.js, the hex-map engine and its own init code as three
+    separate, independent files - nothing here is bundled together:
+
+      1) three.js (public/js/vendor/three.module.js) - the peer dependency the
+         engine expects the page itself to supply (see package.json's
+         peerDependencies and tsup.config.ts's external:["three"]).
+      2) the engine (public/js/hex-map.global.js) - HexMap + GameEngine + Unit +
+         PathFinder etc., built from src/ via `npm run build:demo`
+         (tsup -> rollup, see rollup.config.global.mjs). A plain UMD/global
+         build, so it just needs `window.THREE` to exist before it runs.
+      3) this page's own init code below - fetches the demo's map/unit JSON and
+         calls GameEngine, with an editable options object so map settings can
+         be tweaked without touching any of the above.
+
+    Loading order is guaranteed by the HTML spec: `type="module"` scripts and
+    `defer` classic scripts both execute after parsing, in document order - so
+    despite the middle one being a classic (non-module) script, it still runs
+    after the module above it and before the module below it.
+-->
+<script type="module">
+    import * as THREE from "./js/vendor/three.module.js";
+    window.THREE = THREE;
+</script>
+
+<script src="js/hex-map.global.js" defer></script>
+
+<script type="module">
+    import { GUI } from "./js/vendor/dat.gui.module.js";
+    import Stats from "./js/vendor/stats.module.js";
+    const { GameEngine } = window.HexMap;
+
+    // ---------------------------------------------------------------------
+    // Map options - edit these and reload the page to see the result. Every
+    // field is optional; the values below are spelled out (even where they
+    // match the library default) so they're easy to find and tweak.
+    // See HexMapOptions in src/HexMap.ts for the full/authoritative list.
+    // ---------------------------------------------------------------------
+    const mapOptions = {
+        element: "[game-scene]",
+        size: 48,                    // hex circumradius, world units
+        texturesBaseUrl: "textures/",
+
+        gridVisible: true,
+        gridColor: 0x42322b,
+        gridWidth: 0.04,
+        gridOpacity: 0.35,
+
+        selectorColor: 0xffff00,
+        pointerColor: 0xeeeeee,
+        treesPerTile: 20,
+
+        // Solid animated water (waves + sparkle + beach slope) - sea/coastal
+        // tiles always render on the animated water layer.
+        waterColorShallow: 0x2f9c8f,
+        waterColorDeep: 0x0f4c75,
+
+        // Wave fine-tuning.
+        waterWaveAmplitude: 1.6,
+        waterWaveFrequency: 1.0,
+        waterWaveSpeed: 1.0,
+        waterSparkleIntensity: 1.0,
+        waterFresnelIntensity: 1.0,
+
+        // Stylized coastal foam waves (white bands rolling towards every
+        // shoreline + a lapping foam strip at the waterline). All knobs are
+        // live shader uniforms.
+        coastalWavesEnabled: true,
+        coastalWaveColor: 0xffffff,
+        coastalWaveCount: 3,        // bands per shore-to-center span
+        coastalWaveSpeed: 0.6,      // travel speed towards the shore
+        coastalWaveWidth: 0.3,      // band thickness, 0..1 of a wavelength
+        coastalWaveRange: 0.8,      // reach out from the shore, 0..1 of tile radius
+        coastalWaveDistortion: 0.5, // 0..1, noise bend/tear amount
+        coastalWaveOpacity: 0.85,
+
+        // waterDepth defaults to size * 0.25 if left unset. beachWidth is the
+        // *total* beach transition width, split evenly between the land tile
+        // and the water tile that share a coastal edge.
+        waterDepth: 3,
+        beachWidth: 1.0,             // 0..1, fraction of a tile's radius
+
+        // Diffusion/blend band sizes - independent from beachWidth above.
+        // landBlendWidth: how far a land tile's texture fades towards a
+        // differently-typed land neighbor (e.g. grass fading towards a city's
+        // sand tile). waterCornerRounding: how rounded a water tile's corner
+        // looks where two coastal edges meet (0 = sharp, 1 = fully rounded;
+        // a corner with only one coastal edge is never rounded).
+        landBlendWidth: 0.5,
+        waterCornerRounding: 0.5,
+
+        // Curved coastline & organic land transitions: how strongly static
+        // world-space noise bends the waterline off the straight hex edges
+        // (bays/headlands) and meanders the land-type transition bands.
+        // 0 restores the old straight-edge look. Mountains: "mountain" tiles
+        // (see gameInfo/map.json) rise into craggy peaks; adjacent ones merge
+        // into ridgelines. mountainHeight defaults to size * 0.6.
+        coastCurvature: 0.5,
+        landBlendCurvature: 0.5,
+        // mountainHeight: 28,
+
+        // Rivers & lakes - drawn on any land tile whose map data carries the
+        // "river"/"lake" modifier (see gameInfo/map.json), auto-connected to
+        // neighboring river/lake/sea/coastal tiles. Widths are fractions of a
+        // tile's radius; depth is world units. Colors default to
+        // waterColorShallow/Deep when left unset; all knobs are live shader
+        // uniforms.
+        riverWidth: 0.28,
+        riverBankWidth: 0.14,
+        riverCurvature: 0.5,
+        riverBankColor: 0xa8bf6a,
+        riverFlowSpeed: 1.0,
+        lakeShoreWidth: 0.18,
+
+        // Tree/city models - each a *folder* path containing model.glb +
+        // info.json (that model's own offset/rotation/scale fine-tuning, see
+        // helpers/models.ts). A tile's own TileInfo.city.model/treeModel (see
+        // gameInfo/map.json) overrides these per-tile; treeScale/cityScale are
+        // extra map-wide multipliers on top of each model's own info.json scale.
+        treeModel: "Assets/models/pinia",
+        treeScale: 1,
+        cityModel: "Assets/models/monument",
+        cityScale: 1,
+
+        // Wind-animated grass-blade overlay on top of grass ("land") tiles -
+        // purely decorative, on top of the terrain layer's own texture. Set
+        // grassEnabled: false to fall back to the plain grass texture alone.
+        grassEnabled: true,
+        grassDensity: 70,       // blades per tile
+        grassBladeWidth: 0.8,
+        grassBladeHeight: 5.5,
+        grassWindStrength: 1.7,
+        grassWindSpeed: 1.2
+    };
+
+    async function init() {
+        const game = new GameEngine(mapOptions);
+        window.game = game; // console access for debugging (e.g. game.map.setTileFog(x, y, 0))
+
+        // FPS/frame-time/memory readout (top-left, click to cycle panels) -
+        // HexMap emits "frame" once per rendered frame regardless of whether
+        // map data has finished loading yet, so this starts counting
+        // immediately rather than waiting on game.init() below.
+        const stats = new Stats();
+        stats.showPanel(0); // 0 = fps, 1 = ms per frame, 2 = MB (Chrome only)
+        document.body.appendChild(stats.dom);
+        game.map.on("frame", () => stats.update());
+
+        const [mapData, unitsData] = await Promise.all([
+            fetch("gameInfo/map.json").then(r => r.json()),
+            fetch("gameInfo/units.json").then(r => r.json())
+        ]);
+
+        await game.init(mapData, unitsData);
+
+        game.on("unitClick", cellCoords => {
+            // Here goes UI to activate unit actions - game.currentUnit.actions
+            // lists what this unit can currently do.
+            console.log("unitClick", cellCoords, game.currentUnit?.actions);
+        });
+
+        game.on("click", cellCoords => console.log("click", cellCoords));
+        game.on("hover", payload => console.log("hover", payload));
+        game.on("start_move", payload => console.log("start_move", payload));
+        game.on("end_move", payload => console.log("end_move", payload));
+
+        const gui = new GUI();
+        gui.add(game.map, "gridVisible");
+        // hide/show the war fog for map inspection - fog states keep being
+        // tracked underneath, so re-enabling repaints the current fog exactly
+        gui.add(game.map, "warFogVisible").name("war fog");
+
+        const waterFolder = gui.addFolder("Water animation");
+        waterFolder.add(game.map, "waterWaveAmplitude", 0, 5, 0.1).name("wave amplitude");
+        waterFolder.add(game.map, "waterWaveFrequency", 0.1, 4, 0.05).name("wave frequency");
+        waterFolder.add(game.map, "waterWaveSpeed", 0, 4, 0.05).name("wave speed");
+        waterFolder.add(game.map, "waterSparkleIntensity", 0, 3, 0.05).name("sparkle");
+        waterFolder.add(game.map, "waterFresnelIntensity", 0, 3, 0.05).name("fresnel");
+        waterFolder.addColor(game.map, "waterColorShallow").name("color shallow");
+        waterFolder.addColor(game.map, "waterColorDeep").name("color deep");
+
+        const coastalFolder = gui.addFolder("Coastal waves");
+        coastalFolder.add(game.map, "coastalWavesEnabled").name("enabled");
+        coastalFolder.add(game.map, "coastalWaveCount", 1, 8, 1).name("wave count");
+        coastalFolder.add(game.map, "coastalWaveSpeed", 0, 3, 0.05).name("speed");
+        coastalFolder.add(game.map, "coastalWaveWidth", 0.05, 1, 0.01).name("width");
+        coastalFolder.add(game.map, "coastalWaveRange", 0.1, 1, 0.01).name("range");
+        coastalFolder.add(game.map, "coastalWaveDistortion", 0, 1, 0.01).name("distortion");
+        coastalFolder.add(game.map, "coastalWaveOpacity", 0, 1, 0.01).name("opacity");
+        coastalFolder.addColor(game.map, "coastalWaveColor").name("foam color");
+
+        const blendFolder = gui.addFolder("Blending & beach");
+        blendFolder.add(game.map, "landBlendWidth", 0, 1, 0.01).name("land blend width");
+        blendFolder.add(game.map, "landBlendCurvature", 0, 1, 0.01).name("blend curvature");
+        blendFolder.add(game.map, "waterCornerRounding", 0, 1, 0.01).name("corner rounding");
+        blendFolder.add(game.map, "beachWidth", 0, 1, 0.01).name("beach width");
+        blendFolder.add(game.map, "coastCurvature", 0, 1, 0.01).name("coast curvature");
+        blendFolder.add(game.map, "waterDepth", 0, 20, 0.5).name("water depth");
+
+        const mountainFolder = gui.addFolder("Mountains");
+        mountainFolder.add(game.map, "mountainHeight", 0, 80, 1).name("peak height");
+
+        const riverFolder = gui.addFolder("Rivers & lakes");
+        riverFolder.add(game.map, "riverWidth", 0.05, 0.6, 0.01).name("river width");
+        riverFolder.add(game.map, "riverBankWidth", 0, 0.4, 0.01).name("bank width");
+        riverFolder.add(game.map, "riverCurvature", 0, 1, 0.01).name("curvature");
+        riverFolder.add(game.map, "riverFlowSpeed", 0, 4, 0.05).name("flow speed");
+        riverFolder.add(game.map, "riverDepth", 0, 15, 0.25).name("depth");
+        riverFolder.add(game.map, "lakeShoreWidth", 0.02, 0.5, 0.01).name("lake shore");
+        riverFolder.addColor(game.map, "riverColorShallow").name("color shallow");
+        riverFolder.addColor(game.map, "riverColorDeep").name("color deep");
+        riverFolder.addColor(game.map, "riverBankColor").name("bank color");
+
+        const treesFolder = gui.addFolder("Trees");
+        treesFolder.add(game.map, "treesPerTile", 0, 60, 1).name("density");
+        treesFolder.add(game.map, "treeScale", 0.1, 3, 0.05).name("scale");
+
+        const grassFolder = gui.addFolder("Grass");
+        grassFolder.add(game.map, "grassVisible").name("enabled");
+        grassFolder.add(game.map, "grassWindSpeed", 0, 3, 0.05).name("wind speed");
+        grassFolder.add(game.map, "grassWindStrength", 0, 10, 0.1).name("wind strength");
+        grassFolder.add(game.map, "grassDensity", 0, 150, 1).name("density");
+        grassFolder.add(game.map, "grassBladeWidth", 0.2, 5, 0.1).name("blade width");
+        grassFolder.add(game.map, "grassBladeHeight", 1, 20, 0.5).name("blade height");
+    }
+
+    init();
+</script>
+
+</body>
+</html>
