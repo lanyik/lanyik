@@ -6,7 +6,8 @@ import { getHexCenter } from "./helpers";
 export const WORLD_CHUNK_SIZE = 12;
 export const WORLD_CHUNK_METADATA = "hexWorldChunk";
 
-export type WorldChunkKind = "land" | "water" | "grass";
+export type WorldChunkKind = "land" | "water" | "grass" | "forest";
+export type WorldChunkLod = 0 | 1 | 2;
 
 export interface WorldChunkBounds {
     minX: number;
@@ -18,11 +19,27 @@ export interface WorldChunkBounds {
 }
 
 export interface WorldChunkMetadata {
+    id: string;
+    key: string;
     chunkX: number;
     chunkY: number;
     kind: WorldChunkKind;
     bounds: WorldChunkBounds;
 }
+
+export interface WorldChunkLodDistances {
+    near: number;
+    far: number;
+    vegetation: number;
+    hysteresis: number;
+}
+
+export const DEFAULT_WORLD_CHUNK_LOD_DISTANCES: Readonly<WorldChunkLodDistances> = Object.freeze({
+    near: 900,
+    far: 1650,
+    vegetation: 1450,
+    hysteresis: 120
+});
 
 export function getWorldChunkKey(x: number, y: number, chunkSize = WORLD_CHUNK_SIZE): string {
     return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
@@ -69,12 +86,49 @@ export function tagWorldChunk(
     object: Object3D,
     chunkKey: string,
     kind: WorldChunkKind,
-    bounds: WorldChunkBounds
+    bounds: WorldChunkBounds,
+    id = `${kind}:${chunkKey}`
 ): void {
     const [chunkX, chunkY] = chunkKey.split(",").map(Number);
-    object.userData[WORLD_CHUNK_METADATA] = { chunkX, chunkY, kind, bounds } satisfies WorldChunkMetadata;
+    object.userData[WORLD_CHUNK_METADATA] = {
+        id,
+        key: chunkKey,
+        chunkX,
+        chunkY,
+        kind,
+        bounds
+    } satisfies WorldChunkMetadata;
 }
 
 export function getWorldChunkMetadata(object: Object3D): WorldChunkMetadata | undefined {
     return object.userData[WORLD_CHUNK_METADATA] as WorldChunkMetadata | undefined;
+}
+
+//Selects a stable LOD with a dead band around each threshold. The dead band is
+//important while orbiting: without it, a chunk sitting on a boundary can be
+//rebuilt between two subdivision levels every other frame.
+export function resolveWorldChunkLod(
+    distance: number,
+    kind: WorldChunkKind,
+    previous: WorldChunkLod | undefined,
+    distances: WorldChunkLodDistances = DEFAULT_WORLD_CHUNK_LOD_DISTANCES
+): WorldChunkLod | null {
+    const decorative = kind === "grass" || kind === "forest";
+    const hiddenBeyond = decorative ? distances.vegetation : Infinity;
+    if (distance > hiddenBeyond + (previous === undefined ? 0 : distances.hysteresis)) return null;
+
+    const near = distances.near;
+    const far = decorative ? distances.vegetation : distances.far;
+    const h = previous === undefined ? 0 : distances.hysteresis;
+
+    if (previous === 0 && distance <= near + h) return 0;
+    if (previous === 1) {
+        if (distance < near - h) return 0;
+        if (distance <= far + h) return 1;
+    }
+    if (previous === 2 && distance >= far - h) return 2;
+
+    if (distance <= near) return 0;
+    if (distance <= far) return 1;
+    return decorative ? null : 2;
 }

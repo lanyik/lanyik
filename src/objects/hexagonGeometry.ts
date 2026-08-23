@@ -78,3 +78,84 @@ export function createHexagonGeometry(radius: number, numSubdivisions: number = 
 
     return geometry;
 }
+
+//A transition-safe LOD mesh. It keeps the outer edge tessellated at the same
+//rate as the highest-detail mesh while using a smaller inner ring. Neighbouring
+//chunks therefore evaluate every displaced rim vertex at identical positions,
+//even when their interior detail differs.
+export function createHexagonLodGeometry(
+    radius: number,
+    interiorSubdivisions: number,
+    borderSubdivisions: number
+): BufferGeometry {
+    if (interiorSubdivisions >= borderSubdivisions) {
+        return createHexagonGeometry(radius, borderSubdivisions);
+    }
+
+    const outerSegments = Math.pow(2, borderSubdivisions);
+    const innerSegments = Math.pow(2, Math.max(0, interiorSubdivisions));
+    const innerScale = 0.72;
+    const triangles: Vector3[] = [];
+    const center = new Vector3();
+    const corners = Array.from({ length: 6 }, (_, index) => {
+        const angle = index * Math.PI / 3;
+        return new Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+    });
+
+    const appendTriangle = (a: Vector3, b: Vector3, c: Vector3) => {
+        const crossY = b.clone().sub(a).cross(c.clone().sub(a)).y;
+        if (crossY >= 0) triangles.push(a, b, c);
+        else triangles.push(a, c, b);
+    };
+
+    for (let side = 0; side < 6; side++) {
+        const a = corners[side];
+        const b = corners[(side + 1) % 6];
+        const outer = Array.from({ length: outerSegments + 1 }, (_, index) =>
+            a.clone().lerp(b, index / outerSegments)
+        );
+        const innerA = a.clone().multiplyScalar(innerScale);
+        const innerB = b.clone().multiplyScalar(innerScale);
+        const inner = Array.from({ length: innerSegments + 1 }, (_, index) =>
+            innerA.clone().lerp(innerB, index / innerSegments)
+        );
+
+        let outerIndex = 0;
+        let innerIndex = 0;
+        while (outerIndex < outerSegments || innerIndex < innerSegments) {
+            const nextOuter = outerIndex < outerSegments ? (outerIndex + 1) / outerSegments : Infinity;
+            const nextInner = innerIndex < innerSegments ? (innerIndex + 1) / innerSegments : Infinity;
+            if (Math.abs(nextOuter - nextInner) < 1e-9) {
+                appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+                appendTriangle(outer[outerIndex + 1], inner[innerIndex], inner[innerIndex + 1]);
+                outerIndex++;
+                innerIndex++;
+            } else if (nextOuter < nextInner) {
+                appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+                outerIndex++;
+            } else {
+                appendTriangle(outer[outerIndex], inner[innerIndex], inner[innerIndex + 1]);
+                innerIndex++;
+            }
+        }
+
+        for (let index = 0; index < innerSegments; index++) {
+            appendTriangle(inner[index], center, inner[index + 1]);
+        }
+    }
+
+    const positions = new Float32Array(triangles.length * 3);
+    const texcoords = new Float32Array(triangles.length * 2);
+    triangles.forEach((vertex, index) => {
+        positions[index * 3] = vertex.x;
+        positions[index * 3 + 1] = vertex.y;
+        positions[index * 3 + 2] = vertex.z;
+        texcoords[index * 2] = 0.02 + 0.96 * ((vertex.x + radius) / (radius * 2));
+        texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex.z + radius) / (radius * 2));
+    });
+
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new BufferAttribute(texcoords, 2));
+    return geometry;
+}

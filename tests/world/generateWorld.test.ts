@@ -14,6 +14,12 @@ const allowedModifiers = new Set(["hill", "wood", "lake"]);
 const isWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 
 describe("generateWorld", () => {
+    test("supports world dimensions up to 512", () => {
+        expect(MAX_WORLD_SIZE).toBe(512);
+        expect(() => generateWorld({ seed: "limit", width: 512, height: MIN_WORLD_SIZE }))
+            .not.toThrow();
+    });
+
     test("repeats exactly for the same seed and dimensions", () => {
         const first = generateWorld({ seed: "atlas", width: 24, height: 18 });
         const second = generateWorld({ seed: "atlas", width: 24, height: 18 });

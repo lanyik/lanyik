@@ -11,7 +11,7 @@ npm start
 
 Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. The default page does not start units, turns, or fog-of-war gameplay.
 
-A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. One draw call per layer, no per-tile meshes.
+A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. Rendering is batched per visible chunk, never per tile.
 
 See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) · [Changelog](CHANGELOG.md)
 
@@ -21,7 +21,8 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 
 - **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, physically repeated streamed chunks, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
 - **Atmospheric sky** - a procedural sky dome replaces the flat background with blue zenith, atmospheric horizon haze and a physically positioned sun while orbiting down toward the horizon.
-- **Streamed world rendering** - terrain, water, grass and trees are split into 12×12 logical chunks; only distance/frustum-visible chunks are submitted and uploaded to the GPU. An LRU-style 96-geometry residency cap releases old WebGL buffers while preserving their CPU attributes for transparent re-upload when revisited.
+- **Complete world streaming** - terrain, water, grass and trees are split into 12×12 logical chunks. The scheduler combines distance/frustum culling, three stable LOD levels, lazy CPU geometry construction, lazy WebGL upload and separate 128-GPU/192-CPU logical-chunk caches. Near terrain retains the original full subdivision and decoration density.
+- **Large procedural worlds** - deterministic generation supports 8–512 tiles per dimension. The demo performs generation in a dedicated Worker, keeping camera/UI rendering responsive while a 512×512 world is created.
 - **Instanced terrain** - every visible chunk uses `InstancedBufferGeometry` batches (land, water, grass, trees), with grid lines, land-type edge blending and beach slopes computed in the shaders.
 - **Animated water** - sea/coastal tiles render as a solid-colored, wave-displaced surface (sum-of-sines with analytic normals) with sparkle, fresnel and stylized coastal foam waves rolling towards every shoreline.
 - **Rivers** - mark a grass tile with the `"river"` modifier and it renders an animated water channel with noise-curved banks, a light vegetation strip, a carved 3D riverbed and shallow-to-deep shading. Connectivity is auto-detected from neighbors: rivers merge at junctions, spring from source pools and flow into lakes and the sea.
@@ -131,10 +132,34 @@ Everything is optional except `element`. The full, documented list lives in [`He
 | Rivers & lakes | `riverWidth`, `riverBankWidth`, `riverCurvature`, `riverColorShallow/Deep`, `riverBankColor`, `riverFlowSpeed`, `riverDepth`, `lakeShoreWidth` |
 | Trees | `treesPerTile`, `treeModel`, `treeScale` |
 | Grass | `grassEnabled`, `grassDensity`, `grassBladeWidth/Height`, `grassWindStrength/Speed` |
+| Streaming | `renderDistance`, `lodEnabled`, `lodNearDistance`, `lodFarDistance`, `vegetationRenderDistance`, `chunkLodHysteresis`, `gpuChunkCacheSize`, `cpuChunkCacheSize` |
 | Fog of war | `fogTexture`, `fogDarkenFactor`, `fogTextureSize` |
 | GameEngine only | `fogOfWar`, `preventCellClick` |
 
 Almost all of these are also **live properties** on the `HexMap` instance (`map.riverCurvature = 0.8`, `map.waterWaveSpeed = 2`, ...) backed by shader uniforms - only a few (tree/grass density and sizes) rebuild their layer.
+
+The streaming pipeline, LOD guarantees, cache lifecycle and frustum calculation
+are documented in [docs/render-streaming.md](docs/render-streaming.md). Runtime
+counters are available through `map.streamingStats`.
+
+For large generated maps, run the generator off the main thread:
+
+```ts
+import { WorldGeneratorClient } from "three-hex-map";
+
+const generator = new WorldGeneratorClient(
+    // Copy the package's world-generator.worker.mjs to your public assets.
+    new URL("/assets/world-generator.worker.mjs", window.location.href)
+);
+const world = await generator.generate({
+    seed: "continent",
+    width: 512,
+    height: 512,
+    topology: "toroidal"
+});
+await map.load(world);
+generator.dispose();
+```
 
 ## Fog of war
 

@@ -6,6 +6,7 @@ import {
     getWorldChunkKey,
     getWorldChunkMetadata,
     groupTilesByWorldChunk,
+    resolveWorldChunkLod,
     tagWorldChunk,
     WORLD_CHUNK_SIZE
 } from "../../src/helpers/chunks";
@@ -40,10 +41,25 @@ describe("world render chunks", () => {
         const object = new Object3D();
         tagWorldChunk(object, "1,2", "land", bounds);
         expect(getWorldChunkMetadata(object.clone())).toEqual({
+            id: "land:1,2",
+            key: "1,2",
             chunkX: 1,
             chunkY: 2,
             kind: "land",
             bounds
         });
+    });
+
+    test("selects stable near, middle and far LOD levels", () => {
+        const distances = { near: 900, far: 1650, vegetation: 1450, hysteresis: 120 };
+        expect(resolveWorldChunkLod(500, "land", undefined, distances)).toBe(0);
+        expect(resolveWorldChunkLod(1200, "land", undefined, distances)).toBe(1);
+        expect(resolveWorldChunkLod(2000, "land", undefined, distances)).toBe(2);
+        expect(resolveWorldChunkLod(1500, "grass", undefined, distances)).toBeNull();
+
+        //LOD 0 remains active slightly beyond the nominal boundary and only
+        //changes once the hysteresis band has been crossed.
+        expect(resolveWorldChunkLod(980, "land", 0, distances)).toBe(0);
+        expect(resolveWorldChunkLod(1030, "land", 0, distances)).toBe(1);
     });
 });

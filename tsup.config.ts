@@ -11,7 +11,10 @@ import { defineConfig } from "tsup";
 // TypeScript 6 now hard-errors on (baseUrl is deprecated) - a tsup/TS6
 // incompatibility as of tsup 8.5.1, not something in our own tsconfig.
 export default defineConfig({
-    entry: { "hex-map": "src/index.ts" },
+    entry: {
+        "hex-map": "src/index.ts",
+        "world-generator.worker": "src/world/generateWorld.worker.ts"
+    },
     format: ["esm", "cjs"],
     outDir: "dist",
     dts: false,

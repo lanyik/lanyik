@@ -5,16 +5,23 @@ import {
     Group,
     DynamicDrawUsage,
     Mesh,
-    Vector3
+    Vector3,
+    Object3D
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
-import { getRandomInt, HEXPolygon, getHexCenter } from "../helpers/helpers";
+import { HEXPolygon, getHexCenter } from "../helpers/helpers";
 import { loadModel } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
-import { WORLD_CHUNK_SIZE } from "../helpers/chunks";
+import {
+    getWorldChunkBounds,
+    groupTilesByWorldChunk,
+    tagWorldChunk,
+    WorldChunkLod,
+    WorldChunkMetadata
+} from "../helpers/chunks";
 
 export interface ForestOptions {
     size: number;
@@ -50,6 +57,24 @@ interface TileTreeRange {
     originalMatrices: Matrix4[];
 }
 
+interface ForestChunkRecord {
+    root: Group;
+    instancedMeshes: InstancedMesh[];
+    tiles: Point[];
+    lod?: WorldChunkLod;
+}
+
+interface ForestBuildContext {
+    map: MapInfo;
+    size: number;
+    treesPerTile: number;
+    treeScale: number;
+    treeFootprint: number;
+    polygon: number[][];
+    waterOptions: WaterClearanceOptions;
+    coastOptions: CoastClearanceOptions;
+}
+
 //----------------------------------------------------------------------------------
 //Thin Group subclass so the forest can expose setFogState() per tile (see
 //FogOfWar.ts) alongside the InstancedMeshes createForest() fills it with.
@@ -62,13 +87,22 @@ interface TileTreeRange {
 //----------------------------------------------------------------------------------
 export class ForestField extends Group {
     private readonly hiddenMatrix = new Matrix4().makeScale(0, 0, 0);
+    private readonly fogStates = new Map<string, number>();
 
-    constructor(private tileRanges: Map<string, TileTreeRange>, private fogDarkenFactor: number) {
+    constructor(
+        private tileRanges: Map<string, TileTreeRange>,
+        private fogDarkenFactor: number,
+        private chunks: Map<string, ForestChunkRecord>,
+        private context: ForestBuildContext
+    ) {
         super();
+        for (const record of chunks.values()) this.add(record.root);
     }
 
     public setFogState(x: number, y: number, state: number): void {
-        const range = this.tileRanges.get(`${x},${y}`);
+        const key = `${x},${y}`;
+        this.fogStates.set(key, state);
+        const range = this.tileRanges.get(key);
         if (!range) return;
 
         const hidden = state < 0.5;
@@ -84,6 +118,108 @@ export class ForestField extends Group {
             if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
         }
     }
+
+    public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod, objects: Object3D[]): void {
+        const record = this.chunks.get(metadata.id);
+        if (!record) return;
+        if (record.lod !== lod) this.populateChunk(record, lod);
+
+        //World copies share matrices/colors, but InstancedMesh.count is a plain
+        //number. Mirror it into every visible clone after a lazy build or LOD
+        //change so all toroidal images draw the same number of trees.
+        for (const object of objects) {
+            const copies: InstancedMesh[] = [];
+            object.traverse(child => {
+                if ((child as InstancedMesh).isInstancedMesh) copies.push(child as InstancedMesh);
+            });
+            copies.forEach((copy, index) => {
+                const source = record.instancedMeshes[index];
+                if (source) copy.count = source.count;
+            });
+        }
+    }
+
+    public releaseChunk(metadata: WorldChunkMetadata): void {
+        const record = this.chunks.get(metadata.id);
+        if (!record || record.lod === undefined) return;
+        for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+        for (const mesh of record.instancedMeshes) mesh.count = 0;
+        record.lod = undefined;
+    }
+
+    private populateChunk(record: ForestChunkRecord, lod: WorldChunkLod): void {
+        const {
+            map, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
+        } = this.context;
+        const density = Math.max(1, Math.round(treesPerTile * ([1, 0.5, 0.2] as const)[lod]));
+        for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+
+        const matrix = new Matrix4();
+        const scaleVector = new Vector3();
+        let instance = 0;
+        for (const tile of record.tiles) {
+            const key = `${tile.x},${tile.y}`;
+            const center = getHexCenter(tile.x, tile.y, size);
+            const placed: Point[] = [];
+            const tileStart = instance;
+            const originalMatrices: Matrix4[] = [];
+            let attempts = 0;
+            const waterValue = waterEdgeValue(map, tile.x, tile.y);
+            const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+            const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+            const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+
+            while (placed.length < density && attempts < density * 20) {
+                const salt = attempts++ * 17;
+                const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * size;
+                const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * size;
+                if (pointInPolygon(polygon, [lx, ly]) !== -1) continue;
+                if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
+                if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+                if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+                if (placed.some(p => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint)) continue;
+
+                placed.push({ x: lx, y: ly });
+                const scale = treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
+                matrix.makeRotationY(stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2);
+                matrix.scale(scaleVector.set(scale, scale, scale));
+                matrix.setPosition(center.x + lx, 0, center.y + ly);
+                originalMatrices.push(matrix.clone());
+                const fogState = this.fogStates.get(key) ?? 2;
+                const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
+                for (const mesh of record.instancedMeshes) {
+                    mesh.setMatrixAt(instance, fogState < 0.5 ? this.hiddenMatrix : matrix);
+                    mesh.instanceColor?.setXYZ(instance, shade, shade, shade);
+                }
+                instance++;
+            }
+            this.tileRanges.set(key, {
+                instancedMeshes: record.instancedMeshes,
+                start: tileStart,
+                count: instance - tileStart,
+                originalMatrices
+            });
+        }
+
+        for (const mesh of record.instancedMeshes) {
+            mesh.count = instance;
+            mesh.instanceMatrix.needsUpdate = true;
+            if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        }
+        record.lod = lod;
+    }
+}
+
+function stableRandom(x: number, y: number, salt: number): number {
+    let value = Math.imul(x ^ 0x9e3779b9, 0x85ebca6b)
+        ^ Math.imul(y ^ 0xc2b2ae35, 0x27d4eb2f)
+        ^ Math.imul(salt ^ 0x165667b1, 0x85ebca77);
+    value ^= value >>> 16;
+    value = Math.imul(value, 0x7feb352d);
+    value ^= value >>> 15;
+    value = Math.imul(value, 0x846ca68b);
+    value ^= value >>> 16;
+    return (value >>> 0) / 0x100000000;
 }
 
 //----------------------------------------------------------------------------------
@@ -107,6 +243,7 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
     const treeScale = options.treeScale ?? 1;
     const fogDarkenFactor = options.fogDarkenFactor ?? 0.45;
+    if (treesPerTile <= 0) return null;
 
     //Wood is a tile *modifier* (TileInfo.modifiers, like "river"/"lake"/
     //"hill"), not its own field. Lake tiles are skipped even if marked wood -
@@ -142,7 +279,8 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
     };
 
     const tileRanges = new Map<string, TileTreeRange>();
-    const group = new ForestField(tileRanges, fogDarkenFactor);
+    const chunkRecords = new Map<string, ForestChunkRecord>();
+    let modelIndex = 0;
 
     for (const [modelPath, tiles] of tilesByModel) {
         const { scene, fixup } = await loadModel(modelPath);
@@ -162,76 +300,43 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
             return { geometry, material: mesh.material };
         });
 
-        const chunks = new Map<string, Point[]>();
-        for (const tile of tiles) {
-            const key = `${Math.floor(tile.x / WORLD_CHUNK_SIZE)},${Math.floor(tile.y / WORLD_CHUNK_SIZE)}`;
-            const chunk = chunks.get(key) ?? [];
-            chunk.push(tile);
-            chunks.set(key, chunk);
-        }
+        const chunks = groupTilesByWorldChunk(tiles);
 
         for (const [chunkKey, chunkTiles] of chunks) {
             const totalInstances = chunkTiles.length * treesPerTile;
+            const root = new Group();
+            root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
             const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
                 const instancedMesh = new InstancedMesh(geometry, material, totalInstances);
                 instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
                 instancedMesh.instanceMatrix.setUsage(DynamicDrawUsage);
                 instancedMesh.instanceColor = new InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-                group.add(instancedMesh);
+                instancedMesh.count = 0;
+                instancedMesh.frustumCulled = false;
+                root.add(instancedMesh);
                 return instancedMesh;
             });
-
-            const matrix = new Matrix4();
-            const scaleVector = new Vector3();
-            let instance = 0;
-
-            for (const tile of chunkTiles) {
-                const center = getHexCenter(tile.x, tile.y, size);
-                const placed: Point[] = [];
-                const tileStart = instance;
-                const originalMatrices: Matrix4[] = [];
-                let attempts = 0;
-                const waterValue = waterEdgeValue(map, tile.x, tile.y);
-                const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-                const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-                const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-
-                while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
-                    attempts++;
-                    const lx = getRandomInt(-size, size);
-                    const ly = getRandomInt(-size, size);
-
-                    if (pointInPolygon(polygon, [lx, ly]) !== -1) continue;
-                    if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
-                    if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-                    if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-
-                    const overlaps = placed.some(p => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
-                    if (overlaps) continue;
-
-                    placed.push({ x: lx, y: ly });
-                    const scale = treeScale * (0.8 + Math.random() * 0.4);
-                    matrix.makeRotationY(Math.random() * Math.PI * 2);
-                    matrix.scale(scaleVector.set(scale, scale, scale));
-                    matrix.setPosition(center.x + lx, 0, center.y + ly);
-
-                    for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
-                    originalMatrices.push(matrix.clone());
-                    instance++;
-                }
-
-                tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
-            }
-
-            for (const instancedMesh of instancedMeshes) {
-                instancedMesh.count = instance;
-                instancedMesh.instanceMatrix.needsUpdate = true;
-                instancedMesh.computeBoundingBox();
-                instancedMesh.computeBoundingSphere();
-                instancedMesh.frustumCulled = true;
-            }
+            const id = `forest:${chunkKey}:${modelIndex}`;
+            tagWorldChunk(
+                root,
+                chunkKey,
+                "forest",
+                getWorldChunkBounds(chunkTiles, size, 0, size * 3),
+                id
+            );
+            chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles });
         }
+        modelIndex += 1;
     }
 
-    return group;
+    return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
+        map,
+        size,
+        treesPerTile,
+        treeScale,
+        treeFootprint,
+        polygon,
+        waterOptions,
+        coastOptions
+    });
 }

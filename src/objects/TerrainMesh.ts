@@ -22,9 +22,15 @@ import { Land, LandPriority, LandColor } from "../enums";
 import { getHexCenter } from "../helpers/helpers";
 import { getNeighborCoords } from "../helpers/neighbors";
 import { getMapTile } from "../helpers/topology";
-import { getWorldChunkBounds, groupTilesByWorldChunk, tagWorldChunk } from "../helpers/chunks";
+import {
+    getWorldChunkBounds,
+    groupTilesByWorldChunk,
+    tagWorldChunk,
+    WorldChunkLod,
+    WorldChunkMetadata
+} from "../helpers/chunks";
 import { lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, waterEdgeValue } from "../helpers/rivers";
-import { createHexagonGeometry } from "./hexagonGeometry";
+import { createHexagonGeometry, createHexagonLodGeometry } from "./hexagonGeometry";
 import { makeTextSprite } from "./citysprite";
 import { loadModel } from "../helpers/models";
 import { TERRAIN_VERTEX_SHADER } from "../shaders/terrain.vertex";
@@ -181,6 +187,13 @@ interface CityFogEntry {
     meshes: { mesh: Mesh, baseColor: Color }[];
 }
 
+interface TerrainChunkRecord {
+    mesh: Mesh<InstancedBufferGeometry, RawShaderMaterial>;
+    tiles: Point[];
+    layer: "land" | "water";
+    lod?: WorldChunkLod;
+}
+
 //----------------------------------------------------------------------------------
 //Renders the map as spatially streamed 12x12 instanced chunks
 //(InstancedBufferGeometry + InstancedBufferAttribute) instead of either one
@@ -221,6 +234,8 @@ export class TerrainMesh extends Group {
     private waterMaterial: RawShaderMaterial | undefined;
     private tileIndex = new Map<string, { mesh: Mesh, index: number }>();
     private waterTileIndex = new Map<string, { mesh: Mesh, index: number }>();
+    private chunkRecords = new Map<string, TerrainChunkRecord>();
+    private fogStates = new Map<string, number>();
     private cityFog = new Map<string, CityFogEntry>(); // "x,y" -> that tile's city model/label
     private fogTexture: Texture;
     private atlasTexture: Texture;
@@ -247,16 +262,17 @@ export class TerrainMesh extends Group {
         this.waterShallow = new Color(options.waterColorShallow ?? LandColor[Land.coastal]);
         this.waterDeep = new Color(options.waterColorDeep ?? LandColor[Land.sea]);
 
-        const allTiles: Point[] = [];
+        const landTiles: Point[] = [];
+        const waterTiles: Point[] = [];
         for (let x = 0; x < this.map.w; x++) {
             for (let y = 0; y < this.map.h; y++) {
-                if (this.map.data[x]?.[y]) allTiles.push({ x, y });
+                const tile = this.map.data[x]?.[y];
+                if (!tile) continue;
+                (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
             }
         }
-
-        const isWater = (tile: Point) => WATER_TYPES.includes(this.map.data[tile.x][tile.y].type);
-        this.buildLandLayer(allTiles.filter(t => !isWater(t)));
-        this.buildWaterLayer(allTiles.filter(isWater));
+        this.buildLandLayer(landTiles);
+        this.buildWaterLayer(waterTiles);
     }
 
     private buildAtlasCellIndex(): void {
@@ -312,7 +328,7 @@ export class TerrainMesh extends Group {
             riverSeaMouthEdges: new Float32Array(tiles.length),
             riverLakeMouthEdges: new Float32Array(tiles.length),
             lakeNeighborEdges: new Float32Array(tiles.length),
-            fogState: new Float32Array(tiles.length).fill(2) // default Visible - see FogOfWar.ts
+            fogState: new Float32Array(tiles.length) // filled per tile below
         };
 
         tiles.forEach((tile, i) => {
@@ -325,6 +341,7 @@ export class TerrainMesh extends Group {
             attrs.style[i * 3 + 0] = this.atlasCellIndex[info.type] ?? 0;
             attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
             attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
+            attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
 
             const se = getNeighborCoords(tile.x, tile.y, "SE");
             const s = getNeighborCoords(tile.x, tile.y, "S");
@@ -366,8 +383,14 @@ export class TerrainMesh extends Group {
         return attrs;
     }
 
-    private buildInstancedGeometry(tiles: Point[], numSubdivisions: number): InstancedBufferGeometry {
-        const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
+    private buildInstancedGeometry(
+        tiles: Point[],
+        numSubdivisions: number,
+        borderSubdivisions = numSubdivisions
+    ): InstancedBufferGeometry {
+        const hexagon = numSubdivisions === borderSubdivisions
+            ? createHexagonGeometry(this.options.size, numSubdivisions)
+            : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
         const geometry = new InstancedBufferGeometry();
         geometry.setAttribute("position", hexagon.getAttribute("position"));
         geometry.setAttribute("uv", hexagon.getAttribute("uv"));
@@ -390,6 +413,25 @@ export class TerrainMesh extends Group {
         geometry.setAttribute("fogState", new InstancedBufferAttribute(attrs.fogState, 1));
 
         return geometry;
+    }
+
+    private replaceGeometry(target: InstancedBufferGeometry, source: InstancedBufferGeometry): void {
+        target.dispose();
+        for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
+        target.setIndex(source.getIndex());
+        for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
+        target.instanceCount = source.instanceCount;
+        target.boundingBox = null;
+        target.boundingSphere = null;
+    }
+
+    private clearGeometry(geometry: InstancedBufferGeometry): void {
+        geometry.dispose();
+        for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
+        geometry.setIndex(null);
+        geometry.instanceCount = 0;
+        geometry.boundingBox = null;
+        geometry.boundingSphere = null;
     }
 
     private commonUniforms() {
@@ -491,11 +533,11 @@ export class TerrainMesh extends Group {
             fragmentShader: TERRAIN_FRAGMENT_SHADER
         });
 
-        //Subdivision 3 is preserved for every streamed chunk: mountain and
-        //shore quality is identical to the previous full-world mesh. Splitting
-        //only changes submission/culling granularity, not visible geometry.
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-            const geometry = this.buildInstancedGeometry(chunkTiles, 3);
+            //The shell and metadata are cheap enough to keep for the whole
+            //world. Attribute arrays and subdivided hex vertices are created
+            //only when the scheduler activates this chunk.
+            const geometry = new InstancedBufferGeometry();
             const mesh = new Mesh(geometry, this.landMaterial);
             mesh.name = `terrain-chunk-land-${chunkKey}`;
             mesh.frustumCulled = false;
@@ -506,6 +548,7 @@ export class TerrainMesh extends Group {
                 getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3)
             );
             chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+            this.chunkRecords.set(`land:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "land" });
             this.landChunks.push(mesh);
             this.add(mesh);
         }
@@ -543,7 +586,7 @@ export class TerrainMesh extends Group {
         });
 
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-            const geometry = this.buildInstancedGeometry(chunkTiles, 2);
+            const geometry = new InstancedBufferGeometry();
             const mesh = new Mesh(geometry, this.waterMaterial);
             mesh.name = `terrain-chunk-water-${chunkKey}`;
             mesh.frustumCulled = false;
@@ -554,6 +597,7 @@ export class TerrainMesh extends Group {
                 getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size)
             );
             chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+            this.chunkRecords.set(`water:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "water" });
             this.waterChunks.push(mesh);
             this.add(mesh);
         }
@@ -637,6 +681,31 @@ export class TerrainMesh extends Group {
     public setWorldCenter(x: number, y: number): void {
         this.landMaterial?.uniforms.worldCenter.value.set(x, y);
         this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
+    }
+
+    //Near terrain keeps the original subdivision counts (land 3 / water 2).
+    //Only interior vertices are reduced at middle/far distances; full-detail
+    //rim tessellation remains identical, so adjacent chunks cannot open cracks.
+    public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod): InstancedBufferGeometry | undefined {
+        const record = this.chunkRecords.get(metadata.id);
+        if (!record) return undefined;
+        const geometry = record.mesh.geometry;
+        if (record.lod === lod && geometry.getAttribute("position")) return geometry;
+
+        const subdivisions = record.layer === "land"
+            ? ([3, 2, 1] as const)[lod]
+            : ([2, 1, 0] as const)[lod];
+        const borderSubdivisions = record.layer === "land" ? 3 : 2;
+        this.replaceGeometry(geometry, this.buildInstancedGeometry(record.tiles, subdivisions, borderSubdivisions));
+        record.lod = lod;
+        return geometry;
+    }
+
+    public releaseChunk(metadata: WorldChunkMetadata): void {
+        const record = this.chunkRecords.get(metadata.id);
+        if (!record || record.lod === undefined) return;
+        this.clearGeometry(record.mesh.geometry);
+        record.lod = undefined;
     }
 
     public get gridVisible(): boolean {
@@ -918,19 +987,24 @@ export class TerrainMesh extends Group {
     //-------------------------------------------------------------------------
     public setFogState(x: number, y: number, state: number): void {
         const key = `${x},${y}`;
+        this.fogStates.set(key, state);
 
         const landEntry = this.tileIndex.get(key);
         if (landEntry) {
-            const attribute = landEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-            attribute.setX(landEntry.index, state);
-            attribute.needsUpdate = true;
+            const attribute = landEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
+            if (attribute) {
+                attribute.setX(landEntry.index, state);
+                attribute.needsUpdate = true;
+            }
         }
 
         const waterEntry = this.waterTileIndex.get(key);
         if (waterEntry) {
-            const attribute = waterEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-            attribute.setX(waterEntry.index, state);
-            attribute.needsUpdate = true;
+            const attribute = waterEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
+            if (attribute) {
+                attribute.setX(waterEntry.index, state);
+                attribute.needsUpdate = true;
+            }
         }
 
         this.setCityFog(key, state);

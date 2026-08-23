@@ -44,3 +44,5 @@ export {
 
 export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateWorld";
 export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
+export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
+export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";

@@ -2,7 +2,7 @@ import { GUI } from "./js/vendor/dat.gui.module.js";
 import { createI18n } from "./i18n.js";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
-const { HexMap, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
+const { HexMap, generateWorld, WorldGeneratorClient, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
@@ -69,7 +69,10 @@ let performanceSnapshot = {
     frameTime: null,
     memory: null,
     drawCalls: null,
-    triangles: null
+    triangles: null,
+    visibleChunks: null,
+    residentChunks: null,
+    lod: null
 };
 
 function renderPerformance() {
@@ -78,13 +81,18 @@ function renderPerformance() {
         frameTime: value => value.toFixed(1),
         memory: value => Math.round(value),
         drawCalls: value => performanceNumberFormatter.format(value),
-        triangles: value => performanceCompactFormatter.format(value)
+        triangles: value => performanceCompactFormatter.format(value),
+        visibleChunks: value => performanceNumberFormatter.format(value),
+        residentChunks: value => performanceNumberFormatter.format(value),
+        lod: value => value
     };
 
     Object.entries(performanceValues).forEach(([key, element]) => {
         const value = performanceSnapshot[key];
         element.textContent = value === null ? "—" : formats[key](value);
-        element.title = value === null ? i18n.t("performance.unavailable") : performanceNumberFormatter.format(value);
+        element.title = value === null
+            ? i18n.t("performance.unavailable")
+            : typeof value === "number" ? performanceNumberFormatter.format(value) : String(value);
     });
 }
 
@@ -111,13 +119,17 @@ function samplePerformance() {
     if (elapsed < PERFORMANCE_SAMPLE_INTERVAL) return;
 
     const rendererInfo = map.renderer?.info;
+    const streaming = map.streamingStats;
     const heapSize = performance.memory?.usedJSHeapSize;
     performanceSnapshot = {
         fps: performanceFrameCount * 1000 / elapsed,
         frameTime: elapsed / performanceFrameCount,
         memory: Number.isFinite(heapSize) ? heapSize / 1048576 : null,
         drawCalls: rendererInfo?.render.calls ?? null,
-        triangles: rendererInfo?.render.triangles ?? null
+        triangles: rendererInfo?.render.triangles ?? null,
+        visibleChunks: streaming?.visibleChunks ?? null,
+        residentChunks: streaming?.residentChunks ?? null,
+        lod: streaming ? `${streaming.lod0}/${streaming.lod1}/${streaming.lod2}` : null
     };
     performanceFrameCount = 0;
     performanceSampleStart = now;
@@ -140,6 +152,13 @@ window.regenerateWorld = regenerate;
 let currentWorld;
 let generating = false;
 let statusState = { kind: "initializing" };
+let worldGenerator;
+try {
+    worldGenerator = new WorldGeneratorClient(new URL("./js/world-generator.worker.mjs", window.location.href));
+    window.addEventListener("beforeunload", () => worldGenerator.dispose(), { once: true });
+} catch (error) {
+    console.warn("World generation worker unavailable; using the synchronous fallback", error);
+}
 
 function formatTile(tile) {
     return [
@@ -186,12 +205,15 @@ async function regenerate() {
     });
 
     try {
-        const nextWorld = generateWorld({
+        const generationOptions = {
             seed: controls.seed,
             width: Number(controls.width),
             height: Number(controls.height),
             topology: "toroidal"
-        });
+        };
+        const nextWorld = worldGenerator
+            ? await worldGenerator.generate(generationOptions)
+            : generateWorld(generationOptions);
         await map.load(nextWorld);
         currentWorld = nextWorld;
         setStatus("generated", {

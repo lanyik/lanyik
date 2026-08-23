@@ -4,7 +4,7 @@ import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
 import { fractalNoise2D, periodicFractalNoise2D, randomAt, seedToUint32 } from "./noise";
 
 export const MIN_WORLD_SIZE = 8;
-export const MAX_WORLD_SIZE = 96;
+export const MAX_WORLD_SIZE = 512;
 
 export interface WorldGenerationOptions {
     seed: string | number;

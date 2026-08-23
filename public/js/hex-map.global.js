@@ -8004,11 +8004,6 @@
 	})(UnitActions || {});
 
 	// src/helpers/helpers.ts
-	function getRandomInt(min, max) {
-	  min = Math.ceil(min);
-	  max = Math.floor(max);
-	  return Math.floor(Math.random() * (max - min + 1)) + min;
-	}
 	function pointy_hex_corner(center, size, i) {
 	  let angle_deg = 60 * i;
 	  let angle_rad = Math.PI / 180 * angle_deg;
@@ -8142,6 +8137,12 @@
 	// src/helpers/chunks.ts
 	var WORLD_CHUNK_SIZE = 12;
 	var WORLD_CHUNK_METADATA = "hexWorldChunk";
+	var DEFAULT_WORLD_CHUNK_LOD_DISTANCES = Object.freeze({
+	  near: 900,
+	  far: 1650,
+	  vegetation: 1450,
+	  hysteresis: 120
+	});
 	function getWorldChunkKey(x, y, chunkSize = WORLD_CHUNK_SIZE) {
 	  return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
 	}
@@ -8170,12 +8171,36 @@
 	  }
 	  return { minX, maxX, minY, maxY, minZ, maxZ };
 	}
-	function tagWorldChunk(object, chunkKey, kind, bounds) {
+	function tagWorldChunk(object, chunkKey, kind, bounds, id = `${kind}:${chunkKey}`) {
 	  const [chunkX, chunkY] = chunkKey.split(",").map(Number);
-	  object.userData[WORLD_CHUNK_METADATA] = { chunkX, chunkY, kind, bounds };
+	  object.userData[WORLD_CHUNK_METADATA] = {
+	    id,
+	    key: chunkKey,
+	    chunkX,
+	    chunkY,
+	    kind,
+	    bounds
+	  };
 	}
 	function getWorldChunkMetadata(object) {
 	  return object.userData[WORLD_CHUNK_METADATA];
+	}
+	function resolveWorldChunkLod(distance, kind, previous, distances = DEFAULT_WORLD_CHUNK_LOD_DISTANCES) {
+	  const decorative = kind === "grass" || kind === "forest";
+	  const hiddenBeyond = decorative ? distances.vegetation : Infinity;
+	  if (distance > hiddenBeyond + (previous === void 0 ? 0 : distances.hysteresis)) return null;
+	  const near = distances.near;
+	  const far = decorative ? distances.vegetation : distances.far;
+	  const h = previous === void 0 ? 0 : distances.hysteresis;
+	  if (previous === 0 && distance <= near + h) return 0;
+	  if (previous === 1) {
+	    if (distance < near - h) return 0;
+	    if (distance <= far + h) return 1;
+	  }
+	  if (previous === 2 && distance >= far - h) return 2;
+	  if (distance <= near) return 0;
+	  if (distance <= far) return 1;
+	  return decorative ? null : 2;
 	}
 
 	// src/helpers/rivers.ts
@@ -8347,6 +8372,73 @@
 	    texcoords[t++] = 0.02 + 0.96 * ((vertices[i].x + radius) / (radius * 2));
 	    texcoords[t++] = 0.02 + 0.96 * ((vertices[i].z + radius) / (radius * 2));
 	  }
+	  const geometry = new three.BufferGeometry();
+	  geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
+	  geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
+	  return geometry;
+	}
+	function createHexagonLodGeometry(radius, interiorSubdivisions, borderSubdivisions) {
+	  if (interiorSubdivisions >= borderSubdivisions) {
+	    return createHexagonGeometry(radius, borderSubdivisions);
+	  }
+	  const outerSegments = Math.pow(2, borderSubdivisions);
+	  const innerSegments = Math.pow(2, Math.max(0, interiorSubdivisions));
+	  const innerScale = 0.72;
+	  const triangles = [];
+	  const center = new three.Vector3();
+	  const corners = Array.from({ length: 6 }, (_, index) => {
+	    const angle = index * Math.PI / 3;
+	    return new three.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+	  });
+	  const appendTriangle = (a, b, c) => {
+	    const crossY = b.clone().sub(a).cross(c.clone().sub(a)).y;
+	    if (crossY >= 0) triangles.push(a, b, c);
+	    else triangles.push(a, c, b);
+	  };
+	  for (let side = 0; side < 6; side++) {
+	    const a = corners[side];
+	    const b = corners[(side + 1) % 6];
+	    const outer = Array.from(
+	      { length: outerSegments + 1 },
+	      (_, index) => a.clone().lerp(b, index / outerSegments)
+	    );
+	    const innerA = a.clone().multiplyScalar(innerScale);
+	    const innerB = b.clone().multiplyScalar(innerScale);
+	    const inner = Array.from(
+	      { length: innerSegments + 1 },
+	      (_, index) => innerA.clone().lerp(innerB, index / innerSegments)
+	    );
+	    let outerIndex = 0;
+	    let innerIndex = 0;
+	    while (outerIndex < outerSegments || innerIndex < innerSegments) {
+	      const nextOuter = outerIndex < outerSegments ? (outerIndex + 1) / outerSegments : Infinity;
+	      const nextInner = innerIndex < innerSegments ? (innerIndex + 1) / innerSegments : Infinity;
+	      if (Math.abs(nextOuter - nextInner) < 1e-9) {
+	        appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+	        appendTriangle(outer[outerIndex + 1], inner[innerIndex], inner[innerIndex + 1]);
+	        outerIndex++;
+	        innerIndex++;
+	      } else if (nextOuter < nextInner) {
+	        appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+	        outerIndex++;
+	      } else {
+	        appendTriangle(outer[outerIndex], inner[innerIndex], inner[innerIndex + 1]);
+	        innerIndex++;
+	      }
+	    }
+	    for (let index = 0; index < innerSegments; index++) {
+	      appendTriangle(inner[index], center, inner[index + 1]);
+	    }
+	  }
+	  const positions = new Float32Array(triangles.length * 3);
+	  const texcoords = new Float32Array(triangles.length * 2);
+	  triangles.forEach((vertex, index) => {
+	    positions[index * 3] = vertex.x;
+	    positions[index * 3 + 1] = vertex.y;
+	    positions[index * 3 + 2] = vertex.z;
+	    texcoords[index * 2] = 0.02 + 0.96 * ((vertex.x + radius) / (radius * 2));
+	    texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex.z + radius) / (radius * 2));
+	  });
 	  const geometry = new three.BufferGeometry();
 	  geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
 	  geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
@@ -9952,6 +10044,8 @@ void main() {
 	    this.waterChunks = [];
 	    this.tileIndex = /* @__PURE__ */ new Map();
 	    this.waterTileIndex = /* @__PURE__ */ new Map();
+	    this.chunkRecords = /* @__PURE__ */ new Map();
+	    this.fogStates = /* @__PURE__ */ new Map();
 	    this.cityFog = /* @__PURE__ */ new Map();
 	    this.atlasCellIndex = {};
 	    this.clock = 0;
@@ -9961,15 +10055,17 @@ void main() {
 	    this.atlasTexture = this.loadAtlasTexture();
 	    this.waterShallow = new three.Color(options.waterColorShallow ?? LandColor["coastal" /* coastal */]);
 	    this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
-	    const allTiles = [];
+	    const landTiles = [];
+	    const waterTiles = [];
 	    for (let x = 0; x < this.map.w; x++) {
 	      for (let y = 0; y < this.map.h; y++) {
-	        if (this.map.data[x]?.[y]) allTiles.push({ x, y });
+	        const tile = this.map.data[x]?.[y];
+	        if (!tile) continue;
+	        (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
 	      }
 	    }
-	    const isWater3 = (tile) => WATER_TYPES.includes(this.map.data[tile.x][tile.y].type);
-	    this.buildLandLayer(allTiles.filter((t) => !isWater3(t)));
-	    this.buildWaterLayer(allTiles.filter(isWater3));
+	    this.buildLandLayer(landTiles);
+	    this.buildWaterLayer(waterTiles);
 	  }
 	  buildAtlasCellIndex() {
 	    const atlas = this.options.atlas;
@@ -10020,8 +10116,8 @@ void main() {
 	      riverSeaMouthEdges: new Float32Array(tiles.length),
 	      riverLakeMouthEdges: new Float32Array(tiles.length),
 	      lakeNeighborEdges: new Float32Array(tiles.length),
-	      fogState: new Float32Array(tiles.length).fill(2)
-	      // default Visible - see FogOfWar.ts
+	      fogState: new Float32Array(tiles.length)
+	      // filled per tile below
 	    };
 	    tiles.forEach((tile, i) => {
 	      const info = this.map.data[tile.x][tile.y];
@@ -10031,6 +10127,7 @@ void main() {
 	      attrs.style[i * 3 + 0] = this.atlasCellIndex[info.type] ?? 0;
 	      attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
 	      attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
+	      attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
 	      const se = getNeighborCoords(tile.x, tile.y, "SE");
 	      const s = getNeighborCoords(tile.x, tile.y, "S");
 	      const sw = getNeighborCoords(tile.x, tile.y, "SW");
@@ -10062,8 +10159,8 @@ void main() {
 	    });
 	    return attrs;
 	  }
-	  buildInstancedGeometry(tiles, numSubdivisions) {
-	    const hexagon = createHexagonGeometry(this.options.size, numSubdivisions);
+	  buildInstancedGeometry(tiles, numSubdivisions, borderSubdivisions = numSubdivisions) {
+	    const hexagon = numSubdivisions === borderSubdivisions ? createHexagonGeometry(this.options.size, numSubdivisions) : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
 	    const geometry = new three.InstancedBufferGeometry();
 	    geometry.setAttribute("position", hexagon.getAttribute("position"));
 	    geometry.setAttribute("uv", hexagon.getAttribute("uv"));
@@ -10084,6 +10181,23 @@ void main() {
 	    geometry.setAttribute("lakeNeighborEdges", new three.InstancedBufferAttribute(attrs.lakeNeighborEdges, 1));
 	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
 	    return geometry;
+	  }
+	  replaceGeometry(target, source) {
+	    target.dispose();
+	    for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
+	    target.setIndex(source.getIndex());
+	    for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
+	    target.instanceCount = source.instanceCount;
+	    target.boundingBox = null;
+	    target.boundingSphere = null;
+	  }
+	  clearGeometry(geometry) {
+	    geometry.dispose();
+	    for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
+	    geometry.setIndex(null);
+	    geometry.instanceCount = 0;
+	    geometry.boundingBox = null;
+	    geometry.boundingSphere = null;
 	  }
 	  commonUniforms() {
 	    const atlas = this.options.atlas;
@@ -10180,7 +10294,7 @@ void main() {
 	      fragmentShader: TERRAIN_FRAGMENT_SHADER
 	    });
 	    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-	      const geometry = this.buildInstancedGeometry(chunkTiles, 3);
+	      const geometry = new three.InstancedBufferGeometry();
 	      const mesh = new three.Mesh(geometry, this.landMaterial);
 	      mesh.name = `terrain-chunk-land-${chunkKey}`;
 	      mesh.frustumCulled = false;
@@ -10191,6 +10305,7 @@ void main() {
 	        getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3)
 	      );
 	      chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+	      this.chunkRecords.set(`land:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "land" });
 	      this.landChunks.push(mesh);
 	      this.add(mesh);
 	    }
@@ -10225,7 +10340,7 @@ void main() {
 	      fragmentShader: WATER_FRAGMENT_SHADER
 	    });
 	    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-	      const geometry = this.buildInstancedGeometry(chunkTiles, 2);
+	      const geometry = new three.InstancedBufferGeometry();
 	      const mesh = new three.Mesh(geometry, this.waterMaterial);
 	      mesh.name = `terrain-chunk-water-${chunkKey}`;
 	      mesh.frustumCulled = false;
@@ -10236,6 +10351,7 @@ void main() {
 	        getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size)
 	      );
 	      chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
+	      this.chunkRecords.set(`water:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "water" });
 	      this.waterChunks.push(mesh);
 	      this.add(mesh);
 	    }
@@ -10304,6 +10420,26 @@ void main() {
 	  setWorldCenter(x, y) {
 	    this.landMaterial?.uniforms.worldCenter.value.set(x, y);
 	    this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
+	  }
+	  //Near terrain keeps the original subdivision counts (land 3 / water 2).
+	  //Only interior vertices are reduced at middle/far distances; full-detail
+	  //rim tessellation remains identical, so adjacent chunks cannot open cracks.
+	  activateChunk(metadata, lod) {
+	    const record = this.chunkRecords.get(metadata.id);
+	    if (!record) return void 0;
+	    const geometry = record.mesh.geometry;
+	    if (record.lod === lod && geometry.getAttribute("position")) return geometry;
+	    const subdivisions = record.layer === "land" ? [3, 2, 1][lod] : [2, 1, 0][lod];
+	    const borderSubdivisions = record.layer === "land" ? 3 : 2;
+	    this.replaceGeometry(geometry, this.buildInstancedGeometry(record.tiles, subdivisions, borderSubdivisions));
+	    record.lod = lod;
+	    return geometry;
+	  }
+	  releaseChunk(metadata) {
+	    const record = this.chunkRecords.get(metadata.id);
+	    if (!record || record.lod === void 0) return;
+	    this.clearGeometry(record.mesh.geometry);
+	    record.lod = void 0;
 	  }
 	  get gridVisible() {
 	    return (this.landMaterial ?? this.waterMaterial)?.uniforms.showGrid.value > 0;
@@ -10550,17 +10686,22 @@ void main() {
 	  //-------------------------------------------------------------------------
 	  setFogState(x, y, state) {
 	    const key = `${x},${y}`;
+	    this.fogStates.set(key, state);
 	    const landEntry = this.tileIndex.get(key);
 	    if (landEntry) {
 	      const attribute = landEntry.mesh.geometry.getAttribute("fogState");
-	      attribute.setX(landEntry.index, state);
-	      attribute.needsUpdate = true;
+	      if (attribute) {
+	        attribute.setX(landEntry.index, state);
+	        attribute.needsUpdate = true;
+	      }
 	    }
 	    const waterEntry = this.waterTileIndex.get(key);
 	    if (waterEntry) {
 	      const attribute = waterEntry.mesh.geometry.getAttribute("fogState");
-	      attribute.setX(waterEntry.index, state);
-	      attribute.needsUpdate = true;
+	      if (attribute) {
+	        attribute.setX(waterEntry.index, state);
+	        attribute.needsUpdate = true;
+	      }
 	    }
 	    this.setCityFog(key, state);
 	  }
@@ -10721,14 +10862,20 @@ void main() {
 
 	// src/objects/Forest.ts
 	var ForestField = class extends three.Group {
-	  constructor(tileRanges, fogDarkenFactor) {
+	  constructor(tileRanges, fogDarkenFactor, chunks, context) {
 	    super();
 	    this.tileRanges = tileRanges;
 	    this.fogDarkenFactor = fogDarkenFactor;
+	    this.chunks = chunks;
+	    this.context = context;
 	    this.hiddenMatrix = new three.Matrix4().makeScale(0, 0, 0);
+	    this.fogStates = /* @__PURE__ */ new Map();
+	    for (const record of chunks.values()) this.add(record.root);
 	  }
 	  setFogState(x, y, state) {
-	    const range = this.tileRanges.get(`${x},${y}`);
+	    const key = `${x},${y}`;
+	    this.fogStates.set(key, state);
+	    const range = this.tileRanges.get(key);
 	    if (!range) return;
 	    const hidden = state < 0.5;
 	    const shade = state < 1.5 ? this.fogDarkenFactor : 1;
@@ -10742,13 +10889,109 @@ void main() {
 	      if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
 	    }
 	  }
+	  activateChunk(metadata, lod, objects) {
+	    const record = this.chunks.get(metadata.id);
+	    if (!record) return;
+	    if (record.lod !== lod) this.populateChunk(record, lod);
+	    for (const object of objects) {
+	      const copies = [];
+	      object.traverse((child) => {
+	        if (child.isInstancedMesh) copies.push(child);
+	      });
+	      copies.forEach((copy, index) => {
+	        const source = record.instancedMeshes[index];
+	        if (source) copy.count = source.count;
+	      });
+	    }
+	  }
+	  releaseChunk(metadata) {
+	    const record = this.chunks.get(metadata.id);
+	    if (!record || record.lod === void 0) return;
+	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+	    for (const mesh of record.instancedMeshes) mesh.count = 0;
+	    record.lod = void 0;
+	  }
+	  populateChunk(record, lod) {
+	    const {
+	      map,
+	      size,
+	      treesPerTile,
+	      treeScale,
+	      treeFootprint,
+	      polygon,
+	      waterOptions,
+	      coastOptions
+	    } = this.context;
+	    const density = Math.max(1, Math.round(treesPerTile * [1, 0.5, 0.2][lod]));
+	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+	    const matrix = new three.Matrix4();
+	    const scaleVector = new three.Vector3();
+	    let instance = 0;
+	    for (const tile of record.tiles) {
+	      const key = `${tile.x},${tile.y}`;
+	      const center = getHexCenter(tile.x, tile.y, size);
+	      const placed = [];
+	      const tileStart = instance;
+	      const originalMatrices = [];
+	      let attempts = 0;
+	      const waterValue = waterEdgeValue(map, tile.x, tile.y);
+	      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+	      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+	      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+	      while (placed.length < density && attempts < density * 20) {
+	        const salt = attempts++ * 17;
+	        const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * size;
+	        const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * size;
+	        if (pointInPolygon2(polygon, [lx, ly]) !== -1) continue;
+	        if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
+	        if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+	        if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
+	        if (placed.some((p) => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint)) continue;
+	        placed.push({ x: lx, y: ly });
+	        const scale = treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
+	        matrix.makeRotationY(stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2);
+	        matrix.scale(scaleVector.set(scale, scale, scale));
+	        matrix.setPosition(center.x + lx, 0, center.y + ly);
+	        originalMatrices.push(matrix.clone());
+	        const fogState = this.fogStates.get(key) ?? 2;
+	        const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
+	        for (const mesh of record.instancedMeshes) {
+	          mesh.setMatrixAt(instance, fogState < 0.5 ? this.hiddenMatrix : matrix);
+	          mesh.instanceColor?.setXYZ(instance, shade, shade, shade);
+	        }
+	        instance++;
+	      }
+	      this.tileRanges.set(key, {
+	        instancedMeshes: record.instancedMeshes,
+	        start: tileStart,
+	        count: instance - tileStart,
+	        originalMatrices
+	      });
+	    }
+	    for (const mesh of record.instancedMeshes) {
+	      mesh.count = instance;
+	      mesh.instanceMatrix.needsUpdate = true;
+	      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+	    }
+	    record.lod = lod;
+	  }
 	};
+	function stableRandom(x, y, salt) {
+	  let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
+	  value ^= value >>> 16;
+	  value = Math.imul(value, 2146121005);
+	  value ^= value >>> 15;
+	  value = Math.imul(value, 2221713035);
+	  value ^= value >>> 16;
+	  return (value >>> 0) / 4294967296;
+	}
 	async function createForest(map, options) {
 	  const { size } = options;
 	  const treesPerTile = options.treesPerTile ?? 20;
 	  const defaultModel = options.treeModel ?? "Assets/models/pinia";
 	  const treeScale = options.treeScale ?? 1;
 	  const fogDarkenFactor = options.fogDarkenFactor ?? 0.45;
+	  if (treesPerTile <= 0) return null;
 	  const tilesByModel = /* @__PURE__ */ new Map();
 	  for (let x = 0; x < map.w; x++) {
 	    for (let y = 0; y < map.h; y++) {
@@ -10776,7 +11019,8 @@ void main() {
 	    coastCurvature: options.coastCurvature ?? 0.5
 	  };
 	  const tileRanges = /* @__PURE__ */ new Map();
-	  const group = new ForestField(tileRanges, fogDarkenFactor);
+	  const chunkRecords = /* @__PURE__ */ new Map();
+	  let modelIndex = 0;
 	  for (const [modelPath, tiles] of tilesByModel) {
 	    const { scene, fixup } = await loadModel(modelPath);
 	    const meshes = [];
@@ -10790,67 +11034,43 @@ void main() {
 	      geometry.applyMatrix4(fixup);
 	      return { geometry, material: mesh.material };
 	    });
-	    const chunks = /* @__PURE__ */ new Map();
-	    for (const tile of tiles) {
-	      const key = `${Math.floor(tile.x / WORLD_CHUNK_SIZE)},${Math.floor(tile.y / WORLD_CHUNK_SIZE)}`;
-	      const chunk = chunks.get(key) ?? [];
-	      chunk.push(tile);
-	      chunks.set(key, chunk);
-	    }
+	    const chunks = groupTilesByWorldChunk(tiles);
 	    for (const [chunkKey, chunkTiles] of chunks) {
 	      const totalInstances = chunkTiles.length * treesPerTile;
+	      const root = new three.Group();
+	      root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
 	      const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
 	        const instancedMesh = new three.InstancedMesh(geometry, material, totalInstances);
 	        instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
 	        instancedMesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
 	        instancedMesh.instanceColor = new three.InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-	        group.add(instancedMesh);
+	        instancedMesh.count = 0;
+	        instancedMesh.frustumCulled = false;
+	        root.add(instancedMesh);
 	        return instancedMesh;
 	      });
-	      const matrix = new three.Matrix4();
-	      const scaleVector = new three.Vector3();
-	      let instance = 0;
-	      for (const tile of chunkTiles) {
-	        const center = getHexCenter(tile.x, tile.y, size);
-	        const placed = [];
-	        const tileStart = instance;
-	        const originalMatrices = [];
-	        let attempts = 0;
-	        const waterValue = waterEdgeValue(map, tile.x, tile.y);
-	        const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-	        const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-	        const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-	        while (placed.length < treesPerTile && attempts < treesPerTile * 20) {
-	          attempts++;
-	          const lx = getRandomInt(-size, size);
-	          const ly = getRandomInt(-size, size);
-	          if (pointInPolygon2(polygon, [lx, ly]) !== -1) continue;
-	          if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
-	          if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-	          if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-	          const overlaps = placed.some((p) => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint);
-	          if (overlaps) continue;
-	          placed.push({ x: lx, y: ly });
-	          const scale = treeScale * (0.8 + Math.random() * 0.4);
-	          matrix.makeRotationY(Math.random() * Math.PI * 2);
-	          matrix.scale(scaleVector.set(scale, scale, scale));
-	          matrix.setPosition(center.x + lx, 0, center.y + ly);
-	          for (const instancedMesh of instancedMeshes) instancedMesh.setMatrixAt(instance, matrix);
-	          originalMatrices.push(matrix.clone());
-	          instance++;
-	        }
-	        tileRanges.set(`${tile.x},${tile.y}`, { instancedMeshes, start: tileStart, count: instance - tileStart, originalMatrices });
-	      }
-	      for (const instancedMesh of instancedMeshes) {
-	        instancedMesh.count = instance;
-	        instancedMesh.instanceMatrix.needsUpdate = true;
-	        instancedMesh.computeBoundingBox();
-	        instancedMesh.computeBoundingSphere();
-	        instancedMesh.frustumCulled = true;
-	      }
+	      const id = `forest:${chunkKey}:${modelIndex}`;
+	      tagWorldChunk(
+	        root,
+	        chunkKey,
+	        "forest",
+	        getWorldChunkBounds(chunkTiles, size, 0, size * 3),
+	        id
+	      );
+	      chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles });
 	    }
+	    modelIndex += 1;
 	  }
-	  return group;
+	  return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
+	    map,
+	    size,
+	    treesPerTile,
+	    treeScale,
+	    treeFootprint,
+	    polygon,
+	    waterOptions,
+	    coastOptions
+	  });
 	}
 
 	// src/shaders/grass.vertex.ts
@@ -10949,19 +11169,25 @@ void main() {
 
 	// src/objects/Grass.ts
 	var GrassField = class extends three.Group {
-	  constructor(chunks, material, tileRanges) {
+	  constructor(map, chunks, grassMaterial, options) {
 	    super();
+	    this.map = map;
 	    this.chunks = chunks;
-	    this.tileRanges = tileRanges;
+	    this.grassMaterial = grassMaterial;
+	    this.options = options;
 	    this.clock = 0;
-	    this.grassMaterial = material;
-	    for (const chunk of chunks) this.add(chunk);
+	    this.tileRanges = /* @__PURE__ */ new Map();
+	    this.fogStates = /* @__PURE__ */ new Map();
+	    this.blade = buildBladeGeometry();
+	    for (const record of chunks.values()) this.add(record.mesh);
 	  }
 	  //Updates every blade belonging to (x, y) to the given fog state (see
 	  //FogOfWar.ts) - a plain attribute-slice fill + needsUpdate, no rebuild.
 	  //No-op for tiles with no grass (city tiles, non-"land" terrain).
 	  setFogState(x, y, state) {
-	    const range = this.tileRanges.get(`${x},${y}`);
+	    const key = `${x},${y}`;
+	    this.fogStates.set(key, state);
+	    const range = this.tileRanges.get(key);
 	    if (!range) return;
 	    const attribute = range.geometry.getAttribute("fogState");
 	    for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
@@ -10988,11 +11214,123 @@ void main() {
 	  set windSpeed(value) {
 	    this.grassMaterial.uniforms.windSpeed.value = value;
 	  }
+	  activateChunk(metadata, lod) {
+	    const record = this.chunks.get(metadata.id);
+	    if (!record) return void 0;
+	    if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
+	    this.removeTileRanges(record);
+	    const source = this.buildChunkGeometry(record.tiles, lod);
+	    this.replaceGeometry(record.mesh.geometry, source, record.tiles);
+	    record.lod = lod;
+	    return record.mesh.geometry;
+	  }
+	  releaseChunk(metadata) {
+	    const record = this.chunks.get(metadata.id);
+	    if (!record || record.lod === void 0) return;
+	    this.removeTileRanges(record);
+	    this.clearGeometry(record.mesh.geometry);
+	    record.lod = void 0;
+	  }
+	  removeTileRanges(record) {
+	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+	  }
+	  buildChunkGeometry(chunkTiles, lod) {
+	    const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
+	    const densityScale = [1, 0.38, 0.14][lod];
+	    const density = Math.max(1, Math.round(this.options.density * densityScale));
+	    const totalBlades = chunkTiles.length * density;
+	    const offsets = new Float32Array(totalBlades * 2);
+	    const tileOffsets = new Float32Array(totalBlades * 2);
+	    const angles = new Float32Array(totalBlades);
+	    const scales = new Float32Array(totalBlades * 2);
+	    const phases = new Float32Array(totalBlades);
+	    const shades = new Float32Array(totalBlades);
+	    const fogStates = new Float32Array(totalBlades);
+	    const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map((p) => [p.x, p.y]);
+	    const pendingRanges = [];
+	    let instance = 0;
+	    for (const tile of chunkTiles) {
+	      const key = `${tile.x},${tile.y}`;
+	      const center = getHexCenter(tile.x, tile.y, size);
+	      const tileStart = instance;
+	      const waterValue = waterEdgeValue(this.map, tile.x, tile.y);
+	      const seaMouthValue = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
+	      const lakeMouthValue = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
+	      const lakeNeighborValue = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
+	      for (let i = 0; i < density; i++) {
+	        let lx = 0, ly = 0, attempts = 0, valid = false;
+	        while (!valid && attempts < 20) {
+	          lx = (stableRandom2(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * size;
+	          ly = (stableRandom2(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * size;
+	          valid = pointInPolygon2(polygon, [lx, ly]) === -1 && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
+	          attempts++;
+	        }
+	        if (!valid) continue;
+	        offsets[instance * 2] = center.x + lx;
+	        offsets[instance * 2 + 1] = center.y + ly;
+	        tileOffsets[instance * 2] = center.x;
+	        tileOffsets[instance * 2 + 1] = center.y;
+	        angles[instance] = stableRandom2(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
+	        const heightJitter = 1 - heightVariation * 0.5 + stableRandom2(tile.x, tile.y, i * 97 + 43) * heightVariation;
+	        scales[instance * 2] = bladeWidth * (0.8 + stableRandom2(tile.x, tile.y, i * 97 + 47) * 0.4);
+	        scales[instance * 2 + 1] = bladeHeight * heightJitter;
+	        phases[instance] = stableRandom2(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
+	        shades[instance] = 0.75 + stableRandom2(tile.x, tile.y, i * 97 + 59) * 0.35;
+	        fogStates[instance] = this.fogStates.get(key) ?? 2;
+	        instance++;
+	      }
+	      pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
+	    }
+	    const geometry = new three.InstancedBufferGeometry();
+	    geometry.setAttribute("position", this.blade.getAttribute("position").clone());
+	    geometry.setIndex(this.blade.getIndex()?.clone() ?? null);
+	    geometry.instanceCount = instance;
+	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
+	    geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
+	    geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
+	    geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
+	    geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
+	    geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
+	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
+	    for (const range of pendingRanges) {
+	      this.tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
+	    }
+	    return geometry;
+	  }
+	  replaceGeometry(target, source, tiles) {
+	    target.dispose();
+	    for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
+	    target.setIndex(source.getIndex());
+	    for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
+	    target.instanceCount = source.instanceCount;
+	    target.boundingBox = null;
+	    target.boundingSphere = null;
+	    for (const tile of tiles) {
+	      const range = this.tileRanges.get(`${tile.x},${tile.y}`);
+	      if (range.geometry === source) range.geometry = target;
+	    }
+	  }
+	  clearGeometry(geometry) {
+	    geometry.dispose();
+	    for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
+	    geometry.setIndex(null);
+	    geometry.instanceCount = 0;
+	  }
 	  dispose() {
-	    for (const chunk of this.chunks) chunk.geometry.dispose();
+	    for (const record of this.chunks.values()) record.mesh.geometry.dispose();
+	    this.blade.dispose();
 	    this.grassMaterial.dispose();
 	  }
 	};
+	function stableRandom2(x, y, salt) {
+	  let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
+	  value ^= value >>> 16;
+	  value = Math.imul(value, 2146121005);
+	  value ^= value >>> 15;
+	  value = Math.imul(value, 2221713035);
+	  value ^= value >>> 16;
+	  return (value >>> 0) / 4294967296;
+	}
 	function buildBladeGeometry() {
 	  const positions = new Float32Array([
 	    -0.5,
@@ -11034,14 +11372,12 @@ void main() {
 	    }
 	  }
 	  if (tiles.length === 0) return null;
-	  const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map((p) => [p.x, p.y]);
 	  const waterOptions = {
 	    riverWidth: options.riverWidth ?? 0.28,
 	    riverBankWidth: options.riverBankWidth ?? 0.14,
 	    riverCurvature: options.riverCurvature ?? 0.5,
 	    lakeShoreWidth: options.lakeShoreWidth ?? 0.18
 	  };
-	  const tileRanges = /* @__PURE__ */ new Map();
 	  const material = new three.RawShaderMaterial({
 	    uniforms: {
 	      worldOffset: { value: new three.Vector2(0, 0) },
@@ -11060,61 +11396,9 @@ void main() {
 	    fragmentShader: GRASS_FRAGMENT_SHADER,
 	    side: three.DoubleSide
 	  });
-	  const chunks = [];
-	  const blade = buildBladeGeometry();
+	  const chunks = /* @__PURE__ */ new Map();
 	  for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-	    const totalBlades = chunkTiles.length * density;
-	    const offsets = new Float32Array(totalBlades * 2);
-	    const tileOffsets = new Float32Array(totalBlades * 2);
-	    const angles = new Float32Array(totalBlades);
-	    const scales = new Float32Array(totalBlades * 2);
-	    const phases = new Float32Array(totalBlades);
-	    const shades = new Float32Array(totalBlades);
-	    const fogStates = new Float32Array(totalBlades).fill(2);
-	    const pendingRanges = [];
-	    let instance = 0;
-	    for (const tile of chunkTiles) {
-	      const center = getHexCenter(tile.x, tile.y, size);
-	      const tileStart = instance;
-	      const waterValue = waterEdgeValue(map, tile.x, tile.y);
-	      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-	      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-	      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-	      for (let i = 0; i < density; i++) {
-	        let lx = 0, ly = 0, attempts = 0, valid = false;
-	        while (!valid && attempts < 20) {
-	          lx = getRandomInt(-size, size);
-	          ly = getRandomInt(-size, size);
-	          valid = pointInPolygon2(polygon, [lx, ly]) === -1 && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
-	          attempts++;
-	        }
-	        if (!valid) continue;
-	        offsets[instance * 2 + 0] = center.x + lx;
-	        offsets[instance * 2 + 1] = center.y + ly;
-	        tileOffsets[instance * 2 + 0] = center.x;
-	        tileOffsets[instance * 2 + 1] = center.y;
-	        angles[instance] = Math.random() * Math.PI * 2;
-	        const heightJitter = 1 - heightVariation * 0.5 + Math.random() * heightVariation;
-	        scales[instance * 2 + 0] = bladeWidth * (0.8 + Math.random() * 0.4);
-	        scales[instance * 2 + 1] = bladeHeight * heightJitter;
-	        phases[instance] = Math.random() * Math.PI * 2;
-	        shades[instance] = 0.75 + Math.random() * 0.35;
-	        instance++;
-	      }
-	      pendingRanges.push({ key: `${tile.x},${tile.y}`, start: tileStart, count: instance - tileStart });
-	    }
 	    const geometry = new three.InstancedBufferGeometry();
-	    geometry.setAttribute("position", blade.getAttribute("position").clone());
-	    geometry.setIndex(blade.getIndex()?.clone() ?? null);
-	    geometry.instanceCount = instance;
-	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
-	    geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
-	    geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
-	    geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
-	    geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
-	    geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
-	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
-	    for (const range of pendingRanges) tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
 	    const chunk = new three.Mesh(geometry, material);
 	    chunk.name = `grass-chunk-${chunkKey}`;
 	    chunk.frustumCulled = false;
@@ -11124,9 +11408,16 @@ void main() {
 	      "grass",
 	      getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation))
 	    );
-	    chunks.push(chunk);
+	    chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles });
 	  }
-	  return new GrassField(chunks, material, tileRanges);
+	  return new GrassField(map, chunks, material, {
+	    size,
+	    density,
+	    bladeWidth,
+	    bladeHeight,
+	    heightVariation,
+	    waterOptions
+	  });
 	}
 
 	// src/helpers/fog.ts
@@ -11214,11 +11505,140 @@ void main() {
 	    return changes;
 	  }
 	};
+	var EMPTY_STATS = {
+	  visibleObjects: 0,
+	  visibleChunks: 0,
+	  residentChunks: 0,
+	  gpuResidentChunks: 0,
+	  lod0: 0,
+	  lod1: 0,
+	  lod2: 0
+	};
+	var WorldChunkScheduler = class {
+	  constructor(options) {
+	    this.options = options;
+	    this.frustum = new three.Frustum();
+	    this.projection = new three.Matrix4();
+	    this.bounds = new three.Box3();
+	    this.residents = /* @__PURE__ */ new Map();
+	    this.frame = 0;
+	    this.snapshot = { ...EMPTY_STATS };
+	  }
+	  configure(options) {
+	    this.options = { ...this.options, ...options };
+	  }
+	  clear() {
+	    this.residents.clear();
+	    this.frame = 0;
+	    this.snapshot = { ...EMPTY_STATS };
+	  }
+	  get stats() {
+	    return this.snapshot;
+	  }
+	  update(root, camera, target, hooks) {
+	    this.frame += 1;
+	    camera.updateMatrixWorld();
+	    this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+	    this.frustum.setFromProjectionMatrix(this.projection);
+	    const requests = /* @__PURE__ */ new Map();
+	    let visibleObjects = 0;
+	    root.traverse((object) => {
+	      const metadata = getWorldChunkMetadata(object);
+	      if (!metadata) return;
+	      if (!hooks.enabled(metadata)) {
+	        object.visible = false;
+	        return;
+	      }
+	      object.updateWorldMatrix(true, false);
+	      const worldX = object.matrixWorld.elements[12];
+	      const worldY = object.matrixWorld.elements[13];
+	      const worldZ = object.matrixWorld.elements[14];
+	      const local = metadata.bounds;
+	      this.bounds.min.set(local.minX + worldX, local.minY + worldY, local.minZ + worldZ);
+	      this.bounds.max.set(local.maxX + worldX, local.maxY + worldY, local.maxZ + worldZ);
+	      const dx = Math.max(0, this.bounds.min.x - target.x, target.x - this.bounds.max.x);
+	      const dz = Math.max(0, this.bounds.min.z - target.z, target.z - this.bounds.max.z);
+	      const distance = Math.hypot(dx, dz);
+	      const resident = this.residents.get(metadata.id);
+	      const lod = this.options.lodEnabled ? resolveWorldChunkLod(distance, metadata.kind, resident?.lod, this.options.lodDistances) : distance <= (metadata.kind === "grass" || metadata.kind === "forest" ? this.options.lodDistances.vegetation : this.options.renderDistance) ? 0 : null;
+	      const visible = distance <= this.options.renderDistance && lod !== null && this.frustum.intersectsBox(this.bounds);
+	      object.visible = visible;
+	      if (!visible || lod === null) return;
+	      visibleObjects += 1;
+	      const existing = requests.get(metadata.id);
+	      if (existing) {
+	        existing.objects.push(object);
+	        if (lod < existing.lod) existing.lod = lod;
+	      } else {
+	        requests.set(metadata.id, { metadata, lod, objects: [object] });
+	      }
+	    });
+	    const lodCounts = [0, 0, 0];
+	    for (const request of requests.values()) {
+	      const activation = hooks.activate(request.metadata, request.lod, request.objects);
+	      const geometries = (activation && activation.geometries) ?? this.residents.get(request.metadata.id)?.geometries ?? [];
+	      const resident = this.residents.get(request.metadata.id);
+	      this.residents.set(request.metadata.id, {
+	        metadata: request.metadata,
+	        lod: request.lod,
+	        lastVisible: this.frame,
+	        geometries,
+	        gpuResident: true
+	      });
+	      if (resident && resident.lod !== request.lod) {
+	        for (const geometry of resident.geometries) geometry.dispose();
+	      }
+	      lodCounts[request.lod] += 1;
+	    }
+	    this.evictInactive(requests, hooks);
+	    this.snapshot = {
+	      visibleObjects,
+	      visibleChunks: requests.size,
+	      residentChunks: this.residents.size,
+	      gpuResidentChunks: [...this.residents.values()].filter((entry) => entry.gpuResident).length,
+	      lod0: lodCounts[0],
+	      lod1: lodCounts[1],
+	      lod2: lodCounts[2]
+	    };
+	  }
+	  evictInactive(visible, hooks) {
+	    const inactive = [...this.residents.entries()].filter(([id]) => !visible.has(id)).sort((a, b) => a[1].lastVisible - b[1].lastVisible);
+	    let gpuExcess = Math.max(
+	      0,
+	      [...this.residents.values()].filter((entry) => entry.gpuResident).length - this.options.gpuCacheSize
+	    );
+	    for (const [, entry] of inactive) {
+	      if (!entry.gpuResident) continue;
+	      const stale = this.frame - entry.lastVisible >= this.options.gpuGraceFrames;
+	      if (!stale && gpuExcess <= 0) break;
+	      for (const geometry of entry.geometries) geometry.dispose();
+	      entry.gpuResident = false;
+	      if (gpuExcess > 0) gpuExcess -= 1;
+	    }
+	    let cpuExcess = Math.max(0, this.residents.size - this.options.cpuCacheSize);
+	    for (const [id, entry] of inactive) {
+	      const stale = this.frame - entry.lastVisible >= this.options.cpuGraceFrames;
+	      if (!stale && cpuExcess <= 0) break;
+	      for (const geometry of entry.geometries) geometry.dispose();
+	      hooks.release(entry.metadata);
+	      this.residents.delete(id);
+	      if (cpuExcess > 0) cpuExcess -= 1;
+	    }
+	  }
+	};
+	function createDefaultWorldChunkSchedulerOptions() {
+	  return {
+	    renderDistance: 2400,
+	    lodEnabled: true,
+	    lodDistances: { ...DEFAULT_WORLD_CHUNK_LOD_DISTANCES },
+	    gpuCacheSize: 128,
+	    cpuCacheSize: 192,
+	    gpuGraceFrames: 300,
+	    cpuGraceFrames: 1200
+	  };
+	}
 
 	// src/HexMap.ts
-	var WORLD_SURFACE_RENDER_DISTANCE = 2400;
-	var WORLD_CHUNK_GPU_CACHE_LIMIT = 96;
-	var WORLD_CHUNK_EVICT_AFTER_FRAMES = 600;
 	var DEFAULT_OPTIONS = {
 	  size: 40,
 	  texturesBaseUrl: "textures/",
@@ -11266,7 +11686,15 @@ void main() {
 	  grassWindStrength: 2.5,
 	  grassWindSpeed: 1.2,
 	  fogTexture: "war-fog.jpg",
-	  fogDarkenFactor: 0.45
+	  fogDarkenFactor: 0.45,
+	  renderDistance: 2400,
+	  lodEnabled: true,
+	  lodNearDistance: 900,
+	  lodFarDistance: 1650,
+	  vegetationRenderDistance: 1450,
+	  chunkLodHysteresis: 120,
+	  gpuChunkCacheSize: 128,
+	  cpuChunkCacheSize: 192
 	};
 	var HexMap = class extends EventEmitter {
 	  constructor(options) {
@@ -11276,12 +11704,6 @@ void main() {
 	    this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
 	    this.worldPatternOffset = new three.Vector2();
 	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
-	    this.forestCullCenter = new three.Vector3();
-	    this.surfaceFrustum = new three.Frustum();
-	    this.surfaceProjection = new three.Matrix4();
-	    this.surfaceBounds = new three.Box3();
-	    this.chunkVisibilityFrame = 0;
-	    this.chunkGeometryLastVisible = /* @__PURE__ */ new Map();
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
@@ -11308,7 +11730,6 @@ void main() {
 	      this.controls.update(dtS);
 	      this.wrapCameraToWorld();
 	      this.updateWorldChunkVisibility();
-	      this.updateForestVisibility();
 	      this.terrain?.update(dtS);
 	      this.grass?.update(dtS);
 	      this.emit("frame", { t });
@@ -11395,6 +11816,20 @@ void main() {
 	      riverDepth: options.riverDepth ?? waterDepth * 0.6,
 	      mountainHeight: options.mountainHeight ?? (options.size ?? DEFAULT_OPTIONS.size) * 0.6
 	    };
+	    const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
+	    this.chunkScheduler = new WorldChunkScheduler({
+	      ...schedulerOptions,
+	      renderDistance: this.options.renderDistance,
+	      lodEnabled: this.options.lodEnabled,
+	      lodDistances: {
+	        near: this.options.lodNearDistance,
+	        far: this.options.lodFarDistance,
+	        vegetation: this.options.vegetationRenderDistance,
+	        hysteresis: this.options.chunkLodHysteresis
+	      },
+	      gpuCacheSize: this.options.gpuChunkCacheSize,
+	      cpuCacheSize: this.options.cpuChunkCacheSize
+	    });
 	    const el = document.querySelector(this.options.element);
 	    if (!(el instanceof HTMLCanvasElement)) {
 	      throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
@@ -11594,6 +12029,21 @@ void main() {
 	      copy = instancedCopy;
 	    } else {
 	      copy = source.clone(true);
+	      const sourceInstances = [];
+	      const copyInstances = [];
+	      source.traverse((object) => {
+	        if (object.isInstancedMesh) sourceInstances.push(object);
+	      });
+	      copy.traverse((object) => {
+	        if (object.isInstancedMesh) copyInstances.push(object);
+	      });
+	      copyInstances.forEach((instance, index) => {
+	        const original = sourceInstances[index];
+	        if (!original) return;
+	        instance.instanceMatrix = original.instanceMatrix;
+	        instance.instanceColor = original.instanceColor;
+	        instance.count = original.count;
+	      });
 	    }
 	    copy.traverse((object) => {
 	      const mesh = object;
@@ -11608,8 +12058,15 @@ void main() {
 	  }
 	  copyOffsets(wrapped, period) {
 	    if (!wrapped || period <= 0) return [0];
-	    const radius = Math.max(1, Math.ceil(WORLD_SURFACE_RENDER_DISTANCE / period));
+	    const radius = Math.max(1, Math.ceil(this.options.renderDistance / period));
 	    return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
+	  }
+	  worldCopyCanBecomeVisible(source, offsetX, offsetY) {
+	    const metadata = getWorldChunkMetadata(source);
+	    if (!metadata) return true;
+	    const padding = this.options.renderDistance;
+	    const bounds = metadata.bounds;
+	    return bounds.maxX + offsetX >= -padding && bounds.minX + offsetX <= this.worldPeriodX + padding && bounds.maxZ + offsetY >= -padding && bounds.minZ + offsetY <= this.worldPeriodY + padding;
 	  }
 	  refreshWorldCopies() {
 	    this.clearWorldCopies();
@@ -11624,13 +12081,16 @@ void main() {
 	        const group = new three.Group();
 	        group.position.set(offsetX, 0, offsetY);
 	        for (const child of this.terrain?.children ?? []) {
+	          if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
 	        for (const child of this.forest?.children ?? []) {
+	          if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
 	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	        }
 	        if (this.grass?.visible) {
 	          for (const child of this.grass.children) {
+	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
 	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	          }
 	        }
@@ -11690,65 +12150,30 @@ void main() {
 	    this.camera.position.add(movement);
 	    this.controls.target.add(movement);
 	  }
-	  updateForestVisibility() {
-	    const viewDistance = this.camera.position.distanceTo(this.controls.target);
-	    const renderDistance = Math.min(WORLD_SURFACE_RENDER_DISTANCE, Math.max(1200, viewDistance * 2.75));
-	    this.scene.traverse((object) => {
-	      const forestChunk = object;
-	      if (!forestChunk.isInstancedMesh || !forestChunk.name.startsWith("forest-")) return;
-	      if (!forestChunk.boundingSphere) forestChunk.computeBoundingSphere();
-	      if (!forestChunk.boundingSphere) return;
-	      forestChunk.updateWorldMatrix(true, false);
-	      this.forestCullCenter.copy(forestChunk.boundingSphere.center).applyMatrix4(forestChunk.matrixWorld);
-	      const dx = this.forestCullCenter.x - this.controls.target.x;
-	      const dz = this.forestCullCenter.z - this.controls.target.z;
-	      forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
-	    });
-	  }
 	  updateWorldChunkVisibility() {
 	    if (!this.mapData) return;
-	    this.chunkVisibilityFrame += 1;
-	    const visibleGeometries = /* @__PURE__ */ new Set();
-	    this.camera.updateMatrixWorld();
-	    this.surfaceProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
-	    this.surfaceFrustum.setFromProjectionMatrix(this.surfaceProjection);
-	    this.scene.traverse((object) => {
-	      const chunk = getWorldChunkMetadata(object);
-	      if (!chunk) return;
-	      object.updateWorldMatrix(true, false);
-	      const worldX = object.matrixWorld.elements[12];
-	      const worldY = object.matrixWorld.elements[13];
-	      const worldZ = object.matrixWorld.elements[14];
-	      const bounds = chunk.bounds;
-	      this.surfaceBounds.min.set(bounds.minX + worldX, bounds.minY + worldY, bounds.minZ + worldZ);
-	      this.surfaceBounds.max.set(bounds.maxX + worldX, bounds.maxY + worldY, bounds.maxZ + worldZ);
-	      const dx = Math.max(
-	        0,
-	        this.surfaceBounds.min.x - this.controls.target.x,
-	        this.controls.target.x - this.surfaceBounds.max.x
-	      );
-	      const dz = Math.max(
-	        0,
-	        this.surfaceBounds.min.z - this.controls.target.z,
-	        this.controls.target.z - this.surfaceBounds.max.z
-	      );
-	      const visible = Math.hypot(dx, dz) <= WORLD_SURFACE_RENDER_DISTANCE && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
-	      object.visible = visible && (chunk.kind !== "grass" || this.options.grassEnabled);
-	      const mesh = object;
-	      if (object.visible && mesh.isMesh) {
-	        visibleGeometries.add(mesh.geometry);
-	        this.chunkGeometryLastVisible.set(mesh.geometry, this.chunkVisibilityFrame);
-	      }
+	    this.chunkScheduler.update(this.scene, this.camera, this.controls.target, {
+	      enabled: (metadata) => metadata.kind !== "grass" || this.options.grassEnabled,
+	      activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
+	      release: (metadata) => this.releaseWorldChunk(metadata)
 	    });
-	    const inactive = [...this.chunkGeometryLastVisible.entries()].filter(([geometry]) => !visibleGeometries.has(geometry)).sort((a, b) => a[1] - b[1]);
-	    let excess = Math.max(0, this.chunkGeometryLastVisible.size - WORLD_CHUNK_GPU_CACHE_LIMIT);
-	    for (const [geometry, lastVisible] of inactive) {
-	      const stale = this.chunkVisibilityFrame - lastVisible >= WORLD_CHUNK_EVICT_AFTER_FRAMES;
-	      if (!stale && excess <= 0) break;
-	      geometry.dispose();
-	      this.chunkGeometryLastVisible.delete(geometry);
-	      if (excess > 0) excess--;
+	  }
+	  activateWorldChunk(metadata, lod, objects) {
+	    if (metadata.kind === "land" || metadata.kind === "water") {
+	      const geometry = this.terrain?.activateChunk(metadata, lod);
+	      return geometry ? { geometries: [geometry] } : void 0;
 	    }
+	    if (metadata.kind === "grass") {
+	      const geometry = this.grass?.activateChunk(metadata, lod);
+	      return geometry ? { geometries: [geometry] } : void 0;
+	    }
+	    this.forest?.activateChunk(metadata, lod, objects);
+	    return void 0;
+	  }
+	  releaseWorldChunk(metadata) {
+	    if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
+	    else if (metadata.kind === "grass") this.grass?.releaseChunk(metadata);
+	    else this.forest?.releaseChunk(metadata);
 	  }
 	  //-------------------------------------------------------------------------
 	  //Public API
@@ -11767,6 +12192,7 @@ void main() {
 	    await this.rebuildTerrain();
 	    await this.rebuildForest();
 	    this.rebuildGrass();
+	    this.updateWorldChunkVisibility();
 	    this.emit("load", void 0);
 	  }
 	  //Tears down and recreates the terrain (land/water layers + city models) from
@@ -11776,7 +12202,7 @@ void main() {
 	  //(waterWaveAmplitude, beachWidth, etc.)
 	  async rebuildTerrain() {
 	    this.clearWorldCopies();
-	    this.chunkGeometryLastVisible.clear();
+	    this.chunkScheduler.clear();
 	    if (this.terrain) {
 	      this.scene.remove(this.terrain);
 	      this.terrain.dispose();
@@ -11839,6 +12265,7 @@ void main() {
 	  //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
 	  async rebuildForest() {
 	    this.clearWorldCopies();
+	    this.chunkScheduler.clear();
 	    if (this.forest) {
 	      this.scene.remove(this.forest);
 	      this.forest.traverse((o) => o.geometry?.dispose());
@@ -11873,7 +12300,7 @@ void main() {
 	  //geometry, there's no partial/incremental update.
 	  rebuildGrass() {
 	    this.clearWorldCopies();
-	    this.chunkGeometryLastVisible.clear();
+	    this.chunkScheduler.clear();
 	    if (this.grass) {
 	      this.scene.remove(this.grass);
 	      this.grass.dispose();
@@ -12269,6 +12696,9 @@ void main() {
 	  }
 	  get size() {
 	    return this.options.size;
+	  }
+	  get streamingStats() {
+	    return this.chunkScheduler.stats;
 	  }
 	  drawRoutePath(path) {
 	    this.cleanRoutePath();
@@ -12933,7 +13363,7 @@ void main() {
 
 	// src/world/generateWorld.ts
 	var MIN_WORLD_SIZE = 8;
-	var MAX_WORLD_SIZE = 96;
+	var MAX_WORLD_SIZE = 512;
 	var SEA_LEVEL = 0.43;
 	var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
 	function assertDimension(name, value) {
@@ -13053,6 +13483,53 @@ void main() {
 	  return world;
 	}
 
+	// src/world/WorldGeneratorClient.ts
+	var WorldGeneratorClient = class {
+	  constructor(workerUrl, workerOptions = { type: "module" }) {
+	    this.pending = /* @__PURE__ */ new Map();
+	    this.nextRequestId = 1;
+	    this.disposed = false;
+	    this.handleMessage = (event) => {
+	      const request = this.pending.get(event.data.id);
+	      if (!request) return;
+	      this.pending.delete(event.data.id);
+	      if ("world" in event.data) {
+	        request.resolve(event.data.world);
+	        return;
+	      }
+	      const remote = event.data.error;
+	      const error = new Error(remote.message);
+	      error.name = remote.name;
+	      if (remote.stack) error.stack = remote.stack;
+	      request.reject(error);
+	    };
+	    this.handleWorkerError = (event) => {
+	      const error = event.error instanceof Error ? event.error : new Error(event.message);
+	      for (const request of this.pending.values()) request.reject(error);
+	      this.pending.clear();
+	    };
+	    this.worker = new Worker(workerUrl, workerOptions);
+	    this.worker.addEventListener("message", this.handleMessage);
+	    this.worker.addEventListener("error", this.handleWorkerError);
+	  }
+	  generate(options) {
+	    if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+	    const id = this.nextRequestId++;
+	    return new Promise((resolve, reject) => {
+	      this.pending.set(id, { resolve, reject });
+	      this.worker.postMessage({ id, options });
+	    });
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    this.worker.terminate();
+	    const error = new Error("World generation worker was disposed");
+	    for (const request of this.pending.values()) request.reject(error);
+	    this.pending.clear();
+	  }
+	};
+
 	exports.EventEmitter = EventEmitter;
 	exports.FogOfWar = FogOfWar;
 	exports.FogState = FogState;
@@ -13068,6 +13545,7 @@ void main() {
 	exports.PathFinder = PathFinder;
 	exports.Unit = Unit;
 	exports.UnitActions = UnitActions;
+	exports.WorldGeneratorClient = WorldGeneratorClient;
 	exports.generateWorld = generateWorld;
 	exports.getHexCenter = getHexCenter;
 	exports.getMapNeighbors = getMapNeighbors;

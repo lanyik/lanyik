@@ -19,18 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Procedural atmospheric sky dome with horizon haze and filmic tone mapping,
   replacing the flat gray background at low camera angles.
 - Localized performance monitor with horizontally tiled FPS, frame time, memory,
-  draw-call and triangle counters.
+  draw-call, triangle, visible/resident chunk and LOD counters.
+- Dedicated browser Worker build and `WorldGeneratorClient` for non-blocking
+  procedural generation. Supported world dimensions now extend to 512×512.
 
 ### Changed
 
-- Terrain, water and grass are split into 12×12 logical chunks with exact
-  full-detail geometry. Only distance/frustum-visible canonical or toroidal
-  chunk copies are submitted, instead of submitting a complete world buffer.
-- Visible chunks upload lazily to WebGL and use a 96-geometry residency cache;
-  inactive GPU buffers are evicted while their CPU attributes remain available
-  for automatic re-upload when revisited.
-- Forest instances are split into spatial chunks and culled by frustum/distance,
-  avoiding millions of invisible far-tree triangles on large worlds.
+- Terrain, water, grass and forests now expose lazy chunk-resource interfaces
+  managed by a dedicated scheduler. Only distance/frustum-visible canonical or
+  toroidal chunks construct CPU render data and submit GPU work.
+- Three LOD levels preserve the original subdivision/density in the near field,
+  reduce sub-pixel interior geometry and decoration density farther away, and
+  use a hysteresis band to prevent boundary thrashing.
+- Independent 128-chunk GPU and 192-chunk CPU residency budgets evict inactive
+  WebGL buffers first, then reconstructible CPU attributes. Toroidal copies
+  share canonical resources and are only created for seam regions that can
+  become visible.
 
 ### Fixed
 

@@ -21,10 +21,7 @@ import {
     RawShaderMaterial,
     Vector2,
     Material,
-    ACESFilmicToneMapping,
-    Box3,
-    Frustum,
-    Matrix4
+    ACESFilmicToneMapping
 } from "three";
 // MapControls was removed from three.js's examples; OrbitControls configured
 // with swapped mouse buttons (left=pan, right=rotate) reproduces it.
@@ -41,13 +38,12 @@ import { createForest, ForestField } from "./objects/Forest";
 import { GrassField, createGrassField } from "./objects/Grass";
 import { FogState } from "./objects/FogOfWar";
 import { assertWrappableMap, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
-import { getWorldChunkMetadata } from "./helpers/chunks";
-
-//Repeated forest chunks are distance-culled at this radius. Toroidal surface
-//patches use the same extent so repeated trees/grass cannot outlive their ground.
-const WORLD_SURFACE_RENDER_DISTANCE = 2400;
-const WORLD_CHUNK_GPU_CACHE_LIMIT = 96;
-const WORLD_CHUNK_EVICT_AFTER_FRAMES = 600;
+import { getWorldChunkMetadata, WorldChunkMetadata } from "./helpers/chunks";
+import {
+    createDefaultWorldChunkSchedulerOptions,
+    WorldChunkScheduler,
+    WorldChunkStreamingStats
+} from "./rendering/WorldChunkScheduler";
 
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
@@ -161,6 +157,19 @@ export interface HexMapOptions {
     grassWindStrength?: number;  // tip sway distance, world units, default bladeHeight * 0.35
     grassWindSpeed?: number;     // default 1.2
 
+    //Spatial streaming and LOD. LOD 0 keeps the original full-detail meshes;
+    //middle/far levels only reduce detail that is smaller than its projected
+    //screen size. CPU and GPU caches are independent so very large worlds do
+    //not allocate every chunk up front.
+    renderDistance?: number;             // world units, default 2400
+    lodEnabled?: boolean;                // default true
+    lodNearDistance?: number;            // LOD 0 -> 1 threshold, default 900
+    lodFarDistance?: number;             // LOD 1 -> 2 threshold, default 1650
+    vegetationRenderDistance?: number;   // grass/forest cutoff, default 1450
+    chunkLodHysteresis?: number;         // threshold dead band, default 120
+    gpuChunkCacheSize?: number;           // default 128 logical chunks
+    cpuChunkCacheSize?: number;           // default 192 logical chunks
+
     //Fog of war (see objects/FogOfWar.ts): fogTexture is a file name resolved
     //against texturesBaseUrl (default "war-fog.jpg", the same folder as the
     //terrain atlas), drawn over every tile HexMap.setTileFog() marks Unseen -
@@ -228,7 +237,15 @@ const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "
     grassWindStrength: 2.5,
     grassWindSpeed: 1.2,
     fogTexture: "war-fog.jpg",
-    fogDarkenFactor: 0.45
+    fogDarkenFactor: 0.45,
+    renderDistance: 2400,
+    lodEnabled: true,
+    lodNearDistance: 900,
+    lodFarDistance: 1650,
+    vegetationRenderDistance: 1450,
+    chunkLodHysteresis: 120,
+    gpuChunkCacheSize: 128,
+    cpuChunkCacheSize: 192
 };
 
 //----------------------------------------------------------------------------------
@@ -267,12 +284,7 @@ export class HexMap extends EventEmitter {
     private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
     private pressedMovementKeys = new Set<string>();
-    private forestCullCenter = new Vector3();
-    private surfaceFrustum = new Frustum();
-    private surfaceProjection = new Matrix4();
-    private surfaceBounds = new Box3();
-    private chunkVisibilityFrame = 0;
-    private chunkGeometryLastVisible = new Map<BufferGeometry, number>();
+    private chunkScheduler: WorldChunkScheduler;
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
     private lastHover: Point | null = null;
@@ -299,6 +311,20 @@ export class HexMap extends EventEmitter {
             riverDepth: options.riverDepth ?? waterDepth * 0.6,
             mountainHeight: options.mountainHeight ?? (options.size ?? DEFAULT_OPTIONS.size) * 0.6
         };
+        const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
+        this.chunkScheduler = new WorldChunkScheduler({
+            ...schedulerOptions,
+            renderDistance: this.options.renderDistance,
+            lodEnabled: this.options.lodEnabled,
+            lodDistances: {
+                near: this.options.lodNearDistance,
+                far: this.options.lodFarDistance,
+                vegetation: this.options.vegetationRenderDistance,
+                hysteresis: this.options.chunkLodHysteresis
+            },
+            gpuCacheSize: this.options.gpuChunkCacheSize,
+            cpuCacheSize: this.options.cpuChunkCacheSize
+        });
 
         const el = document.querySelector(this.options.element);
         if (!(el instanceof HTMLCanvasElement)) {
@@ -533,6 +559,21 @@ export class HexMap extends EventEmitter {
             copy = instancedCopy;
         } else {
             copy = source.clone(true);
+            const sourceInstances: InstancedMesh[] = [];
+            const copyInstances: InstancedMesh[] = [];
+            source.traverse(object => {
+                if ((object as InstancedMesh).isInstancedMesh) sourceInstances.push(object as InstancedMesh);
+            });
+            copy.traverse(object => {
+                if ((object as InstancedMesh).isInstancedMesh) copyInstances.push(object as InstancedMesh);
+            });
+            copyInstances.forEach((instance, index) => {
+                const original = sourceInstances[index];
+                if (!original) return;
+                instance.instanceMatrix = original.instanceMatrix;
+                instance.instanceColor = original.instanceColor;
+                instance.count = original.count;
+            });
         }
 
         copy.traverse(object => {
@@ -549,8 +590,19 @@ export class HexMap extends EventEmitter {
 
     private copyOffsets(wrapped: boolean | undefined, period: number): number[] {
         if (!wrapped || period <= 0) return [0];
-        const radius = Math.max(1, Math.ceil(WORLD_SURFACE_RENDER_DISTANCE / period));
+        const radius = Math.max(1, Math.ceil(this.options.renderDistance / period));
         return Array.from({ length: radius * 2 + 1 }, (_, index) => index - radius);
+    }
+
+    private worldCopyCanBecomeVisible(source: Object3D, offsetX: number, offsetY: number): boolean {
+        const metadata = getWorldChunkMetadata(source);
+        if (!metadata) return true;
+        const padding = this.options.renderDistance;
+        const bounds = metadata.bounds;
+        return bounds.maxX + offsetX >= -padding
+            && bounds.minX + offsetX <= this.worldPeriodX + padding
+            && bounds.maxZ + offsetY >= -padding
+            && bounds.minZ + offsetY <= this.worldPeriodY + padding;
     }
 
     private refreshWorldCopies(): void {
@@ -569,13 +621,16 @@ export class HexMap extends EventEmitter {
                 group.position.set(offsetX, 0, offsetY);
 
                 for (const child of this.terrain?.children ?? []) {
+                    if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
                 }
                 for (const child of this.forest?.children ?? []) {
+                    if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
                     group.add(this.cloneWorldObject(child, offsetX, offsetY));
                 }
                 if (this.grass?.visible) {
                     for (const child of this.grass.children) {
+                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
                         group.add(this.cloneWorldObject(child, offsetX, offsetY));
                     }
                 }
@@ -636,7 +691,6 @@ export class HexMap extends EventEmitter {
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.updateWorldChunkVisibility();
-        this.updateForestVisibility();
         this.terrain?.update(dtS);
         this.grass?.update(dtS);
         this.emit("frame", { t });
@@ -694,80 +748,32 @@ export class HexMap extends EventEmitter {
         this.controls.target.add(movement);
     }
 
-    private updateForestVisibility(): void {
-        const viewDistance = this.camera.position.distanceTo(this.controls.target);
-        const renderDistance = Math.min(WORLD_SURFACE_RENDER_DISTANCE, Math.max(1200, viewDistance * 2.75));
-
-        this.scene.traverse(object => {
-            const forestChunk = object as InstancedMesh;
-            if (!forestChunk.isInstancedMesh || !forestChunk.name.startsWith("forest-")) return;
-            if (!forestChunk.boundingSphere) forestChunk.computeBoundingSphere();
-            if (!forestChunk.boundingSphere) return;
-
-            forestChunk.updateWorldMatrix(true, false);
-            this.forestCullCenter.copy(forestChunk.boundingSphere.center).applyMatrix4(forestChunk.matrixWorld);
-            const dx = this.forestCullCenter.x - this.controls.target.x;
-            const dz = this.forestCullCenter.z - this.controls.target.z;
-            forestChunk.visible = Math.hypot(dx, dz) - forestChunk.boundingSphere.radius <= renderDistance;
+    private updateWorldChunkVisibility(): void {
+        if (!this.mapData) return;
+        this.chunkScheduler.update(this.scene, this.camera, this.controls.target, {
+            enabled: metadata => metadata.kind !== "grass" || this.options.grassEnabled,
+            activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
+            release: metadata => this.releaseWorldChunk(metadata)
         });
     }
 
-    private updateWorldChunkVisibility(): void {
-        if (!this.mapData) return;
-        this.chunkVisibilityFrame += 1;
-        const visibleGeometries = new Set<BufferGeometry>();
-
-        this.camera.updateMatrixWorld();
-        this.surfaceProjection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
-        this.surfaceFrustum.setFromProjectionMatrix(this.surfaceProjection);
-
-        this.scene.traverse(object => {
-            const chunk = getWorldChunkMetadata(object);
-            if (!chunk) return;
-
-            object.updateWorldMatrix(true, false);
-            const worldX = object.matrixWorld.elements[12];
-            const worldY = object.matrixWorld.elements[13];
-            const worldZ = object.matrixWorld.elements[14];
-            const bounds = chunk.bounds;
-            this.surfaceBounds.min.set(bounds.minX + worldX, bounds.minY + worldY, bounds.minZ + worldZ);
-            this.surfaceBounds.max.set(bounds.maxX + worldX, bounds.maxY + worldY, bounds.maxZ + worldZ);
-
-            const dx = Math.max(
-                0,
-                this.surfaceBounds.min.x - this.controls.target.x,
-                this.controls.target.x - this.surfaceBounds.max.x
-            );
-            const dz = Math.max(
-                0,
-                this.surfaceBounds.min.z - this.controls.target.z,
-                this.controls.target.z - this.surfaceBounds.max.z
-            );
-            const visible = Math.hypot(dx, dz) <= WORLD_SURFACE_RENDER_DISTANCE
-                && this.surfaceFrustum.intersectsBox(this.surfaceBounds);
-            object.visible = visible && (chunk.kind !== "grass" || this.options.grassEnabled);
-            const mesh = object as Mesh;
-            if (object.visible && mesh.isMesh) {
-                visibleGeometries.add(mesh.geometry);
-                this.chunkGeometryLastVisible.set(mesh.geometry, this.chunkVisibilityFrame);
-            }
-        });
-
-        //BufferGeometry.dispose() only releases its WebGL allocation; the CPU
-        //attributes remain intact, so a revisited chunk is uploaded again on
-        //demand. Evict old/inactive entries after a grace period and enforce a
-        //hard resident-cache target without ever evicting a visible chunk.
-        const inactive = [...this.chunkGeometryLastVisible.entries()]
-            .filter(([geometry]) => !visibleGeometries.has(geometry))
-            .sort((a, b) => a[1] - b[1]);
-        let excess = Math.max(0, this.chunkGeometryLastVisible.size - WORLD_CHUNK_GPU_CACHE_LIMIT);
-        for (const [geometry, lastVisible] of inactive) {
-            const stale = this.chunkVisibilityFrame - lastVisible >= WORLD_CHUNK_EVICT_AFTER_FRAMES;
-            if (!stale && excess <= 0) break;
-            geometry.dispose();
-            this.chunkGeometryLastVisible.delete(geometry);
-            if (excess > 0) excess--;
+    private activateWorldChunk(metadata: WorldChunkMetadata, lod: 0 | 1 | 2, objects: Object3D[]) {
+        if (metadata.kind === "land" || metadata.kind === "water") {
+            const geometry = this.terrain?.activateChunk(metadata, lod);
+            return geometry ? { geometries: [geometry] } : undefined;
         }
+        if (metadata.kind === "grass") {
+            const geometry = this.grass?.activateChunk(metadata, lod);
+            return geometry ? { geometries: [geometry] } : undefined;
+        }
+        this.forest?.activateChunk(metadata, lod, objects);
+        return undefined;
+    }
+
+    private releaseWorldChunk(metadata: WorldChunkMetadata): void {
+        if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
+        else if (metadata.kind === "grass") this.grass?.releaseChunk(metadata);
+        else this.forest?.releaseChunk(metadata);
     }
 
     //-------------------------------------------------------------------------
@@ -860,6 +866,9 @@ export class HexMap extends EventEmitter {
         await this.rebuildTerrain();
         await this.rebuildForest();
         this.rebuildGrass();
+        //Make the first camera view render-ready before load resolves. The
+        //rest of the world remains as lightweight shells and streams later.
+        this.updateWorldChunkVisibility();
 
         this.emit("load" satisfies HexMapEventName, undefined);
     }
@@ -871,7 +880,7 @@ export class HexMap extends EventEmitter {
     //(waterWaveAmplitude, beachWidth, etc.)
     private async rebuildTerrain(): Promise<void> {
         this.clearWorldCopies();
-        this.chunkGeometryLastVisible.clear();
+        this.chunkScheduler.clear();
         if (this.terrain) {
             this.scene.remove(this.terrain);
             this.terrain.dispose();
@@ -936,6 +945,7 @@ export class HexMap extends EventEmitter {
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
     private async rebuildForest(): Promise<void> {
         this.clearWorldCopies();
+        this.chunkScheduler.clear();
         if (this.forest) {
             this.scene.remove(this.forest);
             this.forest.traverse(o => (o as unknown as Mesh).geometry?.dispose());
@@ -973,7 +983,7 @@ export class HexMap extends EventEmitter {
     //geometry, there's no partial/incremental update.
     private rebuildGrass(): void {
         this.clearWorldCopies();
-        this.chunkGeometryLastVisible.clear();
+        this.chunkScheduler.clear();
         if (this.grass) {
             this.scene.remove(this.grass);
             this.grass.dispose();
@@ -1426,6 +1436,10 @@ export class HexMap extends EventEmitter {
 
     public get size(): number {
         return this.options.size;
+    }
+
+    public get streamingStats(): Readonly<WorldChunkStreamingStats> {
+        return this.chunkScheduler.stats;
     }
 
     public drawRoutePath(path: Point[]): void {
