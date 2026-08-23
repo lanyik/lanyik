@@ -10,6 +10,34 @@
 </head>
 <body>
     <canvas class="scene__canvas" data-world-canvas></canvas>
+    <aside class="performance-panel" data-performance-panel aria-labelledby="performance-title">
+        <header class="performance-panel__header">
+            <span class="performance-panel__status" aria-hidden="true"></span>
+            <h2 id="performance-title" data-performance-title></h2>
+        </header>
+        <div class="performance-panel__metrics">
+            <div class="performance-metric">
+                <span data-performance-label="fps"></span>
+                <div><strong data-performance-value="fps">—</strong><small data-performance-unit="fps"></small></div>
+            </div>
+            <div class="performance-metric">
+                <span data-performance-label="frameTime"></span>
+                <div><strong data-performance-value="frameTime">—</strong><small data-performance-unit="frameTime"></small></div>
+            </div>
+            <div class="performance-metric">
+                <span data-performance-label="memory"></span>
+                <div><strong data-performance-value="memory">—</strong><small data-performance-unit="memory"></small></div>
+            </div>
+            <div class="performance-metric">
+                <span data-performance-label="drawCalls"></span>
+                <div><strong data-performance-value="drawCalls">—</strong></div>
+            </div>
+            <div class="performance-metric">
+                <span data-performance-label="triangles"></span>
+                <div><strong data-performance-value="triangles">—</strong></div>
+            </div>
+        </div>
+    </aside>
     <aside class="world-status" aria-live="polite">
         <strong data-world-title></strong>
         <span data-world-detail></span>

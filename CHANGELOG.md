@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   orbit controls, and localized on-screen control hints.
 - Procedural atmospheric sky dome with horizon haze and filmic tone mapping,
   replacing the flat gray background at low camera angles.
+- Localized performance monitor with horizontally tiled FPS, frame time, memory,
+  draw-call and triangle counters.
 
 ### Changed
 

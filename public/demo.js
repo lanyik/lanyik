@@ -1,5 +1,4 @@
 import { GUI } from "./js/vendor/dat.gui.module.js";
-import Stats from "./js/vendor/stats.module.js";
 import { createI18n } from "./i18n.js";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
@@ -7,6 +6,13 @@ const { HexMap, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
+const performanceTitle = document.querySelector("[data-performance-title]");
+const performanceLabels = document.querySelectorAll("[data-performance-label]");
+const performanceUnits = document.querySelectorAll("[data-performance-unit]");
+const performanceValues = Object.fromEntries(
+    [...document.querySelectorAll("[data-performance-value]")]
+        .map(element => [element.dataset.performanceValue, element])
+);
 
 function readInitialLocale() {
     try {
@@ -53,10 +59,72 @@ const map = new HexMap({
 window.hexWorld = map;
 window.hexWorldI18n = i18n;
 
-const stats = new Stats();
-stats.showPanel(0);
-document.body.appendChild(stats.dom);
-map.on("frame", () => stats.update());
+const PERFORMANCE_SAMPLE_INTERVAL = 500;
+let performanceSampleStart = performance.now();
+let performanceFrameCount = 0;
+let performanceNumberFormatter;
+let performanceCompactFormatter;
+let performanceSnapshot = {
+    fps: null,
+    frameTime: null,
+    memory: null,
+    drawCalls: null,
+    triangles: null
+};
+
+function renderPerformance() {
+    const formats = {
+        fps: value => Math.round(value),
+        frameTime: value => value.toFixed(1),
+        memory: value => Math.round(value),
+        drawCalls: value => performanceNumberFormatter.format(value),
+        triangles: value => performanceCompactFormatter.format(value)
+    };
+
+    Object.entries(performanceValues).forEach(([key, element]) => {
+        const value = performanceSnapshot[key];
+        element.textContent = value === null ? "—" : formats[key](value);
+        element.title = value === null ? i18n.t("performance.unavailable") : performanceNumberFormatter.format(value);
+    });
+}
+
+function updatePerformanceLocale(locale) {
+    performanceNumberFormatter = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+    performanceCompactFormatter = new Intl.NumberFormat(locale, {
+        notation: "compact",
+        maximumFractionDigits: 1
+    });
+    performanceTitle.textContent = i18n.t("performance.title");
+    performanceLabels.forEach(element => {
+        element.textContent = i18n.t(`performance.${element.dataset.performanceLabel}`);
+    });
+    performanceUnits.forEach(element => {
+        element.textContent = i18n.t(`performance.unit.${element.dataset.performanceUnit}`);
+    });
+    renderPerformance();
+}
+
+function samplePerformance() {
+    const now = performance.now();
+    const elapsed = now - performanceSampleStart;
+    performanceFrameCount += 1;
+    if (elapsed < PERFORMANCE_SAMPLE_INTERVAL) return;
+
+    const rendererInfo = map.renderer?.info;
+    const heapSize = performance.memory?.usedJSHeapSize;
+    performanceSnapshot = {
+        fps: performanceFrameCount * 1000 / elapsed,
+        frameTime: elapsed / performanceFrameCount,
+        memory: Number.isFinite(heapSize) ? heapSize / 1048576 : null,
+        drawCalls: rendererInfo?.render.calls ?? null,
+        triangles: rendererInfo?.render.triangles ?? null
+    };
+    performanceFrameCount = 0;
+    performanceSampleStart = now;
+    renderPerformance();
+}
+
+map.on("frame", samplePerformance);
 
 const controls = {
     language: i18n.locale,
@@ -214,6 +282,7 @@ function applyLocale(locale) {
     GUI.TEXT_OPEN = i18n.t("panel.open");
     GUI.TEXT_CLOSED = i18n.t("panel.close");
     gui.closed = gui.closed;
+    updatePerformanceLocale(locale);
     renderStatus();
 }
 

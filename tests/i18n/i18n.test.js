@@ -20,6 +20,8 @@ describe("i18n", () => {
         expect(i18n.t("status.generated")).toBe("世界已生成");
         expect(i18n.t("status.worldDetail", { width: 42, height: 32, seed: "atlas" }))
             .toBe("42 × 32 · 四向循环 · 种子 atlas");
+        expect(i18n.t("performance.title")).toBe("性能监控");
+        expect(i18n.t("performance.drawCalls")).toBe("绘制调用");
     });
 
     test("keeps English and Chinese catalogs in sync", () => {
