@@ -1,9 +1,29 @@
 import { GUI } from "./js/vendor/dat.gui.module.js";
 import Stats from "./js/vendor/stats.module.js";
+import { createI18n } from "./i18n.js";
 
+const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const { HexMap, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
+
+function readInitialLocale() {
+    try {
+        return localStorage.getItem(LOCALE_STORAGE_KEY) || navigator.languages?.[0] || navigator.language;
+    } catch {
+        return navigator.languages?.[0] || navigator.language;
+    }
+}
+
+function persistLocale(locale) {
+    try {
+        localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    } catch {
+        // Language switching still works when storage is unavailable.
+    }
+}
+
+const i18n = createI18n({ locale: readInitialLocale() });
 
 const map = new HexMap({
     element: "[data-world-canvas]",
@@ -30,6 +50,7 @@ const map = new HexMap({
 });
 
 window.hexWorld = map;
+window.hexWorldI18n = i18n;
 
 const stats = new Stats();
 stats.showPanel(0);
@@ -37,6 +58,7 @@ document.body.appendChild(stats.dom);
 map.on("frame", () => stats.update());
 
 const controls = {
+    language: i18n.locale,
     seed: "new-world",
     width: 42,
     height: 32,
@@ -48,12 +70,51 @@ window.regenerateWorld = regenerate;
 
 let currentWorld;
 let generating = false;
+let statusState = { kind: "initializing" };
+
+function formatTile(tile) {
+    return [
+        i18n.t(`terrain.${tile.type}`),
+        ...(tile.modifiers ?? []).map(modifier => i18n.t(`modifier.${modifier}`))
+    ].join(" · ");
+}
+
+function renderStatus() {
+    const { kind } = statusState;
+    if (kind === "initializing") {
+        title.textContent = i18n.t("status.initializing");
+        detail.textContent = i18n.t("status.initializingDetail");
+        return;
+    }
+    if (kind === "generating" || kind === "generated") {
+        title.textContent = i18n.t(`status.${kind}`);
+        detail.textContent = i18n.t("status.worldDetail", statusState);
+        return;
+    }
+    if (kind === "failed") {
+        title.textContent = i18n.t("status.failed");
+        detail.textContent = statusState.message;
+        return;
+    }
+    if (kind === "tile" || kind === "selected") {
+        title.textContent = i18n.t(`status.${kind}`, statusState);
+        detail.textContent = formatTile(statusState.tile);
+    }
+}
+
+function setStatus(kind, values = {}) {
+    statusState = { kind, ...values };
+    renderStatus();
+}
 
 async function regenerate() {
     if (generating) return;
     generating = true;
-    title.textContent = "正在生成世界…";
-    detail.textContent = `${controls.width} × ${controls.height} · seed ${controls.seed}`;
+    setStatus("generating", {
+        width: controls.width,
+        height: controls.height,
+        seed: controls.seed
+    });
 
     try {
         const nextWorld = generateWorld({
@@ -63,12 +124,16 @@ async function regenerate() {
         });
         await map.load(nextWorld);
         currentWorld = nextWorld;
-        title.textContent = "世界已生成";
-        detail.textContent = `${nextWorld.w} × ${nextWorld.h} · seed ${controls.seed}`;
+        setStatus("generated", {
+            width: nextWorld.w,
+            height: nextWorld.h,
+            seed: controls.seed
+        });
     } catch (error) {
         console.error(error);
-        title.textContent = "生成失败";
-        detail.textContent = error instanceof Error ? error.message : String(error);
+        setStatus("failed", {
+            message: error instanceof Error ? error.message : String(error)
+        });
         if (currentWorld) {
             await map.load(currentWorld).catch(restoreError => console.error("Map restore failed", restoreError));
         }
@@ -77,39 +142,83 @@ async function regenerate() {
     }
 }
 
-map.on("hover", ({ x, y, tile }) => {
-    title.textContent = `格子 ${x}, ${y}`;
-    detail.textContent = [tile.type, ...(tile.modifiers ?? [])].join(" · ");
-});
-
-map.on("click", ({ x, y, tile }) => {
-    title.textContent = `已选择 ${x}, ${y}`;
-    detail.textContent = [tile.type, ...(tile.modifiers ?? [])].join(" · ");
-});
+map.on("hover", ({ x, y, tile }) => setStatus("tile", { x, y, tile }));
+map.on("click", ({ x, y, tile }) => setStatus("selected", { x, y, tile }));
 
 const gui = new GUI({ width: 310 });
+const languageOptions = { English: "en", "简体中文": "zh-CN" };
+const languageController = gui.add(controls, "language", languageOptions);
+
 const worldFolder = gui.addFolder("World generation");
-worldFolder.add(controls, "seed").name("seed");
-worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1).name("width");
-worldFolder.add(controls, "height", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1).name("height");
-worldFolder.add(controls, "regenerate").name("Generate world");
+const seedController = worldFolder.add(controls, "seed");
+const widthController = worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
+const heightController = worldFolder.add(controls, "height", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
+const generateController = worldFolder.add(controls, "regenerate");
 worldFolder.open();
 
 const terrainFolder = gui.addFolder("Terrain");
-terrainFolder.add(map, "gridVisible").name("grid");
-terrainFolder.add(map, "landBlendWidth", 0, 1, 0.01).name("blend width");
-terrainFolder.add(map, "landBlendCurvature", 0, 1, 0.01).name("blend curve");
-terrainFolder.add(map, "mountainHeight", 0, 80, 1).name("mountains");
+const gridController = terrainFolder.add(map, "gridVisible");
+const blendWidthController = terrainFolder.add(map, "landBlendWidth", 0, 1, 0.01);
+const blendCurveController = terrainFolder.add(map, "landBlendCurvature", 0, 1, 0.01);
+const mountainController = terrainFolder.add(map, "mountainHeight", 0, 80, 1);
 
 const waterFolder = gui.addFolder("Water & coast");
-waterFolder.add(map, "waterWaveAmplitude", 0, 5, 0.1).name("wave height");
-waterFolder.add(map, "waterWaveSpeed", 0, 4, 0.05).name("wave speed");
-waterFolder.add(map, "coastCurvature", 0, 1, 0.01).name("coast curve");
-waterFolder.add(map, "coastalWaveOpacity", 0, 1, 0.01).name("foam");
+const waveHeightController = waterFolder.add(map, "waterWaveAmplitude", 0, 5, 0.1);
+const waveSpeedController = waterFolder.add(map, "waterWaveSpeed", 0, 4, 0.05);
+const coastCurveController = waterFolder.add(map, "coastCurvature", 0, 1, 0.01);
+const foamController = waterFolder.add(map, "coastalWaveOpacity", 0, 1, 0.01);
 
 const vegetationFolder = gui.addFolder("Vegetation");
-vegetationFolder.add(map, "treesPerTile", 0, 40, 1).name("trees");
-vegetationFolder.add(map, "grassVisible").name("grass");
-vegetationFolder.add(map, "grassWindStrength", 0, 6, 0.1).name("wind");
+const treesController = vegetationFolder.add(map, "treesPerTile", 0, 40, 1);
+const grassController = vegetationFolder.add(map, "grassVisible");
+const windController = vegetationFolder.add(map, "grassWindStrength", 0, 6, 0.1);
 
+const translatedControllers = [
+    [languageController, "panel.language"],
+    [seedController, "control.seed"],
+    [widthController, "control.width"],
+    [heightController, "control.height"],
+    [generateController, "control.generate"],
+    [gridController, "control.grid"],
+    [blendWidthController, "control.blendWidth"],
+    [blendCurveController, "control.blendCurve"],
+    [mountainController, "control.mountains"],
+    [waveHeightController, "control.waveHeight"],
+    [waveSpeedController, "control.waveSpeed"],
+    [coastCurveController, "control.coastCurve"],
+    [foamController, "control.foam"],
+    [treesController, "control.trees"],
+    [grassController, "control.grass"],
+    [windController, "control.wind"]
+];
+
+const translatedFolders = [
+    [worldFolder, "panel.world"],
+    [terrainFolder, "panel.terrain"],
+    [waterFolder, "panel.water"],
+    [vegetationFolder, "panel.vegetation"]
+];
+
+function applyLocale(locale) {
+    controls.language = locale;
+    languageController.updateDisplay();
+    document.documentElement.lang = locale;
+    document.title = i18n.t("app.title");
+    translatedControllers.forEach(([controller, key]) => controller.name(i18n.t(key)));
+    translatedFolders.forEach(([folder, key]) => {
+        folder.name = i18n.t(key);
+    });
+    GUI.TEXT_OPEN = i18n.t("panel.open");
+    GUI.TEXT_CLOSED = i18n.t("panel.close");
+    gui.closed = gui.closed;
+    renderStatus();
+}
+
+languageController.onChange(locale => {
+    const resolved = i18n.setLocale(locale);
+    persistLocale(resolved);
+});
+
+i18n.subscribe(applyLocale);
+applyLocale(i18n.locale);
 await regenerate();
