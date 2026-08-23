@@ -1,5 +1,16 @@
 # three-hex-map
 
+## Procedural world demo
+
+This fork starts as a graphics-only Civilization-style world viewer. It keeps the upstream instanced terrain, water, coast, mountain, grass, and forest rendering, and adds deterministic world generation from a seed.
+
+```bash
+npm install
+npm start
+```
+
+Open <http://127.0.0.1:3000>. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The default page does not start units, pathfinding, turns, or fog-of-war gameplay.
+
 A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. One draw call per layer, no per-tile meshes.
 
 See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) · [Changelog](CHANGELOG.md)
