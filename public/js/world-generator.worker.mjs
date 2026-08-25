@@ -232,6 +232,22 @@ function decorateTile(seed, x, y, climate, type) {
   if (modifiers.length > 0) tile.modifiers = modifiers;
   return tile;
 }
+var modulo = (value, period) => (value % period + period) % period;
+function generateToroidalWorldTile(numericSeed, x, y, width, height) {
+  const canonicalX = modulo(x, width);
+  const canonicalY = modulo(y, height);
+  const climate = sampleToroidalClimate(numericSeed, canonicalX, canonicalY, width, height);
+  let type = classifyTerrain(climate);
+  if (type === "sea" /* sea */) {
+    const touchesLand = getNeighbors(canonicalX, canonicalY).some((neighbor) => {
+      const nx = modulo(neighbor.x, width);
+      const ny = modulo(neighbor.y, height);
+      return !isWater(classifyTerrain(sampleToroidalClimate(numericSeed, nx, ny, width, height)));
+    });
+    if (touchesLand) type = "coastal" /* coastal */;
+  }
+  return decorateTile(numericSeed, canonicalX, canonicalY, climate, type);
+}
 function generateWorld({ seed, width, height, topology = "bounded" }) {
   assertDimension("width", width);
   assertDimension("height", height);
@@ -247,16 +263,19 @@ function generateWorld({ seed, width, height, topology = "bounded" }) {
   for (let x = 0; x < width; x += 1) {
     data[x] = {};
     for (let y = 0; y < height; y += 1) {
-      const climate = toroidal ? sampleToroidalClimate(numericSeed, x, y, width, height) : sampleBoundedClimate(numericSeed, x, y, width, height);
-      const type = classifyTerrain(climate);
-      data[x][y] = decorateTile(numericSeed, x, y, climate, type);
+      if (toroidal) {
+        data[x][y] = generateToroidalWorldTile(numericSeed, x, y, width, height);
+        continue;
+      }
+      const climate = sampleBoundedClimate(numericSeed, x, y, width, height);
+      data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
     }
   }
   const world = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
   for (let x = 0; x < width; x += 1) {
     for (let y = 0; y < height; y += 1) {
       const tile = data[x][y];
-      if (tile.type !== "sea" /* sea */) continue;
+      if (toroidal || tile.type !== "sea" /* sea */) continue;
       const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
         const neighbor = data[nx]?.[ny];
         return neighbor !== void 0 && !isWater(neighbor.type);
@@ -287,6 +306,7 @@ var FLAG_WOOD = 1 << 4;
 var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
+var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
 var SEA_LEVEL2 = 0.43;
 function assertChunkCoordinate(name, value) {
   if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
@@ -341,9 +361,25 @@ function encodeTile(seed, x, y) {
   }
   return packed;
 }
+function encodeTileInfo(tile) {
+  let packed = LAND_CODE.get(tile.type) ?? 0;
+  if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
+  if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
+  if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
+  const treeCode = TREE_MODELS.indexOf(tile.treeModel);
+  if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
+  return packed;
+}
+function validateBoundedWorld(world) {
+  if (!world) return;
+  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
+    throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
+  }
+}
 function generateWorldChunk(options) {
   assertChunkCoordinate("chunkX", options.chunkX);
   assertChunkCoordinate("chunkY", options.chunkY);
+  validateBoundedWorld(options.world);
   const chunkSize = resolveChunkSize(options.chunkSize);
   const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
   const tiles = new Uint16Array(stride * stride);
@@ -355,7 +391,9 @@ function generateWorldChunk(options) {
   }
   for (let localX = 0; localX < stride; localX += 1) {
     for (let localY = 0; localY < stride; localY += 1) {
-      tiles[localX * stride + localY] = encodeTile(seed, originX + localX, originY + localY);
+      const x = originX + localX;
+      const y = originY + localY;
+      tiles[localX * stride + localY] = options.world ? encodeTileInfo(generateToroidalWorldTile(seed, x, y, options.world.width, options.world.height)) : encodeTile(seed, x, y);
     }
   }
   return {

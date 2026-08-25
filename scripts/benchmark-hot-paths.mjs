@@ -44,6 +44,36 @@ function benchmarkSparseStore() {
     };
 }
 
+function benchmarkToroidalWindow() {
+    const width = 512;
+    const height = 512;
+    const chunkSize = 24;
+    const chunks = [];
+    const started = performance.now();
+    for (let chunkX = 8; chunkX < 13; chunkX += 1) {
+        for (let chunkY = 8; chunkY < 13; chunkY += 1) {
+            chunks.push(generateWorldChunk({
+                seed: "perf-toroidal",
+                chunkX,
+                chunkY,
+                chunkSize,
+                world: { width, height, topology: "toroidal" }
+            }));
+        }
+    }
+    const store = new SparseWorldChunkStore({ width, height, wrapX: true, wrapY: true });
+    for (const chunk of chunks) store.add(chunk);
+    return {
+        operation: "512x512 toroidal world, 5x5 resident chunk window",
+        durationMs: round(performance.now() - started),
+        logicalTiles: width * height,
+        residentCoreTiles: chunks.length * chunkSize * chunkSize,
+        residentChunks: store.residentChunkCount,
+        residentPayloadBytes: store.residentPayloadBytes,
+        materializedColumns: Object.keys(store.map.data).length
+    };
+}
+
 function benchmarkFogFrontier() {
     const width = 512;
     const height = 512;
@@ -74,5 +104,6 @@ function benchmarkFogFrontier() {
 
 console.log(JSON.stringify({
     sparseStore: benchmarkSparseStore(),
+    toroidalWindow: benchmarkToroidalWindow(),
     fogFrontier: benchmarkFogFrontier()
 }, null, 2));

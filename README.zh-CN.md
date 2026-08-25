@@ -75,7 +75,7 @@ map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
 
-`loadWorld()` 是有限、环绕、程序化无限和自定义远程世界的统一入口。
+`loadWorld()` 是有限、环绕、程序化无限和自定义远程世界的推荐统一入口。已有有限地图代码仍可继续调用 `await map.load(mapData)`；该方法会通过 `StaticWorldSource` 转发，不会造成破坏性迁移。
 它也是 `HexMap` 唯一的加载接口：选择或实现一个 `WorldSource`，再传给该方法即可。
 
 永久移除画布时请调用 `map.dispose()`。`GameEngine` 持有自己的地图实例，
@@ -156,24 +156,25 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 流式管线、LOD 保证、缓存生命周期及视锥计算详见 [docs/render-streaming.md](docs/render-streaming.md)。
 `map.worldStreamingStats` 提供数据源 Chunk 的驻留、排队、重试和失败统计，`map.streamingStats` 提供渲染 Chunk 的可见性、LOD 与 GPU 驻留统计，`map.frameTaskStats` 提供主线程延迟挂载队列的耗时与完成/取消统计。
 
-生成大型世界时，建议在主线程之外运行生成器：
+对于大型有限四向环形世界，可按种子、宽度和高度流式生成同一个确定世界，无需预先物化全部格子：
 
 ```ts
-import { StaticWorldSource, WorldGeneratorClient } from "three-hex-map";
+import { ToroidalWorldSource } from "three-hex-map";
 
-const generator = new WorldGeneratorClient(
-    // 将包中的 world-generator.worker.mjs 复制到公共资源目录。
-    new URL("/assets/world-generator.worker.mjs", window.location.href)
-);
-const world = await generator.generate({
+const source = new ToroidalWorldSource({
     seed: "continent",
     width: 512,
     height: 512,
-    topology: "toroidal"
+    workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
+    workerCount: 4,
+    chunkSize: 24,
+    cache: true,
+    cacheMaxBytes: 128 * 1024 * 1024
 });
-await map.loadWorld({ source: new StaticWorldSource(world) });
-generator.dispose();
+await map.loadWorld({ source });
 ```
+
+系统只生成并保留镜头附近的 Chunk。缓存键包含生成器版本、种子、宽高、拓扑、Chunk 尺寸和坐标，因此不同测试世界不会串数据。持久缓存默认上限为 128 MB，并按最近最少使用原则淘汰；`await source.clearCache()` 可清空该数据源的基础区块，没有活动数据源时也可调用 `clearWorldChunkCache()`。IndexedDB 禁用或故障时会自动回退到 Worker 生成，不会阻断世界加载。
 
 如果不希望预先保存整个世界，可以给同一个入口传入多 Worker 程序化数据源。该模式只让镜头附近的 Chunk 驻留在 JavaScript 和 GPU 内存中，以 16 位紧凑数据传输，并在坐标过大前自动平移 Three.js 世界根节点：
 
@@ -184,7 +185,8 @@ const source = new ProceduralWorldSource({
     seed: "endless-continent",
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
-    chunkSize: 24
+    chunkSize: 24,
+    cache: true
 });
 
 await map.loadWorld({
@@ -194,13 +196,17 @@ await map.loadWorld({
     frameBudgetMs: 3,
     maxMountsPerFrame: 2,
     maxRetries: 2,
+    predictionSeconds: 1.25,
+    predictionMaxChunks: 1,
     initialTile: { x: 0, y: 0 }
 });
 
 console.log(map.worldStreamingStats);
 ```
 
-`chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks`、`frameBudgetMs`、`maxMountsPerFrame`、`maxRetries`、`retryBaseDelayMs` 和 `floatingOriginThreshold`。短暂的数据源失败默认进行两次可取消的指数退避重试；返回坐标、尺寸或核心格错误的 Chunk 会立即拒绝，避免污染运行时地图。
+生成的基础格子采用紧凑、共享且不可变的数据变体。逐坐标玩法状态仍保持稀疏：可调用 `source.setTileOverride(x, y, changes)` 和 `source.clearTileOverride(x, y)` 设置 `unit`、`city` 等字段，无需物化整个无限世界。覆盖状态会在数据源生命周期内跨 Chunk 淘汰保留，并应用到后续重新挂载。
+
+`chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks`、`frameBudgetMs`、`maxMountsPerFrame`、`maxRetries`、`retryBaseDelayMs` 和 `floatingOriginThreshold`。移动方向会经过平滑后，仅在保留半径的余量内预取，过期预测任务由正常调度器取消。短暂的数据源失败默认进行两次可取消的指数退避重试；返回坐标、尺寸或核心格错误的 Chunk 会立即拒绝，避免污染运行时地图。
 
 `WorldSource` 是公开接口：实现 `loadChunk()`、`releaseChunk()`、边界解析，以及物化 `data` 或虚拟 `tileAt()`/`forEachTile()` 地图视图后，即可接入 HTTP、IndexedDB、服务器权威世界或编辑器数据，无需改动渲染器。一个数据源实例由一次 `loadWorld()` 会话独占，并在切换世界或 `map.dispose()` 时自动释放。
 

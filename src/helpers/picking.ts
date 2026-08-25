@@ -69,8 +69,11 @@ export function pickTile(
     }
 
     if (!best) return null;
-    if (!wrapX && (best.x < 0 || (mapWidth !== undefined && best.x >= mapWidth))) return null;
-    if (!wrapY && (best.y < 0 || (mapHeight !== undefined && best.y >= mapHeight))) return null;
+    // An omitted dimension means an unbounded axis, not a bounded map whose
+    // minimum happens to be zero. Infinite worlds must be pickable and streamable
+    // through negative coordinates as well as positive ones.
+    if (!wrapX && mapWidth !== undefined && (best.x < 0 || best.x >= mapWidth)) return null;
+    if (!wrapY && mapHeight !== undefined && (best.y < 0 || best.y >= mapHeight)) return null;
     return {
         ...best,
         x: wrapX ? positiveModulo(best.x, mapWidth as number) : best.x,

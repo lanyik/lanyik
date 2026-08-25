@@ -5,9 +5,8 @@ const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const {
     HexMap,
     ProceduralWorldSource,
-    StaticWorldSource,
-    generateWorld,
-    WorldGeneratorClient,
+    ToroidalWorldSource,
+    clearWorldChunkCache,
     MIN_WORLD_SIZE,
     MAX_WORLD_SIZE
 } = window.HexMap;
@@ -82,7 +81,11 @@ let performanceSnapshot = {
     triangles: null,
     visibleChunks: null,
     residentChunks: null,
-    lod: null
+    lod: null,
+    sourceChunks: null,
+    cache: null,
+    cachedChunks: null,
+    cacheStorage: null
 };
 
 function renderPerformance() {
@@ -94,7 +97,11 @@ function renderPerformance() {
         triangles: value => performanceCompactFormatter.format(value),
         visibleChunks: value => performanceNumberFormatter.format(value),
         residentChunks: value => performanceNumberFormatter.format(value),
-        lod: value => value
+        lod: value => value,
+        sourceChunks: value => value,
+        cache: value => value,
+        cachedChunks: value => performanceNumberFormatter.format(value),
+        cacheStorage: value => value.toFixed(1)
     };
 
     Object.entries(performanceValues).forEach(([key, element]) => {
@@ -130,6 +137,7 @@ function samplePerformance() {
 
     const rendererInfo = map.renderer?.info;
     const streaming = map.streamingStats;
+    const worldStreaming = map.worldStreamingStats;
     const heapSize = performance.memory?.usedJSHeapSize;
     performanceSnapshot = {
         fps: performanceFrameCount * 1000 / elapsed,
@@ -139,7 +147,13 @@ function samplePerformance() {
         triangles: rendererInfo?.render.triangles ?? null,
         visibleChunks: streaming?.visibleChunks ?? null,
         residentChunks: streaming?.residentChunks ?? null,
-        lod: streaming ? `${streaming.lod0}/${streaming.lod1}/${streaming.lod2}` : null
+        lod: streaming ? `${streaming.lod0}/${streaming.lod1}/${streaming.lod2}` : null,
+        sourceChunks: worldStreaming
+            ? `${worldStreaming.residentChunks}/${worldStreaming.pendingChunks}`
+            : null,
+        cache: worldStreaming ? `${worldStreaming.cacheHits}/${worldStreaming.cacheMisses}` : null,
+        cachedChunks: worldStreaming?.cachedChunks ?? null,
+        cacheStorage: worldStreaming ? worldStreaming.cachedBytes / 1048576 : null
     };
     performanceFrameCount = 0;
     performanceSampleStart = now;
@@ -153,26 +167,19 @@ const controls = {
     seed: "new-world",
     width: 42,
     height: 32,
-    regenerate
+    regenerate,
+    clearCachedData
 };
 
 window.worldControls = controls;
 window.regenerateWorld = regenerate;
+window.clearWorldCache = clearCachedData;
 
-let currentWorld;
+let activeSource;
 let generating = false;
 let statusState = { kind: "initializing" };
-let worldGenerator;
-if (!infiniteMode) {
-    try {
-        worldGenerator = new WorldGeneratorClient(new URL("./js/world-generator.worker.mjs", window.location.href));
-    } catch (error) {
-        console.warn("World generation worker unavailable; using the synchronous fallback", error);
-    }
-}
 
 window.addEventListener("beforeunload", () => {
-    worldGenerator?.dispose();
     map.dispose();
 }, { once: true });
 
@@ -200,6 +207,11 @@ function renderStatus() {
         detail.textContent = statusState.message;
         return;
     }
+    if (kind === "cacheCleared" || kind === "cacheUnavailable") {
+        title.textContent = i18n.t(`status.${kind}`);
+        detail.textContent = i18n.t(`status.${kind}Detail`);
+        return;
+    }
     if (kind === "tile" || kind === "selected") {
         title.textContent = i18n.t(`status.${kind}`, statusState);
         detail.textContent = formatTile(statusState.tile);
@@ -209,6 +221,24 @@ function renderStatus() {
 function setStatus(kind, values = {}) {
     statusState = { kind, ...values };
     renderStatus();
+}
+
+async function clearCachedData() {
+    if (generating || !window.confirm(i18n.t("cache.confirm"))) return;
+    generating = true;
+    try {
+        const cleared = activeSource?.clearCache
+            ? await activeSource.clearCache()
+            : await clearWorldChunkCache();
+        setStatus(cleared ? "cacheCleared" : "cacheUnavailable");
+    } catch (error) {
+        console.error(error);
+        setStatus("failed", {
+            message: error instanceof Error ? error.message : String(error)
+        });
+    } finally {
+        generating = false;
+    }
 }
 
 async function regenerate() {
@@ -221,12 +251,15 @@ async function regenerate() {
     });
 
     try {
+        const workerUrl = new URL("./js/world-generator.worker.mjs", window.location.href);
         if (infiniteMode) {
             const source = new ProceduralWorldSource({
                 seed: controls.seed,
-                workerUrl: new URL("./js/world-generator.worker.mjs", window.location.href),
-                chunkSize: 24
+                workerUrl,
+                chunkSize: 24,
+                cache: true
             });
+            activeSource = undefined;
             await map.loadWorld({
                 source,
                 initialTile: {
@@ -234,24 +267,24 @@ async function regenerate() {
                     y: Number.parseInt(query.get("y") ?? "0", 10)
                 }
             });
-            currentWorld = undefined;
+            activeSource = source;
             setStatus("generated", { infinite: true, seed: controls.seed });
             return;
         }
-        const generationOptions = {
+        const source = new ToroidalWorldSource({
             seed: controls.seed,
             width: Number(controls.width),
             height: Number(controls.height),
-            topology: "toroidal"
-        };
-        const nextWorld = worldGenerator
-            ? await worldGenerator.generate(generationOptions)
-            : generateWorld(generationOptions);
-        await map.loadWorld({ source: new StaticWorldSource(nextWorld) });
-        currentWorld = nextWorld;
+            workerUrl,
+            chunkSize: 24,
+            cache: true
+        });
+        activeSource = undefined;
+        await map.loadWorld({ source });
+        activeSource = source;
         setStatus("generated", {
-            width: nextWorld.w,
-            height: nextWorld.h,
+            width: source.bounds.width,
+            height: source.bounds.height,
             seed: controls.seed
         });
     } catch (error) {
@@ -259,10 +292,6 @@ async function regenerate() {
         setStatus("failed", {
             message: error instanceof Error ? error.message : String(error)
         });
-        if (currentWorld) {
-            await map.loadWorld({ source: new StaticWorldSource(currentWorld) })
-                .catch(restoreError => console.error("Map restore failed", restoreError));
-        }
     } finally {
         generating = false;
     }
@@ -280,6 +309,7 @@ const seedController = worldFolder.add(controls, "seed");
 const widthController = worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 2);
 const heightController = worldFolder.add(controls, "height", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
 const generateController = worldFolder.add(controls, "regenerate");
+const clearCacheController = worldFolder.add(controls, "clearCachedData");
 worldFolder.open();
 
 const terrainFolder = gui.addFolder("Terrain");
@@ -305,6 +335,7 @@ const translatedControllers = [
     [widthController, "control.width"],
     [heightController, "control.height"],
     [generateController, "control.generate"],
+    [clearCacheController, "control.clearCache"],
     [gridController, "control.grid"],
     [blendWidthController, "control.blendWidth"],
     [blendCurveController, "control.blendCurve"],

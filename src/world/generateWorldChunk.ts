@@ -2,17 +2,26 @@ import { Land } from "../enums";
 import { getNeighbors } from "../helpers/neighbors";
 import { MapInfo, Point, TileInfo } from "../interfaces";
 import { fractalNoise2D, randomAt, seedToUint32 } from "./noise";
+import { generateToroidalWorldTile } from "./generateWorld";
 
 export const DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 export const MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 export const WORLD_CHUNK_FORMAT_VERSION = 1;
 export const WORLD_CHUNK_PADDING = 1;
+export const WORLD_GENERATOR_VERSION = 1;
+
+export interface BoundedWorldChunkGeneration {
+    width: number;
+    height: number;
+    topology: "toroidal";
+}
 
 export interface WorldChunkGenerationOptions {
     seed: string | number;
     chunkX: number;
     chunkY: number;
     chunkSize?: number;
+    world?: BoundedWorldChunkGeneration;
 }
 
 //One Uint16 per tile keeps worker transfer and CPU cache compact. Bit layout:
@@ -25,6 +34,18 @@ export interface PackedWorldChunk {
     padding: typeof WORLD_CHUNK_PADDING;
     stride: number;
     tiles: Uint16Array;
+}
+
+//Packed terrain variants remain shared and immutable. Applications can attach
+//coordinate-specific state without materializing every tile by storing only
+//the fields that differ from the generated base tile.
+export type WorldTileOverride = Partial<TileInfo>;
+
+export interface SparseWorldChunkStoreOptions {
+    width?: number;
+    height?: number;
+    wrapX?: boolean;
+    wrapY?: boolean;
 }
 
 export function assertPackedWorldChunk(chunk: PackedWorldChunk): void {
@@ -135,9 +156,30 @@ function encodeTile(seed: number, x: number, y: number): number {
     return packed;
 }
 
+function encodeTileInfo(tile: TileInfo): number {
+    let packed = LAND_CODE.get(tile.type) ?? 0;
+    if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
+    if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
+    if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
+    const treeCode = TREE_MODELS.indexOf(tile.treeModel as typeof TREE_MODELS[number]);
+    if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
+    return packed;
+}
+
+function validateBoundedWorld(world: BoundedWorldChunkGeneration | undefined): void {
+    if (!world) return;
+    if (world.topology !== "toroidal"
+        || !Number.isInteger(world.width) || world.width < 8
+        || !Number.isInteger(world.height) || world.height < 8
+        || world.width % 2 !== 0) {
+        throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
+    }
+}
+
 export function generateWorldChunk(options: WorldChunkGenerationOptions): PackedWorldChunk {
     assertChunkCoordinate("chunkX", options.chunkX);
     assertChunkCoordinate("chunkY", options.chunkY);
+    validateBoundedWorld(options.world);
     const chunkSize = resolveChunkSize(options.chunkSize);
     const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
     const tiles = new Uint16Array(stride * stride);
@@ -151,7 +193,11 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
 
     for (let localX = 0; localX < stride; localX += 1) {
         for (let localY = 0; localY < stride; localY += 1) {
-            tiles[localX * stride + localY] = encodeTile(seed, originX + localX, originY + localY);
+            const x = originX + localX;
+            const y = originY + localY;
+            tiles[localX * stride + localY] = options.world
+                ? encodeTileInfo(generateToroidalWorldTile(seed, x, y, options.world.width, options.world.height))
+                : encodeTile(seed, x, y);
         }
     }
     return {
@@ -201,24 +247,54 @@ export class SparseWorldChunkStore {
     public readonly map: MapInfo;
     private readonly chunks = new Map<string, PackedWorldChunk>();
     private readonly decodedTiles = new Map<number, TileInfo>();
+    private readonly tileOverrides = new Map<string, WorldTileOverride>();
+    private readonly overriddenTiles = new Map<string, { packed: number; tile: TileInfo }>();
+    private readonly bounds: { width: number; height: number; wrapX: boolean; wrapY: boolean } | undefined;
     private chunkSize: number | undefined;
 
-    constructor() {
+    constructor(options: SparseWorldChunkStoreOptions = {}) {
+        const bounded = options.width !== undefined || options.height !== undefined;
+        if (bounded) {
+            if (!Number.isInteger(options.width) || (options.width as number) <= 0
+                || !Number.isInteger(options.height) || (options.height as number) <= 0) {
+                throw new RangeError("bounded sparse stores require positive integer width and height");
+            }
+            this.bounds = {
+                width: options.width as number,
+                height: options.height as number,
+                wrapX: options.wrapX ?? false,
+                wrapY: options.wrapY ?? false
+            };
+        }
         //`data` intentionally stays empty. The renderer reaches resident packed
         //tiles through getMapTile() -> tileAt(), avoiding one object, one string
         //key and two reference-count maps per logical cell.
-        this.map = {
-            data: {},
-            w: 1,
-            h: 1,
-            infinite: true,
-            tileAt: (x, y) => this.getTile(x, y),
-            forEachTile: visit => this.forEachCoreTile(visit)
-        };
+        this.map = this.bounds
+            ? {
+                data: {},
+                w: this.bounds.width,
+                h: this.bounds.height,
+                wrapX: this.bounds.wrapX,
+                wrapY: this.bounds.wrapY,
+                tileAt: (x, y) => this.getTile(x, y),
+                forEachTile: visit => this.forEachCoreTile(visit)
+            }
+            : {
+                data: {},
+                w: 1,
+                h: 1,
+                infinite: true,
+                tileAt: (x, y) => this.getTile(x, y),
+                forEachTile: visit => this.forEachCoreTile(visit)
+            };
     }
 
     public static key(chunkX: number, chunkY: number): string {
         return `${chunkX},${chunkY}`;
+    }
+
+    public static tileKey(x: number, y: number): string {
+        return `${x},${y}`;
     }
 
     public add(chunk: PackedWorldChunk): Point[] {
@@ -228,9 +304,9 @@ export class SparseWorldChunkStore {
         }
         this.chunkSize = chunk.chunkSize;
         const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-        if (this.chunks.has(key)) return getWorldChunkCorePoints(chunk);
+        if (this.chunks.has(key)) return this.corePoints(chunk);
         this.chunks.set(key, chunk);
-        return getWorldChunkCorePoints(chunk);
+        return this.corePoints(chunk);
     }
 
     public remove(chunkX: number, chunkY: number): void {
@@ -242,7 +318,9 @@ export class SparseWorldChunkStore {
 
     public hasCoreTile(x: number, y: number): boolean {
         if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === undefined) return false;
-        return this.hasChunk(Math.floor(x / this.chunkSize), Math.floor(y / this.chunkSize));
+        const point = this.normalizePoint(x, y);
+        if (!point) return false;
+        return this.hasChunk(Math.floor(point.x / this.chunkSize), Math.floor(point.y / this.chunkSize));
     }
 
     public hasChunk(chunkX: number, chunkY: number): boolean {
@@ -263,11 +341,40 @@ export class SparseWorldChunkStore {
         return this.decodedTiles.size;
     }
 
+    public get tileOverrideCount(): number {
+        return this.tileOverrides.size;
+    }
+
+    public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+            throw new RangeError("tile override coordinates must be safe integers");
+        }
+        if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+            throw new TypeError("tile override must be an object");
+        }
+        const key = SparseWorldChunkStore.tileKey(x, y);
+        const copy: WorldTileOverride = { ...changes };
+        if (changes.modifiers) copy.modifiers = [...changes.modifiers];
+        if (changes.rivers) copy.rivers = changes.rivers.map(river => ({ ...river }));
+        if (changes.city) copy.city = { ...changes.city };
+        this.tileOverrides.set(key, { ...this.tileOverrides.get(key), ...copy });
+        this.overriddenTiles.delete(key);
+    }
+
+    public clearTileOverride(x: number, y: number): boolean {
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return false;
+        const key = SparseWorldChunkStore.tileKey(x, y);
+        this.overriddenTiles.delete(key);
+        return this.tileOverrides.delete(key);
+    }
+
     private getTile(x: number, y: number): TileInfo | undefined {
         if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === undefined) return undefined;
-        const ownerX = Math.floor(x / this.chunkSize);
-        const ownerY = Math.floor(y / this.chunkSize);
-        const direct = this.tileFromChunk(this.chunks.get(SparseWorldChunkStore.key(ownerX, ownerY)), x, y);
+        const point = this.normalizePoint(x, y);
+        if (!point) return undefined;
+        const ownerX = Math.floor(point.x / this.chunkSize);
+        const ownerY = Math.floor(point.y / this.chunkSize);
+        const direct = this.tileFromChunk(this.chunks.get(SparseWorldChunkStore.key(ownerX, ownerY)), point.x, point.y);
         if (direct) return direct;
 
         //A core owner can be absent while an adjacent resident chunk still
@@ -275,10 +382,12 @@ export class SparseWorldChunkStore {
         for (let dx = -1; dx <= 1; dx += 1) {
             for (let dy = -1; dy <= 1; dy += 1) {
                 if (dx === 0 && dy === 0) continue;
+                const candidate = this.resolveChunk(ownerX + dx, ownerY + dy);
+                if (!candidate) continue;
                 const tile = this.tileFromChunk(
-                    this.chunks.get(SparseWorldChunkStore.key(ownerX + dx, ownerY + dy)),
-                    x,
-                    y
+                    this.chunks.get(SparseWorldChunkStore.key(candidate.x, candidate.y)),
+                    point.x,
+                    point.y
                 );
                 if (tile) return tile;
             }
@@ -288,35 +397,96 @@ export class SparseWorldChunkStore {
 
     private tileFromChunk(chunk: PackedWorldChunk | undefined, x: number, y: number): TileInfo | undefined {
         if (!chunk) return undefined;
-        const localX = x - chunk.chunkX * chunk.chunkSize;
-        const localY = y - chunk.chunkY * chunk.chunkSize;
-        if (localX < -chunk.padding || localX >= chunk.chunkSize + chunk.padding
-            || localY < -chunk.padding || localY >= chunk.chunkSize + chunk.padding) return undefined;
-        const packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
-        const cached = this.decodedTiles.get(packed);
-        if (cached) return cached;
-        const decoded = decodeWorldChunkTile(chunk, localX, localY);
-        if (decoded.modifiers) Object.freeze(decoded.modifiers);
-        Object.freeze(decoded);
-        this.decodedTiles.set(packed, decoded);
-        return decoded;
+        const xSamples = this.bounds?.wrapX ? [x, x - this.bounds.width, x + this.bounds.width] : [x];
+        const ySamples = this.bounds?.wrapY ? [y, y - this.bounds.height, y + this.bounds.height] : [y];
+        let packed: number | undefined;
+        let localX = 0;
+        let localY = 0;
+        outer: for (const sampleX of xSamples) {
+            for (const sampleY of ySamples) {
+                const candidateX = sampleX - chunk.chunkX * chunk.chunkSize;
+                const candidateY = sampleY - chunk.chunkY * chunk.chunkSize;
+                if (candidateX < -chunk.padding || candidateX >= chunk.chunkSize + chunk.padding
+                    || candidateY < -chunk.padding || candidateY >= chunk.chunkSize + chunk.padding) continue;
+                localX = candidateX;
+                localY = candidateY;
+                packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
+                break outer;
+            }
+        }
+        if (packed === undefined) return undefined;
+        let base = this.decodedTiles.get(packed);
+        if (!base) {
+            base = decodeWorldChunkTile(chunk, localX, localY);
+            if (base.modifiers) Object.freeze(base.modifiers);
+            Object.freeze(base);
+            this.decodedTiles.set(packed, base);
+        }
+        const key = SparseWorldChunkStore.tileKey(x, y);
+        const changes = this.tileOverrides.get(key);
+        if (!changes) return base;
+        const cached = this.overriddenTiles.get(key);
+        if (cached?.packed === packed) return cached.tile;
+        const tile: TileInfo = { ...base, ...changes };
+        if (tile.modifiers) tile.modifiers = [...tile.modifiers];
+        if (tile.rivers) tile.rivers = tile.rivers.map(river => ({ ...river }));
+        if (tile.city) tile.city = { ...tile.city };
+        this.overriddenTiles.set(key, { packed, tile });
+        return tile;
     }
 
     private forEachCoreTile(visit: (tile: TileInfo, x: number, y: number) => void): void {
         for (const chunk of this.chunks.values()) {
             const originX = chunk.chunkX * chunk.chunkSize;
             const originY = chunk.chunkY * chunk.chunkSize;
-            for (let localX = 0; localX < chunk.chunkSize; localX += 1) {
-                for (let localY = 0; localY < chunk.chunkSize; localY += 1) {
+            const width = this.bounds ? Math.min(chunk.chunkSize, this.bounds.width - originX) : chunk.chunkSize;
+            const height = this.bounds ? Math.min(chunk.chunkSize, this.bounds.height - originY) : chunk.chunkSize;
+            for (let localX = 0; localX < width; localX += 1) {
+                for (let localY = 0; localY < height; localY += 1) {
                     visit(this.tileFromChunk(chunk, originX + localX, originY + localY)!, originX + localX, originY + localY);
                 }
             }
         }
     }
 
+    private corePoints(chunk: PackedWorldChunk): Point[] {
+        if (!this.bounds) return getWorldChunkCorePoints(chunk);
+        const originX = chunk.chunkX * chunk.chunkSize;
+        const originY = chunk.chunkY * chunk.chunkSize;
+        const width = Math.max(0, Math.min(chunk.chunkSize, this.bounds.width - originX));
+        const height = Math.max(0, Math.min(chunk.chunkSize, this.bounds.height - originY));
+        const points: Point[] = [];
+        for (let localX = 0; localX < width; localX += 1) {
+            for (let localY = 0; localY < height; localY += 1) {
+                points.push({ x: originX + localX, y: originY + localY });
+            }
+        }
+        return points;
+    }
+
+    private normalizePoint(x: number, y: number): Point | undefined {
+        if (!this.bounds) return { x, y };
+        const nx = this.bounds.wrapX ? ((x % this.bounds.width) + this.bounds.width) % this.bounds.width : x;
+        const ny = this.bounds.wrapY ? ((y % this.bounds.height) + this.bounds.height) % this.bounds.height : y;
+        if (nx < 0 || nx >= this.bounds.width || ny < 0 || ny >= this.bounds.height) return undefined;
+        return { x: nx, y: ny };
+    }
+
+    private resolveChunk(chunkX: number, chunkY: number): Point | undefined {
+        if (!this.bounds || this.chunkSize === undefined) return { x: chunkX, y: chunkY };
+        const countX = Math.ceil(this.bounds.width / this.chunkSize);
+        const countY = Math.ceil(this.bounds.height / this.chunkSize);
+        const x = this.bounds.wrapX ? ((chunkX % countX) + countX) % countX : chunkX;
+        const y = this.bounds.wrapY ? ((chunkY % countY) + countY) % countY : chunkY;
+        if (x < 0 || x >= countX || y < 0 || y >= countY) return undefined;
+        return { x, y };
+    }
+
     public clear(): void {
         this.chunks.clear();
         this.decodedTiles.clear();
+        this.tileOverrides.clear();
+        this.overriddenTiles.clear();
         this.chunkSize = undefined;
     }
 }

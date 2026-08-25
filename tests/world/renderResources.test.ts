@@ -52,16 +52,22 @@ describe("streamed render resource sharing", () => {
             }
         }, []);
         terrain.addTiles(points(0));
-        const mesh = terrain.children.find(child => getWorldChunkMetadata(child)) as Mesh;
+        terrain.addTiles(points(12));
+        const meshes = terrain.children.filter(child => getWorldChunkMetadata(child)) as Mesh[];
+        const mesh = meshes[0];
         const metadata = getWorldChunkMetadata(mesh)!;
         const lod0 = terrain.activateChunk(metadata, 0)!;
+        const otherLod0 = terrain.activateChunk(getWorldChunkMetadata(meshes[1])!, 0)!;
+        expect(otherLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
+        expect(otherLod0.getIndex()).toBe(lod0.getIndex());
+        expect(otherLod0.getAttribute("offset")).not.toBe(lod0.getAttribute("offset"));
         const lod0Offsets = lod0.getAttribute("offset").array;
         const lod1 = terrain.activateChunk(metadata, 1)!;
         expect(lod1.getAttribute("offset").array).toBe(lod0Offsets);
         expect(terrain.activateChunk(metadata, 0)).toBe(lod0);
-        expect(terrain.lodBuildCount).toBe(2);
-        terrain.activateChunk(metadata, 2);
         expect(terrain.lodBuildCount).toBe(3);
+        terrain.activateChunk(metadata, 2);
+        expect(terrain.lodBuildCount).toBe(4);
 
         terrain.dispose();
         texture.mockRestore();
@@ -79,6 +85,9 @@ describe("streamed render resource sharing", () => {
 
         const metadata = getWorldChunkMetadata(leftMesh)!;
         const lod0 = left.activateChunk(metadata, 0)!;
+        const rightLod0 = right.activateChunk(getWorldChunkMetadata(rightMesh)!, 0)!;
+        expect(rightLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
+        expect(rightLod0.getIndex()).toBe(lod0.getIndex());
         left.activateChunk(metadata, 1);
         expect(left.activateChunk(metadata, 0)).toBe(lod0);
         expect(left.lodBuildCount).toBe(2);

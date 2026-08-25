@@ -85,6 +85,17 @@ describe("WorldChunkScheduler", () => {
 });
 
 describe("FrameTaskScheduler", () => {
+    test("coalesces repeated keyed work and runs only the newest task", () => {
+        const order: string[] = [];
+        const scheduler = new FrameTaskScheduler();
+        scheduler.enqueue("copies", -1, () => order.push("stale"));
+        scheduler.enqueue("copies", -1, () => order.push("latest"));
+
+        expect(scheduler.stats.pendingTasks).toBe(1);
+        expect(scheduler.runFrame()).toBe(1);
+        expect(order).toEqual(["latest"]);
+    });
+
     test("applies priority, cancellation and a deterministic per-frame budget", () => {
         let clock = 0;
         const order: string[] = [];

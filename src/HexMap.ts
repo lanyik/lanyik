@@ -51,6 +51,7 @@ import {
 } from "./world/generateWorldChunk";
 import {
     assertWorldSource,
+    StaticWorldSource,
     WorldChunk,
     WorldSource
 } from "./world/WorldSource";
@@ -259,6 +260,8 @@ const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "
     cpuChunkCacheSize: 192
 };
 
+const WORLD_COPY_REFRESH_TASK = "@world-copy-refresh";
+
 //----------------------------------------------------------------------------------
 //Public entry point of the library. Owns the renderer/camera/scene/controls (what
 //used to be Scene.ts) and the tile/grid/selector/trees content (what used to be
@@ -292,6 +295,8 @@ export class HexMap extends EventEmitter {
     private pointer!: Mesh;
     private routeLine: Line | undefined;
     private worldCopies: Group[] = [];
+    private worldCopyGroups = new Map<string, Group>();
+    private worldCopyObjects = new Map<string, Object3D>();
     private worldCopyMaterials: RawShaderMaterial[] = [];
     private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
@@ -313,8 +318,16 @@ export class HexMap extends EventEmitter {
     private worldLayerRevision = 0;
     private worldChunkSize = 24;
     private worldDemandChunkKey: string | undefined;
+    private worldDemandSignature: string | undefined;
     private renderOrigin = new Vector2();
     private logicalTargetScratch = new Vector3();
+    private predictedTargetScratch = new Vector3();
+    private lastStreamingTarget: Vector2 | undefined;
+    private streamingVelocity = new Vector2();
+    private streamingMotionScratch = new Vector2();
+    private streamingAheadScratch = new Vector2();
+    private streamingPredictionSeconds = 1.25;
+    private streamingPredictionMaxChunks = 1;
     private floatingOriginThreshold = 8192;
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
@@ -575,10 +588,13 @@ export class HexMap extends EventEmitter {
     }
 
     private clearWorldCopies(): void {
+        this.frameTasks.cancel(WORLD_COPY_REFRESH_TASK);
         this.chunkScheduler.invalidateScene();
         for (const copy of this.worldCopies) this.worldRoot.remove(copy);
         for (const material of this.worldCopyMaterials) material.dispose();
         this.worldCopies = [];
+        this.worldCopyGroups.clear();
+        this.worldCopyObjects.clear();
         this.worldCopyMaterials = [];
         this.worldCopyMaterialCache.clear();
     }
@@ -634,30 +650,33 @@ export class HexMap extends EventEmitter {
         if (source instanceof InstancedMesh) {
             const instancedCopy = new InstancedMesh(source.geometry, source.material, source.count);
             instancedCopy.copy(source, false);
-            //Fog updates mutate these attributes at runtime. Sharing them keeps
-            //all repeated views synchronized without updating every copy.
-            instancedCopy.instanceMatrix = source.instanceMatrix;
-            instancedCopy.instanceColor = source.instanceColor;
-            instancedCopy.count = source.count;
             copy = instancedCopy;
         } else {
             copy = source.clone(true);
-            const sourceInstances: InstancedMesh[] = [];
-            const copyInstances: InstancedMesh[] = [];
-            source.traverse(object => {
-                if ((object as InstancedMesh).isInstancedMesh) sourceInstances.push(object as InstancedMesh);
-            });
-            copy.traverse(object => {
-                if ((object as InstancedMesh).isInstancedMesh) copyInstances.push(object as InstancedMesh);
-            });
-            copyInstances.forEach((instance, index) => {
-                const original = sourceInstances[index];
-                if (!original) return;
-                instance.instanceMatrix = original.instanceMatrix;
-                instance.instanceColor = original.instanceColor;
-                instance.count = original.count;
-            });
         }
+
+        // Object3D.clone() deliberately resets render callbacks. Terrain and
+        // grass use onBeforeRender to select the current chunk origin, so a
+        // toroidal image must retain the callback as well as the scene graph.
+        // Instancing attributes are shared because fog mutates them at runtime;
+        // sharing keeps every repeated image bit-for-bit synchronized.
+        const sourceObjects: Object3D[] = [];
+        const copyObjects: Object3D[] = [];
+        source.traverse(object => sourceObjects.push(object));
+        copy.traverse(object => copyObjects.push(object));
+        copyObjects.forEach((object, index) => {
+            const original = sourceObjects[index];
+            if (!original) return;
+            object.onBeforeRender = original.onBeforeRender;
+            object.onAfterRender = original.onAfterRender;
+            if ((original as InstancedMesh).isInstancedMesh && (object as InstancedMesh).isInstancedMesh) {
+                const sourceInstance = original as InstancedMesh;
+                const copyInstance = object as InstancedMesh;
+                copyInstance.instanceMatrix = sourceInstance.instanceMatrix;
+                copyInstance.instanceColor = sourceInstance.instanceColor;
+                copyInstance.count = sourceInstance.count;
+            }
+        });
 
         copy.traverse(object => {
             const mesh = object as Mesh;
@@ -688,53 +707,93 @@ export class HexMap extends EventEmitter {
             && bounds.minZ + source.position.z + offsetY <= this.worldPeriodY + padding;
     }
 
+    //Multiple source chunks and their async city/forest models can finish in
+    //the same browser turn. Coalesce those notifications into one scheduled
+    //synchronization so toroidal copy work participates in frame backpressure.
     private refreshWorldCopies(): void {
-        this.clearWorldCopies();
-        if (!this.mapData || (!this.mapData.wrapX && !this.mapData.wrapY)) return;
+        if (this.disposed) return;
+        this.frameTasks.enqueue(WORLD_COPY_REFRESH_TASK, -1, () => this.synchronizeWorldCopies());
+    }
+
+    //Diffs physical toroidal images by source UUID and offset. Existing clones,
+    //shared geometry and copy-specific shader materials survive unrelated chunk
+    //mounts; only newly visible/removed source objects are added or released.
+    private synchronizeWorldCopies(): void {
+        if (!this.mapData || (!this.mapData.wrapX && !this.mapData.wrapY)) {
+            this.clearWorldCopies();
+            return;
+        }
 
         const xOffsets = this.copyOffsets(this.mapData.wrapX, this.worldPeriodX);
         const yOffsets = this.copyOffsets(this.mapData.wrapY, this.worldPeriodY);
+        const sources: Object3D[] = [
+            ...(this.terrain?.children ?? []),
+            ...(this.forest?.children ?? []),
+            ...(this.grass?.visible ? this.grass.children : [])
+        ];
+        for (const record of this.worldChunkLayers.values()) {
+            sources.push(...(record.forest?.children ?? []));
+            if (record.grass?.visible) sources.push(...record.grass.children);
+        }
+
+        const desired = new Set<string>();
+        let sceneChanged = false;
 
         for (const copyX of xOffsets) {
             for (const copyY of yOffsets) {
                 if (copyX === 0 && copyY === 0) continue;
                 const offsetX = copyX * this.worldPeriodX;
                 const offsetY = copyY * this.worldPeriodY;
-                const group = new Group();
-                group.position.set(offsetX, 0, offsetY);
-
-                for (const child of this.terrain?.children ?? []) {
-                    if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-                    group.add(this.cloneWorldObject(child, offsetX, offsetY));
-                }
-                for (const child of this.forest?.children ?? []) {
-                    if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-                    group.add(this.cloneWorldObject(child, offsetX, offsetY));
-                }
-                if (this.grass?.visible) {
-                    for (const child of this.grass.children) {
-                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
+                const groupKey = `${offsetX},${offsetY}`;
+                for (const source of sources) {
+                    if (!this.worldCopyCanBecomeVisible(source, offsetX, offsetY)) continue;
+                    const objectKey = `${source.uuid}@${groupKey}`;
+                    desired.add(objectKey);
+                    if (this.worldCopyObjects.has(objectKey)) continue;
+                    let group = this.worldCopyGroups.get(groupKey);
+                    if (!group) {
+                        group = new Group();
+                        group.position.set(offsetX, 0, offsetY);
+                        this.worldCopyGroups.set(groupKey, group);
+                        this.worldRoot.add(group);
                     }
+                    const copy = this.cloneWorldObject(source, offsetX, offsetY);
+                    group.add(copy);
+                    this.worldCopyObjects.set(objectKey, copy);
+                    sceneChanged = true;
                 }
-                for (const record of this.worldChunkLayers.values()) {
-                    for (const child of record.forest?.children ?? []) {
-                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
-                    }
-                    if (!record.grass?.visible) continue;
-                    for (const child of record.grass.children) {
-                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
-                    }
-                }
-
-                if (group.children.length === 0) continue;
-
-                this.worldCopies.push(group);
-                this.worldRoot.add(group);
             }
         }
+
+        for (const [key, copy] of this.worldCopyObjects) {
+            if (desired.has(key)) continue;
+            copy.removeFromParent();
+            this.worldCopyObjects.delete(key);
+            sceneChanged = true;
+        }
+        for (const [key, group] of this.worldCopyGroups) {
+            if (group.children.length > 0) continue;
+            group.removeFromParent();
+            this.worldCopyGroups.delete(key);
+        }
+
+        const usedMaterials = new Set<Material>();
+        for (const copy of this.worldCopyObjects.values()) {
+            copy.traverse(object => {
+                const mesh = object as Mesh;
+                if (!mesh.isMesh) return;
+                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                for (const material of materials) usedMaterials.add(material);
+            });
+        }
+        for (const [key, material] of this.worldCopyMaterialCache) {
+            if (usedMaterials.has(material)) continue;
+            material.dispose();
+            this.worldCopyMaterialCache.delete(key);
+        }
+        this.worldCopies = [...this.worldCopyGroups.values()];
+        this.worldCopyMaterials = [...this.worldCopyMaterialCache.values()];
+        if (sceneChanged) this.chunkScheduler.invalidateScene();
     }
 
     private setupMarkers(): void {
@@ -793,7 +852,7 @@ export class HexMap extends EventEmitter {
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.rebaseWorld();
-        this.updateWorldDemand();
+        this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
@@ -870,11 +929,25 @@ export class HexMap extends EventEmitter {
     private activateWorldChunk(metadata: WorldChunkMetadata, lod: 0 | 1 | 2, objects: Object3D[]) {
         if (metadata.kind === "land" || metadata.kind === "water") {
             const geometry = this.terrain?.activateChunk(metadata, lod);
+            // Toroidal images are physical Mesh clones grouped under the same
+            // logical chunk id. LOD activation replaces the primary mesh's
+            // initially empty geometry, so mirror that live geometry into all
+            // currently visible images before Three renders the frame.
+            if (geometry) {
+                for (const object of objects) {
+                    if ((object as Mesh).isMesh) (object as Mesh).geometry = geometry;
+                }
+            }
             return geometry ? { geometries: [geometry] } : undefined;
         }
         if (metadata.kind === "grass") {
             const field = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
             const geometry = field?.activateChunk(metadata, lod);
+            if (geometry) {
+                for (const object of objects) {
+                    if ((object as Mesh).isMesh) (object as Mesh).geometry = geometry;
+                }
+            }
             return geometry ? { geometries: [geometry] } : undefined;
         }
         const forest = this.streamedForestByChunkId.get(metadata.id) ?? this.forest;
@@ -976,6 +1049,13 @@ export class HexMap extends EventEmitter {
     //Public API
     //-------------------------------------------------------------------------
 
+    //Backwards-compatible finite-map convenience entry point. loadWorld() is
+    //the extensible source API; existing 0.5 consumers can keep passing MapInfo
+    //directly without a breaking migration.
+    public load(mapData: MapInfo): Promise<void> {
+        return this.loadWorld({ source: new StaticWorldSource(mapData) });
+    }
+
     public async loadWorld(options: WorldLoadOptions): Promise<void> {
         if (this.disposed) {
             options?.source?.dispose();
@@ -1016,6 +1096,8 @@ export class HexMap extends EventEmitter {
         const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
         const frameBudgetMs = options.frameBudgetMs ?? 3;
         const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
+        const predictionSeconds = options.predictionSeconds ?? 1.25;
+        const predictionMaxChunks = options.predictionMaxChunks ?? 1;
         const integerAtLeast = (name: string, value: number, minimum: number) => {
             if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
         };
@@ -1026,8 +1108,12 @@ export class HexMap extends EventEmitter {
             integerAtLeast("maxRetries", maxRetries, 0);
             integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
             integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
+            integerAtLeast("predictionMaxChunks", predictionMaxChunks, 0);
             if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
                 throw new RangeError("frameBudgetMs must be a positive finite number");
+            }
+            if (!Number.isFinite(predictionSeconds) || predictionSeconds < 0) {
+                throw new RangeError("predictionSeconds must be a non-negative finite number");
             }
         } catch (reason) {
             source.dispose();
@@ -1044,6 +1130,13 @@ export class HexMap extends EventEmitter {
         const revision = ++this.loadRevision;
         this.worldSource = source;
         this.worldChunkSize = chunkSize;
+        this.streamingPredictionSeconds = predictionSeconds;
+        this.streamingPredictionMaxChunks = Math.min(
+            predictionMaxChunks,
+            Math.max(0, retentionRadius - loadRadius)
+        );
+        this.lastStreamingTarget = undefined;
+        this.streamingVelocity.set(0, 0);
         this.mapData = source.map;
         this.fogStates = new FogStateStore(source.map);
         this.floatingOriginThreshold = threshold;
@@ -1092,6 +1185,7 @@ export class HexMap extends EventEmitter {
             );
             if (!centerChunk) throw new RangeError("initialTile does not resolve to a source chunk");
             this.worldDemandChunkKey = WorldStreamer.key(centerChunk.x, centerChunk.y);
+            this.worldDemandSignature = this.worldDemandChunkKey;
             this.rebaseWorld();
 
             const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
@@ -1282,6 +1376,9 @@ export class HexMap extends EventEmitter {
         const streamer = this.worldStreamer;
         const source = this.worldSource;
         this.worldDemandChunkKey = undefined;
+        this.worldDemandSignature = undefined;
+        this.lastStreamingTarget = undefined;
+        this.streamingVelocity.set(0, 0);
         this.frameTasks.clear();
         streamer?.dispose();
         if (!streamer) source?.dispose();
@@ -1305,6 +1402,7 @@ export class HexMap extends EventEmitter {
         this.streamedGrassResources = undefined;
         this.streamedForestResources?.dispose();
         this.streamedForestResources = undefined;
+        this.clearWorldCopies();
     }
 
     private reapplyFogToPoints(points: readonly Point[], record: WorldChunkLayers): void {
@@ -1658,13 +1756,32 @@ export class HexMap extends EventEmitter {
         this.camera.position.z -= z;
     }
 
-    private updateWorldDemand(): void {
+    private updateWorldDemand(dtS: number): void {
         if (!this.worldStreamer || !this.worldSource) return;
         this.logicalTargetScratch.copy(this.controls.target);
         if (this.mapData.infinite) {
             this.logicalTargetScratch.x += this.renderOrigin.x;
             this.logicalTargetScratch.z += this.renderOrigin.y;
         }
+        const currentX = this.logicalTargetScratch.x;
+        const currentY = this.logicalTargetScratch.z;
+        if (this.lastStreamingTarget && dtS > 0) {
+            let dx = currentX - this.lastStreamingTarget.x;
+            let dy = currentY - this.lastStreamingTarget.y;
+            if (this.mapData.wrapX && this.worldPeriodX > 0) {
+                if (dx > this.worldPeriodX / 2) dx -= this.worldPeriodX;
+                else if (dx < -this.worldPeriodX / 2) dx += this.worldPeriodX;
+            }
+            if (this.mapData.wrapY && this.worldPeriodY > 0) {
+                if (dy > this.worldPeriodY / 2) dy -= this.worldPeriodY;
+                else if (dy < -this.worldPeriodY / 2) dy += this.worldPeriodY;
+            }
+            const alpha = 1 - Math.exp(-dtS / 0.25);
+            this.streamingMotionScratch.set(dx / dtS, dy / dtS);
+            this.streamingVelocity.lerp(this.streamingMotionScratch, alpha);
+        }
+        this.lastStreamingTarget ??= new Vector2();
+        this.lastStreamingTarget.set(currentX, currentY);
         const tile = pickTile(
             this.logicalTargetScratch,
             this.options.size,
@@ -1680,9 +1797,36 @@ export class HexMap extends EventEmitter {
         );
         if (!resolved) return;
         const key = WorldStreamer.key(resolved.x, resolved.y);
-        if (key === this.worldDemandChunkKey) return;
+        let predictedTile: Point | undefined;
+        if (this.streamingPredictionSeconds > 0 && this.streamingPredictionMaxChunks > 0
+            && this.streamingVelocity.lengthSq() > 1) {
+            const maxAhead = this.streamingPredictionMaxChunks * this.worldChunkSize * this.options.size * 1.5;
+            const ahead = this.streamingAheadScratch.copy(this.streamingVelocity)
+                .multiplyScalar(this.streamingPredictionSeconds);
+            if (ahead.length() > maxAhead) ahead.setLength(maxAhead);
+            this.predictedTargetScratch.copy(this.logicalTargetScratch);
+            this.predictedTargetScratch.x += ahead.x;
+            this.predictedTargetScratch.z += ahead.y;
+            predictedTile = pickTile(
+                this.predictedTargetScratch,
+                this.options.size,
+                this.mapData.infinite ? undefined : this.mapData.w,
+                this.mapData.infinite ? undefined : this.mapData.h,
+                this.mapData.wrapX,
+                this.mapData.wrapY
+            ) ?? undefined;
+        }
+        const predictedChunk = predictedTile
+            ? this.worldSource.resolveChunk(
+                Math.floor(predictedTile.x / this.worldChunkSize),
+                Math.floor(predictedTile.y / this.worldChunkSize)
+            )
+            : undefined;
+        const signature = `${key}>${predictedChunk ? WorldStreamer.key(predictedChunk.x, predictedChunk.y) : key}`;
+        if (signature === this.worldDemandSignature) return;
         this.worldDemandChunkKey = key;
-        void this.worldStreamer.setCenterTile(tile.x, tile.y).catch(error => {
+        this.worldDemandSignature = signature;
+        void this.worldStreamer.setCenterTile(tile.x, tile.y, predictedTile).catch(error => {
             if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
         });
     }
@@ -2259,6 +2403,8 @@ export interface WorldLoadOptions {
     retryBaseDelayMs?: number;
     frameBudgetMs?: number;
     maxMountsPerFrame?: number;
+    predictionSeconds?: number;
+    predictionMaxChunks?: number;
     floatingOriginThreshold?: number;
 }
 

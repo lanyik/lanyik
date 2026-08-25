@@ -2,6 +2,7 @@ import {
     InstancedBufferGeometry,
     InstancedBufferAttribute,
     Mesh,
+    BufferGeometry,
     RawShaderMaterial,
     TextureLoader,
     Vector4,
@@ -24,6 +25,7 @@ import { getHexCenter } from "../helpers/helpers";
 import { forEachMapTile } from "../helpers/mapData";
 import { getNeighborCoords } from "../helpers/neighbors";
 import { getMapTile } from "../helpers/topology";
+import { SharedBaseInstancedBufferGeometry } from "../rendering/SharedBaseInstancedBufferGeometry";
 import {
     getWorldChunkBounds,
     getWorldChunkOrigin,
@@ -241,6 +243,7 @@ export class TerrainMesh extends Group {
     private landMaterial: RawShaderMaterial | undefined;
     private waterChunks: Mesh[] = [];
     private waterMaterial: RawShaderMaterial | undefined;
+    private readonly baseLodGeometries = new Map<string, BufferGeometry>();
     private tileIndex = new Map<string, { mesh: Mesh, index: number }>();
     private waterTileIndex = new Map<string, { mesh: Mesh, index: number }>();
     private chunkRecords = new Map<string, TerrainChunkRecord>();
@@ -403,13 +406,15 @@ export class TerrainMesh extends Group {
         origin: Point = { x: 0, y: 0 },
         attributes?: InstanceAttributes
     ): InstancedBufferGeometry {
-        const hexagon = numSubdivisions === borderSubdivisions
-            ? createHexagonGeometry(this.options.size, numSubdivisions)
-            : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
-        const geometry = new InstancedBufferGeometry();
-        geometry.setAttribute("position", hexagon.getAttribute("position"));
-        geometry.setAttribute("uv", hexagon.getAttribute("uv"));
-        geometry.setIndex(hexagon.getIndex());
+        const baseKey = `${numSubdivisions}:${borderSubdivisions}`;
+        let hexagon = this.baseLodGeometries.get(baseKey);
+        if (!hexagon) {
+            hexagon = numSubdivisions === borderSubdivisions
+                ? createHexagonGeometry(this.options.size, numSubdivisions)
+                : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
+            this.baseLodGeometries.set(baseKey, hexagon);
+        }
+        const geometry = new SharedBaseInstancedBufferGeometry(hexagon, ["position", "uv"]);
         geometry.instanceCount = tiles.length;
 
         const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
@@ -1179,6 +1184,8 @@ export class TerrainMesh extends Group {
     //materials and canvas label textures are owned here and released below.
     public dispose(): void {
         for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
+        for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
+        this.baseLodGeometries.clear();
         this.landMaterial?.dispose();
         this.waterMaterial?.dispose();
         this.atlasTexture.dispose(); // shared by both materials - dispose once

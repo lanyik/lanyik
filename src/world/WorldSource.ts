@@ -1,13 +1,22 @@
 import { assertWrappableMap, getMapTile, positiveModulo } from "../helpers/topology";
 import { MapInfo, Point, TileInfo } from "../interfaces";
+import { MAX_WORLD_SIZE, MIN_WORLD_SIZE } from "./generateWorld";
 import {
     DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
     MAX_WORLD_GENERATION_CHUNK_SIZE,
     PackedWorldChunk,
     SparseWorldChunkStore,
+    WORLD_GENERATOR_VERSION,
+    WorldTileOverride,
     assertPackedWorldChunk
 } from "./generateWorldChunk";
 import { ChunkRequestOptions, WorldGeneratorPool, WorldGeneratorPoolStats } from "./WorldGeneratorPool";
+import {
+    createWorldChunkCacheKey,
+    IndexedDbWorldChunkCache,
+    WorldChunkCache,
+    WorldChunkCacheStats
+} from "./WorldChunkCache";
 
 export interface WorldBounds {
     width: number;
@@ -29,6 +38,12 @@ export interface WorldSourceStats {
     busyWorkers: number;
     queued: number;
     completed: number;
+    cacheHits?: number;
+    cacheMisses?: number;
+    cacheWrites?: number;
+    cacheErrors?: number;
+    cachedChunks?: number;
+    cachedBytes?: number;
 }
 
 //A WorldSource owns the materialized MapInfo view used by renderers. Loading a
@@ -47,6 +62,7 @@ export interface WorldSource {
     releaseChunk(chunk: WorldChunk): void;
     hasChunk(chunkX: number, chunkY: number): boolean;
     hasTile(x: number, y: number): boolean;
+    clearCache?(): Promise<boolean>;
     dispose(): void;
 }
 
@@ -59,12 +75,24 @@ export interface ProceduralWorldSourceOptions {
     workerUrl: string | URL;
     workerCount?: number;
     chunkSize?: number;
+    cache?: boolean | WorldChunkCache;
+    cacheDatabaseName?: string;
+    cacheMaxBytes?: number;
+    generatorVersion?: number;
+}
+
+export interface ToroidalWorldSourceOptions extends ProceduralWorldSourceOptions {
+    width: number;
+    height: number;
 }
 
 export interface ProceduralWorldSourceDependencies {
     pool?: WorldGeneratorPool;
     store?: SparseWorldChunkStore;
+    cache?: WorldChunkCache;
 }
+
+export type ToroidalWorldSourceDependencies = ProceduralWorldSourceDependencies;
 
 export function assertWorldSource(source: WorldSource): void {
     if (!source || typeof source !== "object") throw new TypeError("world source must be an object");
@@ -203,11 +231,206 @@ export class StaticWorldSource implements WorldSource {
 
 }
 
+function resolveCache(
+    options: ProceduralWorldSourceOptions,
+    dependencies: ProceduralWorldSourceDependencies
+): { cache: WorldChunkCache | undefined; owned: boolean } {
+    if (dependencies.cache) return { cache: dependencies.cache, owned: false };
+    if (options.cache && typeof options.cache === "object") return { cache: options.cache, owned: false };
+    if (options.cache === true) {
+        return {
+            cache: new IndexedDbWorldChunkCache({
+                databaseName: options.cacheDatabaseName,
+                maxBytes: options.cacheMaxBytes
+            }),
+            owned: true
+        };
+    }
+    return { cache: undefined, owned: false };
+}
+
+function cacheStats(pool: WorldGeneratorPoolStats, cache: WorldChunkCache | undefined, cachedLoads: number): WorldSourceStats {
+    const stored: Readonly<WorldChunkCacheStats> | undefined = cache?.stats;
+    return {
+        ...pool,
+        completed: pool.completed + cachedLoads,
+        cacheHits: cachedLoads,
+        cacheMisses: stored?.misses ?? 0,
+        cacheWrites: stored?.writes ?? 0,
+        cacheErrors: stored?.errors ?? 0,
+        cachedChunks: stored?.entries ?? 0,
+        cachedBytes: stored?.bytes ?? 0
+    };
+}
+
+// Finite toroidal counterpart to ProceduralWorldSource. The authoritative
+// world is seed+dimensions; only camera-near packed chunks are materialized.
+export class ToroidalWorldSource implements WorldSource {
+    public readonly chunkSize: number;
+    public readonly bounds: WorldBounds;
+    public readonly store: SparseWorldChunkStore;
+    private readonly seed: string | number;
+    private readonly pool: WorldGeneratorPool;
+    private readonly chunkCountX: number;
+    private readonly chunkCountY: number;
+    private readonly cache: WorldChunkCache | undefined;
+    private readonly ownsCache: boolean;
+    private readonly generatorVersion: number;
+    private cachedLoads = 0;
+    private cacheEpoch = 0;
+    private disposed = false;
+
+    constructor(options: ToroidalWorldSourceOptions, dependencies: ToroidalWorldSourceDependencies = {}) {
+        if (!options || typeof options !== "object") throw new TypeError("toroidal world options are required");
+        if (!Number.isInteger(options.width) || options.width < MIN_WORLD_SIZE || options.width > MAX_WORLD_SIZE
+            || !Number.isInteger(options.height) || options.height < MIN_WORLD_SIZE || options.height > MAX_WORLD_SIZE) {
+            throw new RangeError(`toroidal world dimensions must be integers between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+        }
+        if (options.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+        if (options.workerCount !== undefined
+            && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
+            throw new RangeError("workerCount must be an integer between 1 and 8");
+        }
+        this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+        validateChunkSize(this.chunkSize);
+        this.seed = options.seed;
+        this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+        if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
+            throw new RangeError("generatorVersion must be a positive integer");
+        }
+        this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
+        this.chunkCountX = Math.ceil(options.width / this.chunkSize);
+        this.chunkCountY = Math.ceil(options.height / this.chunkSize);
+        this.store = dependencies.store ?? new SparseWorldChunkStore(this.bounds);
+        if (this.store.map.infinite || this.store.map.w !== options.width || this.store.map.h !== options.height
+            || !this.store.map.wrapX || !this.store.map.wrapY) {
+            throw new TypeError("toroidal world store bounds do not match source dimensions");
+        }
+        const resolvedCache = resolveCache(options, dependencies);
+        this.cache = resolvedCache.cache;
+        this.ownsCache = resolvedCache.owned;
+        try {
+            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+        } catch (error) {
+            if (this.ownsCache) this.cache?.dispose();
+            throw error;
+        }
+    }
+
+    public get map(): MapInfo {
+        return this.store.map;
+    }
+
+    public get stats(): Readonly<WorldSourceStats> {
+        return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
+    }
+
+    public resolveChunk(chunkX: number, chunkY: number): Point | undefined {
+        if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) return undefined;
+        return {
+            x: positiveModulo(chunkX, this.chunkCountX),
+            y: positiveModulo(chunkY, this.chunkCountY)
+        };
+    }
+
+    public chunkDistance(chunkX: number, chunkY: number, centerChunkX: number, centerChunkY: number): number {
+        const dx = Math.min(Math.abs(chunkX - centerChunkX), this.chunkCountX - Math.abs(chunkX - centerChunkX));
+        const dy = Math.min(Math.abs(chunkY - centerChunkY), this.chunkCountY - Math.abs(chunkY - centerChunkY));
+        return Math.hypot(dx, dy);
+    }
+
+    public async loadChunk(
+        chunkX: number,
+        chunkY: number,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldChunk> {
+        if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+        const resolved = this.resolveChunk(chunkX, chunkY);
+        if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+            throw new RangeError("toroidal chunk coordinates must use canonical bounds");
+        }
+        const generation = {
+            seed: this.seed,
+            chunkX,
+            chunkY,
+            chunkSize: this.chunkSize,
+            world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
+        } as const;
+        const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+        const cacheEpoch = this.cacheEpoch;
+        let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
+        if (!packed) {
+            packed = await this.pool.generateChunk(generation, request);
+            if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
+        }
+        if (request.signal?.aborted) throw abortError();
+        const coreTiles = this.store.add(packed);
+        return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
+    }
+
+    public releaseChunk(chunk: WorldChunk): void {
+        this.store.remove(chunk.chunkX, chunk.chunkY);
+    }
+
+    public hasChunk(chunkX: number, chunkY: number): boolean {
+        return this.store.hasChunk(chunkX, chunkY);
+    }
+
+    public hasTile(x: number, y: number): boolean {
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)
+            || x < 0 || x >= this.bounds.width || y < 0 || y >= this.bounds.height) return false;
+        return this.store.hasCoreTile(x, y);
+    }
+
+    public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
+        if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+        this.store.setTileOverride(
+            positiveModulo(x, this.bounds.width),
+            positiveModulo(y, this.bounds.height),
+            changes
+        );
+    }
+
+    public clearTileOverride(x: number, y: number): boolean {
+        if (this.disposed) return false;
+        return this.store.clearTileOverride(
+            positiveModulo(x, this.bounds.width),
+            positiveModulo(y, this.bounds.height)
+        );
+    }
+
+    public clearCache(): Promise<boolean> {
+        this.cacheEpoch += 1;
+        return this.cache?.clear() ?? Promise.resolve(false);
+    }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.pool.dispose();
+        this.store.clear();
+        if (this.ownsCache) this.cache?.dispose();
+    }
+
+    private async readCachedChunk(key: string, chunkX: number, chunkY: number): Promise<PackedWorldChunk | undefined> {
+        if (!this.cache) return undefined;
+        const chunk = await this.cache.get(key).catch(() => undefined);
+        if (!chunk || chunk.chunkX !== chunkX || chunk.chunkY !== chunkY || chunk.chunkSize !== this.chunkSize) return undefined;
+        this.cachedLoads += 1;
+        return chunk;
+    }
+}
+
 export class ProceduralWorldSource implements WorldSource {
     public readonly chunkSize: number;
     public readonly store: SparseWorldChunkStore;
     private readonly seed: string | number;
     private readonly pool: WorldGeneratorPool;
+    private readonly cache: WorldChunkCache | undefined;
+    private readonly ownsCache: boolean;
+    private readonly generatorVersion: number;
+    private cachedLoads = 0;
+    private cacheEpoch = 0;
     private disposed = false;
 
     constructor(options: ProceduralWorldSourceOptions, dependencies: ProceduralWorldSourceDependencies = {}) {
@@ -219,16 +442,28 @@ export class ProceduralWorldSource implements WorldSource {
         this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
         validateChunkSize(this.chunkSize);
         this.seed = options.seed;
+        this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+        if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
+            throw new RangeError("generatorVersion must be a positive integer");
+        }
         this.store = dependencies.store ?? new SparseWorldChunkStore();
-        this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+        const resolvedCache = resolveCache(options, dependencies);
+        this.cache = resolvedCache.cache;
+        this.ownsCache = resolvedCache.owned;
+        try {
+            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+        } catch (error) {
+            if (this.ownsCache) this.cache?.dispose();
+            throw error;
+        }
     }
 
     public get map(): MapInfo {
         return this.store.map;
     }
 
-    public get stats(): Readonly<WorldGeneratorPoolStats> {
-        return this.pool.stats;
+    public get stats(): Readonly<WorldSourceStats> {
+        return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
     }
 
     public resolveChunk(chunkX: number, chunkY: number): Point | undefined {
@@ -245,10 +480,14 @@ export class ProceduralWorldSource implements WorldSource {
         request: ChunkRequestOptions = {}
     ): Promise<WorldChunk> {
         if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
-        const packed = await this.pool.generateChunk(
-            { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize },
-            request
-        );
+        const generation = { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize };
+        const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+        const cacheEpoch = this.cacheEpoch;
+        let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
+        if (!packed) {
+            packed = await this.pool.generateChunk(generation, request);
+            if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
+        }
         if (request.signal?.aborted) throw abortError();
         const coreTiles = this.store.add(packed);
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
@@ -266,11 +505,35 @@ export class ProceduralWorldSource implements WorldSource {
         return this.store.hasCoreTile(x, y);
     }
 
+    public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
+        if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+        this.store.setTileOverride(x, y, changes);
+    }
+
+    public clearTileOverride(x: number, y: number): boolean {
+        if (this.disposed) return false;
+        return this.store.clearTileOverride(x, y);
+    }
+
+    public clearCache(): Promise<boolean> {
+        this.cacheEpoch += 1;
+        return this.cache?.clear() ?? Promise.resolve(false);
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
         this.pool.dispose();
         this.store.clear();
+        if (this.ownsCache) this.cache?.dispose();
+    }
+
+    private async readCachedChunk(key: string, chunkX: number, chunkY: number): Promise<PackedWorldChunk | undefined> {
+        if (!this.cache) return undefined;
+        const chunk = await this.cache.get(key).catch(() => undefined);
+        if (!chunk || chunk.chunkX !== chunkX || chunk.chunkY !== chunkY || chunk.chunkSize !== this.chunkSize) return undefined;
+        this.cachedLoads += 1;
+        return chunk;
     }
 }
 

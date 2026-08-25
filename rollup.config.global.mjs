@@ -26,6 +26,15 @@ export default {
     input: "dist/hex-map.mjs",
     external: (id) => id === "three",
     plugins: [nodeResolve(), commonjs(), stripTrailingWhitespace],
+    onwarn(warning, warn) {
+        //SkeletonUtils includes retargeting helpers that import SkeletonHelper,
+        //while this package only uses clone(). Rollup correctly tree-shakes the
+        //retargeting code; silence only that known post-tree-shake external import.
+        if (warning.code === "UNUSED_EXTERNAL_IMPORT"
+            && warning.exporter === "three"
+            && warning.names?.includes("SkeletonHelper")) return;
+        warn(warning);
+    },
     output: {
         file: "dist/hex-map.global.js",
         format: "umd",

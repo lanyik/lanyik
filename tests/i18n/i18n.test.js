@@ -22,6 +22,8 @@ describe("i18n", () => {
             .toBe("42 × 32 · 四向循环 · 种子 atlas");
         expect(i18n.t("performance.title")).toBe("性能监控");
         expect(i18n.t("performance.drawCalls")).toBe("绘制调用");
+        expect(i18n.t("control.clearCache")).toBe("清空缓存数据");
+        expect(createI18n({ locale: "en" }).t("control.clearCache")).toBe("Clear cached data");
     });
 
     test("keeps English and Chinese catalogs in sync", () => {

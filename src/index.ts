@@ -56,10 +56,17 @@ export {
     SparseWorldChunkStore,
     DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
     MAX_WORLD_GENERATION_CHUNK_SIZE,
+    WORLD_GENERATOR_VERSION,
     WORLD_CHUNK_FORMAT_VERSION,
     WORLD_CHUNK_PADDING
 } from "./world/generateWorldChunk";
-export type { PackedWorldChunk, WorldChunkGenerationOptions } from "./world/generateWorldChunk";
+export type {
+    PackedWorldChunk,
+    WorldChunkGenerationOptions,
+    BoundedWorldChunkGeneration,
+    WorldTileOverride,
+    SparseWorldChunkStoreOptions
+} from "./world/generateWorldChunk";
 export { WorldGeneratorPool } from "./world/WorldGeneratorPool";
 export type {
     WorldGeneratorPoolOptions,
@@ -68,7 +75,19 @@ export type {
     ChunkGeneratorClient
 } from "./world/WorldGeneratorPool";
 export {
+    IndexedDbWorldChunkCache,
+    createWorldChunkCacheKey,
+    clearWorldChunkCache
+} from "./world/WorldChunkCache";
+export type {
+    WorldChunkCache,
+    WorldChunkCacheStats,
+    WorldChunkCacheKeyOptions,
+    IndexedDbWorldChunkCacheOptions
+} from "./world/WorldChunkCache";
+export {
     StaticWorldSource,
+    ToroidalWorldSource,
     ProceduralWorldSource,
     assertWorldSource,
     assertWorldChunk,
@@ -81,6 +100,8 @@ export type {
     WorldChunk,
     WorldSourceStats,
     StaticWorldSourceOptions,
+    ToroidalWorldSourceOptions,
+    ToroidalWorldSourceDependencies,
     ProceduralWorldSourceOptions,
     ProceduralWorldSourceDependencies
 } from "./world/WorldSource";

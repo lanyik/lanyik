@@ -57,7 +57,9 @@ export interface MapInfo {
     h: number,
     //High-performance streaming sources may expose a virtual tile view rather
     //than materializing one TileInfo object under data[x][y] for every resident
-    //cell. Static/JSON maps leave these hooks undefined.
+    //cell. Returned base tiles may be shared/immutable; source-specific mutation
+    //APIs provide sparse coordinate state. Static/JSON maps leave these hooks
+    //undefined and retain ordinary mutable TileInfo objects.
     tileAt?: (x: number, y: number) => TileInfo | undefined,
     forEachTile?: (visit: (tile: TileInfo, x: number, y: number) => void) => void,
     //Optional topology flags. Existing/static maps remain bounded when these

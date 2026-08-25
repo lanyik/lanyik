@@ -2143,8 +2143,8 @@
 	    }
 	  }
 	  if (!best) return null;
-	  if (!wrapX && (best.x < 0 || mapWidth !== void 0 && best.x >= mapWidth)) return null;
-	  if (!wrapY && (best.y < 0 || mapHeight !== void 0 && best.y >= mapHeight)) return null;
+	  if (!wrapX && mapWidth !== void 0 && (best.x < 0 || best.x >= mapWidth)) return null;
+	  if (!wrapY && mapHeight !== void 0 && (best.y < 0 || best.y >= mapHeight)) return null;
 	  return {
 	    ...best,
 	    x: wrapX ? positiveModulo(best.x, mapWidth) : best.x,
@@ -2171,6 +2171,30 @@
 	    }
 	  }
 	}
+	var SharedBaseInstancedBufferGeometry = class extends three.InstancedBufferGeometry {
+	  constructor(base, attributeNames) {
+	    super();
+	    this.sharedAttributes = /* @__PURE__ */ new Map();
+	    for (const name of attributeNames) {
+	      const attribute = base.getAttribute(name);
+	      if (!attribute) continue;
+	      this.sharedAttributes.set(name, attribute);
+	      this.setAttribute(name, attribute);
+	    }
+	    this.sharedIndex = base.getIndex();
+	    this.setIndex(this.sharedIndex);
+	  }
+	  dispose() {
+	    for (const [name, attribute] of this.sharedAttributes) {
+	      if (this.getAttribute(name) === attribute) this.deleteAttribute(name);
+	    }
+	    const usesSharedIndex = this.getIndex() === this.sharedIndex;
+	    if (usesSharedIndex) this.setIndex(null);
+	    super.dispose();
+	    for (const [name, attribute] of this.sharedAttributes) this.setAttribute(name, attribute);
+	    if (usesSharedIndex) this.setIndex(this.sharedIndex);
+	  }
+	};
 
 	// src/helpers/chunks.ts
 	var WORLD_CHUNK_SIZE = 12;
@@ -6741,6 +6765,7 @@ void main() {
 	    this.options = options;
 	    this.landChunks = [];
 	    this.waterChunks = [];
+	    this.baseLodGeometries = /* @__PURE__ */ new Map();
 	    this.tileIndex = /* @__PURE__ */ new Map();
 	    this.waterTileIndex = /* @__PURE__ */ new Map();
 	    this.chunkRecords = /* @__PURE__ */ new Map();
@@ -6863,11 +6888,13 @@ void main() {
 	    return attrs;
 	  }
 	  buildInstancedGeometry(tiles, numSubdivisions, borderSubdivisions = numSubdivisions, origin = { x: 0, y: 0 }, attributes) {
-	    const hexagon = numSubdivisions === borderSubdivisions ? createHexagonGeometry(this.options.size, numSubdivisions) : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
-	    const geometry = new three.InstancedBufferGeometry();
-	    geometry.setAttribute("position", hexagon.getAttribute("position"));
-	    geometry.setAttribute("uv", hexagon.getAttribute("uv"));
-	    geometry.setIndex(hexagon.getIndex());
+	    const baseKey = `${numSubdivisions}:${borderSubdivisions}`;
+	    let hexagon = this.baseLodGeometries.get(baseKey);
+	    if (!hexagon) {
+	      hexagon = numSubdivisions === borderSubdivisions ? createHexagonGeometry(this.options.size, numSubdivisions) : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
+	      this.baseLodGeometries.set(baseKey, hexagon);
+	    }
+	    const geometry = new SharedBaseInstancedBufferGeometry(hexagon, ["position", "uv"]);
 	    geometry.instanceCount = tiles.length;
 	    const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
 	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(attrs.offset, 2));
@@ -7554,6 +7581,8 @@ void main() {
 	  //materials and canvas label textures are owned here and released below.
 	  dispose() {
 	    for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
+	    for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
+	    this.baseLodGeometries.clear();
 	    this.landMaterial?.dispose();
 	    this.waterMaterial?.dispose();
 	    this.atlasTexture.dispose();
@@ -8267,9 +8296,7 @@ void main() {
 	      }
 	      pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
 	    }
-	    const geometry = new three.InstancedBufferGeometry();
-	    geometry.setAttribute("position", this.resources.blade.getAttribute("position").clone());
-	    geometry.setIndex(this.resources.blade.getIndex()?.clone() ?? null);
+	    const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
 	    geometry.instanceCount = instance;
 	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
 	    geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
@@ -8901,11 +8928,156 @@ void main() {
 	  return randomGridValue((seed ^ salt) >>> 0, x, y);
 	}
 
+	// src/world/generateWorld.ts
+	var MIN_WORLD_SIZE = 8;
+	var MAX_WORLD_SIZE = 512;
+	var SEA_LEVEL = 0.43;
+	var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
+	function assertDimension(name, value) {
+	  if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+	    throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+	  }
+	}
+	function sampleBoundedClimate(seed, x, y, width, height) {
+	  const nx = width === 1 ? 0 : x / (width - 1) * 2 - 1;
+	  const ny = height === 1 ? 0 : y / (height - 1) * 2 - 1;
+	  const edge = Math.max(Math.abs(nx), Math.abs(ny));
+	  const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
+	  const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
+	  const elevation = continent * 0.78 + detail * 0.22 + 0.12 - Math.pow(edge, 3) * 0.58;
+	  const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
+	  const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.07, y * 0.07, 3);
+	  const latitude = Math.abs(ny);
+	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
+	  return { elevation, moisture, temperature };
+	}
+	function sampleToroidalClimate(seed, x, y, width, height) {
+	  const nx = x / width;
+	  const ny = y / height;
+	  const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
+	  const continent = periodicFractalNoise2D(
+	    seed,
+	    nx,
+	    ny,
+	    cells(0.055, width, 2),
+	    cells(0.055, height, 2),
+	    5
+	  );
+	  const detail = periodicFractalNoise2D(
+	    seed ^ 2738958700,
+	    nx,
+	    ny,
+	    cells(0.14, width, 3),
+	    cells(0.14, height, 3),
+	    3
+	  );
+	  const elevation = continent * 0.78 + detail * 0.22 + 0.03;
+	  const moisture = periodicFractalNoise2D(
+	    seed ^ 3355524772,
+	    nx,
+	    ny,
+	    cells(0.08, width, 2),
+	    cells(0.08, height, 2),
+	    4
+	  );
+	  const temperatureNoise = periodicFractalNoise2D(
+	    seed ^ 2911926141,
+	    nx,
+	    ny,
+	    cells(0.07, width, 2),
+	    cells(0.07, height, 2),
+	    3
+	  );
+	  const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
+	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
+	  return { elevation, moisture, temperature };
+	}
+	function classifyTerrain({ elevation, moisture, temperature }) {
+	  if (elevation < SEA_LEVEL) return "sea" /* sea */;
+	  if (elevation > 0.75) return "mountain" /* mountain */;
+	  if (temperature < 0.18) return "snow" /* snow */;
+	  if (temperature < 0.34) return "tundra" /* tundra */;
+	  if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
+	  return "land" /* land */;
+	}
+	function decorateTile(seed, x, y, climate, type) {
+	  const tile = { type };
+	  if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return tile;
+	  const modifiers = [];
+	  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+	  if (lake) {
+	    modifiers.push("lake");
+	  } else {
+	    if (climate.elevation > 0.62) modifiers.push("hill");
+	    const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
+	    if (randomAt(seed, x, y, 668265263) < forestChance) {
+	      modifiers.push("wood");
+	      tile.treeModel = climate.temperature > 0.67 ? "Assets/models/palm" : climate.temperature < 0.4 ? "Assets/models/pinia" : "Assets/models/oak";
+	    }
+	  }
+	  if (modifiers.length > 0) tile.modifiers = modifiers;
+	  return tile;
+	}
+	var modulo = (value, period) => (value % period + period) % period;
+	function generateToroidalWorldTile(numericSeed, x, y, width, height) {
+	  const canonicalX = modulo(x, width);
+	  const canonicalY = modulo(y, height);
+	  const climate = sampleToroidalClimate(numericSeed, canonicalX, canonicalY, width, height);
+	  let type = classifyTerrain(climate);
+	  if (type === "sea" /* sea */) {
+	    const touchesLand = getNeighbors(canonicalX, canonicalY).some((neighbor) => {
+	      const nx = modulo(neighbor.x, width);
+	      const ny = modulo(neighbor.y, height);
+	      return !isWater2(classifyTerrain(sampleToroidalClimate(numericSeed, nx, ny, width, height)));
+	    });
+	    if (touchesLand) type = "coastal" /* coastal */;
+	  }
+	  return decorateTile(numericSeed, canonicalX, canonicalY, climate, type);
+	}
+	function generateWorld({ seed, width, height, topology = "bounded" }) {
+	  assertDimension("width", width);
+	  assertDimension("height", height);
+	  if (topology !== "bounded" && topology !== "toroidal") {
+	    throw new RangeError('topology must be either "bounded" or "toroidal"');
+	  }
+	  if (topology === "toroidal" && width % 2 !== 0) {
+	    throw new RangeError("toroidal worlds require an even width");
+	  }
+	  const numericSeed = seedToUint32(seed);
+	  const data = {};
+	  const toroidal = topology === "toroidal";
+	  for (let x = 0; x < width; x += 1) {
+	    data[x] = {};
+	    for (let y = 0; y < height; y += 1) {
+	      if (toroidal) {
+	        data[x][y] = generateToroidalWorldTile(numericSeed, x, y, width, height);
+	        continue;
+	      }
+	      const climate = sampleBoundedClimate(numericSeed, x, y, width, height);
+	      data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
+	    }
+	  }
+	  const world = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
+	  for (let x = 0; x < width; x += 1) {
+	    for (let y = 0; y < height; y += 1) {
+	      const tile = data[x][y];
+	      if (toroidal || tile.type !== "sea" /* sea */) continue;
+	      const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
+	        const neighbor = data[nx]?.[ny];
+	        return neighbor !== void 0 && !isWater2(neighbor.type);
+	      });
+	      if (touchesLand) tile.type = "coastal" /* coastal */;
+	    }
+	  }
+	  return world;
+	}
+
 	// src/world/generateWorldChunk.ts
 	var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 	var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 	var WORLD_CHUNK_FORMAT_VERSION = 1;
 	var WORLD_CHUNK_PADDING = 1;
+	var WORLD_GENERATOR_VERSION = 1;
 	function assertPackedWorldChunk(chunk) {
 	  if (!chunk || typeof chunk !== "object" || chunk.version !== WORLD_CHUNK_FORMAT_VERSION || !Number.isSafeInteger(chunk.chunkX) || !Number.isSafeInteger(chunk.chunkY) || !Number.isInteger(chunk.chunkSize) || chunk.chunkSize <= 0 || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunk.padding !== WORLD_CHUNK_PADDING || chunk.stride !== chunk.chunkSize + chunk.padding * 2 || !(chunk.tiles instanceof Uint16Array) || chunk.tiles.length !== chunk.stride * chunk.stride) {
 	    throw new TypeError("packed world chunk payload is invalid");
@@ -8927,7 +9099,7 @@ void main() {
 	var TREE_SHIFT = 6;
 	var TREE_MASK = 3 << TREE_SHIFT;
 	var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
-	var SEA_LEVEL = 0.43;
+	var SEA_LEVEL2 = 0.43;
 	function assertChunkCoordinate(name, value) {
 	  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
 	}
@@ -8946,8 +9118,8 @@ void main() {
 	  const temperature = 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8;
 	  return { elevation, moisture, temperature };
 	}
-	function classifyTerrain({ elevation, moisture, temperature }) {
-	  if (elevation < SEA_LEVEL) return "sea" /* sea */;
+	function classifyTerrain2({ elevation, moisture, temperature }) {
+	  if (elevation < SEA_LEVEL2) return "sea" /* sea */;
 	  if (elevation > 0.75) return "mountain" /* mountain */;
 	  if (temperature < 0.18) return "snow" /* snow */;
 	  if (temperature < 0.34) return "tundra" /* tundra */;
@@ -8955,23 +9127,23 @@ void main() {
 	  return "land" /* land */;
 	}
 	function baseTerrainAt(seed, x, y) {
-	  return classifyTerrain(sampleClimate(seed, x, y));
+	  return classifyTerrain2(sampleClimate(seed, x, y));
 	}
-	function isWater2(type) {
+	function isWater3(type) {
 	  return type === "sea" /* sea */ || type === "coastal" /* coastal */;
 	}
 	function terrainAt(seed, x, y) {
 	  const base = baseTerrainAt(seed, x, y);
 	  if (base !== "sea" /* sea */) return base;
-	  const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater2(baseTerrainAt(seed, neighbor.x, neighbor.y)));
+	  const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater3(baseTerrainAt(seed, neighbor.x, neighbor.y)));
 	  return touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
 	}
 	function encodeTile(seed, x, y) {
 	  const climate = sampleClimate(seed, x, y);
 	  const type = terrainAt(seed, x, y);
 	  let packed = LAND_CODE.get(type) ?? 0;
-	  if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return packed;
-	  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+	  if (isWater3(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return packed;
+	  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL2 + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
 	  if (lake) return packed | FLAG_LAKE;
 	  if (climate.elevation > 0.62) packed |= FLAG_HILL;
 	  const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
@@ -8981,9 +9153,25 @@ void main() {
 	  }
 	  return packed;
 	}
+	function encodeTileInfo(tile) {
+	  let packed = LAND_CODE.get(tile.type) ?? 0;
+	  if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
+	  if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
+	  if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
+	  const treeCode = TREE_MODELS.indexOf(tile.treeModel);
+	  if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
+	  return packed;
+	}
+	function validateBoundedWorld(world) {
+	  if (!world) return;
+	  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
+	    throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
+	  }
+	}
 	function generateWorldChunk(options) {
 	  assertChunkCoordinate("chunkX", options.chunkX);
 	  assertChunkCoordinate("chunkY", options.chunkY);
+	  validateBoundedWorld(options.world);
 	  const chunkSize = resolveChunkSize(options.chunkSize);
 	  const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
 	  const tiles = new Uint16Array(stride * stride);
@@ -8995,7 +9183,9 @@ void main() {
 	  }
 	  for (let localX = 0; localX < stride; localX += 1) {
 	    for (let localY = 0; localY < stride; localY += 1) {
-	      tiles[localX * stride + localY] = encodeTile(seed, originX + localX, originY + localY);
+	      const x = originX + localX;
+	      const y = originY + localY;
+	      tiles[localX * stride + localY] = options.world ? encodeTileInfo(generateToroidalWorldTile(seed, x, y, options.world.width, options.world.height)) : encodeTile(seed, x, y);
 	    }
 	  }
 	  return {
@@ -9037,10 +9227,32 @@ void main() {
 	  return points;
 	}
 	var SparseWorldChunkStore = class _SparseWorldChunkStore {
-	  constructor() {
+	  constructor(options = {}) {
 	    this.chunks = /* @__PURE__ */ new Map();
 	    this.decodedTiles = /* @__PURE__ */ new Map();
-	    this.map = {
+	    this.tileOverrides = /* @__PURE__ */ new Map();
+	    this.overriddenTiles = /* @__PURE__ */ new Map();
+	    const bounded = options.width !== void 0 || options.height !== void 0;
+	    if (bounded) {
+	      if (!Number.isInteger(options.width) || options.width <= 0 || !Number.isInteger(options.height) || options.height <= 0) {
+	        throw new RangeError("bounded sparse stores require positive integer width and height");
+	      }
+	      this.bounds = {
+	        width: options.width,
+	        height: options.height,
+	        wrapX: options.wrapX ?? false,
+	        wrapY: options.wrapY ?? false
+	      };
+	    }
+	    this.map = this.bounds ? {
+	      data: {},
+	      w: this.bounds.width,
+	      h: this.bounds.height,
+	      wrapX: this.bounds.wrapX,
+	      wrapY: this.bounds.wrapY,
+	      tileAt: (x, y) => this.getTile(x, y),
+	      forEachTile: (visit) => this.forEachCoreTile(visit)
+	    } : {
 	      data: {},
 	      w: 1,
 	      h: 1,
@@ -9052,6 +9264,9 @@ void main() {
 	  static key(chunkX, chunkY) {
 	    return `${chunkX},${chunkY}`;
 	  }
+	  static tileKey(x, y) {
+	    return `${x},${y}`;
+	  }
 	  add(chunk) {
 	    assertPackedWorldChunk(chunk);
 	    if (this.chunkSize !== void 0 && chunk.chunkSize !== this.chunkSize) {
@@ -9059,9 +9274,9 @@ void main() {
 	    }
 	    this.chunkSize = chunk.chunkSize;
 	    const key = _SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-	    if (this.chunks.has(key)) return getWorldChunkCorePoints(chunk);
+	    if (this.chunks.has(key)) return this.corePoints(chunk);
 	    this.chunks.set(key, chunk);
-	    return getWorldChunkCorePoints(chunk);
+	    return this.corePoints(chunk);
 	  }
 	  remove(chunkX, chunkY) {
 	    const key = _SparseWorldChunkStore.key(chunkX, chunkY);
@@ -9071,7 +9286,9 @@ void main() {
 	  }
 	  hasCoreTile(x, y) {
 	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === void 0) return false;
-	    return this.hasChunk(Math.floor(x / this.chunkSize), Math.floor(y / this.chunkSize));
+	    const point = this.normalizePoint(x, y);
+	    if (!point) return false;
+	    return this.hasChunk(Math.floor(point.x / this.chunkSize), Math.floor(point.y / this.chunkSize));
 	  }
 	  hasChunk(chunkX, chunkY) {
 	    return this.chunks.has(_SparseWorldChunkStore.key(chunkX, chunkY));
@@ -9087,19 +9304,47 @@ void main() {
 	  get decodedTileVariantCount() {
 	    return this.decodedTiles.size;
 	  }
+	  get tileOverrideCount() {
+	    return this.tileOverrides.size;
+	  }
+	  setTileOverride(x, y, changes) {
+	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+	      throw new RangeError("tile override coordinates must be safe integers");
+	    }
+	    if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+	      throw new TypeError("tile override must be an object");
+	    }
+	    const key = _SparseWorldChunkStore.tileKey(x, y);
+	    const copy = { ...changes };
+	    if (changes.modifiers) copy.modifiers = [...changes.modifiers];
+	    if (changes.rivers) copy.rivers = changes.rivers.map((river) => ({ ...river }));
+	    if (changes.city) copy.city = { ...changes.city };
+	    this.tileOverrides.set(key, { ...this.tileOverrides.get(key), ...copy });
+	    this.overriddenTiles.delete(key);
+	  }
+	  clearTileOverride(x, y) {
+	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return false;
+	    const key = _SparseWorldChunkStore.tileKey(x, y);
+	    this.overriddenTiles.delete(key);
+	    return this.tileOverrides.delete(key);
+	  }
 	  getTile(x, y) {
 	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === void 0) return void 0;
-	    const ownerX = Math.floor(x / this.chunkSize);
-	    const ownerY = Math.floor(y / this.chunkSize);
-	    const direct = this.tileFromChunk(this.chunks.get(_SparseWorldChunkStore.key(ownerX, ownerY)), x, y);
+	    const point = this.normalizePoint(x, y);
+	    if (!point) return void 0;
+	    const ownerX = Math.floor(point.x / this.chunkSize);
+	    const ownerY = Math.floor(point.y / this.chunkSize);
+	    const direct = this.tileFromChunk(this.chunks.get(_SparseWorldChunkStore.key(ownerX, ownerY)), point.x, point.y);
 	    if (direct) return direct;
 	    for (let dx = -1; dx <= 1; dx += 1) {
 	      for (let dy = -1; dy <= 1; dy += 1) {
 	        if (dx === 0 && dy === 0) continue;
+	        const candidate = this.resolveChunk(ownerX + dx, ownerY + dy);
+	        if (!candidate) continue;
 	        const tile = this.tileFromChunk(
-	          this.chunks.get(_SparseWorldChunkStore.key(ownerX + dx, ownerY + dy)),
-	          x,
-	          y
+	          this.chunks.get(_SparseWorldChunkStore.key(candidate.x, candidate.y)),
+	          point.x,
+	          point.y
 	        );
 	        if (tile) return tile;
 	      }
@@ -9108,32 +9353,90 @@ void main() {
 	  }
 	  tileFromChunk(chunk, x, y) {
 	    if (!chunk) return void 0;
-	    const localX = x - chunk.chunkX * chunk.chunkSize;
-	    const localY = y - chunk.chunkY * chunk.chunkSize;
-	    if (localX < -chunk.padding || localX >= chunk.chunkSize + chunk.padding || localY < -chunk.padding || localY >= chunk.chunkSize + chunk.padding) return void 0;
-	    const packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
-	    const cached = this.decodedTiles.get(packed);
-	    if (cached) return cached;
-	    const decoded = decodeWorldChunkTile(chunk, localX, localY);
-	    if (decoded.modifiers) Object.freeze(decoded.modifiers);
-	    Object.freeze(decoded);
-	    this.decodedTiles.set(packed, decoded);
-	    return decoded;
+	    const xSamples = this.bounds?.wrapX ? [x, x - this.bounds.width, x + this.bounds.width] : [x];
+	    const ySamples = this.bounds?.wrapY ? [y, y - this.bounds.height, y + this.bounds.height] : [y];
+	    let packed;
+	    let localX = 0;
+	    let localY = 0;
+	    outer: for (const sampleX of xSamples) {
+	      for (const sampleY of ySamples) {
+	        const candidateX = sampleX - chunk.chunkX * chunk.chunkSize;
+	        const candidateY = sampleY - chunk.chunkY * chunk.chunkSize;
+	        if (candidateX < -chunk.padding || candidateX >= chunk.chunkSize + chunk.padding || candidateY < -chunk.padding || candidateY >= chunk.chunkSize + chunk.padding) continue;
+	        localX = candidateX;
+	        localY = candidateY;
+	        packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
+	        break outer;
+	      }
+	    }
+	    if (packed === void 0) return void 0;
+	    let base = this.decodedTiles.get(packed);
+	    if (!base) {
+	      base = decodeWorldChunkTile(chunk, localX, localY);
+	      if (base.modifiers) Object.freeze(base.modifiers);
+	      Object.freeze(base);
+	      this.decodedTiles.set(packed, base);
+	    }
+	    const key = _SparseWorldChunkStore.tileKey(x, y);
+	    const changes = this.tileOverrides.get(key);
+	    if (!changes) return base;
+	    const cached = this.overriddenTiles.get(key);
+	    if (cached?.packed === packed) return cached.tile;
+	    const tile = { ...base, ...changes };
+	    if (tile.modifiers) tile.modifiers = [...tile.modifiers];
+	    if (tile.rivers) tile.rivers = tile.rivers.map((river) => ({ ...river }));
+	    if (tile.city) tile.city = { ...tile.city };
+	    this.overriddenTiles.set(key, { packed, tile });
+	    return tile;
 	  }
 	  forEachCoreTile(visit) {
 	    for (const chunk of this.chunks.values()) {
 	      const originX = chunk.chunkX * chunk.chunkSize;
 	      const originY = chunk.chunkY * chunk.chunkSize;
-	      for (let localX = 0; localX < chunk.chunkSize; localX += 1) {
-	        for (let localY = 0; localY < chunk.chunkSize; localY += 1) {
+	      const width = this.bounds ? Math.min(chunk.chunkSize, this.bounds.width - originX) : chunk.chunkSize;
+	      const height = this.bounds ? Math.min(chunk.chunkSize, this.bounds.height - originY) : chunk.chunkSize;
+	      for (let localX = 0; localX < width; localX += 1) {
+	        for (let localY = 0; localY < height; localY += 1) {
 	          visit(this.tileFromChunk(chunk, originX + localX, originY + localY), originX + localX, originY + localY);
 	        }
 	      }
 	    }
 	  }
+	  corePoints(chunk) {
+	    if (!this.bounds) return getWorldChunkCorePoints(chunk);
+	    const originX = chunk.chunkX * chunk.chunkSize;
+	    const originY = chunk.chunkY * chunk.chunkSize;
+	    const width = Math.max(0, Math.min(chunk.chunkSize, this.bounds.width - originX));
+	    const height = Math.max(0, Math.min(chunk.chunkSize, this.bounds.height - originY));
+	    const points = [];
+	    for (let localX = 0; localX < width; localX += 1) {
+	      for (let localY = 0; localY < height; localY += 1) {
+	        points.push({ x: originX + localX, y: originY + localY });
+	      }
+	    }
+	    return points;
+	  }
+	  normalizePoint(x, y) {
+	    if (!this.bounds) return { x, y };
+	    const nx = this.bounds.wrapX ? (x % this.bounds.width + this.bounds.width) % this.bounds.width : x;
+	    const ny = this.bounds.wrapY ? (y % this.bounds.height + this.bounds.height) % this.bounds.height : y;
+	    if (nx < 0 || nx >= this.bounds.width || ny < 0 || ny >= this.bounds.height) return void 0;
+	    return { x: nx, y: ny };
+	  }
+	  resolveChunk(chunkX, chunkY) {
+	    if (!this.bounds || this.chunkSize === void 0) return { x: chunkX, y: chunkY };
+	    const countX = Math.ceil(this.bounds.width / this.chunkSize);
+	    const countY = Math.ceil(this.bounds.height / this.chunkSize);
+	    const x = this.bounds.wrapX ? (chunkX % countX + countX) % countX : chunkX;
+	    const y = this.bounds.wrapY ? (chunkY % countY + countY) % countY : chunkY;
+	    if (x < 0 || x >= countX || y < 0 || y >= countY) return void 0;
+	    return { x, y };
+	  }
 	  clear() {
 	    this.chunks.clear();
 	    this.decodedTiles.clear();
+	    this.tileOverrides.clear();
+	    this.overriddenTiles.clear();
 	    this.chunkSize = void 0;
 	  }
 	};
@@ -9352,6 +9655,321 @@ void main() {
 	  }
 	};
 
+	// src/world/WorldChunkCache.ts
+	var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
+	var DATABASE_VERSION = 1;
+	var CHUNK_STORE = "chunks";
+	var META_STORE = "meta";
+	var USAGE_KEY = "usage";
+	function createWorldChunkCacheKey(options) {
+	  return JSON.stringify([
+	    options.generatorVersion ?? WORLD_GENERATOR_VERSION,
+	    String(options.seed),
+	    options.chunkSize,
+	    options.world?.topology ?? "infinite",
+	    options.world?.width ?? null,
+	    options.world?.height ?? null,
+	    options.chunkX,
+	    options.chunkY
+	  ]);
+	}
+	function requestResult(request) {
+	  return new Promise((resolve, reject) => {
+	    request.addEventListener("success", () => resolve(request.result), { once: true });
+	    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
+	  });
+	}
+	function transactionComplete(transaction) {
+	  return new Promise((resolve, reject) => {
+	    transaction.addEventListener("complete", () => resolve(), { once: true });
+	    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
+	    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+	  });
+	}
+	var IndexedDbWorldChunkCache = class {
+	  constructor(options = {}) {
+	    this.maintenance = Promise.resolve();
+	    this.disposed = false;
+	    this.snapshot = {
+	      available: typeof indexedDB !== "undefined",
+	      hits: 0,
+	      misses: 0,
+	      writes: 0,
+	      errors: 0,
+	      entries: 0,
+	      bytes: 0
+	    };
+	    this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME;
+	    this.maxBytes = options.maxBytes ?? 128 * 1024 * 1024;
+	    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+	    if (typeof this.databaseName !== "string" || this.databaseName.trim().length === 0) {
+	      throw new TypeError("cache databaseName must be a non-empty string");
+	    }
+	    if (!Number.isFinite(this.maxBytes) || this.maxBytes <= 0) {
+	      throw new RangeError("cache maxBytes must be a positive finite number");
+	    }
+	    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+	      throw new RangeError("cache openTimeoutMs must be a positive finite number");
+	    }
+	  }
+	  get stats() {
+	    return this.snapshot;
+	  }
+	  async get(key) {
+	    if (this.disposed) return void 0;
+	    const database = await this.open();
+	    if (!database) {
+	      this.snapshot.misses += 1;
+	      return void 0;
+	    }
+	    try {
+	      const transaction = database.transaction(CHUNK_STORE, "readonly");
+	      const record = await requestResult(transaction.objectStore(CHUNK_STORE).get(key));
+	      await transactionComplete(transaction);
+	      if (!record) {
+	        this.snapshot.misses += 1;
+	        return void 0;
+	      }
+	      const chunk = {
+	        version: record.version,
+	        chunkX: record.chunkX,
+	        chunkY: record.chunkY,
+	        chunkSize: record.chunkSize,
+	        padding: record.padding,
+	        stride: record.stride,
+	        tiles: new Uint16Array(record.tiles.slice(0))
+	      };
+	      assertPackedWorldChunk(chunk);
+	      this.snapshot.hits += 1;
+	      this.enqueueMaintenance(() => this.touch(database, record));
+	      return chunk;
+	    } catch {
+	      this.snapshot.errors += 1;
+	      this.snapshot.misses += 1;
+	      this.enqueueMaintenance(() => this.deleteKey(database, key));
+	      return void 0;
+	    }
+	  }
+	  put(key, chunk) {
+	    assertPackedWorldChunk(chunk);
+	    if (this.disposed) return Promise.resolve(false);
+	    return this.enqueueMaintenance(async () => {
+	      const database = await this.open();
+	      if (!database) return false;
+	      try {
+	        const bytes = chunk.tiles.byteLength;
+	        const tiles = chunk.tiles.buffer.slice(
+	          chunk.tiles.byteOffset,
+	          chunk.tiles.byteOffset + chunk.tiles.byteLength
+	        );
+	        const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+	        const chunks = transaction.objectStore(CHUNK_STORE);
+	        const meta = transaction.objectStore(META_STORE);
+	        const [existing, usage] = await Promise.all([
+	          requestResult(chunks.get(key)),
+	          requestResult(meta.get(USAGE_KEY))
+	        ]);
+	        const nextUsage = {
+	          key: USAGE_KEY,
+	          bytes: Math.max(0, (usage?.bytes ?? 0) - (existing?.bytes ?? 0) + bytes),
+	          entries: Math.max(0, (usage?.entries ?? 0) + (existing ? 0 : 1))
+	        };
+	        chunks.put({
+	          key,
+	          version: chunk.version,
+	          chunkX: chunk.chunkX,
+	          chunkY: chunk.chunkY,
+	          chunkSize: chunk.chunkSize,
+	          padding: chunk.padding,
+	          stride: chunk.stride,
+	          tiles,
+	          bytes,
+	          accessedAt: Date.now()
+	        });
+	        meta.put(nextUsage);
+	        await transactionComplete(transaction);
+	        this.snapshot.writes += 1;
+	        this.snapshot.entries = nextUsage.entries;
+	        this.snapshot.bytes = nextUsage.bytes;
+	        await this.prune(database);
+	        return true;
+	      } catch {
+	        this.snapshot.errors += 1;
+	        return false;
+	      }
+	    });
+	  }
+	  async clear() {
+	    if (this.disposed) return false;
+	    return this.enqueueMaintenance(async () => {
+	      const database = await this.open();
+	      if (!database) return false;
+	      try {
+	        const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+	        transaction.objectStore(CHUNK_STORE).clear();
+	        transaction.objectStore(META_STORE).put({ key: USAGE_KEY, bytes: 0, entries: 0 });
+	        await transactionComplete(transaction);
+	        this.snapshot.entries = 0;
+	        this.snapshot.bytes = 0;
+	        return true;
+	      } catch {
+	        this.snapshot.errors += 1;
+	        return false;
+	      }
+	    });
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    void this.databasePromise?.then((database) => database?.close());
+	  }
+	  enqueueMaintenance(task) {
+	    const result = this.maintenance.then(task, task);
+	    this.maintenance = result.then(() => void 0, () => void 0);
+	    return result;
+	  }
+	  async open() {
+	    if (this.disposed || typeof indexedDB === "undefined") return void 0;
+	    this.databasePromise ?? (this.databasePromise = new Promise((resolve) => {
+	      const request = indexedDB.open(this.databaseName, DATABASE_VERSION);
+	      let settled = false;
+	      let timeout;
+	      const finish = (database) => {
+	        if (settled) {
+	          database?.close();
+	          return;
+	        }
+	        settled = true;
+	        if (timeout !== void 0) clearTimeout(timeout);
+	        resolve(database);
+	      };
+	      timeout = setTimeout(() => {
+	        this.snapshot.available = false;
+	        this.snapshot.errors += 1;
+	        finish(void 0);
+	      }, this.openTimeoutMs);
+	      request.addEventListener("upgradeneeded", () => {
+	        const database = request.result;
+	        if (!database.objectStoreNames.contains(CHUNK_STORE)) {
+	          const chunks = database.createObjectStore(CHUNK_STORE, { keyPath: "key" });
+	          chunks.createIndex("accessedAt", "accessedAt");
+	        }
+	        if (!database.objectStoreNames.contains(META_STORE)) {
+	          database.createObjectStore(META_STORE, { keyPath: "key" });
+	        }
+	      });
+	      request.addEventListener("success", () => {
+	        const database = request.result;
+	        if (settled) {
+	          database.close();
+	          return;
+	        }
+	        database.addEventListener("versionchange", () => {
+	          database.close();
+	          this.databasePromise = void 0;
+	        });
+	        this.snapshot.available = true;
+	        void this.readUsage(database);
+	        finish(database);
+	      }, { once: true });
+	      request.addEventListener("error", () => {
+	        if (settled) return;
+	        this.snapshot.available = false;
+	        this.snapshot.errors += 1;
+	        finish(void 0);
+	      }, { once: true });
+	      request.addEventListener("blocked", () => {
+	        if (settled) return;
+	        this.snapshot.available = false;
+	        this.snapshot.errors += 1;
+	        finish(void 0);
+	      });
+	    }));
+	    return this.databasePromise;
+	  }
+	  async readUsage(database) {
+	    try {
+	      const transaction = database.transaction(META_STORE, "readonly");
+	      const usage = await requestResult(transaction.objectStore(META_STORE).get(USAGE_KEY));
+	      await transactionComplete(transaction);
+	      this.snapshot.entries = usage?.entries ?? 0;
+	      this.snapshot.bytes = usage?.bytes ?? 0;
+	    } catch {
+	      this.snapshot.errors += 1;
+	    }
+	  }
+	  async touch(database, record) {
+	    try {
+	      const transaction = database.transaction(CHUNK_STORE, "readwrite");
+	      transaction.objectStore(CHUNK_STORE).put({ ...record, accessedAt: Date.now() });
+	      await transactionComplete(transaction);
+	    } catch {
+	      this.snapshot.errors += 1;
+	    }
+	  }
+	  async deleteKey(database, key) {
+	    try {
+	      const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+	      const chunks = transaction.objectStore(CHUNK_STORE);
+	      const meta = transaction.objectStore(META_STORE);
+	      const [existing, usage] = await Promise.all([
+	        requestResult(chunks.get(key)),
+	        requestResult(meta.get(USAGE_KEY))
+	      ]);
+	      if (existing) {
+	        chunks.delete(key);
+	        const next = {
+	          key: USAGE_KEY,
+	          bytes: Math.max(0, (usage?.bytes ?? 0) - existing.bytes),
+	          entries: Math.max(0, (usage?.entries ?? 0) - 1)
+	        };
+	        meta.put(next);
+	        this.snapshot.bytes = next.bytes;
+	        this.snapshot.entries = next.entries;
+	      }
+	      await transactionComplete(transaction);
+	    } catch {
+	      this.snapshot.errors += 1;
+	    }
+	  }
+	  async prune(database) {
+	    if (this.snapshot.bytes <= this.maxBytes) return;
+	    const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+	    const chunks = transaction.objectStore(CHUNK_STORE);
+	    const meta = transaction.objectStore(META_STORE);
+	    let bytes = this.snapshot.bytes;
+	    let entries = this.snapshot.entries;
+	    await new Promise((resolve, reject) => {
+	      const request = chunks.index("accessedAt").openCursor();
+	      request.addEventListener("error", () => reject(request.error ?? new Error("cache pruning failed")), { once: true });
+	      request.addEventListener("success", () => {
+	        const cursor = request.result;
+	        if (!cursor || bytes <= this.maxBytes) {
+	          resolve();
+	          return;
+	        }
+	        const record = cursor.value;
+	        bytes = Math.max(0, bytes - record.bytes);
+	        entries = Math.max(0, entries - 1);
+	        cursor.delete();
+	        cursor.continue();
+	      });
+	    });
+	    meta.put({ key: USAGE_KEY, bytes, entries });
+	    await transactionComplete(transaction);
+	    this.snapshot.bytes = bytes;
+	    this.snapshot.entries = entries;
+	  }
+	};
+	async function clearWorldChunkCache(options = {}) {
+	  const cache2 = new IndexedDbWorldChunkCache(options);
+	  try {
+	    return await cache2.clear();
+	  } finally {
+	    cache2.dispose();
+	  }
+	}
+
 	// src/world/WorldSource.ts
 	function assertWorldSource(source) {
 	  if (!source || typeof source !== "object") throw new TypeError("world source must be an object");
@@ -9463,8 +10081,160 @@ void main() {
 	    this.disposed = true;
 	  }
 	};
+	function resolveCache(options, dependencies) {
+	  if (dependencies.cache) return { cache: dependencies.cache, owned: false };
+	  if (options.cache && typeof options.cache === "object") return { cache: options.cache, owned: false };
+	  if (options.cache === true) {
+	    return {
+	      cache: new IndexedDbWorldChunkCache({
+	        databaseName: options.cacheDatabaseName,
+	        maxBytes: options.cacheMaxBytes
+	      }),
+	      owned: true
+	    };
+	  }
+	  return { cache: void 0, owned: false };
+	}
+	function cacheStats(pool, cache2, cachedLoads) {
+	  const stored = cache2?.stats;
+	  return {
+	    ...pool,
+	    completed: pool.completed + cachedLoads,
+	    cacheHits: cachedLoads,
+	    cacheMisses: stored?.misses ?? 0,
+	    cacheWrites: stored?.writes ?? 0,
+	    cacheErrors: stored?.errors ?? 0,
+	    cachedChunks: stored?.entries ?? 0,
+	    cachedBytes: stored?.bytes ?? 0
+	  };
+	}
+	var ToroidalWorldSource = class {
+	  constructor(options, dependencies = {}) {
+	    this.cachedLoads = 0;
+	    this.cacheEpoch = 0;
+	    this.disposed = false;
+	    if (!options || typeof options !== "object") throw new TypeError("toroidal world options are required");
+	    if (!Number.isInteger(options.width) || options.width < MIN_WORLD_SIZE || options.width > MAX_WORLD_SIZE || !Number.isInteger(options.height) || options.height < MIN_WORLD_SIZE || options.height > MAX_WORLD_SIZE) {
+	      throw new RangeError(`toroidal world dimensions must be integers between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+	    }
+	    if (options.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+	    if (options.workerCount !== void 0 && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
+	      throw new RangeError("workerCount must be an integer between 1 and 8");
+	    }
+	    this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+	    validateChunkSize(this.chunkSize);
+	    this.seed = options.seed;
+	    this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+	    if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
+	      throw new RangeError("generatorVersion must be a positive integer");
+	    }
+	    this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
+	    this.chunkCountX = Math.ceil(options.width / this.chunkSize);
+	    this.chunkCountY = Math.ceil(options.height / this.chunkSize);
+	    this.store = dependencies.store ?? new SparseWorldChunkStore(this.bounds);
+	    if (this.store.map.infinite || this.store.map.w !== options.width || this.store.map.h !== options.height || !this.store.map.wrapX || !this.store.map.wrapY) {
+	      throw new TypeError("toroidal world store bounds do not match source dimensions");
+	    }
+	    const resolvedCache = resolveCache(options, dependencies);
+	    this.cache = resolvedCache.cache;
+	    this.ownsCache = resolvedCache.owned;
+	    try {
+	      this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+	    } catch (error) {
+	      if (this.ownsCache) this.cache?.dispose();
+	      throw error;
+	    }
+	  }
+	  get map() {
+	    return this.store.map;
+	  }
+	  get stats() {
+	    return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
+	  }
+	  resolveChunk(chunkX, chunkY) {
+	    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) return void 0;
+	    return {
+	      x: positiveModulo(chunkX, this.chunkCountX),
+	      y: positiveModulo(chunkY, this.chunkCountY)
+	    };
+	  }
+	  chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
+	    const dx = Math.min(Math.abs(chunkX - centerChunkX), this.chunkCountX - Math.abs(chunkX - centerChunkX));
+	    const dy = Math.min(Math.abs(chunkY - centerChunkY), this.chunkCountY - Math.abs(chunkY - centerChunkY));
+	    return Math.hypot(dx, dy);
+	  }
+	  async loadChunk(chunkX, chunkY, request = {}) {
+	    if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+	    const resolved = this.resolveChunk(chunkX, chunkY);
+	    if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+	      throw new RangeError("toroidal chunk coordinates must use canonical bounds");
+	    }
+	    const generation = {
+	      seed: this.seed,
+	      chunkX,
+	      chunkY,
+	      chunkSize: this.chunkSize,
+	      world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
+	    };
+	    const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+	    const cacheEpoch = this.cacheEpoch;
+	    let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
+	    if (!packed) {
+	      packed = await this.pool.generateChunk(generation, request);
+	      if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
+	    }
+	    if (request.signal?.aborted) throw abortError2();
+	    const coreTiles = this.store.add(packed);
+	    return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
+	  }
+	  releaseChunk(chunk) {
+	    this.store.remove(chunk.chunkX, chunk.chunkY);
+	  }
+	  hasChunk(chunkX, chunkY) {
+	    return this.store.hasChunk(chunkX, chunkY);
+	  }
+	  hasTile(x, y) {
+	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < 0 || x >= this.bounds.width || y < 0 || y >= this.bounds.height) return false;
+	    return this.store.hasCoreTile(x, y);
+	  }
+	  setTileOverride(x, y, changes) {
+	    if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+	    this.store.setTileOverride(
+	      positiveModulo(x, this.bounds.width),
+	      positiveModulo(y, this.bounds.height),
+	      changes
+	    );
+	  }
+	  clearTileOverride(x, y) {
+	    if (this.disposed) return false;
+	    return this.store.clearTileOverride(
+	      positiveModulo(x, this.bounds.width),
+	      positiveModulo(y, this.bounds.height)
+	    );
+	  }
+	  clearCache() {
+	    this.cacheEpoch += 1;
+	    return this.cache?.clear() ?? Promise.resolve(false);
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    this.pool.dispose();
+	    this.store.clear();
+	    if (this.ownsCache) this.cache?.dispose();
+	  }
+	  async readCachedChunk(key, chunkX, chunkY) {
+	    if (!this.cache) return void 0;
+	    const chunk = await this.cache.get(key).catch(() => void 0);
+	    if (!chunk || chunk.chunkX !== chunkX || chunk.chunkY !== chunkY || chunk.chunkSize !== this.chunkSize) return void 0;
+	    this.cachedLoads += 1;
+	    return chunk;
+	  }
+	};
 	var ProceduralWorldSource = class {
 	  constructor(options, dependencies = {}) {
+	    this.cachedLoads = 0;
+	    this.cacheEpoch = 0;
 	    this.disposed = false;
 	    if (!options || typeof options !== "object") throw new TypeError("procedural world options are required");
 	    if (options.workerCount !== void 0 && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
@@ -9473,14 +10243,26 @@ void main() {
 	    this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
 	    validateChunkSize(this.chunkSize);
 	    this.seed = options.seed;
+	    this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+	    if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
+	      throw new RangeError("generatorVersion must be a positive integer");
+	    }
 	    this.store = dependencies.store ?? new SparseWorldChunkStore();
-	    this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+	    const resolvedCache = resolveCache(options, dependencies);
+	    this.cache = resolvedCache.cache;
+	    this.ownsCache = resolvedCache.owned;
+	    try {
+	      this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+	    } catch (error) {
+	      if (this.ownsCache) this.cache?.dispose();
+	      throw error;
+	    }
 	  }
 	  get map() {
 	    return this.store.map;
 	  }
 	  get stats() {
-	    return this.pool.stats;
+	    return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
 	  }
 	  resolveChunk(chunkX, chunkY) {
 	    return Number.isSafeInteger(chunkX) && Number.isSafeInteger(chunkY) ? { x: chunkX, y: chunkY } : void 0;
@@ -9490,10 +10272,14 @@ void main() {
 	  }
 	  async loadChunk(chunkX, chunkY, request = {}) {
 	    if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
-	    const packed = await this.pool.generateChunk(
-	      { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize },
-	      request
-	    );
+	    const generation = { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize };
+	    const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+	    const cacheEpoch = this.cacheEpoch;
+	    let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
+	    if (!packed) {
+	      packed = await this.pool.generateChunk(generation, request);
+	      if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
+	    }
 	    if (request.signal?.aborted) throw abortError2();
 	    const coreTiles = this.store.add(packed);
 	    return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
@@ -9507,11 +10293,31 @@ void main() {
 	  hasTile(x, y) {
 	    return this.store.hasCoreTile(x, y);
 	  }
+	  setTileOverride(x, y, changes) {
+	    if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+	    this.store.setTileOverride(x, y, changes);
+	  }
+	  clearTileOverride(x, y) {
+	    if (this.disposed) return false;
+	    return this.store.clearTileOverride(x, y);
+	  }
+	  clearCache() {
+	    this.cacheEpoch += 1;
+	    return this.cache?.clear() ?? Promise.resolve(false);
+	  }
 	  dispose() {
 	    if (this.disposed) return;
 	    this.disposed = true;
 	    this.pool.dispose();
 	    this.store.clear();
+	    if (this.ownsCache) this.cache?.dispose();
+	  }
+	  async readCachedChunk(key, chunkX, chunkY) {
+	    if (!this.cache) return void 0;
+	    const chunk = await this.cache.get(key).catch(() => void 0);
+	    if (!chunk || chunk.chunkX !== chunkX || chunk.chunkY !== chunkY || chunk.chunkSize !== this.chunkSize) return void 0;
+	    this.cachedLoads += 1;
+	    return chunk;
 	  }
 	};
 	function packedChunkFromWorldChunk(chunk) {
@@ -9562,6 +10368,8 @@ void main() {
 	    this.wanted = /* @__PURE__ */ new Set();
 	    this.centerChunkX = 0;
 	    this.centerChunkY = 0;
+	    this.predictedChunkX = 0;
+	    this.predictedChunkY = 0;
 	    this.disposed = false;
 	    this.completed = 0;
 	    this.retried = 0;
@@ -9578,18 +10386,29 @@ void main() {
 	    integerOption("maxRetries", this.maxRetries, 0);
 	    integerOption("retryBaseDelayMs", this.retryBaseDelayMs, 0);
 	  }
-	  setCenterTile(x, y) {
+	  setCenterTile(x, y, predictedTile) {
 	    if (this.disposed) return Promise.reject(new Error("WorldStreamer has been disposed"));
 	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
 	      return Promise.reject(new RangeError("streaming center must use safe integer tile coordinates"));
 	    }
-	    const rawX = Math.floor(x / this.source.chunkSize);
-	    const rawY = Math.floor(y / this.source.chunkSize);
-	    const center = this.source.resolveChunk(rawX, rawY);
+	    const center = this.resolveTileChunk(x, y);
 	    if (!center) return Promise.reject(new RangeError("streaming center is outside the world bounds"));
-	    const changed = center.x !== this.centerChunkX || center.y !== this.centerChunkY || this.wanted.size === 0;
+	    let predicted = center;
+	    if (predictedTile) {
+	      if (!Number.isSafeInteger(predictedTile.x) || !Number.isSafeInteger(predictedTile.y)) {
+	        return Promise.reject(new RangeError("predicted streaming tile must use safe integer coordinates"));
+	      }
+	      const candidate = this.resolveTileChunk(predictedTile.x, predictedTile.y);
+	      const maximumAhead = Math.max(0, this.retentionRadius - this.loadRadius);
+	      if (candidate && this.source.chunkDistance(candidate.x, candidate.y, center.x, center.y) <= maximumAhead) {
+	        predicted = candidate;
+	      }
+	    }
+	    const changed = center.x !== this.centerChunkX || center.y !== this.centerChunkY || predicted.x !== this.predictedChunkX || predicted.y !== this.predictedChunkY || this.wanted.size === 0;
 	    this.centerChunkX = center.x;
 	    this.centerChunkY = center.y;
+	    this.predictedChunkX = predicted.x;
+	    this.predictedChunkY = predicted.y;
 	    if (changed) this.refreshDemand();
 	    return this.requestChunk(center.x, center.y, 0);
 	  }
@@ -9604,7 +10423,12 @@ void main() {
 	      busyWorkers: source?.busyWorkers ?? 0,
 	      completedChunks: source?.completed ?? this.completed,
 	      retriedChunkRequests: this.retried,
-	      failedChunks: this.failed
+	      failedChunks: this.failed,
+	      cacheHits: source?.cacheHits ?? 0,
+	      cacheMisses: source?.cacheMisses ?? 0,
+	      cachedChunks: source?.cachedChunks ?? 0,
+	      cachedBytes: source?.cachedBytes ?? 0,
+	      cacheErrors: source?.cacheErrors ?? 0
 	    };
 	  }
 	  get residentChunks() {
@@ -9622,22 +10446,44 @@ void main() {
 	    this.residents.clear();
 	    if (disposeSource) this.source.dispose();
 	  }
+	  resolveTileChunk(tileX, tileY) {
+	    const bounds = this.source.bounds;
+	    let x = tileX;
+	    let y = tileY;
+	    if (bounds) {
+	      if (bounds.wrapX) x = positiveModulo(x, bounds.width);
+	      else if (x < 0 || x >= bounds.width) return void 0;
+	      if (bounds.wrapY) y = positiveModulo(y, bounds.height);
+	      else if (y < 0 || y >= bounds.height) return void 0;
+	    }
+	    return this.source.resolveChunk(
+	      Math.floor(x / this.source.chunkSize),
+	      Math.floor(y / this.source.chunkSize)
+	    );
+	  }
 	  refreshDemand() {
 	    const coordinateByKey = /* @__PURE__ */ new Map();
-	    for (let dx = -this.loadRadius; dx <= this.loadRadius; dx += 1) {
-	      for (let dy = -this.loadRadius; dy <= this.loadRadius; dy += 1) {
-	        const distance = Math.hypot(dx, dy);
-	        if (distance > this.loadRadius + 0.5) continue;
-	        const resolved = this.source.resolveChunk(this.centerChunkX + dx, this.centerChunkY + dy);
-	        if (!resolved) continue;
-	        const key = _WorldStreamer.key(resolved.x, resolved.y);
-	        const existing = coordinateByKey.get(key);
-	        if (!existing || distance < existing.distance) {
-	          coordinateByKey.set(key, { ...resolved, distance, key });
+	    const collect = (originX, originY, predictionPenalty) => {
+	      for (let dx = -this.loadRadius; dx <= this.loadRadius; dx += 1) {
+	        for (let dy = -this.loadRadius; dy <= this.loadRadius; dy += 1) {
+	          const radialDistance = Math.hypot(dx, dy);
+	          if (radialDistance > this.loadRadius + 0.5) continue;
+	          const resolved = this.source.resolveChunk(originX + dx, originY + dy);
+	          if (!resolved) continue;
+	          const key = _WorldStreamer.key(resolved.x, resolved.y);
+	          const distance = radialDistance + predictionPenalty;
+	          const existing = coordinateByKey.get(key);
+	          if (!existing || distance < existing.distance) {
+	            coordinateByKey.set(key, { ...resolved, distance, key });
+	          }
 	        }
 	      }
+	    };
+	    collect(this.centerChunkX, this.centerChunkY, 0);
+	    if (this.predictedChunkX !== this.centerChunkX || this.predictedChunkY !== this.centerChunkY) {
+	      collect(this.predictedChunkX, this.predictedChunkY, 0.35);
 	    }
-	    const coordinates = [...coordinateByKey.values()].sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y);
+	    const coordinates = [...coordinateByKey.values()].sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y).slice(0, this.maxResidentChunks);
 	    this.wanted = new Set(coordinates.map((coordinate) => coordinate.key));
 	    for (const [key, request] of this.pending) {
 	      if (!this.wanted.has(key)) request.controller.abort();
@@ -9656,8 +10502,10 @@ void main() {
 	    const resident = this.residents.get(key);
 	    if (resident) return Promise.resolve(resident);
 	    const existing = this.pending.get(key);
-	    if (existing) return existing.promise;
+	    if (existing && !existing.controller.signal.aborted) return existing.promise;
+	    if (existing) this.pending.delete(key);
 	    const controller = new AbortController();
+	    let pending;
 	    const promise = this.loadWithRetry(chunkX, chunkY, priority, controller.signal).then((chunk) => {
 	      if (this.disposed || !this.wanted.has(key)) {
 	        this.source.releaseChunk(chunk);
@@ -9675,15 +10523,20 @@ void main() {
 	      this.enforceResidentLimit();
 	      return chunk;
 	    }).finally(() => {
-	      this.pending.delete(key);
+	      if (this.pending.get(key) === pending) this.pending.delete(key);
 	    });
-	    this.pending.set(key, { controller, promise });
+	    pending = { controller, promise };
+	    this.pending.set(key, pending);
 	    return promise;
 	  }
 	  async loadWithRetry(chunkX, chunkY, priority, signal) {
 	    for (let attempt = 0; ; attempt += 1) {
 	      try {
 	        const chunk = await this.source.loadChunk(chunkX, chunkY, { priority, signal });
+	        if (signal.aborted) {
+	          this.source.releaseChunk(chunk);
+	          throw abortError3("Chunk load completed after cancellation");
+	        }
 	        try {
 	          assertWorldChunk(this.source, chunk, chunkX, chunkY);
 	        } catch (reason) {
@@ -9810,10 +10663,13 @@ void main() {
 	  gpuChunkCacheSize: 128,
 	  cpuChunkCacheSize: 192
 	};
+	var WORLD_COPY_REFRESH_TASK = "@world-copy-refresh";
 	var HexMap = class extends EventEmitter {
 	  constructor(options) {
 	    super();
 	    this.worldCopies = [];
+	    this.worldCopyGroups = /* @__PURE__ */ new Map();
+	    this.worldCopyObjects = /* @__PURE__ */ new Map();
 	    this.worldCopyMaterials = [];
 	    this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
 	    this.worldPatternOffset = new three.Vector2();
@@ -9829,6 +10685,12 @@ void main() {
 	    this.worldChunkSize = 24;
 	    this.renderOrigin = new three.Vector2();
 	    this.logicalTargetScratch = new three.Vector3();
+	    this.predictedTargetScratch = new three.Vector3();
+	    this.streamingVelocity = new three.Vector2();
+	    this.streamingMotionScratch = new three.Vector2();
+	    this.streamingAheadScratch = new three.Vector2();
+	    this.streamingPredictionSeconds = 1.25;
+	    this.streamingPredictionMaxChunks = 1;
 	    this.floatingOriginThreshold = 8192;
 	    this.mouseDownAt = null;
 	    // screen coords, used to distinguish click vs. drag
@@ -9853,7 +10715,7 @@ void main() {
 	      this.controls.update(dtS);
 	      this.wrapCameraToWorld();
 	      this.rebaseWorld();
-	      this.updateWorldDemand();
+	      this.updateWorldDemand(Math.min(dtS, 0.1));
 	      this.frameTasks.runFrame();
 	      this.updateWorldChunkVisibility();
 	      this.terrain?.update(dtS);
@@ -10168,10 +11030,13 @@ void main() {
 	    if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
 	  }
 	  clearWorldCopies() {
+	    this.frameTasks.cancel(WORLD_COPY_REFRESH_TASK);
 	    this.chunkScheduler.invalidateScene();
 	    for (const copy of this.worldCopies) this.worldRoot.remove(copy);
 	    for (const material of this.worldCopyMaterials) material.dispose();
 	    this.worldCopies = [];
+	    this.worldCopyGroups.clear();
+	    this.worldCopyObjects.clear();
 	    this.worldCopyMaterials = [];
 	    this.worldCopyMaterialCache.clear();
 	  }
@@ -10221,28 +11086,27 @@ void main() {
 	    if (source instanceof three.InstancedMesh) {
 	      const instancedCopy = new three.InstancedMesh(source.geometry, source.material, source.count);
 	      instancedCopy.copy(source, false);
-	      instancedCopy.instanceMatrix = source.instanceMatrix;
-	      instancedCopy.instanceColor = source.instanceColor;
-	      instancedCopy.count = source.count;
 	      copy = instancedCopy;
 	    } else {
 	      copy = source.clone(true);
-	      const sourceInstances = [];
-	      const copyInstances = [];
-	      source.traverse((object) => {
-	        if (object.isInstancedMesh) sourceInstances.push(object);
-	      });
-	      copy.traverse((object) => {
-	        if (object.isInstancedMesh) copyInstances.push(object);
-	      });
-	      copyInstances.forEach((instance, index) => {
-	        const original = sourceInstances[index];
-	        if (!original) return;
-	        instance.instanceMatrix = original.instanceMatrix;
-	        instance.instanceColor = original.instanceColor;
-	        instance.count = original.count;
-	      });
 	    }
+	    const sourceObjects = [];
+	    const copyObjects = [];
+	    source.traverse((object) => sourceObjects.push(object));
+	    copy.traverse((object) => copyObjects.push(object));
+	    copyObjects.forEach((object, index) => {
+	      const original = sourceObjects[index];
+	      if (!original) return;
+	      object.onBeforeRender = original.onBeforeRender;
+	      object.onAfterRender = original.onAfterRender;
+	      if (original.isInstancedMesh && object.isInstancedMesh) {
+	        const sourceInstance = original;
+	        const copyInstance = object;
+	        copyInstance.instanceMatrix = sourceInstance.instanceMatrix;
+	        copyInstance.instanceColor = sourceInstance.instanceColor;
+	        copyInstance.count = sourceInstance.count;
+	      }
+	    });
 	    copy.traverse((object) => {
 	      const mesh = object;
 	      if (!mesh.isMesh) return;
@@ -10266,48 +11130,87 @@ void main() {
 	    const bounds = metadata.bounds;
 	    return bounds.maxX + source.position.x + offsetX >= -padding && bounds.minX + source.position.x + offsetX <= this.worldPeriodX + padding && bounds.maxZ + source.position.z + offsetY >= -padding && bounds.minZ + source.position.z + offsetY <= this.worldPeriodY + padding;
 	  }
+	  //Multiple source chunks and their async city/forest models can finish in
+	  //the same browser turn. Coalesce those notifications into one scheduled
+	  //synchronization so toroidal copy work participates in frame backpressure.
 	  refreshWorldCopies() {
-	    this.clearWorldCopies();
-	    if (!this.mapData || !this.mapData.wrapX && !this.mapData.wrapY) return;
+	    if (this.disposed) return;
+	    this.frameTasks.enqueue(WORLD_COPY_REFRESH_TASK, -1, () => this.synchronizeWorldCopies());
+	  }
+	  //Diffs physical toroidal images by source UUID and offset. Existing clones,
+	  //shared geometry and copy-specific shader materials survive unrelated chunk
+	  //mounts; only newly visible/removed source objects are added or released.
+	  synchronizeWorldCopies() {
+	    if (!this.mapData || !this.mapData.wrapX && !this.mapData.wrapY) {
+	      this.clearWorldCopies();
+	      return;
+	    }
 	    const xOffsets = this.copyOffsets(this.mapData.wrapX, this.worldPeriodX);
 	    const yOffsets = this.copyOffsets(this.mapData.wrapY, this.worldPeriodY);
+	    const sources = [
+	      ...this.terrain?.children ?? [],
+	      ...this.forest?.children ?? [],
+	      ...this.grass?.visible ? this.grass.children : []
+	    ];
+	    for (const record of this.worldChunkLayers.values()) {
+	      sources.push(...record.forest?.children ?? []);
+	      if (record.grass?.visible) sources.push(...record.grass.children);
+	    }
+	    const desired = /* @__PURE__ */ new Set();
+	    let sceneChanged = false;
 	    for (const copyX of xOffsets) {
 	      for (const copyY of yOffsets) {
 	        if (copyX === 0 && copyY === 0) continue;
 	        const offsetX = copyX * this.worldPeriodX;
 	        const offsetY = copyY * this.worldPeriodY;
-	        const group = new three.Group();
-	        group.position.set(offsetX, 0, offsetY);
-	        for (const child of this.terrain?.children ?? []) {
-	          if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
-	        }
-	        for (const child of this.forest?.children ?? []) {
-	          if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-	          group.add(this.cloneWorldObject(child, offsetX, offsetY));
-	        }
-	        if (this.grass?.visible) {
-	          for (const child of this.grass.children) {
-	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	        const groupKey = `${offsetX},${offsetY}`;
+	        for (const source of sources) {
+	          if (!this.worldCopyCanBecomeVisible(source, offsetX, offsetY)) continue;
+	          const objectKey = `${source.uuid}@${groupKey}`;
+	          desired.add(objectKey);
+	          if (this.worldCopyObjects.has(objectKey)) continue;
+	          let group = this.worldCopyGroups.get(groupKey);
+	          if (!group) {
+	            group = new three.Group();
+	            group.position.set(offsetX, 0, offsetY);
+	            this.worldCopyGroups.set(groupKey, group);
+	            this.worldRoot.add(group);
 	          }
+	          const copy = this.cloneWorldObject(source, offsetX, offsetY);
+	          group.add(copy);
+	          this.worldCopyObjects.set(objectKey, copy);
+	          sceneChanged = true;
 	        }
-	        for (const record of this.worldChunkLayers.values()) {
-	          for (const child of record.forest?.children ?? []) {
-	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
-	          }
-	          if (!record.grass?.visible) continue;
-	          for (const child of record.grass.children) {
-	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
-	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
-	          }
-	        }
-	        if (group.children.length === 0) continue;
-	        this.worldCopies.push(group);
-	        this.worldRoot.add(group);
 	      }
 	    }
+	    for (const [key, copy] of this.worldCopyObjects) {
+	      if (desired.has(key)) continue;
+	      copy.removeFromParent();
+	      this.worldCopyObjects.delete(key);
+	      sceneChanged = true;
+	    }
+	    for (const [key, group] of this.worldCopyGroups) {
+	      if (group.children.length > 0) continue;
+	      group.removeFromParent();
+	      this.worldCopyGroups.delete(key);
+	    }
+	    const usedMaterials = /* @__PURE__ */ new Set();
+	    for (const copy of this.worldCopyObjects.values()) {
+	      copy.traverse((object) => {
+	        const mesh = object;
+	        if (!mesh.isMesh) return;
+	        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+	        for (const material of materials) usedMaterials.add(material);
+	      });
+	    }
+	    for (const [key, material] of this.worldCopyMaterialCache) {
+	      if (usedMaterials.has(material)) continue;
+	      material.dispose();
+	      this.worldCopyMaterialCache.delete(key);
+	    }
+	    this.worldCopies = [...this.worldCopyGroups.values()];
+	    this.worldCopyMaterials = [...this.worldCopyMaterialCache.values()];
+	    if (sceneChanged) this.chunkScheduler.invalidateScene();
 	  }
 	  setupMarkers() {
 	    const size = this.options.size;
@@ -10374,11 +11277,21 @@ void main() {
 	  activateWorldChunk(metadata, lod, objects) {
 	    if (metadata.kind === "land" || metadata.kind === "water") {
 	      const geometry = this.terrain?.activateChunk(metadata, lod);
+	      if (geometry) {
+	        for (const object of objects) {
+	          if (object.isMesh) object.geometry = geometry;
+	        }
+	      }
 	      return geometry ? { geometries: [geometry] } : void 0;
 	    }
 	    if (metadata.kind === "grass") {
 	      const field = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
 	      const geometry = field?.activateChunk(metadata, lod);
+	      if (geometry) {
+	        for (const object of objects) {
+	          if (object.isMesh) object.geometry = geometry;
+	        }
+	      }
 	      return geometry ? { geometries: [geometry] } : void 0;
 	    }
 	    const forest = this.streamedForestByChunkId.get(metadata.id) ?? this.forest;
@@ -10393,6 +11306,12 @@ void main() {
 	  //-------------------------------------------------------------------------
 	  //Public API
 	  //-------------------------------------------------------------------------
+	  //Backwards-compatible finite-map convenience entry point. loadWorld() is
+	  //the extensible source API; existing 0.5 consumers can keep passing MapInfo
+	  //directly without a breaking migration.
+	  load(mapData) {
+	    return this.loadWorld({ source: new StaticWorldSource(mapData) });
+	  }
 	  async loadWorld(options) {
 	    if (this.disposed) {
 	      options?.source?.dispose();
@@ -10430,6 +11349,8 @@ void main() {
 	    const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
 	    const frameBudgetMs = options.frameBudgetMs ?? 3;
 	    const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
+	    const predictionSeconds = options.predictionSeconds ?? 1.25;
+	    const predictionMaxChunks = options.predictionMaxChunks ?? 1;
 	    const integerAtLeast = (name, value, minimum) => {
 	      if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
 	    };
@@ -10440,8 +11361,12 @@ void main() {
 	      integerAtLeast("maxRetries", maxRetries, 0);
 	      integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
 	      integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
+	      integerAtLeast("predictionMaxChunks", predictionMaxChunks, 0);
 	      if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
 	        throw new RangeError("frameBudgetMs must be a positive finite number");
+	      }
+	      if (!Number.isFinite(predictionSeconds) || predictionSeconds < 0) {
+	        throw new RangeError("predictionSeconds must be a non-negative finite number");
 	      }
 	    } catch (reason) {
 	      source.dispose();
@@ -10457,6 +11382,13 @@ void main() {
 	    const revision = ++this.loadRevision;
 	    this.worldSource = source;
 	    this.worldChunkSize = chunkSize;
+	    this.streamingPredictionSeconds = predictionSeconds;
+	    this.streamingPredictionMaxChunks = Math.min(
+	      predictionMaxChunks,
+	      Math.max(0, retentionRadius - loadRadius)
+	    );
+	    this.lastStreamingTarget = void 0;
+	    this.streamingVelocity.set(0, 0);
 	    this.mapData = source.map;
 	    this.fogStates = new FogStateStore(source.map);
 	    this.floatingOriginThreshold = threshold;
@@ -10501,6 +11433,7 @@ void main() {
 	      );
 	      if (!centerChunk) throw new RangeError("initialTile does not resolve to a source chunk");
 	      this.worldDemandChunkKey = WorldStreamer.key(centerChunk.x, centerChunk.y);
+	      this.worldDemandSignature = this.worldDemandChunkKey;
 	      this.rebaseWorld();
 	      const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
 	      const centerKey = WorldStreamer.key(loadedCenter.chunkX, loadedCenter.chunkY);
@@ -10669,6 +11602,9 @@ void main() {
 	    const streamer = this.worldStreamer;
 	    const source = this.worldSource;
 	    this.worldDemandChunkKey = void 0;
+	    this.worldDemandSignature = void 0;
+	    this.lastStreamingTarget = void 0;
+	    this.streamingVelocity.set(0, 0);
 	    this.frameTasks.clear();
 	    streamer?.dispose();
 	    if (!streamer) source?.dispose();
@@ -10692,6 +11628,7 @@ void main() {
 	    this.streamedGrassResources = void 0;
 	    this.streamedForestResources?.dispose();
 	    this.streamedForestResources = void 0;
+	    this.clearWorldCopies();
 	  }
 	  reapplyFogToPoints(points, record) {
 	    for (const point of points) {
@@ -11019,13 +11956,32 @@ void main() {
 	    this.camera.position.x -= x;
 	    this.camera.position.z -= z;
 	  }
-	  updateWorldDemand() {
+	  updateWorldDemand(dtS) {
 	    if (!this.worldStreamer || !this.worldSource) return;
 	    this.logicalTargetScratch.copy(this.controls.target);
 	    if (this.mapData.infinite) {
 	      this.logicalTargetScratch.x += this.renderOrigin.x;
 	      this.logicalTargetScratch.z += this.renderOrigin.y;
 	    }
+	    const currentX = this.logicalTargetScratch.x;
+	    const currentY = this.logicalTargetScratch.z;
+	    if (this.lastStreamingTarget && dtS > 0) {
+	      let dx = currentX - this.lastStreamingTarget.x;
+	      let dy = currentY - this.lastStreamingTarget.y;
+	      if (this.mapData.wrapX && this.worldPeriodX > 0) {
+	        if (dx > this.worldPeriodX / 2) dx -= this.worldPeriodX;
+	        else if (dx < -this.worldPeriodX / 2) dx += this.worldPeriodX;
+	      }
+	      if (this.mapData.wrapY && this.worldPeriodY > 0) {
+	        if (dy > this.worldPeriodY / 2) dy -= this.worldPeriodY;
+	        else if (dy < -this.worldPeriodY / 2) dy += this.worldPeriodY;
+	      }
+	      const alpha = 1 - Math.exp(-dtS / 0.25);
+	      this.streamingMotionScratch.set(dx / dtS, dy / dtS);
+	      this.streamingVelocity.lerp(this.streamingMotionScratch, alpha);
+	    }
+	    this.lastStreamingTarget ?? (this.lastStreamingTarget = new three.Vector2());
+	    this.lastStreamingTarget.set(currentX, currentY);
 	    const tile = pickTile(
 	      this.logicalTargetScratch,
 	      this.options.size,
@@ -11041,9 +11997,32 @@ void main() {
 	    );
 	    if (!resolved) return;
 	    const key = WorldStreamer.key(resolved.x, resolved.y);
-	    if (key === this.worldDemandChunkKey) return;
+	    let predictedTile;
+	    if (this.streamingPredictionSeconds > 0 && this.streamingPredictionMaxChunks > 0 && this.streamingVelocity.lengthSq() > 1) {
+	      const maxAhead = this.streamingPredictionMaxChunks * this.worldChunkSize * this.options.size * 1.5;
+	      const ahead = this.streamingAheadScratch.copy(this.streamingVelocity).multiplyScalar(this.streamingPredictionSeconds);
+	      if (ahead.length() > maxAhead) ahead.setLength(maxAhead);
+	      this.predictedTargetScratch.copy(this.logicalTargetScratch);
+	      this.predictedTargetScratch.x += ahead.x;
+	      this.predictedTargetScratch.z += ahead.y;
+	      predictedTile = pickTile(
+	        this.predictedTargetScratch,
+	        this.options.size,
+	        this.mapData.infinite ? void 0 : this.mapData.w,
+	        this.mapData.infinite ? void 0 : this.mapData.h,
+	        this.mapData.wrapX,
+	        this.mapData.wrapY
+	      ) ?? void 0;
+	    }
+	    const predictedChunk = predictedTile ? this.worldSource.resolveChunk(
+	      Math.floor(predictedTile.x / this.worldChunkSize),
+	      Math.floor(predictedTile.y / this.worldChunkSize)
+	    ) : void 0;
+	    const signature = `${key}>${predictedChunk ? WorldStreamer.key(predictedChunk.x, predictedChunk.y) : key}`;
+	    if (signature === this.worldDemandSignature) return;
 	    this.worldDemandChunkKey = key;
-	    void this.worldStreamer.setCenterTile(tile.x, tile.y).catch((error) => {
+	    this.worldDemandSignature = signature;
+	    void this.worldStreamer.setCenterTile(tile.x, tile.y, predictedTile).catch((error) => {
 	      if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
 	    });
 	  }
@@ -12151,131 +13130,6 @@ void main() {
 	  }
 	};
 
-	// src/world/generateWorld.ts
-	var MIN_WORLD_SIZE = 8;
-	var MAX_WORLD_SIZE = 512;
-	var SEA_LEVEL2 = 0.43;
-	var isWater3 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
-	function assertDimension(name, value) {
-	  if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-	    throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-	  }
-	}
-	function sampleBoundedClimate(seed, x, y, width, height) {
-	  const nx = width === 1 ? 0 : x / (width - 1) * 2 - 1;
-	  const ny = height === 1 ? 0 : y / (height - 1) * 2 - 1;
-	  const edge = Math.max(Math.abs(nx), Math.abs(ny));
-	  const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
-	  const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
-	  const elevation = continent * 0.78 + detail * 0.22 + 0.12 - Math.pow(edge, 3) * 0.58;
-	  const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
-	  const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.07, y * 0.07, 3);
-	  const latitude = Math.abs(ny);
-	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-	  return { elevation, moisture, temperature };
-	}
-	function sampleToroidalClimate(seed, x, y, width, height) {
-	  const nx = x / width;
-	  const ny = y / height;
-	  const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
-	  const continent = periodicFractalNoise2D(
-	    seed,
-	    nx,
-	    ny,
-	    cells(0.055, width, 2),
-	    cells(0.055, height, 2),
-	    5
-	  );
-	  const detail = periodicFractalNoise2D(
-	    seed ^ 2738958700,
-	    nx,
-	    ny,
-	    cells(0.14, width, 3),
-	    cells(0.14, height, 3),
-	    3
-	  );
-	  const elevation = continent * 0.78 + detail * 0.22 + 0.03;
-	  const moisture = periodicFractalNoise2D(
-	    seed ^ 3355524772,
-	    nx,
-	    ny,
-	    cells(0.08, width, 2),
-	    cells(0.08, height, 2),
-	    4
-	  );
-	  const temperatureNoise = periodicFractalNoise2D(
-	    seed ^ 2911926141,
-	    nx,
-	    ny,
-	    cells(0.07, width, 2),
-	    cells(0.07, height, 2),
-	    3
-	  );
-	  const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-	  const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-	  return { elevation, moisture, temperature };
-	}
-	function classifyTerrain2({ elevation, moisture, temperature }) {
-	  if (elevation < SEA_LEVEL2) return "sea" /* sea */;
-	  if (elevation > 0.75) return "mountain" /* mountain */;
-	  if (temperature < 0.18) return "snow" /* snow */;
-	  if (temperature < 0.34) return "tundra" /* tundra */;
-	  if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
-	  return "land" /* land */;
-	}
-	function decorateTile(seed, x, y, climate, type) {
-	  const tile = { type };
-	  if (isWater3(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return tile;
-	  const modifiers = [];
-	  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL2 + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
-	  if (lake) {
-	    modifiers.push("lake");
-	  } else {
-	    if (climate.elevation > 0.62) modifiers.push("hill");
-	    const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
-	    if (randomAt(seed, x, y, 668265263) < forestChance) {
-	      modifiers.push("wood");
-	      tile.treeModel = climate.temperature > 0.67 ? "Assets/models/palm" : climate.temperature < 0.4 ? "Assets/models/pinia" : "Assets/models/oak";
-	    }
-	  }
-	  if (modifiers.length > 0) tile.modifiers = modifiers;
-	  return tile;
-	}
-	function generateWorld({ seed, width, height, topology = "bounded" }) {
-	  assertDimension("width", width);
-	  assertDimension("height", height);
-	  if (topology !== "bounded" && topology !== "toroidal") {
-	    throw new RangeError('topology must be either "bounded" or "toroidal"');
-	  }
-	  if (topology === "toroidal" && width % 2 !== 0) {
-	    throw new RangeError("toroidal worlds require an even width");
-	  }
-	  const numericSeed = seedToUint32(seed);
-	  const data = {};
-	  const toroidal = topology === "toroidal";
-	  for (let x = 0; x < width; x += 1) {
-	    data[x] = {};
-	    for (let y = 0; y < height; y += 1) {
-	      const climate = toroidal ? sampleToroidalClimate(numericSeed, x, y, width, height) : sampleBoundedClimate(numericSeed, x, y, width, height);
-	      const type = classifyTerrain2(climate);
-	      data[x][y] = decorateTile(numericSeed, x, y, climate, type);
-	    }
-	  }
-	  const world = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
-	  for (let x = 0; x < width; x += 1) {
-	    for (let y = 0; y < height; y += 1) {
-	      const tile = data[x][y];
-	      if (tile.type !== "sea" /* sea */) continue;
-	      const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
-	        const neighbor = data[nx]?.[ny];
-	        return neighbor !== void 0 && !isWater3(neighbor.type);
-	      });
-	      if (touchesLand) tile.type = "coastal" /* coastal */;
-	    }
-	  }
-	  return world;
-	}
-
 	exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
 	exports.EventEmitter = EventEmitter;
 	exports.FogOfWar = FogOfWar;
@@ -12284,6 +13138,7 @@ void main() {
 	exports.GameEngine = GameEngine;
 	exports.HEXPolygon = HEXPolygon;
 	exports.HexMap = HexMap;
+	exports.IndexedDbWorldChunkCache = IndexedDbWorldChunkCache;
 	exports.Land = Land;
 	exports.LandColor = LandColor;
 	exports.LandPriority = LandPriority;
@@ -12295,16 +13150,20 @@ void main() {
 	exports.ProceduralWorldSource = ProceduralWorldSource;
 	exports.SparseWorldChunkStore = SparseWorldChunkStore;
 	exports.StaticWorldSource = StaticWorldSource;
+	exports.ToroidalWorldSource = ToroidalWorldSource;
 	exports.Unit = Unit;
 	exports.UnitActions = UnitActions;
 	exports.WORLD_CHUNK_FORMAT_VERSION = WORLD_CHUNK_FORMAT_VERSION;
 	exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
+	exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
 	exports.WorldGeneratorClient = WorldGeneratorClient;
 	exports.WorldGeneratorPool = WorldGeneratorPool;
 	exports.WorldStreamer = WorldStreamer;
 	exports.assertPackedWorldChunk = assertPackedWorldChunk;
 	exports.assertWorldChunk = assertWorldChunk;
 	exports.assertWorldSource = assertWorldSource;
+	exports.clearWorldChunkCache = clearWorldChunkCache;
+	exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
 	exports.decodeWorldChunkTile = decodeWorldChunkTile;
 	exports.generateWorld = generateWorld;
 	exports.generateWorldChunk = generateWorldChunk;

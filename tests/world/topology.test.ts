@@ -49,6 +49,13 @@ describe("toroidal topology", () => {
         expect(pickTile(new Vector3(0, 0, 0), 0, 8, 8)).toBeNull();
     });
 
+    test("picks negative coordinates when map dimensions are unbounded", () => {
+        const size = 40;
+        const negative = getHexCenter(-9, -6, size);
+        expect(pickTile(new Vector3(negative.x, 0, negative.y), size))
+            .toMatchObject({ x: -9, y: -6, worldX: negative.x, worldY: negative.y });
+    });
+
     test("pathfinding takes the one-step route across a seam", () => {
         const world = allLandWorld();
         const allowed = Object.fromEntries(Object.values(Land).map(type => [type, true])) as { [key in Land]: boolean };

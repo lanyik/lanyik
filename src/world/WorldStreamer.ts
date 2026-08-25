@@ -1,4 +1,5 @@
 import { Point } from "../interfaces";
+import { positiveModulo } from "../helpers/topology";
 import { assertWorldChunk, assertWorldSource, WorldChunk, WorldSource } from "./WorldSource";
 
 export interface WorldStreamerOptions {
@@ -25,6 +26,11 @@ export interface WorldStreamingStats {
     completedChunks: number;
     retriedChunkRequests: number;
     failedChunks: number;
+    cacheHits: number;
+    cacheMisses: number;
+    cachedChunks: number;
+    cachedBytes: number;
+    cacheErrors: number;
 }
 
 interface PendingChunk {
@@ -79,6 +85,8 @@ export class WorldStreamer {
     private wanted = new Set<string>();
     private centerChunkX = 0;
     private centerChunkY = 0;
+    private predictedChunkX = 0;
+    private predictedChunkY = 0;
     private disposed = false;
     private completed = 0;
     private retried = 0;
@@ -102,18 +110,33 @@ export class WorldStreamer {
         integerOption("retryBaseDelayMs", this.retryBaseDelayMs, 0);
     }
 
-    public setCenterTile(x: number, y: number): Promise<WorldChunk> {
+    public setCenterTile(x: number, y: number, predictedTile?: Point): Promise<WorldChunk> {
         if (this.disposed) return Promise.reject(new Error("WorldStreamer has been disposed"));
         if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
             return Promise.reject(new RangeError("streaming center must use safe integer tile coordinates"));
         }
-        const rawX = Math.floor(x / this.source.chunkSize);
-        const rawY = Math.floor(y / this.source.chunkSize);
-        const center = this.source.resolveChunk(rawX, rawY);
+        const center = this.resolveTileChunk(x, y);
         if (!center) return Promise.reject(new RangeError("streaming center is outside the world bounds"));
-        const changed = center.x !== this.centerChunkX || center.y !== this.centerChunkY || this.wanted.size === 0;
+        let predicted = center;
+        if (predictedTile) {
+            if (!Number.isSafeInteger(predictedTile.x) || !Number.isSafeInteger(predictedTile.y)) {
+                return Promise.reject(new RangeError("predicted streaming tile must use safe integer coordinates"));
+            }
+            const candidate = this.resolveTileChunk(predictedTile.x, predictedTile.y);
+            // Prediction may extend only into the retention margin. This keeps
+            // speculative chunks from evicting the guaranteed current radius.
+            const maximumAhead = Math.max(0, this.retentionRadius - this.loadRadius);
+            if (candidate && this.source.chunkDistance(candidate.x, candidate.y, center.x, center.y) <= maximumAhead) {
+                predicted = candidate;
+            }
+        }
+        const changed = center.x !== this.centerChunkX || center.y !== this.centerChunkY
+            || predicted.x !== this.predictedChunkX || predicted.y !== this.predictedChunkY
+            || this.wanted.size === 0;
         this.centerChunkX = center.x;
         this.centerChunkY = center.y;
+        this.predictedChunkX = predicted.x;
+        this.predictedChunkY = predicted.y;
         if (changed) this.refreshDemand();
         return this.requestChunk(center.x, center.y, 0);
     }
@@ -129,7 +152,12 @@ export class WorldStreamer {
             busyWorkers: source?.busyWorkers ?? 0,
             completedChunks: source?.completed ?? this.completed,
             retriedChunkRequests: this.retried,
-            failedChunks: this.failed
+            failedChunks: this.failed,
+            cacheHits: source?.cacheHits ?? 0,
+            cacheMisses: source?.cacheMisses ?? 0,
+            cachedChunks: source?.cachedChunks ?? 0,
+            cachedBytes: source?.cachedBytes ?? 0,
+            cacheErrors: source?.cacheErrors ?? 0
         };
     }
 
@@ -151,23 +179,51 @@ export class WorldStreamer {
         if (disposeSource) this.source.dispose();
     }
 
+    private resolveTileChunk(tileX: number, tileY: number): Point | undefined {
+        const bounds = this.source.bounds;
+        let x = tileX;
+        let y = tileY;
+        if (bounds) {
+            if (bounds.wrapX) x = positiveModulo(x, bounds.width);
+            else if (x < 0 || x >= bounds.width) return undefined;
+            if (bounds.wrapY) y = positiveModulo(y, bounds.height);
+            else if (y < 0 || y >= bounds.height) return undefined;
+        }
+        return this.source.resolveChunk(
+            Math.floor(x / this.source.chunkSize),
+            Math.floor(y / this.source.chunkSize)
+        );
+    }
+
     private refreshDemand(): void {
         const coordinateByKey = new Map<string, ChunkCoordinate>();
-        for (let dx = -this.loadRadius; dx <= this.loadRadius; dx += 1) {
-            for (let dy = -this.loadRadius; dy <= this.loadRadius; dy += 1) {
-                const distance = Math.hypot(dx, dy);
-                if (distance > this.loadRadius + 0.5) continue;
-                const resolved = this.source.resolveChunk(this.centerChunkX + dx, this.centerChunkY + dy);
-                if (!resolved) continue;
-                const key = WorldStreamer.key(resolved.x, resolved.y);
-                const existing = coordinateByKey.get(key);
-                if (!existing || distance < existing.distance) {
-                    coordinateByKey.set(key, { ...resolved, distance, key });
+        const collect = (originX: number, originY: number, predictionPenalty: number) => {
+            for (let dx = -this.loadRadius; dx <= this.loadRadius; dx += 1) {
+                for (let dy = -this.loadRadius; dy <= this.loadRadius; dy += 1) {
+                    const radialDistance = Math.hypot(dx, dy);
+                    if (radialDistance > this.loadRadius + 0.5) continue;
+                    const resolved = this.source.resolveChunk(originX + dx, originY + dy);
+                    if (!resolved) continue;
+                    const key = WorldStreamer.key(resolved.x, resolved.y);
+                    const distance = radialDistance + predictionPenalty;
+                    const existing = coordinateByKey.get(key);
+                    if (!existing || distance < existing.distance) {
+                        coordinateByKey.set(key, { ...resolved, distance, key });
+                    }
                 }
             }
+        };
+        collect(this.centerChunkX, this.centerChunkY, 0);
+        if (this.predictedChunkX !== this.centerChunkX || this.predictedChunkY !== this.centerChunkY) {
+            // Current-area requests win ties; predicted work fills idle workers.
+            collect(this.predictedChunkX, this.predictedChunkY, 0.35);
         }
+        //maxResidentChunks is a hard source-residency limit. Restrict demand to
+        //the nearest chunks up front instead of loading a larger wanted set that
+        //cannot be evicted without immediately requesting it again.
         const coordinates = [...coordinateByKey.values()]
-            .sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y);
+            .sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y)
+            .slice(0, this.maxResidentChunks);
         this.wanted = new Set(coordinates.map(coordinate => coordinate.key));
 
         for (const [key, request] of this.pending) {
@@ -188,9 +244,14 @@ export class WorldStreamer {
         const resident = this.residents.get(key);
         if (resident) return Promise.resolve(resident);
         const existing = this.pending.get(key);
-        if (existing) return existing.promise;
+        if (existing && !existing.controller.signal.aborted) return existing.promise;
+        //An aborted promise settles on a microtask. A caller can move away and
+        //back before its finally handler runs, so detach it now and allow the
+        //new demand to create a fresh request for the same key.
+        if (existing) this.pending.delete(key);
 
         const controller = new AbortController();
+        let pending: PendingChunk;
         const promise = this.loadWithRetry(chunkX, chunkY, priority, controller.signal).then(chunk => {
             if (this.disposed || !this.wanted.has(key)) {
                 this.source.releaseChunk(chunk);
@@ -208,9 +269,11 @@ export class WorldStreamer {
             this.enforceResidentLimit();
             return chunk;
         }).finally(() => {
-            this.pending.delete(key);
+            //A superseded aborted request must not delete its replacement.
+            if (this.pending.get(key) === pending) this.pending.delete(key);
         });
-        this.pending.set(key, { controller, promise });
+        pending = { controller, promise };
+        this.pending.set(key, pending);
         return promise;
     }
 
@@ -223,6 +286,10 @@ export class WorldStreamer {
         for (let attempt = 0; ; attempt += 1) {
             try {
                 const chunk = await this.source.loadChunk(chunkX, chunkY, { priority, signal });
+                if (signal.aborted) {
+                    this.source.releaseChunk(chunk);
+                    throw abortError("Chunk load completed after cancellation");
+                }
                 try {
                     assertWorldChunk(this.source, chunk, chunkX, chunkY);
                 } catch (reason) {

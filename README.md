@@ -71,9 +71,10 @@ map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
 
-`loadWorld()` is the unified entry point for finite, wrapped, procedural and
-custom remote worlds. It is the only `HexMap` loading API; choose or implement a
-`WorldSource` and pass it to this method.
+`loadWorld()` is the preferred unified entry point for finite, wrapped,
+procedural and custom remote worlds. Existing finite-map code can continue to
+call `await map.load(mapData)`; it is a compatibility wrapper around
+`StaticWorldSource`.
 
 Call `map.dispose()` when the canvas is permanently removed. `GameEngine` owns
 its map and exposes the matching `game.dispose()` lifecycle method.
@@ -158,24 +159,32 @@ source-level residency/retry counters are available through
 through `map.streamingStats`, and deferred main-thread mount work through
 `map.frameTaskStats`.
 
-For large generated maps, run the generator off the main thread:
+For a large finite four-way-wrapped world, stream the same deterministic
+seed/width/height world instead of materializing every tile up front:
 
 ```ts
-import { StaticWorldSource, WorldGeneratorClient } from "three-hex-map";
+import { ToroidalWorldSource } from "three-hex-map";
 
-const generator = new WorldGeneratorClient(
-    // Copy the package's world-generator.worker.mjs to your public assets.
-    new URL("/assets/world-generator.worker.mjs", window.location.href)
-);
-const world = await generator.generate({
+const source = new ToroidalWorldSource({
     seed: "continent",
     width: 512,
     height: 512,
-    topology: "toroidal"
+    workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
+    workerCount: 4,
+    chunkSize: 24,
+    cache: true,
+    cacheMaxBytes: 128 * 1024 * 1024
 });
-await map.loadWorld({ source: new StaticWorldSource(world) });
-generator.dispose();
+await map.loadWorld({ source });
 ```
+
+Only nearby chunks are generated and retained. The cache key includes the
+generator version, seed, dimensions, topology, chunk size and coordinates, so
+different test worlds cannot collide. The default persistent cache is bounded
+to 128 MB and evicts least-recently-used chunks. `await source.clearCache()`
+removes its stored base chunks; `clearWorldChunkCache()` performs the same
+operation without an active source. Cache failures degrade to worker generation
+and never prevent the world from loading.
 
 For a world whose logical size is not stored up front, pass the multi-worker
 procedural source to the same entry point. It keeps only a camera-centered
@@ -189,7 +198,8 @@ const source = new ProceduralWorldSource({
     seed: "endless-continent",
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
-    chunkSize: 24
+    chunkSize: 24,
+    cache: true
 });
 
 await map.loadWorld({
@@ -199,15 +209,25 @@ await map.loadWorld({
     frameBudgetMs: 3,
     maxMountsPerFrame: 2,
     maxRetries: 2,
+    predictionSeconds: 1.25,
+    predictionMaxChunks: 1,
     initialTile: { x: 0, y: 0 }
 });
 
 console.log(map.worldStreamingStats);
 ```
 
+Generated base tiles are compact shared immutable variants. Coordinate-specific
+gameplay state stays sparse: use `source.setTileOverride(x, y, changes)` and
+`source.clearTileOverride(x, y)` for fields such as `unit` or `city` without
+materializing the whole infinite world. Overrides persist across chunk eviction
+for the lifetime of that source and are applied to future chunk mounts.
+
 `chunkSize` must be a multiple of 12. `loadRadius`, `retentionRadius`,
 `maxResidentChunks`, `frameBudgetMs`, `maxMountsPerFrame`, `maxRetries`, `retryBaseDelayMs` and
-`floatingOriginThreshold` are optional tuning controls. Transient source
+`floatingOriginThreshold` are optional tuning controls. Movement direction is
+smoothed and prefetched only inside the retention margin; stale predicted work
+is cancelled by the normal demand scheduler. Transient source
 failures retry twice by default with cancellable exponential backoff; malformed
 chunk contracts fail immediately before they can pollute the runtime map.
 
@@ -216,7 +236,7 @@ and a materialized or virtual `map` view to connect HTTP, IndexedDB, authoritati
 worlds or editor data without changing the renderer. A source instance is owned
 by one `loadWorld()` session and is disposed automatically when the world changes.
 
-The regular demo remains finite; open `/?infinite` to exercise this mode (the
+The regular demo uses the streamed finite toroidal source; open `/?infinite` to exercise this mode (the
 optional `x`/`y` query values test very large logical coordinates). Arbitrary
 `Unit` objects added through `map.add()` remain under the rebased world root;
 global simulation/pathfinding across unloaded chunks is intentionally an

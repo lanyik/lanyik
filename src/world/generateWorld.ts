@@ -1,4 +1,5 @@
 import { Land } from "../enums";
+import { getNeighbors } from "../helpers/neighbors";
 import { getMapNeighbors } from "../helpers/topology";
 import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
 import { fractalNoise2D, periodicFractalNoise2D, randomAt, seedToUint32 } from "./noise";
@@ -128,6 +129,33 @@ function decorateTile(seed: number, x: number, y: number, climate: ClimateSample
     return tile;
 }
 
+const modulo = (value: number, period: number): number => ((value % period) + period) % period;
+
+// Generates one canonical cell of a finite toroidal world without requiring
+// the other width*height TileInfo objects to exist. Chunk workers use the same
+// function as eager generation, which keeps both APIs byte-for-byte equivalent.
+export function generateToroidalWorldTile(
+    numericSeed: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+): TileInfo {
+    const canonicalX = modulo(x, width);
+    const canonicalY = modulo(y, height);
+    const climate = sampleToroidalClimate(numericSeed, canonicalX, canonicalY, width, height);
+    let type = classifyTerrain(climate);
+    if (type === Land.sea) {
+        const touchesLand = getNeighbors(canonicalX, canonicalY).some(neighbor => {
+            const nx = modulo(neighbor.x, width);
+            const ny = modulo(neighbor.y, height);
+            return !isWater(classifyTerrain(sampleToroidalClimate(numericSeed, nx, ny, width, height)));
+        });
+        if (touchesLand) type = Land.coastal;
+    }
+    return decorateTile(numericSeed, canonicalX, canonicalY, climate, type);
+}
+
 export function generateWorld({ seed, width, height, topology = "bounded" }: WorldGenerationOptions): MapInfo {
     assertDimension("width", width);
     assertDimension("height", height);
@@ -145,11 +173,12 @@ export function generateWorld({ seed, width, height, topology = "bounded" }: Wor
     for (let x = 0; x < width; x += 1) {
         data[x] = {};
         for (let y = 0; y < height; y += 1) {
-            const climate = toroidal
-                ? sampleToroidalClimate(numericSeed, x, y, width, height)
-                : sampleBoundedClimate(numericSeed, x, y, width, height);
-            const type = classifyTerrain(climate);
-            data[x][y] = decorateTile(numericSeed, x, y, climate, type);
+            if (toroidal) {
+                data[x][y] = generateToroidalWorldTile(numericSeed, x, y, width, height);
+                continue;
+            }
+            const climate = sampleBoundedClimate(numericSeed, x, y, width, height);
+            data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
         }
     }
 
@@ -158,7 +187,7 @@ export function generateWorld({ seed, width, height, topology = "bounded" }: Wor
     for (let x = 0; x < width; x += 1) {
         for (let y = 0; y < height; y += 1) {
             const tile = data[x][y];
-            if (tile.type !== Land.sea) continue;
+            if (toroidal || tile.type !== Land.sea) continue;
             const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
                 const neighbor = data[nx]?.[ny];
                 return neighbor !== undefined && !isWater(neighbor.type);

@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation and source-level residency/retry/failure statistics.
 - A priority/frame-budget queue for main-thread chunk mounting, runtime queue
   statistics and a reproducible hot-path benchmark command.
+- Sparse per-coordinate overrides for mutable gameplay state on packed
+  procedural worlds without materializing every generated tile.
+- Finite `ToroidalWorldSource` streaming that reproduces eager periodic worlds
+  from seed plus dimensions without retaining every tile object.
+- Optional bounded IndexedDB base-chunk cache with versioned keys, LRU pruning,
+  runtime hit/storage counters and an explicit localized clear-data control.
+- Velocity-smoothed forward chunk prefetch constrained to the retention margin.
 
 ### Changed
 
@@ -53,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Procedural chunks remain packed behind a virtual map view; grass/forest model
   resources and deterministic per-LOD results are shared or cached across
   source chunks. The render scheduler uses a persistent flat registry.
+- Terrain and grass chunks share immutable base instancing geometry across LOD
+  resources, reducing repeated CPU attributes and WebGL buffer creation.
 - Fog recomputation now follows only the visible frontier, batches resident
   chunk updates and stores finite renderer state at one byte per cell. Distant
   idle unit mixers update at a configurable lower cadence.
@@ -67,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and takes the short visual route across toroidal seams.
 - Added race guards for repeated map/game initialization and asynchronous forest
   rebuilds; worker protocol/fatal errors now reject requests instead of hanging.
+- Enforced `maxResidentChunks` as a hard nearest-demand limit and fixed the
+  abort/re-request race that could leave a returned-to center chunk unloaded.
+- Toroidal copy updates are coalesced and diffed incrementally instead of
+  rebuilding every physical image after each chunk, city or forest completion.
+- Toroidal images now inherit per-chunk render callbacks and receive lazily
+  activated terrain/grass geometry, preventing empty ground beneath copied
+  forests at finite-world seams.
+- Restored `HexMap.load(mapData)` as a backwards-compatible wrapper while keeping
+  `loadWorld()` as the preferred source-based API.
 - Added complete `HexMap`/`GameEngine` disposal, route/city/forest GPU cleanup,
   wrapped-city fog synchronization, and embedded-canvas resize observation.
 - Package metadata now points to this fork, CommonJS uses a `.cjs` entry, and

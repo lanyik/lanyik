@@ -18,6 +18,7 @@ import { forEachMapTile } from "../helpers/mapData";
 import { MapInfo, Point } from "../interfaces";
 import { Land } from "../enums";
 import { getMapTile } from "../helpers/topology";
+import { SharedBaseInstancedBufferGeometry } from "../rendering/SharedBaseInstancedBufferGeometry";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
@@ -298,9 +299,7 @@ export class GrassField extends Group {
             pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
         }
 
-        const geometry = new InstancedBufferGeometry();
-        geometry.setAttribute("position", this.resources.blade.getAttribute("position").clone());
-        geometry.setIndex(this.resources.blade.getIndex()?.clone() ?? null);
+        const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
         geometry.instanceCount = instance;
         geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
         geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));

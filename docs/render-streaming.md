@@ -11,8 +11,10 @@ Every map runs through two intentionally separate chunk layers:
 
 `StaticWorldSource` retains the caller's authoritative finite `MapInfo`, including
 cities, rivers, units and wrap topology, while streaming only visual layers.
-`ProceduralWorldSource` instead owns a packed sparse tile view and a bounded
-worker pool. Its `MapInfo.data` remains empty: `tileAt()` decodes only the small
+`ToroidalWorldSource` and `ProceduralWorldSource` instead own a packed sparse
+tile view and a bounded worker pool. The former is fixed by seed plus dimensions
+and samples periodic noise at its seams; the latter is fixed by seed alone and
+has no logical edge. Their `MapInfo.data` remains empty: `tileAt()` decodes only the small
 set of distinct 16-bit tile variants that are actually read. Both sources reach
 the renderer through the same callbacks.
 
@@ -32,14 +34,19 @@ into all eight neighboring world images.
 Worker completions do not mount every returned chunk immediately. The center
 chunk is admitted synchronously for first-frame feedback; peripheral mounts go
 through a priority queue capped by `frameBudgetMs` and `maxMountsPerFrame`.
-This backpressure prevents a batch of completed workers from creating a long
-main-thread frame.
+Toroidal images are diffed by source-object UUID and physical offset; repeated
+chunk/model completion notices coalesce into one queued synchronization instead
+of clearing and recloning every image. This backpressure prevents a batch of
+completed workers from creating a long main-thread frame.
 
 The scheduler builds a flat chunk registry only when the mounted scene changes.
 Normal frames iterate that registry directly instead of traversing the Three.js
 scene graph. Grass fields share one blade geometry/material/clock per load
 session, forest fields share each prepared model geometry/material, and every
-layer caches its deterministic CPU result per LOD.
+layer caches its deterministic CPU result per LOD. Terrain chunks also share one
+immutable base hex geometry per LOD; each chunk stores only instance attributes.
+Disposing one chunk detaches those shared attributes before Three.js sends its
+WebGL-dispose notification, so sibling chunks cannot invalidate each other.
 
 ## Frustum culling
 
@@ -91,18 +98,19 @@ residency, queues and retries; `map.streamingStats` reports render LOD/GPU state
 
 ## Generation
 
-`generateWorld()` remains synchronous for Node, tests and server-side tools. The
-browser demo uses `WorldGeneratorClient` and `world-generator.worker.mjs`, so
-noise sampling and coast classification for worlds up to 512×512 do not block
-the main render thread. The resulting plain `MapInfo` remains compatible with
-pathfinding, fog, picking and gameplay systems.
+`generateWorld()` remains synchronous for Node, tests and server-side tools, and
+`WorldGeneratorClient` remains available when an application explicitly needs a
+fully materialized `MapInfo`. The browser demo instead uses
+`ToroidalWorldSource` with `world-generator.worker.mjs`, so a 512×512 selection
+does not allocate all 262,144 tile objects. It generates the camera window and
+keeps the rest reproducible from seed plus dimensions.
 
 ## Unified world sources
 
 `HexMap.loadWorld()` owns one source for the duration of a load session. Calling
 it again cancels outstanding work, unmounts resident layers and disposes the old
-source. It is the sole loading API; callers explicitly choose a built-in or
-custom `WorldSource`.
+source. It is the preferred extensible loading API; `HexMap.load(mapData)` is a
+backwards-compatible `StaticWorldSource` wrapper.
 
 For the built-in procedural source:
 
@@ -128,6 +136,36 @@ cancels the delay and request. Structural contract failures do not retry:
 returned chunk coordinates, size and every core tile are validated against the
 source before renderer state is mutated.
 
+Camera velocity is exponentially smoothed and projected ahead by
+`predictionSeconds`. Predicted requests may extend only through
+`retentionRadius - loadRadius`, preserving the guaranteed current window and the
+hard resident budget. Current chunks win priority ties; changes in direction
+reuse the same cancellation path as normal camera demand.
+
+## Persistent procedural cache
+
+Passing `cache: true` to `ToroidalWorldSource` or `ProceduralWorldSource` enables
+an IndexedDB cache for immutable packed base chunks. Keys include generator
+version, seed, topology, finite dimensions, chunk size and chunk coordinates.
+Changing any world-defining input therefore creates a distinct entry, while a
+generator version bump invalidates old terrain without a database migration.
+
+The cache defaults to a 128 MB byte budget and prunes least-recently-used
+entries after writes. Reads clone the transferred `ArrayBuffer`, validate the
+packed payload again, and treat missing, corrupt, blocked or unavailable browser
+storage as a normal miss. Opening storage also has a two-second fail-open timeout,
+so a blocked browser database cannot hold up terrain. Cache I/O never replaces
+the worker fallback.
+
+`source.clearCache()` serializes behind outstanding cache writes, advances a
+source cache epoch so older in-flight worker results cannot repopulate storage,
+and deletes all stored base chunks. The demo exposes this operation as a localized, confirmed
+**Clear cached data** control; loaded terrain remains in memory until normal
+eviction or regeneration. The operation intentionally does not delete mutable
+game saves or `setTileOverride()` state, which require an application-owned
+persistence layer. `map.worldStreamingStats` exposes hit/miss/error, entry and
+byte counters for diagnostics.
+
 A custom `WorldSource` can use HTTP, IndexedDB, a server-authoritative cache or
 an editor database. Its `map` is the view read by terrain and gameplay helpers:
 it may populate `data`, or expose virtual `tileAt()`/`forEachTile()` hooks.
@@ -141,6 +179,11 @@ approach `floatingOriginThreshold`, the camera and shared world root are shifted
 back towards zero. Terrain, tree models, custom units, orbit lighting and
 procedural texture phase remain aligned; `getCameraTarget()` continues to return
 the logical rather than rebased coordinate.
+
+Packed procedural base tiles are shared immutable variants. Per-coordinate
+gameplay fields use `ProceduralWorldSource.setTileOverride()` and
+`clearTileOverride()`, a sparse sidecar that survives chunk eviction for the
+source lifetime without expanding every generated cell into an object.
 
 `map.worldStreamingStats` works for every source and reports source-chunk
 residency, pending work, queue depth, busy workers, completions, retries and
