@@ -31,7 +31,7 @@ export function HEXPolygon(center:Point = {x: 0, y: 0}, size:number = 1):Point[]
 
 export function getHexCenter(x:number, y:number, size:number):Point {
     let space = 0;
-    if(x % 2 == 0) {
+    if(x % 2 === 0) {
         space = size * Math.sqrt(3) / 2;
     }
 

@@ -33,17 +33,24 @@ import { MapInfo, Point, TileInfo } from "./interfaces";
 import { HexMapEventName, Land, LandColor } from "./enums";
 import { getHexCenter } from "./helpers/helpers";
 import { screenToGround, pickTile } from "./helpers/picking";
-import { TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
+import { CITY_FOG_TILE_KEY, TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
 import { createForest, ForestField } from "./objects/Forest";
 import { GrassField, createGrassField } from "./objects/Grass";
 import { FogState } from "./objects/FogOfWar";
 import { assertWrappableMap, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
-import { getWorldChunkMetadata, WorldChunkMetadata } from "./helpers/chunks";
+import { getWorldChunkMetadata, WORLD_CHUNK_SIZE, WorldChunkMetadata } from "./helpers/chunks";
 import {
     createDefaultWorldChunkSchedulerOptions,
     WorldChunkScheduler,
     WorldChunkStreamingStats
 } from "./rendering/WorldChunkScheduler";
+import {
+    MAX_WORLD_GENERATION_CHUNK_SIZE,
+    PackedWorldChunk,
+    SparseWorldChunkStore
+} from "./world/generateWorldChunk";
+import { WorldGeneratorPool } from "./world/WorldGeneratorPool";
+import { InfiniteWorldStreamer, InfiniteWorldStreamingStats } from "./world/InfiniteWorldStreamer";
 
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
@@ -265,19 +272,20 @@ export class HexMap extends EventEmitter {
         & { element: string, waterDepth: number, fogTextureSize: number, riverColorShallow: ColorRepresentation, riverColorDeep: ColorRepresentation, riverDepth: number, mountainHeight: number };
 
     private canvas: HTMLCanvasElement;
-    private renderer: WebGLRenderer;
-    private scene: ThreeScene;
-    private camera: PerspectiveCamera;
-    private controls: OrbitControls;
-    private sky: Sky;
+    private renderer!: WebGLRenderer;
+    private scene!: ThreeScene;
+    private worldRoot!: Group;
+    private camera!: PerspectiveCamera;
+    private controls!: OrbitControls;
+    private sky!: Sky;
 
-    private mapData: MapInfo;
-    private atlas: TerrainAtlas;
-    private terrain: TerrainMesh;
+    private mapData!: MapInfo;
+    private atlas!: TerrainAtlas;
+    private terrain!: TerrainMesh;
     private forest: ForestField | undefined;
     private grass: GrassField | undefined;
-    private selector: Mesh;
-    private pointer: Mesh;
+    private selector!: Mesh;
+    private pointer!: Mesh;
     private routeLine: Line | undefined;
     private worldCopies: Group[] = [];
     private worldCopyMaterials: RawShaderMaterial[] = [];
@@ -285,6 +293,21 @@ export class HexMap extends EventEmitter {
     private worldPatternOffset = new Vector2();
     private pressedMovementKeys = new Set<string>();
     private chunkScheduler: WorldChunkScheduler;
+    private resizeObserver: ResizeObserver | undefined;
+    private animationFrameId: number | undefined;
+    private disposed = false;
+    private loadRevision = 0;
+    private forestRevision = 0;
+    private infiniteStreamer: InfiniteWorldStreamer | undefined;
+    private infiniteChunkLayers = new Map<string, InfiniteChunkLayers>();
+    private infiniteGrassByChunkId = new Map<string, GrassField>();
+    private infiniteForestByChunkId = new Map<string, ForestField>();
+    private infiniteLayerRevision = 0;
+    private infiniteChunkSize = 24;
+    private infiniteDemandChunkKey: string | undefined;
+    private renderOrigin = new Vector2();
+    private logicalTargetScratch = new Vector3();
+    private floatingOriginThreshold = 8192;
 
     private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
     private lastHover: Point | null = null;
@@ -300,17 +323,24 @@ export class HexMap extends EventEmitter {
 
     constructor(options: HexMapOptions) {
         super();
-        const waterDepth = options.waterDepth ?? (options.size ?? DEFAULT_OPTIONS.size) * 0.25;
+        if (!options || typeof options !== "object") throw new TypeError("HexMap options are required");
+        const size = options.size ?? DEFAULT_OPTIONS.size;
+        const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
+        const waterDepth = options.waterDepth ?? size * 0.25;
         this.options = {
             ...DEFAULT_OPTIONS,
             ...options,
             waterDepth,
-            fogTextureSize: options.fogTextureSize ?? (options.size ?? DEFAULT_OPTIONS.size) * 8,
+            fogTextureSize: options.fogTextureSize ?? size * 8,
             riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_OPTIONS.waterColorShallow,
             riverColorDeep: options.riverColorDeep ?? options.waterColorDeep ?? DEFAULT_OPTIONS.waterColorDeep,
             riverDepth: options.riverDepth ?? waterDepth * 0.6,
-            mountainHeight: options.mountainHeight ?? (options.size ?? DEFAULT_OPTIONS.size) * 0.6
+            mountainHeight: options.mountainHeight ?? size * 0.6,
+            grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
+            grassBladeHeight,
+            grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
         };
+        this.validateOptions();
         const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
         this.chunkScheduler = new WorldChunkScheduler({
             ...schedulerOptions,
@@ -341,7 +371,48 @@ export class HexMap extends EventEmitter {
         this.setupEvents();
         this.handleResize();
 
-        this.animate(0);
+        this.animationFrameId = window.requestAnimationFrame(this.animate);
+    }
+
+    private validateOptions(): void {
+        const positive = (name: string, value: number) => {
+            if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive finite number`);
+        };
+        const nonNegativeInteger = (name: string, value: number) => {
+            if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
+        };
+        positive("size", this.options.size);
+        positive("renderDistance", this.options.renderDistance);
+        if (this.options.lodNearDistance < 0 || this.options.lodFarDistance < this.options.lodNearDistance) {
+            throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
+        }
+        if (this.options.vegetationRenderDistance < 0 || this.options.chunkLodHysteresis < 0) {
+            throw new RangeError("vegetationRenderDistance and chunkLodHysteresis must be non-negative");
+        }
+        nonNegativeInteger("gpuChunkCacheSize", this.options.gpuChunkCacheSize);
+        nonNegativeInteger("cpuChunkCacheSize", this.options.cpuChunkCacheSize);
+        nonNegativeInteger("treesPerTile", this.options.treesPerTile);
+        nonNegativeInteger("grassDensity", this.options.grassDensity);
+        positive("grassBladeWidth", this.options.grassBladeWidth);
+        positive("grassBladeHeight", this.options.grassBladeHeight);
+        if (!Number.isFinite(this.options.treeScale) || this.options.treeScale < 0) {
+            throw new RangeError("treeScale must be a non-negative finite number");
+        }
+        for (const [name, value] of [
+            ["waterCornerRounding", this.options.waterCornerRounding],
+            ["coastCurvature", this.options.coastCurvature],
+            ["landBlendCurvature", this.options.landBlendCurvature],
+            ["coastalWaveWidth", this.options.coastalWaveWidth],
+            ["coastalWaveRange", this.options.coastalWaveRange],
+            ["coastalWaveDistortion", this.options.coastalWaveDistortion],
+            ["coastalWaveOpacity", this.options.coastalWaveOpacity],
+            ["riverCurvature", this.options.riverCurvature],
+            ["lakeShoreWidth", this.options.lakeShoreWidth]
+        ] as const) {
+            if (!Number.isFinite(value) || value < 0 || value > 1) {
+                throw new RangeError(`${name} must be a finite number between 0 and 1`);
+            }
+        }
     }
 
     //-------------------------------------------------------------------------
@@ -350,6 +421,9 @@ export class HexMap extends EventEmitter {
     private setupScene(): void {
         this.scene = new ThreeScene();
         this.scene.background = new Color(0x9fc9e2);
+        this.worldRoot = new Group();
+        this.worldRoot.name = "hex-map-world-root";
+        this.scene.add(this.worldRoot);
         this.renderer = new WebGLRenderer({ canvas: this.canvas, antialias: true });
         this.renderer.toneMapping = ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.65;
@@ -416,6 +490,7 @@ export class HexMap extends EventEmitter {
     //direction from target to camera, already tuned via min/maxAzimuth/PolarAngle)
     //on the map's real center instead, at a fixed, in-range viewing distance.
     private frameMap(mapData: MapInfo): void {
+        this.resetRenderOrigin();
         const size = this.options.size;
         const corner00 = getHexCenter(0, 0, size);
         const cornerWH = getHexCenter(mapData.w - 1, mapData.h - 1, size);
@@ -471,7 +546,7 @@ export class HexMap extends EventEmitter {
         }
     }
 
-    private nearestRepeatedCenter(x: number, y: number, reference = this.controls.target): Point {
+    private nearestRepeatedCenter(x: number, y: number, reference = this.getCameraTarget()): Point {
         const center = getHexCenter(x, y, this.options.size);
         if (this.mapData?.wrapX && this.worldPeriodX > 0) {
             center.x += Math.round((reference.x - center.x) / this.worldPeriodX) * this.worldPeriodX;
@@ -482,7 +557,7 @@ export class HexMap extends EventEmitter {
         return center;
     }
 
-    private positionMarker(marker: Mesh, tile: Point, reference = this.controls.target): void {
+    private positionMarker(marker: Mesh, tile: Point, reference = this.getCameraTarget()): void {
         const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
         marker.position.setX(center.x);
         marker.position.setZ(center.y);
@@ -494,7 +569,7 @@ export class HexMap extends EventEmitter {
     }
 
     private clearWorldCopies(): void {
-        for (const copy of this.worldCopies) this.scene.remove(copy);
+        for (const copy of this.worldCopies) this.worldRoot.remove(copy);
         for (const material of this.worldCopyMaterials) material.dispose();
         this.worldCopies = [];
         this.worldCopyMaterials = [];
@@ -599,10 +674,10 @@ export class HexMap extends EventEmitter {
         if (!metadata) return true;
         const padding = this.options.renderDistance;
         const bounds = metadata.bounds;
-        return bounds.maxX + offsetX >= -padding
-            && bounds.minX + offsetX <= this.worldPeriodX + padding
-            && bounds.maxZ + offsetY >= -padding
-            && bounds.minZ + offsetY <= this.worldPeriodY + padding;
+        return bounds.maxX + source.position.x + offsetX >= -padding
+            && bounds.minX + source.position.x + offsetX <= this.worldPeriodX + padding
+            && bounds.maxZ + source.position.z + offsetY >= -padding
+            && bounds.minZ + source.position.z + offsetY <= this.worldPeriodY + padding;
     }
 
     private refreshWorldCopies(): void {
@@ -638,7 +713,7 @@ export class HexMap extends EventEmitter {
                 if (group.children.length === 0) continue;
 
                 this.worldCopies.push(group);
-                this.scene.add(group);
+                this.worldRoot.add(group);
             }
         }
     }
@@ -651,14 +726,14 @@ export class HexMap extends EventEmitter {
         this.selector.rotateX(-Math.PI / 2);
         this.selector.position.setY(size / 10 + 1.1);
         this.selector.visible = false;
-        this.scene.add(this.selector);
+        this.worldRoot.add(this.selector);
 
         const pointerGeom = new RingGeometry(0.97 * size, size, 6, 2);
         this.pointer = new Mesh(pointerGeom, new MeshBasicMaterial({ color: this.options.pointerColor }));
         this.pointer.rotateX(-Math.PI / 2);
         this.pointer.position.setY(size / 10 + 1.1);
         this.pointer.visible = false;
-        this.scene.add(this.pointer);
+        this.worldRoot.add(this.pointer);
     }
 
     private setupEvents(): void {
@@ -667,35 +742,46 @@ export class HexMap extends EventEmitter {
         window.addEventListener("keyup", this.onKeyUp);
         window.addEventListener("blur", this.clearMovementKeys);
         this.canvas.addEventListener("mousedown", this.onMouseDown);
-        this.canvas.addEventListener("contextmenu", event => event.preventDefault());
+        this.canvas.addEventListener("contextmenu", this.onContextMenu);
         window.addEventListener("pointermove", this.onPointerMove);
         window.addEventListener("mouseup", this.onMouseUp);
+        if (typeof ResizeObserver !== "undefined") {
+            this.resizeObserver = new ResizeObserver(this.handleResize);
+            this.resizeObserver.observe(this.canvas);
+        }
     }
 
+    private onContextMenu = (event: Event): void => event.preventDefault();
+
     private handleResize = (): void => {
-        const width = window.innerWidth;
-        const height = window.innerHeight;
+        const width = this.canvas.clientWidth || window.innerWidth;
+        const height = this.canvas.clientHeight || window.innerHeight;
+        if (width <= 0 || height <= 0) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
         this.renderer.setPixelRatio(window.devicePixelRatio);
-        this.renderer.setSize(width, height);
+        this.renderer.setSize(width, height, false);
     };
 
     private lastFrameTime: number | undefined;
 
     private animate = (t: number): void => {
+        if (this.disposed) return;
         const dtS = this.lastFrameTime === undefined ? 0 : (t - this.lastFrameTime) / 1000;
         this.lastFrameTime = t;
 
         this.updateKeyboardMovement(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
+        this.rebaseInfiniteWorld();
+        this.updateInfiniteWorldDemand();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
         this.grass?.update(dtS);
-        this.emit("frame", { t });
+        for (const record of this.infiniteChunkLayers.values()) record.grass?.update(dtS);
+        this.emit("frame", { t, dtS });
         this.renderer.render(this.scene, this.camera);
-        window.requestAnimationFrame(this.animate);
+        this.animationFrameId = window.requestAnimationFrame(this.animate);
     };
 
     private onKeyDown = (event: KeyboardEvent): void => {
@@ -763,17 +849,18 @@ export class HexMap extends EventEmitter {
             return geometry ? { geometries: [geometry] } : undefined;
         }
         if (metadata.kind === "grass") {
-            const geometry = this.grass?.activateChunk(metadata, lod);
+            const field = this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass;
+            const geometry = field?.activateChunk(metadata, lod);
             return geometry ? { geometries: [geometry] } : undefined;
         }
-        this.forest?.activateChunk(metadata, lod, objects);
+        (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.activateChunk(metadata, lod, objects);
         return undefined;
     }
 
     private releaseWorldChunk(metadata: WorldChunkMetadata): void {
         if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
-        else if (metadata.kind === "grass") this.grass?.releaseChunk(metadata);
-        else this.forest?.releaseChunk(metadata);
+        else if (metadata.kind === "grass") (this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
+        else (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
     }
 
     //-------------------------------------------------------------------------
@@ -789,23 +876,36 @@ export class HexMap extends EventEmitter {
 
     private onPointerMove = (event: MouseEvent): void => {
         const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
-        if (!ground) return;
+        if (!ground) {
+            this.pointer.visible = false;
+            this.lastHover = null;
+            return;
+        }
+        this.logicalGround(ground);
 
         const tileCoords = pickTile(
             ground,
             this.options.size,
-            this.mapData?.w,
-            this.mapData?.h,
+            this.mapData?.infinite ? undefined : this.mapData?.w,
+            this.mapData?.infinite ? undefined : this.mapData?.h,
             this.mapData?.wrapX,
             this.mapData?.wrapY
         );
-        if (!tileCoords) return;
+        if (!tileCoords) {
+            this.pointer.visible = false;
+            this.lastHover = null;
+            return;
+        }
 
         if (this.lastHover && this.lastHover.x === tileCoords.x && this.lastHover.y === tileCoords.y) return;
         this.lastHover = tileCoords;
 
         const tile = this.getTile(tileCoords.x, tileCoords.y);
-        if (!tile) return;
+        if (!tile) {
+            this.pointer.visible = false;
+            this.lastHover = null;
+            return;
+        }
 
         this.pointer.visible = true;
         this.pointer.position.setX(tileCoords.worldX);
@@ -826,12 +926,13 @@ export class HexMap extends EventEmitter {
 
         const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
         if (!ground) return;
+        this.logicalGround(ground);
 
         const tileCoords = pickTile(
             ground,
             this.options.size,
-            this.mapData?.w,
-            this.mapData?.h,
+            this.mapData?.infinite ? undefined : this.mapData?.w,
+            this.mapData?.infinite ? undefined : this.mapData?.h,
             this.mapData?.wrapX,
             this.mapData?.wrapY
         );
@@ -854,17 +955,38 @@ export class HexMap extends EventEmitter {
     //atlas descriptor (land-atlas.json) from texturesBaseUrl; textures themselves
     //load in the background as usual for three.js.
     public async load(mapData: MapInfo): Promise<void> {
+        if (this.disposed) throw new Error("HexMap has been disposed");
+        this.stopInfiniteStreaming();
         assertWrappableMap(mapData);
+        const revision = ++this.loadRevision;
         this.worldPatternOffset.set(0, 0);
         this.mapData = mapData;
         this.fogStates.clear(); // a new map starts with no fog history
+        this.cleanRoutePath();
+        this.lastHover = null;
+        this.lastSelected = null;
+        this.pointer.visible = false;
+        this.selector.visible = false;
         this.frameMap(mapData);
 
         const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
-        this.atlas = await fetch(atlasUrl).then(r => r.json());
+        const response = await fetch(atlasUrl);
+        if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
+        const atlas = await response.json() as TerrainAtlas;
+        if (this.disposed || revision !== this.loadRevision) return;
+        if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0
+            || !Number.isFinite(atlas.width) || atlas.width <= 0
+            || !Number.isFinite(atlas.height) || atlas.height <= 0
+            || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0
+            || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0
+            || !atlas.textures || typeof atlas.textures !== "object") {
+            throw new TypeError("Terrain atlas descriptor is invalid");
+        }
+        this.atlas = atlas;
 
-        await this.rebuildTerrain();
-        await this.rebuildForest();
+        if (!(await this.rebuildTerrain(revision))) return;
+        if (!(await this.rebuildForest(revision))) return;
+        if (this.disposed || revision !== this.loadRevision) return;
         this.rebuildGrass();
         //Make the first camera view render-ready before load resolves. The
         //rest of the world remains as lightweight shells and streams later.
@@ -873,20 +995,265 @@ export class HexMap extends EventEmitter {
         this.emit("load" satisfies HexMapEventName, undefined);
     }
 
+    //Starts a sparse, deterministic world whose chunks are generated on a
+    //bounded worker pool around the camera. Existing finite-map load() remains
+    //unchanged and can be called later to leave streaming mode.
+    public async loadInfinite(options: InfiniteWorldOptions): Promise<void> {
+        if (this.disposed) throw new Error("HexMap has been disposed");
+        if (!options || typeof options !== "object") throw new TypeError("infinite world options are required");
+        const chunkSize = options.chunkSize ?? 24;
+        if (!Number.isInteger(chunkSize) || chunkSize <= 0
+            || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
+            throw new RangeError(
+                `chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
+            );
+        }
+        if (options.workerCount !== undefined && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
+            throw new RangeError("workerCount must be an integer between 1 and 8");
+        }
+        const initialTile = options.initialTile ?? { x: 0, y: 0 };
+        if (!Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
+            throw new RangeError("initialTile coordinates must be safe integers");
+        }
+        const threshold = options.floatingOriginThreshold ?? 8192;
+        if (!Number.isFinite(threshold) || threshold <= this.options.size * chunkSize) {
+            throw new RangeError("floatingOriginThreshold must exceed one generation chunk span");
+        }
+
+        this.stopInfiniteStreaming();
+        const revision = ++this.loadRevision;
+        const store = new SparseWorldChunkStore();
+        this.mapData = store.map;
+        this.floatingOriginThreshold = threshold;
+        this.worldPatternOffset.set(0, 0);
+        this.fogStates.clear();
+        this.cleanRoutePath();
+        this.lastHover = null;
+        this.lastSelected = null;
+        this.pointer.visible = false;
+        this.selector.visible = false;
+        this.resetRenderOrigin();
+
+        if (this.forest) {
+            this.worldRoot.remove(this.forest);
+            this.forest.dispose();
+            this.forest = undefined;
+        }
+        if (this.grass) {
+            this.worldRoot.remove(this.grass);
+            this.grass.dispose();
+            this.grass = undefined;
+        }
+
+        const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
+        const response = await fetch(atlasUrl);
+        if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
+        const atlas = await response.json() as TerrainAtlas;
+        if (this.disposed || revision !== this.loadRevision) return;
+        if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0
+            || !Number.isFinite(atlas.width) || atlas.width <= 0
+            || !Number.isFinite(atlas.height) || atlas.height <= 0
+            || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0
+            || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0
+            || !atlas.textures || typeof atlas.textures !== "object") {
+            throw new TypeError("Terrain atlas descriptor is invalid");
+        }
+        this.atlas = atlas;
+        if (!(await this.rebuildTerrain(revision))) return;
+
+        const pool = new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+        const chunkSpan = chunkSize * this.options.size * 1.5;
+        const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
+        const streamer = new InfiniteWorldStreamer(pool, {
+            chunkLoaded: (chunk, points) => this.mountInfiniteChunk(chunk, points),
+            chunkUnloading: chunk => this.unmountInfiniteChunk(chunk),
+            error: error => this.emit("error", error)
+        }, {
+            seed: options.seed,
+            chunkSize,
+            loadRadius,
+            retentionRadius: options.retentionRadius,
+            maxResidentChunks: options.maxResidentChunks
+        }, store);
+        this.infiniteStreamer = streamer;
+        this.infiniteChunkSize = chunkSize;
+
+        const center = getHexCenter(initialTile.x, initialTile.y, this.options.size);
+        const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
+        const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+        this.controls.target.set(center.x, 0, center.y);
+        this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
+        this.rebaseInfiniteWorld();
+        this.infiniteDemandChunkKey = SparseWorldChunkStore.key(
+            Math.floor(initialTile.x / chunkSize),
+            Math.floor(initialTile.y / chunkSize)
+        );
+        let centerChunk: PackedWorldChunk;
+        try {
+            centerChunk = await streamer.setCenterTile(initialTile.x, initialTile.y);
+        } catch (reason) {
+            if (this.infiniteStreamer === streamer) this.stopInfiniteStreaming();
+            throw reason;
+        }
+        const centerKey = SparseWorldChunkStore.key(centerChunk.chunkX, centerChunk.chunkY);
+        await this.infiniteChunkLayers.get(centerKey)?.forestPromise;
+        if (this.disposed || revision !== this.loadRevision || this.infiniteStreamer !== streamer) return;
+        this.updateWorldChunkVisibility();
+        this.emit("load" satisfies HexMapEventName, undefined);
+    }
+
+    private mountInfiniteChunk(chunk: PackedWorldChunk, points: readonly Point[]): void {
+        if (!this.infiniteStreamer || !this.terrain) return;
+        const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
+        const revision = ++this.infiniteLayerRevision;
+        this.terrain.addTiles(points);
+        const record: InfiniteChunkLayers = { points, revision };
+        this.infiniteChunkLayers.set(key, record);
+
+        if (this.options.grassEnabled) {
+            const grass = createGrassField(this.mapData, {
+                size: this.options.size,
+                density: this.options.grassDensity,
+                bladeWidth: this.options.grassBladeWidth,
+                bladeHeight: this.options.grassBladeHeight,
+                windStrength: this.options.grassWindStrength,
+                windSpeed: this.options.grassWindSpeed,
+                fogDarkenFactor: this.options.fogDarkenFactor,
+                riverWidth: this.options.riverWidth,
+                riverBankWidth: this.options.riverBankWidth,
+                riverCurvature: this.options.riverCurvature,
+                lakeShoreWidth: this.options.lakeShoreWidth
+            }, points) ?? undefined;
+            if (grass) {
+                record.grass = grass;
+                this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+                this.worldRoot.add(grass);
+            }
+        }
+
+        record.forestPromise = createForest(this.mapData, {
+            size: this.options.size,
+            treesPerTile: this.options.treesPerTile,
+            treeModel: this.options.treeModel,
+            treeScale: this.options.treeScale,
+            fogDarkenFactor: this.options.fogDarkenFactor,
+            riverWidth: this.options.riverWidth,
+            riverBankWidth: this.options.riverBankWidth,
+            riverCurvature: this.options.riverCurvature,
+            lakeShoreWidth: this.options.lakeShoreWidth,
+            beachWidth: this.options.beachWidth,
+            waterCornerRounding: this.options.waterCornerRounding,
+            coastCurvature: this.options.coastCurvature
+        }, points).then(forest => {
+            const current = this.infiniteChunkLayers.get(key);
+            if (!forest) return;
+            if (this.disposed || !current || current.revision !== revision || !this.infiniteStreamer?.store.hasChunk(chunk.chunkX, chunk.chunkY)) {
+                forest.dispose();
+                return;
+            }
+            current.forest = forest;
+            this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+            this.worldRoot.add(forest);
+            this.reapplyFogToObject(forest);
+        }).catch(error => {
+            if (this.infiniteChunkLayers.get(key)?.revision === revision) this.emit("error", error);
+        });
+        this.reapplyFogToPoints(points, record);
+    }
+
+    private unmountInfiniteChunk(chunk: PackedWorldChunk): void {
+        const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
+        const record = this.infiniteChunkLayers.get(key);
+        if (!record) return;
+        this.infiniteChunkLayers.delete(key);
+        const forgotten = this.terrain?.removeTiles(record.points) ?? [];
+        if (record.grass) {
+            this.collectChunkIds(record.grass, forgotten);
+            this.unindexChunkLayer(record.grass, this.infiniteGrassByChunkId);
+            this.worldRoot.remove(record.grass);
+            record.grass.dispose();
+        }
+        if (record.forest) {
+            this.collectChunkIds(record.forest, forgotten);
+            this.unindexChunkLayer(record.forest, this.infiniteForestByChunkId);
+            this.worldRoot.remove(record.forest);
+            record.forest.dispose();
+        }
+        this.chunkScheduler.forget(forgotten);
+    }
+
+    private collectChunkIds(object: Object3D, target: string[]): void {
+        object.traverse(child => {
+            const metadata = getWorldChunkMetadata(child);
+            if (metadata) target.push(metadata.id);
+        });
+    }
+
+    private indexChunkLayer<T extends ForestField | GrassField>(object: T, index: Map<string, T>): void {
+        object.traverse(child => {
+            const metadata = getWorldChunkMetadata(child);
+            if (metadata) index.set(metadata.id, object);
+        });
+    }
+
+    private unindexChunkLayer<T extends ForestField | GrassField>(object: T, index: Map<string, T>): void {
+        object.traverse(child => {
+            const metadata = getWorldChunkMetadata(child);
+            if (metadata && index.get(metadata.id) === object) index.delete(metadata.id);
+        });
+    }
+
+    private stopInfiniteStreaming(): void {
+        const streamer = this.infiniteStreamer;
+        this.infiniteStreamer = undefined;
+        this.infiniteDemandChunkKey = undefined;
+        streamer?.dispose();
+        this.infiniteLayerRevision += 1;
+        for (const record of this.infiniteChunkLayers.values()) {
+            if (record.grass) {
+                this.worldRoot.remove(record.grass);
+                record.grass.dispose();
+            }
+            if (record.forest) {
+                this.worldRoot.remove(record.forest);
+                record.forest.dispose();
+            }
+        }
+        this.infiniteChunkLayers.clear();
+        this.infiniteGrassByChunkId.clear();
+        this.infiniteForestByChunkId.clear();
+    }
+
+    private reapplyFogToPoints(points: readonly Point[], record: InfiniteChunkLayers): void {
+        for (const point of points) {
+            const state = this.warFogShown ? (this.fogStates.get(`${point.x},${point.y}`) ?? FogState.Visible) : FogState.Visible;
+            this.terrain?.setFogState(point.x, point.y, state);
+            record.grass?.setFogState(point.x, point.y, state);
+            record.forest?.setFogState(point.x, point.y, state);
+        }
+    }
+
+    private reapplyFogToObject(object: ForestField | GrassField): void {
+        for (const [key, stored] of this.fogStates) {
+            const [x, y] = key.split(",").map(Number);
+            object.setFogState(x, y, this.warFogShown ? stored : FogState.Visible);
+        }
+    }
+
     //Tears down and recreates the terrain (land/water layers + city models) from
     //the current options against the already-fetched atlas/map data. Only needed
     //when the map itself changes (see load()) - everything water/blend-related
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
-    private async rebuildTerrain(): Promise<void> {
+    private async rebuildTerrain(expectedRevision = this.loadRevision): Promise<boolean> {
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.terrain) {
-            this.scene.remove(this.terrain);
+            this.worldRoot.remove(this.terrain);
             this.terrain.dispose();
         }
 
-        this.terrain = new TerrainMesh(this.mapData, {
+        const terrain = new TerrainMesh(this.mapData, {
             size: this.options.size,
             texturesBaseUrl: this.options.texturesBaseUrl,
             atlas: this.atlas,
@@ -931,11 +1298,19 @@ export class HexMap extends EventEmitter {
             fogDarkenFactor: this.options.fogDarkenFactor,
             fogTextureSize: this.options.fogTextureSize
         });
-        this.applyWorldPatternToObject(this.terrain);
-        this.scene.add(this.terrain);
-        await this.terrain.loadCities();
+        this.terrain = terrain;
+        terrain.setCameraWorldOffset(this.renderOrigin.x, this.renderOrigin.y);
+        this.applyWorldPatternToObject(terrain);
+        this.worldRoot.add(terrain);
+        await terrain.loadCities();
+        if (this.disposed || expectedRevision !== this.loadRevision || this.terrain !== terrain) {
+            this.worldRoot.remove(terrain);
+            terrain.dispose();
+            return false;
+        }
         this.reapplyFog(); // the fresh layer defaults to all-Visible
         this.refreshWorldCopies();
+        return true;
     }
 
     //Tears down and recreates the tree instances from the current tree*
@@ -943,17 +1318,21 @@ export class HexMap extends EventEmitter {
     //instance count/matrices at build time, so - like grass - there's no live
     //uniform for them, only a rebuild. Model files are cached (see
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
-    private async rebuildForest(): Promise<void> {
+    private async rebuildForest(expectedRevision = this.loadRevision): Promise<boolean> {
+        const forestRevision = ++this.forestRevision;
+        if (this.infiniteStreamer) {
+            return this.rebuildInfiniteForests(expectedRevision, forestRevision);
+        }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.forest) {
-            this.scene.remove(this.forest);
-            this.forest.traverse(o => (o as unknown as Mesh).geometry?.dispose());
+            this.worldRoot.remove(this.forest);
+            this.forest.dispose();
             this.forest = undefined;
         }
-        if (!this.mapData) return;
+        if (!this.mapData) return false;
 
-        this.forest = (await createForest(this.mapData, {
+        const forest = (await createForest(this.mapData, {
             size: this.options.size,
             treesPerTile: this.options.treesPerTile,
             treeModel: this.options.treeModel,
@@ -968,11 +1347,18 @@ export class HexMap extends EventEmitter {
             coastCurvature: this.options.coastCurvature
         })) ?? undefined;
 
+        if (this.disposed || expectedRevision !== this.loadRevision || forestRevision !== this.forestRevision) {
+            forest?.dispose();
+            return false;
+        }
+        this.forest = forest;
+
         if (this.forest) {
-            this.scene.add(this.forest);
+            this.worldRoot.add(this.forest);
             this.reapplyFog(); // the fresh layer defaults to all-Visible
         }
         this.refreshWorldCopies();
+        return true;
     }
 
     //Tears down and recreates the grass field from the current grass* options
@@ -982,10 +1368,14 @@ export class HexMap extends EventEmitter {
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
     private rebuildGrass(): void {
+        if (this.infiniteStreamer) {
+            this.rebuildInfiniteGrass();
+            return;
+        }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.grass) {
-            this.scene.remove(this.grass);
+            this.worldRoot.remove(this.grass);
             this.grass.dispose();
             this.grass = undefined;
         }
@@ -1008,13 +1398,90 @@ export class HexMap extends EventEmitter {
 
         if (this.grass) {
             this.grass.visible = this.options.grassEnabled;
-            this.scene.add(this.grass);
+            this.worldRoot.add(this.grass);
             this.reapplyFog(); // the fresh layer defaults to all-Visible
         }
         this.refreshWorldCopies();
     }
 
+    private rebuildInfiniteGrass(): void {
+        this.chunkScheduler.clear();
+        this.infiniteGrassByChunkId.clear();
+        for (const record of this.infiniteChunkLayers.values()) {
+            if (record.grass) {
+                this.worldRoot.remove(record.grass);
+                record.grass.dispose();
+                record.grass = undefined;
+            }
+            if (!this.options.grassEnabled) continue;
+            const grass = createGrassField(this.mapData, {
+                size: this.options.size,
+                density: this.options.grassDensity,
+                bladeWidth: this.options.grassBladeWidth,
+                bladeHeight: this.options.grassBladeHeight,
+                windStrength: this.options.grassWindStrength,
+                windSpeed: this.options.grassWindSpeed,
+                fogDarkenFactor: this.options.fogDarkenFactor,
+                riverWidth: this.options.riverWidth,
+                riverBankWidth: this.options.riverBankWidth,
+                riverCurvature: this.options.riverCurvature,
+                lakeShoreWidth: this.options.lakeShoreWidth
+            }, record.points) ?? undefined;
+            if (!grass) continue;
+            record.grass = grass;
+            this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+            this.worldRoot.add(grass);
+            this.reapplyFogToObject(grass);
+        }
+    }
+
+    private async rebuildInfiniteForests(expectedRevision: number, forestRevision: number): Promise<boolean> {
+        this.chunkScheduler.clear();
+        this.infiniteForestByChunkId.clear();
+        const builds: Promise<void>[] = [];
+        for (const [key, record] of this.infiniteChunkLayers) {
+            if (record.forest) {
+                this.worldRoot.remove(record.forest);
+                record.forest.dispose();
+                record.forest = undefined;
+            }
+            const revision = ++this.infiniteLayerRevision;
+            record.revision = revision;
+            const build = createForest(this.mapData, {
+                size: this.options.size,
+                treesPerTile: this.options.treesPerTile,
+                treeModel: this.options.treeModel,
+                treeScale: this.options.treeScale,
+                fogDarkenFactor: this.options.fogDarkenFactor,
+                riverWidth: this.options.riverWidth,
+                riverBankWidth: this.options.riverBankWidth,
+                riverCurvature: this.options.riverCurvature,
+                lakeShoreWidth: this.options.lakeShoreWidth,
+                beachWidth: this.options.beachWidth,
+                waterCornerRounding: this.options.waterCornerRounding,
+                coastCurvature: this.options.coastCurvature
+            }, record.points).then(forest => {
+                if (!forest) return;
+                const current = this.infiniteChunkLayers.get(key);
+                if (this.disposed || expectedRevision !== this.loadRevision
+                    || forestRevision !== this.forestRevision || current !== record || record.revision !== revision) {
+                    forest.dispose();
+                    return;
+                }
+                record.forest = forest;
+                this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+                this.worldRoot.add(forest);
+                this.reapplyFogToObject(forest);
+            });
+            record.forestPromise = build;
+            builds.push(build);
+        }
+        await Promise.all(builds);
+        return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
+    }
+
     public getTile(x: number, y: number): TileInfo | undefined {
+        if (this.mapData?.infinite && !this.infiniteStreamer?.store.hasCoreTile(x, y)) return undefined;
         return this.mapData ? getMapTile(this.mapData, x, y) : undefined;
     }
 
@@ -1030,14 +1497,72 @@ export class HexMap extends EventEmitter {
     //fog updates as usual and re-showing the fog repaints everything current.
     //-------------------------------------------------------------------------
     public setTileFog(x: number, y: number, state: FogState): void {
-        this.fogStates.set(`${x},${y}`, state);
-        if (this.warFogShown) this.applyTileFog(x, y, state);
+        if (!this.mapData || (state !== FogState.Unseen && state !== FogState.Explored && state !== FogState.Visible)) return;
+        const normalized = normalizeMapCoordinates(this.mapData, x, y);
+        if (!normalized || !this.mapData.data[normalized.x]?.[normalized.y]) return;
+        this.fogStates.set(`${normalized.x},${normalized.y}`, state);
+        if (this.warFogShown) this.applyTileFog(normalized.x, normalized.y, state);
+    }
+
+    private resetRenderOrigin(): void {
+        this.renderOrigin.set(0, 0);
+        this.worldRoot.position.set(0, 0, 0);
+        this.terrain?.setCameraWorldOffset(0, 0);
+    }
+
+    private rebaseInfiniteWorld(): void {
+        if (!this.mapData?.infinite) return;
+        const x = this.controls.target.x;
+        const z = this.controls.target.z;
+        if (Math.max(Math.abs(x), Math.abs(z)) < this.floatingOriginThreshold) return;
+        this.renderOrigin.x += x;
+        this.renderOrigin.y += z;
+        this.terrain?.setCameraWorldOffset(this.renderOrigin.x, this.renderOrigin.y);
+        this.worldRoot.position.x -= x;
+        this.worldRoot.position.z -= z;
+        this.controls.target.x -= x;
+        this.controls.target.z -= z;
+        this.camera.position.x -= x;
+        this.camera.position.z -= z;
+    }
+
+    private updateInfiniteWorldDemand(): void {
+        if (!this.infiniteStreamer) return;
+        this.logicalTargetScratch.copy(this.controls.target);
+        this.logicalTargetScratch.x += this.renderOrigin.x;
+        this.logicalTargetScratch.z += this.renderOrigin.y;
+        const tile = pickTile(this.logicalTargetScratch, this.options.size);
+        if (!tile) return;
+        const key = SparseWorldChunkStore.key(
+            Math.floor(tile.x / this.infiniteChunkSize),
+            Math.floor(tile.y / this.infiniteChunkSize)
+        );
+        if (key === this.infiniteDemandChunkKey) return;
+        this.infiniteDemandChunkKey = key;
+        void this.infiniteStreamer.setCenterTile(tile.x, tile.y).catch(error => {
+            if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
+        });
+    }
+
+    private logicalGround(point: Vector3): Vector3 {
+        if (!this.mapData?.infinite) return point;
+        point.x += this.renderOrigin.x;
+        point.z += this.renderOrigin.y;
+        return point;
     }
 
     private applyTileFog(x: number, y: number, state: FogState): void {
         this.terrain?.setFogState(x, y, state);
         this.grass?.setFogState(x, y, state);
         this.forest?.setFogState(x, y, state);
+        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.setFogState(x, y, state);
+        for (const forest of new Set(this.infiniteForestByChunkId.values())) forest.setFogState(x, y, state);
+        const key = `${x},${y}`;
+        for (const copy of this.worldCopies) {
+            copy.traverse(object => {
+                if (object.userData[CITY_FOG_TILE_KEY] === key) object.visible = state !== FogState.Unseen;
+            });
+        }
     }
 
     //Repaints every recorded tile: its real state when the fog is shown, or
@@ -1348,6 +1873,7 @@ export class HexMap extends EventEmitter {
         return this.options.treesPerTile;
     }
     public set treesPerTile(value: number) {
+        if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
         this.options.treesPerTile = value;
         void this.rebuildForest();
     }
@@ -1356,6 +1882,7 @@ export class HexMap extends EventEmitter {
         return this.options.treeScale;
     }
     public set treeScale(value: number) {
+        if (!Number.isFinite(value) || value < 0) throw new RangeError("treeScale must be a non-negative finite number");
         this.options.treeScale = value;
         void this.rebuildForest();
     }
@@ -1365,12 +1892,13 @@ export class HexMap extends EventEmitter {
     //keeps rendering underneath either way, so disabling this is purely
     //"remove the blade overlay", not "regenerate as flat grass".
     public get grassVisible(): boolean {
-        return this.grass?.visible ?? this.options.grassEnabled;
+        return this.options.grassEnabled;
     }
 
     public set grassVisible(value: boolean) {
         this.options.grassEnabled = value;
         if (this.grass) this.grass.visible = value;
+        if (this.infiniteStreamer) this.rebuildInfiniteGrass();
         this.refreshWorldCopies();
     }
 
@@ -1382,6 +1910,7 @@ export class HexMap extends EventEmitter {
     public set grassWindStrength(value: number) {
         this.options.grassWindStrength = value;
         if (this.grass) this.grass.windStrength = value;
+        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windStrength = value;
     }
 
     public get grassWindSpeed(): number {
@@ -1391,6 +1920,7 @@ export class HexMap extends EventEmitter {
     public set grassWindSpeed(value: number) {
         this.options.grassWindSpeed = value;
         if (this.grass) this.grass.windSpeed = value;
+        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windSpeed = value;
     }
 
     //Blade count/size is baked into the instanced geometry at build time, so
@@ -1400,6 +1930,7 @@ export class HexMap extends EventEmitter {
     }
 
     public set grassDensity(value: number) {
+        if (!Number.isInteger(value) || value < 0) throw new RangeError("grassDensity must be a non-negative integer");
         this.options.grassDensity = value;
         this.rebuildGrass();
     }
@@ -1409,6 +1940,7 @@ export class HexMap extends EventEmitter {
     }
 
     public set grassBladeWidth(value: number) {
+        if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeWidth must be a positive finite number");
         this.options.grassBladeWidth = value;
         this.rebuildGrass();
     }
@@ -1418,13 +1950,14 @@ export class HexMap extends EventEmitter {
     }
 
     public set grassBladeHeight(value: number) {
+        if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeHeight must be a positive finite number");
         this.options.grassBladeHeight = value;
         this.rebuildGrass();
     }
 
     public selectTile(x: number, y: number): void {
         const normalized = this.mapData ? normalizeMapCoordinates(this.mapData, x, y) : { x, y };
-        if (!normalized) return;
+        if (!normalized || (this.mapData && !this.getTile(normalized.x, normalized.y))) return;
         this.selector.visible = true;
         this.positionMarker(this.selector, normalized);
         this.lastSelected = normalized;
@@ -1442,26 +1975,36 @@ export class HexMap extends EventEmitter {
         return this.chunkScheduler.stats;
     }
 
+    public get infiniteStreamingStats(): Readonly<InfiniteWorldStreamingStats> | undefined {
+        return this.infiniteStreamer?.stats;
+    }
+
     public drawRoutePath(path: Point[]): void {
         this.cleanRoutePath();
 
-        let reference = this.controls.target;
+        let reference = this.getCameraTarget();
         const points = path.map(p => {
             const center = this.nearestRepeatedCenter(p.x, p.y, reference);
             const point = new Vector3(center.x, 10, center.y);
             reference = point;
             return point;
         });
+        if (points.length === 0) return;
 
-        const geometry = new BufferGeometry().setFromPoints(points);
+        const origin = points[0].clone();
+        const geometry = new BufferGeometry().setFromPoints(points.map(point => point.clone().sub(origin)));
         const material = new LineBasicMaterial({ color: 0xff0000, linewidth: 5 });
         this.routeLine = new Line(geometry, material);
-        this.scene.add(this.routeLine);
+        this.routeLine.position.copy(origin);
+        this.worldRoot.add(this.routeLine);
     }
 
     public cleanRoutePath(): void {
         if (this.routeLine) {
-            this.scene.remove(this.routeLine);
+            this.worldRoot.remove(this.routeLine);
+            this.routeLine.geometry.dispose();
+            const materials = Array.isArray(this.routeLine.material) ? this.routeLine.material : [this.routeLine.material];
+            for (const material of materials) material.dispose();
             this.routeLine = undefined;
         }
     }
@@ -1469,18 +2012,89 @@ export class HexMap extends EventEmitter {
     //Escape hatch for consumers that want to add their own Object3D (units,
     //effects, custom markers) to the map's scene.
     public add(object: Object3D): void {
-        this.scene.add(object);
+        this.worldRoot.add(object);
     }
 
     public remove(object: Object3D): void {
-        this.scene.remove(object);
+        this.worldRoot.remove(object);
     }
 
     public getCamera(): PerspectiveCamera {
         return this.camera;
     }
 
+    public getCameraTarget(): Vector3 {
+        return this.controls.target.clone().add(new Vector3(this.renderOrigin.x, 0, this.renderOrigin.y));
+    }
+
     public getScene(): ThreeScene {
         return this.scene;
     }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.loadRevision += 1;
+        this.forestRevision += 1;
+        this.stopInfiniteStreaming();
+        if (this.animationFrameId !== undefined) window.cancelAnimationFrame(this.animationFrameId);
+
+        window.removeEventListener("resize", this.handleResize);
+        window.removeEventListener("keydown", this.onKeyDown);
+        window.removeEventListener("keyup", this.onKeyUp);
+        window.removeEventListener("blur", this.clearMovementKeys);
+        this.canvas.removeEventListener("mousedown", this.onMouseDown);
+        this.canvas.removeEventListener("contextmenu", this.onContextMenu);
+        window.removeEventListener("pointermove", this.onPointerMove);
+        window.removeEventListener("mouseup", this.onMouseUp);
+        this.resizeObserver?.disconnect();
+
+        this.cleanRoutePath();
+        this.clearWorldCopies();
+        this.chunkScheduler.clear();
+        if (this.terrain) {
+            this.worldRoot.remove(this.terrain);
+            this.terrain.dispose();
+        }
+        if (this.forest) {
+            this.worldRoot.remove(this.forest);
+            this.forest.dispose();
+            this.forest = undefined;
+        }
+        if (this.grass) {
+            this.worldRoot.remove(this.grass);
+            this.grass.dispose();
+            this.grass = undefined;
+        }
+        this.selector.geometry.dispose();
+        (this.selector.material as Material).dispose();
+        this.pointer.geometry.dispose();
+        (this.pointer.material as Material).dispose();
+        this.sky.geometry.dispose();
+        this.sky.material.dispose();
+        this.controls.dispose();
+        this.renderer.renderLists.dispose();
+        this.renderer.dispose();
+        this.removeAllListeners();
+    }
+}
+
+export interface InfiniteWorldOptions {
+    seed: string | number;
+    workerUrl: string | URL;
+    workerCount?: number;
+    chunkSize?: number;
+    loadRadius?: number;
+    retentionRadius?: number;
+    maxResidentChunks?: number;
+    initialTile?: Point;
+    floatingOriginThreshold?: number;
+}
+
+interface InfiniteChunkLayers {
+    points: readonly Point[];
+    revision: number;
+    grass?: GrassField;
+    forest?: ForestField;
+    forestPromise?: Promise<void>;
 }

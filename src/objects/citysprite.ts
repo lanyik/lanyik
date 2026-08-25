@@ -1,6 +1,15 @@
 
 import { Texture, SpriteMaterial, Sprite } from "three";
 
+interface RgbaColor { r: number; g: number; b: number; a: number }
+export interface TextSpriteOptions {
+    fontface?: string;
+    fontsize?: number;
+    borderThickness?: number;
+    borderColor?: RgbaColor;
+    backgroundColor?: RgbaColor;
+}
+
 //A THREE.Sprite is always centered on its own position - the label used to
 //look off-center because the canvas backing its texture was left at the
 //browser's default size (300x150) instead of being sized to the actual
@@ -9,27 +18,17 @@ import { Texture, SpriteMaterial, Sprite } from "three";
 //tile. Sizing the canvas to the content fixes that. `transparent: true` also
 //stops the sprite's empty canvas background from being drawn as an opaque
 //(visible) quad.
-export function makeTextSprite( message:string, parameters:any ):Sprite
+export function makeTextSprite(message: string, parameters: TextSpriteOptions = {}): Sprite
 {
-	if ( parameters === undefined ) parameters = {};
+	const fontface = parameters.fontface ?? "Arial";
+	const fontsize = parameters.fontsize ?? 18;
+	const borderThickness = parameters.borderThickness ?? 4;
+	const borderColor = parameters.borderColor ?? { r:0, g:0, b:0, a:1.0 };
+	const backgroundColor = parameters.backgroundColor ?? { r:255, g:255, b:255, a:1.0 };
 
-	let fontface = parameters.hasOwnProperty("fontface") ?
-		parameters["fontface"] : "Arial";
-
-	let fontsize = parameters.hasOwnProperty("fontsize") ?
-		parameters["fontsize"] : 18;
-
-	let borderThickness = parameters.hasOwnProperty("borderThickness") ?
-		parameters["borderThickness"] : 4;
-
-	let borderColor = parameters.hasOwnProperty("borderColor") ?
-		parameters["borderColor"] : { r:0, g:0, b:0, a:1.0 };
-
-	let backgroundColor = parameters.hasOwnProperty("backgroundColor") ?
-		parameters["backgroundColor"] : { r:255, g:255, b:255, a:1.0 };
-
-	let canvas:HTMLCanvasElement = document.createElement('canvas');
-	let context:CanvasRenderingContext2D = canvas.getContext('2d');
+	const canvas:HTMLCanvasElement = document.createElement('canvas');
+	let context = canvas.getContext('2d');
+	if (!context) throw new Error("Unable to create a 2D canvas context for city label");
 	context.font = "Bold " + fontsize + "px " + fontface;
 
 	// get size data (height depends only on font size)
@@ -45,6 +44,7 @@ export function makeTextSprite( message:string, parameters:any ):Sprite
 
 	// resizing the canvas resets its 2D context state, so re-apply the font
 	context = canvas.getContext('2d');
+	if (!context) throw new Error("Unable to recreate the 2D canvas context for city label");
 	context.font = "Bold " + fontsize + "px " + fontface;
 
 	// background color
@@ -64,12 +64,12 @@ export function makeTextSprite( message:string, parameters:any ):Sprite
 	context.fillText( message, borderThickness, fontsize + borderThickness);
 
 	// canvas contents will be used for a texture
-	var texture = new Texture(canvas)
+	const texture = new Texture(canvas);
 	texture.needsUpdate = true;
 
-	var spriteMaterial = new SpriteMaterial(
+	const spriteMaterial = new SpriteMaterial(
 		{ map: texture, transparent: true, depthWrite: false } );
-	var sprite = new Sprite( spriteMaterial );
+	const sprite = new Sprite( spriteMaterial );
 
 	// keep the same pixels-to-world-units scale the fixed 100x50 used to have
 	// (100 world units per 300px-wide default canvas), but derived from the

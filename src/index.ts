@@ -3,7 +3,7 @@
 //consumers must have their own copy of three.js installed/loaded.
 //----------------------------------------------------------------------------------
 export { HexMap } from "./HexMap";
-export type { HexMapOptions } from "./HexMap";
+export type { HexMapOptions, InfiniteWorldOptions } from "./HexMap";
 
 export { GameEngine } from "./gameengine";
 export type { GameEngineOptions } from "./gameengine";
@@ -46,3 +46,28 @@ export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateW
 export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
+export {
+    generateWorldChunk,
+    assertPackedWorldChunk,
+    decodeWorldChunkTile,
+    getWorldChunkCorePoints,
+    SparseWorldChunkStore,
+    DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
+    MAX_WORLD_GENERATION_CHUNK_SIZE,
+    WORLD_CHUNK_FORMAT_VERSION,
+    WORLD_CHUNK_PADDING
+} from "./world/generateWorldChunk";
+export type { PackedWorldChunk, WorldChunkGenerationOptions } from "./world/generateWorldChunk";
+export { WorldGeneratorPool } from "./world/WorldGeneratorPool";
+export type {
+    WorldGeneratorPoolOptions,
+    WorldGeneratorPoolStats,
+    ChunkRequestOptions,
+    ChunkGeneratorClient
+} from "./world/WorldGeneratorPool";
+export { InfiniteWorldStreamer } from "./world/InfiniteWorldStreamer";
+export type {
+    InfiniteWorldStreamerOptions,
+    InfiniteWorldStreamerHandlers,
+    InfiniteWorldStreamingStats
+} from "./world/InfiniteWorldStreamer";

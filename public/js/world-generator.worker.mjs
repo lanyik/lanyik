@@ -23,9 +23,15 @@ function getNeighbors(x, y) {
 
 // src/helpers/topology.ts
 function positiveModulo(value, modulus) {
+  if (!Number.isFinite(value) || !Number.isFinite(modulus) || modulus <= 0) {
+    throw new RangeError("positiveModulo requires a finite value and a positive finite modulus");
+  }
   return (value % modulus + modulus) % modulus;
 }
 function normalizeMapCoordinates(map, x, y) {
+  if (map.infinite) {
+    return Number.isInteger(x) && Number.isInteger(y) ? { x, y } : null;
+  }
   if (map.w <= 0 || map.h <= 0) return null;
   let normalizedX = x;
   let normalizedY = y;
@@ -229,6 +235,9 @@ function decorateTile(seed, x, y, climate, type) {
 function generateWorld({ seed, width, height, topology = "bounded" }) {
   assertDimension("width", width);
   assertDimension("height", height);
+  if (topology !== "bounded" && topology !== "toroidal") {
+    throw new RangeError('topology must be either "bounded" or "toroidal"');
+  }
   if (topology === "toroidal" && width % 2 !== 0) {
     throw new RangeError("toroidal worlds require an even width");
   }
@@ -258,16 +267,126 @@ function generateWorld({ seed, width, height, topology = "bounded" }) {
   return world;
 }
 
+// src/world/generateWorldChunk.ts
+var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
+var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
+var WORLD_CHUNK_FORMAT_VERSION = 1;
+var WORLD_CHUNK_PADDING = 1;
+var LAND_BY_CODE = [
+  "sea" /* sea */,
+  "coastal" /* coastal */,
+  "land" /* land */,
+  "sand" /* sand */,
+  "tundra" /* tundra */,
+  "snow" /* snow */,
+  "mountain" /* mountain */
+];
+var LAND_CODE = new Map(LAND_BY_CODE.map((land, index) => [land, index]));
+var FLAG_HILL = 1 << 3;
+var FLAG_WOOD = 1 << 4;
+var FLAG_LAKE = 1 << 5;
+var TREE_SHIFT = 6;
+var TREE_MASK = 3 << TREE_SHIFT;
+var SEA_LEVEL2 = 0.43;
+function assertChunkCoordinate(name, value) {
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+}
+function resolveChunkSize(value = DEFAULT_WORLD_GENERATION_CHUNK_SIZE) {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+  }
+  return value;
+}
+function sampleClimate(seed, x, y) {
+  const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
+  const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
+  const elevation = continent * 0.78 + detail * 0.22 + 0.03;
+  const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
+  const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.025, y * 0.025, 3);
+  const temperature = 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8;
+  return { elevation, moisture, temperature };
+}
+function classifyTerrain2({ elevation, moisture, temperature }) {
+  if (elevation < SEA_LEVEL2) return "sea" /* sea */;
+  if (elevation > 0.75) return "mountain" /* mountain */;
+  if (temperature < 0.18) return "snow" /* snow */;
+  if (temperature < 0.34) return "tundra" /* tundra */;
+  if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
+  return "land" /* land */;
+}
+function baseTerrainAt(seed, x, y) {
+  return classifyTerrain2(sampleClimate(seed, x, y));
+}
+function isWater2(type) {
+  return type === "sea" /* sea */ || type === "coastal" /* coastal */;
+}
+function terrainAt(seed, x, y) {
+  const base = baseTerrainAt(seed, x, y);
+  if (base !== "sea" /* sea */) return base;
+  const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater2(baseTerrainAt(seed, neighbor.x, neighbor.y)));
+  return touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
+}
+function encodeTile(seed, x, y) {
+  const climate = sampleClimate(seed, x, y);
+  const type = terrainAt(seed, x, y);
+  let packed = LAND_CODE.get(type) ?? 0;
+  if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return packed;
+  const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL2 + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+  if (lake) return packed | FLAG_LAKE;
+  if (climate.elevation > 0.62) packed |= FLAG_HILL;
+  const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
+  if (randomAt(seed, x, y, 668265263) < forestChance) {
+    const treeCode = climate.temperature > 0.67 ? 1 : climate.temperature < 0.4 ? 2 : 3;
+    packed |= FLAG_WOOD | treeCode << TREE_SHIFT;
+  }
+  return packed;
+}
+function generateWorldChunk(options) {
+  assertChunkCoordinate("chunkX", options.chunkX);
+  assertChunkCoordinate("chunkY", options.chunkY);
+  const chunkSize = resolveChunkSize(options.chunkSize);
+  const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
+  const tiles = new Uint16Array(stride * stride);
+  const seed = seedToUint32(options.seed);
+  const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
+  const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
+  if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(originX + stride - 1) || !Number.isSafeInteger(originY + stride - 1)) {
+    throw new RangeError("chunk coordinates exceed the safe integer tile range");
+  }
+  for (let localX = 0; localX < stride; localX += 1) {
+    for (let localY = 0; localY < stride; localY += 1) {
+      tiles[localX * stride + localY] = encodeTile(seed, originX + localX, originY + localY);
+    }
+  }
+  return {
+    version: WORLD_CHUNK_FORMAT_VERSION,
+    chunkX: options.chunkX,
+    chunkY: options.chunkY,
+    chunkSize,
+    padding: WORLD_CHUNK_PADDING,
+    stride,
+    tiles
+  };
+}
+
 // src/world/generateWorld.worker.ts
 var scope = globalThis;
 scope.addEventListener("message", (event) => {
-  const { id, options } = event.data;
   try {
-    scope.postMessage({ id, world: generateWorld(options) });
+    const request = event.data;
+    if (!request || typeof request.id !== "number" || !request.options) {
+      throw new TypeError("World generator received an invalid request");
+    }
+    if (request.type === "chunk") {
+      const chunk = generateWorldChunk(request.options);
+      scope.postMessage({ id: request.id, chunk }, [chunk.tiles.buffer]);
+    } else {
+      scope.postMessage({ id: request.id, world: generateWorld(request.options) });
+    }
   } catch (reason) {
     const error = reason instanceof Error ? reason : new Error(String(reason));
     scope.postMessage({
-      id,
+      id: event.data?.id,
       error: { name: error.name, message: error.message, stack: error.stack }
     });
   }

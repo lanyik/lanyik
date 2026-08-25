@@ -71,6 +71,9 @@ map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
 
+Call `map.dispose()` when the canvas is permanently removed. `GameEngine` owns
+its map and exposes the matching `game.dispose()` lifecycle method.
+
 Or take the batteries-included game loop (unit selection, click-to-move, fog of war driven by unit view ranges):
 
 ```ts
@@ -167,6 +170,31 @@ await map.load(world);
 generator.dispose();
 ```
 
+For a world whose logical size is not stored up front, use the multi-worker
+streaming mode. It keeps only a camera-centered chunk window in JavaScript and
+GPU memory, transfers packed 16-bit tile data, and rebases the Three.js world
+root before large coordinates lose precision:
+
+```ts
+await map.loadInfinite({
+    seed: "endless-continent",
+    workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
+    workerCount: 4,
+    chunkSize: 24,
+    initialTile: { x: 0, y: 0 }
+});
+
+console.log(map.infiniteStreamingStats);
+```
+
+`chunkSize` must be a multiple of 12. `loadRadius`, `retentionRadius`,
+`maxResidentChunks` and `floatingOriginThreshold` are optional tuning controls.
+The regular demo remains finite; open `/?infinite` to exercise this mode (the
+optional `x`/`y` query values test very large logical coordinates). Arbitrary
+`Unit` objects added through `map.add()` remain under the rebased world root;
+global simulation/pathfinding across unloaded chunks is intentionally an
+application-level concern rather than materializing the entire world again.
+
 ## Fog of war
 
 `HexMap` renders whatever fog states it is told: `map.setTileFog(x, y, state)` with `0 = Unseen` (fog texture), `1 = Explored` (darkened) or `2 = Visible`. `GameEngine` (with `fogOfWar: true`, the default) drives this from every unit's view range as units move.
@@ -189,7 +217,7 @@ generator.dispose();
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes. The latest tagged version is
+See [CHANGELOG.md](CHANGELOG.md) for release notes. The current package version is
 **0.5.0**, with large-world streaming and LOD work currently documented under
 **Unreleased**.
 

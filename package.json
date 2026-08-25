@@ -3,14 +3,14 @@
   "version": "0.5.0",
   "description": "A civ like 3D hexagonal terrain map based on three.js, rendered via instancing/shaders.",
   "type": "module",
-  "main": "dist/hex-map.js",
+  "main": "dist/hex-map.cjs",
   "module": "dist/hex-map.mjs",
   "types": "dist/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
       "import": "./dist/hex-map.mjs",
-      "require": "./dist/hex-map.js"
+      "require": "./dist/hex-map.cjs"
     },
     "./world-generator.worker": "./dist/world-generator.worker.mjs"
   },
@@ -22,7 +22,7 @@
     "build:lib": "tsup && tsc -p tsconfig.build.json && rollup -c rollup.config.global.mjs",
     "build:demo": "npm run build:lib && node scripts/copy-demo-assets.cjs",
     "build": "npm run build:demo",
-    "server": "npx http-server public -c-1 -p 3000",
+    "server": "http-server public -c-1 -p 3000",
     "start": "npm run build && npm run server",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -30,7 +30,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gunyakov/three-hex-map.git"
+    "url": "git+https://github.com/lanyik/lanyik.git"
   },
   "keywords": [
     "civilization",
@@ -42,17 +42,21 @@
   "author": "Oleg Gunyakov",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/gunyakov/three-hex-map/issues"
+    "url": "https://github.com/lanyik/lanyik/issues"
   },
-  "homepage": "https://github.com/gunyakov/three-hex-map#readme",
+  "homepage": "https://github.com/lanyik/lanyik#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "peerDependencies": {
-    "three": ">=0.160.0"
+    "three": "^0.185.0"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/three": "^0.185.0",
     "dat.gui": "^0.7.9",
+    "http-server": "^14.1.1",
     "rollup": "^4.62.2",
     "stats.js": "^0.17.0",
     "three": "^0.185.1",
@@ -62,5 +66,8 @@
   },
   "dependencies": {
     "robust-point-in-polygon": "^1.0.3"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
   }
 }

@@ -8,6 +8,7 @@ uniform float uTime;
 uniform float windStrength;
 uniform float windSpeed;
 uniform vec2 worldOffset;
+uniform vec2 chunkOrigin;
 uniform vec2 worldCenter;
 uniform vec2 worldPeriod;
 
@@ -52,7 +53,8 @@ void main() {
     //anchor, so decorations cannot hop to the next image before their ground.
     vec2 wrappedTileOffset = nearestWorldOffset(tileOffset);
     vec2 bladeOffset = wrappedTileOffset + (offset - tileOffset);
-    float wave = sin(uTime * windSpeed + phase + (bladeOffset.x + worldOffset.x + bladeOffset.y + worldOffset.y) * 0.015);
+    vec2 logicalBladeOffset = bladeOffset + chunkOrigin + worldOffset;
+    float wave = sin(uTime * windSpeed + phase + (logicalBladeOffset.x + logicalBladeOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
     rotated.z += bend * 0.4;

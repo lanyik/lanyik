@@ -26,6 +26,7 @@ uniform float gridOpacity;
 
 uniform vec3 lightDir;
 uniform vec3 cameraPosition; // auto-provided by three.js each frame
+uniform vec2 cameraWorldOffset; // floating-origin logical offset (infinite worlds)
 
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
@@ -234,7 +235,8 @@ void main() {
 
     vec3 normal = normalize(vNormal);
     vec3 light = normalize(lightDir);
-    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    vec3 logicalCameraPosition = cameraPosition + vec3(cameraWorldOffset.x, 0.0, cameraWorldOffset.y);
+    vec3 viewDir = normalize(logicalCameraPosition - vWorldPos);
 
     float ndotl = max(dot(normal, light), 0.0);
     vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;

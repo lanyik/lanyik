@@ -3,6 +3,8 @@ import { createI18n } from "./i18n.js";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const { HexMap, generateWorld, WorldGeneratorClient, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
+const query = new URLSearchParams(window.location.search);
+const infiniteMode = query.has("infinite");
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
@@ -153,12 +155,18 @@ let currentWorld;
 let generating = false;
 let statusState = { kind: "initializing" };
 let worldGenerator;
-try {
-    worldGenerator = new WorldGeneratorClient(new URL("./js/world-generator.worker.mjs", window.location.href));
-    window.addEventListener("beforeunload", () => worldGenerator.dispose(), { once: true });
-} catch (error) {
-    console.warn("World generation worker unavailable; using the synchronous fallback", error);
+if (!infiniteMode) {
+    try {
+        worldGenerator = new WorldGeneratorClient(new URL("./js/world-generator.worker.mjs", window.location.href));
+    } catch (error) {
+        console.warn("World generation worker unavailable; using the synchronous fallback", error);
+    }
 }
+
+window.addEventListener("beforeunload", () => {
+    worldGenerator?.dispose();
+    map.dispose();
+}, { once: true });
 
 function formatTile(tile) {
     return [
@@ -176,7 +184,7 @@ function renderStatus() {
     }
     if (kind === "generating" || kind === "generated") {
         title.textContent = i18n.t(`status.${kind}`);
-        detail.textContent = i18n.t("status.worldDetail", statusState);
+        detail.textContent = i18n.t(statusState.infinite ? "status.infiniteDetail" : "status.worldDetail", statusState);
         return;
     }
     if (kind === "failed") {
@@ -205,6 +213,20 @@ async function regenerate() {
     });
 
     try {
+        if (infiniteMode) {
+            await map.loadInfinite({
+                seed: controls.seed,
+                workerUrl: new URL("./js/world-generator.worker.mjs", window.location.href),
+                chunkSize: 24,
+                initialTile: {
+                    x: Number.parseInt(query.get("x") ?? "0", 10),
+                    y: Number.parseInt(query.get("y") ?? "0", 10)
+                }
+            });
+            currentWorld = undefined;
+            setStatus("generated", { infinite: true, seed: controls.seed });
+            return;
+        }
         const generationOptions = {
             seed: controls.seed,
             width: Number(controls.width),

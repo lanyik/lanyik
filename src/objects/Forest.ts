@@ -11,13 +11,16 @@ import {
 import pointInPolygon from "robust-point-in-polygon";
 
 import { HEXPolygon, getHexCenter } from "../helpers/helpers";
+import { forEachMapTile } from "../helpers/mapData";
 import { loadModel } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
 import {
     getWorldChunkBounds,
+    getWorldChunkOrigin,
     groupTilesByWorldChunk,
+    localizeWorldChunkBounds,
     tagWorldChunk,
     WorldChunkLod,
     WorldChunkMetadata
@@ -147,6 +150,16 @@ export class ForestField extends Group {
         record.lod = undefined;
     }
 
+    public dispose(): void {
+        const geometries = new Set<InstancedMesh["geometry"]>();
+        for (const record of this.chunks.values()) {
+            for (const mesh of record.instancedMeshes) geometries.add(mesh.geometry);
+        }
+        for (const geometry of geometries) geometry.dispose();
+        this.tileRanges.clear();
+        this.chunks.clear();
+    }
+
     private populateChunk(record: ForestChunkRecord, lod: WorldChunkLod): void {
         const {
             map, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
@@ -183,7 +196,11 @@ export class ForestField extends Group {
                 const scale = treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
                 matrix.makeRotationY(stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2);
                 matrix.scale(scaleVector.set(scale, scale, scale));
-                matrix.setPosition(center.x + lx, 0, center.y + ly);
+                matrix.setPosition(
+                    center.x + lx - record.root.position.x,
+                    0,
+                    center.y + ly - record.root.position.z
+                );
                 originalMatrices.push(matrix.clone());
                 const fogState = this.fogStates.get(key) ?? 2;
                 const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
@@ -237,7 +254,11 @@ function stableRandom(x: number, y: number, salt: number): number {
 //
 //Returns null if the map has no wood tiles.
 //----------------------------------------------------------------------------------
-export async function createForest(map: MapInfo, options: ForestOptions): Promise<ForestField | null> {
+export async function createForest(
+    map: MapInfo,
+    options: ForestOptions,
+    onlyTiles?: readonly Point[]
+): Promise<ForestField | null> {
     const { size } = options;
     const treesPerTile = options.treesPerTile ?? 20;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
@@ -250,15 +271,18 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
     //the dry shore rim is too thin to reliably place trees in (see Grass.ts's
     //matching skip).
     const tilesByModel = new Map<string, Point[]>();
-    for (let x = 0; x < map.w; x++) {
-        for (let y = 0; y < map.h; y++) {
-            const tile = map.data[x]?.[y];
-            if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) continue;
-            const modelPath = tile.treeModel ?? defaultModel;
-            const tiles = tilesByModel.get(modelPath) ?? [];
-            tiles.push({ x, y });
-            tilesByModel.set(modelPath, tiles);
-        }
+    const considerTile = (x: number, y: number): void => {
+        const tile = map.data[x]?.[y];
+        if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) return;
+        const modelPath = tile.treeModel ?? defaultModel;
+        const tiles = tilesByModel.get(modelPath) ?? [];
+        tiles.push({ x, y });
+        tilesByModel.set(modelPath, tiles);
+    };
+    if (onlyTiles) {
+        for (const point of onlyTiles) considerTile(point.x, point.y);
+    } else {
+        forEachMapTile(map, (_tile, x, y) => considerTile(x, y));
     }
     if (tilesByModel.size === 0) return null;
 
@@ -305,6 +329,8 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
         for (const [chunkKey, chunkTiles] of chunks) {
             const totalInstances = chunkTiles.length * treesPerTile;
             const root = new Group();
+            const origin = getWorldChunkOrigin(chunkKey, size);
+            root.position.set(origin.x, 0, origin.y);
             root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
             const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
                 const instancedMesh = new InstancedMesh(geometry, material, totalInstances);
@@ -321,7 +347,7 @@ export async function createForest(map: MapInfo, options: ForestOptions): Promis
                 root,
                 chunkKey,
                 "forest",
-                getWorldChunkBounds(chunkTiles, size, 0, size * 3),
+                localizeWorldChunkBounds(getWorldChunkBounds(chunkTiles, size, 0, size * 3), origin),
                 id
             );
             chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles });

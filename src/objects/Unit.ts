@@ -5,7 +5,8 @@ import { loadModel } from "../helpers/models";
 import { Point } from "../interfaces";
 
 import { getHexCenter } from "../helpers/helpers";
-import { CurvePath, Object3D, Vector3, LineCurve3 } from "three";
+import { AnimationAction, AnimationClip, AnimationMixer, CurvePath, LoopOnce, Object3D, Vector3, LineCurve3 } from "three";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Land, UnitActions } from "../enums";
 import { EventEmitter } from "../EventEmitter";
 
@@ -26,10 +27,14 @@ import { EventEmitter } from "../EventEmitter";
 export class Unit extends EventEmitter {
 
     private needAnimate = false;
-    private _unit:Object3D;
-    private _action:UnitActions;
+    private _unit!:Object3D;
+    private _action:UnitActions | undefined;
+    private animationMixer: AnimationMixer | undefined;
+    private animationAction: AnimationAction | undefined;
+    private animationClips: AnimationClip[] = [];
     private pathFraction:number = 0;
-    private pointsPath:CurvePath<Vector3>;
+    private pointsPath!:CurvePath<Vector3>;
+    private movementToken = 0;
     //Path currently being animated + the cell the model is nearest to right
     //now. moveTo() sets options.x/y to the *destination* immediately (so game
     //logic like "which tile holds this unit" is stable), which means position
@@ -58,7 +63,11 @@ export class Unit extends EventEmitter {
         sand: false,
         tundra: false,
         snow: false,
-        mountain: false
+        mountain: false,
+        mapWidth: 0,
+        mapHeight: 0,
+        wrapX: false,
+        wrapY: false
     };
 
     constructor(options:object = {}) {
@@ -68,7 +77,7 @@ export class Unit extends EventEmitter {
     }
 
     public async setUnit():Promise<void> {
-        const { scene, info, fixup } = await loadModel(this.options.type);
+        const { scene, animations, info, fixup } = await loadModel(this.options.type);
         //Merge gameplay stats (movement/health/actions/...) from info.json with current options
         setOptions(this, info);
 
@@ -76,8 +85,10 @@ export class Unit extends EventEmitter {
         //child, not this._unit itself - moveTo()/animation() drive this._unit's
         //position/quaternion directly for path movement, so it must stay a plain
         //placement transform (hex position only), not also carry the asset fixup.
-        const model = scene.clone(true);
+        const model = cloneSkeleton(scene);
         model.applyMatrix4(fixup);
+        this.animationClips = animations;
+        this.animationMixer = animations.length > 0 ? new AnimationMixer(model) : undefined;
 
         this._unit = new Object3D();
         this._unit.add(model);
@@ -86,11 +97,13 @@ export class Unit extends EventEmitter {
         let position:Point = getHexCenter(this.options.x, this.options.y, this.options.size);
         //Set 3D model center to current hexagon
         this._unit.position.set(position.x, 0, position.y);
+        if (!this.activate(UnitActions.idle) && animations.length > 0) this.playClip(animations[0]);
     }
     //----------------------------------------------------------------------------------------------------------
     //RETURN CURRENT 3D Object
     //----------------------------------------------------------------------------------------------------------
     public get unit() {
+        if (!this._unit) throw new Error("Unit.setUnit() must complete before accessing unit");
         return this._unit;
     }
 
@@ -133,108 +146,172 @@ export class Unit extends EventEmitter {
         return this._viewCell ?? this.position;
     }
     public set position(position:Point) {
+        if (this.needAnimate) throw new Error("Cannot set a unit position while it is moving");
         this.options.y = position.y;
         this.options.x = position.x;
-    }
-
-    public activate(action:UnitActions):void {
-        if (this.options.actions.includes(action)) {
-            this._action = action;
-        }
-        else {
-            console.log(`${action} isnt inside enum UnitActions, skip.`);
+        if (this._unit) {
+            const center = getHexCenter(position.x, position.y, this.options.size);
+            this._unit.position.set(center.x, this._unit.position.y, center.y);
         }
     }
 
-    public moveTo(path:Point[]) {
+    public activate(action:UnitActions): boolean {
+        if (!this.options.actions.includes(action)) return false;
+        const clip = this.animationClips.find(candidate => candidate.name.toLowerCase() === action.toLowerCase());
+        if (!clip) return false;
+        this._action = action;
+        this.playClip(clip, action === UnitActions.death);
+        return true;
+    }
 
-        //Get last poin and save like current unit position
-        this.options.x = path[path.length - 1]['x'];
-        this.options.y = path[path.length - 1]['y'];
+    private playClip(clip: AnimationClip, playOnce = false): void {
+        if (!this.animationMixer) return;
+        const next = this.animationMixer.clipAction(clip);
+        if (next === this.animationAction && next.isRunning()) return;
+        this.animationAction?.fadeOut(0.15);
+        next.reset().fadeIn(0.15);
+        if (playOnce) {
+            next.setLoop(LoopOnce, 1);
+            next.clampWhenFinished = true;
+        }
+        next.play();
+        this.animationAction = next;
+    }
+
+    public update(deltaSeconds: number): void {
+        if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) this.animationMixer?.update(deltaSeconds);
+    }
+
+    public get moving(): boolean {
+        return this.needAnimate;
+    }
+
+    public moveTo(path:Point[]): boolean {
+        if (this.needAnimate || path.length < 2) return false;
+
+        const route = path.map(point => ({ ...point }));
+
+        //Get last point and save as the canonical logical position.
+        this.options.x = route[route.length - 1].x;
+        this.options.y = route[route.length - 1].y;
 
         const pointsPath = new CurvePath<Vector3>();
-
-        let prevPoint3:Vector3 = new Vector3(0, 0, 0);
-
-        for(let i = 0; i < path.length; i++) {
-
-            let position:Point = getHexCenter(path[i]['x'], path[i]['y'], this.options.size);
-
-            let point3ForRoute = new Vector3( position.x, 0, position.y );
-
-            if(i > 0) {
-
-                const Line = new LineCurve3(
-
-                    prevPoint3,
-                    point3ForRoute,
-
-                );
-
-                pointsPath.add( Line );
-            }
-
-            prevPoint3 = point3ForRoute;
-
+        const points = createContinuousHexPath(route, this.options.size, {
+            mapWidth: this.options.mapWidth,
+            mapHeight: this.options.mapHeight,
+            wrapX: this.options.wrapX,
+            wrapY: this.options.wrapY
+        }, this.unit.position);
+        for (let i = 1; i < points.length; i++) {
+            pointsPath.add(new LineCurve3(points[i - 1], points[i]));
         }
 
         this.pointsPath = pointsPath;
-        this.movePath = path;
-        this._viewCell = path[0];
+        this.movePath = route;
+        this._viewCell = route[0];
+        this.pathFraction = 0;
         this.needAnimate = true;
-        this.emit("start_move", { id: this.id, from: path[0], to: this.position, path });
-        this.animation(path.length);
+        this.activate(UnitActions.walk);
+        const token = ++this.movementToken;
+        this.emit("start_move", { id: this.id, from: route[0], to: this.position, path: route });
+        void this.animation(route.length - 1, token);
+        return true;
     }
 
-    private async animation(cellCount:number):Promise<void> {
-        //If need animate unit
-        if(this.needAnimate) {
-            //Calculate animation fraction
-            let pathFraction = 1 / (cellCount * this.options.animateSpeed * this.options.animateFrameRate);
-            //Run until reach final destination
-            while(this.needAnimate) {
-                //Calcalate next poin of move
-                this.pathFraction += pathFraction;
-                //If unit reach final point
-                if ( this.pathFraction > 1 ) {
-                    this.pathFraction = 0;
-                    this.needAnimate = false;
-                }
-                //If unit dont reach final point
-                else {
-                    //Get coords from path
-                    let newPosition = this.pointsPath.getPoint( this.pathFraction );
-                    //Get angle to rotate unit
-                    let tangent = this.pointsPath.getTangent( this.pathFraction );
-                    const up = new Vector3( 0, 0, 1 );
-                    let axis = new Vector3();
-                    axis.crossVectors( up, tangent ).normalize( );
-                    let radians = Math.acos( up.dot( tangent ) );
-                    //Move unit to position
-                    this.unit.position.copy( newPosition );
-                    //Rotate unit to needed angle
-                    this.unit.quaternion.setFromAxisAngle( axis, radians );
+    private async animation(segmentCount:number, token: number):Promise<void> {
+        const frameRate = Number.isFinite(this.options.animateFrameRate) && this.options.animateFrameRate > 0
+            ? this.options.animateFrameRate : 50;
+        const secondsPerCell = Number.isFinite(this.options.animateSpeed) && this.options.animateSpeed > 0
+            ? this.options.animateSpeed : 1;
+        const fractionStep = 1 / (segmentCount * secondsPerCell * frameRate);
+        const forward = new Vector3(0, 0, 1);
 
-                    //Emit "cell_enter" whenever the model crosses into the
-                    //next cell of the path (nearest waypoint to the current
-                    //animation fraction) - consumers (GameEngine's fog of
-                    //war) reveal the map from viewPosition per cell, instead
-                    //of the whole route at once when the move started.
-                    if (this.movePath && this._viewCell) {
-                        const cellIndex = Math.round(this.pathFraction * (this.movePath.length - 1));
-                        const cell = this.movePath[cellIndex];
-                        if (cell && (cell.x !== this._viewCell.x || cell.y !== this._viewCell.y)) {
-                            this._viewCell = cell;
-                            this.emit("cell_enter", { id: this.id, cell });
-                        }
-                    }
+        while (this.needAnimate && token === this.movementToken) {
+            this.pathFraction = Math.min(1, this.pathFraction + fractionStep);
+            const newPosition = this.pointsPath.getPoint(this.pathFraction);
+            const tangent = this.pointsPath.getTangent(this.pathFraction).normalize();
+            this.unit.position.copy(newPosition);
+            if (tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(forward, tangent);
+
+            if (this.movePath && this._viewCell) {
+                const cellIndex = Math.min(
+                    this.movePath.length - 1,
+                    Math.round(this.pathFraction * (this.movePath.length - 1))
+                );
+                const cell = this.movePath[cellIndex];
+                if (cell && (cell.x !== this._viewCell.x || cell.y !== this._viewCell.y)) {
+                    this._viewCell = cell;
+                    this.emit("cell_enter", { id: this.id, cell });
                 }
-                //Wait to move unit animateFrameRate times per second
-                await wait(Math.floor(1000 / this.options.animateFrameRate));
             }
-            this.movePath = null;
-            this._viewCell = null;
-            this.emit("end_move", { id: this.id, position: this.position });
+
+            if (this.pathFraction >= 1) break;
+            await wait(Math.max(1, Math.floor(1000 / frameRate)));
         }
+
+        if (token !== this.movementToken) return;
+        this.pathFraction = 0;
+        this.needAnimate = false;
+        this.movePath = null;
+        this._viewCell = null;
+        this.activate(UnitActions.idle);
+        this.emit("end_move", { id: this.id, position: this.position });
     }
+
+    public alignToWorldReference(referenceX: number, referenceZ: number): void {
+        if (this.needAnimate || !this._unit) return;
+        const center = getHexCenter(this.options.x, this.options.y, this.options.size);
+        const periodX = this.options.wrapX ? this.options.mapWidth * this.options.size * 1.5 : 0;
+        const periodY = this.options.wrapY ? this.options.mapHeight * this.options.size * Math.sqrt(3) : 0;
+        if (periodX > 0) center.x += Math.round((referenceX - center.x) / periodX) * periodX;
+        if (periodY > 0) center.y += Math.round((referenceZ - center.y) / periodY) * periodY;
+        this._unit.position.set(center.x, this._unit.position.y, center.y);
+    }
+
+    public dispose(): void {
+        this.needAnimate = false;
+        this.movementToken += 1;
+        this.movePath = null;
+        this._viewCell = null;
+        this._unit?.removeFromParent();
+        if (this.animationMixer && this._unit?.children[0]) {
+            this.animationMixer.stopAllAction();
+            this.animationMixer.uncacheRoot(this._unit.children[0]);
+        }
+        this.animationMixer = undefined;
+        this.animationAction = undefined;
+        this.animationClips = [];
+        this.removeAllListeners();
+    }
+}
+
+export interface UnitWorldTopology {
+    mapWidth?: number;
+    mapHeight?: number;
+    wrapX?: boolean;
+    wrapY?: boolean;
+}
+
+export function createContinuousHexPath(
+    path: readonly Point[],
+    size: number,
+    topology: UnitWorldTopology = {},
+    start?: Vector3
+): Vector3[] {
+    const periodX = topology.wrapX && topology.mapWidth ? topology.mapWidth * size * 1.5 : 0;
+    const periodY = topology.wrapY && topology.mapHeight ? topology.mapHeight * size * Math.sqrt(3) : 0;
+    const points: Vector3[] = [];
+
+    for (let index = 0; index < path.length; index++) {
+        if (index === 0 && start) {
+            points.push(start.clone());
+            continue;
+        }
+        const center = getHexCenter(path[index].x, path[index].y, size);
+        const previous = points[index - 1];
+        if (previous && periodX > 0) center.x += Math.round((previous.x - center.x) / periodX) * periodX;
+        if (previous && periodY > 0) center.y += Math.round((previous.z - center.y) / periodY) * periodY;
+        points.push(new Vector3(center.x, 0, center.y));
+    }
+    return points;
 }

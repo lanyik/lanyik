@@ -12,6 +12,7 @@ const GROUND_PLANE = new Plane(new Vector3(0, 1, 0), 0);
 //world space, using the given canvas element for coordinate normalization.
 export function screenToGround(clientX: number, clientY: number, canvas: HTMLElement, camera: Camera): Vector3 | null {
     const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
     const ndc = new Vector2(
         ((clientX - rect.left) / rect.width) * 2 - 1,
         -((clientY - rect.top) / rect.height) * 2 + 1
@@ -40,6 +41,11 @@ export function pickTile(
     wrapX = false,
     wrapY = false
 ): TilePick | null {
+    if (!Number.isFinite(size) || size <= 0) return null;
+    if (mapWidth !== undefined && (!Number.isInteger(mapWidth) || mapWidth <= 0)) return null;
+    if (mapHeight !== undefined && (!Number.isInteger(mapHeight) || mapHeight <= 0)) return null;
+    if ((wrapX && mapWidth === undefined) || (wrapY && mapHeight === undefined)) return null;
+
     const approxX = worldPoint.x / (size * 1.5);
     const approxY = worldPoint.z / (size * Math.sqrt(3));
 
@@ -53,23 +59,21 @@ export function pickTile(
         for (let dy = -1; dy <= 1; dy++) {
             const rawX = x0 + dx;
             const rawY = y0 + dy;
-            if ((!wrapX && rawX < 0) || (!wrapY && rawY < 0)) continue;
-            if (!wrapX && mapWidth !== undefined && rawX >= mapWidth) continue;
-            if (!wrapY && mapHeight !== undefined && rawY >= mapHeight) continue;
-            if (wrapX && mapWidth === undefined) continue;
-            if (wrapY && mapHeight === undefined) continue;
-
-            const x = wrapX ? positiveModulo(rawX, mapWidth as number) : rawX;
-            const y = wrapY ? positiveModulo(rawY, mapHeight as number) : rawY;
-
             const center = getHexCenter(rawX, rawY, size);
             const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
             if (dist < bestDist) {
                 bestDist = dist;
-                best = { x, y, worldX: center.x, worldY: center.y };
+                best = { x: rawX, y: rawY, worldX: center.x, worldY: center.y };
             }
         }
     }
 
-    return best;
+    if (!best) return null;
+    if (!wrapX && (best.x < 0 || (mapWidth !== undefined && best.x >= mapWidth))) return null;
+    if (!wrapY && (best.y < 0 || (mapHeight !== undefined && best.y >= mapHeight))) return null;
+    return {
+        ...best,
+        x: wrapX ? positiveModulo(best.x, mapWidth as number) : best.x,
+        y: wrapY ? positiveModulo(best.y, mapHeight as number) : best.y
+    };
 }

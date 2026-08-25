@@ -31,4 +31,10 @@ export class EventEmitter {
             listener(payload);
         }
     }
+
+    public removeAllListeners(event?: string): this {
+        if (event === undefined) this.listeners = {};
+        else delete this.listeners[event];
+        return this;
+    }
 }

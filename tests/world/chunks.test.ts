@@ -5,7 +5,9 @@ import {
     getWorldChunkBounds,
     getWorldChunkKey,
     getWorldChunkMetadata,
+    getWorldChunkOrigin,
     groupTilesByWorldChunk,
+    localizeWorldChunkBounds,
     resolveWorldChunkLod,
     tagWorldChunk,
     WORLD_CHUNK_SIZE
@@ -48,6 +50,17 @@ describe("world render chunks", () => {
             kind: "land",
             bounds
         });
+    });
+
+    test("keeps GPU-facing chunk coordinates local even at huge logical positions", () => {
+        const origin = getWorldChunkOrigin("83333,-83334", 48);
+        const logical = getWorldChunkBounds([
+            { x: 999996, y: -1000008 },
+            { x: 1000007, y: -999997 }
+        ], 48, -10, 100);
+        const local = localizeWorldChunkBounds(logical, origin);
+        expect(Math.max(Math.abs(local.minX), Math.abs(local.maxX))).toBeLessThan(1000);
+        expect(Math.max(Math.abs(local.minZ), Math.abs(local.maxZ))).toBeLessThan(1000);
     });
 
     test("selects stable near, middle and far LOD levels", () => {

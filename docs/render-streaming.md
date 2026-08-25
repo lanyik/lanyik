@@ -2,9 +2,10 @@
 
 ## Pipeline
 
-The renderer keeps the authoritative `MapInfo` in memory, but it does not build
-render data for every tile. Each visual layer creates inexpensive 12×12 chunk
-shells with conservative bounds. `WorldChunkScheduler` then owns this lifecycle:
+For a regular finite map the renderer keeps the authoritative `MapInfo` in
+memory, but it does not build render data for every tile. Each visual layer
+creates inexpensive 12×12 chunk shells with conservative bounds.
+`WorldChunkScheduler` then owns this lifecycle:
 
 1. transform the chunk's local AABB into its current toroidal image;
 2. reject it by horizontal render distance and the camera frustum;
@@ -70,3 +71,31 @@ browser demo uses `WorldGeneratorClient` and `world-generator.worker.mjs`, so
 noise sampling and coast classification for worlds up to 512×512 do not block
 the main render thread. The resulting plain `MapInfo` remains compatible with
 pathfinding, fog, picking and gameplay systems.
+
+## Infinite generation mode
+
+`HexMap.loadInfinite()` does not allocate a full `MapInfo`. It combines two
+independent layers of streaming:
+
+1. `InfiniteWorldStreamer` derives camera-near generation chunks from one world
+   seed and submits them to `WorldGeneratorPool` by distance priority.
+2. Each worker returns a single transferred `Uint16Array`: one packed value per
+   tile plus a one-cell halo. Generation samples global coordinates, so worker
+   count, completion order and negative chunk coordinates cannot change terrain
+   or create a coast seam.
+3. `SparseWorldChunkStore` decodes only resident chunks. Reference counts retain
+   shared halo cells until their final owner leaves.
+4. `TerrainMesh`, `GrassField` and `ForestField` mount only the core cells and
+   reuse the normal 12×12 render-chunk LOD scheduler.
+5. Chunks outside the retention radius dispose their geometry, grass and tree
+   instances and remove their sparse tile data.
+
+Logical coordinates stay exact integers. When the camera's render coordinates
+approach `floatingOriginThreshold`, the camera and shared world root are shifted
+back towards zero. Terrain, tree models, custom units, orbit lighting and
+procedural texture phase remain aligned; `getCameraTarget()` continues to return
+the logical rather than rebased coordinate.
+
+`map.infiniteStreamingStats` reports generation-chunk residency, pending work,
+queue depth, busy workers and completed chunks. `map.streamingStats` continues
+to report render-chunk visibility/LOD/GPU residency.

@@ -14,17 +14,21 @@ import {
     ColorRepresentation,
     RepeatWrapping,
     LinearFilter,
-    Texture
+    Texture,
+    Material
 } from "three";
 
 import { MapInfo, TileInfo, Point } from "../interfaces";
 import { Land, LandPriority, LandColor } from "../enums";
 import { getHexCenter } from "../helpers/helpers";
+import { forEachMapTile } from "../helpers/mapData";
 import { getNeighborCoords } from "../helpers/neighbors";
 import { getMapTile } from "../helpers/topology";
 import {
     getWorldChunkBounds,
+    getWorldChunkOrigin,
     groupTilesByWorldChunk,
+    localizeWorldChunkBounds,
     tagWorldChunk,
     WorldChunkLod,
     WorldChunkMetadata
@@ -184,8 +188,10 @@ interface InstanceAttributes {
 interface CityFogEntry {
     wrapper: Group;
     sprite: Sprite;
-    meshes: { mesh: Mesh, baseColor: Color }[];
+    materials: { material: Material & { color?: Color }, baseColor?: Color }[];
 }
+
+export const CITY_FOG_TILE_KEY = "hexMapCityFogTile";
 
 interface TerrainChunkRecord {
     mesh: Mesh<InstancedBufferGeometry, RawShaderMaterial>;
@@ -264,13 +270,9 @@ export class TerrainMesh extends Group {
 
         const landTiles: Point[] = [];
         const waterTiles: Point[] = [];
-        for (let x = 0; x < this.map.w; x++) {
-            for (let y = 0; y < this.map.h; y++) {
-                const tile = this.map.data[x]?.[y];
-                if (!tile) continue;
-                (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
-            }
-        }
+        forEachMapTile(this.map, (tile, x, y) => {
+            (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+        });
         this.buildLandLayer(landTiles);
         this.buildWaterLayer(waterTiles);
     }
@@ -313,7 +315,7 @@ export class TerrainMesh extends Group {
     //Builds the per-instance attribute arrays (offset/style/neighbors/neighbor
     //priorities/kinds) shared by every layer - land and water tiles are laid
     //out identically, only the geometry/shader differ.
-    private buildInstanceAttributes(tiles: Point[]): InstanceAttributes {
+    private buildInstanceAttributes(tiles: Point[], origin: Point): InstanceAttributes {
         const { size } = this.options;
         const attrs: InstanceAttributes = {
             offset: new Float32Array(tiles.length * 2),
@@ -335,8 +337,8 @@ export class TerrainMesh extends Group {
             const info = this.map.data[tile.x][tile.y];
             const center = getHexCenter(tile.x, tile.y, size);
 
-            attrs.offset[i * 2 + 0] = center.x;
-            attrs.offset[i * 2 + 1] = center.y; // world Z
+            attrs.offset[i * 2 + 0] = center.x - origin.x;
+            attrs.offset[i * 2 + 1] = center.y - origin.y; // chunk-local Z
 
             attrs.style[i * 3 + 0] = this.atlasCellIndex[info.type] ?? 0;
             attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
@@ -386,7 +388,8 @@ export class TerrainMesh extends Group {
     private buildInstancedGeometry(
         tiles: Point[],
         numSubdivisions: number,
-        borderSubdivisions = numSubdivisions
+        borderSubdivisions = numSubdivisions,
+        origin: Point = { x: 0, y: 0 }
     ): InstancedBufferGeometry {
         const hexagon = numSubdivisions === borderSubdivisions
             ? createHexagonGeometry(this.options.size, numSubdivisions)
@@ -397,7 +400,7 @@ export class TerrainMesh extends Group {
         geometry.setIndex(hexagon.getIndex());
         geometry.instanceCount = tiles.length;
 
-        const attrs = this.buildInstanceAttributes(tiles);
+        const attrs = this.buildInstanceAttributes(tiles, origin);
         geometry.setAttribute("offset", new InstancedBufferAttribute(attrs.offset, 2));
         geometry.setAttribute("style", new InstancedBufferAttribute(attrs.style, 3));
         geometry.setAttribute("neighborsA", new InstancedBufferAttribute(attrs.neighborsA, 3));
@@ -454,6 +457,7 @@ export class TerrainMesh extends Group {
             //chunk, so chunks can be independently culled and streamed.
             worldCenter: { value: new Vector2(0, 0) },
             worldPeriod: { value: new Vector2(0, 0) },
+            chunkOrigin: { value: new Vector2(0, 0) },
             lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
             showGrid: { value: this.options.gridVisible === false ? 0.0 : 1.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
@@ -498,9 +502,7 @@ export class TerrainMesh extends Group {
     //any hex corner) and the center is always 0, so the GPU only ever linearly
     //interpolates between those 2 fixed extremes no matter the configured width.
     private buildLandLayer(tiles: Point[]): void {
-        if (tiles.length === 0) return;
-
-        this.landMaterial = new RawShaderMaterial({
+        this.landMaterial ??= new RawShaderMaterial({
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
                 landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
@@ -532,20 +534,32 @@ export class TerrainMesh extends Group {
             vertexShader: TERRAIN_VERTEX_SHADER,
             fragmentShader: TERRAIN_FRAGMENT_SHADER
         });
+        if (tiles.length === 0) return;
 
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+            if (this.chunkRecords.has(`land:${chunkKey}`)) continue;
             //The shell and metadata are cheap enough to keep for the whole
             //world. Attribute arrays and subdivided hex vertices are created
             //only when the scheduler activates this chunk.
             const geometry = new InstancedBufferGeometry();
             const mesh = new Mesh(geometry, this.landMaterial);
+            const origin = getWorldChunkOrigin(chunkKey, this.options.size);
+            mesh.position.set(origin.x, 0, origin.y);
+            mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
+                const shader = material as RawShaderMaterial;
+                shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
+                shader.uniformsNeedUpdate = true;
+            };
             mesh.name = `terrain-chunk-land-${chunkKey}`;
             mesh.frustumCulled = false;
             tagWorldChunk(
                 mesh,
                 chunkKey,
                 "land",
-                getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3)
+                localizeWorldChunkBounds(
+                    getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3),
+                    origin
+                )
             );
             chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
             this.chunkRecords.set(`land:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "land" });
@@ -558,11 +572,10 @@ export class TerrainMesh extends Group {
     //hex) so the sum-of-sines wave displacement in water.vertex.ts has enough
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     private buildWaterLayer(tiles: Point[]): void {
-        if (tiles.length === 0) return;
-
-        this.waterMaterial = new RawShaderMaterial({
+        this.waterMaterial ??= new RawShaderMaterial({
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
+                cameraWorldOffset: { value: new Vector2(0, 0) },
                 uTime: { value: 0 },
                 waveAmplitude: { value: this.options.waterWaveAmplitude ?? 1.6 },
                 waveFrequency: { value: 0.045 * (this.options.waterWaveFrequency ?? 1.0) },
@@ -584,17 +597,29 @@ export class TerrainMesh extends Group {
             vertexShader: WATER_VERTEX_SHADER,
             fragmentShader: WATER_FRAGMENT_SHADER
         });
+        if (tiles.length === 0) return;
 
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+            if (this.chunkRecords.has(`water:${chunkKey}`)) continue;
             const geometry = new InstancedBufferGeometry();
             const mesh = new Mesh(geometry, this.waterMaterial);
+            const origin = getWorldChunkOrigin(chunkKey, this.options.size);
+            mesh.position.set(origin.x, 0, origin.y);
+            mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
+                const shader = material as RawShaderMaterial;
+                shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
+                shader.uniformsNeedUpdate = true;
+            };
             mesh.name = `terrain-chunk-water-${chunkKey}`;
             mesh.frustumCulled = false;
             tagWorldChunk(
                 mesh,
                 chunkKey,
                 "water",
-                getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size)
+                localizeWorldChunkBounds(
+                    getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size),
+                    origin
+                )
             );
             chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
             this.chunkRecords.set(`water:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "water" });
@@ -616,15 +641,25 @@ export class TerrainMesh extends Group {
     //Async because loading a glTF model is async (see helpers/models.ts) -
     //called by HexMap.load() after construction, not from the constructor,
     //so callers can await it if they need cities present before proceeding.
-    public async loadCities(): Promise<void> {
+    public async loadCities(onlyTiles?: readonly Point[]): Promise<void> {
         const { size } = this.options;
         const defaultModel = this.options.cityModel ?? "Assets/models/monument";
         const cityScale = this.options.cityScale ?? 1;
 
-        for (let x = 0; x < this.map.w; x++) {
-            for (let y = 0; y < this.map.h; y++) {
+        const cityTiles: Point[] = [];
+        if (onlyTiles) {
+            for (const point of onlyTiles) {
+                if (this.map.data[point.x]?.[point.y]?.city) cityTiles.push(point);
+            }
+        } else {
+            forEachMapTile(this.map, (tile, x, y) => {
+                if (tile.city) cityTiles.push({ x, y });
+            });
+        }
+
+        for (const { x, y } of cityTiles) {
                 const tile = this.map.data[x]?.[y];
-                if (!tile?.city) continue;
+                if (!tile?.city || this.cityFog.has(`${x},${y}`)) continue;
 
                 const center = getHexCenter(x, y, size);
                 const modelPath = tile.city.model ?? defaultModel;
@@ -638,13 +673,17 @@ export class TerrainMesh extends Group {
                 // setFogState()) doesn't also darken every other city sharing
                 // the same model - scene.clone(true) copies the hierarchy but
                 // leaves materials as shared references.
-                const cityMeshes: { mesh: Mesh, baseColor: Color }[] = [];
+                const cityMaterials: { material: Material & { color?: Color }, baseColor?: Color }[] = [];
                 model.traverse(o => {
                     const mesh = o as Mesh;
                     if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return;
-                    mesh.material = (mesh.material as { clone(): typeof mesh.material }).clone();
-                    const color = (mesh.material as unknown as { color?: Color }).color;
-                    if (color) cityMeshes.push({ mesh, baseColor: color.clone() });
+                    const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                    const clonedMaterials = sourceMaterials.map(material => material.clone());
+                    mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
+                    for (const material of clonedMaterials) {
+                        const colored = material as Material & { color?: Color };
+                        cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                    }
                 });
 
                 const box = new Box3().setFromObject(model);
@@ -654,6 +693,7 @@ export class TerrainMesh extends Group {
                 wrapper.add(model);
                 wrapper.scale.setScalar(cityScale);
                 wrapper.position.set(center.x, 0, center.y);
+                wrapper.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
                 this.add(wrapper);
 
                 const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
@@ -662,11 +702,62 @@ export class TerrainMesh extends Group {
                     borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
                 });
                 sprite.position.set(center.x, modelHeight * cityScale + Math.round(size / 5), center.y);
+                sprite.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
                 this.add(sprite);
 
-                this.cityFog.set(`${x},${y}`, { wrapper, sprite, meshes: cityMeshes });
+                this.cityFog.set(`${x},${y}`, { wrapper, sprite, materials: cityMaterials });
+        }
+    }
+
+    //Adds render shells for newly materialized sparse-world cells. Actual GPU
+    //attributes remain lazy and are built by activateChunk() when visible.
+    public addTiles(tiles: readonly Point[]): void {
+        const landTiles: Point[] = [];
+        const waterTiles: Point[] = [];
+        for (const point of tiles) {
+            const tile = this.map.data[point.x]?.[point.y];
+            if (!tile) continue;
+            (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+        }
+        this.buildLandLayer(landTiles);
+        this.buildWaterLayer(waterTiles);
+    }
+
+    //Removes every render chunk touched by these cells. Streaming generation
+    //chunks are aligned to WORLD_CHUNK_SIZE, so a render chunk is never shared
+    //between two independently resident generation chunks.
+    public removeTiles(tiles: readonly Point[]): string[] {
+        const chunkKeys = new Set(groupTilesByWorldChunk(tiles).keys());
+        const removedIds: string[] = [];
+        for (const chunkKey of chunkKeys) {
+            for (const layer of ["land", "water"] as const) {
+                const id = `${layer}:${chunkKey}`;
+                const record = this.chunkRecords.get(id);
+                if (!record) continue;
+                record.mesh.geometry.dispose();
+                this.remove(record.mesh);
+                this.chunkRecords.delete(id);
+                const collection = layer === "land" ? this.landChunks : this.waterChunks;
+                const index = collection.indexOf(record.mesh);
+                if (index >= 0) collection.splice(index, 1);
+                const tileIndex = layer === "land" ? this.tileIndex : this.waterTileIndex;
+                for (const point of record.tiles) tileIndex.delete(`${point.x},${point.y}`);
+                removedIds.push(id);
             }
         }
+        for (const point of tiles) this.removeCity(`${point.x},${point.y}`);
+        return removedIds;
+    }
+
+    private removeCity(key: string): void {
+        const entry = this.cityFog.get(key);
+        if (!entry) return;
+        this.remove(entry.wrapper);
+        this.remove(entry.sprite);
+        for (const { material } of entry.materials) material.dispose();
+        entry.sprite.material.map?.dispose();
+        entry.sprite.material.dispose();
+        this.cityFog.delete(key);
     }
 
     //Advances the water/river animation. `dtS` is the elapsed time in seconds
@@ -683,6 +774,10 @@ export class TerrainMesh extends Group {
         this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
     }
 
+    public setCameraWorldOffset(x: number, y: number): void {
+        this.waterMaterial?.uniforms.cameraWorldOffset.value.set(x, y);
+    }
+
     //Near terrain keeps the original subdivision counts (land 3 / water 2).
     //Only interior vertices are reduced at middle/far distances; full-detail
     //rim tessellation remains identical, so adjacent chunks cannot open cracks.
@@ -696,7 +791,12 @@ export class TerrainMesh extends Group {
             ? ([3, 2, 1] as const)[lod]
             : ([2, 1, 0] as const)[lod];
         const borderSubdivisions = record.layer === "land" ? 3 : 2;
-        this.replaceGeometry(geometry, this.buildInstancedGeometry(record.tiles, subdivisions, borderSubdivisions));
+        this.replaceGeometry(geometry, this.buildInstancedGeometry(
+            record.tiles,
+            subdivisions,
+            borderSubdivisions,
+            { x: record.mesh.position.x, y: record.mesh.position.z }
+        ));
         record.lod = lod;
         return geometry;
     }
@@ -1020,8 +1120,8 @@ export class TerrainMesh extends Group {
         if (hidden) return;
 
         const shade = state < 1.5 ? (this.options.fogDarkenFactor ?? 0.45) : 1;
-        for (const { mesh, baseColor } of entry.meshes) {
-            ((mesh.material as unknown as { color: Color }).color).copy(baseColor).multiplyScalar(shade);
+        for (const { material, baseColor } of entry.materials) {
+            if (material.color && baseColor) material.color.copy(baseColor).multiplyScalar(shade);
         }
     }
 
@@ -1030,9 +1130,8 @@ export class TerrainMesh extends Group {
     }
 
     //Releases the land/water geometries, materials and atlas texture. City
-    //models/labels (also children of this Group) are *not* disposed - their
-    //geometry/materials are shared references into loadModel()'s cache (see
-    //helpers/models.ts), reused by future loads, not owned by this instance.
+    //Model geometry remains shared with loadModel()'s cache. Per-city cloned
+    //materials and canvas label textures are owned here and released below.
     public dispose(): void {
         for (const chunk of this.landChunks) chunk.geometry.dispose();
         this.landMaterial?.dispose();
@@ -1040,5 +1139,11 @@ export class TerrainMesh extends Group {
         this.waterMaterial?.dispose();
         this.atlasTexture.dispose(); // shared by both materials - dispose once
         this.fogTexture.dispose();
+        for (const entry of this.cityFog.values()) {
+            for (const { material } of entry.materials) material.dispose();
+            entry.sprite.material.map?.dispose();
+            entry.sprite.material.dispose();
+        }
+        this.cityFog.clear();
     }
 }

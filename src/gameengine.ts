@@ -8,6 +8,8 @@ import { Land } from "./enums";
 
 import { PathFinder } from "./helpers/pathfinder";
 import { EventEmitter } from "./EventEmitter";
+import { assertWrappableMap, normalizeMapCoordinates } from "./helpers/topology";
+import { forEachMapTile } from "./helpers/mapData";
 
 export interface GameEngineOptions extends HexMapOptions {
     preventCellClick?: boolean;
@@ -31,10 +33,11 @@ export interface GameEngineOptions extends HexMapOptions {
 export class GameEngine extends EventEmitter {
 
     private _map:HexMap;
-    private _mapData:MapInfo;
+    private _mapData!:MapInfo;
     private _unitsList:{ [key:string]:Unit } = {};
     private _currentUnit:Unit | undefined;
     private _fog:FogOfWar | undefined;
+    private initRevision = 0;
 
     private options = {
         preventCellClick: true,
@@ -47,15 +50,47 @@ export class GameEngine extends EventEmitter {
         this._map = new HexMap(options);
         this._map.on("click", (payload:{x:number,y:number,tile:TileInfo}) => this.cellClick(payload));
         this._map.on("hover", (payload:{x:number,y:number,tile:TileInfo}) => this.cellHover(payload));
+        this._map.on("frame", ({ dtS }:{ dtS:number }) => {
+            const target = this._map.getCameraTarget();
+            for (const unit of Object.values(this._unitsList)) {
+                unit.update(dtS);
+                unit.alignToWorldReference(target.x, target.z);
+            }
+        });
     }
 
     public async init(mapData:MapInfo, unitsData:UnitPlacement[] = []):Promise<void> {
+        const revision = ++this.initRevision;
+        assertWrappableMap(mapData);
+        const placements = this.validatePlacements(mapData, unitsData);
+        this.clearUnits();
+        this._currentUnit = undefined;
+        this._fog = undefined;
+        this.clearMapUnitMarkers(mapData);
         this._mapData = mapData;
         await this._map.load(mapData);
+        if (revision !== this.initRevision) return;
 
-        for (const unitInfo of unitsData) {
-            const unit = new Unit({ ...unitInfo, size: this._map.size });
-            await unit.setUnit();
+        const units = placements.map(unitInfo => new Unit({
+            ...unitInfo,
+            size: this._map.size,
+            mapWidth: mapData.w,
+            mapHeight: mapData.h,
+            wrapX: mapData.wrapX === true,
+            wrapY: mapData.wrapY === true
+        }));
+        try {
+            await Promise.all(units.map(unit => unit.setUnit()));
+        } catch (reason) {
+            for (const unit of units) unit.dispose();
+            throw reason;
+        }
+        if (revision !== this.initRevision) {
+            for (const unit of units) unit.dispose();
+            return;
+        }
+
+        for (const unit of units) {
             unit.on("start_move", payload => this.emit("start_move", payload));
             unit.on("end_move", payload => this.emit("end_move", payload));
             //Fog recomputes per cell the unit actually passes through (see
@@ -84,6 +119,45 @@ export class GameEngine extends EventEmitter {
         }
     }
 
+    private validatePlacements(map: MapInfo, units: readonly UnitPlacement[]): UnitPlacement[] {
+        const ids = new Set<string>();
+        const occupied = new Set<string>();
+        return units.map(placement => {
+            if (!placement.id || typeof placement.id !== "string") {
+                throw new TypeError("unit id must be a non-empty string");
+            }
+            if (!placement.type || typeof placement.type !== "string") {
+                throw new TypeError(`unit "${placement.id}" type must be a non-empty model path`);
+            }
+            if (ids.has(placement.id)) throw new Error(`duplicate unit id "${placement.id}"`);
+            ids.add(placement.id);
+
+            const normalized = normalizeMapCoordinates(map, placement.x, placement.y);
+            if (!normalized || !map.data[normalized.x]?.[normalized.y]) {
+                throw new RangeError(`unit "${placement.id}" is outside the map or on a missing tile`);
+            }
+            const key = `${normalized.x},${normalized.y}`;
+            if (occupied.has(key)) throw new Error(`multiple units occupy tile ${key}`);
+            occupied.add(key);
+            return { ...placement, ...normalized };
+        });
+    }
+
+    private clearUnits(): void {
+        for (const unit of Object.values(this._unitsList)) {
+            const tile = this._mapData?.data[unit.position.x]?.[unit.position.y];
+            if (tile?.unit === unit.id) delete tile.unit;
+            unit.dispose();
+        }
+        this._unitsList = {};
+    }
+
+    private clearMapUnitMarkers(map: MapInfo): void {
+        forEachMapTile(map, tile => {
+            if (tile.unit) delete tile.unit;
+        });
+    }
+
     //Recomputes which tiles are currently visible from every unit's own
     //{x, y, viewRange} (see FogOfWar.recompute()), pushes only the tiles whose
     //state actually changed into HexMap.setTileFog(), and hides/shows each
@@ -107,7 +181,7 @@ export class GameEngine extends EventEmitter {
 
     private cellHover(payload:{x:number,y:number,tile:TileInfo}):void {
         this._map.cleanRoutePath();
-        if (this._currentUnit) {
+        if (this._currentUnit && !this._currentUnit.moving) {
             const path = this.findPath(this._currentUnit.position, payload);
             if (path.length > 0) this._map.drawRoutePath(path);
         }
@@ -128,9 +202,11 @@ export class GameEngine extends EventEmitter {
             if (this._currentUnit) {
                 const path = this.findPath(this._currentUnit.position, cellCoords);
                 if (path.length > 0) {
-                    delete this._mapData.data[this._currentUnit.position.x][this._currentUnit.position.y].unit;
-                    this._currentUnit.moveTo(path);
-                    this._mapData.data[x][y].unit = this._currentUnit.id;
+                    const from = this._currentUnit.position;
+                    if (this._currentUnit.moveTo(path)) {
+                        delete this._mapData.data[from.x][from.y].unit;
+                        this._mapData.data[x][y].unit = this._currentUnit.id;
+                    }
                 }
             }
             this._currentUnit = undefined;
@@ -171,8 +247,21 @@ export class GameEngine extends EventEmitter {
         //dimmed) stay routable. With fogOfWar disabled there's no fog tracker
         //and no veto - the old behavior.
         const fog = this._fog;
-        const pathFinder = new PathFinder(this._mapData, restrictions,
-            fog ? (x, y) => fog.getState(x, y) !== FogState.Unseen : undefined);
+        const pathFinder = new PathFinder(this._mapData, restrictions, (x, y) => {
+            if (fog && fog.getState(x, y) === FogState.Unseen) return false;
+            if (x === start.x && y === start.y) return true;
+            const occupyingUnit = this._mapData.data[x]?.[y]?.unit;
+            return !occupyingUnit || occupyingUnit === unit?.id;
+        });
         return pathFinder.find(start.x, start.y, stop.x, stop.y);
+    }
+
+    public dispose(): void {
+        this.initRevision += 1;
+        this.clearUnits();
+        this._currentUnit = undefined;
+        this._fog = undefined;
+        this._map.dispose();
+        this.removeAllListeners();
     }
 }

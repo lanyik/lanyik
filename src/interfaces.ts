@@ -4,10 +4,6 @@ import { Land, UnitActions } from "./enums";
 //----------------------------------------------------------------------------------
 export interface Point {x:number, y:number}
 //----------------------------------------------------------------------------------
-//Calback common interface
-//----------------------------------------------------------------------------------
-export interface myCallbackType { (myArgument: any): void }
-//----------------------------------------------------------------------------------
 //A river is an ordered chain of tiles: riverIndex identifies which river a tile
 //belongs to (a map can have several rivers), riverTileIndex is this tile's position
 //within that chain (used to tell direction and find the previous/next segment).
@@ -63,7 +59,11 @@ export interface MapInfo {
     //are absent; generated toroidal maps opt into coordinate wrapping on both
     //axes so rendering, picking, neighbors and pathfinding agree at the seam.
     wrapX?: boolean,
-    wrapY?: boolean
+    wrapY?: boolean,
+    //Streaming worlds are sparse and unbounded. `w`/`h` remain present for
+    //backwards compatibility, but coordinate normalization deliberately does
+    //not clamp against them when this flag is true.
+    infinite?: boolean
 }
 //----------------------------------------------------------------------------------
 //Where to place a unit on load (the units.json array passed to GameEngine.init/

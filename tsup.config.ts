@@ -21,8 +21,11 @@ export default defineConfig({
     sourcemap: true,
     clean: true,
     splitting: false,
-    external: ["three"],
+    // Keep only Three's core external. Its ESM-only addons are bundled so the
+    // CommonJS entry never tries to require() an ESM subpath at runtime.
+    external: [/^three$/],
+    noExternal: [/^three\/examples\//],
     outExtension({ format }) {
-        return { js: format === "esm" ? ".mjs" : ".js" };
+        return { js: format === "esm" ? ".mjs" : ".cjs" };
     }
 });

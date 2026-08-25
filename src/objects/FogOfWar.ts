@@ -1,5 +1,6 @@
 import { MapInfo, Point } from "../interfaces";
 import { tilesWithinRange } from "../helpers/fog";
+import { assertWrappableMap, normalizeMapCoordinates } from "../helpers/topology";
 
 //----------------------------------------------------------------------------------
 //Civ-style three-state fog of war:
@@ -35,6 +36,7 @@ export class FogOfWar {
     private state: Uint8Array;
 
     constructor(private map: MapInfo) {
+        assertWrappableMap(map);
         this.state = new Uint8Array(map.w * map.h); // defaults to 0 = Unseen
     }
 
@@ -43,7 +45,9 @@ export class FogOfWar {
     }
 
     public getState(x: number, y: number): FogState {
-        return this.state[this.index(x, y)] as FogState;
+        const normalized = normalizeMapCoordinates(this.map, x, y);
+        if (!normalized || !this.map.data[normalized.x]?.[normalized.y]) return FogState.Unseen;
+        return this.state[this.index(normalized.x, normalized.y)] as FogState;
     }
 
     //Every existing tile, at its current state - used once at startup to sync

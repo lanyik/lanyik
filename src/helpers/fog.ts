@@ -13,13 +13,14 @@ import { getMapNeighbors, normalizeMapCoordinates } from "./topology";
 //----------------------------------------------------------------------------------
 export function tilesWithinRange(map: MapInfo, x: number, y: number, range: number): Point[] {
     const origin = normalizeMapCoordinates(map, x, y);
-    if (range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
+    if (!Number.isFinite(range) || range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
+    const wholeRange = Math.floor(range);
 
     const visited = new Set<string>([`${origin.x},${origin.y}`]);
     const result: Point[] = [origin];
     let frontier: Point[] = [origin];
 
-    for (let step = 0; step < range; step++) {
+    for (let step = 0; step < wholeRange; step++) {
         const next: Point[] = [];
         for (const tile of frontier) {
             for (const n of getMapNeighbors(map, tile.x, tile.y)) {

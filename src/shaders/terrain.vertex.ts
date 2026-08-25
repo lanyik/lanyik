@@ -46,6 +46,7 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
 uniform float fogTextureSize;
 uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
+uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
 uniform vec2 worldCenter; // camera target on the ground plane
 uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
@@ -296,6 +297,7 @@ void main() {
     float apothem = hexSize * 0.8660254;
     vec2 local = position.xz;
     vec2 tileOffset = nearestWorldOffset(offset);
+    vec2 logicalTileOffset = tileOffset + chunkOrigin;
 
     vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
     vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
@@ -374,9 +376,9 @@ void main() {
         float gate = fogVisible * (riverEdges >= 0.0 ? 0.0 : 1.0);
         if (gate > 0.0) {
             float eps = hexSize * 0.08;
-            float h0 = mountainHeightAt(local, tileOffset);
-            float hx = mountainHeightAt(local + vec2(eps, 0.0), tileOffset);
-            float hz = mountainHeightAt(local + vec2(0.0, eps), tileOffset);
+            float h0 = mountainHeightAt(local, logicalTileOffset);
+            float hx = mountainHeightAt(local + vec2(eps, 0.0), logicalTileOffset);
+            float hz = mountainHeightAt(local + vec2(0.0, eps), logicalTileOffset);
             elevation = h0 * gate;
             raiseY = elevation * mountainHeight;
             mountainSlope = vec2(hx - h0, hz - h0) / eps * mountainHeight * gate;
@@ -429,13 +431,14 @@ void main() {
     vRiverLakeMouthEdges = riverLakeMouthEdges;
     vLakeNeighborEdges = lakeNeighborEdges;
     vLocal = local;
-    vWorldXZ = pos.xz + worldOffset;
+    vec2 logicalWorldXZ = pos.xz + chunkOrigin + worldOffset;
+    vWorldXZ = logicalWorldXZ;
     // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
     // upright from this map's camera: the camera's azimuth is locked to ~90deg
     // (see HexMap's setupControls), which puts screen-right along world -Z and
     // screen-up along world -X - mapping u to -z and v to -x orients the
     // texture to the screen and keeps it un-mirrored when viewed from above.
     // Negation is free for a seamlessly wrapping texture (just a phase shift).
-    vFogUV = vec2(-(pos.z + worldOffset.y), -(pos.x + worldOffset.x)) / fogTextureSize;
+    vFogUV = vec2(-logicalWorldXZ.y, -logicalWorldXZ.x) / fogTextureSize;
 }
 `;

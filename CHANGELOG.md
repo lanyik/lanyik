@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   draw-call, triangle, visible/resident chunk and LOD counters.
 - Dedicated browser Worker build and `WorldGeneratorClient` for non-blocking
   procedural generation. Supported world dimensions now extend to 512×512.
+- Deterministic infinite-world chunks with a compact 16-bit tile format, halo
+  cells for seamless borders, a prioritized multi-Worker pool, sparse
+  reference-counted residency, camera-driven loading and floating-origin
+  rebasing through `HexMap.loadInfinite()`.
 
 ### Changed
 
@@ -35,8 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WebGL buffers first, then reconstructible CPU attributes. Toroidal copies
   share canonical resources and are only created for seam regions that can
   become visible.
+- Streaming mode incrementally mounts and releases terrain, grass and 3D forest
+  layers while preserving lighting, orbit controls and custom unit objects.
 
 ### Fixed
+
+- Corrected bounded-map picking so points outside the map no longer snap to an
+  edge tile, and hardened topology/fog/generator runtime input validation.
+- Replaced the legacy sparse-array pathfinder with a typed heap-based A* that
+  preserves shortest wrapped routes and respects occupied tiles.
+- Unit animation now lands exactly on its endpoint, rejects overlapping moves,
+  and takes the short visual route across toroidal seams.
+- Added race guards for repeated map/game initialization and asynchronous forest
+  rebuilds; worker protocol/fatal errors now reject requests instead of hanging.
+- Added complete `HexMap`/`GameEngine` disposal, route/city/forest GPU cleanup,
+  wrapped-city fog synchronization, and embedded-canvas resize observation.
+- Package metadata now points to this fork, CommonJS uses a `.cjs` entry, and
+  the transitive esbuild security advisory is resolved.
 
 - Grass wraps with its owning hex, and physical terrain/grass chunks share the
   same toroidal placement and visibility rules as their decorations, preventing

@@ -14,14 +14,17 @@ import {
 import pointInPolygon from "robust-point-in-polygon";
 
 import { HEXPolygon, getHexCenter } from "../helpers/helpers";
-import { MapInfo } from "../interfaces";
+import { forEachMapTile } from "../helpers/mapData";
+import { MapInfo, Point } from "../interfaces";
 import { Land } from "../enums";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
 import {
     getWorldChunkBounds,
+    getWorldChunkOrigin,
     groupTilesByWorldChunk,
+    localizeWorldChunkBounds,
     tagWorldChunk,
     WorldChunkLod,
     WorldChunkMetadata
@@ -146,7 +149,11 @@ export class GrassField extends Group {
         if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
 
         this.removeTileRanges(record);
-        const source = this.buildChunkGeometry(record.tiles, lod);
+        const source = this.buildChunkGeometry(
+            record.tiles,
+            lod,
+            { x: record.mesh.position.x, y: record.mesh.position.z }
+        );
         this.replaceGeometry(record.mesh.geometry, source, record.tiles);
         record.lod = lod;
         return record.mesh.geometry;
@@ -164,7 +171,11 @@ export class GrassField extends Group {
         for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
     }
 
-    private buildChunkGeometry(chunkTiles: { x: number, y: number }[], lod: WorldChunkLod): InstancedBufferGeometry {
+    private buildChunkGeometry(
+        chunkTiles: { x: number, y: number }[],
+        lod: WorldChunkLod,
+        origin: Point
+    ): InstancedBufferGeometry {
         const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
         const densityScale = ([1, 0.38, 0.14] as const)[lod];
         const density = Math.max(1, Math.round(this.options.density * densityScale));
@@ -200,10 +211,10 @@ export class GrassField extends Group {
                 }
                 if (!valid) continue;
 
-                offsets[instance * 2] = center.x + lx;
-                offsets[instance * 2 + 1] = center.y + ly;
-                tileOffsets[instance * 2] = center.x;
-                tileOffsets[instance * 2 + 1] = center.y;
+                offsets[instance * 2] = center.x + lx - origin.x;
+                offsets[instance * 2 + 1] = center.y + ly - origin.y;
+                tileOffsets[instance * 2] = center.x - origin.x;
+                tileOffsets[instance * 2 + 1] = center.y - origin.y;
                 angles[instance] = stableRandom(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
                 const heightJitter = 1 - heightVariation * 0.5
                     + stableRandom(tile.x, tile.y, i * 97 + 43) * heightVariation;
@@ -250,7 +261,7 @@ export class GrassField extends Group {
         target.boundingSphere = null;
         for (const tile of tiles) {
             const range = this.tileRanges.get(`${tile.x},${tile.y}`);
-            if (range.geometry === source) range.geometry = target;
+            if (range?.geometry === source) range.geometry = target;
         }
     }
 
@@ -303,7 +314,11 @@ function buildBladeGeometry(): BufferGeometry {
 
 //Builds the map-wide grass field. Returns null if the map has no grass tiles
 //or density is 0.
-export function createGrassField(map: MapInfo, options: GrassOptions): GrassField | null {
+export function createGrassField(
+    map: MapInfo,
+    options: GrassOptions,
+    onlyTiles?: readonly Point[]
+): GrassField | null {
     const { size } = options;
     const density = options.density ?? 60;
     if (density <= 0) return null;
@@ -319,11 +334,14 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     //10-attempt rejection fallback below would end up dropping them in the
     //water). River tiles keep their grass - the banks are wide enough.
     const tiles: { x: number, y: number }[] = [];
-    for (let x = 0; x < map.w; x++) {
-        for (let y = 0; y < map.h; y++) {
-            const tile = map.data[x]?.[y];
-            if (tile?.type === Land.land && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
-        }
+    const considerTile = (x: number, y: number): void => {
+        const tile = map.data[x]?.[y];
+        if (tile?.type === Land.land && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
+    };
+    if (onlyTiles) {
+        for (const point of onlyTiles) considerTile(point.x, point.y);
+    } else {
+        forEachMapTile(map, (_tile, x, y) => considerTile(x, y));
     }
     if (tiles.length === 0) return null;
 
@@ -341,6 +359,7 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
             //Toroidal placement is performed by physical chunk copies so the
             //shader keeps every blade attached to its canonical chunk.
             worldPeriod: { value: new Vector2(0, 0) },
+            chunkOrigin: { value: new Vector2(0, 0) },
             uTime: { value: 0 },
             windStrength: { value: windStrength },
             windSpeed: { value: windSpeed },
@@ -357,13 +376,23 @@ export function createGrassField(map: MapInfo, options: GrassOptions): GrassFiel
     for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
         const geometry = new InstancedBufferGeometry();
         const chunk = new Mesh(geometry, material);
+        const origin = getWorldChunkOrigin(chunkKey, size);
+        chunk.position.set(origin.x, 0, origin.y);
+        chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
+            const shader = currentMaterial as RawShaderMaterial;
+            shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
+            shader.uniformsNeedUpdate = true;
+        };
         chunk.name = `grass-chunk-${chunkKey}`;
         chunk.frustumCulled = false;
         tagWorldChunk(
             chunk,
             chunkKey,
             "grass",
-            getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation))
+            localizeWorldChunkBounds(
+                getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation)),
+                origin
+            )
         );
         chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles });
     }

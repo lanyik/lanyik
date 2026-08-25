@@ -94,6 +94,13 @@ export class WorldChunkScheduler {
         this.snapshot = { ...EMPTY_STATS };
     }
 
+    //Streaming worlds can physically remove render shells before the normal
+    //grace-frame eviction pass. Forget them immediately so residency stats and
+    //cache limits never retain metadata for unloaded logical chunks.
+    public forget(ids: Iterable<string>): void {
+        for (const id of ids) this.residents.delete(id);
+    }
+
     public get stats(): Readonly<WorldChunkStreamingStats> {
         return this.snapshot;
     }

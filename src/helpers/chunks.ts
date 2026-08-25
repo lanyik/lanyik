@@ -42,6 +42,9 @@ export const DEFAULT_WORLD_CHUNK_LOD_DISTANCES: Readonly<WorldChunkLodDistances>
 });
 
 export function getWorldChunkKey(x: number, y: number, chunkSize = WORLD_CHUNK_SIZE): string {
+    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+        throw new RangeError("chunkSize must be a positive integer");
+    }
     return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
 }
 
@@ -49,6 +52,9 @@ export function groupTilesByWorldChunk<T extends Point>(
     tiles: readonly T[],
     chunkSize = WORLD_CHUNK_SIZE
 ): Map<string, T[]> {
+    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+        throw new RangeError("chunkSize must be a positive integer");
+    }
     const chunks = new Map<string, T[]>();
     for (const tile of tiles) {
         const key = getWorldChunkKey(tile.x, tile.y, chunkSize);
@@ -80,6 +86,25 @@ export function getWorldChunkBounds(
     }
 
     return { minX, maxX, minY, maxY, minZ, maxZ };
+}
+
+export function getWorldChunkOrigin(chunkKey: string, size: number): Point {
+    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
+    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) {
+        throw new TypeError(`invalid world chunk key "${chunkKey}"`);
+    }
+    return getHexCenter(chunkX * WORLD_CHUNK_SIZE, chunkY * WORLD_CHUNK_SIZE, size);
+}
+
+export function localizeWorldChunkBounds(bounds: WorldChunkBounds, origin: Point): WorldChunkBounds {
+    return {
+        minX: bounds.minX - origin.x,
+        maxX: bounds.maxX - origin.x,
+        minY: bounds.minY,
+        maxY: bounds.maxY,
+        minZ: bounds.minZ - origin.y,
+        maxZ: bounds.maxZ - origin.y
+    };
 }
 
 export function tagWorldChunk(

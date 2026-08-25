@@ -131,6 +131,9 @@ function decorateTile(seed: number, x: number, y: number, climate: ClimateSample
 export function generateWorld({ seed, width, height, topology = "bounded" }: WorldGenerationOptions): MapInfo {
     assertDimension("width", width);
     assertDimension("height", height);
+    if (topology !== "bounded" && topology !== "toroidal") {
+        throw new RangeError('topology must be either "bounded" or "toroidal"');
+    }
     if (topology === "toroidal" && width % 2 !== 0) {
         throw new RangeError("toroidal worlds require an even width");
     }

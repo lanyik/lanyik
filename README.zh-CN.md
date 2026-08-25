@@ -73,6 +73,9 @@ map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
 
+永久移除画布时请调用 `map.dispose()`。`GameEngine` 持有自己的地图实例，
+对应使用 `game.dispose()` 释放资源。
+
 也可以直接使用包含单位选择、点击移动和单位视野迷雾的游戏循环：
 
 ```ts
@@ -166,6 +169,22 @@ await map.load(world);
 generator.dispose();
 ```
 
+如果不希望预先保存整个世界，可以直接使用多 Worker 无限流式模式。该模式只让镜头附近的 Chunk 驻留在 JavaScript 和 GPU 内存中，以 16 位紧凑数据传输，并在坐标过大前自动平移 Three.js 世界根节点：
+
+```ts
+await map.loadInfinite({
+    seed: "endless-continent",
+    workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
+    workerCount: 4,
+    chunkSize: 24,
+    initialTile: { x: 0, y: 0 }
+});
+
+console.log(map.infiniteStreamingStats);
+```
+
+`chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks` 和 `floatingOriginThreshold`。普通演示仍使用有限环形地图，打开 `/?infinite` 可体验无限模式；附加 `x`/`y` 查询参数可以测试极大逻辑坐标。通过 `map.add()` 添加的 `Unit` 会保留在可重定位的世界根节点下；跨未加载 Chunk 的全局模拟和寻路应由上层应用按 Chunk 处理，避免重新把整个世界放回内存。
+
 ## 战争迷雾
 
 `HexMap` 会渲染调用方提供的迷雾状态：`map.setTileFog(x, y, state)` 中，`0 = 未探索`（迷雾纹理）、`1 = 已探索`（变暗）、`2 = 当前可见`。开启 `fogOfWar` 的 `GameEngine` 会根据所有单位的位置和视野范围自动更新这些状态。
@@ -188,7 +207,7 @@ generator.dispose();
 
 ## 更新日志
 
-发布记录见 [CHANGELOG.md](CHANGELOG.md)。最新标签版本为 **0.5.0**，大型世界流送与 LOD 等当前开发内容记录在 **Unreleased** 中。
+发布记录见 [CHANGELOG.md](CHANGELOG.md)。当前包版本为 **0.5.0**，大型世界流送与 LOD 等当前开发内容记录在 **Unreleased** 中。
 
 ## 致谢
 

@@ -7,6 +7,7 @@ import { ColorRepresentation } from "three";
 //----------------------------------------------------------------------------------
 export type HexMapEventName =
     | "load"
+    | "error"
     | "click"
     | "hover"
     | "unitClick"
