@@ -34,7 +34,7 @@
 
 ### 程序化生成层
 
-新增纯 TypeScript 世界生成模块。输入为 `seed`、`width` 和 `height`，输出上游 `HexMap.load()` 接受的 `MapInfo`。
+新增纯 TypeScript 世界生成模块。输入为 `seed`、`width` 和 `height`，输出可由 `StaticWorldSource` 包装的 `MapInfo`。
 
 生成过程分为五步：
 
@@ -42,7 +42,7 @@
 2. 通过大陆中心衰减让地图边缘更偏向海洋，形成可读的大陆轮廓。
 3. 根据海拔和温度分类海洋、陆地、沙地、苔原与雪地。
 4. 根据相邻格子把临海水域标为 coastal，并根据局部海拔、湿度增加 hill、wood 和 lake 修饰。
-5. 返回结构完整的 `MapInfo`，交给 `HexMap.load()` 一次性重建渲染层。
+5. 返回结构完整的 `MapInfo`，通过 `StaticWorldSource` 交给 `HexMap.loadWorld()` 重建渲染层。
 
 同一个种子和尺寸必须生成完全相同的数据。无效尺寸在进入生成器时被拒绝，并由页面显示可理解的错误信息。
 
@@ -59,7 +59,7 @@
   -> 参数校验
   -> generateWorld(seed, width, height)
   -> MapInfo
-  -> HexMap.load(MapInfo)
+  -> HexMap.loadWorld({ source: new StaticWorldSource(MapInfo) })
   -> 实例化地形/水面/植被/网格 Shader
   -> 浏览器画布
 ```

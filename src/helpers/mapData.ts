@@ -12,6 +12,10 @@ export function forEachMapTile(
     map: MapInfo,
     visit: (tile: TileInfo, x: number, y: number) => void
 ): void {
+    if (map.forEachTile) {
+        map.forEachTile(visit);
+        return;
+    }
     for (const xKey of Object.keys(map.data)) {
         const x = Number(xKey);
         if (!Number.isInteger(x)) continue;

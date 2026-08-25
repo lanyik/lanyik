@@ -34,23 +34,27 @@ import { HexMapEventName, Land, LandColor } from "./enums";
 import { getHexCenter } from "./helpers/helpers";
 import { screenToGround, pickTile } from "./helpers/picking";
 import { CITY_FOG_TILE_KEY, TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
-import { createForest, ForestField } from "./objects/Forest";
-import { GrassField, createGrassField } from "./objects/Grass";
-import { FogState } from "./objects/FogOfWar";
-import { assertWrappableMap, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
+import { createForest, ForestField, ForestSharedResources } from "./objects/Forest";
+import { GrassField, createGrassField, GrassSharedResources } from "./objects/Grass";
+import { FogChange, FogState } from "./objects/FogOfWar";
+import { FogStateStore } from "./helpers/fogStateStore";
+import { getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
 import { getWorldChunkMetadata, WORLD_CHUNK_SIZE, WorldChunkMetadata } from "./helpers/chunks";
 import {
     createDefaultWorldChunkSchedulerOptions,
     WorldChunkScheduler,
     WorldChunkStreamingStats
 } from "./rendering/WorldChunkScheduler";
+import { FrameTaskScheduler, FrameTaskSchedulerStats } from "./rendering/FrameTaskScheduler";
 import {
-    MAX_WORLD_GENERATION_CHUNK_SIZE,
-    PackedWorldChunk,
-    SparseWorldChunkStore
+    MAX_WORLD_GENERATION_CHUNK_SIZE
 } from "./world/generateWorldChunk";
-import { WorldGeneratorPool } from "./world/WorldGeneratorPool";
-import { InfiniteWorldStreamer, InfiniteWorldStreamingStats } from "./world/InfiniteWorldStreamer";
+import {
+    assertWorldSource,
+    WorldChunk,
+    WorldSource
+} from "./world/WorldSource";
+import { WorldStreamer, WorldStreamingStats } from "./world/WorldStreamer";
 
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
@@ -263,7 +267,7 @@ const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "
 //
 //Usage (mirrors maplibre-gl's event-driven API):
 //   const map = new HexMap({ element: "canvas" });
-//   await map.load(mapData);
+//   await map.loadWorld({ source });
 //   map.on("click", ({x, y, tile}) => ...);
 //   map.on("hover", ({x, y, tile}) => ...);
 //----------------------------------------------------------------------------------
@@ -293,18 +297,22 @@ export class HexMap extends EventEmitter {
     private worldPatternOffset = new Vector2();
     private pressedMovementKeys = new Set<string>();
     private chunkScheduler: WorldChunkScheduler;
+    private readonly frameTasks = new FrameTaskScheduler({ error: error => this.emit("error", error) });
     private resizeObserver: ResizeObserver | undefined;
     private animationFrameId: number | undefined;
     private disposed = false;
     private loadRevision = 0;
     private forestRevision = 0;
-    private infiniteStreamer: InfiniteWorldStreamer | undefined;
-    private infiniteChunkLayers = new Map<string, InfiniteChunkLayers>();
-    private infiniteGrassByChunkId = new Map<string, GrassField>();
-    private infiniteForestByChunkId = new Map<string, ForestField>();
-    private infiniteLayerRevision = 0;
-    private infiniteChunkSize = 24;
-    private infiniteDemandChunkKey: string | undefined;
+    private worldSource: WorldSource | undefined;
+    private worldStreamer: WorldStreamer | undefined;
+    private worldChunkLayers = new Map<string, WorldChunkLayers>();
+    private streamedGrassByChunkId = new Map<string, GrassField>();
+    private streamedForestByChunkId = new Map<string, ForestField>();
+    private streamedGrassResources: GrassSharedResources | undefined;
+    private streamedForestResources: ForestSharedResources | undefined;
+    private worldLayerRevision = 0;
+    private worldChunkSize = 24;
+    private worldDemandChunkKey: string | undefined;
     private renderOrigin = new Vector2();
     private logicalTargetScratch = new Vector3();
     private floatingOriginThreshold = 8192;
@@ -313,12 +321,10 @@ export class HexMap extends EventEmitter {
     private lastHover: Point | null = null;
     private lastSelected: Point | null = null;
 
-    //Authoritative per-tile fog states ("x,y" -> state), owned here rather
-    //than only living inside each layer's instanced attributes: those are
-    //rebuilt to all-Visible whenever a layer rebuilds (grass density slider,
-    //treesPerTile, ...), and warFogVisible below needs the real states back
-    //when fog is re-shown after being hidden.
-    private fogStates = new Map<string, FogState>();
+    //Authoritative renderer-side fog copy. Finite maps use a lazy byte array;
+    //infinite maps use sparse coordinate keys. Layer attributes can therefore
+    //be rebuilt or evicted without retaining an object/string per finite cell.
+    private fogStates: FogStateStore | undefined;
     private warFogShown = true;
 
     constructor(options: HexMapOptions) {
@@ -569,6 +575,7 @@ export class HexMap extends EventEmitter {
     }
 
     private clearWorldCopies(): void {
+        this.chunkScheduler.invalidateScene();
         for (const copy of this.worldCopies) this.worldRoot.remove(copy);
         for (const material of this.worldCopyMaterials) material.dispose();
         this.worldCopies = [];
@@ -615,6 +622,7 @@ export class HexMap extends EventEmitter {
         this.worldPatternOffset.y += offsetY;
         this.applyWorldPatternToObject(this.terrain);
         this.applyWorldPatternToObject(this.grass);
+        for (const record of this.worldChunkLayers.values()) this.applyWorldPatternToObject(record.grass);
         for (const material of this.worldCopyMaterials) {
             material.uniforms.worldOffset.value.x += offsetX;
             material.uniforms.worldOffset.value.y += offsetY;
@@ -709,6 +717,17 @@ export class HexMap extends EventEmitter {
                         group.add(this.cloneWorldObject(child, offsetX, offsetY));
                     }
                 }
+                for (const record of this.worldChunkLayers.values()) {
+                    for (const child of record.forest?.children ?? []) {
+                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
+                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
+                    }
+                    if (!record.grass?.visible) continue;
+                    for (const child of record.grass.children) {
+                        if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
+                        group.add(this.cloneWorldObject(child, offsetX, offsetY));
+                    }
+                }
 
                 if (group.children.length === 0) continue;
 
@@ -773,12 +792,17 @@ export class HexMap extends EventEmitter {
         this.updateKeyboardMovement(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
-        this.rebaseInfiniteWorld();
-        this.updateInfiniteWorldDemand();
+        this.rebaseWorld();
+        this.updateWorldDemand();
+        this.frameTasks.runFrame();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
-        this.grass?.update(dtS);
-        for (const record of this.infiniteChunkLayers.values()) record.grass?.update(dtS);
+        const grassResources = new Set<GrassSharedResources>();
+        if (this.grass) grassResources.add(this.grass.resources);
+        for (const record of this.worldChunkLayers.values()) {
+            if (record.grass) grassResources.add(record.grass.resources);
+        }
+        for (const resources of grassResources) resources.update(dtS);
         this.emit("frame", { t, dtS });
         this.renderer.render(this.scene, this.camera);
         this.animationFrameId = window.requestAnimationFrame(this.animate);
@@ -849,18 +873,19 @@ export class HexMap extends EventEmitter {
             return geometry ? { geometries: [geometry] } : undefined;
         }
         if (metadata.kind === "grass") {
-            const field = this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass;
+            const field = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
             const geometry = field?.activateChunk(metadata, lod);
             return geometry ? { geometries: [geometry] } : undefined;
         }
-        (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.activateChunk(metadata, lod, objects);
-        return undefined;
+        const forest = this.streamedForestByChunkId.get(metadata.id) ?? this.forest;
+        forest?.activateChunk(metadata, lod, objects);
+        return forest ? { disposeGpu: () => forest.disposeChunkGpu(metadata) } : undefined;
     }
 
     private releaseWorldChunk(metadata: WorldChunkMetadata): void {
         if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
-        else if (metadata.kind === "grass") (this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
-        else (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
+        else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
+        else (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
     }
 
     //-------------------------------------------------------------------------
@@ -951,82 +976,78 @@ export class HexMap extends EventEmitter {
     //Public API
     //-------------------------------------------------------------------------
 
-    //Builds the terrain/grid/trees for the given map data. Fetches the terrain
-    //atlas descriptor (land-atlas.json) from texturesBaseUrl; textures themselves
-    //load in the background as usual for three.js.
-    public async load(mapData: MapInfo): Promise<void> {
-        if (this.disposed) throw new Error("HexMap has been disposed");
-        this.stopInfiniteStreaming();
-        assertWrappableMap(mapData);
-        const revision = ++this.loadRevision;
-        this.worldPatternOffset.set(0, 0);
-        this.mapData = mapData;
-        this.fogStates.clear(); // a new map starts with no fog history
-        this.cleanRoutePath();
-        this.lastHover = null;
-        this.lastSelected = null;
-        this.pointer.visible = false;
-        this.selector.visible = false;
-        this.frameMap(mapData);
-
-        const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
-        const response = await fetch(atlasUrl);
-        if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
-        const atlas = await response.json() as TerrainAtlas;
-        if (this.disposed || revision !== this.loadRevision) return;
-        if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0
-            || !Number.isFinite(atlas.width) || atlas.width <= 0
-            || !Number.isFinite(atlas.height) || atlas.height <= 0
-            || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0
-            || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0
-            || !atlas.textures || typeof atlas.textures !== "object") {
-            throw new TypeError("Terrain atlas descriptor is invalid");
+    public async loadWorld(options: WorldLoadOptions): Promise<void> {
+        if (this.disposed) {
+            options?.source?.dispose();
+            throw new Error("HexMap has been disposed");
         }
-        this.atlas = atlas;
-
-        if (!(await this.rebuildTerrain(revision))) return;
-        if (!(await this.rebuildForest(revision))) return;
-        if (this.disposed || revision !== this.loadRevision) return;
-        this.rebuildGrass();
-        //Make the first camera view render-ready before load resolves. The
-        //rest of the world remains as lightweight shells and streams later.
-        this.updateWorldChunkVisibility();
-
-        this.emit("load" satisfies HexMapEventName, undefined);
-    }
-
-    //Starts a sparse, deterministic world whose chunks are generated on a
-    //bounded worker pool around the camera. Existing finite-map load() remains
-    //unchanged and can be called later to leave streaming mode.
-    public async loadInfinite(options: InfiniteWorldOptions): Promise<void> {
-        if (this.disposed) throw new Error("HexMap has been disposed");
-        if (!options || typeof options !== "object") throw new TypeError("infinite world options are required");
-        const chunkSize = options.chunkSize ?? 24;
+        if (!options || typeof options !== "object" || !options.source) {
+            throw new TypeError("world load options with a source are required");
+        }
+        const source = options.source;
+        try {
+            assertWorldSource(source);
+        } catch (reason) {
+            if (typeof source.dispose === "function") source.dispose();
+            throw reason;
+        }
+        const chunkSize = source.chunkSize;
         if (!Number.isInteger(chunkSize) || chunkSize <= 0
             || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
+            source.dispose();
             throw new RangeError(
-                `chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
+                `source.chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
             );
         }
-        if (options.workerCount !== undefined && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
-            throw new RangeError("workerCount must be an integer between 1 and 8");
+        const defaultTile = source.bounds
+            ? { x: Math.floor((source.bounds.width - 1) / 2), y: Math.floor((source.bounds.height - 1) / 2) }
+            : { x: 0, y: 0 };
+        const requestedTile = options.initialTile ?? defaultTile;
+        const initialTile = normalizeMapCoordinates(source.map, requestedTile.x, requestedTile.y);
+        if (!initialTile || !Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
+            source.dispose();
+            throw new RangeError("initialTile must identify a safe integer tile inside the world");
         }
-        const initialTile = options.initialTile ?? { x: 0, y: 0 };
-        if (!Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
-            throw new RangeError("initialTile coordinates must be safe integers");
+        const chunkSpan = chunkSize * this.options.size * 1.5;
+        const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
+        const retentionRadius = options.retentionRadius ?? loadRadius + 1;
+        const maxResidentChunks = options.maxResidentChunks ?? (retentionRadius * 2 + 1) ** 2;
+        const maxRetries = options.maxRetries ?? 2;
+        const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
+        const frameBudgetMs = options.frameBudgetMs ?? 3;
+        const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
+        const integerAtLeast = (name: string, value: number, minimum: number) => {
+            if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
+        };
+        try {
+            integerAtLeast("loadRadius", loadRadius, 0);
+            integerAtLeast("retentionRadius", retentionRadius, loadRadius);
+            integerAtLeast("maxResidentChunks", maxResidentChunks, 1);
+            integerAtLeast("maxRetries", maxRetries, 0);
+            integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
+            integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
+            if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
+                throw new RangeError("frameBudgetMs must be a positive finite number");
+            }
+        } catch (reason) {
+            source.dispose();
+            throw reason;
         }
         const threshold = options.floatingOriginThreshold ?? 8192;
         if (!Number.isFinite(threshold) || threshold <= this.options.size * chunkSize) {
-            throw new RangeError("floatingOriginThreshold must exceed one generation chunk span");
+            source.dispose();
+            throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
         }
 
-        this.stopInfiniteStreaming();
+        this.stopWorldStreaming();
+        this.frameTasks.configure({ budgetMs: frameBudgetMs, maxTasksPerFrame: maxMountsPerFrame });
         const revision = ++this.loadRevision;
-        const store = new SparseWorldChunkStore();
-        this.mapData = store.map;
+        this.worldSource = source;
+        this.worldChunkSize = chunkSize;
+        this.mapData = source.map;
+        this.fogStates = new FogStateStore(source.map);
         this.floatingOriginThreshold = threshold;
         this.worldPatternOffset.set(0, 0);
-        this.fogStates.clear();
         this.cleanRoutePath();
         this.lastHover = null;
         this.lastSelected = null;
@@ -1045,11 +1066,52 @@ export class HexMap extends EventEmitter {
             this.grass = undefined;
         }
 
+        try {
+            if (source.bounds && !options.initialTile) this.frameMap(source.map);
+            else this.positionCameraAtTile(initialTile);
+
+            this.atlas = await this.fetchTerrainAtlas();
+            if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
+            if (!(await this.rebuildTerrain(revision, true))) return;
+
+            const streamer = new WorldStreamer(source, {
+                chunkLoaded: chunk => this.scheduleWorldChunkMount(chunk),
+                chunkUnloading: chunk => this.unmountWorldChunk(chunk),
+                error: error => this.emit("error", error)
+            }, {
+                loadRadius,
+                retentionRadius,
+                maxResidentChunks,
+                maxRetries,
+                retryBaseDelayMs
+            });
+            this.worldStreamer = streamer;
+            const centerChunk = source.resolveChunk(
+                Math.floor(initialTile.x / chunkSize),
+                Math.floor(initialTile.y / chunkSize)
+            );
+            if (!centerChunk) throw new RangeError("initialTile does not resolve to a source chunk");
+            this.worldDemandChunkKey = WorldStreamer.key(centerChunk.x, centerChunk.y);
+            this.rebaseWorld();
+
+            const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
+            const centerKey = WorldStreamer.key(loadedCenter.chunkX, loadedCenter.chunkY);
+            const centerLayers = this.worldChunkLayers.get(centerKey);
+            await Promise.all([centerLayers?.forestPromise, centerLayers?.cityPromise]);
+            if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
+            this.updateWorldChunkVisibility();
+            this.emit("load" satisfies HexMapEventName, undefined);
+        } catch (reason) {
+            if (revision === this.loadRevision && this.worldSource === source) this.stopWorldStreaming();
+            throw reason;
+        }
+    }
+
+    private async fetchTerrainAtlas(): Promise<TerrainAtlas> {
         const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
         const response = await fetch(atlasUrl);
         if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
         const atlas = await response.json() as TerrainAtlas;
-        if (this.disposed || revision !== this.loadRevision) return;
         if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0
             || !Number.isFinite(atlas.width) || atlas.width <= 0
             || !Number.isFinite(atlas.height) || atlas.height <= 0
@@ -1058,59 +1120,50 @@ export class HexMap extends EventEmitter {
             || !atlas.textures || typeof atlas.textures !== "object") {
             throw new TypeError("Terrain atlas descriptor is invalid");
         }
-        this.atlas = atlas;
-        if (!(await this.rebuildTerrain(revision))) return;
+        return atlas;
+    }
 
-        const pool = new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
-        const chunkSpan = chunkSize * this.options.size * 1.5;
-        const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
-        const streamer = new InfiniteWorldStreamer(pool, {
-            chunkLoaded: (chunk, points) => this.mountInfiniteChunk(chunk, points),
-            chunkUnloading: chunk => this.unmountInfiniteChunk(chunk),
-            error: error => this.emit("error", error)
-        }, {
-            seed: options.seed,
-            chunkSize,
-            loadRadius,
-            retentionRadius: options.retentionRadius,
-            maxResidentChunks: options.maxResidentChunks
-        }, store);
-        this.infiniteStreamer = streamer;
-        this.infiniteChunkSize = chunkSize;
-
-        const center = getHexCenter(initialTile.x, initialTile.y, this.options.size);
+    private positionCameraAtTile(tile: Point): void {
+        const center = getHexCenter(tile.x, tile.y, this.options.size);
         const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
         const direction = this.camera.position.clone().sub(this.controls.target).normalize();
         this.controls.target.set(center.x, 0, center.y);
         this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
-        this.rebaseInfiniteWorld();
-        this.infiniteDemandChunkKey = SparseWorldChunkStore.key(
-            Math.floor(initialTile.x / chunkSize),
-            Math.floor(initialTile.y / chunkSize)
-        );
-        let centerChunk: PackedWorldChunk;
-        try {
-            centerChunk = await streamer.setCenterTile(initialTile.x, initialTile.y);
-        } catch (reason) {
-            if (this.infiniteStreamer === streamer) this.stopInfiniteStreaming();
-            throw reason;
-        }
-        const centerKey = SparseWorldChunkStore.key(centerChunk.chunkX, centerChunk.chunkY);
-        await this.infiniteChunkLayers.get(centerKey)?.forestPromise;
-        if (this.disposed || revision !== this.loadRevision || this.infiniteStreamer !== streamer) return;
-        this.updateWorldChunkVisibility();
-        this.emit("load" satisfies HexMapEventName, undefined);
+        this.controls.update();
     }
 
-    private mountInfiniteChunk(chunk: PackedWorldChunk, points: readonly Point[]): void {
-        if (!this.infiniteStreamer || !this.terrain) return;
-        const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-        const revision = ++this.infiniteLayerRevision;
+    private scheduleWorldChunkMount(chunk: WorldChunk): void {
+        const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+        if (key === this.worldDemandChunkKey) {
+            this.mountWorldChunk(chunk);
+            return;
+        }
+        const center = this.worldStreamer?.stats;
+        const priority = center && this.worldSource
+            ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY)
+            : 0;
+        this.frameTasks.enqueue(key, priority, () => {
+            if (this.worldStreamer?.hasResident(chunk.chunkX, chunk.chunkY)) this.mountWorldChunk(chunk);
+        });
+    }
+
+    private mountWorldChunk(chunk: WorldChunk): void {
+        if (!this.worldStreamer || !this.terrain) return;
+        const points = chunk.coreTiles;
+        const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+        const revision = ++this.worldLayerRevision;
+        const record: WorldChunkLayers = { points, revision };
+        this.worldChunkLayers.set(key, record);
         this.terrain.addTiles(points);
-        const record: InfiniteChunkLayers = { points, revision };
-        this.infiniteChunkLayers.set(key, record);
 
         if (this.options.grassEnabled) {
+            this.streamedGrassResources ??= new GrassSharedResources({
+                size: this.options.size,
+                bladeHeight: this.options.grassBladeHeight,
+                windStrength: this.options.grassWindStrength,
+                windSpeed: this.options.grassWindSpeed,
+                fogDarkenFactor: this.options.fogDarkenFactor
+            });
             const grass = createGrassField(this.mapData, {
                 size: this.options.size,
                 density: this.options.grassDensity,
@@ -1123,14 +1176,32 @@ export class HexMap extends EventEmitter {
                 riverBankWidth: this.options.riverBankWidth,
                 riverCurvature: this.options.riverCurvature,
                 lakeShoreWidth: this.options.lakeShoreWidth
-            }, points) ?? undefined;
+            }, points, this.streamedGrassResources) ?? undefined;
             if (grass) {
                 record.grass = grass;
-                this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+                this.applyWorldPatternToObject(grass);
+                this.indexChunkLayer(grass, this.streamedGrassByChunkId);
                 this.worldRoot.add(grass);
             }
         }
 
+        record.cityPromise = this.terrain.loadCities(points, record).then(() => {
+            if (this.worldChunkLayers.get(key) !== record) {
+                this.terrain?.removeCities(points, record);
+                return;
+            }
+            for (const point of points) {
+                const state = this.warFogShown
+                    ? (this.fogStates?.get(point.x, point.y) ?? FogState.Visible)
+                    : FogState.Visible;
+                this.terrain?.setFogState(point.x, point.y, state);
+            }
+            this.refreshWorldCopies();
+        }).catch(error => {
+            if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
+        });
+
+        this.streamedForestResources ??= new ForestSharedResources();
         record.forestPromise = createForest(this.mapData, {
             size: this.options.size,
             treesPerTile: this.options.treesPerTile,
@@ -1144,42 +1215,46 @@ export class HexMap extends EventEmitter {
             beachWidth: this.options.beachWidth,
             waterCornerRounding: this.options.waterCornerRounding,
             coastCurvature: this.options.coastCurvature
-        }, points).then(forest => {
-            const current = this.infiniteChunkLayers.get(key);
+        }, points, this.streamedForestResources).then(forest => {
+            const current = this.worldChunkLayers.get(key);
             if (!forest) return;
-            if (this.disposed || !current || current.revision !== revision || !this.infiniteStreamer?.store.hasChunk(chunk.chunkX, chunk.chunkY)) {
+            if (this.disposed || !current || current.revision !== revision) {
                 forest.dispose();
                 return;
             }
             current.forest = forest;
-            this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+            this.indexChunkLayer(forest, this.streamedForestByChunkId);
             this.worldRoot.add(forest);
-            this.reapplyFogToObject(forest);
+            this.reapplyFogToObject(forest, points);
+            this.refreshWorldCopies();
         }).catch(error => {
-            if (this.infiniteChunkLayers.get(key)?.revision === revision) this.emit("error", error);
+            if (this.worldChunkLayers.get(key)?.revision === revision) this.emit("error", error);
         });
         this.reapplyFogToPoints(points, record);
+        this.refreshWorldCopies();
     }
 
-    private unmountInfiniteChunk(chunk: PackedWorldChunk): void {
-        const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-        const record = this.infiniteChunkLayers.get(key);
+    private unmountWorldChunk(chunk: WorldChunk): void {
+        const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+        this.frameTasks.cancel(key);
+        const record = this.worldChunkLayers.get(key);
         if (!record) return;
-        this.infiniteChunkLayers.delete(key);
-        const forgotten = this.terrain?.removeTiles(record.points) ?? [];
+        this.worldChunkLayers.delete(key);
+        const forgotten = this.terrain?.removeTiles(record.points, true, record) ?? [];
         if (record.grass) {
             this.collectChunkIds(record.grass, forgotten);
-            this.unindexChunkLayer(record.grass, this.infiniteGrassByChunkId);
+            this.unindexChunkLayer(record.grass, this.streamedGrassByChunkId);
             this.worldRoot.remove(record.grass);
             record.grass.dispose();
         }
         if (record.forest) {
             this.collectChunkIds(record.forest, forgotten);
-            this.unindexChunkLayer(record.forest, this.infiniteForestByChunkId);
+            this.unindexChunkLayer(record.forest, this.streamedForestByChunkId);
             this.worldRoot.remove(record.forest);
             record.forest.dispose();
         }
         this.chunkScheduler.forget(forgotten);
+        this.refreshWorldCopies();
     }
 
     private collectChunkIds(object: Object3D, target: string[]): void {
@@ -1203,13 +1278,17 @@ export class HexMap extends EventEmitter {
         });
     }
 
-    private stopInfiniteStreaming(): void {
-        const streamer = this.infiniteStreamer;
-        this.infiniteStreamer = undefined;
-        this.infiniteDemandChunkKey = undefined;
+    private stopWorldStreaming(): void {
+        const streamer = this.worldStreamer;
+        const source = this.worldSource;
+        this.worldDemandChunkKey = undefined;
+        this.frameTasks.clear();
         streamer?.dispose();
-        this.infiniteLayerRevision += 1;
-        for (const record of this.infiniteChunkLayers.values()) {
+        if (!streamer) source?.dispose();
+        this.worldStreamer = undefined;
+        this.worldSource = undefined;
+        this.worldLayerRevision += 1;
+        for (const record of this.worldChunkLayers.values()) {
             if (record.grass) {
                 this.worldRoot.remove(record.grass);
                 record.grass.dispose();
@@ -1219,25 +1298,39 @@ export class HexMap extends EventEmitter {
                 record.forest.dispose();
             }
         }
-        this.infiniteChunkLayers.clear();
-        this.infiniteGrassByChunkId.clear();
-        this.infiniteForestByChunkId.clear();
+        this.worldChunkLayers.clear();
+        this.streamedGrassByChunkId.clear();
+        this.streamedForestByChunkId.clear();
+        this.streamedGrassResources?.dispose();
+        this.streamedGrassResources = undefined;
+        this.streamedForestResources?.dispose();
+        this.streamedForestResources = undefined;
     }
 
-    private reapplyFogToPoints(points: readonly Point[], record: InfiniteChunkLayers): void {
+    private reapplyFogToPoints(points: readonly Point[], record: WorldChunkLayers): void {
         for (const point of points) {
-            const state = this.warFogShown ? (this.fogStates.get(`${point.x},${point.y}`) ?? FogState.Visible) : FogState.Visible;
+            const state = this.warFogShown
+                ? (this.fogStates?.get(point.x, point.y) ?? FogState.Visible)
+                : FogState.Visible;
             this.terrain?.setFogState(point.x, point.y, state);
             record.grass?.setFogState(point.x, point.y, state);
             record.forest?.setFogState(point.x, point.y, state);
         }
     }
 
-    private reapplyFogToObject(object: ForestField | GrassField): void {
-        for (const [key, stored] of this.fogStates) {
-            const [x, y] = key.split(",").map(Number);
-            object.setFogState(x, y, this.warFogShown ? stored : FogState.Visible);
+    private reapplyFogToObject(object: ForestField | GrassField, points?: readonly Point[]): void {
+        if (points) {
+            for (const point of points) {
+                const state = this.warFogShown
+                    ? (this.fogStates?.get(point.x, point.y) ?? FogState.Visible)
+                    : FogState.Visible;
+                object.setFogState(point.x, point.y, state);
+            }
+            return;
         }
+        this.fogStates?.forEach((stored, x, y) => {
+            object.setFogState(x, y, this.warFogShown ? stored : FogState.Visible);
+        });
     }
 
     //Tears down and recreates the terrain (land/water layers + city models) from
@@ -1245,7 +1338,7 @@ export class HexMap extends EventEmitter {
     //when the map itself changes (see load()) - everything water/blend-related
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
-    private async rebuildTerrain(expectedRevision = this.loadRevision): Promise<boolean> {
+    private async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)): Promise<boolean> {
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.terrain) {
@@ -1297,12 +1390,18 @@ export class HexMap extends EventEmitter {
             fogTexture: this.options.fogTexture,
             fogDarkenFactor: this.options.fogDarkenFactor,
             fogTextureSize: this.options.fogTextureSize
-        });
+        }, deferTiles ? [] : undefined);
         this.terrain = terrain;
         terrain.setCameraWorldOffset(this.renderOrigin.x, this.renderOrigin.y);
         this.applyWorldPatternToObject(terrain);
         this.worldRoot.add(terrain);
-        await terrain.loadCities();
+        if (deferTiles) {
+            for (const record of this.worldChunkLayers.values()) terrain.addTiles(record.points);
+        }
+        if (!deferTiles) await terrain.loadCities();
+        else if (this.worldStreamer) {
+            await Promise.all([...this.worldChunkLayers.values()].map(record => terrain.loadCities(record.points, record)));
+        }
         if (this.disposed || expectedRevision !== this.loadRevision || this.terrain !== terrain) {
             this.worldRoot.remove(terrain);
             terrain.dispose();
@@ -1320,8 +1419,8 @@ export class HexMap extends EventEmitter {
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
     private async rebuildForest(expectedRevision = this.loadRevision): Promise<boolean> {
         const forestRevision = ++this.forestRevision;
-        if (this.infiniteStreamer) {
-            return this.rebuildInfiniteForests(expectedRevision, forestRevision);
+        if (this.worldStreamer) {
+            return this.rebuildStreamedForests(expectedRevision, forestRevision);
         }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
@@ -1368,8 +1467,8 @@ export class HexMap extends EventEmitter {
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
     private rebuildGrass(): void {
-        if (this.infiniteStreamer) {
-            this.rebuildInfiniteGrass();
+        if (this.worldStreamer) {
+            this.rebuildStreamedGrass();
             return;
         }
         this.clearWorldCopies();
@@ -1404,16 +1503,29 @@ export class HexMap extends EventEmitter {
         this.refreshWorldCopies();
     }
 
-    private rebuildInfiniteGrass(): void {
+    private rebuildStreamedGrass(): void {
         this.chunkScheduler.clear();
-        this.infiniteGrassByChunkId.clear();
-        for (const record of this.infiniteChunkLayers.values()) {
+        this.streamedGrassByChunkId.clear();
+        for (const record of this.worldChunkLayers.values()) {
             if (record.grass) {
                 this.worldRoot.remove(record.grass);
                 record.grass.dispose();
                 record.grass = undefined;
             }
-            if (!this.options.grassEnabled) continue;
+        }
+        this.streamedGrassResources?.dispose();
+        this.streamedGrassResources = undefined;
+        if (this.options.grassEnabled) {
+            this.streamedGrassResources = new GrassSharedResources({
+                size: this.options.size,
+                bladeHeight: this.options.grassBladeHeight,
+                windStrength: this.options.grassWindStrength,
+                windSpeed: this.options.grassWindSpeed,
+                fogDarkenFactor: this.options.fogDarkenFactor
+            });
+        }
+        for (const record of this.worldChunkLayers.values()) {
+            if (!this.streamedGrassResources) continue;
             const grass = createGrassField(this.mapData, {
                 size: this.options.size,
                 density: this.options.grassDensity,
@@ -1426,26 +1538,33 @@ export class HexMap extends EventEmitter {
                 riverBankWidth: this.options.riverBankWidth,
                 riverCurvature: this.options.riverCurvature,
                 lakeShoreWidth: this.options.lakeShoreWidth
-            }, record.points) ?? undefined;
+            }, record.points, this.streamedGrassResources) ?? undefined;
             if (!grass) continue;
             record.grass = grass;
-            this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+            this.applyWorldPatternToObject(grass);
+            this.indexChunkLayer(grass, this.streamedGrassByChunkId);
             this.worldRoot.add(grass);
-            this.reapplyFogToObject(grass);
+            this.reapplyFogToObject(grass, record.points);
         }
+        this.refreshWorldCopies();
     }
 
-    private async rebuildInfiniteForests(expectedRevision: number, forestRevision: number): Promise<boolean> {
+    private async rebuildStreamedForests(expectedRevision: number, forestRevision: number): Promise<boolean> {
         this.chunkScheduler.clear();
-        this.infiniteForestByChunkId.clear();
+        this.streamedForestByChunkId.clear();
         const builds: Promise<void>[] = [];
-        for (const [key, record] of this.infiniteChunkLayers) {
+        for (const [key, record] of this.worldChunkLayers) {
             if (record.forest) {
                 this.worldRoot.remove(record.forest);
                 record.forest.dispose();
                 record.forest = undefined;
             }
-            const revision = ++this.infiniteLayerRevision;
+        }
+        this.streamedForestResources?.dispose();
+        const resources = new ForestSharedResources();
+        this.streamedForestResources = resources;
+        for (const [key, record] of this.worldChunkLayers) {
+            const revision = ++this.worldLayerRevision;
             record.revision = revision;
             const build = createForest(this.mapData, {
                 size: this.options.size,
@@ -1460,28 +1579,30 @@ export class HexMap extends EventEmitter {
                 beachWidth: this.options.beachWidth,
                 waterCornerRounding: this.options.waterCornerRounding,
                 coastCurvature: this.options.coastCurvature
-            }, record.points).then(forest => {
+            }, record.points, resources).then(forest => {
                 if (!forest) return;
-                const current = this.infiniteChunkLayers.get(key);
+                const current = this.worldChunkLayers.get(key);
                 if (this.disposed || expectedRevision !== this.loadRevision
                     || forestRevision !== this.forestRevision || current !== record || record.revision !== revision) {
                     forest.dispose();
                     return;
                 }
                 record.forest = forest;
-                this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+                this.indexChunkLayer(forest, this.streamedForestByChunkId);
                 this.worldRoot.add(forest);
-                this.reapplyFogToObject(forest);
+                this.reapplyFogToObject(forest, record.points);
+                this.refreshWorldCopies();
             });
             record.forestPromise = build;
             builds.push(build);
         }
         await Promise.all(builds);
+        this.refreshWorldCopies();
         return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
     }
 
     public getTile(x: number, y: number): TileInfo | undefined {
-        if (this.mapData?.infinite && !this.infiniteStreamer?.store.hasCoreTile(x, y)) return undefined;
+        if (this.worldSource && !this.worldSource.hasTile(x, y)) return undefined;
         return this.mapData ? getMapTile(this.mapData, x, y) : undefined;
     }
 
@@ -1497,11 +1618,22 @@ export class HexMap extends EventEmitter {
     //fog updates as usual and re-showing the fog repaints everything current.
     //-------------------------------------------------------------------------
     public setTileFog(x: number, y: number, state: FogState): void {
-        if (!this.mapData || (state !== FogState.Unseen && state !== FogState.Explored && state !== FogState.Visible)) return;
-        const normalized = normalizeMapCoordinates(this.mapData, x, y);
-        if (!normalized || !this.mapData.data[normalized.x]?.[normalized.y]) return;
-        this.fogStates.set(`${normalized.x},${normalized.y}`, state);
-        if (this.warFogShown) this.applyTileFog(normalized.x, normalized.y, state);
+        this.setTilesFog([{ x, y, state }]);
+    }
+
+    public setTilesFog(changes: readonly FogChange[]): void {
+        if (!this.mapData || !this.fogStates || changes.length === 0) return;
+        const normalizedChanges: FogChange[] = [];
+        for (const change of changes) {
+            if (change.state !== FogState.Unseen && change.state !== FogState.Explored && change.state !== FogState.Visible) continue;
+            const normalized = normalizeMapCoordinates(this.mapData, change.x, change.y);
+            if (!normalized || !getMapTile(this.mapData, normalized.x, normalized.y)) continue;
+            this.fogStates.set(normalized.x, normalized.y, change.state);
+            normalizedChanges.push(normalized.x === change.x && normalized.y === change.y
+                ? change
+                : { ...normalized, state: change.state });
+        }
+        if (this.warFogShown) this.applyFogChanges(normalizedChanges);
     }
 
     private resetRenderOrigin(): void {
@@ -1510,7 +1642,7 @@ export class HexMap extends EventEmitter {
         this.terrain?.setCameraWorldOffset(0, 0);
     }
 
-    private rebaseInfiniteWorld(): void {
+    private rebaseWorld(): void {
         if (!this.mapData?.infinite) return;
         const x = this.controls.target.x;
         const z = this.controls.target.z;
@@ -1526,20 +1658,31 @@ export class HexMap extends EventEmitter {
         this.camera.position.z -= z;
     }
 
-    private updateInfiniteWorldDemand(): void {
-        if (!this.infiniteStreamer) return;
+    private updateWorldDemand(): void {
+        if (!this.worldStreamer || !this.worldSource) return;
         this.logicalTargetScratch.copy(this.controls.target);
-        this.logicalTargetScratch.x += this.renderOrigin.x;
-        this.logicalTargetScratch.z += this.renderOrigin.y;
-        const tile = pickTile(this.logicalTargetScratch, this.options.size);
-        if (!tile) return;
-        const key = SparseWorldChunkStore.key(
-            Math.floor(tile.x / this.infiniteChunkSize),
-            Math.floor(tile.y / this.infiniteChunkSize)
+        if (this.mapData.infinite) {
+            this.logicalTargetScratch.x += this.renderOrigin.x;
+            this.logicalTargetScratch.z += this.renderOrigin.y;
+        }
+        const tile = pickTile(
+            this.logicalTargetScratch,
+            this.options.size,
+            this.mapData.infinite ? undefined : this.mapData.w,
+            this.mapData.infinite ? undefined : this.mapData.h,
+            this.mapData.wrapX,
+            this.mapData.wrapY
         );
-        if (key === this.infiniteDemandChunkKey) return;
-        this.infiniteDemandChunkKey = key;
-        void this.infiniteStreamer.setCenterTile(tile.x, tile.y).catch(error => {
+        if (!tile) return;
+        const resolved = this.worldSource.resolveChunk(
+            Math.floor(tile.x / this.worldChunkSize),
+            Math.floor(tile.y / this.worldChunkSize)
+        );
+        if (!resolved) return;
+        const key = WorldStreamer.key(resolved.x, resolved.y);
+        if (key === this.worldDemandChunkKey) return;
+        this.worldDemandChunkKey = key;
+        void this.worldStreamer.setCenterTile(tile.x, tile.y).catch(error => {
             if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
         });
     }
@@ -1551,16 +1694,34 @@ export class HexMap extends EventEmitter {
         return point;
     }
 
-    private applyTileFog(x: number, y: number, state: FogState): void {
-        this.terrain?.setFogState(x, y, state);
-        this.grass?.setFogState(x, y, state);
-        this.forest?.setFogState(x, y, state);
-        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.setFogState(x, y, state);
-        for (const forest of new Set(this.infiniteForestByChunkId.values())) forest.setFogState(x, y, state);
-        const key = `${x},${y}`;
+    private applyFogChanges(changes: readonly FogChange[]): void {
+        const renderedStates = new Map<string, FogState>();
+        for (const { x, y, state } of changes) {
+            if (this.worldSource) {
+                const resolved = this.worldSource.resolveChunk(
+                    Math.floor(x / this.worldChunkSize),
+                    Math.floor(y / this.worldChunkSize)
+                );
+                const record = resolved
+                    ? this.worldChunkLayers.get(WorldStreamer.key(resolved.x, resolved.y))
+                    : undefined;
+                if (!record) continue;
+                this.terrain?.setFogState(x, y, state);
+                record.grass?.setFogState(x, y, state);
+                record.forest?.setFogState(x, y, state);
+            } else {
+                this.terrain?.setFogState(x, y, state);
+                this.grass?.setFogState(x, y, state);
+                this.forest?.setFogState(x, y, state);
+            }
+            renderedStates.set(`${x},${y}`, state);
+        }
+        if (renderedStates.size === 0) return;
         for (const copy of this.worldCopies) {
             copy.traverse(object => {
-                if (object.userData[CITY_FOG_TILE_KEY] === key) object.visible = state !== FogState.Unseen;
+                const key = object.userData[CITY_FOG_TILE_KEY] as string | undefined;
+                const state = key ? renderedStates.get(key) : undefined;
+                if (state !== undefined) object.visible = state !== FogState.Unseen;
             });
         }
     }
@@ -1571,10 +1732,15 @@ export class HexMap extends EventEmitter {
     //attributes default to all-Visible, which silently dropped previously
     //painted fog until the next consumer update.
     private reapplyFog(): void {
-        for (const [key, state] of this.fogStates) {
-            const [x, y] = key.split(",").map(Number);
-            this.applyTileFog(x, y, this.warFogShown ? state : FogState.Visible);
+        if (this.worldSource) {
+            for (const record of this.worldChunkLayers.values()) this.reapplyFogToPoints(record.points, record);
+            return;
         }
+        const changes: FogChange[] = [];
+        this.fogStates?.forEach((state, x, y) => {
+            changes.push({ x, y, state: this.warFogShown ? state : FogState.Visible });
+        });
+        this.applyFogChanges(changes);
     }
 
     //Purely visual show/hide of the war fog: hiding repaints every tile as
@@ -1898,7 +2064,7 @@ export class HexMap extends EventEmitter {
     public set grassVisible(value: boolean) {
         this.options.grassEnabled = value;
         if (this.grass) this.grass.visible = value;
-        if (this.infiniteStreamer) this.rebuildInfiniteGrass();
+        if (this.worldStreamer) this.rebuildStreamedGrass();
         this.refreshWorldCopies();
     }
 
@@ -1910,7 +2076,7 @@ export class HexMap extends EventEmitter {
     public set grassWindStrength(value: number) {
         this.options.grassWindStrength = value;
         if (this.grass) this.grass.windStrength = value;
-        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windStrength = value;
+        for (const grass of new Set(this.streamedGrassByChunkId.values())) grass.windStrength = value;
     }
 
     public get grassWindSpeed(): number {
@@ -1920,7 +2086,7 @@ export class HexMap extends EventEmitter {
     public set grassWindSpeed(value: number) {
         this.options.grassWindSpeed = value;
         if (this.grass) this.grass.windSpeed = value;
-        for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windSpeed = value;
+        for (const grass of new Set(this.streamedGrassByChunkId.values())) grass.windSpeed = value;
     }
 
     //Blade count/size is baked into the instanced geometry at build time, so
@@ -1975,8 +2141,12 @@ export class HexMap extends EventEmitter {
         return this.chunkScheduler.stats;
     }
 
-    public get infiniteStreamingStats(): Readonly<InfiniteWorldStreamingStats> | undefined {
-        return this.infiniteStreamer?.stats;
+    public get worldStreamingStats(): Readonly<WorldStreamingStats> | undefined {
+        return this.worldStreamer?.stats;
+    }
+
+    public get frameTaskStats(): Readonly<FrameTaskSchedulerStats> {
+        return this.frameTasks.stats;
     }
 
     public drawRoutePath(path: Point[]): void {
@@ -2023,8 +2193,8 @@ export class HexMap extends EventEmitter {
         return this.camera;
     }
 
-    public getCameraTarget(): Vector3 {
-        return this.controls.target.clone().add(new Vector3(this.renderOrigin.x, 0, this.renderOrigin.y));
+    public getCameraTarget(target = new Vector3()): Vector3 {
+        return target.copy(this.controls.target).add(this.logicalTargetScratch.set(this.renderOrigin.x, 0, this.renderOrigin.y));
     }
 
     public getScene(): ThreeScene {
@@ -2036,7 +2206,7 @@ export class HexMap extends EventEmitter {
         this.disposed = true;
         this.loadRevision += 1;
         this.forestRevision += 1;
-        this.stopInfiniteStreaming();
+        this.stopWorldStreaming();
         if (this.animationFrameId !== undefined) window.cancelAnimationFrame(this.animationFrameId);
 
         window.removeEventListener("resize", this.handleResize);
@@ -2079,22 +2249,24 @@ export class HexMap extends EventEmitter {
     }
 }
 
-export interface InfiniteWorldOptions {
-    seed: string | number;
-    workerUrl: string | URL;
-    workerCount?: number;
-    chunkSize?: number;
+export interface WorldLoadOptions {
+    source: WorldSource;
+    initialTile?: Point;
     loadRadius?: number;
     retentionRadius?: number;
     maxResidentChunks?: number;
-    initialTile?: Point;
+    maxRetries?: number;
+    retryBaseDelayMs?: number;
+    frameBudgetMs?: number;
+    maxMountsPerFrame?: number;
     floatingOriginThreshold?: number;
 }
 
-interface InfiniteChunkLayers {
+interface WorldChunkLayers {
     points: readonly Point[];
     revision: number;
     grass?: GrassField;
     forest?: ForestField;
+    cityPromise?: Promise<void>;
     forestPromise?: Promise<void>;
 }

@@ -55,6 +55,11 @@ export interface MapInfo {
     data: MapInfoData,
     w: number,
     h: number,
+    //High-performance streaming sources may expose a virtual tile view rather
+    //than materializing one TileInfo object under data[x][y] for every resident
+    //cell. Static/JSON maps leave these hooks undefined.
+    tileAt?: (x: number, y: number) => TileInfo | undefined,
+    forEachTile?: (visit: (tile: TileInfo, x: number, y: number) => void) => void,
     //Optional topology flags. Existing/static maps remain bounded when these
     //are absent; generated toroidal maps opt into coordinate wrapping on both
     //axes so rendering, picking, neighbors and pathfinding agree at the seam.

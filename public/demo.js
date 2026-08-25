@@ -2,7 +2,15 @@ import { GUI } from "./js/vendor/dat.gui.module.js";
 import { createI18n } from "./i18n.js";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
-const { HexMap, generateWorld, WorldGeneratorClient, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
+const {
+    HexMap,
+    ProceduralWorldSource,
+    StaticWorldSource,
+    generateWorld,
+    WorldGeneratorClient,
+    MIN_WORLD_SIZE,
+    MAX_WORLD_SIZE
+} = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const infiniteMode = query.has("infinite");
 const title = document.querySelector("[data-world-title]");
@@ -214,10 +222,13 @@ async function regenerate() {
 
     try {
         if (infiniteMode) {
-            await map.loadInfinite({
+            const source = new ProceduralWorldSource({
                 seed: controls.seed,
                 workerUrl: new URL("./js/world-generator.worker.mjs", window.location.href),
-                chunkSize: 24,
+                chunkSize: 24
+            });
+            await map.loadWorld({
+                source,
                 initialTile: {
                     x: Number.parseInt(query.get("x") ?? "0", 10),
                     y: Number.parseInt(query.get("y") ?? "0", 10)
@@ -236,7 +247,7 @@ async function regenerate() {
         const nextWorld = worldGenerator
             ? await worldGenerator.generate(generationOptions)
             : generateWorld(generationOptions);
-        await map.load(nextWorld);
+        await map.loadWorld({ source: new StaticWorldSource(nextWorld) });
         currentWorld = nextWorld;
         setStatus("generated", {
             width: nextWorld.w,
@@ -249,7 +260,8 @@ async function regenerate() {
             message: error instanceof Error ? error.message : String(error)
         });
         if (currentWorld) {
-            await map.load(currentWorld).catch(restoreError => console.error("Map restore failed", restoreError));
+            await map.loadWorld({ source: new StaticWorldSource(currentWorld) })
+                .catch(restoreError => console.error("Map restore failed", restoreError));
         }
     } finally {
         generating = false;

@@ -1,6 +1,6 @@
 import { Land } from "../enums";
 import { MapInfo, Point } from "../interfaces";
-import { assertWrappableMap, getMapNeighbors, normalizeMapCoordinates } from "./topology";
+import { assertWrappableMap, getMapNeighbors, getMapTile, normalizeMapCoordinates } from "./topology";
 
 interface QueueEntry extends Point {
     priority: number;
@@ -105,7 +105,7 @@ export class PathFinder {
     }
 
     private isAccessible(point: Point): boolean {
-        const tile = this.map.data[point.x]?.[point.y];
+        const tile = getMapTile(this.map, point.x, point.y);
         return tile !== undefined
             && this.restricted[tile.type] === true
             && (!this.accessible || this.accessible(point.x, point.y));

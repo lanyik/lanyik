@@ -17,6 +17,7 @@ import { HEXPolygon, getHexCenter } from "../helpers/helpers";
 import { forEachMapTile } from "../helpers/mapData";
 import { MapInfo, Point } from "../interfaces";
 import { Land } from "../enums";
+import { getMapTile } from "../helpers/topology";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
@@ -54,10 +55,16 @@ export interface GrassOptions {
 
 interface TileBladeRange { geometry: InstancedBufferGeometry, start: number, count: number }
 
+interface GrassLodCache {
+    geometry: InstancedBufferGeometry;
+    ranges: { key: string, start: number, count: number }[];
+}
+
 interface GrassChunkRecord {
     mesh: Mesh<InstancedBufferGeometry, RawShaderMaterial>;
     tiles: { x: number, y: number }[];
     lod?: WorldChunkLod;
+    lodCache: Map<WorldChunkLod, GrassLodCache>;
 }
 
 interface ResolvedGrassOptions {
@@ -67,6 +74,46 @@ interface ResolvedGrassOptions {
     bladeHeight: number;
     heightVariation: number;
     waterOptions: WaterClearanceOptions;
+}
+
+export class GrassSharedResources {
+    public readonly blade = buildBladeGeometry();
+    public readonly material: RawShaderMaterial;
+    private clock = 0;
+    private disposed = false;
+
+    constructor(options: GrassOptions) {
+        const bladeHeight = options.bladeHeight ?? options.size * 0.18;
+        this.material = new RawShaderMaterial({
+            uniforms: {
+                worldOffset: { value: new Vector2(0, 0) },
+                worldCenter: { value: new Vector2(0, 0) },
+                worldPeriod: { value: new Vector2(0, 0) },
+                chunkOrigin: { value: new Vector2(0, 0) },
+                uTime: { value: 0 },
+                windStrength: { value: options.windStrength ?? bladeHeight * 0.35 },
+                windSpeed: { value: options.windSpeed ?? 1.2 },
+                colorBase: { value: new Color(options.colorBase ?? 0x3c6e2e) },
+                colorTip: { value: new Color(options.colorTip ?? 0x8fce5a) },
+                fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
+            },
+            vertexShader: GRASS_VERTEX_SHADER,
+            fragmentShader: GRASS_FRAGMENT_SHADER,
+            side: DoubleSide
+        });
+    }
+
+    public update(dtS: number): void {
+        this.clock += dtS;
+        this.material.uniforms.uTime.value = this.clock;
+    }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.blade.dispose();
+        this.material.dispose();
+    }
 }
 
 //----------------------------------------------------------------------------------
@@ -89,16 +136,16 @@ interface ResolvedGrassOptions {
 //(e.g. a live GUI slider changing blade density) without an async round-trip.
 //----------------------------------------------------------------------------------
 export class GrassField extends Group {
-    private clock = 0;
     private readonly tileRanges = new Map<string, TileBladeRange>();
     private readonly fogStates = new Map<string, number>();
-    private readonly blade = buildBladeGeometry();
+    private lodBuilds = 0;
 
     constructor(
         private map: MapInfo,
         private chunks: Map<string, GrassChunkRecord>,
-        private grassMaterial: RawShaderMaterial,
-        private options: ResolvedGrassOptions
+        public readonly resources: GrassSharedResources,
+        private options: ResolvedGrassOptions,
+        private ownsResources: boolean
     ) {
         super();
         for (const record of chunks.values()) this.add(record.mesh);
@@ -115,32 +162,32 @@ export class GrassField extends Group {
 
         const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
         for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
+        attribute.addUpdateRange(range.start, range.count);
         attribute.needsUpdate = true;
     }
 
     //Advances the wind animation. `dtS` is the elapsed time in seconds since
     //the previous frame - call this once per frame (see HexMap's render loop).
     public update(dtS: number): void {
-        this.clock += dtS;
-        this.grassMaterial.uniforms.uTime.value = this.clock;
+        this.resources.update(dtS);
     }
 
     public setWorldCenter(x: number, y: number): void {
-        this.grassMaterial.uniforms.worldCenter.value.set(x, y);
+        this.resources.material.uniforms.worldCenter.value.set(x, y);
     }
 
     public get windStrength(): number {
-        return this.grassMaterial.uniforms.windStrength.value;
+        return this.resources.material.uniforms.windStrength.value;
     }
     public set windStrength(value: number) {
-        this.grassMaterial.uniforms.windStrength.value = value;
+        this.resources.material.uniforms.windStrength.value = value;
     }
 
     public get windSpeed(): number {
-        return this.grassMaterial.uniforms.windSpeed.value;
+        return this.resources.material.uniforms.windSpeed.value;
     }
     public set windSpeed(value: number) {
-        this.grassMaterial.uniforms.windSpeed.value = value;
+        this.resources.material.uniforms.windSpeed.value = value;
     }
 
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod): InstancedBufferGeometry | undefined {
@@ -149,12 +196,28 @@ export class GrassField extends Group {
         if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
 
         this.removeTileRanges(record);
-        const source = this.buildChunkGeometry(
-            record.tiles,
-            lod,
-            { x: record.mesh.position.x, y: record.mesh.position.z }
-        );
-        this.replaceGeometry(record.mesh.geometry, source, record.tiles);
+        let cached = record.lodCache.get(lod);
+        if (!cached) {
+            cached = this.buildChunkGeometry(
+                record.tiles,
+                lod,
+                { x: record.mesh.position.x, y: record.mesh.position.z }
+            );
+            record.lodCache.set(lod, cached);
+            this.lodBuilds += 1;
+        }
+        const previous = record.mesh.geometry;
+        record.mesh.geometry = cached.geometry;
+        if (record.lod === undefined && !previous.getAttribute("position")) previous.dispose();
+        const fogAttribute = cached.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+        for (const range of cached.ranges) {
+            const state = this.fogStates.get(range.key) ?? 2;
+            for (let index = 0; index < range.count; index += 1) {
+                fogAttribute.setX(range.start + index, state);
+            }
+            this.tileRanges.set(range.key, { geometry: cached.geometry, start: range.start, count: range.count });
+        }
+        fogAttribute.needsUpdate = true;
         record.lod = lod;
         return record.mesh.geometry;
     }
@@ -163,8 +226,14 @@ export class GrassField extends Group {
         const record = this.chunks.get(metadata.id);
         if (!record || record.lod === undefined) return;
         this.removeTileRanges(record);
-        this.clearGeometry(record.mesh.geometry);
+        for (const cached of record.lodCache.values()) cached.geometry.dispose();
+        record.lodCache.clear();
+        record.mesh.geometry = new InstancedBufferGeometry();
         record.lod = undefined;
+    }
+
+    public get lodBuildCount(): number {
+        return this.lodBuilds;
     }
 
     private removeTileRanges(record: GrassChunkRecord): void {
@@ -175,7 +244,7 @@ export class GrassField extends Group {
         chunkTiles: { x: number, y: number }[],
         lod: WorldChunkLod,
         origin: Point
-    ): InstancedBufferGeometry {
+    ): GrassLodCache {
         const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
         const densityScale = ([1, 0.38, 0.14] as const)[lod];
         const density = Math.max(1, Math.round(this.options.density * densityScale));
@@ -230,8 +299,8 @@ export class GrassField extends Group {
         }
 
         const geometry = new InstancedBufferGeometry();
-        geometry.setAttribute("position", this.blade.getAttribute("position").clone());
-        geometry.setIndex(this.blade.getIndex()?.clone() ?? null);
+        geometry.setAttribute("position", this.resources.blade.getAttribute("position").clone());
+        geometry.setIndex(this.resources.blade.getIndex()?.clone() ?? null);
         geometry.instanceCount = instance;
         geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
         geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));
@@ -241,41 +310,19 @@ export class GrassField extends Group {
         geometry.setAttribute("shade", new InstancedBufferAttribute(shades, 1));
         geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
 
-        for (const range of pendingRanges) {
-            this.tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
-        }
-        return geometry;
-    }
-
-    private replaceGeometry(
-        target: InstancedBufferGeometry,
-        source: InstancedBufferGeometry,
-        tiles: { x: number, y: number }[]
-    ): void {
-        target.dispose();
-        for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
-        target.setIndex(source.getIndex());
-        for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
-        target.instanceCount = source.instanceCount;
-        target.boundingBox = null;
-        target.boundingSphere = null;
-        for (const tile of tiles) {
-            const range = this.tileRanges.get(`${tile.x},${tile.y}`);
-            if (range?.geometry === source) range.geometry = target;
-        }
-    }
-
-    private clearGeometry(geometry: InstancedBufferGeometry): void {
-        geometry.dispose();
-        for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
-        geometry.setIndex(null);
-        geometry.instanceCount = 0;
+        return { geometry, ranges: pendingRanges };
     }
 
     public dispose(): void {
-        for (const record of this.chunks.values()) record.mesh.geometry.dispose();
-        this.blade.dispose();
-        this.grassMaterial.dispose();
+        for (const record of this.chunks.values()) {
+            const geometries = new Set<InstancedBufferGeometry>([
+                record.mesh.geometry,
+                ...[...record.lodCache.values()].map(cached => cached.geometry)
+            ]);
+            for (const geometry of geometries) geometry.dispose();
+            record.lodCache.clear();
+        }
+        if (this.ownsResources) this.resources.dispose();
     }
 }
 
@@ -317,7 +364,8 @@ function buildBladeGeometry(): BufferGeometry {
 export function createGrassField(
     map: MapInfo,
     options: GrassOptions,
-    onlyTiles?: readonly Point[]
+    onlyTiles?: readonly Point[],
+    sharedResources?: GrassSharedResources
 ): GrassField | null {
     const { size } = options;
     const density = options.density ?? 60;
@@ -326,8 +374,6 @@ export function createGrassField(
     const bladeWidth = options.bladeWidth ?? size * 0.03;
     const bladeHeight = options.bladeHeight ?? size * 0.18;
     const heightVariation = options.heightVariation ?? 0.4;
-    const windStrength = options.windStrength ?? bladeHeight * 0.35;
-    const windSpeed = options.windSpeed ?? 1.2;
 
     //Lake tiles are skipped outright: with the waterline's noise wobble the
     //remaining dry shore rim is too thin to reliably place blades in (and the
@@ -335,7 +381,7 @@ export function createGrassField(
     //water). River tiles keep their grass - the banks are wide enough.
     const tiles: { x: number, y: number }[] = [];
     const considerTile = (x: number, y: number): void => {
-        const tile = map.data[x]?.[y];
+        const tile = getMapTile(map, x, y);
         if (tile?.type === Land.land && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
     };
     if (onlyTiles) {
@@ -352,30 +398,12 @@ export function createGrassField(
         lakeShoreWidth: options.lakeShoreWidth ?? 0.18
     };
 
-    const material = new RawShaderMaterial({
-        uniforms: {
-            worldOffset: { value: new Vector2(0, 0) },
-            worldCenter: { value: new Vector2(0, 0) },
-            //Toroidal placement is performed by physical chunk copies so the
-            //shader keeps every blade attached to its canonical chunk.
-            worldPeriod: { value: new Vector2(0, 0) },
-            chunkOrigin: { value: new Vector2(0, 0) },
-            uTime: { value: 0 },
-            windStrength: { value: windStrength },
-            windSpeed: { value: windSpeed },
-            colorBase: { value: new Color(options.colorBase ?? 0x3c6e2e) },
-            colorTip: { value: new Color(options.colorTip ?? 0x8fce5a) },
-            fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
-        },
-        vertexShader: GRASS_VERTEX_SHADER,
-        fragmentShader: GRASS_FRAGMENT_SHADER,
-        side: DoubleSide
-    });
+    const resources = sharedResources ?? new GrassSharedResources(options);
 
     const chunks = new Map<string, GrassChunkRecord>();
     for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
         const geometry = new InstancedBufferGeometry();
-        const chunk = new Mesh(geometry, material);
+        const chunk = new Mesh(geometry, resources.material);
         const origin = getWorldChunkOrigin(chunkKey, size);
         chunk.position.set(origin.x, 0, origin.y);
         chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
@@ -394,15 +422,15 @@ export function createGrassField(
                 origin
             )
         );
-        chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles });
+        chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles, lodCache: new Map() });
     }
 
-    return new GrassField(map, chunks, material, {
+    return new GrassField(map, chunks, resources, {
         size,
         density,
         bladeWidth,
         bladeHeight,
         heightVariation,
         waterOptions
-    });
+    }, !sharedResources);
 }

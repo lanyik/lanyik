@@ -1,7 +1,7 @@
 import { HexMap, HexMapOptions } from "./HexMap";
 import { setOptions } from "./helpers/setoptions";
 import { Unit } from "./objects/Unit";
-import { FogOfWar, FogState } from "./objects/FogOfWar";
+import { FogOfWar, FogState, FogViewer } from "./objects/FogOfWar";
 
 import { Point, MapInfo, UnitPlacement, TileInfo } from "./interfaces";
 import { Land } from "./enums";
@@ -10,6 +10,8 @@ import { PathFinder } from "./helpers/pathfinder";
 import { EventEmitter } from "./EventEmitter";
 import { assertWrappableMap, normalizeMapCoordinates } from "./helpers/topology";
 import { forEachMapTile } from "./helpers/mapData";
+import { StaticWorldSource } from "./world/WorldSource";
+import { Vector3 } from "three";
 
 export interface GameEngineOptions extends HexMapOptions {
     preventCellClick?: boolean;
@@ -20,6 +22,8 @@ export interface GameEngineOptions extends HexMapOptions {
     //("Explored") if seen before, or the war-fog texture ("Unseen") if not.
     //Set to false to leave every tile permanently Visible, the old behavior.
     fogOfWar?: boolean;
+    unitAnimationDistance?: number;
+    farUnitUpdateInterval?: number;
 }
 
 //----------------------------------------------------------------------------------
@@ -35,26 +39,51 @@ export class GameEngine extends EventEmitter {
     private _map:HexMap;
     private _mapData!:MapInfo;
     private _unitsList:{ [key:string]:Unit } = {};
+    private _units:Unit[] = [];
     private _currentUnit:Unit | undefined;
     private _fog:FogOfWar | undefined;
     private initRevision = 0;
+    private readonly cameraTarget = new Vector3();
+    private readonly farUnitElapsed = new Map<Unit, number>();
+    private readonly fogViewers: FogViewer[] = [];
 
     private options = {
         preventCellClick: true,
-        fogOfWar: true
+        fogOfWar: true,
+        unitAnimationDistance: 3000,
+        farUnitUpdateInterval: 0.25
     };
 
     constructor(options:GameEngineOptions) {
         super();
         setOptions(this, options);
+        if (!Number.isFinite(this.options.unitAnimationDistance) || this.options.unitAnimationDistance < 0) {
+            throw new RangeError("unitAnimationDistance must be a non-negative finite number");
+        }
+        if (!Number.isFinite(this.options.farUnitUpdateInterval) || this.options.farUnitUpdateInterval <= 0) {
+            throw new RangeError("farUnitUpdateInterval must be a positive finite number");
+        }
         this._map = new HexMap(options);
         this._map.on("click", (payload:{x:number,y:number,tile:TileInfo}) => this.cellClick(payload));
         this._map.on("hover", (payload:{x:number,y:number,tile:TileInfo}) => this.cellHover(payload));
         this._map.on("frame", ({ dtS }:{ dtS:number }) => {
-            const target = this._map.getCameraTarget();
-            for (const unit of Object.values(this._unitsList)) {
-                unit.update(dtS);
+            const target = this._map.getCameraTarget(this.cameraTarget);
+            for (const unit of this._units) {
                 unit.alignToWorldReference(target.x, target.z);
+                const dx = unit.unit.position.x - target.x;
+                const dz = unit.unit.position.z - target.z;
+                if (unit.moving || Math.hypot(dx, dz) <= this.options.unitAnimationDistance) {
+                    unit.update(dtS);
+                    this.farUnitElapsed.delete(unit);
+                    continue;
+                }
+                const elapsed = (this.farUnitElapsed.get(unit) ?? 0) + dtS;
+                if (elapsed >= this.options.farUnitUpdateInterval) {
+                    unit.update(elapsed);
+                    this.farUnitElapsed.set(unit, 0);
+                } else {
+                    this.farUnitElapsed.set(unit, elapsed);
+                }
             }
         });
     }
@@ -68,7 +97,7 @@ export class GameEngine extends EventEmitter {
         this._fog = undefined;
         this.clearMapUnitMarkers(mapData);
         this._mapData = mapData;
-        await this._map.load(mapData);
+        await this._map.loadWorld({ source: new StaticWorldSource(mapData) });
         if (revision !== this.initRevision) return;
 
         const units = placements.map(unitInfo => new Unit({
@@ -105,6 +134,8 @@ export class GameEngine extends EventEmitter {
             unit.on("end_move", () => this.recomputeFog());
             this._map.add(unit.unit);
             this._unitsList[unit.id] = unit;
+            this._units.push(unit);
+            this.fogViewers.push({ ...unit.viewPosition, viewRange: unit.viewRange });
             this._mapData.data[unit.position.x][unit.position.y].unit = unit.id;
         }
 
@@ -114,7 +145,7 @@ export class GameEngine extends EventEmitter {
             // tile to Visible until told otherwise (see setTileFog()) - push
             // the Unseen state through once so the two actually agree before
             // recomputeFog() reveals whatever's within a unit's view range.
-            for (const tile of this._fog.allTiles()) this._map.setTileFog(tile.x, tile.y, tile.state);
+            this._map.setTilesFog(this._fog.allTiles());
             this.recomputeFog();
         }
     }
@@ -144,12 +175,15 @@ export class GameEngine extends EventEmitter {
     }
 
     private clearUnits(): void {
-        for (const unit of Object.values(this._unitsList)) {
+        for (const unit of this._units) {
             const tile = this._mapData?.data[unit.position.x]?.[unit.position.y];
             if (tile?.unit === unit.id) delete tile.unit;
             unit.dispose();
         }
         this._unitsList = {};
+        this._units = [];
+        this.fogViewers.length = 0;
+        this.farUnitElapsed.clear();
     }
 
     private clearMapUnitMarkers(map: MapInfo): void {
@@ -170,9 +204,17 @@ export class GameEngine extends EventEmitter {
     private recomputeFog():void {
         if (!this._fog) return;
 
-        const units = Object.values(this._unitsList);
-        const changes = this._fog.recompute(units.map(u => ({ ...u.viewPosition, viewRange: u.viewRange })));
-        for (const change of changes) this._map.setTileFog(change.x, change.y, change.state);
+        const units = this._units;
+        for (let index = 0; index < units.length; index += 1) {
+            const unit = units[index];
+            const position = unit.viewPosition;
+            const viewer = this.fogViewers[index] ??= { ...position, viewRange: unit.viewRange };
+            viewer.x = position.x;
+            viewer.y = position.y;
+            viewer.viewRange = unit.viewRange;
+        }
+        const changes = this._fog.recompute(this.fogViewers);
+        this._map.setTilesFog(changes);
 
         for (const unit of units) {
             unit.unit.visible = this._fog.getState(unit.viewPosition.x, unit.viewPosition.y) === FogState.Visible;

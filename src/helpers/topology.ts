@@ -28,7 +28,8 @@ export function normalizeMapCoordinates(map: MapInfo, x: number, y: number): Poi
 
 export function getMapTile(map: MapInfo, x: number, y: number): TileInfo | undefined {
     const normalized = normalizeMapCoordinates(map, x, y);
-    return normalized ? map.data[normalized.x]?.[normalized.y] : undefined;
+    if (!normalized) return undefined;
+    return map.tileAt?.(normalized.x, normalized.y) ?? map.data[normalized.x]?.[normalized.y];
 }
 
 export function getMapNeighbors(map: MapInfo, x: number, y: number): Neighbor[] {
@@ -57,6 +58,12 @@ export function assertWrappableMap(map: MapInfo): void {
     }
     if (!map.data || typeof map.data !== "object") {
         throw new TypeError("map data must be an object");
+    }
+    if (map.tileAt !== undefined && typeof map.tileAt !== "function") {
+        throw new TypeError("map tileAt must be a function when provided");
+    }
+    if (map.forEachTile !== undefined && typeof map.forEachTile !== "function") {
+        throw new TypeError("map forEachTile must be a function when provided");
     }
     if (map.wrapX !== undefined && typeof map.wrapX !== "boolean") {
         throw new TypeError("wrapX must be a boolean when provided");

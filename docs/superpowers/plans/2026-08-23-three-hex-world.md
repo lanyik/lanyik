@@ -580,7 +580,7 @@ Create `public/demo.js`:
 import { GUI } from "./js/vendor/dat.gui.module.js";
 import Stats from "./js/vendor/stats.module.js";
 
-const { HexMap, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
+const { HexMap, StaticWorldSource, generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } = window.HexMap;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 
@@ -637,7 +637,7 @@ async function regenerate() {
             width: Number(controls.width),
             height: Number(controls.height)
         });
-        await map.load(nextWorld);
+        await map.loadWorld({ source: new StaticWorldSource(nextWorld) });
         currentWorld = nextWorld;
         title.textContent = "世界已生成";
         detail.textContent = `${nextWorld.w} × ${nextWorld.h} · seed ${controls.seed}`;
@@ -646,7 +646,8 @@ async function regenerate() {
         title.textContent = "生成失败";
         detail.textContent = error instanceof Error ? error.message : String(error);
         if (currentWorld) {
-            await map.load(currentWorld).catch(restoreError => console.error("Map restore failed", restoreError));
+            await map.loadWorld({ source: new StaticWorldSource(currentWorld) })
+                .catch(restoreError => console.error("Map restore failed", restoreError));
         }
     } finally {
         generating = false;

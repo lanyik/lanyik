@@ -189,6 +189,7 @@ interface CityFogEntry {
     wrapper: Group;
     sprite: Sprite;
     materials: { material: Material & { color?: Color }, baseColor?: Color }[];
+    owner?: object;
 }
 
 export const CITY_FOG_TILE_KEY = "hexMapCityFogTile";
@@ -198,6 +199,8 @@ interface TerrainChunkRecord {
     tiles: Point[];
     layer: "land" | "water";
     lod?: WorldChunkLod;
+    attributes?: InstanceAttributes;
+    lodGeometries: Map<WorldChunkLod, InstancedBufferGeometry>;
 }
 
 //----------------------------------------------------------------------------------
@@ -248,6 +251,7 @@ export class TerrainMesh extends Group {
     private map: MapInfo;
     private atlasCellIndex: { [type: string]: number } = {};
     private clock = 0;
+    private lodBuilds = 0;
     //Single Color instances shared by BOTH materials' uniforms (the water
     //layer's own colors AND the land layer's painted curved-coast water - see
     //seaColorShallow in terrain.fragment.ts): mutating them via the
@@ -256,7 +260,7 @@ export class TerrainMesh extends Group {
     private waterShallow: Color;
     private waterDeep: Color;
 
-    constructor(map: MapInfo, private options: TerrainMeshOptions) {
+    constructor(map: MapInfo, private options: TerrainMeshOptions, initialTiles?: readonly Point[]) {
         super();
         this.map = map;
         this.buildAtlasCellIndex();
@@ -270,9 +274,16 @@ export class TerrainMesh extends Group {
 
         const landTiles: Point[] = [];
         const waterTiles: Point[] = [];
-        forEachMapTile(this.map, (tile, x, y) => {
-            (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
-        });
+        if (initialTiles) {
+            for (const point of initialTiles) {
+                const tile = getMapTile(this.map, point.x, point.y);
+                if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+            }
+        } else {
+            forEachMapTile(this.map, (tile, x, y) => {
+                (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+            });
+        }
         this.buildLandLayer(landTiles);
         this.buildWaterLayer(waterTiles);
     }
@@ -334,7 +345,7 @@ export class TerrainMesh extends Group {
         };
 
         tiles.forEach((tile, i) => {
-            const info = this.map.data[tile.x][tile.y];
+            const info = getMapTile(this.map, tile.x, tile.y)!;
             const center = getHexCenter(tile.x, tile.y, size);
 
             attrs.offset[i * 2 + 0] = center.x - origin.x;
@@ -389,7 +400,8 @@ export class TerrainMesh extends Group {
         tiles: Point[],
         numSubdivisions: number,
         borderSubdivisions = numSubdivisions,
-        origin: Point = { x: 0, y: 0 }
+        origin: Point = { x: 0, y: 0 },
+        attributes?: InstanceAttributes
     ): InstancedBufferGeometry {
         const hexagon = numSubdivisions === borderSubdivisions
             ? createHexagonGeometry(this.options.size, numSubdivisions)
@@ -400,7 +412,7 @@ export class TerrainMesh extends Group {
         geometry.setIndex(hexagon.getIndex());
         geometry.instanceCount = tiles.length;
 
-        const attrs = this.buildInstanceAttributes(tiles, origin);
+        const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
         geometry.setAttribute("offset", new InstancedBufferAttribute(attrs.offset, 2));
         geometry.setAttribute("style", new InstancedBufferAttribute(attrs.style, 3));
         geometry.setAttribute("neighborsA", new InstancedBufferAttribute(attrs.neighborsA, 3));
@@ -416,25 +428,6 @@ export class TerrainMesh extends Group {
         geometry.setAttribute("fogState", new InstancedBufferAttribute(attrs.fogState, 1));
 
         return geometry;
-    }
-
-    private replaceGeometry(target: InstancedBufferGeometry, source: InstancedBufferGeometry): void {
-        target.dispose();
-        for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
-        target.setIndex(source.getIndex());
-        for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
-        target.instanceCount = source.instanceCount;
-        target.boundingBox = null;
-        target.boundingSphere = null;
-    }
-
-    private clearGeometry(geometry: InstancedBufferGeometry): void {
-        geometry.dispose();
-        for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
-        geometry.setIndex(null);
-        geometry.instanceCount = 0;
-        geometry.boundingBox = null;
-        geometry.boundingSphere = null;
     }
 
     private commonUniforms() {
@@ -562,7 +555,12 @@ export class TerrainMesh extends Group {
                 )
             );
             chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-            this.chunkRecords.set(`land:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "land" });
+            this.chunkRecords.set(`land:${chunkKey}`, {
+                mesh,
+                tiles: chunkTiles,
+                layer: "land",
+                lodGeometries: new Map()
+            });
             this.landChunks.push(mesh);
             this.add(mesh);
         }
@@ -622,7 +620,12 @@ export class TerrainMesh extends Group {
                 )
             );
             chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-            this.chunkRecords.set(`water:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "water" });
+            this.chunkRecords.set(`water:${chunkKey}`, {
+                mesh,
+                tiles: chunkTiles,
+                layer: "water",
+                lodGeometries: new Map()
+            });
             this.waterChunks.push(mesh);
             this.add(mesh);
         }
@@ -639,9 +642,9 @@ export class TerrainMesh extends Group {
     //cityScale only applies an *additional* map-wide multiplier on top of that.
     //
     //Async because loading a glTF model is async (see helpers/models.ts) -
-    //called by HexMap.load() after construction, not from the constructor,
+    //called by HexMap.loadWorld() after construction, not from the constructor,
     //so callers can await it if they need cities present before proceeding.
-    public async loadCities(onlyTiles?: readonly Point[]): Promise<void> {
+    public async loadCities(onlyTiles?: readonly Point[], owner?: object): Promise<void> {
         const { size } = this.options;
         const defaultModel = this.options.cityModel ?? "Assets/models/monument";
         const cityScale = this.options.cityScale ?? 1;
@@ -649,7 +652,7 @@ export class TerrainMesh extends Group {
         const cityTiles: Point[] = [];
         if (onlyTiles) {
             for (const point of onlyTiles) {
-                if (this.map.data[point.x]?.[point.y]?.city) cityTiles.push(point);
+                if (getMapTile(this.map, point.x, point.y)?.city) cityTiles.push(point);
             }
         } else {
             forEachMapTile(this.map, (tile, x, y) => {
@@ -658,13 +661,24 @@ export class TerrainMesh extends Group {
         }
 
         for (const { x, y } of cityTiles) {
-                const tile = this.map.data[x]?.[y];
-                if (!tile?.city || this.cityFog.has(`${x},${y}`)) continue;
+                const tile = getMapTile(this.map, x, y);
+                const key = `${x},${y}`;
+                if (!tile?.city) continue;
+                const existing = this.cityFog.get(key);
+                if (existing) {
+                    existing.owner = owner;
+                    continue;
+                }
 
                 const center = getHexCenter(x, y, size);
                 const modelPath = tile.city.model ?? defaultModel;
 
                 const { scene, fixup } = await loadModel(modelPath);
+                const loadedByAnotherRequest = this.cityFog.get(key);
+                if (loadedByAnotherRequest) {
+                    loadedByAnotherRequest.owner = owner;
+                    continue;
+                }
                 const model = scene.clone(true);
                 model.applyMatrix4(fixup);
                 model.updateMatrixWorld(true);
@@ -693,7 +707,7 @@ export class TerrainMesh extends Group {
                 wrapper.add(model);
                 wrapper.scale.setScalar(cityScale);
                 wrapper.position.set(center.x, 0, center.y);
-                wrapper.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
+                wrapper.userData[CITY_FOG_TILE_KEY] = key;
                 this.add(wrapper);
 
                 const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
@@ -702,10 +716,10 @@ export class TerrainMesh extends Group {
                     borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
                 });
                 sprite.position.set(center.x, modelHeight * cityScale + Math.round(size / 5), center.y);
-                sprite.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
+                sprite.userData[CITY_FOG_TILE_KEY] = key;
                 this.add(sprite);
 
-                this.cityFog.set(`${x},${y}`, { wrapper, sprite, materials: cityMaterials });
+                this.cityFog.set(key, { wrapper, sprite, materials: cityMaterials, owner });
         }
     }
 
@@ -715,7 +729,7 @@ export class TerrainMesh extends Group {
         const landTiles: Point[] = [];
         const waterTiles: Point[] = [];
         for (const point of tiles) {
-            const tile = this.map.data[point.x]?.[point.y];
+            const tile = getMapTile(this.map, point.x, point.y);
             if (!tile) continue;
             (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
         }
@@ -726,7 +740,7 @@ export class TerrainMesh extends Group {
     //Removes every render chunk touched by these cells. Streaming generation
     //chunks are aligned to WORLD_CHUNK_SIZE, so a render chunk is never shared
     //between two independently resident generation chunks.
-    public removeTiles(tiles: readonly Point[]): string[] {
+    public removeTiles(tiles: readonly Point[], removeCities = true, cityOwner?: object): string[] {
         const chunkKeys = new Set(groupTilesByWorldChunk(tiles).keys());
         const removedIds: string[] = [];
         for (const chunkKey of chunkKeys) {
@@ -734,7 +748,7 @@ export class TerrainMesh extends Group {
                 const id = `${layer}:${chunkKey}`;
                 const record = this.chunkRecords.get(id);
                 if (!record) continue;
-                record.mesh.geometry.dispose();
+                this.disposeChunkGeometries(record);
                 this.remove(record.mesh);
                 this.chunkRecords.delete(id);
                 const collection = layer === "land" ? this.landChunks : this.waterChunks;
@@ -745,13 +759,18 @@ export class TerrainMesh extends Group {
                 removedIds.push(id);
             }
         }
-        for (const point of tiles) this.removeCity(`${point.x},${point.y}`);
+        for (const point of tiles) this.fogStates.delete(`${point.x},${point.y}`);
+        if (removeCities) this.removeCities(tiles, cityOwner);
         return removedIds;
     }
 
-    private removeCity(key: string): void {
+    public removeCities(tiles: readonly Point[], owner?: object): void {
+        for (const point of tiles) this.removeCity(`${point.x},${point.y}`, owner);
+    }
+
+    private removeCity(key: string, owner?: object): void {
         const entry = this.cityFog.get(key);
-        if (!entry) return;
+        if (!entry || (owner !== undefined && entry.owner !== owner)) return;
         this.remove(entry.wrapper);
         this.remove(entry.sprite);
         for (const { material } of entry.materials) material.dispose();
@@ -784,19 +803,31 @@ export class TerrainMesh extends Group {
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod): InstancedBufferGeometry | undefined {
         const record = this.chunkRecords.get(metadata.id);
         if (!record) return undefined;
-        const geometry = record.mesh.geometry;
-        if (record.lod === lod && geometry.getAttribute("position")) return geometry;
+        if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
 
-        const subdivisions = record.layer === "land"
-            ? ([3, 2, 1] as const)[lod]
-            : ([2, 1, 0] as const)[lod];
-        const borderSubdivisions = record.layer === "land" ? 3 : 2;
-        this.replaceGeometry(geometry, this.buildInstancedGeometry(
-            record.tiles,
-            subdivisions,
-            borderSubdivisions,
-            { x: record.mesh.position.x, y: record.mesh.position.z }
-        ));
+        let geometry = record.lodGeometries.get(lod);
+        if (!geometry) {
+            record.attributes ??= this.buildInstanceAttributes(
+                record.tiles,
+                { x: record.mesh.position.x, y: record.mesh.position.z }
+            );
+            const subdivisions = record.layer === "land"
+                ? ([3, 2, 1] as const)[lod]
+                : ([2, 1, 0] as const)[lod];
+            const borderSubdivisions = record.layer === "land" ? 3 : 2;
+            geometry = this.buildInstancedGeometry(
+                record.tiles,
+                subdivisions,
+                borderSubdivisions,
+                { x: record.mesh.position.x, y: record.mesh.position.z },
+                record.attributes
+            );
+            record.lodGeometries.set(lod, geometry);
+            this.lodBuilds += 1;
+        }
+        const previous = record.mesh.geometry;
+        record.mesh.geometry = geometry;
+        if (record.lod === undefined && !previous.getAttribute("position")) previous.dispose();
         record.lod = lod;
         return geometry;
     }
@@ -804,8 +835,20 @@ export class TerrainMesh extends Group {
     public releaseChunk(metadata: WorldChunkMetadata): void {
         const record = this.chunkRecords.get(metadata.id);
         if (!record || record.lod === undefined) return;
-        this.clearGeometry(record.mesh.geometry);
+        this.disposeChunkGeometries(record);
+        record.mesh.geometry = new InstancedBufferGeometry();
+        record.attributes = undefined;
         record.lod = undefined;
+    }
+
+    public get lodBuildCount(): number {
+        return this.lodBuilds;
+    }
+
+    private disposeChunkGeometries(record: TerrainChunkRecord): void {
+        const geometries = new Set<InstancedBufferGeometry>([record.mesh.geometry, ...record.lodGeometries.values()]);
+        for (const geometry of geometries) geometry.dispose();
+        record.lodGeometries.clear();
     }
 
     public get gridVisible(): boolean {
@@ -1094,6 +1137,7 @@ export class TerrainMesh extends Group {
             const attribute = landEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
             if (attribute) {
                 attribute.setX(landEntry.index, state);
+                attribute.addUpdateRange(landEntry.index, 1);
                 attribute.needsUpdate = true;
             }
         }
@@ -1103,6 +1147,7 @@ export class TerrainMesh extends Group {
             const attribute = waterEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
             if (attribute) {
                 attribute.setX(waterEntry.index, state);
+                attribute.addUpdateRange(waterEntry.index, 1);
                 attribute.needsUpdate = true;
             }
         }
@@ -1133,9 +1178,8 @@ export class TerrainMesh extends Group {
     //Model geometry remains shared with loadModel()'s cache. Per-city cloned
     //materials and canvas label textures are owned here and released below.
     public dispose(): void {
-        for (const chunk of this.landChunks) chunk.geometry.dispose();
+        for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
         this.landMaterial?.dispose();
-        for (const chunk of this.waterChunks) chunk.geometry.dispose();
         this.waterMaterial?.dispose();
         this.atlasTexture.dispose(); // shared by both materials - dispose once
         this.fogTexture.dispose();

@@ -26,7 +26,8 @@
     "start": "npm run build && npm run server",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "benchmark": "npm run build:lib && node --expose-gc scripts/benchmark-hot-paths.mjs"
   },
   "repository": {
     "type": "git",

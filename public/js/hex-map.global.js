@@ -2059,7 +2059,8 @@
 	}
 	function getMapTile(map, x, y) {
 	  const normalized = normalizeMapCoordinates(map, x, y);
-	  return normalized ? map.data[normalized.x]?.[normalized.y] : void 0;
+	  if (!normalized) return void 0;
+	  return map.tileAt?.(normalized.x, normalized.y) ?? map.data[normalized.x]?.[normalized.y];
 	}
 	function getMapNeighbors(map, x, y) {
 	  const seen = /* @__PURE__ */ new Set();
@@ -2080,6 +2081,12 @@
 	  }
 	  if (!map.data || typeof map.data !== "object") {
 	    throw new TypeError("map data must be an object");
+	  }
+	  if (map.tileAt !== void 0 && typeof map.tileAt !== "function") {
+	    throw new TypeError("map tileAt must be a function when provided");
+	  }
+	  if (map.forEachTile !== void 0 && typeof map.forEachTile !== "function") {
+	    throw new TypeError("map forEachTile must be a function when provided");
 	  }
 	  if (map.wrapX !== void 0 && typeof map.wrapX !== "boolean") {
 	    throw new TypeError("wrapX must be a boolean when provided");
@@ -2147,6 +2154,10 @@
 
 	// src/helpers/mapData.ts
 	function forEachMapTile(map, visit) {
+	  if (map.forEachTile) {
+	    map.forEachTile(visit);
+	    return;
+	  }
 	  for (const xKey of Object.keys(map.data)) {
 	    const x = Number(xKey);
 	    if (!Number.isInteger(x)) continue;
@@ -6725,7 +6736,7 @@ void main() {
 	var WATER_TYPES = ["sea" /* sea */, "coastal" /* coastal */];
 	var CITY_FOG_TILE_KEY = "hexMapCityFogTile";
 	var TerrainMesh = class extends three.Group {
-	  constructor(map, options) {
+	  constructor(map, options, initialTiles) {
 	    super();
 	    this.options = options;
 	    this.landChunks = [];
@@ -6737,6 +6748,7 @@ void main() {
 	    this.cityFog = /* @__PURE__ */ new Map();
 	    this.atlasCellIndex = {};
 	    this.clock = 0;
+	    this.lodBuilds = 0;
 	    this.map = map;
 	    this.buildAtlasCellIndex();
 	    this.fogTexture = this.loadFogTexture();
@@ -6745,9 +6757,16 @@ void main() {
 	    this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
 	    const landTiles = [];
 	    const waterTiles = [];
-	    forEachMapTile(this.map, (tile, x, y) => {
-	      (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
-	    });
+	    if (initialTiles) {
+	      for (const point of initialTiles) {
+	        const tile = getMapTile(this.map, point.x, point.y);
+	        if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+	      }
+	    } else {
+	      forEachMapTile(this.map, (tile, x, y) => {
+	        (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+	      });
+	    }
 	    this.buildLandLayer(landTiles);
 	    this.buildWaterLayer(waterTiles);
 	  }
@@ -6804,7 +6823,7 @@ void main() {
 	      // filled per tile below
 	    };
 	    tiles.forEach((tile, i) => {
-	      const info = this.map.data[tile.x][tile.y];
+	      const info = getMapTile(this.map, tile.x, tile.y);
 	      const center = getHexCenter(tile.x, tile.y, size);
 	      attrs.offset[i * 2 + 0] = center.x - origin.x;
 	      attrs.offset[i * 2 + 1] = center.y - origin.y;
@@ -6843,14 +6862,14 @@ void main() {
 	    });
 	    return attrs;
 	  }
-	  buildInstancedGeometry(tiles, numSubdivisions, borderSubdivisions = numSubdivisions, origin = { x: 0, y: 0 }) {
+	  buildInstancedGeometry(tiles, numSubdivisions, borderSubdivisions = numSubdivisions, origin = { x: 0, y: 0 }, attributes) {
 	    const hexagon = numSubdivisions === borderSubdivisions ? createHexagonGeometry(this.options.size, numSubdivisions) : createHexagonLodGeometry(this.options.size, numSubdivisions, borderSubdivisions);
 	    const geometry = new three.InstancedBufferGeometry();
 	    geometry.setAttribute("position", hexagon.getAttribute("position"));
 	    geometry.setAttribute("uv", hexagon.getAttribute("uv"));
 	    geometry.setIndex(hexagon.getIndex());
 	    geometry.instanceCount = tiles.length;
-	    const attrs = this.buildInstanceAttributes(tiles, origin);
+	    const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
 	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(attrs.offset, 2));
 	    geometry.setAttribute("style", new three.InstancedBufferAttribute(attrs.style, 3));
 	    geometry.setAttribute("neighborsA", new three.InstancedBufferAttribute(attrs.neighborsA, 3));
@@ -6865,23 +6884,6 @@ void main() {
 	    geometry.setAttribute("lakeNeighborEdges", new three.InstancedBufferAttribute(attrs.lakeNeighborEdges, 1));
 	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
 	    return geometry;
-	  }
-	  replaceGeometry(target, source) {
-	    target.dispose();
-	    for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
-	    target.setIndex(source.getIndex());
-	    for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
-	    target.instanceCount = source.instanceCount;
-	    target.boundingBox = null;
-	    target.boundingSphere = null;
-	  }
-	  clearGeometry(geometry) {
-	    geometry.dispose();
-	    for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
-	    geometry.setIndex(null);
-	    geometry.instanceCount = 0;
-	    geometry.boundingBox = null;
-	    geometry.boundingSphere = null;
 	  }
 	  commonUniforms() {
 	    const atlas = this.options.atlas;
@@ -7001,7 +7003,12 @@ void main() {
 	        )
 	      );
 	      chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-	      this.chunkRecords.set(`land:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "land" });
+	      this.chunkRecords.set(`land:${chunkKey}`, {
+	        mesh,
+	        tiles: chunkTiles,
+	        layer: "land",
+	        lodGeometries: /* @__PURE__ */ new Map()
+	      });
 	      this.landChunks.push(mesh);
 	      this.add(mesh);
 	    }
@@ -7059,7 +7066,12 @@ void main() {
 	        )
 	      );
 	      chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-	      this.chunkRecords.set(`water:${chunkKey}`, { mesh, tiles: chunkTiles, layer: "water" });
+	      this.chunkRecords.set(`water:${chunkKey}`, {
+	        mesh,
+	        tiles: chunkTiles,
+	        layer: "water",
+	        lodGeometries: /* @__PURE__ */ new Map()
+	      });
 	      this.waterChunks.push(mesh);
 	      this.add(mesh);
 	    }
@@ -7075,16 +7087,16 @@ void main() {
 	  //cityScale only applies an *additional* map-wide multiplier on top of that.
 	  //
 	  //Async because loading a glTF model is async (see helpers/models.ts) -
-	  //called by HexMap.load() after construction, not from the constructor,
+	  //called by HexMap.loadWorld() after construction, not from the constructor,
 	  //so callers can await it if they need cities present before proceeding.
-	  async loadCities(onlyTiles) {
+	  async loadCities(onlyTiles, owner) {
 	    const { size } = this.options;
 	    const defaultModel = this.options.cityModel ?? "Assets/models/monument";
 	    const cityScale = this.options.cityScale ?? 1;
 	    const cityTiles = [];
 	    if (onlyTiles) {
 	      for (const point of onlyTiles) {
-	        if (this.map.data[point.x]?.[point.y]?.city) cityTiles.push(point);
+	        if (getMapTile(this.map, point.x, point.y)?.city) cityTiles.push(point);
 	      }
 	    } else {
 	      forEachMapTile(this.map, (tile, x, y) => {
@@ -7092,11 +7104,22 @@ void main() {
 	      });
 	    }
 	    for (const { x, y } of cityTiles) {
-	      const tile = this.map.data[x]?.[y];
-	      if (!tile?.city || this.cityFog.has(`${x},${y}`)) continue;
+	      const tile = getMapTile(this.map, x, y);
+	      const key = `${x},${y}`;
+	      if (!tile?.city) continue;
+	      const existing = this.cityFog.get(key);
+	      if (existing) {
+	        existing.owner = owner;
+	        continue;
+	      }
 	      const center = getHexCenter(x, y, size);
 	      const modelPath = tile.city.model ?? defaultModel;
 	      const { scene, fixup } = await loadModel(modelPath);
+	      const loadedByAnotherRequest = this.cityFog.get(key);
+	      if (loadedByAnotherRequest) {
+	        loadedByAnotherRequest.owner = owner;
+	        continue;
+	      }
 	      const model = scene.clone(true);
 	      model.applyMatrix4(fixup);
 	      model.updateMatrixWorld(true);
@@ -7118,7 +7141,7 @@ void main() {
 	      wrapper.add(model);
 	      wrapper.scale.setScalar(cityScale);
 	      wrapper.position.set(center.x, 0, center.y);
-	      wrapper.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
+	      wrapper.userData[CITY_FOG_TILE_KEY] = key;
 	      this.add(wrapper);
 	      const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
 	        fontsize: 32,
@@ -7126,9 +7149,9 @@ void main() {
 	        borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
 	      });
 	      sprite.position.set(center.x, modelHeight * cityScale + Math.round(size / 5), center.y);
-	      sprite.userData[CITY_FOG_TILE_KEY] = `${x},${y}`;
+	      sprite.userData[CITY_FOG_TILE_KEY] = key;
 	      this.add(sprite);
-	      this.cityFog.set(`${x},${y}`, { wrapper, sprite, materials: cityMaterials });
+	      this.cityFog.set(key, { wrapper, sprite, materials: cityMaterials, owner });
 	    }
 	  }
 	  //Adds render shells for newly materialized sparse-world cells. Actual GPU
@@ -7137,7 +7160,7 @@ void main() {
 	    const landTiles = [];
 	    const waterTiles = [];
 	    for (const point of tiles) {
-	      const tile = this.map.data[point.x]?.[point.y];
+	      const tile = getMapTile(this.map, point.x, point.y);
 	      if (!tile) continue;
 	      (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
 	    }
@@ -7147,7 +7170,7 @@ void main() {
 	  //Removes every render chunk touched by these cells. Streaming generation
 	  //chunks are aligned to WORLD_CHUNK_SIZE, so a render chunk is never shared
 	  //between two independently resident generation chunks.
-	  removeTiles(tiles) {
+	  removeTiles(tiles, removeCities = true, cityOwner) {
 	    const chunkKeys = new Set(groupTilesByWorldChunk(tiles).keys());
 	    const removedIds = [];
 	    for (const chunkKey of chunkKeys) {
@@ -7155,7 +7178,7 @@ void main() {
 	        const id = `${layer}:${chunkKey}`;
 	        const record = this.chunkRecords.get(id);
 	        if (!record) continue;
-	        record.mesh.geometry.dispose();
+	        this.disposeChunkGeometries(record);
 	        this.remove(record.mesh);
 	        this.chunkRecords.delete(id);
 	        const collection = layer === "land" ? this.landChunks : this.waterChunks;
@@ -7166,12 +7189,16 @@ void main() {
 	        removedIds.push(id);
 	      }
 	    }
-	    for (const point of tiles) this.removeCity(`${point.x},${point.y}`);
+	    for (const point of tiles) this.fogStates.delete(`${point.x},${point.y}`);
+	    if (removeCities) this.removeCities(tiles, cityOwner);
 	    return removedIds;
 	  }
-	  removeCity(key) {
+	  removeCities(tiles, owner) {
+	    for (const point of tiles) this.removeCity(`${point.x},${point.y}`, owner);
+	  }
+	  removeCity(key, owner) {
 	    const entry = this.cityFog.get(key);
-	    if (!entry) return;
+	    if (!entry || owner !== void 0 && entry.owner !== owner) return;
 	    this.remove(entry.wrapper);
 	    this.remove(entry.sprite);
 	    for (const { material } of entry.materials) material.dispose();
@@ -7200,24 +7227,46 @@ void main() {
 	  activateChunk(metadata, lod) {
 	    const record = this.chunkRecords.get(metadata.id);
 	    if (!record) return void 0;
-	    const geometry = record.mesh.geometry;
-	    if (record.lod === lod && geometry.getAttribute("position")) return geometry;
-	    const subdivisions = record.layer === "land" ? [3, 2, 1][lod] : [2, 1, 0][lod];
-	    const borderSubdivisions = record.layer === "land" ? 3 : 2;
-	    this.replaceGeometry(geometry, this.buildInstancedGeometry(
-	      record.tiles,
-	      subdivisions,
-	      borderSubdivisions,
-	      { x: record.mesh.position.x, y: record.mesh.position.z }
-	    ));
+	    if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
+	    let geometry = record.lodGeometries.get(lod);
+	    if (!geometry) {
+	      record.attributes ?? (record.attributes = this.buildInstanceAttributes(
+	        record.tiles,
+	        { x: record.mesh.position.x, y: record.mesh.position.z }
+	      ));
+	      const subdivisions = record.layer === "land" ? [3, 2, 1][lod] : [2, 1, 0][lod];
+	      const borderSubdivisions = record.layer === "land" ? 3 : 2;
+	      geometry = this.buildInstancedGeometry(
+	        record.tiles,
+	        subdivisions,
+	        borderSubdivisions,
+	        { x: record.mesh.position.x, y: record.mesh.position.z },
+	        record.attributes
+	      );
+	      record.lodGeometries.set(lod, geometry);
+	      this.lodBuilds += 1;
+	    }
+	    const previous = record.mesh.geometry;
+	    record.mesh.geometry = geometry;
+	    if (record.lod === void 0 && !previous.getAttribute("position")) previous.dispose();
 	    record.lod = lod;
 	    return geometry;
 	  }
 	  releaseChunk(metadata) {
 	    const record = this.chunkRecords.get(metadata.id);
 	    if (!record || record.lod === void 0) return;
-	    this.clearGeometry(record.mesh.geometry);
+	    this.disposeChunkGeometries(record);
+	    record.mesh.geometry = new three.InstancedBufferGeometry();
+	    record.attributes = void 0;
 	    record.lod = void 0;
+	  }
+	  get lodBuildCount() {
+	    return this.lodBuilds;
+	  }
+	  disposeChunkGeometries(record) {
+	    const geometries = /* @__PURE__ */ new Set([record.mesh.geometry, ...record.lodGeometries.values()]);
+	    for (const geometry of geometries) geometry.dispose();
+	    record.lodGeometries.clear();
 	  }
 	  get gridVisible() {
 	    return (this.landMaterial ?? this.waterMaterial)?.uniforms.showGrid.value > 0;
@@ -7470,6 +7519,7 @@ void main() {
 	      const attribute = landEntry.mesh.geometry.getAttribute("fogState");
 	      if (attribute) {
 	        attribute.setX(landEntry.index, state);
+	        attribute.addUpdateRange(landEntry.index, 1);
 	        attribute.needsUpdate = true;
 	      }
 	    }
@@ -7478,6 +7528,7 @@ void main() {
 	      const attribute = waterEntry.mesh.geometry.getAttribute("fogState");
 	      if (attribute) {
 	        attribute.setX(waterEntry.index, state);
+	        attribute.addUpdateRange(waterEntry.index, 1);
 	        attribute.needsUpdate = true;
 	      }
 	    }
@@ -7502,9 +7553,8 @@ void main() {
 	  //Model geometry remains shared with loadModel()'s cache. Per-city cloned
 	  //materials and canvas label textures are owned here and released below.
 	  dispose() {
-	    for (const chunk of this.landChunks) chunk.geometry.dispose();
+	    for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
 	    this.landMaterial?.dispose();
-	    for (const chunk of this.waterChunks) chunk.geometry.dispose();
 	    this.waterMaterial?.dispose();
 	    this.atlasTexture.dispose();
 	    this.fogTexture.dispose();
@@ -7644,15 +7694,67 @@ void main() {
 	}
 
 	// src/objects/Forest.ts
+	var ForestSharedResources = class {
+	  constructor() {
+	    this.models = /* @__PURE__ */ new Map();
+	    this.geometries = /* @__PURE__ */ new Set();
+	    this.disposed = false;
+	  }
+	  prepare(modelPath) {
+	    if (this.disposed) return Promise.reject(new Error("ForestSharedResources has been disposed"));
+	    let pending = this.models.get(modelPath);
+	    if (!pending) {
+	      pending = loadModel(modelPath).then(({ scene, fixup }) => {
+	        const meshes = [];
+	        scene.traverse((object) => {
+	          if (object.isMesh) meshes.push(object);
+	        });
+	        const parts = meshes.map((mesh) => {
+	          const geometry = mesh.geometry.clone();
+	          geometry.applyMatrix4(mesh.matrixWorld);
+	          geometry.applyMatrix4(fixup);
+	          this.geometries.add(geometry);
+	          return { geometry, material: mesh.material };
+	        });
+	        if (this.disposed) {
+	          for (const part of parts) part.geometry.dispose();
+	          throw new Error("ForestSharedResources was disposed while loading a model");
+	        }
+	        return parts;
+	      }).catch((reason) => {
+	        this.models.delete(modelPath);
+	        throw reason;
+	      });
+	      this.models.set(modelPath, pending);
+	    }
+	    return pending;
+	  }
+	  get preparedModelCount() {
+	    return this.models.size;
+	  }
+	  get preparedGeometryCount() {
+	    return this.geometries.size;
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    for (const geometry of this.geometries) geometry.dispose();
+	    this.geometries.clear();
+	    this.models.clear();
+	  }
+	};
 	var ForestField = class extends three.Group {
-	  constructor(tileRanges, fogDarkenFactor, chunks, context) {
+	  constructor(tileRanges, fogDarkenFactor, chunks, context, resources, ownsResources) {
 	    super();
 	    this.tileRanges = tileRanges;
 	    this.fogDarkenFactor = fogDarkenFactor;
 	    this.chunks = chunks;
 	    this.context = context;
+	    this.resources = resources;
+	    this.ownsResources = ownsResources;
 	    this.hiddenMatrix = new three.Matrix4().makeScale(0, 0, 0);
 	    this.fogStates = /* @__PURE__ */ new Map();
+	    this.lodBuilds = 0;
 	    for (const record of chunks.values()) this.add(record.root);
 	  }
 	  setFogState(x, y, state) {
@@ -7668,14 +7770,27 @@ void main() {
 	        instancedMesh.setMatrixAt(idx, hidden ? this.hiddenMatrix : range.originalMatrices[i]);
 	        instancedMesh.instanceColor?.setXYZ(idx, shade, shade, shade);
 	      }
+	      instancedMesh.instanceMatrix.addUpdateRange(range.start * 16, range.count * 16);
 	      instancedMesh.instanceMatrix.needsUpdate = true;
-	      if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+	      if (instancedMesh.instanceColor) {
+	        instancedMesh.instanceColor.addUpdateRange(range.start * 3, range.count * 3);
+	        instancedMesh.instanceColor.needsUpdate = true;
+	      }
 	    }
 	  }
 	  activateChunk(metadata, lod, objects) {
 	    const record = this.chunks.get(metadata.id);
 	    if (!record) return;
-	    if (record.lod !== lod) this.populateChunk(record, lod);
+	    if (record.lod !== lod) {
+	      let cached = record.lodCache.get(lod);
+	      if (!cached) {
+	        cached = this.buildChunkLod(record, lod);
+	        record.lodCache.set(lod, cached);
+	        this.lodBuilds += 1;
+	      }
+	      this.applyChunkLod(record, cached);
+	      record.lod = lod;
+	    }
 	    for (const object of objects) {
 	      const copies = [];
 	      object.traverse((child) => {
@@ -7692,18 +7807,26 @@ void main() {
 	    if (!record || record.lod === void 0) return;
 	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
 	    for (const mesh of record.instancedMeshes) mesh.count = 0;
+	    record.lodCache.clear();
 	    record.lod = void 0;
 	  }
+	  disposeChunkGpu(metadata) {
+	    const record = this.chunks.get(metadata.id);
+	    if (!record) return;
+	    for (const mesh of record.instancedMeshes) mesh.dispose();
+	  }
+	  get lodBuildCount() {
+	    return this.lodBuilds;
+	  }
 	  dispose() {
-	    const geometries = /* @__PURE__ */ new Set();
 	    for (const record of this.chunks.values()) {
-	      for (const mesh of record.instancedMeshes) geometries.add(mesh.geometry);
+	      for (const mesh of record.instancedMeshes) mesh.dispose();
 	    }
-	    for (const geometry of geometries) geometry.dispose();
 	    this.tileRanges.clear();
 	    this.chunks.clear();
+	    if (this.ownsResources) this.resources.dispose();
 	  }
-	  populateChunk(record, lod) {
+	  buildChunkLod(record, lod) {
 	    const {
 	      map,
 	      size,
@@ -7715,9 +7838,9 @@ void main() {
 	      coastOptions
 	    } = this.context;
 	    const density = Math.max(1, Math.round(treesPerTile * [1, 0.5, 0.2][lod]));
-	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
 	    const matrix = new three.Matrix4();
 	    const scaleVector = new three.Vector3();
+	    const ranges = /* @__PURE__ */ new Map();
 	    let instance = 0;
 	    for (const tile of record.tiles) {
 	      const key = `${tile.x},${tile.y}`;
@@ -7749,27 +7872,36 @@ void main() {
 	          center.y + ly - record.root.position.z
 	        );
 	        originalMatrices.push(matrix.clone());
-	        const fogState = this.fogStates.get(key) ?? 2;
-	        const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
-	        for (const mesh of record.instancedMeshes) {
-	          mesh.setMatrixAt(instance, fogState < 0.5 ? this.hiddenMatrix : matrix);
-	          mesh.instanceColor?.setXYZ(instance, shade, shade, shade);
-	        }
 	        instance++;
 	      }
-	      this.tileRanges.set(key, {
-	        instancedMeshes: record.instancedMeshes,
+	      ranges.set(key, {
 	        start: tileStart,
 	        count: instance - tileStart,
 	        originalMatrices
 	      });
 	    }
+	    return { instanceCount: instance, ranges };
+	  }
+	  applyChunkLod(record, cached) {
+	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+	    for (const [key, range] of cached.ranges) {
+	      const fogState = this.fogStates.get(key) ?? 2;
+	      const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
+	      for (let offset = 0; offset < range.count; offset += 1) {
+	        const matrix = fogState < 0.5 ? this.hiddenMatrix : range.originalMatrices[offset];
+	        const index = range.start + offset;
+	        for (const mesh of record.instancedMeshes) {
+	          mesh.setMatrixAt(index, matrix);
+	          mesh.instanceColor?.setXYZ(index, shade, shade, shade);
+	        }
+	      }
+	      this.tileRanges.set(key, { instancedMeshes: record.instancedMeshes, ...range });
+	    }
 	    for (const mesh of record.instancedMeshes) {
-	      mesh.count = instance;
+	      mesh.count = cached.instanceCount;
 	      mesh.instanceMatrix.needsUpdate = true;
 	      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 	    }
-	    record.lod = lod;
 	  }
 	};
 	function stableRandom(x, y, salt) {
@@ -7781,7 +7913,7 @@ void main() {
 	  value ^= value >>> 16;
 	  return (value >>> 0) / 4294967296;
 	}
-	async function createForest(map, options, onlyTiles) {
+	async function createForest(map, options, onlyTiles, sharedResources) {
 	  const { size } = options;
 	  const treesPerTile = options.treesPerTile ?? 20;
 	  const defaultModel = options.treeModel ?? "Assets/models/pinia";
@@ -7790,7 +7922,7 @@ void main() {
 	  if (treesPerTile <= 0) return null;
 	  const tilesByModel = /* @__PURE__ */ new Map();
 	  const considerTile = (x, y) => {
-	    const tile = map.data[x]?.[y];
+	    const tile = getMapTile(map, x, y);
 	    if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) return;
 	    const modelPath = tile.treeModel ?? defaultModel;
 	    const tiles = tilesByModel.get(modelPath) ?? [];
@@ -7819,20 +7951,11 @@ void main() {
 	  };
 	  const tileRanges = /* @__PURE__ */ new Map();
 	  const chunkRecords = /* @__PURE__ */ new Map();
+	  const resources = sharedResources ?? new ForestSharedResources();
 	  let modelIndex = 0;
 	  for (const [modelPath, tiles] of tilesByModel) {
-	    const { scene, fixup } = await loadModel(modelPath);
-	    const meshes = [];
-	    scene.traverse((o) => {
-	      if (o.isMesh) meshes.push(o);
-	    });
-	    if (meshes.length === 0) continue;
-	    const preparedParts = meshes.map((mesh) => {
-	      const geometry = mesh.geometry.clone();
-	      geometry.applyMatrix4(mesh.matrixWorld);
-	      geometry.applyMatrix4(fixup);
-	      return { geometry, material: mesh.material };
-	    });
+	    const preparedParts = await resources.prepare(modelPath);
+	    if (preparedParts.length === 0) continue;
 	    const chunks = groupTilesByWorldChunk(tiles);
 	    for (const [chunkKey, chunkTiles] of chunks) {
 	      const totalInstances = chunkTiles.length * treesPerTile;
@@ -7858,7 +7981,7 @@ void main() {
 	        localizeWorldChunkBounds(getWorldChunkBounds(chunkTiles, size, 0, size * 3), origin),
 	        id
 	      );
-	      chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles });
+	      chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles, lodCache: /* @__PURE__ */ new Map() });
 	    }
 	    modelIndex += 1;
 	  }
@@ -7871,7 +7994,7 @@ void main() {
 	    polygon,
 	    waterOptions,
 	    coastOptions
-	  });
+	  }, resources, !sharedResources);
 	}
 
 	// src/shaders/grass.vertex.ts
@@ -7971,17 +8094,52 @@ void main() {
 `;
 
 	// src/objects/Grass.ts
+	var GrassSharedResources = class {
+	  constructor(options) {
+	    this.blade = buildBladeGeometry();
+	    this.clock = 0;
+	    this.disposed = false;
+	    const bladeHeight = options.bladeHeight ?? options.size * 0.18;
+	    this.material = new three.RawShaderMaterial({
+	      uniforms: {
+	        worldOffset: { value: new three.Vector2(0, 0) },
+	        worldCenter: { value: new three.Vector2(0, 0) },
+	        worldPeriod: { value: new three.Vector2(0, 0) },
+	        chunkOrigin: { value: new three.Vector2(0, 0) },
+	        uTime: { value: 0 },
+	        windStrength: { value: options.windStrength ?? bladeHeight * 0.35 },
+	        windSpeed: { value: options.windSpeed ?? 1.2 },
+	        colorBase: { value: new three.Color(options.colorBase ?? 3960366) },
+	        colorTip: { value: new three.Color(options.colorTip ?? 9424474) },
+	        fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
+	      },
+	      vertexShader: GRASS_VERTEX_SHADER,
+	      fragmentShader: GRASS_FRAGMENT_SHADER,
+	      side: three.DoubleSide
+	    });
+	  }
+	  update(dtS) {
+	    this.clock += dtS;
+	    this.material.uniforms.uTime.value = this.clock;
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    this.blade.dispose();
+	    this.material.dispose();
+	  }
+	};
 	var GrassField = class extends three.Group {
-	  constructor(map, chunks, grassMaterial, options) {
+	  constructor(map, chunks, resources, options, ownsResources) {
 	    super();
 	    this.map = map;
 	    this.chunks = chunks;
-	    this.grassMaterial = grassMaterial;
+	    this.resources = resources;
 	    this.options = options;
-	    this.clock = 0;
+	    this.ownsResources = ownsResources;
 	    this.tileRanges = /* @__PURE__ */ new Map();
 	    this.fogStates = /* @__PURE__ */ new Map();
-	    this.blade = buildBladeGeometry();
+	    this.lodBuilds = 0;
 	    for (const record of chunks.values()) this.add(record.mesh);
 	  }
 	  //Updates every blade belonging to (x, y) to the given fog state (see
@@ -7994,40 +8152,56 @@ void main() {
 	    if (!range) return;
 	    const attribute = range.geometry.getAttribute("fogState");
 	    for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
+	    attribute.addUpdateRange(range.start, range.count);
 	    attribute.needsUpdate = true;
 	  }
 	  //Advances the wind animation. `dtS` is the elapsed time in seconds since
 	  //the previous frame - call this once per frame (see HexMap's render loop).
 	  update(dtS) {
-	    this.clock += dtS;
-	    this.grassMaterial.uniforms.uTime.value = this.clock;
+	    this.resources.update(dtS);
 	  }
 	  setWorldCenter(x, y) {
-	    this.grassMaterial.uniforms.worldCenter.value.set(x, y);
+	    this.resources.material.uniforms.worldCenter.value.set(x, y);
 	  }
 	  get windStrength() {
-	    return this.grassMaterial.uniforms.windStrength.value;
+	    return this.resources.material.uniforms.windStrength.value;
 	  }
 	  set windStrength(value) {
-	    this.grassMaterial.uniforms.windStrength.value = value;
+	    this.resources.material.uniforms.windStrength.value = value;
 	  }
 	  get windSpeed() {
-	    return this.grassMaterial.uniforms.windSpeed.value;
+	    return this.resources.material.uniforms.windSpeed.value;
 	  }
 	  set windSpeed(value) {
-	    this.grassMaterial.uniforms.windSpeed.value = value;
+	    this.resources.material.uniforms.windSpeed.value = value;
 	  }
 	  activateChunk(metadata, lod) {
 	    const record = this.chunks.get(metadata.id);
 	    if (!record) return void 0;
 	    if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
 	    this.removeTileRanges(record);
-	    const source = this.buildChunkGeometry(
-	      record.tiles,
-	      lod,
-	      { x: record.mesh.position.x, y: record.mesh.position.z }
-	    );
-	    this.replaceGeometry(record.mesh.geometry, source, record.tiles);
+	    let cached = record.lodCache.get(lod);
+	    if (!cached) {
+	      cached = this.buildChunkGeometry(
+	        record.tiles,
+	        lod,
+	        { x: record.mesh.position.x, y: record.mesh.position.z }
+	      );
+	      record.lodCache.set(lod, cached);
+	      this.lodBuilds += 1;
+	    }
+	    const previous = record.mesh.geometry;
+	    record.mesh.geometry = cached.geometry;
+	    if (record.lod === void 0 && !previous.getAttribute("position")) previous.dispose();
+	    const fogAttribute = cached.geometry.getAttribute("fogState");
+	    for (const range of cached.ranges) {
+	      const state = this.fogStates.get(range.key) ?? 2;
+	      for (let index = 0; index < range.count; index += 1) {
+	        fogAttribute.setX(range.start + index, state);
+	      }
+	      this.tileRanges.set(range.key, { geometry: cached.geometry, start: range.start, count: range.count });
+	    }
+	    fogAttribute.needsUpdate = true;
 	    record.lod = lod;
 	    return record.mesh.geometry;
 	  }
@@ -8035,8 +8209,13 @@ void main() {
 	    const record = this.chunks.get(metadata.id);
 	    if (!record || record.lod === void 0) return;
 	    this.removeTileRanges(record);
-	    this.clearGeometry(record.mesh.geometry);
+	    for (const cached of record.lodCache.values()) cached.geometry.dispose();
+	    record.lodCache.clear();
+	    record.mesh.geometry = new three.InstancedBufferGeometry();
 	    record.lod = void 0;
+	  }
+	  get lodBuildCount() {
+	    return this.lodBuilds;
 	  }
 	  removeTileRanges(record) {
 	    for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
@@ -8089,8 +8268,8 @@ void main() {
 	      pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
 	    }
 	    const geometry = new three.InstancedBufferGeometry();
-	    geometry.setAttribute("position", this.blade.getAttribute("position").clone());
-	    geometry.setIndex(this.blade.getIndex()?.clone() ?? null);
+	    geometry.setAttribute("position", this.resources.blade.getAttribute("position").clone());
+	    geometry.setIndex(this.resources.blade.getIndex()?.clone() ?? null);
 	    geometry.instanceCount = instance;
 	    geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
 	    geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
@@ -8099,34 +8278,18 @@ void main() {
 	    geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
 	    geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
 	    geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
-	    for (const range of pendingRanges) {
-	      this.tileRanges.set(range.key, { geometry, start: range.start, count: range.count });
-	    }
-	    return geometry;
-	  }
-	  replaceGeometry(target, source, tiles) {
-	    target.dispose();
-	    for (const name of Object.keys(target.attributes)) target.deleteAttribute(name);
-	    target.setIndex(source.getIndex());
-	    for (const [name, attribute] of Object.entries(source.attributes)) target.setAttribute(name, attribute);
-	    target.instanceCount = source.instanceCount;
-	    target.boundingBox = null;
-	    target.boundingSphere = null;
-	    for (const tile of tiles) {
-	      const range = this.tileRanges.get(`${tile.x},${tile.y}`);
-	      if (range?.geometry === source) range.geometry = target;
-	    }
-	  }
-	  clearGeometry(geometry) {
-	    geometry.dispose();
-	    for (const name of Object.keys(geometry.attributes)) geometry.deleteAttribute(name);
-	    geometry.setIndex(null);
-	    geometry.instanceCount = 0;
+	    return { geometry, ranges: pendingRanges };
 	  }
 	  dispose() {
-	    for (const record of this.chunks.values()) record.mesh.geometry.dispose();
-	    this.blade.dispose();
-	    this.grassMaterial.dispose();
+	    for (const record of this.chunks.values()) {
+	      const geometries = /* @__PURE__ */ new Set([
+	        record.mesh.geometry,
+	        ...[...record.lodCache.values()].map((cached) => cached.geometry)
+	      ]);
+	      for (const geometry of geometries) geometry.dispose();
+	      record.lodCache.clear();
+	    }
+	    if (this.ownsResources) this.resources.dispose();
 	  }
 	};
 	function stableRandom2(x, y, salt) {
@@ -8162,18 +8325,16 @@ void main() {
 	  geometry.setIndex(index);
 	  return geometry;
 	}
-	function createGrassField(map, options, onlyTiles) {
+	function createGrassField(map, options, onlyTiles, sharedResources) {
 	  const { size } = options;
 	  const density = options.density ?? 60;
 	  if (density <= 0) return null;
 	  const bladeWidth = options.bladeWidth ?? size * 0.03;
 	  const bladeHeight = options.bladeHeight ?? size * 0.18;
 	  const heightVariation = options.heightVariation ?? 0.4;
-	  const windStrength = options.windStrength ?? bladeHeight * 0.35;
-	  const windSpeed = options.windSpeed ?? 1.2;
 	  const tiles = [];
 	  const considerTile = (x, y) => {
-	    const tile = map.data[x]?.[y];
+	    const tile = getMapTile(map, x, y);
 	    if (tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
 	  };
 	  if (onlyTiles) {
@@ -8188,29 +8349,11 @@ void main() {
 	    riverCurvature: options.riverCurvature ?? 0.5,
 	    lakeShoreWidth: options.lakeShoreWidth ?? 0.18
 	  };
-	  const material = new three.RawShaderMaterial({
-	    uniforms: {
-	      worldOffset: { value: new three.Vector2(0, 0) },
-	      worldCenter: { value: new three.Vector2(0, 0) },
-	      //Toroidal placement is performed by physical chunk copies so the
-	      //shader keeps every blade attached to its canonical chunk.
-	      worldPeriod: { value: new three.Vector2(0, 0) },
-	      chunkOrigin: { value: new three.Vector2(0, 0) },
-	      uTime: { value: 0 },
-	      windStrength: { value: windStrength },
-	      windSpeed: { value: windSpeed },
-	      colorBase: { value: new three.Color(options.colorBase ?? 3960366) },
-	      colorTip: { value: new three.Color(options.colorTip ?? 9424474) },
-	      fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
-	    },
-	    vertexShader: GRASS_VERTEX_SHADER,
-	    fragmentShader: GRASS_FRAGMENT_SHADER,
-	    side: three.DoubleSide
-	  });
+	  const resources = sharedResources ?? new GrassSharedResources(options);
 	  const chunks = /* @__PURE__ */ new Map();
 	  for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
 	    const geometry = new three.InstancedBufferGeometry();
-	    const chunk = new three.Mesh(geometry, material);
+	    const chunk = new three.Mesh(geometry, resources.material);
 	    const origin = getWorldChunkOrigin(chunkKey, size);
 	    chunk.position.set(origin.x, 0, origin.y);
 	    chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
@@ -8229,22 +8372,22 @@ void main() {
 	        origin
 	      )
 	    );
-	    chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles });
+	    chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles, lodCache: /* @__PURE__ */ new Map() });
 	  }
-	  return new GrassField(map, chunks, material, {
+	  return new GrassField(map, chunks, resources, {
 	    size,
 	    density,
 	    bladeWidth,
 	    bladeHeight,
 	    heightVariation,
 	    waterOptions
-	  });
+	  }, !sharedResources);
 	}
 
 	// src/helpers/fog.ts
 	function tilesWithinRange(map, x, y, range) {
 	  const origin = normalizeMapCoordinates(map, x, y);
-	  if (!Number.isFinite(range) || range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
+	  if (!Number.isFinite(range) || range < 0 || !origin || !getMapTile(map, origin.x, origin.y)) return [];
 	  const wholeRange = Math.floor(range);
 	  const visited = /* @__PURE__ */ new Set([`${origin.x},${origin.y}`]);
 	  const result = [origin];
@@ -8275,6 +8418,8 @@ void main() {
 	var FogOfWar = class {
 	  constructor(map) {
 	    this.map = map;
+	    this.visible = /* @__PURE__ */ new Set();
+	    this.lastCandidates = 0;
 	    assertWrappableMap(map);
 	    this.state = new Uint8Array(map.w * map.h);
 	  }
@@ -8283,7 +8428,7 @@ void main() {
 	  }
 	  getState(x, y) {
 	    const normalized = normalizeMapCoordinates(this.map, x, y);
-	    if (!normalized || !this.map.data[normalized.x]?.[normalized.y]) return 0 /* Unseen */;
+	    if (!normalized || !getMapTile(this.map, normalized.x, normalized.y)) return 0 /* Unseen */;
 	    return this.state[this.index(normalized.x, normalized.y)];
 	  }
 	  //Every existing tile, at its current state - used once at startup to sync
@@ -8293,7 +8438,7 @@ void main() {
 	    const tiles = [];
 	    for (let x = 0; x < this.map.w; x++) {
 	      for (let y = 0; y < this.map.h; y++) {
-	        if (!this.map.data[x]?.[y]) continue;
+	        if (!getMapTile(this.map, x, y)) continue;
 	        tiles.push({ x, y, state: this.state[this.index(x, y)] });
 	      }
 	    }
@@ -8310,24 +8455,90 @@ void main() {
 	    const nowVisible = /* @__PURE__ */ new Set();
 	    for (const viewer of viewers) {
 	      for (const tile of tilesWithinRange(this.map, viewer.x, viewer.y, viewer.viewRange)) {
-	        nowVisible.add(`${tile.x},${tile.y}`);
+	        nowVisible.add(this.index(tile.x, tile.y));
 	      }
 	    }
 	    const changes = [];
-	    for (let x = 0; x < this.map.w; x++) {
-	      for (let y = 0; y < this.map.h; y++) {
-	        if (!this.map.data[x]?.[y]) continue;
-	        const idx = this.index(x, y);
-	        const was = this.state[idx];
-	        const isVisibleNow = nowVisible.has(`${x},${y}`);
-	        const next = isVisibleNow ? 2 /* Visible */ : was === 2 /* Visible */ ? 1 /* Explored */ : was;
-	        if (next !== was) {
-	          this.state[idx] = next;
-	          changes.push({ x, y, state: next });
-	        }
-	      }
+	    for (const idx of this.visible) {
+	      if (nowVisible.has(idx)) continue;
+	      this.state[idx] = 1 /* Explored */;
+	      changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: 1 /* Explored */ });
 	    }
+	    for (const idx of nowVisible) {
+	      if (this.state[idx] === 2 /* Visible */) continue;
+	      this.state[idx] = 2 /* Visible */;
+	      changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: 2 /* Visible */ });
+	    }
+	    this.lastCandidates = this.visible.size + nowVisible.size;
+	    this.visible = nowVisible;
 	    return changes;
+	  }
+	  get lastRecomputeCandidateCount() {
+	    return this.lastCandidates;
+	  }
+	};
+
+	// src/helpers/fogStateStore.ts
+	var UNSET_FOG_STATE = 255;
+	var MAX_DENSE_FOG_CELLS = 1e8;
+	var FogStateStore = class {
+	  constructor(map) {
+	    this.map = map;
+	    this.sparse = /* @__PURE__ */ new Map();
+	    this.count = 0;
+	    const cells = map.w * map.h;
+	    if (!map.infinite && Number.isSafeInteger(cells) && cells >= 0 && cells <= MAX_DENSE_FOG_CELLS) {
+	      this.denseLength = cells;
+	    }
+	  }
+	  set(x, y, state) {
+	    if (this.denseLength !== void 0) {
+	      this.dense ?? (this.dense = this.createDenseStorage());
+	      const index = x * this.map.h + y;
+	      if (index < 0 || index >= this.denseLength || !Number.isSafeInteger(index)) return;
+	      if (this.dense[index] === UNSET_FOG_STATE) this.count += 1;
+	      this.dense[index] = state;
+	      return;
+	    }
+	    const key = `${x},${y}`;
+	    if (!this.sparse.has(key)) this.count += 1;
+	    this.sparse.set(key, state);
+	  }
+	  get(x, y) {
+	    if (this.denseLength !== void 0) {
+	      if (!this.dense) return void 0;
+	      const index = x * this.map.h + y;
+	      if (index < 0 || index >= this.denseLength || !Number.isSafeInteger(index)) return void 0;
+	      const state = this.dense[index];
+	      return state === UNSET_FOG_STATE ? void 0 : state;
+	    }
+	    return this.sparse.get(`${x},${y}`);
+	  }
+	  forEach(visit) {
+	    if (this.denseLength !== void 0) {
+	      if (!this.dense) return;
+	      for (let index = 0; index < this.dense.length; index += 1) {
+	        const state = this.dense[index];
+	        if (state === UNSET_FOG_STATE) continue;
+	        visit(state, Math.floor(index / this.map.h), index % this.map.h);
+	      }
+	      return;
+	    }
+	    for (const [key, state] of this.sparse) {
+	      const separator = key.indexOf(",");
+	      visit(state, Number(key.slice(0, separator)), Number(key.slice(separator + 1)));
+	    }
+	  }
+	  get size() {
+	    return this.count;
+	  }
+	  get storageBytes() {
+	    return this.dense?.byteLength ?? 0;
+	  }
+	  createDenseStorage() {
+	    const storage = new Uint8Array(this.denseLength);
+	    storage.fill(UNSET_FOG_STATE);
+	    return storage;
 	  }
 	};
 	var EMPTY_STATS = {
@@ -8337,7 +8548,9 @@ void main() {
 	  gpuResidentChunks: 0,
 	  lod0: 0,
 	  lod1: 0,
-	  lod2: 0
+	  lod2: 0,
+	  registeredObjects: 0,
+	  sceneTraversals: 0
 	};
 	var WorldChunkScheduler = class {
 	  constructor(options) {
@@ -8346,6 +8559,12 @@ void main() {
 	    this.projection = new three.Matrix4();
 	    this.bounds = new three.Box3();
 	    this.residents = /* @__PURE__ */ new Map();
+	    this.bindings = /* @__PURE__ */ new Map();
+	    this.visibleIds = /* @__PURE__ */ new Set();
+	    this.inactive = [];
+	    this.registryDirty = true;
+	    this.registeredObjects = 0;
+	    this.sceneTraversals = 0;
 	    this.frame = 0;
 	    this.snapshot = { ...EMPTY_STATS };
 	  }
@@ -8356,105 +8575,153 @@ void main() {
 	    this.residents.clear();
 	    this.frame = 0;
 	    this.snapshot = { ...EMPTY_STATS };
+	    this.registryDirty = true;
+	  }
+	  invalidateScene() {
+	    this.registryDirty = true;
 	  }
 	  //Streaming worlds can physically remove render shells before the normal
 	  //grace-frame eviction pass. Forget them immediately so residency stats and
 	  //cache limits never retain metadata for unloaded logical chunks.
 	  forget(ids) {
-	    for (const id of ids) this.residents.delete(id);
+	    for (const id of ids) {
+	      this.residents.delete(id);
+	      this.bindings.delete(id);
+	    }
+	    this.registryDirty = true;
 	  }
 	  get stats() {
 	    return this.snapshot;
 	  }
 	  update(root, camera, target, hooks) {
 	    this.frame += 1;
+	    if (root !== this.registeredRoot || this.registryDirty) this.rebuildRegistry(root);
 	    camera.updateMatrixWorld();
 	    this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
 	    this.frustum.setFromProjectionMatrix(this.projection);
-	    const requests = /* @__PURE__ */ new Map();
+	    this.visibleIds.clear();
 	    let visibleObjects = 0;
-	    root.traverse((object) => {
-	      const metadata = getWorldChunkMetadata(object);
-	      if (!metadata) return;
+	    for (const binding of this.bindings.values()) {
+	      const metadata = binding.metadata;
+	      binding.visibleObjects.length = 0;
+	      let requestedLod;
 	      if (!hooks.enabled(metadata)) {
-	        object.visible = false;
-	        return;
+	        for (const object of binding.objects) object.visible = false;
+	        continue;
 	      }
-	      object.updateWorldMatrix(true, false);
-	      const worldX = object.matrixWorld.elements[12];
-	      const worldY = object.matrixWorld.elements[13];
-	      const worldZ = object.matrixWorld.elements[14];
-	      const local = metadata.bounds;
-	      this.bounds.min.set(local.minX + worldX, local.minY + worldY, local.minZ + worldZ);
-	      this.bounds.max.set(local.maxX + worldX, local.maxY + worldY, local.maxZ + worldZ);
-	      const dx = Math.max(0, this.bounds.min.x - target.x, target.x - this.bounds.max.x);
-	      const dz = Math.max(0, this.bounds.min.z - target.z, target.z - this.bounds.max.z);
-	      const distance = Math.hypot(dx, dz);
-	      const resident = this.residents.get(metadata.id);
-	      const lod = this.options.lodEnabled ? resolveWorldChunkLod(distance, metadata.kind, resident?.lod, this.options.lodDistances) : distance <= (metadata.kind === "grass" || metadata.kind === "forest" ? this.options.lodDistances.vegetation : this.options.renderDistance) ? 0 : null;
-	      const visible = distance <= this.options.renderDistance && lod !== null && this.frustum.intersectsBox(this.bounds);
-	      object.visible = visible;
-	      if (!visible || lod === null) return;
-	      visibleObjects += 1;
-	      const existing = requests.get(metadata.id);
-	      if (existing) {
-	        existing.objects.push(object);
-	        if (lod < existing.lod) existing.lod = lod;
-	      } else {
-	        requests.set(metadata.id, { metadata, lod, objects: [object] });
+	      for (const object of binding.objects) {
+	        object.updateWorldMatrix(true, false);
+	        const worldX = object.matrixWorld.elements[12];
+	        const worldY = object.matrixWorld.elements[13];
+	        const worldZ = object.matrixWorld.elements[14];
+	        const local = metadata.bounds;
+	        this.bounds.min.set(local.minX + worldX, local.minY + worldY, local.minZ + worldZ);
+	        this.bounds.max.set(local.maxX + worldX, local.maxY + worldY, local.maxZ + worldZ);
+	        const dx = Math.max(0, this.bounds.min.x - target.x, target.x - this.bounds.max.x);
+	        const dz = Math.max(0, this.bounds.min.z - target.z, target.z - this.bounds.max.z);
+	        const distance = Math.hypot(dx, dz);
+	        const resident = this.residents.get(metadata.id);
+	        const lod = this.options.lodEnabled ? resolveWorldChunkLod(distance, metadata.kind, resident?.lod, this.options.lodDistances) : distance <= (metadata.kind === "grass" || metadata.kind === "forest" ? this.options.lodDistances.vegetation : this.options.renderDistance) ? 0 : null;
+	        const visible = distance <= this.options.renderDistance && lod !== null && this.frustum.intersectsBox(this.bounds);
+	        object.visible = visible;
+	        if (!visible || lod === null) continue;
+	        visibleObjects += 1;
+	        binding.visibleObjects.push(object);
+	        if (requestedLod === void 0 || lod < requestedLod) requestedLod = lod;
 	      }
-	    });
+	      if (requestedLod !== void 0) {
+	        binding.lod = requestedLod;
+	        this.visibleIds.add(metadata.id);
+	      }
+	    }
 	    const lodCounts = [0, 0, 0];
-	    for (const request of requests.values()) {
-	      const activation = hooks.activate(request.metadata, request.lod, request.objects);
-	      const geometries = (activation && activation.geometries) ?? this.residents.get(request.metadata.id)?.geometries ?? [];
-	      const resident = this.residents.get(request.metadata.id);
-	      this.residents.set(request.metadata.id, {
+	    for (const id of this.visibleIds) {
+	      const request = this.bindings.get(id);
+	      const activation = hooks.activate(request.metadata, request.lod, request.visibleObjects);
+	      const geometries = (activation && activation.geometries) ?? this.residents.get(id)?.geometries ?? [];
+	      const resident = this.residents.get(id);
+	      this.residents.set(id, {
+	        id,
 	        metadata: request.metadata,
 	        lod: request.lod,
 	        lastVisible: this.frame,
 	        geometries,
+	        disposeGpu: activation?.disposeGpu ?? resident?.disposeGpu,
 	        gpuResident: true
 	      });
 	      if (resident && resident.lod !== request.lod) {
 	        for (const geometry of resident.geometries) geometry.dispose();
+	        resident.disposeGpu?.();
 	      }
 	      lodCounts[request.lod] += 1;
 	    }
-	    this.evictInactive(requests, hooks);
+	    this.evictInactive(this.visibleIds, hooks);
+	    let gpuResidentChunks = 0;
+	    for (const entry of this.residents.values()) if (entry.gpuResident) gpuResidentChunks += 1;
 	    this.snapshot = {
 	      visibleObjects,
-	      visibleChunks: requests.size,
+	      visibleChunks: this.visibleIds.size,
 	      residentChunks: this.residents.size,
-	      gpuResidentChunks: [...this.residents.values()].filter((entry) => entry.gpuResident).length,
+	      gpuResidentChunks,
 	      lod0: lodCounts[0],
 	      lod1: lodCounts[1],
-	      lod2: lodCounts[2]
+	      lod2: lodCounts[2],
+	      registeredObjects: this.registeredObjects,
+	      sceneTraversals: this.sceneTraversals
 	    };
 	  }
 	  evictInactive(visible, hooks) {
-	    const inactive = [...this.residents.entries()].filter(([id]) => !visible.has(id)).sort((a, b) => a[1].lastVisible - b[1].lastVisible);
+	    this.inactive.length = 0;
+	    for (const entry of this.residents.values()) {
+	      if (!visible.has(entry.id)) this.inactive.push(entry);
+	    }
+	    this.inactive.sort((a, b) => a.lastVisible - b.lastVisible);
 	    let gpuExcess = Math.max(
 	      0,
-	      [...this.residents.values()].filter((entry) => entry.gpuResident).length - this.options.gpuCacheSize
+	      this.countGpuResidents() - this.options.gpuCacheSize
 	    );
-	    for (const [, entry] of inactive) {
+	    for (const entry of this.inactive) {
 	      if (!entry.gpuResident) continue;
 	      const stale = this.frame - entry.lastVisible >= this.options.gpuGraceFrames;
 	      if (!stale && gpuExcess <= 0) break;
 	      for (const geometry of entry.geometries) geometry.dispose();
+	      entry.disposeGpu?.();
 	      entry.gpuResident = false;
 	      if (gpuExcess > 0) gpuExcess -= 1;
 	    }
 	    let cpuExcess = Math.max(0, this.residents.size - this.options.cpuCacheSize);
-	    for (const [id, entry] of inactive) {
+	    for (const entry of this.inactive) {
 	      const stale = this.frame - entry.lastVisible >= this.options.cpuGraceFrames;
 	      if (!stale && cpuExcess <= 0) break;
 	      for (const geometry of entry.geometries) geometry.dispose();
+	      if (entry.gpuResident) entry.disposeGpu?.();
 	      hooks.release(entry.metadata);
-	      this.residents.delete(id);
+	      this.residents.delete(entry.id);
 	      if (cpuExcess > 0) cpuExcess -= 1;
 	    }
+	  }
+	  countGpuResidents() {
+	    let count = 0;
+	    for (const entry of this.residents.values()) if (entry.gpuResident) count += 1;
+	    return count;
+	  }
+	  rebuildRegistry(root) {
+	    this.bindings.clear();
+	    this.registeredRoot = root;
+	    this.registeredObjects = 0;
+	    root.traverse((object) => {
+	      const metadata = getWorldChunkMetadata(object);
+	      if (!metadata) return;
+	      let binding = this.bindings.get(metadata.id);
+	      if (!binding) {
+	        binding = { metadata, objects: [], visibleObjects: [], lod: 0 };
+	        this.bindings.set(metadata.id, binding);
+	      }
+	      binding.objects.push(object);
+	      this.registeredObjects += 1;
+	    });
+	    this.registryDirty = false;
+	    this.sceneTraversals += 1;
 	  }
 	};
 	function createDefaultWorldChunkSchedulerOptions() {
@@ -8468,6 +8735,84 @@ void main() {
 	    cpuGraceFrames: 1200
 	  };
 	}
+
+	// src/rendering/FrameTaskScheduler.ts
+	var FrameTaskScheduler = class {
+	  constructor(options = {}) {
+	    this.tasks = /* @__PURE__ */ new Map();
+	    this.sequence = 0;
+	    this.completed = 0;
+	    this.cancelled = 0;
+	    this.lastFrameTasks = 0;
+	    this.lastFrameDurationMs = 0;
+	    this.budgetMs = options.budgetMs ?? 3;
+	    this.maxTasksPerFrame = options.maxTasksPerFrame ?? 2;
+	    this.now = options.now ?? (() => performance.now());
+	    this.error = options.error;
+	    this.validate();
+	  }
+	  configure(options) {
+	    if (options.budgetMs !== void 0) this.budgetMs = options.budgetMs;
+	    if (options.maxTasksPerFrame !== void 0) this.maxTasksPerFrame = options.maxTasksPerFrame;
+	    this.validate();
+	  }
+	  enqueue(key, priority, run) {
+	    if (!key) throw new TypeError("frame task key is required");
+	    if (!Number.isFinite(priority)) throw new RangeError("frame task priority must be finite");
+	    this.tasks.set(key, { key, priority, sequence: this.sequence++, run });
+	  }
+	  cancel(key) {
+	    const removed = this.tasks.delete(key);
+	    if (removed) this.cancelled += 1;
+	    return removed;
+	  }
+	  clear() {
+	    this.cancelled += this.tasks.size;
+	    this.tasks.clear();
+	    this.lastFrameTasks = 0;
+	    this.lastFrameDurationMs = 0;
+	  }
+	  runFrame() {
+	    const started = this.now();
+	    let ran = 0;
+	    const ordered = [...this.tasks.values()].sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+	    for (const task of ordered) {
+	      if (ran >= this.maxTasksPerFrame) break;
+	      if (ran > 0 && this.now() - started >= this.budgetMs) break;
+	      if (!this.tasks.delete(task.key)) continue;
+	      try {
+	        task.run();
+	      } catch (reason) {
+	        try {
+	          this.error?.(reason instanceof Error ? reason : new Error(String(reason)));
+	        } catch {
+	        }
+	      }
+	      ran += 1;
+	      this.completed += 1;
+	    }
+	    this.lastFrameTasks = ran;
+	    this.lastFrameDurationMs = this.now() - started;
+	    return ran;
+	  }
+	  get stats() {
+	    return {
+	      pendingTasks: this.tasks.size,
+	      completedTasks: this.completed,
+	      cancelledTasks: this.cancelled,
+	      lastFrameTasks: this.lastFrameTasks,
+	      lastFrameDurationMs: this.lastFrameDurationMs
+	    };
+	  }
+	  validate() {
+	    if (!Number.isFinite(this.budgetMs) || this.budgetMs <= 0) {
+	      throw new RangeError("frame task budgetMs must be a positive finite number");
+	    }
+	    if (!Number.isInteger(this.maxTasksPerFrame) || this.maxTasksPerFrame <= 0) {
+	      throw new RangeError("frame task maxTasksPerFrame must be a positive integer");
+	    }
+	  }
+	};
 
 	// src/world/noise.ts
 	var UINT32_MAX = 4294967295;
@@ -8693,70 +9038,40 @@ void main() {
 	}
 	var SparseWorldChunkStore = class _SparseWorldChunkStore {
 	  constructor() {
-	    this.map = { data: {}, w: 1, h: 1, infinite: true };
 	    this.chunks = /* @__PURE__ */ new Map();
-	    this.tileReferences = /* @__PURE__ */ new Map();
-	    this.coreReferences = /* @__PURE__ */ new Map();
+	    this.decodedTiles = /* @__PURE__ */ new Map();
+	    this.map = {
+	      data: {},
+	      w: 1,
+	      h: 1,
+	      infinite: true,
+	      tileAt: (x, y) => this.getTile(x, y),
+	      forEachTile: (visit) => this.forEachCoreTile(visit)
+	    };
 	  }
 	  static key(chunkX, chunkY) {
 	    return `${chunkX},${chunkY}`;
 	  }
 	  add(chunk) {
 	    assertPackedWorldChunk(chunk);
+	    if (this.chunkSize !== void 0 && chunk.chunkSize !== this.chunkSize) {
+	      throw new TypeError("all sparse world chunks must use the same chunkSize");
+	    }
+	    this.chunkSize = chunk.chunkSize;
 	    const key = _SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
 	    if (this.chunks.has(key)) return getWorldChunkCorePoints(chunk);
 	    this.chunks.set(key, chunk);
-	    const originX = chunk.chunkX * chunk.chunkSize;
-	    const originY = chunk.chunkY * chunk.chunkSize;
-	    for (let localX = -chunk.padding; localX < chunk.chunkSize + chunk.padding; localX += 1) {
-	      for (let localY = -chunk.padding; localY < chunk.chunkSize + chunk.padding; localY += 1) {
-	        const x = originX + localX;
-	        const y = originY + localY;
-	        const tileKey = `${x},${y}`;
-	        const references = this.tileReferences.get(tileKey) ?? 0;
-	        this.tileReferences.set(tileKey, references + 1);
-	        if (references === 0) {
-	          const column = this.map.data[x] ?? {};
-	          column[y] = decodeWorldChunkTile(chunk, localX, localY);
-	          this.map.data[x] = column;
-	        }
-	        if (localX >= 0 && localX < chunk.chunkSize && localY >= 0 && localY < chunk.chunkSize) {
-	          this.coreReferences.set(tileKey, (this.coreReferences.get(tileKey) ?? 0) + 1);
-	        }
-	      }
-	    }
 	    return getWorldChunkCorePoints(chunk);
 	  }
 	  remove(chunkX, chunkY) {
 	    const key = _SparseWorldChunkStore.key(chunkX, chunkY);
-	    const chunk = this.chunks.get(key);
-	    if (!chunk) return;
+	    if (!this.chunks.has(key)) return;
 	    this.chunks.delete(key);
-	    const originX = chunk.chunkX * chunk.chunkSize;
-	    const originY = chunk.chunkY * chunk.chunkSize;
-	    for (let localX = -chunk.padding; localX < chunk.chunkSize + chunk.padding; localX += 1) {
-	      for (let localY = -chunk.padding; localY < chunk.chunkSize + chunk.padding; localY += 1) {
-	        const x = originX + localX;
-	        const y = originY + localY;
-	        const tileKey = `${x},${y}`;
-	        const references = (this.tileReferences.get(tileKey) ?? 1) - 1;
-	        if (references <= 0) {
-	          this.tileReferences.delete(tileKey);
-	          delete this.map.data[x]?.[y];
-	          if (this.map.data[x] && Object.keys(this.map.data[x]).length === 0) delete this.map.data[x];
-	        } else {
-	          this.tileReferences.set(tileKey, references);
-	        }
-	        if (localX >= 0 && localX < chunk.chunkSize && localY >= 0 && localY < chunk.chunkSize) {
-	          const core = (this.coreReferences.get(tileKey) ?? 1) - 1;
-	          if (core <= 0) this.coreReferences.delete(tileKey);
-	          else this.coreReferences.set(tileKey, core);
-	        }
-	      }
-	    }
+	    if (this.chunks.size === 0) this.chunkSize = void 0;
 	  }
 	  hasCoreTile(x, y) {
-	    return this.coreReferences.has(`${x},${y}`);
+	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === void 0) return false;
+	    return this.hasChunk(Math.floor(x / this.chunkSize), Math.floor(y / this.chunkSize));
 	  }
 	  hasChunk(chunkX, chunkY) {
 	    return this.chunks.has(_SparseWorldChunkStore.key(chunkX, chunkY));
@@ -8764,11 +9079,62 @@ void main() {
 	  get residentChunkCount() {
 	    return this.chunks.size;
 	  }
+	  get residentPayloadBytes() {
+	    let bytes = 0;
+	    for (const chunk of this.chunks.values()) bytes += chunk.tiles.byteLength;
+	    return bytes;
+	  }
+	  get decodedTileVariantCount() {
+	    return this.decodedTiles.size;
+	  }
+	  getTile(x, y) {
+	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || this.chunkSize === void 0) return void 0;
+	    const ownerX = Math.floor(x / this.chunkSize);
+	    const ownerY = Math.floor(y / this.chunkSize);
+	    const direct = this.tileFromChunk(this.chunks.get(_SparseWorldChunkStore.key(ownerX, ownerY)), x, y);
+	    if (direct) return direct;
+	    for (let dx = -1; dx <= 1; dx += 1) {
+	      for (let dy = -1; dy <= 1; dy += 1) {
+	        if (dx === 0 && dy === 0) continue;
+	        const tile = this.tileFromChunk(
+	          this.chunks.get(_SparseWorldChunkStore.key(ownerX + dx, ownerY + dy)),
+	          x,
+	          y
+	        );
+	        if (tile) return tile;
+	      }
+	    }
+	    return void 0;
+	  }
+	  tileFromChunk(chunk, x, y) {
+	    if (!chunk) return void 0;
+	    const localX = x - chunk.chunkX * chunk.chunkSize;
+	    const localY = y - chunk.chunkY * chunk.chunkSize;
+	    if (localX < -chunk.padding || localX >= chunk.chunkSize + chunk.padding || localY < -chunk.padding || localY >= chunk.chunkSize + chunk.padding) return void 0;
+	    const packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
+	    const cached = this.decodedTiles.get(packed);
+	    if (cached) return cached;
+	    const decoded = decodeWorldChunkTile(chunk, localX, localY);
+	    if (decoded.modifiers) Object.freeze(decoded.modifiers);
+	    Object.freeze(decoded);
+	    this.decodedTiles.set(packed, decoded);
+	    return decoded;
+	  }
+	  forEachCoreTile(visit) {
+	    for (const chunk of this.chunks.values()) {
+	      const originX = chunk.chunkX * chunk.chunkSize;
+	      const originY = chunk.chunkY * chunk.chunkSize;
+	      for (let localX = 0; localX < chunk.chunkSize; localX += 1) {
+	        for (let localY = 0; localY < chunk.chunkSize; localY += 1) {
+	          visit(this.tileFromChunk(chunk, originX + localX, originY + localY), originX + localX, originY + localY);
+	        }
+	      }
+	    }
+	  }
 	  clear() {
 	    this.chunks.clear();
-	    this.tileReferences.clear();
-	    this.coreReferences.clear();
-	    this.map.data = {};
+	    this.decodedTiles.clear();
+	    this.chunkSize = void 0;
 	  }
 	};
 
@@ -8986,15 +9352,210 @@ void main() {
 	  }
 	};
 
-	// src/world/InfiniteWorldStreamer.ts
+	// src/world/WorldSource.ts
+	function assertWorldSource(source) {
+	  if (!source || typeof source !== "object") throw new TypeError("world source must be an object");
+	  if (!source.map || typeof source.map !== "object") throw new TypeError("world source must expose a MapInfo view");
+	  assertWrappableMap(source.map);
+	  validateChunkSize(source.chunkSize);
+	  for (const method of ["resolveChunk", "chunkDistance", "loadChunk", "releaseChunk", "hasChunk", "hasTile", "dispose"]) {
+	    if (typeof source[method] !== "function") throw new TypeError(`world source must implement ${method}()`);
+	  }
+	  if (source.bounds) {
+	    const { width, height, wrapX, wrapY } = source.bounds;
+	    if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+	      throw new RangeError("world source bounds must use positive integer dimensions");
+	    }
+	    if (typeof wrapX !== "boolean" || typeof wrapY !== "boolean") {
+	      throw new TypeError("world source bounds wrap flags must be boolean");
+	    }
+	    if (source.map.infinite || source.map.w !== width || source.map.h !== height || Boolean(source.map.wrapX) !== wrapX || Boolean(source.map.wrapY) !== wrapY) {
+	      throw new TypeError("world source bounds must match its MapInfo topology");
+	    }
+	  } else if (!source.map.infinite) {
+	    throw new TypeError("an unbounded world source must expose an infinite MapInfo view");
+	  }
+	}
+	function assertWorldChunk(source, chunk, expectedX, expectedY) {
+	  if (!chunk || typeof chunk !== "object" || chunk.chunkX !== expectedX || chunk.chunkY !== expectedY || chunk.chunkSize !== source.chunkSize || !Array.isArray(chunk.coreTiles)) {
+	    throw new TypeError("world source returned an invalid chunk");
+	  }
+	  const seen = /* @__PURE__ */ new Set();
+	  for (const point of chunk.coreTiles) {
+	    const key = point ? `${point.x},${point.y}` : "";
+	    if (!point || !Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y) || Math.floor(point.x / source.chunkSize) !== expectedX || Math.floor(point.y / source.chunkSize) !== expectedY || !source.hasTile(point.x, point.y) || seen.has(key)) {
+	      throw new TypeError("world source returned an invalid core tile");
+	    }
+	    seen.add(key);
+	  }
+	}
+	function validateChunkSize(value) {
+	  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+	    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+	  }
+	}
+	function abortError2() {
+	  if (typeof DOMException !== "undefined") return new DOMException("World chunk request was aborted", "AbortError");
+	  const error = new Error("World chunk request was aborted");
+	  error.name = "AbortError";
+	  return error;
+	}
+	var StaticWorldSource = class {
+	  constructor(map, options = {}) {
+	    this.disposed = false;
+	    assertWrappableMap(map);
+	    if (map.infinite) throw new TypeError("StaticWorldSource requires a finite MapInfo");
+	    this.map = map;
+	    this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+	    validateChunkSize(this.chunkSize);
+	    this.bounds = {
+	      width: map.w,
+	      height: map.h,
+	      wrapX: map.wrapX ?? false,
+	      wrapY: map.wrapY ?? false
+	    };
+	    this.chunkCountX = Math.ceil(map.w / this.chunkSize);
+	    this.chunkCountY = Math.ceil(map.h / this.chunkSize);
+	  }
+	  resolveChunk(chunkX, chunkY) {
+	    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) return void 0;
+	    const x = this.bounds.wrapX ? positiveModulo(chunkX, this.chunkCountX) : chunkX;
+	    const y = this.bounds.wrapY ? positiveModulo(chunkY, this.chunkCountY) : chunkY;
+	    if (x < 0 || x >= this.chunkCountX || y < 0 || y >= this.chunkCountY) return void 0;
+	    return { x, y };
+	  }
+	  chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
+	    let dx = Math.abs(chunkX - centerChunkX);
+	    let dy = Math.abs(chunkY - centerChunkY);
+	    if (this.bounds.wrapX) dx = Math.min(dx, this.chunkCountX - dx);
+	    if (this.bounds.wrapY) dy = Math.min(dy, this.chunkCountY - dy);
+	    return Math.hypot(dx, dy);
+	  }
+	  loadChunk(chunkX, chunkY, request = {}) {
+	    if (this.disposed) return Promise.reject(new Error("StaticWorldSource has been disposed"));
+	    if (request.signal?.aborted) return Promise.reject(abortError2());
+	    const resolved = this.resolveChunk(chunkX, chunkY);
+	    if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+	      return Promise.reject(new RangeError("static world chunk coordinates are outside the canonical bounds"));
+	    }
+	    const startX = chunkX * this.chunkSize;
+	    const startY = chunkY * this.chunkSize;
+	    const endX = Math.min(this.map.w, startX + this.chunkSize);
+	    const endY = Math.min(this.map.h, startY + this.chunkSize);
+	    const coreTiles = [];
+	    for (let x = startX; x < endX; x += 1) {
+	      for (let y = startY; y < endY; y += 1) {
+	        if (this.map.data[x]?.[y]) coreTiles.push({ x, y });
+	      }
+	    }
+	    return Promise.resolve({ chunkX, chunkY, chunkSize: this.chunkSize, coreTiles });
+	  }
+	  releaseChunk(_chunk) {
+	  }
+	  hasChunk(chunkX, chunkY) {
+	    const resolved = this.resolveChunk(chunkX, chunkY);
+	    return resolved?.x === chunkX && resolved.y === chunkY;
+	  }
+	  hasTile(x, y) {
+	    return getMapTile(this.map, x, y) !== void 0;
+	  }
+	  dispose() {
+	    this.disposed = true;
+	  }
+	};
+	var ProceduralWorldSource = class {
+	  constructor(options, dependencies = {}) {
+	    this.disposed = false;
+	    if (!options || typeof options !== "object") throw new TypeError("procedural world options are required");
+	    if (options.workerCount !== void 0 && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
+	      throw new RangeError("workerCount must be an integer between 1 and 8");
+	    }
+	    this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+	    validateChunkSize(this.chunkSize);
+	    this.seed = options.seed;
+	    this.store = dependencies.store ?? new SparseWorldChunkStore();
+	    this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+	  }
+	  get map() {
+	    return this.store.map;
+	  }
+	  get stats() {
+	    return this.pool.stats;
+	  }
+	  resolveChunk(chunkX, chunkY) {
+	    return Number.isSafeInteger(chunkX) && Number.isSafeInteger(chunkY) ? { x: chunkX, y: chunkY } : void 0;
+	  }
+	  chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
+	    return Math.hypot(chunkX - centerChunkX, chunkY - centerChunkY);
+	  }
+	  async loadChunk(chunkX, chunkY, request = {}) {
+	    if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+	    const packed = await this.pool.generateChunk(
+	      { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize },
+	      request
+	    );
+	    if (request.signal?.aborted) throw abortError2();
+	    const coreTiles = this.store.add(packed);
+	    return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
+	  }
+	  releaseChunk(chunk) {
+	    this.store.remove(chunk.chunkX, chunk.chunkY);
+	  }
+	  hasChunk(chunkX, chunkY) {
+	    return this.store.hasChunk(chunkX, chunkY);
+	  }
+	  hasTile(x, y) {
+	    return this.store.hasCoreTile(x, y);
+	  }
+	  dispose() {
+	    if (this.disposed) return;
+	    this.disposed = true;
+	    this.pool.dispose();
+	    this.store.clear();
+	  }
+	};
+	function packedChunkFromWorldChunk(chunk) {
+	  if (!(chunk.payload instanceof Object) || !("tiles" in chunk.payload)) return void 0;
+	  const packed = chunk.payload;
+	  assertPackedWorldChunk(packed);
+	  if (packed.chunkX !== chunk.chunkX || packed.chunkY !== chunk.chunkY || packed.chunkSize !== chunk.chunkSize) {
+	    throw new TypeError("packed payload does not match its world chunk");
+	  }
+	  return packed;
+	}
+	function getWorldSourceTile(source, x, y) {
+	  return source.hasTile(x, y) ? getMapTile(source.map, x, y) : void 0;
+	}
+
+	// src/world/WorldStreamer.ts
 	function integerOption(name, value, minimum) {
 	  if (!Number.isInteger(value) || value < minimum) {
 	    throw new RangeError(`${name} must be an integer >= ${minimum}`);
 	  }
 	}
-	var InfiniteWorldStreamer = class {
-	  constructor(pool, handlers, options, store = new SparseWorldChunkStore()) {
-	    this.pool = pool;
+	function abortError3(message) {
+	  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+	  const error = new Error(message);
+	  error.name = "AbortError";
+	  return error;
+	}
+	function waitForRetry(delayMs, signal) {
+	  if (signal.aborted) return Promise.reject(abortError3("Chunk retry was aborted"));
+	  return new Promise((resolve, reject) => {
+	    const timeout = setTimeout(() => {
+	      signal.removeEventListener("abort", abort);
+	      resolve();
+	    }, delayMs);
+	    const abort = () => {
+	      clearTimeout(timeout);
+	      reject(abortError3("Chunk retry was aborted"));
+	    };
+	    signal.addEventListener("abort", abort, { once: true });
+	  });
+	}
+	var WorldStreamer = class _WorldStreamer {
+	  constructor(source, handlers, options = {}) {
+	    this.source = source;
 	    this.handlers = handlers;
 	    this.residents = /* @__PURE__ */ new Map();
 	    this.pending = /* @__PURE__ */ new Map();
@@ -9002,70 +9563,81 @@ void main() {
 	    this.centerChunkX = 0;
 	    this.centerChunkY = 0;
 	    this.disposed = false;
-	    this.store = store;
-	    this.seed = options.seed;
-	    this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+	    this.completed = 0;
+	    this.retried = 0;
+	    this.failed = 0;
+	    assertWorldSource(source);
 	    this.loadRadius = options.loadRadius ?? 3;
 	    this.retentionRadius = options.retentionRadius ?? this.loadRadius + 1;
 	    this.maxResidentChunks = options.maxResidentChunks ?? (this.retentionRadius * 2 + 1) ** 2;
-	    integerOption("chunkSize", this.chunkSize, 1);
-	    if (this.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE) {
-	      throw new RangeError(`chunkSize must be <= ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
-	    }
+	    this.maxRetries = options.maxRetries ?? 2;
+	    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
 	    integerOption("loadRadius", this.loadRadius, 0);
 	    integerOption("retentionRadius", this.retentionRadius, this.loadRadius);
 	    integerOption("maxResidentChunks", this.maxResidentChunks, 1);
+	    integerOption("maxRetries", this.maxRetries, 0);
+	    integerOption("retryBaseDelayMs", this.retryBaseDelayMs, 0);
 	  }
-	  //Updates demand only when the camera crosses a generation-chunk boundary.
-	  //The returned promise resolves once the center chunk is resident, allowing
-	  //loadInfinite() to present a renderable first frame before it completes.
 	  setCenterTile(x, y) {
-	    if (this.disposed) return Promise.reject(new Error("InfiniteWorldStreamer has been disposed"));
+	    if (this.disposed) return Promise.reject(new Error("WorldStreamer has been disposed"));
 	    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
 	      return Promise.reject(new RangeError("streaming center must use safe integer tile coordinates"));
 	    }
-	    const chunkX = Math.floor(x / this.chunkSize);
-	    const chunkY = Math.floor(y / this.chunkSize);
-	    const changed = chunkX !== this.centerChunkX || chunkY !== this.centerChunkY || this.wanted.size === 0;
-	    this.centerChunkX = chunkX;
-	    this.centerChunkY = chunkY;
+	    const rawX = Math.floor(x / this.source.chunkSize);
+	    const rawY = Math.floor(y / this.source.chunkSize);
+	    const center = this.source.resolveChunk(rawX, rawY);
+	    if (!center) return Promise.reject(new RangeError("streaming center is outside the world bounds"));
+	    const changed = center.x !== this.centerChunkX || center.y !== this.centerChunkY || this.wanted.size === 0;
+	    this.centerChunkX = center.x;
+	    this.centerChunkY = center.y;
 	    if (changed) this.refreshDemand();
-	    return this.requestChunk(chunkX, chunkY, 0);
+	    return this.requestChunk(center.x, center.y, 0);
 	  }
 	  get stats() {
-	    const pool = this.pool.stats;
+	    const source = this.source.stats;
 	    return {
 	      centerChunkX: this.centerChunkX,
 	      centerChunkY: this.centerChunkY,
 	      residentChunks: this.residents.size,
 	      pendingChunks: this.pending.size,
-	      queuedChunks: pool.queued,
-	      busyWorkers: pool.busyWorkers,
-	      completedChunks: pool.completed
+	      queuedChunks: source?.queued ?? 0,
+	      busyWorkers: source?.busyWorkers ?? 0,
+	      completedChunks: source?.completed ?? this.completed,
+	      retriedChunkRequests: this.retried,
+	      failedChunks: this.failed
 	    };
 	  }
-	  dispose(disposePool = true) {
+	  get residentChunks() {
+	    return [...this.residents.values()];
+	  }
+	  hasResident(chunkX, chunkY) {
+	    return this.residents.has(_WorldStreamer.key(chunkX, chunkY));
+	  }
+	  dispose(disposeSource = true) {
 	    if (this.disposed) return;
 	    this.disposed = true;
 	    for (const request of this.pending.values()) request.controller.abort();
 	    this.pending.clear();
-	    for (const chunk of this.residents.values()) this.handlers.chunkUnloading(chunk);
+	    for (const chunk of this.residents.values()) this.unload(chunk);
 	    this.residents.clear();
-	    this.store.clear();
-	    if (disposePool) this.pool.dispose();
+	    if (disposeSource) this.source.dispose();
 	  }
 	  refreshDemand() {
-	    const coordinates = [];
+	    const coordinateByKey = /* @__PURE__ */ new Map();
 	    for (let dx = -this.loadRadius; dx <= this.loadRadius; dx += 1) {
 	      for (let dy = -this.loadRadius; dy <= this.loadRadius; dy += 1) {
 	        const distance = Math.hypot(dx, dy);
 	        if (distance > this.loadRadius + 0.5) continue;
-	        const x = this.centerChunkX + dx;
-	        const y = this.centerChunkY + dy;
-	        coordinates.push({ x, y, distance, key: SparseWorldChunkStore.key(x, y) });
+	        const resolved = this.source.resolveChunk(this.centerChunkX + dx, this.centerChunkY + dy);
+	        if (!resolved) continue;
+	        const key = _WorldStreamer.key(resolved.x, resolved.y);
+	        const existing = coordinateByKey.get(key);
+	        if (!existing || distance < existing.distance) {
+	          coordinateByKey.set(key, { ...resolved, distance, key });
+	        }
 	      }
 	    }
-	    coordinates.sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y);
+	    const coordinates = [...coordinateByKey.values()].sort((a, b) => a.distance - b.distance || a.x - b.x || a.y - b.y);
 	    this.wanted = new Set(coordinates.map((coordinate) => coordinate.key));
 	    for (const [key, request] of this.pending) {
 	      if (!this.wanted.has(key)) request.controller.abort();
@@ -9073,33 +9645,33 @@ void main() {
 	    for (const coordinate of coordinates) {
 	      if (!this.residents.has(coordinate.key) && !this.pending.has(coordinate.key)) {
 	        void this.requestChunk(coordinate.x, coordinate.y, coordinate.distance).catch((error) => {
-	          if (error instanceof Error && error.name !== "AbortError") this.handlers.error?.(error);
+	          if (error instanceof Error && error.name !== "AbortError") this.reportError(error);
 	        });
 	      }
 	    }
 	    this.evictOutsideRetention();
 	  }
 	  requestChunk(chunkX, chunkY, priority) {
-	    const key = SparseWorldChunkStore.key(chunkX, chunkY);
+	    const key = _WorldStreamer.key(chunkX, chunkY);
 	    const resident = this.residents.get(key);
 	    if (resident) return Promise.resolve(resident);
 	    const existing = this.pending.get(key);
 	    if (existing) return existing.promise;
 	    const controller = new AbortController();
-	    const promise = this.pool.generateChunk(
-	      { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize },
-	      { priority, signal: controller.signal }
-	    ).then((chunk) => {
-	      if (this.disposed || !this.wanted.has(key)) throw new DOMException("Chunk is no longer wanted", "AbortError");
-	      const coreTiles = this.store.add(chunk);
+	    const promise = this.loadWithRetry(chunkX, chunkY, priority, controller.signal).then((chunk) => {
+	      if (this.disposed || !this.wanted.has(key)) {
+	        this.source.releaseChunk(chunk);
+	        throw abortError3("Chunk is no longer wanted");
+	      }
 	      this.residents.set(key, chunk);
 	      try {
-	        this.handlers.chunkLoaded(chunk, coreTiles);
+	        this.handlers.chunkLoaded(chunk);
 	      } catch (reason) {
 	        this.residents.delete(key);
-	        this.store.remove(chunk.chunkX, chunk.chunkY);
+	        this.unload(chunk);
 	        throw reason;
 	      }
+	      this.completed += 1;
 	      this.enforceResidentLimit();
 	      return chunk;
 	    }).finally(() => {
@@ -9108,30 +9680,75 @@ void main() {
 	    this.pending.set(key, { controller, promise });
 	    return promise;
 	  }
+	  async loadWithRetry(chunkX, chunkY, priority, signal) {
+	    for (let attempt = 0; ; attempt += 1) {
+	      try {
+	        const chunk = await this.source.loadChunk(chunkX, chunkY, { priority, signal });
+	        try {
+	          assertWorldChunk(this.source, chunk, chunkX, chunkY);
+	        } catch (reason) {
+	          this.source.releaseChunk(chunk);
+	          throw reason;
+	        }
+	        return chunk;
+	      } catch (reason) {
+	        const error = reason instanceof Error ? reason : new Error(String(reason));
+	        if (signal.aborted || error.name === "AbortError") throw error;
+	        if (error instanceof TypeError || attempt >= this.maxRetries) {
+	          this.failed += 1;
+	          throw error;
+	        }
+	        this.retried += 1;
+	        this.reportError(error);
+	        await waitForRetry(this.retryBaseDelayMs * 2 ** attempt, signal);
+	      }
+	    }
+	  }
 	  evictOutsideRetention() {
 	    for (const [key, chunk] of this.residents) {
-	      const dx = chunk.chunkX - this.centerChunkX;
-	      const dy = chunk.chunkY - this.centerChunkY;
-	      if (Math.hypot(dx, dy) <= this.retentionRadius + 0.5) continue;
-	      this.unload(key, chunk);
+	      const distance = this.source.chunkDistance(
+	        chunk.chunkX,
+	        chunk.chunkY,
+	        this.centerChunkX,
+	        this.centerChunkY
+	      );
+	      if (distance <= this.retentionRadius + 0.5) continue;
+	      this.residents.delete(key);
+	      this.unload(chunk);
 	    }
 	  }
 	  enforceResidentLimit() {
 	    if (this.residents.size <= this.maxResidentChunks) return;
-	    const candidates = [...this.residents.entries()].filter(([key]) => !this.wanted.has(key)).sort((a, b) => {
-	      const da = Math.hypot(a[1].chunkX - this.centerChunkX, a[1].chunkY - this.centerChunkY);
-	      const db = Math.hypot(b[1].chunkX - this.centerChunkX, b[1].chunkY - this.centerChunkY);
-	      return db - da;
-	    });
+	    const candidates = [...this.residents.entries()].filter(([key]) => !this.wanted.has(key)).sort((a, b) => this.distanceFromCenter(b[1]) - this.distanceFromCenter(a[1]));
 	    while (this.residents.size > this.maxResidentChunks && candidates.length > 0) {
 	      const [key, chunk] = candidates.shift();
-	      this.unload(key, chunk);
+	      this.residents.delete(key);
+	      this.unload(chunk);
 	    }
 	  }
-	  unload(key, chunk) {
-	    this.handlers.chunkUnloading(chunk);
-	    this.residents.delete(key);
-	    this.store.remove(chunk.chunkX, chunk.chunkY);
+	  distanceFromCenter(chunk) {
+	    return this.source.chunkDistance(chunk.chunkX, chunk.chunkY, this.centerChunkX, this.centerChunkY);
+	  }
+	  unload(chunk) {
+	    try {
+	      this.handlers.chunkUnloading(chunk);
+	    } catch (reason) {
+	      this.reportError(reason);
+	    }
+	    try {
+	      this.source.releaseChunk(chunk);
+	    } catch (reason) {
+	      this.reportError(reason);
+	    }
+	  }
+	  reportError(reason) {
+	    try {
+	      this.handlers.error?.(reason instanceof Error ? reason : new Error(String(reason)));
+	    } catch {
+	    }
+	  }
+	  static key(chunkX, chunkY) {
+	    return `${chunkX},${chunkY}`;
 	  }
 	};
 
@@ -9201,14 +9818,15 @@ void main() {
 	    this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
 	    this.worldPatternOffset = new three.Vector2();
 	    this.pressedMovementKeys = /* @__PURE__ */ new Set();
+	    this.frameTasks = new FrameTaskScheduler({ error: (error) => this.emit("error", error) });
 	    this.disposed = false;
 	    this.loadRevision = 0;
 	    this.forestRevision = 0;
-	    this.infiniteChunkLayers = /* @__PURE__ */ new Map();
-	    this.infiniteGrassByChunkId = /* @__PURE__ */ new Map();
-	    this.infiniteForestByChunkId = /* @__PURE__ */ new Map();
-	    this.infiniteLayerRevision = 0;
-	    this.infiniteChunkSize = 24;
+	    this.worldChunkLayers = /* @__PURE__ */ new Map();
+	    this.streamedGrassByChunkId = /* @__PURE__ */ new Map();
+	    this.streamedForestByChunkId = /* @__PURE__ */ new Map();
+	    this.worldLayerRevision = 0;
+	    this.worldChunkSize = 24;
 	    this.renderOrigin = new three.Vector2();
 	    this.logicalTargetScratch = new three.Vector3();
 	    this.floatingOriginThreshold = 8192;
@@ -9216,12 +9834,6 @@ void main() {
 	    // screen coords, used to distinguish click vs. drag
 	    this.lastHover = null;
 	    this.lastSelected = null;
-	    //Authoritative per-tile fog states ("x,y" -> state), owned here rather
-	    //than only living inside each layer's instanced attributes: those are
-	    //rebuilt to all-Visible whenever a layer rebuilds (grass density slider,
-	    //treesPerTile, ...), and warFogVisible below needs the real states back
-	    //when fog is re-shown after being hidden.
-	    this.fogStates = /* @__PURE__ */ new Map();
 	    this.warFogShown = true;
 	    this.onContextMenu = (event) => event.preventDefault();
 	    this.handleResize = () => {
@@ -9240,12 +9852,17 @@ void main() {
 	      this.updateKeyboardMovement(Math.min(dtS, 0.05));
 	      this.controls.update(dtS);
 	      this.wrapCameraToWorld();
-	      this.rebaseInfiniteWorld();
-	      this.updateInfiniteWorldDemand();
+	      this.rebaseWorld();
+	      this.updateWorldDemand();
+	      this.frameTasks.runFrame();
 	      this.updateWorldChunkVisibility();
 	      this.terrain?.update(dtS);
-	      this.grass?.update(dtS);
-	      for (const record of this.infiniteChunkLayers.values()) record.grass?.update(dtS);
+	      const grassResources = /* @__PURE__ */ new Set();
+	      if (this.grass) grassResources.add(this.grass.resources);
+	      for (const record of this.worldChunkLayers.values()) {
+	        if (record.grass) grassResources.add(record.grass.resources);
+	      }
+	      for (const resources of grassResources) resources.update(dtS);
 	      this.emit("frame", { t, dtS });
 	      this.renderer.render(this.scene, this.camera);
 	      this.animationFrameId = window.requestAnimationFrame(this.animate);
@@ -9551,6 +10168,7 @@ void main() {
 	    if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
 	  }
 	  clearWorldCopies() {
+	    this.chunkScheduler.invalidateScene();
 	    for (const copy of this.worldCopies) this.worldRoot.remove(copy);
 	    for (const material of this.worldCopyMaterials) material.dispose();
 	    this.worldCopies = [];
@@ -9592,6 +10210,7 @@ void main() {
 	    this.worldPatternOffset.y += offsetY;
 	    this.applyWorldPatternToObject(this.terrain);
 	    this.applyWorldPatternToObject(this.grass);
+	    for (const record of this.worldChunkLayers.values()) this.applyWorldPatternToObject(record.grass);
 	    for (const material of this.worldCopyMaterials) {
 	      material.uniforms.worldOffset.value.x += offsetX;
 	      material.uniforms.worldOffset.value.y += offsetY;
@@ -9673,6 +10292,17 @@ void main() {
 	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
 	          }
 	        }
+	        for (const record of this.worldChunkLayers.values()) {
+	          for (const child of record.forest?.children ?? []) {
+	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
+	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	          }
+	          if (!record.grass?.visible) continue;
+	          for (const child of record.grass.children) {
+	            if (!this.worldCopyCanBecomeVisible(child, offsetX, offsetY)) continue;
+	            group.add(this.cloneWorldObject(child, offsetX, offsetY));
+	          }
+	        }
 	        if (group.children.length === 0) continue;
 	        this.worldCopies.push(group);
 	        this.worldRoot.add(group);
@@ -9747,84 +10377,90 @@ void main() {
 	      return geometry ? { geometries: [geometry] } : void 0;
 	    }
 	    if (metadata.kind === "grass") {
-	      const field = this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass;
+	      const field = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
 	      const geometry = field?.activateChunk(metadata, lod);
 	      return geometry ? { geometries: [geometry] } : void 0;
 	    }
-	    (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.activateChunk(metadata, lod, objects);
-	    return void 0;
+	    const forest = this.streamedForestByChunkId.get(metadata.id) ?? this.forest;
+	    forest?.activateChunk(metadata, lod, objects);
+	    return forest ? { disposeGpu: () => forest.disposeChunkGpu(metadata) } : void 0;
 	  }
 	  releaseWorldChunk(metadata) {
 	    if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
-	    else if (metadata.kind === "grass") (this.infiniteGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
-	    else (this.infiniteForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
+	    else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
+	    else (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
 	  }
 	  //-------------------------------------------------------------------------
 	  //Public API
 	  //-------------------------------------------------------------------------
-	  //Builds the terrain/grid/trees for the given map data. Fetches the terrain
-	  //atlas descriptor (land-atlas.json) from texturesBaseUrl; textures themselves
-	  //load in the background as usual for three.js.
-	  async load(mapData) {
-	    if (this.disposed) throw new Error("HexMap has been disposed");
-	    this.stopInfiniteStreaming();
-	    assertWrappableMap(mapData);
-	    const revision = ++this.loadRevision;
-	    this.worldPatternOffset.set(0, 0);
-	    this.mapData = mapData;
-	    this.fogStates.clear();
-	    this.cleanRoutePath();
-	    this.lastHover = null;
-	    this.lastSelected = null;
-	    this.pointer.visible = false;
-	    this.selector.visible = false;
-	    this.frameMap(mapData);
-	    const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
-	    const response = await fetch(atlasUrl);
-	    if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
-	    const atlas = await response.json();
-	    if (this.disposed || revision !== this.loadRevision) return;
-	    if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0 || !Number.isFinite(atlas.width) || atlas.width <= 0 || !Number.isFinite(atlas.height) || atlas.height <= 0 || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0 || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0 || !atlas.textures || typeof atlas.textures !== "object") {
-	      throw new TypeError("Terrain atlas descriptor is invalid");
+	  async loadWorld(options) {
+	    if (this.disposed) {
+	      options?.source?.dispose();
+	      throw new Error("HexMap has been disposed");
 	    }
-	    this.atlas = atlas;
-	    if (!await this.rebuildTerrain(revision)) return;
-	    if (!await this.rebuildForest(revision)) return;
-	    if (this.disposed || revision !== this.loadRevision) return;
-	    this.rebuildGrass();
-	    this.updateWorldChunkVisibility();
-	    this.emit("load", void 0);
-	  }
-	  //Starts a sparse, deterministic world whose chunks are generated on a
-	  //bounded worker pool around the camera. Existing finite-map load() remains
-	  //unchanged and can be called later to leave streaming mode.
-	  async loadInfinite(options) {
-	    if (this.disposed) throw new Error("HexMap has been disposed");
-	    if (!options || typeof options !== "object") throw new TypeError("infinite world options are required");
-	    const chunkSize = options.chunkSize ?? 24;
+	    if (!options || typeof options !== "object" || !options.source) {
+	      throw new TypeError("world load options with a source are required");
+	    }
+	    const source = options.source;
+	    try {
+	      assertWorldSource(source);
+	    } catch (reason) {
+	      if (typeof source.dispose === "function") source.dispose();
+	      throw reason;
+	    }
+	    const chunkSize = source.chunkSize;
 	    if (!Number.isInteger(chunkSize) || chunkSize <= 0 || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
+	      source.dispose();
 	      throw new RangeError(
-	        `chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
+	        `source.chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
 	      );
 	    }
-	    if (options.workerCount !== void 0 && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
-	      throw new RangeError("workerCount must be an integer between 1 and 8");
+	    const defaultTile = source.bounds ? { x: Math.floor((source.bounds.width - 1) / 2), y: Math.floor((source.bounds.height - 1) / 2) } : { x: 0, y: 0 };
+	    const requestedTile = options.initialTile ?? defaultTile;
+	    const initialTile = normalizeMapCoordinates(source.map, requestedTile.x, requestedTile.y);
+	    if (!initialTile || !Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
+	      source.dispose();
+	      throw new RangeError("initialTile must identify a safe integer tile inside the world");
 	    }
-	    const initialTile = options.initialTile ?? { x: 0, y: 0 };
-	    if (!Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
-	      throw new RangeError("initialTile coordinates must be safe integers");
+	    const chunkSpan = chunkSize * this.options.size * 1.5;
+	    const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
+	    const retentionRadius = options.retentionRadius ?? loadRadius + 1;
+	    const maxResidentChunks = options.maxResidentChunks ?? (retentionRadius * 2 + 1) ** 2;
+	    const maxRetries = options.maxRetries ?? 2;
+	    const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
+	    const frameBudgetMs = options.frameBudgetMs ?? 3;
+	    const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
+	    const integerAtLeast = (name, value, minimum) => {
+	      if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
+	    };
+	    try {
+	      integerAtLeast("loadRadius", loadRadius, 0);
+	      integerAtLeast("retentionRadius", retentionRadius, loadRadius);
+	      integerAtLeast("maxResidentChunks", maxResidentChunks, 1);
+	      integerAtLeast("maxRetries", maxRetries, 0);
+	      integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
+	      integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
+	      if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
+	        throw new RangeError("frameBudgetMs must be a positive finite number");
+	      }
+	    } catch (reason) {
+	      source.dispose();
+	      throw reason;
 	    }
 	    const threshold = options.floatingOriginThreshold ?? 8192;
 	    if (!Number.isFinite(threshold) || threshold <= this.options.size * chunkSize) {
-	      throw new RangeError("floatingOriginThreshold must exceed one generation chunk span");
+	      source.dispose();
+	      throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
 	    }
-	    this.stopInfiniteStreaming();
+	    this.stopWorldStreaming();
+	    this.frameTasks.configure({ budgetMs: frameBudgetMs, maxTasksPerFrame: maxMountsPerFrame });
 	    const revision = ++this.loadRevision;
-	    const store = new SparseWorldChunkStore();
-	    this.mapData = store.map;
+	    this.worldSource = source;
+	    this.worldChunkSize = chunkSize;
+	    this.mapData = source.map;
+	    this.fogStates = new FogStateStore(source.map);
 	    this.floatingOriginThreshold = threshold;
 	    this.worldPatternOffset.set(0, 0);
-	    this.fogStates.clear();
 	    this.cleanRoutePath();
 	    this.lastHover = null;
 	    this.lastSelected = null;
@@ -9841,63 +10477,89 @@ void main() {
 	      this.grass.dispose();
 	      this.grass = void 0;
 	    }
+	    try {
+	      if (source.bounds && !options.initialTile) this.frameMap(source.map);
+	      else this.positionCameraAtTile(initialTile);
+	      this.atlas = await this.fetchTerrainAtlas();
+	      if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
+	      if (!await this.rebuildTerrain(revision, true)) return;
+	      const streamer = new WorldStreamer(source, {
+	        chunkLoaded: (chunk) => this.scheduleWorldChunkMount(chunk),
+	        chunkUnloading: (chunk) => this.unmountWorldChunk(chunk),
+	        error: (error) => this.emit("error", error)
+	      }, {
+	        loadRadius,
+	        retentionRadius,
+	        maxResidentChunks,
+	        maxRetries,
+	        retryBaseDelayMs
+	      });
+	      this.worldStreamer = streamer;
+	      const centerChunk = source.resolveChunk(
+	        Math.floor(initialTile.x / chunkSize),
+	        Math.floor(initialTile.y / chunkSize)
+	      );
+	      if (!centerChunk) throw new RangeError("initialTile does not resolve to a source chunk");
+	      this.worldDemandChunkKey = WorldStreamer.key(centerChunk.x, centerChunk.y);
+	      this.rebaseWorld();
+	      const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
+	      const centerKey = WorldStreamer.key(loadedCenter.chunkX, loadedCenter.chunkY);
+	      const centerLayers = this.worldChunkLayers.get(centerKey);
+	      await Promise.all([centerLayers?.forestPromise, centerLayers?.cityPromise]);
+	      if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
+	      this.updateWorldChunkVisibility();
+	      this.emit("load", void 0);
+	    } catch (reason) {
+	      if (revision === this.loadRevision && this.worldSource === source) this.stopWorldStreaming();
+	      throw reason;
+	    }
+	  }
+	  async fetchTerrainAtlas() {
 	    const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
 	    const response = await fetch(atlasUrl);
 	    if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
 	    const atlas = await response.json();
-	    if (this.disposed || revision !== this.loadRevision) return;
 	    if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0 || !Number.isFinite(atlas.width) || atlas.width <= 0 || !Number.isFinite(atlas.height) || atlas.height <= 0 || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0 || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0 || !atlas.textures || typeof atlas.textures !== "object") {
 	      throw new TypeError("Terrain atlas descriptor is invalid");
 	    }
-	    this.atlas = atlas;
-	    if (!await this.rebuildTerrain(revision)) return;
-	    const pool = new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
-	    const chunkSpan = chunkSize * this.options.size * 1.5;
-	    const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
-	    const streamer = new InfiniteWorldStreamer(pool, {
-	      chunkLoaded: (chunk, points) => this.mountInfiniteChunk(chunk, points),
-	      chunkUnloading: (chunk) => this.unmountInfiniteChunk(chunk),
-	      error: (error) => this.emit("error", error)
-	    }, {
-	      seed: options.seed,
-	      chunkSize,
-	      loadRadius,
-	      retentionRadius: options.retentionRadius,
-	      maxResidentChunks: options.maxResidentChunks
-	    }, store);
-	    this.infiniteStreamer = streamer;
-	    this.infiniteChunkSize = chunkSize;
-	    const center = getHexCenter(initialTile.x, initialTile.y, this.options.size);
+	    return atlas;
+	  }
+	  positionCameraAtTile(tile) {
+	    const center = getHexCenter(tile.x, tile.y, this.options.size);
 	    const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
 	    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
 	    this.controls.target.set(center.x, 0, center.y);
 	    this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
-	    this.rebaseInfiniteWorld();
-	    this.infiniteDemandChunkKey = SparseWorldChunkStore.key(
-	      Math.floor(initialTile.x / chunkSize),
-	      Math.floor(initialTile.y / chunkSize)
-	    );
-	    let centerChunk;
-	    try {
-	      centerChunk = await streamer.setCenterTile(initialTile.x, initialTile.y);
-	    } catch (reason) {
-	      if (this.infiniteStreamer === streamer) this.stopInfiniteStreaming();
-	      throw reason;
-	    }
-	    const centerKey = SparseWorldChunkStore.key(centerChunk.chunkX, centerChunk.chunkY);
-	    await this.infiniteChunkLayers.get(centerKey)?.forestPromise;
-	    if (this.disposed || revision !== this.loadRevision || this.infiniteStreamer !== streamer) return;
-	    this.updateWorldChunkVisibility();
-	    this.emit("load", void 0);
+	    this.controls.update();
 	  }
-	  mountInfiniteChunk(chunk, points) {
-	    if (!this.infiniteStreamer || !this.terrain) return;
-	    const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-	    const revision = ++this.infiniteLayerRevision;
-	    this.terrain.addTiles(points);
+	  scheduleWorldChunkMount(chunk) {
+	    const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+	    if (key === this.worldDemandChunkKey) {
+	      this.mountWorldChunk(chunk);
+	      return;
+	    }
+	    const center = this.worldStreamer?.stats;
+	    const priority = center && this.worldSource ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY) : 0;
+	    this.frameTasks.enqueue(key, priority, () => {
+	      if (this.worldStreamer?.hasResident(chunk.chunkX, chunk.chunkY)) this.mountWorldChunk(chunk);
+	    });
+	  }
+	  mountWorldChunk(chunk) {
+	    if (!this.worldStreamer || !this.terrain) return;
+	    const points = chunk.coreTiles;
+	    const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+	    const revision = ++this.worldLayerRevision;
 	    const record = { points, revision };
-	    this.infiniteChunkLayers.set(key, record);
+	    this.worldChunkLayers.set(key, record);
+	    this.terrain.addTiles(points);
 	    if (this.options.grassEnabled) {
+	      this.streamedGrassResources ?? (this.streamedGrassResources = new GrassSharedResources({
+	        size: this.options.size,
+	        bladeHeight: this.options.grassBladeHeight,
+	        windStrength: this.options.grassWindStrength,
+	        windSpeed: this.options.grassWindSpeed,
+	        fogDarkenFactor: this.options.fogDarkenFactor
+	      }));
 	      const grass = createGrassField(this.mapData, {
 	        size: this.options.size,
 	        density: this.options.grassDensity,
@@ -9910,13 +10572,28 @@ void main() {
 	        riverBankWidth: this.options.riverBankWidth,
 	        riverCurvature: this.options.riverCurvature,
 	        lakeShoreWidth: this.options.lakeShoreWidth
-	      }, points) ?? void 0;
+	      }, points, this.streamedGrassResources) ?? void 0;
 	      if (grass) {
 	        record.grass = grass;
-	        this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+	        this.applyWorldPatternToObject(grass);
+	        this.indexChunkLayer(grass, this.streamedGrassByChunkId);
 	        this.worldRoot.add(grass);
 	      }
 	    }
+	    record.cityPromise = this.terrain.loadCities(points, record).then(() => {
+	      if (this.worldChunkLayers.get(key) !== record) {
+	        this.terrain?.removeCities(points, record);
+	        return;
+	      }
+	      for (const point of points) {
+	        const state = this.warFogShown ? this.fogStates?.get(point.x, point.y) ?? 2 /* Visible */ : 2 /* Visible */;
+	        this.terrain?.setFogState(point.x, point.y, state);
+	      }
+	      this.refreshWorldCopies();
+	    }).catch((error) => {
+	      if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
+	    });
+	    this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources());
 	    record.forestPromise = createForest(this.mapData, {
 	      size: this.options.size,
 	      treesPerTile: this.options.treesPerTile,
@@ -9930,41 +10607,45 @@ void main() {
 	      beachWidth: this.options.beachWidth,
 	      waterCornerRounding: this.options.waterCornerRounding,
 	      coastCurvature: this.options.coastCurvature
-	    }, points).then((forest) => {
-	      const current = this.infiniteChunkLayers.get(key);
+	    }, points, this.streamedForestResources).then((forest) => {
+	      const current = this.worldChunkLayers.get(key);
 	      if (!forest) return;
-	      if (this.disposed || !current || current.revision !== revision || !this.infiniteStreamer?.store.hasChunk(chunk.chunkX, chunk.chunkY)) {
+	      if (this.disposed || !current || current.revision !== revision) {
 	        forest.dispose();
 	        return;
 	      }
 	      current.forest = forest;
-	      this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+	      this.indexChunkLayer(forest, this.streamedForestByChunkId);
 	      this.worldRoot.add(forest);
-	      this.reapplyFogToObject(forest);
+	      this.reapplyFogToObject(forest, points);
+	      this.refreshWorldCopies();
 	    }).catch((error) => {
-	      if (this.infiniteChunkLayers.get(key)?.revision === revision) this.emit("error", error);
+	      if (this.worldChunkLayers.get(key)?.revision === revision) this.emit("error", error);
 	    });
 	    this.reapplyFogToPoints(points, record);
+	    this.refreshWorldCopies();
 	  }
-	  unmountInfiniteChunk(chunk) {
-	    const key = SparseWorldChunkStore.key(chunk.chunkX, chunk.chunkY);
-	    const record = this.infiniteChunkLayers.get(key);
+	  unmountWorldChunk(chunk) {
+	    const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+	    this.frameTasks.cancel(key);
+	    const record = this.worldChunkLayers.get(key);
 	    if (!record) return;
-	    this.infiniteChunkLayers.delete(key);
-	    const forgotten = this.terrain?.removeTiles(record.points) ?? [];
+	    this.worldChunkLayers.delete(key);
+	    const forgotten = this.terrain?.removeTiles(record.points, true, record) ?? [];
 	    if (record.grass) {
 	      this.collectChunkIds(record.grass, forgotten);
-	      this.unindexChunkLayer(record.grass, this.infiniteGrassByChunkId);
+	      this.unindexChunkLayer(record.grass, this.streamedGrassByChunkId);
 	      this.worldRoot.remove(record.grass);
 	      record.grass.dispose();
 	    }
 	    if (record.forest) {
 	      this.collectChunkIds(record.forest, forgotten);
-	      this.unindexChunkLayer(record.forest, this.infiniteForestByChunkId);
+	      this.unindexChunkLayer(record.forest, this.streamedForestByChunkId);
 	      this.worldRoot.remove(record.forest);
 	      record.forest.dispose();
 	    }
 	    this.chunkScheduler.forget(forgotten);
+	    this.refreshWorldCopies();
 	  }
 	  collectChunkIds(object, target) {
 	    object.traverse((child) => {
@@ -9984,13 +10665,17 @@ void main() {
 	      if (metadata && index.get(metadata.id) === object) index.delete(metadata.id);
 	    });
 	  }
-	  stopInfiniteStreaming() {
-	    const streamer = this.infiniteStreamer;
-	    this.infiniteStreamer = void 0;
-	    this.infiniteDemandChunkKey = void 0;
+	  stopWorldStreaming() {
+	    const streamer = this.worldStreamer;
+	    const source = this.worldSource;
+	    this.worldDemandChunkKey = void 0;
+	    this.frameTasks.clear();
 	    streamer?.dispose();
-	    this.infiniteLayerRevision += 1;
-	    for (const record of this.infiniteChunkLayers.values()) {
+	    if (!streamer) source?.dispose();
+	    this.worldStreamer = void 0;
+	    this.worldSource = void 0;
+	    this.worldLayerRevision += 1;
+	    for (const record of this.worldChunkLayers.values()) {
 	      if (record.grass) {
 	        this.worldRoot.remove(record.grass);
 	        record.grass.dispose();
@@ -10000,30 +10685,40 @@ void main() {
 	        record.forest.dispose();
 	      }
 	    }
-	    this.infiniteChunkLayers.clear();
-	    this.infiniteGrassByChunkId.clear();
-	    this.infiniteForestByChunkId.clear();
+	    this.worldChunkLayers.clear();
+	    this.streamedGrassByChunkId.clear();
+	    this.streamedForestByChunkId.clear();
+	    this.streamedGrassResources?.dispose();
+	    this.streamedGrassResources = void 0;
+	    this.streamedForestResources?.dispose();
+	    this.streamedForestResources = void 0;
 	  }
 	  reapplyFogToPoints(points, record) {
 	    for (const point of points) {
-	      const state = this.warFogShown ? this.fogStates.get(`${point.x},${point.y}`) ?? 2 /* Visible */ : 2 /* Visible */;
+	      const state = this.warFogShown ? this.fogStates?.get(point.x, point.y) ?? 2 /* Visible */ : 2 /* Visible */;
 	      this.terrain?.setFogState(point.x, point.y, state);
 	      record.grass?.setFogState(point.x, point.y, state);
 	      record.forest?.setFogState(point.x, point.y, state);
 	    }
 	  }
-	  reapplyFogToObject(object) {
-	    for (const [key, stored] of this.fogStates) {
-	      const [x, y] = key.split(",").map(Number);
-	      object.setFogState(x, y, this.warFogShown ? stored : 2 /* Visible */);
+	  reapplyFogToObject(object, points) {
+	    if (points) {
+	      for (const point of points) {
+	        const state = this.warFogShown ? this.fogStates?.get(point.x, point.y) ?? 2 /* Visible */ : 2 /* Visible */;
+	        object.setFogState(point.x, point.y, state);
+	      }
+	      return;
 	    }
+	    this.fogStates?.forEach((stored, x, y) => {
+	      object.setFogState(x, y, this.warFogShown ? stored : 2 /* Visible */);
+	    });
 	  }
 	  //Tears down and recreates the terrain (land/water layers + city models) from
 	  //the current options against the already-fetched atlas/map data. Only needed
 	  //when the map itself changes (see load()) - everything water/blend-related
 	  //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
 	  //(waterWaveAmplitude, beachWidth, etc.)
-	  async rebuildTerrain(expectedRevision = this.loadRevision) {
+	  async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)) {
 	    this.clearWorldCopies();
 	    this.chunkScheduler.clear();
 	    if (this.terrain) {
@@ -10074,12 +10769,18 @@ void main() {
 	      fogTexture: this.options.fogTexture,
 	      fogDarkenFactor: this.options.fogDarkenFactor,
 	      fogTextureSize: this.options.fogTextureSize
-	    });
+	    }, deferTiles ? [] : void 0);
 	    this.terrain = terrain;
 	    terrain.setCameraWorldOffset(this.renderOrigin.x, this.renderOrigin.y);
 	    this.applyWorldPatternToObject(terrain);
 	    this.worldRoot.add(terrain);
-	    await terrain.loadCities();
+	    if (deferTiles) {
+	      for (const record of this.worldChunkLayers.values()) terrain.addTiles(record.points);
+	    }
+	    if (!deferTiles) await terrain.loadCities();
+	    else if (this.worldStreamer) {
+	      await Promise.all([...this.worldChunkLayers.values()].map((record) => terrain.loadCities(record.points, record)));
+	    }
 	    if (this.disposed || expectedRevision !== this.loadRevision || this.terrain !== terrain) {
 	      this.worldRoot.remove(terrain);
 	      terrain.dispose();
@@ -10096,8 +10797,8 @@ void main() {
 	  //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
 	  async rebuildForest(expectedRevision = this.loadRevision) {
 	    const forestRevision = ++this.forestRevision;
-	    if (this.infiniteStreamer) {
-	      return this.rebuildInfiniteForests(expectedRevision, forestRevision);
+	    if (this.worldStreamer) {
+	      return this.rebuildStreamedForests(expectedRevision, forestRevision);
 	    }
 	    this.clearWorldCopies();
 	    this.chunkScheduler.clear();
@@ -10140,8 +10841,8 @@ void main() {
 	  //grassBladeHeight setters below) - a rebuild replaces the whole instanced
 	  //geometry, there's no partial/incremental update.
 	  rebuildGrass() {
-	    if (this.infiniteStreamer) {
-	      this.rebuildInfiniteGrass();
+	    if (this.worldStreamer) {
+	      this.rebuildStreamedGrass();
 	      return;
 	    }
 	    this.clearWorldCopies();
@@ -10173,16 +10874,29 @@ void main() {
 	    }
 	    this.refreshWorldCopies();
 	  }
-	  rebuildInfiniteGrass() {
+	  rebuildStreamedGrass() {
 	    this.chunkScheduler.clear();
-	    this.infiniteGrassByChunkId.clear();
-	    for (const record of this.infiniteChunkLayers.values()) {
+	    this.streamedGrassByChunkId.clear();
+	    for (const record of this.worldChunkLayers.values()) {
 	      if (record.grass) {
 	        this.worldRoot.remove(record.grass);
 	        record.grass.dispose();
 	        record.grass = void 0;
 	      }
-	      if (!this.options.grassEnabled) continue;
+	    }
+	    this.streamedGrassResources?.dispose();
+	    this.streamedGrassResources = void 0;
+	    if (this.options.grassEnabled) {
+	      this.streamedGrassResources = new GrassSharedResources({
+	        size: this.options.size,
+	        bladeHeight: this.options.grassBladeHeight,
+	        windStrength: this.options.grassWindStrength,
+	        windSpeed: this.options.grassWindSpeed,
+	        fogDarkenFactor: this.options.fogDarkenFactor
+	      });
+	    }
+	    for (const record of this.worldChunkLayers.values()) {
+	      if (!this.streamedGrassResources) continue;
 	      const grass = createGrassField(this.mapData, {
 	        size: this.options.size,
 	        density: this.options.grassDensity,
@@ -10195,25 +10909,32 @@ void main() {
 	        riverBankWidth: this.options.riverBankWidth,
 	        riverCurvature: this.options.riverCurvature,
 	        lakeShoreWidth: this.options.lakeShoreWidth
-	      }, record.points) ?? void 0;
+	      }, record.points, this.streamedGrassResources) ?? void 0;
 	      if (!grass) continue;
 	      record.grass = grass;
-	      this.indexChunkLayer(grass, this.infiniteGrassByChunkId);
+	      this.applyWorldPatternToObject(grass);
+	      this.indexChunkLayer(grass, this.streamedGrassByChunkId);
 	      this.worldRoot.add(grass);
-	      this.reapplyFogToObject(grass);
+	      this.reapplyFogToObject(grass, record.points);
 	    }
+	    this.refreshWorldCopies();
 	  }
-	  async rebuildInfiniteForests(expectedRevision, forestRevision) {
+	  async rebuildStreamedForests(expectedRevision, forestRevision) {
 	    this.chunkScheduler.clear();
-	    this.infiniteForestByChunkId.clear();
+	    this.streamedForestByChunkId.clear();
 	    const builds = [];
-	    for (const [key, record] of this.infiniteChunkLayers) {
+	    for (const [key, record] of this.worldChunkLayers) {
 	      if (record.forest) {
 	        this.worldRoot.remove(record.forest);
 	        record.forest.dispose();
 	        record.forest = void 0;
 	      }
-	      const revision = ++this.infiniteLayerRevision;
+	    }
+	    this.streamedForestResources?.dispose();
+	    const resources = new ForestSharedResources();
+	    this.streamedForestResources = resources;
+	    for (const [key, record] of this.worldChunkLayers) {
+	      const revision = ++this.worldLayerRevision;
 	      record.revision = revision;
 	      const build = createForest(this.mapData, {
 	        size: this.options.size,
@@ -10228,26 +10949,28 @@ void main() {
 	        beachWidth: this.options.beachWidth,
 	        waterCornerRounding: this.options.waterCornerRounding,
 	        coastCurvature: this.options.coastCurvature
-	      }, record.points).then((forest) => {
+	      }, record.points, resources).then((forest) => {
 	        if (!forest) return;
-	        const current = this.infiniteChunkLayers.get(key);
+	        const current = this.worldChunkLayers.get(key);
 	        if (this.disposed || expectedRevision !== this.loadRevision || forestRevision !== this.forestRevision || current !== record || record.revision !== revision) {
 	          forest.dispose();
 	          return;
 	        }
 	        record.forest = forest;
-	        this.indexChunkLayer(forest, this.infiniteForestByChunkId);
+	        this.indexChunkLayer(forest, this.streamedForestByChunkId);
 	        this.worldRoot.add(forest);
-	        this.reapplyFogToObject(forest);
+	        this.reapplyFogToObject(forest, record.points);
+	        this.refreshWorldCopies();
 	      });
 	      record.forestPromise = build;
 	      builds.push(build);
 	    }
 	    await Promise.all(builds);
+	    this.refreshWorldCopies();
 	    return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
 	  }
 	  getTile(x, y) {
-	    if (this.mapData?.infinite && !this.infiniteStreamer?.store.hasCoreTile(x, y)) return void 0;
+	    if (this.worldSource && !this.worldSource.hasTile(x, y)) return void 0;
 	    return this.mapData ? getMapTile(this.mapData, x, y) : void 0;
 	  }
 	  //-------------------------------------------------------------------------
@@ -10262,18 +10985,26 @@ void main() {
 	  //fog updates as usual and re-showing the fog repaints everything current.
 	  //-------------------------------------------------------------------------
 	  setTileFog(x, y, state) {
-	    if (!this.mapData || state !== 0 /* Unseen */ && state !== 1 /* Explored */ && state !== 2 /* Visible */) return;
-	    const normalized = normalizeMapCoordinates(this.mapData, x, y);
-	    if (!normalized || !this.mapData.data[normalized.x]?.[normalized.y]) return;
-	    this.fogStates.set(`${normalized.x},${normalized.y}`, state);
-	    if (this.warFogShown) this.applyTileFog(normalized.x, normalized.y, state);
+	    this.setTilesFog([{ x, y, state }]);
+	  }
+	  setTilesFog(changes) {
+	    if (!this.mapData || !this.fogStates || changes.length === 0) return;
+	    const normalizedChanges = [];
+	    for (const change of changes) {
+	      if (change.state !== 0 /* Unseen */ && change.state !== 1 /* Explored */ && change.state !== 2 /* Visible */) continue;
+	      const normalized = normalizeMapCoordinates(this.mapData, change.x, change.y);
+	      if (!normalized || !getMapTile(this.mapData, normalized.x, normalized.y)) continue;
+	      this.fogStates.set(normalized.x, normalized.y, change.state);
+	      normalizedChanges.push(normalized.x === change.x && normalized.y === change.y ? change : { ...normalized, state: change.state });
+	    }
+	    if (this.warFogShown) this.applyFogChanges(normalizedChanges);
 	  }
 	  resetRenderOrigin() {
 	    this.renderOrigin.set(0, 0);
 	    this.worldRoot.position.set(0, 0, 0);
 	    this.terrain?.setCameraWorldOffset(0, 0);
 	  }
-	  rebaseInfiniteWorld() {
+	  rebaseWorld() {
 	    if (!this.mapData?.infinite) return;
 	    const x = this.controls.target.x;
 	    const z = this.controls.target.z;
@@ -10288,20 +11019,31 @@ void main() {
 	    this.camera.position.x -= x;
 	    this.camera.position.z -= z;
 	  }
-	  updateInfiniteWorldDemand() {
-	    if (!this.infiniteStreamer) return;
+	  updateWorldDemand() {
+	    if (!this.worldStreamer || !this.worldSource) return;
 	    this.logicalTargetScratch.copy(this.controls.target);
-	    this.logicalTargetScratch.x += this.renderOrigin.x;
-	    this.logicalTargetScratch.z += this.renderOrigin.y;
-	    const tile = pickTile(this.logicalTargetScratch, this.options.size);
-	    if (!tile) return;
-	    const key = SparseWorldChunkStore.key(
-	      Math.floor(tile.x / this.infiniteChunkSize),
-	      Math.floor(tile.y / this.infiniteChunkSize)
+	    if (this.mapData.infinite) {
+	      this.logicalTargetScratch.x += this.renderOrigin.x;
+	      this.logicalTargetScratch.z += this.renderOrigin.y;
+	    }
+	    const tile = pickTile(
+	      this.logicalTargetScratch,
+	      this.options.size,
+	      this.mapData.infinite ? void 0 : this.mapData.w,
+	      this.mapData.infinite ? void 0 : this.mapData.h,
+	      this.mapData.wrapX,
+	      this.mapData.wrapY
 	    );
-	    if (key === this.infiniteDemandChunkKey) return;
-	    this.infiniteDemandChunkKey = key;
-	    void this.infiniteStreamer.setCenterTile(tile.x, tile.y).catch((error) => {
+	    if (!tile) return;
+	    const resolved = this.worldSource.resolveChunk(
+	      Math.floor(tile.x / this.worldChunkSize),
+	      Math.floor(tile.y / this.worldChunkSize)
+	    );
+	    if (!resolved) return;
+	    const key = WorldStreamer.key(resolved.x, resolved.y);
+	    if (key === this.worldDemandChunkKey) return;
+	    this.worldDemandChunkKey = key;
+	    void this.worldStreamer.setCenterTile(tile.x, tile.y).catch((error) => {
 	      if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
 	    });
 	  }
@@ -10311,16 +11053,32 @@ void main() {
 	    point.z += this.renderOrigin.y;
 	    return point;
 	  }
-	  applyTileFog(x, y, state) {
-	    this.terrain?.setFogState(x, y, state);
-	    this.grass?.setFogState(x, y, state);
-	    this.forest?.setFogState(x, y, state);
-	    for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.setFogState(x, y, state);
-	    for (const forest of new Set(this.infiniteForestByChunkId.values())) forest.setFogState(x, y, state);
-	    const key = `${x},${y}`;
+	  applyFogChanges(changes) {
+	    const renderedStates = /* @__PURE__ */ new Map();
+	    for (const { x, y, state } of changes) {
+	      if (this.worldSource) {
+	        const resolved = this.worldSource.resolveChunk(
+	          Math.floor(x / this.worldChunkSize),
+	          Math.floor(y / this.worldChunkSize)
+	        );
+	        const record = resolved ? this.worldChunkLayers.get(WorldStreamer.key(resolved.x, resolved.y)) : void 0;
+	        if (!record) continue;
+	        this.terrain?.setFogState(x, y, state);
+	        record.grass?.setFogState(x, y, state);
+	        record.forest?.setFogState(x, y, state);
+	      } else {
+	        this.terrain?.setFogState(x, y, state);
+	        this.grass?.setFogState(x, y, state);
+	        this.forest?.setFogState(x, y, state);
+	      }
+	      renderedStates.set(`${x},${y}`, state);
+	    }
+	    if (renderedStates.size === 0) return;
 	    for (const copy of this.worldCopies) {
 	      copy.traverse((object) => {
-	        if (object.userData[CITY_FOG_TILE_KEY] === key) object.visible = state !== 0 /* Unseen */;
+	        const key = object.userData[CITY_FOG_TILE_KEY];
+	        const state = key ? renderedStates.get(key) : void 0;
+	        if (state !== void 0) object.visible = state !== 0 /* Unseen */;
 	      });
 	    }
 	  }
@@ -10330,10 +11088,15 @@ void main() {
 	  //attributes default to all-Visible, which silently dropped previously
 	  //painted fog until the next consumer update.
 	  reapplyFog() {
-	    for (const [key, state] of this.fogStates) {
-	      const [x, y] = key.split(",").map(Number);
-	      this.applyTileFog(x, y, this.warFogShown ? state : 2 /* Visible */);
+	    if (this.worldSource) {
+	      for (const record of this.worldChunkLayers.values()) this.reapplyFogToPoints(record.points, record);
+	      return;
 	    }
+	    const changes = [];
+	    this.fogStates?.forEach((state, x, y) => {
+	      changes.push({ x, y, state: this.warFogShown ? state : 2 /* Visible */ });
+	    });
+	    this.applyFogChanges(changes);
 	  }
 	  //Purely visual show/hide of the war fog: hiding repaints every tile as
 	  //Visible but keeps the recorded states (and keeps recording new ones from
@@ -10619,7 +11382,7 @@ void main() {
 	  set grassVisible(value) {
 	    this.options.grassEnabled = value;
 	    if (this.grass) this.grass.visible = value;
-	    if (this.infiniteStreamer) this.rebuildInfiniteGrass();
+	    if (this.worldStreamer) this.rebuildStreamedGrass();
 	    this.refreshWorldCopies();
 	  }
 	  //Wind uniforms are cheap to update live - no rebuild needed.
@@ -10629,7 +11392,7 @@ void main() {
 	  set grassWindStrength(value) {
 	    this.options.grassWindStrength = value;
 	    if (this.grass) this.grass.windStrength = value;
-	    for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windStrength = value;
+	    for (const grass of new Set(this.streamedGrassByChunkId.values())) grass.windStrength = value;
 	  }
 	  get grassWindSpeed() {
 	    return this.grass?.windSpeed ?? this.options.grassWindSpeed;
@@ -10637,7 +11400,7 @@ void main() {
 	  set grassWindSpeed(value) {
 	    this.options.grassWindSpeed = value;
 	    if (this.grass) this.grass.windSpeed = value;
-	    for (const grass of new Set(this.infiniteGrassByChunkId.values())) grass.windSpeed = value;
+	    for (const grass of new Set(this.streamedGrassByChunkId.values())) grass.windSpeed = value;
 	  }
 	  //Blade count/size is baked into the instanced geometry at build time, so
 	  //changing any of these rebuilds the whole grass field (see rebuildGrass()).
@@ -10681,8 +11444,11 @@ void main() {
 	  get streamingStats() {
 	    return this.chunkScheduler.stats;
 	  }
-	  get infiniteStreamingStats() {
-	    return this.infiniteStreamer?.stats;
+	  get worldStreamingStats() {
+	    return this.worldStreamer?.stats;
+	  }
+	  get frameTaskStats() {
+	    return this.frameTasks.stats;
 	  }
 	  drawRoutePath(path) {
 	    this.cleanRoutePath();
@@ -10721,8 +11487,8 @@ void main() {
 	  getCamera() {
 	    return this.camera;
 	  }
-	  getCameraTarget() {
-	    return this.controls.target.clone().add(new three.Vector3(this.renderOrigin.x, 0, this.renderOrigin.y));
+	  getCameraTarget(target = new three.Vector3()) {
+	    return target.copy(this.controls.target).add(this.logicalTargetScratch.set(this.renderOrigin.x, 0, this.renderOrigin.y));
 	  }
 	  getScene() {
 	    return this.scene;
@@ -10732,7 +11498,7 @@ void main() {
 	    this.disposed = true;
 	    this.loadRevision += 1;
 	    this.forestRevision += 1;
-	    this.stopInfiniteStreaming();
+	    this.stopWorldStreaming();
 	    if (this.animationFrameId !== void 0) window.cancelAnimationFrame(this.animationFrameId);
 	    window.removeEventListener("resize", this.handleResize);
 	    window.removeEventListener("keydown", this.onKeyDown);
@@ -10800,6 +11566,10 @@ void main() {
 	    //instead, and "cell_enter" fires as it crosses into each new cell.
 	    this.movePath = null;
 	    this._viewCell = null;
+	    this.alignedCopyX = Number.NaN;
+	    this.alignedCopyY = Number.NaN;
+	    this.alignedTileX = Number.NaN;
+	    this.alignedTileY = Number.NaN;
 	    this.options = {
 	      animateFrameRate: 50,
 	      //Framerate: how much per second run animate function
@@ -10985,9 +11755,16 @@ void main() {
 	    const center = getHexCenter(this.options.x, this.options.y, this.options.size);
 	    const periodX = this.options.wrapX ? this.options.mapWidth * this.options.size * 1.5 : 0;
 	    const periodY = this.options.wrapY ? this.options.mapHeight * this.options.size * Math.sqrt(3) : 0;
-	    if (periodX > 0) center.x += Math.round((referenceX - center.x) / periodX) * periodX;
-	    if (periodY > 0) center.y += Math.round((referenceZ - center.y) / periodY) * periodY;
+	    const copyX = periodX > 0 ? Math.round((referenceX - center.x) / periodX) : 0;
+	    const copyY = periodY > 0 ? Math.round((referenceZ - center.y) / periodY) : 0;
+	    if (copyX === this.alignedCopyX && copyY === this.alignedCopyY && this.options.x === this.alignedTileX && this.options.y === this.alignedTileY) return;
+	    center.x += copyX * periodX;
+	    center.y += copyY * periodY;
 	    this._unit.position.set(center.x, this._unit.position.y, center.y);
+	    this.alignedCopyX = copyX;
+	    this.alignedCopyY = copyY;
+	    this.alignedTileX = this.options.x;
+	    this.alignedTileY = this.options.y;
 	  }
 	  dispose() {
 	    this.needAnimate = false;
@@ -11105,7 +11882,7 @@ void main() {
 	    return [];
 	  }
 	  isAccessible(point) {
-	    const tile = this.map.data[point.x]?.[point.y];
+	    const tile = getMapTile(this.map, point.x, point.y);
 	    return tile !== void 0 && this.restricted[tile.type] === true && (!this.accessible || this.accessible(point.x, point.y));
 	  }
 	  reconstructPath(start, end, parents) {
@@ -11140,26 +11917,49 @@ void main() {
 	    return best;
 	  }
 	};
-
-	// src/gameengine.ts
 	var GameEngine = class extends EventEmitter {
 	  constructor(options) {
 	    super();
 	    this._unitsList = {};
+	    this._units = [];
 	    this.initRevision = 0;
+	    this.cameraTarget = new three.Vector3();
+	    this.farUnitElapsed = /* @__PURE__ */ new Map();
+	    this.fogViewers = [];
 	    this.options = {
 	      preventCellClick: true,
-	      fogOfWar: true
+	      fogOfWar: true,
+	      unitAnimationDistance: 3e3,
+	      farUnitUpdateInterval: 0.25
 	    };
 	    setOptions(this, options);
+	    if (!Number.isFinite(this.options.unitAnimationDistance) || this.options.unitAnimationDistance < 0) {
+	      throw new RangeError("unitAnimationDistance must be a non-negative finite number");
+	    }
+	    if (!Number.isFinite(this.options.farUnitUpdateInterval) || this.options.farUnitUpdateInterval <= 0) {
+	      throw new RangeError("farUnitUpdateInterval must be a positive finite number");
+	    }
 	    this._map = new HexMap(options);
 	    this._map.on("click", (payload) => this.cellClick(payload));
 	    this._map.on("hover", (payload) => this.cellHover(payload));
 	    this._map.on("frame", ({ dtS }) => {
-	      const target = this._map.getCameraTarget();
-	      for (const unit of Object.values(this._unitsList)) {
-	        unit.update(dtS);
+	      const target = this._map.getCameraTarget(this.cameraTarget);
+	      for (const unit of this._units) {
 	        unit.alignToWorldReference(target.x, target.z);
+	        const dx = unit.unit.position.x - target.x;
+	        const dz = unit.unit.position.z - target.z;
+	        if (unit.moving || Math.hypot(dx, dz) <= this.options.unitAnimationDistance) {
+	          unit.update(dtS);
+	          this.farUnitElapsed.delete(unit);
+	          continue;
+	        }
+	        const elapsed = (this.farUnitElapsed.get(unit) ?? 0) + dtS;
+	        if (elapsed >= this.options.farUnitUpdateInterval) {
+	          unit.update(elapsed);
+	          this.farUnitElapsed.set(unit, 0);
+	        } else {
+	          this.farUnitElapsed.set(unit, elapsed);
+	        }
 	      }
 	    });
 	  }
@@ -11172,7 +11972,7 @@ void main() {
 	    this._fog = void 0;
 	    this.clearMapUnitMarkers(mapData);
 	    this._mapData = mapData;
-	    await this._map.load(mapData);
+	    await this._map.loadWorld({ source: new StaticWorldSource(mapData) });
 	    if (revision !== this.initRevision) return;
 	    const units = placements.map((unitInfo) => new Unit({
 	      ...unitInfo,
@@ -11202,11 +12002,13 @@ void main() {
 	      unit.on("end_move", () => this.recomputeFog());
 	      this._map.add(unit.unit);
 	      this._unitsList[unit.id] = unit;
+	      this._units.push(unit);
+	      this.fogViewers.push({ ...unit.viewPosition, viewRange: unit.viewRange });
 	      this._mapData.data[unit.position.x][unit.position.y].unit = unit.id;
 	    }
 	    if (this.options.fogOfWar) {
 	      this._fog = new FogOfWar(mapData);
-	      for (const tile of this._fog.allTiles()) this._map.setTileFog(tile.x, tile.y, tile.state);
+	      this._map.setTilesFog(this._fog.allTiles());
 	      this.recomputeFog();
 	    }
 	  }
@@ -11233,12 +12035,15 @@ void main() {
 	    });
 	  }
 	  clearUnits() {
-	    for (const unit of Object.values(this._unitsList)) {
+	    for (const unit of this._units) {
 	      const tile = this._mapData?.data[unit.position.x]?.[unit.position.y];
 	      if (tile?.unit === unit.id) delete tile.unit;
 	      unit.dispose();
 	    }
 	    this._unitsList = {};
+	    this._units = [];
+	    this.fogViewers.length = 0;
+	    this.farUnitElapsed.clear();
 	  }
 	  clearMapUnitMarkers(map) {
 	    forEachMapTile(map, (tile) => {
@@ -11255,10 +12060,19 @@ void main() {
 	  //during a moveTo() animation position is already the destination, while
 	  //viewPosition tracks the cell the model is actually passing through.
 	  recomputeFog() {
+	    var _a;
 	    if (!this._fog) return;
-	    const units = Object.values(this._unitsList);
-	    const changes = this._fog.recompute(units.map((u) => ({ ...u.viewPosition, viewRange: u.viewRange })));
-	    for (const change of changes) this._map.setTileFog(change.x, change.y, change.state);
+	    const units = this._units;
+	    for (let index = 0; index < units.length; index += 1) {
+	      const unit = units[index];
+	      const position = unit.viewPosition;
+	      const viewer = (_a = this.fogViewers)[index] ?? (_a[index] = { ...position, viewRange: unit.viewRange });
+	      viewer.x = position.x;
+	      viewer.y = position.y;
+	      viewer.viewRange = unit.viewRange;
+	    }
+	    const changes = this._fog.recompute(this.fogViewers);
+	    this._map.setTilesFog(changes);
 	    for (const unit of units) {
 	      unit.unit.visible = this._fog.getState(unit.viewPosition.x, unit.viewPosition.y) === 2 /* Visible */;
 	    }
@@ -11466,10 +12280,10 @@ void main() {
 	exports.EventEmitter = EventEmitter;
 	exports.FogOfWar = FogOfWar;
 	exports.FogState = FogState;
+	exports.FrameTaskScheduler = FrameTaskScheduler;
 	exports.GameEngine = GameEngine;
 	exports.HEXPolygon = HEXPolygon;
 	exports.HexMap = HexMap;
-	exports.InfiniteWorldStreamer = InfiniteWorldStreamer;
 	exports.Land = Land;
 	exports.LandColor = LandColor;
 	exports.LandPriority = LandPriority;
@@ -11478,14 +12292,19 @@ void main() {
 	exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
 	exports.NEIGHBOR_DIRECTIONS = NEIGHBOR_DIRECTIONS;
 	exports.PathFinder = PathFinder;
+	exports.ProceduralWorldSource = ProceduralWorldSource;
 	exports.SparseWorldChunkStore = SparseWorldChunkStore;
+	exports.StaticWorldSource = StaticWorldSource;
 	exports.Unit = Unit;
 	exports.UnitActions = UnitActions;
 	exports.WORLD_CHUNK_FORMAT_VERSION = WORLD_CHUNK_FORMAT_VERSION;
 	exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
 	exports.WorldGeneratorClient = WorldGeneratorClient;
 	exports.WorldGeneratorPool = WorldGeneratorPool;
+	exports.WorldStreamer = WorldStreamer;
 	exports.assertPackedWorldChunk = assertPackedWorldChunk;
+	exports.assertWorldChunk = assertWorldChunk;
+	exports.assertWorldSource = assertWorldSource;
 	exports.decodeWorldChunkTile = decodeWorldChunkTile;
 	exports.generateWorld = generateWorld;
 	exports.generateWorldChunk = generateWorldChunk;
@@ -11495,7 +12314,9 @@ void main() {
 	exports.getNeighborCoords = getNeighborCoords;
 	exports.getNeighbors = getNeighbors;
 	exports.getWorldChunkCorePoints = getWorldChunkCorePoints;
+	exports.getWorldSourceTile = getWorldSourceTile;
 	exports.normalizeMapCoordinates = normalizeMapCoordinates;
+	exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
 	exports.positiveModulo = positiveModulo;
 
 }));

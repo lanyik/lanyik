@@ -3,7 +3,7 @@
 //consumers must have their own copy of three.js installed/loaded.
 //----------------------------------------------------------------------------------
 export { HexMap } from "./HexMap";
-export type { HexMapOptions, InfiniteWorldOptions } from "./HexMap";
+export type { HexMapOptions, WorldLoadOptions } from "./HexMap";
 
 export { GameEngine } from "./gameengine";
 export type { GameEngineOptions } from "./gameengine";
@@ -46,6 +46,8 @@ export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateW
 export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
+export { FrameTaskScheduler } from "./rendering/FrameTaskScheduler";
+export type { FrameTaskSchedulerOptions, FrameTaskSchedulerStats } from "./rendering/FrameTaskScheduler";
 export {
     generateWorldChunk,
     assertPackedWorldChunk,
@@ -65,9 +67,26 @@ export type {
     ChunkRequestOptions,
     ChunkGeneratorClient
 } from "./world/WorldGeneratorPool";
-export { InfiniteWorldStreamer } from "./world/InfiniteWorldStreamer";
+export {
+    StaticWorldSource,
+    ProceduralWorldSource,
+    assertWorldSource,
+    assertWorldChunk,
+    packedChunkFromWorldChunk,
+    getWorldSourceTile
+} from "./world/WorldSource";
 export type {
-    InfiniteWorldStreamerOptions,
-    InfiniteWorldStreamerHandlers,
-    InfiniteWorldStreamingStats
-} from "./world/InfiniteWorldStreamer";
+    WorldSource,
+    WorldBounds,
+    WorldChunk,
+    WorldSourceStats,
+    StaticWorldSourceOptions,
+    ProceduralWorldSourceOptions,
+    ProceduralWorldSourceDependencies
+} from "./world/WorldSource";
+export { WorldStreamer } from "./world/WorldStreamer";
+export type {
+    WorldStreamerOptions,
+    WorldStreamerHandlers,
+    WorldStreamingStats
+} from "./world/WorldStreamer";

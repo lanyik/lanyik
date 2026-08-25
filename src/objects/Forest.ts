@@ -6,7 +6,9 @@ import {
     DynamicDrawUsage,
     Mesh,
     Vector3,
-    Object3D
+    Object3D,
+    BufferGeometry,
+    Material
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
@@ -14,6 +16,7 @@ import { HEXPolygon, getHexCenter } from "../helpers/helpers";
 import { forEachMapTile } from "../helpers/mapData";
 import { loadModel } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
+import { getMapTile } from "../helpers/topology";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
 import {
@@ -65,6 +68,12 @@ interface ForestChunkRecord {
     instancedMeshes: InstancedMesh[];
     tiles: Point[];
     lod?: WorldChunkLod;
+    lodCache: Map<WorldChunkLod, ForestLodCache>;
+}
+
+interface ForestLodCache {
+    instanceCount: number;
+    ranges: Map<string, { start: number, count: number, originalMatrices: Matrix4[] }>;
 }
 
 interface ForestBuildContext {
@@ -76,6 +85,64 @@ interface ForestBuildContext {
     polygon: number[][];
     waterOptions: WaterClearanceOptions;
     coastOptions: CoastClearanceOptions;
+}
+
+interface PreparedForestPart {
+    geometry: BufferGeometry;
+    material: Material | Material[];
+}
+
+//One cache per HexMap load session. Every resident source chunk using the same
+//tree species shares the baked glTF geometry/material instead of cloning it
+//again on every mount.
+export class ForestSharedResources {
+    private readonly models = new Map<string, Promise<PreparedForestPart[]>>();
+    private readonly geometries = new Set<BufferGeometry>();
+    private disposed = false;
+
+    public prepare(modelPath: string): Promise<PreparedForestPart[]> {
+        if (this.disposed) return Promise.reject(new Error("ForestSharedResources has been disposed"));
+        let pending = this.models.get(modelPath);
+        if (!pending) {
+            pending = loadModel(modelPath).then(({ scene, fixup }) => {
+                const meshes: Mesh[] = [];
+                scene.traverse(object => { if ((object as Mesh).isMesh) meshes.push(object as Mesh); });
+                const parts = meshes.map(mesh => {
+                    const geometry = mesh.geometry.clone();
+                    geometry.applyMatrix4(mesh.matrixWorld);
+                    geometry.applyMatrix4(fixup);
+                    this.geometries.add(geometry);
+                    return { geometry, material: mesh.material };
+                });
+                if (this.disposed) {
+                    for (const part of parts) part.geometry.dispose();
+                    throw new Error("ForestSharedResources was disposed while loading a model");
+                }
+                return parts;
+            }).catch(reason => {
+                this.models.delete(modelPath);
+                throw reason;
+            });
+            this.models.set(modelPath, pending);
+        }
+        return pending;
+    }
+
+    public get preparedModelCount(): number {
+        return this.models.size;
+    }
+
+    public get preparedGeometryCount(): number {
+        return this.geometries.size;
+    }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        for (const geometry of this.geometries) geometry.dispose();
+        this.geometries.clear();
+        this.models.clear();
+    }
 }
 
 //----------------------------------------------------------------------------------
@@ -91,12 +158,15 @@ interface ForestBuildContext {
 export class ForestField extends Group {
     private readonly hiddenMatrix = new Matrix4().makeScale(0, 0, 0);
     private readonly fogStates = new Map<string, number>();
+    private lodBuilds = 0;
 
     constructor(
         private tileRanges: Map<string, TileTreeRange>,
         private fogDarkenFactor: number,
         private chunks: Map<string, ForestChunkRecord>,
-        private context: ForestBuildContext
+        private context: ForestBuildContext,
+        private resources: ForestSharedResources,
+        private ownsResources: boolean
     ) {
         super();
         for (const record of chunks.values()) this.add(record.root);
@@ -117,15 +187,28 @@ export class ForestField extends Group {
                 instancedMesh.setMatrixAt(idx, hidden ? this.hiddenMatrix : range.originalMatrices[i]);
                 instancedMesh.instanceColor?.setXYZ(idx, shade, shade, shade);
             }
+            instancedMesh.instanceMatrix.addUpdateRange(range.start * 16, range.count * 16);
             instancedMesh.instanceMatrix.needsUpdate = true;
-            if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+            if (instancedMesh.instanceColor) {
+                instancedMesh.instanceColor.addUpdateRange(range.start * 3, range.count * 3);
+                instancedMesh.instanceColor.needsUpdate = true;
+            }
         }
     }
 
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod, objects: Object3D[]): void {
         const record = this.chunks.get(metadata.id);
         if (!record) return;
-        if (record.lod !== lod) this.populateChunk(record, lod);
+        if (record.lod !== lod) {
+            let cached = record.lodCache.get(lod);
+            if (!cached) {
+                cached = this.buildChunkLod(record, lod);
+                record.lodCache.set(lod, cached);
+                this.lodBuilds += 1;
+            }
+            this.applyChunkLod(record, cached);
+            record.lod = lod;
+        }
 
         //World copies share matrices/colors, but InstancedMesh.count is a plain
         //number. Mirror it into every visible clone after a lazy build or LOD
@@ -147,28 +230,38 @@ export class ForestField extends Group {
         if (!record || record.lod === undefined) return;
         for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
         for (const mesh of record.instancedMeshes) mesh.count = 0;
+        record.lodCache.clear();
         record.lod = undefined;
     }
 
-    public dispose(): void {
-        const geometries = new Set<InstancedMesh["geometry"]>();
-        for (const record of this.chunks.values()) {
-            for (const mesh of record.instancedMeshes) geometries.add(mesh.geometry);
-        }
-        for (const geometry of geometries) geometry.dispose();
-        this.tileRanges.clear();
-        this.chunks.clear();
+    public disposeChunkGpu(metadata: WorldChunkMetadata): void {
+        const record = this.chunks.get(metadata.id);
+        if (!record) return;
+        for (const mesh of record.instancedMeshes) mesh.dispose();
     }
 
-    private populateChunk(record: ForestChunkRecord, lod: WorldChunkLod): void {
+    public get lodBuildCount(): number {
+        return this.lodBuilds;
+    }
+
+    public dispose(): void {
+        for (const record of this.chunks.values()) {
+            for (const mesh of record.instancedMeshes) mesh.dispose();
+        }
+        this.tileRanges.clear();
+        this.chunks.clear();
+        if (this.ownsResources) this.resources.dispose();
+    }
+
+    private buildChunkLod(record: ForestChunkRecord, lod: WorldChunkLod): ForestLodCache {
         const {
             map, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
         } = this.context;
         const density = Math.max(1, Math.round(treesPerTile * ([1, 0.5, 0.2] as const)[lod]));
-        for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
 
         const matrix = new Matrix4();
         const scaleVector = new Vector3();
+        const ranges = new Map<string, { start: number, count: number, originalMatrices: Matrix4[] }>();
         let instance = 0;
         for (const tile of record.tiles) {
             const key = `${tile.x},${tile.y}`;
@@ -202,28 +295,39 @@ export class ForestField extends Group {
                     center.y + ly - record.root.position.z
                 );
                 originalMatrices.push(matrix.clone());
-                const fogState = this.fogStates.get(key) ?? 2;
-                const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
-                for (const mesh of record.instancedMeshes) {
-                    mesh.setMatrixAt(instance, fogState < 0.5 ? this.hiddenMatrix : matrix);
-                    mesh.instanceColor?.setXYZ(instance, shade, shade, shade);
-                }
                 instance++;
             }
-            this.tileRanges.set(key, {
-                instancedMeshes: record.instancedMeshes,
+            ranges.set(key, {
                 start: tileStart,
                 count: instance - tileStart,
                 originalMatrices
             });
         }
 
+        return { instanceCount: instance, ranges };
+    }
+
+    private applyChunkLod(record: ForestChunkRecord, cached: ForestLodCache): void {
+        for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
+        for (const [key, range] of cached.ranges) {
+            const fogState = this.fogStates.get(key) ?? 2;
+            const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
+            for (let offset = 0; offset < range.count; offset += 1) {
+                const matrix = fogState < 0.5 ? this.hiddenMatrix : range.originalMatrices[offset];
+                const index = range.start + offset;
+                for (const mesh of record.instancedMeshes) {
+                    mesh.setMatrixAt(index, matrix);
+                    mesh.instanceColor?.setXYZ(index, shade, shade, shade);
+                }
+            }
+            this.tileRanges.set(key, { instancedMeshes: record.instancedMeshes, ...range });
+        }
+
         for (const mesh of record.instancedMeshes) {
-            mesh.count = instance;
+            mesh.count = cached.instanceCount;
             mesh.instanceMatrix.needsUpdate = true;
             if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         }
-        record.lod = lod;
     }
 }
 
@@ -257,7 +361,8 @@ function stableRandom(x: number, y: number, salt: number): number {
 export async function createForest(
     map: MapInfo,
     options: ForestOptions,
-    onlyTiles?: readonly Point[]
+    onlyTiles?: readonly Point[],
+    sharedResources?: ForestSharedResources
 ): Promise<ForestField | null> {
     const { size } = options;
     const treesPerTile = options.treesPerTile ?? 20;
@@ -272,7 +377,7 @@ export async function createForest(
     //matching skip).
     const tilesByModel = new Map<string, Point[]>();
     const considerTile = (x: number, y: number): void => {
-        const tile = map.data[x]?.[y];
+        const tile = getMapTile(map, x, y);
         if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) return;
         const modelPath = tile.treeModel ?? defaultModel;
         const tiles = tilesByModel.get(modelPath) ?? [];
@@ -304,25 +409,12 @@ export async function createForest(
 
     const tileRanges = new Map<string, TileTreeRange>();
     const chunkRecords = new Map<string, ForestChunkRecord>();
+    const resources = sharedResources ?? new ForestSharedResources();
     let modelIndex = 0;
 
     for (const [modelPath, tiles] of tilesByModel) {
-        const { scene, fixup } = await loadModel(modelPath);
-
-        const meshes: Mesh[] = [];
-        scene.traverse(o => { if ((o as Mesh).isMesh) meshes.push(o as Mesh); });
-        if (meshes.length === 0) continue;
-
-        //Prepare each model part once, then share its baked geometry across
-        //small spatial chunks. Each chunk remains an InstancedMesh, but Three
-        //can now reject off-screen chunks instead of drawing every tree in all
-        //nine toroidal images.
-        const preparedParts = meshes.map(mesh => {
-            const geometry = mesh.geometry.clone();
-            geometry.applyMatrix4(mesh.matrixWorld); // bake this part's offset within the model
-            geometry.applyMatrix4(fixup);             // bake the model's own info.json fine-tuning
-            return { geometry, material: mesh.material };
-        });
+        const preparedParts = await resources.prepare(modelPath);
+        if (preparedParts.length === 0) continue;
 
         const chunks = groupTilesByWorldChunk(tiles);
 
@@ -350,7 +442,7 @@ export async function createForest(
                 localizeWorldChunkBounds(getWorldChunkBounds(chunkTiles, size, 0, size * 3), origin),
                 id
             );
-            chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles });
+            chunkRecords.set(id, { root, instancedMeshes, tiles: chunkTiles, lodCache: new Map() });
         }
         modelIndex += 1;
     }
@@ -364,5 +456,5 @@ export async function createForest(
         polygon,
         waterOptions,
         coastOptions
-    });
+    }, resources, !sharedResources);
 }

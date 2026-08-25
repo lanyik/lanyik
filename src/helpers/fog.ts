@@ -1,5 +1,5 @@
 import { MapInfo, Point } from "../interfaces";
-import { getMapNeighbors, normalizeMapCoordinates } from "./topology";
+import { getMapNeighbors, getMapTile, normalizeMapCoordinates } from "./topology";
 
 //----------------------------------------------------------------------------------
 //Flood-fills outward from (x, y) along hex neighbors up to `range` steps,
@@ -13,7 +13,7 @@ import { getMapNeighbors, normalizeMapCoordinates } from "./topology";
 //----------------------------------------------------------------------------------
 export function tilesWithinRange(map: MapInfo, x: number, y: number, range: number): Point[] {
     const origin = normalizeMapCoordinates(map, x, y);
-    if (!Number.isFinite(range) || range < 0 || !origin || !map.data[origin.x]?.[origin.y]) return [];
+    if (!Number.isFinite(range) || range < 0 || !origin || !getMapTile(map, origin.x, origin.y)) return [];
     const wholeRange = Math.floor(range);
 
     const visited = new Set<string>([`${origin.x},${origin.y}`]);

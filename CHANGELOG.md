@@ -25,7 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deterministic infinite-world chunks with a compact 16-bit tile format, halo
   cells for seamless borders, a prioritized multi-Worker pool, sparse
   reference-counted residency, camera-driven loading and floating-origin
-  rebasing through `HexMap.loadInfinite()`.
+  rebasing through `ProceduralWorldSource` and `HexMap.loadWorld()`.
+- Unified `HexMap.loadWorld()` API with public `WorldSource`,
+  `StaticWorldSource`, `ProceduralWorldSource` and `WorldStreamer` abstractions
+  for finite, wrapped, infinite and application-defined chunk providers.
+- Abortable exponential-backoff source retries, strict source/chunk contract
+  validation and source-level residency/retry/failure statistics.
+- A priority/frame-budget queue for main-thread chunk mounting, runtime queue
+  statistics and a reproducible hot-path benchmark command.
 
 ### Changed
 
@@ -41,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   become visible.
 - Streaming mode incrementally mounts and releases terrain, grass and 3D forest
   layers while preserving lighting, orbit controls and custom unit objects.
+- Finite and procedural worlds now share one source-chunk mount/unmount path and
+  one public `HexMap.loadWorld()` entry point.
+- Procedural chunks remain packed behind a virtual map view; grass/forest model
+  resources and deterministic per-LOD results are shared or cached across
+  source chunks. The render scheduler uses a persistent flat registry.
+- Fog recomputation now follows only the visible frontier, batches resident
+  chunk updates and stores finite renderer state at one byte per cell. Distant
+  idle unit mixers update at a configurable lower cadence.
 
 ### Fixed
 

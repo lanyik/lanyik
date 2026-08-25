@@ -59,7 +59,7 @@ npm run start   # 构建库与演示，然后启动 public/ 静态服务器
 three.js 是一个 **peer dependency**，需要由你的页面或构建工具提供。
 
 ```ts
-import { HexMap } from "three-hex-map";
+import { HexMap, StaticWorldSource } from "three-hex-map";
 
 const map = new HexMap({
     element: "canvas",            // <canvas> 的 CSS 选择器
@@ -67,11 +67,16 @@ const map = new HexMap({
     texturesBaseUrl: "textures/" // terrain.png / land-atlas.json / war-fog.jpg
 });
 
-await map.load(mapData);          // MapInfo，参见下方“地图数据”
+await map.loadWorld({
+    source: new StaticWorldSource(mapData)
+});
 
 map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
+
+`loadWorld()` 是有限、环绕、程序化无限和自定义远程世界的统一入口。
+它也是 `HexMap` 唯一的加载接口：选择或实现一个 `WorldSource`，再传给该方法即可。
 
 永久移除画布时请调用 `map.dispose()`。`GameEngine` 持有自己的地图实例，
 对应使用 `game.dispose()` 释放资源。
@@ -90,7 +95,7 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 
 ## 地图数据
 
-`HexMap.load()` 和 `GameEngine.init()` 接收普通的 `MapInfo` 对象。完整示例见 [public/gameInfo/map.json](public/gameInfo/map.json)：
+`StaticWorldSource` 和 `GameEngine.init()` 接收普通的 `MapInfo` 对象。完整示例见 [public/gameInfo/map.json](public/gameInfo/map.json)：
 
 ```jsonc
 {
@@ -148,12 +153,13 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 
 绝大多数配置也作为 `HexMap` 实例上的实时属性公开，例如 `map.riverCurvature = 0.8` 和 `map.waterWaveSpeed = 2`。这些属性直接更新着色器 uniform；只有树木/草地密度和尺寸等少数配置需要重建对应图层。
 
-流式管线、LOD 保证、缓存生命周期及视锥计算详见 [docs/render-streaming.md](docs/render-streaming.md)。运行时统计可以通过 `map.streamingStats` 获取。
+流式管线、LOD 保证、缓存生命周期及视锥计算详见 [docs/render-streaming.md](docs/render-streaming.md)。
+`map.worldStreamingStats` 提供数据源 Chunk 的驻留、排队、重试和失败统计，`map.streamingStats` 提供渲染 Chunk 的可见性、LOD 与 GPU 驻留统计，`map.frameTaskStats` 提供主线程延迟挂载队列的耗时与完成/取消统计。
 
 生成大型世界时，建议在主线程之外运行生成器：
 
 ```ts
-import { WorldGeneratorClient } from "three-hex-map";
+import { StaticWorldSource, WorldGeneratorClient } from "three-hex-map";
 
 const generator = new WorldGeneratorClient(
     // 将包中的 world-generator.worker.mjs 复制到公共资源目录。
@@ -165,25 +171,40 @@ const world = await generator.generate({
     height: 512,
     topology: "toroidal"
 });
-await map.load(world);
+await map.loadWorld({ source: new StaticWorldSource(world) });
 generator.dispose();
 ```
 
-如果不希望预先保存整个世界，可以直接使用多 Worker 无限流式模式。该模式只让镜头附近的 Chunk 驻留在 JavaScript 和 GPU 内存中，以 16 位紧凑数据传输，并在坐标过大前自动平移 Three.js 世界根节点：
+如果不希望预先保存整个世界，可以给同一个入口传入多 Worker 程序化数据源。该模式只让镜头附近的 Chunk 驻留在 JavaScript 和 GPU 内存中，以 16 位紧凑数据传输，并在坐标过大前自动平移 Three.js 世界根节点：
 
 ```ts
-await map.loadInfinite({
+import { ProceduralWorldSource } from "three-hex-map";
+
+const source = new ProceduralWorldSource({
     seed: "endless-continent",
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
-    chunkSize: 24,
+    chunkSize: 24
+});
+
+await map.loadWorld({
+    source,
+    loadRadius: 2,
+    retentionRadius: 3,
+    frameBudgetMs: 3,
+    maxMountsPerFrame: 2,
+    maxRetries: 2,
     initialTile: { x: 0, y: 0 }
 });
 
-console.log(map.infiniteStreamingStats);
+console.log(map.worldStreamingStats);
 ```
 
-`chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks` 和 `floatingOriginThreshold`。普通演示仍使用有限环形地图，打开 `/?infinite` 可体验无限模式；附加 `x`/`y` 查询参数可以测试极大逻辑坐标。通过 `map.add()` 添加的 `Unit` 会保留在可重定位的世界根节点下；跨未加载 Chunk 的全局模拟和寻路应由上层应用按 Chunk 处理，避免重新把整个世界放回内存。
+`chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks`、`frameBudgetMs`、`maxMountsPerFrame`、`maxRetries`、`retryBaseDelayMs` 和 `floatingOriginThreshold`。短暂的数据源失败默认进行两次可取消的指数退避重试；返回坐标、尺寸或核心格错误的 Chunk 会立即拒绝，避免污染运行时地图。
+
+`WorldSource` 是公开接口：实现 `loadChunk()`、`releaseChunk()`、边界解析，以及物化 `data` 或虚拟 `tileAt()`/`forEachTile()` 地图视图后，即可接入 HTTP、IndexedDB、服务器权威世界或编辑器数据，无需改动渲染器。一个数据源实例由一次 `loadWorld()` 会话独占，并在切换世界或 `map.dispose()` 时自动释放。
+
+普通演示使用有限环形数据源，打开 `/?infinite` 可体验程序化数据源；附加 `x`/`y` 查询参数可以测试极大逻辑坐标。通过 `map.add()` 添加的 `Unit` 会保留在可重定位的世界根节点下；跨未加载 Chunk 的全局模拟和寻路应由上层应用按 Chunk 处理，避免重新把整个世界放回内存。
 
 ## 战争迷雾
 
@@ -204,6 +225,8 @@ console.log(map.infiniteStreamingStats);
 | `npm run server` | 在 3000 端口提供 `public/` 静态服务 |
 | `npm run start` | 执行 `build:demo` 后启动服务器 |
 | `npm run typecheck` | 执行 `tsc --noEmit` |
+| `npm run test` | 运行全部 Vitest 测试 |
+| `npm run benchmark` | 构建后复测紧凑 Chunk 与迷雾热路径 |
 
 ## 更新日志
 

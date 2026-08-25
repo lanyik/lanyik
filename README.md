@@ -57,7 +57,7 @@ Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The demo page ([public/inde
 three.js is a **peer dependency** - your page/bundle supplies its own copy.
 
 ```ts
-import { HexMap } from "three-hex-map";
+import { HexMap, StaticWorldSource } from "three-hex-map";
 
 const map = new HexMap({
     element: "canvas",          // CSS selector of your <canvas>
@@ -65,11 +65,15 @@ const map = new HexMap({
     texturesBaseUrl: "textures/" // terrain.png / land-atlas.json / war-fog.jpg
 });
 
-await map.load(mapData);        // MapInfo, see "Map data" below
+await map.loadWorld({ source: new StaticWorldSource(mapData) });
 
 map.on("click", ({ x, y, tile }) => console.log("clicked", x, y, tile));
 map.on("hover", ({ x, y, tile }) => console.log("hover", x, y, tile));
 ```
+
+`loadWorld()` is the unified entry point for finite, wrapped, procedural and
+custom remote worlds. It is the only `HexMap` loading API; choose or implement a
+`WorldSource` and pass it to this method.
 
 Call `map.dispose()` when the canvas is permanently removed. `GameEngine` owns
 its map and exposes the matching `game.dispose()` lifecycle method.
@@ -88,7 +92,7 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 
 ## Map data
 
-`HexMap.load()` / `GameEngine.init()` take a plain `MapInfo` object - see [public/gameInfo/map.json](public/gameInfo/map.json) for a full example:
+`StaticWorldSource` and `GameEngine.init()` take a plain `MapInfo` object - see [public/gameInfo/map.json](public/gameInfo/map.json) for a full example:
 
 ```jsonc
 {
@@ -149,12 +153,15 @@ Almost all of these are also **live properties** on the `HexMap` instance (`map.
 
 The streaming pipeline, LOD guarantees, cache lifecycle and frustum calculation
 are documented in [docs/render-streaming.md](docs/render-streaming.md). Runtime
-counters are available through `map.streamingStats`.
+source-level residency/retry counters are available through
+`map.worldStreamingStats`; render visibility/LOD/GPU counters remain available
+through `map.streamingStats`, and deferred main-thread mount work through
+`map.frameTaskStats`.
 
 For large generated maps, run the generator off the main thread:
 
 ```ts
-import { WorldGeneratorClient } from "three-hex-map";
+import { StaticWorldSource, WorldGeneratorClient } from "three-hex-map";
 
 const generator = new WorldGeneratorClient(
     // Copy the package's world-generator.worker.mjs to your public assets.
@@ -166,29 +173,49 @@ const world = await generator.generate({
     height: 512,
     topology: "toroidal"
 });
-await map.load(world);
+await map.loadWorld({ source: new StaticWorldSource(world) });
 generator.dispose();
 ```
 
-For a world whose logical size is not stored up front, use the multi-worker
-streaming mode. It keeps only a camera-centered chunk window in JavaScript and
-GPU memory, transfers packed 16-bit tile data, and rebases the Three.js world
-root before large coordinates lose precision:
+For a world whose logical size is not stored up front, pass the multi-worker
+procedural source to the same entry point. It keeps only a camera-centered
+chunk window in JavaScript and GPU memory, transfers packed 16-bit tile data,
+and rebases the Three.js world root before large coordinates lose precision:
 
 ```ts
-await map.loadInfinite({
+import { ProceduralWorldSource } from "three-hex-map";
+
+const source = new ProceduralWorldSource({
     seed: "endless-continent",
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
-    chunkSize: 24,
+    chunkSize: 24
+});
+
+await map.loadWorld({
+    source,
+    loadRadius: 2,
+    retentionRadius: 3,
+    frameBudgetMs: 3,
+    maxMountsPerFrame: 2,
+    maxRetries: 2,
     initialTile: { x: 0, y: 0 }
 });
 
-console.log(map.infiniteStreamingStats);
+console.log(map.worldStreamingStats);
 ```
 
 `chunkSize` must be a multiple of 12. `loadRadius`, `retentionRadius`,
-`maxResidentChunks` and `floatingOriginThreshold` are optional tuning controls.
+`maxResidentChunks`, `frameBudgetMs`, `maxMountsPerFrame`, `maxRetries`, `retryBaseDelayMs` and
+`floatingOriginThreshold` are optional tuning controls. Transient source
+failures retry twice by default with cancellable exponential backoff; malformed
+chunk contracts fail immediately before they can pollute the runtime map.
+
+`WorldSource` is public: implement chunk loading/release, boundary resolution
+and a materialized or virtual `map` view to connect HTTP, IndexedDB, authoritative server
+worlds or editor data without changing the renderer. A source instance is owned
+by one `loadWorld()` session and is disposed automatically when the world changes.
+
 The regular demo remains finite; open `/?infinite` to exercise this mode (the
 optional `x`/`y` query values test very large logical coordinates). Arbitrary
 `Unit` objects added through `map.add()` remain under the rebased world root;
@@ -214,6 +241,8 @@ application-level concern rather than materializing the entire world again.
 | `npm run server` | serves `public/` on port 3000 |
 | `npm run start` | `build:demo` + `server` |
 | `npm run typecheck` | `tsc --noEmit` |
+| `npm run test` | runs the full Vitest suite |
+| `npm run benchmark` | builds and measures packed-chunk and fog hot paths |
 
 ## Changelog
 

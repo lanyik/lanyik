@@ -61,4 +61,28 @@ describe("unit movement path", () => {
         expect(ended).toHaveBeenCalledOnce();
         unit.dispose();
     });
+
+    test("does not rewrite a stationary unit transform until its nearest wrapped copy changes", async () => {
+        const unit = new Unit({
+            id: "wrapped",
+            type: "test-model",
+            x: 0,
+            y: 0,
+            size: 40,
+            mapWidth: 8,
+            mapHeight: 8,
+            wrapX: true,
+            wrapY: true
+        });
+        await unit.setUnit();
+        const setPosition = vi.spyOn(unit.unit.position, "set");
+
+        unit.alignToWorldReference(0, 0);
+        unit.alignToWorldReference(10, 10);
+        expect(setPosition).toHaveBeenCalledTimes(1);
+
+        unit.alignToWorldReference(8 * 40 * 1.5, 0);
+        expect(setPosition).toHaveBeenCalledTimes(2);
+        unit.dispose();
+    });
 });

@@ -1,6 +1,6 @@
 import { MapInfo, Point } from "../interfaces";
 import { tilesWithinRange } from "../helpers/fog";
-import { assertWrappableMap, normalizeMapCoordinates } from "../helpers/topology";
+import { assertWrappableMap, getMapTile, normalizeMapCoordinates } from "../helpers/topology";
 
 //----------------------------------------------------------------------------------
 //Civ-style three-state fog of war:
@@ -34,6 +34,8 @@ export interface FogChange extends Point {
 //----------------------------------------------------------------------------------
 export class FogOfWar {
     private state: Uint8Array;
+    private visible = new Set<number>();
+    private lastCandidates = 0;
 
     constructor(private map: MapInfo) {
         assertWrappableMap(map);
@@ -46,7 +48,7 @@ export class FogOfWar {
 
     public getState(x: number, y: number): FogState {
         const normalized = normalizeMapCoordinates(this.map, x, y);
-        if (!normalized || !this.map.data[normalized.x]?.[normalized.y]) return FogState.Unseen;
+        if (!normalized || !getMapTile(this.map, normalized.x, normalized.y)) return FogState.Unseen;
         return this.state[this.index(normalized.x, normalized.y)] as FogState;
     }
 
@@ -57,7 +59,7 @@ export class FogOfWar {
         const tiles: FogChange[] = [];
         for (let x = 0; x < this.map.w; x++) {
             for (let y = 0; y < this.map.h; y++) {
-                if (!this.map.data[x]?.[y]) continue;
+                if (!getMapTile(this.map, x, y)) continue;
                 tiles.push({ x, y, state: this.state[this.index(x, y)] as FogState });
             }
         }
@@ -72,27 +74,30 @@ export class FogOfWar {
     //Returns only the tiles whose state actually changed, so callers can push
     //a cheap incremental update to the renderer instead of touching every tile.
     public recompute(viewers: FogViewer[]): FogChange[] {
-        const nowVisible = new Set<string>();
+        const nowVisible = new Set<number>();
         for (const viewer of viewers) {
             for (const tile of tilesWithinRange(this.map, viewer.x, viewer.y, viewer.viewRange)) {
-                nowVisible.add(`${tile.x},${tile.y}`);
+                nowVisible.add(this.index(tile.x, tile.y));
             }
         }
 
         const changes: FogChange[] = [];
-        for (let x = 0; x < this.map.w; x++) {
-            for (let y = 0; y < this.map.h; y++) {
-                if (!this.map.data[x]?.[y]) continue;
-                const idx = this.index(x, y);
-                const was = this.state[idx] as FogState;
-                const isVisibleNow = nowVisible.has(`${x},${y}`);
-                const next: FogState = isVisibleNow ? FogState.Visible : (was === FogState.Visible ? FogState.Explored : was);
-                if (next !== was) {
-                    this.state[idx] = next;
-                    changes.push({ x, y, state: next });
-                }
-            }
+        for (const idx of this.visible) {
+            if (nowVisible.has(idx)) continue;
+            this.state[idx] = FogState.Explored;
+            changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: FogState.Explored });
         }
+        for (const idx of nowVisible) {
+            if (this.state[idx] === FogState.Visible) continue;
+            this.state[idx] = FogState.Visible;
+            changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: FogState.Visible });
+        }
+        this.lastCandidates = this.visible.size + nowVisible.size;
+        this.visible = nowVisible;
         return changes;
+    }
+
+    public get lastRecomputeCandidateCount(): number {
+        return this.lastCandidates;
     }
 }

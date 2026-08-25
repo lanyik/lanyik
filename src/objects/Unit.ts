@@ -43,6 +43,10 @@ export class Unit extends EventEmitter {
     //instead, and "cell_enter" fires as it crosses into each new cell.
     private movePath:Point[] | null = null;
     private _viewCell:Point | null = null;
+    private alignedCopyX = Number.NaN;
+    private alignedCopyY = Number.NaN;
+    private alignedTileX = Number.NaN;
+    private alignedTileY = Number.NaN;
 
     private options = {
         animateFrameRate: 50,        //Framerate: how much per second run animate function
@@ -263,9 +267,17 @@ export class Unit extends EventEmitter {
         const center = getHexCenter(this.options.x, this.options.y, this.options.size);
         const periodX = this.options.wrapX ? this.options.mapWidth * this.options.size * 1.5 : 0;
         const periodY = this.options.wrapY ? this.options.mapHeight * this.options.size * Math.sqrt(3) : 0;
-        if (periodX > 0) center.x += Math.round((referenceX - center.x) / periodX) * periodX;
-        if (periodY > 0) center.y += Math.round((referenceZ - center.y) / periodY) * periodY;
+        const copyX = periodX > 0 ? Math.round((referenceX - center.x) / periodX) : 0;
+        const copyY = periodY > 0 ? Math.round((referenceZ - center.y) / periodY) : 0;
+        if (copyX === this.alignedCopyX && copyY === this.alignedCopyY
+            && this.options.x === this.alignedTileX && this.options.y === this.alignedTileY) return;
+        center.x += copyX * periodX;
+        center.y += copyY * periodY;
         this._unit.position.set(center.x, this._unit.position.y, center.y);
+        this.alignedCopyX = copyX;
+        this.alignedCopyY = copyY;
+        this.alignedTileX = this.options.x;
+        this.alignedTileY = this.options.y;
     }
 
     public dispose(): void {
