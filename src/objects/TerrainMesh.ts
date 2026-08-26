@@ -48,8 +48,10 @@ import { makeTextSprite } from "./citysprite";
 import { loadModel } from "../helpers/models";
 import { TERRAIN_VERTEX_SHADER } from "../shaders/terrain.vertex";
 import { TERRAIN_FRAGMENT_SHADER } from "../shaders/terrain.fragment";
+import { TERRAIN_FAST_FRAGMENT_SHADER } from "../shaders/terrain.fast.fragment";
 import { WATER_VERTEX_SHADER } from "../shaders/water.vertex";
 import { WATER_FRAGMENT_SHADER } from "../shaders/water.fragment";
+import { WATER_FAST_FRAGMENT_SHADER } from "../shaders/water.fast.fragment";
 
 export interface TerrainAtlasCell { cellX: number, cellY: number }
 export interface TerrainAtlas {
@@ -69,6 +71,7 @@ export interface TerrainMeshOptions {
     gridWidth?: number;
     gridOpacity?: number;
     gridVisible?: boolean;
+    shaderQuality?: "full" | "fast";
 
     //Sea/coastal tiles render on their own animated layer with solid colors
     //(waterColorShallow/Deep) - see shaders/water.*.ts.
@@ -109,6 +112,7 @@ export interface TerrainMeshOptions {
     //rounded - only applies when both edges of that corner border land; a
     //single coastal edge never gets rounded).
     landBlendWidth?: number;
+    landBlendEnabled?: boolean;
     waterCornerRounding?: number;
 
     //Curved coastline: 0..1, how strongly static world-space noise bends the
@@ -517,6 +521,7 @@ export class TerrainMesh extends Group {
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
                 landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
+                landBlendEnabled: { value: (this.options.landBlendEnabled ?? true) ? 1.0 : 0.0 },
                 landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
                 mountainAtlasIndex: { value: this.atlasCellIndex[Land.mountain] ?? -2 },
                 mountainHeight: { value: this.options.mountainHeight ?? this.options.size * 0.6 },
@@ -543,7 +548,9 @@ export class TerrainMesh extends Group {
                 ...this.commonUniforms()
             },
             vertexShader: TERRAIN_VERTEX_SHADER,
-            fragmentShader: TERRAIN_FRAGMENT_SHADER
+            fragmentShader: this.options.shaderQuality === "fast"
+                ? TERRAIN_FAST_FRAGMENT_SHADER
+                : TERRAIN_FRAGMENT_SHADER
         });
         if (tiles.length === 0) return;
 
@@ -611,7 +618,9 @@ export class TerrainMesh extends Group {
                 ...this.commonUniforms()
             },
             vertexShader: WATER_VERTEX_SHADER,
-            fragmentShader: WATER_FRAGMENT_SHADER
+            fragmentShader: this.options.shaderQuality === "fast"
+                ? WATER_FAST_FRAGMENT_SHADER
+                : WATER_FRAGMENT_SHADER
         });
         if (tiles.length === 0) return;
 
@@ -944,10 +953,13 @@ export class TerrainMesh extends Group {
                 record.tiles,
                 { x: record.mesh.position.x, y: record.mesh.position.z }
             );
-            const subdivisions = record.layer === "land"
-                ? ([3, 2, 1] as const)[lod]
-                : ([2, 1, 0] as const)[lod];
-            const borderSubdivisions = record.layer === "land" ? 3 : 2;
+            const fastTerrain = this.options.shaderQuality === "fast";
+            const subdivisions = fastTerrain
+                ? 0
+                : record.layer === "land"
+                    ? ([3, 2, 1] as const)[lod]
+                    : ([2, 1, 0] as const)[lod];
+            const borderSubdivisions = fastTerrain ? 0 : record.layer === "land" ? 3 : 2;
             geometry = this.buildInstancedGeometry(
                 record.tiles,
                 subdivisions,
@@ -1006,6 +1018,13 @@ export class TerrainMesh extends Group {
     }
     public set landBlendWidth(value: number) {
         if (this.landMaterial) this.landMaterial.uniforms.landBlendWidth.value = value;
+    }
+
+    public get landBlendEnabled(): boolean {
+        return (this.landMaterial?.uniforms.landBlendEnabled.value ?? 1.0) > 0.5;
+    }
+    public set landBlendEnabled(value: boolean) {
+        if (this.landMaterial) this.landMaterial.uniforms.landBlendEnabled.value = value ? 1.0 : 0.0;
     }
 
     //River channel knobs - all live uniforms on the land material (rivers are

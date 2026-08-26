@@ -183,6 +183,16 @@ describe("WorldSimulationRuntime", () => {
         expect(runtime.chunkAt(10, 2)?.entities[0].id).toBe("traveler");
     });
 
+    test("updates entity state outside a tick without moving the entity", () => {
+        const runtime = new WorldSimulationRuntime<State>({ chunkSize: 10 });
+        runtime.addEntity(entity("ordered", 9, 2));
+
+        expect(runtime.setEntityState("ordered", { ticks: 7 })).toBe(true);
+        expect(runtime.setEntityState("missing", { ticks: 1 })).toBe(false);
+        expect(runtime.getEntity("ordered")).toEqual({ id: "ordered", x: 9, y: 2, state: { ticks: 7 } });
+        expect(runtime.stats.dirtyChunks).toBe(1);
+    });
+
     test("hibernates to storage and restores without render residency", async () => {
         const store = new MemorySimulationChunkStore<State>();
         const first = new WorldSimulationRuntime<State>({ chunkSize: 10, store });
@@ -232,5 +242,46 @@ describe("IndexedDbSimulationChunkStore", () => {
         expect(second.getEntity("persisted")).toEqual(entity("persisted", 12, 3));
         first.dispose();
         second.dispose();
+    });
+
+    test("enumerates and atomically restores every stored simulation chunk", async () => {
+        const options = { worldId: "restore-all", databaseName: "simulation-restore-all" };
+        const firstStore = new IndexedDbSimulationChunkStore<State>(options);
+        const first = new WorldSimulationRuntime<State>({ chunkSize: 10, store: firstStore });
+        first.addEntity(entity("west", -12, 3));
+        first.addEntity(entity("east", 27, 3));
+        await first.flush();
+
+        const secondStore = new IndexedDbSimulationChunkStore<State>(options);
+        expect(await secondStore.listChunks()).toEqual([{ x: -2, y: 0 }, { x: 2, y: 0 }]);
+        const second = new WorldSimulationRuntime<State>({ chunkSize: 10, store: secondStore });
+        const restored = await second.restoreStoredChunks();
+
+        expect(restored.map(chunk => [chunk.chunkX, chunk.chunkY])).toEqual([[-2, 0], [2, 0]]);
+        expect(second.getEntity("west")).toEqual(entity("west", -12, 3));
+        expect(second.getEntity("east")).toEqual(entity("east", 27, 3));
+        first.dispose();
+        second.dispose();
+    });
+
+    test("deletes empty simulation snapshots after an entity leaves its chunk", async () => {
+        const options = { worldId: "empty-cleanup", databaseName: "simulation-empty-cleanup" };
+        const store = new IndexedDbSimulationChunkStore<State>(options);
+        const runtime = new WorldSimulationRuntime<State>({
+            chunkSize: 10, activeTickIntervalSeconds: 1, backgroundTickIntervalSeconds: 1, store
+        });
+        runtime.addEntity(entity("traveler", 9, 2));
+        runtime.registerSystem({
+            id: "move-once",
+            update(context) {
+                const traveler = context.entities.find(candidate => candidate.id === "traveler");
+                if (traveler?.x === 9) context.moveEntity("traveler", 10, 2);
+            }
+        });
+
+        await runtime.advance(1);
+        await runtime.flush();
+        expect(await store.listChunks()).toEqual([{ x: 1, y: 0 }]);
+        runtime.dispose();
     });
 });

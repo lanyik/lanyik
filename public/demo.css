@@ -109,6 +109,14 @@ body {
     font-size: 9px;
 }
 
+.performance-metric--wide {
+    grid-column: 1 / -1;
+}
+
+.performance-metric--wide strong {
+    font-size: 11px;
+}
+
 .world-status {
     position: fixed;
     left: 16px;
@@ -143,6 +151,42 @@ body {
     border-top: 1px solid rgba(178, 217, 180, 0.16);
 }
 
+.campaign-panel {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 9;
+    display: grid;
+    gap: 4px;
+    min-width: 280px;
+    padding: 12px 14px;
+    color: #fff3cf;
+    background: rgba(35, 20, 7, 0.84);
+    border: 1px solid rgba(255, 200, 87, 0.38);
+    border-radius: 10px;
+    box-shadow: 0 12px 38px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+}
+
+.campaign-panel strong {
+    color: #ffc857;
+    font-size: 14px;
+}
+
+.campaign-panel span {
+    color: #f2d9a2;
+    font-size: 12px;
+}
+
+.campaign-panel small {
+    margin-top: 5px;
+    padding-top: 7px;
+    color: #c9ab72;
+    font-size: 11px;
+    border-top: 1px solid rgba(255, 200, 87, 0.2);
+}
+
 .dg.ac {
     z-index: 10;
 }
@@ -163,6 +207,13 @@ body {
     .world-status {
         right: 10px;
         bottom: 10px;
+        left: 10px;
+        min-width: 0;
+    }
+
+    .campaign-panel {
+        right: 10px;
+        bottom: 112px;
         left: 10px;
         min-width: 0;
     }

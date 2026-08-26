@@ -88,6 +88,10 @@ function renderLayerError(reason: unknown): Error {
 export interface HexMapOptions {
     element: string;                       // CSS selector for the <canvas>
     size?: number;                          // hex size in world units, default 40
+    maxPixelRatio?: number;                 // renderer DPR ceiling, default 2
+    antialias?: boolean;                    // WebGL multisample antialiasing, default true
+    terrainShaderQuality?: "full" | "fast"; // fast preserves core terrain features, default full
+    skyVisible?: boolean;                   // atmospheric sky shader, default true
     texturesBaseUrl?: string;                // folder with terrain.png/transitions.png/land-atlas.json
     gridVisible?: boolean;
     gridColor?: ColorRepresentation;
@@ -138,6 +142,7 @@ export interface HexMapOptions {
     //where two coastal edges meet (waterCornerRounding, 0 = sharp corner, 1 =
     //fully rounded - only where both edges of that corner border land).
     landBlendWidth?: number;    // default 0.5
+    landBlendEnabled?: boolean; // skip costly organic neighbor blending when false, default true
     waterCornerRounding?: number; // default 0.4
 
     //Curved coastline: how strongly static world-space noise bends the visual
@@ -232,6 +237,10 @@ export interface HexMapOptions {
 //fixed values.
 const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "fogTextureSize" | "riverColorShallow" | "riverColorDeep" | "riverDepth" | "mountainHeight">> = {
     size: 40,
+    maxPixelRatio: 2,
+    antialias: true,
+    terrainShaderQuality: "full",
+    skyVisible: true,
     texturesBaseUrl: "textures/",
     gridVisible: true,
     gridColor: 0x42322b,
@@ -257,6 +266,7 @@ const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "
     coastalWaveOpacity: 0.85,
     beachWidth: 0.35,
     landBlendWidth: 0.5,
+    landBlendEnabled: true,
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
@@ -383,6 +393,7 @@ export class HexMap extends EventEmitter {
     private streamingPredictionMaxChunks = 1;
     private floatingOriginThreshold = 8192;
     private adaptiveStreamingController: AdaptiveStreamingController | undefined;
+    private adaptiveResolutionScale = 1;
     private appliedVegetationDensityScale = 1;
     private adaptiveVegetationRevision = 0;
 
@@ -491,6 +502,10 @@ export class HexMap extends EventEmitter {
         };
         positive("size", this.options.size);
         positive("renderDistance", this.options.renderDistance);
+        positive("maxPixelRatio", this.options.maxPixelRatio);
+        if (this.options.terrainShaderQuality !== "full" && this.options.terrainShaderQuality !== "fast") {
+            throw new RangeError('terrainShaderQuality must be "full" or "fast"');
+        }
         if (this.options.lodNearDistance < 0 || this.options.lodFarDistance < this.options.lodNearDistance) {
             throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
         }
@@ -532,7 +547,7 @@ export class HexMap extends EventEmitter {
         this.worldRoot = new Group();
         this.worldRoot.name = "hex-map-world-root";
         this.scene.add(this.worldRoot);
-        this.renderer = new WebGLRenderer({ canvas: this.canvas, antialias: true });
+        this.renderer = new WebGLRenderer({ canvas: this.canvas, antialias: this.options.antialias });
         this.renderer.toneMapping = ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.65;
     }
@@ -557,6 +572,7 @@ export class HexMap extends EventEmitter {
 
     private setupSky(): void {
         this.sky = new Sky();
+        this.sky.visible = this.options.skyVisible;
         this.sky.scale.setScalar(450000);
         this.sky.frustumCulled = false;
 
@@ -939,7 +955,9 @@ export class HexMap extends EventEmitter {
         if (width <= 0 || height <= 0) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(
+            Math.min(window.devicePixelRatio, this.options.maxPixelRatio) * this.adaptiveResolutionScale
+        );
         this.renderer.setSize(width, height, false);
     };
 
@@ -1744,6 +1762,8 @@ export class HexMap extends EventEmitter {
     }
 
     private applyAdaptiveStreamingProfile(profile: Readonly<AdaptiveStreamingProfile>): void {
+        const resolutionChanged = profile.resolutionScale !== this.adaptiveResolutionScale;
+        this.adaptiveResolutionScale = profile.resolutionScale;
         const densityChanged = profile.vegetationDensityScale !== this.appliedVegetationDensityScale;
         this.appliedVegetationDensityScale = profile.vegetationDensityScale;
         this.frameTasks.configure({
@@ -1760,6 +1780,7 @@ export class HexMap extends EventEmitter {
         } catch (reason) {
             this.emit("error", reason instanceof Error ? reason : new Error(String(reason)));
         }
+        if (resolutionChanged) this.handleResize();
         if (densityChanged) this.scheduleAdaptiveVegetationRebuild(profile.vegetationDensityScale);
     }
 
@@ -2178,6 +2199,7 @@ export class HexMap extends EventEmitter {
             gridColor: this.options.gridColor,
             gridWidth: this.options.gridWidth,
             gridOpacity: this.options.gridOpacity,
+            shaderQuality: this.options.terrainShaderQuality,
             waterColorShallow: this.options.waterColorShallow,
             waterColorDeep: this.options.waterColorDeep,
             waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -2196,6 +2218,7 @@ export class HexMap extends EventEmitter {
             waterDepth: this.options.waterDepth,
             beachWidth: this.options.beachWidth,
             landBlendWidth: this.options.landBlendWidth,
+            landBlendEnabled: this.options.landBlendEnabled,
             waterCornerRounding: this.options.waterCornerRounding,
             coastCurvature: this.options.coastCurvature,
             landBlendCurvature: this.options.landBlendCurvature,
@@ -3004,6 +3027,14 @@ export class HexMap extends EventEmitter {
     public set landBlendWidth(value: number) {
         this.options.landBlendWidth = value;
         if (this.terrain) this.terrain.landBlendWidth = value;
+    }
+
+    public get landBlendEnabled(): boolean {
+        return this.terrain?.landBlendEnabled ?? this.options.landBlendEnabled;
+    }
+    public set landBlendEnabled(value: boolean) {
+        this.options.landBlendEnabled = value;
+        if (this.terrain) this.terrain.landBlendEnabled = value;
     }
 
     public get waterCornerRounding(): number {

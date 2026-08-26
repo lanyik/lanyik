@@ -139,11 +139,11 @@ game.on("end_move", payload => console.log("unit arrived", payload));
 
 | 分组 | 配置项 |
 |---|---|
-| 布局 | `size`, `texturesBaseUrl` |
+| 布局 | `size`, `texturesBaseUrl`, `maxPixelRatio`, `antialias`, `terrainShaderQuality`, `skyVisible` |
 | 网格 | `gridVisible`, `gridColor`, `gridWidth`, `gridOpacity` |
 | 水面 | `waterColorShallow/Deep`, `waterWaveAmplitude/Frequency/Speed`, `waterSparkleIntensity`, `waterFresnelIntensity`, `waterDepth`, `beachWidth` |
 | 海岸浪花 | `coastalWavesEnabled`, `coastalWaveColor/Count/Speed/Width/Range/Distortion/Opacity` |
-| 地貌混合 | `landBlendWidth`, `waterCornerRounding` |
+| 地貌混合 | `landBlendWidth`, `landBlendEnabled`, `waterCornerRounding` |
 | 河流与湖泊 | `riverWidth`, `riverBankWidth`, `riverCurvature`, `riverColorShallow/Deep`, `riverBankColor`, `riverFlowSpeed`, `riverDepth`, `lakeShoreWidth` |
 | 树木 | `treesPerTile`, `treeModel`, `treeScale` |
 | 草地 | `grassEnabled`, `grassDensity`, `grassBladeWidth/Height`, `grassWindStrength/Speed` |
@@ -216,6 +216,8 @@ console.log(map.worldStreamingStats);
 `three-hex-map/simulation` 子路径导入，避免全局浏览器包暴露可选运行时。
 
 普通演示使用有限环形数据源，打开 `/?infinite` 可体验程序化数据源；附加 `x`/`y` 查询参数可以测试极大逻辑坐标。通过 `map.add()` 添加的 `Unit` 会保留在可重定位的世界根节点下；跨未加载 Chunk 的全局模拟和寻路应由上层应用按 Chunk 处理，避免重新把整个世界放回内存。
+
+打开 `/?infinite&campaign` 可运行最小持久化战役切片。控制面板可以命令军队跨多个 Chunk 行军、将镜头移开后继续后台模拟、跟随军队或手动保存；军队到达后会通过 World Delta 建立前哨站。刷新页面会从 IndexedDB 同时恢复军队位置/行军状态和前哨站。追加 `&autostart` 可自动开始第一段长途行军。实现与边界说明见 [docs/campaign-vertical-slice.md](docs/campaign-vertical-slice.md)。
 
 ## 战争迷雾
 

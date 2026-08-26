@@ -16,3 +16,17 @@ export type {
     SimulationSystem,
     WorldSimulationStats
 } from "./simulation/WorldSimulationRuntime";
+export {
+    ArmyMarchRouteNotFoundError,
+    createArmyMarchState,
+    assertArmyMarchState,
+    createArmyMarchSystem,
+    orderArmyMarch
+} from "./simulation/ArmyMarch";
+export type {
+    ArmyMarchStatus,
+    ArmyMarchState,
+    ArmyMarchStateOptions,
+    ArmyMarchOrderOptions,
+    ArmyMarchOrderResult
+} from "./simulation/ArmyMarch";

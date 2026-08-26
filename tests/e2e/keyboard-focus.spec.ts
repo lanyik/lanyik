@@ -6,7 +6,7 @@ interface KeyboardTestMap {
 }
 
 test("WASD input is isolated to the focused map canvas", async ({ page }) => {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/?quality=fast", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => Boolean((window as unknown as { hexWorld?: unknown }).hexWorld));
     await page.evaluate(() => {
         const canvas = document.createElement("canvas");

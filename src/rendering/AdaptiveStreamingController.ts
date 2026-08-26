@@ -22,6 +22,7 @@ export interface AdaptiveStreamingProfile {
     frameBudgetMs: number;
     maxTasksPerFrame: number;
     workerCount: number;
+    resolutionScale: number;
     vegetationDensityScale: number;
     lodDistanceScale: number;
     lodBias: WorldChunkLod;
@@ -67,10 +68,10 @@ export interface AdaptiveStreamingStats extends AdaptiveStreamingProfile {
 }
 
 const QUALITY = [
-    { mount: 1, tasks: 1, workers: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.75, tasks: 0.75, workers: 0.75, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.5, tasks: 0.5, workers: 0.5, vegetation: 0.65, lod: 0.8, lodBias: 0, vegetationBias: 1 },
-    { mount: 0.3, tasks: 0.35, workers: 0.35, vegetation: 0.45, lod: 0.68, lodBias: 1, vegetationBias: 1 }
+    { mount: 1, tasks: 1, workers: 1, resolution: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.75, tasks: 0.75, workers: 0.75, resolution: 0.85, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.5, tasks: 0.5, workers: 0.5, resolution: 0.65, vegetation: 0.55, lod: 0.75, lodBias: 0, vegetationBias: 1 },
+    { mount: 0.3, tasks: 0.35, workers: 0.35, resolution: 0.25, vegetation: 0.25, lod: 0.55, lodBias: 1, vegetationBias: 1 }
 ] as const;
 
 interface PressureState {
@@ -120,8 +121,13 @@ export class AdaptiveStreamingController {
     public sample(value: number | AdaptiveStreamingSample): Readonly<AdaptiveStreamingProfile> | undefined {
         const legacy = typeof value === "number";
         const sample: AdaptiveStreamingSample = legacy ? { frameMs: value } : value;
-        const frameMs = sample?.frameMs;
-        if (!this.enabled || !Number.isFinite(frameMs) || frameMs <= 0 || frameMs > 250) return undefined;
+        const observedFrameMs = sample?.frameMs;
+        if (!this.enabled || !Number.isFinite(observedFrameMs) || observedFrameMs <= 0
+            || (legacy && observedFrameMs > 250)) return undefined;
+        // Structured samples come from visible render loops with workload
+        // telemetry. Keep extreme frames actionable, but cap their influence
+        // so a single stall cannot dominate the EMA for minutes.
+        const frameMs = legacy ? observedFrameMs : Math.min(observedFrameMs, 250);
         this.averageFrameMs = this.averageFrameMs === 0
             ? frameMs
             : this.averageFrameMs + (frameMs - this.averageFrameMs) * this.emaAlpha;
@@ -148,8 +154,15 @@ export class AdaptiveStreamingController {
             if (mainMeasurement !== undefined) {
                 changed = this.samplePressure(this.mainThread, mainMeasurement, this.targetFrameMs) || changed;
             }
-            if (sample.gpuFrameMs !== undefined) {
-                changed = this.samplePressure(this.gpu, sample.gpuFrameMs, this.targetFrameMs) || changed;
+            const observableWorkIsIdle = (sample.frameTaskBacklog ?? 0) === 0
+                && (sample.oldestFrameTaskMs ?? 0) <= this.targetFrameMs
+                && (sample.workerQueueDepth ?? 0) === 0
+                && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25
+                && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
+            const renderMeasurement = sample.gpuFrameMs
+                ?? (observableWorkIsIdle ? frameMs : undefined);
+            if (renderMeasurement !== undefined) {
+                changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
             }
             if (sample.workerContentionMs !== undefined) {
                 changed = this.samplePressure(this.worker, sample.workerContentionMs, this.targetFrameMs * 0.25) || changed;
@@ -210,6 +223,7 @@ export class AdaptiveStreamingController {
             frameBudgetMs: Math.max(0.5, this.options.baseFrameBudgetMs * main.mount),
             maxTasksPerFrame: Math.max(1, Math.round(this.options.baseMaxTasksPerFrame * main.tasks)),
             workerCount: Math.max(minimumWorkerCount, Math.round(this.options.baseWorkerCount * worker.workers)),
+            resolutionScale: gpu.resolution,
             vegetationDensityScale: gpu.vegetation,
             lodDistanceScale: gpu.lod,
             lodBias: gpu.lodBias,

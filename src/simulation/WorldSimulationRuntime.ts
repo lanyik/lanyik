@@ -21,6 +21,7 @@ export interface SimulationChunkStore<State = unknown> {
     load(chunkX: number, chunkY: number): Promise<SimulationChunkSnapshot<State> | undefined>;
     save(snapshot: SimulationChunkSnapshot<State>): Promise<void>;
     delete(chunkX: number, chunkY: number): Promise<void>;
+    listChunks?(): Promise<readonly Point[]>;
     flush(): Promise<void>;
     dispose(): void;
 }
@@ -61,6 +62,13 @@ export class MemorySimulationChunkStore<State = unknown> implements SimulationCh
     public delete(chunkX: number, chunkY: number): Promise<void> {
         this.snapshots.delete(simulationChunkKey(chunkX, chunkY));
         return Promise.resolve();
+    }
+
+    public listChunks(): Promise<readonly Point[]> {
+        if (this.disposed) return Promise.resolve([]);
+        return Promise.resolve([...this.snapshots.values()]
+            .map(snapshot => ({ x: snapshot.chunkX, y: snapshot.chunkY }))
+            .sort((first, second) => first.x - second.x || first.y - second.y));
     }
 
     public flush(): Promise<void> { return Promise.resolve(); }
@@ -149,6 +157,25 @@ export class IndexedDbSimulationChunkStore<State = unknown> implements Simulatio
             transaction.objectStore(SIMULATION_OBJECT_STORE).delete(this.key(chunkX, chunkY));
             await idbTransactionComplete(transaction);
         });
+    }
+
+    public async listChunks(): Promise<readonly Point[]> {
+        if (this.disposed) return [];
+        await this.flush();
+        const database = await this.open();
+        const transaction = database.transaction(SIMULATION_OBJECT_STORE, "readonly");
+        const records = await idbResult(
+            transaction.objectStore(SIMULATION_OBJECT_STORE).index("worldId").getAll(this.worldId)
+        ) as StoredSimulationChunk<State>[];
+        await idbTransactionComplete(transaction);
+        const chunks = records.map(record => {
+            if (record.worldId !== this.worldId || !Number.isSafeInteger(record.chunkX)
+                || !Number.isSafeInteger(record.chunkY)) {
+                throw new TypeError("stored simulation chunk index is invalid or incompatible");
+            }
+            return { x: record.chunkX, y: record.chunkY };
+        });
+        return chunks.sort((first, second) => first.x - second.x || first.y - second.y);
     }
 
     public async flush(): Promise<void> {
@@ -390,6 +417,18 @@ export class WorldSimulationRuntime<State = unknown> {
         return entity ? cloneEntity(entity) : undefined;
     }
 
+    public setEntityState(id: string, state: State): boolean {
+        this.assertSynchronousMutationAllowed();
+        const key = this.entityChunks.get(id);
+        const record = key ? this.chunks.get(key) : undefined;
+        const entity = record?.entities.get(id);
+        if (!record || !entity) return false;
+        entity.state = cloneValue(state);
+        this.touch(record);
+        this.updateStats(0, 0);
+        return true;
+    }
+
     public removeEntity(id: string): boolean {
         this.assertSynchronousMutationAllowed();
         const key = this.entityChunks.get(id);
@@ -433,6 +472,69 @@ export class WorldSimulationRuntime<State = unknown> {
             this.registerChunk(key, record);
             this.updateStats(0, 0);
             return this.chunkInfo(record);
+        });
+    }
+
+    public restoreStoredChunks(): Promise<readonly SimulationChunkInfo<State>[]> {
+        const store = this.store;
+        if (!store?.listChunks) {
+            return Promise.reject(new Error("SimulationChunkStore does not support stored chunk enumeration"));
+        }
+        return this.enqueueOperation(async lifecycleRevision => {
+            const listed = await store.listChunks!();
+            this.assertLifecycleCurrent(lifecycleRevision);
+            if (!Array.isArray(listed)) throw new TypeError("stored simulation chunk list must be an array");
+            const points = listed.map(point => {
+                if (!point || typeof point !== "object") {
+                    throw new TypeError("stored simulation chunk coordinates are invalid");
+                }
+                this.assertChunkCoordinates(point.x, point.y);
+                return { x: point.x, y: point.y };
+            }).sort((first, second) => first.x - second.x || first.y - second.y);
+            const seenChunks = new Set<string>();
+            const seenEntities = new Set(this.entityChunks.keys());
+            const pending: Array<{ key: string; snapshot: SimulationChunkSnapshot<State> }> = [];
+            const result: SimulationChunkInfo<State>[] = [];
+            for (const point of points) {
+                const key = simulationChunkKey(point.x, point.y);
+                if (seenChunks.has(key)) throw new TypeError("simulation store listed duplicate chunk coordinates");
+                seenChunks.add(key);
+                const resident = this.chunks.get(key);
+                if (resident) {
+                    result.push(this.chunkInfo(resident));
+                    continue;
+                }
+                const snapshot = await store.load(point.x, point.y);
+                this.assertLifecycleCurrent(lifecycleRevision);
+                if (!snapshot) continue;
+                this.assertSnapshot(snapshot, point.x, point.y);
+                for (const entity of snapshot.entities) {
+                    if (seenEntities.has(entity.id)) {
+                        throw new Error(`duplicate restored simulation entity "${entity.id}"`);
+                    }
+                    seenEntities.add(entity.id);
+                }
+                pending.push({ key, snapshot });
+            }
+            // No restored record is made visible until every indexed snapshot
+            // has loaded and validated successfully.
+            for (const { key, snapshot } of pending) {
+                const record: SimulationChunkRecord<State> = {
+                    chunkX: snapshot.chunkX,
+                    chunkY: snapshot.chunkY,
+                    revision: snapshot.revision,
+                    accumulator: 0,
+                    simulatedSeconds: snapshot.simulatedSeconds,
+                    entities: new Map(snapshot.entities.map(entity => [entity.id, cloneEntity(entity)])),
+                    dirty: false,
+                    active: false
+                };
+                for (const id of record.entities.keys()) this.entityChunks.set(id, key);
+                this.registerChunk(key, record);
+                result.push(this.chunkInfo(record));
+            }
+            this.updateStats(0, 0);
+            return result.sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
         });
     }
 
@@ -633,12 +735,16 @@ export class WorldSimulationRuntime<State = unknown> {
     private async saveRecord(record: SimulationChunkRecord<State>, lifecycleRevision: number): Promise<void> {
         if (!this.store || !record.dirty) return;
         const savedRevision = record.revision;
-        await this.store.save({
-            version: WORLD_SIMULATION_FORMAT_VERSION,
-            chunkX: record.chunkX, chunkY: record.chunkY, revision: savedRevision,
-            savedAt: Date.now(), simulatedSeconds: record.simulatedSeconds,
-            entities: [...record.entities.values()].map(cloneEntity)
-        });
+        if (record.entities.size === 0) {
+            await this.store.delete(record.chunkX, record.chunkY);
+        } else {
+            await this.store.save({
+                version: WORLD_SIMULATION_FORMAT_VERSION,
+                chunkX: record.chunkX, chunkY: record.chunkY, revision: savedRevision,
+                savedAt: Date.now(), simulatedSeconds: record.simulatedSeconds,
+                entities: [...record.entities.values()].map(cloneEntity)
+            });
+        }
         this.assertLifecycleCurrent(lifecycleRevision);
         const key = simulationChunkKey(record.chunkX, record.chunkY);
         if (this.chunks.get(key) === record && record.dirty && record.revision === savedRevision) {

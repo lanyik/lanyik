@@ -252,8 +252,11 @@ routed by cause:
 
 - frame-task duration/backlog/oldest age control only the main-thread
   `FrameTaskScheduler` millisecond and task budgets;
-- GPU timing, when supplied by a host, controls vegetation density, LOD
-  distances and vegetation-first LOD bias;
+- GPU timing, when supplied by a host, controls internal render resolution,
+  vegetation density, LOD distances and vegetation-first LOD bias. When
+  explicit timing is unavailable and all observable frame-task and Worker
+  queues are idle, sustained slow animation frames provide a conservative
+  render-pressure fallback;
 - an explicit Worker-contention measurement controls Worker count (busy
   Workers still retire only after their current request settles).
 
@@ -261,13 +264,15 @@ Worker busy ratio and queue depth are telemetry, not proof of contention: a
 full queue normally means the pool needs its configured capacity, so it no
 longer causes Worker count to be reduced. `AdaptiveStreamingController.sample`
 accepts CPU/GPU time, frame-task age/backlog, Worker saturation/contention,
-Chunk latency, upload bytes and draw calls. `HexMap` currently supplies the
-signals it can measure portably and exposes the rest for renderer backends or
-application instrumentation; missing domains keep their current quality rather
-than guessing from total frame time.
+Chunk latency, upload bytes and draw calls. `HexMap` supplies the signals it can
+measure portably and exposes the rest for renderer backends or application
+instrumentation. The frame-time fallback is disabled while observable work is
+busy, so streaming or Worker pressure is not mislabeled as GPU pressure.
 
-Background-tab gaps above 250ms are ignored. Recovery is intentionally slower
-than degradation. Applications can opt out with `adaptiveStreaming: false`, set
+Legacy/background-gap samples above 250ms are ignored. Structured samples from
+the visible `HexMap` loop are capped at 250ms but remain actionable. Recovery is
+intentionally slower than degradation. Applications can opt out with
+`adaptiveStreaming: false`, set
 `targetFrameMs`, tune the consecutive/cooldown frame counts, and inspect
 `map.adaptiveStreamingStats`. The original `frameBudgetMs`,
 `maxMountsPerFrame`, Worker count and LOD options remain the level-0 ceiling.

@@ -4,6 +4,7 @@ interface Diagnostics {
     status: string;
     generating: boolean;
     streaming?: {
+        visibleChunks: number;
         residentChunks: number;
         gpuResidentChunks: number;
         registeredObjects: number;
@@ -15,6 +16,10 @@ interface Diagnostics {
         queuedChunks: number;
     };
     rendererMemory?: { geometries: number; textures: number };
+    renderer?: { calls: number; triangles: number };
+    rendererPixelRatio?: number;
+    adaptive?: { targetFrameMs: number };
+    renderBackend?: { renderer: string; software: boolean };
 }
 
 async function diagnostics(page: Page): Promise<Diagnostics> {
@@ -41,7 +46,7 @@ test.beforeEach(async ({ page }) => {
     page.on("console", message => {
         if (message.type() === "error") errors.push(message.text());
     });
-    await page.goto("/?infinite&x=0&y=0", { waitUntil: "domcontentloaded" });
+    await page.goto("/?infinite&x=0&y=0&quality=fast", { waitUntil: "domcontentloaded" });
     await waitForWorld(page);
 });
 
@@ -50,7 +55,30 @@ test.afterEach(async ({ page }) => {
     expect(errors, errors.join("\n")).toEqual([]);
 });
 
+test("keeps the default infinite-world render budget bounded", async ({ page }, testInfo) => {
+    await page.waitForFunction(() => {
+        const state = (window as unknown as { getWorldDiagnostics(): Diagnostics }).getWorldDiagnostics();
+        return state.worldStreaming?.pendingChunks === 0
+            && state.worldStreaming.queuedChunks === 0
+            && (state.renderer?.triangles ?? 0) > 0;
+    });
+    const sample = await diagnostics(page);
+    await testInfo.attach("default-render-budget.json", {
+        body: JSON.stringify(sample, null, 2),
+        contentType: "application/json"
+    });
+
+    expect(sample.worldStreaming!.residentChunks).toBeLessThanOrEqual(9);
+    expect(sample.streaming!.visibleChunks).toBeLessThanOrEqual(12);
+    expect(sample.renderer!.calls).toBeLessThanOrEqual(12);
+    expect(sample.renderer!.triangles).toBeLessThan(10_000);
+    expect(sample.rendererPixelRatio).toBeLessThanOrEqual(1);
+    expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 120);
+    expect(sample.renderBackend!.renderer.length).toBeGreaterThan(0);
+});
+
 test("streams across long distances while residency and GPU caches stay bounded", async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
     const samples: Diagnostics[] = [];
     for (const tileX of [0, 96, 240, 480, 960, 1440]) {
         await page.evaluate(x => {

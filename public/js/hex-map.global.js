@@ -5696,6 +5696,7 @@ uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
+uniform float landBlendEnabled;
 
 // Curved coastline: the visual waterline is bent by *static* world-space value
 // noise (same recipe as the river banks below) so bays and headlands cut
@@ -6047,19 +6048,21 @@ void main() {
 
     vec4 texColor = texture2D(map, vTexCoord);
 
-    // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
-    // meanders the border position, a finer one modulates its strength into
-    // patches (like the river banks' bankPatchiness below).
-    float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
-    float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
-    float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
+    if (landBlendEnabled > 0.5) {
+        // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
+        // meanders the border position, a finer one modulates its strength into
+        // patches (like the river banks' bankPatchiness below).
+        float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
+        float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
+        float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
 
-    texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
-    texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
-    texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
-    texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
-    texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
-    texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
+        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
+        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
+        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
+        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
+        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+    }
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
     // with a water tile; bending it with static world-space noise moves the
@@ -6227,6 +6230,135 @@ void main() {
     // keep every feature visible, just darker - the "remembered" Civ-style look.
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
+    gl_FragColor = vec4(color, 1.0);
+
+    if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
+        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+    }
+}
+`;
+
+  // src/shaders/terrain.fast.fragment.ts
+  var TERRAIN_FAST_FRAGMENT_SHADER = `
+precision highp float;
+
+uniform sampler2D map;
+uniform sampler2D fogMap;
+uniform vec4 textureAtlasMeta;
+uniform float sandAtlasIndex;
+uniform float beachWidth;
+uniform float fogDarkenFactor;
+uniform float showGrid;
+uniform vec3 gridColor;
+uniform float gridWidth;
+uniform float gridOpacity;
+uniform vec3 lightDir;
+uniform float hexSize;
+uniform float riverWidth;
+uniform float riverBankWidth;
+uniform vec3 riverColorShallow;
+uniform vec3 riverColorDeep;
+uniform vec3 riverBankColor;
+
+varying vec2 vUV;
+varying vec2 vTexCoord;
+varying float vBorder;
+varying vec3 vNormal;
+varying float vFogState;
+varying vec2 vFogUV;
+varying float vRiverEdges;
+varying vec2 vLocal;
+varying vec3 vNeighborsKindA;
+varying vec3 vNeighborsKindB;
+varying vec3 vEdgeFactorsA;
+varying vec3 vEdgeFactorsB;
+
+const vec2 DIR_SE = vec2(0.8660254, 0.5);
+const vec2 DIR_S  = vec2(0.0, 1.0);
+const vec2 DIR_SW = vec2(-0.8660254, 0.5);
+const vec2 DIR_NW = vec2(-0.8660254, -0.5);
+const vec2 DIR_N  = vec2(0.0, -1.0);
+const vec2 DIR_NE = vec2(0.8660254, -0.5);
+
+vec2 cellIndexToUV(float idx) {
+    float atlasWidth = textureAtlasMeta.x;
+    float atlasHeight = textureAtlasMeta.y;
+    float cellSize = textureAtlasMeta.z;
+    float cols = atlasWidth / cellSize - 1e-6;
+    float rows = atlasHeight / cellSize;
+    float x = mod(idx, cols);
+    float y = floor(idx / cols);
+    return vec2(x / cols + vUV.x / cols, 1.0 - (y / rows + (1.0 - vUV.y) / rows));
+}
+
+float riverSegDist(vec2 p, vec2 dir, float apothem) {
+    float t = clamp(dot(p, dir), 0.0, apothem);
+    return length(p - dir * t);
+}
+
+float riverChannelDist(vec2 p, float mask, float apothem) {
+    float d = length(p);
+    if (mod(floor(mask /  1.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SE, apothem));
+    if (mod(floor(mask /  2.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_S,  apothem));
+    if (mod(floor(mask /  4.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SW, apothem));
+    if (mod(floor(mask /  8.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NW, apothem));
+    if (mod(floor(mask / 16.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_N,  apothem));
+    if (mod(floor(mask / 32.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NE, apothem));
+    return d;
+}
+
+float straightCoastField() {
+    vec3 kA = floor(vNeighborsKindA + 0.5);
+    vec3 kB = floor(vNeighborsKindB + 0.5);
+    float coast = 0.0;
+    if (kA.x >= 0.5) coast = max(coast, vEdgeFactorsA.x);
+    if (kA.y >= 0.5) coast = max(coast, vEdgeFactorsA.y);
+    if (kA.z >= 0.5) coast = max(coast, vEdgeFactorsA.z);
+    if (kB.x >= 0.5) coast = max(coast, vEdgeFactorsB.x);
+    if (kB.y >= 0.5) coast = max(coast, vEdgeFactorsB.y);
+    if (kB.z >= 0.5) coast = max(coast, vEdgeFactorsB.z);
+    return coast;
+}
+
+void main() {
+    if (vFogState < 0.5) {
+        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+        return;
+    }
+
+    vec4 texColor = texture2D(map, vTexCoord);
+
+    float coast = straightCoastField();
+    if (coast > 0.0) {
+        float edge = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
+        float beachT = smoothstep(edge, 1.0, coast);
+        if (beachT > 0.0) {
+            texColor = mix(texColor, texture2D(map, cellIndexToUV(sandAtlasIndex)), beachT);
+        }
+    }
+
+    if (vRiverEdges > -0.5) {
+        float mask = floor(vRiverEdges + 0.5);
+        float waterT = 0.0;
+        float bankT = 0.0;
+        float depthT = 0.0;
+        if (mask >= 2048.0) {
+            waterT = 1.0;
+            depthT = 1.0;
+        } else {
+            float d = riverChannelDist(vLocal, mask, hexSize * 0.8660254) / hexSize;
+            bankT = 1.0 - smoothstep(riverWidth + riverBankWidth * 0.35, riverWidth + riverBankWidth, d);
+            waterT = 1.0 - smoothstep(riverWidth - 0.04, riverWidth, d);
+            depthT = 1.0 - smoothstep(0.0, riverWidth, d);
+        }
+        texColor = mix(texColor, vec4(riverBankColor, 1.0), bankT);
+        texColor = mix(texColor, vec4(mix(riverColorShallow, riverColorDeep, depthT), 1.0), waterT);
+    }
+
+    vec3 normal = normalize(vNormal);
+    float lambertian = max(dot(normalize(lightDir), normal), 0.0);
+    vec3 color = texColor.rgb * (0.55 + 0.55 * lambertian);
+    if (vFogState < 1.5) color *= fogDarkenFactor;
     gl_FragColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
@@ -6737,6 +6869,47 @@ void main() {
 }
 `;
 
+  // src/shaders/water.fast.fragment.ts
+  var WATER_FAST_FRAGMENT_SHADER = `
+precision highp float;
+
+uniform sampler2D fogMap;
+uniform float fogDarkenFactor;
+uniform float showGrid;
+uniform vec3 gridColor;
+uniform float gridWidth;
+uniform float gridOpacity;
+uniform vec3 lightDir;
+uniform vec3 waterColorDeep;
+uniform vec3 waterColorShallow;
+
+varying float vBorder;
+varying float vPriority;
+varying vec3 vNormal;
+varying float vShoreT;
+varying float vFogState;
+varying vec2 vFogUV;
+
+void main() {
+    if (vFogState < 0.5) {
+        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+        return;
+    }
+
+    vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
+    vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
+    color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
+    float lambertian = max(dot(normalize(lightDir), normalize(vNormal)), 0.0);
+    color *= 0.55 + 0.55 * lambertian;
+    if (vFogState < 1.5) color *= fogDarkenFactor;
+    gl_FragColor = vec4(color, 1.0);
+
+    if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
+        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+    }
+}
+`;
+
   // src/objects/TerrainMesh.ts
   var WATER_TYPES = ["sea" /* sea */, "coastal" /* coastal */];
   var CITY_FOG_TILE_KEY = "hexMapCityFogTile";
@@ -6959,6 +7132,7 @@ void main() {
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
           landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
+          landBlendEnabled: { value: this.options.landBlendEnabled ?? true ? 1 : 0 },
           landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
           mountainAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] ?? -2 },
           mountainHeight: { value: this.options.mountainHeight ?? this.options.size * 0.6 },
@@ -6985,7 +7159,7 @@ void main() {
           ...this.commonUniforms()
         },
         vertexShader: TERRAIN_VERTEX_SHADER,
-        fragmentShader: TERRAIN_FRAGMENT_SHADER
+        fragmentShader: this.options.shaderQuality === "fast" ? TERRAIN_FAST_FRAGMENT_SHADER : TERRAIN_FRAGMENT_SHADER
       }));
       if (tiles.length === 0) return;
       for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -7048,7 +7222,7 @@ void main() {
           ...this.commonUniforms()
         },
         vertexShader: WATER_VERTEX_SHADER,
-        fragmentShader: WATER_FRAGMENT_SHADER
+        fragmentShader: this.options.shaderQuality === "fast" ? WATER_FAST_FRAGMENT_SHADER : WATER_FRAGMENT_SHADER
       }));
       if (tiles.length === 0) return;
       for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -7344,8 +7518,9 @@ void main() {
           record.tiles,
           { x: record.mesh.position.x, y: record.mesh.position.z }
         ));
-        const subdivisions = record.layer === "land" ? [3, 2, 1][lod] : [2, 1, 0][lod];
-        const borderSubdivisions = record.layer === "land" ? 3 : 2;
+        const fastTerrain = this.options.shaderQuality === "fast";
+        const subdivisions = fastTerrain ? 0 : record.layer === "land" ? [3, 2, 1][lod] : [2, 1, 0][lod];
+        const borderSubdivisions = fastTerrain ? 0 : record.layer === "land" ? 3 : 2;
         geometry = this.buildInstancedGeometry(
           record.tiles,
           subdivisions,
@@ -7398,6 +7573,12 @@ void main() {
     }
     set landBlendWidth(value) {
       if (this.landMaterial) this.landMaterial.uniforms.landBlendWidth.value = value;
+    }
+    get landBlendEnabled() {
+      return (this.landMaterial?.uniforms.landBlendEnabled.value ?? 1) > 0.5;
+    }
+    set landBlendEnabled(value) {
+      if (this.landMaterial) this.landMaterial.uniforms.landBlendEnabled.value = value ? 1 : 0;
     }
     //River channel knobs - all live uniforms on the land material (rivers are
     //drawn by the land layer's shaders).
@@ -9048,10 +9229,10 @@ void main() {
 
   // src/rendering/AdaptiveStreamingController.ts
   var QUALITY = [
-    { mount: 1, tasks: 1, workers: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.75, tasks: 0.75, workers: 0.75, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.5, tasks: 0.5, workers: 0.5, vegetation: 0.65, lod: 0.8, lodBias: 0, vegetationBias: 1 },
-    { mount: 0.3, tasks: 0.35, workers: 0.35, vegetation: 0.45, lod: 0.68, lodBias: 1, vegetationBias: 1 }
+    { mount: 1, tasks: 1, workers: 1, resolution: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.75, tasks: 0.75, workers: 0.75, resolution: 0.85, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.5, tasks: 0.5, workers: 0.5, resolution: 0.65, vegetation: 0.55, lod: 0.75, lodBias: 0, vegetationBias: 1 },
+    { mount: 0.3, tasks: 0.35, workers: 0.35, resolution: 0.25, vegetation: 0.25, lod: 0.55, lodBias: 1, vegetationBias: 1 }
   ];
   var pressureState = () => ({
     level: 0,
@@ -9083,8 +9264,9 @@ void main() {
     sample(value) {
       const legacy = typeof value === "number";
       const sample = legacy ? { frameMs: value } : value;
-      const frameMs = sample?.frameMs;
-      if (!this.enabled || !Number.isFinite(frameMs) || frameMs <= 0 || frameMs > 250) return void 0;
+      const observedFrameMs = sample?.frameMs;
+      if (!this.enabled || !Number.isFinite(observedFrameMs) || observedFrameMs <= 0 || legacy && observedFrameMs > 250) return void 0;
+      const frameMs = legacy ? observedFrameMs : Math.min(observedFrameMs, 250);
       this.averageFrameMs = this.averageFrameMs === 0 ? frameMs : this.averageFrameMs + (frameMs - this.averageFrameMs) * this.emaAlpha;
       this.latest = { ...sample };
       delete this.latest.frameMs;
@@ -9104,8 +9286,10 @@ void main() {
         if (mainMeasurement !== void 0) {
           changed = this.samplePressure(this.mainThread, mainMeasurement, this.targetFrameMs) || changed;
         }
-        if (sample.gpuFrameMs !== void 0) {
-          changed = this.samplePressure(this.gpu, sample.gpuFrameMs, this.targetFrameMs) || changed;
+        const observableWorkIsIdle = (sample.frameTaskBacklog ?? 0) === 0 && (sample.oldestFrameTaskMs ?? 0) <= this.targetFrameMs && (sample.workerQueueDepth ?? 0) === 0 && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25 && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
+        const renderMeasurement = sample.gpuFrameMs ?? (observableWorkIsIdle ? frameMs : void 0);
+        if (renderMeasurement !== void 0) {
+          changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
         }
         if (sample.workerContentionMs !== void 0) {
           changed = this.samplePressure(this.worker, sample.workerContentionMs, this.targetFrameMs * 0.25) || changed;
@@ -9163,6 +9347,7 @@ void main() {
         frameBudgetMs: Math.max(0.5, this.options.baseFrameBudgetMs * main.mount),
         maxTasksPerFrame: Math.max(1, Math.round(this.options.baseMaxTasksPerFrame * main.tasks)),
         workerCount: Math.max(minimumWorkerCount, Math.round(this.options.baseWorkerCount * worker.workers)),
+        resolutionScale: gpu.resolution,
         vegetationDensityScale: gpu.vegetation,
         lodDistanceScale: gpu.lod,
         lodBias: gpu.lodBias,
@@ -12639,6 +12824,10 @@ void main() {
   }
   var DEFAULT_OPTIONS = {
     size: 40,
+    maxPixelRatio: 2,
+    antialias: true,
+    terrainShaderQuality: "full",
+    skyVisible: true,
     texturesBaseUrl: "textures/",
     gridVisible: true,
     gridColor: 4338219,
@@ -12664,6 +12853,7 @@ void main() {
     coastalWaveOpacity: 0.85,
     beachWidth: 0.35,
     landBlendWidth: 0.5,
+    landBlendEnabled: true,
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
@@ -12743,6 +12933,7 @@ void main() {
       this.streamingPredictionSeconds = 1.25;
       this.streamingPredictionMaxChunks = 1;
       this.floatingOriginThreshold = 8192;
+      this.adaptiveResolutionScale = 1;
       this.appliedVegetationDensityScale = 1;
       this.adaptiveVegetationRevision = 0;
       this.mouseDownAt = null;
@@ -12757,7 +12948,9 @@ void main() {
         if (width <= 0 || height <= 0) return;
         this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(
+          Math.min(window.devicePixelRatio, this.options.maxPixelRatio) * this.adaptiveResolutionScale
+        );
         this.renderer.setSize(width, height, false);
       };
       this.animate = (t) => {
@@ -12968,6 +13161,10 @@ void main() {
       };
       positive("size", this.options.size);
       positive("renderDistance", this.options.renderDistance);
+      positive("maxPixelRatio", this.options.maxPixelRatio);
+      if (this.options.terrainShaderQuality !== "full" && this.options.terrainShaderQuality !== "fast") {
+        throw new RangeError('terrainShaderQuality must be "full" or "fast"');
+      }
       if (this.options.lodNearDistance < 0 || this.options.lodFarDistance < this.options.lodNearDistance) {
         throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
       }
@@ -13008,7 +13205,7 @@ void main() {
       this.worldRoot = new three.Group();
       this.worldRoot.name = "hex-map-world-root";
       this.scene.add(this.worldRoot);
-      this.renderer = new three.WebGLRenderer({ canvas: this.canvas, antialias: true });
+      this.renderer = new three.WebGLRenderer({ canvas: this.canvas, antialias: this.options.antialias });
       this.renderer.toneMapping = three.ACESFilmicToneMapping;
       this.renderer.toneMappingExposure = 0.65;
     }
@@ -13028,6 +13225,7 @@ void main() {
     }
     setupSky() {
       this.sky = new Sky();
+      this.sky.visible = this.options.skyVisible;
       this.sky.scale.setScalar(45e4);
       this.sky.frustumCulled = false;
       const uniforms = this.sky.material.uniforms;
@@ -13926,6 +14124,8 @@ void main() {
       });
     }
     applyAdaptiveStreamingProfile(profile) {
+      const resolutionChanged = profile.resolutionScale !== this.adaptiveResolutionScale;
+      this.adaptiveResolutionScale = profile.resolutionScale;
       const densityChanged = profile.vegetationDensityScale !== this.appliedVegetationDensityScale;
       this.appliedVegetationDensityScale = profile.vegetationDensityScale;
       this.frameTasks.configure({
@@ -13942,6 +14142,7 @@ void main() {
       } catch (reason) {
         this.emit("error", reason instanceof Error ? reason : new Error(String(reason)));
       }
+      if (resolutionChanged) this.handleResize();
       if (densityChanged) this.scheduleAdaptiveVegetationRebuild(profile.vegetationDensityScale);
     }
     scheduleAdaptiveVegetationRebuild(scale) {
@@ -14308,6 +14509,7 @@ void main() {
         gridColor: this.options.gridColor,
         gridWidth: this.options.gridWidth,
         gridOpacity: this.options.gridOpacity,
+        shaderQuality: this.options.terrainShaderQuality,
         waterColorShallow: this.options.waterColorShallow,
         waterColorDeep: this.options.waterColorDeep,
         waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -14326,6 +14528,7 @@ void main() {
         waterDepth: this.options.waterDepth,
         beachWidth: this.options.beachWidth,
         landBlendWidth: this.options.landBlendWidth,
+        landBlendEnabled: this.options.landBlendEnabled,
         waterCornerRounding: this.options.waterCornerRounding,
         coastCurvature: this.options.coastCurvature,
         landBlendCurvature: this.options.landBlendCurvature,
@@ -15056,6 +15259,13 @@ void main() {
     set landBlendWidth(value) {
       this.options.landBlendWidth = value;
       if (this.terrain) this.terrain.landBlendWidth = value;
+    }
+    get landBlendEnabled() {
+      return this.terrain?.landBlendEnabled ?? this.options.landBlendEnabled;
+    }
+    set landBlendEnabled(value) {
+      this.options.landBlendEnabled = value;
+      if (this.terrain) this.terrain.landBlendEnabled = value;
     }
     get waterCornerRounding() {
       return this.terrain?.waterCornerRounding ?? this.options.waterCornerRounding;

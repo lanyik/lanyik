@@ -138,11 +138,11 @@ Everything is optional except `element`. The full, documented list lives in [`He
 
 | Group | Options |
 |-------|---------|
-| Layout | `size`, `texturesBaseUrl` |
+| Layout | `size`, `texturesBaseUrl`, `maxPixelRatio`, `antialias`, `terrainShaderQuality`, `skyVisible` |
 | Grid | `gridVisible`, `gridColor`, `gridWidth`, `gridOpacity` |
 | Water | `waterColorShallow/Deep`, `waterWaveAmplitude/Frequency/Speed`, `waterSparkleIntensity`, `waterFresnelIntensity`, `waterDepth`, `beachWidth` |
 | Coastal foam | `coastalWavesEnabled`, `coastalWaveColor/Count/Speed/Width/Range/Distortion/Opacity` |
-| Blending | `landBlendWidth`, `waterCornerRounding` |
+| Blending | `landBlendWidth`, `landBlendEnabled`, `waterCornerRounding` |
 | Rivers & lakes | `riverWidth`, `riverBankWidth`, `riverCurvature`, `riverColorShallow/Deep`, `riverBankColor`, `riverFlowSpeed`, `riverDepth`, `lakeShoreWidth` |
 | Trees | `treesPerTile`, `treeModel`, `treeScale` |
 | Grass | `grassEnabled`, `grassDensity`, `grassBladeWidth/Height`, `grassWindStrength/Speed` |
@@ -254,6 +254,14 @@ optional `x`/`y` query values test very large logical coordinates). Arbitrary
 `Unit` objects added through `map.add()` remain under the rebased world root;
 global simulation/pathfinding across unloaded chunks is intentionally an
 application-level concern rather than materializing the entire world again.
+
+Open `/?infinite&campaign` for the minimal persistent-campaign vertical slice.
+It orders an army across multiple source chunks, keeps it advancing after the
+camera moves away, creates an outpost through a World Delta on arrival, and
+restores both simulation and world state from IndexedDB after a reload. Add
+`&autostart` to issue the first long march automatically. See
+[docs/campaign-vertical-slice.md](docs/campaign-vertical-slice.md) for the
+runtime boundaries and verification flow.
 
 ## Fog of war
 

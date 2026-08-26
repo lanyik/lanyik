@@ -9,6 +9,7 @@ uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
+uniform float landBlendEnabled;
 
 // Curved coastline: the visual waterline is bent by *static* world-space value
 // noise (same recipe as the river banks below) so bays and headlands cut
@@ -360,19 +361,21 @@ void main() {
 
     vec4 texColor = texture2D(map, vTexCoord);
 
-    // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
-    // meanders the border position, a finer one modulates its strength into
-    // patches (like the river banks' bankPatchiness below).
-    float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
-    float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
-    float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
+    if (landBlendEnabled > 0.5) {
+        // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
+        // meanders the border position, a finer one modulates its strength into
+        // patches (like the river banks' bankPatchiness below).
+        float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
+        float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
+        float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
 
-    texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
-    texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
-    texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
-    texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
-    texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
-    texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
+        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
+        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
+        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
+        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
+        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+    }
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
     // with a water tile; bending it with static world-space noise moves the

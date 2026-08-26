@@ -24,6 +24,7 @@ describe("adaptive streaming controller", () => {
         const frameTasks = new FrameTaskScheduler({ budgetMs: 10, maxTasksPerFrame: 1 });
         const map = Object.create(HexMap.prototype) as {
             disposed: boolean;
+            adaptiveResolutionScale: number;
             appliedVegetationDensityScale: number;
             adaptiveVegetationRevision: number;
             options: { grassEnabled: boolean; grassDensity: number; treesPerTile: number };
@@ -39,9 +40,11 @@ describe("adaptive streaming controller", () => {
                 forestVegetationSignature?: string;
             }>;
             rebuildAdaptiveWorldVegetation: typeof rebuild;
+            handleResize: ReturnType<typeof vi.fn>;
             applyAdaptiveStreamingProfile(profile: Readonly<AdaptiveStreamingProfile>): void;
         };
         map.disposed = false;
+        map.adaptiveResolutionScale = 1;
         map.appliedVegetationDensityScale = 1;
         map.adaptiveVegetationRevision = 0;
         map.options = { grassEnabled: true, grassDensity: 10, treesPerTile: 4 };
@@ -57,6 +60,7 @@ describe("adaptive streaming controller", () => {
             ["2,0", { chunk: { chunkX: 2, chunkY: 0 }, grassVegetationSignature: "10:4", forestVegetationSignature: "10:4" }]
         ]);
         map.rebuildAdaptiveWorldVegetation = rebuild;
+        map.handleResize = vi.fn();
         const profile: AdaptiveStreamingProfile = {
             qualityLevel: 2,
             mainThreadLevel: 0,
@@ -65,6 +69,7 @@ describe("adaptive streaming controller", () => {
             frameBudgetMs: 4,
             maxTasksPerFrame: 1,
             workerCount: 4,
+            resolutionScale: 0.7,
             vegetationDensityScale: 0.5,
             lodDistanceScale: 0.8,
             lodBias: 0,
@@ -73,6 +78,7 @@ describe("adaptive streaming controller", () => {
         };
 
         map.applyAdaptiveStreamingProfile(profile);
+        expect(map.handleResize).toHaveBeenCalledOnce();
         expect(frameTasks.stats.pendingTasks).toBe(2);
         expect(rebuild).not.toHaveBeenCalled();
         frameTasks.runFrame();
@@ -90,6 +96,7 @@ describe("adaptive streaming controller", () => {
             frameBudgetMs: 3,
             maxTasksPerFrame: 3,
             workerCount: 3,
+            resolutionScale: 0.85,
             vegetationDensityScale: 0.85,
             lodDistanceScale: 0.9
         });
@@ -108,13 +115,14 @@ describe("adaptive streaming controller", () => {
         expect(adaptive.currentProfile).toMatchObject({
             qualityLevel: 3,
             workerCount: 1,
+            resolutionScale: 0.25,
             lodBias: 1,
             vegetationLodBias: 1
         });
-        expect(adaptive.currentProfile.lodDistances.near).toBeCloseTo(68);
-        expect(adaptive.currentProfile.lodDistances.far).toBeCloseTo(136);
-        expect(adaptive.currentProfile.lodDistances.vegetation).toBeCloseTo(108.8);
-        expect(adaptive.currentProfile.lodDistances.hysteresis).toBeCloseTo(13.6);
+        expect(adaptive.currentProfile.lodDistances.near).toBeCloseTo(55);
+        expect(adaptive.currentProfile.lodDistances.far).toBeCloseTo(110);
+        expect(adaptive.currentProfile.lodDistances.vegetation).toBeCloseTo(88);
+        expect(adaptive.currentProfile.lodDistances.hysteresis).toBeCloseTo(11);
     });
 
     test("ignores background-tab sized samples", () => {
@@ -122,6 +130,14 @@ describe("adaptive streaming controller", () => {
         for (let index = 0; index < 10; index += 1) adaptive.sample(1000);
         expect(adaptive.stats.averageFrameMs).toBe(0);
         expect(adaptive.currentProfile.qualityLevel).toBe(0);
+    });
+
+    test("clamps but retains structured long-frame telemetry", () => {
+        const adaptive = controller();
+        const sample = { frameMs: 1000, frameTaskBacklog: 0, workerQueueDepth: 0 };
+        expect(adaptive.sample(sample)).toBeUndefined();
+        expect(adaptive.sample(sample)).toMatchObject({ gpuLevel: 1 });
+        expect(adaptive.stats.averageFrameMs).toBe(250);
     });
 
     test("routes GPU pressure only to LOD and vegetation actuators", () => {
@@ -135,6 +151,27 @@ describe("adaptive streaming controller", () => {
             frameBudgetMs: 4,
             maxTasksPerFrame: 4,
             workerCount: 4,
+            resolutionScale: 0.85,
+            vegetationDensityScale: 0.85,
+            lodDistanceScale: 0.9
+        });
+    });
+
+    test("treats sustained slow frames as render pressure once observable work is idle", () => {
+        const adaptive = controller();
+        const sample = {
+            frameMs: 24,
+            frameTaskMs: 0,
+            frameTaskBacklog: 0,
+            oldestFrameTaskMs: 0,
+            workerQueueDepth: 0,
+            workerContentionMs: 0
+        };
+        expect(adaptive.sample(sample)).toBeUndefined();
+        expect(adaptive.sample(sample)).toMatchObject({
+            mainThreadLevel: 0,
+            gpuLevel: 1,
+            workerLevel: 0,
             vegetationDensityScale: 0.85,
             lodDistanceScale: 0.9
         });

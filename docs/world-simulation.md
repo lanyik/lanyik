@@ -67,6 +67,13 @@ while `wakeChunk()` restores it. A production application can implement
 store persists browser campaigns by `worldId`; the memory store is useful for
 sessions and tests.
 
+Built-in stores implement `listChunks()`, and a fresh runtime can call
+`restoreStoredChunks()` to discover and atomically restore every snapshot for
+its `worldId` without an external chunk manifest. Custom stores may omit
+enumeration when their application already owns the manifest. Empty dirty
+chunks are deleted at the next save barrier rather than accumulating historical
+snapshots as entities move across the world.
+
 `wakeChunk()`, `hibernateChunk()`, `advance()` and `flush()` share one ordered
 operation queue. Lifecycle revisions are checked after every storage await, so
 an old restore cannot publish a Chunk after `dispose()`, and concurrent wakes of
@@ -85,3 +92,35 @@ invalidates pending work immediately and releases the store after queued work
 has settled. Activity anchors affect frequency only: they do not load terrain
 and they do not control whether distant resident entity chunks continue
 background simulation.
+
+## Route-driven army slice
+
+The simulation subpath also exports the deliberately small `ArmyMarch` helper.
+It converts a `HierarchicalPathfinder` result into persistent route state and a
+camera-independent simulation system:
+
+```ts
+import {
+    WorldSimulationRuntime,
+    createArmyMarchState,
+    createArmyMarchSystem,
+    orderArmyMarch
+} from "three-hex-map/simulation";
+
+const runtime = new WorldSimulationRuntime({ store, chunkSize: 24 });
+runtime.registerSystem(createArmyMarchSystem());
+runtime.addEntity({
+    id: "first-army",
+    x: 0,
+    y: 0,
+    state: createArmyMarchState({ speedTilesPerSecond: 6 })
+});
+
+await orderArmyMarch(runtime, pathfinder, "first-army", { x: 72, y: 12 });
+await runtime.advance(deltaSeconds);
+await runtime.flush();
+```
+
+The helper owns no render object and releases path-owned terrain leases as soon
+as the route is copied into simulation state. Applications remain responsible
+for route invalidation policy when gameplay edits change terrain passability.
