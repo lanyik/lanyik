@@ -63,6 +63,17 @@ describe("toroidal topology", () => {
         expect(path).toEqual([{ x: 0, y: 3 }, { x: 7, y: 3 }]);
     });
 
+    test("legacy synchronous pathfinding rejects infinite map compatibility dimensions", () => {
+        const tile = { type: Land.land };
+        const world: MapInfo = {
+            data: {}, w: 1, h: 1, infinite: true,
+            tileAt: (x, y) => y === 0 && x >= 0 && x <= 2 ? tile : undefined
+        };
+        const allowed = Object.fromEntries(Object.values(Land).map(type => [type, true])) as { [key in Land]: boolean };
+
+        expect(() => new PathFinder(world, allowed)).toThrow(/finite maps/);
+    });
+
     test("pathfinding normalizes public endpoints and respects tile vetoes", () => {
         const world = allLandWorld();
         const allowed = Object.fromEntries(Object.values(Land).map(type => [type, true])) as { [key in Land]: boolean };

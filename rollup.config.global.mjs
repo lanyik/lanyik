@@ -41,6 +41,7 @@ export default {
         name: "HexMap",
         exports: "named",
         sourcemap: true,
+        sourcemapExcludeSources: true,
         globals: {
             three: "THREE"
         }

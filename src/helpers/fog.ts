@@ -27,6 +27,10 @@ export function tilesWithinRange(map: MapInfo, x: number, y: number, range: numb
                 const key = `${n.x},${n.y}`;
                 if (visited.has(key)) continue;
                 visited.add(key);
+                //MapInfo.infinite means coordinates are unbounded, not that
+                //every coordinate is materialized. Missing cells neither
+                //become visible nor bridge disconnected sparse regions.
+                if (!getMapTile(map, n.x, n.y)) continue;
                 next.push({ x: n.x, y: n.y });
                 result.push({ x: n.x, y: n.y });
             }

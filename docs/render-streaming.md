@@ -162,8 +162,11 @@ source cache epoch so older in-flight worker results cannot repopulate storage,
 and deletes all stored base chunks. The demo exposes this operation as a localized, confirmed
 **Clear cached data** control; loaded terrain remains in memory until normal
 eviction or regeneration. The operation intentionally does not delete mutable
-game saves or `setTileOverride()` state, which require an application-owned
-persistence layer. `map.worldStreamingStats` exposes hit/miss/error, entry and
+game saves or `setTileOverride()` state. Passing `deltaStore: true` enables the
+separate `IndexedDbWorldDeltaStore`; callers can instead provide a
+`WorldDeltaStore` backed by a server or editor database. `source.flushDeltas()`
+is the durable save barrier and `source.clearDeltas()` deletes only the active
+world's sparse save. `map.worldStreamingStats` exposes hit/miss/error, entry and
 byte counters for diagnostics.
 
 A custom `WorldSource` can use HTTP, IndexedDB, a server-authoritative cache or
@@ -183,13 +186,141 @@ the logical rather than rebased coordinate.
 Packed procedural base tiles are shared immutable variants. Per-coordinate
 gameplay fields use `ProceduralWorldSource.setTileOverride()` and
 `clearTileOverride()`, a sparse sidecar that survives chunk eviction for the
-source lifetime without expanding every generated cell into an object.
+source lifetime without expanding every generated cell into an object. Delta
+keys include topology, seed, dimensions, chunk size and generator version by
+default, while an explicit `worldId` lets applications control save slots.
+Chunk snapshots carry a format version and monotonically increasing revision;
+incompatible or corrupt records are rejected rather than applied.
 
 `map.worldStreamingStats` works for every source and reports source-chunk
 residency, pending work, queue depth, busy workers, completions, retries and
 terminal failures. `map.streamingStats` continues to report render-chunk
 visibility/LOD/GPU residency. `map.frameTaskStats` reports deferred mount work,
 completed/cancelled tasks and the most recent frame's queue cost.
+
+## Worker-prepared vegetation
+
+Procedural and toroidal sources reuse their bounded generation pool for a
+second task type: vegetation preparation. After a source chunk becomes
+resident, grass and forest share one request containing only its core tiles and
+the one-ring halo needed for river, lake and coast clearance. The worker performs
+deterministic rejection sampling, tree-spacing checks and all three LOD builds.
+
+The response contains transferable `Float32Array`/`Uint32Array` buffers. Grass
+receives ready-to-bind offset, tile-offset, angle, scale, phase and shade
+attributes; forests receive ready-to-upload column-major instance matrices,
+grouped by tree model and 12x12 render chunk. The main thread still owns model
+loading, Three.js object creation, fog state and WebGL buffer upload, but no
+longer runs the per-blade/per-tree layout loops for streamed procedural worlds.
+Queued preparation is distance-prioritized and cancellable when a chunk is
+evicted. Static/custom sources without `prepareVegetation()` keep the existing
+synchronous layout path, so the optional `WorldSource` capability is backward
+compatible.
+
+The shared pool reserves one Worker slot for terrain by default whenever it has
+more than one Worker (`reservedChunkWorkers` is configurable). Vegetation may
+use the remaining slots, but it cannot occupy the reservation while terrain is
+absent. A newly requested center Chunk can therefore start immediately instead
+of waiting behind several non-preemptible ~11ms vegetation jobs. Pool stats
+separate queued/running terrain and vegetation work and expose an EMA for each
+task duration; a single-Worker pool remains fully utilized.
+
+## Batched GPU attribute updates
+
+Fog/frontier changes are grouped by resident terrain, grass and forest buffer.
+The renderer writes the underlying typed arrays in slices, merges overlapping
+or adjacent component ranges, and marks each attribute once. Pending Three.js
+update ranges are included in the merge, so several gameplay calls before the
+next frame cannot accumulate redundant uploads. Cached terrain LOD attributes
+are marked together to prevent a later LOD switch from exposing stale GPU data.
+
+Tile overrides also take an incremental terrain path. Changes that keep an
+instance on the same land or water draw layer update style, neighbor atlas,
+priority/kind and river/lake edge attributes in place for the tile and its
+one-ring dependents. A land-to-water or water-to-land transition still rebuilds
+the affected 12x12 render chunk because its draw-batch membership changes.
+City models refresh only when their name/model signature changes; decorative
+grass and forest layers retain their safe layer-remount behavior.
+
+## Adaptive frame budget
+
+`loadWorld()` enables adaptive streaming by default. The controller now keeps
+independent main-thread, GPU and Worker pressure levels. Each uses an EMA,
+separate overload/recovery thresholds, consecutive-frame gates and a cooldown,
+so an isolated hitch cannot oscillate quality. Actuators are deliberately
+routed by cause:
+
+- frame-task duration/backlog/oldest age control only the main-thread
+  `FrameTaskScheduler` millisecond and task budgets;
+- GPU timing, when supplied by a host, controls vegetation density, LOD
+  distances and vegetation-first LOD bias;
+- an explicit Worker-contention measurement controls Worker count (busy
+  Workers still retire only after their current request settles).
+
+Worker busy ratio and queue depth are telemetry, not proof of contention: a
+full queue normally means the pool needs its configured capacity, so it no
+longer causes Worker count to be reduced. `AdaptiveStreamingController.sample`
+accepts CPU/GPU time, frame-task age/backlog, Worker saturation/contention,
+Chunk latency, upload bytes and draw calls. `HexMap` currently supplies the
+signals it can measure portably and exposes the rest for renderer backends or
+application instrumentation; missing domains keep their current quality rather
+than guessing from total frame time.
+
+Background-tab gaps above 250ms are ignored. Recovery is intentionally slower
+than degradation. Applications can opt out with `adaptiveStreaming: false`, set
+`targetFrameMs`, tune the consecutive/cooldown frame counts, and inspect
+`map.adaptiveStreamingStats`. The original `frameBudgetMs`,
+`maxMountsPerFrame`, Worker count and LOD options remain the level-0 ceiling.
+When GPU quality changes, resident vegetation is migrated as prioritized frame
+tasks instead of applying the new density only to future chunks. Near chunks
+start first, async builds carry the requested quality signature, and completed
+grass/forest objects replace the previous objects only after the new resources
+are ready. Superseded work cannot publish after a later quality transition.
+
+## Registering render layers
+
+Streaming terrain, cities, grass and forests use the same `WorldRenderLayer`
+registry exposed to applications. A road, resource or boundary layer can be
+registered without adding another lifecycle branch to `HexMap`:
+
+```ts
+await map.registerWorldRenderLayer({
+    id: "roads",
+    kinds: ["road"],
+    mountChunk(context) {
+        const object = buildRoadChunk(context.map, context.points);
+        tagWorldChunk(
+            object,
+            context.key,
+            "road",
+            getWorldChunkBounds(context.points, context.tileSize, 0, 2)
+        );
+        context.addObject(object);
+    },
+    unmountChunk() {}, // context-tracked objects are removed by HexMap
+    refreshTiles({ tiles }) {
+        updateRoadTiles(tiles);
+    },
+    activateLod(metadata, lod, visibleCopies) {
+        return activateRoadGeometry(metadata, lod, visibleCopies);
+    },
+    releaseChunk(metadata) {
+        releaseRoadGeometry(metadata);
+    },
+    dispose() {
+        disposeRoadResources();
+    }
+});
+```
+
+Registration also works while a world is loaded: every resident source chunk
+is mounted before the returned promise resolves. Async builders receive an
+`isCurrent()` guard, layers unload in reverse registration order during a world
+switch, and `unregisterWorldRenderLayer()` removes tracked objects and calls
+`dispose()`. Layers with `refreshTiles()` receive coalesced tile-and-neighbor
+changes without a full chunk remount; other layers use the safe remount path.
+Lifecycle failures are aggregated after all remaining cleanup hooks have run;
+objects added through the host are removed even when mount or unmount throws.
 
 ## Fog and unit hot paths
 
@@ -198,6 +329,10 @@ frontiers, rather than scanning the full map. `HexMap.setTilesFog()` batches
 renderer changes and routes them to the owning resident source chunk. Finite
 worlds keep the persistent renderer-side copy in a lazily allocated byte array;
 infinite worlds retain sparse keys. Attribute uploads use partial update ranges.
+Visibility flood-fill traverses only materialized tiles, so sparse holes are
+barriers rather than implicit cells. Explored state remains keyed by logical
+coordinate after a source Chunk leaves residency and is restored when that tile
+is rendered again.
 
 `GameEngine` keeps stable unit/viewer arrays. Moving and camera-near units update
 their animation mixers every frame; idle units beyond `unitAnimationDistance`
@@ -206,3 +341,22 @@ transform writes until their nearest physical world copy changes.
 
 Run `npm run benchmark` after performance changes. It builds the library and
 measures packed chunk residency plus the 512×512 fog frontier using fixed input.
+
+## Browser stress and leak checks
+
+`npm run test:e2e` builds the distributable demo and runs the streaming system
+in Chromium with software WebGL. The suite first loads the generated Worker as a
+standalone module, which catches browser-incompatible bare imports and transfer
+protocol regressions before the heavier rendering cases start.
+
+The long-distance case moves the logical camera target from source chunk 0 to
+chunk 60, crossing the floating-origin threshold several times. At every stop it
+waits for demand to settle and asserts bounded source residency, render/GPU
+residency and texture counts. The replacement case regenerates five differently
+seeded infinite worlds in one renderer and rejects monotonic or excessive
+`WebGLRenderer.info.memory` growth. Both cases attach their raw JSON samples to
+the Playwright result; traces, screenshots and videos are retained on failure
+and uploaded by CI.
+
+The backend/culling crossover benchmark and migration decision are recorded in
+[`render-backend-evaluation.md`](./render-backend-evaluation.md).

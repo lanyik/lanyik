@@ -48,9 +48,19 @@ export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
 export { FrameTaskScheduler } from "./rendering/FrameTaskScheduler";
 export type { FrameTaskSchedulerOptions, FrameTaskSchedulerStats } from "./rendering/FrameTaskScheduler";
+export { mergeBufferUpdateRanges, commitBufferAttributeRanges } from "./rendering/BufferUpdateBatch";
+export type { BufferUpdateRange, GpuTileStateChange } from "./rendering/BufferUpdateBatch";
+export { AdaptiveStreamingController } from "./rendering/AdaptiveStreamingController";
+export type {
+    AdaptiveStreamingControllerOptions,
+    AdaptiveStreamingProfile,
+    AdaptiveStreamingStats,
+    AdaptiveStreamingSample
+} from "./rendering/AdaptiveStreamingController";
 export {
     generateWorldChunk,
     assertPackedWorldChunk,
+    assertWorldTileOverride,
     decodeWorldChunkTile,
     getWorldChunkCorePoints,
     SparseWorldChunkStore,
@@ -65,6 +75,7 @@ export type {
     WorldChunkGenerationOptions,
     BoundedWorldChunkGeneration,
     WorldTileOverride,
+    WorldTileOverrideChange,
     SparseWorldChunkStoreOptions
 } from "./world/generateWorldChunk";
 export { WorldGeneratorPool } from "./world/WorldGeneratorPool";
@@ -74,6 +85,22 @@ export type {
     ChunkRequestOptions,
     ChunkGeneratorClient
 } from "./world/WorldGeneratorPool";
+export {
+    generateWorldVegetation,
+    createWorldVegetationMapSnapshot,
+    assertWorldVegetationLayout,
+    worldVegetationTransferables,
+    WORLD_VEGETATION_FORMAT_VERSION
+} from "./world/generateVegetation";
+export type {
+    WorldVegetationMapSnapshot,
+    WorldVegetationGenerationOptions,
+    WorldVegetationLayout,
+    WorldVegetationGrassChunkLayout,
+    WorldVegetationGrassLodLayout,
+    WorldVegetationForestChunkLayout,
+    WorldVegetationForestLodLayout
+} from "./world/generateVegetation";
 export {
     IndexedDbWorldChunkCache,
     createWorldChunkCacheKey,
@@ -91,11 +118,17 @@ export {
     ProceduralWorldSource,
     assertWorldSource,
     assertWorldChunk,
+    isMutableWorldSource,
+    isWorldVegetationSource,
     packedChunkFromWorldChunk,
     getWorldSourceTile
 } from "./world/WorldSource";
 export type {
     WorldSource,
+    WorldChunkRevision,
+    MutableWorldSource,
+    WorldVegetationSource,
+    WorldVegetationPreparationOptions,
     WorldBounds,
     WorldChunk,
     WorldSourceStats,
@@ -106,8 +139,41 @@ export type {
     ProceduralWorldSourceDependencies
 } from "./world/WorldSource";
 export { WorldStreamer } from "./world/WorldStreamer";
+export {
+    ChunkResidencyCoordinator,
+    getChunkResidencyCoordinator
+} from "./world/ChunkResidencyCoordinator";
+export type {
+    ChunkLeaseOwner,
+    ChunkLeaseOptions,
+    WorldChunkLease,
+    ChunkResidencyStats
+} from "./world/ChunkResidencyCoordinator";
 export type {
     WorldStreamerOptions,
     WorldStreamerHandlers,
     WorldStreamingStats
 } from "./world/WorldStreamer";
+export { WorldRenderLayerRegistry } from "./rendering/WorldRenderLayer";
+export type {
+    WorldRenderLayer,
+    WorldRenderLayerHost,
+    WorldRenderChunkContext,
+    WorldRenderTileRefreshContext
+} from "./rendering/WorldRenderLayer";
+export { RenderWorldController } from "./rendering/RenderWorldController";
+export type { RenderWorldStreamingOptions } from "./rendering/RenderWorldController";
+export {
+    tagWorldChunk,
+    getWorldChunkMetadata,
+    getWorldChunkBounds,
+    groupTilesByWorldChunk,
+    WORLD_CHUNK_SIZE
+} from "./helpers/chunks";
+export type {
+    WorldChunkKind,
+    BuiltinWorldChunkKind,
+    WorldChunkLod,
+    WorldChunkMetadata,
+    WorldChunkBounds
+} from "./helpers/chunks";

@@ -35,4 +35,17 @@ describe("renderer fog state storage", () => {
         expect(store.size).toBe(1);
         expect(store.get(-2_000_000, 4_000_000)).toBe(FogState.Visible);
     });
+
+    test("rejects each out-of-range dense axis before linear indexing", () => {
+        const store = new FogStateStore(finiteMap(2, 2));
+        store.set(1, 0, FogState.Visible);
+        store.set(0, 2, FogState.Explored);
+        store.set(2, 0, FogState.Explored);
+        store.set(-1, 2, FogState.Explored);
+
+        expect(store.size).toBe(1);
+        expect(store.get(1, 0)).toBe(FogState.Visible);
+        expect(store.get(0, 2)).toBeUndefined();
+        expect(store.get(2, 0)).toBeUndefined();
+    });
 });

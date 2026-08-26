@@ -41,6 +41,75 @@ export interface PackedWorldChunk {
 //the fields that differ from the generated base tile.
 export type WorldTileOverride = Partial<TileInfo>;
 
+export interface WorldTileOverrideChange {
+    x: number;
+    y: number;
+    changes: WorldTileOverride;
+}
+
+export function cloneWorldTileOverride(value: WorldTileOverride): WorldTileOverride {
+    const copy: WorldTileOverride = { ...value };
+    if (value.modifiers) copy.modifiers = [...value.modifiers];
+    if (value.rivers) copy.rivers = value.rivers.map(river => ({ ...river }));
+    if (value.city) copy.city = { ...value.city };
+    return copy;
+}
+
+export function worldTileOverridesEqual(
+    first: WorldTileOverride | undefined,
+    second: WorldTileOverride | undefined
+): boolean {
+    if (first === second) return true;
+    if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
+    if (first.type !== second.type || first.treeModel !== second.treeModel
+        || first.unit !== second.unit || first.city?.name !== second.city?.name
+        || first.city?.model !== second.city?.model
+        || Boolean(first.city) !== Boolean(second.city)) return false;
+    const firstModifiers = first.modifiers;
+    const secondModifiers = second.modifiers;
+    if (firstModifiers?.length !== secondModifiers?.length
+        || firstModifiers?.some((value, index) => value !== secondModifiers?.[index])) return false;
+    const firstRivers = first.rivers;
+    const secondRivers = second.rivers;
+    return firstRivers?.length === secondRivers?.length
+        && !firstRivers?.some((value, index) => value.riverIndex !== secondRivers?.[index]?.riverIndex
+            || value.riverTileIndex !== secondRivers?.[index]?.riverTileIndex);
+}
+
+export function hasWorldTileOverride(value: WorldTileOverride | undefined): boolean {
+    return !!value && (value.type !== undefined || value.modifiers !== undefined
+        || value.treeModel !== undefined || value.rivers !== undefined
+        || value.unit !== undefined || value.city !== undefined);
+}
+
+export function assertWorldTileOverride(value: WorldTileOverride): void {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new TypeError("tile override must be an object");
+    }
+    if (value.type !== undefined && !Object.values(Land).includes(value.type)) {
+        throw new TypeError("tile override type is invalid");
+    }
+    if (value.modifiers !== undefined
+        && (!Array.isArray(value.modifiers) || value.modifiers.some(item => typeof item !== "string"))) {
+        throw new TypeError("tile override modifiers must be strings");
+    }
+    if (value.treeModel !== undefined && typeof value.treeModel !== "string") {
+        throw new TypeError("tile override treeModel must be a string");
+    }
+    if (value.unit !== undefined && typeof value.unit !== "string") {
+        throw new TypeError("tile override unit must be a string");
+    }
+    if (value.rivers !== undefined && (!Array.isArray(value.rivers) || value.rivers.some(river =>
+        !river || !Number.isSafeInteger(river.riverIndex) || !Number.isSafeInteger(river.riverTileIndex)))) {
+        throw new TypeError("tile override rivers are invalid");
+    }
+    if (value.city !== undefined && (!value.city || typeof value.city !== "object" || Array.isArray(value.city)
+        || (value.city.name !== undefined && typeof value.city.name !== "string")
+        || (value.city.model !== undefined && typeof value.city.model !== "string"))) {
+        throw new TypeError("tile override city is invalid");
+    }
+}
+
 export interface SparseWorldChunkStoreOptions {
     width?: number;
     height?: number;
@@ -345,20 +414,45 @@ export class SparseWorldChunkStore {
         return this.tileOverrides.size;
     }
 
-    public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
-        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
-            throw new RangeError("tile override coordinates must be safe integers");
+    public getTileOverride(x: number, y: number): WorldTileOverride | undefined {
+        const value = this.tileOverrides.get(SparseWorldChunkStore.tileKey(x, y));
+        return value ? cloneWorldTileOverride(value) : undefined;
+    }
+
+    public setTileOverride(x: number, y: number, changes: WorldTileOverride): boolean {
+        return this.setTileOverrides([{ x, y, changes }]).length > 0;
+    }
+
+    public setTileOverrides(changes: readonly WorldTileOverrideChange[]): Point[] {
+        if (!Array.isArray(changes)) throw new TypeError("tile override changes must be an array");
+        const prepared = new Map<string, { x: number; y: number; value: WorldTileOverride | undefined }>();
+        //Validate and reduce the complete batch before mutating storage. This
+        //makes duplicate-coordinate edits atomic and lets net-zero batches
+        //avoid cache invalidation, persistence and revision bumps.
+        for (const change of changes) {
+            if (!change || typeof change !== "object") {
+                throw new TypeError("tile override change must be an object");
+            }
+            const { x, y } = change;
+            if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+                throw new RangeError("tile override coordinates must be safe integers");
+            }
+            assertWorldTileOverride(change.changes);
+            const key = SparseWorldChunkStore.tileKey(x, y);
+            const previous = prepared.has(key) ? prepared.get(key)!.value : this.tileOverrides.get(key);
+            const merged = { ...previous, ...cloneWorldTileOverride(change.changes) };
+            prepared.set(key, { x, y, value: hasWorldTileOverride(merged) ? merged : undefined });
         }
-        if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
-            throw new TypeError("tile override must be an object");
+
+        const changed: Point[] = [];
+        for (const [key, next] of prepared) {
+            if (worldTileOverridesEqual(this.tileOverrides.get(key), next.value)) continue;
+            if (next.value) this.tileOverrides.set(key, next.value);
+            else this.tileOverrides.delete(key);
+            this.overriddenTiles.delete(key);
+            changed.push({ x: next.x, y: next.y });
         }
-        const key = SparseWorldChunkStore.tileKey(x, y);
-        const copy: WorldTileOverride = { ...changes };
-        if (changes.modifiers) copy.modifiers = [...changes.modifiers];
-        if (changes.rivers) copy.rivers = changes.rivers.map(river => ({ ...river }));
-        if (changes.city) copy.city = { ...changes.city };
-        this.tileOverrides.set(key, { ...this.tileOverrides.get(key), ...copy });
-        this.overriddenTiles.delete(key);
+        return changed;
     }
 
     public clearTileOverride(x: number, y: number): boolean {
@@ -366,6 +460,11 @@ export class SparseWorldChunkStore {
         const key = SparseWorldChunkStore.tileKey(x, y);
         this.overriddenTiles.delete(key);
         return this.tileOverrides.delete(key);
+    }
+
+    public clearTileOverrides(): void {
+        this.tileOverrides.clear();
+        this.overriddenTiles.clear();
     }
 
     private getTile(x: number, y: number): TileInfo | undefined {
@@ -399,15 +498,28 @@ export class SparseWorldChunkStore {
         if (!chunk) return undefined;
         const xSamples = this.bounds?.wrapX ? [x, x - this.bounds.width, x + this.bounds.width] : [x];
         const ySamples = this.bounds?.wrapY ? [y, y - this.bounds.height, y + this.bounds.height] : [y];
+        const originX = chunk.chunkX * chunk.chunkSize;
+        const originY = chunk.chunkY * chunk.chunkSize;
+        //The final chunk of a bounded world may contain fewer core cells than
+        //chunkSize. Its packed payload is still square, but the unused slots are
+        //generation/storage padding rather than resident cells. Restrict lookup
+        //to the real core extent plus the one-cell halo so wrapped samples cannot
+        //expose several unloaded cells at the opposite world edge.
+        const coreWidth = this.bounds
+            ? Math.max(0, Math.min(chunk.chunkSize, this.bounds.width - originX))
+            : chunk.chunkSize;
+        const coreHeight = this.bounds
+            ? Math.max(0, Math.min(chunk.chunkSize, this.bounds.height - originY))
+            : chunk.chunkSize;
         let packed: number | undefined;
         let localX = 0;
         let localY = 0;
         outer: for (const sampleX of xSamples) {
             for (const sampleY of ySamples) {
-                const candidateX = sampleX - chunk.chunkX * chunk.chunkSize;
-                const candidateY = sampleY - chunk.chunkY * chunk.chunkSize;
-                if (candidateX < -chunk.padding || candidateX >= chunk.chunkSize + chunk.padding
-                    || candidateY < -chunk.padding || candidateY >= chunk.chunkSize + chunk.padding) continue;
+                const candidateX = sampleX - originX;
+                const candidateY = sampleY - originY;
+                if (candidateX < -chunk.padding || candidateX >= coreWidth + chunk.padding
+                    || candidateY < -chunk.padding || candidateY >= coreHeight + chunk.padding) continue;
                 localX = candidateX;
                 localY = candidateY;
                 packed = chunk.tiles[(localX + chunk.padding) * chunk.stride + localY + chunk.padding];
@@ -431,6 +543,13 @@ export class SparseWorldChunkStore {
         if (tile.modifiers) tile.modifiers = [...tile.modifiers];
         if (tile.rivers) tile.rivers = tile.rivers.map(river => ({ ...river }));
         if (tile.city) tile.city = { ...tile.city };
+        if (tile.modifiers) Object.freeze(tile.modifiers);
+        if (tile.rivers) {
+            for (const river of tile.rivers) Object.freeze(river);
+            Object.freeze(tile.rivers);
+        }
+        if (tile.city) Object.freeze(tile.city);
+        Object.freeze(tile);
         this.overriddenTiles.set(key, { packed, tile });
         return tile;
     }

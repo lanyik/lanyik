@@ -60,6 +60,9 @@ export class PathFinder {
         private readonly accessible?: (x: number, y: number) => boolean
     ) {
         assertWrappableMap(map);
+        if (map.infinite) {
+            throw new RangeError("PathFinder supports finite maps only; use HierarchicalPathfinder for streaming infinite worlds");
+        }
         this.wrapX = map.wrapX === true;
         this.wrapY = map.wrapY === true;
     }

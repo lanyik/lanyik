@@ -12,6 +12,69 @@ function world(width = 8, height = 8, wrapped = false): MapInfo {
 }
 
 describe("fog of war input handling", () => {
+    test("does not reveal through missing tiles in a sparse map", () => {
+        const tile = { type: Land.land };
+        const map: MapInfo = {
+            data: {}, w: 1, h: 1, infinite: true,
+            tileAt: (x, y) => y === 0 && (x === 0 || x === 2) ? tile : undefined,
+            forEachTile(visit) {
+                visit(tile, 0, 0);
+                visit(tile, 2, 0);
+            }
+        };
+
+        expect(tilesWithinRange(map, 0, 0, 2)).toEqual([{ x: 0, y: 0 }]);
+        const fog = new FogOfWar(map);
+        expect(fog.recompute([{ x: 0, y: 0, viewRange: 2 }])).toEqual([
+            { x: 0, y: 0, state: FogState.Visible }
+        ]);
+        expect(fog.getState(2, 0)).toBe(FogState.Unseen);
+    });
+
+    test("stores infinite and negative coordinates without dense-array aliasing", () => {
+        const tile = { type: Land.land };
+        const coordinates = new Set(["-2,0", "50,0"]);
+        const map: MapInfo = {
+            data: {}, w: 1, h: 1, infinite: true,
+            tileAt: (x, y) => coordinates.has(`${x},${y}`) ? tile : undefined,
+            forEachTile(visit) {
+                visit(tile, -2, 0);
+                visit(tile, 50, 0);
+            }
+        };
+        const fog = new FogOfWar(map);
+
+        fog.recompute([
+            { x: -2, y: 0, viewRange: 0 },
+            { x: 50, y: 0, viewRange: 0 }
+        ]);
+
+        expect(fog.getState(-2, 0)).toBe(FogState.Visible);
+        expect(fog.getState(50, 0)).toBe(FogState.Visible);
+        expect(fog.allTiles()).toEqual([
+            { x: -2, y: 0, state: FogState.Visible },
+            { x: 50, y: 0, state: FogState.Visible }
+        ]);
+    });
+
+    test("retains explored state after a sparse tile leaves residency", () => {
+        const tile = { type: Land.land };
+        const coordinates = new Set(["0,0"]);
+        const map: MapInfo = {
+            data: {}, w: 1, h: 1, infinite: true,
+            tileAt: (x, y) => coordinates.has(`${x},${y}`) ? tile : undefined,
+            forEachTile(visit) {
+                if (coordinates.has("0,0")) visit(tile, 0, 0);
+            }
+        };
+        const fog = new FogOfWar(map);
+        fog.recompute([{ x: 0, y: 0, viewRange: 0 }]);
+        fog.recompute([]);
+        coordinates.clear();
+
+        expect(fog.getState(0, 0)).toBe(FogState.Explored);
+    });
+
     test("floors fractional ranges and rejects non-finite ranges", () => {
         const map = world();
         expect(tilesWithinRange(map, 3, 3, 1.9)).toHaveLength(7);

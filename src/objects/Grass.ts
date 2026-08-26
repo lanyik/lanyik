@@ -19,6 +19,11 @@ import { MapInfo, Point } from "../interfaces";
 import { Land } from "../enums";
 import { getMapTile } from "../helpers/topology";
 import { SharedBaseInstancedBufferGeometry } from "../rendering/SharedBaseInstancedBufferGeometry";
+import {
+    BufferUpdateRange,
+    commitBufferAttributeRanges,
+    GpuTileStateChange
+} from "../rendering/BufferUpdateBatch";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
@@ -31,6 +36,11 @@ import {
     WorldChunkLod,
     WorldChunkMetadata
 } from "../helpers/chunks";
+import {
+    WorldVegetationGrassChunkLayout,
+    WorldVegetationGrassLodLayout,
+    WorldVegetationLayout
+} from "../world/generateVegetation";
 
 export interface GrassOptions {
     size: number;
@@ -62,6 +72,7 @@ interface GrassLodCache {
 }
 
 interface GrassChunkRecord {
+    chunkKey: string;
     mesh: Mesh<InstancedBufferGeometry, RawShaderMaterial>;
     tiles: { x: number, y: number }[];
     lod?: WorldChunkLod;
@@ -146,6 +157,7 @@ export class GrassField extends Group {
         private chunks: Map<string, GrassChunkRecord>,
         public readonly resources: GrassSharedResources,
         private options: ResolvedGrassOptions,
+        private preparedChunks: ReadonlyMap<string, WorldVegetationGrassChunkLayout>,
         private ownsResources: boolean
     ) {
         super();
@@ -156,15 +168,23 @@ export class GrassField extends Group {
     //FogOfWar.ts) - a plain attribute-slice fill + needsUpdate, no rebuild.
     //No-op for tiles with no grass (city tiles, non-"land" terrain).
     public setFogState(x: number, y: number, state: number): void {
-        const key = `${x},${y}`;
-        this.fogStates.set(key, state);
-        const range = this.tileRanges.get(key);
-        if (!range) return;
+        this.setFogStates([{ x, y, state }]);
+    }
 
-        const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-        for (let i = 0; i < range.count; i++) attribute.setX(range.start + i, state);
-        attribute.addUpdateRange(range.start, range.count);
-        attribute.needsUpdate = true;
+    public setFogStates(changes: readonly GpuTileStateChange[]): void {
+        const updates = new Map<InstancedBufferAttribute, BufferUpdateRange[]>();
+        for (const { x, y, state } of changes) {
+            const key = `${x},${y}`;
+            this.fogStates.set(key, state);
+            const range = this.tileRanges.get(key);
+            if (!range) continue;
+            const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+            (attribute.array as Float32Array).fill(state, range.start, range.start + range.count);
+            const ranges = updates.get(attribute) ?? [];
+            ranges.push({ start: range.start, count: range.count });
+            updates.set(attribute, ranges);
+        }
+        for (const [attribute, ranges] of updates) commitBufferAttributeRanges(attribute, ranges);
     }
 
     //Advances the wind animation. `dtS` is the elapsed time in seconds since
@@ -200,6 +220,7 @@ export class GrassField extends Group {
         let cached = record.lodCache.get(lod);
         if (!cached) {
             cached = this.buildChunkGeometry(
+                record.chunkKey,
                 record.tiles,
                 lod,
                 { x: record.mesh.position.x, y: record.mesh.position.z }
@@ -211,14 +232,14 @@ export class GrassField extends Group {
         record.mesh.geometry = cached.geometry;
         if (record.lod === undefined && !previous.getAttribute("position")) previous.dispose();
         const fogAttribute = cached.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+        const updateRanges: BufferUpdateRange[] = [];
         for (const range of cached.ranges) {
             const state = this.fogStates.get(range.key) ?? 2;
-            for (let index = 0; index < range.count; index += 1) {
-                fogAttribute.setX(range.start + index, state);
-            }
+            (fogAttribute.array as Float32Array).fill(state, range.start, range.start + range.count);
+            updateRanges.push({ start: range.start, count: range.count });
             this.tileRanges.set(range.key, { geometry: cached.geometry, start: range.start, count: range.count });
         }
-        fogAttribute.needsUpdate = true;
+        commitBufferAttributeRanges(fogAttribute, updateRanges);
         record.lod = lod;
         return record.mesh.geometry;
     }
@@ -242,10 +263,13 @@ export class GrassField extends Group {
     }
 
     private buildChunkGeometry(
+        chunkKey: string,
         chunkTiles: { x: number, y: number }[],
         lod: WorldChunkLod,
         origin: Point
     ): GrassLodCache {
+        const prepared = this.preparedChunks.get(chunkKey)?.lods.find(candidate => candidate.lod === lod);
+        if (prepared) return this.buildPreparedChunkGeometry(prepared);
         const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
         const densityScale = ([1, 0.38, 0.14] as const)[lod];
         const density = Math.max(1, Math.round(this.options.density * densityScale));
@@ -312,6 +336,27 @@ export class GrassField extends Group {
         return { geometry, ranges: pendingRanges };
     }
 
+    private buildPreparedChunkGeometry(prepared: WorldVegetationGrassLodLayout): GrassLodCache {
+        const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
+        const fogStates = new Float32Array(prepared.instanceCount);
+        const ranges = prepared.tiles.map((tile, index) => {
+            const key = `${tile.x},${tile.y}`;
+            const start = prepared.ranges[index * 2];
+            const count = prepared.ranges[index * 2 + 1];
+            fogStates.fill(this.fogStates.get(key) ?? 2, start, start + count);
+            return { key, start, count };
+        });
+        geometry.instanceCount = prepared.instanceCount;
+        geometry.setAttribute("offset", new InstancedBufferAttribute(prepared.offsets, 2));
+        geometry.setAttribute("tileOffset", new InstancedBufferAttribute(prepared.tileOffsets, 2));
+        geometry.setAttribute("angle", new InstancedBufferAttribute(prepared.angles, 1));
+        geometry.setAttribute("scale", new InstancedBufferAttribute(prepared.scales, 2));
+        geometry.setAttribute("phase", new InstancedBufferAttribute(prepared.phases, 1));
+        geometry.setAttribute("shade", new InstancedBufferAttribute(prepared.shades, 1));
+        geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
+        return { geometry, ranges };
+    }
+
     public dispose(): void {
         for (const record of this.chunks.values()) {
             const geometries = new Set<InstancedBufferGeometry>([
@@ -364,7 +409,8 @@ export function createGrassField(
     map: MapInfo,
     options: GrassOptions,
     onlyTiles?: readonly Point[],
-    sharedResources?: GrassSharedResources
+    sharedResources?: GrassSharedResources,
+    preparedLayout?: WorldVegetationLayout
 ): GrassField | null {
     const { size } = options;
     const density = options.density ?? 60;
@@ -421,7 +467,7 @@ export function createGrassField(
                 origin
             )
         );
-        chunks.set(`grass:${chunkKey}`, { mesh: chunk, tiles: chunkTiles, lodCache: new Map() });
+        chunks.set(`grass:${chunkKey}`, { chunkKey, mesh: chunk, tiles: chunkTiles, lodCache: new Map() });
     }
 
     return new GrassField(map, chunks, resources, {
@@ -431,5 +477,5 @@ export function createGrassField(
         bladeHeight,
         heightVariation,
         waterOptions
-    }, !sharedResources);
+    }, new Map(preparedLayout?.grass.map(chunk => [chunk.chunkKey, chunk]) ?? []), !sharedResources);
 }

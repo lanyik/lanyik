@@ -16,16 +16,19 @@ export class FogStateStore {
 
     constructor(private readonly map: MapInfo) {
         const cells = map.w * map.h;
-        if (!map.infinite && Number.isSafeInteger(cells) && cells >= 0 && cells <= MAX_DENSE_FOG_CELLS) {
+        if (!map.infinite && Number.isSafeInteger(map.w) && map.w >= 0
+            && Number.isSafeInteger(map.h) && map.h >= 0
+            && Number.isSafeInteger(cells) && cells <= MAX_DENSE_FOG_CELLS) {
             this.denseLength = cells;
         }
     }
 
     public set(x: number, y: number, state: FogState): void {
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return;
         if (this.denseLength !== undefined) {
+            const index = this.denseIndex(x, y);
+            if (index === undefined) return;
             this.dense ??= this.createDenseStorage();
-            const index = x * this.map.h + y;
-            if (index < 0 || index >= this.denseLength || !Number.isSafeInteger(index)) return;
             if (this.dense[index] === UNSET_FOG_STATE) this.count += 1;
             this.dense[index] = state;
             return;
@@ -36,10 +39,11 @@ export class FogStateStore {
     }
 
     public get(x: number, y: number): FogState | undefined {
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return undefined;
         if (this.denseLength !== undefined) {
             if (!this.dense) return undefined;
-            const index = x * this.map.h + y;
-            if (index < 0 || index >= this.denseLength || !Number.isSafeInteger(index)) return undefined;
+            const index = this.denseIndex(x, y);
+            if (index === undefined) return undefined;
             const state = this.dense[index];
             return state === UNSET_FOG_STATE ? undefined : state as FogState;
         }
@@ -74,5 +78,10 @@ export class FogStateStore {
         const storage = new Uint8Array(this.denseLength!);
         storage.fill(UNSET_FOG_STATE);
         return storage;
+    }
+
+    private denseIndex(x: number, y: number): number | undefined {
+        if (x < 0 || x >= this.map.w || y < 0 || y >= this.map.h) return undefined;
+        return x * this.map.h + y;
     }
 }

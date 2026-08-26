@@ -8,6 +8,7 @@ import {
     SparseWorldChunkStore,
     WORLD_GENERATOR_VERSION,
     WorldTileOverride,
+    WorldTileOverrideChange,
     assertPackedWorldChunk
 } from "./generateWorldChunk";
 import { ChunkRequestOptions, WorldGeneratorPool, WorldGeneratorPoolStats } from "./WorldGeneratorPool";
@@ -17,6 +18,16 @@ import {
     WorldChunkCache,
     WorldChunkCacheStats
 } from "./WorldChunkCache";
+import {
+    IndexedDbWorldDeltaStore,
+    normalizeWorldChunkDelta,
+    WorldDeltaStore
+} from "./WorldDeltaStore";
+import {
+    createWorldVegetationMapSnapshot,
+    WorldVegetationGenerationOptions,
+    WorldVegetationLayout
+} from "./generateVegetation";
 
 export interface WorldBounds {
     width: number;
@@ -35,15 +46,30 @@ export interface WorldChunk {
 
 export interface WorldSourceStats {
     workers: number;
+    configuredWorkers?: number;
     busyWorkers: number;
     queued: number;
     completed: number;
+    queuedChunks?: number;
+    queuedVegetation?: number;
+    busyChunkWorkers?: number;
+    busyVegetationWorkers?: number;
+    averageChunkMs?: number;
+    averageVegetationMs?: number;
     cacheHits?: number;
     cacheMisses?: number;
     cacheWrites?: number;
     cacheErrors?: number;
     cachedChunks?: number;
     cachedBytes?: number;
+    trackedDeltaChunks?: number;
+    pendingDeltaTiles?: number;
+    restoringDeltaChunks?: number;
+}
+
+export interface WorldChunkRevision {
+    terrainRevision: string | number;
+    deltaRevision: number;
 }
 
 //A WorldSource owns the materialized MapInfo view used by renderers. Loading a
@@ -62,8 +88,41 @@ export interface WorldSource {
     releaseChunk(chunk: WorldChunk): void;
     hasChunk(chunkX: number, chunkY: number): boolean;
     hasTile(x: number, y: number): boolean;
+    getChunkRevision?(chunkX: number, chunkY: number): WorldChunkRevision | undefined;
     clearCache?(): Promise<boolean>;
+    prepareVegetation?(
+        options: WorldVegetationPreparationOptions,
+        request?: ChunkRequestOptions
+    ): Promise<WorldVegetationLayout>;
+    configureWorkerCount?(count: number): number;
     dispose(): void;
+}
+
+export type WorldVegetationPreparationOptions = Omit<WorldVegetationGenerationOptions, "map">;
+
+export interface WorldVegetationSource extends WorldSource {
+    prepareVegetation(
+        options: WorldVegetationPreparationOptions,
+        request?: ChunkRequestOptions
+    ): Promise<WorldVegetationLayout>;
+}
+
+export function isWorldVegetationSource(source: WorldSource): source is WorldVegetationSource {
+    return typeof source.prepareVegetation === "function";
+}
+
+export interface MutableWorldSource extends WorldSource {
+    setTileOverride(x: number, y: number, changes: WorldTileOverride): void;
+    setTileOverrides?(changes: readonly WorldTileOverrideChange[]): void;
+    clearTileOverride(x: number, y: number): boolean;
+    flushDeltas?(): Promise<void>;
+    clearDeltas?(): Promise<void>;
+}
+
+export function isMutableWorldSource(source: WorldSource): source is MutableWorldSource {
+    const candidate = source as Partial<MutableWorldSource>;
+    return typeof candidate.setTileOverride === "function"
+        && typeof candidate.clearTileOverride === "function";
 }
 
 export interface StaticWorldSourceOptions {
@@ -74,11 +133,15 @@ export interface ProceduralWorldSourceOptions {
     seed: string | number;
     workerUrl: string | URL;
     workerCount?: number;
+    reservedChunkWorkers?: number;
     chunkSize?: number;
     cache?: boolean | WorldChunkCache;
     cacheDatabaseName?: string;
     cacheMaxBytes?: number;
     generatorVersion?: number;
+    deltaStore?: boolean | WorldDeltaStore;
+    deltaDatabaseName?: string;
+    worldId?: string;
 }
 
 export interface ToroidalWorldSourceOptions extends ProceduralWorldSourceOptions {
@@ -90,6 +153,7 @@ export interface ProceduralWorldSourceDependencies {
     pool?: WorldGeneratorPool;
     store?: SparseWorldChunkStore;
     cache?: WorldChunkCache;
+    deltaStore?: WorldDeltaStore;
 }
 
 export type ToroidalWorldSourceDependencies = ProceduralWorldSourceDependencies;
@@ -249,7 +313,370 @@ function resolveCache(
     return { cache: undefined, owned: false };
 }
 
-function cacheStats(pool: WorldGeneratorPoolStats, cache: WorldChunkCache | undefined, cachedLoads: number): WorldSourceStats {
+function resolveDeltaStore(
+    options: ProceduralWorldSourceOptions,
+    dependencies: ProceduralWorldSourceDependencies
+): { store: WorldDeltaStore | undefined; owned: boolean } {
+    if (dependencies.deltaStore) return { store: dependencies.deltaStore, owned: false };
+    if (options.deltaStore === true) {
+        return { store: new IndexedDbWorldDeltaStore({ databaseName: options.deltaDatabaseName }), owned: true };
+    }
+    return { store: options.deltaStore || undefined, owned: false };
+}
+
+function resolveWorldId(value: string | undefined, fallback: string): string {
+    const worldId = value ?? fallback;
+    if (typeof worldId !== "string" || worldId.trim().length === 0) {
+        throw new TypeError("worldId must be a non-empty string");
+    }
+    return worldId;
+}
+
+interface WorldDeltaSessionStats {
+    trackedChunks: number;
+    pendingTiles: number;
+    restoringChunks: number;
+}
+
+interface WorldDeltaChunkState {
+    chunkX: number;
+    chunkY: number;
+    revision: number;
+    mutationEpoch: number;
+    activeTiles: Set<string>;
+    pendingTiles: Map<string, Point & { epoch: number }>;
+    modifiedDuringRestore: Map<string, number>;
+    restored: boolean;
+    restore?: Promise<void>;
+    write?: Promise<void>;
+}
+
+const MAX_DELTA_REVISION_TOMBSTONES = 4096;
+
+class WorldDeltaSession {
+    private readonly chunks = new Map<string, WorldDeltaChunkState>();
+    //Recently emptied chunks retain a bounded revision tombstone so navigation
+    //summaries can be invalidated precisely without keeping every historical
+    //edit forever. Overflow promotes one global baseline and drops the set.
+    private readonly revisionTombstones = new Map<string, number>();
+    private baselineRevision = 0;
+    private generation = 0;
+    private clearing = false;
+    private disposed = false;
+
+    constructor(
+        private readonly deltaStore: WorldDeltaStore | undefined,
+        private readonly worldId: string,
+        private readonly chunkSize: number,
+        private readonly tileStore: SparseWorldChunkStore
+    ) {}
+
+    public get stats(): WorldDeltaSessionStats {
+        let pendingTiles = 0;
+        let restoringChunks = 0;
+        for (const state of this.chunks.values()) {
+            pendingTiles += new Set([
+                ...state.pendingTiles.keys(),
+                ...state.modifiedDuringRestore.keys()
+            ]).size;
+            if (state.restore) restoringChunks += 1;
+        }
+        return {
+            trackedChunks: this.chunks.size + this.revisionTombstones.size,
+            pendingTiles,
+            restoringChunks
+        };
+    }
+
+    public getRevision(chunkX: number, chunkY: number): number {
+        const key = `${chunkX},${chunkY}`;
+        return this.chunks.get(key)?.revision
+            ?? this.revisionTombstones.get(key)
+            ?? this.baselineRevision;
+    }
+
+    public assertEditable(): void {
+        if (this.disposed) throw new Error("world delta session has been disposed");
+        if (this.clearing) throw new Error("world deltas are being cleared; await clearDeltas() before editing");
+    }
+
+    public persist(points: readonly Point[]): void {
+        if (points.length === 0) return;
+        this.assertEditable();
+
+        const unique = new Map<string, Point>();
+        for (const point of points) unique.set(`${point.x},${point.y}`, point);
+        const groups = new Map<string, { chunkX: number; chunkY: number; points: Point[] }>();
+        for (const point of unique.values()) {
+            const chunkX = Math.floor(point.x / this.chunkSize);
+            const chunkY = Math.floor(point.y / this.chunkSize);
+            const key = `${chunkX},${chunkY}`;
+            const group = groups.get(key) ?? { chunkX, chunkY, points: [] };
+            group.points.push(point);
+            groups.set(key, group);
+        }
+
+        for (const [key, group] of groups) {
+            const state = this.state(key, group.chunkX, group.chunkY);
+            state.mutationEpoch += 1;
+            state.revision = this.incrementRevision(Math.max(state.revision, this.baselineRevision));
+            for (const point of group.points) {
+                const tileKey = `${point.x},${point.y}`;
+                if (this.tileStore.getTileOverride(point.x, point.y)) state.activeTiles.add(tileKey);
+                else state.activeTiles.delete(tileKey);
+                if (this.deltaStore) {
+                    state.pendingTiles.set(tileKey, { ...point, epoch: state.mutationEpoch });
+                    if (state.restore) state.modifiedDuringRestore.set(tileKey, state.mutationEpoch);
+                }
+            }
+            this.persistGroup(key, state);
+        }
+    }
+
+    public restore(chunkX: number, chunkY: number): Promise<void> {
+        if (!this.deltaStore || this.disposed || this.clearing) return Promise.resolve();
+        const key = `${chunkX},${chunkY}`;
+        const state = this.state(key, chunkX, chunkY);
+        if (state.restored) return Promise.resolve();
+        if (state.restore) return state.restore;
+        const generation = this.generation;
+        const mutationEpoch = state.mutationEpoch;
+        const revisionBeforeRestore = state.revision;
+        const restore = (async () => {
+            const loaded = await this.deltaStore!.loadChunk(this.worldId, chunkX, chunkY, {
+                chunkSize: this.chunkSize
+            });
+            if (this.disposed || generation !== this.generation) return;
+            const delta = loaded
+                ? normalizeWorldChunkDelta(loaded, this.worldId, chunkX, chunkY, { chunkSize: this.chunkSize })
+                : undefined;
+            state.restored = true;
+            if (!delta) return;
+            const locallyMutated = state.mutationEpoch !== mutationEpoch;
+            state.revision = locallyMutated
+                ? Math.max(state.revision, delta.revision + 1)
+                : delta.entries.length > 0 && delta.revision <= revisionBeforeRestore
+                    ? this.incrementRevision(revisionBeforeRestore)
+                    : Math.max(state.revision, delta.revision);
+            const protectedTiles = new Set([
+                ...state.pendingTiles.keys(),
+                ...state.modifiedDuringRestore.keys()
+            ]);
+            const restored = delta.entries.filter(entry => !protectedTiles.has(`${entry.x},${entry.y}`));
+            this.tileStore.setTileOverrides(restored.map(entry => ({
+                x: entry.x,
+                y: entry.y,
+                changes: entry.override
+            })));
+            for (const entry of restored) state.activeTiles.add(`${entry.x},${entry.y}`);
+        })();
+        state.restore = restore;
+        void restore.finally(() => {
+            if (state.restore !== restore) return;
+            state.restore = undefined;
+            state.modifiedDuringRestore.clear();
+            this.pruneState(key, state);
+        }).catch(() => undefined);
+        return restore;
+    }
+
+    public async flush(): Promise<void> {
+        if (this.disposed) throw new Error("world delta session has been disposed");
+        if (this.clearing) throw new Error("world deltas are being cleared");
+        if (!this.deltaStore) return;
+
+        while (true) {
+            for (const [key, state] of this.chunks) {
+                if (state.pendingTiles.size > 0 && !state.write) this.startWrite(key, state);
+            }
+            const writes = [...this.chunks.values()].flatMap(state => state.write ? [state.write] : []);
+            if (writes.length === 0) {
+                await this.deltaStore.flush();
+                //A caller may have edited while the Store barrier was pending.
+                if ([...this.chunks.values()].some(state => state.write || state.pendingTiles.size > 0)) continue;
+                return;
+            }
+            const results = await Promise.allSettled(writes);
+            const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+            if (failure) {
+                //Drain/consume Store-owned error state as well. The Session's
+                //pending tile epochs remain intact and the next flush retries.
+                await this.deltaStore.flush().catch(() => undefined);
+                throw this.persistenceError(failure.reason);
+            }
+        }
+    }
+
+    public async clear(): Promise<void> {
+        if (this.disposed) throw new Error("world delta session has been disposed");
+        if (this.clearing) throw new Error("world deltas are already being cleared");
+        this.clearing = true;
+        this.generation += 1;
+        try {
+            await Promise.allSettled(
+                [...this.chunks.values()].flatMap(state => state.write ? [state.write] : [])
+            );
+            await this.deltaStore?.clear(this.worldId);
+            this.tileStore.clearTileOverrides();
+            let highestRevision = this.baselineRevision;
+            for (const revision of this.revisionTombstones.values()) {
+                highestRevision = Math.max(highestRevision, revision);
+            }
+            for (const state of this.chunks.values()) {
+                highestRevision = Math.max(highestRevision, state.revision);
+                state.restore = undefined;
+            }
+            this.baselineRevision = this.incrementRevision(highestRevision);
+            this.chunks.clear();
+            this.revisionTombstones.clear();
+        } finally {
+            this.clearing = false;
+        }
+    }
+
+    public dispose(): void {
+        this.disposed = true;
+        this.generation += 1;
+        for (const state of this.chunks.values()) state.restore = undefined;
+        this.chunks.clear();
+        this.revisionTombstones.clear();
+    }
+
+    private state(key: string, chunkX: number, chunkY: number): WorldDeltaChunkState {
+        let state = this.chunks.get(key);
+        if (!state) {
+            const revision = this.revisionTombstones.get(key) ?? this.baselineRevision;
+            this.revisionTombstones.delete(key);
+            state = {
+                chunkX,
+                chunkY,
+                revision,
+                mutationEpoch: 0,
+                activeTiles: new Set(),
+                pendingTiles: new Map(),
+                modifiedDuringRestore: new Map(),
+                restored: false
+            };
+            this.chunks.set(key, state);
+        } else if (state.chunkX !== chunkX || state.chunkY !== chunkY) {
+            throw new Error("world delta chunk state identity is inconsistent");
+        }
+        return state;
+    }
+
+    private persistGroup(key: string, state: WorldDeltaChunkState): void {
+        if (!this.deltaStore) {
+            this.pruneState(key, state);
+            return;
+        }
+        this.startWrite(key, state);
+    }
+
+    private startWrite(key: string, state: WorldDeltaChunkState): void {
+        if (!this.deltaStore || state.write || state.pendingTiles.size === 0
+            || this.disposed || this.clearing) return;
+        const pending = new Map(state.pendingTiles);
+        const generation = this.generation;
+        const write = this.writePendingTiles(state, pending).then(revision => {
+            if (this.disposed || generation !== this.generation) return;
+            if (revision !== undefined) state.revision = Math.max(state.revision, revision);
+            for (const [tileKey, point] of pending) {
+                if (state.pendingTiles.get(tileKey)?.epoch === point.epoch) state.pendingTiles.delete(tileKey);
+            }
+        });
+        state.write = write;
+        void write.then(() => {
+            if (state.write !== write) return;
+            state.write = undefined;
+            if (!this.disposed && generation === this.generation && state.pendingTiles.size > 0) {
+                this.startWrite(key, state);
+            }
+            this.pruneState(key, state);
+        }, () => {
+            if (state.write === write) state.write = undefined;
+        });
+        //The write remains observable through state.write/flush(); suppress an
+        //unhandled-rejection report while application code has not flushed yet.
+        void write.catch(() => undefined);
+    }
+
+    private async writePendingTiles(
+        state: WorldDeltaChunkState,
+        pending: ReadonlyMap<string, Point & { epoch: number }>
+    ): Promise<number | undefined> {
+        const store = this.deltaStore;
+        if (!store) throw new Error("world delta store is unavailable");
+        const changes = [...pending.values()].map(point => ({
+            x: point.x,
+            y: point.y,
+            override: this.tileStore.getTileOverride(point.x, point.y) ?? null
+        }));
+        if (store.putChunkDelta) {
+            const delta = await store.putChunkDelta(
+                this.worldId,
+                state.chunkX,
+                state.chunkY,
+                changes,
+                { chunkSize: this.chunkSize }
+            );
+            return delta?.revision;
+        }
+        for (const change of changes) {
+            if (change.override) {
+                store.putTile(this.worldId, state.chunkX, state.chunkY, {
+                    x: change.x,
+                    y: change.y,
+                    override: change.override
+                }, { chunkSize: this.chunkSize });
+            } else {
+                store.deleteTile(
+                    this.worldId,
+                    state.chunkX,
+                    state.chunkY,
+                    change.x,
+                    change.y,
+                    { chunkSize: this.chunkSize }
+                );
+            }
+        }
+        await store.flush();
+        return undefined;
+    }
+
+    private pruneState(key: string, state: WorldDeltaChunkState): void {
+        if (this.disposed || state.activeTiles.size > 0 || state.restore || state.write
+            || state.pendingTiles.size > 0 || state.modifiedDuringRestore.size > 0) return;
+        if (this.chunks.get(key) === state) this.chunks.delete(key);
+        if (state.revision <= this.baselineRevision) return;
+        this.revisionTombstones.delete(key);
+        this.revisionTombstones.set(key, state.revision);
+        if (this.revisionTombstones.size <= MAX_DELTA_REVISION_TOMBSTONES) return;
+        let highestRevision = this.baselineRevision;
+        for (const revision of this.revisionTombstones.values()) {
+            highestRevision = Math.max(highestRevision, revision);
+        }
+        this.baselineRevision = this.incrementRevision(highestRevision);
+        this.revisionTombstones.clear();
+    }
+
+    private incrementRevision(revision: number): number {
+        if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("world delta revision space is exhausted");
+        }
+        return revision + 1;
+    }
+
+    private persistenceError(reason: unknown): Error {
+        return reason instanceof Error ? reason : new Error(`world delta persistence failed: ${String(reason)}`);
+    }
+}
+
+function cacheStats(
+    pool: WorldGeneratorPoolStats,
+    cache: WorldChunkCache | undefined,
+    cachedLoads: number,
+    deltas: WorldDeltaSessionStats
+): WorldSourceStats {
     const stored: Readonly<WorldChunkCacheStats> | undefined = cache?.stats;
     return {
         ...pool,
@@ -259,13 +686,16 @@ function cacheStats(pool: WorldGeneratorPoolStats, cache: WorldChunkCache | unde
         cacheWrites: stored?.writes ?? 0,
         cacheErrors: stored?.errors ?? 0,
         cachedChunks: stored?.entries ?? 0,
-        cachedBytes: stored?.bytes ?? 0
+        cachedBytes: stored?.bytes ?? 0,
+        trackedDeltaChunks: deltas.trackedChunks,
+        pendingDeltaTiles: deltas.pendingTiles,
+        restoringDeltaChunks: deltas.restoringChunks
     };
 }
 
 // Finite toroidal counterpart to ProceduralWorldSource. The authoritative
 // world is seed+dimensions; only camera-near packed chunks are materialized.
-export class ToroidalWorldSource implements WorldSource {
+export class ToroidalWorldSource implements MutableWorldSource {
     public readonly chunkSize: number;
     public readonly bounds: WorldBounds;
     public readonly store: SparseWorldChunkStore;
@@ -276,6 +706,10 @@ export class ToroidalWorldSource implements WorldSource {
     private readonly cache: WorldChunkCache | undefined;
     private readonly ownsCache: boolean;
     private readonly generatorVersion: number;
+    private readonly deltaStore: WorldDeltaStore | undefined;
+    private readonly ownsDeltaStore: boolean;
+    private readonly worldId: string;
+    private readonly deltaSession: WorldDeltaSession;
     private cachedLoads = 0;
     private cacheEpoch = 0;
     private disposed = false;
@@ -299,6 +733,12 @@ export class ToroidalWorldSource implements WorldSource {
             throw new RangeError("generatorVersion must be a positive integer");
         }
         this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
+        const resolvedDeltas = resolveDeltaStore(options, dependencies);
+        this.deltaStore = resolvedDeltas.store;
+        this.ownsDeltaStore = resolvedDeltas.owned;
+        this.worldId = resolveWorldId(options.worldId, JSON.stringify([
+            "toroidal", String(options.seed), options.width, options.height, this.chunkSize, this.generatorVersion
+        ]));
         this.chunkCountX = Math.ceil(options.width / this.chunkSize);
         this.chunkCountY = Math.ceil(options.height / this.chunkSize);
         this.store = dependencies.store ?? new SparseWorldChunkStore(this.bounds);
@@ -306,11 +746,15 @@ export class ToroidalWorldSource implements WorldSource {
             || !this.store.map.wrapX || !this.store.map.wrapY) {
             throw new TypeError("toroidal world store bounds do not match source dimensions");
         }
+        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
         const resolvedCache = resolveCache(options, dependencies);
         this.cache = resolvedCache.cache;
         this.ownsCache = resolvedCache.owned;
         try {
-            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
+                size: options.workerCount,
+                reservedChunkWorkers: options.reservedChunkWorkers
+            });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
             throw error;
@@ -322,7 +766,7 @@ export class ToroidalWorldSource implements WorldSource {
     }
 
     public get stats(): Readonly<WorldSourceStats> {
-        return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
+        return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);
     }
 
     public resolveChunk(chunkX: number, chunkY: number): Point | undefined {
@@ -364,12 +808,28 @@ export class ToroidalWorldSource implements WorldSource {
             if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
         }
         if (request.signal?.aborted) throw abortError();
+        await this.restoreChunkDelta(chunkX, chunkY);
         const coreTiles = this.store.add(packed);
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
 
     public releaseChunk(chunk: WorldChunk): void {
         this.store.remove(chunk.chunkX, chunk.chunkY);
+    }
+
+    public prepareVegetation(
+        options: WorldVegetationPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldVegetationLayout> {
+        if (this.disposed) return Promise.reject(new Error("ToroidalWorldSource has been disposed"));
+        return this.pool.generateVegetation({
+            ...options,
+            map: createWorldVegetationMapSnapshot(this.map, options.points)
+        }, request);
+    }
+
+    public configureWorkerCount(count: number): number {
+        return this.pool.configureSize(count);
     }
 
     public hasChunk(chunkX: number, chunkY: number): boolean {
@@ -382,21 +842,55 @@ export class ToroidalWorldSource implements WorldSource {
         return this.store.hasCoreTile(x, y);
     }
 
+    public getChunkRevision(chunkX: number, chunkY: number): WorldChunkRevision | undefined {
+        const resolved = this.resolveChunk(chunkX, chunkY);
+        if (!resolved) return undefined;
+        return {
+            terrainRevision: this.generatorVersion,
+            deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
+        };
+    }
+
     public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
         if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
-        this.store.setTileOverride(
-            positiveModulo(x, this.bounds.width),
-            positiveModulo(y, this.bounds.height),
-            changes
-        );
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+            throw new RangeError("tile override coordinates must be safe integers");
+        }
+        const canonicalX = positiveModulo(x, this.bounds.width);
+        const canonicalY = positiveModulo(y, this.bounds.height);
+        this.deltaSession.assertEditable();
+        if (this.store.setTileOverride(canonicalX, canonicalY, changes)) {
+            this.persistOverrides([{ x: canonicalX, y: canonicalY }]);
+        }
+    }
+
+    public setTileOverrides(changes: readonly WorldTileOverrideChange[]): void {
+        if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+        const normalized = changes.map(change => {
+            if (!Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
+                throw new RangeError("tile override coordinates must be safe integers");
+            }
+            return {
+                x: positiveModulo(change.x, this.bounds.width),
+                y: positiveModulo(change.y, this.bounds.height),
+                changes: change.changes
+            };
+        });
+        this.deltaSession.assertEditable();
+        this.persistOverrides(this.store.setTileOverrides(normalized));
     }
 
     public clearTileOverride(x: number, y: number): boolean {
         if (this.disposed) return false;
-        return this.store.clearTileOverride(
-            positiveModulo(x, this.bounds.width),
-            positiveModulo(y, this.bounds.height)
-        );
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return false;
+        const canonicalX = positiveModulo(x, this.bounds.width);
+        const canonicalY = positiveModulo(y, this.bounds.height);
+        this.deltaSession.assertEditable();
+        const cleared = this.store.clearTileOverride(canonicalX, canonicalY);
+        if (cleared) {
+            this.persistOverrides([{ x: canonicalX, y: canonicalY }]);
+        }
+        return cleared;
     }
 
     public clearCache(): Promise<boolean> {
@@ -404,12 +898,18 @@ export class ToroidalWorldSource implements WorldSource {
         return this.cache?.clear() ?? Promise.resolve(false);
     }
 
+    public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
+
+    public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
+        this.deltaSession.dispose();
         this.pool.dispose();
         this.store.clear();
         if (this.ownsCache) this.cache?.dispose();
+        if (this.ownsDeltaStore) this.deltaStore?.dispose();
     }
 
     private async readCachedChunk(key: string, chunkX: number, chunkY: number): Promise<PackedWorldChunk | undefined> {
@@ -419,9 +919,17 @@ export class ToroidalWorldSource implements WorldSource {
         this.cachedLoads += 1;
         return chunk;
     }
+
+    private persistOverrides(points: readonly Point[]): void {
+        this.deltaSession.persist(points);
+    }
+
+    private restoreChunkDelta(chunkX: number, chunkY: number): Promise<void> {
+        return this.deltaSession.restore(chunkX, chunkY);
+    }
 }
 
-export class ProceduralWorldSource implements WorldSource {
+export class ProceduralWorldSource implements MutableWorldSource {
     public readonly chunkSize: number;
     public readonly store: SparseWorldChunkStore;
     private readonly seed: string | number;
@@ -429,6 +937,10 @@ export class ProceduralWorldSource implements WorldSource {
     private readonly cache: WorldChunkCache | undefined;
     private readonly ownsCache: boolean;
     private readonly generatorVersion: number;
+    private readonly deltaStore: WorldDeltaStore | undefined;
+    private readonly ownsDeltaStore: boolean;
+    private readonly worldId: string;
+    private readonly deltaSession: WorldDeltaSession;
     private cachedLoads = 0;
     private cacheEpoch = 0;
     private disposed = false;
@@ -447,11 +959,22 @@ export class ProceduralWorldSource implements WorldSource {
             throw new RangeError("generatorVersion must be a positive integer");
         }
         this.store = dependencies.store ?? new SparseWorldChunkStore();
+        const resolvedDeltas = resolveDeltaStore(options, dependencies);
+        this.deltaStore = resolvedDeltas.store;
+        this.ownsDeltaStore = resolvedDeltas.owned;
+        this.worldId = resolveWorldId(
+            options.worldId,
+            JSON.stringify(["infinite", String(options.seed), this.chunkSize, this.generatorVersion])
+        );
+        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
         const resolvedCache = resolveCache(options, dependencies);
         this.cache = resolvedCache.cache;
         this.ownsCache = resolvedCache.owned;
         try {
-            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, { size: options.workerCount });
+            this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
+                size: options.workerCount,
+                reservedChunkWorkers: options.reservedChunkWorkers
+            });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
             throw error;
@@ -463,7 +986,7 @@ export class ProceduralWorldSource implements WorldSource {
     }
 
     public get stats(): Readonly<WorldSourceStats> {
-        return cacheStats(this.pool.stats, this.cache, this.cachedLoads);
+        return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);
     }
 
     public resolveChunk(chunkX: number, chunkY: number): Point | undefined {
@@ -489,12 +1012,28 @@ export class ProceduralWorldSource implements WorldSource {
             if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
         }
         if (request.signal?.aborted) throw abortError();
+        await this.restoreChunkDelta(chunkX, chunkY);
         const coreTiles = this.store.add(packed);
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
 
     public releaseChunk(chunk: WorldChunk): void {
         this.store.remove(chunk.chunkX, chunk.chunkY);
+    }
+
+    public prepareVegetation(
+        options: WorldVegetationPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldVegetationLayout> {
+        if (this.disposed) return Promise.reject(new Error("ProceduralWorldSource has been disposed"));
+        return this.pool.generateVegetation({
+            ...options,
+            map: createWorldVegetationMapSnapshot(this.map, options.points)
+        }, request);
+    }
+
+    public configureWorkerCount(count: number): number {
+        return this.pool.configureSize(count);
     }
 
     public hasChunk(chunkX: number, chunkY: number): boolean {
@@ -505,14 +1044,35 @@ export class ProceduralWorldSource implements WorldSource {
         return this.store.hasCoreTile(x, y);
     }
 
+    public getChunkRevision(chunkX: number, chunkY: number): WorldChunkRevision | undefined {
+        const resolved = this.resolveChunk(chunkX, chunkY);
+        if (!resolved) return undefined;
+        return {
+            terrainRevision: this.generatorVersion,
+            deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
+        };
+    }
+
     public setTileOverride(x: number, y: number, changes: WorldTileOverride): void {
         if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
-        this.store.setTileOverride(x, y, changes);
+        this.deltaSession.assertEditable();
+        if (this.store.setTileOverride(x, y, changes)) this.persistOverrides([{ x, y }]);
+    }
+
+    public setTileOverrides(changes: readonly WorldTileOverrideChange[]): void {
+        if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+        this.deltaSession.assertEditable();
+        this.persistOverrides(this.store.setTileOverrides(changes));
     }
 
     public clearTileOverride(x: number, y: number): boolean {
         if (this.disposed) return false;
-        return this.store.clearTileOverride(x, y);
+        this.deltaSession.assertEditable();
+        const cleared = this.store.clearTileOverride(x, y);
+        if (cleared) {
+            this.persistOverrides([{ x, y }]);
+        }
+        return cleared;
     }
 
     public clearCache(): Promise<boolean> {
@@ -520,12 +1080,18 @@ export class ProceduralWorldSource implements WorldSource {
         return this.cache?.clear() ?? Promise.resolve(false);
     }
 
+    public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
+
+    public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
+        this.deltaSession.dispose();
         this.pool.dispose();
         this.store.clear();
         if (this.ownsCache) this.cache?.dispose();
+        if (this.ownsDeltaStore) this.deltaStore?.dispose();
     }
 
     private async readCachedChunk(key: string, chunkX: number, chunkY: number): Promise<PackedWorldChunk | undefined> {
@@ -534,6 +1100,14 @@ export class ProceduralWorldSource implements WorldSource {
         if (!chunk || chunk.chunkX !== chunkX || chunk.chunkY !== chunkY || chunk.chunkSize !== this.chunkSize) return undefined;
         this.cachedLoads += 1;
         return chunk;
+    }
+
+    private persistOverrides(points: readonly Point[]): void {
+        this.deltaSession.persist(points);
+    }
+
+    private restoreChunkDelta(chunkX: number, chunkY: number): Promise<void> {
+        return this.deltaSession.restore(chunkX, chunkY);
     }
 }
 

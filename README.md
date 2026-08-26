@@ -15,7 +15,7 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. The default page does not start units, turns, or fog-of-war gameplay.
+Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Click the map and move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. Keyboard input belongs only to the focused canvas when a page contains multiple maps. The default page does not start units, turns, or fog-of-war gameplay.
 
 A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. Rendering is batched per visible chunk, never per tile.
 
@@ -199,7 +199,8 @@ const source = new ProceduralWorldSource({
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
     chunkSize: 24,
-    cache: true
+    cache: true,
+    deltaStore: true
 });
 
 await map.loadWorld({
@@ -218,10 +219,15 @@ console.log(map.worldStreamingStats);
 ```
 
 Generated base tiles are compact shared immutable variants. Coordinate-specific
-gameplay state stays sparse: use `source.setTileOverride(x, y, changes)` and
-`source.clearTileOverride(x, y)` for fields such as `unit` or `city` without
-materializing the whole infinite world. Overrides persist across chunk eviction
-for the lifetime of that source and are applied to future chunk mounts.
+gameplay state stays sparse: use `await map.setTileOverride(x, y, changes)`,
+`await map.setTileOverrides(changes)` for coalesced editor-sized batches, and
+`await map.clearTileOverride(x, y)` for fields such as `unit`, terrain, vegetation
+or `city` without materializing the whole infinite world. With `deltaStore: true`,
+overrides are restored from a separate IndexedDB save across page sessions; call
+`await source.flushDeltas()` at an explicit save barrier. Unit-only changes avoid GPU work;
+visual changes immediately rebuild only resident source chunks touched by that
+tile or its neighbors. The lower-level source methods remain available for
+headless/data-only consumers that do not have an active `HexMap` renderer.
 
 `chunkSize` must be a multiple of 12. `loadRadius`, `retentionRadius`,
 `maxResidentChunks`, `frameBudgetMs`, `maxMountsPerFrame`, `maxRetries`, `retryBaseDelayMs` and
@@ -235,6 +241,13 @@ chunk contracts fail immediately before they can pollute the runtime map.
 and a materialized or virtual `map` view to connect HTTP, IndexedDB, authoritative server
 worlds or editor data without changing the renderer. A source instance is owned
 by one `loadWorld()` session and is disposed automatically when the world changes.
+
+Global AI and production should use the camera-independent
+`WorldSimulationRuntime` from `three-hex-map/simulation`; see
+[docs/world-simulation.md](docs/world-simulation.md). Long routes across
+unloaded terrain use `HierarchicalPathfinder` from
+`three-hex-map/pathfinding`; see
+[docs/hierarchical-pathfinding.md](docs/hierarchical-pathfinding.md).
 
 The regular demo uses the streamed finite toroidal source; open `/?infinite` to exercise this mode (the
 optional `x`/`y` query values test very large logical coordinates). Arbitrary

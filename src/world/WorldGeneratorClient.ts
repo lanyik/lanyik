@@ -1,11 +1,17 @@
 import { MapInfo } from "../interfaces";
 import { WorldGenerationOptions } from "./generateWorld";
 import { assertPackedWorldChunk, PackedWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
+import {
+    assertWorldVegetationLayout,
+    WorldVegetationGenerationOptions,
+    WorldVegetationLayout
+} from "./generateVegetation";
 
 interface WorkerSuccessMessage {
     id: number;
     world?: MapInfo;
     chunk?: PackedWorldChunk;
+    vegetation?: WorldVegetationLayout;
 }
 
 interface WorkerFailureMessage {
@@ -16,8 +22,8 @@ interface WorkerFailureMessage {
 type WorkerResponse = WorkerSuccessMessage | WorkerFailureMessage;
 
 interface PendingRequest {
-    kind: "world" | "chunk";
-    resolve(value: MapInfo | PackedWorldChunk): void;
+    kind: "world" | "chunk" | "vegetation";
+    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout): void;
     reject(error: Error): void;
 }
 
@@ -64,6 +70,24 @@ export class WorldGeneratorClient {
         });
     }
 
+    public generateVegetation(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        const id = this.nextRequestId++;
+        return new Promise<WorldVegetationLayout>((resolve, reject) => {
+            this.pending.set(id, {
+                kind: "vegetation",
+                resolve: value => resolve(value as WorldVegetationLayout),
+                reject
+            });
+            try {
+                this.worker.postMessage({ id, type: "vegetation", options });
+            } catch (reason) {
+                this.pending.delete(id);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -79,7 +103,7 @@ export class WorldGeneratorClient {
     private handleMessage = (event: MessageEvent<WorkerResponse>): void => {
         const data = event.data;
         if (!data || typeof data !== "object" || typeof data.id !== "number"
-            || (!("world" in data) && !("chunk" in data) && !("error" in data))) {
+            || (!("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));
             return;
         }
@@ -94,6 +118,15 @@ export class WorldGeneratorClient {
             try {
                 assertPackedWorldChunk(data.chunk);
                 request.resolve(data.chunk);
+            } catch (reason) {
+                request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+            return;
+        }
+        if (request.kind === "vegetation" && "vegetation" in data && data.vegetation) {
+            try {
+                assertWorldVegetationLayout(data.vegetation);
+                request.resolve(data.vegetation);
             } catch (reason) {
                 request.reject(reason instanceof Error ? reason : new Error(String(reason)));
             }

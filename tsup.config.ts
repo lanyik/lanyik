@@ -13,18 +13,30 @@ import { defineConfig } from "tsup";
 export default defineConfig({
     entry: {
         "hex-map": "src/index.ts",
+        "persistence": "src/persistence.ts",
+        "pathfinding": "src/pathfinding.ts",
+        "simulation": "src/simulation.ts",
         "world-generator.worker": "src/world/generateWorld.worker.ts"
     },
     format: ["esm", "cjs"],
     outDir: "dist",
     dts: false,
     sourcemap: true,
+    //Source contents make otherwise identical maps depend on the checkout's
+    //CRLF/LF representation. Keep external maps deterministic across platforms;
+    //the original TypeScript remains available from the package/repository.
+    esbuildOptions(options) {
+        options.sourcesContent = false;
+    },
     clean: true,
     splitting: false,
     // Keep only Three's core external. Its ESM-only addons are bundled so the
     // CommonJS entry never tries to require() an ESM subpath at runtime.
     external: [/^three$/],
-    noExternal: [/^three\/examples\//],
+    // The worker is served directly by the demo and therefore cannot retain
+    // bare npm specifiers. Bundling this small geometry predicate also keeps
+    // the exported worker entry self-contained for consumers.
+    noExternal: [/^three\/examples\//, /^robust-point-in-polygon$/],
     outExtension({ format }) {
         return { js: format === "esm" ? ".mjs" : ".cjs" };
     }

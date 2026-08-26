@@ -110,3 +110,5 @@ dist
 .superpowers/
 .browser-profile*/
 .browser-artifacts/
+playwright-report/
+test-results/

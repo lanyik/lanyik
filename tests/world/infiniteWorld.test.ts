@@ -18,9 +18,23 @@ import {
     WorldChunkCache,
     WorldChunkCacheStats,
     createWorldChunkCacheKey,
+    isMutableWorldSource,
     WorldStreamer
 } from "../../src/index";
 import { ChunkGeneratorClient, ChunkRequestOptions } from "../../src/world/WorldGeneratorPool";
+import {
+    MemoryWorldDeltaStore,
+    WORLD_DELTA_FORMAT_VERSION,
+    WorldChunkDelta,
+    WorldDeltaBatchOptions,
+    WorldDeltaChange,
+    WorldDeltaEntry,
+    WorldDeltaStore
+} from "../../src/world/WorldDeltaStore";
+import {
+    WorldVegetationGenerationOptions,
+    WorldVegetationLayout
+} from "../../src/world/generateVegetation";
 
 interface DeferredRequest {
     options: WorldChunkGenerationOptions;
@@ -38,6 +52,106 @@ class DeferredChunkClient implements ChunkGeneratorClient {
 
     dispose(): void {
         this.disposed = true;
+    }
+
+    get isDisposed(): boolean {
+        return this.disposed;
+    }
+}
+
+class ImmediateChunkClient implements ChunkGeneratorClient {
+    generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk> {
+        return Promise.resolve(generateWorldChunk(options));
+    }
+    dispose(): void {}
+}
+
+class DeferredMixedClient implements ChunkGeneratorClient {
+    readonly tasks: Array<
+        | { kind: "chunk"; options: WorldChunkGenerationOptions; resolve(value: PackedWorldChunk): void }
+        | { kind: "vegetation"; options: WorldVegetationGenerationOptions; resolve(value: WorldVegetationLayout): void }
+    > = [];
+    generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk> {
+        return new Promise(resolve => this.tasks.push({ kind: "chunk", options, resolve }));
+    }
+    generateVegetation(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout> {
+        return new Promise(resolve => this.tasks.push({ kind: "vegetation", options, resolve }));
+    }
+    dispose(): void {}
+}
+
+class DeferredDeltaStore implements WorldDeltaStore {
+    resolveLoad!: (delta: WorldChunkDelta | undefined) => void;
+    loadChunk(): Promise<WorldChunkDelta | undefined> {
+        return new Promise(resolve => { this.resolveLoad = resolve; });
+    }
+    putTile(): void {}
+    deleteTile(): void {}
+    flush(): Promise<void> { return Promise.resolve(); }
+    clear(): Promise<void> { return Promise.resolve(); }
+    dispose(): void {}
+}
+
+class FlakyDeltaStore extends MemoryWorldDeltaStore {
+    public attempts = 0;
+
+    constructor(private failuresRemaining: number) {
+        super();
+    }
+
+    public override putChunkDelta(
+        worldId: string,
+        chunkX: number,
+        chunkY: number,
+        changes: readonly WorldDeltaChange[],
+        options: WorldDeltaBatchOptions
+    ): Promise<WorldChunkDelta | undefined> {
+        this.attempts += 1;
+        if (this.failuresRemaining > 0) {
+            this.failuresRemaining -= 1;
+            return Promise.reject(new Error("write failed"));
+        }
+        return super.putChunkDelta(worldId, chunkX, chunkY, changes, options);
+    }
+}
+
+class DeferredWriteDeltaStore extends MemoryWorldDeltaStore {
+    public readonly writes: Array<{
+        worldId: string;
+        chunkX: number;
+        chunkY: number;
+        changes: readonly WorldDeltaChange[];
+        options: WorldDeltaBatchOptions;
+        resolve(delta: WorldChunkDelta | undefined): void;
+        reject(reason: unknown): void;
+    }> = [];
+
+    public override putChunkDelta(
+        worldId: string,
+        chunkX: number,
+        chunkY: number,
+        changes: readonly WorldDeltaChange[],
+        options: WorldDeltaBatchOptions
+    ): Promise<WorldChunkDelta | undefined> {
+        return new Promise((resolve, reject) => {
+            this.writes.push({ worldId, chunkX, chunkY, changes, options, resolve, reject });
+        });
+    }
+
+    public async completeNext(): Promise<void> {
+        const write = this.writes.shift();
+        if (!write) throw new Error("no deferred delta write is pending");
+        try {
+            write.resolve(await super.putChunkDelta(
+                write.worldId,
+                write.chunkX,
+                write.chunkY,
+                write.changes,
+                write.options
+            ));
+        } catch (reason) {
+            write.reject(reason);
+        }
     }
 }
 
@@ -173,6 +287,27 @@ describe("deterministic infinite world chunks", () => {
         expect(Object.keys(store.map.data)).toHaveLength(0);
     });
 
+    test("partial edge chunks expose only their real core and one-cell seam halo", () => {
+        const width = 20;
+        const height = 17;
+        const chunkSize = 12;
+        const store = new SparseWorldChunkStore({ width, height, wrapX: true, wrapY: true });
+        const edge = generateWorldChunk({
+            seed: "partial-seam",
+            chunkX: 1,
+            chunkY: 0,
+            chunkSize,
+            world: { width, height, topology: "toroidal" }
+        });
+        store.add(edge);
+
+        expect(getMapTile(store.map, 0, 0)).toEqual(decodeWorldChunkTile(edge, 8, 0));
+        expect(getMapTile(store.map, 11, 0)).toEqual(decodeWorldChunkTile(edge, -1, 0));
+        for (let x = 1; x <= 10; x += 1) {
+            expect(getMapTile(store.map, x, 0)).toBeUndefined();
+        }
+    });
+
     test("stores mutable per-coordinate overrides without expanding shared base variants", () => {
         const store = new SparseWorldChunkStore();
         const chunk = generateWorldChunk({ seed: 4, chunkX: 0, chunkY: 0, chunkSize: 12 });
@@ -180,11 +315,20 @@ describe("deterministic infinite world chunks", () => {
         const base = getMapTile(store.map, 0, 0)!;
         const variants = store.decodedTileVariantCount;
 
-        store.setTileOverride(0, 0, { unit: "scout", city: { name: "Outpost" } });
+        store.setTileOverride(0, 0, {
+            unit: "scout",
+            modifiers: ["wood"],
+            rivers: [{ riverIndex: 1, riverTileIndex: 2 }],
+            city: { name: "Outpost" }
+        });
         const overridden = getMapTile(store.map, 0, 0)!;
         expect(overridden).not.toBe(base);
         expect(Object.isFrozen(base)).toBe(true);
-        expect(Object.isFrozen(overridden)).toBe(false);
+        expect(Object.isFrozen(overridden)).toBe(true);
+        expect(Object.isFrozen(overridden.modifiers)).toBe(true);
+        expect(Object.isFrozen(overridden.rivers)).toBe(true);
+        expect(Object.isFrozen(overridden.rivers?.[0])).toBe(true);
+        expect(Object.isFrozen(overridden.city)).toBe(true);
         expect(overridden.unit).toBe("scout");
         expect(overridden.city?.name).toBe("Outpost");
         expect(store.tileOverrideCount).toBe(1);
@@ -194,6 +338,16 @@ describe("deterministic infinite world chunks", () => {
         store.remove(0, 0);
         store.add(chunk);
         expect(getMapTile(store.map, 0, 0)?.unit).toBe("scout");
+
+        const exposed = store.getTileOverride(0, 0)!;
+        exposed.modifiers?.push("lake");
+        exposed.rivers![0].riverIndex = 99;
+        exposed.city!.name = "Mutated";
+        expect(store.getTileOverride(0, 0)).toMatchObject({
+            modifiers: ["wood"],
+            rivers: [{ riverIndex: 1, riverTileIndex: 2 }],
+            city: { name: "Outpost" }
+        });
 
         expect(store.clearTileOverride(0, 0)).toBe(true);
         expect(getMapTile(store.map, 0, 0)?.unit).toBeUndefined();
@@ -209,6 +363,42 @@ describe("deterministic infinite world chunks", () => {
 });
 
 describe("world generator pool", () => {
+    test("reserves capacity so long vegetation work cannot block a new terrain chunk", async () => {
+        const clients: DeferredMixedClient[] = [];
+        const pool = new WorldGeneratorPool("unused", {
+            size: 2,
+            reservedChunkWorkers: 1,
+            clientFactory: () => {
+                const client = new DeferredMixedClient();
+                clients.push(client);
+                return client;
+            }
+        });
+        const vegetationOptions = {} as WorldVegetationGenerationOptions;
+        const firstVegetation = pool.generateVegetation(vegetationOptions);
+        const secondVegetation = pool.generateVegetation(vegetationOptions);
+        expect(clients.flatMap(client => client.tasks).filter(task => task.kind === "vegetation")).toHaveLength(1);
+        expect(pool.stats).toMatchObject({ busyVegetationWorkers: 1, queuedVegetation: 1 });
+
+        const terrain = pool.generateChunk({ seed: 1, chunkX: 4, chunkY: 5 });
+        const terrainTask = clients.flatMap(client => client.tasks).find(task => task.kind === "chunk")!;
+        expect(terrainTask).toBeDefined();
+        if (terrainTask.kind === "chunk") terrainTask.resolve(generateWorldChunk(terrainTask.options));
+        await terrain;
+        expect(pool.stats).toMatchObject({ busyVegetationWorkers: 1, queuedVegetation: 1 });
+
+        const runningVegetation = clients.flatMap(client => client.tasks).find(task => task.kind === "vegetation")!;
+        if (runningVegetation.kind === "vegetation") runningVegetation.resolve({} as WorldVegetationLayout);
+        await firstVegetation;
+        await flush();
+        const vegetationTasks = clients.flatMap(client => client.tasks).filter(task => task.kind === "vegetation");
+        expect(vegetationTasks).toHaveLength(2);
+        const queuedVegetation = vegetationTasks[1];
+        if (queuedVegetation.kind === "vegetation") queuedVegetation.resolve({} as WorldVegetationLayout);
+        await secondVegetation;
+        pool.dispose();
+    });
+
     test("keeps one task per worker and prioritizes camera-near queued chunks", async () => {
         const clients: DeferredChunkClient[] = [];
         const pool = new WorldGeneratorPool("unused", {
@@ -253,9 +443,327 @@ describe("world generator pool", () => {
         expect(client.requests).toHaveLength(1);
         pool.dispose();
     });
+
+    test("shrinks busy worker pools after in-flight tasks settle and grows them again", async () => {
+        const clients: DeferredChunkClient[] = [];
+        const pool = new WorldGeneratorPool("unused", {
+            size: 2,
+            maxWorkers: 4,
+            clientFactory: () => {
+                const client = new DeferredChunkClient();
+                clients.push(client);
+                return client;
+            }
+        });
+        const first = pool.generateChunk({ seed: 1, chunkX: 0, chunkY: 0 });
+        const second = pool.generateChunk({ seed: 1, chunkX: 1, chunkY: 0 });
+        pool.configureSize(1);
+        expect(pool.stats).toMatchObject({ workers: 2, configuredWorkers: 1, busyWorkers: 2 });
+        clients[0].requests[0].resolve(generateWorldChunk(clients[0].requests[0].options));
+        await first;
+        await flush();
+        expect(pool.stats.workers).toBe(1);
+        const remaining = clients.find(client => !client.disposed)!;
+        remaining.requests[0].resolve(generateWorldChunk(remaining.requests[0].options));
+        await second;
+        pool.configureSize(3);
+        expect(pool.stats).toMatchObject({ workers: 3, configuredWorkers: 3 });
+        pool.dispose();
+    });
+
+    test("replaces a client that fails while idle before dispatching new work", async () => {
+        const clients: DeferredChunkClient[] = [];
+        const pool = new WorldGeneratorPool("unused", {
+            size: 1,
+            clientFactory: () => {
+                const client = new DeferredChunkClient();
+                clients.push(client);
+                return client;
+            }
+        });
+        clients[0].dispose();
+
+        const pending = pool.generateChunk({ seed: 1, chunkX: 4, chunkY: 5 });
+        expect(clients).toHaveLength(2);
+        expect(clients[1].requests).toHaveLength(1);
+        clients[1].requests[0].resolve(generateWorldChunk(clients[1].requests[0].options));
+        await expect(pending).resolves.toMatchObject({ chunkX: 4, chunkY: 5 });
+        pool.dispose();
+    });
 });
 
 describe("procedural world source", () => {
+    test("persists editor batches once per affected chunk", async () => {
+        class CountingDeltaStore extends MemoryWorldDeltaStore {
+            readonly batches: Array<{ chunkX: number; chunkY: number; changes: number }> = [];
+            public override putChunkDelta(
+                worldId: string,
+                chunkX: number,
+                chunkY: number,
+                changes: readonly WorldDeltaChange[],
+                options: WorldDeltaBatchOptions
+            ): Promise<WorldChunkDelta | undefined> {
+                this.batches.push({ chunkX, chunkY, changes: changes.length });
+                return super.putChunkDelta(worldId, chunkX, chunkY, changes, options);
+            }
+        }
+        const deltas = new CountingDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "batch-save", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        source.setTileOverrides([
+            ...Array.from({ length: 100 }, (_, index) => ({
+                x: index % 10,
+                y: Math.floor(index / 10),
+                changes: { unit: `first-${index}` }
+            })),
+            { x: 12, y: 0, changes: { unit: "second-chunk" } }
+        ]);
+
+        expect(deltas.batches).toEqual([
+            { chunkX: 0, chunkY: 0, changes: 100 },
+            { chunkX: 1, chunkY: 0, changes: 1 }
+        ]);
+        expect((await deltas.loadChunk("[\"infinite\",\"batch-save\",12,1]", 0, 0, { chunkSize: 12 }))?.revision).toBe(1);
+        expect(source.getChunkRevision(0, 0)?.deltaRevision).toBe(1);
+        expect(source.getChunkRevision(1, 0)?.deltaRevision).toBe(1);
+        source.setTileOverride(0, 0, { unit: "first-0" });
+        expect(deltas.batches).toHaveLength(2);
+        expect(source.getChunkRevision(0, 0)?.deltaRevision).toBe(1);
+        await source.clearDeltas();
+        expect(source.getChunkRevision(0, 0)?.deltaRevision).toBe(2);
+        expect(source.stats).toMatchObject({ trackedDeltaChunks: 0, pendingDeltaTiles: 0 });
+        source.dispose();
+    });
+
+    test("releases tile-level delta protection after persistence acknowledgement", async () => {
+        const deltas = new MemoryWorldDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "delta-tracking", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        source.setTileOverrides(Array.from({ length: 100 }, (_, index) => ({
+            x: index % 10,
+            y: Math.floor(index / 10),
+            changes: { unit: `unit-${index}` }
+        })));
+        expect(source.stats).toMatchObject({ trackedDeltaChunks: 1, pendingDeltaTiles: 100 });
+
+        await flush();
+        expect(source.stats).toMatchObject({ trackedDeltaChunks: 1, pendingDeltaTiles: 0 });
+        source.dispose();
+    });
+
+    test("flush reports persistent write failures without acknowledging tiles", async () => {
+        const deltas = new FlakyDeltaStore(Number.POSITIVE_INFINITY);
+        const source = new ProceduralWorldSource(
+            { seed: "failed-delta-write", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        source.setTileOverride(2, 3, { unit: "unsaved" });
+        await flush();
+
+        await expect(source.flushDeltas()).rejects.toThrow("write failed");
+        expect(source.stats.pendingDeltaTiles).toBe(1);
+        expect(deltas.attempts).toBeGreaterThanOrEqual(1);
+        source.dispose();
+    });
+
+    test("flush retries failed tile epochs and acknowledges only a durable retry", async () => {
+        const deltas = new FlakyDeltaStore(1);
+        const source = new ProceduralWorldSource(
+            { seed: "retried-delta-write", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        source.setTileOverride(2, 3, { unit: "saved-after-retry" });
+        await flush();
+        expect(source.stats.pendingDeltaTiles).toBe(1);
+
+        await source.flushDeltas();
+
+        expect(source.stats.pendingDeltaTiles).toBe(0);
+        expect(deltas.attempts).toBe(2);
+        expect((await deltas.loadChunk(
+            "[\"infinite\",\"retried-delta-write\",12,1]",
+            0,
+            0,
+            { chunkSize: 12 }
+        ))?.entries[0]).toMatchObject({ x: 2, y: 3, override: { unit: "saved-after-retry" } });
+        source.dispose();
+    });
+
+    test("does not let an older write acknowledge a newer edit to the same tile", async () => {
+        const deltas = new DeferredWriteDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "delta-write-epochs", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        source.setTileOverride(2, 3, { unit: "first" });
+        source.setTileOverride(2, 3, { unit: "second" });
+        expect(deltas.writes).toHaveLength(1);
+        expect(deltas.writes[0].changes[0].override).toEqual({ unit: "first" });
+
+        await deltas.completeNext();
+        await flush();
+        expect(source.stats.pendingDeltaTiles).toBe(1);
+        expect(deltas.writes).toHaveLength(1);
+        expect(deltas.writes[0].changes[0].override).toEqual({ unit: "second" });
+
+        await deltas.completeNext();
+        await source.flushDeltas();
+        expect(source.stats.pendingDeltaTiles).toBe(0);
+        expect((await deltas.loadChunk(
+            "[\"infinite\",\"delta-write-epochs\",12,1]",
+            0,
+            0,
+            { chunkSize: 12 }
+        ))?.entries[0].override).toEqual({ unit: "second" });
+        source.dispose();
+    });
+
+    test("bounds revision tombstones during long-running edit churn", async () => {
+        const source = new ProceduralWorldSource(
+            { seed: "bounded-delta-history", workerUrl: "unused", chunkSize: 12 },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        for (let chunkX = 0; chunkX < 5_000; chunkX += 1) {
+            const x = chunkX * 12;
+            source.setTileOverride(x, 0, { unit: "temporary" });
+            expect(source.clearTileOverride(x, 0)).toBe(true);
+        }
+
+        expect(source.stats.trackedDeltaChunks).toBeLessThanOrEqual(4_096);
+        expect(source.stats.pendingDeltaTiles).toBe(0);
+        await source.clearDeltas();
+        expect(source.stats.trackedDeltaChunks).toBe(0);
+        source.dispose();
+    });
+
+    test("restores sparse deltas after rebuilding a source", async () => {
+        const deltas = new MemoryWorldDeltaStore();
+        const createSource = () => new ProceduralWorldSource(
+            { seed: "saved-world", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        const first = createSource();
+        await first.loadChunk(0, 0);
+        first.setTileOverrides([
+            { x: 2, y: 3, changes: { unit: "scout" } },
+            { x: 4, y: 5, changes: { city: { name: "Persistent" } } }
+        ]);
+        first.dispose();
+
+        const second = createSource();
+        await second.loadChunk(0, 0);
+        expect(getMapTile(second.map, 2, 3)?.unit).toBe("scout");
+        expect(getMapTile(second.map, 4, 5)?.city?.name).toBe("Persistent");
+        expect(second.clearTileOverride(2, 3)).toBe(true);
+        second.dispose();
+
+        const third = createSource();
+        await third.loadChunk(0, 0);
+        expect(getMapTile(third.map, 2, 3)?.unit).toBeUndefined();
+        expect(getMapTile(third.map, 4, 5)?.city?.name).toBe("Persistent");
+        await third.clearDeltas();
+        expect(getMapTile(third.map, 4, 5)?.city).toBeUndefined();
+        third.dispose();
+
+        const fourth = createSource();
+        await fourth.loadChunk(0, 0);
+        expect(getMapTile(fourth.map, 4, 5)?.city).toBeUndefined();
+        fourth.dispose();
+    });
+
+    test("isolates default save slots when chunk size changes", async () => {
+        const deltas = new MemoryWorldDeltaStore();
+        const source12 = new ProceduralWorldSource(
+            { seed: "sized-save", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        await source12.loadChunk(0, 0);
+        source12.setTileOverride(2, 3, { unit: "size-12" });
+        source12.dispose();
+
+        const source24 = new ProceduralWorldSource(
+            { seed: "sized-save", workerUrl: "unused", chunkSize: 24, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        await source24.loadChunk(0, 0);
+        expect(getMapTile(source24.map, 2, 3)?.unit).toBeUndefined();
+        source24.dispose();
+    });
+
+    test("does not let delayed delta restoration overwrite a newer local edit", async () => {
+        const deltas = new DeferredDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "delta-race", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        const loading = source.loadChunk(0, 0);
+        await flush();
+        source.setTileOverride(2, 3, { unit: "new" });
+        deltas.resolveLoad({
+            version: WORLD_DELTA_FORMAT_VERSION,
+            worldId: "[\"infinite\",\"delta-race\",12,1]",
+            chunkX: 0,
+            chunkY: 0,
+            chunkSize: 12,
+            revision: 1,
+            entries: [{ x: 2, y: 3, override: { unit: "old" } } satisfies WorldDeltaEntry]
+        });
+        await loading;
+        expect(getMapTile(source.map, 2, 3)?.unit).toBe("new");
+        source.dispose();
+    });
+
+    test("invalidates an older in-flight restore when deltas are cleared", async () => {
+        const deltas = new DeferredDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "delta-clear-race", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        const loading = source.loadChunk(0, 0);
+        await flush();
+        await source.clearDeltas();
+        deltas.resolveLoad({
+            version: WORLD_DELTA_FORMAT_VERSION,
+            worldId: "[\"infinite\",\"delta-clear-race\",12,1]",
+            chunkX: 0,
+            chunkY: 0,
+            chunkSize: 12,
+            revision: 1,
+            entries: [{ x: 2, y: 3, override: { unit: "stale" } }]
+        });
+
+        await loading;
+        expect(getMapTile(source.map, 2, 3)?.unit).toBeUndefined();
+        expect(source.stats).toMatchObject({ pendingDeltaTiles: 0, restoringDeltaChunks: 0 });
+        source.dispose();
+    });
+
+    test("rejects a custom delta store that injects coordinates from another chunk", async () => {
+        const deltas = new DeferredDeltaStore();
+        const source = new ProceduralWorldSource(
+            { seed: "invalid-delta", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
+            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+        );
+        const loading = source.loadChunk(0, 0);
+        await flush();
+        deltas.resolveLoad({
+            version: WORLD_DELTA_FORMAT_VERSION,
+            worldId: "[\"infinite\",\"invalid-delta\",12,1]",
+            chunkX: 0,
+            chunkY: 0,
+            chunkSize: 12,
+            revision: 1,
+            entries: [{ x: 12, y: 0, override: { unit: "foreign" } }]
+        });
+
+        await expect(loading).rejects.toThrow(/invalid or incompatible/);
+        expect(source.hasChunk(0, 0)).toBe(false);
+        source.dispose();
+    });
     test("versions cache keys by generator, topology, dimensions and coordinates", () => {
         const base = {
             seed: "cache-key",
@@ -375,7 +883,29 @@ describe("procedural world source", () => {
         expect(source.hasTile(19, 16)).toBe(true);
         expect(source.map.infinite).not.toBe(true);
         expect(Object.keys(source.map.data)).toHaveLength(0);
+        expect(isMutableWorldSource(source)).toBe(true);
+        source.setTileOverride(-1, -1, { unit: "wrapped-scout" });
+        expect(getMapTile(source.map, 19, 16)?.unit).toBe("wrapped-scout");
+        expect(source.clearTileOverride(-1, -1)).toBe(true);
+        expect(getMapTile(source.map, 19, 16)?.unit).toBeUndefined();
+        expect(() => source.setTileOverride(Number.MAX_SAFE_INTEGER + 1, 0, { unit: "invalid" }))
+            .toThrow(/safe integers/);
         source.dispose();
+    });
+
+    test("validates an override batch before applying any changes", () => {
+        const store = new SparseWorldChunkStore();
+        expect(() => store.setTileOverrides([
+            { x: 1, y: 2, changes: { unit: "scout" } },
+            { x: Number.MAX_SAFE_INTEGER + 1, y: 2, changes: { unit: "invalid" } }
+        ])).toThrow(/safe integers/);
+        expect(store.tileOverrideCount).toBe(0);
+
+        expect(() => store.setTileOverrides([
+            { x: 1, y: 2, changes: { unit: "scout" } },
+            { x: 2, y: 2, changes: { rivers: "invalid" } as never }
+        ])).toThrow(/rivers/);
+        expect(store.tileOverrideCount).toBe(0);
     });
 });
 
@@ -495,9 +1025,12 @@ describe("unified world sources and streamer", () => {
         const stale = streamer.setCenterTile(0, 0);
         const away = streamer.setCenterTile(12, 0);
         const returned = streamer.setCenterTile(0, 0);
+        // The returned demand reuses the still-running request for the same
+        // immutable chunk; the coordinator never overlaps two source loads
+        // whose release hooks could invalidate each other.
+        expect(source.completions).toHaveLength(2);
         source.completions[0]();
         source.completions[1]();
-        source.completions[2]();
         await expect(stale).rejects.toMatchObject({ name: "AbortError" });
         await expect(away).rejects.toMatchObject({ name: "AbortError" });
         await expect(returned).resolves.toMatchObject({ chunkX: 0, chunkY: 0 });

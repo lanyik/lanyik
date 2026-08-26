@@ -32,6 +32,8 @@ export interface WorldChunkSchedulerOptions {
     renderDistance: number;
     lodEnabled: boolean;
     lodDistances: WorldChunkLodDistances;
+    lodBias?: WorldChunkLod;
+    vegetationLodBias?: WorldChunkLod;
     gpuCacheSize: number;
     cpuCacheSize: number;
     gpuGraceFrames: number;
@@ -149,22 +151,29 @@ export class WorldChunkScheduler {
             }
             for (const object of binding.objects) {
                 object.updateWorldMatrix(true, false);
-                const worldX = object.matrixWorld.elements[12];
-                const worldY = object.matrixWorld.elements[13];
-                const worldZ = object.matrixWorld.elements[14];
                 const local = metadata.bounds;
-                this.bounds.min.set(local.minX + worldX, local.minY + worldY, local.minZ + worldZ);
-                this.bounds.max.set(local.maxX + worldX, local.maxY + worldY, local.maxZ + worldZ);
+                this.bounds.min.set(local.minX, local.minY, local.minZ);
+                this.bounds.max.set(local.maxX, local.maxY, local.maxZ);
+                //Metadata bounds are local to the tagged object. Transform all
+                //eight corners into a world AABB so custom layers may rotate,
+                //scale or nest their chunk objects without corrupting culling
+                //and LOD distance decisions.
+                this.bounds.applyMatrix4(object.matrixWorld);
 
                 const dx = Math.max(0, this.bounds.min.x - target.x, target.x - this.bounds.max.x);
                 const dz = Math.max(0, this.bounds.min.z - target.z, target.z - this.bounds.max.z);
                 const distance = Math.hypot(dx, dz);
                 const resident = this.residents.get(metadata.id);
-                const lod = this.options.lodEnabled
+                const resolvedLod = this.options.lodEnabled
                     ? resolveWorldChunkLod(distance, metadata.kind, resident?.lod, this.options.lodDistances)
                     : (distance <= (metadata.kind === "grass" || metadata.kind === "forest"
                         ? this.options.lodDistances.vegetation
                         : this.options.renderDistance) ? 0 : null);
+                const vegetation = metadata.kind === "grass" || metadata.kind === "forest";
+                const bias = (this.options.lodBias ?? 0) + (vegetation ? (this.options.vegetationLodBias ?? 0) : 0);
+                const lod = resolvedLod === null
+                    ? null
+                    : Math.min(2, resolvedLod + bias) as WorldChunkLod;
                 const visible = distance <= this.options.renderDistance
                     && lod !== null
                     && this.frustum.intersectsBox(this.bounds);
@@ -286,6 +295,8 @@ export function createDefaultWorldChunkSchedulerOptions(): WorldChunkSchedulerOp
         renderDistance: 2400,
         lodEnabled: true,
         lodDistances: { ...DEFAULT_WORLD_CHUNK_LOD_DISTANCES },
+        lodBias: 0,
+        vegetationLodBias: 0,
         gpuCacheSize: 128,
         cpuCacheSize: 192,
         gpuGraceFrames: 300,

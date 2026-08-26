@@ -1,6 +1,11 @@
 import { Point } from "../interfaces";
 import { positiveModulo } from "../helpers/topology";
 import { assertWorldChunk, assertWorldSource, WorldChunk, WorldSource } from "./WorldSource";
+import {
+    ChunkResidencyCoordinator,
+    getChunkResidencyCoordinator,
+    WorldChunkLease
+} from "./ChunkResidencyCoordinator";
 
 export interface WorldStreamerOptions {
     loadRadius?: number;
@@ -8,6 +13,8 @@ export interface WorldStreamerOptions {
     maxResidentChunks?: number;
     maxRetries?: number;
     retryBaseDelayMs?: number;
+    residency?: ChunkResidencyCoordinator;
+    residencyOwner?: string;
 }
 
 export interface WorldStreamerHandlers {
@@ -23,6 +30,7 @@ export interface WorldStreamingStats {
     pendingChunks: number;
     queuedChunks: number;
     busyWorkers: number;
+    configuredWorkers: number;
     completedChunks: number;
     retriedChunkRequests: number;
     failedChunks: number;
@@ -31,6 +39,13 @@ export interface WorldStreamingStats {
     cachedChunks: number;
     cachedBytes: number;
     cacheErrors: number;
+    queuedTerrainChunks: number;
+    queuedVegetationChunks: number;
+    busyTerrainWorkers: number;
+    busyVegetationWorkers: number;
+    averageTerrainTaskMs: number;
+    averageVegetationTaskMs: number;
+    averageChunkLoadMs: number;
 }
 
 interface PendingChunk {
@@ -80,7 +95,7 @@ export class WorldStreamer {
     private readonly maxResidentChunks: number;
     private readonly maxRetries: number;
     private readonly retryBaseDelayMs: number;
-    private readonly residents = new Map<string, WorldChunk>();
+    private readonly residents = new Map<string, WorldChunkLease>();
     private readonly pending = new Map<string, PendingChunk>();
     private wanted = new Set<string>();
     private centerChunkX = 0;
@@ -91,6 +106,9 @@ export class WorldStreamer {
     private completed = 0;
     private retried = 0;
     private failed = 0;
+    private averageChunkLoadMs = 0;
+    public readonly residency: ChunkResidencyCoordinator;
+    private readonly residencyOwner: string;
 
     constructor(
         public readonly source: WorldSource,
@@ -98,6 +116,14 @@ export class WorldStreamer {
         options: WorldStreamerOptions = {}
     ) {
         assertWorldSource(source);
+        this.residency = options.residency ?? getChunkResidencyCoordinator(source);
+        if (this.residency.source !== source) {
+            throw new TypeError("WorldStreamer residency must coordinate its source");
+        }
+        this.residencyOwner = options.residencyOwner ?? "world-streamer";
+        if (typeof this.residencyOwner !== "string" || this.residencyOwner.trim().length === 0) {
+            throw new TypeError("residencyOwner must be a non-empty string");
+        }
         this.loadRadius = options.loadRadius ?? 3;
         this.retentionRadius = options.retentionRadius ?? this.loadRadius + 1;
         this.maxResidentChunks = options.maxResidentChunks ?? (this.retentionRadius * 2 + 1) ** 2;
@@ -150,6 +176,7 @@ export class WorldStreamer {
             pendingChunks: this.pending.size,
             queuedChunks: source?.queued ?? 0,
             busyWorkers: source?.busyWorkers ?? 0,
+            configuredWorkers: source?.configuredWorkers ?? source?.workers ?? 0,
             completedChunks: source?.completed ?? this.completed,
             retriedChunkRequests: this.retried,
             failedChunks: this.failed,
@@ -157,12 +184,19 @@ export class WorldStreamer {
             cacheMisses: source?.cacheMisses ?? 0,
             cachedChunks: source?.cachedChunks ?? 0,
             cachedBytes: source?.cachedBytes ?? 0,
-            cacheErrors: source?.cacheErrors ?? 0
+            cacheErrors: source?.cacheErrors ?? 0,
+            queuedTerrainChunks: source?.queuedChunks ?? 0,
+            queuedVegetationChunks: source?.queuedVegetation ?? 0,
+            busyTerrainWorkers: source?.busyChunkWorkers ?? 0,
+            busyVegetationWorkers: source?.busyVegetationWorkers ?? 0,
+            averageTerrainTaskMs: source?.averageChunkMs ?? 0,
+            averageVegetationTaskMs: source?.averageVegetationMs ?? 0,
+            averageChunkLoadMs: this.averageChunkLoadMs
         };
     }
 
     public get residentChunks(): readonly WorldChunk[] {
-        return [...this.residents.values()];
+        return [...this.residents.values()].map(lease => lease.chunk);
     }
 
     public hasResident(chunkX: number, chunkY: number): boolean {
@@ -174,9 +208,9 @@ export class WorldStreamer {
         this.disposed = true;
         for (const request of this.pending.values()) request.controller.abort();
         this.pending.clear();
-        for (const chunk of this.residents.values()) this.unload(chunk);
+        for (const lease of this.residents.values()) this.unload(lease);
         this.residents.clear();
-        if (disposeSource) this.source.dispose();
+        if (disposeSource) this.residency.dispose(true);
     }
 
     private resolveTileChunk(tileX: number, tileY: number): Point | undefined {
@@ -242,7 +276,7 @@ export class WorldStreamer {
     private requestChunk(chunkX: number, chunkY: number, priority: number): Promise<WorldChunk> {
         const key = WorldStreamer.key(chunkX, chunkY);
         const resident = this.residents.get(key);
-        if (resident) return Promise.resolve(resident);
+        if (resident) return Promise.resolve(resident.chunk);
         const existing = this.pending.get(key);
         if (existing && !existing.controller.signal.aborted) return existing.promise;
         //An aborted promise settles on a microtask. A caller can move away and
@@ -251,21 +285,28 @@ export class WorldStreamer {
         if (existing) this.pending.delete(key);
 
         const controller = new AbortController();
+        const startedAt = typeof performance === "undefined" ? Date.now() : performance.now();
         let pending: PendingChunk;
-        const promise = this.loadWithRetry(chunkX, chunkY, priority, controller.signal).then(chunk => {
+        const promise = this.loadWithRetry(chunkX, chunkY, priority, controller.signal).then(lease => {
+            const chunk = lease.chunk;
             if (this.disposed || !this.wanted.has(key)) {
-                this.source.releaseChunk(chunk);
+                lease.release();
                 throw abortError("Chunk is no longer wanted");
             }
-            this.residents.set(key, chunk);
+            this.residents.set(key, lease);
             try {
                 this.handlers.chunkLoaded(chunk);
             } catch (reason) {
                 this.residents.delete(key);
-                this.unload(chunk);
+                this.unload(lease);
                 throw reason;
             }
             this.completed += 1;
+            const completedAt = typeof performance === "undefined" ? Date.now() : performance.now();
+            const loadMs = Math.max(0, completedAt - startedAt);
+            this.averageChunkLoadMs = this.averageChunkLoadMs === 0
+                ? loadMs
+                : this.averageChunkLoadMs + (loadMs - this.averageChunkLoadMs) * 0.2;
             this.enforceResidentLimit();
             return chunk;
         }).finally(() => {
@@ -282,21 +323,26 @@ export class WorldStreamer {
         chunkY: number,
         priority: number,
         signal: AbortSignal
-    ): Promise<WorldChunk> {
+    ): Promise<WorldChunkLease> {
         for (let attempt = 0; ; attempt += 1) {
             try {
-                const chunk = await this.source.loadChunk(chunkX, chunkY, { priority, signal });
+                const lease = await this.residency.acquireChunk(chunkX, chunkY, {
+                    owner: this.residencyOwner,
+                    priority,
+                    signal
+                });
+                const chunk = lease.chunk;
                 if (signal.aborted) {
-                    this.source.releaseChunk(chunk);
+                    lease.release();
                     throw abortError("Chunk load completed after cancellation");
                 }
                 try {
                     assertWorldChunk(this.source, chunk, chunkX, chunkY);
                 } catch (reason) {
-                    this.source.releaseChunk(chunk);
+                    lease.release();
                     throw reason;
                 }
-                return chunk;
+                return lease;
             } catch (reason) {
                 const error = reason instanceof Error ? reason : new Error(String(reason));
                 if (signal.aborted || error.name === "AbortError") throw error;
@@ -312,7 +358,8 @@ export class WorldStreamer {
     }
 
     private evictOutsideRetention(): void {
-        for (const [key, chunk] of this.residents) {
+        for (const [key, lease] of this.residents) {
+            const chunk = lease.chunk;
             const distance = this.source.chunkDistance(
                 chunk.chunkX,
                 chunk.chunkY,
@@ -321,7 +368,7 @@ export class WorldStreamer {
             );
             if (distance <= this.retentionRadius + 0.5) continue;
             this.residents.delete(key);
-            this.unload(chunk);
+            this.unload(lease);
         }
     }
 
@@ -329,11 +376,11 @@ export class WorldStreamer {
         if (this.residents.size <= this.maxResidentChunks) return;
         const candidates = [...this.residents.entries()]
             .filter(([key]) => !this.wanted.has(key))
-            .sort((a, b) => this.distanceFromCenter(b[1]) - this.distanceFromCenter(a[1]));
+            .sort((a, b) => this.distanceFromCenter(b[1].chunk) - this.distanceFromCenter(a[1].chunk));
         while (this.residents.size > this.maxResidentChunks && candidates.length > 0) {
-            const [key, chunk] = candidates.shift()!;
+            const [key, lease] = candidates.shift()!;
             this.residents.delete(key);
-            this.unload(chunk);
+            this.unload(lease);
         }
     }
 
@@ -341,14 +388,15 @@ export class WorldStreamer {
         return this.source.chunkDistance(chunk.chunkX, chunk.chunkY, this.centerChunkX, this.centerChunkY);
     }
 
-    private unload(chunk: WorldChunk): void {
+    private unload(lease: WorldChunkLease): void {
+        const chunk = lease.chunk;
         try {
             this.handlers.chunkUnloading(chunk);
         } catch (reason) {
             this.reportError(reason);
         }
         try {
-            this.source.releaseChunk(chunk);
+            lease.release();
         } catch (reason) {
             this.reportError(reason);
         }

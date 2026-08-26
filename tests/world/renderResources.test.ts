@@ -1,5 +1,15 @@
 import { describe, expect, test, vi } from "vitest";
-import { BoxGeometry, Group, Matrix4, Mesh, MeshBasicMaterial, Texture, TextureLoader } from "three";
+import {
+    BoxGeometry,
+    Group,
+    InstancedBufferAttribute,
+    InstancedMesh,
+    Matrix4,
+    Mesh,
+    MeshBasicMaterial,
+    Texture,
+    TextureLoader
+} from "three";
 
 vi.mock("../../src/helpers/models", () => ({
     loadModel: vi.fn(async () => {
@@ -69,6 +79,23 @@ describe("streamed render resource sharing", () => {
         terrain.activateChunk(metadata, 2);
         expect(terrain.lodBuildCount).toBe(4);
 
+        const fog = lod0.getAttribute("fogState") as InstancedBufferAttribute;
+        fog.clearUpdateRanges();
+        terrain.setFogStates([
+            { x: 0, y: 0, state: 0 },
+            { x: 0, y: 1, state: 1 },
+            { x: 0, y: 2, state: 1 }
+        ]);
+        expect(fog.updateRanges).toEqual([{ start: 0, count: 3 }]);
+
+        const firstMesh = meshes[0];
+        map.data[0][0].type = Land.sand;
+        expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toEqual([]);
+        expect(terrain.children).toContain(firstMesh);
+        map.data[0][0].type = Land.sea;
+        expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toContain("land:0,0");
+        expect(terrain.children).not.toContain(firstMesh);
+
         terrain.dispose();
         texture.mockRestore();
     });
@@ -92,6 +119,14 @@ describe("streamed render resource sharing", () => {
         expect(left.activateChunk(metadata, 0)).toBe(lod0);
         expect(left.lodBuildCount).toBe(2);
 
+        const fog = lod0.getAttribute("fogState") as InstancedBufferAttribute;
+        fog.clearUpdateRanges();
+        left.setFogStates([
+            { x: 0, y: 0, state: 0 },
+            { x: 0, y: 1, state: 0 }
+        ]);
+        expect(fog.updateRanges).toEqual([{ start: 0, count: 8 }]);
+
         left.dispose();
         right.dispose();
         resources.dispose();
@@ -114,6 +149,16 @@ describe("streamed render resource sharing", () => {
         left.activateChunk(metadata, 1, [leftRoot]);
         left.activateChunk(metadata, 0, [leftRoot]);
         expect(left.lodBuildCount).toBe(2);
+
+        const instanced = leftRoot.children[0] as InstancedMesh;
+        instanced.instanceMatrix.clearUpdateRanges();
+        instanced.instanceColor!.clearUpdateRanges();
+        left.setFogStates([
+            { x: 0, y: 0, state: 0 },
+            { x: 0, y: 1, state: 1 }
+        ]);
+        expect(instanced.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 64 }]);
+        expect(instanced.instanceColor!.updateRanges).toEqual([{ start: 0, count: 12 }]);
 
         left.dispose();
         right.dispose();

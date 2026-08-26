@@ -17,7 +17,7 @@ npm start
 
 打开 <http://127.0.0.1:3000>。可以通过语言选择器切换英文和简体中文，选择结果会跨刷新保存。在“世界生成”面板中修改种子、宽度或高度并重新生成地图。演示默认生成四向循环的环形世界：越过任意边界后会从另一侧继续。
 
-操作方式：使用 **WASD** 移动，左键选择格子，按住右键拖动环绕观察，滚轮缩放。默认页面只展示图形能力，不会自动启动单位、回合或战争迷雾玩法。
+操作方式：点击地图后使用 **WASD** 移动，左键选择格子，按住右键拖动环绕观察，滚轮缩放。同一页面有多个地图时，键盘只控制当前聚焦的 Canvas。默认页面只展示图形能力，不会自动启动单位、回合或战争迷雾玩法。
 
 项目基于 [three.js](https://threejs.org/)，通过实例化渲染与自定义着色器构建浏览器端的《文明》风格六边形地形。渲染按可见区块批处理，不会为每个格子单独创建一次绘制。
 
@@ -186,7 +186,8 @@ const source = new ProceduralWorldSource({
     workerUrl: new URL("/assets/world-generator.worker.mjs", window.location.href),
     workerCount: 4,
     chunkSize: 24,
-    cache: true
+    cache: true,
+    deltaStore: true
 });
 
 await map.loadWorld({
@@ -204,11 +205,15 @@ await map.loadWorld({
 console.log(map.worldStreamingStats);
 ```
 
-生成的基础格子采用紧凑、共享且不可变的数据变体。逐坐标玩法状态仍保持稀疏：可调用 `source.setTileOverride(x, y, changes)` 和 `source.clearTileOverride(x, y)` 设置 `unit`、`city` 等字段，无需物化整个无限世界。覆盖状态会在数据源生命周期内跨 Chunk 淘汰保留，并应用到后续重新挂载。
+生成的基础格子采用紧凑、共享且不可变的数据变体。逐坐标玩法状态仍保持稀疏：可调用 `await map.setTileOverride(x, y, changes)`、用于编辑器批处理的 `await map.setTileOverrides(changes)` 和 `await map.clearTileOverride(x, y)` 设置 `unit`、地形、植被或 `city` 等字段，无需物化整个无限世界。设置 `deltaStore: true` 后，覆盖状态会写入与基础地形缓存分离的 IndexedDB 存档，并在页面或 Source 重建后恢复；明确的存档点可调用 `await source.flushDeltas()`。仅修改单位状态不会触发 GPU 工作，视觉字段则会立即局部重建该格及邻居涉及的驻留数据块。底层 `source` 方法仍可供没有活动 `HexMap` 渲染器的纯数据场景使用。
 
 `chunkSize` 必须是 12 的倍数；还可配置 `loadRadius`、`retentionRadius`、`maxResidentChunks`、`frameBudgetMs`、`maxMountsPerFrame`、`maxRetries`、`retryBaseDelayMs` 和 `floatingOriginThreshold`。移动方向会经过平滑后，仅在保留半径的余量内预取，过期预测任务由正常调度器取消。短暂的数据源失败默认进行两次可取消的指数退避重试；返回坐标、尺寸或核心格错误的 Chunk 会立即拒绝，避免污染运行时地图。
 
 `WorldSource` 是公开接口：实现 `loadChunk()`、`releaseChunk()`、边界解析，以及物化 `data` 或虚拟 `tileAt()`/`forEachTile()` 地图视图后，即可接入 HTTP、IndexedDB、服务器权威世界或编辑器数据，无需改动渲染器。一个数据源实例由一次 `loadWorld()` 会话独占，并在切换世界或 `map.dispose()` 时自动释放。
+
+浏览器持久化、长距离寻路和相机无关模拟分别通过
+`three-hex-map/persistence`、`three-hex-map/pathfinding` 和
+`three-hex-map/simulation` 子路径导入，避免全局浏览器包暴露可选运行时。
 
 普通演示使用有限环形数据源，打开 `/?infinite` 可体验程序化数据源；附加 `x`/`y` 查询参数可以测试极大逻辑坐标。通过 `map.add()` 添加的 `Unit` 会保留在可重定位的世界根节点下；跨未加载 Chunk 的全局模拟和寻路应由上层应用按 Chunk 处理，避免重新把整个世界放回内存。
 

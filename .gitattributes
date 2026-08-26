@@ -1,2 +1,7 @@
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.glb -text
+
 public/** linguist-vendored
 webpack.config.js linguist-vendored

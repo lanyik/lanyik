@@ -27,7 +27,14 @@ import { getNeighborCoords } from "../helpers/neighbors";
 import { getMapTile } from "../helpers/topology";
 import { SharedBaseInstancedBufferGeometry } from "../rendering/SharedBaseInstancedBufferGeometry";
 import {
+    BufferUpdateRange,
+    commitBufferAttributeRanges,
+    GpuTileStateChange
+} from "../rendering/BufferUpdateBatch";
+import {
     getWorldChunkBounds,
+    getWorldChunkKey,
+    getWorldChunkMetadata,
     getWorldChunkOrigin,
     groupTilesByWorldChunk,
     localizeWorldChunkBounds,
@@ -191,6 +198,12 @@ interface CityFogEntry {
     wrapper: Group;
     sprite: Sprite;
     materials: { material: Material & { color?: Color }, baseColor?: Color }[];
+    owner?: object;
+    signature: string;
+}
+
+export interface TerrainCityRefresh {
+    point: Point;
     owner?: object;
 }
 
@@ -724,8 +737,38 @@ export class TerrainMesh extends Group {
                 sprite.userData[CITY_FOG_TILE_KEY] = key;
                 this.add(sprite);
 
-                this.cityFog.set(key, { wrapper, sprite, materials: cityMaterials, owner });
+                this.cityFog.set(key, {
+                    wrapper,
+                    sprite,
+                    materials: cityMaterials,
+                    owner,
+                    signature: this.citySignature(tile)
+                });
         }
+    }
+
+    public async refreshCities(changes: readonly TerrainCityRefresh[]): Promise<void> {
+        const latest = new Map<string, TerrainCityRefresh>();
+        for (const change of changes) latest.set(`${change.point.x},${change.point.y}`, change);
+        const builds: Promise<void>[] = [];
+        for (const [key, { point, owner }] of latest) {
+            const tile = getMapTile(this.map, point.x, point.y);
+            const signature = this.citySignature(tile);
+            const existing = this.cityFog.get(key);
+            if (existing?.signature === signature) {
+                existing.owner = owner;
+                continue;
+            }
+            if (existing) this.removeCity(key);
+            if (tile?.city) builds.push(this.loadCities([point], owner));
+        }
+        await Promise.all(builds);
+    }
+
+    private citySignature(tile: TileInfo | undefined): string {
+        return tile?.city
+            ? JSON.stringify([tile.city.name ?? null, tile.city.model ?? null])
+            : "";
     }
 
     //Adds render shells for newly materialized sparse-world cells. Actual GPU
@@ -742,10 +785,95 @@ export class TerrainMesh extends Group {
         this.buildWaterLayer(waterTiles);
     }
 
+    //Updates terrain/rivers/neighborhood attributes in place when a tile stays
+    //on its current land/water layer. A land<->water transition changes draw
+    //membership, so only that 12x12 render chunk is rebuilt. Returned ids let
+    //the scheduler drop stale GPU residency records for those rebuilt shells.
+    public refreshTileAttributes(tiles: readonly Point[]): string[] {
+        const structuralChunkKeys = new Set<string>();
+        for (const point of tiles) {
+            const key = `${point.x},${point.y}`;
+            const tile = getMapTile(this.map, point.x, point.y);
+            const landEntry = this.tileIndex.get(key);
+            const waterEntry = this.waterTileIndex.get(key);
+            const expectedWater = Boolean(tile && WATER_TYPES.includes(tile.type));
+            if ((!tile && (landEntry || waterEntry))
+                || (expectedWater && landEntry) || (!expectedWater && waterEntry)) {
+                structuralChunkKeys.add(getWorldChunkKey(point.x, point.y));
+            }
+        }
+
+        const rebuiltIds: string[] = [];
+        for (const chunkKey of structuralChunkKeys) {
+            const allTiles = new Map<string, Point>();
+            for (const layer of ["land", "water"] as const) {
+                for (const point of this.chunkRecords.get(`${layer}:${chunkKey}`)?.tiles ?? []) {
+                    allTiles.set(`${point.x},${point.y}`, point);
+                }
+            }
+            const points = [...allTiles.values()];
+            rebuiltIds.push(...this.removeTiles(points, false, undefined, true));
+            this.addTiles(points);
+        }
+
+        const attributeNames: readonly (keyof InstanceAttributes)[] = [
+            "style",
+            "neighborsA",
+            "neighborsB",
+            "neighborsPriorityA",
+            "neighborsPriorityB",
+            "neighborsKindA",
+            "neighborsKindB",
+            "riverEdges",
+            "riverSeaMouthEdges",
+            "riverLakeMouthEdges",
+            "lakeNeighborEdges"
+        ];
+        const pendingUpdates = new Map<InstancedBufferAttribute, BufferUpdateRange[]>();
+        for (const point of tiles) {
+            if (structuralChunkKeys.has(getWorldChunkKey(point.x, point.y))) continue;
+            const key = `${point.x},${point.y}`;
+            const entry = this.tileIndex.get(key) ?? this.waterTileIndex.get(key);
+            if (!entry) continue;
+            const metadata = getWorldChunkMetadata(entry.mesh);
+            const record = metadata ? this.chunkRecords.get(metadata.id) : undefined;
+            if (!record?.attributes) continue;
+            const fresh = this.buildInstanceAttributes(
+                [point],
+                { x: record.mesh.position.x, y: record.mesh.position.z }
+            );
+            const geometries = new Set<InstancedBufferGeometry>([
+                record.mesh.geometry,
+                ...record.lodGeometries.values()
+            ]);
+            for (const name of attributeNames) {
+                const source = fresh[name];
+                const target = record.attributes[name];
+                const itemSize = source.length;
+                const start = entry.index * itemSize;
+                target.set(source, start);
+                for (const geometry of geometries) {
+                    const attribute = geometry.getAttribute(name) as InstancedBufferAttribute | undefined;
+                    if (!attribute) continue;
+                    const ranges = pendingUpdates.get(attribute) ?? [];
+                    ranges.push({ start, count: itemSize });
+                    pendingUpdates.set(attribute, ranges);
+                }
+            }
+        }
+        for (const [attribute, ranges] of pendingUpdates) commitBufferAttributeRanges(attribute, ranges);
+        return rebuiltIds;
+    }
+
     //Removes every render chunk touched by these cells. Streaming generation
     //chunks are aligned to WORLD_CHUNK_SIZE, so a render chunk is never shared
     //between two independently resident generation chunks.
-    public removeTiles(tiles: readonly Point[], removeCities = true, cityOwner?: object): string[] {
+    public removeTiles(
+        tiles: readonly Point[],
+        removeCities = true,
+        cityOwner?: object,
+        preserveFog = false
+    ): string[] {
         const chunkKeys = new Set(groupTilesByWorldChunk(tiles).keys());
         const removedIds: string[] = [];
         for (const chunkKey of chunkKeys) {
@@ -764,7 +892,7 @@ export class TerrainMesh extends Group {
                 removedIds.push(id);
             }
         }
-        for (const point of tiles) this.fogStates.delete(`${point.x},${point.y}`);
+        if (!preserveFog) for (const point of tiles) this.fogStates.delete(`${point.x},${point.y}`);
         if (removeCities) this.removeCities(tiles, cityOwner);
         return removedIds;
     }
@@ -1134,30 +1262,44 @@ export class TerrainMesh extends Group {
     //the given state. Plain per-instance attribute writes, no rebuild.
     //-------------------------------------------------------------------------
     public setFogState(x: number, y: number, state: number): void {
-        const key = `${x},${y}`;
-        this.fogStates.set(key, state);
+        this.setFogStates([{ x, y, state }]);
+    }
 
-        const landEntry = this.tileIndex.get(key);
-        if (landEntry) {
-            const attribute = landEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
-            if (attribute) {
-                attribute.setX(landEntry.index, state);
-                attribute.addUpdateRange(landEntry.index, 1);
-                attribute.needsUpdate = true;
+    public setFogStates(changes: readonly GpuTileStateChange[]): void {
+        const updates = new Map<InstancedBufferAttribute, BufferUpdateRange[]>();
+        const write = (
+            entry: { mesh: Mesh, index: number } | undefined,
+            state: number
+        ): void => {
+            if (!entry) return;
+            const attribute = entry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
+            if (!attribute) return;
+            (attribute.array as Float32Array)[entry.index] = state;
+            const metadata = getWorldChunkMetadata(entry.mesh);
+            const record = metadata ? this.chunkRecords.get(metadata.id) : undefined;
+            const geometries = record
+                ? new Set<InstancedBufferGeometry>([
+                    entry.mesh.geometry as InstancedBufferGeometry,
+                    ...record.lodGeometries.values()
+                ])
+                : new Set<InstancedBufferGeometry>([entry.mesh.geometry as InstancedBufferGeometry]);
+            for (const geometry of geometries) {
+                const target = geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
+                if (!target) continue;
+                const ranges = updates.get(target) ?? [];
+                ranges.push({ start: entry.index, count: 1 });
+                updates.set(target, ranges);
             }
-        }
+        };
 
-        const waterEntry = this.waterTileIndex.get(key);
-        if (waterEntry) {
-            const attribute = waterEntry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
-            if (attribute) {
-                attribute.setX(waterEntry.index, state);
-                attribute.addUpdateRange(waterEntry.index, 1);
-                attribute.needsUpdate = true;
-            }
+        for (const { x, y, state } of changes) {
+            const key = `${x},${y}`;
+            this.fogStates.set(key, state);
+            write(this.tileIndex.get(key), state);
+            write(this.waterTileIndex.get(key), state);
+            this.setCityFog(key, state);
         }
-
-        this.setCityFog(key, state);
+        for (const [attribute, ranges] of updates) commitBufferAttributeRanges(attribute, ranges);
     }
 
     private setCityFog(key: string, state: number): void {

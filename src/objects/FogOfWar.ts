@@ -1,6 +1,8 @@
 import { MapInfo, Point } from "../interfaces";
 import { tilesWithinRange } from "../helpers/fog";
-import { assertWrappableMap, getMapTile, normalizeMapCoordinates } from "../helpers/topology";
+import { FogStateStore } from "../helpers/fogStateStore";
+import { forEachMapTile } from "../helpers/mapData";
+import { assertWrappableMap, normalizeMapCoordinates } from "../helpers/topology";
 
 //----------------------------------------------------------------------------------
 //Civ-style three-state fog of war:
@@ -33,23 +35,21 @@ export interface FogChange extends Point {
 //Unit's own visibility.
 //----------------------------------------------------------------------------------
 export class FogOfWar {
-    private state: Uint8Array;
-    private visible = new Set<number>();
+    private readonly state: FogStateStore;
+    private visible = new Map<string, Point>();
     private lastCandidates = 0;
 
     constructor(private map: MapInfo) {
         assertWrappableMap(map);
-        this.state = new Uint8Array(map.w * map.h); // defaults to 0 = Unseen
-    }
-
-    private index(x: number, y: number): number {
-        return x * this.map.h + y;
+        this.state = new FogStateStore(map);
     }
 
     public getState(x: number, y: number): FogState {
         const normalized = normalizeMapCoordinates(this.map, x, y);
-        if (!normalized || !getMapTile(this.map, normalized.x, normalized.y)) return FogState.Unseen;
-        return this.state[this.index(normalized.x, normalized.y)] as FogState;
+        if (!normalized) return FogState.Unseen;
+        //Sparse streaming may evict the tile after it was explored. Fog memory
+        //belongs to the logical world, not current render/source residency.
+        return this.state.get(normalized.x, normalized.y) ?? FogState.Unseen;
     }
 
     //Every existing tile, at its current state - used once at startup to sync
@@ -57,12 +57,9 @@ export class FogOfWar {
     //match this class's all-Unseen initial state.
     public allTiles(): FogChange[] {
         const tiles: FogChange[] = [];
-        for (let x = 0; x < this.map.w; x++) {
-            for (let y = 0; y < this.map.h; y++) {
-                if (!getMapTile(this.map, x, y)) continue;
-                tiles.push({ x, y, state: this.state[this.index(x, y)] as FogState });
-            }
-        }
+        forEachMapTile(this.map, (_tile, x, y) => {
+            tiles.push({ x, y, state: this.state.get(x, y) ?? FogState.Unseen });
+        });
         return tiles;
     }
 
@@ -74,23 +71,23 @@ export class FogOfWar {
     //Returns only the tiles whose state actually changed, so callers can push
     //a cheap incremental update to the renderer instead of touching every tile.
     public recompute(viewers: FogViewer[]): FogChange[] {
-        const nowVisible = new Set<number>();
+        const nowVisible = new Map<string, Point>();
         for (const viewer of viewers) {
             for (const tile of tilesWithinRange(this.map, viewer.x, viewer.y, viewer.viewRange)) {
-                nowVisible.add(this.index(tile.x, tile.y));
+                nowVisible.set(`${tile.x},${tile.y}`, tile);
             }
         }
 
         const changes: FogChange[] = [];
-        for (const idx of this.visible) {
-            if (nowVisible.has(idx)) continue;
-            this.state[idx] = FogState.Explored;
-            changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: FogState.Explored });
+        for (const [key, tile] of this.visible) {
+            if (nowVisible.has(key)) continue;
+            this.state.set(tile.x, tile.y, FogState.Explored);
+            changes.push({ ...tile, state: FogState.Explored });
         }
-        for (const idx of nowVisible) {
-            if (this.state[idx] === FogState.Visible) continue;
-            this.state[idx] = FogState.Visible;
-            changes.push({ x: Math.floor(idx / this.map.h), y: idx % this.map.h, state: FogState.Visible });
+        for (const tile of nowVisible.values()) {
+            if (this.state.get(tile.x, tile.y) === FogState.Visible) continue;
+            this.state.set(tile.x, tile.y, FogState.Visible);
+            changes.push({ ...tile, state: FogState.Visible });
         }
         this.lastCandidates = this.visible.size + nowVisible.size;
         this.visible = nowVisible;

@@ -179,6 +179,18 @@ let activeSource;
 let generating = false;
 let statusState = { kind: "initializing" };
 
+window.getWorldDiagnostics = () => ({
+    status: statusState.kind,
+    generating,
+    streaming: map.streamingStats,
+    worldStreaming: map.worldStreamingStats,
+    frameTasks: map.frameTaskStats,
+    adaptive: map.adaptiveStreamingStats,
+    rendererMemory: map.renderer ? { ...map.renderer.info.memory } : undefined,
+    renderer: map.renderer ? { ...map.renderer.info.render } : undefined,
+    cameraTarget: map.getCameraTarget().toArray()
+});
+
 window.addEventListener("beforeunload", () => {
     map.dispose();
 }, { once: true });

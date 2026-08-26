@@ -11,12 +11,14 @@ export interface FrameTaskSchedulerStats {
     cancelledTasks: number;
     lastFrameTasks: number;
     lastFrameDurationMs: number;
+    oldestTaskAgeMs: number;
 }
 
 interface FrameTask {
     key: string;
     priority: number;
     sequence: number;
+    enqueuedAt: number;
     run(): void;
 }
 
@@ -51,7 +53,7 @@ export class FrameTaskScheduler {
     public enqueue(key: string, priority: number, run: () => void): void {
         if (!key) throw new TypeError("frame task key is required");
         if (!Number.isFinite(priority)) throw new RangeError("frame task priority must be finite");
-        this.tasks.set(key, { key, priority, sequence: this.sequence++, run });
+        this.tasks.set(key, { key, priority, sequence: this.sequence++, enqueuedAt: this.now(), run });
     }
 
     public cancel(key: string): boolean {
@@ -94,12 +96,18 @@ export class FrameTaskScheduler {
     }
 
     public get stats(): Readonly<FrameTaskSchedulerStats> {
+        const now = this.now();
+        let oldestTaskAgeMs = 0;
+        for (const task of this.tasks.values()) {
+            oldestTaskAgeMs = Math.max(oldestTaskAgeMs, Math.max(0, now - task.enqueuedAt));
+        }
         return {
             pendingTasks: this.tasks.size,
             completedTasks: this.completed,
             cancelledTasks: this.cancelled,
             lastFrameTasks: this.lastFrameTasks,
-            lastFrameDurationMs: this.lastFrameDurationMs
+            lastFrameDurationMs: this.lastFrameDurationMs,
+            oldestTaskAgeMs
         };
     }
 

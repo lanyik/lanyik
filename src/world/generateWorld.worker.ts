@@ -1,5 +1,10 @@
 import { generateWorld, WorldGenerationOptions } from "./generateWorld";
 import { generateWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
+import {
+    generateWorldVegetation,
+    WorldVegetationGenerationOptions,
+    worldVegetationTransferables
+} from "./generateVegetation";
 
 interface GenerateWorldRequest {
     id: number;
@@ -13,7 +18,13 @@ interface GenerateChunkRequest {
     options: WorldChunkGenerationOptions;
 }
 
-type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest;
+interface GenerateVegetationRequest {
+    id: number;
+    type: "vegetation";
+    options: WorldVegetationGenerationOptions;
+}
+
+type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest | GenerateVegetationRequest;
 
 const scope = globalThis as unknown as {
     addEventListener(type: "message", listener: (event: MessageEvent<GenerateRequest>) => void): void;
@@ -29,6 +40,9 @@ scope.addEventListener("message", event => {
         if (request.type === "chunk") {
             const chunk = generateWorldChunk(request.options);
             scope.postMessage({ id: request.id, chunk }, [chunk.tiles.buffer]);
+        } else if (request.type === "vegetation") {
+            const vegetation = generateWorldVegetation(request.options);
+            scope.postMessage({ id: request.id, vegetation }, worldVegetationTransferables(vegetation));
         } else {
             scope.postMessage({ id: request.id, world: generateWorld(request.options) });
         }

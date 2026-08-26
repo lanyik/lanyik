@@ -6,7 +6,8 @@ import { getHexCenter } from "./helpers";
 export const WORLD_CHUNK_SIZE = 12;
 export const WORLD_CHUNK_METADATA = "hexWorldChunk";
 
-export type WorldChunkKind = "land" | "water" | "grass" | "forest";
+export type BuiltinWorldChunkKind = "land" | "water" | "grass" | "forest";
+export type WorldChunkKind = BuiltinWorldChunkKind | (string & {});
 export type WorldChunkLod = 0 | 1 | 2;
 
 export interface WorldChunkBounds {
