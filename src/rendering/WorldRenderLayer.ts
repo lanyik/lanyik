@@ -4,6 +4,7 @@ import { WorldChunkLod, WorldChunkMetadata, WorldChunkKind } from "../helpers/ch
 import { MapInfo, Point } from "../interfaces";
 import { WorldChunk, WorldSource } from "../world/WorldSource";
 import { WorldChunkActivation } from "./WorldChunkScheduler";
+import type { WorldRenderRefreshKind } from "../world/WorldEditingFacade";
 
 export interface WorldRenderLayerHost {
     readonly map: MapInfo;
@@ -27,6 +28,7 @@ export interface WorldRenderChunkContext extends WorldRenderLayerHost {
 
 export interface WorldRenderTileRefreshContext extends WorldRenderLayerHost {
     readonly tiles: readonly Point[];
+    readonly refreshKind: WorldRenderRefreshKind;
 }
 
 //Layers own construction and disposal of their objects. HexMap owns when a
@@ -40,7 +42,8 @@ export interface WorldRenderLayer {
     unloadWorld?(host: WorldRenderLayerHost): void;
     mountChunk(context: WorldRenderChunkContext): void | Promise<void>;
     unmountChunk(context: WorldRenderChunkContext): void;
-    refreshTiles?(context: WorldRenderTileRefreshContext): void | Promise<void>;
+    /** Return false when the layer cannot handle this refresh kind incrementally. */
+    refreshTiles?(context: WorldRenderTileRefreshContext): boolean | void | Promise<boolean | void>;
     enabled?(metadata: WorldChunkMetadata): boolean;
     activateLod?(
         metadata: WorldChunkMetadata,

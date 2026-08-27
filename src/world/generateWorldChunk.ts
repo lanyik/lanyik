@@ -1,14 +1,20 @@
 import { Land } from "../enums";
 import { getNeighbors } from "../helpers/neighbors";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { fractalNoise2D, randomAt, seedToUint32 } from "./noise";
+import {
+    createLandformSampler,
+    LANDFORM_SEA_LEVEL,
+    LandformSample,
+    LandformSampler
+} from "./LandformSampler";
+import { randomAt, seedToUint32 } from "./noise";
 import { generateToroidalWorldTile } from "./generateWorld";
 
 export const DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 export const MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 export const WORLD_CHUNK_FORMAT_VERSION = 1;
 export const WORLD_CHUNK_PADDING = 1;
-export const WORLD_GENERATOR_VERSION = 1;
+export const WORLD_GENERATOR_VERSION = 3;
 
 export interface BoundedWorldChunkGeneration {
     width: number;
@@ -148,14 +154,6 @@ const FLAG_LAKE = 1 << 5;
 const TREE_SHIFT = 6;
 const TREE_MASK = 0b11 << TREE_SHIFT;
 const TREE_MODELS = [undefined, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"] as const;
-const SEA_LEVEL = 0.43;
-
-interface ClimateSample {
-    elevation: number;
-    moisture: number;
-    temperature: number;
-}
-
 function assertChunkCoordinate(name: "chunkX" | "chunkY", value: number): void {
     if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
 }
@@ -167,50 +165,38 @@ function resolveChunkSize(value = DEFAULT_WORLD_GENERATION_CHUNK_SIZE): number {
     return value;
 }
 
-//All fields sample global integer coordinates, so generation order, worker
-//count and chunk boundaries cannot alter the result or create seams.
-function sampleClimate(seed: number, x: number, y: number): ClimateSample {
-    const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
-    const detail = fractalNoise2D(seed ^ 0xa341316c, x * 0.14, y * 0.14, 3);
-    const elevation = continent * 0.78 + detail * 0.22 + 0.03;
-    const moisture = fractalNoise2D(seed ^ 0xc8013ea4, x * 0.08, y * 0.08, 4);
-    const temperatureNoise = fractalNoise2D(seed ^ 0xad90777d, x * 0.025, y * 0.025, 3);
-    const temperature = 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8;
-    return { elevation, moisture, temperature };
-}
-
-function classifyTerrain({ elevation, moisture, temperature }: ClimateSample): Land {
-    if (elevation < SEA_LEVEL) return Land.sea;
-    if (elevation > 0.75) return Land.mountain;
+function classifyTerrain({ elevation, ridge, moisture, temperature }: LandformSample): Land {
+    if (elevation < LANDFORM_SEA_LEVEL) return Land.sea;
+    if ((elevation > 0.7 && ridge > 0.2) || elevation > 0.82) return Land.mountain;
     if (temperature < 0.18) return Land.snow;
     if (temperature < 0.34) return Land.tundra;
     if (temperature > 0.68 && moisture < 0.42) return Land.sand;
     return Land.land;
 }
 
-function baseTerrainAt(seed: number, x: number, y: number): Land {
-    return classifyTerrain(sampleClimate(seed, x, y));
+function baseTerrainAt(sampler: LandformSampler, x: number, y: number): Land {
+    return classifyTerrain(sampler.sample(x, y));
 }
 
 function isWater(type: Land): boolean {
     return type === Land.sea || type === Land.coastal;
 }
 
-function terrainAt(seed: number, x: number, y: number): Land {
-    const base = baseTerrainAt(seed, x, y);
+function terrainAt(sampler: LandformSampler, x: number, y: number): Land {
+    const base = baseTerrainAt(sampler, x, y);
     if (base !== Land.sea) return base;
-    const touchesLand = getNeighbors(x, y).some(neighbor => !isWater(baseTerrainAt(seed, neighbor.x, neighbor.y)));
+    const touchesLand = getNeighbors(x, y).some(neighbor => !isWater(baseTerrainAt(sampler, neighbor.x, neighbor.y)));
     return touchesLand ? Land.coastal : Land.sea;
 }
 
-function encodeTile(seed: number, x: number, y: number): number {
-    const climate = sampleClimate(seed, x, y);
-    const type = terrainAt(seed, x, y);
+function encodeTile(seed: number, sampler: LandformSampler, x: number, y: number): number {
+    const climate = sampler.sample(x, y);
+    const type = terrainAt(sampler, x, y);
     let packed = LAND_CODE.get(type) ?? 0;
     if (isWater(type) || type === Land.mountain || type === Land.snow) return packed;
 
     const lake = type === Land.land
-        && climate.elevation > SEA_LEVEL + 0.025
+        && climate.elevation > LANDFORM_SEA_LEVEL + 0.025
         && climate.elevation < 0.56
         && climate.moisture > 0.74
         && randomAt(seed, x, y, 0x6c8e9cf5) > 0.94;
@@ -253,6 +239,15 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
     const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
     const tiles = new Uint16Array(stride * stride);
     const seed = seedToUint32(options.seed);
+    const sampler = createLandformSampler({
+        // Keep the source seed identical to TerrainMesh's sampler input.
+        // Passing the already-hashed decoration seed here would hash it a
+        // second time and classify a different height field than we render.
+        seed: options.seed,
+        domain: options.world
+            ? { topology: "toroidal", width: options.world.width, height: options.world.height }
+            : { topology: "infinite" }
+    });
     const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
     const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
     if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)
@@ -265,8 +260,15 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
             const x = originX + localX;
             const y = originY + localY;
             tiles[localX * stride + localY] = options.world
-                ? encodeTileInfo(generateToroidalWorldTile(seed, x, y, options.world.width, options.world.height))
-                : encodeTile(seed, x, y);
+                ? encodeTileInfo(generateToroidalWorldTile(
+                    options.seed,
+                    x,
+                    y,
+                    options.world.width,
+                    options.world.height,
+                    sampler
+                ))
+                : encodeTile(seed, sampler, x, y);
         }
     }
     return {

@@ -28,7 +28,12 @@ import { MapInfo, Point, TileInfo } from "./interfaces";
 import { HexMapEventName } from "./enums";
 import { getHexCenter } from "./helpers/helpers";
 import { pickTile } from "./helpers/picking";
-import { CITY_FOG_TILE_KEY, TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
+import {
+    CITY_FOG_TILE_KEY,
+    LandformDebugMode,
+    TerrainMesh,
+    TerrainAtlas
+} from "./objects/TerrainMesh";
 import { createForest, ForestField, ForestSharedResources } from "./objects/Forest";
 import { GrassField, createGrassField, GrassSharedResources } from "./objects/Grass";
 import { FogChange, FogState } from "./objects/FogOfWar";
@@ -81,7 +86,12 @@ import {
 import { WorldChunkLayers } from "./rendering/WorldChunkLayers";
 import { WorldChunkMountQueue } from "./rendering/WorldChunkMountQueue";
 import { WebGlGpuTimerStats } from "./rendering/WebGlGpuTimer";
-import { WorldEditingFacade, WorldEditingStats, worldTileVisualSignature } from "./world/WorldEditingFacade";
+import {
+    WorldEditingFacade,
+    WorldEditingStats,
+    WorldRenderRefreshKind,
+    worldTileVisualSignature
+} from "./world/WorldEditingFacade";
 import {
     RuntimeWorkCoordinator,
     RuntimeWorkCoordinatorStats
@@ -303,6 +313,7 @@ export class HexMap extends EventEmitter {
             enabled: () => this.options.grassEnabled,
             mountChunk: context => this.mountGrassWorldRenderLayer(context),
             unmountChunk: context => this.unmountGrassWorldRenderLayer(context),
+            refreshTiles: context => this.refreshGrassWorldRenderLayer(context),
             activateLod: (metadata, lod, objects) => this.activateGrassWorldChunk(metadata, lod, objects),
             releaseChunk: metadata => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata),
             dispose: () => undefined
@@ -312,6 +323,7 @@ export class HexMap extends EventEmitter {
             kinds: ["forest"],
             mountChunk: context => this.mountForestWorldRenderLayer(context),
             unmountChunk: context => this.unmountForestWorldRenderLayer(context),
+            refreshTiles: context => this.refreshForestWorldRenderLayer(context),
             activateLod: (metadata, lod, objects) => this.activateForestWorldChunk(metadata, lod, objects),
             releaseChunk: metadata => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata),
             dispose: () => undefined
@@ -1197,6 +1209,18 @@ export class HexMap extends EventEmitter {
         this.chunkScheduler.forget(forgotten);
     }
 
+    private refreshGrassWorldRenderLayer(context: WorldRenderTileRefreshContext): boolean {
+        if (context.refreshKind !== "city") return false;
+        for (const point of context.tiles) {
+            const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
+            for (const grass of new Set(this.streamedGrassByChunkId.values())) {
+                grass.setTileSuppressed(point.x, point.y, suppressed);
+            }
+        }
+        context.invalidateVisibility();
+        return true;
+    }
+
     private mountForestWorldRenderLayer(context: WorldRenderChunkContext): Promise<void> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
@@ -1341,6 +1365,18 @@ export class HexMap extends EventEmitter {
         record.forest = undefined;
         record.forestVegetationSignature = undefined;
         this.chunkScheduler.forget(forgotten);
+    }
+
+    private refreshForestWorldRenderLayer(context: WorldRenderTileRefreshContext): boolean {
+        if (context.refreshKind !== "city") return false;
+        for (const point of context.tiles) {
+            const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
+            for (const forest of new Set(this.streamedForestByChunkId.values())) {
+                forest.setTileSuppressed(point.x, point.y, suppressed);
+            }
+        }
+        context.invalidateVisibility();
+        return true;
     }
 
     private collectChunkIds(object: Object3D, target: string[]): void {
@@ -1842,6 +1878,18 @@ export class HexMap extends EventEmitter {
             gridWidth: this.options.gridWidth,
             gridOpacity: this.options.gridOpacity,
             shaderQuality: this.options.terrainShaderQuality,
+            landform: this.worldSource?.descriptor ? {
+                seed: this.worldSource.descriptor.seed,
+                domain: this.worldSource.descriptor.topology === "toroidal"
+                    ? {
+                        topology: "toroidal",
+                        width: this.worldSource.descriptor.width!,
+                        height: this.worldSource.descriptor.height!
+                    }
+                    : { topology: "infinite" }
+            } : undefined,
+            landformDebugMode: this.options.landformDebugMode,
+            terrainTextureRegionSize: this.options.terrainTextureRegionSize,
             waterColorShallow: this.options.waterColorShallow,
             waterColorDeep: this.options.waterColorDeep,
             waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -2149,7 +2197,7 @@ export class HexMap extends EventEmitter {
             if (!result) throw new Error("The current world source does not support tile overrides");
             return result.dirtyTiles.length === 0
                 ? Promise.resolve()
-                : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source);
+                : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source, result.refreshKind);
         } catch (reason) {
             return Promise.reject(reason);
         }
@@ -2166,7 +2214,7 @@ export class HexMap extends EventEmitter {
             if (!result) throw new Error("The current world source does not support tile overrides");
             return result.dirtyTiles.length === 0
                 ? Promise.resolve()
-                : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source);
+                : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source, result.refreshKind);
         } catch (reason) {
             return Promise.reject(reason);
         }
@@ -2178,7 +2226,7 @@ export class HexMap extends EventEmitter {
             const result = this.currentWorldEditingFacade()?.clearTileOverride(x, y);
             if (!result) throw new Error("The current world source does not support tile overrides");
             if (!result.changed || result.dirtyTiles.length === 0) return Promise.resolve(result.changed);
-            return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source).then(() => true);
+            return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source, result.refreshKind).then(() => true);
         } catch (reason) {
             return Promise.reject(reason);
         }
@@ -2196,16 +2244,24 @@ export class HexMap extends EventEmitter {
         return this.enqueueTileRenderRefreshes([...unique.values()], source);
     }
 
-    private enqueueTileRenderRefresh(point: Point, source: WorldSource): Promise<void> {
-        return this.enqueueTileRenderRefreshes([point], source);
+    private enqueueTileRenderRefresh(
+        point: Point,
+        source: WorldSource,
+        refreshKind: WorldRenderRefreshKind = "terrain"
+    ): Promise<void> {
+        return this.enqueueTileRenderRefreshes([point], source, refreshKind);
     }
 
-    private enqueueTileRenderRefreshes(points: readonly Point[], source: WorldSource): Promise<void> {
+    private enqueueTileRenderRefreshes(
+        points: readonly Point[],
+        source: WorldSource,
+        refreshKind: WorldRenderRefreshKind = "terrain"
+    ): Promise<void> {
         const loadRevision = this.loadRevision;
         const controller = this.worldController;
         const queued = this.worldTileUpdateQueue.then(() => {
             if (!this.isWorldSessionCurrent(source, loadRevision)) return;
-            return this.refreshTileOverridesRendering(points, source, loadRevision);
+            return this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind);
         });
         const refresh = controller?.source === source
             ? controller.lifecycle.track(queued)
@@ -2225,7 +2281,8 @@ export class HexMap extends EventEmitter {
     private async refreshTileOverridesRendering(
         points: readonly Point[],
         source: WorldSource,
-        loadRevision: number
+        loadRevision: number,
+        refreshKind: WorldRenderRefreshKind = "terrain"
     ): Promise<void> {
         const streamer = this.worldStreamer;
         if (!streamer || !this.isWorldSessionCurrent(source, loadRevision)) return;
@@ -2265,15 +2322,16 @@ export class HexMap extends EventEmitter {
             this.worldChunkLayers.get(key)?.renderLayerPromises?.get(layer.id)
         )));
         if (!this.isWorldSessionCurrent(source, loadRevision)) return;
+        const remounted = layers.filter(layer => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
         for (const layer of refreshable) {
-            await layer.refreshTiles?.({
+            const handled = await layer.refreshTiles?.({
                 ...this.createWorldRenderLayerHost(layer.id, "@world"),
-                tiles: [...affectedTiles.values()]
+                tiles: [...affectedTiles.values()],
+                refreshKind
             });
             if (!this.isWorldSessionCurrent(source, loadRevision)) return;
+            if (handled === false) remounted.push(layer);
         }
-
-        const remounted = layers.filter(layer => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
         for (const key of keys) {
             const record = this.worldChunkLayers.get(key);
             if (!record) continue;
@@ -2708,6 +2766,25 @@ export class HexMap extends EventEmitter {
     public set mountainHeight(value: number) {
         this.options.mountainHeight = value;
         if (this.terrain) this.terrain.mountainHeight = value;
+    }
+
+    public get landformDebugMode(): LandformDebugMode {
+        return this.terrain?.landformDebugMode ?? this.options.landformDebugMode;
+    }
+    public set landformDebugMode(value: LandformDebugMode) {
+        this.options.landformDebugMode = value;
+        if (this.terrain) this.terrain.landformDebugMode = value;
+    }
+
+    public get terrainTextureRegionSize(): number {
+        return this.terrain?.terrainTextureRegionSize ?? this.options.terrainTextureRegionSize;
+    }
+    public set terrainTextureRegionSize(value: number) {
+        if (!Number.isFinite(value) || value <= 0) {
+            throw new RangeError("terrainTextureRegionSize must be a positive finite number");
+        }
+        this.options.terrainTextureRegionSize = value;
+        if (this.terrain) this.terrain.terrainTextureRegionSize = value;
     }
 
     public get beachWidth(): number {

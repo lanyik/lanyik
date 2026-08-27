@@ -4,6 +4,7 @@
 //----------------------------------------------------------------------------------
 export { HexMap } from "./HexMap";
 export type { HexMapOptions, WorldLoadOptions } from "./HexMap";
+export type { LandformDebugMode } from "./objects/TerrainMesh";
 
 export { GameEngine } from "./gameengine";
 export type { GameEngineOptions } from "./gameengine";
@@ -78,6 +79,17 @@ export {
 
 export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateWorld";
 export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
+export {
+    createLandformSampler,
+    sampleLandform,
+    LANDFORM_SEA_LEVEL
+} from "./world/LandformSampler";
+export type {
+    LandformDomain,
+    LandformSample,
+    LandformSampler,
+    LandformSamplerOptions
+} from "./world/LandformSampler";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export {
     createWorldDescriptor,

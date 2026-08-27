@@ -16,6 +16,7 @@ describe("HexMap option boundary", () => {
             fogTextureSize: 400,
             riverDepth: 7.5,
             mountainHeight: 30,
+            terrainTextureRegionSize: 2,
             grassBladeWidth: 1.5,
             grassBladeHeight: 9,
             grassWindStrength: 3.15,
@@ -35,5 +36,9 @@ describe("HexMap option boundary", () => {
             element: "#map",
             worldSessionDrainTimeoutMs: 0
         })).toThrow(/positive finite number/);
+        expect(() => resolveHexMapOptions({
+            element: "#map",
+            terrainTextureRegionSize: 0
+        })).toThrow(/terrainTextureRegionSize must be a positive finite number/);
     });
 });

@@ -32,10 +32,14 @@ import {
     WorldDeltaEntry,
     WorldDeltaStore
 } from "../../src/world/WorldDeltaStore";
+
 import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "../../src/world/generateVegetation";
+
+const infiniteWorldId = (seed: string, chunkSize = 12): string =>
+    JSON.stringify(["infinite", seed, chunkSize, WORLD_GENERATOR_VERSION]);
 
 interface DeferredRequest {
     options: WorldChunkGenerationOptions;
@@ -582,7 +586,7 @@ describe("procedural world source", () => {
             { chunkX: 0, chunkY: 0, changes: 100 },
             { chunkX: 1, chunkY: 0, changes: 1 }
         ]);
-        expect((await deltas.loadChunk("[\"infinite\",\"batch-save\",12,1]", 0, 0, { chunkSize: 12 }))?.revision).toBe(1);
+        expect((await deltas.loadChunk(infiniteWorldId("batch-save"), 0, 0, { chunkSize: 12 }))?.revision).toBe(1);
         expect(source.getChunkRevision(0, 0)?.deltaRevision).toBe(1);
         expect(source.getChunkRevision(1, 0)?.deltaRevision).toBe(1);
         source.setTileOverride(0, 0, { unit: "first-0" });
@@ -642,7 +646,7 @@ describe("procedural world source", () => {
         expect(source.stats.pendingDeltaTiles).toBe(0);
         expect(deltas.attempts).toBe(2);
         expect((await deltas.loadChunk(
-            "[\"infinite\",\"retried-delta-write\",12,1]",
+            infiniteWorldId("retried-delta-write"),
             0,
             0,
             { chunkSize: 12 }
@@ -671,7 +675,7 @@ describe("procedural world source", () => {
         await source.flushDeltas();
         expect(source.stats.pendingDeltaTiles).toBe(0);
         expect((await deltas.loadChunk(
-            "[\"infinite\",\"delta-write-epochs\",12,1]",
+            infiniteWorldId("delta-write-epochs"),
             0,
             0,
             { chunkSize: 12 }
@@ -762,7 +766,7 @@ describe("procedural world source", () => {
         source.setTileOverride(2, 3, { unit: "new" });
         deltas.resolveLoad({
             version: WORLD_DELTA_FORMAT_VERSION,
-            worldId: "[\"infinite\",\"delta-race\",12,1]",
+            worldId: infiniteWorldId("delta-race"),
             chunkX: 0,
             chunkY: 0,
             chunkSize: 12,
@@ -785,7 +789,7 @@ describe("procedural world source", () => {
         await source.clearDeltas();
         deltas.resolveLoad({
             version: WORLD_DELTA_FORMAT_VERSION,
-            worldId: "[\"infinite\",\"delta-clear-race\",12,1]",
+            worldId: infiniteWorldId("delta-clear-race"),
             chunkX: 0,
             chunkY: 0,
             chunkSize: 12,
@@ -809,7 +813,7 @@ describe("procedural world source", () => {
         await flush();
         deltas.resolveLoad({
             version: WORLD_DELTA_FORMAT_VERSION,
-            worldId: "[\"infinite\",\"invalid-delta\",12,1]",
+            worldId: infiniteWorldId("invalid-delta"),
             chunkX: 0,
             chunkY: 0,
             chunkSize: 12,

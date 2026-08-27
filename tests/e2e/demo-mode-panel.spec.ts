@@ -57,3 +57,38 @@ test("switches and remembers world mode from the root demo control panel", async
     await expect(page.locator("[data-campaign-panel]")).toBeVisible();
     expect(errors).toEqual([]);
 });
+
+test("switches landform diagnostics and regional texture scale live without regenerating", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => {
+        if (message.type() === "error") errors.push(message.text());
+    });
+    await page.goto("/?quality=fast", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+        const state = (window as unknown as {
+            getWorldDiagnostics?: () => DemoDiagnostics;
+        }).getWorldDiagnostics?.();
+        return state?.status === "generated" && !state.generating;
+    });
+
+    const before = await page.evaluate(() => (window as unknown as {
+        getWorldDiagnostics(): DemoDiagnostics & { worldLifecycle?: { generation: number } };
+    }).getWorldDiagnostics().worldLifecycle?.generation);
+    await page.locator("[data-landform-debug]").selectOption("ridge");
+    await expect(page.locator("[data-landform-debug]")).toHaveValue("ridge");
+    await expect.poll(() => page.evaluate(() => (window as unknown as {
+        hexWorld: { landformDebugMode: string };
+    }).hexWorld.landformDebugMode)).toBe("ridge");
+    await page.locator("[data-texture-region]").fill("6");
+    await page.locator("[data-texture-region]").press("Enter");
+    await expect.poll(() => page.evaluate(() => (window as unknown as {
+        hexWorld: { terrainTextureRegionSize: number };
+    }).hexWorld.terrainTextureRegionSize)).toBe(6);
+    const after = await page.evaluate(() => (window as unknown as {
+        getWorldDiagnostics(): DemoDiagnostics & { worldLifecycle?: { generation: number } };
+    }).getWorldDiagnostics().worldLifecycle?.generation);
+
+    expect(after).toBe(before);
+    expect(errors).toEqual([]);
+});

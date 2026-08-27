@@ -184,6 +184,7 @@ export class ForestSharedResources {
 //----------------------------------------------------------------------------------
 export class ForestField extends Group {
     private readonly fogStates = new Map<string, number>();
+    private readonly suppressedTiles = new Set<string>();
     private lodBuilds = 0;
 
     constructor(
@@ -210,7 +211,7 @@ export class ForestField extends Group {
             this.fogStates.set(key, state);
             const range = this.tileRanges.get(key);
             if (!range) continue;
-            const hidden = state < 0.5;
+            const hidden = this.suppressedTiles.has(key) || state < 0.5;
             const shade = state < 1.5 ? this.fogDarkenFactor : 1;
             for (const mesh of range.instancedMeshes) {
                 const matrices = mesh.instanceMatrix.array as Float32Array;
@@ -230,6 +231,34 @@ export class ForestField extends Group {
         }
         for (const [attribute, ranges] of matrixUpdates) commitBufferAttributeRanges(attribute, ranges);
         for (const [attribute, ranges] of colorUpdates) commitBufferAttributeRanges(attribute, ranges);
+    }
+
+    /** Hides one tile's instances without rebuilding or reloading its model. */
+    public setTileSuppressed(x: number, y: number, suppressed: boolean): void {
+        const key = `${x},${y}`;
+        if (suppressed) this.suppressedTiles.add(key);
+        else this.suppressedTiles.delete(key);
+        const range = this.tileRanges.get(key);
+        if (!range) return;
+        const state = this.fogStates.get(key) ?? 2;
+        const hidden = suppressed || state < 0.5;
+        const shade = state < 1.5 ? this.fogDarkenFactor : 1;
+        for (const mesh of range.instancedMeshes) {
+            const matrices = mesh.instanceMatrix.array as Float32Array;
+            if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+            else matrices.set(range.originalMatrices, range.start * 16);
+            commitBufferAttributeRanges(mesh.instanceMatrix, [{
+                start: range.start * 16,
+                count: range.count * 16
+            }]);
+            if (!mesh.instanceColor) continue;
+            (mesh.instanceColor.array as Float32Array)
+                .fill(shade, range.start * 3, (range.start + range.count) * 3);
+            commitBufferAttributeRanges(mesh.instanceColor, [{
+                start: range.start * 3,
+                count: range.count * 3
+            }]);
+        }
     }
 
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod, objects: Object3D[]): void {
@@ -370,7 +399,7 @@ export class ForestField extends Group {
         for (const [key, range] of cached.ranges) {
             const fogState = this.fogStates.get(key) ?? 2;
             const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
-            if (fogState < 0.5) {
+            if (this.suppressedTiles.has(key) || fogState < 0.5) {
                 for (const mesh of record.instancedMeshes) {
                     writeHiddenMatrices(mesh.instanceMatrix.array as Float32Array, range.start, range.count);
                 }
@@ -434,13 +463,13 @@ export async function createForest(
     if (treesPerTile <= 0) return null;
 
     //Wood is a tile *modifier* (TileInfo.modifiers, like "river"/"lake"/
-    //"hill"), not its own field. Lake tiles are skipped even if marked wood -
-    //the dry shore rim is too thin to reliably place trees in (see Grass.ts's
-    //matching skip).
+    //"hill"), not its own field. City and lake tiles are skipped: city models
+    //need a clear footprint, while a lake's dry shore rim is too thin to place
+    //trees reliably (see Grass.ts's matching skip).
     const tilesByModel = new Map<string, Point[]>();
     const considerTile = (x: number, y: number): void => {
         const tile = getMapTile(map, x, y);
-        if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) return;
+        if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) return;
         const modelPath = tile.treeModel ?? defaultModel;
         const tiles = tilesByModel.get(modelPath) ?? [];
         tiles.push({ x, y });

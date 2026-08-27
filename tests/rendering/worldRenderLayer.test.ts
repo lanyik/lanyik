@@ -338,7 +338,12 @@ describe("HexMap custom world render layers", () => {
         const map = Object.create(HexMap.prototype) as LayerTestMap & {
             loadRevision: number;
             worldStreamer: { residentChunks: readonly WorldChunk[] };
-            refreshTileOverridesRendering(points: readonly { x: number; y: number }[], source: WorldSource, revision: number): Promise<void>;
+            refreshTileOverridesRendering(
+                points: readonly { x: number; y: number }[],
+                source: WorldSource,
+                revision: number,
+                refreshKind?: "none" | "city" | "terrain"
+            ): Promise<void>;
         };
         map.disposed = false;
         map.options = { size: 40 };
@@ -362,8 +367,9 @@ describe("HexMap custom world render layers", () => {
         map.refreshWorldCopies = vi.fn();
         map.updateWorldChunkVisibility = vi.fn();
 
-        await map.refreshTileOverridesRendering([{ x: 1, y: 1 }], map.worldSource, 2);
+        await map.refreshTileOverridesRendering([{ x: 1, y: 1 }], map.worldSource, 2, "city");
         expect(refreshTiles).toHaveBeenCalledOnce();
+        expect(refreshTiles.mock.calls[0][0]).toMatchObject({ refreshKind: "city" });
         expect(custom.unmountChunk).not.toHaveBeenCalled();
         expect(custom.mountChunk).not.toHaveBeenCalled();
     });

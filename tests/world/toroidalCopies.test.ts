@@ -30,8 +30,8 @@ type OverrideTestableHexMap = {
     setTileOverride: HexMap["setTileOverride"];
     setTileOverrides: HexMap["setTileOverrides"];
     clearTileOverride: HexMap["clearTileOverride"];
-    enqueueTileRenderRefresh(point: Point, source: WorldSource): Promise<void>;
-    enqueueTileRenderRefreshes(points: readonly Point[], source: WorldSource): Promise<void>;
+    enqueueTileRenderRefresh(point: Point, source: WorldSource, refreshKind?: string): Promise<void>;
+    enqueueTileRenderRefreshes(points: readonly Point[], source: WorldSource, refreshKind?: string): Promise<void>;
 };
 
 type RefreshTestableHexMap = {
@@ -98,7 +98,7 @@ describe("toroidal render copies", () => {
             currentTile = { type: Land.land };
             return true;
         });
-        const refresh = vi.fn((_point: Point, _source: WorldSource) => Promise.resolve());
+        const refresh = vi.fn((_point: Point, _source: WorldSource, _refreshKind?: string) => Promise.resolve());
         const map = Object.create(HexMap.prototype) as OverrideTestableHexMap;
         map.disposed = false;
         map.mapData = { data: {}, w: 20, h: 17, wrapX: true, wrapY: true, tileAt: () => currentTile };
@@ -110,7 +110,7 @@ describe("toroidal render copies", () => {
         expect(refresh).not.toHaveBeenCalled();
 
         await map.setTileOverride(-1, -1, { city: { name: "Harbor" } });
-        expect(refresh).toHaveBeenCalledWith({ x: 19, y: 16 }, map.worldSource);
+        expect(refresh).toHaveBeenCalledWith({ x: 19, y: 16 }, map.worldSource, "city");
         await expect(map.clearTileOverride(-1, -1)).resolves.toBe(true);
         expect(clearTileOverride).toHaveBeenCalledWith(19, 16);
         expect(refresh).toHaveBeenCalledTimes(2);
@@ -128,7 +128,7 @@ describe("toroidal render copies", () => {
                 tiles.set(key, { type: Land.land, ...tiles.get(key), ...change.changes });
             }
         });
-        const refresh = vi.fn((_points: readonly Point[], _source: WorldSource) => Promise.resolve());
+        const refresh = vi.fn((_points: readonly Point[], _source: WorldSource, _refreshKind?: string) => Promise.resolve());
         const map = Object.create(HexMap.prototype) as OverrideTestableHexMap;
         map.disposed = false;
         map.mapData = {
@@ -150,6 +150,7 @@ describe("toroidal render copies", () => {
         expect(setTileOverrides).toHaveBeenCalledOnce();
         expect(refresh).toHaveBeenCalledOnce();
         expect(refresh.mock.calls[0][0]).toEqual([{ x: 1, y: 2 }, { x: 13, y: 2 }]);
+        expect(refresh.mock.calls[0][2]).toBe("terrain");
     });
 
     test("remounts only resident source chunks touched by a tile and its neighbors", async () => {

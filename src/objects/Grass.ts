@@ -150,6 +150,7 @@ export class GrassSharedResources {
 export class GrassField extends Group {
     private readonly tileRanges = new Map<string, TileBladeRange>();
     private readonly fogStates = new Map<string, number>();
+    private readonly suppressedTiles = new Set<string>();
     private lodBuilds = 0;
 
     constructor(
@@ -179,12 +180,29 @@ export class GrassField extends Group {
             const range = this.tileRanges.get(key);
             if (!range) continue;
             const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
-            (attribute.array as Float32Array).fill(state, range.start, range.start + range.count);
+            const visibleState = this.suppressedTiles.has(key) ? 0 : state;
+            (attribute.array as Float32Array).fill(visibleState, range.start, range.start + range.count);
             const ranges = updates.get(attribute) ?? [];
             ranges.push({ start: range.start, count: range.count });
             updates.set(attribute, ranges);
         }
         for (const [attribute, ranges] of updates) commitBufferAttributeRanges(attribute, ranges);
+    }
+
+    /** Hides one tile's blades without rebuilding its streamed render chunk. */
+    public setTileSuppressed(x: number, y: number, suppressed: boolean): void {
+        const key = `${x},${y}`;
+        if (suppressed) this.suppressedTiles.add(key);
+        else this.suppressedTiles.delete(key);
+        const range = this.tileRanges.get(key);
+        if (!range) return;
+        const attribute = range.geometry.getAttribute("fogState") as InstancedBufferAttribute;
+        (attribute.array as Float32Array).fill(
+            suppressed ? 0 : (this.fogStates.get(key) ?? 2),
+            range.start,
+            range.start + range.count
+        );
+        commitBufferAttributeRanges(attribute, [{ start: range.start, count: range.count }]);
     }
 
     //Advances the wind animation. `dtS` is the elapsed time in seconds since
@@ -234,7 +252,7 @@ export class GrassField extends Group {
         const fogAttribute = cached.geometry.getAttribute("fogState") as InstancedBufferAttribute;
         const updateRanges: BufferUpdateRange[] = [];
         for (const range of cached.ranges) {
-            const state = this.fogStates.get(range.key) ?? 2;
+            const state = this.suppressedTiles.has(range.key) ? 0 : (this.fogStates.get(range.key) ?? 2);
             (fogAttribute.array as Float32Array).fill(state, range.start, range.start + range.count);
             updateRanges.push({ start: range.start, count: range.count });
             this.tileRanges.set(range.key, { geometry: cached.geometry, start: range.start, count: range.count });

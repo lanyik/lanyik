@@ -7,6 +7,7 @@ precision highp float;
 
 uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
+uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
 uniform float landBlendEnabled;
@@ -39,6 +40,7 @@ uniform float showGrid;
 uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
+uniform float landformDebugMode; // 0 normal, 1 elevation, 2 ridge, 3 valley, 4 roughness
 
 uniform vec3 lightDir;
 
@@ -69,7 +71,6 @@ uniform vec3 riverColorDeep;    // water color over the channel centerline / lak
 uniform vec3 riverBankColor;    // vegetation strip hugging the waterline
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
 varying float vTerrain;
 varying float vModifiers;
@@ -93,6 +94,7 @@ varying vec2 vWorldXZ;
 varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
 varying vec3 vNeighborsKindB; // (NW,N,NE)
 varying float vElevation;     // normalized mountain elevation, 0 on flat tiles
+varying vec4 vLandform;       // elevation, ridge, valley, roughness
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -103,6 +105,29 @@ const vec2 DIR_SW = vec2(-0.8660254, 0.5);
 const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
+
+vec3 elevationDebugColor(float value) {
+    vec3 ground = vec3(0.035, 0.055, 0.09);
+    vec3 slope = vec3(0.12, 0.58, 0.34);
+    vec3 crest = vec3(0.92, 0.42, 0.09);
+    vec3 summit = vec3(0.98, 0.96, 0.9);
+    vec3 color = mix(ground, slope, smoothstep(0.02, 0.34, value));
+    color = mix(color, crest, smoothstep(0.34, 0.76, value));
+    color = mix(color, summit, smoothstep(0.76, 1.12, value));
+    float band = fract(max(value, 0.0) * 8.0);
+    float contourDistance = min(band, 1.0 - band);
+    return color * mix(0.58, 1.0, smoothstep(0.015, 0.075, contourDistance));
+}
+
+vec3 landformDebugColor() {
+    // Mode 1 shows the final displaced surface, including the continuous
+    // cross-hex mountain field. It is intentionally not the centre-only
+    // generator sample stored in vLandform.x.
+    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
+    if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
+    return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
+}
 
 // Cheap value noise, same recipe as water.fragment.ts's - keeps the land
 // layer texture-free for rivers too (no extra noise texture to load).
@@ -193,17 +218,44 @@ float lakeShore(float openMask, vec3 efA, vec3 efB) {
     return s;
 }
 
-vec2 cellIndexToUV(float idx) {
+// One continuous low-frequency field bends the world-space UVs and modulates
+// their tone. All terrain types share this pattern, so biome blends stay
+// registered. It deliberately adds ALU only: sampleTerrainCell still performs
+// exactly one atlas lookup, preserving the texture-fetch budget.
+vec3 terrainPattern() {
+    vec2 macroP = vWorldXZ / max(hexSize * 10.0, 1.0) + vec2(13.7, -8.2);
+    float macro = valueNoise(macroP);
+    float warp = (macro - 0.5) * hexSize * 1.15;
+    vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
+    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
+    // Mirrored repeat joins the same source edge to itself at every regional
+    // boundary, even when the atlas cell was not authored as tileable.
+    vec2 regionUV = 1.0 - abs(phase - 1.0);
+    return vec3(regionUV, macro);
+}
+
+// Select one atlas cell by terrain type, then reuse the shared, warped phase.
+vec2 cellIndexToUV(float idx, vec2 regionUV) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
     float cellSize = textureAtlasMeta.z;
-    // subtract a small epsilon to avoid edge flickering when sampling the last column/row
-    float cols = atlasWidth / cellSize - 1e-6;
+    float inset = max(textureAtlasMeta.w, 0.5);
+    float cols = atlasWidth / cellSize;
     float rows = atlasHeight / cellSize;
     float x = mod(idx, cols);
     float y = floor(idx / cols);
+    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
+    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
+    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
+        / vec2(atlasWidth, atlasHeight);
+}
 
-    return vec2(x / cols + vUV.x / cols, 1.0 - (y / rows + (1.0 - vUV.y) / rows));
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
+    vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
+    color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
+    return color;
 }
 
 // Blends towards a neighboring tile's atlas texture near the edge actually
@@ -223,12 +275,19 @@ vec2 cellIndexToUV(float idx) {
 // bend (world-space noise, shared by all 6 calls) shifts the band's position
 // so the border meanders instead of running parallel to the hex edge; patch
 // modulates its strength so the mixed-in texture reads as patchy growth.
-vec4 blendEdge(vec4 inputColor, float neighborTerrain, float neighborPriority, float factor, float bend, float patch) {
+vec4 blendEdge(
+    vec4 inputColor,
+    float neighborTerrain,
+    float neighborPriority,
+    float factor,
+    float bend,
+    float patch,
+    vec3 pattern
+) {
     if (neighborTerrain < 0.0 || neighborTerrain == vTerrain) return inputColor;
     if (neighborPriority <= vPriority) return inputColor;
 
-    vec2 otherUV = cellIndexToUV(neighborTerrain);
-    vec4 neighborColor = texture2D(map, otherUV);
+    vec4 neighborColor = sampleTerrainCell(neighborTerrain, pattern);
 
     float e0 = 1.0 - clamp(landBlendWidth, 0.001, 1.0);
     float t = smoothstep(e0, 1.0, factor + bend) * patch;
@@ -359,7 +418,8 @@ void main() {
         return;
     }
 
-    vec4 texColor = texture2D(map, vTexCoord);
+    vec3 materialPattern = terrainPattern();
+    vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     if (landBlendEnabled > 0.5) {
         // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
@@ -369,12 +429,12 @@ void main() {
         float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
         float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
 
-        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
-        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
-        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
-        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
-        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
-        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch, materialPattern); // SE
+        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch, materialPattern); // S
+        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch, materialPattern); // SW
+        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch, materialPattern); // NW
+        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
+        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
@@ -400,7 +460,7 @@ void main() {
         float e0Beach = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
         float beachT = smoothstep(e0Beach, 1.0, f);
         if (beachT > 0.0) {
-            vec4 sandColor = texture2D(map, cellIndexToUV(sandAtlasIndex));
+            vec4 sandColor = sampleTerrainCell(sandAtlasIndex, materialPattern);
             texColor = mix(texColor, sandColor, beachT);
         }
 
@@ -440,12 +500,16 @@ void main() {
         }
     }
 
-    // Mountain snowcap: tint the rock towards snow near the peak (vElevation
-    // is 0 on every non-mountain tile). The relief itself comes from the
-    // vertex stage's displacement + normals; this is just the color accent.
+    // Mountain snow only survives on local high summits. A warped world-space
+    // snowline breaks the constant-height rings that used to outline every
+    // ridge and made the terrain read as rows of volcanic craters.
     if (vElevation > 0.0) {
-        float snowT = smoothstep(0.55, 0.95, vElevation);
-        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.85);
+        float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
+        snowNoise = 0.7 * snowNoise
+            + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
+        float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
+        float snowT = smoothstep(snowLine, snowLine + 0.2, vElevation);
+        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
     }
 
     // Rivers/lakes (see the uniform block's comment above). Drawn before
@@ -537,7 +601,9 @@ void main() {
 
     vec3 normal = normalize(vNormal);
     float lambertian = max(dot(normalize(lightDir), normal), 0.0);
-    vec3 color = lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
+    vec3 color = landformDebugMode > 0.5
+        ? landformDebugColor() * (0.72 + lambertian * 0.28)
+        : lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
 
     // Explored (previously seen, currently outside every unit's view range):
     // keep every feature visible, just darker - the "remembered" Civ-style look.

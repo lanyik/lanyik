@@ -14,7 +14,7 @@ var Land = /* @__PURE__ */ ((Land2) => {
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 var WORLD_CHUNK_FORMAT_VERSION = 1;
 var WORLD_CHUNK_PADDING = 1;
-var WORLD_GENERATOR_VERSION = 1;
+var WORLD_GENERATOR_VERSION = 3;
 function cloneWorldTileOverride(value) {
   const copy = { ...value };
   if (value.modifiers) copy.modifiers = [...value.modifiers];

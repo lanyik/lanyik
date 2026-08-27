@@ -10,7 +10,8 @@ const {
     ToroidalWorldSource,
     clearWorldChunkCache,
     MIN_WORLD_SIZE,
-    MAX_WORLD_SIZE
+    MAX_WORLD_SIZE,
+    WORLD_GENERATOR_VERSION
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const fastRenderMode = query.get("quality") === "fast";
@@ -413,7 +414,9 @@ async function regenerate() {
                 cache: true,
                 deltaStore: campaignMode,
                 workCoordinator: map.workCoordinator,
-                worldId: campaignMode ? `campaign-demo:${controls.seed}:terrain` : undefined
+                worldId: campaignMode
+                    ? `campaign-demo:${controls.seed}:terrain:g${WORLD_GENERATOR_VERSION}`
+                    : undefined
             });
             activeSource = undefined;
             await map.loadWorld({
@@ -548,7 +551,20 @@ const terrainFolder = gui.addFolder("Terrain");
 const gridController = terrainFolder.add(map, "gridVisible");
 const blendWidthController = terrainFolder.add(map, "landBlendWidth", 0, 1, 0.01);
 const blendCurveController = terrainFolder.add(map, "landBlendCurvature", 0, 1, 0.01);
+const textureRegionController = terrainFolder.add(map, "terrainTextureRegionSize", 1, 8, 0.5);
+const textureRegionInput = textureRegionController.domElement.querySelector("input");
+if (textureRegionInput) textureRegionInput.dataset.textureRegion = "";
 const mountainController = terrainFolder.add(map, "mountainHeight", 0, 80, 1);
+const landformDebugOptions = {
+    [i18n.t("landformDebug.off")]: "off",
+    [i18n.t("landformDebug.elevation")]: "elevation",
+    [i18n.t("landformDebug.ridge")]: "ridge",
+    [i18n.t("landformDebug.valley")]: "valley",
+    [i18n.t("landformDebug.roughness")]: "roughness"
+};
+const landformDebugController = terrainFolder.add(map, "landformDebugMode", landformDebugOptions);
+const landformDebugSelect = landformDebugController.domElement.querySelector("select");
+if (landformDebugSelect) landformDebugSelect.dataset.landformDebug = "";
 
 const waterFolder = gui.addFolder("Water & coast");
 const waveHeightController = waterFolder.add(map, "waterWaveAmplitude", 0, 5, 0.1);
@@ -574,7 +590,9 @@ const translatedControllers = [
     [gridController, "control.grid"],
     [blendWidthController, "control.blendWidth"],
     [blendCurveController, "control.blendCurve"],
+    [textureRegionController, "control.textureRegion"],
     [mountainController, "control.mountains"],
+    [landformDebugController, "control.landformDebug"],
     [waveHeightController, "control.waveHeight"],
     [waveSpeedController, "control.waveSpeed"],
     [coastCurveController, "control.coastCurve"],
@@ -604,6 +622,11 @@ function applyLocale(locale) {
     if (worldModeSelect) {
         [...worldModeSelect.options].forEach(option => {
             option.textContent = i18n.t(`worldMode.${option.value}`);
+        });
+    }
+    if (landformDebugSelect) {
+        [...landformDebugSelect.options].forEach(option => {
+            option.textContent = i18n.t(`landformDebug.${option.value}`);
         });
     }
     translatedControllers.forEach(([controller, key]) => controller.name(i18n.t(key)));

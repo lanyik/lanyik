@@ -8,8 +8,6 @@ uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform mat3 normalMatrix;
 
-// (atlas width, atlas height, cell size, cell spacing)
-uniform vec4 textureAtlasMeta;
 uniform float hexSize; // tile circumradius, matches getHexCenter's "size" (world units)
 
 // Beach slope towards water neighbors (see neighborsKindA/B below). waterLevel
@@ -20,12 +18,11 @@ uniform float waterLevel;
 uniform float beachWidth;
 uniform float sandAtlasIndex;
 
-// Mountains (Land.mountain tiles - style.x == mountainAtlasIndex): the whole
-// tile rises to a craggy peak. The height is a pure function of the tile-local
-// position (mountainHeightAt below) so the lighting normal can be derived from
-// it by finite differences - an analytic chain rule through the noise octaves
-// would be far messier than two extra evaluations. mountainHeight is the peak
-// height in world units.
+// Mountain centres and their surrounding foothill tiles form one world-space
+// height field. Nothing in mountainHeightAt treats the hex centre as a summit:
+// neighbouring instances therefore evaluate the same height at every shared
+// vertex instead of building one cone per tile. The lighting normal is derived
+// by finite differences; mountainHeight is the vertical scale in world units.
 uniform float mountainAtlasIndex;
 uniform float mountainHeight;
 
@@ -61,17 +58,21 @@ attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
 attribute vec3 neighborsKindB; // NW/N/NE
-// -1 = no water; 0..63 = river (connected-edge bitmask, bit order SE,S,SW,NW,
-// N,NE); 4096 + openMask*64 + channelMask = lake - see helpers/rivers.ts's
-// waterEdgeValue() for the authoritative encoding.
-attribute float riverEdges;
-attribute float riverSeaMouthEdges;
-attribute float riverLakeMouthEdges;
-attribute float lakeNeighborEdges;
+// x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
+// mask. Packed to leave two attribute slots for neighbour relief samples.
+attribute vec4 waterEdges;
 attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+// x elevation, y ridge strength, z valley strength, w roughness. Values are
+// sampled in global tile coordinates by LandformSampler, so chunk order and
+// worker count cannot change the visible macro landform.
+attribute vec4 landform;
+// Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
+// Together with landform.x at this tile centre these define a continuous fan
+// surface whose shared edge endpoints are identical in adjacent instances.
+attribute vec3 reliefNeighborsA;
+attribute vec3 reliefNeighborsB;
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
 varying float vTerrain;
 varying float vModifiers;
@@ -95,6 +96,7 @@ varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space 
 varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
 varying vec3 vNeighborsKindB;
 varying float vElevation;  // normalized mountain elevation (0 flat .. ~1 peak), for snowcap tinting
+varying vec4 vLandform;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -113,21 +115,9 @@ vec2 nearestWorldOffset(vec2 canonical) {
     return wrapped;
 }
 
-vec2 cellIndexToUV(float idx) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-
-    return vec2(x / cols + uv.x / cols, 1.0 - (y / rows + (1.0 - uv.y) / rows));
-}
-
-// Same cheap value noise as the fragment stages - the mountain relief has to
-// be world-space so adjacent mountain tiles' crags line up across the shared
-// edge exactly like the river banks do.
+// Same cheap value noise as the fragment stages. Mountain relief is sampled
+// exclusively in world-space so its extrema are unrelated to hex centres and
+// adjacent tiles agree at every shared vertex.
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -143,68 +133,87 @@ float valueNoise(vec2 p) {
     );
 }
 
-// Saddle corner taper - a ridge saddle's height at an edge CORNER must agree
-// across all three tiles meeting there, or the surfaces crack open (visible
-// as background-colored triangular holes). If the corner's third tile is a
-// mountain too, all three raise it to the same saddle height (no taper); if
-// it isn't, the saddle fades to 0 towards that corner - the flat third tile
-// stays at 0 there, and both mountain tiles taper symmetrically (the
-// adjacent-edge factor measures the same corner distance from either side).
-float saddleTaper(float adjIsMountain, float adjFactor) {
-    return adjIsMountain > 0.5 ? 1.0 : 1.0 - smoothstep(0.6, 1.0, adjFactor);
+float isMountain(float atlasIndex) {
+    return abs(atlasIndex - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
 }
 
-// Normalized mountain height (0..~1.2) at a tile-local point p. Three parts:
-//  - a central peak: (1 - rim)^1.2, 1 at the tile center, 0 on the rim;
-//  - ridge saddles: towards every edge whose neighbor is also a mountain, the
-//    height only falls to 0.55 at the shared edge instead of 0. Both tiles
-//    compute the same 0.55 * edgeFactor there (each side's factor is 1.0 on
-//    the edge), so adjacent mountains connect into a continuous ridgeline;
-//  - two octaves of world-space noise multiplying the whole profile into
-//    irregular crags (world-space: continuous across the shared edges too).
-// Kept a pure function of p so main() can finite-difference it for normals.
+float centerMountainRelief() {
+    if (isMountain(style.x) < 0.5) return 0.0;
+    // Static maps do not carry generator fields; retain their historical
+    // neutral mountain scale. Procedural mountain tiles cannot legitimately
+    // have elevation 0, so zero is an unambiguous missing-sampler sentinel.
+    if (landform.x <= 0.001) return 1.0;
+    float elevationT = max((landform.x - 0.68) / 0.22, 0.0);
+    return min(1.35, 0.08 + pow(elevationT, 1.3) * 1.12);
+}
+
+float cornerRelief(float center, float a, float b) {
+    // Mountain centres carry relief and ordinary land centres carry zero.
+    // Averaging the same three centres makes every tile touching this world
+    // vertex resolve the exact same height. Ordinary land therefore becomes
+    // a short foothill ramp instead of forcing the range boundary into a
+    // cliff, while two-tile-wide ridges no longer acquire a trench between
+    // their mountain centres.
+    return (center + a + b) / 3.0;
+}
+
+float fanTriangleRelief(vec2 p, vec2 a, vec2 b, float center, float ha, float hb) {
+    vec2 q = p / hexSize;
+    float det = a.x * b.y - a.y * b.x;
+    float wa = (q.x * b.y - q.y * b.x) / det;
+    float wb = (a.x * q.y - a.y * q.x) / det;
+    return max(center * (1.0 - wa - wb) + ha * wa + hb * wb, 0.0);
+}
+
+// Piecewise-linear macro elevation over the six fan triangles. A corner uses
+// the same three tile-centre samples from every touching hex, and a shared
+// edge is the same interpolation between its two corners from either side.
+// This is the actual cross-hex height contract; no tile centre is forced high.
+float mountainMacroReliefAt(vec2 p) {
+    float sourceCenter = centerMountainRelief();
+    float cE  = cornerRelief(sourceCenter, reliefNeighborsB.z, reliefNeighborsA.x);
+    float cSE = cornerRelief(sourceCenter, reliefNeighborsA.x, reliefNeighborsA.y);
+    float cSW = cornerRelief(sourceCenter, reliefNeighborsA.y, reliefNeighborsA.z);
+    float cW  = cornerRelief(sourceCenter, reliefNeighborsA.z, reliefNeighborsB.x);
+    float cNW = cornerRelief(sourceCenter, reliefNeighborsB.x, reliefNeighborsB.y);
+    float cNE = cornerRelief(sourceCenter, reliefNeighborsB.y, reliefNeighborsB.z);
+    // The mesh's fan centre is derived from its six shared corner samples,
+    // rather than using the tile's source sample as a seventh control point.
+    // This removes the remaining tendency for every hex centre to become a
+    // little convex summit; actual extrema now come from world-space detail.
+    float macroCenter = (cE + cSE + cSW + cW + cNW + cNE) / 6.0;
+
+    const vec2 C_E  = vec2(1.0, 0.0);
+    const vec2 C_SE = vec2(0.5, 0.8660254);
+    const vec2 C_SW = vec2(-0.5, 0.8660254);
+    const vec2 C_W  = vec2(-1.0, 0.0);
+    const vec2 C_NW = vec2(-0.5, -0.8660254);
+    const vec2 C_NE = vec2(0.5, -0.8660254);
+    float angle = atan(p.y, p.x);
+    if (angle < 0.0) angle += 6.2831853;
+    if (angle < 1.0471976) return fanTriangleRelief(p, C_E, C_SE, macroCenter, cE, cSE);
+    if (angle < 2.0943951) return fanTriangleRelief(p, C_SE, C_SW, macroCenter, cSE, cSW);
+    if (angle < 3.1415927) return fanTriangleRelief(p, C_SW, C_W, macroCenter, cSW, cW);
+    if (angle < 4.1887902) return fanTriangleRelief(p, C_W, C_NW, macroCenter, cW, cNW);
+    if (angle < 5.2359878) return fanTriangleRelief(p, C_NW, C_NE, macroCenter, cNW, cNE);
+    return fanTriangleRelief(p, C_NE, C_E, macroCenter, cNE, cE);
+}
+
+// The generator-driven macro surface supplies the massif and summit heights.
+// Four cheap world-space samples only bend/break that surface at sub-range
+// scale; they never manufacture a contour line or override the macro field.
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
-    float apothem = hexSize * 0.8660254;
-    vec3 efA = vec3(dot(p, DIR_SE), dot(p, DIR_S), dot(p, DIR_SW)) / apothem;
-    vec3 efB = vec3(dot(p, DIR_NW), dot(p, DIR_N), dot(p, DIR_NE)) / apothem;
-    float rim = max(max(max(efA.x, efA.y), max(efA.z, efB.x)), max(efB.y, efB.z));
-    float h = pow(clamp(1.0 - rim, 0.0, 1.0), 1.2);
-
-    float mSE = abs(neighborsA.x - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mS  = abs(neighborsA.y - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mSW = abs(neighborsA.z - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mNW = abs(neighborsB.x - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mN  = abs(neighborsB.y - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mNE = abs(neighborsB.z - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-
-    // ring adjacency: SE-S-SW-NW-N-NE-SE (see the DIR_* constants' angles)
-    float ridge = 0.0;
-    if (mSE > 0.5) ridge = max(ridge, efA.x * saddleTaper(mNE, efB.z) * saddleTaper(mS,  efA.y));
-    if (mS  > 0.5) ridge = max(ridge, efA.y * saddleTaper(mSE, efA.x) * saddleTaper(mSW, efA.z));
-    if (mSW > 0.5) ridge = max(ridge, efA.z * saddleTaper(mS,  efA.y) * saddleTaper(mNW, efB.x));
-    if (mNW > 0.5) ridge = max(ridge, efB.x * saddleTaper(mSW, efA.z) * saddleTaper(mN,  efB.y));
-    if (mN  > 0.5) ridge = max(ridge, efB.y * saddleTaper(mNW, efB.x) * saddleTaper(mNE, efB.z));
-    if (mNE > 0.5) ridge = max(ridge, efB.z * saddleTaper(mN,  efB.y) * saddleTaper(mSE, efA.x));
-    h = max(h, clamp(ridge, 0.0, 1.0) * 0.55);
-
-    // Shore flattening - a coastal mountain still gets its beach. Done here
-    // per water-adjacent direction (not by multiplying with the vertex's own
-    // beachT in main()) so it stays a symmetric function of the corner
-    // distance: a mountain NEIGHBOR at the shared corner of a water tile
-    // computes the same falloff from its own side, keeping the saddle heights
-    // crack-free (same reasoning as saddleTaper above - the water tile at
-    // such a corner is a direct neighbor of both mountain tiles).
-    if (neighborsKindA.x >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.x);
-    if (neighborsKindA.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.y);
-    if (neighborsKindA.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.z);
-    if (neighborsKindB.x >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.x);
-    if (neighborsKindB.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.y);
-    if (neighborsKindB.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.z);
-
     vec2 w = tileOffset + p + worldOffset;
-    float n = valueNoise(w * (1.6 / hexSize));
-    n = 0.65 * n + 0.35 * valueNoise(w * (4.0 / hexSize));
-    return h * (0.72 + 1.1 * (n - 0.5));
+    vec2 terrainP = w / hexSize;
+    float warp = valueNoise(terrainP * 0.075 + vec2(17.3, 41.7)) - 0.5;
+    vec2 q = terrainP + vec2(warp * 4.2, warp * -2.7);
+    vec2 stretched = vec2(q.x * 0.62 + q.y * 0.16, q.y * 0.24 - q.x * 0.05);
+    float crestA = valueNoise(stretched * 0.38 + vec2(37.2, 11.8));
+    float crestB = valueNoise(stretched * 0.57 + vec2(-19.4, 53.1));
+    float crest = max(crestA, crestB * 0.92);
+    float crag = valueNoise(q * 0.86 + vec2(61.3, -18.2));
+    float detailScale = 0.42 + pow(crest, 1.7) * 1.05 + (crag - 0.5) * 0.2;
+    return mountainMacroReliefAt(p) * max(detailScale, 0.25);
 }
 
 // Tracks the strongest "closeness to a water-adjacent edge" (see
@@ -298,6 +307,10 @@ void main() {
     vec2 local = position.xz;
     vec2 tileOffset = nearestWorldOffset(offset);
     vec2 logicalTileOffset = tileOffset + chunkOrigin;
+    float riverEdges = waterEdges.x;
+    float riverSeaMouthEdges = waterEdges.y;
+    float riverLakeMouthEdges = waterEdges.z;
+    float lakeNeighborEdges = waterEdges.w;
 
     vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
     vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
@@ -363,17 +376,19 @@ void main() {
     }
     sinkY = min(sinkY, riverSink);
 
-    // Mountain elevation - flattened towards water edges inside
-    // mountainHeightAt itself (so a coastal mountain still gets a shore),
-    // gated to 0 on river/lake tiles (the carved bed wins - rivers stay
-    // exactly as they were; don't combine the river/lake modifiers with
-    // mountain tiles) and under unseen fog (same reasoning as the beach
-    // sink above: relief betrays what's there).
+    // Mountain elevation comes from one continuous cross-tile field. A land
+    // tile adjacent to mountains participates only in the shared foothill
+    // corners, keeping the range boundary continuous without lifting its
+    // centre. Interior hex edges are no longer local peak/rim pairs.
     float raiseY = 0.0;
     vec2 mountainSlope = vec2(0.0);
     float elevation = 0.0;
-    if (abs(style.x - mountainAtlasIndex) < 0.5) {
-        float gate = fogVisible * (riverEdges >= 0.0 ? 0.0 : 1.0);
+    float reliefInfluence = max(centerMountainRelief(), max(
+        max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
+        max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
+    ));
+    if (reliefInfluence > 0.001) {
+        float gate = fogVisible;
         if (gate > 0.0) {
             float eps = hexSize * 0.08;
             float h0 = mountainHeightAt(local, logicalTileOffset);
@@ -417,7 +432,6 @@ void main() {
     vModifiers = style.y;
     vPriority = style.z;
     vBeachT = beachT;
-    vTexCoord = cellIndexToUV(style.x);
     vNeighborsA = neighborsA;
     vNeighborsB = neighborsB;
     vNeighborsPriorityA = neighborsPriorityA;
@@ -425,6 +439,7 @@ void main() {
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
     vElevation = elevation;
+    vLandform = landform;
     vFogState = fogState;
     vRiverEdges = riverEdges;
     vRiverSeaMouthEdges = riverSeaMouthEdges;

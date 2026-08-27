@@ -4985,8 +4985,6 @@ uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform mat3 normalMatrix;
 
-// (atlas width, atlas height, cell size, cell spacing)
-uniform vec4 textureAtlasMeta;
 uniform float hexSize; // tile circumradius, matches getHexCenter's "size" (world units)
 
 // Beach slope towards water neighbors (see neighborsKindA/B below). waterLevel
@@ -4997,12 +4995,11 @@ uniform float waterLevel;
 uniform float beachWidth;
 uniform float sandAtlasIndex;
 
-// Mountains (Land.mountain tiles - style.x == mountainAtlasIndex): the whole
-// tile rises to a craggy peak. The height is a pure function of the tile-local
-// position (mountainHeightAt below) so the lighting normal can be derived from
-// it by finite differences - an analytic chain rule through the noise octaves
-// would be far messier than two extra evaluations. mountainHeight is the peak
-// height in world units.
+// Mountain centres and their surrounding foothill tiles form one world-space
+// height field. Nothing in mountainHeightAt treats the hex centre as a summit:
+// neighbouring instances therefore evaluate the same height at every shared
+// vertex instead of building one cone per tile. The lighting normal is derived
+// by finite differences; mountainHeight is the vertical scale in world units.
 uniform float mountainAtlasIndex;
 uniform float mountainHeight;
 
@@ -5038,17 +5035,21 @@ attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
 attribute vec3 neighborsKindB; // NW/N/NE
-// -1 = no water; 0..63 = river (connected-edge bitmask, bit order SE,S,SW,NW,
-// N,NE); 4096 + openMask*64 + channelMask = lake - see helpers/rivers.ts's
-// waterEdgeValue() for the authoritative encoding.
-attribute float riverEdges;
-attribute float riverSeaMouthEdges;
-attribute float riverLakeMouthEdges;
-attribute float lakeNeighborEdges;
+// x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
+// mask. Packed to leave two attribute slots for neighbour relief samples.
+attribute vec4 waterEdges;
 attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+// x elevation, y ridge strength, z valley strength, w roughness. Values are
+// sampled in global tile coordinates by LandformSampler, so chunk order and
+// worker count cannot change the visible macro landform.
+attribute vec4 landform;
+// Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
+// Together with landform.x at this tile centre these define a continuous fan
+// surface whose shared edge endpoints are identical in adjacent instances.
+attribute vec3 reliefNeighborsA;
+attribute vec3 reliefNeighborsB;
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
 varying float vTerrain;
 varying float vModifiers;
@@ -5072,6 +5073,7 @@ varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space 
 varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
 varying vec3 vNeighborsKindB;
 varying float vElevation;  // normalized mountain elevation (0 flat .. ~1 peak), for snowcap tinting
+varying vec4 vLandform;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -5090,21 +5092,9 @@ vec2 nearestWorldOffset(vec2 canonical) {
     return wrapped;
 }
 
-vec2 cellIndexToUV(float idx) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-
-    return vec2(x / cols + uv.x / cols, 1.0 - (y / rows + (1.0 - uv.y) / rows));
-}
-
-// Same cheap value noise as the fragment stages - the mountain relief has to
-// be world-space so adjacent mountain tiles' crags line up across the shared
-// edge exactly like the river banks do.
+// Same cheap value noise as the fragment stages. Mountain relief is sampled
+// exclusively in world-space so its extrema are unrelated to hex centres and
+// adjacent tiles agree at every shared vertex.
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -5120,68 +5110,87 @@ float valueNoise(vec2 p) {
     );
 }
 
-// Saddle corner taper - a ridge saddle's height at an edge CORNER must agree
-// across all three tiles meeting there, or the surfaces crack open (visible
-// as background-colored triangular holes). If the corner's third tile is a
-// mountain too, all three raise it to the same saddle height (no taper); if
-// it isn't, the saddle fades to 0 towards that corner - the flat third tile
-// stays at 0 there, and both mountain tiles taper symmetrically (the
-// adjacent-edge factor measures the same corner distance from either side).
-float saddleTaper(float adjIsMountain, float adjFactor) {
-    return adjIsMountain > 0.5 ? 1.0 : 1.0 - smoothstep(0.6, 1.0, adjFactor);
+float isMountain(float atlasIndex) {
+    return abs(atlasIndex - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
 }
 
-// Normalized mountain height (0..~1.2) at a tile-local point p. Three parts:
-//  - a central peak: (1 - rim)^1.2, 1 at the tile center, 0 on the rim;
-//  - ridge saddles: towards every edge whose neighbor is also a mountain, the
-//    height only falls to 0.55 at the shared edge instead of 0. Both tiles
-//    compute the same 0.55 * edgeFactor there (each side's factor is 1.0 on
-//    the edge), so adjacent mountains connect into a continuous ridgeline;
-//  - two octaves of world-space noise multiplying the whole profile into
-//    irregular crags (world-space: continuous across the shared edges too).
-// Kept a pure function of p so main() can finite-difference it for normals.
+float centerMountainRelief() {
+    if (isMountain(style.x) < 0.5) return 0.0;
+    // Static maps do not carry generator fields; retain their historical
+    // neutral mountain scale. Procedural mountain tiles cannot legitimately
+    // have elevation 0, so zero is an unambiguous missing-sampler sentinel.
+    if (landform.x <= 0.001) return 1.0;
+    float elevationT = max((landform.x - 0.68) / 0.22, 0.0);
+    return min(1.35, 0.08 + pow(elevationT, 1.3) * 1.12);
+}
+
+float cornerRelief(float center, float a, float b) {
+    // Mountain centres carry relief and ordinary land centres carry zero.
+    // Averaging the same three centres makes every tile touching this world
+    // vertex resolve the exact same height. Ordinary land therefore becomes
+    // a short foothill ramp instead of forcing the range boundary into a
+    // cliff, while two-tile-wide ridges no longer acquire a trench between
+    // their mountain centres.
+    return (center + a + b) / 3.0;
+}
+
+float fanTriangleRelief(vec2 p, vec2 a, vec2 b, float center, float ha, float hb) {
+    vec2 q = p / hexSize;
+    float det = a.x * b.y - a.y * b.x;
+    float wa = (q.x * b.y - q.y * b.x) / det;
+    float wb = (a.x * q.y - a.y * q.x) / det;
+    return max(center * (1.0 - wa - wb) + ha * wa + hb * wb, 0.0);
+}
+
+// Piecewise-linear macro elevation over the six fan triangles. A corner uses
+// the same three tile-centre samples from every touching hex, and a shared
+// edge is the same interpolation between its two corners from either side.
+// This is the actual cross-hex height contract; no tile centre is forced high.
+float mountainMacroReliefAt(vec2 p) {
+    float sourceCenter = centerMountainRelief();
+    float cE  = cornerRelief(sourceCenter, reliefNeighborsB.z, reliefNeighborsA.x);
+    float cSE = cornerRelief(sourceCenter, reliefNeighborsA.x, reliefNeighborsA.y);
+    float cSW = cornerRelief(sourceCenter, reliefNeighborsA.y, reliefNeighborsA.z);
+    float cW  = cornerRelief(sourceCenter, reliefNeighborsA.z, reliefNeighborsB.x);
+    float cNW = cornerRelief(sourceCenter, reliefNeighborsB.x, reliefNeighborsB.y);
+    float cNE = cornerRelief(sourceCenter, reliefNeighborsB.y, reliefNeighborsB.z);
+    // The mesh's fan centre is derived from its six shared corner samples,
+    // rather than using the tile's source sample as a seventh control point.
+    // This removes the remaining tendency for every hex centre to become a
+    // little convex summit; actual extrema now come from world-space detail.
+    float macroCenter = (cE + cSE + cSW + cW + cNW + cNE) / 6.0;
+
+    const vec2 C_E  = vec2(1.0, 0.0);
+    const vec2 C_SE = vec2(0.5, 0.8660254);
+    const vec2 C_SW = vec2(-0.5, 0.8660254);
+    const vec2 C_W  = vec2(-1.0, 0.0);
+    const vec2 C_NW = vec2(-0.5, -0.8660254);
+    const vec2 C_NE = vec2(0.5, -0.8660254);
+    float angle = atan(p.y, p.x);
+    if (angle < 0.0) angle += 6.2831853;
+    if (angle < 1.0471976) return fanTriangleRelief(p, C_E, C_SE, macroCenter, cE, cSE);
+    if (angle < 2.0943951) return fanTriangleRelief(p, C_SE, C_SW, macroCenter, cSE, cSW);
+    if (angle < 3.1415927) return fanTriangleRelief(p, C_SW, C_W, macroCenter, cSW, cW);
+    if (angle < 4.1887902) return fanTriangleRelief(p, C_W, C_NW, macroCenter, cW, cNW);
+    if (angle < 5.2359878) return fanTriangleRelief(p, C_NW, C_NE, macroCenter, cNW, cNE);
+    return fanTriangleRelief(p, C_NE, C_E, macroCenter, cNE, cE);
+}
+
+// The generator-driven macro surface supplies the massif and summit heights.
+// Four cheap world-space samples only bend/break that surface at sub-range
+// scale; they never manufacture a contour line or override the macro field.
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
-    float apothem = hexSize * 0.8660254;
-    vec3 efA = vec3(dot(p, DIR_SE), dot(p, DIR_S), dot(p, DIR_SW)) / apothem;
-    vec3 efB = vec3(dot(p, DIR_NW), dot(p, DIR_N), dot(p, DIR_NE)) / apothem;
-    float rim = max(max(max(efA.x, efA.y), max(efA.z, efB.x)), max(efB.y, efB.z));
-    float h = pow(clamp(1.0 - rim, 0.0, 1.0), 1.2);
-
-    float mSE = abs(neighborsA.x - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mS  = abs(neighborsA.y - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mSW = abs(neighborsA.z - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mNW = abs(neighborsB.x - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mN  = abs(neighborsB.y - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-    float mNE = abs(neighborsB.z - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-
-    // ring adjacency: SE-S-SW-NW-N-NE-SE (see the DIR_* constants' angles)
-    float ridge = 0.0;
-    if (mSE > 0.5) ridge = max(ridge, efA.x * saddleTaper(mNE, efB.z) * saddleTaper(mS,  efA.y));
-    if (mS  > 0.5) ridge = max(ridge, efA.y * saddleTaper(mSE, efA.x) * saddleTaper(mSW, efA.z));
-    if (mSW > 0.5) ridge = max(ridge, efA.z * saddleTaper(mS,  efA.y) * saddleTaper(mNW, efB.x));
-    if (mNW > 0.5) ridge = max(ridge, efB.x * saddleTaper(mSW, efA.z) * saddleTaper(mN,  efB.y));
-    if (mN  > 0.5) ridge = max(ridge, efB.y * saddleTaper(mNW, efB.x) * saddleTaper(mNE, efB.z));
-    if (mNE > 0.5) ridge = max(ridge, efB.z * saddleTaper(mN,  efB.y) * saddleTaper(mSE, efA.x));
-    h = max(h, clamp(ridge, 0.0, 1.0) * 0.55);
-
-    // Shore flattening - a coastal mountain still gets its beach. Done here
-    // per water-adjacent direction (not by multiplying with the vertex's own
-    // beachT in main()) so it stays a symmetric function of the corner
-    // distance: a mountain NEIGHBOR at the shared corner of a water tile
-    // computes the same falloff from its own side, keeping the saddle heights
-    // crack-free (same reasoning as saddleTaper above - the water tile at
-    // such a corner is a direct neighbor of both mountain tiles).
-    if (neighborsKindA.x >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.x);
-    if (neighborsKindA.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.y);
-    if (neighborsKindA.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efA.z);
-    if (neighborsKindB.x >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.x);
-    if (neighborsKindB.y >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.y);
-    if (neighborsKindB.z >= 0.5) h *= 1.0 - smoothstep(0.5, 0.95, efB.z);
-
     vec2 w = tileOffset + p + worldOffset;
-    float n = valueNoise(w * (1.6 / hexSize));
-    n = 0.65 * n + 0.35 * valueNoise(w * (4.0 / hexSize));
-    return h * (0.72 + 1.1 * (n - 0.5));
+    vec2 terrainP = w / hexSize;
+    float warp = valueNoise(terrainP * 0.075 + vec2(17.3, 41.7)) - 0.5;
+    vec2 q = terrainP + vec2(warp * 4.2, warp * -2.7);
+    vec2 stretched = vec2(q.x * 0.62 + q.y * 0.16, q.y * 0.24 - q.x * 0.05);
+    float crestA = valueNoise(stretched * 0.38 + vec2(37.2, 11.8));
+    float crestB = valueNoise(stretched * 0.57 + vec2(-19.4, 53.1));
+    float crest = max(crestA, crestB * 0.92);
+    float crag = valueNoise(q * 0.86 + vec2(61.3, -18.2));
+    float detailScale = 0.42 + pow(crest, 1.7) * 1.05 + (crag - 0.5) * 0.2;
+    return mountainMacroReliefAt(p) * max(detailScale, 0.25);
 }
 
 // Tracks the strongest "closeness to a water-adjacent edge" (see
@@ -5275,6 +5284,10 @@ void main() {
     vec2 local = position.xz;
     vec2 tileOffset = nearestWorldOffset(offset);
     vec2 logicalTileOffset = tileOffset + chunkOrigin;
+    float riverEdges = waterEdges.x;
+    float riverSeaMouthEdges = waterEdges.y;
+    float riverLakeMouthEdges = waterEdges.z;
+    float lakeNeighborEdges = waterEdges.w;
 
     vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
     vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
@@ -5340,17 +5353,19 @@ void main() {
     }
     sinkY = min(sinkY, riverSink);
 
-    // Mountain elevation - flattened towards water edges inside
-    // mountainHeightAt itself (so a coastal mountain still gets a shore),
-    // gated to 0 on river/lake tiles (the carved bed wins - rivers stay
-    // exactly as they were; don't combine the river/lake modifiers with
-    // mountain tiles) and under unseen fog (same reasoning as the beach
-    // sink above: relief betrays what's there).
+    // Mountain elevation comes from one continuous cross-tile field. A land
+    // tile adjacent to mountains participates only in the shared foothill
+    // corners, keeping the range boundary continuous without lifting its
+    // centre. Interior hex edges are no longer local peak/rim pairs.
     float raiseY = 0.0;
     vec2 mountainSlope = vec2(0.0);
     float elevation = 0.0;
-    if (abs(style.x - mountainAtlasIndex) < 0.5) {
-        float gate = fogVisible * (riverEdges >= 0.0 ? 0.0 : 1.0);
+    float reliefInfluence = max(centerMountainRelief(), max(
+        max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
+        max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
+    ));
+    if (reliefInfluence > 0.001) {
+        float gate = fogVisible;
         if (gate > 0.0) {
             float eps = hexSize * 0.08;
             float h0 = mountainHeightAt(local, logicalTileOffset);
@@ -5394,7 +5409,6 @@ void main() {
     vModifiers = style.y;
     vPriority = style.z;
     vBeachT = beachT;
-    vTexCoord = cellIndexToUV(style.x);
     vNeighborsA = neighborsA;
     vNeighborsB = neighborsB;
     vNeighborsPriorityA = neighborsPriorityA;
@@ -5402,6 +5416,7 @@ void main() {
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
     vElevation = elevation;
+    vLandform = landform;
     vFogState = fogState;
     vRiverEdges = riverEdges;
     vRiverSeaMouthEdges = riverSeaMouthEdges;
@@ -5430,6 +5445,7 @@ precision highp float;
 
 uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
+uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
 uniform float landBlendEnabled;
@@ -5462,6 +5478,7 @@ uniform float showGrid;
 uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
+uniform float landformDebugMode; // 0 normal, 1 elevation, 2 ridge, 3 valley, 4 roughness
 
 uniform vec3 lightDir;
 
@@ -5492,7 +5509,6 @@ uniform vec3 riverColorDeep;    // water color over the channel centerline / lak
 uniform vec3 riverBankColor;    // vegetation strip hugging the waterline
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
 varying float vTerrain;
 varying float vModifiers;
@@ -5516,6 +5532,7 @@ varying vec2 vWorldXZ;
 varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
 varying vec3 vNeighborsKindB; // (NW,N,NE)
 varying float vElevation;     // normalized mountain elevation, 0 on flat tiles
+varying vec4 vLandform;       // elevation, ridge, valley, roughness
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -5526,6 +5543,29 @@ const vec2 DIR_SW = vec2(-0.8660254, 0.5);
 const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
+
+vec3 elevationDebugColor(float value) {
+    vec3 ground = vec3(0.035, 0.055, 0.09);
+    vec3 slope = vec3(0.12, 0.58, 0.34);
+    vec3 crest = vec3(0.92, 0.42, 0.09);
+    vec3 summit = vec3(0.98, 0.96, 0.9);
+    vec3 color = mix(ground, slope, smoothstep(0.02, 0.34, value));
+    color = mix(color, crest, smoothstep(0.34, 0.76, value));
+    color = mix(color, summit, smoothstep(0.76, 1.12, value));
+    float band = fract(max(value, 0.0) * 8.0);
+    float contourDistance = min(band, 1.0 - band);
+    return color * mix(0.58, 1.0, smoothstep(0.015, 0.075, contourDistance));
+}
+
+vec3 landformDebugColor() {
+    // Mode 1 shows the final displaced surface, including the continuous
+    // cross-hex mountain field. It is intentionally not the centre-only
+    // generator sample stored in vLandform.x.
+    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
+    if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
+    return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
+}
 
 // Cheap value noise, same recipe as water.fragment.ts's - keeps the land
 // layer texture-free for rivers too (no extra noise texture to load).
@@ -5616,17 +5656,44 @@ float lakeShore(float openMask, vec3 efA, vec3 efB) {
     return s;
 }
 
-vec2 cellIndexToUV(float idx) {
+// One continuous low-frequency field bends the world-space UVs and modulates
+// their tone. All terrain types share this pattern, so biome blends stay
+// registered. It deliberately adds ALU only: sampleTerrainCell still performs
+// exactly one atlas lookup, preserving the texture-fetch budget.
+vec3 terrainPattern() {
+    vec2 macroP = vWorldXZ / max(hexSize * 10.0, 1.0) + vec2(13.7, -8.2);
+    float macro = valueNoise(macroP);
+    float warp = (macro - 0.5) * hexSize * 1.15;
+    vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
+    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
+    // Mirrored repeat joins the same source edge to itself at every regional
+    // boundary, even when the atlas cell was not authored as tileable.
+    vec2 regionUV = 1.0 - abs(phase - 1.0);
+    return vec3(regionUV, macro);
+}
+
+// Select one atlas cell by terrain type, then reuse the shared, warped phase.
+vec2 cellIndexToUV(float idx, vec2 regionUV) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
     float cellSize = textureAtlasMeta.z;
-    // subtract a small epsilon to avoid edge flickering when sampling the last column/row
-    float cols = atlasWidth / cellSize - 1e-6;
+    float inset = max(textureAtlasMeta.w, 0.5);
+    float cols = atlasWidth / cellSize;
     float rows = atlasHeight / cellSize;
     float x = mod(idx, cols);
     float y = floor(idx / cols);
+    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
+    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
+    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
+        / vec2(atlasWidth, atlasHeight);
+}
 
-    return vec2(x / cols + vUV.x / cols, 1.0 - (y / rows + (1.0 - vUV.y) / rows));
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
+    vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
+    color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
+    return color;
 }
 
 // Blends towards a neighboring tile's atlas texture near the edge actually
@@ -5646,12 +5713,19 @@ vec2 cellIndexToUV(float idx) {
 // bend (world-space noise, shared by all 6 calls) shifts the band's position
 // so the border meanders instead of running parallel to the hex edge; patch
 // modulates its strength so the mixed-in texture reads as patchy growth.
-vec4 blendEdge(vec4 inputColor, float neighborTerrain, float neighborPriority, float factor, float bend, float patch) {
+vec4 blendEdge(
+    vec4 inputColor,
+    float neighborTerrain,
+    float neighborPriority,
+    float factor,
+    float bend,
+    float patch,
+    vec3 pattern
+) {
     if (neighborTerrain < 0.0 || neighborTerrain == vTerrain) return inputColor;
     if (neighborPriority <= vPriority) return inputColor;
 
-    vec2 otherUV = cellIndexToUV(neighborTerrain);
-    vec4 neighborColor = texture2D(map, otherUV);
+    vec4 neighborColor = sampleTerrainCell(neighborTerrain, pattern);
 
     float e0 = 1.0 - clamp(landBlendWidth, 0.001, 1.0);
     float t = smoothstep(e0, 1.0, factor + bend) * patch;
@@ -5782,7 +5856,8 @@ void main() {
         return;
     }
 
-    vec4 texColor = texture2D(map, vTexCoord);
+    vec3 materialPattern = terrainPattern();
+    vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     if (landBlendEnabled > 0.5) {
         // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
@@ -5792,12 +5867,12 @@ void main() {
         float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
         float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
 
-        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch); // SE
-        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch); // S
-        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch); // SW
-        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch); // NW
-        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch); // N
-        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch); // NE
+        texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch, materialPattern); // SE
+        texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch, materialPattern); // S
+        texColor = blendEdge(texColor, vNeighborsA.z, vNeighborsPriorityA.z, vEdgeFactorsA.z, blendBend, blendPatch, materialPattern); // SW
+        texColor = blendEdge(texColor, vNeighborsB.x, vNeighborsPriorityB.x, vEdgeFactorsB.x, blendBend, blendPatch, materialPattern); // NW
+        texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
+        texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
@@ -5823,7 +5898,7 @@ void main() {
         float e0Beach = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
         float beachT = smoothstep(e0Beach, 1.0, f);
         if (beachT > 0.0) {
-            vec4 sandColor = texture2D(map, cellIndexToUV(sandAtlasIndex));
+            vec4 sandColor = sampleTerrainCell(sandAtlasIndex, materialPattern);
             texColor = mix(texColor, sandColor, beachT);
         }
 
@@ -5863,12 +5938,16 @@ void main() {
         }
     }
 
-    // Mountain snowcap: tint the rock towards snow near the peak (vElevation
-    // is 0 on every non-mountain tile). The relief itself comes from the
-    // vertex stage's displacement + normals; this is just the color accent.
+    // Mountain snow only survives on local high summits. A warped world-space
+    // snowline breaks the constant-height rings that used to outline every
+    // ridge and made the terrain read as rows of volcanic craters.
     if (vElevation > 0.0) {
-        float snowT = smoothstep(0.55, 0.95, vElevation);
-        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.85);
+        float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
+        snowNoise = 0.7 * snowNoise
+            + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
+        float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
+        float snowT = smoothstep(snowLine, snowLine + 0.2, vElevation);
+        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
     }
 
     // Rivers/lakes (see the uniform block's comment above). Drawn before
@@ -5960,7 +6039,9 @@ void main() {
 
     vec3 normal = normalize(vNormal);
     float lambertian = max(dot(normalize(lightDir), normal), 0.0);
-    vec3 color = lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
+    vec3 color = landformDebugMode > 0.5
+        ? landformDebugColor() * (0.72 + lambertian * 0.28)
+        : lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
 
     // Explored (previously seen, currently outside every unit's view range):
     // keep every feature visible, just darker - the "remembered" Civ-style look.
@@ -5981,6 +6062,7 @@ precision highp float;
 uniform sampler2D map;
 uniform sampler2D fogMap;
 uniform vec4 textureAtlasMeta;
+uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
 uniform float fogDarkenFactor;
@@ -5988,6 +6070,7 @@ uniform float showGrid;
 uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
+uniform float landformDebugMode;
 uniform vec3 lightDir;
 uniform float hexSize;
 uniform float riverWidth;
@@ -5997,8 +6080,8 @@ uniform vec3 riverColorDeep;
 uniform vec3 riverBankColor;
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
+varying float vTerrain;
 varying vec3 vNormal;
 varying float vFogState;
 varying vec2 vFogUV;
@@ -6008,6 +6091,9 @@ varying vec3 vNeighborsKindA;
 varying vec3 vNeighborsKindB;
 varying vec3 vEdgeFactorsA;
 varying vec3 vEdgeFactorsB;
+varying float vElevation;
+varying vec4 vLandform;
+varying vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -6016,15 +6102,63 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
-vec2 cellIndexToUV(float idx) {
+vec3 elevationDebugColor(float value) {
+    vec3 ground = vec3(0.035, 0.055, 0.09);
+    vec3 slope = vec3(0.12, 0.58, 0.34);
+    vec3 crest = vec3(0.92, 0.42, 0.09);
+    vec3 summit = vec3(0.98, 0.96, 0.9);
+    vec3 color = mix(ground, slope, smoothstep(0.02, 0.34, value));
+    color = mix(color, crest, smoothstep(0.34, 0.76, value));
+    color = mix(color, summit, smoothstep(0.76, 1.12, value));
+    float band = fract(max(value, 0.0) * 8.0);
+    float contourDistance = min(band, 1.0 - band);
+    return color * mix(0.58, 1.0, smoothstep(0.015, 0.075, contourDistance));
+}
+
+vec3 landformDebugColor() {
+    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
+    if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
+    return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
+}
+
+// Fast mode keeps the same single texture lookup. Two broad sine waves replace
+// full value noise, providing a cheap continuous UV bend and material tint.
+vec3 terrainPattern() {
+    vec2 p = vWorldXZ / max(hexSize * 4.0, 1.0);
+    float macro = clamp(
+        0.5
+            + 0.25 * sin(dot(p, vec2(0.73, 1.21)))
+            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + 1.9),
+        0.0,
+        1.0
+    );
+    float warp = (macro - 0.5) * hexSize * 1.15;
+    vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
+    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
+    return vec3(1.0 - abs(phase - 1.0), macro);
+}
+
+vec2 cellIndexToUV(float idx, vec2 regionUV) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
     float cellSize = textureAtlasMeta.z;
-    float cols = atlasWidth / cellSize - 1e-6;
+    float inset = max(textureAtlasMeta.w, 0.5);
+    float cols = atlasWidth / cellSize;
     float rows = atlasHeight / cellSize;
     float x = mod(idx, cols);
     float y = floor(idx / cols);
-    return vec2(x / cols + vUV.x / cols, 1.0 - (y / rows + (1.0 - vUV.y) / rows));
+    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
+    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
+    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
+        / vec2(atlasWidth, atlasHeight);
+}
+
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
+    color.rgb *= tone;
+    return color;
 }
 
 float riverSegDist(vec2 p, vec2 dir, float apothem) {
@@ -6062,14 +6196,15 @@ void main() {
         return;
     }
 
-    vec4 texColor = texture2D(map, vTexCoord);
+    vec3 materialPattern = terrainPattern();
+    vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
         float edge = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
         float beachT = smoothstep(edge, 1.0, coast);
         if (beachT > 0.0) {
-            texColor = mix(texColor, texture2D(map, cellIndexToUV(sandAtlasIndex)), beachT);
+            texColor = mix(texColor, sampleTerrainCell(sandAtlasIndex, materialPattern), beachT);
         }
     }
 
@@ -6093,7 +6228,9 @@ void main() {
 
     vec3 normal = normalize(vNormal);
     float lambertian = max(dot(normalize(lightDir), normal), 0.0);
-    vec3 color = texColor.rgb * (0.55 + 0.55 * lambertian);
+    vec3 color = landformDebugMode > 0.5
+        ? landformDebugColor() * (0.72 + lambertian * 0.28)
+        : texColor.rgb * (0.55 + 0.55 * lambertian);
     if (vFogState < 1.5) color *= fogDarkenFactor;
     gl_FragColor = vec4(color, 1.0);
 
@@ -6646,7 +6783,213 @@ void main() {
 }
 `;
 
+  // src/world/noise.ts
+  var UINT32_MAX = 4294967295;
+  function seedToUint32(seed) {
+    const text = String(seed);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+  function randomGridValue(seed, x, y) {
+    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+    hash = Math.imul(hash ^ hash >>> 15, 739982445);
+    hash = Math.imul(hash ^ hash >>> 12, 695872825);
+    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+  }
+  var smooth = (value) => value * value * (3 - 2 * value);
+  var lerp = (from, to, amount) => from + (to - from) * amount;
+  function positiveModulo2(value, modulus) {
+    return (value % modulus + modulus) % modulus;
+  }
+  function valueNoise2D(seed, x, y) {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function fractalNoise2D(seed, x, y, octaves) {
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+    const px = Math.max(1, Math.round(periodX));
+    const py = Math.max(1, Math.round(periodY));
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const sample = (gx, gy) => randomGridValue(
+      seed,
+      positiveModulo2(gx, px),
+      positiveModulo2(gy, py)
+    );
+    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+    const baseCellsX = Math.max(1, Math.round(cellsX));
+    const baseCellsY = Math.max(1, Math.round(cellsY));
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      const periodX = baseCellsX * frequency;
+      const periodY = baseCellsY * frequency;
+      total += periodicValueNoise2D(
+        seed + Math.imul(octave, 2654435769) >>> 0,
+        normalizedX * periodX,
+        normalizedY * periodY,
+        periodX,
+        periodY
+      ) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function randomAt(seed, x, y, salt) {
+    return randomGridValue((seed ^ salt) >>> 0, x, y);
+  }
+
+  // src/world/LandformSampler.ts
+  var LANDFORM_SEA_LEVEL = 0.43;
+  var clamp01 = (value) => Math.max(0, Math.min(1, value));
+  var smoothstep = (edge0, edge1, value) => {
+    const t = clamp01((value - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
+  function assertDimension(name, value) {
+    if (!Number.isInteger(value) || value < 2) {
+      throw new RangeError(`landform ${name} must be an integer >= 2`);
+    }
+  }
+  function resolveDomain(domain) {
+    const resolved = domain ?? { topology: "infinite" };
+    if (resolved.topology !== "infinite") {
+      assertDimension("width", resolved.width);
+      assertDimension("height", resolved.height);
+    }
+    return { ...resolved };
+  }
+  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, latitude, edgeFalloff) {
+    const landMask = smoothstep(0.38, 0.68, continent);
+    const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), 2.35) * landMask;
+    const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), 3.1) * smoothstep(0.34, 0.7, continent);
+    const elevation = continent * 0.72 + detail * 0.16 + ridge * 0.27 - valley * 0.075 + 0.01 - edgeFalloff;
+    const moisture = clamp01(moistureNoise * 0.86 + valley * 0.18 - ridge * 0.08);
+    const temperature = clamp01(latitude === void 0 ? 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8 : 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18);
+    return {
+      elevation,
+      continentalness: continent,
+      ridge,
+      valley,
+      roughness: clamp01(roughness),
+      moisture,
+      temperature
+    };
+  }
+  function sampleOpenLandform(seed, x, y, domain) {
+    const warpX = (fractalNoise2D(seed ^ 1374496523, x * 0.018, y * 0.018, 3) - 0.5) * 15;
+    const warpY = (fractalNoise2D(seed ^ 1757159915, x * 0.018, y * 0.018, 3) - 0.5) * 15;
+    const wx = x + warpX;
+    const wy = y + warpY;
+    const continent = fractalNoise2D(seed, wx * 0.052, wy * 0.052, 5);
+    const detail = fractalNoise2D(seed ^ 2738958700, wx * 0.145, wy * 0.145, 3);
+    const ridgeNoise = fractalNoise2D(seed ^ 2654435769, wx * 0.032, wy * 0.032, 4);
+    const valleyNoise = fractalNoise2D(seed ^ 2135587861, wx * 0.024, wy * 0.024, 3);
+    const rough = fractalNoise2D(seed ^ 2496678331, wx * 0.31, wy * 0.31, 3);
+    const moisture = fractalNoise2D(seed ^ 3355524772, wx * 0.08, wy * 0.08, 4);
+    const temperature = fractalNoise2D(seed ^ 2911926141, wx * 0.035, wy * 0.035, 3);
+    if (domain.topology === "infinite") {
+      return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, void 0, 0);
+    }
+    const nx = x / (domain.width - 1) * 2 - 1;
+    const ny = y / (domain.height - 1) * 2 - 1;
+    const edge = Math.max(Math.abs(nx), Math.abs(ny));
+    return composeSample(
+      continent,
+      detail,
+      ridgeNoise,
+      valleyNoise,
+      rough,
+      moisture,
+      temperature,
+      Math.abs(ny),
+      Math.pow(edge, 3) * 0.58
+    );
+  }
+  function sampleToroidalLandform(seed, x, y, domain) {
+    const nx = x / domain.width;
+    const ny = y / domain.height;
+    const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
+    const periodic = (salt, u, v, scale, minimum, octaves) => periodicFractalNoise2D(
+      seed ^ salt,
+      u,
+      v,
+      cells(scale, domain.width, minimum),
+      cells(scale, domain.height, minimum),
+      octaves
+    );
+    const warpX = (periodic(1374496523, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
+    const warpY = (periodic(1757159915, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
+    const wx = nx + warpX;
+    const wy = ny + warpY;
+    const continent = periodic(0, wx, wy, 0.052, 2, 5);
+    const detail = periodic(2738958700, wx, wy, 0.145, 3, 3);
+    const ridgeNoise = periodic(2654435769, wx, wy, 0.032, 2, 4);
+    const valleyNoise = periodic(2135587861, wx, wy, 0.024, 2, 3);
+    const rough = periodic(2496678331, wx, wy, 0.31, 4, 3);
+    const moisture = periodic(3355524772, wx, wy, 0.08, 2, 4);
+    const temperature = periodic(2911926141, wx, wy, 0.035, 2, 3);
+    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
+    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0);
+  }
+  function createLandformSampler(options) {
+    if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
+    const numericSeed = seedToUint32(options.seed);
+    const domain = resolveDomain(options.domain);
+    return {
+      numericSeed,
+      domain,
+      sample(x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          throw new RangeError("landform coordinates must be finite numbers");
+        }
+        return domain.topology === "toroidal" ? sampleToroidalLandform(numericSeed, x, y, domain) : sampleOpenLandform(numericSeed, x, y, domain);
+      }
+    };
+  }
+  function sampleLandform(seed, x, y, domain) {
+    return createLandformSampler({ seed, domain }).sample(x, y);
+  }
+
   // src/objects/TerrainMesh.ts
+  var LANDFORM_DEBUG_VALUE = {
+    off: 0,
+    elevation: 1,
+    ridge: 2,
+    valley: 3,
+    roughness: 4
+  };
   var WATER_TYPES = ["sea" /* sea */, "coastal" /* coastal */];
   var CITY_FOG_TILE_KEY = "hexMapCityFogTile";
   var TerrainMesh = class extends three.Group {
@@ -6665,6 +7008,7 @@ void main() {
       this.clock = 0;
       this.lodBuilds = 0;
       this.map = map;
+      this.landformSampler = options.landform ? createLandformSampler(options.landform) : void 0;
       this.buildAtlasCellIndex();
       this.fogTexture = this.loadFogTexture();
       this.atlasTexture = this.loadAtlasTexture();
@@ -6716,6 +7060,19 @@ void main() {
       const waterIndex = WATER_TYPES.indexOf(tile.type);
       return waterIndex === -1 ? 0 : waterIndex + 1;
     }
+    //Macro mountain height at a tile centre. Geometry uses elevation rather
+    //than the generator's contour-derived ridge value, so a closed ridge
+    //classification band cannot become a volcanic crater rim. Relief starts
+    //near zero at the mountain threshold and rises non-linearly, avoiding the
+    //broad raised plateau produced by giving every mountain a large base.
+    //Static maps without a LandformSampler retain a neutral height of 1.
+    mountainReliefFor(x, y) {
+      if (getMapTile(this.map, x, y)?.type !== "mountain" /* mountain */) return 0;
+      const sample = this.landformSampler?.sample(x, y);
+      if (!sample) return 1;
+      const elevationT = Math.max(0, (sample.elevation - 0.68) / 0.22);
+      return Math.min(1.35, 0.08 + Math.pow(elevationT, 1.3) * 1.12);
+    }
     //Builds the per-instance attribute arrays (offset/style/neighbors/neighbor
     //priorities/kinds) shared by every layer - land and water tiles are laid
     //out identically, only the geometry/shader differ.
@@ -6730,12 +7087,12 @@ void main() {
         neighborsPriorityB: new Float32Array(tiles.length * 3),
         neighborsKindA: new Float32Array(tiles.length * 3),
         neighborsKindB: new Float32Array(tiles.length * 3),
-        riverEdges: new Float32Array(tiles.length),
-        riverSeaMouthEdges: new Float32Array(tiles.length),
-        riverLakeMouthEdges: new Float32Array(tiles.length),
-        lakeNeighborEdges: new Float32Array(tiles.length),
-        fogState: new Float32Array(tiles.length)
+        waterEdges: new Float32Array(tiles.length * 4),
+        fogState: new Float32Array(tiles.length),
         // filled per tile below
+        landform: new Float32Array(tiles.length * 4),
+        reliefNeighborsA: new Float32Array(tiles.length * 3),
+        reliefNeighborsB: new Float32Array(tiles.length * 3)
       };
       tiles.forEach((tile, i) => {
         const info = getMapTile(this.map, tile.x, tile.y);
@@ -6746,6 +7103,13 @@ void main() {
         attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
         attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
         attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
+        const landform = this.landformSampler?.sample(tile.x, tile.y);
+        if (landform) {
+          attrs.landform[i * 4 + 0] = landform.elevation;
+          attrs.landform[i * 4 + 1] = landform.ridge;
+          attrs.landform[i * 4 + 2] = landform.valley;
+          attrs.landform[i * 4 + 3] = landform.roughness;
+        }
         const se = getNeighborCoords(tile.x, tile.y, "SE");
         const s = getNeighborCoords(tile.x, tile.y, "S");
         const sw = getNeighborCoords(tile.x, tile.y, "SW");
@@ -6770,10 +7134,16 @@ void main() {
         attrs.neighborsKindB[i * 3 + 0] = this.kindFor(nw.x, nw.y);
         attrs.neighborsKindB[i * 3 + 1] = this.kindFor(n.x, n.y);
         attrs.neighborsKindB[i * 3 + 2] = this.kindFor(ne.x, ne.y);
-        attrs.riverEdges[i] = waterEdgeValue(this.map, tile.x, tile.y);
-        attrs.riverSeaMouthEdges[i] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
-        attrs.riverLakeMouthEdges[i] = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
-        attrs.lakeNeighborEdges[i] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
+        attrs.reliefNeighborsA[i * 3 + 0] = this.mountainReliefFor(se.x, se.y);
+        attrs.reliefNeighborsA[i * 3 + 1] = this.mountainReliefFor(s.x, s.y);
+        attrs.reliefNeighborsA[i * 3 + 2] = this.mountainReliefFor(sw.x, sw.y);
+        attrs.reliefNeighborsB[i * 3 + 0] = this.mountainReliefFor(nw.x, nw.y);
+        attrs.reliefNeighborsB[i * 3 + 1] = this.mountainReliefFor(n.x, n.y);
+        attrs.reliefNeighborsB[i * 3 + 2] = this.mountainReliefFor(ne.x, ne.y);
+        attrs.waterEdges[i * 4 + 0] = waterEdgeValue(this.map, tile.x, tile.y);
+        attrs.waterEdges[i * 4 + 1] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
+        attrs.waterEdges[i * 4 + 2] = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
+        attrs.waterEdges[i * 4 + 3] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
       });
       return attrs;
     }
@@ -6795,18 +7165,26 @@ void main() {
       geometry.setAttribute("neighborsPriorityB", new three.InstancedBufferAttribute(attrs.neighborsPriorityB, 3));
       geometry.setAttribute("neighborsKindA", new three.InstancedBufferAttribute(attrs.neighborsKindA, 3));
       geometry.setAttribute("neighborsKindB", new three.InstancedBufferAttribute(attrs.neighborsKindB, 3));
-      geometry.setAttribute("riverEdges", new three.InstancedBufferAttribute(attrs.riverEdges, 1));
-      geometry.setAttribute("riverSeaMouthEdges", new three.InstancedBufferAttribute(attrs.riverSeaMouthEdges, 1));
-      geometry.setAttribute("riverLakeMouthEdges", new three.InstancedBufferAttribute(attrs.riverLakeMouthEdges, 1));
-      geometry.setAttribute("lakeNeighborEdges", new three.InstancedBufferAttribute(attrs.lakeNeighborEdges, 1));
+      geometry.setAttribute("waterEdges", new three.InstancedBufferAttribute(attrs.waterEdges, 4));
       geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
+      geometry.setAttribute("landform", new three.InstancedBufferAttribute(attrs.landform, 4));
+      geometry.setAttribute("reliefNeighborsA", new three.InstancedBufferAttribute(attrs.reliefNeighborsA, 3));
+      geometry.setAttribute("reliefNeighborsB", new three.InstancedBufferAttribute(attrs.reliefNeighborsB, 3));
       return geometry;
     }
     commonUniforms() {
       const atlas = this.options.atlas;
       const size = this.options.size;
+      const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
       return {
         textureAtlasMeta: { value: new three.Vector4(atlas.width, atlas.height, atlas.cellSize, atlas.cellSpacing) },
+        // One atlas cell spans a configurable world region (two hexes by
+        // default) instead of restarting inside every tile. The unequal
+        // axes match the flat-top hex lattice's column/row spacing.
+        terrainTextureWorldSize: { value: new three.Vector2(
+          size * 1.5 * textureRegionSize,
+          size * Math.sqrt(3) * textureRegionSize
+        ) },
         hexSize: { value: size },
         map: { value: this.atlasTexture },
         sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] ?? 0 },
@@ -6827,17 +7205,14 @@ void main() {
         showGrid: { value: this.options.gridVisible === false ? 0 : 1 },
         gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
         gridWidth: { value: this.options.gridWidth ?? 0.04 },
-        gridOpacity: { value: this.options.gridOpacity ?? 0.35 }
+        gridOpacity: { value: this.options.gridOpacity ?? 0.35 },
+        landformDebugMode: { value: LANDFORM_DEBUG_VALUE[this.options.landformDebugMode ?? "off"] }
       };
     }
     //Mipmapping a multi-cell texture atlas bleeds neighboring cells into each
-    //other at lower mip levels (each mip texel then averages pixels that span
-    //a cell boundary) - visible as dark blotches on distant/oblique tiles,
-    //worst on the water layer's sand-cell blend since it's sampled from many
-    //different tiles' local UVs at once. Disabling mipmaps (plain bilinear
-    //filtering) avoids it; some distant-terrain shimmer is an acceptable
-    //trade-off for a tile-based map that's mostly viewed from a fixed range of
-    //distances anyway.
+    //other at lower mip levels. Regional world-space sampling stays inset by
+    //atlas.cellSpacing, but lower mip texels would still cross a cell boundary,
+    //so keep plain bilinear filtering and accept modest distant shimmer.
     loadAtlasTexture() {
       const loader = new three.TextureLoader().setPath(this.options.texturesBaseUrl);
       const atlasTexture = loader.load(this.options.atlas.image);
@@ -7147,10 +7522,10 @@ void main() {
         "neighborsPriorityB",
         "neighborsKindA",
         "neighborsKindB",
-        "riverEdges",
-        "riverSeaMouthEdges",
-        "riverLakeMouthEdges",
-        "lakeNeighborEdges"
+        "waterEdges",
+        "landform",
+        "reliefNeighborsA",
+        "reliefNeighborsB"
       ];
       const pendingUpdates = /* @__PURE__ */ new Map();
       for (const point of tiles) {
@@ -7296,6 +7671,28 @@ void main() {
       const v = value ? 1 : 0;
       if (this.landMaterial) this.landMaterial.uniforms.showGrid.value = v;
       if (this.waterMaterial) this.waterMaterial.uniforms.showGrid.value = v;
+    }
+    get landformDebugMode() {
+      const value = this.landMaterial?.uniforms.landformDebugMode.value ?? 0;
+      return Object.entries(LANDFORM_DEBUG_VALUE).find(([, candidate]) => candidate === value)?.[0] ?? "off";
+    }
+    set landformDebugMode(value) {
+      if (!(value in LANDFORM_DEBUG_VALUE)) throw new RangeError(`unknown landform debug mode "${String(value)}"`);
+      if (this.landMaterial) this.landMaterial.uniforms.landformDebugMode.value = LANDFORM_DEBUG_VALUE[value];
+    }
+    get terrainTextureRegionSize() {
+      const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value;
+      return worldSize ? worldSize.x / (this.options.size * 1.5) : this.options.terrainTextureRegionSize ?? 2;
+    }
+    set terrainTextureRegionSize(value) {
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new RangeError("terrainTextureRegionSize must be a positive finite number");
+      }
+      const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value;
+      worldSize?.set(
+        this.options.size * 1.5 * value,
+        this.options.size * Math.sqrt(3) * value
+      );
     }
     //-------------------------------------------------------------------------
     //Live shader-uniform tuning knobs, for a GUI to adjust without rebuilding
@@ -7818,6 +8215,7 @@ void main() {
       this.resources = resources;
       this.ownsResources = ownsResources;
       this.fogStates = /* @__PURE__ */ new Map();
+      this.suppressedTiles = /* @__PURE__ */ new Set();
       this.lodBuilds = 0;
       for (const record of chunks.values()) this.add(record.root);
     }
@@ -7832,7 +8230,7 @@ void main() {
         this.fogStates.set(key, state);
         const range = this.tileRanges.get(key);
         if (!range) continue;
-        const hidden = state < 0.5;
+        const hidden = this.suppressedTiles.has(key) || state < 0.5;
         const shade = state < 1.5 ? this.fogDarkenFactor : 1;
         for (const mesh of range.instancedMeshes) {
           const matrices = mesh.instanceMatrix.array;
@@ -7850,6 +8248,32 @@ void main() {
       }
       for (const [attribute, ranges] of matrixUpdates) commitBufferAttributeRanges(attribute, ranges);
       for (const [attribute, ranges] of colorUpdates) commitBufferAttributeRanges(attribute, ranges);
+    }
+    /** Hides one tile's instances without rebuilding or reloading its model. */
+    setTileSuppressed(x, y, suppressed) {
+      const key = `${x},${y}`;
+      if (suppressed) this.suppressedTiles.add(key);
+      else this.suppressedTiles.delete(key);
+      const range = this.tileRanges.get(key);
+      if (!range) return;
+      const state = this.fogStates.get(key) ?? 2;
+      const hidden = suppressed || state < 0.5;
+      const shade = state < 1.5 ? this.fogDarkenFactor : 1;
+      for (const mesh of range.instancedMeshes) {
+        const matrices = mesh.instanceMatrix.array;
+        if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+        else matrices.set(range.originalMatrices, range.start * 16);
+        commitBufferAttributeRanges(mesh.instanceMatrix, [{
+          start: range.start * 16,
+          count: range.count * 16
+        }]);
+        if (!mesh.instanceColor) continue;
+        mesh.instanceColor.array.fill(shade, range.start * 3, (range.start + range.count) * 3);
+        commitBufferAttributeRanges(mesh.instanceColor, [{
+          start: range.start * 3,
+          count: range.count * 3
+        }]);
+      }
     }
     activateChunk(metadata, lod, objects) {
       const record = this.chunks.get(metadata.id);
@@ -7980,7 +8404,7 @@ void main() {
       for (const [key, range] of cached.ranges) {
         const fogState = this.fogStates.get(key) ?? 2;
         const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
-        if (fogState < 0.5) {
+        if (this.suppressedTiles.has(key) || fogState < 0.5) {
           for (const mesh of record.instancedMeshes) {
             writeHiddenMatrices(mesh.instanceMatrix.array, range.start, range.count);
           }
@@ -8018,7 +8442,7 @@ void main() {
     const tilesByModel = /* @__PURE__ */ new Map();
     const considerTile = (x, y) => {
       const tile = getMapTile(map, x, y);
-      if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) return;
+      if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) return;
       const modelPath = tile.treeModel ?? defaultModel;
       const tiles = tilesByModel.get(modelPath) ?? [];
       tiles.push({ x, y });
@@ -8249,6 +8673,7 @@ void main() {
       this.ownsResources = ownsResources;
       this.tileRanges = /* @__PURE__ */ new Map();
       this.fogStates = /* @__PURE__ */ new Map();
+      this.suppressedTiles = /* @__PURE__ */ new Set();
       this.lodBuilds = 0;
       for (const record of chunks.values()) this.add(record.mesh);
     }
@@ -8266,12 +8691,28 @@ void main() {
         const range = this.tileRanges.get(key);
         if (!range) continue;
         const attribute = range.geometry.getAttribute("fogState");
-        attribute.array.fill(state, range.start, range.start + range.count);
+        const visibleState = this.suppressedTiles.has(key) ? 0 : state;
+        attribute.array.fill(visibleState, range.start, range.start + range.count);
         const ranges = updates.get(attribute) ?? [];
         ranges.push({ start: range.start, count: range.count });
         updates.set(attribute, ranges);
       }
       for (const [attribute, ranges] of updates) commitBufferAttributeRanges(attribute, ranges);
+    }
+    /** Hides one tile's blades without rebuilding its streamed render chunk. */
+    setTileSuppressed(x, y, suppressed) {
+      const key = `${x},${y}`;
+      if (suppressed) this.suppressedTiles.add(key);
+      else this.suppressedTiles.delete(key);
+      const range = this.tileRanges.get(key);
+      if (!range) return;
+      const attribute = range.geometry.getAttribute("fogState");
+      attribute.array.fill(
+        suppressed ? 0 : this.fogStates.get(key) ?? 2,
+        range.start,
+        range.start + range.count
+      );
+      commitBufferAttributeRanges(attribute, [{ start: range.start, count: range.count }]);
     }
     //Advances the wind animation. `dtS` is the elapsed time in seconds since
     //the previous frame - call this once per frame (see HexMap's render loop).
@@ -8315,7 +8756,7 @@ void main() {
       const fogAttribute = cached.geometry.getAttribute("fogState");
       const updateRanges = [];
       for (const range of cached.ranges) {
-        const state = this.fogStates.get(range.key) ?? 2;
+        const state = this.suppressedTiles.has(range.key) ? 0 : this.fogStates.get(range.key) ?? 2;
         fogAttribute.array.fill(state, range.start, range.start + range.count);
         updateRanges.push({ start: range.start, count: range.count });
         this.tileRanges.set(range.key, { geometry: cached.geometry, start: range.start, count: range.count });
@@ -9953,160 +10394,18 @@ void main() {
     }
   };
 
-  // src/world/noise.ts
-  var UINT32_MAX = 4294967295;
-  function seedToUint32(seed) {
-    const text = String(seed);
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
-  }
-  function randomGridValue(seed, x, y) {
-    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-    hash = Math.imul(hash ^ hash >>> 15, 739982445);
-    hash = Math.imul(hash ^ hash >>> 12, 695872825);
-    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-  }
-  var smooth = (value) => value * value * (3 - 2 * value);
-  var lerp = (from, to, amount) => from + (to - from) * amount;
-  function positiveModulo2(value, modulus) {
-    return (value % modulus + modulus) % modulus;
-  }
-  function valueNoise2D(seed, x, y) {
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function fractalNoise2D(seed, x, y, octaves) {
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-    const px = Math.max(1, Math.round(periodX));
-    const py = Math.max(1, Math.round(periodY));
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const sample = (gx, gy) => randomGridValue(
-      seed,
-      positiveModulo2(gx, px),
-      positiveModulo2(gy, py)
-    );
-    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-    const baseCellsX = Math.max(1, Math.round(cellsX));
-    const baseCellsY = Math.max(1, Math.round(cellsY));
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      const periodX = baseCellsX * frequency;
-      const periodY = baseCellsY * frequency;
-      total += periodicValueNoise2D(
-        seed + Math.imul(octave, 2654435769) >>> 0,
-        normalizedX * periodX,
-        normalizedY * periodY,
-        periodX,
-        periodY
-      ) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function randomAt(seed, x, y, salt) {
-    return randomGridValue((seed ^ salt) >>> 0, x, y);
-  }
-
   // src/world/generateWorld.ts
   var MIN_WORLD_SIZE = 8;
   var MAX_WORLD_SIZE = 512;
-  var SEA_LEVEL = 0.43;
   var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
-  function assertDimension(name, value) {
+  function assertDimension2(name, value) {
     if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
       throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
     }
   }
-  function sampleBoundedClimate(seed, x, y, width, height) {
-    const nx = width === 1 ? 0 : x / (width - 1) * 2 - 1;
-    const ny = height === 1 ? 0 : y / (height - 1) * 2 - 1;
-    const edge = Math.max(Math.abs(nx), Math.abs(ny));
-    const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
-    const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
-    const elevation = continent * 0.78 + detail * 0.22 + 0.12 - Math.pow(edge, 3) * 0.58;
-    const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
-    const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.07, y * 0.07, 3);
-    const latitude = Math.abs(ny);
-    const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-    return { elevation, moisture, temperature };
-  }
-  function sampleToroidalClimate(seed, x, y, width, height) {
-    const nx = x / width;
-    const ny = y / height;
-    const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
-    const continent = periodicFractalNoise2D(
-      seed,
-      nx,
-      ny,
-      cells(0.055, width, 2),
-      cells(0.055, height, 2),
-      5
-    );
-    const detail = periodicFractalNoise2D(
-      seed ^ 2738958700,
-      nx,
-      ny,
-      cells(0.14, width, 3),
-      cells(0.14, height, 3),
-      3
-    );
-    const elevation = continent * 0.78 + detail * 0.22 + 0.03;
-    const moisture = periodicFractalNoise2D(
-      seed ^ 3355524772,
-      nx,
-      ny,
-      cells(0.08, width, 2),
-      cells(0.08, height, 2),
-      4
-    );
-    const temperatureNoise = periodicFractalNoise2D(
-      seed ^ 2911926141,
-      nx,
-      ny,
-      cells(0.07, width, 2),
-      cells(0.07, height, 2),
-      3
-    );
-    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-    return { elevation, moisture, temperature };
-  }
-  function classifyTerrain({ elevation, moisture, temperature }) {
-    if (elevation < SEA_LEVEL) return "sea" /* sea */;
-    if (elevation > 0.75) return "mountain" /* mountain */;
+  function classifyTerrain({ elevation, ridge, moisture, temperature }) {
+    if (elevation < LANDFORM_SEA_LEVEL) return "sea" /* sea */;
+    if (elevation > 0.7 && ridge > 0.2 || elevation > 0.82) return "mountain" /* mountain */;
     if (temperature < 0.18) return "snow" /* snow */;
     if (temperature < 0.34) return "tundra" /* tundra */;
     if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
@@ -10116,7 +10415,7 @@ void main() {
     const tile = { type };
     if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return tile;
     const modifiers = [];
-    const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+    const lake = type === "land" /* land */ && climate.elevation > LANDFORM_SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
     if (lake) {
       modifiers.push("lake");
     } else {
@@ -10131,24 +10430,28 @@ void main() {
     return tile;
   }
   var modulo = (value, period) => (value % period + period) % period;
-  function generateToroidalWorldTile(numericSeed, x, y, width, height) {
+  function generateToroidalWorldTile(seed, x, y, width, height, sampler = createLandformSampler({
+    seed,
+    domain: { topology: "toroidal", width, height }
+  })) {
+    const numericSeed = seedToUint32(seed);
     const canonicalX = modulo(x, width);
     const canonicalY = modulo(y, height);
-    const climate = sampleToroidalClimate(numericSeed, canonicalX, canonicalY, width, height);
+    const climate = sampler.sample(canonicalX, canonicalY);
     let type = classifyTerrain(climate);
     if (type === "sea" /* sea */) {
       const touchesLand = getNeighbors(canonicalX, canonicalY).some((neighbor) => {
         const nx = modulo(neighbor.x, width);
         const ny = modulo(neighbor.y, height);
-        return !isWater2(classifyTerrain(sampleToroidalClimate(numericSeed, nx, ny, width, height)));
+        return !isWater2(classifyTerrain(sampler.sample(nx, ny)));
       });
       if (touchesLand) type = "coastal" /* coastal */;
     }
     return decorateTile(numericSeed, canonicalX, canonicalY, climate, type);
   }
   function generateWorld({ seed, width, height, topology = "bounded" }) {
-    assertDimension("width", width);
-    assertDimension("height", height);
+    assertDimension2("width", width);
+    assertDimension2("height", height);
     if (topology !== "bounded" && topology !== "toroidal") {
       throw new RangeError('topology must be either "bounded" or "toroidal"');
     }
@@ -10158,14 +10461,18 @@ void main() {
     const numericSeed = seedToUint32(seed);
     const data = {};
     const toroidal = topology === "toroidal";
+    const sampler = createLandformSampler({
+      seed,
+      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
+    });
     for (let x = 0; x < width; x += 1) {
       data[x] = {};
       for (let y = 0; y < height; y += 1) {
         if (toroidal) {
-          data[x][y] = generateToroidalWorldTile(numericSeed, x, y, width, height);
+          data[x][y] = generateToroidalWorldTile(seed, x, y, width, height, sampler);
           continue;
         }
-        const climate = sampleBoundedClimate(numericSeed, x, y, width, height);
+        const climate = sampler.sample(x, y);
         data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
       }
     }
@@ -10189,7 +10496,7 @@ void main() {
   var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
   var WORLD_CHUNK_FORMAT_VERSION = 1;
   var WORLD_CHUNK_PADDING = 1;
-  var WORLD_GENERATOR_VERSION = 1;
+  var WORLD_GENERATOR_VERSION = 3;
   function cloneWorldTileOverride(value) {
     const copy = { ...value };
     if (value.modifiers) copy.modifiers = [...value.modifiers];
@@ -10255,7 +10562,6 @@ void main() {
   var TREE_SHIFT = 6;
   var TREE_MASK = 3 << TREE_SHIFT;
   var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
-  var SEA_LEVEL2 = 0.43;
   function assertChunkCoordinate(name, value) {
     if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
   }
@@ -10265,41 +10571,32 @@ void main() {
     }
     return value;
   }
-  function sampleClimate(seed, x, y) {
-    const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
-    const detail = fractalNoise2D(seed ^ 2738958700, x * 0.14, y * 0.14, 3);
-    const elevation = continent * 0.78 + detail * 0.22 + 0.03;
-    const moisture = fractalNoise2D(seed ^ 3355524772, x * 0.08, y * 0.08, 4);
-    const temperatureNoise = fractalNoise2D(seed ^ 2911926141, x * 0.025, y * 0.025, 3);
-    const temperature = 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8;
-    return { elevation, moisture, temperature };
-  }
-  function classifyTerrain2({ elevation, moisture, temperature }) {
-    if (elevation < SEA_LEVEL2) return "sea" /* sea */;
-    if (elevation > 0.75) return "mountain" /* mountain */;
+  function classifyTerrain2({ elevation, ridge, moisture, temperature }) {
+    if (elevation < LANDFORM_SEA_LEVEL) return "sea" /* sea */;
+    if (elevation > 0.7 && ridge > 0.2 || elevation > 0.82) return "mountain" /* mountain */;
     if (temperature < 0.18) return "snow" /* snow */;
     if (temperature < 0.34) return "tundra" /* tundra */;
     if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
     return "land" /* land */;
   }
-  function baseTerrainAt(seed, x, y) {
-    return classifyTerrain2(sampleClimate(seed, x, y));
+  function baseTerrainAt(sampler, x, y) {
+    return classifyTerrain2(sampler.sample(x, y));
   }
   function isWater3(type) {
     return type === "sea" /* sea */ || type === "coastal" /* coastal */;
   }
-  function terrainAt(seed, x, y) {
-    const base = baseTerrainAt(seed, x, y);
+  function terrainAt(sampler, x, y) {
+    const base = baseTerrainAt(sampler, x, y);
     if (base !== "sea" /* sea */) return base;
-    const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater3(baseTerrainAt(seed, neighbor.x, neighbor.y)));
+    const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater3(baseTerrainAt(sampler, neighbor.x, neighbor.y)));
     return touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
   }
-  function encodeTile(seed, x, y) {
-    const climate = sampleClimate(seed, x, y);
-    const type = terrainAt(seed, x, y);
+  function encodeTile(seed, sampler, x, y) {
+    const climate = sampler.sample(x, y);
+    const type = terrainAt(sampler, x, y);
     let packed = LAND_CODE.get(type) ?? 0;
     if (isWater3(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return packed;
-    const lake = type === "land" /* land */ && climate.elevation > SEA_LEVEL2 + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
+    const lake = type === "land" /* land */ && climate.elevation > LANDFORM_SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
     if (lake) return packed | FLAG_LAKE;
     if (climate.elevation > 0.62) packed |= FLAG_HILL;
     const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
@@ -10332,6 +10629,13 @@ void main() {
     const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
     const tiles = new Uint16Array(stride * stride);
     const seed = seedToUint32(options.seed);
+    const sampler = createLandformSampler({
+      // Keep the source seed identical to TerrainMesh's sampler input.
+      // Passing the already-hashed decoration seed here would hash it a
+      // second time and classify a different height field than we render.
+      seed: options.seed,
+      domain: options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" }
+    });
     const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
     const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
     if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(originX + stride - 1) || !Number.isSafeInteger(originY + stride - 1)) {
@@ -10341,7 +10645,14 @@ void main() {
       for (let localY = 0; localY < stride; localY += 1) {
         const x = originX + localX;
         const y = originY + localY;
-        tiles[localX * stride + localY] = options.world ? encodeTileInfo(generateToroidalWorldTile(seed, x, y, options.world.width, options.world.height)) : encodeTile(seed, x, y);
+        tiles[localX * stride + localY] = options.world ? encodeTileInfo(generateToroidalWorldTile(
+          options.seed,
+          x,
+          y,
+          options.world.width,
+          options.world.height,
+          sampler
+        )) : encodeTile(seed, sampler, x, y);
       }
     }
     return {
@@ -10973,7 +11284,7 @@ void main() {
     const tilesByModel = /* @__PURE__ */ new Map();
     for (const point of options.points) {
       const tile = getMapTile(map, point.x, point.y);
-      if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) continue;
+      if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) continue;
       const modelPath = tile.treeModel ?? options.treeModel;
       const tiles = tilesByModel.get(modelPath) ?? [];
       tiles.push({ x: point.x, y: point.y });
@@ -14665,18 +14976,29 @@ void main() {
   };
 
   // src/world/WorldEditingFacade.ts
-  function worldTileVisualSignature(tile) {
+  function worldTileTerrainSignature(tile) {
     const modifiers = tile?.modifiers ? [...tile.modifiers].sort() : [];
     const rivers = tile?.rivers ? tile.rivers.map((river) => `${river.riverIndex}:${river.riverTileIndex}`).sort() : [];
     return JSON.stringify([
       tile?.type ?? null,
       modifiers,
       tile?.treeModel ?? null,
-      rivers,
+      rivers
+    ]);
+  }
+  function worldTileCitySignature(tile) {
+    return JSON.stringify([
       Boolean(tile?.city),
       tile?.city?.name ?? null,
       tile?.city?.model ?? null
     ]);
+  }
+  function worldTileVisualSignature(tile) {
+    return JSON.stringify([worldTileTerrainSignature(tile), worldTileCitySignature(tile)]);
+  }
+  function refreshKind(beforeTerrain, beforeCity, after) {
+    if (worldTileTerrainSignature(after) !== beforeTerrain) return "terrain";
+    return worldTileCitySignature(after) !== beforeCity ? "city" : "none";
   }
   var WorldEditingFacade = class {
     constructor(source, map, options = {}) {
@@ -14697,10 +15019,15 @@ void main() {
       assertWorldTileOverride(changes);
       const point = this.normalizeRequired(x, y);
       const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
+      const beforeTerrain = worldTileTerrainSignature(getMapTile(this.map, point.x, point.y));
+      const beforeCity = worldTileCitySignature(getMapTile(this.map, point.x, point.y));
       source.setTileOverride(point.x, point.y, changes);
-      const dirty = this.visualSignature(getMapTile(this.map, point.x, point.y)) !== before ? [point] : [];
+      const after = getMapTile(this.map, point.x, point.y);
+      const dirty = this.visualSignature(after) !== before ? [point] : [];
+      const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
+      const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
       this.record(1, dirty.length);
-      return { source, changed: true, dirtyTiles: dirty };
+      return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
     }
     setTileOverrides(changes) {
       const source = this.mutableSource();
@@ -14716,30 +15043,58 @@ void main() {
         const point = this.normalizeRequired(change.x, change.y);
         const key = `${point.x},${point.y}`;
         if (!before.has(key)) {
-          before.set(key, { point, signature: this.visualSignature(getMapTile(this.map, point.x, point.y)) });
+          const tile = getMapTile(this.map, point.x, point.y);
+          before.set(key, {
+            point,
+            signature: this.visualSignature(tile),
+            terrainSignature: worldTileTerrainSignature(tile),
+            citySignature: worldTileCitySignature(tile)
+          });
         }
         normalized.push({ x: point.x, y: point.y, changes: change.changes });
       }
       if (source.setTileOverrides) source.setTileOverrides(normalized);
       else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
       const dirty = [...before.values()].filter(({ point, signature }) => this.visualSignature(getMapTile(this.map, point.x, point.y)) !== signature).map(({ point }) => point);
+      const dirtyKeys = new Set(dirty.map((point) => `${point.x},${point.y}`));
+      let kind = "none";
+      for (const [key, entry] of before) {
+        if (!dirtyKeys.has(key)) continue;
+        const current = refreshKind(
+          entry.terrainSignature,
+          entry.citySignature,
+          getMapTile(this.map, entry.point.x, entry.point.y)
+        );
+        if (current === "terrain") {
+          kind = "terrain";
+          break;
+        }
+        if (current === "city") kind = "city";
+      }
+      if (dirty.length > 0 && kind === "none") kind = "terrain";
       this.record(before.size, dirty.length);
-      return { source, changed: normalized.length > 0, dirtyTiles: dirty };
+      return { source, changed: normalized.length > 0, dirtyTiles: dirty, refreshKind: kind };
     }
     clearTileOverride(x, y) {
       const source = this.mutableSource();
       if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
-        return { source, changed: false, dirtyTiles: [] };
+        return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
       }
       const point = normalizeMapCoordinates(this.map, x, y);
-      if (!point) return { source, changed: false, dirtyTiles: [] };
-      const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
+      if (!point) return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
+      const beforeTile = getMapTile(this.map, point.x, point.y);
+      const before = this.visualSignature(beforeTile);
+      const beforeTerrain = worldTileTerrainSignature(beforeTile);
+      const beforeCity = worldTileCitySignature(beforeTile);
       if (!source.clearTileOverride(point.x, point.y)) {
-        return { source, changed: false, dirtyTiles: [] };
+        return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
       }
-      const dirty = this.visualSignature(getMapTile(this.map, point.x, point.y)) !== before ? [point] : [];
+      const after = getMapTile(this.map, point.x, point.y);
+      const dirty = this.visualSignature(after) !== before ? [point] : [];
+      const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
+      const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
       this.record(1, dirty.length);
-      return { source, changed: true, dirtyTiles: dirty };
+      return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
     }
     flush() {
       const source = this.mutableSource();
@@ -14937,6 +15292,8 @@ void main() {
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
+    landformDebugMode: "off",
+    terrainTextureRegionSize: 2,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -14992,6 +15349,9 @@ void main() {
     if (typeof options.element !== "string" || options.element.trim().length === 0) {
       throw new TypeError("HexMap element must be a non-empty CSS selector");
     }
+    if (!["off", "elevation", "ridge", "valley", "roughness"].includes(options.landformDebugMode)) {
+      throw new RangeError("landformDebugMode is invalid");
+    }
     const positive = (name, value) => {
       if (!Number.isFinite(value) || value <= 0) {
         throw new RangeError(`${name} must be a positive finite number`);
@@ -15003,6 +15363,7 @@ void main() {
       }
     };
     positive("size", options.size);
+    positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
     positive("renderDistance", options.renderDistance);
     positive("maxPixelRatio", options.maxPixelRatio);
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
@@ -15253,6 +15614,7 @@ void main() {
         enabled: () => this.options.grassEnabled,
         mountChunk: (context) => this.mountGrassWorldRenderLayer(context),
         unmountChunk: (context) => this.unmountGrassWorldRenderLayer(context),
+        refreshTiles: (context) => this.refreshGrassWorldRenderLayer(context),
         activateLod: (metadata, lod, objects) => this.activateGrassWorldChunk(metadata, lod, objects),
         releaseChunk: (metadata) => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata),
         dispose: () => void 0
@@ -15262,6 +15624,7 @@ void main() {
         kinds: ["forest"],
         mountChunk: (context) => this.mountForestWorldRenderLayer(context),
         unmountChunk: (context) => this.unmountForestWorldRenderLayer(context),
+        refreshTiles: (context) => this.refreshForestWorldRenderLayer(context),
         activateLod: (metadata, lod, objects) => this.activateForestWorldChunk(metadata, lod, objects),
         releaseChunk: (metadata) => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata),
         dispose: () => void 0
@@ -15986,6 +16349,17 @@ void main() {
       record.grassVegetationSignature = void 0;
       this.chunkScheduler.forget(forgotten);
     }
+    refreshGrassWorldRenderLayer(context) {
+      if (context.refreshKind !== "city") return false;
+      for (const point of context.tiles) {
+        const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
+        for (const grass of new Set(this.streamedGrassByChunkId.values())) {
+          grass.setTileSuppressed(point.x, point.y, suppressed);
+        }
+      }
+      context.invalidateVisibility();
+      return true;
+    }
     mountForestWorldRenderLayer(context) {
       const record = this.worldChunkLayers.get(context.key);
       if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
@@ -16104,6 +16478,17 @@ void main() {
       record.forest = void 0;
       record.forestVegetationSignature = void 0;
       this.chunkScheduler.forget(forgotten);
+    }
+    refreshForestWorldRenderLayer(context) {
+      if (context.refreshKind !== "city") return false;
+      for (const point of context.tiles) {
+        const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
+        for (const forest of new Set(this.streamedForestByChunkId.values())) {
+          forest.setTileSuppressed(point.x, point.y, suppressed);
+        }
+      }
+      context.invalidateVisibility();
+      return true;
     }
     collectChunkIds(object, target) {
       object.traverse((child) => {
@@ -16560,6 +16945,16 @@ void main() {
         gridWidth: this.options.gridWidth,
         gridOpacity: this.options.gridOpacity,
         shaderQuality: this.options.terrainShaderQuality,
+        landform: this.worldSource?.descriptor ? {
+          seed: this.worldSource.descriptor.seed,
+          domain: this.worldSource.descriptor.topology === "toroidal" ? {
+            topology: "toroidal",
+            width: this.worldSource.descriptor.width,
+            height: this.worldSource.descriptor.height
+          } : { topology: "infinite" }
+        } : void 0,
+        landformDebugMode: this.options.landformDebugMode,
+        terrainTextureRegionSize: this.options.terrainTextureRegionSize,
         waterColorShallow: this.options.waterColorShallow,
         waterColorDeep: this.options.waterColorDeep,
         waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -16841,7 +17236,7 @@ void main() {
       try {
         const result = this.currentWorldEditingFacade()?.setTileOverride(x, y, changes);
         if (!result) throw new Error("The current world source does not support tile overrides");
-        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source);
+        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source, result.refreshKind);
       } catch (reason) {
         return Promise.reject(reason);
       }
@@ -16855,7 +17250,7 @@ void main() {
       try {
         const result = this.currentWorldEditingFacade()?.setTileOverrides(changes);
         if (!result) throw new Error("The current world source does not support tile overrides");
-        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source);
+        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source, result.refreshKind);
       } catch (reason) {
         return Promise.reject(reason);
       }
@@ -16866,7 +17261,7 @@ void main() {
         const result = this.currentWorldEditingFacade()?.clearTileOverride(x, y);
         if (!result) throw new Error("The current world source does not support tile overrides");
         if (!result.changed || result.dirtyTiles.length === 0) return Promise.resolve(result.changed);
-        return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source).then(() => true);
+        return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source, result.refreshKind).then(() => true);
       } catch (reason) {
         return Promise.reject(reason);
       }
@@ -16881,15 +17276,15 @@ void main() {
       const unique = new Map(points.map((point) => [`${point.x},${point.y}`, { x: point.x, y: point.y }]));
       return this.enqueueTileRenderRefreshes([...unique.values()], source);
     }
-    enqueueTileRenderRefresh(point, source) {
-      return this.enqueueTileRenderRefreshes([point], source);
+    enqueueTileRenderRefresh(point, source, refreshKind2 = "terrain") {
+      return this.enqueueTileRenderRefreshes([point], source, refreshKind2);
     }
-    enqueueTileRenderRefreshes(points, source) {
+    enqueueTileRenderRefreshes(points, source, refreshKind2 = "terrain") {
       const loadRevision = this.loadRevision;
       const controller = this.worldController;
       const queued = this.worldTileUpdateQueue.then(() => {
         if (!this.isWorldSessionCurrent(source, loadRevision)) return;
-        return this.refreshTileOverridesRendering(points, source, loadRevision);
+        return this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind2);
       });
       const refresh = controller?.source === source ? controller.lifecycle.track(queued) : queued;
       this.worldTileUpdateQueue = refresh.catch(() => void 0);
@@ -16898,7 +17293,7 @@ void main() {
     refreshTileOverrideRendering(point, source, loadRevision) {
       return this.refreshTileOverridesRendering([point], source, loadRevision);
     }
-    async refreshTileOverridesRendering(points, source, loadRevision) {
+    async refreshTileOverridesRendering(points, source, loadRevision, refreshKind2 = "terrain") {
       const streamer = this.worldStreamer;
       if (!streamer || !this.isWorldSessionCurrent(source, loadRevision)) return;
       const residents = new Map(streamer.residentChunks.map((chunk) => [
@@ -16936,14 +17331,16 @@ void main() {
         (key) => this.worldChunkLayers.get(key)?.renderLayerPromises?.get(layer.id)
       )));
       if (!this.isWorldSessionCurrent(source, loadRevision)) return;
+      const remounted = layers.filter((layer) => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
       for (const layer of refreshable) {
-        await layer.refreshTiles?.({
+        const handled = await layer.refreshTiles?.({
           ...this.createWorldRenderLayerHost(layer.id, "@world"),
-          tiles: [...affectedTiles.values()]
+          tiles: [...affectedTiles.values()],
+          refreshKind: refreshKind2
         });
         if (!this.isWorldSessionCurrent(source, loadRevision)) return;
+        if (handled === false) remounted.push(layer);
       }
-      const remounted = layers.filter((layer) => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
       for (const key of keys) {
         const record = this.worldChunkLayers.get(key);
         if (!record) continue;
@@ -17334,6 +17731,23 @@ void main() {
     set mountainHeight(value) {
       this.options.mountainHeight = value;
       if (this.terrain) this.terrain.mountainHeight = value;
+    }
+    get landformDebugMode() {
+      return this.terrain?.landformDebugMode ?? this.options.landformDebugMode;
+    }
+    set landformDebugMode(value) {
+      this.options.landformDebugMode = value;
+      if (this.terrain) this.terrain.landformDebugMode = value;
+    }
+    get terrainTextureRegionSize() {
+      return this.terrain?.terrainTextureRegionSize ?? this.options.terrainTextureRegionSize;
+    }
+    set terrainTextureRegionSize(value) {
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new RangeError("terrainTextureRegionSize must be a positive finite number");
+      }
+      this.options.terrainTextureRegionSize = value;
+      if (this.terrain) this.terrain.terrainTextureRegionSize = value;
     }
     get beachWidth() {
       return this.terrain?.beachWidth ?? this.options.beachWidth;
@@ -18294,6 +18708,7 @@ void main() {
   exports.HexMapInteractionController = HexMapInteractionController;
   exports.HexMapRendererHost = HexMapRendererHost;
   exports.IndexedDbWorldChunkCache = IndexedDbWorldChunkCache;
+  exports.LANDFORM_SEA_LEVEL = LANDFORM_SEA_LEVEL;
   exports.Land = Land;
   exports.LandColor = LandColor;
   exports.LandPriority = LandPriority;
@@ -18339,6 +18754,7 @@ void main() {
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
   exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
+  exports.createLandformSampler = createLandformSampler;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
@@ -18368,6 +18784,7 @@ void main() {
   exports.normalizeResourceCost = normalizeResourceCost;
   exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
   exports.positiveModulo = positiveModulo;
+  exports.sampleLandform = sampleLandform;
   exports.serializeWorldDescriptor = serializeWorldDescriptor;
   exports.tagWorldChunk = tagWorldChunk;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;

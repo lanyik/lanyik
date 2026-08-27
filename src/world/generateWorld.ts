@@ -2,7 +2,13 @@ import { Land } from "../enums";
 import { getNeighbors } from "../helpers/neighbors";
 import { getMapNeighbors } from "../helpers/topology";
 import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
-import { fractalNoise2D, periodicFractalNoise2D, randomAt, seedToUint32 } from "./noise";
+import {
+    createLandformSampler,
+    LANDFORM_SEA_LEVEL,
+    LandformSample,
+    LandformSampler
+} from "./LandformSampler";
+import { randomAt, seedToUint32 } from "./noise";
 
 export const MIN_WORLD_SIZE = 8;
 export const MAX_WORLD_SIZE = 512;
@@ -16,13 +22,6 @@ export interface WorldGenerationOptions {
 
 export type WorldTopology = "bounded" | "toroidal";
 
-interface ClimateSample {
-    elevation: number;
-    moisture: number;
-    temperature: number;
-}
-
-const SEA_LEVEL = 0.43;
 const isWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 
 function assertDimension(name: "width" | "height", value: number): void {
@@ -31,81 +30,25 @@ function assertDimension(name: "width" | "height", value: number): void {
     }
 }
 
-function sampleBoundedClimate(seed: number, x: number, y: number, width: number, height: number): ClimateSample {
-    const nx = width === 1 ? 0 : (x / (width - 1)) * 2 - 1;
-    const ny = height === 1 ? 0 : (y / (height - 1)) * 2 - 1;
-    const edge = Math.max(Math.abs(nx), Math.abs(ny));
-    const continent = fractalNoise2D(seed, x * 0.055, y * 0.055, 5);
-    const detail = fractalNoise2D(seed ^ 0xa341316c, x * 0.14, y * 0.14, 3);
-    const elevation = continent * 0.78 + detail * 0.22 + 0.12 - Math.pow(edge, 3) * 0.58;
-    const moisture = fractalNoise2D(seed ^ 0xc8013ea4, x * 0.08, y * 0.08, 4);
-    const temperatureNoise = fractalNoise2D(seed ^ 0xad90777d, x * 0.07, y * 0.07, 3);
-    const latitude = Math.abs(ny);
-    const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-    return { elevation, moisture, temperature };
-}
-
-function sampleToroidalClimate(seed: number, x: number, y: number, width: number, height: number): ClimateSample {
-    const nx = x / width;
-    const ny = y / height;
-    const cells = (scale: number, dimension: number, minimum: number) => Math.max(minimum, Math.round(dimension * scale));
-    const continent = periodicFractalNoise2D(
-        seed,
-        nx,
-        ny,
-        cells(0.055, width, 2),
-        cells(0.055, height, 2),
-        5
-    );
-    const detail = periodicFractalNoise2D(
-        seed ^ 0xa341316c,
-        nx,
-        ny,
-        cells(0.14, width, 3),
-        cells(0.14, height, 3),
-        3
-    );
-    //No edge falloff: the height field joins itself on all four sides.
-    const elevation = continent * 0.78 + detail * 0.22 + 0.03;
-    const moisture = periodicFractalNoise2D(
-        seed ^ 0xc8013ea4,
-        nx,
-        ny,
-        cells(0.08, width, 2),
-        cells(0.08, height, 2),
-        4
-    );
-    const temperatureNoise = periodicFractalNoise2D(
-        seed ^ 0xad90777d,
-        nx,
-        ny,
-        cells(0.07, width, 2),
-        cells(0.07, height, 2),
-        3
-    );
-    //A periodic climate band keeps the top/bottom seam continuous: the cold
-    //band straddles the seam and the warm equator runs through the middle.
-    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    const temperature = 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18;
-    return { elevation, moisture, temperature };
-}
-
-function classifyTerrain({ elevation, moisture, temperature }: ClimateSample): Land {
-    if (elevation < SEA_LEVEL) return Land.sea;
-    if (elevation > 0.75) return Land.mountain;
+function classifyTerrain({ elevation, ridge, moisture, temperature }: LandformSample): Land {
+    if (elevation < LANDFORM_SEA_LEVEL) return Land.sea;
+    //A high point becomes a mountain only when it belongs to the continuous
+    //ridge field. Very high isolated samples remain mountains as a safety net,
+    //but the common case now forms chains instead of scattered single peaks.
+    if ((elevation > 0.7 && ridge > 0.2) || elevation > 0.82) return Land.mountain;
     if (temperature < 0.18) return Land.snow;
     if (temperature < 0.34) return Land.tundra;
     if (temperature > 0.68 && moisture < 0.42) return Land.sand;
     return Land.land;
 }
 
-function decorateTile(seed: number, x: number, y: number, climate: ClimateSample, type: Land): TileInfo {
+function decorateTile(seed: number, x: number, y: number, climate: LandformSample, type: Land): TileInfo {
     const tile: TileInfo = { type };
     if (isWater(type) || type === Land.mountain || type === Land.snow) return tile;
 
     const modifiers: string[] = [];
     const lake = type === Land.land
-        && climate.elevation > SEA_LEVEL + 0.025
+        && climate.elevation > LANDFORM_SEA_LEVEL + 0.025
         && climate.elevation < 0.56
         && climate.moisture > 0.74
         && randomAt(seed, x, y, 0x6c8e9cf5) > 0.94;
@@ -135,21 +78,26 @@ const modulo = (value: number, period: number): number => ((value % period) + pe
 // the other width*height TileInfo objects to exist. Chunk workers use the same
 // function as eager generation, which keeps both APIs byte-for-byte equivalent.
 export function generateToroidalWorldTile(
-    numericSeed: number,
+    seed: string | number,
     x: number,
     y: number,
     width: number,
-    height: number
+    height: number,
+    sampler = createLandformSampler({
+        seed,
+        domain: { topology: "toroidal", width, height }
+    })
 ): TileInfo {
+    const numericSeed = seedToUint32(seed);
     const canonicalX = modulo(x, width);
     const canonicalY = modulo(y, height);
-    const climate = sampleToroidalClimate(numericSeed, canonicalX, canonicalY, width, height);
+    const climate = sampler.sample(canonicalX, canonicalY);
     let type = classifyTerrain(climate);
     if (type === Land.sea) {
         const touchesLand = getNeighbors(canonicalX, canonicalY).some(neighbor => {
             const nx = modulo(neighbor.x, width);
             const ny = modulo(neighbor.y, height);
-            return !isWater(classifyTerrain(sampleToroidalClimate(numericSeed, nx, ny, width, height)));
+            return !isWater(classifyTerrain(sampler.sample(nx, ny)));
         });
         if (touchesLand) type = Land.coastal;
     }
@@ -169,15 +117,21 @@ export function generateWorld({ seed, width, height, topology = "bounded" }: Wor
     const numericSeed = seedToUint32(seed);
     const data: MapInfoData = {};
     const toroidal = topology === "toroidal";
+    const sampler: LandformSampler = createLandformSampler({
+        seed,
+        domain: toroidal
+            ? { topology: "toroidal", width, height }
+            : { topology: "bounded", width, height }
+    });
 
     for (let x = 0; x < width; x += 1) {
         data[x] = {};
         for (let y = 0; y < height; y += 1) {
             if (toroidal) {
-                data[x][y] = generateToroidalWorldTile(numericSeed, x, y, width, height);
+                data[x][y] = generateToroidalWorldTile(seed, x, y, width, height, sampler);
                 continue;
             }
-            const climate = sampleBoundedClimate(numericSeed, x, y, width, height);
+            const climate = sampler.sample(x, y);
             data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
         }
     }

@@ -52,6 +52,11 @@ import { TERRAIN_FAST_FRAGMENT_SHADER } from "../shaders/terrain.fast.fragment";
 import { WATER_VERTEX_SHADER } from "../shaders/water.vertex";
 import { WATER_FRAGMENT_SHADER } from "../shaders/water.fragment";
 import { WATER_FAST_FRAGMENT_SHADER } from "../shaders/water.fast.fragment";
+import {
+    createLandformSampler,
+    LandformSampler,
+    LandformSamplerOptions
+} from "../world/LandformSampler";
 
 export interface TerrainAtlasCell { cellX: number, cellY: number }
 export interface TerrainAtlas {
@@ -63,6 +68,16 @@ export interface TerrainAtlas {
     textures: { [name: string]: TerrainAtlasCell };
 }
 
+export type LandformDebugMode = "off" | "elevation" | "ridge" | "valley" | "roughness";
+
+const LANDFORM_DEBUG_VALUE: Readonly<Record<LandformDebugMode, number>> = {
+    off: 0,
+    elevation: 1,
+    ridge: 2,
+    valley: 3,
+    roughness: 4
+};
+
 export interface TerrainMeshOptions {
     size: number;
     texturesBaseUrl: string;   // folder containing terrain.png / land-atlas.json
@@ -72,6 +87,12 @@ export interface TerrainMeshOptions {
     gridOpacity?: number;
     gridVisible?: boolean;
     shaderQuality?: "full" | "fast";
+    /** Deterministic procedural field attached to every terrain instance. */
+    landform?: LandformSamplerOptions;
+    /** Development heatmap; does not rebuild terrain or change generated tiles. */
+    landformDebugMode?: LandformDebugMode;
+    /** Number of hex rows/columns covered by one repeat of an atlas cell. */
+    terrainTextureRegionSize?: number;
 
     //Sea/coastal tiles render on their own animated layer with solid colors
     //(waterColorShallow/Deep) - see shaders/water.*.ts.
@@ -129,9 +150,9 @@ export interface TerrainMeshOptions {
     //(plus patchy strength modulation). 0 restores straight bands.
     landBlendCurvature?: number;
 
-    //Mountains: peak height (world units) of Land.mountain tiles. Adjacent
-    //mountain tiles connect into continuous ridgelines (see the terrain
-    //vertex shader's mountainHeightAt). Default size * 0.6.
+    //Mountains: vertical scale (world units) of the world-space mountain
+    //height field. Adjacent mountain tiles sample one continuous surface (see
+    //the terrain vertex shader's mountainHeightAt). Default size * 0.6.
     mountainHeight?: number;
 
     //Rivers/lakes: land tiles with the "river"/"lake" modifier render animated
@@ -186,11 +207,11 @@ interface InstanceAttributes {
     neighborsPriorityB: Float32Array;
     neighborsKindA: Float32Array;
     neighborsKindB: Float32Array;
-    riverEdges: Float32Array;
-    riverSeaMouthEdges: Float32Array;
-    riverLakeMouthEdges: Float32Array;
-    lakeNeighborEdges: Float32Array;
+    waterEdges: Float32Array;
     fogState: Float32Array;
+    landform: Float32Array;
+    reliefNeighborsA: Float32Array;
+    reliefNeighborsB: Float32Array;
 }
 
 //A city tile's model + label, tracked so setFogState() can hide it entirely
@@ -233,10 +254,10 @@ interface TerrainChunkRecord {
 //tundra/snow) and an animated "water" layer (sea/coastal, see shaders/water.*.ts - sum-of-sines
 //vertex displacement with analytically derived normals, no normal map, solid
 //colors instead of a texture). Both share the same per-tile neighbor/priority/
-//kind computation below. Mountain tiles (Land.mountain) stay on the land layer
-//- the terrain vertex shader raises them into noise-craggy peaks, reusing the
-//neighbor data to hold shared borders between adjacent mountain tiles up at a
-//saddle height so they form a continuous ridge instead of isolated peaks.
+//kind computation below. Mountain tiles (Land.mountain) stay on the land layer.
+//The terrain vertex shader samples one world-space ridged height field across
+//an entire connected mountain region, then uses neighbor data only to taper
+//the region's outer boundary to ground. Hex centers have no peak semantics.
 //
 //The neighborsA/neighborsB attribute order (SE,S,SW / NW,N,NE) must match
 //NEIGHBOR_DIRECTIONS' angle convention (see helpers/neighbors.ts) and the
@@ -272,6 +293,7 @@ export class TerrainMesh extends Group {
     private atlasCellIndex: { [type: string]: number } = {};
     private clock = 0;
     private lodBuilds = 0;
+    private readonly landformSampler: LandformSampler | undefined;
     //Single Color instances shared by BOTH materials' uniforms (the water
     //layer's own colors AND the land layer's painted curved-coast water - see
     //seaColorShallow in terrain.fragment.ts): mutating them via the
@@ -283,6 +305,7 @@ export class TerrainMesh extends Group {
     constructor(map: MapInfo, private options: TerrainMeshOptions, initialTiles?: readonly Point[]) {
         super();
         this.map = map;
+        this.landformSampler = options.landform ? createLandformSampler(options.landform) : undefined;
         this.buildAtlasCellIndex();
         this.fogTexture = this.loadFogTexture();
         //One shared texture for both layers (via commonUniforms) - only the
@@ -343,6 +366,20 @@ export class TerrainMesh extends Group {
         return waterIndex === -1 ? 0 : waterIndex + 1;
     }
 
+    //Macro mountain height at a tile centre. Geometry uses elevation rather
+    //than the generator's contour-derived ridge value, so a closed ridge
+    //classification band cannot become a volcanic crater rim. Relief starts
+    //near zero at the mountain threshold and rises non-linearly, avoiding the
+    //broad raised plateau produced by giving every mountain a large base.
+    //Static maps without a LandformSampler retain a neutral height of 1.
+    private mountainReliefFor(x: number, y: number): number {
+        if (getMapTile(this.map, x, y)?.type !== Land.mountain) return 0;
+        const sample = this.landformSampler?.sample(x, y);
+        if (!sample) return 1;
+        const elevationT = Math.max(0, (sample.elevation - 0.68) / 0.22);
+        return Math.min(1.35, 0.08 + Math.pow(elevationT, 1.3) * 1.12);
+    }
+
     //Builds the per-instance attribute arrays (offset/style/neighbors/neighbor
     //priorities/kinds) shared by every layer - land and water tiles are laid
     //out identically, only the geometry/shader differ.
@@ -357,11 +394,11 @@ export class TerrainMesh extends Group {
             neighborsPriorityB: new Float32Array(tiles.length * 3),
             neighborsKindA: new Float32Array(tiles.length * 3),
             neighborsKindB: new Float32Array(tiles.length * 3),
-            riverEdges: new Float32Array(tiles.length),
-            riverSeaMouthEdges: new Float32Array(tiles.length),
-            riverLakeMouthEdges: new Float32Array(tiles.length),
-            lakeNeighborEdges: new Float32Array(tiles.length),
-            fogState: new Float32Array(tiles.length) // filled per tile below
+            waterEdges: new Float32Array(tiles.length * 4),
+            fogState: new Float32Array(tiles.length), // filled per tile below
+            landform: new Float32Array(tiles.length * 4),
+            reliefNeighborsA: new Float32Array(tiles.length * 3),
+            reliefNeighborsB: new Float32Array(tiles.length * 3)
         };
 
         tiles.forEach((tile, i) => {
@@ -375,6 +412,13 @@ export class TerrainMesh extends Group {
             attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
             attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
             attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
+            const landform = this.landformSampler?.sample(tile.x, tile.y);
+            if (landform) {
+                attrs.landform[i * 4 + 0] = landform.elevation;
+                attrs.landform[i * 4 + 1] = landform.ridge;
+                attrs.landform[i * 4 + 2] = landform.valley;
+                attrs.landform[i * 4 + 3] = landform.roughness;
+            }
 
             const se = getNeighborCoords(tile.x, tile.y, "SE");
             const s = getNeighborCoords(tile.x, tile.y, "S");
@@ -407,10 +451,17 @@ export class TerrainMesh extends Group {
             attrs.neighborsKindB[i * 3 + 1] = this.kindFor(n.x, n.y);
             attrs.neighborsKindB[i * 3 + 2] = this.kindFor(ne.x, ne.y);
 
-            attrs.riverEdges[i] = waterEdgeValue(this.map, tile.x, tile.y);
-            attrs.riverSeaMouthEdges[i] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
-            attrs.riverLakeMouthEdges[i] = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
-            attrs.lakeNeighborEdges[i] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
+            attrs.reliefNeighborsA[i * 3 + 0] = this.mountainReliefFor(se.x, se.y);
+            attrs.reliefNeighborsA[i * 3 + 1] = this.mountainReliefFor(s.x, s.y);
+            attrs.reliefNeighborsA[i * 3 + 2] = this.mountainReliefFor(sw.x, sw.y);
+            attrs.reliefNeighborsB[i * 3 + 0] = this.mountainReliefFor(nw.x, nw.y);
+            attrs.reliefNeighborsB[i * 3 + 1] = this.mountainReliefFor(n.x, n.y);
+            attrs.reliefNeighborsB[i * 3 + 2] = this.mountainReliefFor(ne.x, ne.y);
+
+            attrs.waterEdges[i * 4 + 0] = waterEdgeValue(this.map, tile.x, tile.y);
+            attrs.waterEdges[i * 4 + 1] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
+            attrs.waterEdges[i * 4 + 2] = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
+            attrs.waterEdges[i * 4 + 3] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
         });
 
         return attrs;
@@ -443,11 +494,11 @@ export class TerrainMesh extends Group {
         geometry.setAttribute("neighborsPriorityB", new InstancedBufferAttribute(attrs.neighborsPriorityB, 3));
         geometry.setAttribute("neighborsKindA", new InstancedBufferAttribute(attrs.neighborsKindA, 3));
         geometry.setAttribute("neighborsKindB", new InstancedBufferAttribute(attrs.neighborsKindB, 3));
-        geometry.setAttribute("riverEdges", new InstancedBufferAttribute(attrs.riverEdges, 1));
-        geometry.setAttribute("riverSeaMouthEdges", new InstancedBufferAttribute(attrs.riverSeaMouthEdges, 1));
-        geometry.setAttribute("riverLakeMouthEdges", new InstancedBufferAttribute(attrs.riverLakeMouthEdges, 1));
-        geometry.setAttribute("lakeNeighborEdges", new InstancedBufferAttribute(attrs.lakeNeighborEdges, 1));
+        geometry.setAttribute("waterEdges", new InstancedBufferAttribute(attrs.waterEdges, 4));
         geometry.setAttribute("fogState", new InstancedBufferAttribute(attrs.fogState, 1));
+        geometry.setAttribute("landform", new InstancedBufferAttribute(attrs.landform, 4));
+        geometry.setAttribute("reliefNeighborsA", new InstancedBufferAttribute(attrs.reliefNeighborsA, 3));
+        geometry.setAttribute("reliefNeighborsB", new InstancedBufferAttribute(attrs.reliefNeighborsB, 3));
 
         return geometry;
     }
@@ -455,8 +506,16 @@ export class TerrainMesh extends Group {
     private commonUniforms() {
         const atlas = this.options.atlas;
         const size = this.options.size;
+        const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
         return {
             textureAtlasMeta: { value: new Vector4(atlas.width, atlas.height, atlas.cellSize, atlas.cellSpacing) },
+            // One atlas cell spans a configurable world region (two hexes by
+            // default) instead of restarting inside every tile. The unequal
+            // axes match the flat-top hex lattice's column/row spacing.
+            terrainTextureWorldSize: { value: new Vector2(
+                size * 1.5 * textureRegionSize,
+                size * Math.sqrt(3) * textureRegionSize
+            ) },
             hexSize: { value: size },
             map: { value: this.atlasTexture },
             sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] ?? 0 },
@@ -477,18 +536,15 @@ export class TerrainMesh extends Group {
             showGrid: { value: this.options.gridVisible === false ? 0.0 : 1.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
             gridWidth: { value: this.options.gridWidth ?? 0.04 },
-            gridOpacity: { value: this.options.gridOpacity ?? 0.35 }
+            gridOpacity: { value: this.options.gridOpacity ?? 0.35 },
+            landformDebugMode: { value: LANDFORM_DEBUG_VALUE[this.options.landformDebugMode ?? "off"] }
         };
     }
 
     //Mipmapping a multi-cell texture atlas bleeds neighboring cells into each
-    //other at lower mip levels (each mip texel then averages pixels that span
-    //a cell boundary) - visible as dark blotches on distant/oblique tiles,
-    //worst on the water layer's sand-cell blend since it's sampled from many
-    //different tiles' local UVs at once. Disabling mipmaps (plain bilinear
-    //filtering) avoids it; some distant-terrain shimmer is an acceptable
-    //trade-off for a tile-based map that's mostly viewed from a fixed range of
-    //distances anyway.
+    //other at lower mip levels. Regional world-space sampling stays inset by
+    //atlas.cellSpacing, but lower mip texels would still cross a cell boundary,
+    //so keep plain bilinear filtering and accept modest distant shimmer.
     private loadAtlasTexture() {
         const loader = new TextureLoader().setPath(this.options.texturesBaseUrl);
         const atlasTexture = loader.load(this.options.atlas.image);
@@ -833,10 +889,10 @@ export class TerrainMesh extends Group {
             "neighborsPriorityB",
             "neighborsKindA",
             "neighborsKindB",
-            "riverEdges",
-            "riverSeaMouthEdges",
-            "riverLakeMouthEdges",
-            "lakeNeighborEdges"
+            "waterEdges",
+            "landform",
+            "reliefNeighborsA",
+            "reliefNeighborsB"
         ];
         const pendingUpdates = new Map<InstancedBufferAttribute, BufferUpdateRange[]>();
         for (const point of tiles) {
@@ -1004,6 +1060,33 @@ export class TerrainMesh extends Group {
         const v = value ? 1.0 : 0.0;
         if (this.landMaterial) this.landMaterial.uniforms.showGrid.value = v;
         if (this.waterMaterial) this.waterMaterial.uniforms.showGrid.value = v;
+    }
+
+    public get landformDebugMode(): LandformDebugMode {
+        const value = this.landMaterial?.uniforms.landformDebugMode.value ?? 0;
+        return (Object.entries(LANDFORM_DEBUG_VALUE)
+            .find(([, candidate]) => candidate === value)?.[0] as LandformDebugMode | undefined) ?? "off";
+    }
+
+    public set landformDebugMode(value: LandformDebugMode) {
+        if (!(value in LANDFORM_DEBUG_VALUE)) throw new RangeError(`unknown landform debug mode "${String(value)}"`);
+        if (this.landMaterial) this.landMaterial.uniforms.landformDebugMode.value = LANDFORM_DEBUG_VALUE[value];
+    }
+
+    public get terrainTextureRegionSize(): number {
+        const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value as Vector2 | undefined;
+        return worldSize ? worldSize.x / (this.options.size * 1.5) : this.options.terrainTextureRegionSize ?? 2;
+    }
+
+    public set terrainTextureRegionSize(value: number) {
+        if (!Number.isFinite(value) || value <= 0) {
+            throw new RangeError("terrainTextureRegionSize must be a positive finite number");
+        }
+        const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value as Vector2 | undefined;
+        worldSize?.set(
+            this.options.size * 1.5 * value,
+            this.options.size * Math.sqrt(3) * value
+        );
     }
 
     //-------------------------------------------------------------------------

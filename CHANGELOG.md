@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A deterministic continuous `LandformSampler` for elevation,
+  continentalness, mountain ridges, valleys, roughness, moisture and
+  temperature across bounded, toroidal and infinite worlds, plus live
+  final-height/ridge/valley/roughness inspection colors in the demo panel.
 - Generation-scoped lifecycle ownership with late-publication guards,
   cancellation propagation, bounded/observable drain tracking, and
   `HexMap.disposeAsync()`.
@@ -62,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Terrain atlas cells now retain detail at a two-hex span by default. One
+  continuous world-space UV warp and macro tint field break up visible tiling
+  without adding another `terrain.png` lookup; the span remains live-tunable.
+- Procedural terrain generation now uses generator version 3. Generation and
+  rendering consume the same seed and continuous elevation field; mountain
+  tiles share edge/corner heights with their neighbors and hex centers are no
+  longer forced into one peak per tile.
 - Consolidated the finite, infinite, and persistent-campaign demos under the
   `/` entry point with a remembered in-game world-mode selector; legacy query
   flags remain available for automation and old bookmarks.
@@ -90,6 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- City/outpost edits now refresh their terrain model and suppress only the
+  affected tile's grass/tree instances in place; they no longer remount the
+  surrounding streamed vegetation chunks and cause a visible scene refresh.
 - Made generation publication and orphan collection share a staging/manifest
   transaction fence, so garbage collection cannot publish a manifest whose
   verified stage was concurrently removed.

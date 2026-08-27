@@ -34,7 +34,8 @@ describe("foundation acceptance invariants", () => {
         expect(reverse).toBe(forward);
         expect(checksum(generate("different-seed"))).not.toBe(forward);
         expect(forward).toMatch(/^[0-9a-f]{8}$/);
-        expect(forward).toBe("805273d8");
+        // Generator v3: generation and rendering share the original seed.
+        expect(forward).toBe("c950f52e");
     });
 
     test("repeated checkpoint and recovery converges to the last committed state", async () => {

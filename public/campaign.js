@@ -90,7 +90,7 @@ export async function createCampaignDemo({
     engine = window.HexMap,
     onUpdate = () => {}
 }) {
-    const worldId = `campaign-demo:${String(seed)}:${source.chunkSize}`;
+    const worldId = `campaign-demo:${String(seed)}:${source.chunkSize}:g${engine.WORLD_GENERATOR_VERSION}`;
     const navigation = new ProceduralWorldNavigationIndex({
         seed,
         chunkSize: source.chunkSize,

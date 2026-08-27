@@ -15,7 +15,7 @@ npm install
 npm start
 ```
 
-Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Click the map and move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. Keyboard input belongs only to the focused canvas when a page contains multiple maps. The default page does not start units, turns, or fog-of-war gameplay.
+Open <http://127.0.0.1:3000>. Use the language selector to switch between English and Simplified Chinese; the choice persists across reloads. Use the **World generation** panel to change the seed or dimensions and rebuild the map. The **Terrain** panel can color the final mountain surface by actual height (with contours), inspect the deterministic ridge, valley and roughness inputs, and tune how many hexes one world-space atlas repeat covers. The generated demo is a four-way wrapped toroidal world: crossing any edge continues at the opposite edge. Click the map and move with **WASD**, left-click to select a tile, right-drag to orbit freely, and use the wheel to zoom. Keyboard input belongs only to the focused canvas when a page contains multiple maps. The default page does not start units, turns, or fog-of-war gameplay.
 
 A Civilization-like 3D hexagonal terrain map for the browser, built on [three.js](https://threejs.org/) and rendered with instancing + custom shaders. Rendering is batched per visible chunk, never per tile.
 
@@ -25,6 +25,8 @@ See the [live demo](https://gunyakov.github.io/three-hex-map/public/index.html) 
 
 ## Features
 
+- **Continuous procedural landforms** - bounded, wrapped and infinite worlds share deterministic elevation, continentalness, ridge, valley, roughness, moisture and temperature fields. Mountain classification follows connected ridge bands, while one world-space vertex field shapes whole ranges without forcing a peak at every hex center. The demo exposes live inspection colors without regenerating the world.
+- **Single-sample terrain de-tiling** - each atlas cell keeps its detail at a two-hex span, while continuous world-space UV warping and macro color variation break up obvious repetition without adding another texture lookup. The detail span is adjustable live.
 - **Four-way toroidal worlds** - optional `wrapX`/`wrapY` map topology, physically repeated streamed chunks, camera wrapping, seam-aware picking, neighbors, fog and pathfinding. The procedural demo uses periodic noise and wraps both axes by default.
 - **Atmospheric sky** - a procedural sky dome replaces the flat background with blue zenith, atmospheric horizon haze and a physically positioned sun while orbiting down toward the horizon.
 - **Complete world streaming** - terrain, water, grass and trees are split into 12×12 logical chunks. The scheduler combines distance/frustum culling, three stable LOD levels, lazy CPU geometry construction, lazy WebGL upload and separate 128-GPU/192-CPU logical-chunk caches. Near terrain retains the original full subdivision and decoration density.

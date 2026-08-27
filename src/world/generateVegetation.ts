@@ -386,7 +386,7 @@ function buildForest(
     const tilesByModel = new Map<string, Point[]>();
     for (const point of options.points) {
         const tile = getMapTile(map, point.x, point.y);
-        if (!tile?.modifiers?.includes("wood") || isLakeTile(tile)) continue;
+        if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) continue;
         const modelPath = tile.treeModel ?? options.treeModel;
         const tiles = tilesByModel.get(modelPath) ?? [];
         tiles.push({ x: point.x, y: point.y });

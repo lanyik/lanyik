@@ -37,7 +37,22 @@ describe("WorldEditingFacade", () => {
         ]);
         expect(result.changed).toBe(true);
         expect(result.dirtyTiles).toEqual([{ x: 1, y: 0 }]);
+        expect(result.refreshKind).toBe("terrain");
         expect(editing.stats).toMatchObject({ editBatches: 1, changedTiles: 2, visualDirtyTiles: 1 });
+    });
+
+    test("distinguishes city-only refreshes from terrain rebuilds", () => {
+        const source = new EditableSource(world());
+        const editing = new WorldEditingFacade(source, source.map);
+
+        const city = editing.setTileOverride(0, 0, { city: { name: "Outpost" } });
+        expect(city).toMatchObject({ refreshKind: "city", dirtyTiles: [{ x: 0, y: 0 }] });
+
+        const renamed = editing.setTileOverride(0, 0, { city: { name: "New Outpost" } });
+        expect(renamed.refreshKind).toBe("city");
+
+        const terrain = editing.setTileOverride(0, 0, { modifiers: ["wood"] });
+        expect(terrain.refreshKind).toBe("terrain");
     });
 
     test("cannot mutate its old world after disposal", () => {

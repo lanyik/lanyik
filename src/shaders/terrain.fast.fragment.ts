@@ -4,6 +4,7 @@ precision highp float;
 uniform sampler2D map;
 uniform sampler2D fogMap;
 uniform vec4 textureAtlasMeta;
+uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
 uniform float fogDarkenFactor;
@@ -11,6 +12,7 @@ uniform float showGrid;
 uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
+uniform float landformDebugMode;
 uniform vec3 lightDir;
 uniform float hexSize;
 uniform float riverWidth;
@@ -20,8 +22,8 @@ uniform vec3 riverColorDeep;
 uniform vec3 riverBankColor;
 
 varying vec2 vUV;
-varying vec2 vTexCoord;
 varying float vBorder;
+varying float vTerrain;
 varying vec3 vNormal;
 varying float vFogState;
 varying vec2 vFogUV;
@@ -31,6 +33,9 @@ varying vec3 vNeighborsKindA;
 varying vec3 vNeighborsKindB;
 varying vec3 vEdgeFactorsA;
 varying vec3 vEdgeFactorsB;
+varying float vElevation;
+varying vec4 vLandform;
+varying vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -39,15 +44,63 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
-vec2 cellIndexToUV(float idx) {
+vec3 elevationDebugColor(float value) {
+    vec3 ground = vec3(0.035, 0.055, 0.09);
+    vec3 slope = vec3(0.12, 0.58, 0.34);
+    vec3 crest = vec3(0.92, 0.42, 0.09);
+    vec3 summit = vec3(0.98, 0.96, 0.9);
+    vec3 color = mix(ground, slope, smoothstep(0.02, 0.34, value));
+    color = mix(color, crest, smoothstep(0.34, 0.76, value));
+    color = mix(color, summit, smoothstep(0.76, 1.12, value));
+    float band = fract(max(value, 0.0) * 8.0);
+    float contourDistance = min(band, 1.0 - band);
+    return color * mix(0.58, 1.0, smoothstep(0.015, 0.075, contourDistance));
+}
+
+vec3 landformDebugColor() {
+    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
+    if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
+    return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
+}
+
+// Fast mode keeps the same single texture lookup. Two broad sine waves replace
+// full value noise, providing a cheap continuous UV bend and material tint.
+vec3 terrainPattern() {
+    vec2 p = vWorldXZ / max(hexSize * 4.0, 1.0);
+    float macro = clamp(
+        0.5
+            + 0.25 * sin(dot(p, vec2(0.73, 1.21)))
+            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + 1.9),
+        0.0,
+        1.0
+    );
+    float warp = (macro - 0.5) * hexSize * 1.15;
+    vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
+    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
+    return vec3(1.0 - abs(phase - 1.0), macro);
+}
+
+vec2 cellIndexToUV(float idx, vec2 regionUV) {
     float atlasWidth = textureAtlasMeta.x;
     float atlasHeight = textureAtlasMeta.y;
     float cellSize = textureAtlasMeta.z;
-    float cols = atlasWidth / cellSize - 1e-6;
+    float inset = max(textureAtlasMeta.w, 0.5);
+    float cols = atlasWidth / cellSize;
     float rows = atlasHeight / cellSize;
     float x = mod(idx, cols);
     float y = floor(idx / cols);
-    return vec2(x / cols + vUV.x / cols, 1.0 - (y / rows + (1.0 - vUV.y) / rows));
+    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
+    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
+    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
+        / vec2(atlasWidth, atlasHeight);
+}
+
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
+    color.rgb *= tone;
+    return color;
 }
 
 float riverSegDist(vec2 p, vec2 dir, float apothem) {
@@ -85,14 +138,15 @@ void main() {
         return;
     }
 
-    vec4 texColor = texture2D(map, vTexCoord);
+    vec3 materialPattern = terrainPattern();
+    vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
         float edge = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
         float beachT = smoothstep(edge, 1.0, coast);
         if (beachT > 0.0) {
-            texColor = mix(texColor, texture2D(map, cellIndexToUV(sandAtlasIndex)), beachT);
+            texColor = mix(texColor, sampleTerrainCell(sandAtlasIndex, materialPattern), beachT);
         }
     }
 
@@ -116,7 +170,9 @@ void main() {
 
     vec3 normal = normalize(vNormal);
     float lambertian = max(dot(normalize(lightDir), normal), 0.0);
-    vec3 color = texColor.rgb * (0.55 + 0.55 * lambertian);
+    vec3 color = landformDebugMode > 0.5
+        ? landformDebugColor() * (0.72 + lambertian * 0.28)
+        : texColor.rgb * (0.55 + 0.55 * lambertian);
     if (vFogState < 1.5) color *= fogDarkenFactor;
     gl_FragColor = vec4(color, 1.0);
 

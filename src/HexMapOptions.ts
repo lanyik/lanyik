@@ -2,6 +2,7 @@ import { ColorRepresentation } from "three";
 
 import { Land, LandColor } from "./enums";
 import type { Point } from "./interfaces";
+import type { LandformDebugMode } from "./objects/TerrainMesh";
 import type { WorldSource } from "./world/WorldSource";
 
 export interface HexMapOptions {
@@ -50,6 +51,9 @@ export interface HexMapOptions {
     coastCurvature?: number;
     landBlendCurvature?: number;
     mountainHeight?: number;
+    landformDebugMode?: LandformDebugMode;
+    /** Atlas texture detail span in hex rows/columns. Defaults to 2. */
+    terrainTextureRegionSize?: number;
 
     // Rivers and lakes use normalized width/curvature controls. River colours
     // inherit the corresponding sea colours when omitted.
@@ -189,6 +193,8 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
+    landformDebugMode: "off",
+    terrainTextureRegionSize: 2,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -250,6 +256,9 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     if (typeof options.element !== "string" || options.element.trim().length === 0) {
         throw new TypeError("HexMap element must be a non-empty CSS selector");
     }
+    if (!["off", "elevation", "ridge", "valley", "roughness"].includes(options.landformDebugMode)) {
+        throw new RangeError("landformDebugMode is invalid");
+    }
     const positive = (name: string, value: number): void => {
         if (!Number.isFinite(value) || value <= 0) {
             throw new RangeError(`${name} must be a positive finite number`);
@@ -261,6 +270,7 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
         }
     };
     positive("size", options.size);
+    positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
     positive("renderDistance", options.renderDistance);
     positive("maxPixelRatio", options.maxPixelRatio);
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
