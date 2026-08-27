@@ -15,6 +15,7 @@ import {
     WorldChunk,
     WorldChunkGenerationOptions,
     WorldGeneratorPool,
+    WORLD_GENERATOR_VERSION,
     WorldChunkCache,
     WorldChunkCacheStats,
     createWorldChunkCacheKey,
@@ -490,9 +491,65 @@ describe("world generator pool", () => {
         await expect(pending).resolves.toMatchObject({ chunkX: 4, chunkY: 5 });
         pool.dispose();
     });
+
+    test("rejects admitted work when worker recreation fails and remains recoverable", async () => {
+        const clients: DeferredChunkClient[] = [];
+        let rejectFactory = false;
+        const pool = new WorldGeneratorPool("unused", {
+            size: 1,
+            clientFactory: () => {
+                if (rejectFactory) throw new Error("worker construction failed");
+                const client = new DeferredChunkClient();
+                clients.push(client);
+                return client;
+            }
+        });
+        clients[0].dispose();
+        rejectFactory = true;
+
+        await expect(pool.generateChunk({ seed: 1, chunkX: 7, chunkY: 0 }))
+            .rejects.toThrow("worker construction failed");
+        expect(pool.stats).toMatchObject({ queued: 0, busyWorkers: 0, clientFactoryFailures: 1 });
+
+        rejectFactory = false;
+        const recovered = pool.generateChunk({ seed: 1, chunkX: 8, chunkY: 0 });
+        expect(clients).toHaveLength(2);
+        clients[1].requests[0].resolve(generateWorldChunk(clients[1].requests[0].options));
+        await expect(recovered).resolves.toMatchObject({ chunkX: 8, chunkY: 0 });
+        pool.dispose();
+    });
+
+    test("normalizes a synchronous client failure without stranding the worker slot", async () => {
+        class SynchronouslyFlakyClient extends ImmediateChunkClient {
+            private fail = true;
+            public override generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk> {
+                if (this.fail) {
+                    this.fail = false;
+                    throw new Error("synchronous worker failure");
+                }
+                return super.generateChunk(options);
+            }
+        }
+        const client = new SynchronouslyFlakyClient();
+        const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });
+
+        await expect(pool.generateChunk({ seed: 1, chunkX: 1, chunkY: 2 }))
+            .rejects.toThrow("synchronous worker failure");
+        await flush();
+        expect(pool.stats).toMatchObject({ queued: 0, busyWorkers: 0 });
+        await expect(pool.generateChunk({ seed: 1, chunkX: 3, chunkY: 4 }))
+            .resolves.toMatchObject({ chunkX: 3, chunkY: 4 });
+        pool.dispose();
+    });
 });
 
 describe("procedural world source", () => {
+    test("rejects generator versions not implemented by this build", () => {
+        expect(() => new ProceduralWorldSource({
+            seed: "future", workerUrl: "unused", generatorVersion: WORLD_GENERATOR_VERSION + 1
+        })).toThrow(/unsupported world generator version/);
+    });
+
     test("persists editor batches once per affected chunk", async () => {
         class CountingDeltaStore extends MemoryWorldDeltaStore {
             readonly batches: Array<{ chunkX: number; chunkY: number; changes: number }> = [];

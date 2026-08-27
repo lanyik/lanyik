@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { EventEmitter, generateWorld, generateWorldChunk, WorldGeneratorClient } from "../src/index";
+import {
+    EventEmitter,
+    generateWorld,
+    generateWorldChunk,
+    WORLD_WORKER_PROTOCOL_VERSION,
+    WorldGeneratorClient
+} from "../src/index";
 import { setOptions } from "../src/helpers/setoptions";
 
 class FakeWorker {
@@ -99,7 +105,9 @@ describe("core safeguards", () => {
         const request = worker.messages[0] as { id: number; type: string };
         expect(request.type).toBe("chunk");
         const chunk = generateWorldChunk({ seed: 3, chunkX: -2, chunkY: 4, chunkSize: 12 });
-        worker.emit("message", { data: { id: request.id, chunk } });
+        worker.emit("message", {
+            data: { protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id: request.id, chunk }
+        });
         await expect(pending).resolves.toEqual(chunk);
         client.dispose();
     });

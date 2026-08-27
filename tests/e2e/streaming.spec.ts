@@ -19,6 +19,16 @@ interface Diagnostics {
     renderer?: { calls: number; triangles: number };
     rendererPixelRatio?: number;
     adaptive?: { targetFrameMs: number };
+    gpuTiming?: { supported: boolean; pendingQueries: number; completedSamples: number };
+    worldLifecycle?: { state: string; pendingTasks: number; rejectedPublications: number };
+    frameTasks?: { pendingTasks: number; pendingWeight: number; shedTasks: number };
+    work?: {
+        disposed: boolean;
+        pendingTasks: number;
+        pendingWeight: number;
+        busyTasks: number;
+        domains: Record<string, unknown>;
+    };
     renderBackend?: { renderer: string; software: boolean };
 }
 
@@ -73,7 +83,7 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
     expect(sample.renderer!.calls).toBeLessThanOrEqual(12);
     expect(sample.renderer!.triangles).toBeLessThan(10_000);
     expect(sample.rendererPixelRatio).toBeLessThanOrEqual(1);
-    expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 120);
+    expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 60);
     expect(sample.renderBackend!.renderer.length).toBeGreaterThan(0);
 });
 
@@ -145,4 +155,82 @@ test("repeated world replacement does not show monotonic WebGL resource growth",
     const textureGrowth = samples.slice(1).every((sample, index) => sample.textures > samples[index].textures);
     expect(geometryGrowth && last.geometries > first.geometries + 4).toBe(false);
     expect(textureGrowth).toBe(false);
+});
+
+test("rapid world-session replacement drains cancelled work and keeps resources bounded", async ({ page }, testInfo) => {
+    test.setTimeout(240_000);
+    const baseline = await diagnostics(page);
+    const outcomes = await page.evaluate(async () => {
+        const api = window as unknown as {
+            HexMap: {
+                ProceduralWorldSource: new (options: Record<string, unknown>) => unknown;
+            };
+            hexWorld: {
+                loadWorld(options: Record<string, unknown>): Promise<void>;
+                workCoordinator: unknown;
+                settled: Promise<void>;
+            };
+        };
+        const workerUrl = new URL("./js/world-generator.worker.mjs", window.location.href);
+        const pending: Promise<void>[] = [];
+        for (let generation = 0; generation < 40; generation += 1) {
+            const source = new api.HexMap.ProceduralWorldSource({
+                seed: `lifecycle-soak-${generation}`,
+                workerUrl,
+                workerCount: 1,
+                chunkSize: 24,
+                cache: false,
+                deltaStore: false,
+                workCoordinator: api.hexWorld.workCoordinator
+            });
+            pending.push(api.hexWorld.loadWorld({
+                source,
+                initialTile: { x: generation * 24, y: -generation * 12 },
+                loadRadius: 1,
+                retentionRadius: 2,
+                maxResidentChunks: 25,
+                adaptiveStreaming: false
+            }));
+        }
+        const results = await Promise.allSettled(pending);
+        await api.hexWorld.settled;
+        return results.map(result => {
+            if (result.status === "fulfilled") return { status: result.status };
+            const reason = result.reason as { name?: unknown; message?: unknown } | undefined;
+            return {
+                status: result.status,
+                name: typeof reason?.name === "string" ? reason.name : "Error",
+                message: typeof reason?.message === "string" ? reason.message : String(result.reason)
+            };
+        });
+    });
+    expect(outcomes[outcomes.length - 1]).toMatchObject({ status: "fulfilled" });
+    expect(outcomes.slice(0, -1).every(outcome =>
+        outcome.status === "fulfilled" || outcome.name === "AbortError"
+    )).toBe(true);
+    await page.waitForFunction(() => {
+        const state = (window as unknown as { getWorldDiagnostics(): Diagnostics }).getWorldDiagnostics();
+        return state.worldLifecycle?.state === "active"
+            && state.worldLifecycle.pendingTasks === 0
+            && state.worldStreaming?.pendingChunks === 0
+            && state.worldStreaming?.queuedChunks === 0
+            && state.work?.pendingTasks === 0
+            && state.work.busyTasks === 0;
+    });
+    await page.waitForTimeout(500);
+    const after = await diagnostics(page);
+    await testInfo.attach("lifecycle-soak.json", {
+        body: JSON.stringify({ baseline, after, outcomes }, null, 2),
+        contentType: "application/json"
+    });
+
+    expect(after.worldLifecycle).toMatchObject({ state: "active", pendingTasks: 0 });
+    expect(after.worldStreaming!.residentChunks).toBeLessThanOrEqual(25);
+    expect(after.streaming!.residentChunks).toBeLessThanOrEqual(192);
+    expect(after.frameTasks!.pendingTasks).toBeLessThanOrEqual(512);
+    expect(after.frameTasks!.pendingWeight).toBeLessThanOrEqual(2048);
+    expect(Object.keys(after.work!.domains)).toHaveLength(3);
+    expect(after.rendererMemory!.geometries).toBeLessThanOrEqual((baseline.rendererMemory?.geometries ?? 0) + 24);
+    expect(after.rendererMemory!.textures).toBeLessThanOrEqual((baseline.rendererMemory?.textures ?? 0) + 4);
+    expect(after.gpuTiming!.pendingQueries).toBeLessThanOrEqual(4);
 });

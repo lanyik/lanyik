@@ -9,6 +9,12 @@ import {
     createArmyMarchSystem,
     orderArmyMarch
 } from "./js/simulation.mjs";
+import {
+    GenerationCheckpointCoordinator,
+    IndexedDbGenerationCheckpointStore,
+    createSimulationGenerationParticipant,
+    createWorldDeltaGenerationParticipant
+} from "./js/persistence.mjs";
 
 const ARMY_ID = "first-army";
 const MOVEMENT_TYPE = "ground-army";
@@ -120,18 +126,51 @@ export async function createCampaignDemo({
         backgroundTickIntervalSeconds: 1,
         maxTicksPerAdvance: 120,
         checkpointIntervalSeconds: 5,
+        workCoordinator: map.workCoordinator,
         store
     });
     simulation.registerSystem(createArmyMarchSystem());
-    await simulation.restoreStoredChunks();
-    if (!simulation.getEntity(ARMY_ID)) {
-        const start = findLoadedStart(map, initialTile);
-        simulation.addEntity({
-            id: ARMY_ID,
-            ...start,
-            state: createArmyMarchState({ label: "First Army", speedTilesPerSecond: 6 })
-        });
-        await simulation.flush();
+    if (!source.descriptor) throw new Error("Campaign persistence requires a versioned world descriptor");
+    const checkpoints = new GenerationCheckpointCoordinator({
+        worldId,
+        descriptor: source.descriptor,
+        store: new IndexedDbGenerationCheckpointStore({
+            databaseName: "three-hex-map-campaign-generations-v1",
+            openTimeoutMs: 15_000
+        }),
+        operationTimeoutMs: 15_000,
+        participants: [
+            createSimulationGenerationParticipant(simulation),
+            createWorldDeltaGenerationParticipant(source, {
+                afterRestore: snapshot => map.refreshWorldTiles(
+                    snapshot.deltas.flatMap(delta => delta.entries.map(entry => ({ x: entry.x, y: entry.y })))
+                )
+            })
+        ]
+    });
+    try {
+        const recovered = await checkpoints.recover();
+        if (!recovered) await simulation.restoreStoredChunks();
+        let createdInitialArmy = false;
+        if (!simulation.getEntity(ARMY_ID)) {
+            const start = findLoadedStart(map, initialTile);
+            simulation.addEntity({
+                id: ARMY_ID,
+                ...start,
+                state: createArmyMarchState({ label: "First Army", speedTilesPerSecond: 6 })
+            });
+            createdInitialArmy = true;
+        }
+        // A manifest-less legacy campaign is imported once into the strict
+        // generation store. Subsequent recovery ignores newer uncommitted
+        // writes in the compatibility stores and restores the manifest state.
+        if (!recovered || createdInitialArmy) {
+            await checkpoints.checkpoint();
+        }
+    } catch (reason) {
+        checkpoints.dispose();
+        simulation.dispose();
+        throw reason;
     }
     // Keep the initial player area hot. Once the army leaves it, its route
     // continues at the background cadence without camera/render residency.
@@ -140,9 +179,16 @@ export async function createCampaignDemo({
     const marker = createMarker(map, tileSize, engine);
     let disposed = false;
     let disposing = false;
+    let disposePromise;
     let frameSeconds = 0;
     let frameScheduled = false;
-    let handledArrivalMarches = simulation.getEntity(ARMY_ID)?.state.completedMarches ?? 0;
+    const restoredArmy = simulation.getEntity(ARMY_ID);
+    // The terrain delta and simulation snapshot live in separate stores. Treat
+    // the latest restored arrival as unacknowledged so an interrupted save can
+    // idempotently recreate its outpost before normal frame processing starts.
+    let handledArrivalMarches = restoredArmy?.state.status === "arrived"
+        ? restoredArmy.state.completedMarches - 1
+        : restoredArmy?.state.completedMarches ?? 0;
     let latestOrder;
     let operation = Promise.resolve();
 
@@ -164,6 +210,7 @@ export async function createCampaignDemo({
                     Math.abs(armyChunk.y - streaming.centerChunkY)
                 ) > 1),
             simulation: simulation.stats,
+            checkpoint: checkpoints.stats,
             order: latestOrder
         };
     };
@@ -184,10 +231,11 @@ export async function createCampaignDemo({
                 model: "Assets/models/monument"
             }
         });
-        await source.flushDeltas?.();
-        await simulation.flush();
+        await checkpoints.checkpoint();
         handledArrivalMarches = army.state.completedMarches;
     };
+
+    await handleArrival();
 
     const enqueue = task => {
         const result = operation.then(async () => {
@@ -234,6 +282,7 @@ export async function createCampaignDemo({
                 latestOrder = await orderArmyMarch(simulation, pathfinder, ARMY_ID, destination, {
                     maxVisitedPortals: 20_000
                 });
+                await handleArrival();
                 publish();
                 return latestOrder;
             });
@@ -289,8 +338,7 @@ export async function createCampaignDemo({
         },
         async flush() {
             return enqueue(async () => {
-                await simulation.flush();
-                await source.flushDeltas?.();
+                await checkpoints.checkpoint();
                 publish();
             });
         },
@@ -299,15 +347,21 @@ export async function createCampaignDemo({
             if (army) map.setCameraTargetTile(army.x, army.y);
         },
         async dispose() {
-            if (disposed || disposing) return;
+            if (disposePromise) return disposePromise;
             disposing = true;
             map.off("frame", frameListener);
-            await operation;
-            await simulation.flush();
-            await source.flushDeltas?.();
-            disposed = true;
-            simulation.dispose();
-            marker.dispose();
+            disposePromise = (async () => {
+                try {
+                    await operation;
+                    await checkpoints.checkpoint();
+                } finally {
+                    disposed = true;
+                    checkpoints.dispose();
+                    simulation.dispose();
+                    marker.dispose();
+                }
+            })();
+            return disposePromise;
         }
     };
 

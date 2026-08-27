@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 interface KeyboardTestMap {
-    pressedMovementKeys: Set<string>;
+    interactionStats: { movementKeys: readonly string[] };
     dispose(): void;
 }
 
@@ -26,8 +26,8 @@ test("WASD input is isolated to the focused map canvas", async ({ page }) => {
     expect(await page.evaluate(() => {
         const api = window as unknown as { hexWorld: KeyboardTestMap; secondHexWorld: KeyboardTestMap };
         return {
-            first: [...api.hexWorld.pressedMovementKeys],
-            second: [...api.secondHexWorld.pressedMovementKeys],
+            first: api.hexWorld.interactionStats.movementKeys,
+            second: api.secondHexWorld.interactionStats.movementKeys,
             active: document.activeElement?.hasAttribute("data-world-canvas")
         };
     })).toEqual({ first: ["KeyW"], second: [], active: true });
@@ -38,8 +38,8 @@ test("WASD input is isolated to the focused map canvas", async ({ page }) => {
     expect(await page.evaluate(() => {
         const api = window as unknown as { hexWorld: KeyboardTestMap; secondHexWorld: KeyboardTestMap };
         return {
-            first: [...api.hexWorld.pressedMovementKeys],
-            second: [...api.secondHexWorld.pressedMovementKeys],
+            first: api.hexWorld.interactionStats.movementKeys,
+            second: api.secondHexWorld.interactionStats.movementKeys,
             active: document.activeElement?.hasAttribute("data-second-world-canvas")
         };
     })).toEqual({ first: [], second: ["KeyD"], active: true });

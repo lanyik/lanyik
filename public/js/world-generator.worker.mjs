@@ -1720,26 +1720,38 @@ function worldVegetationTransferables(layout) {
   return [...buffers];
 }
 
+// src/world/WorldDescriptor.ts
+var WORLD_WORKER_PROTOCOL_VERSION = 1;
+
 // src/world/generateWorld.worker.ts
 var scope = globalThis;
 scope.addEventListener("message", (event) => {
   try {
     const request = event.data;
-    if (!request || typeof request.id !== "number" || !request.options) {
+    if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || !Number.isSafeInteger(request.id) || !request.options || !["world", "chunk", "vegetation"].includes(request.type)) {
       throw new TypeError("World generator received an invalid request");
     }
     if (request.type === "chunk") {
       const chunk = generateWorldChunk(request.options);
-      scope.postMessage({ id: request.id, chunk }, [chunk.tiles.buffer]);
+      scope.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id: request.id, chunk }, [chunk.tiles.buffer]);
     } else if (request.type === "vegetation") {
       const vegetation = generateWorldVegetation(request.options);
-      scope.postMessage({ id: request.id, vegetation }, worldVegetationTransferables(vegetation));
+      scope.postMessage({
+        protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+        id: request.id,
+        vegetation
+      }, worldVegetationTransferables(vegetation));
     } else {
-      scope.postMessage({ id: request.id, world: generateWorld(request.options) });
+      scope.postMessage({
+        protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+        id: request.id,
+        world: generateWorld(request.options)
+      });
     }
   } catch (reason) {
     const error = reason instanceof Error ? reason : new Error(String(reason));
     scope.postMessage({
+      protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
       id: event.data?.id,
       error: { name: error.name, message: error.message, stack: error.stack }
     });

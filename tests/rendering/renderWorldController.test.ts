@@ -44,4 +44,33 @@ describe("RenderWorldController", () => {
         expect(() => controller.startStreaming(handlers)).toThrow(/already started/);
         controller.stop();
     });
+
+    test("does not inherit a custom source promise that ignores cancellation", async () => {
+        const source = new StaticWorldSource(world(), { chunkSize: 12 });
+        let markStarted!: () => void;
+        const started = new Promise<void>(resolve => { markStarted = resolve; });
+        vi.spyOn(source, "loadChunk").mockImplementation(() => {
+            markStarted();
+            return new Promise(() => undefined);
+        });
+        const controller = new RenderWorldController(source, undefined, { drainTimeoutMs: 20 });
+        controller.startStreaming({ chunkLoaded: vi.fn(), chunkUnloading: vi.fn() }, {
+            loadRadius: 0,
+            retentionRadius: 0,
+            maxResidentChunks: 1,
+            maxRetries: 0
+        });
+        void controller.setCenterTile(0, 0);
+        await started;
+
+        controller.stop();
+        await controller.settled;
+
+        expect(controller.lifecycleStats).toMatchObject({
+            state: "closed",
+            drainTimedOut: false,
+            detachedTasks: 0,
+            pendingTasks: 0
+        });
+    });
 });

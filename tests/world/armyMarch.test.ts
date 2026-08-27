@@ -91,4 +91,24 @@ describe("ArmyMarch", () => {
             .rejects.toBeInstanceOf(ArmyMarchRouteNotFoundError);
         expect(runtime.getEntity("blocked")?.state.status).toBe("idle");
     });
+
+    test("completes an order to the current tile exactly once", async () => {
+        const map = landWorld(12, 12);
+        const runtime = new WorldSimulationRuntime<ArmyMarchState>({ chunkSize: 12 });
+        runtime.registerSystem(createArmyMarchSystem());
+        runtime.addEntity({ id: "stationary", x: 4, y: 5, state: createArmyMarchState() });
+
+        const order = await orderArmyMarch(runtime, pathfinder(map, 12), "stationary", { x: 4, y: 5 });
+
+        expect(order.pathLength).toBe(1);
+        expect(runtime.getEntity("stationary")).toMatchObject({
+            x: 4,
+            y: 5,
+            state: {
+                status: "arrived",
+                completedMarches: 1,
+                tilesTravelled: 0
+            }
+        });
+    });
 });

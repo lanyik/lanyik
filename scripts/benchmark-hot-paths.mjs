@@ -275,7 +275,7 @@ async function benchmarkSimulationRuntime() {
     };
 }
 
-console.log(JSON.stringify({
+const results = {
     sparseStore: benchmarkSparseStore(),
     toroidalWindow: benchmarkToroidalWindow(),
     fogFrontier: benchmarkFogFrontier(),
@@ -284,4 +284,42 @@ console.log(JSON.stringify({
     adaptiveController: benchmarkAdaptiveController(),
     navigationSummaries: benchmarkNavigationSummaries(),
     simulationRuntime: await benchmarkSimulationRuntime()
-}, null, 2));
+};
+
+console.log(JSON.stringify(results, null, 2));
+
+if (process.argv.includes("--check")) {
+    const failures = [];
+    const configuredScale = Number(process.env.FOUNDATION_BENCHMARK_SCALE ?? 1);
+    const limitScale = Number.isFinite(configuredScale) && configuredScale > 0 ? configuredScale : 1;
+    const under = (name, value, limit) => {
+        const scaledLimit = limit * limitScale;
+        if (!Number.isFinite(value) || value > scaledLimit) {
+            failures.push(`${name}: ${value} > ${scaledLimit}`);
+        }
+    };
+    // These are gross-regression gates rather than machine-comparison scores:
+    // each limit leaves substantial shared-runner headroom but still catches
+    // accidental quadratic work and multi-order-of-magnitude slowdowns.
+    under("sparseStore.durationMs", results.sparseStore.durationMs, 500);
+    under("sparseStore.residentPayloadBytes", results.sparseStore.residentPayloadBytes, 16 * 1024 * 1024);
+    under("toroidalWindow.durationMs", results.toroidalWindow.durationMs, 750);
+    under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
+    under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
+    under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);
+    under("navigationSummaries.exactDurationMs", results.navigationSummaries.exactDurationMs, 2_500);
+    under("simulationRuntime.coldInsertMs", results.simulationRuntime.coldInsertMs, 500);
+    under("simulationRuntime.denseNoopTickMs", results.simulationRuntime.denseNoopTickMs, 2_000);
+    if (results.toroidalWindow.residentChunks !== 25) {
+        failures.push(`toroidalWindow.residentChunks: ${results.toroidalWindow.residentChunks} !== 25`);
+    }
+    if (results.fogFrontier.candidateReductionPercent < 99) {
+        failures.push(`fogFrontier.candidateReductionPercent: ${results.fogFrontier.candidateReductionPercent} < 99`);
+    }
+    if (failures.length > 0) {
+        console.error(`Foundation benchmark gate failed:\n${failures.join("\n")}`);
+        process.exitCode = 1;
+    } else {
+        console.log("Foundation benchmark gate passed.");
+    }
+}

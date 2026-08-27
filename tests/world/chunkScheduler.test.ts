@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { BufferGeometry, Object3D, PerspectiveCamera, Vector3 } from "three";
+import { BufferAttribute, BufferGeometry, Object3D, PerspectiveCamera, Vector3 } from "three";
 
 import { tagWorldChunk } from "../../src/helpers/chunks";
 import {
@@ -7,6 +7,7 @@ import {
     WorldChunkSchedulerHooks
 } from "../../src/rendering/WorldChunkScheduler";
 import { FrameTaskScheduler } from "../../src/rendering/FrameTaskScheduler";
+import { WorkQueueBackpressureError } from "../../src/runtime/PriorityTaskQueue";
 
 describe("WorldChunkScheduler", () => {
     test("activates visible chunks and releases inactive CPU resources", () => {
@@ -169,6 +170,203 @@ describe("WorldChunkScheduler", () => {
         expect(rotated.visible).toBe(true);
         expect(rotatedActivate).toHaveBeenCalledOnce();
     });
+
+    test("evicts inactive residency by measured bytes even below chunk-count limits", () => {
+        const root = new Object3D();
+        for (const [id, offset] of [["first", -20], ["second", 20]] as const) {
+            const object = new Object3D();
+            tagWorldChunk(object, id, "land", {
+                minX: offset - 5, maxX: offset + 5, minY: -2, maxY: 2, minZ: -5, maxZ: 5
+            });
+            root.add(object);
+        }
+        const camera = new PerspectiveCamera(90, 1, 1, 2000);
+        camera.position.set(0, 100, 100);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+        const geometries = new Map<string, BufferGeometry>();
+        const release = vi.fn();
+        let onlySecond = false;
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500,
+            lodEnabled: true,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10,
+            cpuCacheSize: 10,
+            gpuCacheBytes: 150,
+            cpuCacheBytes: 150,
+            gpuGraceFrames: 100,
+            cpuGraceFrames: 100
+        });
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: metadata => !onlySecond || metadata.id === "second",
+            activate: metadata => {
+                let geometry = geometries.get(metadata.id);
+                if (!geometry) {
+                    geometry = new BufferGeometry();
+                    geometry.setAttribute("position", new BufferAttribute(new Float32Array(30), 3));
+                    geometries.set(metadata.id, geometry);
+                }
+                return { geometries: [geometry] };
+            },
+            release
+        });
+        expect(scheduler.stats).toMatchObject({
+            cpuResidentBytes: 240,
+            cpuBudgetExceededBytes: 90,
+            residentChunks: 2
+        });
+
+        onlySecond = true;
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: metadata => metadata.id === "second",
+            activate: metadata => ({ geometries: [geometries.get(metadata.id)!] }),
+            release
+        });
+        expect(release).toHaveBeenCalledOnce();
+        expect(scheduler.stats).toMatchObject({
+            cpuResidentBytes: 120,
+            gpuResidentBytes: 120,
+            cpuBudgetExceededBytes: 0,
+            gpuBudgetExceededBytes: 0,
+            residentChunks: 1
+        });
+    });
+
+    test("restores GPU byte accounting when an evicted resident becomes visible again", () => {
+        const root = new Object3D();
+        for (const [id, offset] of [["first", -20], ["second", 20]] as const) {
+            const object = new Object3D();
+            tagWorldChunk(object, id, "land", {
+                minX: offset - 5, maxX: offset + 5, minY: -2, maxY: 2, minZ: -5, maxZ: 5
+            });
+            root.add(object);
+        }
+        const camera = new PerspectiveCamera(90, 1, 1, 2000);
+        camera.position.set(0, 100, 100);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+        const geometries = new Map<string, BufferGeometry>();
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500,
+            lodEnabled: true,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10,
+            cpuCacheSize: 10,
+            gpuCacheBytes: 150,
+            cpuCacheBytes: 1_000,
+            gpuGraceFrames: 100,
+            cpuGraceFrames: 100
+        });
+        const activation = (id: string) => {
+            let geometry = geometries.get(id);
+            if (!geometry) {
+                geometry = new BufferGeometry();
+                geometry.setAttribute("position", new BufferAttribute(new Float32Array(30), 3));
+                geometries.set(id, geometry);
+            }
+            return { geometries: [geometry] };
+        };
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: () => true,
+            activate: metadata => activation(metadata.id),
+            release: vi.fn()
+        });
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: metadata => metadata.id === "second",
+            activate: metadata => activation(metadata.id),
+            release: vi.fn()
+        });
+        expect(scheduler.stats).toMatchObject({
+            residentChunks: 2,
+            gpuResidentChunks: 1,
+            cpuResidentBytes: 240,
+            gpuResidentBytes: 120
+        });
+
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: () => true,
+            activate: () => undefined,
+            release: vi.fn()
+        });
+        expect(scheduler.stats).toMatchObject({
+            residentChunks: 2,
+            gpuResidentChunks: 2,
+            gpuResidentBytes: 240,
+            gpuBudgetExceededBytes: 90
+        });
+    });
+
+    test("shares one byte account with non-chunk render owners across world clears", () => {
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500,
+            lodEnabled: true,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10,
+            cpuCacheSize: 10,
+            gpuCacheBytes: 1_000,
+            cpuCacheBytes: 1_000,
+            gpuGraceFrames: 100,
+            cpuGraceFrames: 100
+        });
+        const units = scheduler.createResourceAccount("units");
+        const army = units.acquire("army", {
+            cpuBytes: 80, gpuBytes: 120, modelBytes: 120
+        });
+        expect(army).toBeDefined();
+        const root = new Object3D();
+        const chunk = new Object3D();
+        tagWorldChunk(chunk, "units:army", "land", {
+            minX: -5, maxX: 5, minY: -2, maxY: 2, minZ: -5, maxZ: 5
+        });
+        root.add(chunk);
+        const camera = new PerspectiveCamera(60, 1, 1, 2000);
+        camera.position.set(0, 100, 100);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+        const geometry = new BufferGeometry();
+        geometry.setAttribute("position", new BufferAttribute(new Float32Array(9), 3));
+        scheduler.update(root, camera, new Vector3(), {
+            enabled: () => true,
+            activate: () => ({ geometries: [geometry] }),
+            release: vi.fn()
+        });
+        expect(scheduler.stats).toMatchObject({
+            residentChunks: 1,
+            cpuResidentBytes: 116,
+            gpuResidentBytes: 156
+        });
+        scheduler.clear();
+        expect(scheduler.stats).toMatchObject({
+            residentChunks: 0,
+            cpuResidentBytes: 80,
+            gpuResidentBytes: 120,
+            modelBytes: 120,
+            cpuBudgetBytes: 1_000,
+            gpuBudgetBytes: 1_000
+        });
+        expect(army!.release()).toBe(true);
+        expect(scheduler.stats).toMatchObject({ cpuResidentBytes: 0, gpuResidentBytes: 0 });
+    });
+
+    test("exposes diagnostics without leaking ledger mutation methods", () => {
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500,
+            lodEnabled: true,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10,
+            cpuCacheSize: 10,
+            gpuCacheBytes: 1_000,
+            cpuCacheBytes: 1_000,
+            gpuGraceFrames: 100,
+            cpuGraceFrames: 100
+        });
+
+        expect(scheduler.resourceBudget.stats).toMatchObject({ cpuLimitBytes: 1_000, gpuLimitBytes: 1_000 });
+        expect("clear" in scheduler.resourceBudget).toBe(false);
+        expect("forceReserve" in scheduler.resourceBudget).toBe(false);
+        expect(Object.isFrozen(scheduler.resourceBudget)).toBe(true);
+    });
 });
 
 describe("FrameTaskScheduler", () => {
@@ -207,5 +405,17 @@ describe("FrameTaskScheduler", () => {
         expect(scheduler.stats.cancelledTasks).toBe(1);
         expect(scheduler.runFrame()).toBe(1);
         expect(order).toEqual(["near", "middle", "far"]);
+    });
+
+    test("reports a shed keyed task so its owner can retry later", () => {
+        const cancelled = vi.fn();
+        const scheduler = new FrameTaskScheduler({ maxPendingTasks: 1 });
+        expect(scheduler.enqueue("prefetch", 0, vi.fn(), {
+            lane: "prefetch",
+            cancelled
+        })).toBe(true);
+        expect(scheduler.enqueue("visible", 0, vi.fn(), { lane: "visible" })).toBe(true);
+        expect(cancelled).toHaveBeenCalledWith(expect.any(WorkQueueBackpressureError));
+        expect(scheduler.stats).toMatchObject({ pendingTasks: 1, shedTasks: 1 });
     });
 });

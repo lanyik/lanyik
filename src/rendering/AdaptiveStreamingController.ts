@@ -34,6 +34,9 @@ export interface AdaptiveStreamingSample {
     frameMs: number;
     cpuFrameMs?: number;
     gpuFrameMs?: number;
+    gpuTimingSupported?: boolean;
+    gpuTimingSaturated?: boolean;
+    gpuSampleAgeMs?: number;
     frameTaskMs?: number;
     frameTaskBacklog?: number;
     oldestFrameTaskMs?: number;
@@ -45,6 +48,8 @@ export interface AdaptiveStreamingSample {
     uploadBytes?: number;
     drawCalls?: number;
     longTaskMs?: number;
+    cpuBudgetExceededBytes?: number;
+    gpuBudgetExceededBytes?: number;
 }
 
 export interface AdaptiveStreamingStats extends AdaptiveStreamingProfile {
@@ -65,6 +70,11 @@ export interface AdaptiveStreamingStats extends AdaptiveStreamingProfile {
     chunkVisibleLatencyMs: number;
     uploadBytes: number;
     drawCalls: number;
+    gpuTimingSupported: boolean;
+    gpuTimingSaturated: boolean;
+    gpuSampleAgeMs: number | undefined;
+    cpuBudgetExceededBytes: number;
+    gpuBudgetExceededBytes: number;
 }
 
 const QUALITY = [
@@ -149,6 +159,9 @@ export class AdaptiveStreamingController {
                     : undefined,
                 sample.frameTaskBacklog !== undefined
                     ? sample.frameTaskBacklog > this.options.baseMaxTasksPerFrame * 3 ? this.targetFrameMs * 2 : 0
+                    : undefined,
+                sample.cpuBudgetExceededBytes !== undefined
+                    ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0
                     : undefined
             );
             if (mainMeasurement !== undefined) {
@@ -159,8 +172,26 @@ export class AdaptiveStreamingController {
                 && (sample.workerQueueDepth ?? 0) === 0
                 && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25
                 && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
-            const renderMeasurement = sample.gpuFrameMs
-                ?? (observableWorkIsIdle ? frameMs : undefined);
+            const gpuTimerStalled = Boolean(
+                sample.gpuTimingSupported
+                && sample.gpuTimingSaturated
+                && (sample.gpuSampleAgeMs === undefined
+                    || sample.gpuSampleAgeMs > this.targetFrameMs * 2)
+            );
+            const inferredRenderMs = !sample.gpuTimingSupported && observableWorkIsIdle
+                ? frameMs
+                : gpuTimerStalled && observableWorkIsIdle
+                    ? Math.max(frameMs, this.targetFrameMs * 2)
+                    : undefined;
+            const renderMeasurement = this.maximumDefined(
+                sample.gpuFrameMs ?? inferredRenderMs,
+                sample.gpuBudgetExceededBytes !== undefined
+                    ? sample.gpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0
+                    : undefined,
+                sample.cpuBudgetExceededBytes !== undefined
+                    ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0
+                    : undefined
+            );
             if (renderMeasurement !== undefined) {
                 changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
             }
@@ -205,7 +236,12 @@ export class AdaptiveStreamingController {
             chunkLoadLatencyMs: this.latest.chunkLoadLatencyMs ?? 0,
             chunkVisibleLatencyMs: this.latest.chunkVisibleLatencyMs ?? 0,
             uploadBytes: this.latest.uploadBytes ?? 0,
-            drawCalls: this.latest.drawCalls ?? 0
+            drawCalls: this.latest.drawCalls ?? 0,
+            gpuTimingSupported: this.latest.gpuTimingSupported ?? false,
+            gpuTimingSaturated: this.latest.gpuTimingSaturated ?? false,
+            gpuSampleAgeMs: this.latest.gpuSampleAgeMs,
+            cpuBudgetExceededBytes: this.latest.cpuBudgetExceededBytes ?? 0,
+            gpuBudgetExceededBytes: this.latest.gpuBudgetExceededBytes ?? 0
         };
     }
 

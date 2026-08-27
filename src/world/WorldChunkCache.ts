@@ -45,6 +45,7 @@ export interface WorldChunkCache {
     get(key: string): Promise<PackedWorldChunk | undefined>;
     put(key: string, chunk: PackedWorldChunk): Promise<boolean>;
     clear(): Promise<boolean>;
+    flush?(): Promise<void>;
     dispose(): void;
 }
 
@@ -233,6 +234,10 @@ export class IndexedDbWorldChunkCache implements WorldChunkCache {
                 return false;
             }
         });
+    }
+
+    public flush(): Promise<void> {
+        return this.maintenance.then(() => undefined);
     }
 
     public dispose(): void {

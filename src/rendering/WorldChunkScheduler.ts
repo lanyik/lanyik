@@ -16,10 +16,22 @@ import {
     WorldChunkLodDistances,
     WorldChunkMetadata
 } from "../helpers/chunks";
+import {
+    estimateBufferGeometriesResourceBytes,
+    estimateObject3DResourceCost,
+    normalizeResourceCost,
+    ResourceBudgetAccount,
+    ResourceBudgetLedger,
+    ResourceBudgetView,
+    ResourceCost
+} from "../runtime/ResourceBudget";
 
 export interface WorldChunkActivation {
     geometries?: BufferGeometry[];
     disposeGpu?: () => void;
+    // Custom layers should include texture/model allocations here. Geometry
+    // bytes are measured automatically when this field is omitted.
+    resourceCost?: Partial<ResourceCost>;
 }
 
 export interface WorldChunkSchedulerHooks {
@@ -36,6 +48,8 @@ export interface WorldChunkSchedulerOptions {
     vegetationLodBias?: WorldChunkLod;
     gpuCacheSize: number;
     cpuCacheSize: number;
+    gpuCacheBytes?: number;
+    cpuCacheBytes?: number;
     gpuGraceFrames: number;
     cpuGraceFrames: number;
 }
@@ -50,6 +64,16 @@ export interface WorldChunkStreamingStats {
     lod2: number;
     registeredObjects: number;
     sceneTraversals: number;
+    cpuResidentBytes: number;
+    gpuResidentBytes: number;
+    geometryBytes: number;
+    textureBytes: number;
+    modelBytes: number;
+    cpuBudgetBytes: number;
+    gpuBudgetBytes: number;
+    cpuBudgetExceededBytes: number;
+    gpuBudgetExceededBytes: number;
+    resourceEvictions: number;
 }
 
 interface ResidentChunk {
@@ -60,6 +84,7 @@ interface ResidentChunk {
     geometries: BufferGeometry[];
     disposeGpu?: () => void;
     gpuResident: boolean;
+    resourceCost: ResourceCost;
 }
 
 interface ChunkBinding {
@@ -78,7 +103,17 @@ const EMPTY_STATS: WorldChunkStreamingStats = {
     lod1: 0,
     lod2: 0,
     registeredObjects: 0,
-    sceneTraversals: 0
+    sceneTraversals: 0,
+    cpuResidentBytes: 0,
+    gpuResidentBytes: 0,
+    geometryBytes: 0,
+    textureBytes: 0,
+    modelBytes: 0,
+    cpuBudgetBytes: 0,
+    gpuBudgetBytes: 0,
+    cpuBudgetExceededBytes: 0,
+    gpuBudgetExceededBytes: 0,
+    resourceEvictions: 0
 };
 
 //Owns visibility, LOD selection and CPU/GPU residency. Render-layer classes
@@ -98,18 +133,49 @@ export class WorldChunkScheduler {
     private sceneTraversals = 0;
     private frame = 0;
     private snapshot: WorldChunkStreamingStats = { ...EMPTY_STATS };
+    private readonly resources: ResourceBudgetLedger;
+    private readonly resourceView: ResourceBudgetView;
+    private resourceEvictions = 0;
 
-    constructor(private options: WorldChunkSchedulerOptions) {}
+    constructor(private options: WorldChunkSchedulerOptions) {
+        this.validateOptions(options);
+        this.resources = new ResourceBudgetLedger({
+            cpuBytes: options.cpuCacheBytes ?? 384 * 1024 * 1024,
+            gpuBytes: options.gpuCacheBytes ?? 256 * 1024 * 1024
+        });
+        const resources = this.resources;
+        this.resourceView = Object.freeze({
+            get stats() { return resources.stats; }
+        });
+        this.refreshResourceSnapshot();
+    }
 
     public configure(options: Partial<WorldChunkSchedulerOptions>): void {
-        this.options = { ...this.options, ...options };
+        const next = { ...this.options, ...options };
+        this.validateOptions(next);
+        this.options = next;
+        this.resources.configure({
+            cpuBytes: next.cpuCacheBytes ?? 384 * 1024 * 1024,
+            gpuBytes: next.gpuCacheBytes ?? 256 * 1024 * 1024
+        });
+        this.refreshResourceSnapshot();
     }
 
     public clear(): void {
+        for (const id of this.residents.keys()) this.resources.release(this.resourceKey(id));
         this.residents.clear();
         this.frame = 0;
         this.snapshot = { ...EMPTY_STATS };
         this.registryDirty = true;
+        this.resourceEvictions = 0;
+        this.refreshResourceSnapshot();
+    }
+
+    /** Final owner teardown; unlike clear(), this also drops external accounts. */
+    public dispose(): void {
+        this.clear();
+        this.resources.dispose();
+        this.refreshResourceSnapshot();
     }
 
     public invalidateScene(): void {
@@ -121,6 +187,7 @@ export class WorldChunkScheduler {
     //cache limits never retain metadata for unloaded logical chunks.
     public forget(ids: Iterable<string>): void {
         for (const id of ids) {
+            this.resources.release(this.resourceKey(id));
             this.residents.delete(id);
             this.bindings.delete(id);
         }
@@ -128,7 +195,19 @@ export class WorldChunkScheduler {
     }
 
     public get stats(): Readonly<WorldChunkStreamingStats> {
+        this.refreshResourceSnapshot();
         return this.snapshot;
+    }
+
+    // Shared admission surface for non-chunk render owners (units, buildings,
+    // effects). Namespaced reservations participate in the same CPU/GPU hard
+    // limits and remain intact when chunk residency is cleared.
+    public get resourceBudget(): ResourceBudgetView {
+        return this.resourceView;
+    }
+
+    public createResourceAccount(label: string): ResourceBudgetAccount {
+        return this.resources.createAccount(label);
     }
 
     public update(root: Object3D, camera: Camera, target: Vector3, hooks: WorldChunkSchedulerHooks): void {
@@ -197,6 +276,11 @@ export class WorldChunkScheduler {
                 ?? this.residents.get(id)?.geometries
                 ?? [];
             const resident = this.residents.get(id);
+            const resourceCost = activation
+                ? this.activationCost(activation, geometries, request.visibleObjects)
+                : resident?.gpuResident
+                    ? resident.resourceCost
+                    : this.activationCost({}, geometries, request.visibleObjects);
             this.residents.set(id, {
                 id,
                 metadata: request.metadata,
@@ -204,8 +288,13 @@ export class WorldChunkScheduler {
                 lastVisible: this.frame,
                 geometries,
                 disposeGpu: activation?.disposeGpu ?? resident?.disposeGpu,
-                gpuResident: true
+                gpuResident: true,
+                resourceCost
             });
+            // Visible chunks form the pinned working set. Their unavoidable
+            // overage is surfaced explicitly so adaptive quality can react;
+            // all inactive retention remains subject to the hard byte limit.
+            this.resources.forceReserve(this.resourceKey(id), resourceCost, true);
             //A changed LOD can replace attribute data without changing the
             //BufferGeometry identity. Disposing here guarantees stale GPU
             //buffers are gone before Three uploads the new attributes.
@@ -219,6 +308,7 @@ export class WorldChunkScheduler {
         this.evictInactive(this.visibleIds, hooks);
         let gpuResidentChunks = 0;
         for (const entry of this.residents.values()) if (entry.gpuResident) gpuResidentChunks += 1;
+        const resourceStats = this.resources.stats;
         this.snapshot = {
             visibleObjects,
             visibleChunks: this.visibleIds.size,
@@ -228,14 +318,26 @@ export class WorldChunkScheduler {
             lod1: lodCounts[1],
             lod2: lodCounts[2],
             registeredObjects: this.registeredObjects,
-            sceneTraversals: this.sceneTraversals
+            sceneTraversals: this.sceneTraversals,
+            cpuResidentBytes: resourceStats.cpuBytes,
+            gpuResidentBytes: resourceStats.gpuBytes,
+            geometryBytes: resourceStats.geometryBytes,
+            textureBytes: resourceStats.textureBytes,
+            modelBytes: resourceStats.modelBytes,
+            cpuBudgetBytes: resourceStats.cpuLimitBytes,
+            gpuBudgetBytes: resourceStats.gpuLimitBytes,
+            cpuBudgetExceededBytes: resourceStats.cpuExceededBytes,
+            gpuBudgetExceededBytes: resourceStats.gpuExceededBytes,
+            resourceEvictions: this.resourceEvictions
         };
     }
 
     private evictInactive(visible: ReadonlySet<string>, hooks: WorldChunkSchedulerHooks): void {
         this.inactive.length = 0;
         for (const entry of this.residents.values()) {
-            if (!visible.has(entry.id)) this.inactive.push(entry);
+            const isVisible = visible.has(entry.id);
+            this.resources.setPinned(this.resourceKey(entry.id), isVisible);
+            if (!isVisible) this.inactive.push(entry);
         }
         this.inactive.sort((a, b) => a.lastVisible - b.lastVisible);
 
@@ -245,21 +347,30 @@ export class WorldChunkScheduler {
         for (const entry of this.inactive) {
             if (!entry.gpuResident) continue;
             const stale = this.frame - entry.lastVisible >= this.options.gpuGraceFrames;
-            if (!stale && gpuExcess <= 0) break;
+            const byteExcess = this.resources.stats.gpuExceededBytes;
+            if (!stale && gpuExcess <= 0 && byteExcess <= 0) break;
             for (const geometry of entry.geometries) geometry.dispose();
             entry.disposeGpu?.();
             entry.gpuResident = false;
+            entry.resourceCost = { ...entry.resourceCost, gpuBytes: 0 };
+            this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false);
+            this.resourceEvictions += 1;
             if (gpuExcess > 0) gpuExcess -= 1;
         }
 
         let cpuExcess = Math.max(0, this.residents.size - this.options.cpuCacheSize);
         for (const entry of this.inactive) {
             const stale = this.frame - entry.lastVisible >= this.options.cpuGraceFrames;
-            if (!stale && cpuExcess <= 0) break;
-            for (const geometry of entry.geometries) geometry.dispose();
-            if (entry.gpuResident) entry.disposeGpu?.();
+            const byteExcess = this.resources.stats.cpuExceededBytes;
+            if (!stale && cpuExcess <= 0 && byteExcess <= 0) break;
+            if (entry.gpuResident) {
+                for (const geometry of entry.geometries) geometry.dispose();
+                entry.disposeGpu?.();
+            }
             hooks.release(entry.metadata);
             this.residents.delete(entry.id);
+            this.resources.release(this.resourceKey(entry.id));
+            this.resourceEvictions += 1;
             if (cpuExcess > 0) cpuExcess -= 1;
         }
     }
@@ -268,6 +379,64 @@ export class WorldChunkScheduler {
         let count = 0;
         for (const entry of this.residents.values()) if (entry.gpuResident) count += 1;
         return count;
+    }
+
+    private activationCost(
+        activation: WorldChunkActivation,
+        geometries: readonly BufferGeometry[],
+        objects: readonly Object3D[]
+    ): ResourceCost {
+        const measured = objects.length > 0
+            ? estimateObject3DResourceCost(objects)
+            : normalizeResourceCost();
+        const geometry = geometries.length > 0
+            ? estimateBufferGeometriesResourceBytes(geometries)
+            : { cpuBytes: measured.cpuBytes, gpuBytes: measured.geometryBytes };
+        return normalizeResourceCost({
+            ...measured,
+            cpuBytes: Math.max(measured.cpuBytes, geometry.cpuBytes),
+            gpuBytes: Math.max(measured.gpuBytes, geometry.gpuBytes),
+            geometryBytes: geometry.gpuBytes,
+            ...activation.resourceCost
+        });
+    }
+
+    private resourceKey(id: string): string {
+        return `world-chunk:${id}`;
+    }
+
+    private validateOptions(options: WorldChunkSchedulerOptions): void {
+        for (const [name, value] of [
+            ["gpuCacheSize", options.gpuCacheSize],
+            ["cpuCacheSize", options.cpuCacheSize],
+            ["gpuGraceFrames", options.gpuGraceFrames],
+            ["cpuGraceFrames", options.cpuGraceFrames]
+        ] as const) {
+            if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
+        }
+        for (const [name, value] of [
+            ["gpuCacheBytes", options.gpuCacheBytes ?? 256 * 1024 * 1024],
+            ["cpuCacheBytes", options.cpuCacheBytes ?? 384 * 1024 * 1024]
+        ] as const) {
+            if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative safe integer`);
+        }
+    }
+
+    private refreshResourceSnapshot(): void {
+        const resources = this.resources.stats;
+        this.snapshot = {
+            ...this.snapshot,
+            cpuResidentBytes: resources.cpuBytes,
+            gpuResidentBytes: resources.gpuBytes,
+            geometryBytes: resources.geometryBytes,
+            textureBytes: resources.textureBytes,
+            modelBytes: resources.modelBytes,
+            cpuBudgetBytes: resources.cpuLimitBytes,
+            gpuBudgetBytes: resources.gpuLimitBytes,
+            cpuBudgetExceededBytes: resources.cpuExceededBytes,
+            gpuBudgetExceededBytes: resources.gpuExceededBytes,
+            resourceEvictions: this.resourceEvictions
+        };
     }
 
     private rebuildRegistry(root: Object3D): void {
@@ -299,6 +468,8 @@ export function createDefaultWorldChunkSchedulerOptions(): WorldChunkSchedulerOp
         vegetationLodBias: 0,
         gpuCacheSize: 128,
         cpuCacheSize: 192,
+        gpuCacheBytes: 256 * 1024 * 1024,
+        cpuCacheBytes: 384 * 1024 * 1024,
         gpuGraceFrames: 300,
         cpuGraceFrames: 1200
     };

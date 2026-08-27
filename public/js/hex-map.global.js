@@ -1604,270 +1604,6 @@
       document2.removeEventListener("keyup", this._interceptControlUp, { passive: true, capture: true });
     }
   }
-  var Sky = class _Sky extends three.Mesh {
-    /**
-     * Constructs a new skydome.
-     */
-    constructor() {
-      const shader = _Sky.SkyShader;
-      const material = new three.ShaderMaterial({
-        name: shader.name,
-        uniforms: three.UniformsUtils.clone(shader.uniforms),
-        vertexShader: shader.vertexShader,
-        fragmentShader: shader.fragmentShader,
-        side: three.BackSide,
-        depthWrite: false
-      });
-      super(new three.BoxGeometry(1, 1, 1), material);
-      this.isSky = true;
-    }
-  };
-  Sky.SkyShader = {
-    name: "SkyShader",
-    uniforms: {
-      "turbidity": { value: 2 },
-      "rayleigh": { value: 1 },
-      "mieCoefficient": { value: 5e-3 },
-      "mieDirectionalG": { value: 0.8 },
-      "sunPosition": { value: new three.Vector3() },
-      "up": { value: new three.Vector3(0, 1, 0) },
-      "cloudScale": { value: 2e-4 },
-      "cloudSpeed": { value: 1e-4 },
-      "cloudCoverage": { value: 0.4 },
-      "cloudDensity": { value: 0.4 },
-      "cloudElevation": { value: 0.5 },
-      "showSunDisc": { value: 1 },
-      "time": { value: 0 }
-    },
-    vertexShader: (
-      /* glsl */
-      `
-		uniform vec3 sunPosition;
-		uniform float rayleigh;
-		uniform float turbidity;
-		uniform float mieCoefficient;
-		uniform vec3 up;
-
-		varying vec3 vWorldPosition;
-		varying vec3 vSunDirection;
-		varying float vSunfade;
-		varying vec3 vBetaR;
-		varying vec3 vBetaM;
-		varying float vSunE;
-
-		// constants for atmospheric scattering
-		const float e = 2.71828182845904523536028747135266249775724709369995957;
-		const float pi = 3.141592653589793238462643383279502884197169;
-
-		// wavelength of used primaries, according to preetham
-		const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );
-		// this pre-calculation replaces older TotalRayleigh(vec3 lambda) function:
-		// (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn))
-		const vec3 totalRayleigh = vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 );
-
-		// mie stuff
-		// K coefficient for the primaries
-		const float v = 4.0;
-		const vec3 K = vec3( 0.686, 0.678, 0.666 );
-		// MieConst = pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K
-		const vec3 MieConst = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
-
-		// earth shadow hack
-		// cutoffAngle = pi / 1.95;
-		const float cutoffAngle = 1.6110731556870734;
-		const float steepness = 1.5;
-		const float EE = 1000.0;
-
-		float sunIntensity( float zenithAngleCos ) {
-			zenithAngleCos = clamp( zenithAngleCos, -1.0, 1.0 );
-			return EE * max( 0.0, 1.0 - pow( e, -( ( cutoffAngle - acos( zenithAngleCos ) ) / steepness ) ) );
-		}
-
-		vec3 totalMie( float T ) {
-			float c = ( 0.2 * T ) * 10E-18;
-			return 0.434 * c * MieConst;
-		}
-
-		void main() {
-
-			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
-			vWorldPosition = worldPosition.xyz;
-
-			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-			gl_Position.z = gl_Position.w; // set z to camera.far
-
-			vSunDirection = normalize( sunPosition );
-
-			vSunE = sunIntensity( dot( vSunDirection, up ) );
-
-			vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
-
-			float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
-
-			// extinction (absorption + out scattering)
-			// rayleigh coefficients
-			vBetaR = totalRayleigh * rayleighCoefficient;
-
-			// mie coefficients
-			vBetaM = totalMie( turbidity ) * mieCoefficient;
-
-		}`
-    ),
-    fragmentShader: (
-      /* glsl */
-      `
-		varying vec3 vWorldPosition;
-		varying vec3 vSunDirection;
-		varying vec3 vBetaR;
-		varying vec3 vBetaM;
-		varying float vSunE;
-
-		uniform float mieDirectionalG;
-		uniform vec3 up;
-		uniform float cloudScale;
-		uniform float cloudSpeed;
-		uniform float cloudCoverage;
-		uniform float cloudDensity;
-		uniform float cloudElevation;
-		uniform float showSunDisc;
-		uniform float time;
-
-		// Cloud noise functions
-		float hash( vec2 p ) {
-			return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
-		}
-
-		float noise( vec2 p ) {
-			vec2 i = floor( p );
-			vec2 f = fract( p );
-			f = f * f * ( 3.0 - 2.0 * f );
-			float a = hash( i );
-			float b = hash( i + vec2( 1.0, 0.0 ) );
-			float c = hash( i + vec2( 0.0, 1.0 ) );
-			float d = hash( i + vec2( 1.0, 1.0 ) );
-			return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
-		}
-
-		float fbm( vec2 p ) {
-			float value = 0.0;
-			float amplitude = 0.5;
-			for ( int i = 0; i < 5; i ++ ) {
-				value += amplitude * noise( p );
-				p *= 2.0;
-				amplitude *= 0.5;
-			}
-			return value;
-		}
-
-		// constants for atmospheric scattering
-		const float pi = 3.141592653589793238462643383279502884197169;
-
-		const float n = 1.0003; // refractive index of air
-		const float N = 2.545E25; // number of molecules per unit volume for air at 288.15K and 1013mb (sea level -45 celsius)
-
-		// optical length at zenith for molecules
-		const float rayleighZenithLength = 8.4E3;
-		const float mieZenithLength = 1.25E3;
-		// 66 arc seconds -> degrees, and the cosine of that
-		const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
-
-		// 3.0 / ( 16.0 * pi )
-		const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
-		// 1.0 / ( 4.0 * pi )
-		const float ONE_OVER_FOURPI = 0.07957747154594767;
-
-		float rayleighPhase( float cosTheta ) {
-			return THREE_OVER_SIXTEENPI * ( 1.0 + pow( cosTheta, 2.0 ) );
-		}
-
-		float hgPhase( float cosTheta, float g ) {
-			float g2 = pow( g, 2.0 );
-			float inverse = 1.0 / pow( 1.0 - 2.0 * g * cosTheta + g2, 1.5 );
-			return ONE_OVER_FOURPI * ( ( 1.0 - g2 ) * inverse );
-		}
-
-		void main() {
-
-			vec3 direction = normalize( vWorldPosition - cameraPosition );
-
-			// optical length
-			// cutoff angle at 90 to avoid singularity in next formula.
-			float zenithAngle = acos( max( 0.0, dot( up, direction ) ) );
-			float inverse = 1.0 / ( cos( zenithAngle ) + 0.15 * pow( 93.885 - ( ( zenithAngle * 180.0 ) / pi ), -1.253 ) );
-			float sR = rayleighZenithLength * inverse;
-			float sM = mieZenithLength * inverse;
-
-			// combined extinction factor
-			vec3 Fex = exp( -( vBetaR * sR + vBetaM * sM ) );
-
-			// in scattering
-			float cosTheta = dot( direction, vSunDirection );
-
-			float rPhase = rayleighPhase( cosTheta * 0.5 + 0.5 );
-			vec3 betaRTheta = vBetaR * rPhase;
-
-			float mPhase = hgPhase( cosTheta, mieDirectionalG );
-			vec3 betaMTheta = vBetaM * mPhase;
-
-			vec3 Lin = pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * ( 1.0 - Fex ), vec3( 1.5 ) );
-			Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * Fex, vec3( 1.0 / 2.0 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );
-
-			// nightsky
-			float theta = acos( direction.y ); // elevation --> y-axis, [-pi/2, pi/2]
-			float phi = atan( direction.z, direction.x ); // azimuth --> x-axis [-pi/2, pi/2]
-			vec2 uv = vec2( phi, theta ) / vec2( 2.0 * pi, pi ) + vec2( 0.5, 0.0 );
-			vec3 L0 = vec3( 0.1 ) * Fex;
-
-			// composition + solar disc
-			float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSunDisc;
-			L0 += ( vSunE * 19000.0 * Fex ) * sundisc;
-
-			vec3 texColor = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
-
-			// Clouds
-			if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
-
-				// Project to cloud plane (higher elevation = clouds appear lower/closer)
-				float elevation = mix( 1.0, 0.1, cloudElevation );
-				vec2 cloudUV = direction.xz / ( direction.y * elevation );
-				cloudUV *= cloudScale;
-				cloudUV += time * cloudSpeed;
-
-				// Multi-octave noise for fluffy clouds
-				float cloudNoise = fbm( cloudUV * 1000.0 );
-				cloudNoise += 0.5 * fbm( cloudUV * 2000.0 + 3.7 );
-				cloudNoise = cloudNoise * 0.5 + 0.5;
-
-				// Apply coverage threshold
-				float cloudMask = smoothstep( 1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cloudNoise );
-
-				// Fade clouds near horizon (adjusted by elevation)
-				float horizonFade = smoothstep( 0.0, 0.1 + 0.2 * cloudElevation, direction.y );
-				cloudMask *= horizonFade;
-
-				// Cloud lighting based on sun position
-				float sunInfluence = dot( direction, vSunDirection ) * 0.5 + 0.5;
-				float daylight = max( 0.0, vSunDirection.y * 2.0 );
-
-				// Base cloud color affected by atmosphere
-				vec3 atmosphereColor = Lin * 0.04;
-				vec3 cloudColor = mix( vec3( 0.3 ), vec3( 1.0 ), daylight );
-				cloudColor = mix( cloudColor, atmosphereColor + vec3( 1.0 ), sunInfluence * 0.5 );
-				cloudColor *= vSunE * 0.00002;
-
-				// Blend clouds with sky
-				texColor = mix( texColor, cloudColor, cloudMask * cloudDensity );
-
-			}
-
-			gl_FragColor = vec4( texColor, 1.0 );
-
-			#include <tonemapping_fragment>
-			#include <colorspace_fragment>
-
-		}`
-    )
-  };
 
   // src/EventEmitter.ts
   var EventEmitter = class {
@@ -1901,45 +1637,6 @@
       return this;
     }
   };
-
-  // src/enums.ts
-  var Land = /* @__PURE__ */ ((Land2) => {
-    Land2["sea"] = "sea";
-    Land2["coastal"] = "coastal";
-    Land2["land"] = "land";
-    Land2["sand"] = "sand";
-    Land2["tundra"] = "tundra";
-    Land2["snow"] = "snow";
-    Land2["mountain"] = "mountain";
-    return Land2;
-  })(Land || {});
-  var LandColor = {
-    ["land" /* land */]: 8694355,
-    ["coastal" /* coastal */]: 5205120,
-    ["sea" /* sea */]: 2766476,
-    ["sand" /* sand */]: 11446117,
-    ["tundra" /* tundra */]: 16777215,
-    ["snow" /* snow */]: 16777215,
-    ["mountain" /* mountain */]: 9142389
-  };
-  var LandPriority = {
-    ["sea" /* sea */]: 0,
-    ["coastal" /* coastal */]: 1,
-    ["land" /* land */]: 2,
-    ["sand" /* sand */]: 3,
-    ["tundra" /* tundra */]: 4,
-    ["snow" /* snow */]: 5,
-    ["mountain" /* mountain */]: 6
-  };
-  var UnitActions = /* @__PURE__ */ ((UnitActions2) => {
-    UnitActions2["attack"] = "attack";
-    UnitActions2["walk"] = "walk";
-    UnitActions2["distanceAttack"] = "distanceAttack";
-    UnitActions2["death"] = "death";
-    UnitActions2["idle"] = "idle";
-    UnitActions2["defence"] = "defence";
-    return UnitActions2;
-  })(UnitActions || {});
 
   // src/helpers/helpers.ts
   function pointy_hex_corner(center, size, i) {
@@ -2107,6 +1804,45 @@
       y: wrapY ? positiveModulo(best.y, mapHeight) : best.y
     };
   }
+
+  // src/enums.ts
+  var Land = /* @__PURE__ */ ((Land2) => {
+    Land2["sea"] = "sea";
+    Land2["coastal"] = "coastal";
+    Land2["land"] = "land";
+    Land2["sand"] = "sand";
+    Land2["tundra"] = "tundra";
+    Land2["snow"] = "snow";
+    Land2["mountain"] = "mountain";
+    return Land2;
+  })(Land || {});
+  var LandColor = {
+    ["land" /* land */]: 8694355,
+    ["coastal" /* coastal */]: 5205120,
+    ["sea" /* sea */]: 2766476,
+    ["sand" /* sand */]: 11446117,
+    ["tundra" /* tundra */]: 16777215,
+    ["snow" /* snow */]: 16777215,
+    ["mountain" /* mountain */]: 9142389
+  };
+  var LandPriority = {
+    ["sea" /* sea */]: 0,
+    ["coastal" /* coastal */]: 1,
+    ["land" /* land */]: 2,
+    ["sand" /* sand */]: 3,
+    ["tundra" /* tundra */]: 4,
+    ["snow" /* snow */]: 5,
+    ["mountain" /* mountain */]: 6
+  };
+  var UnitActions = /* @__PURE__ */ ((UnitActions2) => {
+    UnitActions2["attack"] = "attack";
+    UnitActions2["walk"] = "walk";
+    UnitActions2["distanceAttack"] = "distanceAttack";
+    UnitActions2["death"] = "death";
+    UnitActions2["idle"] = "idle";
+    UnitActions2["defence"] = "defence";
+    return UnitActions2;
+  })(UnitActions || {});
 
   // src/helpers/mapData.ts
   function forEachMapTile(map, visit) {
@@ -8945,6 +8681,385 @@ void main() {
       return this.lastCandidates;
     }
   };
+  var ZERO_COST = {
+    cpuBytes: 0,
+    gpuBytes: 0,
+    geometryBytes: 0,
+    textureBytes: 0,
+    modelBytes: 0
+  };
+  function normalizeResourceCost(cost = {}) {
+    const normalized = { ...ZERO_COST, ...cost };
+    for (const [name, value] of Object.entries(normalized)) {
+      if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
+        throw new RangeError(`${name} must be a non-negative safe integer byte count`);
+      }
+    }
+    return normalized;
+  }
+  function addCost(first, second) {
+    return {
+      cpuBytes: first.cpuBytes + second.cpuBytes,
+      gpuBytes: first.gpuBytes + second.gpuBytes,
+      geometryBytes: first.geometryBytes + second.geometryBytes,
+      textureBytes: first.textureBytes + second.textureBytes,
+      modelBytes: first.modelBytes + second.modelBytes
+    };
+  }
+  function subtractCost(first, second) {
+    return {
+      cpuBytes: Math.max(0, first.cpuBytes - second.cpuBytes),
+      gpuBytes: Math.max(0, first.gpuBytes - second.gpuBytes),
+      geometryBytes: Math.max(0, first.geometryBytes - second.geometryBytes),
+      textureBytes: Math.max(0, first.textureBytes - second.textureBytes),
+      modelBytes: Math.max(0, first.modelBytes - second.modelBytes)
+    };
+  }
+  var ResourceBudgetLedger = class {
+    constructor(limits) {
+      this.entries = /* @__PURE__ */ new Map();
+      this.accounts = /* @__PURE__ */ new Set();
+      this.totals = { ...ZERO_COST };
+      this.rejectedReservations = 0;
+      this.peakCpuBytes = 0;
+      this.peakGpuBytes = 0;
+      this.nextAccountId = 1;
+      this.disposed = false;
+      this.limits = this.validateLimits(limits);
+    }
+    configure(limits) {
+      this.assertActive();
+      this.limits = this.validateLimits({ ...this.limits, ...limits });
+    }
+    reserve(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertKey(key);
+      const normalized = normalizeResourceCost(cost);
+      const existing = this.entries.get(key);
+      const prospective = addCost(subtractCost(this.totals, existing ?? ZERO_COST), normalized);
+      if (prospective.cpuBytes > this.limits.cpuBytes || prospective.gpuBytes > this.limits.gpuBytes) {
+        this.rejectedReservations += 1;
+        return false;
+      }
+      this.store(key, normalized, pinned, existing);
+      return true;
+    }
+    forceReserve(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertKey(key);
+      const normalized = normalizeResourceCost(cost);
+      this.store(key, normalized, pinned, this.entries.get(key));
+    }
+    release(key) {
+      const existing = this.entries.get(key);
+      if (!existing) return false;
+      this.entries.delete(key);
+      this.totals = subtractCost(this.totals, existing);
+      return true;
+    }
+    clear() {
+      if (this.disposed) return;
+      for (const account of this.accounts) account.invalidateReservations();
+      this.entries.clear();
+      this.totals = { ...ZERO_COST };
+    }
+    dispose() {
+      if (this.disposed) return;
+      for (const account of [...this.accounts]) account.detachFromLedger();
+      this.accounts.clear();
+      this.entries.clear();
+      this.totals = { ...ZERO_COST };
+      this.disposed = true;
+    }
+    createAccount(label) {
+      this.assertActive();
+      if (typeof label !== "string" || label.trim().length === 0) {
+        throw new TypeError("resource account label is required");
+      }
+      const account = new LedgerResourceBudgetAccount(
+        this,
+        label,
+        `@account:${this.nextAccountId++}:`,
+        (value) => {
+          this.accounts.delete(value);
+        }
+      );
+      this.accounts.add(account);
+      return account;
+    }
+    setPinned(key, pinned) {
+      const existing = this.entries.get(key);
+      if (!existing || existing.pinned === pinned) return Boolean(existing);
+      this.entries.set(key, { ...existing, pinned });
+      return true;
+    }
+    get(key) {
+      return this.entries.get(key);
+    }
+    get stats() {
+      let pinnedReservations = 0;
+      for (const entry of this.entries.values()) if (entry.pinned) pinnedReservations += 1;
+      return {
+        ...this.totals,
+        disposed: this.disposed,
+        cpuLimitBytes: this.limits.cpuBytes,
+        gpuLimitBytes: this.limits.gpuBytes,
+        accounts: this.accounts.size,
+        reservations: this.entries.size,
+        pinnedReservations,
+        cpuExceededBytes: Math.max(0, this.totals.cpuBytes - this.limits.cpuBytes),
+        gpuExceededBytes: Math.max(0, this.totals.gpuBytes - this.limits.gpuBytes),
+        rejectedReservations: this.rejectedReservations,
+        peakCpuBytes: this.peakCpuBytes,
+        peakGpuBytes: this.peakGpuBytes
+      };
+    }
+    store(key, cost, pinned, existing) {
+      this.totals = addCost(subtractCost(this.totals, existing ?? ZERO_COST), cost);
+      this.entries.set(key, { key, pinned, ...cost });
+      this.peakCpuBytes = Math.max(this.peakCpuBytes, this.totals.cpuBytes);
+      this.peakGpuBytes = Math.max(this.peakGpuBytes, this.totals.gpuBytes);
+    }
+    validateLimits(limits) {
+      for (const [name, value] of Object.entries(limits)) {
+        if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
+          throw new RangeError(`${name} budget must be a non-negative safe integer`);
+        }
+      }
+      return { ...limits };
+    }
+    assertKey(key) {
+      if (typeof key !== "string" || key.trim().length === 0) {
+        throw new TypeError("resource key is required");
+      }
+    }
+    assertActive() {
+      if (this.disposed) throw new Error("ResourceBudgetLedger has been disposed");
+    }
+  };
+  var LedgerResourceReservationHandle = class {
+    constructor(account, key, ledgerKey) {
+      this.account = account;
+      this.key = key;
+      this.ledgerKey = ledgerKey;
+      this.releasedValue = false;
+    }
+    get released() {
+      return this.releasedValue;
+    }
+    get reservation() {
+      return this.releasedValue ? void 0 : this.account.lookup(this.ledgerKey);
+    }
+    update(cost, pinned = this.reservation?.pinned ?? false) {
+      if (this.releasedValue) throw new Error(`resource reservation "${this.key}" has been released`);
+      return this.account.update(this, cost, pinned);
+    }
+    setPinned(pinned) {
+      if (this.releasedValue) return false;
+      return this.account.setPinned(this, pinned);
+    }
+    release() {
+      if (this.releasedValue) return false;
+      this.releasedValue = true;
+      return this.account.releaseHandle(this);
+    }
+    invalidate() {
+      this.releasedValue = true;
+    }
+  };
+  var LedgerResourceBudgetAccount = class {
+    constructor(ledger, label, prefix, detached) {
+      this.ledger = ledger;
+      this.label = label;
+      this.prefix = prefix;
+      this.detached = detached;
+      this.handles = /* @__PURE__ */ new Map();
+      this.disposedValue = false;
+    }
+    get disposed() {
+      return this.disposedValue;
+    }
+    acquire(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertLocalKey(key);
+      if (this.handles.has(key)) {
+        throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
+      }
+      const ledgerKey = `${this.prefix}${key}`;
+      if (!this.ledger.reserve(ledgerKey, cost, pinned)) return void 0;
+      const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
+      this.handles.set(key, handle);
+      return handle;
+    }
+    release(key) {
+      return this.handles.get(key)?.release() ?? false;
+    }
+    clear() {
+      if (this.disposedValue) return;
+      for (const handle of [...this.handles.values()]) handle.release();
+    }
+    dispose() {
+      if (this.disposedValue) return;
+      this.clear();
+      this.disposedValue = true;
+      this.detached(this);
+    }
+    get stats() {
+      let totals = { ...ZERO_COST };
+      let reservations = 0;
+      let pinnedReservations = 0;
+      for (const handle of this.handles.values()) {
+        const reservation = handle.reservation;
+        if (!reservation) continue;
+        totals = addCost(totals, reservation);
+        reservations += 1;
+        if (reservation.pinned) pinnedReservations += 1;
+      }
+      return {
+        ...totals,
+        label: this.label,
+        disposed: this.disposedValue,
+        reservations,
+        pinnedReservations
+      };
+    }
+    lookup(ledgerKey) {
+      return this.ledger.get(ledgerKey);
+    }
+    update(handle, cost, pinned) {
+      this.assertOwned(handle);
+      return this.ledger.reserve(handle.ledgerKey, cost, pinned);
+    }
+    setPinned(handle, pinned) {
+      this.assertOwned(handle);
+      return this.ledger.setPinned(handle.ledgerKey, pinned);
+    }
+    releaseHandle(handle) {
+      if (this.handles.get(handle.key) !== handle) return false;
+      this.handles.delete(handle.key);
+      return this.ledger.release(handle.ledgerKey);
+    }
+    invalidateReservations() {
+      for (const handle of this.handles.values()) handle.invalidate();
+      this.handles.clear();
+    }
+    detachFromLedger() {
+      this.invalidateReservations();
+      this.disposedValue = true;
+    }
+    assertOwned(handle) {
+      this.assertActive();
+      if (this.handles.get(handle.key) !== handle) {
+        throw new Error(`resource reservation "${handle.key}" is not owned by account "${this.label}"`);
+      }
+    }
+    assertActive() {
+      if (this.disposedValue) throw new Error(`resource account "${this.label}" has been disposed`);
+    }
+    assertLocalKey(key) {
+      if (typeof key !== "string" || key.trim().length === 0) {
+        throw new TypeError("resource reservation key is required");
+      }
+    }
+  };
+  function attributeArray(attribute) {
+    return attribute instanceof three.InterleavedBufferAttribute ? attribute.data.array : attribute.array;
+  }
+  function estimateBufferGeometriesResourceBytes(geometries) {
+    const arrays = /* @__PURE__ */ new Set();
+    const uploads = /* @__PURE__ */ new Set();
+    let cpuBytes = 0;
+    let gpuBytes = 0;
+    const account = (attribute) => {
+      if (!attribute) return;
+      const array = attributeArray(attribute);
+      const buffer = array.buffer;
+      if (!arrays.has(buffer)) {
+        arrays.add(buffer);
+        cpuBytes += buffer.byteLength;
+      }
+      const uploadOwner = attribute instanceof three.InterleavedBufferAttribute ? attribute.data : attribute;
+      if (!uploads.has(uploadOwner)) {
+        uploads.add(uploadOwner);
+        gpuBytes += array.byteLength;
+      }
+    };
+    for (const geometry of new Set(geometries)) {
+      account(geometry.index);
+      for (const attribute of Object.values(geometry.attributes)) account(attribute);
+      for (const attributes of Object.values(geometry.morphAttributes)) {
+        for (const attribute of attributes) account(attribute);
+      }
+    }
+    return { cpuBytes, gpuBytes };
+  }
+  function estimateBufferGeometriesBytes(geometries) {
+    return estimateBufferGeometriesResourceBytes(geometries).cpuBytes;
+  }
+  function textureImageBytes(image) {
+    if (Array.isArray(image)) return image.reduce((bytes, face) => bytes + textureImageBytes(face), 0);
+    if (!image || typeof image !== "object") return 0;
+    const value = image;
+    if (value.data) return value.data.byteLength;
+    if (!Number.isFinite(value.width) || !Number.isFinite(value.height)) return 0;
+    return Math.max(0, Math.round(
+      value.width * value.height * (value.depth ?? 1) * 4
+    ));
+  }
+  function textureResourceBytes(texture) {
+    const baseBytes = textureImageBytes(texture.image);
+    const mipmapBytes = texture.mipmaps.reduce((bytes, mipmap) => bytes + textureImageBytes(mipmap), 0);
+    const generatedMipBytes = texture.generateMipmaps && mipmapBytes === 0 ? Math.ceil(baseBytes / 3) : 0;
+    return {
+      cpuBytes: baseBytes + mipmapBytes,
+      gpuBytes: baseBytes + mipmapBytes + generatedMipBytes
+    };
+  }
+  function collectTextureValue(value, textures) {
+    if (value instanceof three.Texture) {
+      textures.add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) collectTextureValue(entry, textures);
+    }
+  }
+  function estimateObject3DResourceCost(objects) {
+    const geometries = /* @__PURE__ */ new Set();
+    const materials = /* @__PURE__ */ new Set();
+    const textures = /* @__PURE__ */ new Set();
+    const roots = new Set(objects);
+    for (const root of roots) root.traverse((object) => {
+      const renderable = object;
+      if (renderable.geometry) geometries.add(renderable.geometry);
+      const objectMaterials = renderable.material ? Array.isArray(renderable.material) ? renderable.material : [renderable.material] : [];
+      for (const material of objectMaterials) materials.add(material);
+    });
+    for (const material of materials) {
+      for (const value of Object.values(material)) collectTextureValue(value, textures);
+      const uniforms = material.uniforms;
+      for (const uniform of Object.values(uniforms ?? {})) {
+        collectTextureValue(uniform?.value, textures);
+      }
+    }
+    const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
+    let textureCpuBytes = 0;
+    let textureGpuBytes = 0;
+    for (const texture of textures) {
+      const cost = textureResourceBytes(texture);
+      textureCpuBytes += cost.cpuBytes;
+      textureGpuBytes += cost.gpuBytes;
+    }
+    return normalizeResourceCost({
+      cpuBytes: geometry.cpuBytes + textureCpuBytes,
+      gpuBytes: geometry.gpuBytes + textureGpuBytes,
+      geometryBytes: geometry.gpuBytes,
+      textureBytes: textureGpuBytes,
+      modelBytes: geometry.cpuBytes + textureCpuBytes
+    });
+  }
+
+  // src/rendering/WorldChunkScheduler.ts
   var EMPTY_STATS = {
     visibleObjects: 0,
     visibleChunks: 0,
@@ -8954,7 +9069,17 @@ void main() {
     lod1: 0,
     lod2: 0,
     registeredObjects: 0,
-    sceneTraversals: 0
+    sceneTraversals: 0,
+    cpuResidentBytes: 0,
+    gpuResidentBytes: 0,
+    geometryBytes: 0,
+    textureBytes: 0,
+    modelBytes: 0,
+    cpuBudgetBytes: 0,
+    gpuBudgetBytes: 0,
+    cpuBudgetExceededBytes: 0,
+    gpuBudgetExceededBytes: 0,
+    resourceEvictions: 0
   };
   var WorldChunkScheduler = class {
     constructor(options) {
@@ -8971,15 +9096,44 @@ void main() {
       this.sceneTraversals = 0;
       this.frame = 0;
       this.snapshot = { ...EMPTY_STATS };
+      this.resourceEvictions = 0;
+      this.validateOptions(options);
+      this.resources = new ResourceBudgetLedger({
+        cpuBytes: options.cpuCacheBytes ?? 384 * 1024 * 1024,
+        gpuBytes: options.gpuCacheBytes ?? 256 * 1024 * 1024
+      });
+      const resources = this.resources;
+      this.resourceView = Object.freeze({
+        get stats() {
+          return resources.stats;
+        }
+      });
+      this.refreshResourceSnapshot();
     }
     configure(options) {
-      this.options = { ...this.options, ...options };
+      const next = { ...this.options, ...options };
+      this.validateOptions(next);
+      this.options = next;
+      this.resources.configure({
+        cpuBytes: next.cpuCacheBytes ?? 384 * 1024 * 1024,
+        gpuBytes: next.gpuCacheBytes ?? 256 * 1024 * 1024
+      });
+      this.refreshResourceSnapshot();
     }
     clear() {
+      for (const id of this.residents.keys()) this.resources.release(this.resourceKey(id));
       this.residents.clear();
       this.frame = 0;
       this.snapshot = { ...EMPTY_STATS };
       this.registryDirty = true;
+      this.resourceEvictions = 0;
+      this.refreshResourceSnapshot();
+    }
+    /** Final owner teardown; unlike clear(), this also drops external accounts. */
+    dispose() {
+      this.clear();
+      this.resources.dispose();
+      this.refreshResourceSnapshot();
     }
     invalidateScene() {
       this.registryDirty = true;
@@ -8989,13 +9143,24 @@ void main() {
     //cache limits never retain metadata for unloaded logical chunks.
     forget(ids) {
       for (const id of ids) {
+        this.resources.release(this.resourceKey(id));
         this.residents.delete(id);
         this.bindings.delete(id);
       }
       this.registryDirty = true;
     }
     get stats() {
+      this.refreshResourceSnapshot();
       return this.snapshot;
+    }
+    // Shared admission surface for non-chunk render owners (units, buildings,
+    // effects). Namespaced reservations participate in the same CPU/GPU hard
+    // limits and remain intact when chunk residency is cleared.
+    get resourceBudget() {
+      return this.resourceView;
+    }
+    createResourceAccount(label) {
+      return this.resources.createAccount(label);
     }
     update(root, camera, target, hooks) {
       this.frame += 1;
@@ -9045,6 +9210,7 @@ void main() {
         const activation = hooks.activate(request.metadata, request.lod, request.visibleObjects);
         const geometries = (activation && activation.geometries) ?? this.residents.get(id)?.geometries ?? [];
         const resident = this.residents.get(id);
+        const resourceCost = activation ? this.activationCost(activation, geometries, request.visibleObjects) : resident?.gpuResident ? resident.resourceCost : this.activationCost({}, geometries, request.visibleObjects);
         this.residents.set(id, {
           id,
           metadata: request.metadata,
@@ -9052,8 +9218,10 @@ void main() {
           lastVisible: this.frame,
           geometries,
           disposeGpu: activation?.disposeGpu ?? resident?.disposeGpu,
-          gpuResident: true
+          gpuResident: true,
+          resourceCost
         });
+        this.resources.forceReserve(this.resourceKey(id), resourceCost, true);
         if (resident && resident.lod !== request.lod) {
           for (const geometry of resident.geometries) geometry.dispose();
           resident.disposeGpu?.();
@@ -9063,6 +9231,7 @@ void main() {
       this.evictInactive(this.visibleIds, hooks);
       let gpuResidentChunks = 0;
       for (const entry of this.residents.values()) if (entry.gpuResident) gpuResidentChunks += 1;
+      const resourceStats = this.resources.stats;
       this.snapshot = {
         visibleObjects,
         visibleChunks: this.visibleIds.size,
@@ -9072,13 +9241,25 @@ void main() {
         lod1: lodCounts[1],
         lod2: lodCounts[2],
         registeredObjects: this.registeredObjects,
-        sceneTraversals: this.sceneTraversals
+        sceneTraversals: this.sceneTraversals,
+        cpuResidentBytes: resourceStats.cpuBytes,
+        gpuResidentBytes: resourceStats.gpuBytes,
+        geometryBytes: resourceStats.geometryBytes,
+        textureBytes: resourceStats.textureBytes,
+        modelBytes: resourceStats.modelBytes,
+        cpuBudgetBytes: resourceStats.cpuLimitBytes,
+        gpuBudgetBytes: resourceStats.gpuLimitBytes,
+        cpuBudgetExceededBytes: resourceStats.cpuExceededBytes,
+        gpuBudgetExceededBytes: resourceStats.gpuExceededBytes,
+        resourceEvictions: this.resourceEvictions
       };
     }
     evictInactive(visible, hooks) {
       this.inactive.length = 0;
       for (const entry of this.residents.values()) {
-        if (!visible.has(entry.id)) this.inactive.push(entry);
+        const isVisible = visible.has(entry.id);
+        this.resources.setPinned(this.resourceKey(entry.id), isVisible);
+        if (!isVisible) this.inactive.push(entry);
       }
       this.inactive.sort((a, b) => a.lastVisible - b.lastVisible);
       let gpuExcess = Math.max(
@@ -9088,20 +9269,29 @@ void main() {
       for (const entry of this.inactive) {
         if (!entry.gpuResident) continue;
         const stale = this.frame - entry.lastVisible >= this.options.gpuGraceFrames;
-        if (!stale && gpuExcess <= 0) break;
+        const byteExcess = this.resources.stats.gpuExceededBytes;
+        if (!stale && gpuExcess <= 0 && byteExcess <= 0) break;
         for (const geometry of entry.geometries) geometry.dispose();
         entry.disposeGpu?.();
         entry.gpuResident = false;
+        entry.resourceCost = { ...entry.resourceCost, gpuBytes: 0 };
+        this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false);
+        this.resourceEvictions += 1;
         if (gpuExcess > 0) gpuExcess -= 1;
       }
       let cpuExcess = Math.max(0, this.residents.size - this.options.cpuCacheSize);
       for (const entry of this.inactive) {
         const stale = this.frame - entry.lastVisible >= this.options.cpuGraceFrames;
-        if (!stale && cpuExcess <= 0) break;
-        for (const geometry of entry.geometries) geometry.dispose();
-        if (entry.gpuResident) entry.disposeGpu?.();
+        const byteExcess = this.resources.stats.cpuExceededBytes;
+        if (!stale && cpuExcess <= 0 && byteExcess <= 0) break;
+        if (entry.gpuResident) {
+          for (const geometry of entry.geometries) geometry.dispose();
+          entry.disposeGpu?.();
+        }
         hooks.release(entry.metadata);
         this.residents.delete(entry.id);
+        this.resources.release(this.resourceKey(entry.id));
+        this.resourceEvictions += 1;
         if (cpuExcess > 0) cpuExcess -= 1;
       }
     }
@@ -9109,6 +9299,52 @@ void main() {
       let count = 0;
       for (const entry of this.residents.values()) if (entry.gpuResident) count += 1;
       return count;
+    }
+    activationCost(activation, geometries, objects) {
+      const measured = objects.length > 0 ? estimateObject3DResourceCost(objects) : normalizeResourceCost();
+      const geometry = geometries.length > 0 ? estimateBufferGeometriesResourceBytes(geometries) : { cpuBytes: measured.cpuBytes, gpuBytes: measured.geometryBytes };
+      return normalizeResourceCost({
+        ...measured,
+        cpuBytes: Math.max(measured.cpuBytes, geometry.cpuBytes),
+        gpuBytes: Math.max(measured.gpuBytes, geometry.gpuBytes),
+        geometryBytes: geometry.gpuBytes,
+        ...activation.resourceCost
+      });
+    }
+    resourceKey(id) {
+      return `world-chunk:${id}`;
+    }
+    validateOptions(options) {
+      for (const [name, value] of [
+        ["gpuCacheSize", options.gpuCacheSize],
+        ["cpuCacheSize", options.cpuCacheSize],
+        ["gpuGraceFrames", options.gpuGraceFrames],
+        ["cpuGraceFrames", options.cpuGraceFrames]
+      ]) {
+        if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
+      }
+      for (const [name, value] of [
+        ["gpuCacheBytes", options.gpuCacheBytes ?? 256 * 1024 * 1024],
+        ["cpuCacheBytes", options.cpuCacheBytes ?? 384 * 1024 * 1024]
+      ]) {
+        if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative safe integer`);
+      }
+    }
+    refreshResourceSnapshot() {
+      const resources = this.resources.stats;
+      this.snapshot = {
+        ...this.snapshot,
+        cpuResidentBytes: resources.cpuBytes,
+        gpuResidentBytes: resources.gpuBytes,
+        geometryBytes: resources.geometryBytes,
+        textureBytes: resources.textureBytes,
+        modelBytes: resources.modelBytes,
+        cpuBudgetBytes: resources.cpuLimitBytes,
+        gpuBudgetBytes: resources.gpuLimitBytes,
+        cpuBudgetExceededBytes: resources.cpuExceededBytes,
+        gpuBudgetExceededBytes: resources.gpuExceededBytes,
+        resourceEvictions: this.resourceEvictions
+      };
     }
     rebuildRegistry(root) {
       this.bindings.clear();
@@ -9138,55 +9374,272 @@ void main() {
       vegetationLodBias: 0,
       gpuCacheSize: 128,
       cpuCacheSize: 192,
+      gpuCacheBytes: 256 * 1024 * 1024,
+      cpuCacheBytes: 384 * 1024 * 1024,
       gpuGraceFrames: 300,
       cpuGraceFrames: 1200
     };
   }
 
+  // src/runtime/PriorityTaskQueue.ts
+  var WorkQueueBackpressureError = class extends Error {
+    constructor() {
+      super(...arguments);
+      this.name = "WorkQueueBackpressureError";
+    }
+  };
+  var LANE_RANK = {
+    critical: 0,
+    interactive: 1,
+    visible: 2,
+    prefetch: 3,
+    background: 4
+  };
+  function cancellationError(message) {
+    if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  }
+  var PriorityTaskQueue = class {
+    constructor(options = {}) {
+      this.entries = /* @__PURE__ */ new Map();
+      this.keyed = /* @__PURE__ */ new Map();
+      this.nextId = 1;
+      this.sequence = 0;
+      this.pendingWeight = 0;
+      this.cancelledTasks = 0;
+      this.shedTasks = 0;
+      this.maxPendingTasks = options.maxPendingTasks ?? Number.MAX_SAFE_INTEGER;
+      this.maxPendingWeight = options.maxPendingWeight ?? Number.MAX_SAFE_INTEGER;
+      this.starvationMs = options.starvationMs ?? 2e3;
+      this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+      if (!Number.isSafeInteger(this.maxPendingTasks) || this.maxPendingTasks <= 0) {
+        throw new RangeError("maxPendingTasks must be a positive safe integer");
+      }
+      if (!Number.isSafeInteger(this.maxPendingWeight) || this.maxPendingWeight <= 0) {
+        throw new RangeError("maxPendingWeight must be a positive safe integer");
+      }
+      if (!Number.isFinite(this.starvationMs) || this.starvationMs <= 0) {
+        throw new RangeError("starvationMs must be positive and finite");
+      }
+    }
+    enqueue(value, options = {}) {
+      const lane = options.lane ?? "visible";
+      const priority = options.priority ?? 0;
+      const weight = options.weight ?? 1;
+      if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
+      if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
+      if (!Number.isSafeInteger(weight) || weight <= 0) throw new RangeError("task weight must be a positive safe integer");
+      if (options.key !== void 0 && options.key.length === 0) throw new TypeError("task key cannot be empty");
+      if (options.signal?.aborted) {
+        this.notifyCancellation(options.cancelled, cancellationError("Task was aborted before it was queued"));
+        return void 0;
+      }
+      if (weight > this.maxPendingWeight) {
+        this.shedTasks += 1;
+        this.notifyCancellation(
+          options.cancelled,
+          new WorkQueueBackpressureError(
+            `Task weight ${weight} exceeds the queue limit ${this.maxPendingWeight}`
+          )
+        );
+        return void 0;
+      }
+      if (options.key !== void 0) {
+        const previous = this.keyed.get(options.key);
+        if (previous !== void 0) this.remove(previous, cancellationError("Task was replaced"), true);
+      }
+      const entry = {
+        id: this.nextId++,
+        key: options.key,
+        lane,
+        priority,
+        weight,
+        sequence: this.sequence++,
+        enqueuedAt: this.now(),
+        value,
+        signal: options.signal,
+        cancelled: options.cancelled
+      };
+      if (options.signal) {
+        entry.abort = () => this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+        options.signal.addEventListener("abort", entry.abort, { once: true });
+      }
+      this.entries.set(entry.id, entry);
+      if (entry.key !== void 0) this.keyed.set(entry.key, entry.id);
+      this.pendingWeight += weight;
+      this.shedOverflow();
+      return this.entries.has(entry.id) ? entry.id : void 0;
+    }
+    take(predicate) {
+      const now = this.now();
+      let selected;
+      for (const entry of this.entries.values()) {
+        if (entry.signal?.aborted) {
+          this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+          continue;
+        }
+        if (predicate && !predicate(entry.value)) continue;
+        if (!selected || this.compare(entry, selected, now) < 0) selected = entry;
+      }
+      if (!selected) return void 0;
+      this.detach(selected);
+      return selected.value;
+    }
+    cancelKey(key, reason = cancellationError("Queued task was cancelled")) {
+      const id = this.keyed.get(key);
+      return id === void 0 ? false : this.remove(id, reason, true);
+    }
+    cancel(id, reason = cancellationError("Queued task was cancelled")) {
+      return this.remove(id, reason, true);
+    }
+    clear(reason = cancellationError("Work queue was cleared")) {
+      for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
+    }
+    get values() {
+      return [...this.entries.values()].map((entry) => entry.value);
+    }
+    get stats() {
+      const now = this.now();
+      let oldestTaskAgeMs = 0;
+      let starvationPromotions = 0;
+      for (const entry of this.entries.values()) {
+        const age = Math.max(0, now - entry.enqueuedAt);
+        oldestTaskAgeMs = Math.max(oldestTaskAgeMs, age);
+        starvationPromotions += Math.min(LANE_RANK[entry.lane], Math.floor(age / this.starvationMs));
+      }
+      return {
+        pendingTasks: this.entries.size,
+        pendingWeight: this.pendingWeight,
+        oldestTaskAgeMs,
+        cancelledTasks: this.cancelledTasks,
+        shedTasks: this.shedTasks,
+        starvationPromotions
+      };
+    }
+    shedOverflow() {
+      while (this.entries.size > this.maxPendingTasks || this.pendingWeight > this.maxPendingWeight) {
+        let worst;
+        for (const entry of this.entries.values()) {
+          if (!worst || this.compareForEviction(entry, worst) > 0) worst = entry;
+        }
+        if (!worst) return;
+        this.shedTasks += 1;
+        this.remove(
+          worst.id,
+          new WorkQueueBackpressureError("Queued task was shed by the configured backpressure limit"),
+          false
+        );
+      }
+    }
+    compare(first, second, now) {
+      const firstStarved = this.isStarved(first, now);
+      const secondStarved = this.isStarved(second, now);
+      if (firstStarved !== secondStarved) return firstStarved ? -1 : 1;
+      if (firstStarved) return first.sequence - second.sequence;
+      return this.effectiveLane(first, now) - this.effectiveLane(second, now) || first.priority - second.priority || first.sequence - second.sequence;
+    }
+    // Dispatch aging prevents starvation among admitted work. Admission is a
+    // different policy boundary: an old background task must not evict a fresh
+    // critical task merely because the tab was suspended long enough for its
+    // wall-clock starvation deadline to elapse.
+    compareForEviction(first, second) {
+      return LANE_RANK[first.lane] - LANE_RANK[second.lane] || first.priority - second.priority || first.sequence - second.sequence;
+    }
+    isStarved(entry, now) {
+      const deadlineWindows = LANE_RANK[entry.lane] + 1;
+      return Math.max(0, now - entry.enqueuedAt) >= this.starvationMs * deadlineWindows;
+    }
+    effectiveLane(entry, now) {
+      const promotions = Math.min(LANE_RANK[entry.lane], Math.floor(Math.max(0, now - entry.enqueuedAt) / this.starvationMs));
+      return LANE_RANK[entry.lane] - promotions;
+    }
+    remove(id, reason, countCancellation) {
+      const entry = this.entries.get(id);
+      if (!entry) return false;
+      this.detach(entry);
+      if (countCancellation) this.cancelledTasks += 1;
+      this.notifyCancellation(entry.cancelled, reason);
+      return true;
+    }
+    notifyCancellation(observer, reason) {
+      try {
+        observer?.(reason);
+      } catch {
+      }
+    }
+    detach(entry) {
+      this.entries.delete(entry.id);
+      if (entry.key !== void 0 && this.keyed.get(entry.key) === entry.id) this.keyed.delete(entry.key);
+      if (entry.signal && entry.abort) entry.signal.removeEventListener("abort", entry.abort);
+      this.pendingWeight = Math.max(0, this.pendingWeight - entry.weight);
+    }
+  };
+
   // src/rendering/FrameTaskScheduler.ts
   var FrameTaskScheduler = class {
     constructor(options = {}) {
-      this.tasks = /* @__PURE__ */ new Map();
-      this.sequence = 0;
       this.completed = 0;
-      this.cancelled = 0;
       this.lastFrameTasks = 0;
       this.lastFrameDurationMs = 0;
+      this.disposed = false;
       this.budgetMs = options.budgetMs ?? 3;
       this.maxTasksPerFrame = options.maxTasksPerFrame ?? 2;
       this.now = options.now ?? (() => performance.now());
       this.error = options.error;
+      this.workCoordinator = options.coordinator;
+      const queueOptions = {
+        now: this.now,
+        maxPendingTasks: options.maxPendingTasks,
+        maxPendingWeight: options.maxPendingWeight,
+        starvationMs: options.starvationMs
+      };
+      this.tasks = options.coordinator ? options.coordinator.createQueue(options.domain ?? "frame", queueOptions) : new PriorityTaskQueue(queueOptions);
       this.validate();
     }
     configure(options) {
+      if (this.disposed) throw new Error("FrameTaskScheduler has been disposed");
       if (options.budgetMs !== void 0) this.budgetMs = options.budgetMs;
       if (options.maxTasksPerFrame !== void 0) this.maxTasksPerFrame = options.maxTasksPerFrame;
       this.validate();
     }
-    enqueue(key, priority, run) {
+    enqueue(key, priority, run, options = {}) {
+      if (this.disposed) throw new Error("FrameTaskScheduler has been disposed");
       if (!key) throw new TypeError("frame task key is required");
       if (!Number.isFinite(priority)) throw new RangeError("frame task priority must be finite");
-      this.tasks.set(key, { key, priority, sequence: this.sequence++, enqueuedAt: this.now(), run });
+      return this.tasks.enqueue({ run }, {
+        key,
+        priority,
+        lane: options.lane ?? "visible",
+        weight: options.weight,
+        signal: options.signal,
+        cancelled: options.cancelled
+      }) !== void 0;
     }
     cancel(key) {
-      const removed = this.tasks.delete(key);
-      if (removed) this.cancelled += 1;
-      return removed;
+      return this.tasks.cancelKey(key);
     }
     clear() {
-      this.cancelled += this.tasks.size;
       this.tasks.clear();
       this.lastFrameTasks = 0;
       this.lastFrameDurationMs = 0;
     }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.clear();
+      this.workCoordinator?.releaseQueue(this.tasks, false);
+    }
     runFrame() {
+      if (this.disposed) return 0;
       const started = this.now();
       let ran = 0;
-      const ordered = [...this.tasks.values()].sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
-      for (const task of ordered) {
+      while (true) {
         if (ran >= this.maxTasksPerFrame) break;
         if (ran > 0 && this.now() - started >= this.budgetMs) break;
-        if (!this.tasks.delete(task.key)) continue;
+        const task = this.tasks.take();
+        if (!task) break;
         try {
           task.run();
         } catch (reason) {
@@ -9203,18 +9656,17 @@ void main() {
       return ran;
     }
     get stats() {
-      const now = this.now();
-      let oldestTaskAgeMs = 0;
-      for (const task of this.tasks.values()) {
-        oldestTaskAgeMs = Math.max(oldestTaskAgeMs, Math.max(0, now - task.enqueuedAt));
-      }
+      const queue = this.tasks.stats;
       return {
-        pendingTasks: this.tasks.size,
+        pendingTasks: queue.pendingTasks,
         completedTasks: this.completed,
-        cancelledTasks: this.cancelled,
+        cancelledTasks: queue.cancelledTasks,
         lastFrameTasks: this.lastFrameTasks,
         lastFrameDurationMs: this.lastFrameDurationMs,
-        oldestTaskAgeMs
+        oldestTaskAgeMs: queue.oldestTaskAgeMs,
+        pendingWeight: queue.pendingWeight,
+        shedTasks: queue.shedTasks,
+        starvationPromotions: queue.starvationPromotions
       };
     }
     validate() {
@@ -9281,13 +9733,22 @@ void main() {
           sample.frameTaskMs,
           sample.longTaskMs,
           sample.oldestFrameTaskMs !== void 0 ? sample.oldestFrameTaskMs / 2 : void 0,
-          sample.frameTaskBacklog !== void 0 ? sample.frameTaskBacklog > this.options.baseMaxTasksPerFrame * 3 ? this.targetFrameMs * 2 : 0 : void 0
+          sample.frameTaskBacklog !== void 0 ? sample.frameTaskBacklog > this.options.baseMaxTasksPerFrame * 3 ? this.targetFrameMs * 2 : 0 : void 0,
+          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
         );
         if (mainMeasurement !== void 0) {
           changed = this.samplePressure(this.mainThread, mainMeasurement, this.targetFrameMs) || changed;
         }
         const observableWorkIsIdle = (sample.frameTaskBacklog ?? 0) === 0 && (sample.oldestFrameTaskMs ?? 0) <= this.targetFrameMs && (sample.workerQueueDepth ?? 0) === 0 && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25 && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
-        const renderMeasurement = sample.gpuFrameMs ?? (observableWorkIsIdle ? frameMs : void 0);
+        const gpuTimerStalled = Boolean(
+          sample.gpuTimingSupported && sample.gpuTimingSaturated && (sample.gpuSampleAgeMs === void 0 || sample.gpuSampleAgeMs > this.targetFrameMs * 2)
+        );
+        const inferredRenderMs = !sample.gpuTimingSupported && observableWorkIsIdle ? frameMs : gpuTimerStalled && observableWorkIsIdle ? Math.max(frameMs, this.targetFrameMs * 2) : void 0;
+        const renderMeasurement = this.maximumDefined(
+          sample.gpuFrameMs ?? inferredRenderMs,
+          sample.gpuBudgetExceededBytes !== void 0 ? sample.gpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0,
+          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
+        );
         if (renderMeasurement !== void 0) {
           changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
         }
@@ -9330,7 +9791,12 @@ void main() {
         chunkLoadLatencyMs: this.latest.chunkLoadLatencyMs ?? 0,
         chunkVisibleLatencyMs: this.latest.chunkVisibleLatencyMs ?? 0,
         uploadBytes: this.latest.uploadBytes ?? 0,
-        drawCalls: this.latest.drawCalls ?? 0
+        drawCalls: this.latest.drawCalls ?? 0,
+        gpuTimingSupported: this.latest.gpuTimingSupported ?? false,
+        gpuTimingSaturated: this.latest.gpuTimingSaturated ?? false,
+        gpuSampleAgeMs: this.latest.gpuSampleAgeMs,
+        cpuBudgetExceededBytes: this.latest.cpuBudgetExceededBytes ?? 0,
+        gpuBudgetExceededBytes: this.latest.gpuBudgetExceededBytes ?? 0
       };
     }
     createProfile() {
@@ -10165,6 +10631,98 @@ void main() {
     }
   };
 
+  // src/world/WorldDescriptor.ts
+  var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
+  var WORLD_WORKER_PROTOCOL_VERSION = 1;
+  function assertChunkSize(value) {
+    if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+      throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+    }
+  }
+  function assertSupportedWorldGeneratorVersion(value) {
+    if (value !== WORLD_GENERATOR_VERSION) {
+      throw new RangeError(
+        `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
+      );
+    }
+  }
+  function createWorldDescriptor(options) {
+    if (!options || typeof options !== "object") throw new TypeError("world descriptor options are required");
+    if (typeof options.seed !== "string" && typeof options.seed !== "number") {
+      throw new TypeError("world seed must be a string or number");
+    }
+    if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
+      throw new RangeError("numeric world seed must be finite");
+    }
+    const chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+    assertChunkSize(chunkSize);
+    const generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+    assertSupportedWorldGeneratorVersion(generatorVersion);
+    const base = {
+      descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
+      seed: String(options.seed),
+      generatorVersion,
+      chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
+      chunkSize
+    };
+    if (!options.world) {
+      return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+    }
+    const world = options.world;
+    if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
+      throw new TypeError("toroidal world descriptor bounds are invalid");
+    }
+    return {
+      ...base,
+      sourceKind: "procedural-toroidal",
+      topology: "toroidal",
+      width: world.width,
+      height: world.height
+    };
+  }
+  function assertWorldDescriptor(value) {
+    if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
+    const descriptor = value;
+    if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
+      throw new TypeError(`unsupported world descriptor format ${String(descriptor.descriptorVersion)}`);
+    }
+    if (descriptor.sourceKind !== "procedural-infinite" && descriptor.sourceKind !== "procedural-toroidal") {
+      throw new TypeError("world descriptor sourceKind is invalid");
+    }
+    if (typeof descriptor.seed !== "string") throw new TypeError("world descriptor seed must be a string");
+    assertSupportedWorldGeneratorVersion(descriptor.generatorVersion);
+    if (descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION) {
+      throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
+    }
+    assertChunkSize(descriptor.chunkSize);
+    if (descriptor.sourceKind === "procedural-infinite") {
+      if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
+        throw new TypeError("infinite world descriptor topology is invalid");
+      }
+      return;
+    }
+    if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
+      throw new TypeError("toroidal world descriptor topology is invalid");
+    }
+  }
+  function serializeWorldDescriptor(descriptor) {
+    assertWorldDescriptor(descriptor);
+    return JSON.stringify([
+      descriptor.descriptorVersion,
+      descriptor.sourceKind,
+      descriptor.seed,
+      descriptor.generatorVersion,
+      descriptor.chunkFormatVersion,
+      descriptor.chunkSize,
+      descriptor.topology,
+      descriptor.width ?? null,
+      descriptor.height ?? null
+    ]);
+  }
+  function worldDescriptorsEqual(first, second) {
+    return serializeWorldDescriptor(first) === serializeWorldDescriptor(second);
+  }
+
   // src/world/generateVegetation.ts
   var import_robust_point_in_polygon3 = __toESM(require_robust_pnp());
   var WORLD_VEGETATION_FORMAT_VERSION = 1;
@@ -10519,7 +11077,7 @@ void main() {
       this.disposed = false;
       this.handleMessage = (event) => {
         const data = event.data;
-        if (!data || typeof data !== "object" || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
+        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
           this.fail(new Error("World generation worker returned an invalid message"));
           return;
         }
@@ -10533,6 +11091,9 @@ void main() {
         if (request.kind === "chunk" && "chunk" in data && data.chunk) {
           try {
             assertPackedWorldChunk(data.chunk);
+            if (!request.expectedChunk || data.chunk.chunkX !== request.expectedChunk.chunkX || data.chunk.chunkY !== request.expectedChunk.chunkY || data.chunk.chunkSize !== request.expectedChunk.chunkSize) {
+              throw new TypeError("World generation worker returned a chunk for the wrong request");
+            }
             request.resolve(data.chunk);
           } catch (reason) {
             request.reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -10582,7 +11143,7 @@ void main() {
       return new Promise((resolve, reject) => {
         this.pending.set(id, { kind: "world", resolve: (value) => resolve(value), reject });
         try {
-          this.worker.postMessage({ id, type: "world", options });
+          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "world", options });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -10593,9 +11154,18 @@ void main() {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
       const id = this.nextRequestId++;
       return new Promise((resolve, reject) => {
-        this.pending.set(id, { kind: "chunk", resolve: (value) => resolve(value), reject });
+        this.pending.set(id, {
+          kind: "chunk",
+          resolve: (value) => resolve(value),
+          reject,
+          expectedChunk: {
+            chunkX: options.chunkX,
+            chunkY: options.chunkY,
+            chunkSize: options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE
+          }
+        });
         try {
-          this.worker.postMessage({ id, type: "chunk", options });
+          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "chunk", options });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -10612,7 +11182,7 @@ void main() {
           reject
         });
         try {
-          this.worker.postMessage({ id, type: "vegetation", options });
+          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "vegetation", options });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -10653,12 +11223,12 @@ void main() {
   }
   var WorldGeneratorPool = class {
     constructor(workerUrl, options = {}) {
-      this.queue = [];
-      this.sequence = 0;
       this.completed = 0;
       this.disposed = false;
       this.averageChunkMs = 0;
       this.averageVegetationMs = 0;
+      this.workerFailures = 0;
+      this.clientFactoryFailures = 0;
       this.maxWorkers = options.maxWorkers ?? 8;
       const size = options.size ?? defaultPoolSize(this.maxWorkers);
       if (!Number.isInteger(size) || size <= 0 || size > this.maxWorkers) {
@@ -10670,7 +11240,34 @@ void main() {
         throw new RangeError(`reservedChunkWorkers must be an integer between 0 and ${this.maxWorkers}`);
       }
       this.clientFactory = options.clientFactory ?? (() => new WorldGeneratorClient(workerUrl, options.workerOptions ?? { type: "module" }));
-      this.slots = Array.from({ length: size }, () => ({ client: this.clientFactory(), busy: false }));
+      const queueOptions = {
+        maxPendingTasks: options.maxQueuedTasks ?? 512,
+        maxPendingWeight: options.maxQueuedWeight ?? 1024,
+        starvationMs: options.starvationMs,
+        now: options.now
+      };
+      this.workCoordinator = options.coordinator;
+      this.queue = options.coordinator ? options.coordinator.createQueue(options.domain ?? "worker", queueOptions) : new PriorityTaskQueue(queueOptions);
+      this.coordinatorSignal = options.coordinator?.signal;
+      this.coordinatorAbort = this.coordinatorSignal ? () => this.dispose() : void 0;
+      this.coordinatorSignal?.addEventListener("abort", this.coordinatorAbort, { once: true });
+      const initialSlots = [];
+      try {
+        for (let index = 0; index < size; index += 1) {
+          initialSlots.push({ client: this.createClient(), busy: false });
+        }
+      } catch (reason) {
+        for (const slot of initialSlots) {
+          try {
+            slot.client.dispose();
+          } catch {
+          }
+        }
+        if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
+        this.workCoordinator?.releaseQueue(this.queue);
+        throw reason;
+      }
+      this.slots = initialSlots;
     }
     generateChunk(options, request = {}) {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
@@ -10678,8 +11275,6 @@ void main() {
       return new Promise((resolve, reject) => {
         const task = {
           kind: "chunk",
-          sequence: this.sequence++,
-          priority: Number.isFinite(request.priority) ? request.priority : 0,
           options,
           signal: request.signal,
           resolve: (result) => resolve(result),
@@ -10689,15 +11284,20 @@ void main() {
         if (request.signal) {
           task.abort = () => {
             if (task.settled) return;
-            task.settled = true;
-            const index = this.queue.indexOf(task);
-            if (index >= 0) this.queue.splice(index, 1);
-            reject(abortError());
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
+            this.finishTask(task, () => reject(abortError()));
           };
           request.signal.addEventListener("abort", task.abort, { once: true });
         }
-        this.queue.push(task);
-        this.queue.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+        task.queueId = this.queue.enqueue(task, {
+          priority: Number.isFinite(request.priority) ? request.priority : 0,
+          lane: request.lane ?? "visible",
+          weight: request.weight ?? 1,
+          cancelled: (reason) => this.finishTask(task, () => task.reject(reason))
+        });
+        if (task.queueId === void 0 && !task.settled) {
+          this.finishTask(task, () => reject(new WorkQueueBackpressureError("World chunk request was shed")));
+        }
         this.dispatch();
       });
     }
@@ -10707,8 +11307,6 @@ void main() {
       return new Promise((resolve, reject) => {
         const task = {
           kind: "vegetation",
-          sequence: this.sequence++,
-          priority: Number.isFinite(request.priority) ? request.priority : 0,
           options,
           signal: request.signal,
           resolve: (result) => resolve(result),
@@ -10718,20 +11316,26 @@ void main() {
         if (request.signal) {
           task.abort = () => {
             if (task.settled) return;
-            task.settled = true;
-            const index = this.queue.indexOf(task);
-            if (index >= 0) this.queue.splice(index, 1);
-            reject(abortError());
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
+            this.finishTask(task, () => reject(abortError()));
           };
           request.signal.addEventListener("abort", task.abort, { once: true });
         }
-        this.queue.push(task);
-        this.queue.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+        task.queueId = this.queue.enqueue(task, {
+          priority: Number.isFinite(request.priority) ? request.priority : 0,
+          lane: request.lane ?? "prefetch",
+          weight: request.weight ?? Math.max(1, Math.ceil((options.points?.length ?? 0) / 256)),
+          cancelled: (reason) => this.finishTask(task, () => task.reject(reason))
+        });
+        if (task.queueId === void 0 && !task.settled) {
+          this.finishTask(task, () => reject(new WorkQueueBackpressureError("Vegetation request was shed")));
+        }
         this.dispatch();
       });
     }
     get stats() {
-      const queued = this.queue.filter((task) => !task.settled && !task.signal?.aborted);
+      const queued = this.queue.values.filter((task) => !task.settled && !task.signal?.aborted);
+      const queueStats = this.queue.stats;
       return {
         workers: this.slots.length,
         configuredWorkers: this.desiredSize,
@@ -10743,7 +11347,13 @@ void main() {
         busyChunkWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "chunk").length,
         busyVegetationWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "vegetation").length,
         averageChunkMs: this.averageChunkMs,
-        averageVegetationMs: this.averageVegetationMs
+        averageVegetationMs: this.averageVegetationMs,
+        queuedWeight: queueStats.pendingWeight,
+        oldestQueuedMs: queueStats.oldestTaskAgeMs,
+        shedTasks: queueStats.shedTasks,
+        starvationPromotions: queueStats.starvationPromotions,
+        workerFailures: this.workerFailures,
+        clientFactoryFailures: this.clientFactoryFailures
       };
     }
     configureSize(size) {
@@ -10752,28 +11362,51 @@ void main() {
         throw new RangeError(`worker pool size must be an integer between 1 and ${this.maxWorkers}`);
       }
       this.desiredSize = size;
-      this.reconcileSize();
+      this.reconcileSize(true);
       this.dispatch();
       return this.desiredSize;
     }
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
+      if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
       const error = new Error("WorldGeneratorPool was disposed");
-      for (const task of this.queue.splice(0)) this.finishTask(task, () => task.reject(error));
-      for (const slot of this.slots) slot.client.dispose();
+      this.queue.clear(error);
+      this.workCoordinator?.releaseQueue(this.queue, false);
+      for (const slot of this.slots) {
+        if (slot.task) this.finishTask(slot.task, () => slot.task.reject(error));
+        try {
+          slot.client.dispose();
+        } catch {
+        }
+      }
     }
     dispatch() {
       if (this.disposed) return;
       for (const slot of this.slots) {
         if (slot.busy) continue;
-        if (slot.client.isDisposed) slot.client = this.clientFactory();
         const task = this.takeNextTask();
         if (!task) return;
+        if (slot.client.isDisposed) {
+          const replacementError = this.replaceDisposedClient(slot);
+          if (replacementError) {
+            this.finishTask(task, () => task.reject(replacementError));
+            if (this.slots.every((candidate) => candidate.client.isDisposed)) {
+              this.queue.clear(replacementError);
+            }
+            continue;
+          }
+        }
         slot.busy = true;
         slot.taskKind = task.kind;
+        slot.task = task;
         const started = typeof performance === "undefined" ? Date.now() : performance.now();
-        const pending = task.kind === "chunk" ? slot.client.generateChunk(task.options) : slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+        let pending;
+        try {
+          pending = task.kind === "chunk" ? slot.client.generateChunk(task.options) : slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+        } catch (reason) {
+          pending = Promise.reject(reason);
+        }
         void pending.then(
           (result) => {
             if (!task.settled) {
@@ -10786,31 +11419,26 @@ void main() {
               const error = reason instanceof Error ? reason : new Error(String(reason));
               this.finishTask(task, () => task.reject(error));
             }
-            if (!this.disposed && slot.client.isDisposed) slot.client = this.clientFactory();
+            if (slot.client.isDisposed) this.workerFailures += 1;
           }
         ).finally(() => {
           const finished = typeof performance === "undefined" ? Date.now() : performance.now();
           this.recordDuration(task.kind, Math.max(0, finished - started));
           slot.busy = false;
           slot.taskKind = void 0;
-          this.reconcileSize();
+          slot.task = void 0;
+          this.reconcileSize(false);
           this.dispatch();
         });
       }
     }
     takeNextTask() {
-      for (let index2 = this.queue.length - 1; index2 >= 0; index2 -= 1) {
-        const task = this.queue[index2];
-        if (!task.settled && !task.signal?.aborted) continue;
-        this.queue.splice(index2, 1);
-        if (!task.settled) this.finishTask(task, () => task.reject(abortError()));
-      }
-      if (this.queue.length === 0) return void 0;
       const activeWorkers = Math.max(1, Math.min(this.desiredSize, this.slots.length));
       const maximumVegetation = activeWorkers === 1 ? 1 : Math.max(1, activeWorkers - this.reservedChunkWorkers);
       const busyVegetation = this.slots.filter((candidate) => candidate.busy && candidate.taskKind === "vegetation").length;
-      const index = busyVegetation >= maximumVegetation ? this.queue.findIndex((task) => task.kind === "chunk") : 0;
-      return index < 0 ? void 0 : this.queue.splice(index, 1)[0];
+      const task = this.queue.take(busyVegetation >= maximumVegetation ? (candidate) => candidate.kind === "chunk" : void 0);
+      if (task) task.queueId = void 0;
+      return task;
     }
     recordDuration(kind, durationMs) {
       const alpha = 0.2;
@@ -10826,7 +11454,30 @@ void main() {
       if (task.signal && task.abort) task.signal.removeEventListener("abort", task.abort);
       settle();
     }
-    reconcileSize() {
+    replaceDisposedClient(slot) {
+      try {
+        slot.client = this.createClient();
+        return void 0;
+      } catch (reason) {
+        this.clientFactoryFailures += 1;
+        return reason instanceof Error ? reason : new Error(String(reason));
+      }
+    }
+    createClient() {
+      const client = this.clientFactory();
+      if (!client || typeof client.generateChunk !== "function" || typeof client.dispose !== "function") {
+        throw new TypeError("clientFactory must return a chunk generator client");
+      }
+      if (client.isDisposed) {
+        try {
+          client.dispose();
+        } catch {
+        }
+        throw new Error("clientFactory returned an already disposed client");
+      }
+      return client;
+    }
+    reconcileSize(throwOnFactoryFailure) {
       if (this.disposed) return;
       while (this.slots.length > this.desiredSize) {
         let index = -1;
@@ -10838,10 +11489,19 @@ void main() {
         }
         if (index < 0) break;
         const [slot] = this.slots.splice(index, 1);
-        slot.client.dispose();
+        try {
+          slot.client.dispose();
+        } catch {
+        }
       }
       while (this.slots.length < this.desiredSize) {
-        this.slots.push({ client: this.clientFactory(), busy: false });
+        try {
+          this.slots.push({ client: this.createClient(), busy: false });
+        } catch (reason) {
+          this.clientFactoryFailures += 1;
+          if (throwOnFactoryFailure) throw reason;
+          break;
+        }
       }
     }
   };
@@ -11008,6 +11668,9 @@ void main() {
           return false;
         }
       });
+    }
+    flush() {
+      return this.maintenance.then(() => void 0);
     }
     dispose() {
       if (this.disposed) return;
@@ -11183,7 +11846,7 @@ void main() {
       throw new RangeError("world delta chunk coordinates must be safe integers");
     }
   }
-  function assertChunkSize(chunkSize) {
+  function assertChunkSize2(chunkSize) {
     if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
       throw new RangeError("world delta chunkSize must be a positive safe integer");
     }
@@ -11192,7 +11855,7 @@ void main() {
     return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
   }
   function assertChanges(changes, chunkX, chunkY, options) {
-    assertChunkSize(options.chunkSize);
+    assertChunkSize2(options.chunkSize);
     if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
     if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
       throw new RangeError("expectedRevision must be a non-negative safe integer");
@@ -11209,7 +11872,7 @@ void main() {
   }
   function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
     assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChunkSize(options.chunkSize);
+    assertChunkSize2(options.chunkSize);
     const candidate = value;
     if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
       throw new TypeError("world chunk delta is invalid or incompatible");
@@ -11295,6 +11958,29 @@ void main() {
     }
     flush() {
       return Promise.resolve();
+    }
+    listWorld(worldId) {
+      if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+      const deltas = [...this.chunks.values()].filter((delta) => delta.worldId === worldId).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY).map((delta) => this.cloneDelta(delta));
+      return Promise.resolve(deltas);
+    }
+    async replaceWorld(worldId, deltas) {
+      if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+      const replacements = /* @__PURE__ */ new Map();
+      for (const delta of deltas) {
+        const normalized = normalizeWorldChunkDelta(
+          delta,
+          worldId,
+          delta.chunkX,
+          delta.chunkY,
+          { chunkSize: delta.chunkSize }
+        );
+        const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+        if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
+        replacements.set(key, normalized);
+      }
+      await this.clear(worldId);
+      for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
     }
     async clear(worldId) {
       for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
@@ -11402,6 +12088,52 @@ void main() {
         throw error;
       }
     }
+    async listWorld(worldId) {
+      if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+      await this.flush();
+      const database = await this.open();
+      const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
+      const records = await requestResult2(
+        transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
+      );
+      await transactionComplete2(transaction);
+      return records.map((record) => normalizeWorldChunkDelta(
+        record,
+        worldId,
+        record.chunkX,
+        record.chunkY,
+        { chunkSize: record.chunkSize }
+      )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
+    }
+    replaceWorld(worldId, deltas) {
+      if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+      const replacements = /* @__PURE__ */ new Map();
+      for (const delta of deltas) {
+        const normalized = normalizeWorldChunkDelta(
+          delta,
+          worldId,
+          delta.chunkX,
+          delta.chunkY,
+          { chunkSize: delta.chunkSize }
+        );
+        const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+        if (replacements.has(key)) return Promise.reject(new TypeError("world delta checkpoint contains duplicate chunks"));
+        replacements.set(key, normalized);
+      }
+      return this.enqueue(async () => {
+        const database = await this.open();
+        const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+        const store = transaction.objectStore(DELTA_OBJECT_STORE);
+        const keys = await requestResult2(store.index("worldId").getAllKeys(worldId));
+        for (const key of keys) store.delete(key);
+        for (const [key, delta] of replacements) {
+          store.put({ key, ...this.cloneDelta(delta) });
+        }
+        await transactionComplete2(transaction);
+        await super.clear(worldId);
+        for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+      });
+    }
     async clear(worldId) {
       if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
       await this.enqueue(async () => {
@@ -11476,6 +12208,7 @@ void main() {
     const candidate = source;
     return typeof candidate.setTileOverride === "function" && typeof candidate.clearTileOverride === "function";
   }
+  var WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = 1;
   function assertWorldSource(source) {
     if (!source || typeof source !== "object") throw new TypeError("world source must be an object");
     if (!source.map || typeof source.map !== "object") throw new TypeError("world source must expose a MapInfo view");
@@ -11747,6 +12480,66 @@ void main() {
         }
       }
     }
+    async createCheckpointSnapshot() {
+      await this.flush();
+      if (!this.deltaStore?.listWorld) {
+        throw new Error("WorldDeltaStore does not support checkpoint enumeration");
+      }
+      const deltas = await this.deltaStore.listWorld(this.worldId);
+      return {
+        version: WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
+        worldId: this.worldId,
+        chunkSize: this.chunkSize,
+        deltas: deltas.map((delta) => normalizeWorldChunkDelta(
+          delta,
+          this.worldId,
+          delta.chunkX,
+          delta.chunkY,
+          { chunkSize: this.chunkSize }
+        ))
+      };
+    }
+    async restoreCheckpointSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || snapshot.version !== WORLD_DELTA_CHECKPOINT_FORMAT_VERSION || snapshot.worldId !== this.worldId || snapshot.chunkSize !== this.chunkSize || !Array.isArray(snapshot.deltas)) {
+        throw new TypeError("world delta checkpoint is invalid or incompatible");
+      }
+      if (!this.deltaStore?.replaceWorld) {
+        throw new Error("WorldDeltaStore does not support atomic checkpoint replacement");
+      }
+      const deltas = snapshot.deltas.map((delta) => normalizeWorldChunkDelta(
+        delta,
+        this.worldId,
+        delta.chunkX,
+        delta.chunkY,
+        { chunkSize: this.chunkSize }
+      ));
+      const keys = /* @__PURE__ */ new Set();
+      for (const delta of deltas) {
+        const key = `${delta.chunkX},${delta.chunkY}`;
+        if (keys.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
+        keys.add(key);
+      }
+      await this.flush();
+      await this.deltaStore.replaceWorld(this.worldId, deltas);
+      await this.deltaStore.flush();
+      this.generation += 1;
+      this.chunks.clear();
+      this.revisionTombstones.clear();
+      this.baselineRevision = 0;
+      this.tileStore.clearTileOverrides();
+      for (const delta of deltas) {
+        const key = `${delta.chunkX},${delta.chunkY}`;
+        const state = this.state(key, delta.chunkX, delta.chunkY);
+        state.revision = delta.revision;
+        state.restored = true;
+        for (const entry of delta.entries) state.activeTiles.add(`${entry.x},${entry.y}`);
+        this.tileStore.setTileOverrides(delta.entries.map((entry) => ({
+          x: entry.x,
+          y: entry.y,
+          changes: entry.override
+        })));
+      }
+    }
     async clear() {
       if (this.disposed) throw new Error("world delta session has been disposed");
       if (this.clearing) throw new Error("world deltas are already being cleared");
@@ -11927,10 +12720,13 @@ void main() {
       this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
       validateChunkSize(this.chunkSize);
       this.seed = options.seed;
-      this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
-      if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
-        throw new RangeError("generatorVersion must be a positive integer");
-      }
+      this.descriptor = createWorldDescriptor({
+        seed: options.seed,
+        chunkSize: this.chunkSize,
+        generatorVersion: options.generatorVersion,
+        world: { width: options.width, height: options.height, topology: "toroidal" }
+      });
+      this.generatorVersion = this.descriptor.generatorVersion;
       this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
       const resolvedDeltas = resolveDeltaStore(options, dependencies);
       this.deltaStore = resolvedDeltas.store;
@@ -11956,7 +12752,9 @@ void main() {
       try {
         this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
           size: options.workerCount,
-          reservedChunkWorkers: options.reservedChunkWorkers
+          reservedChunkWorkers: options.reservedChunkWorkers,
+          coordinator: options.workCoordinator,
+          domain: "worker"
         });
       } catch (error) {
         if (this.ownsCache) this.cache?.dispose();
@@ -12077,8 +12875,17 @@ void main() {
       this.cacheEpoch += 1;
       return this.cache?.clear() ?? Promise.resolve(false);
     }
+    flushCache() {
+      return this.cache?.flush?.() ?? Promise.resolve();
+    }
     flushDeltas() {
       return this.deltaSession.flush();
+    }
+    createDeltaCheckpointSnapshot() {
+      return this.deltaSession.createCheckpointSnapshot();
+    }
+    restoreDeltaCheckpointSnapshot(snapshot) {
+      return this.deltaSession.restoreCheckpointSnapshot(snapshot);
     }
     clearDeltas() {
       return this.deltaSession.clear();
@@ -12118,10 +12925,12 @@ void main() {
       this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
       validateChunkSize(this.chunkSize);
       this.seed = options.seed;
-      this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
-      if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
-        throw new RangeError("generatorVersion must be a positive integer");
-      }
+      this.descriptor = createWorldDescriptor({
+        seed: options.seed,
+        chunkSize: this.chunkSize,
+        generatorVersion: options.generatorVersion
+      });
+      this.generatorVersion = this.descriptor.generatorVersion;
       this.store = dependencies.store ?? new SparseWorldChunkStore();
       const resolvedDeltas = resolveDeltaStore(options, dependencies);
       this.deltaStore = resolvedDeltas.store;
@@ -12137,7 +12946,9 @@ void main() {
       try {
         this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
           size: options.workerCount,
-          reservedChunkWorkers: options.reservedChunkWorkers
+          reservedChunkWorkers: options.reservedChunkWorkers,
+          coordinator: options.workCoordinator,
+          domain: "worker"
         });
       } catch (error) {
         if (this.ownsCache) this.cache?.dispose();
@@ -12221,8 +13032,17 @@ void main() {
       this.cacheEpoch += 1;
       return this.cache?.clear() ?? Promise.resolve(false);
     }
+    flushCache() {
+      return this.cache?.flush?.() ?? Promise.resolve();
+    }
     flushDeltas() {
       return this.deltaSession.flush();
+    }
+    createDeltaCheckpointSnapshot() {
+      return this.deltaSession.createCheckpointSnapshot();
+    }
+    restoreDeltaCheckpointSnapshot(snapshot) {
+      return this.deltaSession.restoreCheckpointSnapshot(snapshot);
     }
     clearDeltas() {
       return this.deltaSession.clear();
@@ -12512,6 +13332,7 @@ void main() {
       this.handlers = handlers;
       this.residents = /* @__PURE__ */ new Map();
       this.pending = /* @__PURE__ */ new Map();
+      this.activeRequests = /* @__PURE__ */ new Set();
       this.wanted = /* @__PURE__ */ new Set();
       this.centerChunkX = 0;
       this.centerChunkY = 0;
@@ -12592,11 +13413,22 @@ void main() {
         busyVegetationWorkers: source?.busyVegetationWorkers ?? 0,
         averageTerrainTaskMs: source?.averageChunkMs ?? 0,
         averageVegetationTaskMs: source?.averageVegetationMs ?? 0,
-        averageChunkLoadMs: this.averageChunkLoadMs
+        averageChunkLoadMs: this.averageChunkLoadMs,
+        queuedWeight: source?.queuedWeight ?? 0,
+        oldestQueuedMs: source?.oldestQueuedMs ?? 0,
+        shedTasks: source?.shedTasks ?? 0,
+        starvationPromotions: source?.starvationPromotions ?? 0,
+        workerFailures: source?.workerFailures ?? 0,
+        clientFactoryFailures: source?.clientFactoryFailures ?? 0
       };
     }
     get residentChunks() {
       return [...this.residents.values()].map((lease) => lease.chunk);
+    }
+    // Resolves only after every request that was active at disposal has
+    // observed cancellation and released any lease it acquired meanwhile.
+    get settled() {
+      return Promise.allSettled([...this.activeRequests]).then(() => void 0);
     }
     hasResident(chunkX, chunkY) {
       return this.residents.has(_WorldStreamer.key(chunkX, chunkY));
@@ -12693,9 +13525,11 @@ void main() {
         return chunk;
       }).finally(() => {
         if (this.pending.get(key) === pending) this.pending.delete(key);
+        this.activeRequests.delete(promise);
       });
       pending = { controller, promise };
       this.pending.set(key, pending);
+      this.activeRequests.add(promise);
       return promise;
     }
     async loadWithRetry(chunkX, chunkY, priority, signal) {
@@ -12781,17 +13615,218 @@ void main() {
     }
   };
 
+  // src/runtime/LifecycleScope.ts
+  var nextLifecycleGeneration = 1;
+  function lifecycleAbortError(message = "Lifecycle scope was closed") {
+    if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  }
+  var LifecycleDrainTimeoutError = class extends Error {
+    constructor(label, timeoutMs, detachedTasks) {
+      super(`${label} did not drain ${detachedTasks} task(s) within ${timeoutMs}ms`);
+      this.label = label;
+      this.timeoutMs = timeoutMs;
+      this.detachedTasks = detachedTasks;
+      this.name = "LifecycleDrainTimeoutError";
+    }
+  };
+  var LifecycleScope = class {
+    constructor(label, options = {}) {
+      this.label = label;
+      this.generation = nextLifecycleGeneration++;
+      this.controller = new AbortController();
+      this.pending = /* @__PURE__ */ new Set();
+      this.stateValue = "active";
+      this.startedTasks = 0;
+      this.completedTasks = 0;
+      this.failedTasks = 0;
+      this.cancelledTasks = 0;
+      this.detachedTasks = 0;
+      this.rejectedPublications = 0;
+      this.drainTimedOut = false;
+      if (typeof label !== "string" || label.trim().length === 0) {
+        throw new TypeError("lifecycle scope label must be a non-empty string");
+      }
+      this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+      this.reportError = options.error;
+      this.drainTimeoutMs = options.drainTimeoutMs;
+      if (this.drainTimeoutMs !== void 0 && (!Number.isFinite(this.drainTimeoutMs) || this.drainTimeoutMs <= 0)) {
+        throw new RangeError("lifecycle drainTimeoutMs must be positive and finite");
+      }
+      this.startedAt = this.now();
+    }
+    get signal() {
+      return this.controller.signal;
+    }
+    get state() {
+      return this.stateValue;
+    }
+    get active() {
+      return this.stateValue === "active";
+    }
+    throwIfClosed() {
+      if (!this.active) throw lifecycleAbortError(`${this.label} is no longer active`);
+    }
+    track(task) {
+      if (!this.active) {
+        void Promise.resolve(task).catch(() => void 0);
+        return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
+      }
+      this.startedTasks += 1;
+      let observed;
+      observed = Promise.resolve(task).then(
+        (value) => {
+          this.completedTasks += 1;
+          return value;
+        },
+        (reason) => {
+          const error = reason instanceof Error ? reason : new Error(String(reason));
+          if (error.name === "AbortError" || this.signal.aborted) this.cancelledTasks += 1;
+          else {
+            this.failedTasks += 1;
+            try {
+              this.reportError?.(error);
+            } catch {
+            }
+          }
+          throw reason;
+        }
+      );
+      this.pending.add(observed);
+      void observed.then(
+        () => this.finish(observed),
+        () => this.finish(observed)
+      );
+      return observed;
+    }
+    run(operation) {
+      if (!this.active) return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
+      let result;
+      try {
+        result = operation(this.signal);
+      } catch (reason) {
+        result = Promise.reject(reason);
+      }
+      return this.track(Promise.resolve(result));
+    }
+    // Returns false instead of invoking an observer when the session has been
+    // superseded. Callers can release the value in onRejected when it owns a
+    // resource that otherwise needs explicit cleanup.
+    publish(value, observer, onRejected) {
+      if (!this.active) {
+        this.rejectedPublications += 1;
+        try {
+          onRejected?.(value);
+        } catch (reason) {
+          this.captureError(reason);
+        }
+        return false;
+      }
+      observer(value);
+      return true;
+    }
+    close(reason = lifecycleAbortError(`${this.label} was closed`)) {
+      if (this.stateValue === "active") {
+        this.stateValue = "closing";
+        this.controller.abort(reason);
+      }
+      if (this.pending.size === 0) this.markClosed();
+      else this.armDrainTimeout();
+      return this.settled;
+    }
+    get settled() {
+      if (this.stateValue === "closed") return Promise.resolve();
+      if (!this.settlePromise) {
+        this.settlePromise = new Promise((resolve) => {
+          this.resolveSettled = resolve;
+        });
+      }
+      return this.settlePromise;
+    }
+    get stats() {
+      return {
+        label: this.label,
+        generation: this.generation,
+        state: this.stateValue,
+        pendingTasks: this.pending.size,
+        startedTasks: this.startedTasks,
+        completedTasks: this.completedTasks,
+        failedTasks: this.failedTasks,
+        cancelledTasks: this.cancelledTasks,
+        detachedTasks: this.detachedTasks,
+        rejectedPublications: this.rejectedPublications,
+        drainTimedOut: this.drainTimedOut,
+        ageMs: Math.max(0, this.now() - this.startedAt)
+      };
+    }
+    finish(task) {
+      this.pending.delete(task);
+      if (this.stateValue === "closing" && this.pending.size === 0) this.markClosed();
+    }
+    markClosed() {
+      if (this.drainTimer !== void 0) {
+        clearTimeout(this.drainTimer);
+        this.drainTimer = void 0;
+      }
+      this.stateValue = "closed";
+      this.resolveSettled?.();
+      this.resolveSettled = void 0;
+    }
+    armDrainTimeout() {
+      if (this.drainTimeoutMs === void 0 || this.drainTimer !== void 0) return;
+      this.drainTimer = setTimeout(() => {
+        this.drainTimer = void 0;
+        if (this.stateValue !== "closing" || this.pending.size === 0) return;
+        const detached = this.pending.size;
+        this.pending.clear();
+        this.detachedTasks += detached;
+        this.drainTimedOut = true;
+        this.captureError(new LifecycleDrainTimeoutError(this.label, this.drainTimeoutMs, detached));
+        this.markClosed();
+      }, this.drainTimeoutMs);
+    }
+    captureError(reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      try {
+        this.reportError?.(error);
+      } catch {
+      }
+    }
+  };
+
   // src/rendering/RenderWorldController.ts
   var RenderWorldController = class {
-    constructor(source) {
+    constructor(source, workCoordinator, options = {}) {
       this.source = source;
       this.disposed = false;
       this.residency = getChunkResidencyCoordinator(source);
+      this.lifecycle = new LifecycleScope("render-world", options);
+      this.detachWorkTelemetry = workCoordinator?.registerTelemetry("streaming", () => ({
+        pendingTasks: (this.stats?.pendingChunks ?? 0) + (this.stats?.queuedChunks ?? 0),
+        pendingWeight: this.stats?.queuedWeight ?? this.stats?.queuedChunks ?? 0,
+        busyTasks: this.stats?.busyWorkers ?? 0,
+        oldestTaskAgeMs: this.stats?.oldestQueuedMs ?? 0,
+        shedTasks: this.stats?.shedTasks ?? 0,
+        starvationPromotions: this.stats?.starvationPromotions ?? 0
+      }));
     }
     startStreaming(handlers, options = {}) {
       if (this.disposed) throw new Error("RenderWorldController has been disposed");
       if (this.activeStreamer) throw new Error("Render world streaming has already started");
-      this.activeStreamer = new WorldStreamer(this.source, handlers, {
+      const guardedHandlers = {
+        chunkLoaded: (chunk) => {
+          this.lifecycle.publish(chunk, handlers.chunkLoaded);
+        },
+        chunkUnloading: (chunk) => {
+          handlers.chunkUnloading(chunk);
+        },
+        error: (error) => {
+          this.lifecycle.publish(error, (value) => handlers.error?.(value));
+        }
+      };
+      this.activeStreamer = new WorldStreamer(this.source, guardedHandlers, {
         ...options,
         residency: this.residency,
         residencyOwner: options.residencyOwner ?? "render-world"
@@ -12800,7 +13835,11 @@ void main() {
     }
     setCenterTile(x, y, predictedTile) {
       if (!this.activeStreamer) return Promise.reject(new Error("Render world streaming has not started"));
-      return this.activeStreamer.setCenterTile(x, y, predictedTile);
+      const task = this.activeStreamer.setCenterTile(x, y, predictedTile).then((chunk) => {
+        if (!this.lifecycle.active) throw lifecycleAbortError("Render world session was superseded");
+        return chunk;
+      });
+      return this.lifecycle.track(task);
     }
     get streamer() {
       return this.activeStreamer;
@@ -12808,21 +13847,1049 @@ void main() {
     get stats() {
       return this.activeStreamer?.stats;
     }
+    get lifecycleStats() {
+      return this.lifecycle.stats;
+    }
+    get settled() {
+      return this.lifecycle.settled;
+    }
     stop(disposeSource = true) {
       if (this.disposed) return;
       this.disposed = true;
+      this.detachWorkTelemetry?.();
+      if (this.activeStreamer) void this.lifecycle.track(this.activeStreamer.settled).catch(() => void 0);
+      void this.lifecycle.close();
       this.activeStreamer?.dispose(false);
       this.activeStreamer = void 0;
       this.residency.dispose(false);
       if (disposeSource) this.source.dispose();
     }
   };
+  var Sky = class _Sky extends three.Mesh {
+    /**
+     * Constructs a new skydome.
+     */
+    constructor() {
+      const shader = _Sky.SkyShader;
+      const material = new three.ShaderMaterial({
+        name: shader.name,
+        uniforms: three.UniformsUtils.clone(shader.uniforms),
+        vertexShader: shader.vertexShader,
+        fragmentShader: shader.fragmentShader,
+        side: three.BackSide,
+        depthWrite: false
+      });
+      super(new three.BoxGeometry(1, 1, 1), material);
+      this.isSky = true;
+    }
+  };
+  Sky.SkyShader = {
+    name: "SkyShader",
+    uniforms: {
+      "turbidity": { value: 2 },
+      "rayleigh": { value: 1 },
+      "mieCoefficient": { value: 5e-3 },
+      "mieDirectionalG": { value: 0.8 },
+      "sunPosition": { value: new three.Vector3() },
+      "up": { value: new three.Vector3(0, 1, 0) },
+      "cloudScale": { value: 2e-4 },
+      "cloudSpeed": { value: 1e-4 },
+      "cloudCoverage": { value: 0.4 },
+      "cloudDensity": { value: 0.4 },
+      "cloudElevation": { value: 0.5 },
+      "showSunDisc": { value: 1 },
+      "time": { value: 0 }
+    },
+    vertexShader: (
+      /* glsl */
+      `
+		uniform vec3 sunPosition;
+		uniform float rayleigh;
+		uniform float turbidity;
+		uniform float mieCoefficient;
+		uniform vec3 up;
 
-  // src/HexMap.ts
-  function renderLayerError(reason) {
-    return reason instanceof Error ? reason : new Error(String(reason));
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying float vSunfade;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		// constants for atmospheric scattering
+		const float e = 2.71828182845904523536028747135266249775724709369995957;
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		// wavelength of used primaries, according to preetham
+		const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );
+		// this pre-calculation replaces older TotalRayleigh(vec3 lambda) function:
+		// (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn))
+		const vec3 totalRayleigh = vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 );
+
+		// mie stuff
+		// K coefficient for the primaries
+		const float v = 4.0;
+		const vec3 K = vec3( 0.686, 0.678, 0.666 );
+		// MieConst = pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K
+		const vec3 MieConst = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+		// earth shadow hack
+		// cutoffAngle = pi / 1.95;
+		const float cutoffAngle = 1.6110731556870734;
+		const float steepness = 1.5;
+		const float EE = 1000.0;
+
+		float sunIntensity( float zenithAngleCos ) {
+			zenithAngleCos = clamp( zenithAngleCos, -1.0, 1.0 );
+			return EE * max( 0.0, 1.0 - pow( e, -( ( cutoffAngle - acos( zenithAngleCos ) ) / steepness ) ) );
+		}
+
+		vec3 totalMie( float T ) {
+			float c = ( 0.2 * T ) * 10E-18;
+			return 0.434 * c * MieConst;
+		}
+
+		void main() {
+
+			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+			vWorldPosition = worldPosition.xyz;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			gl_Position.z = gl_Position.w; // set z to camera.far
+
+			vSunDirection = normalize( sunPosition );
+
+			vSunE = sunIntensity( dot( vSunDirection, up ) );
+
+			vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
+
+			float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
+
+			// extinction (absorption + out scattering)
+			// rayleigh coefficients
+			vBetaR = totalRayleigh * rayleighCoefficient;
+
+			// mie coefficients
+			vBetaM = totalMie( turbidity ) * mieCoefficient;
+
+		}`
+    ),
+    fragmentShader: (
+      /* glsl */
+      `
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		uniform float mieDirectionalG;
+		uniform vec3 up;
+		uniform float cloudScale;
+		uniform float cloudSpeed;
+		uniform float cloudCoverage;
+		uniform float cloudDensity;
+		uniform float cloudElevation;
+		uniform float showSunDisc;
+		uniform float time;
+
+		// Cloud noise functions
+		float hash( vec2 p ) {
+			return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+		}
+
+		float noise( vec2 p ) {
+			vec2 i = floor( p );
+			vec2 f = fract( p );
+			f = f * f * ( 3.0 - 2.0 * f );
+			float a = hash( i );
+			float b = hash( i + vec2( 1.0, 0.0 ) );
+			float c = hash( i + vec2( 0.0, 1.0 ) );
+			float d = hash( i + vec2( 1.0, 1.0 ) );
+			return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+		}
+
+		float fbm( vec2 p ) {
+			float value = 0.0;
+			float amplitude = 0.5;
+			for ( int i = 0; i < 5; i ++ ) {
+				value += amplitude * noise( p );
+				p *= 2.0;
+				amplitude *= 0.5;
+			}
+			return value;
+		}
+
+		// constants for atmospheric scattering
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		const float n = 1.0003; // refractive index of air
+		const float N = 2.545E25; // number of molecules per unit volume for air at 288.15K and 1013mb (sea level -45 celsius)
+
+		// optical length at zenith for molecules
+		const float rayleighZenithLength = 8.4E3;
+		const float mieZenithLength = 1.25E3;
+		// 66 arc seconds -> degrees, and the cosine of that
+		const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+
+		// 3.0 / ( 16.0 * pi )
+		const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+		// 1.0 / ( 4.0 * pi )
+		const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+		float rayleighPhase( float cosTheta ) {
+			return THREE_OVER_SIXTEENPI * ( 1.0 + pow( cosTheta, 2.0 ) );
+		}
+
+		float hgPhase( float cosTheta, float g ) {
+			float g2 = pow( g, 2.0 );
+			float inverse = 1.0 / pow( 1.0 - 2.0 * g * cosTheta + g2, 1.5 );
+			return ONE_OVER_FOURPI * ( ( 1.0 - g2 ) * inverse );
+		}
+
+		void main() {
+
+			vec3 direction = normalize( vWorldPosition - cameraPosition );
+
+			// optical length
+			// cutoff angle at 90 to avoid singularity in next formula.
+			float zenithAngle = acos( max( 0.0, dot( up, direction ) ) );
+			float inverse = 1.0 / ( cos( zenithAngle ) + 0.15 * pow( 93.885 - ( ( zenithAngle * 180.0 ) / pi ), -1.253 ) );
+			float sR = rayleighZenithLength * inverse;
+			float sM = mieZenithLength * inverse;
+
+			// combined extinction factor
+			vec3 Fex = exp( -( vBetaR * sR + vBetaM * sM ) );
+
+			// in scattering
+			float cosTheta = dot( direction, vSunDirection );
+
+			float rPhase = rayleighPhase( cosTheta * 0.5 + 0.5 );
+			vec3 betaRTheta = vBetaR * rPhase;
+
+			float mPhase = hgPhase( cosTheta, mieDirectionalG );
+			vec3 betaMTheta = vBetaM * mPhase;
+
+			vec3 Lin = pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * ( 1.0 - Fex ), vec3( 1.5 ) );
+			Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * Fex, vec3( 1.0 / 2.0 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );
+
+			// nightsky
+			float theta = acos( direction.y ); // elevation --> y-axis, [-pi/2, pi/2]
+			float phi = atan( direction.z, direction.x ); // azimuth --> x-axis [-pi/2, pi/2]
+			vec2 uv = vec2( phi, theta ) / vec2( 2.0 * pi, pi ) + vec2( 0.5, 0.0 );
+			vec3 L0 = vec3( 0.1 ) * Fex;
+
+			// composition + solar disc
+			float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSunDisc;
+			L0 += ( vSunE * 19000.0 * Fex ) * sundisc;
+
+			vec3 texColor = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
+
+			// Clouds
+			if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
+
+				// Project to cloud plane (higher elevation = clouds appear lower/closer)
+				float elevation = mix( 1.0, 0.1, cloudElevation );
+				vec2 cloudUV = direction.xz / ( direction.y * elevation );
+				cloudUV *= cloudScale;
+				cloudUV += time * cloudSpeed;
+
+				// Multi-octave noise for fluffy clouds
+				float cloudNoise = fbm( cloudUV * 1000.0 );
+				cloudNoise += 0.5 * fbm( cloudUV * 2000.0 + 3.7 );
+				cloudNoise = cloudNoise * 0.5 + 0.5;
+
+				// Apply coverage threshold
+				float cloudMask = smoothstep( 1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cloudNoise );
+
+				// Fade clouds near horizon (adjusted by elevation)
+				float horizonFade = smoothstep( 0.0, 0.1 + 0.2 * cloudElevation, direction.y );
+				cloudMask *= horizonFade;
+
+				// Cloud lighting based on sun position
+				float sunInfluence = dot( direction, vSunDirection ) * 0.5 + 0.5;
+				float daylight = max( 0.0, vSunDirection.y * 2.0 );
+
+				// Base cloud color affected by atmosphere
+				vec3 atmosphereColor = Lin * 0.04;
+				vec3 cloudColor = mix( vec3( 0.3 ), vec3( 1.0 ), daylight );
+				cloudColor = mix( cloudColor, atmosphereColor + vec3( 1.0 ), sunInfluence * 0.5 );
+				cloudColor *= vSunE * 0.00002;
+
+				// Blend clouds with sky
+				texColor = mix( texColor, cloudColor, cloudMask * cloudDensity );
+
+			}
+
+			gl_FragColor = vec4( texColor, 1.0 );
+
+			#include <tonemapping_fragment>
+			#include <colorspace_fragment>
+
+		}`
+    )
+  };
+
+  // src/rendering/WebGlGpuTimer.ts
+  var WebGlGpuTimer = class {
+    constructor(gl, options = {}) {
+      this.gl = gl;
+      this.pending = [];
+      this.disposed = false;
+      this.completedSamples = 0;
+      this.disjointSamples = 0;
+      this.droppedSamples = 0;
+      this.saturatedFrames = 0;
+      this.maxPendingQueries = options.maxPendingQueries ?? 4;
+      this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+      if (!Number.isInteger(this.maxPendingQueries) || this.maxPendingQueries <= 0) {
+        throw new RangeError("maxPendingQueries must be a positive integer");
+      }
+      this.refreshExtension();
+    }
+    get supported() {
+      return !this.disposed && this.extension !== void 0 && typeof this.gl.createQuery === "function";
+    }
+    begin() {
+      if (!this.supported || this.activeQuery || this.gl.isContextLost()) return false;
+      if (this.pending.length >= this.maxPendingQueries) {
+        this.droppedSamples += 1;
+        this.saturatedFrames += 1;
+        return false;
+      }
+      const query = this.gl.createQuery();
+      if (!query) {
+        this.droppedSamples += 1;
+        return false;
+      }
+      try {
+        this.gl.beginQuery(this.extension.TIME_ELAPSED_EXT, query);
+        this.activeQuery = query;
+        return true;
+      } catch {
+        this.deleteQuery(query);
+        this.droppedSamples += 1;
+        return false;
+      }
+    }
+    end() {
+      const query = this.activeQuery;
+      if (!query) return;
+      this.activeQuery = void 0;
+      try {
+        this.gl.endQuery(this.extension.TIME_ELAPSED_EXT);
+        this.pending.push(query);
+      } catch {
+        this.deleteQuery(query);
+        this.droppedSamples += 1;
+      }
+    }
+    // Returns the newest newly-available measurement, or undefined when the
+    // GPU has not completed a query yet. Disjoint results are discarded.
+    poll() {
+      if (!this.supported) return void 0;
+      if (this.gl.isContextLost()) {
+        this.clearQueries(true);
+        this.extension = void 0;
+        this.resetLastSample();
+        return void 0;
+      }
+      if (this.pending.length === 0) return void 0;
+      let disjoint = false;
+      try {
+        disjoint = Boolean(this.gl.getParameter(this.extension.GPU_DISJOINT_EXT));
+      } catch {
+        this.clearQueries(true);
+        return void 0;
+      }
+      if (disjoint) {
+        this.disjointSamples += this.pending.length;
+        for (const query of this.pending.splice(0)) this.deleteQuery(query);
+        return void 0;
+      }
+      let latest;
+      while (this.pending.length > 0) {
+        const query = this.pending[0];
+        let available = false;
+        try {
+          available = Boolean(this.gl.getQueryParameter(query, this.gl.QUERY_RESULT_AVAILABLE));
+        } catch {
+          this.pending.shift();
+          this.deleteQuery(query);
+          this.droppedSamples += 1;
+          continue;
+        }
+        if (!available) break;
+        this.pending.shift();
+        let elapsedNs;
+        try {
+          elapsedNs = Number(this.gl.getQueryParameter(query, this.gl.QUERY_RESULT));
+        } catch {
+          this.deleteQuery(query);
+          this.droppedSamples += 1;
+          continue;
+        }
+        this.deleteQuery(query);
+        if (!Number.isFinite(elapsedNs) || elapsedNs < 0) {
+          this.droppedSamples += 1;
+          continue;
+        }
+        latest = elapsedNs / 1e6;
+        this.lastGpuMs = latest;
+        this.lastSampleAt = this.now();
+        this.completedSamples += 1;
+      }
+      return latest;
+    }
+    handleContextRestored() {
+      if (this.disposed) return;
+      this.clearQueries();
+      this.resetLastSample();
+      this.refreshExtension();
+    }
+    handleContextLost() {
+      if (this.disposed) return;
+      this.clearQueries(true);
+      this.extension = void 0;
+      this.resetLastSample();
+    }
+    get stats() {
+      return {
+        supported: this.supported,
+        active: this.activeQuery !== void 0,
+        pendingQueries: this.pending.length,
+        maxPendingQueries: this.maxPendingQueries,
+        saturated: this.pending.length >= this.maxPendingQueries,
+        saturatedFrames: this.saturatedFrames,
+        completedSamples: this.completedSamples,
+        disjointSamples: this.disjointSamples,
+        droppedSamples: this.droppedSamples,
+        lastGpuMs: this.lastGpuMs,
+        lastSampleAgeMs: this.lastSampleAt === void 0 ? void 0 : Math.max(0, this.now() - this.lastSampleAt)
+      };
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.clearQueries();
+      this.extension = void 0;
+    }
+    refreshExtension() {
+      this.extension = this.gl.getExtension("EXT_disjoint_timer_query_webgl2") ?? void 0;
+    }
+    clearQueries(countDropped = false) {
+      const discarded = this.pending.length + (this.activeQuery ? 1 : 0);
+      if (this.activeQuery) {
+        this.deleteQuery(this.activeQuery);
+        this.activeQuery = void 0;
+      }
+      for (const query of this.pending.splice(0)) this.deleteQuery(query);
+      if (countDropped) this.droppedSamples += discarded;
+    }
+    deleteQuery(query) {
+      try {
+        this.gl.deleteQuery(query);
+      } catch {
+      }
+    }
+    resetLastSample() {
+      this.lastGpuMs = void 0;
+      this.lastSampleAt = void 0;
+    }
+  };
+
+  // src/rendering/HexMapRendererHost.ts
+  var HexMapRendererHost = class {
+    constructor(options) {
+      this.options = options;
+      this.contextState = "ready";
+      this.contextGeneration = 1;
+      this.contextLosses = 0;
+      this.contextRestores = 0;
+      this.disposed = false;
+      this.onContextLost = (event) => {
+        event.preventDefault();
+        if (this.disposed || this.contextState === "lost") return;
+        this.contextState = "lost";
+        this.contextLosses += 1;
+        this.gpuTimer.handleContextLost();
+        this.options.contextLost?.();
+      };
+      this.onContextRestored = () => {
+        if (this.disposed) return;
+        this.contextState = "restoring";
+        this.gpuTimer.handleContextRestored();
+        this.renderer.resetState();
+        this.invalidateManagedResources();
+        this.contextGeneration += 1;
+        this.contextRestores += 1;
+        this.contextState = "ready";
+        this.options.contextRestored?.();
+      };
+      this.scene = new three.Scene();
+      this.scene.background = new three.Color(10471906);
+      this.worldRoot = new three.Group();
+      this.worldRoot.name = "hex-map-world-root";
+      this.scene.add(this.worldRoot);
+      this.renderer = new three.WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
+      this.renderer.toneMapping = three.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 0.65;
+      this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
+      this.camera.position.set(900, 500, 1e3);
+      this.scene.add(this.camera);
+      const primary = new three.DirectionalLight(16777215);
+      primary.position.set(1, 1, 1);
+      this.scene.add(primary);
+      const fill = new three.DirectionalLight(8840);
+      fill.position.set(-1, -1, -1);
+      this.scene.add(fill);
+      this.scene.add(new three.AmbientLight(2236962));
+      this.sky = this.createSky(options.skyVisible);
+      this.scene.add(this.sky);
+      this.gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
+      options.canvas.addEventListener("webglcontextlost", this.onContextLost);
+      options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+    }
+    resize(width, height, pixelRatio) {
+      if (this.disposed || this.contextState !== "ready" || width <= 0 || height <= 0) return;
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setPixelRatio(pixelRatio);
+      this.renderer.setSize(width, height, false);
+    }
+    pollGpuFrameMs() {
+      return this.contextState === "ready" ? this.gpuTimer.poll() : void 0;
+    }
+    get gpuTimingStats() {
+      return this.gpuTimer.stats;
+    }
+    get contextStats() {
+      return {
+        state: this.contextState,
+        generation: this.contextGeneration,
+        losses: this.contextLosses,
+        restores: this.contextRestores
+      };
+    }
+    render() {
+      if (this.disposed || this.contextState !== "ready") return;
+      const measured = this.gpuTimer.begin();
+      try {
+        this.renderer.render(this.scene, this.camera);
+      } finally {
+        if (measured) this.gpuTimer.end();
+      }
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.contextState = "disposed";
+      this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+      this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+      this.gpuTimer.dispose();
+      this.sky.geometry.dispose();
+      this.sky.material.dispose();
+      this.renderer.renderLists.dispose();
+      this.renderer.dispose();
+    }
+    createSky(visible) {
+      const sky = new Sky();
+      sky.visible = visible;
+      sky.scale.setScalar(45e4);
+      sky.frustumCulled = false;
+      const uniforms = sky.material.uniforms;
+      uniforms.turbidity.value = 4;
+      uniforms.rayleigh.value = 1.7;
+      uniforms.mieCoefficient.value = 2e-3;
+      uniforms.mieDirectionalG.value = 0.76;
+      const elevation = 24 * Math.PI / 180;
+      const azimuth = 205 * Math.PI / 180;
+      const sun = new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
+      uniforms.sunPosition.value.copy(sun);
+      return sky;
+    }
+    invalidateManagedResources() {
+      this.scene.traverse((object) => {
+        const renderable = object;
+        for (const attribute of Object.values(renderable.geometry?.attributes ?? {})) attribute.needsUpdate = true;
+        if (renderable.geometry?.index) renderable.geometry.index.needsUpdate = true;
+        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        for (const material of materials) {
+          if (!material || typeof material !== "object") continue;
+          material.needsUpdate = true;
+          for (const value of Object.values(material)) {
+            if (value instanceof three.Texture) value.needsUpdate = true;
+          }
+        }
+      });
+    }
+  };
+  var HexMapInteractionController = class {
+    constructor(options) {
+      this.options = options;
+      this.movementKeys = /* @__PURE__ */ new Set();
+      this.addedCanvasTabIndex = false;
+      this.disposed = false;
+      this.onContextMenu = (event) => event.preventDefault();
+      this.onKeyDown = (event) => {
+        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
+        this.movementKeys.add(event.code);
+        event.preventDefault();
+      };
+      this.onKeyUp = (event) => {
+        if (!this.isMovementKey(event.code)) return;
+        this.movementKeys.delete(event.code);
+        event.preventDefault();
+      };
+      this.clearMovementKeys = () => {
+        this.movementKeys.clear();
+      };
+      this.onMouseDown = (event) => {
+        this.options.canvas.focus({ preventScroll: true });
+        this.mouseDownAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : void 0;
+      };
+      this.onPointerMove = (event) => {
+        const picked = this.pick(event.clientX, event.clientY);
+        if (!picked) {
+          this.clearHover();
+          return;
+        }
+        if (this.hovered?.x === picked.x && this.hovered.y === picked.y) return;
+        const tile = this.options.tile(picked.x, picked.y);
+        if (!tile) {
+          this.clearHover();
+          return;
+        }
+        this.hovered = { x: picked.x, y: picked.y };
+        this.options.pointer.visible = true;
+        this.options.pointer.position.setX(picked.worldX);
+        this.options.pointer.position.setZ(picked.worldY);
+        this.options.hover(picked.x, picked.y, tile);
+      };
+      this.onMouseUp = (event) => {
+        if (event.button !== 0) return;
+        const downAt = this.mouseDownAt;
+        this.mouseDownAt = void 0;
+        if (!downAt || Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 4) return;
+        const picked = this.pick(event.clientX, event.clientY);
+        if (!picked) return;
+        const tile = this.options.tile(picked.x, picked.y);
+        if (!tile) return;
+        this.options.select(picked.x, picked.y);
+        this.options.click(picked.x, picked.y, tile);
+      };
+      if (!Number.isFinite(options.size) || options.size <= 0) {
+        throw new RangeError("interaction hex size must be positive and finite");
+      }
+      if (!options.canvas.hasAttribute("tabindex")) {
+        options.canvas.tabIndex = 0;
+        this.addedCanvasTabIndex = true;
+      }
+      options.canvas.addEventListener("keydown", this.onKeyDown);
+      options.canvas.addEventListener("keyup", this.onKeyUp);
+      options.canvas.addEventListener("blur", this.clearMovementKeys);
+      options.canvas.addEventListener("mousedown", this.onMouseDown);
+      options.canvas.addEventListener("contextmenu", this.onContextMenu);
+      window.addEventListener("blur", this.clearMovementKeys);
+      window.addEventListener("pointermove", this.onPointerMove);
+      window.addEventListener("mouseup", this.onMouseUp);
+    }
+    update(dtSeconds) {
+      if (this.disposed || dtSeconds <= 0 || this.movementKeys.size === 0) return;
+      const forwardAmount = Number(this.movementKeys.has("KeyW")) - Number(this.movementKeys.has("KeyS"));
+      const rightAmount = Number(this.movementKeys.has("KeyD")) - Number(this.movementKeys.has("KeyA"));
+      if (forwardAmount === 0 && rightAmount === 0) return;
+      const { camera, controls } = this.options;
+      const forward = controls.target.clone().sub(camera.position);
+      forward.y = 0;
+      if (forward.lengthSq() < 1e-4) forward.set(0, 0, -1);
+      else forward.normalize();
+      const right = new three.Vector3(-forward.z, 0, forward.x);
+      const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
+      if (movement.lengthSq() > 1) movement.normalize();
+      const viewDistance = camera.position.distanceTo(controls.target);
+      const speed = Math.min(900, Math.max(140, viewDistance * 0.9));
+      movement.multiplyScalar(speed * dtSeconds);
+      camera.position.add(movement);
+      controls.target.add(movement);
+    }
+    reset() {
+      this.mouseDownAt = void 0;
+      this.hovered = void 0;
+      this.movementKeys.clear();
+      this.options.pointer.visible = false;
+    }
+    get hoveredTile() {
+      return this.hovered ? { ...this.hovered } : null;
+    }
+    get stats() {
+      return {
+        disposed: this.disposed,
+        movementKeys: [...this.movementKeys].sort(),
+        hoveredTile: this.hoveredTile
+      };
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      const { canvas } = this.options;
+      canvas.removeEventListener("keydown", this.onKeyDown);
+      canvas.removeEventListener("keyup", this.onKeyUp);
+      canvas.removeEventListener("blur", this.clearMovementKeys);
+      canvas.removeEventListener("mousedown", this.onMouseDown);
+      canvas.removeEventListener("contextmenu", this.onContextMenu);
+      window.removeEventListener("blur", this.clearMovementKeys);
+      window.removeEventListener("pointermove", this.onPointerMove);
+      window.removeEventListener("mouseup", this.onMouseUp);
+      if (this.addedCanvasTabIndex && canvas.getAttribute("tabindex") === "0") {
+        canvas.removeAttribute("tabindex");
+      }
+      this.reset();
+    }
+    pick(clientX, clientY) {
+      const ground = screenToGround(clientX, clientY, this.options.canvas, this.options.camera);
+      if (!ground) return null;
+      this.options.logicalGround(ground);
+      const map = this.options.map();
+      return pickTile(
+        ground,
+        this.options.size,
+        map?.infinite ? void 0 : map?.w,
+        map?.infinite ? void 0 : map?.h,
+        map?.wrapX,
+        map?.wrapY
+      );
+    }
+    clearHover() {
+      this.options.pointer.visible = false;
+      this.hovered = void 0;
+    }
+    isMovementKey(code) {
+      return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
+    }
+    isTextInput(target) {
+      if (!(target instanceof HTMLElement)) return false;
+      return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
+    }
+  };
+
+  // src/rendering/WorldChunkMountQueue.ts
+  var WorldChunkMountQueue = class {
+    constructor(options) {
+      this.options = options;
+      this.deferred = /* @__PURE__ */ new Map();
+      this.sequence = 0;
+    }
+    schedule(chunk) {
+      const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
+      const signal = this.options.signal();
+      if (signal?.aborted || this.options.mounted(key)) {
+        this.deferred.delete(key);
+        return;
+      }
+      const priority = this.options.priority(chunk);
+      if (key === this.options.demandKey()) {
+        this.deferred.delete(key);
+        this.options.mount(chunk);
+        return;
+      }
+      this.options.frameTasks.enqueue(key, priority, () => {
+        this.deferred.delete(key);
+        if (this.options.streamer()?.hasResident(chunk.chunkX, chunk.chunkY)) {
+          this.options.mount(chunk);
+        }
+      }, {
+        lane: "visible",
+        weight: Math.max(1, Math.ceil(chunk.coreTiles.length / 128)),
+        signal,
+        cancelled: (reason) => {
+          if (reason instanceof WorkQueueBackpressureError && this.options.streamer()?.hasResident(chunk.chunkX, chunk.chunkY)) {
+            const existing = this.deferred.get(key);
+            this.deferred.set(key, {
+              chunk,
+              priority,
+              sequence: existing?.sequence ?? this.sequence++
+            });
+          }
+        }
+      });
+    }
+    retryOne() {
+      const streamer = this.options.streamer();
+      if (!streamer) {
+        this.deferred.clear();
+        return;
+      }
+      const demandKey = this.options.demandKey();
+      let selectedKey;
+      let selected;
+      for (const [key, candidate] of this.deferred) {
+        if (!streamer.hasResident(candidate.chunk.chunkX, candidate.chunk.chunkY) || this.options.mounted(key)) {
+          this.deferred.delete(key);
+          continue;
+        }
+        const demanded = key === demandKey;
+        const selectedDemanded = selectedKey === demandKey;
+        if (!selected || demanded && !selectedDemanded || demanded === selectedDemanded && (candidate.priority < selected.priority || candidate.priority === selected.priority && candidate.sequence < selected.sequence)) {
+          selectedKey = key;
+          selected = candidate;
+        }
+      }
+      if (!selectedKey || !selected) return;
+      this.deferred.delete(selectedKey);
+      this.schedule(selected.chunk);
+    }
+    forget(key) {
+      this.deferred.delete(key);
+      this.options.frameTasks.cancel(key);
+    }
+    clear() {
+      this.deferred.clear();
+    }
+    get stats() {
+      return { deferredChunks: this.deferred.size };
+    }
+  };
+
+  // src/world/WorldEditingFacade.ts
+  function worldTileVisualSignature(tile) {
+    const modifiers = tile?.modifiers ? [...tile.modifiers].sort() : [];
+    const rivers = tile?.rivers ? tile.rivers.map((river) => `${river.riverIndex}:${river.riverTileIndex}`).sort() : [];
+    return JSON.stringify([
+      tile?.type ?? null,
+      modifiers,
+      tile?.treeModel ?? null,
+      rivers,
+      Boolean(tile?.city),
+      tile?.city?.name ?? null,
+      tile?.city?.model ?? null
+    ]);
   }
-  var DEFAULT_OPTIONS = {
+  var WorldEditingFacade = class {
+    constructor(source, map, options = {}) {
+      this.source = source;
+      this.map = map;
+      this.disposed = false;
+      this.editBatches = 0;
+      this.changedTiles = 0;
+      this.visualDirtyTiles = 0;
+      if (source.map !== void 0 && source.map !== map) {
+        throw new TypeError("world editing facade map must belong to its source");
+      }
+      this.visualSignature = options.visualSignature ?? worldTileVisualSignature;
+    }
+    setTileOverride(x, y, changes) {
+      const source = this.mutableSource();
+      this.assertCoordinates(x, y);
+      assertWorldTileOverride(changes);
+      const point = this.normalizeRequired(x, y);
+      const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
+      source.setTileOverride(point.x, point.y, changes);
+      const dirty = this.visualSignature(getMapTile(this.map, point.x, point.y)) !== before ? [point] : [];
+      this.record(1, dirty.length);
+      return { source, changed: true, dirtyTiles: dirty };
+    }
+    setTileOverrides(changes) {
+      const source = this.mutableSource();
+      if (!Array.isArray(changes)) throw new TypeError("tile overrides must be an array");
+      const normalized = [];
+      const before = /* @__PURE__ */ new Map();
+      for (const change of changes) {
+        if (!change || typeof change !== "object") {
+          throw new RangeError("tile override coordinates must be safe integers");
+        }
+        this.assertCoordinates(change.x, change.y);
+        assertWorldTileOverride(change.changes);
+        const point = this.normalizeRequired(change.x, change.y);
+        const key = `${point.x},${point.y}`;
+        if (!before.has(key)) {
+          before.set(key, { point, signature: this.visualSignature(getMapTile(this.map, point.x, point.y)) });
+        }
+        normalized.push({ x: point.x, y: point.y, changes: change.changes });
+      }
+      if (source.setTileOverrides) source.setTileOverrides(normalized);
+      else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
+      const dirty = [...before.values()].filter(({ point, signature }) => this.visualSignature(getMapTile(this.map, point.x, point.y)) !== signature).map(({ point }) => point);
+      this.record(before.size, dirty.length);
+      return { source, changed: normalized.length > 0, dirtyTiles: dirty };
+    }
+    clearTileOverride(x, y) {
+      const source = this.mutableSource();
+      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+        return { source, changed: false, dirtyTiles: [] };
+      }
+      const point = normalizeMapCoordinates(this.map, x, y);
+      if (!point) return { source, changed: false, dirtyTiles: [] };
+      const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
+      if (!source.clearTileOverride(point.x, point.y)) {
+        return { source, changed: false, dirtyTiles: [] };
+      }
+      const dirty = this.visualSignature(getMapTile(this.map, point.x, point.y)) !== before ? [point] : [];
+      this.record(1, dirty.length);
+      return { source, changed: true, dirtyTiles: dirty };
+    }
+    flush() {
+      const source = this.mutableSource();
+      return source.flushDeltas?.() ?? Promise.resolve();
+    }
+    dispose() {
+      this.disposed = true;
+    }
+    get stats() {
+      return {
+        disposed: this.disposed,
+        editBatches: this.editBatches,
+        changedTiles: this.changedTiles,
+        visualDirtyTiles: this.visualDirtyTiles
+      };
+    }
+    mutableSource() {
+      if (this.disposed) throw new Error("WorldEditingFacade has been disposed");
+      if (!isMutableWorldSource(this.source)) {
+        throw new Error("The current world source does not support tile overrides");
+      }
+      return this.source;
+    }
+    assertCoordinates(x, y) {
+      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+        throw new RangeError("tile override coordinates must be safe integers");
+      }
+    }
+    normalizeRequired(x, y) {
+      const point = normalizeMapCoordinates(this.map, x, y);
+      if (!point) throw new RangeError("tile override coordinates are outside the world bounds");
+      return point;
+    }
+    record(changedTiles, dirtyTiles) {
+      this.editBatches += 1;
+      this.changedTiles += changedTiles;
+      this.visualDirtyTiles += dirtyTiles;
+    }
+  };
+
+  // src/runtime/RuntimeWorkCoordinator.ts
+  function nonNegativeTelemetry(value, fallback = 0) {
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  }
+  var RuntimeWorkCoordinator = class {
+    constructor(options = {}) {
+      this.domains = /* @__PURE__ */ new Map();
+      this.queueDomains = /* @__PURE__ */ new WeakMap();
+      this.controller = new AbortController();
+      this.disposed = false;
+      this.defaults = {
+        maxPendingTasks: options.defaultMaxPendingTasks ?? 512,
+        maxPendingWeight: options.defaultMaxPendingWeight ?? 2048,
+        starvationMs: options.starvationMs ?? 2e3,
+        now: options.now
+      };
+    }
+    get signal() {
+      return this.controller.signal;
+    }
+    createQueue(domain, options = {}) {
+      this.assertActive();
+      const id = this.uniqueDomainId(domain);
+      const queue = new PriorityTaskQueue({
+        maxPendingTasks: options.maxPendingTasks ?? this.defaults.maxPendingTasks,
+        maxPendingWeight: options.maxPendingWeight ?? this.defaults.maxPendingWeight,
+        starvationMs: options.starvationMs ?? this.defaults.starvationMs,
+        now: options.now ?? this.defaults.now
+      });
+      this.domains.set(id, {
+        telemetry: () => queue.stats,
+        clear: (reason) => queue.clear(reason)
+      });
+      this.queueDomains.set(queue, id);
+      return queue;
+    }
+    releaseQueue(queue, clear = true) {
+      const id = this.queueDomains.get(queue);
+      if (!id) return false;
+      const registration = this.domains.get(id);
+      if (clear) registration?.clear?.(new Error(`work domain "${id}" was released`));
+      this.domains.delete(id);
+      this.queueDomains.delete(queue);
+      return true;
+    }
+    registerTelemetry(domain, telemetry) {
+      this.assertActive();
+      if (typeof telemetry !== "function") throw new TypeError("work-domain telemetry provider is required");
+      const id = this.uniqueDomainId(domain);
+      const registration = { telemetry };
+      this.domains.set(id, registration);
+      let attached = true;
+      return () => {
+        if (!attached) return;
+        attached = false;
+        if (this.domains.get(id) === registration) this.domains.delete(id);
+      };
+    }
+    get stats() {
+      const domains = {};
+      const totals = {
+        pendingTasks: 0,
+        pendingWeight: 0,
+        busyTasks: 0,
+        oldestTaskAgeMs: 0,
+        cancelledTasks: 0,
+        shedTasks: 0,
+        starvationPromotions: 0
+      };
+      for (const [id, registration] of this.domains) {
+        let sample;
+        try {
+          sample = registration.telemetry() ?? {};
+        } catch {
+          sample = {};
+        }
+        const pendingTasks = nonNegativeTelemetry(sample.pendingTasks);
+        const domain = {
+          id,
+          pendingTasks,
+          pendingWeight: nonNegativeTelemetry(sample.pendingWeight, pendingTasks),
+          busyTasks: nonNegativeTelemetry(sample.busyTasks),
+          oldestTaskAgeMs: nonNegativeTelemetry(sample.oldestTaskAgeMs),
+          cancelledTasks: nonNegativeTelemetry(sample.cancelledTasks),
+          shedTasks: nonNegativeTelemetry(sample.shedTasks),
+          starvationPromotions: nonNegativeTelemetry(sample.starvationPromotions)
+        };
+        domains[id] = domain;
+        totals.pendingTasks += domain.pendingTasks;
+        totals.pendingWeight += domain.pendingWeight;
+        totals.busyTasks += domain.busyTasks;
+        totals.oldestTaskAgeMs = Math.max(totals.oldestTaskAgeMs, domain.oldestTaskAgeMs);
+        totals.cancelledTasks += domain.cancelledTasks;
+        totals.shedTasks += domain.shedTasks;
+        totals.starvationPromotions += domain.starvationPromotions;
+      }
+      return { disposed: this.disposed, domains, ...totals };
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      const error = new Error("RuntimeWorkCoordinator was disposed");
+      error.name = "AbortError";
+      this.controller.abort(error);
+      for (const registration of this.domains.values()) registration.clear?.(error);
+      this.domains.clear();
+    }
+    uniqueDomainId(domain) {
+      if (typeof domain !== "string" || domain.trim().length === 0) {
+        throw new TypeError("work domain must be a non-empty string");
+      }
+      if (!this.domains.has(domain)) return domain;
+      let suffix = 2;
+      while (this.domains.has(`${domain}#${suffix}`)) suffix += 1;
+      return `${domain}#${suffix}`;
+    }
+    assertActive() {
+      if (this.disposed) throw new Error("RuntimeWorkCoordinator has been disposed");
+    }
+  };
+
+  // src/HexMapOptions.ts
+  var DEFAULT_HEX_MAP_OPTIONS = {
     size: 40,
     maxPixelRatio: 2,
     antialias: true,
@@ -12882,22 +14949,93 @@ void main() {
     vegetationRenderDistance: 1450,
     chunkLodHysteresis: 120,
     gpuChunkCacheSize: 128,
-    cpuChunkCacheSize: 192
+    cpuChunkCacheSize: 192,
+    gpuChunkCacheBytes: 256 * 1024 * 1024,
+    cpuChunkCacheBytes: 384 * 1024 * 1024,
+    worldSessionDrainTimeoutMs: 15e3
   };
-  var WORLD_COPY_REFRESH_TASK = "@world-copy-refresh";
-  function tileVisualSignature(tile) {
-    const modifiers = tile?.modifiers ? [...tile.modifiers].sort() : [];
-    const rivers = tile?.rivers ? tile.rivers.map((river) => `${river.riverIndex}:${river.riverTileIndex}`).sort() : [];
-    return JSON.stringify([
-      tile?.type ?? null,
-      modifiers,
-      tile?.treeModel ?? null,
-      rivers,
-      Boolean(tile?.city),
-      tile?.city?.name ?? null,
-      tile?.city?.model ?? null
-    ]);
+  function resolveHexMapOptions(options) {
+    if (!options || typeof options !== "object") throw new TypeError("HexMap options are required");
+    const size = options.size ?? DEFAULT_HEX_MAP_OPTIONS.size;
+    const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
+    const waterDepth = options.waterDepth ?? size * 0.25;
+    const resolved = {
+      ...DEFAULT_HEX_MAP_OPTIONS,
+      ...options,
+      waterDepth,
+      fogTextureSize: options.fogTextureSize ?? size * 8,
+      riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_HEX_MAP_OPTIONS.waterColorShallow,
+      riverColorDeep: options.riverColorDeep ?? options.waterColorDeep ?? DEFAULT_HEX_MAP_OPTIONS.waterColorDeep,
+      riverDepth: options.riverDepth ?? waterDepth * 0.6,
+      mountainHeight: options.mountainHeight ?? size * 0.6,
+      grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
+      grassBladeHeight,
+      grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
+    };
+    validateHexMapOptions(resolved);
+    return resolved;
   }
+  function validateHexMapOptions(options) {
+    if (typeof options.element !== "string" || options.element.trim().length === 0) {
+      throw new TypeError("HexMap element must be a non-empty CSS selector");
+    }
+    const positive = (name, value) => {
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new RangeError(`${name} must be a positive finite number`);
+      }
+    };
+    const nonNegativeSafeInteger = (name, value) => {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new RangeError(`${name} must be a non-negative safe integer`);
+      }
+    };
+    positive("size", options.size);
+    positive("renderDistance", options.renderDistance);
+    positive("maxPixelRatio", options.maxPixelRatio);
+    if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
+      throw new RangeError('terrainShaderQuality must be "full" or "fast"');
+    }
+    if (options.lodNearDistance < 0 || options.lodFarDistance < options.lodNearDistance) {
+      throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
+    }
+    if (options.vegetationRenderDistance < 0 || options.chunkLodHysteresis < 0) {
+      throw new RangeError("vegetationRenderDistance and chunkLodHysteresis must be non-negative");
+    }
+    nonNegativeSafeInteger("gpuChunkCacheSize", options.gpuChunkCacheSize);
+    nonNegativeSafeInteger("cpuChunkCacheSize", options.cpuChunkCacheSize);
+    nonNegativeSafeInteger("gpuChunkCacheBytes", options.gpuChunkCacheBytes);
+    nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
+    positive("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
+    nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
+    nonNegativeSafeInteger("grassDensity", options.grassDensity);
+    positive("grassBladeWidth", options.grassBladeWidth);
+    positive("grassBladeHeight", options.grassBladeHeight);
+    if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
+      throw new RangeError("treeScale must be a non-negative finite number");
+    }
+    for (const [name, value] of [
+      ["waterCornerRounding", options.waterCornerRounding],
+      ["coastCurvature", options.coastCurvature],
+      ["landBlendCurvature", options.landBlendCurvature],
+      ["coastalWaveWidth", options.coastalWaveWidth],
+      ["coastalWaveRange", options.coastalWaveRange],
+      ["coastalWaveDistortion", options.coastalWaveDistortion],
+      ["coastalWaveOpacity", options.coastalWaveOpacity],
+      ["riverCurvature", options.riverCurvature],
+      ["lakeShoreWidth", options.lakeShoreWidth]
+    ]) {
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new RangeError(`${name} must be a finite number between 0 and 1`);
+      }
+    }
+  }
+
+  // src/HexMap.ts
+  function renderLayerError(reason) {
+    return reason instanceof Error ? reason : new Error(String(reason));
+  }
+  var WORLD_COPY_REFRESH_TASK = "@world-copy-refresh";
+  var INERT_WORLD_SIGNAL = new AbortController().signal;
   var HexMap = class extends EventEmitter {
     constructor(options) {
       super();
@@ -12907,12 +15045,23 @@ void main() {
       this.worldCopyMaterials = [];
       this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
       this.worldPatternOffset = new three.Vector2();
-      this.pressedMovementKeys = /* @__PURE__ */ new Set();
-      this.addedCanvasTabIndex = false;
-      this.frameTasks = new FrameTaskScheduler({ error: (error) => this.emit("error", error) });
+      this.runtimeWork = new RuntimeWorkCoordinator({
+        defaultMaxPendingTasks: 512,
+        defaultMaxPendingWeight: 2048,
+        starvationMs: 1500
+      });
+      this.frameTasks = new FrameTaskScheduler({
+        error: (error) => this.emit("error", error),
+        maxPendingTasks: 512,
+        maxPendingWeight: 2048,
+        starvationMs: 1500,
+        coordinator: this.runtimeWork,
+        domain: "frame"
+      });
       this.disposed = false;
       this.loadRevision = 0;
       this.forestRevision = 0;
+      this.drainingWorldSessions = /* @__PURE__ */ new Set();
       this.worldChunkLayers = /* @__PURE__ */ new Map();
       this.streamedGrassByChunkId = /* @__PURE__ */ new Map();
       this.streamedForestByChunkId = /* @__PURE__ */ new Map();
@@ -12936,47 +15085,57 @@ void main() {
       this.adaptiveResolutionScale = 1;
       this.appliedVegetationDensityScale = 1;
       this.adaptiveVegetationRevision = 0;
-      this.mouseDownAt = null;
-      // screen coords, used to distinguish click vs. drag
-      this.lastHover = null;
       this.lastSelected = null;
       this.warFogShown = true;
-      this.onContextMenu = (event) => event.preventDefault();
       this.handleResize = () => {
         const width = this.canvas.clientWidth || window.innerWidth;
         const height = this.canvas.clientHeight || window.innerHeight;
         if (width <= 0 || height <= 0) return;
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setPixelRatio(
+        this.rendererHost.resize(
+          width,
+          height,
           Math.min(window.devicePixelRatio, this.options.maxPixelRatio) * this.adaptiveResolutionScale
         );
-        this.renderer.setSize(width, height, false);
       };
       this.animate = (t) => {
         if (this.disposed) return;
+        if (this.rendererHost.contextStats.state !== "ready") {
+          this.lastFrameTime = void 0;
+          this.animationFrameId = window.requestAnimationFrame(this.animate);
+          return;
+        }
+        const gpuFrameMs = this.rendererHost.pollGpuFrameMs();
+        const gpuTiming = this.rendererHost.gpuTimingStats;
         const dtS = this.lastFrameTime === void 0 ? 0 : (t - this.lastFrameTime) / 1e3;
         this.lastFrameTime = t;
         if (dtS > 0 && !document.hidden) {
           const frameTaskStats = this.frameTasks.stats;
           const streamingStats = this.worldStreamer?.stats;
+          const resourceStats = this.chunkScheduler.stats;
           const profile = this.adaptiveStreamingController?.sample({
             frameMs: dtS * 1e3,
+            gpuFrameMs,
+            gpuTimingSupported: gpuTiming.supported,
+            gpuTimingSaturated: gpuTiming.saturated,
+            gpuSampleAgeMs: gpuTiming.lastSampleAgeMs,
             frameTaskMs: frameTaskStats.lastFrameDurationMs,
             frameTaskBacklog: frameTaskStats.pendingTasks,
             oldestFrameTaskMs: frameTaskStats.oldestTaskAgeMs,
             workerQueueDepth: streamingStats?.queuedChunks,
             workerBusyRatio: streamingStats && streamingStats.configuredWorkers > 0 ? streamingStats.busyWorkers / streamingStats.configuredWorkers : 0,
-            chunkLoadLatencyMs: streamingStats?.averageChunkLoadMs
+            chunkLoadLatencyMs: streamingStats?.averageChunkLoadMs,
+            cpuBudgetExceededBytes: resourceStats.cpuBudgetExceededBytes,
+            gpuBudgetExceededBytes: resourceStats.gpuBudgetExceededBytes
           });
           if (profile) this.applyAdaptiveStreamingProfile(profile);
         }
-        this.updateKeyboardMovement(Math.min(dtS, 0.05));
+        this.interactions.update(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.rebaseWorld();
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
+        this.worldChunkMountQueue.retryOne();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
         const grassResources = /* @__PURE__ */ new Set();
@@ -12986,111 +15145,22 @@ void main() {
         }
         for (const resources of grassResources) resources.update(dtS);
         this.emit("frame", { t, dtS });
-        this.renderer.render(this.scene, this.camera);
+        this.rendererHost.render();
         this.animationFrameId = window.requestAnimationFrame(this.animate);
       };
-      this.onKeyDown = (event) => {
-        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
-        this.pressedMovementKeys.add(event.code);
-        event.preventDefault();
-      };
-      this.onKeyUp = (event) => {
-        if (!this.isMovementKey(event.code)) return;
-        this.pressedMovementKeys.delete(event.code);
-        event.preventDefault();
-      };
-      this.clearMovementKeys = () => {
-        this.pressedMovementKeys.clear();
-      };
-      //-------------------------------------------------------------------------
-      //Picking (analytic, ground-plane based - see helpers/picking.ts)
-      //-------------------------------------------------------------------------
-      this.onMouseDown = (event) => {
-        this.canvas.focus({ preventScroll: true });
-        if (event.button !== 0) {
-          this.mouseDownAt = null;
-          return;
-        }
-        this.mouseDownAt = { x: event.clientX, y: event.clientY };
-      };
-      this.onPointerMove = (event) => {
-        const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
-        if (!ground) {
-          this.pointer.visible = false;
-          this.lastHover = null;
-          return;
-        }
-        this.logicalGround(ground);
-        const tileCoords = pickTile(
-          ground,
-          this.options.size,
-          this.mapData?.infinite ? void 0 : this.mapData?.w,
-          this.mapData?.infinite ? void 0 : this.mapData?.h,
-          this.mapData?.wrapX,
-          this.mapData?.wrapY
-        );
-        if (!tileCoords) {
-          this.pointer.visible = false;
-          this.lastHover = null;
-          return;
-        }
-        if (this.lastHover && this.lastHover.x === tileCoords.x && this.lastHover.y === tileCoords.y) return;
-        this.lastHover = tileCoords;
-        const tile = this.getTile(tileCoords.x, tileCoords.y);
-        if (!tile) {
-          this.pointer.visible = false;
-          this.lastHover = null;
-          return;
-        }
-        this.pointer.visible = true;
-        this.pointer.position.setX(tileCoords.worldX);
-        this.pointer.position.setZ(tileCoords.worldY);
-        this.emit("hover", { x: tileCoords.x, y: tileCoords.y, tile });
-      };
-      this.onMouseUp = (event) => {
-        if (event.button !== 0) return;
-        const downAt = this.mouseDownAt;
-        this.mouseDownAt = null;
-        if (!downAt) return;
-        const dragDistance = Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y);
-        if (dragDistance > 4) return;
-        const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
-        if (!ground) return;
-        this.logicalGround(ground);
-        const tileCoords = pickTile(
-          ground,
-          this.options.size,
-          this.mapData?.infinite ? void 0 : this.mapData?.w,
-          this.mapData?.infinite ? void 0 : this.mapData?.h,
-          this.mapData?.wrapX,
-          this.mapData?.wrapY
-        );
-        if (!tileCoords) return;
-        const tile = this.getTile(tileCoords.x, tileCoords.y);
-        if (!tile) return;
-        this.selectTile(tileCoords.x, tileCoords.y);
-        this.selector.position.setX(tileCoords.worldX);
-        this.selector.position.setZ(tileCoords.worldY);
-        this.emit("click", { x: tileCoords.x, y: tileCoords.y, tile });
-      };
-      if (!options || typeof options !== "object") throw new TypeError("HexMap options are required");
-      const size = options.size ?? DEFAULT_OPTIONS.size;
-      const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
-      const waterDepth = options.waterDepth ?? size * 0.25;
-      this.options = {
-        ...DEFAULT_OPTIONS,
-        ...options,
-        waterDepth,
-        fogTextureSize: options.fogTextureSize ?? size * 8,
-        riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_OPTIONS.waterColorShallow,
-        riverColorDeep: options.riverColorDeep ?? options.waterColorDeep ?? DEFAULT_OPTIONS.waterColorDeep,
-        riverDepth: options.riverDepth ?? waterDepth * 0.6,
-        mountainHeight: options.mountainHeight ?? size * 0.6,
-        grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
-        grassBladeHeight,
-        grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
-      };
-      this.validateOptions();
+      this.options = resolveHexMapOptions(options);
+      this.worldChunkMountQueue = new WorldChunkMountQueue({
+        frameTasks: this.frameTasks,
+        streamer: () => this.worldStreamer,
+        demandKey: () => this.worldDemandChunkKey,
+        signal: () => this.worldController?.lifecycle.signal,
+        mounted: (key) => this.worldChunkLayers.has(key),
+        priority: (chunk) => {
+          const center = this.worldStreamer?.stats;
+          return center && this.worldSource ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY) : 0;
+        },
+        mount: (chunk) => this.mountWorldChunk(chunk)
+      });
       const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
       this.chunkScheduler = new WorldChunkScheduler({
         ...schedulerOptions,
@@ -13103,7 +15173,9 @@ void main() {
           hysteresis: this.options.chunkLodHysteresis
         },
         gpuCacheSize: this.options.gpuChunkCacheSize,
-        cpuCacheSize: this.options.cpuChunkCacheSize
+        cpuCacheSize: this.options.cpuChunkCacheSize,
+        gpuCacheBytes: this.options.gpuChunkCacheBytes,
+        cpuCacheBytes: this.options.cpuChunkCacheBytes
       });
       this.installBuiltinWorldRenderLayers();
       const el = document.querySelector(this.options.element);
@@ -13111,12 +15183,42 @@ void main() {
         throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
       }
       this.canvas = el;
-      this.setupScene();
-      this.setupCamera();
-      this.setupLights();
-      this.setupSky();
+      this.rendererHost = new HexMapRendererHost({
+        canvas: this.canvas,
+        antialias: this.options.antialias,
+        skyVisible: this.options.skyVisible,
+        contextLost: () => {
+          this.lastFrameTime = void 0;
+          this.emit("contextlost", this.rendererHost.contextStats);
+        },
+        contextRestored: () => {
+          this.lastFrameTime = void 0;
+          this.chunkScheduler.invalidateScene();
+          this.handleResize();
+          this.emit("contextrestored", this.rendererHost.contextStats);
+        }
+      });
+      this.renderer = this.rendererHost.renderer;
+      this.scene = this.rendererHost.scene;
+      this.worldRoot = this.rendererHost.worldRoot;
+      this.camera = this.rendererHost.camera;
       this.setupControls();
       this.setupMarkers();
+      this.interactions = new HexMapInteractionController({
+        canvas: this.canvas,
+        camera: this.camera,
+        controls: this.controls,
+        pointer: this.pointer,
+        size: this.options.size,
+        map: () => this.mapData,
+        logicalGround: (point) => {
+          this.logicalGround(point);
+        },
+        tile: (x, y) => this.getTile(x, y),
+        select: (x, y) => this.selectTile(x, y),
+        hover: (x, y, tile) => this.emit("hover", { x, y, tile }),
+        click: (x, y, tile) => this.emit("click", { x, y, tile })
+      });
       this.setupEvents();
       this.handleResize();
       this.animationFrameId = window.requestAnimationFrame(this.animate);
@@ -13152,93 +15254,9 @@ void main() {
         dispose: () => void 0
       });
     }
-    validateOptions() {
-      const positive = (name, value) => {
-        if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive finite number`);
-      };
-      const nonNegativeInteger = (name, value) => {
-        if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
-      };
-      positive("size", this.options.size);
-      positive("renderDistance", this.options.renderDistance);
-      positive("maxPixelRatio", this.options.maxPixelRatio);
-      if (this.options.terrainShaderQuality !== "full" && this.options.terrainShaderQuality !== "fast") {
-        throw new RangeError('terrainShaderQuality must be "full" or "fast"');
-      }
-      if (this.options.lodNearDistance < 0 || this.options.lodFarDistance < this.options.lodNearDistance) {
-        throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
-      }
-      if (this.options.vegetationRenderDistance < 0 || this.options.chunkLodHysteresis < 0) {
-        throw new RangeError("vegetationRenderDistance and chunkLodHysteresis must be non-negative");
-      }
-      nonNegativeInteger("gpuChunkCacheSize", this.options.gpuChunkCacheSize);
-      nonNegativeInteger("cpuChunkCacheSize", this.options.cpuChunkCacheSize);
-      nonNegativeInteger("treesPerTile", this.options.treesPerTile);
-      nonNegativeInteger("grassDensity", this.options.grassDensity);
-      positive("grassBladeWidth", this.options.grassBladeWidth);
-      positive("grassBladeHeight", this.options.grassBladeHeight);
-      if (!Number.isFinite(this.options.treeScale) || this.options.treeScale < 0) {
-        throw new RangeError("treeScale must be a non-negative finite number");
-      }
-      for (const [name, value] of [
-        ["waterCornerRounding", this.options.waterCornerRounding],
-        ["coastCurvature", this.options.coastCurvature],
-        ["landBlendCurvature", this.options.landBlendCurvature],
-        ["coastalWaveWidth", this.options.coastalWaveWidth],
-        ["coastalWaveRange", this.options.coastalWaveRange],
-        ["coastalWaveDistortion", this.options.coastalWaveDistortion],
-        ["coastalWaveOpacity", this.options.coastalWaveOpacity],
-        ["riverCurvature", this.options.riverCurvature],
-        ["lakeShoreWidth", this.options.lakeShoreWidth]
-      ]) {
-        if (!Number.isFinite(value) || value < 0 || value > 1) {
-          throw new RangeError(`${name} must be a finite number between 0 and 1`);
-        }
-      }
-    }
     //-------------------------------------------------------------------------
     //Scene / renderer / camera / controls
     //-------------------------------------------------------------------------
-    setupScene() {
-      this.scene = new three.Scene();
-      this.scene.background = new three.Color(10471906);
-      this.worldRoot = new three.Group();
-      this.worldRoot.name = "hex-map-world-root";
-      this.scene.add(this.worldRoot);
-      this.renderer = new three.WebGLRenderer({ canvas: this.canvas, antialias: this.options.antialias });
-      this.renderer.toneMapping = three.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 0.65;
-    }
-    setupCamera() {
-      this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
-      this.camera.position.set(900, 500, 1e3);
-      this.scene.add(this.camera);
-    }
-    setupLights() {
-      const dirLight1 = new three.DirectionalLight(16777215);
-      dirLight1.position.set(1, 1, 1);
-      this.scene.add(dirLight1);
-      const dirLight2 = new three.DirectionalLight(8840);
-      dirLight2.position.set(-1, -1, -1);
-      this.scene.add(dirLight2);
-      this.scene.add(new three.AmbientLight(2236962));
-    }
-    setupSky() {
-      this.sky = new Sky();
-      this.sky.visible = this.options.skyVisible;
-      this.sky.scale.setScalar(45e4);
-      this.sky.frustumCulled = false;
-      const uniforms = this.sky.material.uniforms;
-      uniforms.turbidity.value = 4;
-      uniforms.rayleigh.value = 1.7;
-      uniforms.mieCoefficient.value = 2e-3;
-      uniforms.mieDirectionalG.value = 0.76;
-      const elevation = 24 * Math.PI / 180;
-      const azimuth = 205 * Math.PI / 180;
-      const sun = new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
-      uniforms.sunPosition.value.copy(sun);
-      this.scene.add(this.sky);
-    }
     setupControls() {
       this.controls = new OrbitControls(this.camera, this.renderer.domElement);
       this.controls.mouseButtons = { LEFT: null, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE };
@@ -13324,7 +15342,8 @@ void main() {
       marker.position.setZ(center.y);
     }
     updateMarkerPositions() {
-      if (this.lastHover && this.pointer.visible) this.positionMarker(this.pointer, this.lastHover);
+      const hovered = this.interactions.hoveredTile;
+      if (hovered && this.pointer.visible) this.positionMarker(this.pointer, hovered);
       if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
     }
     clearWorldCopies() {
@@ -13532,47 +15551,10 @@ void main() {
     }
     setupEvents() {
       window.addEventListener("resize", this.handleResize, { passive: true });
-      if (!this.canvas.hasAttribute("tabindex")) {
-        this.canvas.tabIndex = 0;
-        this.addedCanvasTabIndex = true;
-      }
-      this.canvas.addEventListener("keydown", this.onKeyDown);
-      this.canvas.addEventListener("keyup", this.onKeyUp);
-      this.canvas.addEventListener("blur", this.clearMovementKeys);
-      window.addEventListener("blur", this.clearMovementKeys);
-      this.canvas.addEventListener("mousedown", this.onMouseDown);
-      this.canvas.addEventListener("contextmenu", this.onContextMenu);
-      window.addEventListener("pointermove", this.onPointerMove);
-      window.addEventListener("mouseup", this.onMouseUp);
       if (typeof ResizeObserver !== "undefined") {
         this.resizeObserver = new ResizeObserver(this.handleResize);
         this.resizeObserver.observe(this.canvas);
       }
-    }
-    isMovementKey(code) {
-      return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
-    }
-    isTextInput(target) {
-      if (!(target instanceof HTMLElement)) return false;
-      return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
-    }
-    updateKeyboardMovement(dtS) {
-      if (dtS <= 0 || this.pressedMovementKeys.size === 0) return;
-      const forwardAmount = Number(this.pressedMovementKeys.has("KeyW")) - Number(this.pressedMovementKeys.has("KeyS"));
-      const rightAmount = Number(this.pressedMovementKeys.has("KeyD")) - Number(this.pressedMovementKeys.has("KeyA"));
-      if (forwardAmount === 0 && rightAmount === 0) return;
-      const forward = this.controls.target.clone().sub(this.camera.position);
-      forward.y = 0;
-      if (forward.lengthSq() < 1e-4) forward.set(0, 0, -1);
-      else forward.normalize();
-      const right = new three.Vector3(-forward.z, 0, forward.x);
-      const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
-      if (movement.lengthSq() > 1) movement.normalize();
-      const viewDistance = this.camera.position.distanceTo(this.controls.target);
-      const speed = Math.min(900, Math.max(140, viewDistance * 0.9));
-      movement.multiplyScalar(speed * dtS);
-      this.camera.position.add(movement);
-      this.controls.target.add(movement);
     }
     updateWorldChunkVisibility() {
       if (!this.mapData) return;
@@ -13639,7 +15621,6 @@ void main() {
       else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
       else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
     }
-    //-------------------------------------------------------------------------
     //Public API
     //-------------------------------------------------------------------------
     //Backwards-compatible finite-map convenience entry point. loadWorld() is
@@ -13739,7 +15720,10 @@ void main() {
       }
       this.stopWorldStreaming();
       const revision = ++this.loadRevision;
-      const worldController = new RenderWorldController(source);
+      const worldController = new RenderWorldController(source, this.runtimeWork, {
+        drainTimeoutMs: this.options.worldSessionDrainTimeoutMs,
+        error: (error) => this.emit("error", error)
+      });
       const residency = worldController.residency;
       this.worldController = worldController;
       this.worldSource = source;
@@ -13755,11 +15739,12 @@ void main() {
       this.lastStreamingTarget = void 0;
       this.streamingVelocity.set(0, 0);
       this.mapData = source.map;
+      this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
       this.fogStates = new FogStateStore(source.map);
       this.floatingOriginThreshold = threshold;
       this.worldPatternOffset.set(0, 0);
       this.cleanRoutePath();
-      this.lastHover = null;
+      this.interactions.reset();
       this.lastSelected = null;
       this.pointer.visible = false;
       this.selector.visible = false;
@@ -13777,13 +15762,14 @@ void main() {
       try {
         if (source.bounds && !options.initialTile) this.frameMap(source.map);
         else this.positionCameraAtTile(initialTile);
-        this.atlas = await this.fetchTerrainAtlas();
-        if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
-        if (!await this.rebuildTerrain(revision, true)) return;
-        await this.initializeWorldRenderLayers();
-        if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
+        const atlas = await worldController.lifecycle.run((signal) => this.fetchTerrainAtlas(signal));
+        if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
+        this.atlas = atlas;
+        if (!await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true))) return;
+        if (!await worldController.lifecycle.run(() => this.initializeWorldRenderLayers(source, revision))) return;
+        if (!this.isWorldSessionCurrent(source, revision)) return;
         const streamer = worldController.startStreaming({
-          chunkLoaded: (chunk) => this.scheduleWorldChunkMount(chunk),
+          chunkLoaded: (chunk) => this.worldChunkMountQueue.schedule(chunk),
           chunkUnloading: (chunk) => this.unmountWorldChunk(chunk),
           error: (error) => this.emit("error", error)
         }, {
@@ -13802,14 +15788,14 @@ void main() {
         this.worldDemandChunkKey = WorldStreamer.key(centerChunk.x, centerChunk.y);
         this.worldDemandSignature = this.worldDemandChunkKey;
         this.rebaseWorld();
-        const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
+        const loadedCenter = await worldController.setCenterTile(initialTile.x, initialTile.y);
         const centerKey = WorldStreamer.key(loadedCenter.chunkX, loadedCenter.chunkY);
         const centerLayers = this.worldChunkLayers.get(centerKey);
-        await Promise.all([
+        await worldController.lifecycle.track(Promise.all([
           centerLayers?.forestPromise,
           centerLayers?.cityPromise,
           ...centerLayers?.renderLayerPromises?.values() ?? []
-        ]);
+        ]));
         if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
         this.updateWorldChunkVisibility();
         this.emit("load", void 0);
@@ -13818,9 +15804,9 @@ void main() {
         throw reason;
       }
     }
-    async fetchTerrainAtlas() {
+    async fetchTerrainAtlas(signal) {
       const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
-      const response = await fetch(atlasUrl);
+      const response = await fetch(atlasUrl, { signal });
       if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
       const atlas = await response.json();
       if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0 || !Number.isFinite(atlas.width) || atlas.width <= 0 || !Number.isFinite(atlas.height) || atlas.height <= 0 || !Number.isFinite(atlas.cellSize) || atlas.cellSize <= 0 || !Number.isFinite(atlas.cellSpacing) || atlas.cellSpacing < 0 || !atlas.textures || typeof atlas.textures !== "object") {
@@ -13836,17 +15822,14 @@ void main() {
       this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
       this.controls.update();
     }
-    scheduleWorldChunkMount(chunk) {
-      const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
-      if (key === this.worldDemandChunkKey) {
-        this.mountWorldChunk(chunk);
-        return;
+    runRenderWorldTask(source, operation) {
+      const controller = this.worldController;
+      if (controller && controller.source === source) return controller.lifecycle.run(operation);
+      try {
+        return Promise.resolve(operation());
+      } catch (reason) {
+        return Promise.reject(reason);
       }
-      const center = this.worldStreamer?.stats;
-      const priority = center && this.worldSource ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY) : 0;
-      this.frameTasks.enqueue(key, priority, () => {
-        if (this.worldStreamer?.hasResident(chunk.chunkX, chunk.chunkY)) this.mountWorldChunk(chunk);
-      });
     }
     mountWorldChunk(chunk) {
       if (!this.worldStreamer || !this.terrain) return;
@@ -13858,7 +15841,10 @@ void main() {
       record.renderLayerPromises = /* @__PURE__ */ new Map();
       record.renderLayerStates = /* @__PURE__ */ new Map();
       for (const layer of this.worldRenderLayers.values()) {
-        const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
+        const mounted = this.runRenderWorldTask(
+          this.worldSource,
+          () => this.mountRegisteredWorldRenderLayer(layer, key, record)
+        );
         record.renderLayerPromises.set(layer.id, mounted);
         void mounted.catch((error) => {
           if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
@@ -13869,7 +15855,7 @@ void main() {
     }
     unmountWorldChunk(chunk) {
       const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
-      this.frameTasks.cancel(key);
+      this.worldChunkMountQueue.forget(key);
       this.frameTasks.cancel(`vegetation-quality:${key}`);
       const record = this.worldChunkLayers.get(key);
       if (!record) return;
@@ -14053,9 +16039,9 @@ void main() {
       record.vegetationAbort?.abort();
       if (!isWorldVegetationSource(context.source)) {
         record.vegetationSignature = density.signature;
-        const preparation = Promise.resolve(void 0);
-        record.vegetationPromise = preparation;
-        return preparation;
+        const preparation2 = Promise.resolve(void 0);
+        record.vegetationPromise = preparation2;
+        return preparation2;
       }
       const center = this.worldStreamer?.stats;
       const priority = center ? context.source.chunkDistance(
@@ -14067,7 +16053,7 @@ void main() {
       const abort = new AbortController();
       record.vegetationAbort = abort;
       record.vegetationSignature = density.signature;
-      record.vegetationPromise = context.source.prepareVegetation({
+      const preparation = context.source.prepareVegetation({
         points: context.points,
         size: this.options.size,
         grassDensity: density.grassDensity,
@@ -14084,7 +16070,8 @@ void main() {
         beachWidth: this.options.beachWidth,
         waterCornerRounding: this.options.waterCornerRounding,
         coastCurvature: this.options.coastCurvature
-      }, { priority, signal: abort.signal });
+      }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) });
+      record.vegetationPromise = this.worldController?.source === context.source ? this.worldController.lifecycle.track(preparation) : preparation;
       return record.vegetationPromise;
     }
     worldVegetationDensity(scale) {
@@ -14166,7 +16153,10 @@ void main() {
         );
         this.frameTasks.enqueue(`vegetation-quality:${key}`, priority, () => {
           if (this.disposed || revision !== this.adaptiveVegetationRevision || this.worldSource !== source || this.worldChunkLayers.get(key) !== record || record.requestedVegetationSignature !== target.signature) return;
-          void this.rebuildAdaptiveWorldVegetation(key, record, target.signature).catch((reason) => {
+          void this.runRenderWorldTask(
+            source,
+            () => this.rebuildAdaptiveWorldVegetation(key, record, target.signature)
+          ).catch((reason) => {
             if (this.worldChunkLayers.get(key) === record) this.emit("error", renderLayerError(reason));
           });
         });
@@ -14203,12 +16193,15 @@ void main() {
     createWorldRenderLayerHost(layerId, objectKey) {
       const source = this.worldSource;
       if (!source || !this.mapData) throw new Error("No world is loaded");
+      const signal = this.worldController?.source === source ? this.worldController.lifecycle.signal : INERT_WORLD_SIGNAL;
+      const isCurrent = () => !this.disposed && !signal.aborted && this.worldSource === source;
       return {
         map: this.mapData,
         source,
-        root: this.worldRoot,
         tileSize: this.options.size,
+        signal,
         addObject: (object) => {
+          if (!isCurrent()) return;
           let byChunk = this.worldRenderLayerObjects.get(layerId);
           if (!byChunk) {
             byChunk = /* @__PURE__ */ new Map();
@@ -14230,19 +16223,24 @@ void main() {
           this.worldRoot.remove(object);
           this.chunkScheduler.invalidateScene();
         },
-        invalidateVisibility: () => this.chunkScheduler.invalidateScene(),
-        requestWorldCopyRefresh: () => this.refreshWorldCopies()
+        invalidateVisibility: () => {
+          if (isCurrent()) this.chunkScheduler.invalidateScene();
+        },
+        requestWorldCopyRefresh: () => {
+          if (isCurrent()) this.refreshWorldCopies();
+        }
       };
     }
-    createWorldRenderChunkContext(layerId, key, record) {
+    createWorldRenderChunkContext(layerId, key, record, allowClosing = false) {
       const revision = record.revision;
+      const host = this.createWorldRenderLayerHost(layerId, key);
       return {
-        ...this.createWorldRenderLayerHost(layerId, key),
+        ...host,
         chunk: record.chunk,
         key,
         points: record.points,
         revision,
-        isCurrent: () => !this.disposed && this.worldChunkLayers.get(key) === record && record.revision === revision
+        isCurrent: () => (allowClosing || !this.disposed && !host.signal.aborted) && this.worldChunkLayers.get(key) === record && record.revision === revision
       };
     }
     async mountRegisteredWorldRenderLayer(layer, key, record) {
@@ -14261,7 +16259,7 @@ void main() {
         }
         throw new WorldRenderLayerLifecycleError(`world render layer "${layer.id}" failed to mount chunk ${key}`, errors);
       }
-      const current = this.worldChunkLayers.get(key) === record && this.worldRenderLayers.get(layer.id) === layer && this.initializedWorldRenderLayers.has(layer.id);
+      const current = context.isCurrent() && this.worldRenderLayers.get(layer.id) === layer && this.initializedWorldRenderLayers.has(layer.id);
       if (!current || record.renderLayerStates.get(layer.id) === "unmounted") {
         this.removeWorldRenderLayerObjects(layer.id, key);
         return;
@@ -14277,7 +16275,7 @@ void main() {
       if (state !== "unmounted") {
         record.renderLayerStates.set(layer.id, "unmounted");
         try {
-          layer.unmountChunk(this.createWorldRenderChunkContext(layer.id, key, record));
+          layer.unmountChunk(this.createWorldRenderChunkContext(layer.id, key, record, true));
         } catch (reason) {
           errors.push(renderLayerError(reason));
         }
@@ -14301,12 +16299,15 @@ void main() {
       if (byChunk.size === 0) this.worldRenderLayerObjects.delete(layerId);
       this.chunkScheduler.invalidateScene();
     }
-    async initializeWorldRenderLayers() {
+    async initializeWorldRenderLayers(source, loadRevision) {
       for (const layer of this.worldRenderLayers.values()) {
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return false;
         if (!this.initializedWorldRenderLayers.has(layer.id)) {
           await this.initializeRegisteredWorldRenderLayer(layer);
         }
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return false;
       }
+      return true;
     }
     async initializeRegisteredWorldRenderLayer(layer) {
       const source = this.worldSource;
@@ -14373,6 +16374,7 @@ void main() {
       const source = this.worldSource;
       const residency = this.worldResidency;
       const controller = this.worldController;
+      const editing = this.worldEditing;
       const errors = [];
       this.worldDemandChunkKey = void 0;
       this.worldDemandSignature = void 0;
@@ -14392,9 +16394,16 @@ void main() {
         vegetationLodBias: 0
       });
       this.frameTasks.clear();
+      this.worldChunkMountQueue.clear();
+      this.worldEditing = void 0;
+      editing?.dispose();
       try {
-        if (controller) controller.stop(false);
-        else {
+        if (controller) {
+          controller.stop(false);
+          let draining;
+          draining = controller.settled.finally(() => this.drainingWorldSessions.delete(draining));
+          this.drainingWorldSessions.add(draining);
+        } else {
           streamer?.dispose(false);
           residency?.dispose(false);
         }
@@ -14407,7 +16416,6 @@ void main() {
         for (const layer of [...this.worldRenderLayers.values()].reverse()) {
           errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
         }
-        this.worldChunkLayers.delete(key);
       }
       try {
         this.unloadWorldRenderLayers();
@@ -14427,20 +16435,48 @@ void main() {
       this.worldLayerRevision += 1;
       for (const record of this.worldChunkLayers.values()) {
         if (record.grass) {
-          this.worldRoot.remove(record.grass);
+          const grass = record.grass;
+          const forgotten = [];
           try {
-            record.grass.dispose();
+            this.collectChunkIds(grass, forgotten);
           } catch (reason) {
             errors.push(renderLayerError(reason));
           }
+          try {
+            this.unindexChunkLayer(grass, this.streamedGrassByChunkId);
+          } catch (reason) {
+            errors.push(renderLayerError(reason));
+          }
+          this.worldRoot.remove(grass);
+          try {
+            grass.dispose();
+          } catch (reason) {
+            errors.push(renderLayerError(reason));
+          }
+          record.grass = void 0;
+          this.chunkScheduler.forget(forgotten);
         }
         if (record.forest) {
-          this.worldRoot.remove(record.forest);
+          const forest = record.forest;
+          const forgotten = [];
           try {
-            record.forest.dispose();
+            this.collectChunkIds(forest, forgotten);
           } catch (reason) {
             errors.push(renderLayerError(reason));
           }
+          try {
+            this.unindexChunkLayer(forest, this.streamedForestByChunkId);
+          } catch (reason) {
+            errors.push(renderLayerError(reason));
+          }
+          this.worldRoot.remove(forest);
+          try {
+            forest.dispose();
+          } catch (reason) {
+            errors.push(renderLayerError(reason));
+          }
+          record.forest = void 0;
+          this.chunkScheduler.forget(forgotten);
         }
       }
       this.worldChunkLayers.clear();
@@ -14463,6 +16499,7 @@ void main() {
       } catch (reason) {
         errors.push(renderLayerError(reason));
       }
+      this.chunkScheduler.clear();
       this.reportWorldRenderLayerErrors("world streaming cleanup encountered errors", errors);
     }
     reapplyFogToPoints(points, record) {
@@ -14705,12 +16742,20 @@ void main() {
     async registerWorldRenderLayer(layer) {
       if (this.disposed) throw new Error("HexMap has been disposed");
       this.worldRenderLayers.register(layer);
+      const registrationSource = this.worldSource;
+      const registrationController = this.worldController?.source === registrationSource ? this.worldController : void 0;
       try {
-        if (!this.worldSource || !this.mapData) return;
-        if (!await this.initializeRegisteredWorldRenderLayer(layer)) return;
+        if (!registrationSource || !this.mapData) return;
+        if (!await this.runRenderWorldTask(
+          registrationSource,
+          () => this.initializeRegisteredWorldRenderLayer(layer)
+        )) return;
         const mounts = [];
         for (const [key, record] of this.worldChunkLayers) {
-          const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
+          const mounted = this.runRenderWorldTask(
+            registrationSource,
+            () => this.mountRegisteredWorldRenderLayer(layer, key, record)
+          );
           record.renderLayerPromises ?? (record.renderLayerPromises = /* @__PURE__ */ new Map());
           record.renderLayerPromises.set(layer.id, mounted);
           mounts.push(mounted);
@@ -14719,6 +16764,7 @@ void main() {
         this.refreshWorldCopies();
         this.updateWorldChunkVisibility();
       } catch (reason) {
+        if (!this.disposed && registrationController && !registrationController.lifecycle.active && this.worldRenderLayers.get(layer.id) === layer) return;
         const errors = [renderLayerError(reason)];
         try {
           this.unregisterWorldRenderLayer(layer.id);
@@ -14768,32 +16814,24 @@ void main() {
     //Pure gameplay state such as `unit` needs no GPU work; terrain, rivers,
     //vegetation and cities are rebuilt locally and the returned promise settles
     //after their asynchronous models have finished (or been superseded).
+    currentWorldEditingFacade() {
+      if (this.worldEditing?.source === this.worldSource) return this.worldEditing;
+      if (!this.worldSource || !this.mapData) return void 0;
+      this.worldEditing?.dispose();
+      this.worldEditing = new WorldEditingFacade(this.worldSource, this.mapData, {
+        visualSignature: worldTileVisualSignature
+      });
+      return this.worldEditing;
+    }
     setTileOverride(x, y, changes) {
       if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
-      const source = this.worldSource;
-      if (!source || !isMutableWorldSource(source)) {
-        return Promise.reject(new Error("The current world source does not support tile overrides"));
-      }
-      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
-        return Promise.reject(new RangeError("tile override coordinates must be safe integers"));
-      }
       try {
-        assertWorldTileOverride(changes);
+        const result = this.currentWorldEditingFacade()?.setTileOverride(x, y, changes);
+        if (!result) throw new Error("The current world source does not support tile overrides");
+        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source);
       } catch (reason) {
         return Promise.reject(reason);
       }
-      const point = normalizeMapCoordinates(this.mapData, x, y);
-      if (!point) return Promise.reject(new RangeError("tile override coordinates are outside the world bounds"));
-      const visualBefore = tileVisualSignature(getMapTile(this.mapData, point.x, point.y));
-      try {
-        source.setTileOverride(point.x, point.y, changes);
-      } catch (reason) {
-        return Promise.reject(reason);
-      }
-      if (tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) === visualBefore) {
-        return Promise.resolve();
-      }
-      return this.enqueueTileRenderRefresh(point, source);
     }
     //Validates an editor-sized change set before dispatching it, then
     //coalesces all visual invalidation into one render refresh. Sources with a
@@ -14801,73 +16839,55 @@ void main() {
     //mutation atomic; the per-tile fallback preserves source compatibility.
     setTileOverrides(changes) {
       if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
-      const source = this.worldSource;
-      if (!source || !isMutableWorldSource(source)) {
-        return Promise.reject(new Error("The current world source does not support tile overrides"));
-      }
-      if (!Array.isArray(changes)) return Promise.reject(new TypeError("tile overrides must be an array"));
-      const normalized = [];
-      const before = /* @__PURE__ */ new Map();
-      for (const change of changes) {
-        if (!change || typeof change !== "object" || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
-          return Promise.reject(new RangeError("tile override coordinates must be safe integers"));
-        }
-        try {
-          assertWorldTileOverride(change.changes);
-        } catch (reason) {
-          return Promise.reject(reason);
-        }
-        const point = normalizeMapCoordinates(this.mapData, change.x, change.y);
-        if (!point) return Promise.reject(new RangeError("tile override coordinates are outside the world bounds"));
-        const key = `${point.x},${point.y}`;
-        if (!before.has(key)) {
-          before.set(key, { point, signature: tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) });
-        }
-        normalized.push({ x: point.x, y: point.y, changes: change.changes });
-      }
       try {
-        if (source.setTileOverrides) source.setTileOverrides(normalized);
-        else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
+        const result = this.currentWorldEditingFacade()?.setTileOverrides(changes);
+        if (!result) throw new Error("The current world source does not support tile overrides");
+        return result.dirtyTiles.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source);
       } catch (reason) {
         return Promise.reject(reason);
       }
-      const dirty = [...before.values()].filter(({ point, signature }) => tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) !== signature).map(({ point }) => point);
-      return dirty.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefreshes(dirty, source);
     }
     clearTileOverride(x, y) {
       if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+      try {
+        const result = this.currentWorldEditingFacade()?.clearTileOverride(x, y);
+        if (!result) throw new Error("The current world source does not support tile overrides");
+        if (!result.changed || result.dirtyTiles.length === 0) return Promise.resolve(result.changed);
+        return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source).then(() => true);
+      } catch (reason) {
+        return Promise.reject(reason);
+      }
+    }
+    refreshWorldTiles(points) {
+      if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+      if (!Array.isArray(points) || points.some((point) => !point || !Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y))) {
+        return Promise.reject(new TypeError("world refresh points must use safe integer coordinates"));
+      }
       const source = this.worldSource;
-      if (!source || !isMutableWorldSource(source)) {
-        return Promise.reject(new Error("The current world source does not support tile overrides"));
-      }
-      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return Promise.resolve(false);
-      const point = normalizeMapCoordinates(this.mapData, x, y);
-      if (!point) return Promise.resolve(false);
-      const visualBefore = tileVisualSignature(getMapTile(this.mapData, point.x, point.y));
-      if (!source.clearTileOverride(point.x, point.y)) return Promise.resolve(false);
-      if (tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) === visualBefore) {
-        return Promise.resolve(true);
-      }
-      return this.enqueueTileRenderRefresh(point, source).then(() => true);
+      if (!source || points.length === 0) return Promise.resolve();
+      const unique = new Map(points.map((point) => [`${point.x},${point.y}`, { x: point.x, y: point.y }]));
+      return this.enqueueTileRenderRefreshes([...unique.values()], source);
     }
     enqueueTileRenderRefresh(point, source) {
       return this.enqueueTileRenderRefreshes([point], source);
     }
     enqueueTileRenderRefreshes(points, source) {
       const loadRevision = this.loadRevision;
-      const refresh = this.worldTileUpdateQueue.then(() => {
-        if (this.disposed || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+      const controller = this.worldController;
+      const queued = this.worldTileUpdateQueue.then(() => {
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return;
         return this.refreshTileOverridesRendering(points, source, loadRevision);
       });
+      const refresh = controller?.source === source ? controller.lifecycle.track(queued) : queued;
       this.worldTileUpdateQueue = refresh.catch(() => void 0);
       return refresh;
     }
-    async refreshTileOverrideRendering(point, source, loadRevision) {
+    refreshTileOverrideRendering(point, source, loadRevision) {
       return this.refreshTileOverridesRendering([point], source, loadRevision);
     }
     async refreshTileOverridesRendering(points, source, loadRevision) {
       const streamer = this.worldStreamer;
-      if (!streamer || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+      if (!streamer || !this.isWorldSessionCurrent(source, loadRevision)) return;
       const residents = new Map(streamer.residentChunks.map((chunk) => [
         WorldStreamer.key(chunk.chunkX, chunk.chunkY),
         chunk
@@ -14902,11 +16922,13 @@ void main() {
       await Promise.all(refreshable.flatMap((layer) => keys.map(
         (key) => this.worldChunkLayers.get(key)?.renderLayerPromises?.get(layer.id)
       )));
+      if (!this.isWorldSessionCurrent(source, loadRevision)) return;
       for (const layer of refreshable) {
         await layer.refreshTiles?.({
           ...this.createWorldRenderLayerHost(layer.id, "@world"),
           tiles: [...affectedTiles.values()]
         });
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return;
       }
       const remounted = layers.filter((layer) => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
       for (const key of keys) {
@@ -14933,8 +16955,11 @@ void main() {
         builds.push(record?.cityPromise, record?.forestPromise, ...record?.renderLayerPromises?.values() ?? []);
       }
       await Promise.all(builds);
-      if (this.disposed || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+      if (!this.isWorldSessionCurrent(source, loadRevision)) return;
       this.updateWorldChunkVisibility();
+    }
+    isWorldSessionCurrent(source, loadRevision) {
+      return !this.disposed && this.worldSource === source && this.loadRevision === loadRevision;
     }
     //-------------------------------------------------------------------------
     //Fog of war (see objects/FogOfWar.ts) - updates one tile's terrain, grass
@@ -15048,7 +17073,9 @@ void main() {
       if (signature === this.worldDemandSignature) return;
       this.worldDemandChunkKey = key;
       this.worldDemandSignature = signature;
-      void this.worldStreamer.setCenterTile(tile.x, tile.y, predictedTile).catch((error) => {
+      const demand = this.worldController?.setCenterTile(tile.x, tile.y, predictedTile);
+      if (!demand) return;
+      void demand.catch((error) => {
         if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
       });
     }
@@ -15469,6 +17496,13 @@ void main() {
     get streamingStats() {
       return this.chunkScheduler.stats;
     }
+    get resourceBudget() {
+      return this.chunkScheduler.resourceBudget;
+    }
+    createResourceAccount(label) {
+      if (this.disposed) throw new Error("HexMap has been disposed");
+      return this.chunkScheduler.createResourceAccount(label);
+    }
     get worldStreamingStats() {
       return this.worldStreamer?.stats;
     }
@@ -15483,6 +17517,24 @@ void main() {
     }
     get adaptiveStreamingStats() {
       return this.adaptiveStreamingController?.stats;
+    }
+    get gpuTimingStats() {
+      return this.rendererHost.gpuTimingStats;
+    }
+    get webGlContextStats() {
+      return this.rendererHost.contextStats;
+    }
+    get worldEditingStats() {
+      return this.worldEditing?.stats;
+    }
+    get workCoordinator() {
+      return this.runtimeWork;
+    }
+    get workStats() {
+      return this.runtimeWork.stats;
+    }
+    get settled() {
+      return Promise.all([...this.drainingWorldSessions]).then(() => void 0);
     }
     sampleAdaptiveStreaming(sample) {
       const profile = this.adaptiveStreamingController?.sample(sample);
@@ -15526,6 +17578,9 @@ void main() {
     getCamera() {
       return this.camera;
     }
+    get interactionStats() {
+      return this.interactions.stats;
+    }
     getCameraTarget(target = new three.Vector3()) {
       target.copy(this.controls.target);
       target.x += this.renderOrigin.x;
@@ -15563,22 +17618,11 @@ void main() {
       }
       if (this.animationFrameId !== void 0) window.cancelAnimationFrame(this.animationFrameId);
       window.removeEventListener("resize", this.handleResize);
-      this.canvas.removeEventListener("keydown", this.onKeyDown);
-      this.canvas.removeEventListener("keyup", this.onKeyUp);
-      this.canvas.removeEventListener("blur", this.clearMovementKeys);
-      window.removeEventListener("blur", this.clearMovementKeys);
-      this.canvas.removeEventListener("mousedown", this.onMouseDown);
-      this.canvas.removeEventListener("contextmenu", this.onContextMenu);
-      window.removeEventListener("pointermove", this.onPointerMove);
-      window.removeEventListener("mouseup", this.onMouseUp);
       this.resizeObserver?.disconnect();
-      this.clearMovementKeys();
-      if (this.addedCanvasTabIndex && this.canvas.getAttribute("tabindex") === "0") {
-        this.canvas.removeAttribute("tabindex");
-      }
+      this.interactions.dispose();
       this.cleanRoutePath();
       this.clearWorldCopies();
-      this.chunkScheduler.clear();
+      this.chunkScheduler.dispose();
       if (this.terrain) {
         this.worldRoot.remove(this.terrain);
         this.terrain.dispose();
@@ -15597,12 +17641,15 @@ void main() {
       this.selector.material.dispose();
       this.pointer.geometry.dispose();
       this.pointer.material.dispose();
-      this.sky.geometry.dispose();
-      this.sky.material.dispose();
       this.controls.dispose();
-      this.renderer.renderLists.dispose();
-      this.renderer.dispose();
+      this.rendererHost.dispose();
+      this.frameTasks.dispose();
+      this.runtimeWork.dispose();
       this.removeAllListeners();
+    }
+    async disposeAsync() {
+      this.dispose();
+      await this.settled;
     }
   };
 
@@ -16231,17 +18278,24 @@ void main() {
   exports.GameEngine = GameEngine;
   exports.HEXPolygon = HEXPolygon;
   exports.HexMap = HexMap;
+  exports.HexMapInteractionController = HexMapInteractionController;
+  exports.HexMapRendererHost = HexMapRendererHost;
   exports.IndexedDbWorldChunkCache = IndexedDbWorldChunkCache;
   exports.Land = Land;
   exports.LandColor = LandColor;
   exports.LandPriority = LandPriority;
+  exports.LifecycleDrainTimeoutError = LifecycleDrainTimeoutError;
+  exports.LifecycleScope = LifecycleScope;
   exports.MAX_WORLD_GENERATION_CHUNK_SIZE = MAX_WORLD_GENERATION_CHUNK_SIZE;
   exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
   exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
   exports.NEIGHBOR_DIRECTIONS = NEIGHBOR_DIRECTIONS;
   exports.PathFinder = PathFinder;
+  exports.PriorityTaskQueue = PriorityTaskQueue;
   exports.ProceduralWorldSource = ProceduralWorldSource;
   exports.RenderWorldController = RenderWorldController;
+  exports.ResourceBudgetLedger = ResourceBudgetLedger;
+  exports.RuntimeWorkCoordinator = RuntimeWorkCoordinator;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
   exports.StaticWorldSource = StaticWorldSource;
   exports.ToroidalWorldSource = ToroidalWorldSource;
@@ -16250,22 +18304,35 @@ void main() {
   exports.WORLD_CHUNK_FORMAT_VERSION = WORLD_CHUNK_FORMAT_VERSION;
   exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
   exports.WORLD_CHUNK_SIZE = WORLD_CHUNK_SIZE;
+  exports.WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
+  exports.WORLD_DESCRIPTOR_FORMAT_VERSION = WORLD_DESCRIPTOR_FORMAT_VERSION;
   exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
   exports.WORLD_VEGETATION_FORMAT_VERSION = WORLD_VEGETATION_FORMAT_VERSION;
+  exports.WORLD_WORKER_PROTOCOL_VERSION = WORLD_WORKER_PROTOCOL_VERSION;
+  exports.WebGlGpuTimer = WebGlGpuTimer;
+  exports.WorkQueueBackpressureError = WorkQueueBackpressureError;
+  exports.WorldChunkMountQueue = WorldChunkMountQueue;
+  exports.WorldEditingFacade = WorldEditingFacade;
   exports.WorldGeneratorClient = WorldGeneratorClient;
   exports.WorldGeneratorPool = WorldGeneratorPool;
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
   exports.assertPackedWorldChunk = assertPackedWorldChunk;
+  exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
   exports.assertWorldChunk = assertWorldChunk;
+  exports.assertWorldDescriptor = assertWorldDescriptor;
   exports.assertWorldSource = assertWorldSource;
   exports.assertWorldTileOverride = assertWorldTileOverride;
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
   exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
+  exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
+  exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;
+  exports.estimateBufferGeometriesResourceBytes = estimateBufferGeometriesResourceBytes;
+  exports.estimateObject3DResourceCost = estimateObject3DResourceCost;
   exports.generateWorld = generateWorld;
   exports.generateWorldChunk = generateWorldChunk;
   exports.generateWorldVegetation = generateWorldVegetation;
@@ -16282,11 +18349,16 @@ void main() {
   exports.groupTilesByWorldChunk = groupTilesByWorldChunk;
   exports.isMutableWorldSource = isMutableWorldSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;
+  exports.lifecycleAbortError = lifecycleAbortError;
   exports.mergeBufferUpdateRanges = mergeBufferUpdateRanges;
   exports.normalizeMapCoordinates = normalizeMapCoordinates;
+  exports.normalizeResourceCost = normalizeResourceCost;
   exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
   exports.positiveModulo = positiveModulo;
+  exports.serializeWorldDescriptor = serializeWorldDescriptor;
   exports.tagWorldChunk = tagWorldChunk;
+  exports.worldDescriptorsEqual = worldDescriptorsEqual;
+  exports.worldTileVisualSignature = worldTileVisualSignature;
   exports.worldVegetationTransferables = worldVegetationTransferables;
 
 }));

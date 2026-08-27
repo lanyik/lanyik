@@ -1,0 +1,2071 @@
+// src/enums.ts
+var Land = /* @__PURE__ */ ((Land2) => {
+  Land2["sea"] = "sea";
+  Land2["coastal"] = "coastal";
+  Land2["land"] = "land";
+  Land2["sand"] = "sand";
+  Land2["tundra"] = "tundra";
+  Land2["snow"] = "snow";
+  Land2["mountain"] = "mountain";
+  return Land2;
+})(Land || {});
+
+// src/world/generateWorldChunk.ts
+var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
+var WORLD_CHUNK_FORMAT_VERSION = 1;
+var WORLD_CHUNK_PADDING = 1;
+var WORLD_GENERATOR_VERSION = 1;
+function cloneWorldTileOverride(value) {
+  const copy = { ...value };
+  if (value.modifiers) copy.modifiers = [...value.modifiers];
+  if (value.rivers) copy.rivers = value.rivers.map((river) => ({ ...river }));
+  if (value.city) copy.city = { ...value.city };
+  return copy;
+}
+function worldTileOverridesEqual(first, second) {
+  if (first === second) return true;
+  if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
+  if (first.type !== second.type || first.treeModel !== second.treeModel || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
+  const firstModifiers = first.modifiers;
+  const secondModifiers = second.modifiers;
+  if (firstModifiers?.length !== secondModifiers?.length || firstModifiers?.some((value, index) => value !== secondModifiers?.[index])) return false;
+  const firstRivers = first.rivers;
+  const secondRivers = second.rivers;
+  return firstRivers?.length === secondRivers?.length && !firstRivers?.some((value, index) => value.riverIndex !== secondRivers?.[index]?.riverIndex || value.riverTileIndex !== secondRivers?.[index]?.riverTileIndex);
+}
+function hasWorldTileOverride(value) {
+  return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
+}
+function assertWorldTileOverride(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("tile override must be an object");
+  }
+  if (value.type !== void 0 && !Object.values(Land).includes(value.type)) {
+    throw new TypeError("tile override type is invalid");
+  }
+  if (value.modifiers !== void 0 && (!Array.isArray(value.modifiers) || value.modifiers.some((item) => typeof item !== "string"))) {
+    throw new TypeError("tile override modifiers must be strings");
+  }
+  if (value.treeModel !== void 0 && typeof value.treeModel !== "string") {
+    throw new TypeError("tile override treeModel must be a string");
+  }
+  if (value.unit !== void 0 && typeof value.unit !== "string") {
+    throw new TypeError("tile override unit must be a string");
+  }
+  if (value.rivers !== void 0 && (!Array.isArray(value.rivers) || value.rivers.some((river) => !river || !Number.isSafeInteger(river.riverIndex) || !Number.isSafeInteger(river.riverTileIndex)))) {
+    throw new TypeError("tile override rivers are invalid");
+  }
+  if (value.city !== void 0 && (!value.city || typeof value.city !== "object" || Array.isArray(value.city) || value.city.name !== void 0 && typeof value.city.name !== "string" || value.city.model !== void 0 && typeof value.city.model !== "string")) {
+    throw new TypeError("tile override city is invalid");
+  }
+}
+function assertPackedWorldChunk(chunk) {
+  if (!chunk || typeof chunk !== "object" || chunk.version !== WORLD_CHUNK_FORMAT_VERSION || !Number.isSafeInteger(chunk.chunkX) || !Number.isSafeInteger(chunk.chunkY) || !Number.isInteger(chunk.chunkSize) || chunk.chunkSize <= 0 || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunk.padding !== WORLD_CHUNK_PADDING || chunk.stride !== chunk.chunkSize + chunk.padding * 2 || !(chunk.tiles instanceof Uint16Array) || chunk.tiles.length !== chunk.stride * chunk.stride) {
+    throw new TypeError("packed world chunk payload is invalid");
+  }
+}
+var LAND_BY_CODE = [
+  "sea" /* sea */,
+  "coastal" /* coastal */,
+  "land" /* land */,
+  "sand" /* sand */,
+  "tundra" /* tundra */,
+  "snow" /* snow */,
+  "mountain" /* mountain */
+];
+var LAND_CODE = new Map(LAND_BY_CODE.map((land, index) => [land, index]));
+var FLAG_HILL = 1 << 3;
+var FLAG_WOOD = 1 << 4;
+var FLAG_LAKE = 1 << 5;
+var TREE_SHIFT = 6;
+var TREE_MASK = 3 << TREE_SHIFT;
+
+// src/world/WorldChunkCache.ts
+var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
+var DATABASE_VERSION = 1;
+var CHUNK_STORE = "chunks";
+var META_STORE = "meta";
+var USAGE_KEY = "usage";
+function createWorldChunkCacheKey(options) {
+  return JSON.stringify([
+    options.generatorVersion ?? WORLD_GENERATOR_VERSION,
+    String(options.seed),
+    options.chunkSize,
+    options.world?.topology ?? "infinite",
+    options.world?.width ?? null,
+    options.world?.height ?? null,
+    options.chunkX,
+    options.chunkY
+  ]);
+}
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
+  });
+}
+function transactionComplete(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
+    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+  });
+}
+var IndexedDbWorldChunkCache = class {
+  constructor(options = {}) {
+    this.maintenance = Promise.resolve();
+    this.disposed = false;
+    this.snapshot = {
+      available: typeof indexedDB !== "undefined",
+      hits: 0,
+      misses: 0,
+      writes: 0,
+      errors: 0,
+      entries: 0,
+      bytes: 0
+    };
+    this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME;
+    this.maxBytes = options.maxBytes ?? 128 * 1024 * 1024;
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    if (typeof this.databaseName !== "string" || this.databaseName.trim().length === 0) {
+      throw new TypeError("cache databaseName must be a non-empty string");
+    }
+    if (!Number.isFinite(this.maxBytes) || this.maxBytes <= 0) {
+      throw new RangeError("cache maxBytes must be a positive finite number");
+    }
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("cache openTimeoutMs must be a positive finite number");
+    }
+  }
+  get stats() {
+    return this.snapshot;
+  }
+  async get(key) {
+    if (this.disposed) return void 0;
+    const database = await this.open();
+    if (!database) {
+      this.snapshot.misses += 1;
+      return void 0;
+    }
+    try {
+      const transaction = database.transaction(CHUNK_STORE, "readonly");
+      const record = await requestResult(transaction.objectStore(CHUNK_STORE).get(key));
+      await transactionComplete(transaction);
+      if (!record) {
+        this.snapshot.misses += 1;
+        return void 0;
+      }
+      const chunk = {
+        version: record.version,
+        chunkX: record.chunkX,
+        chunkY: record.chunkY,
+        chunkSize: record.chunkSize,
+        padding: record.padding,
+        stride: record.stride,
+        tiles: new Uint16Array(record.tiles.slice(0))
+      };
+      assertPackedWorldChunk(chunk);
+      this.snapshot.hits += 1;
+      this.enqueueMaintenance(() => this.touch(database, record));
+      return chunk;
+    } catch {
+      this.snapshot.errors += 1;
+      this.snapshot.misses += 1;
+      this.enqueueMaintenance(() => this.deleteKey(database, key));
+      return void 0;
+    }
+  }
+  put(key, chunk) {
+    assertPackedWorldChunk(chunk);
+    if (this.disposed) return Promise.resolve(false);
+    return this.enqueueMaintenance(async () => {
+      const database = await this.open();
+      if (!database) return false;
+      try {
+        const bytes = chunk.tiles.byteLength;
+        const tiles = chunk.tiles.buffer.slice(
+          chunk.tiles.byteOffset,
+          chunk.tiles.byteOffset + chunk.tiles.byteLength
+        );
+        const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+        const chunks = transaction.objectStore(CHUNK_STORE);
+        const meta = transaction.objectStore(META_STORE);
+        const [existing, usage] = await Promise.all([
+          requestResult(chunks.get(key)),
+          requestResult(meta.get(USAGE_KEY))
+        ]);
+        const nextUsage = {
+          key: USAGE_KEY,
+          bytes: Math.max(0, (usage?.bytes ?? 0) - (existing?.bytes ?? 0) + bytes),
+          entries: Math.max(0, (usage?.entries ?? 0) + (existing ? 0 : 1))
+        };
+        chunks.put({
+          key,
+          version: chunk.version,
+          chunkX: chunk.chunkX,
+          chunkY: chunk.chunkY,
+          chunkSize: chunk.chunkSize,
+          padding: chunk.padding,
+          stride: chunk.stride,
+          tiles,
+          bytes,
+          accessedAt: Date.now()
+        });
+        meta.put(nextUsage);
+        await transactionComplete(transaction);
+        this.snapshot.writes += 1;
+        this.snapshot.entries = nextUsage.entries;
+        this.snapshot.bytes = nextUsage.bytes;
+        await this.prune(database);
+        return true;
+      } catch {
+        this.snapshot.errors += 1;
+        return false;
+      }
+    });
+  }
+  async clear() {
+    if (this.disposed) return false;
+    return this.enqueueMaintenance(async () => {
+      const database = await this.open();
+      if (!database) return false;
+      try {
+        const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+        transaction.objectStore(CHUNK_STORE).clear();
+        transaction.objectStore(META_STORE).put({ key: USAGE_KEY, bytes: 0, entries: 0 });
+        await transactionComplete(transaction);
+        this.snapshot.entries = 0;
+        this.snapshot.bytes = 0;
+        return true;
+      } catch {
+        this.snapshot.errors += 1;
+        return false;
+      }
+    });
+  }
+  flush() {
+    return this.maintenance.then(() => void 0);
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    void this.databasePromise?.then((database) => database?.close());
+  }
+  enqueueMaintenance(task) {
+    const result = this.maintenance.then(task, task);
+    this.maintenance = result.then(() => void 0, () => void 0);
+    return result;
+  }
+  async open() {
+    if (this.disposed || typeof indexedDB === "undefined") return void 0;
+    this.databasePromise ?? (this.databasePromise = new Promise((resolve) => {
+      const request = indexedDB.open(this.databaseName, DATABASE_VERSION);
+      let settled = false;
+      let timeout;
+      const finish = (database) => {
+        if (settled) {
+          database?.close();
+          return;
+        }
+        settled = true;
+        if (timeout !== void 0) clearTimeout(timeout);
+        resolve(database);
+      };
+      timeout = setTimeout(() => {
+        this.snapshot.available = false;
+        this.snapshot.errors += 1;
+        finish(void 0);
+      }, this.openTimeoutMs);
+      request.addEventListener("upgradeneeded", () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(CHUNK_STORE)) {
+          const chunks = database.createObjectStore(CHUNK_STORE, { keyPath: "key" });
+          chunks.createIndex("accessedAt", "accessedAt");
+        }
+        if (!database.objectStoreNames.contains(META_STORE)) {
+          database.createObjectStore(META_STORE, { keyPath: "key" });
+        }
+      });
+      request.addEventListener("success", () => {
+        const database = request.result;
+        if (settled) {
+          database.close();
+          return;
+        }
+        database.addEventListener("versionchange", () => {
+          database.close();
+          this.databasePromise = void 0;
+        });
+        this.snapshot.available = true;
+        void this.readUsage(database);
+        finish(database);
+      }, { once: true });
+      request.addEventListener("error", () => {
+        if (settled) return;
+        this.snapshot.available = false;
+        this.snapshot.errors += 1;
+        finish(void 0);
+      }, { once: true });
+      request.addEventListener("blocked", () => {
+        if (settled) return;
+        this.snapshot.available = false;
+        this.snapshot.errors += 1;
+        finish(void 0);
+      });
+    }));
+    return this.databasePromise;
+  }
+  async readUsage(database) {
+    try {
+      const transaction = database.transaction(META_STORE, "readonly");
+      const usage = await requestResult(transaction.objectStore(META_STORE).get(USAGE_KEY));
+      await transactionComplete(transaction);
+      this.snapshot.entries = usage?.entries ?? 0;
+      this.snapshot.bytes = usage?.bytes ?? 0;
+    } catch {
+      this.snapshot.errors += 1;
+    }
+  }
+  async touch(database, record) {
+    try {
+      const transaction = database.transaction(CHUNK_STORE, "readwrite");
+      transaction.objectStore(CHUNK_STORE).put({ ...record, accessedAt: Date.now() });
+      await transactionComplete(transaction);
+    } catch {
+      this.snapshot.errors += 1;
+    }
+  }
+  async deleteKey(database, key) {
+    try {
+      const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+      const chunks = transaction.objectStore(CHUNK_STORE);
+      const meta = transaction.objectStore(META_STORE);
+      const [existing, usage] = await Promise.all([
+        requestResult(chunks.get(key)),
+        requestResult(meta.get(USAGE_KEY))
+      ]);
+      if (existing) {
+        chunks.delete(key);
+        const next = {
+          key: USAGE_KEY,
+          bytes: Math.max(0, (usage?.bytes ?? 0) - existing.bytes),
+          entries: Math.max(0, (usage?.entries ?? 0) - 1)
+        };
+        meta.put(next);
+        this.snapshot.bytes = next.bytes;
+        this.snapshot.entries = next.entries;
+      }
+      await transactionComplete(transaction);
+    } catch {
+      this.snapshot.errors += 1;
+    }
+  }
+  async prune(database) {
+    if (this.snapshot.bytes <= this.maxBytes) return;
+    const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
+    const chunks = transaction.objectStore(CHUNK_STORE);
+    const meta = transaction.objectStore(META_STORE);
+    let bytes = this.snapshot.bytes;
+    let entries = this.snapshot.entries;
+    await new Promise((resolve, reject) => {
+      const request = chunks.index("accessedAt").openCursor();
+      request.addEventListener("error", () => reject(request.error ?? new Error("cache pruning failed")), { once: true });
+      request.addEventListener("success", () => {
+        const cursor = request.result;
+        if (!cursor || bytes <= this.maxBytes) {
+          resolve();
+          return;
+        }
+        const record = cursor.value;
+        bytes = Math.max(0, bytes - record.bytes);
+        entries = Math.max(0, entries - 1);
+        cursor.delete();
+        cursor.continue();
+      });
+    });
+    meta.put({ key: USAGE_KEY, bytes, entries });
+    await transactionComplete(transaction);
+    this.snapshot.bytes = bytes;
+    this.snapshot.entries = entries;
+  }
+};
+async function clearWorldChunkCache(options = {}) {
+  const cache = new IndexedDbWorldChunkCache(options);
+  try {
+    return await cache.clear();
+  } finally {
+    cache.dispose();
+  }
+}
+
+// src/world/WorldDeltaStore.ts
+var WORLD_DELTA_FORMAT_VERSION = 2;
+var LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
+var WorldDeltaConflictError = class extends Error {
+  constructor(expectedRevision, actualRevision) {
+    super(`World delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "WorldDeltaConflictError";
+  }
+};
+function chunkKey(worldId, chunkX, chunkY) {
+  return JSON.stringify([worldId, chunkX, chunkY]);
+}
+function assertChunkIdentity(worldId, chunkX, chunkY) {
+  if (typeof worldId !== "string" || worldId.trim().length === 0) {
+    throw new TypeError("worldId must be a non-empty string");
+  }
+  if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) {
+    throw new RangeError("world delta chunk coordinates must be safe integers");
+  }
+}
+function assertChunkSize(chunkSize) {
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+    throw new RangeError("world delta chunkSize must be a positive safe integer");
+  }
+}
+function tileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
+  return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
+}
+function assertChanges(changes, chunkX, chunkY, options) {
+  assertChunkSize(options.chunkSize);
+  if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
+  if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
+    throw new RangeError("expectedRevision must be a non-negative safe integer");
+  }
+  for (const change of changes) {
+    if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
+      throw new RangeError("world delta tile coordinates must be safe integers");
+    }
+    if (!tileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
+      throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
+    }
+    if (change.override !== null) assertWorldTileOverride(change.override);
+  }
+}
+function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
+  assertChunkIdentity(worldId, chunkX, chunkY);
+  assertChunkSize(options.chunkSize);
+  const candidate = value;
+  if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
+    throw new TypeError("world chunk delta is invalid or incompatible");
+  }
+  const keys = /* @__PURE__ */ new Set();
+  for (const entry of candidate.entries) {
+    assertWorldTileOverride(entry.override);
+    const key = `${entry.x},${entry.y}`;
+    if (keys.has(key)) throw new TypeError("world chunk delta contains duplicate tile coordinates");
+    keys.add(key);
+  }
+  return {
+    version: WORLD_DELTA_FORMAT_VERSION,
+    worldId,
+    chunkX,
+    chunkY,
+    chunkSize: options.chunkSize,
+    revision: candidate.revision,
+    entries: candidate.entries.map((entry) => ({
+      x: entry.x,
+      y: entry.y,
+      override: cloneWorldTileOverride(entry.override)
+    }))
+  };
+}
+function mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options) {
+  assertChunkIdentity(worldId, chunkX, chunkY);
+  assertChanges(changes, chunkX, chunkY, options);
+  if (current) current = normalizeWorldChunkDelta(current, worldId, chunkX, chunkY, options);
+  const actualRevision = current?.revision ?? 0;
+  if (options.expectedRevision !== void 0 && options.expectedRevision !== actualRevision) {
+    throw new WorldDeltaConflictError(options.expectedRevision, actualRevision);
+  }
+  if (changes.length === 0) return current;
+  const entries = new Map((current?.entries ?? []).map((entry) => [
+    `${entry.x},${entry.y}`,
+    { x: entry.x, y: entry.y, override: cloneWorldTileOverride(entry.override) }
+  ]));
+  for (const change of changes) {
+    const key = `${change.x},${change.y}`;
+    if (change.override === null || !hasWorldTileOverride(change.override)) entries.delete(key);
+    else entries.set(key, { x: change.x, y: change.y, override: cloneWorldTileOverride(change.override) });
+  }
+  const currentEntries = new Map((current?.entries ?? []).map((entry) => [`${entry.x},${entry.y}`, entry.override]));
+  const changed = entries.size !== currentEntries.size || [...entries].some(([key, entry]) => !worldTileOverridesEqual(entry.override, currentEntries.get(key)));
+  if (!changed) return current;
+  return {
+    version: WORLD_DELTA_FORMAT_VERSION,
+    worldId,
+    chunkX,
+    chunkY,
+    chunkSize: options.chunkSize,
+    revision: actualRevision + 1,
+    entries: [...entries.values()].sort((a, b) => a.x - b.x || a.y - b.y)
+  };
+}
+var MemoryWorldDeltaStore = class {
+  constructor() {
+    this.chunks = /* @__PURE__ */ new Map();
+    this.disposed = false;
+  }
+  loadChunk(worldId, chunkX, chunkY, options) {
+    assertChunkIdentity(worldId, chunkX, chunkY);
+    const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
+    return Promise.resolve(delta ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options)) : void 0);
+  }
+  putChunkDelta(worldId, chunkX, chunkY, changes, options) {
+    if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    try {
+      const result = this.applyChunkDelta(worldId, chunkX, chunkY, changes, options);
+      return Promise.resolve(result ? this.cloneDelta(result) : void 0);
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  }
+  putTile(worldId, chunkX, chunkY, entry, options) {
+    if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+    this.applyChunkDelta(worldId, chunkX, chunkY, [entry], options);
+  }
+  deleteTile(worldId, chunkX, chunkY, x, y, options) {
+    if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+    this.applyChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options);
+  }
+  flush() {
+    return Promise.resolve();
+  }
+  listWorld(worldId) {
+    if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    const deltas = [...this.chunks.values()].filter((delta) => delta.worldId === worldId).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY).map((delta) => this.cloneDelta(delta));
+    return Promise.resolve(deltas);
+  }
+  async replaceWorld(worldId, deltas) {
+    if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+    const replacements = /* @__PURE__ */ new Map();
+    for (const delta of deltas) {
+      const normalized = normalizeWorldChunkDelta(
+        delta,
+        worldId,
+        delta.chunkX,
+        delta.chunkY,
+        { chunkSize: delta.chunkSize }
+      );
+      const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+      if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
+      replacements.set(key, normalized);
+    }
+    await this.clear(worldId);
+    for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+  }
+  async clear(worldId) {
+    for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
+  }
+  dispose() {
+    this.disposed = true;
+  }
+  cloneDelta(delta) {
+    if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
+    return {
+      ...delta,
+      entries: delta.entries.map((entry) => ({ ...entry, override: cloneWorldTileOverride(entry.override) }))
+    };
+  }
+  applyChunkDelta(worldId, chunkX, chunkY, changes, options) {
+    const key = chunkKey(worldId, chunkX, chunkY);
+    const result = mergeChunkDelta(this.chunks.get(key), worldId, chunkX, chunkY, changes, options);
+    if (result) this.chunks.set(key, result);
+    return result;
+  }
+};
+var DEFAULT_DELTA_DATABASE_NAME = "three-hex-map-world-deltas-v1";
+var DELTA_DATABASE_VERSION = 1;
+var DELTA_OBJECT_STORE = "deltas";
+function requestResult2(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
+  });
+}
+function transactionComplete2(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
+    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+  });
+}
+var IndexedDbWorldDeltaStore = class extends MemoryWorldDeltaStore {
+  constructor(options = {}) {
+    super();
+    this.pending = Promise.resolve();
+    this.closing = false;
+    this.databaseName = options.databaseName ?? DEFAULT_DELTA_DATABASE_NAME;
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    if (!this.databaseName.trim()) throw new TypeError("delta databaseName must be a non-empty string");
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("delta openTimeoutMs must be a positive finite number");
+    }
+  }
+  async loadChunk(worldId, chunkX, chunkY, options) {
+    if (this.disposed || this.closing) return void 0;
+    await this.flush();
+    const memory = await super.loadChunk(worldId, chunkX, chunkY, options);
+    if (memory) return memory;
+    const database = await this.open();
+    const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
+    const record = await requestResult2(transaction.objectStore(DELTA_OBJECT_STORE).get(chunkKey(worldId, chunkX, chunkY)));
+    await transactionComplete2(transaction);
+    if (!record) return void 0;
+    const delta = normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options);
+    this.chunks.set(record.key, delta);
+    return this.cloneDelta(delta);
+  }
+  putChunkDelta(worldId, chunkX, chunkY, changes, options) {
+    if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    return this.enqueue(async () => {
+      const key = chunkKey(worldId, chunkX, chunkY);
+      const database = await this.open();
+      const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+      const completion = transactionComplete2(transaction);
+      try {
+        const store = transaction.objectStore(DELTA_OBJECT_STORE);
+        const record = await requestResult2(store.get(key));
+        const current = record ? normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options) : void 0;
+        const result = mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options);
+        const requiresWrite = result !== void 0 && (record?.version !== WORLD_DELTA_FORMAT_VERSION || result.revision !== current?.revision);
+        if (requiresWrite) store.put({ key, ...this.cloneDelta(result) });
+        await completion;
+        if (result) this.chunks.set(key, this.cloneDelta(result));
+        else this.chunks.delete(key);
+        return result ? this.cloneDelta(result) : void 0;
+      } catch (reason) {
+        try {
+          transaction.abort();
+        } catch {
+        }
+        await completion.catch(() => void 0);
+        throw reason;
+      }
+    });
+  }
+  putTile(worldId, chunkX, chunkY, entry, options) {
+    if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+    void this.putChunkDelta(worldId, chunkX, chunkY, [entry], options).catch(() => void 0);
+  }
+  deleteTile(worldId, chunkX, chunkY, x, y, options) {
+    if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+    void this.putChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options).catch(() => void 0);
+  }
+  async flush() {
+    await this.pending;
+    if (this.pendingError !== void 0) {
+      const error = this.pendingError;
+      this.pendingError = void 0;
+      throw error;
+    }
+  }
+  async listWorld(worldId) {
+    if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+    await this.flush();
+    const database = await this.open();
+    const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
+    const records = await requestResult2(
+      transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
+    );
+    await transactionComplete2(transaction);
+    return records.map((record) => normalizeWorldChunkDelta(
+      record,
+      worldId,
+      record.chunkX,
+      record.chunkY,
+      { chunkSize: record.chunkSize }
+    )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
+  }
+  replaceWorld(worldId, deltas) {
+    if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    const replacements = /* @__PURE__ */ new Map();
+    for (const delta of deltas) {
+      const normalized = normalizeWorldChunkDelta(
+        delta,
+        worldId,
+        delta.chunkX,
+        delta.chunkY,
+        { chunkSize: delta.chunkSize }
+      );
+      const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+      if (replacements.has(key)) return Promise.reject(new TypeError("world delta checkpoint contains duplicate chunks"));
+      replacements.set(key, normalized);
+    }
+    return this.enqueue(async () => {
+      const database = await this.open();
+      const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+      const store = transaction.objectStore(DELTA_OBJECT_STORE);
+      const keys = await requestResult2(store.index("worldId").getAllKeys(worldId));
+      for (const key of keys) store.delete(key);
+      for (const [key, delta] of replacements) {
+        store.put({ key, ...this.cloneDelta(delta) });
+      }
+      await transactionComplete2(transaction);
+      await super.clear(worldId);
+      for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+    });
+  }
+  async clear(worldId) {
+    if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+    await this.enqueue(async () => {
+      await super.clear(worldId);
+      const database = await this.open();
+      const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+      const index = transaction.objectStore(DELTA_OBJECT_STORE).index("worldId");
+      const keys = await requestResult2(index.getAllKeys(worldId));
+      for (const key of keys) transaction.objectStore(DELTA_OBJECT_STORE).delete(key);
+      await transactionComplete2(transaction);
+    });
+    await this.flush();
+  }
+  dispose() {
+    if (this.disposed || this.closing) return;
+    this.closing = true;
+    void this.flush().finally(() => {
+      this.disposed = true;
+      void this.databasePromise?.then((database) => database.close(), () => void 0);
+    }).catch(() => void 0);
+  }
+  enqueue(task) {
+    const result = this.pending.then(task, task);
+    this.pending = result.then(() => void 0, (error) => {
+      this.pendingError ?? (this.pendingError = error);
+    });
+    return result;
+  }
+  open() {
+    if (typeof indexedDB === "undefined") return Promise.reject(new Error("IndexedDB is unavailable"));
+    this.databasePromise ?? (this.databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.databaseName, DELTA_DATABASE_VERSION);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Opening the world delta database timed out"));
+      }, this.openTimeoutMs);
+      const finish = (callback, value) => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+        return true;
+      };
+      request.addEventListener("upgradeneeded", () => {
+        if (!request.result.objectStoreNames.contains(DELTA_OBJECT_STORE)) {
+          const store = request.result.createObjectStore(DELTA_OBJECT_STORE, { keyPath: "key" });
+          store.createIndex("worldId", "worldId", { unique: false });
+        }
+      });
+      request.addEventListener("success", () => {
+        if (settled) {
+          request.result.close();
+          return;
+        }
+        request.result.addEventListener("versionchange", () => request.result.close());
+        finish(resolve, request.result);
+      }, { once: true });
+      request.addEventListener("error", () => finish(reject, request.error ?? new Error("Opening IndexedDB failed")), { once: true });
+      request.addEventListener("blocked", () => finish(reject, new Error("Opening IndexedDB was blocked")), { once: true });
+    }));
+    return this.databasePromise;
+  }
+};
+
+// src/persistence/CheckpointCoordinator.ts
+var CHECKPOINT_JOURNAL_FORMAT_VERSION = 1;
+var CheckpointConflictError = class extends Error {
+  constructor(expectedRevision, actualRevision) {
+    super(`checkpoint journal conflict: expected revision ${expectedRevision}, received ${actualRevision}`);
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "CheckpointConflictError";
+  }
+};
+var CheckpointRecoveryError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.name = "CheckpointRecoveryError";
+  }
+};
+function abortError(message) {
+  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+function cloneToken(value) {
+  if (value === void 0 || value === null) return value;
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+function cloneJournal(journal) {
+  return {
+    ...journal,
+    participants: journal.participants.map((record) => ({
+      ...record,
+      ...record.token === void 0 ? {} : { token: cloneToken(record.token) }
+    }))
+  };
+}
+function errorMessage(reason) {
+  return reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+}
+function assertSafeVersion(name, value) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${name} must be a non-negative safe integer`);
+}
+function assertCheckpointJournal(value, worldId) {
+  if (!value || typeof value !== "object") throw new TypeError("checkpoint journal must be an object");
+  const journal = value;
+  if (journal.formatVersion !== CHECKPOINT_JOURNAL_FORMAT_VERSION) {
+    throw new TypeError(`unsupported checkpoint journal format ${String(journal.formatVersion)}`);
+  }
+  if (typeof journal.worldId !== "string" || journal.worldId.trim().length === 0 || worldId !== void 0 && journal.worldId !== worldId) {
+    throw new TypeError("checkpoint journal worldId is invalid");
+  }
+  assertSafeVersion("checkpoint generation", journal.generation);
+  assertSafeVersion("checkpoint baseGeneration", journal.baseGeneration);
+  assertSafeVersion("checkpoint revision", journal.revision);
+  if (journal.baseGeneration > journal.generation) {
+    throw new TypeError("checkpoint baseGeneration cannot exceed generation");
+  }
+  if (typeof journal.sessionId !== "string" || journal.sessionId.trim().length === 0 || !["preparing", "committing", "committed", "aborted"].includes(journal.phase) || !Number.isFinite(journal.createdAt) || !Number.isFinite(journal.updatedAt) || !Array.isArray(journal.participants)) {
+    throw new TypeError("checkpoint journal metadata is invalid");
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const participant of journal.participants) {
+    if (!participant || typeof participant.id !== "string" || participant.id.trim().length === 0 || ids.has(participant.id) || typeof participant.required !== "boolean" || !["pending", "prepared", "committed", "skipped"].includes(participant.state)) {
+      throw new TypeError("checkpoint participant record is invalid");
+    }
+    assertSafeVersion("checkpoint participant version", participant.version);
+    if (journal.phase !== "aborted" && participant.required && participant.state === "skipped") {
+      throw new TypeError("a required checkpoint participant cannot be skipped");
+    }
+    ids.add(participant.id);
+  }
+  if ((journal.phase === "preparing" || journal.phase === "aborted") && journal.participants.some((participant) => participant.state === "committed")) {
+    throw new TypeError(`${journal.phase} checkpoint cannot contain committed participants`);
+  }
+  if (journal.phase === "committing" && journal.participants.some((participant) => participant.state === "pending")) {
+    throw new TypeError("a committing checkpoint cannot contain pending participants");
+  }
+  if (journal.phase === "committed" && journal.participants.some((participant) => participant.state !== "committed" && participant.state !== "skipped")) {
+    throw new TypeError("a committed checkpoint must have terminal participant states");
+  }
+}
+var MemoryCheckpointJournalStore = class {
+  constructor() {
+    this.journals = /* @__PURE__ */ new Map();
+    this.disposed = false;
+  }
+  load(worldId) {
+    if (this.disposed) return Promise.reject(new Error("CheckpointJournalStore has been disposed"));
+    const journal = this.journals.get(worldId);
+    return Promise.resolve(journal ? cloneJournal(journal) : void 0);
+  }
+  compareAndSet(worldId, expectedRevision, journal) {
+    if (this.disposed) return Promise.reject(new Error("CheckpointJournalStore has been disposed"));
+    assertCheckpointJournal(journal, worldId);
+    const actualRevision = this.journals.get(worldId)?.revision ?? 0;
+    if (actualRevision !== expectedRevision) {
+      return Promise.reject(new CheckpointConflictError(expectedRevision, actualRevision));
+    }
+    if (journal.revision !== expectedRevision + 1) {
+      return Promise.reject(new RangeError("checkpoint journal revision must advance exactly once"));
+    }
+    this.journals.set(worldId, cloneJournal(journal));
+    return Promise.resolve();
+  }
+  dispose() {
+    this.disposed = true;
+  }
+};
+var JOURNAL_DATABASE_VERSION = 1;
+var JOURNAL_OBJECT_STORE = "checkpoints";
+function requestResult3(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
+  });
+}
+function transactionComplete3(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
+    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+  });
+}
+var IndexedDbCheckpointJournalStore = class {
+  constructor(options = {}) {
+    this.disposed = false;
+    this.databaseName = options.databaseName ?? "three-hex-map-checkpoints-v1";
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    if (!this.databaseName.trim()) throw new TypeError("checkpoint databaseName must be a non-empty string");
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("checkpoint openTimeoutMs must be positive and finite");
+    }
+  }
+  async load(worldId) {
+    if (this.disposed) throw new Error("CheckpointJournalStore has been disposed");
+    const database = await this.open();
+    const transaction = database.transaction(JOURNAL_OBJECT_STORE, "readonly");
+    const journal = await requestResult3(transaction.objectStore(JOURNAL_OBJECT_STORE).get(worldId));
+    await transactionComplete3(transaction);
+    if (!journal) return void 0;
+    assertCheckpointJournal(journal, worldId);
+    return cloneJournal(journal);
+  }
+  async compareAndSet(worldId, expectedRevision, journal) {
+    if (this.disposed) throw new Error("CheckpointJournalStore has been disposed");
+    assertCheckpointJournal(journal, worldId);
+    if (journal.revision !== expectedRevision + 1) {
+      throw new RangeError("checkpoint journal revision must advance exactly once");
+    }
+    const database = await this.open();
+    const transaction = database.transaction(JOURNAL_OBJECT_STORE, "readwrite");
+    const completion = transactionComplete3(transaction);
+    try {
+      const store = transaction.objectStore(JOURNAL_OBJECT_STORE);
+      const current = await requestResult3(store.get(worldId));
+      const actualRevision = current?.revision ?? 0;
+      if (actualRevision !== expectedRevision) {
+        throw new CheckpointConflictError(expectedRevision, actualRevision);
+      }
+      store.put(cloneJournal(journal));
+      await completion;
+    } catch (reason) {
+      try {
+        transaction.abort();
+      } catch {
+      }
+      await completion.catch(() => void 0);
+      throw reason;
+    }
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    void this.databasePromise?.then((database) => database.close(), () => void 0);
+  }
+  open() {
+    if (typeof indexedDB === "undefined") return Promise.reject(new Error("IndexedDB is unavailable"));
+    this.databasePromise ?? (this.databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.databaseName, JOURNAL_DATABASE_VERSION);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Opening the checkpoint journal timed out"));
+      }, this.openTimeoutMs);
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      request.addEventListener("upgradeneeded", () => {
+        if (!request.result.objectStoreNames.contains(JOURNAL_OBJECT_STORE)) {
+          request.result.createObjectStore(JOURNAL_OBJECT_STORE, { keyPath: "worldId" });
+        }
+      });
+      request.addEventListener("success", () => {
+        if (settled) {
+          request.result.close();
+          return;
+        }
+        request.result.addEventListener("versionchange", () => request.result.close());
+        finish(resolve, request.result);
+      }, { once: true });
+      request.addEventListener("error", () => finish(reject, request.error ?? new Error("Opening checkpoint IndexedDB failed")), { once: true });
+      request.addEventListener("blocked", () => finish(reject, new Error("Opening checkpoint IndexedDB was blocked")), { once: true });
+    }));
+    return this.databasePromise;
+  }
+};
+function randomSessionId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `checkpoint-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+var CheckpointCoordinator = class {
+  constructor(options) {
+    this.participantById = /* @__PURE__ */ new Map();
+    this.operation = Promise.resolve();
+    this.disposed = false;
+    this.running = false;
+    this.completedCheckpoints = 0;
+    this.recoveredCheckpoints = 0;
+    this.abortedCheckpoints = 0;
+    this.failedOperations = 0;
+    this.latestGeneration = 0;
+    this.latestCommittedGeneration = 0;
+    if (!options?.worldId?.trim()) throw new TypeError("checkpoint worldId must be a non-empty string");
+    if (!Array.isArray(options.participants) || options.participants.length === 0) {
+      throw new TypeError("checkpoint participants must be a non-empty array");
+    }
+    this.worldId = options.worldId;
+    this.participants = [...options.participants];
+    this.journal = options.journal;
+    this.timeoutMs = options.operationTimeoutMs ?? 1e4;
+    this.now = options.now ?? Date.now;
+    this.sessionId = options.sessionId ?? randomSessionId();
+    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
+      throw new RangeError("checkpoint operationTimeoutMs must be positive and finite");
+    }
+    for (const participant of this.participants) {
+      if (!participant?.id?.trim() || this.participantById.has(participant.id)) {
+        throw new TypeError("checkpoint participant ids must be unique non-empty strings");
+      }
+      assertSafeVersion("checkpoint participant version", participant.version);
+      this.participantById.set(participant.id, participant);
+    }
+  }
+  checkpoint(signal) {
+    return this.enqueue(() => this.createCheckpoint(signal));
+  }
+  recover(signal) {
+    return this.enqueue(() => this.recoverLatest(signal));
+  }
+  get settled() {
+    return this.operation;
+  }
+  get stats() {
+    return {
+      worldId: this.worldId,
+      sessionId: this.sessionId,
+      running: this.running,
+      completedCheckpoints: this.completedCheckpoints,
+      recoveredCheckpoints: this.recoveredCheckpoints,
+      abortedCheckpoints: this.abortedCheckpoints,
+      failedOperations: this.failedOperations,
+      latestGeneration: this.latestGeneration,
+      latestCommittedGeneration: this.latestCommittedGeneration
+    };
+  }
+  dispose(disposeJournal = true) {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.activeController?.abort(abortError("CheckpointCoordinator was disposed"));
+    if (disposeJournal) void this.operation.finally(() => this.journal.dispose());
+  }
+  enqueue(task) {
+    if (this.disposed) return Promise.reject(new Error("CheckpointCoordinator has been disposed"));
+    const result = this.operation.then(task, task);
+    this.operation = result.then(() => void 0, () => void 0);
+    return result;
+  }
+  async createCheckpoint(signal) {
+    const existing = await this.recoverLatest(signal);
+    const baseGeneration = existing?.phase === "committed" ? existing.generation : existing?.baseGeneration ?? 0;
+    const previousRevision = existing?.revision ?? 0;
+    const timestamp = this.now();
+    let journal = {
+      formatVersion: CHECKPOINT_JOURNAL_FORMAT_VERSION,
+      worldId: this.worldId,
+      generation: (existing?.generation ?? 0) + 1,
+      baseGeneration,
+      revision: previousRevision + 1,
+      sessionId: this.sessionId,
+      phase: "preparing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      participants: this.participants.map((participant) => ({
+        id: participant.id,
+        version: participant.version,
+        required: participant.required ?? true,
+        state: "pending"
+      }))
+    };
+    await this.journal.compareAndSet(this.worldId, previousRevision, journal);
+    this.latestGeneration = journal.generation;
+    journal = await this.resume(journal, signal, true);
+    if (journal.phase === "committed") this.completedCheckpoints += 1;
+    return journal;
+  }
+  async recoverLatest(signal) {
+    let journal = await this.journal.load(this.worldId);
+    if (!journal) return void 0;
+    assertCheckpointJournal(journal, this.worldId);
+    this.latestGeneration = Math.max(this.latestGeneration, journal.generation);
+    this.latestCommittedGeneration = Math.max(
+      this.latestCommittedGeneration,
+      journal.phase === "committed" ? journal.generation : journal.baseGeneration
+    );
+    if (journal.phase === "committed") return journal;
+    if (journal.phase === "aborted") return this.cleanupAborted(journal, signal);
+    if (journal.phase === "preparing") {
+      const requiredPending = journal.participants.some((record) => record.state === "pending" && record.required);
+      if (requiredPending) {
+        journal = await this.persist({ ...journal, phase: "aborted" });
+        this.abortedCheckpoints += 1;
+        return this.cleanupAborted(journal, signal);
+      }
+      let changed = false;
+      for (const record of journal.participants) {
+        if (record.state !== "pending") continue;
+        record.state = "skipped";
+        record.error = "CheckpointRecoveryError: optional participant did not finish preparing";
+        changed = true;
+      }
+      if (changed) journal = await this.persist(journal);
+    }
+    const recoveredGeneration = journal.generation;
+    journal = await this.resume(journal, signal, false);
+    if (journal.phase === "committed") {
+      this.recoveredCheckpoints += 1;
+      this.latestCommittedGeneration = Math.max(this.latestCommittedGeneration, recoveredGeneration);
+    }
+    return journal;
+  }
+  async resume(initial, externalSignal, mayPrepare) {
+    this.running = true;
+    const controller = new AbortController();
+    this.activeController = controller;
+    const abort = () => controller.abort(externalSignal?.reason ?? abortError("Checkpoint was aborted"));
+    if (externalSignal?.aborted) abort();
+    else externalSignal?.addEventListener("abort", abort, { once: true });
+    const contextBase = {
+      worldId: this.worldId,
+      generation: initial.generation,
+      startedAt: this.now()
+    };
+    let journal = initial;
+    try {
+      if (journal.phase === "preparing") {
+        if (!mayPrepare && journal.participants.some((record) => record.state === "pending")) {
+          throw new CheckpointRecoveryError("an incomplete prepare phase cannot be reconstructed after restart");
+        }
+        for (let index = 0; index < journal.participants.length; index += 1) {
+          const record = journal.participants[index];
+          if (record.state !== "pending") continue;
+          const participant = this.requireParticipant(record.id);
+          try {
+            const token = await this.runParticipant(
+              controller,
+              contextBase,
+              (context) => participant.prepare(context)
+            );
+            record.token = cloneToken(token);
+            record.version = participant.version;
+            record.state = "prepared";
+            delete record.error;
+          } catch (reason) {
+            if (record.required) {
+              try {
+                journal = await this.persist({ ...journal, phase: "aborted" });
+                this.abortedCheckpoints += 1;
+              } catch {
+              }
+              throw reason;
+            }
+            record.state = "skipped";
+            record.error = errorMessage(reason);
+          }
+          journal = await this.persist(journal);
+        }
+        journal = await this.persist({ ...journal, phase: "committing" });
+      }
+      if (journal.phase === "committing") {
+        for (let index = 0; index < journal.participants.length; index += 1) {
+          let record = journal.participants[index];
+          if (record.state === "committed" || record.state === "skipped") continue;
+          const participant = this.participantById.get(record.id);
+          if (!participant) {
+            if (record.required) {
+              throw new CheckpointRecoveryError(`checkpoint participant "${record.id}" is unavailable`);
+            }
+            record.state = "skipped";
+            record.error = `CheckpointRecoveryError: optional participant "${record.id}" is unavailable`;
+            journal = await this.persist(journal);
+            continue;
+          }
+          if (record.version !== participant.version) {
+            if (record.version > participant.version || !participant.migrate) {
+              throw new CheckpointRecoveryError(
+                `participant "${record.id}" checkpoint version ${record.version} cannot migrate to ${participant.version}`
+              );
+            }
+            record.token = cloneToken(await this.runParticipant(
+              controller,
+              contextBase,
+              (context) => participant.migrate(record.token, record.version, context)
+            ));
+            record.version = participant.version;
+            journal = await this.persist(journal);
+            record = journal.participants[index];
+          }
+          await this.runParticipant(
+            controller,
+            contextBase,
+            (context) => participant.commit(context, cloneToken(record.token))
+          );
+          record.state = "committed";
+          journal = await this.persist(journal);
+        }
+        journal = await this.persist({ ...journal, phase: "committed" });
+        this.latestCommittedGeneration = Math.max(this.latestCommittedGeneration, journal.generation);
+      }
+      return journal;
+    } catch (reason) {
+      this.failedOperations += 1;
+      throw reason;
+    } finally {
+      externalSignal?.removeEventListener("abort", abort);
+      if (this.activeController === controller) this.activeController = void 0;
+      this.running = false;
+    }
+  }
+  async cleanupAborted(initial, externalSignal) {
+    this.running = true;
+    const controller = new AbortController();
+    this.activeController = controller;
+    const abort = () => controller.abort(externalSignal?.reason ?? abortError("Checkpoint cleanup was aborted"));
+    if (externalSignal?.aborted) abort();
+    else externalSignal?.addEventListener("abort", abort, { once: true });
+    const contextBase = {
+      worldId: this.worldId,
+      generation: initial.generation,
+      startedAt: this.now()
+    };
+    let journal = initial;
+    try {
+      for (let index = 0; index < journal.participants.length; index += 1) {
+        const record = journal.participants[index];
+        if (record.state === "skipped") continue;
+        if (record.state === "pending") {
+          record.state = "skipped";
+          record.error = "CheckpointRecoveryError: participant prepare did not complete";
+          journal = await this.persist(journal);
+          continue;
+        }
+        if (record.state !== "prepared") continue;
+        const participant = this.participantById.get(record.id);
+        if (participant?.rollback) {
+          await this.runParticipant(
+            controller,
+            contextBase,
+            (context) => participant.rollback(context, cloneToken(record.token), record.version)
+          );
+        }
+        record.state = "skipped";
+        if (!participant) {
+          record.error = `CheckpointRecoveryError: participant "${record.id}" is unavailable for rollback`;
+        } else {
+          delete record.error;
+        }
+        delete record.token;
+        journal = await this.persist(journal);
+      }
+      return journal;
+    } catch (reason) {
+      this.failedOperations += 1;
+      throw reason;
+    } finally {
+      externalSignal?.removeEventListener("abort", abort);
+      if (this.activeController === controller) this.activeController = void 0;
+      this.running = false;
+    }
+  }
+  requireParticipant(id) {
+    const participant = this.participantById.get(id);
+    if (!participant) throw new CheckpointRecoveryError(`checkpoint participant "${id}" is unavailable`);
+    return participant;
+  }
+  async persist(journal) {
+    const next = {
+      ...cloneJournal(journal),
+      revision: journal.revision + 1,
+      updatedAt: this.now()
+    };
+    await this.journal.compareAndSet(this.worldId, journal.revision, next);
+    return next;
+  }
+  runParticipant(parent, contextBase, operation) {
+    const controller = new AbortController();
+    const abort = () => controller.abort(parent.signal.reason ?? abortError("Checkpoint was aborted"));
+    if (parent.signal.aborted) abort();
+    else parent.signal.addEventListener("abort", abort, { once: true });
+    const context = { ...contextBase, signal: controller.signal };
+    if (controller.signal.aborted) {
+      parent.signal.removeEventListener("abort", abort);
+      return Promise.reject(controller.signal.reason ?? abortError("Checkpoint was aborted"));
+    }
+    let task;
+    try {
+      task = Promise.resolve(operation(context));
+    } catch (reason) {
+      task = Promise.reject(reason);
+    }
+    return this.withTimeout(task, controller).finally(() => {
+      parent.signal.removeEventListener("abort", abort);
+    });
+  }
+  withTimeout(task, controller) {
+    if (controller.signal.aborted) return Promise.reject(controller.signal.reason);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        controller.signal.removeEventListener("abort", aborted);
+        callback(value);
+      };
+      const aborted = () => finish(reject, controller.signal.reason ?? abortError("Checkpoint was aborted"));
+      timer = setTimeout(() => {
+        const error = new Error(`checkpoint participant operation timed out after ${this.timeoutMs}ms`);
+        error.name = "TimeoutError";
+        controller.abort(error);
+        finish(reject, error);
+      }, this.timeoutMs);
+      controller.signal.addEventListener("abort", aborted, { once: true });
+      void task.then((value) => finish(resolve, value), (reason) => finish(reject, reason));
+    });
+  }
+};
+function createFlushCheckpointParticipant(id, flush, options = {}) {
+  return {
+    id,
+    version: options.version ?? 1,
+    required: options.required,
+    prepare: (context) => ({ generation: context.generation }),
+    commit: (context) => flush(context)
+  };
+}
+
+// src/world/WorldDescriptor.ts
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
+function assertChunkSize2(value) {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+  }
+}
+function assertSupportedWorldGeneratorVersion(value) {
+  if (value !== WORLD_GENERATOR_VERSION) {
+    throw new RangeError(
+      `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
+    );
+  }
+}
+function assertWorldDescriptor(value) {
+  if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
+  const descriptor = value;
+  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world descriptor format ${String(descriptor.descriptorVersion)}`);
+  }
+  if (descriptor.sourceKind !== "procedural-infinite" && descriptor.sourceKind !== "procedural-toroidal") {
+    throw new TypeError("world descriptor sourceKind is invalid");
+  }
+  if (typeof descriptor.seed !== "string") throw new TypeError("world descriptor seed must be a string");
+  assertSupportedWorldGeneratorVersion(descriptor.generatorVersion);
+  if (descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
+  }
+  assertChunkSize2(descriptor.chunkSize);
+  if (descriptor.sourceKind === "procedural-infinite") {
+    if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
+      throw new TypeError("infinite world descriptor topology is invalid");
+    }
+    return;
+  }
+  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
+    throw new TypeError("toroidal world descriptor topology is invalid");
+  }
+}
+function serializeWorldDescriptor(descriptor) {
+  assertWorldDescriptor(descriptor);
+  return JSON.stringify([
+    descriptor.descriptorVersion,
+    descriptor.sourceKind,
+    descriptor.seed,
+    descriptor.generatorVersion,
+    descriptor.chunkFormatVersion,
+    descriptor.chunkSize,
+    descriptor.topology,
+    descriptor.width ?? null,
+    descriptor.height ?? null
+  ]);
+}
+
+// src/persistence/GenerationCheckpointCoordinator.ts
+var GENERATION_CHECKPOINT_FORMAT_VERSION = 1;
+function cloneValue(value) {
+  if (value === void 0 || value === null) return value;
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+function errorMessage2(reason) {
+  return reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+}
+function abortError2(message) {
+  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+function stableSnapshotValue(value) {
+  if (value === void 0) return ["undefined"];
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return ["number", String(value)];
+    return Object.is(value, -0) ? ["number", "-0"] : value;
+  }
+  if (typeof value === "bigint") return ["bigint", value.toString()];
+  if (value instanceof ArrayBuffer) return ["bytes", ...new Uint8Array(value)];
+  if (ArrayBuffer.isView(value)) {
+    return [
+      value.constructor.name,
+      ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    ];
+  }
+  if (Array.isArray(value)) return value.map(stableSnapshotValue);
+  if (typeof value === "object") {
+    const object = value;
+    return Object.keys(object).sort().map((key) => [key, stableSnapshotValue(object[key])]);
+  }
+  throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
+}
+function checksumCheckpointSnapshot(snapshot) {
+  const text = JSON.stringify(stableSnapshotValue(snapshot));
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    const value = text.charCodeAt(index);
+    hash ^= value & 255;
+    hash = Math.imul(hash, 16777619) >>> 0;
+    hash ^= value >>> 8;
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+function cloneParticipantRecord(record) {
+  return { ...record };
+}
+function cloneGeneration(generation) {
+  return {
+    ...generation,
+    descriptor: cloneValue(generation.descriptor),
+    participants: generation.participants.map(cloneParticipantRecord)
+  };
+}
+function cloneManifest(manifest) {
+  return {
+    ...cloneGeneration(manifest),
+    formatVersion: manifest.formatVersion,
+    worldId: manifest.worldId,
+    revision: manifest.revision,
+    ...manifest.previous ? { previous: cloneGeneration(manifest.previous) } : {}
+  };
+}
+function cloneStage(record) {
+  return { ...record, snapshot: cloneValue(record.snapshot) };
+}
+function assertParticipantRecords(records) {
+  if (!Array.isArray(records)) throw new TypeError("checkpoint manifest participants must be an array");
+  const ids = /* @__PURE__ */ new Set();
+  for (const record of records) {
+    if (!record || typeof record !== "object" || typeof record.id !== "string" || !record.id.trim() || ids.has(record.id) || !Number.isSafeInteger(record.version) || record.version < 0 || typeof record.required !== "boolean" || !["staged", "skipped"].includes(record.state) || record.state === "staged" && (typeof record.stageKey !== "string" || typeof record.checksum !== "string") || record.state === "skipped" && record.required) {
+      throw new TypeError("checkpoint manifest participant record is invalid");
+    }
+    ids.add(record.id);
+  }
+}
+function assertGeneration(value) {
+  if (!value || typeof value !== "object") throw new TypeError("checkpoint generation must be an object");
+  const generation = value;
+  if (!Number.isSafeInteger(generation.generation) || generation.generation <= 0 || typeof generation.saveId !== "string" || !generation.saveId.trim() || !Number.isFinite(generation.committedAt)) {
+    throw new TypeError("checkpoint generation metadata is invalid");
+  }
+  assertWorldDescriptor(generation.descriptor);
+  assertParticipantRecords(generation.participants);
+}
+function assertGenerationCheckpointManifest(value, worldId) {
+  assertGeneration(value);
+  const manifest = value;
+  if (manifest.formatVersion !== GENERATION_CHECKPOINT_FORMAT_VERSION || typeof manifest.worldId !== "string" || !manifest.worldId.trim() || worldId !== void 0 && manifest.worldId !== worldId || !Number.isSafeInteger(manifest.revision) || manifest.revision <= 0) {
+    throw new TypeError("checkpoint manifest metadata is invalid");
+  }
+  if (manifest.previous) {
+    assertGeneration(manifest.previous);
+    if (manifest.previous.generation >= manifest.generation) {
+      throw new TypeError("previous checkpoint generation must precede the active generation");
+    }
+  }
+}
+var MemoryGenerationCheckpointStore = class {
+  constructor() {
+    this.manifests = /* @__PURE__ */ new Map();
+    this.stages = /* @__PURE__ */ new Map();
+    this.disposed = false;
+  }
+  loadManifest(worldId) {
+    this.assertActive();
+    const manifest = this.manifests.get(worldId);
+    return Promise.resolve(manifest ? cloneManifest(manifest) : void 0);
+  }
+  putStage(record) {
+    this.assertActive();
+    if (this.stages.has(record.key)) return Promise.reject(new Error("checkpoint stage key already exists"));
+    this.stages.set(record.key, cloneStage(record));
+    return Promise.resolve();
+  }
+  loadStage(key) {
+    this.assertActive();
+    const record = this.stages.get(key);
+    return Promise.resolve(record ? cloneStage(record) : void 0);
+  }
+  compareAndSetManifest(worldId, expectedRevision, manifest) {
+    this.assertActive();
+    assertGenerationCheckpointManifest(manifest, worldId);
+    const actualRevision = this.manifests.get(worldId)?.revision ?? 0;
+    if (actualRevision !== expectedRevision) {
+      return Promise.reject(new CheckpointConflictError(expectedRevision, actualRevision));
+    }
+    if (manifest.revision !== expectedRevision + 1) {
+      return Promise.reject(new RangeError("checkpoint manifest revision must advance exactly once"));
+    }
+    this.manifests.set(worldId, cloneManifest(manifest));
+    return Promise.resolve();
+  }
+  listStages(worldId) {
+    this.assertActive();
+    return Promise.resolve([...this.stages.values()].filter((record) => record.worldId === worldId).map(cloneStage));
+  }
+  deleteStages(keys) {
+    this.assertActive();
+    for (const key of keys) this.stages.delete(key);
+    return Promise.resolve();
+  }
+  dispose() {
+    this.disposed = true;
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("GenerationCheckpointStore has been disposed");
+  }
+};
+var MANIFEST_STORE = "manifests";
+var STAGING_STORE = "staging";
+var GENERATION_DATABASE_VERSION = 1;
+function requestResult4(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
+  });
+}
+function transactionComplete4(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
+    transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+  });
+}
+var IndexedDbGenerationCheckpointStore = class {
+  constructor(options = {}) {
+    this.disposed = false;
+    this.databaseName = options.databaseName ?? "three-hex-map-generation-checkpoints-v1";
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    if (!this.databaseName.trim()) throw new TypeError("checkpoint databaseName must be a non-empty string");
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("checkpoint openTimeoutMs must be positive and finite");
+    }
+  }
+  async loadManifest(worldId) {
+    this.assertActive();
+    const database = await this.open();
+    const transaction = database.transaction(MANIFEST_STORE, "readonly");
+    const manifest = await requestResult4(transaction.objectStore(MANIFEST_STORE).get(worldId));
+    await transactionComplete4(transaction);
+    if (!manifest) return void 0;
+    assertGenerationCheckpointManifest(manifest, worldId);
+    return cloneManifest(manifest);
+  }
+  async putStage(record) {
+    this.assertActive();
+    const database = await this.open();
+    const transaction = database.transaction(STAGING_STORE, "readwrite");
+    transaction.objectStore(STAGING_STORE).add(cloneStage(record));
+    await transactionComplete4(transaction);
+  }
+  async loadStage(key) {
+    this.assertActive();
+    const database = await this.open();
+    const transaction = database.transaction(STAGING_STORE, "readonly");
+    const record = await requestResult4(transaction.objectStore(STAGING_STORE).get(key));
+    await transactionComplete4(transaction);
+    return record ? cloneStage(record) : void 0;
+  }
+  async compareAndSetManifest(worldId, expectedRevision, manifest) {
+    this.assertActive();
+    assertGenerationCheckpointManifest(manifest, worldId);
+    if (manifest.revision !== expectedRevision + 1) {
+      throw new RangeError("checkpoint manifest revision must advance exactly once");
+    }
+    const database = await this.open();
+    const transaction = database.transaction(MANIFEST_STORE, "readwrite");
+    const completion = transactionComplete4(transaction);
+    try {
+      const store = transaction.objectStore(MANIFEST_STORE);
+      const current = await requestResult4(store.get(worldId));
+      const actualRevision = current?.revision ?? 0;
+      if (actualRevision !== expectedRevision) {
+        throw new CheckpointConflictError(expectedRevision, actualRevision);
+      }
+      store.put(cloneManifest(manifest));
+      await completion;
+    } catch (reason) {
+      try {
+        transaction.abort();
+      } catch {
+      }
+      await completion.catch(() => void 0);
+      throw reason;
+    }
+  }
+  async listStages(worldId) {
+    this.assertActive();
+    const database = await this.open();
+    const transaction = database.transaction(STAGING_STORE, "readonly");
+    const records = await requestResult4(
+      transaction.objectStore(STAGING_STORE).index("worldId").getAll(worldId)
+    );
+    await transactionComplete4(transaction);
+    return records.map(cloneStage);
+  }
+  async deleteStages(keys) {
+    this.assertActive();
+    if (keys.length === 0) return;
+    const database = await this.open();
+    const transaction = database.transaction(STAGING_STORE, "readwrite");
+    const store = transaction.objectStore(STAGING_STORE);
+    for (const key of keys) store.delete(key);
+    await transactionComplete4(transaction);
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    void this.databasePromise?.then((database) => database.close(), () => void 0);
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("GenerationCheckpointStore has been disposed");
+  }
+  open() {
+    if (typeof indexedDB === "undefined") return Promise.reject(new Error("IndexedDB is unavailable"));
+    this.databasePromise ?? (this.databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.databaseName, GENERATION_DATABASE_VERSION);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Opening the generation checkpoint database timed out"));
+      }, this.openTimeoutMs);
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(value);
+      };
+      request.addEventListener("upgradeneeded", () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(MANIFEST_STORE)) {
+          database.createObjectStore(MANIFEST_STORE, { keyPath: "worldId" });
+        }
+        if (!database.objectStoreNames.contains(STAGING_STORE)) {
+          const store = database.createObjectStore(STAGING_STORE, { keyPath: "key" });
+          store.createIndex("worldId", "worldId", { unique: false });
+        }
+      });
+      request.addEventListener("success", () => {
+        if (settled) {
+          request.result.close();
+          return;
+        }
+        request.result.addEventListener("versionchange", () => request.result.close());
+        finish(resolve, request.result);
+      }, { once: true });
+      request.addEventListener("error", () => finish(reject, request.error ?? new Error("Opening checkpoint IndexedDB failed")), { once: true });
+      request.addEventListener("blocked", () => finish(reject, new Error("Opening checkpoint IndexedDB was blocked")), { once: true });
+    }));
+    return this.databasePromise;
+  }
+};
+function randomSaveId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `save-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+var GenerationCheckpointCoordinator = class {
+  constructor(options) {
+    this.participantById = /* @__PURE__ */ new Map();
+    this.operation = Promise.resolve();
+    this.disposed = false;
+    this.running = false;
+    this.completedCheckpoints = 0;
+    this.recoveredCheckpoints = 0;
+    this.migratedCheckpoints = 0;
+    this.failedOperations = 0;
+    this.reclaimedStages = 0;
+    this.latestGeneration = 0;
+    if (!options?.worldId?.trim()) throw new TypeError("checkpoint worldId must be a non-empty string");
+    assertWorldDescriptor(options.descriptor);
+    if (!Array.isArray(options.participants) || options.participants.length === 0) {
+      throw new TypeError("checkpoint participants must be a non-empty array");
+    }
+    this.worldId = options.worldId;
+    this.descriptor = cloneValue(options.descriptor);
+    this.participants = [...options.participants];
+    this.store = options.store;
+    this.timeoutMs = options.operationTimeoutMs ?? 1e4;
+    this.orphanGraceMs = options.orphanGraceMs ?? 5 * 6e4;
+    this.now = options.now ?? Date.now;
+    this.createSaveId = options.createSaveId ?? randomSaveId;
+    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) {
+      throw new RangeError("checkpoint operationTimeoutMs must be positive and finite");
+    }
+    if (!Number.isFinite(this.orphanGraceMs) || this.orphanGraceMs < 0) {
+      throw new RangeError("checkpoint orphanGraceMs must be non-negative and finite");
+    }
+    for (const participant of this.participants) {
+      if (!participant?.id?.trim() || this.participantById.has(participant.id) || !Number.isSafeInteger(participant.version) || participant.version < 0 || typeof participant.capture !== "function" || typeof participant.restore !== "function") {
+        throw new TypeError("generation checkpoint participants are invalid or duplicated");
+      }
+      this.participantById.set(participant.id, participant);
+    }
+  }
+  checkpoint(signal) {
+    return this.enqueue(() => this.createCheckpoint(signal));
+  }
+  recover(signal) {
+    return this.enqueue(() => this.recoverLatest(signal));
+  }
+  collectGarbage(signal) {
+    return this.enqueue(async () => {
+      if (signal?.aborted) throw signal.reason ?? abortError2("Checkpoint garbage collection was aborted");
+      const manifest = await this.store.loadManifest(this.worldId);
+      return this.collectUnreferencedStages(manifest, signal);
+    });
+  }
+  get settled() {
+    return this.operation;
+  }
+  get stats() {
+    return {
+      worldId: this.worldId,
+      running: this.running,
+      completedCheckpoints: this.completedCheckpoints,
+      recoveredCheckpoints: this.recoveredCheckpoints,
+      migratedCheckpoints: this.migratedCheckpoints,
+      failedOperations: this.failedOperations,
+      reclaimedStages: this.reclaimedStages,
+      latestGeneration: this.latestGeneration
+    };
+  }
+  dispose(disposeStore = true) {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.activeController?.abort(abortError2("GenerationCheckpointCoordinator was disposed"));
+    if (disposeStore) void this.operation.finally(() => this.store.dispose());
+  }
+  enqueue(task) {
+    if (this.disposed) return Promise.reject(new Error("GenerationCheckpointCoordinator has been disposed"));
+    const result = this.operation.then(task, task);
+    this.operation = result.then(() => void 0, () => void 0);
+    return result;
+  }
+  async createCheckpoint(signal) {
+    const existing = await this.store.loadManifest(this.worldId);
+    if (existing) {
+      assertGenerationCheckpointManifest(existing, this.worldId);
+      this.assertDescriptor(existing.descriptor);
+    }
+    const generation = (existing?.generation ?? 0) + 1;
+    const saveId = this.createSaveId();
+    if (!saveId.trim()) throw new TypeError("checkpoint saveId must be a non-empty string");
+    const controller = this.startOperation(signal);
+    const context = {
+      worldId: this.worldId,
+      generation,
+      saveId,
+      descriptor: cloneValue(this.descriptor),
+      signal: controller.signal,
+      startedAt: this.now()
+    };
+    const stagedKeys = [];
+    let publishStarted = false;
+    try {
+      const captures = await Promise.all(this.participants.map(async (participant) => {
+        try {
+          const snapshot = await this.runParticipant(controller, () => participant.capture(context));
+          const copy = cloneValue(snapshot);
+          return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) };
+        } catch (reason) {
+          if (participant.required ?? true) throw reason;
+          return { participant, error: errorMessage2(reason) };
+        }
+      }));
+      const records = [];
+      for (const capture of captures) {
+        if ("error" in capture) {
+          records.push({
+            id: capture.participant.id,
+            version: capture.participant.version,
+            required: false,
+            state: "skipped",
+            error: capture.error
+          });
+          continue;
+        }
+        const key = JSON.stringify([this.worldId, saveId, capture.participant.id]);
+        const stage = {
+          key,
+          worldId: this.worldId,
+          generation,
+          saveId,
+          participantId: capture.participant.id,
+          participantVersion: capture.participant.version,
+          createdAt: this.now(),
+          checksum: capture.checksum,
+          snapshot: capture.snapshot
+        };
+        await this.store.putStage(stage);
+        stagedKeys.push(key);
+        const verified = await this.store.loadStage(key);
+        if (!verified || verified.checksum !== capture.checksum || checksumCheckpointSnapshot(verified.snapshot) !== capture.checksum) {
+          throw new CheckpointRecoveryError(`checkpoint staging verification failed for "${capture.participant.id}"`);
+        }
+        records.push({
+          id: capture.participant.id,
+          version: capture.participant.version,
+          required: capture.participant.required ?? true,
+          state: "staged",
+          stageKey: key,
+          checksum: capture.checksum
+        });
+      }
+      const committedAt = this.now();
+      const manifest = {
+        formatVersion: GENERATION_CHECKPOINT_FORMAT_VERSION,
+        worldId: this.worldId,
+        revision: (existing?.revision ?? 0) + 1,
+        generation,
+        saveId,
+        descriptor: cloneValue(this.descriptor),
+        committedAt,
+        participants: records,
+        ...existing ? { previous: cloneGeneration(existing) } : {}
+      };
+      publishStarted = true;
+      await this.store.compareAndSetManifest(this.worldId, existing?.revision ?? 0, manifest);
+      this.latestGeneration = generation;
+      this.completedCheckpoints += 1;
+      await this.collectUnreferencedStages(manifest, controller.signal);
+      return manifest;
+    } catch (reason) {
+      this.failedOperations += 1;
+      if (!publishStarted) {
+        await this.store.deleteStages(stagedKeys).catch(() => void 0);
+      } else {
+        const published = await this.store.loadManifest(this.worldId).catch(() => void 0);
+        if (published?.saveId !== saveId) {
+          await this.store.deleteStages(stagedKeys).catch(() => void 0);
+        }
+      }
+      throw reason;
+    } finally {
+      this.finishOperation(controller, signal);
+    }
+  }
+  async recoverLatest(signal) {
+    const manifest = await this.store.loadManifest(this.worldId);
+    if (!manifest) {
+      await this.collectUnreferencedStages(void 0, signal);
+      return void 0;
+    }
+    assertGenerationCheckpointManifest(manifest, this.worldId);
+    this.assertDescriptor(manifest.descriptor);
+    this.latestGeneration = manifest.generation;
+    const controller = this.startOperation(signal);
+    let migrated = false;
+    try {
+      const restores = [];
+      for (const record of manifest.participants) {
+        if (record.state === "skipped") continue;
+        const participant = this.participantById.get(record.id);
+        if (!participant) {
+          if (record.required) throw new CheckpointRecoveryError(`checkpoint participant "${record.id}" is unavailable`);
+          continue;
+        }
+        const stage = await this.store.loadStage(record.stageKey);
+        if (!stage || stage.worldId !== this.worldId || stage.saveId !== manifest.saveId || stage.participantId !== record.id || stage.checksum !== record.checksum || checksumCheckpointSnapshot(stage.snapshot) !== record.checksum) {
+          throw new CheckpointRecoveryError(`checkpoint stage for "${record.id}" is missing or corrupt`);
+        }
+        let snapshot = stage.snapshot;
+        if (record.version !== participant.version) {
+          if (record.version > participant.version || !participant.migrate) {
+            throw new CheckpointRecoveryError(
+              `participant "${record.id}" checkpoint version ${record.version} cannot migrate to ${participant.version}`
+            );
+          }
+          snapshot = await this.runParticipant(
+            controller,
+            () => participant.migrate(cloneValue(snapshot), record.version, {
+              worldId: this.worldId,
+              generation: manifest.generation,
+              saveId: manifest.saveId,
+              descriptor: cloneValue(this.descriptor),
+              signal: controller.signal,
+              startedAt: this.now()
+            })
+          );
+          migrated = true;
+        }
+        restores.push({ participant, snapshot: cloneValue(snapshot) });
+      }
+      for (const participant of this.participants) {
+        if ((participant.required ?? true) && !manifest.participants.some((record) => record.id === participant.id && record.state === "staged")) {
+          throw new CheckpointRecoveryError(`required checkpoint participant "${participant.id}" is missing`);
+        }
+      }
+      const context = {
+        worldId: this.worldId,
+        generation: manifest.generation,
+        saveId: manifest.saveId,
+        descriptor: cloneValue(this.descriptor),
+        signal: controller.signal,
+        startedAt: this.now()
+      };
+      for (const restore of restores) {
+        await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
+      }
+      this.recoveredCheckpoints += 1;
+      await this.collectUnreferencedStages(manifest, controller.signal);
+    } catch (reason) {
+      this.failedOperations += 1;
+      throw reason;
+    } finally {
+      this.finishOperation(controller, signal);
+    }
+    if (!migrated) return manifest;
+    this.migratedCheckpoints += 1;
+    return this.createCheckpoint(signal);
+  }
+  async collectUnreferencedStages(manifest, signal) {
+    if (signal?.aborted) throw signal.reason ?? abortError2("Checkpoint garbage collection was aborted");
+    const retained = /* @__PURE__ */ new Set();
+    for (const generation of [manifest, manifest?.previous]) {
+      for (const record of generation?.participants ?? []) {
+        if (record.state === "staged" && record.stageKey) retained.add(record.stageKey);
+      }
+    }
+    const cutoff = this.now() - this.orphanGraceMs;
+    const stages = await this.store.listStages(this.worldId);
+    const obsolete = stages.filter((stage) => !retained.has(stage.key) && stage.createdAt <= cutoff).map((stage) => stage.key);
+    await this.store.deleteStages(obsolete);
+    this.reclaimedStages += obsolete.length;
+    return obsolete.length;
+  }
+  assertDescriptor(descriptor) {
+    if (serializeWorldDescriptor(descriptor) !== serializeWorldDescriptor(this.descriptor)) {
+      throw new CheckpointRecoveryError("checkpoint world descriptor does not match the requested world");
+    }
+  }
+  startOperation(signal) {
+    this.running = true;
+    const controller = new AbortController();
+    this.activeController = controller;
+    const abort = () => controller.abort(signal?.reason ?? abortError2("Checkpoint operation was aborted"));
+    controller.externalAbort = abort;
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    return controller;
+  }
+  finishOperation(controller, signal) {
+    const abort = controller.externalAbort;
+    if (abort) signal?.removeEventListener("abort", abort);
+    if (this.activeController === controller) this.activeController = void 0;
+    this.running = false;
+  }
+  async runParticipant(controller, operation) {
+    if (controller.signal.aborted) throw controller.signal.reason ?? abortError2("Checkpoint operation was aborted");
+    let task;
+    try {
+      task = Promise.resolve(operation());
+    } catch (reason) {
+      task = Promise.reject(reason);
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        controller.signal.removeEventListener("abort", aborted);
+        callback(value);
+      };
+      const aborted = () => finish(reject, controller.signal.reason ?? abortError2("Checkpoint operation was aborted"));
+      const timer = setTimeout(() => {
+        const error = new Error(`checkpoint participant operation timed out after ${this.timeoutMs}ms`);
+        error.name = "TimeoutError";
+        controller.abort(error);
+        finish(reject, error);
+      }, this.timeoutMs);
+      controller.signal.addEventListener("abort", aborted, { once: true });
+      void task.then((value) => finish(resolve, value), (reason) => finish(reject, reason));
+    });
+  }
+};
+
+// src/persistence/FoundationCheckpointParticipants.ts
+function createSimulationGenerationParticipant(runtime) {
+  if (!runtime || typeof runtime.createCheckpointSnapshot !== "function" || typeof runtime.restoreCheckpointSnapshot !== "function") {
+    throw new TypeError("simulation runtime does not support generation checkpoints");
+  }
+  return {
+    id: "simulation",
+    version: 1,
+    required: true,
+    capture: () => runtime.createCheckpointSnapshot(),
+    restore: (_context, snapshot) => runtime.restoreCheckpointSnapshot(snapshot)
+  };
+}
+function createWorldDeltaGenerationParticipant(source, options = {}) {
+  if (!source || typeof source.createDeltaCheckpointSnapshot !== "function" || typeof source.restoreDeltaCheckpointSnapshot !== "function") {
+    throw new TypeError("world source does not support generation checkpoints");
+  }
+  return {
+    id: "terrain-deltas",
+    version: 1,
+    required: true,
+    capture: () => source.createDeltaCheckpointSnapshot(),
+    restore: async (_context, snapshot) => {
+      await source.restoreDeltaCheckpointSnapshot(snapshot);
+      await options.afterRestore?.(snapshot);
+    }
+  };
+}
+export {
+  CHECKPOINT_JOURNAL_FORMAT_VERSION,
+  CheckpointConflictError,
+  CheckpointCoordinator,
+  CheckpointRecoveryError,
+  GENERATION_CHECKPOINT_FORMAT_VERSION,
+  GenerationCheckpointCoordinator,
+  IndexedDbCheckpointJournalStore,
+  IndexedDbGenerationCheckpointStore,
+  IndexedDbWorldChunkCache,
+  IndexedDbWorldDeltaStore,
+  MemoryCheckpointJournalStore,
+  MemoryGenerationCheckpointStore,
+  MemoryWorldDeltaStore,
+  WORLD_DELTA_FORMAT_VERSION,
+  WorldDeltaConflictError,
+  assertCheckpointJournal,
+  assertGenerationCheckpointManifest,
+  checksumCheckpointSnapshot,
+  clearWorldChunkCache,
+  createFlushCheckpointParticipant,
+  createSimulationGenerationParticipant,
+  createWorldChunkCacheKey,
+  createWorldDeltaGenerationParticipant,
+  normalizeWorldChunkDelta
+};
+//# sourceMappingURL=persistence.mjs.map

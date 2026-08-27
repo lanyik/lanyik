@@ -5,20 +5,24 @@ import {
     WorldVegetationGenerationOptions,
     worldVegetationTransferables
 } from "./generateVegetation";
+import { WORLD_WORKER_PROTOCOL_VERSION } from "./WorldDescriptor";
 
 interface GenerateWorldRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
     id: number;
-    type?: "world";
+    type: "world";
     options: WorldGenerationOptions;
 }
 
 interface GenerateChunkRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
     id: number;
     type: "chunk";
     options: WorldChunkGenerationOptions;
 }
 
 interface GenerateVegetationRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
     id: number;
     type: "vegetation";
     options: WorldVegetationGenerationOptions;
@@ -34,21 +38,32 @@ const scope = globalThis as unknown as {
 scope.addEventListener("message", event => {
     try {
         const request = event.data;
-        if (!request || typeof request.id !== "number" || !request.options) {
+        if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
+            || !Number.isSafeInteger(request.id) || !request.options
+            || !["world", "chunk", "vegetation"].includes(request.type)) {
             throw new TypeError("World generator received an invalid request");
         }
         if (request.type === "chunk") {
             const chunk = generateWorldChunk(request.options);
-            scope.postMessage({ id: request.id, chunk }, [chunk.tiles.buffer]);
+            scope.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id: request.id, chunk }, [chunk.tiles.buffer]);
         } else if (request.type === "vegetation") {
             const vegetation = generateWorldVegetation(request.options);
-            scope.postMessage({ id: request.id, vegetation }, worldVegetationTransferables(vegetation));
+            scope.postMessage({
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                id: request.id,
+                vegetation
+            }, worldVegetationTransferables(vegetation));
         } else {
-            scope.postMessage({ id: request.id, world: generateWorld(request.options) });
+            scope.postMessage({
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                id: request.id,
+                world: generateWorld(request.options)
+            });
         }
     } catch (reason) {
         const error = reason instanceof Error ? reason : new Error(String(reason));
         scope.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
             id: event.data?.id,
             error: { name: error.name, message: error.message, stack: error.stack }
         });

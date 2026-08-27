@@ -66,6 +66,8 @@ export interface WorldDeltaStore {
         options: WorldDeltaReadOptions
     ): void;
     flush(): Promise<void>;
+    listWorld?(worldId: string): Promise<readonly WorldChunkDelta[]>;
+    replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void>;
     clear(worldId: string): Promise<void>;
     dispose(): void;
 }
@@ -273,6 +275,34 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
 
     public flush(): Promise<void> { return Promise.resolve(); }
 
+    public listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
+        if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+        const deltas = [...this.chunks.values()]
+            .filter(delta => delta.worldId === worldId)
+            .sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY)
+            .map(delta => this.cloneDelta(delta));
+        return Promise.resolve(deltas);
+    }
+
+    public async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+        const replacements = new Map<string, WorldChunkDelta>();
+        for (const delta of deltas) {
+            const normalized = normalizeWorldChunkDelta(
+                delta,
+                worldId,
+                delta.chunkX,
+                delta.chunkY,
+                { chunkSize: delta.chunkSize }
+            );
+            const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+            if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
+            replacements.set(key, normalized);
+        }
+        await this.clear(worldId);
+        for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+    }
+
     public async clear(worldId: string): Promise<void> {
         for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
     }
@@ -428,6 +458,54 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
             this.pendingError = undefined;
             throw error;
         }
+    }
+
+    public override async listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
+        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+        await this.flush();
+        const database = await this.open();
+        const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
+        const records = await requestResult(
+            transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
+        ) as StoredWorldChunkDelta[];
+        await transactionComplete(transaction);
+        return records.map(record => normalizeWorldChunkDelta(
+            record,
+            worldId,
+            record.chunkX,
+            record.chunkY,
+            { chunkSize: record.chunkSize }
+        )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
+    }
+
+    public override replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+        if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+        const replacements = new Map<string, WorldChunkDelta>();
+        for (const delta of deltas) {
+            const normalized = normalizeWorldChunkDelta(
+                delta,
+                worldId,
+                delta.chunkX,
+                delta.chunkY,
+                { chunkSize: delta.chunkSize }
+            );
+            const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
+            if (replacements.has(key)) return Promise.reject(new TypeError("world delta checkpoint contains duplicate chunks"));
+            replacements.set(key, normalized);
+        }
+        return this.enqueue(async () => {
+            const database = await this.open();
+            const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+            const store = transaction.objectStore(DELTA_OBJECT_STORE);
+            const keys = await requestResult(store.index("worldId").getAllKeys(worldId));
+            for (const key of keys) store.delete(key);
+            for (const [key, delta] of replacements) {
+                store.put({ key, ...this.cloneDelta(delta) } satisfies StoredWorldChunkDelta);
+            }
+            await transactionComplete(transaction);
+            await super.clear(worldId);
+            for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+        });
     }
 
     public override async clear(worldId: string): Promise<void> {

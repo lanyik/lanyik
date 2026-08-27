@@ -19,9 +19,10 @@ IndexedDbSimulationChunkStore <── WorldSimulationRuntime
 
 ## Scenario
 
-1. The demo restores every stored simulation chunk for the seed-specific
-   campaign. If none exists, it creates `first-army` on a resident passable
-   tile.
+1. The demo recovers one committed generation containing both the complete
+   simulation snapshot and sparse terrain deltas. A legacy direct-store save is
+   imported once when no generation manifest exists. If no army exists, it
+   creates `first-army` on a resident passable tile.
 2. **Start long march** chooses a passable target in another source chunk and
    plans it with `HierarchicalPathfinder`.
 3. `ArmyMarch` copies the route into simulation state and immediately releases
@@ -29,10 +30,12 @@ IndexedDbSimulationChunkStore <── WorldSimulationRuntime
 4. The initial player area remains an activity anchor. Once the army leaves it,
    the same route continues at the background tick interval, independent of
    camera position and render residency.
-5. Arrival writes a monument city through `HexMap.setTileOverride()` and flushes
-   both World Delta and simulation stores.
-6. Reloading reconstructs the army from enumerated simulation snapshots; moving
-   the camera to its destination reloads the persisted outpost delta.
+5. Arrival writes a monument city through `HexMap.setTileOverride()` and
+   publishes a strict generation checkpoint containing both authoritative
+   stores.
+6. Reloading validates the full world descriptor and restores the army and
+   outpost from the same committed generation. Moving the camera to the
+   destination then renders the restored delta.
 
 Run the automatic path with:
 

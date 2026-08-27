@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Generation-scoped lifecycle ownership with late-publication guards,
+  cancellation propagation, bounded/observable drain tracking, and
+  `HexMap.disposeAsync()`.
+- Strict multi-store generation checkpoints with immutable staging, an atomic
+  CAS manifest, complete simulation/delta snapshots, explicit migrations,
+  previous-generation retention, descriptor validation, and orphan cleanup.
+- CPU/GPU byte budgets, geometry/texture/model accounting, weighted queue
+  backpressure, starvation protection, federated runtime telemetry, and real
+  WebGL GPU timer queries.
+- Scoped resource accounts with disposable reservation handles and a read-only
+  `HexMap.resourceBudget` diagnostics surface.
+- Renderer-host, interaction, option-validation and world-editing boundaries;
+  `HexMap.ts` remains the compatibility orchestrator while ownership continues
+  moving behind those boundaries.
+- Deterministic and fault-injected acceptance tests, rapid replacement E2E, and
+  a configurable scheduled browser soak with lifecycle, WebGL and JS-heap hard bounds.
+- Frozen world descriptors and Worker protocol versions, literal golden
+  generation checksums, real Worker-crash replacement E2E, and repeated real
+  WebGL context-loss recovery with bounded resources.
 - Optional four-way toroidal map topology (`MapInfo.wrapX` / `wrapY`) with
   periodic procedural noise, seam-aware terrain/coast/river/fog neighbors,
   repeated rendering, wrapped picking and shortest-path routing across edges.
@@ -68,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Prevented failed checkpoint prepares from being resumed with tokens captured
+  at a later application state; retries now abort/roll back the old generation.
+- Prevented impossible overweight tasks from evicting an entire queue, kept
+  starvation aging out of admission eviction, and preserved mount priority on
+  backpressure retries.
+- Added GPU-query freshness and saturation telemetry so adaptive rendering does
+  not become blind while the GPU query ring is full.
 - Corrected bounded-map picking so points outside the map no longer snap to an
   edge tile, and hardened topology/fog/generator runtime input validation.
 - Replaced the legacy sparse-array pathfinder with a typed heap-based A* that

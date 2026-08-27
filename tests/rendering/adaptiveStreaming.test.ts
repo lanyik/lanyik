@@ -1,10 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { AdaptiveStreamingController, HexMap } from "../../src/index";
-import { AdaptiveStreamingProfile } from "../../src/rendering/AdaptiveStreamingController";
+import {
+    AdaptiveStreamingControllerOptions,
+    AdaptiveStreamingProfile
+} from "../../src/rendering/AdaptiveStreamingController";
 import { FrameTaskScheduler } from "../../src/rendering/FrameTaskScheduler";
 
-function controller() {
+function controller(overrides: Partial<AdaptiveStreamingControllerOptions> = {}) {
     return new AdaptiveStreamingController({
         targetFrameMs: 16,
         baseFrameBudgetMs: 4,
@@ -14,7 +17,8 @@ function controller() {
         degradeFrames: 2,
         recoverFrames: 3,
         cooldownFrames: 0,
-        emaAlpha: 1
+        emaAlpha: 1,
+        ...overrides
     });
 }
 
@@ -157,6 +161,26 @@ describe("adaptive streaming controller", () => {
         });
     });
 
+    test("turns hard resource-budget overage into explicit degradation pressure", () => {
+        const adaptive = controller();
+        const sample = {
+            frameMs: 12,
+            gpuTimingSupported: true,
+            cpuBudgetExceededBytes: 1024,
+            gpuBudgetExceededBytes: 2048
+        };
+        expect(adaptive.sample(sample)).toBeUndefined();
+        expect(adaptive.sample(sample)).toMatchObject({
+            mainThreadLevel: 1,
+            gpuLevel: 1,
+            workerLevel: 0
+        });
+        expect(adaptive.stats).toMatchObject({
+            cpuBudgetExceededBytes: 1024,
+            gpuBudgetExceededBytes: 2048
+        });
+    });
+
     test("treats sustained slow frames as render pressure once observable work is idle", () => {
         const adaptive = controller();
         const sample = {
@@ -175,6 +199,56 @@ describe("adaptive streaming controller", () => {
             vegetationDensityScale: 0.85,
             lodDistanceScale: 0.9
         });
+    });
+
+    test("does not invent GPU pressure from frame cadence when timer queries are supported", () => {
+        const adaptive = controller();
+        const sample = {
+            frameMs: 30,
+            gpuTimingSupported: true,
+            frameTaskMs: 0,
+            frameTaskBacklog: 0,
+            oldestFrameTaskMs: 0,
+            workerQueueDepth: 0,
+            workerContentionMs: 0
+        };
+        for (let frame = 0; frame < 10; frame += 1) adaptive.sample(sample);
+        expect(adaptive.currentProfile.gpuLevel).toBe(0);
+        expect(adaptive.stats.gpuTimingSupported).toBe(true);
+    });
+
+    test("degrades when supported GPU timing is saturated and no fresh sample arrives", () => {
+        const adaptive = controller();
+        const sample = {
+            frameMs: 16,
+            gpuTimingSupported: true,
+            gpuTimingSaturated: true,
+            gpuSampleAgeMs: 100,
+            frameTaskMs: 0,
+            frameTaskBacklog: 0,
+            oldestFrameTaskMs: 0,
+            workerQueueDepth: 0,
+            workerContentionMs: 0
+        };
+        expect(adaptive.sample(sample)).toBeUndefined();
+        expect(adaptive.sample(sample)).toMatchObject({ gpuLevel: 1, mainThreadLevel: 0 });
+        expect(adaptive.stats).toMatchObject({ gpuTimingSaturated: true, gpuSampleAgeMs: 100 });
+    });
+
+    test("does not treat refresh-limited 60 Hz frames as pressure at the 60 Hz target", () => {
+        const adaptive = controller({ targetFrameMs: 1000 / 60 });
+        const sample = {
+            frameMs: 1000 / 60,
+            frameTaskMs: 0,
+            frameTaskBacklog: 0,
+            oldestFrameTaskMs: 0,
+            workerQueueDepth: 0,
+            workerContentionMs: 0
+        };
+        for (let frame = 0; frame < 30; frame += 1) {
+            expect(adaptive.sample(sample)).toBeUndefined();
+        }
+        expect(adaptive.currentProfile.qualityLevel).toBe(0);
     });
 
     test("routes frame-task backlog only to main-thread mount budgets", () => {

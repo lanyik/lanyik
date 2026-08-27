@@ -2,9 +2,6 @@ import {
     WebGLRenderer,
     Scene as ThreeScene,
     PerspectiveCamera,
-    Color,
-    AmbientLight,
-    DirectionalLight,
     Mesh,
     RingGeometry,
     MeshBasicMaterial,
@@ -20,19 +17,17 @@ import {
     InstancedMesh,
     RawShaderMaterial,
     Vector2,
-    Material,
-    ACESFilmicToneMapping
+    Material
 } from "three";
 // MapControls was removed from three.js's examples; OrbitControls configured
 // with swapped mouse buttons (left=pan, right=rotate) reproduces it.
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { Sky } from "three/examples/jsm/objects/Sky.js";
 
 import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
-import { HexMapEventName, Land, LandColor } from "./enums";
+import { HexMapEventName } from "./enums";
 import { getHexCenter } from "./helpers/helpers";
-import { screenToGround, pickTile } from "./helpers/picking";
+import { pickTile } from "./helpers/picking";
 import { CITY_FOG_TILE_KEY, TerrainMesh, TerrainAtlas } from "./objects/TerrainMesh";
 import { createForest, ForestField, ForestSharedResources } from "./objects/Forest";
 import { GrassField, createGrassField, GrassSharedResources } from "./objects/Grass";
@@ -62,13 +57,11 @@ import {
 } from "./rendering/WorldRenderLayer";
 import {
     MAX_WORLD_GENERATION_CHUNK_SIZE,
-    assertWorldTileOverride,
     WorldTileOverride,
     WorldTileOverrideChange
 } from "./world/generateWorldChunk";
 import {
     assertWorldSource,
-    isMutableWorldSource,
     isWorldVegetationSource,
     StaticWorldSource,
     WorldChunk,
@@ -80,241 +73,35 @@ import {
     ChunkResidencyCoordinator,
 } from "./world/ChunkResidencyCoordinator";
 import { RenderWorldController } from "./rendering/RenderWorldController";
+import { HexMapRendererHost, WebGlContextStats } from "./rendering/HexMapRendererHost";
+import {
+    HexMapInteractionController,
+    HexMapInteractionStats
+} from "./rendering/HexMapInteractionController";
+import { WorldChunkLayers } from "./rendering/WorldChunkLayers";
+import { WorldChunkMountQueue } from "./rendering/WorldChunkMountQueue";
+import { WebGlGpuTimerStats } from "./rendering/WebGlGpuTimer";
+import { WorldEditingFacade, WorldEditingStats, worldTileVisualSignature } from "./world/WorldEditingFacade";
+import {
+    RuntimeWorkCoordinator,
+    RuntimeWorkCoordinatorStats
+} from "./runtime/RuntimeWorkCoordinator";
+import { ResourceBudgetAccount, ResourceBudgetView } from "./runtime/ResourceBudget";
+import {
+    HexMapOptions,
+    ResolvedHexMapOptions,
+    WorldLoadOptions,
+    resolveHexMapOptions
+} from "./HexMapOptions";
+
+export type { HexMapOptions, WorldLoadOptions } from "./HexMapOptions";
 
 function renderLayerError(reason: unknown): Error {
     return reason instanceof Error ? reason : new Error(String(reason));
 }
 
-export interface HexMapOptions {
-    element: string;                       // CSS selector for the <canvas>
-    size?: number;                          // hex size in world units, default 40
-    maxPixelRatio?: number;                 // renderer DPR ceiling, default 2
-    antialias?: boolean;                    // WebGL multisample antialiasing, default true
-    terrainShaderQuality?: "full" | "fast"; // fast preserves core terrain features, default full
-    skyVisible?: boolean;                   // atmospheric sky shader, default true
-    texturesBaseUrl?: string;                // folder with terrain.png/transitions.png/land-atlas.json
-    gridVisible?: boolean;
-    gridColor?: ColorRepresentation;
-    gridWidth?: number;
-    gridOpacity?: number;
-    selectorColor?: ColorRepresentation;
-    pointerColor?: ColorRepresentation;
-    treesPerTile?: number;
-
-    //Sea/coastal tiles always render as an animated, solid-colored water layer
-    //(waves, sparkle, a 3D beach slope where they meet land - see
-    //shaders/water.*.ts).
-    waterColorShallow?: ColorRepresentation;
-    waterColorDeep?: ColorRepresentation;
-
-    //Wave shape/animation fine-tuning. Defaults produce a gentle, sparkling
-    //sea; turn amplitude/speed up for choppier water, sparkleIntensity/
-    //fresnelIntensity down for a flatter look.
-    waterWaveAmplitude?: number;    // default 1.6 (world units)
-    waterWaveFrequency?: number;    // default 1.0 (multiplier)
-    waterWaveSpeed?: number;        // default 1.0 (multiplier)
-    waterSparkleIntensity?: number; // default 1.0
-    waterFresnelIntensity?: number; // default 1.0
-
-    //Stylized coastal foam waves (after Harry Alisavakis' stylized water
-    //shader): noise-distorted white bands rolling in towards every shoreline
-    //plus a solid lapping foam strip right at the waterline. Every knob is a
-    //live uniform (no rebuild), see shaders/water.fragment.ts.
-    coastalWavesEnabled?: boolean;   // default true
-    coastalWaveColor?: ColorRepresentation; // default 0xffffff
-    coastalWaveCount?: number;       // bands per shore-to-center span, default 3
-    coastalWaveSpeed?: number;       // travel speed towards shore, default 0.6
-    coastalWaveWidth?: number;       // band thickness (0..1 of a wavelength), default 0.3
-    coastalWaveRange?: number;       // reach out from the shore (0..1 of tile radius), default 0.8
-    coastalWaveDistortion?: number;  // 0..1 noise bend/tear amount, default 0.5
-    coastalWaveOpacity?: number;     // 0..1, default 0.85
-
-    //How far below land (world units) the water plane rests, and how much of a
-    //tile's radius the beach slope/color blend covers in total (0..1, split
-    //evenly between the land and water tiles that share a coastal edge).
-    //waterDepth defaults to size*0.25.
-    waterDepth?: number;
-    beachWidth?: number; // default 0.35
-
-    //Diffusion/blend band sizes (0..1 fraction of a tile's radius): how far a
-    //land tile's atlas texture blends towards a differently-typed land
-    //neighbor (landBlendWidth), and how rounded a water tile's corner looks
-    //where two coastal edges meet (waterCornerRounding, 0 = sharp corner, 1 =
-    //fully rounded - only where both edges of that corner border land).
-    landBlendWidth?: number;    // default 0.5
-    landBlendEnabled?: boolean; // skip costly organic neighbor blending when false, default true
-    waterCornerRounding?: number; // default 0.4
-
-    //Curved coastline: how strongly static world-space noise bends the visual
-    //waterline off the straight hex edges (one-sided, inland only - the land
-    //layer draws the whole waterline, the water layer's foam recedes to
-    //continue it). 0 restores straight hex-edge coasts. Organic land
-    //transitions: the same idea applied to landBlendWidth's transition band
-    //between differently-typed land tiles. Both live shader uniforms.
-    coastCurvature?: number;      // 0..1, default 0.5
-    landBlendCurvature?: number;  // 0..1, default 0.5
-
-    //Mountains: Land.mountain tiles rise into noise-craggy peaks; adjacent
-    //mountain tiles connect into continuous ridgelines. Peak height in world
-    //units; default size * 0.6. Live shader uniform.
-    mountainHeight?: number;
-
-    //Rivers/lakes: land ("grass") tiles carrying the free-form "river"/"lake"
-    //modifier (TileInfo.modifiers) render animated water on the land layer,
-    //banks bent by world-space noise so the waterline curves naturally. A
-    //river is a channel flowing through the hex; a lake fills the hex with
-    //water except a grass shore rim inset from every edge whose neighbor
-    //isn't water. Connectivity is auto-detected from neighbors (river/lake/
-    //sea/coastal - see helpers/rivers.ts): rivers flow into lakes and the sea,
-    //neighboring lake tiles merge into one body. All knobs below are live
-    //shader uniforms (no rebuild); widths are fractions of a tile's radius,
-    //riverDepth is world units (how deep the bed is carved, like waterDepth).
-    //Colors default to the map's waterColorShallow/Deep to match the sea.
-    riverWidth?: number;         // channel waterline half-width, default 0.28
-    riverBankWidth?: number;     // vegetation strip beyond the waterline, default 0.14
-    riverCurvature?: number;     // 0..1 noise bend of the banks, default 0.5
-    riverColorShallow?: ColorRepresentation; // default waterColorShallow
-    riverColorDeep?: ColorRepresentation;    // default waterColorDeep
-    riverBankColor?: ColorRepresentation;    // default 0xa8bf6a (light green)
-    riverFlowSpeed?: number;     // ripple animation speed, default 1.0
-    riverDepth?: number;         // default waterDepth * 0.6
-    lakeShoreWidth?: number;     // lake grass rim inset, default 0.18
-
-    //Map-wide default tree/city models - each is a *folder* path containing
-    //model.glb + info.json (see helpers/models.ts), not a bare filename; the
-    //folder's info.json holds that model's own offset/rotation/scale fine-
-    //tuning. A tile's own TileInfo.city.model/treeModel (see interfaces.ts)
-    //overrides these per-tile. treeScale/cityScale are extra map-wide
-    //multipliers on top of each model's own info.json scale.
-    treeModel?: string;     // default "Assets/models/pinia"
-    treeScale?: number;     // default 1
-    cityModel?: string;     // default "Assets/models/monument"
-    cityScale?: number;     // default 1
-
-    //A wind-animated grass-blade layer scattered on top of Land.land ("grass")
-    //tiles, on top of the terrain layer's own atlas texture (see objects/
-    //Grass.ts) - purely decorative, disabling it just leaves the plain grass
-    //texture visible underneath, exactly like before this option existed.
-    grassEnabled?: boolean;      // default true
-    grassDensity?: number;       // blades per tile, default 60
-    grassBladeWidth?: number;    // world units, default size * 0.03
-    grassBladeHeight?: number;   // world units, default size * 0.18
-    grassWindStrength?: number;  // tip sway distance, world units, default bladeHeight * 0.35
-    grassWindSpeed?: number;     // default 1.2
-
-    //Spatial streaming and LOD. LOD 0 keeps the original full-detail meshes;
-    //middle/far levels only reduce detail that is smaller than its projected
-    //screen size. CPU and GPU caches are independent so very large worlds do
-    //not allocate every chunk up front.
-    renderDistance?: number;             // world units, default 2400
-    lodEnabled?: boolean;                // default true
-    lodNearDistance?: number;            // LOD 0 -> 1 threshold, default 900
-    lodFarDistance?: number;             // LOD 1 -> 2 threshold, default 1650
-    vegetationRenderDistance?: number;   // grass/forest cutoff, default 1450
-    chunkLodHysteresis?: number;         // threshold dead band, default 120
-    gpuChunkCacheSize?: number;           // default 128 logical chunks
-    cpuChunkCacheSize?: number;           // default 192 logical chunks
-
-    //Fog of war (see objects/FogOfWar.ts): fogTexture is a file name resolved
-    //against texturesBaseUrl (default "war-fog.jpg", the same folder as the
-    //terrain atlas), drawn over every tile HexMap.setTileFog() marks Unseen -
-    //fogDarkenFactor is the color multiplier applied instead to Explored tiles
-    //(previously seen, currently outside every unit's view range), across
-    //every layer (terrain, grass, trees, cities). fogTextureSize is how many
-    //world units one repeat of the (seamlessly tileable) fog texture spans -
-    //fog UVs are world-space, so the image flows continuously across fogged
-    //tiles instead of restarting per hex; defaults to size * 8. Every tile
-    //defaults to fully visible until something calls setTileFog(), so this is
-    //a no-op unless a consumer (e.g. GameEngine) actively drives it.
-    fogTexture?: string;
-    fogDarkenFactor?: number;
-    fogTextureSize?: number;
-}
-
-//waterDepth/fogTextureSize/riverColorShallow/riverColorDeep/riverDepth/
-//mountainHeight have *derived* defaults (computed from size/waterColor*/
-//waterDepth in the constructor), so they're omitted here rather than given
-//fixed values.
-const DEFAULT_OPTIONS: Required<Omit<HexMapOptions, "element" | "waterDepth" | "fogTextureSize" | "riverColorShallow" | "riverColorDeep" | "riverDepth" | "mountainHeight">> = {
-    size: 40,
-    maxPixelRatio: 2,
-    antialias: true,
-    terrainShaderQuality: "full",
-    skyVisible: true,
-    texturesBaseUrl: "textures/",
-    gridVisible: true,
-    gridColor: 0x42322b,
-    gridWidth: 0.04,
-    gridOpacity: 0.35,
-    selectorColor: 0xffff00,
-    pointerColor: 0xeeeeee,
-    treesPerTile: 20,
-    waterColorShallow: LandColor[Land.coastal],
-    waterColorDeep: LandColor[Land.sea],
-    waterWaveAmplitude: 1.6,
-    waterWaveFrequency: 1.0,
-    waterWaveSpeed: 1.0,
-    waterSparkleIntensity: 1.0,
-    waterFresnelIntensity: 1.0,
-    coastalWavesEnabled: true,
-    coastalWaveColor: 0xffffff,
-    coastalWaveCount: 3,
-    coastalWaveSpeed: 0.6,
-    coastalWaveWidth: 0.3,
-    coastalWaveRange: 0.8,
-    coastalWaveDistortion: 0.5,
-    coastalWaveOpacity: 0.85,
-    beachWidth: 0.35,
-    landBlendWidth: 0.5,
-    landBlendEnabled: true,
-    waterCornerRounding: 0.4,
-    coastCurvature: 0.5,
-    landBlendCurvature: 0.5,
-    riverWidth: 0.28,
-    riverBankWidth: 0.14,
-    riverCurvature: 0.5,
-    riverBankColor: 0xa8bf6a,
-    riverFlowSpeed: 1.0,
-    lakeShoreWidth: 0.18,
-    treeModel: "Assets/models/pinia",
-    treeScale: 1,
-    cityModel: "Assets/models/monument",
-    cityScale: 1,
-    grassEnabled: true,
-    grassDensity: 60,
-    grassBladeWidth: 1.2,
-    grassBladeHeight: 7.2,
-    grassWindStrength: 2.5,
-    grassWindSpeed: 1.2,
-    fogTexture: "war-fog.jpg",
-    fogDarkenFactor: 0.45,
-    renderDistance: 2400,
-    lodEnabled: true,
-    lodNearDistance: 900,
-    lodFarDistance: 1650,
-    vegetationRenderDistance: 1450,
-    chunkLodHysteresis: 120,
-    gpuChunkCacheSize: 128,
-    cpuChunkCacheSize: 192
-};
-
 const WORLD_COPY_REFRESH_TASK = "@world-copy-refresh";
-
-function tileVisualSignature(tile: TileInfo | undefined): string {
-    const modifiers = tile?.modifiers ? [...tile.modifiers].sort() : [];
-    const rivers = tile?.rivers
-        ? tile.rivers.map(river => `${river.riverIndex}:${river.riverTileIndex}`).sort()
-        : [];
-    return JSON.stringify([
-        tile?.type ?? null,
-        modifiers,
-        tile?.treeModel ?? null,
-        rivers,
-        Boolean(tile?.city),
-        tile?.city?.name ?? null,
-        tile?.city?.model ?? null
-    ]);
-}
+const INERT_WORLD_SIGNAL = new AbortController().signal;
 
 //----------------------------------------------------------------------------------
 //Public entry point of the library. Owns the renderer/camera/scene/controls (what
@@ -329,16 +116,16 @@ function tileVisualSignature(tile: TileInfo | undefined): string {
 //   map.on("hover", ({x, y, tile}) => ...);
 //----------------------------------------------------------------------------------
 export class HexMap extends EventEmitter {
-    private options: Required<Omit<HexMapOptions, "element" | "waterDepth" | "fogTextureSize" | "riverColorShallow" | "riverColorDeep" | "riverDepth" | "mountainHeight">>
-        & { element: string, waterDepth: number, fogTextureSize: number, riverColorShallow: ColorRepresentation, riverColorDeep: ColorRepresentation, riverDepth: number, mountainHeight: number };
+    private options: ResolvedHexMapOptions;
 
     private canvas: HTMLCanvasElement;
+    private rendererHost!: HexMapRendererHost;
     private renderer!: WebGLRenderer;
     private scene!: ThreeScene;
     private worldRoot!: Group;
     private camera!: PerspectiveCamera;
     private controls!: OrbitControls;
-    private sky!: Sky;
+    private interactions!: HexMapInteractionController;
 
     private mapData!: MapInfo;
     private atlas!: TerrainAtlas;
@@ -354,10 +141,20 @@ export class HexMap extends EventEmitter {
     private worldCopyMaterials: RawShaderMaterial[] = [];
     private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
-    private pressedMovementKeys = new Set<string>();
-    private addedCanvasTabIndex = false;
     private chunkScheduler: WorldChunkScheduler;
-    private readonly frameTasks = new FrameTaskScheduler({ error: error => this.emit("error", error) });
+    private readonly runtimeWork = new RuntimeWorkCoordinator({
+        defaultMaxPendingTasks: 512,
+        defaultMaxPendingWeight: 2048,
+        starvationMs: 1_500
+    });
+    private readonly frameTasks = new FrameTaskScheduler({
+        error: error => this.emit("error", error),
+        maxPendingTasks: 512,
+        maxPendingWeight: 2048,
+        starvationMs: 1_500,
+        coordinator: this.runtimeWork,
+        domain: "frame"
+    });
     private resizeObserver: ResizeObserver | undefined;
     private animationFrameId: number | undefined;
     private disposed = false;
@@ -367,7 +164,10 @@ export class HexMap extends EventEmitter {
     private worldStreamer: WorldStreamer | undefined;
     private worldResidency: ChunkResidencyCoordinator | undefined;
     private worldController: RenderWorldController | undefined;
+    private worldEditing: WorldEditingFacade | undefined;
+    private readonly drainingWorldSessions = new Set<Promise<void>>();
     private worldChunkLayers = new Map<string, WorldChunkLayers>();
+    private readonly worldChunkMountQueue: WorldChunkMountQueue;
     private streamedGrassByChunkId = new Map<string, GrassField>();
     private streamedForestByChunkId = new Map<string, ForestField>();
     private streamedGrassResources: GrassSharedResources | undefined;
@@ -397,8 +197,6 @@ export class HexMap extends EventEmitter {
     private appliedVegetationDensityScale = 1;
     private adaptiveVegetationRevision = 0;
 
-    private mouseDownAt: Point | null = null; // screen coords, used to distinguish click vs. drag
-    private lastHover: Point | null = null;
     private lastSelected: Point | null = null;
 
     //Authoritative renderer-side fog copy. Finite maps use a lazy byte array;
@@ -409,24 +207,21 @@ export class HexMap extends EventEmitter {
 
     constructor(options: HexMapOptions) {
         super();
-        if (!options || typeof options !== "object") throw new TypeError("HexMap options are required");
-        const size = options.size ?? DEFAULT_OPTIONS.size;
-        const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
-        const waterDepth = options.waterDepth ?? size * 0.25;
-        this.options = {
-            ...DEFAULT_OPTIONS,
-            ...options,
-            waterDepth,
-            fogTextureSize: options.fogTextureSize ?? size * 8,
-            riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_OPTIONS.waterColorShallow,
-            riverColorDeep: options.riverColorDeep ?? options.waterColorDeep ?? DEFAULT_OPTIONS.waterColorDeep,
-            riverDepth: options.riverDepth ?? waterDepth * 0.6,
-            mountainHeight: options.mountainHeight ?? size * 0.6,
-            grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
-            grassBladeHeight,
-            grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
-        };
-        this.validateOptions();
+        this.options = resolveHexMapOptions(options);
+        this.worldChunkMountQueue = new WorldChunkMountQueue({
+            frameTasks: this.frameTasks,
+            streamer: () => this.worldStreamer,
+            demandKey: () => this.worldDemandChunkKey,
+            signal: () => this.worldController?.lifecycle.signal,
+            mounted: key => this.worldChunkLayers.has(key),
+            priority: chunk => {
+                const center = this.worldStreamer?.stats;
+                return center && this.worldSource
+                    ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY)
+                    : 0;
+            },
+            mount: chunk => this.mountWorldChunk(chunk)
+        });
         const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
         this.chunkScheduler = new WorldChunkScheduler({
             ...schedulerOptions,
@@ -439,7 +234,9 @@ export class HexMap extends EventEmitter {
                 hysteresis: this.options.chunkLodHysteresis
             },
             gpuCacheSize: this.options.gpuChunkCacheSize,
-            cpuCacheSize: this.options.cpuChunkCacheSize
+            cpuCacheSize: this.options.cpuChunkCacheSize,
+            gpuCacheBytes: this.options.gpuChunkCacheBytes,
+            cpuCacheBytes: this.options.cpuChunkCacheBytes
         });
         this.installBuiltinWorldRenderLayers();
 
@@ -449,12 +246,40 @@ export class HexMap extends EventEmitter {
         }
         this.canvas = el;
 
-        this.setupScene();
-        this.setupCamera();
-        this.setupLights();
-        this.setupSky();
+        this.rendererHost = new HexMapRendererHost({
+            canvas: this.canvas,
+            antialias: this.options.antialias,
+            skyVisible: this.options.skyVisible,
+            contextLost: () => {
+                this.lastFrameTime = undefined;
+                this.emit("contextlost", this.rendererHost.contextStats);
+            },
+            contextRestored: () => {
+                this.lastFrameTime = undefined;
+                this.chunkScheduler.invalidateScene();
+                this.handleResize();
+                this.emit("contextrestored", this.rendererHost.contextStats);
+            }
+        });
+        this.renderer = this.rendererHost.renderer;
+        this.scene = this.rendererHost.scene;
+        this.worldRoot = this.rendererHost.worldRoot;
+        this.camera = this.rendererHost.camera;
         this.setupControls();
         this.setupMarkers();
+        this.interactions = new HexMapInteractionController({
+            canvas: this.canvas,
+            camera: this.camera,
+            controls: this.controls,
+            pointer: this.pointer,
+            size: this.options.size,
+            map: () => this.mapData,
+            logicalGround: point => { this.logicalGround(point); },
+            tile: (x, y) => this.getTile(x, y),
+            select: (x, y) => this.selectTile(x, y),
+            hover: (x, y, tile) => this.emit("hover" satisfies HexMapEventName, { x, y, tile }),
+            click: (x, y, tile) => this.emit("click" satisfies HexMapEventName, { x, y, tile })
+        });
         this.setupEvents();
         this.handleResize();
 
@@ -493,102 +318,9 @@ export class HexMap extends EventEmitter {
         });
     }
 
-    private validateOptions(): void {
-        const positive = (name: string, value: number) => {
-            if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be a positive finite number`);
-        };
-        const nonNegativeInteger = (name: string, value: number) => {
-            if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
-        };
-        positive("size", this.options.size);
-        positive("renderDistance", this.options.renderDistance);
-        positive("maxPixelRatio", this.options.maxPixelRatio);
-        if (this.options.terrainShaderQuality !== "full" && this.options.terrainShaderQuality !== "fast") {
-            throw new RangeError('terrainShaderQuality must be "full" or "fast"');
-        }
-        if (this.options.lodNearDistance < 0 || this.options.lodFarDistance < this.options.lodNearDistance) {
-            throw new RangeError("LOD distances must be non-negative and lodFarDistance must be >= lodNearDistance");
-        }
-        if (this.options.vegetationRenderDistance < 0 || this.options.chunkLodHysteresis < 0) {
-            throw new RangeError("vegetationRenderDistance and chunkLodHysteresis must be non-negative");
-        }
-        nonNegativeInteger("gpuChunkCacheSize", this.options.gpuChunkCacheSize);
-        nonNegativeInteger("cpuChunkCacheSize", this.options.cpuChunkCacheSize);
-        nonNegativeInteger("treesPerTile", this.options.treesPerTile);
-        nonNegativeInteger("grassDensity", this.options.grassDensity);
-        positive("grassBladeWidth", this.options.grassBladeWidth);
-        positive("grassBladeHeight", this.options.grassBladeHeight);
-        if (!Number.isFinite(this.options.treeScale) || this.options.treeScale < 0) {
-            throw new RangeError("treeScale must be a non-negative finite number");
-        }
-        for (const [name, value] of [
-            ["waterCornerRounding", this.options.waterCornerRounding],
-            ["coastCurvature", this.options.coastCurvature],
-            ["landBlendCurvature", this.options.landBlendCurvature],
-            ["coastalWaveWidth", this.options.coastalWaveWidth],
-            ["coastalWaveRange", this.options.coastalWaveRange],
-            ["coastalWaveDistortion", this.options.coastalWaveDistortion],
-            ["coastalWaveOpacity", this.options.coastalWaveOpacity],
-            ["riverCurvature", this.options.riverCurvature],
-            ["lakeShoreWidth", this.options.lakeShoreWidth]
-        ] as const) {
-            if (!Number.isFinite(value) || value < 0 || value > 1) {
-                throw new RangeError(`${name} must be a finite number between 0 and 1`);
-            }
-        }
-    }
-
     //-------------------------------------------------------------------------
     //Scene / renderer / camera / controls
     //-------------------------------------------------------------------------
-    private setupScene(): void {
-        this.scene = new ThreeScene();
-        this.scene.background = new Color(0x9fc9e2);
-        this.worldRoot = new Group();
-        this.worldRoot.name = "hex-map-world-root";
-        this.scene.add(this.worldRoot);
-        this.renderer = new WebGLRenderer({ canvas: this.canvas, antialias: this.options.antialias });
-        this.renderer.toneMapping = ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 0.65;
-    }
-
-    private setupCamera(): void {
-        this.camera = new PerspectiveCamera(60, 1, 10, 100000);
-        this.camera.position.set(900, 500, 1000);
-        this.scene.add(this.camera);
-    }
-
-    private setupLights(): void {
-        const dirLight1 = new DirectionalLight(0xffffff);
-        dirLight1.position.set(1, 1, 1);
-        this.scene.add(dirLight1);
-
-        const dirLight2 = new DirectionalLight(0x002288);
-        dirLight2.position.set(-1, -1, -1);
-        this.scene.add(dirLight2);
-
-        this.scene.add(new AmbientLight(0x222222));
-    }
-
-    private setupSky(): void {
-        this.sky = new Sky();
-        this.sky.visible = this.options.skyVisible;
-        this.sky.scale.setScalar(450000);
-        this.sky.frustumCulled = false;
-
-        const uniforms = this.sky.material.uniforms;
-        uniforms.turbidity.value = 4.0;
-        uniforms.rayleigh.value = 1.7;
-        uniforms.mieCoefficient.value = 0.002;
-        uniforms.mieDirectionalG.value = 0.76;
-
-        const elevation = 24 * Math.PI / 180;
-        const azimuth = 205 * Math.PI / 180;
-        const sun = new Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
-        uniforms.sunPosition.value.copy(sun);
-        this.scene.add(this.sky);
-    }
-
     private setupControls(): void {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         //Left click belongs exclusively to tile selection. World movement is
@@ -688,7 +420,8 @@ export class HexMap extends EventEmitter {
     }
 
     private updateMarkerPositions(): void {
-        if (this.lastHover && this.pointer.visible) this.positionMarker(this.pointer, this.lastHover);
+        const hovered = this.interactions.hoveredTile;
+        if (hovered && this.pointer.visible) this.positionMarker(this.pointer, hovered);
         if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
     }
 
@@ -926,52 +659,46 @@ export class HexMap extends EventEmitter {
 
     private setupEvents(): void {
         window.addEventListener("resize", this.handleResize, { passive: true });
-        // Keyboard navigation belongs to the focused map. Canvas elements are
-        // not focusable by default, so make this one keyboard-addressable while
-        // preserving an explicit tabindex supplied by the host application.
-        if (!this.canvas.hasAttribute("tabindex")) {
-            this.canvas.tabIndex = 0;
-            this.addedCanvasTabIndex = true;
-        }
-        this.canvas.addEventListener("keydown", this.onKeyDown);
-        this.canvas.addEventListener("keyup", this.onKeyUp);
-        this.canvas.addEventListener("blur", this.clearMovementKeys);
-        window.addEventListener("blur", this.clearMovementKeys);
-        this.canvas.addEventListener("mousedown", this.onMouseDown);
-        this.canvas.addEventListener("contextmenu", this.onContextMenu);
-        window.addEventListener("pointermove", this.onPointerMove);
-        window.addEventListener("mouseup", this.onMouseUp);
         if (typeof ResizeObserver !== "undefined") {
             this.resizeObserver = new ResizeObserver(this.handleResize);
             this.resizeObserver.observe(this.canvas);
         }
     }
 
-    private onContextMenu = (event: Event): void => event.preventDefault();
-
     private handleResize = (): void => {
         const width = this.canvas.clientWidth || window.innerWidth;
         const height = this.canvas.clientHeight || window.innerHeight;
         if (width <= 0 || height <= 0) return;
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setPixelRatio(
+        this.rendererHost.resize(
+            width,
+            height,
             Math.min(window.devicePixelRatio, this.options.maxPixelRatio) * this.adaptiveResolutionScale
         );
-        this.renderer.setSize(width, height, false);
     };
 
     private lastFrameTime: number | undefined;
 
     private animate = (t: number): void => {
         if (this.disposed) return;
+        if (this.rendererHost.contextStats.state !== "ready") {
+            this.lastFrameTime = undefined;
+            this.animationFrameId = window.requestAnimationFrame(this.animate);
+            return;
+        }
+        const gpuFrameMs = this.rendererHost.pollGpuFrameMs();
+        const gpuTiming = this.rendererHost.gpuTimingStats;
         const dtS = this.lastFrameTime === undefined ? 0 : (t - this.lastFrameTime) / 1000;
         this.lastFrameTime = t;
         if (dtS > 0 && !document.hidden) {
             const frameTaskStats = this.frameTasks.stats;
             const streamingStats = this.worldStreamer?.stats;
+            const resourceStats = this.chunkScheduler.stats;
             const profile = this.adaptiveStreamingController?.sample({
                 frameMs: dtS * 1000,
+                gpuFrameMs,
+                gpuTimingSupported: gpuTiming.supported,
+                gpuTimingSaturated: gpuTiming.saturated,
+                gpuSampleAgeMs: gpuTiming.lastSampleAgeMs,
                 frameTaskMs: frameTaskStats.lastFrameDurationMs,
                 frameTaskBacklog: frameTaskStats.pendingTasks,
                 oldestFrameTaskMs: frameTaskStats.oldestTaskAgeMs,
@@ -979,17 +706,20 @@ export class HexMap extends EventEmitter {
                 workerBusyRatio: streamingStats && streamingStats.configuredWorkers > 0
                     ? streamingStats.busyWorkers / streamingStats.configuredWorkers
                     : 0,
-                chunkLoadLatencyMs: streamingStats?.averageChunkLoadMs
+                chunkLoadLatencyMs: streamingStats?.averageChunkLoadMs,
+                cpuBudgetExceededBytes: resourceStats.cpuBudgetExceededBytes,
+                gpuBudgetExceededBytes: resourceStats.gpuBudgetExceededBytes
             });
             if (profile) this.applyAdaptiveStreamingProfile(profile);
         }
 
-        this.updateKeyboardMovement(Math.min(dtS, 0.05));
+        this.interactions.update(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.rebaseWorld();
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
+        this.worldChunkMountQueue.retryOne();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
         const grassResources = new Set<GrassSharedResources>();
@@ -999,59 +729,9 @@ export class HexMap extends EventEmitter {
         }
         for (const resources of grassResources) resources.update(dtS);
         this.emit("frame", { t, dtS });
-        this.renderer.render(this.scene, this.camera);
+        this.rendererHost.render();
         this.animationFrameId = window.requestAnimationFrame(this.animate);
     };
-
-    private onKeyDown = (event: KeyboardEvent): void => {
-        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
-        this.pressedMovementKeys.add(event.code);
-        event.preventDefault();
-    };
-
-    private onKeyUp = (event: KeyboardEvent): void => {
-        if (!this.isMovementKey(event.code)) return;
-        this.pressedMovementKeys.delete(event.code);
-        event.preventDefault();
-    };
-
-    private clearMovementKeys = (): void => {
-        this.pressedMovementKeys.clear();
-    };
-
-    private isMovementKey(code: string): boolean {
-        return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
-    }
-
-    private isTextInput(target: EventTarget | null): boolean {
-        if (!(target instanceof HTMLElement)) return false;
-        return target instanceof HTMLInputElement
-            || target instanceof HTMLTextAreaElement
-            || target instanceof HTMLSelectElement
-            || target.isContentEditable;
-    }
-
-    private updateKeyboardMovement(dtS: number): void {
-        if (dtS <= 0 || this.pressedMovementKeys.size === 0) return;
-
-        const forwardAmount = Number(this.pressedMovementKeys.has("KeyW")) - Number(this.pressedMovementKeys.has("KeyS"));
-        const rightAmount = Number(this.pressedMovementKeys.has("KeyD")) - Number(this.pressedMovementKeys.has("KeyA"));
-        if (forwardAmount === 0 && rightAmount === 0) return;
-
-        const forward = this.controls.target.clone().sub(this.camera.position);
-        forward.y = 0;
-        if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
-        else forward.normalize();
-        const right = new Vector3(-forward.z, 0, forward.x);
-        const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
-        if (movement.lengthSq() > 1) movement.normalize();
-
-        const viewDistance = this.camera.position.distanceTo(this.controls.target);
-        const speed = Math.min(900, Math.max(140, viewDistance * 0.9));
-        movement.multiplyScalar(speed * dtS);
-        this.camera.position.add(movement);
-        this.controls.target.add(movement);
-    }
 
     private updateWorldChunkVisibility(): void {
         if (!this.mapData) return;
@@ -1122,92 +802,6 @@ export class HexMap extends EventEmitter {
         else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
     }
 
-    //-------------------------------------------------------------------------
-    //Picking (analytic, ground-plane based - see helpers/picking.ts)
-    //-------------------------------------------------------------------------
-    private onMouseDown = (event: MouseEvent): void => {
-        this.canvas.focus({ preventScroll: true });
-        if (event.button !== 0) {
-            this.mouseDownAt = null;
-            return;
-        }
-        this.mouseDownAt = { x: event.clientX, y: event.clientY };
-    };
-
-    private onPointerMove = (event: MouseEvent): void => {
-        const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
-        if (!ground) {
-            this.pointer.visible = false;
-            this.lastHover = null;
-            return;
-        }
-        this.logicalGround(ground);
-
-        const tileCoords = pickTile(
-            ground,
-            this.options.size,
-            this.mapData?.infinite ? undefined : this.mapData?.w,
-            this.mapData?.infinite ? undefined : this.mapData?.h,
-            this.mapData?.wrapX,
-            this.mapData?.wrapY
-        );
-        if (!tileCoords) {
-            this.pointer.visible = false;
-            this.lastHover = null;
-            return;
-        }
-
-        if (this.lastHover && this.lastHover.x === tileCoords.x && this.lastHover.y === tileCoords.y) return;
-        this.lastHover = tileCoords;
-
-        const tile = this.getTile(tileCoords.x, tileCoords.y);
-        if (!tile) {
-            this.pointer.visible = false;
-            this.lastHover = null;
-            return;
-        }
-
-        this.pointer.visible = true;
-        this.pointer.position.setX(tileCoords.worldX);
-        this.pointer.position.setZ(tileCoords.worldY);
-
-        this.emit("hover" satisfies HexMapEventName, { x: tileCoords.x, y: tileCoords.y, tile });
-    };
-
-    private onMouseUp = (event: MouseEvent): void => {
-        if (event.button !== 0) return;
-        const downAt = this.mouseDownAt;
-        this.mouseDownAt = null;
-        if (!downAt) return;
-
-        // if the pointer moved noticeably, treat this as a camera drag, not a click
-        const dragDistance = Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y);
-        if (dragDistance > 4) return;
-
-        const ground = screenToGround(event.clientX, event.clientY, this.canvas, this.camera);
-        if (!ground) return;
-        this.logicalGround(ground);
-
-        const tileCoords = pickTile(
-            ground,
-            this.options.size,
-            this.mapData?.infinite ? undefined : this.mapData?.w,
-            this.mapData?.infinite ? undefined : this.mapData?.h,
-            this.mapData?.wrapX,
-            this.mapData?.wrapY
-        );
-        if (!tileCoords) return;
-
-        const tile = this.getTile(tileCoords.x, tileCoords.y);
-        if (!tile) return;
-
-        this.selectTile(tileCoords.x, tileCoords.y);
-        this.selector.position.setX(tileCoords.worldX);
-        this.selector.position.setZ(tileCoords.worldY);
-        this.emit("click" satisfies HexMapEventName, { x: tileCoords.x, y: tileCoords.y, tile });
-    };
-
-    //-------------------------------------------------------------------------
     //Public API
     //-------------------------------------------------------------------------
 
@@ -1313,7 +907,10 @@ export class HexMap extends EventEmitter {
 
         this.stopWorldStreaming();
         const revision = ++this.loadRevision;
-        const worldController = new RenderWorldController(source);
+        const worldController = new RenderWorldController(source, this.runtimeWork, {
+            drainTimeoutMs: this.options.worldSessionDrainTimeoutMs,
+            error: error => this.emit("error", error)
+        });
         const residency = worldController.residency;
         this.worldController = worldController;
         this.worldSource = source;
@@ -1329,11 +926,12 @@ export class HexMap extends EventEmitter {
         this.lastStreamingTarget = undefined;
         this.streamingVelocity.set(0, 0);
         this.mapData = source.map;
+        this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
         this.fogStates = new FogStateStore(source.map);
         this.floatingOriginThreshold = threshold;
         this.worldPatternOffset.set(0, 0);
         this.cleanRoutePath();
-        this.lastHover = null;
+        this.interactions.reset();
         this.lastSelected = null;
         this.pointer.visible = false;
         this.selector.visible = false;
@@ -1354,14 +952,15 @@ export class HexMap extends EventEmitter {
             if (source.bounds && !options.initialTile) this.frameMap(source.map);
             else this.positionCameraAtTile(initialTile);
 
-            this.atlas = await this.fetchTerrainAtlas();
-            if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
-            if (!(await this.rebuildTerrain(revision, true))) return;
-            await this.initializeWorldRenderLayers();
-            if (this.disposed || revision !== this.loadRevision || this.worldSource !== source) return;
+            const atlas = await worldController.lifecycle.run(signal => this.fetchTerrainAtlas(signal));
+            if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
+            this.atlas = atlas;
+            if (!(await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true)))) return;
+            if (!(await worldController.lifecycle.run(() => this.initializeWorldRenderLayers(source, revision)))) return;
+            if (!this.isWorldSessionCurrent(source, revision)) return;
 
             const streamer = worldController.startStreaming({
-                chunkLoaded: chunk => this.scheduleWorldChunkMount(chunk),
+                chunkLoaded: chunk => this.worldChunkMountQueue.schedule(chunk),
                 chunkUnloading: chunk => this.unmountWorldChunk(chunk),
                 error: error => this.emit("error", error)
             }, {
@@ -1381,14 +980,14 @@ export class HexMap extends EventEmitter {
             this.worldDemandSignature = this.worldDemandChunkKey;
             this.rebaseWorld();
 
-            const loadedCenter = await streamer.setCenterTile(initialTile.x, initialTile.y);
+            const loadedCenter = await worldController.setCenterTile(initialTile.x, initialTile.y);
             const centerKey = WorldStreamer.key(loadedCenter.chunkX, loadedCenter.chunkY);
             const centerLayers = this.worldChunkLayers.get(centerKey);
-            await Promise.all([
+            await worldController.lifecycle.track(Promise.all([
                 centerLayers?.forestPromise,
                 centerLayers?.cityPromise,
                 ...(centerLayers?.renderLayerPromises?.values() ?? [])
-            ]);
+            ]));
             if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
             this.updateWorldChunkVisibility();
             this.emit("load" satisfies HexMapEventName, undefined);
@@ -1398,9 +997,9 @@ export class HexMap extends EventEmitter {
         }
     }
 
-    private async fetchTerrainAtlas(): Promise<TerrainAtlas> {
+    private async fetchTerrainAtlas(signal?: AbortSignal): Promise<TerrainAtlas> {
         const atlasUrl = new URL("land-atlas.json", new URL(this.options.texturesBaseUrl, window.location.href)).href;
-        const response = await fetch(atlasUrl);
+        const response = await fetch(atlasUrl, { signal });
         if (!response.ok) throw new Error(`Failed to load terrain atlas (${response.status} ${response.statusText})`);
         const atlas = await response.json() as TerrainAtlas;
         if (!atlas || typeof atlas.image !== "string" || atlas.image.length === 0
@@ -1423,19 +1022,17 @@ export class HexMap extends EventEmitter {
         this.controls.update();
     }
 
-    private scheduleWorldChunkMount(chunk: WorldChunk): void {
-        const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
-        if (key === this.worldDemandChunkKey) {
-            this.mountWorldChunk(chunk);
-            return;
+    private runRenderWorldTask<T>(
+        source: WorldSource | undefined,
+        operation: () => PromiseLike<T> | T
+    ): Promise<T> {
+        const controller = this.worldController;
+        if (controller && controller.source === source) return controller.lifecycle.run(operation);
+        try {
+            return Promise.resolve(operation());
+        } catch (reason) {
+            return Promise.reject(reason);
         }
-        const center = this.worldStreamer?.stats;
-        const priority = center && this.worldSource
-            ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY)
-            : 0;
-        this.frameTasks.enqueue(key, priority, () => {
-            if (this.worldStreamer?.hasResident(chunk.chunkX, chunk.chunkY)) this.mountWorldChunk(chunk);
-        });
     }
 
     private mountWorldChunk(chunk: WorldChunk): void {
@@ -1448,7 +1045,10 @@ export class HexMap extends EventEmitter {
         record.renderLayerPromises = new Map();
         record.renderLayerStates = new Map();
         for (const layer of this.worldRenderLayers.values()) {
-            const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
+            const mounted = this.runRenderWorldTask(
+                this.worldSource,
+                () => this.mountRegisteredWorldRenderLayer(layer, key, record)
+            );
             record.renderLayerPromises.set(layer.id, mounted);
             void mounted.catch(error => {
                 if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
@@ -1460,7 +1060,7 @@ export class HexMap extends EventEmitter {
 
     private unmountWorldChunk(chunk: WorldChunk): void {
         const key = WorldStreamer.key(chunk.chunkX, chunk.chunkY);
-        this.frameTasks.cancel(key);
+        this.worldChunkMountQueue.forget(key);
         this.frameTasks.cancel(`vegetation-quality:${key}`);
         const record = this.worldChunkLayers.get(key);
         if (!record) return;
@@ -1691,7 +1291,7 @@ export class HexMap extends EventEmitter {
         const abort = new AbortController();
         record.vegetationAbort = abort;
         record.vegetationSignature = density.signature;
-        record.vegetationPromise = context.source.prepareVegetation({
+        const preparation = context.source.prepareVegetation({
             points: context.points,
             size: this.options.size,
             grassDensity: density.grassDensity,
@@ -1708,7 +1308,10 @@ export class HexMap extends EventEmitter {
             beachWidth: this.options.beachWidth,
             waterCornerRounding: this.options.waterCornerRounding,
             coastCurvature: this.options.coastCurvature
-        }, { priority, signal: abort.signal });
+        }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) });
+        record.vegetationPromise = this.worldController?.source === context.source
+            ? this.worldController.lifecycle.track(preparation)
+            : preparation;
         return record.vegetationPromise;
     }
 
@@ -1809,7 +1412,10 @@ export class HexMap extends EventEmitter {
                 if (this.disposed || revision !== this.adaptiveVegetationRevision
                     || this.worldSource !== source || this.worldChunkLayers.get(key) !== record
                     || record.requestedVegetationSignature !== target.signature) return;
-                void this.rebuildAdaptiveWorldVegetation(key, record, target.signature).catch(reason => {
+                void this.runRenderWorldTask(
+                    source,
+                    () => this.rebuildAdaptiveWorldVegetation(key, record, target.signature)
+                ).catch(reason => {
                     if (this.worldChunkLayers.get(key) === record) this.emit("error", renderLayerError(reason));
                 });
             });
@@ -1855,12 +1461,17 @@ export class HexMap extends EventEmitter {
     private createWorldRenderLayerHost(layerId: string, objectKey: string): WorldRenderLayerHost {
         const source = this.worldSource;
         if (!source || !this.mapData) throw new Error("No world is loaded");
+        const signal = this.worldController?.source === source
+            ? this.worldController.lifecycle.signal
+            : INERT_WORLD_SIGNAL;
+        const isCurrent = (): boolean => !this.disposed && !signal.aborted && this.worldSource === source;
         return {
             map: this.mapData,
             source,
-            root: this.worldRoot,
             tileSize: this.options.size,
+            signal,
             addObject: object => {
+                if (!isCurrent()) return;
                 let byChunk = this.worldRenderLayerObjects.get(layerId);
                 if (!byChunk) {
                     byChunk = new Map();
@@ -1882,24 +1493,31 @@ export class HexMap extends EventEmitter {
                 this.worldRoot.remove(object);
                 this.chunkScheduler.invalidateScene();
             },
-            invalidateVisibility: () => this.chunkScheduler.invalidateScene(),
-            requestWorldCopyRefresh: () => this.refreshWorldCopies()
+            invalidateVisibility: () => {
+                if (isCurrent()) this.chunkScheduler.invalidateScene();
+            },
+            requestWorldCopyRefresh: () => {
+                if (isCurrent()) this.refreshWorldCopies();
+            }
         };
     }
 
     private createWorldRenderChunkContext(
         layerId: string,
         key: string,
-        record: WorldChunkLayers
+        record: WorldChunkLayers,
+        allowClosing = false
     ): WorldRenderChunkContext {
         const revision = record.revision;
+        const host = this.createWorldRenderLayerHost(layerId, key);
         return {
-            ...this.createWorldRenderLayerHost(layerId, key),
+            ...host,
             chunk: record.chunk,
             key,
             points: record.points,
             revision,
-            isCurrent: () => !this.disposed && this.worldChunkLayers.get(key) === record
+            isCurrent: () => (allowClosing || (!this.disposed && !host.signal.aborted))
+                && this.worldChunkLayers.get(key) === record
                 && record.revision === revision
         };
     }
@@ -1924,7 +1542,7 @@ export class HexMap extends EventEmitter {
             }
             throw new WorldRenderLayerLifecycleError(`world render layer "${layer.id}" failed to mount chunk ${key}`, errors);
         }
-        const current = this.worldChunkLayers.get(key) === record
+        const current = context.isCurrent()
             && this.worldRenderLayers.get(layer.id) === layer
             && this.initializedWorldRenderLayers.has(layer.id);
         if (!current || record.renderLayerStates.get(layer.id) === "unmounted") {
@@ -1949,7 +1567,7 @@ export class HexMap extends EventEmitter {
             //cannot execute the layer hook twice.
             record.renderLayerStates.set(layer.id, "unmounted");
             try {
-                layer.unmountChunk(this.createWorldRenderChunkContext(layer.id, key, record));
+                layer.unmountChunk(this.createWorldRenderChunkContext(layer.id, key, record, true));
             } catch (reason) {
                 errors.push(renderLayerError(reason));
             }
@@ -1975,12 +1593,15 @@ export class HexMap extends EventEmitter {
         this.chunkScheduler.invalidateScene();
     }
 
-    private async initializeWorldRenderLayers(): Promise<void> {
+    private async initializeWorldRenderLayers(source: WorldSource, loadRevision: number): Promise<boolean> {
         for (const layer of this.worldRenderLayers.values()) {
+            if (!this.isWorldSessionCurrent(source, loadRevision)) return false;
             if (!this.initializedWorldRenderLayers.has(layer.id)) {
                 await this.initializeRegisteredWorldRenderLayer(layer);
             }
+            if (!this.isWorldSessionCurrent(source, loadRevision)) return false;
         }
+        return true;
     }
 
     private async initializeRegisteredWorldRenderLayer(layer: WorldRenderLayer): Promise<boolean> {
@@ -2054,6 +1675,7 @@ export class HexMap extends EventEmitter {
         const source = this.worldSource;
         const residency = this.worldResidency;
         const controller = this.worldController;
+        const editing = this.worldEditing;
         const errors: Error[] = [];
         this.worldDemandChunkKey = undefined;
         this.worldDemandSignature = undefined;
@@ -2073,8 +1695,16 @@ export class HexMap extends EventEmitter {
             vegetationLodBias: 0
         });
         this.frameTasks.clear();
+        this.worldChunkMountQueue.clear();
+        this.worldEditing = undefined;
+        editing?.dispose();
         try {
-            if (controller) controller.stop(false);
+            if (controller) {
+                controller.stop(false);
+                let draining: Promise<void>;
+                draining = controller.settled.finally(() => this.drainingWorldSessions.delete(draining));
+                this.drainingWorldSessions.add(draining);
+            }
             else {
                 streamer?.dispose(false);
                 residency?.dispose(false);
@@ -2090,7 +1720,6 @@ export class HexMap extends EventEmitter {
             for (const layer of [...this.worldRenderLayers.values()].reverse()) {
                 errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
             }
-            this.worldChunkLayers.delete(key);
         }
         try {
             this.unloadWorldRenderLayers();
@@ -2110,20 +1739,32 @@ export class HexMap extends EventEmitter {
         this.worldLayerRevision += 1;
         for (const record of this.worldChunkLayers.values()) {
             if (record.grass) {
-                this.worldRoot.remove(record.grass);
+                const grass = record.grass;
+                const forgotten: string[] = [];
+                try { this.collectChunkIds(grass, forgotten); } catch (reason) { errors.push(renderLayerError(reason)); }
+                try { this.unindexChunkLayer(grass, this.streamedGrassByChunkId); } catch (reason) { errors.push(renderLayerError(reason)); }
+                this.worldRoot.remove(grass);
                 try {
-                    record.grass.dispose();
+                    grass.dispose();
                 } catch (reason) {
                     errors.push(renderLayerError(reason));
                 }
+                record.grass = undefined;
+                this.chunkScheduler.forget(forgotten);
             }
             if (record.forest) {
-                this.worldRoot.remove(record.forest);
+                const forest = record.forest;
+                const forgotten: string[] = [];
+                try { this.collectChunkIds(forest, forgotten); } catch (reason) { errors.push(renderLayerError(reason)); }
+                try { this.unindexChunkLayer(forest, this.streamedForestByChunkId); } catch (reason) { errors.push(renderLayerError(reason)); }
+                this.worldRoot.remove(forest);
                 try {
-                    record.forest.dispose();
+                    forest.dispose();
                 } catch (reason) {
                     errors.push(renderLayerError(reason));
                 }
+                record.forest = undefined;
+                this.chunkScheduler.forget(forgotten);
             }
         }
         this.worldChunkLayers.clear();
@@ -2146,6 +1787,7 @@ export class HexMap extends EventEmitter {
         } catch (reason) {
             errors.push(renderLayerError(reason));
         }
+        this.chunkScheduler.clear();
         this.reportWorldRenderLayerErrors("world streaming cleanup encountered errors", errors);
     }
 
@@ -2406,12 +2048,22 @@ export class HexMap extends EventEmitter {
     public async registerWorldRenderLayer(layer: WorldRenderLayer): Promise<void> {
         if (this.disposed) throw new Error("HexMap has been disposed");
         this.worldRenderLayers.register(layer);
+        const registrationSource = this.worldSource;
+        const registrationController = this.worldController?.source === registrationSource
+            ? this.worldController
+            : undefined;
         try {
-            if (!this.worldSource || !this.mapData) return;
-            if (!(await this.initializeRegisteredWorldRenderLayer(layer))) return;
+            if (!registrationSource || !this.mapData) return;
+            if (!(await this.runRenderWorldTask(
+                registrationSource,
+                () => this.initializeRegisteredWorldRenderLayer(layer)
+            ))) return;
             const mounts: Promise<void>[] = [];
             for (const [key, record] of this.worldChunkLayers) {
-                const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
+                const mounted = this.runRenderWorldTask(
+                    registrationSource,
+                    () => this.mountRegisteredWorldRenderLayer(layer, key, record)
+                );
                 record.renderLayerPromises ??= new Map();
                 record.renderLayerPromises.set(layer.id, mounted);
                 mounts.push(mounted);
@@ -2420,6 +2072,11 @@ export class HexMap extends EventEmitter {
             this.refreshWorldCopies();
             this.updateWorldChunkVisibility();
         } catch (reason) {
+            // A render-world replacement cancels this generation but the
+            // registered layer itself belongs to HexMap and remains available
+            // for initialization in the next world.
+            if (!this.disposed && registrationController && !registrationController.lifecycle.active
+                && this.worldRenderLayers.get(layer.id) === layer) return;
             const errors = [renderLayerError(reason)];
             try {
                 this.unregisterWorldRenderLayer(layer.id);
@@ -2475,32 +2132,27 @@ export class HexMap extends EventEmitter {
     //Pure gameplay state such as `unit` needs no GPU work; terrain, rivers,
     //vegetation and cities are rebuilt locally and the returned promise settles
     //after their asynchronous models have finished (or been superseded).
+    private currentWorldEditingFacade(): WorldEditingFacade | undefined {
+        if (this.worldEditing?.source === this.worldSource) return this.worldEditing;
+        if (!this.worldSource || !this.mapData) return undefined;
+        this.worldEditing?.dispose();
+        this.worldEditing = new WorldEditingFacade(this.worldSource, this.mapData, {
+            visualSignature: worldTileVisualSignature
+        });
+        return this.worldEditing;
+    }
+
     public setTileOverride(x: number, y: number, changes: WorldTileOverride): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
-        const source = this.worldSource;
-        if (!source || !isMutableWorldSource(source)) {
-            return Promise.reject(new Error("The current world source does not support tile overrides"));
-        }
-        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
-            return Promise.reject(new RangeError("tile override coordinates must be safe integers"));
-        }
         try {
-            assertWorldTileOverride(changes);
+            const result = this.currentWorldEditingFacade()?.setTileOverride(x, y, changes);
+            if (!result) throw new Error("The current world source does not support tile overrides");
+            return result.dirtyTiles.length === 0
+                ? Promise.resolve()
+                : this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source);
         } catch (reason) {
             return Promise.reject(reason);
         }
-        const point = normalizeMapCoordinates(this.mapData, x, y);
-        if (!point) return Promise.reject(new RangeError("tile override coordinates are outside the world bounds"));
-        const visualBefore = tileVisualSignature(getMapTile(this.mapData, point.x, point.y));
-        try {
-            source.setTileOverride(point.x, point.y, changes);
-        } catch (reason) {
-            return Promise.reject(reason);
-        }
-        if (tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) === visualBefore) {
-            return Promise.resolve();
-        }
-        return this.enqueueTileRenderRefresh(point, source);
     }
 
     //Validates an editor-sized change set before dispatching it, then
@@ -2509,60 +2161,39 @@ export class HexMap extends EventEmitter {
     //mutation atomic; the per-tile fallback preserves source compatibility.
     public setTileOverrides(changes: readonly WorldTileOverrideChange[]): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
-        const source = this.worldSource;
-        if (!source || !isMutableWorldSource(source)) {
-            return Promise.reject(new Error("The current world source does not support tile overrides"));
-        }
-        if (!Array.isArray(changes)) return Promise.reject(new TypeError("tile overrides must be an array"));
-
-        const normalized: WorldTileOverrideChange[] = [];
-        const before = new Map<string, { point: Point; signature: string }>();
-        for (const change of changes) {
-            if (!change || typeof change !== "object" || !Number.isSafeInteger(change.x)
-                || !Number.isSafeInteger(change.y)) {
-                return Promise.reject(new RangeError("tile override coordinates must be safe integers"));
-            }
-            try {
-                assertWorldTileOverride(change.changes);
-            } catch (reason) {
-                return Promise.reject(reason);
-            }
-            const point = normalizeMapCoordinates(this.mapData, change.x, change.y);
-            if (!point) return Promise.reject(new RangeError("tile override coordinates are outside the world bounds"));
-            const key = `${point.x},${point.y}`;
-            if (!before.has(key)) {
-                before.set(key, { point, signature: tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) });
-            }
-            normalized.push({ x: point.x, y: point.y, changes: change.changes });
-        }
-
         try {
-            if (source.setTileOverrides) source.setTileOverrides(normalized);
-            else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
+            const result = this.currentWorldEditingFacade()?.setTileOverrides(changes);
+            if (!result) throw new Error("The current world source does not support tile overrides");
+            return result.dirtyTiles.length === 0
+                ? Promise.resolve()
+                : this.enqueueTileRenderRefreshes(result.dirtyTiles, result.source);
         } catch (reason) {
             return Promise.reject(reason);
         }
-        const dirty = [...before.values()]
-            .filter(({ point, signature }) => tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) !== signature)
-            .map(({ point }) => point);
-        return dirty.length === 0 ? Promise.resolve() : this.enqueueTileRenderRefreshes(dirty, source);
     }
 
     public clearTileOverride(x: number, y: number): Promise<boolean> {
         if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+        try {
+            const result = this.currentWorldEditingFacade()?.clearTileOverride(x, y);
+            if (!result) throw new Error("The current world source does not support tile overrides");
+            if (!result.changed || result.dirtyTiles.length === 0) return Promise.resolve(result.changed);
+            return this.enqueueTileRenderRefresh(result.dirtyTiles[0], result.source).then(() => true);
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
+    }
+
+    public refreshWorldTiles(points: readonly Point[]): Promise<void> {
+        if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+        if (!Array.isArray(points) || points.some(point => !point
+            || !Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y))) {
+            return Promise.reject(new TypeError("world refresh points must use safe integer coordinates"));
+        }
         const source = this.worldSource;
-        if (!source || !isMutableWorldSource(source)) {
-            return Promise.reject(new Error("The current world source does not support tile overrides"));
-        }
-        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return Promise.resolve(false);
-        const point = normalizeMapCoordinates(this.mapData, x, y);
-        if (!point) return Promise.resolve(false);
-        const visualBefore = tileVisualSignature(getMapTile(this.mapData, point.x, point.y));
-        if (!source.clearTileOverride(point.x, point.y)) return Promise.resolve(false);
-        if (tileVisualSignature(getMapTile(this.mapData, point.x, point.y)) === visualBefore) {
-            return Promise.resolve(true);
-        }
-        return this.enqueueTileRenderRefresh(point, source).then(() => true);
+        if (!source || points.length === 0) return Promise.resolve();
+        const unique = new Map(points.map(point => [`${point.x},${point.y}`, { x: point.x, y: point.y }]));
+        return this.enqueueTileRenderRefreshes([...unique.values()], source);
     }
 
     private enqueueTileRenderRefresh(point: Point, source: WorldSource): Promise<void> {
@@ -2571,15 +2202,19 @@ export class HexMap extends EventEmitter {
 
     private enqueueTileRenderRefreshes(points: readonly Point[], source: WorldSource): Promise<void> {
         const loadRevision = this.loadRevision;
-        const refresh = this.worldTileUpdateQueue.then(() => {
-            if (this.disposed || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+        const controller = this.worldController;
+        const queued = this.worldTileUpdateQueue.then(() => {
+            if (!this.isWorldSessionCurrent(source, loadRevision)) return;
             return this.refreshTileOverridesRendering(points, source, loadRevision);
         });
+        const refresh = controller?.source === source
+            ? controller.lifecycle.track(queued)
+            : queued;
         this.worldTileUpdateQueue = refresh.catch(() => undefined);
         return refresh;
     }
 
-    private async refreshTileOverrideRendering(
+    private refreshTileOverrideRendering(
         point: Point,
         source: WorldSource,
         loadRevision: number
@@ -2593,7 +2228,7 @@ export class HexMap extends EventEmitter {
         loadRevision: number
     ): Promise<void> {
         const streamer = this.worldStreamer;
-        if (!streamer || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+        if (!streamer || !this.isWorldSessionCurrent(source, loadRevision)) return;
         const residents = new Map(streamer.residentChunks.map(chunk => [
             WorldStreamer.key(chunk.chunkX, chunk.chunkY),
             chunk
@@ -2629,11 +2264,13 @@ export class HexMap extends EventEmitter {
         await Promise.all(refreshable.flatMap(layer => keys.map(key =>
             this.worldChunkLayers.get(key)?.renderLayerPromises?.get(layer.id)
         )));
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return;
         for (const layer of refreshable) {
             await layer.refreshTiles?.({
                 ...this.createWorldRenderLayerHost(layer.id, "@world"),
                 tiles: [...affectedTiles.values()]
             });
+            if (!this.isWorldSessionCurrent(source, loadRevision)) return;
         }
 
         const remounted = layers.filter(layer => !layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
@@ -2662,9 +2299,11 @@ export class HexMap extends EventEmitter {
             builds.push(record?.cityPromise, record?.forestPromise, ...(record?.renderLayerPromises?.values() ?? []));
         }
         await Promise.all(builds);
-        if (this.disposed || this.worldSource !== source || this.loadRevision !== loadRevision) return;
+        if (!this.isWorldSessionCurrent(source, loadRevision)) return;
         this.updateWorldChunkVisibility();
     }
+
+    private isWorldSessionCurrent(source: WorldSource, loadRevision: number): boolean { return !this.disposed && this.worldSource === source && this.loadRevision === loadRevision; }
 
     //-------------------------------------------------------------------------
     //Fog of war (see objects/FogOfWar.ts) - updates one tile's terrain, grass
@@ -2788,7 +2427,9 @@ export class HexMap extends EventEmitter {
         if (signature === this.worldDemandSignature) return;
         this.worldDemandChunkKey = key;
         this.worldDemandSignature = signature;
-        void this.worldStreamer.setCenterTile(tile.x, tile.y, predictedTile).catch(error => {
+        const demand = this.worldController?.setCenterTile(tile.x, tile.y, predictedTile);
+        if (!demand) return;
+        void demand.catch(error => {
             if (error instanceof Error && error.name !== "AbortError") this.emit("error", error);
         });
     }
@@ -3272,6 +2913,13 @@ export class HexMap extends EventEmitter {
         return this.chunkScheduler.stats;
     }
 
+    public get resourceBudget(): ResourceBudgetView { return this.chunkScheduler.resourceBudget; }
+
+    public createResourceAccount(label: string): ResourceBudgetAccount {
+        if (this.disposed) throw new Error("HexMap has been disposed");
+        return this.chunkScheduler.createResourceAccount(label);
+    }
+
     public get worldStreamingStats(): Readonly<WorldStreamingStats> | undefined {
         return this.worldStreamer?.stats;
     }
@@ -3290,6 +2938,30 @@ export class HexMap extends EventEmitter {
 
     public get adaptiveStreamingStats(): Readonly<AdaptiveStreamingStats> | undefined {
         return this.adaptiveStreamingController?.stats;
+    }
+
+    public get gpuTimingStats(): Readonly<WebGlGpuTimerStats> {
+        return this.rendererHost.gpuTimingStats;
+    }
+
+    public get webGlContextStats(): Readonly<WebGlContextStats> {
+        return this.rendererHost.contextStats;
+    }
+
+    public get worldEditingStats(): Readonly<WorldEditingStats> | undefined {
+        return this.worldEditing?.stats;
+    }
+
+    public get workCoordinator(): RuntimeWorkCoordinator {
+        return this.runtimeWork;
+    }
+
+    public get workStats(): Readonly<RuntimeWorkCoordinatorStats> {
+        return this.runtimeWork.stats;
+    }
+
+    public get settled(): Promise<void> {
+        return Promise.all([...this.drainingWorldSessions]).then(() => undefined);
     }
 
     public sampleAdaptiveStreaming(sample: AdaptiveStreamingSample): Readonly<AdaptiveStreamingProfile> | undefined {
@@ -3342,6 +3014,8 @@ export class HexMap extends EventEmitter {
         return this.camera;
     }
 
+    public get interactionStats(): Readonly<HexMapInteractionStats> { return this.interactions.stats; }
+
     public getCameraTarget(target = new Vector3()): Vector3 {
         target.copy(this.controls.target);
         target.x += this.renderOrigin.x;
@@ -3385,23 +3059,12 @@ export class HexMap extends EventEmitter {
         if (this.animationFrameId !== undefined) window.cancelAnimationFrame(this.animationFrameId);
 
         window.removeEventListener("resize", this.handleResize);
-        this.canvas.removeEventListener("keydown", this.onKeyDown);
-        this.canvas.removeEventListener("keyup", this.onKeyUp);
-        this.canvas.removeEventListener("blur", this.clearMovementKeys);
-        window.removeEventListener("blur", this.clearMovementKeys);
-        this.canvas.removeEventListener("mousedown", this.onMouseDown);
-        this.canvas.removeEventListener("contextmenu", this.onContextMenu);
-        window.removeEventListener("pointermove", this.onPointerMove);
-        window.removeEventListener("mouseup", this.onMouseUp);
         this.resizeObserver?.disconnect();
-        this.clearMovementKeys();
-        if (this.addedCanvasTabIndex && this.canvas.getAttribute("tabindex") === "0") {
-            this.canvas.removeAttribute("tabindex");
-        }
+        this.interactions.dispose();
 
         this.cleanRoutePath();
         this.clearWorldCopies();
-        this.chunkScheduler.clear();
+        this.chunkScheduler.dispose();
         if (this.terrain) {
             this.worldRoot.remove(this.terrain);
             this.terrain.dispose();
@@ -3420,53 +3083,15 @@ export class HexMap extends EventEmitter {
         (this.selector.material as Material).dispose();
         this.pointer.geometry.dispose();
         (this.pointer.material as Material).dispose();
-        this.sky.geometry.dispose();
-        this.sky.material.dispose();
         this.controls.dispose();
-        this.renderer.renderLists.dispose();
-        this.renderer.dispose();
+        this.rendererHost.dispose();
+        this.frameTasks.dispose();
+        this.runtimeWork.dispose();
         this.removeAllListeners();
     }
-}
 
-export interface WorldLoadOptions {
-    source: WorldSource;
-    initialTile?: Point;
-    loadRadius?: number;
-    retentionRadius?: number;
-    maxResidentChunks?: number;
-    maxRetries?: number;
-    retryBaseDelayMs?: number;
-    frameBudgetMs?: number;
-    maxMountsPerFrame?: number;
-    predictionSeconds?: number;
-    predictionMaxChunks?: number;
-    floatingOriginThreshold?: number;
-    adaptiveStreaming?: boolean;
-    targetFrameMs?: number;
-    adaptiveMinWorkerCount?: number;
-    adaptiveDegradeFrames?: number;
-    adaptiveRecoverFrames?: number;
-    adaptiveCooldownFrames?: number;
-}
-
-interface WorldChunkLayers {
-    chunk: WorldChunk;
-    points: readonly Point[];
-    revision: number;
-    grass?: GrassField;
-    grassBuildRevision?: number;
-    forest?: ForestField;
-    forestBuildRevision?: number;
-    cityPromise?: Promise<void>;
-    forestPromise?: Promise<void>;
-    vegetationPromise?: Promise<WorldVegetationLayout | undefined>;
-    vegetationAbort?: AbortController;
-    vegetationSignature?: string;
-    requestedVegetationScale?: number;
-    requestedVegetationSignature?: string;
-    grassVegetationSignature?: string;
-    forestVegetationSignature?: string;
-    renderLayerPromises?: Map<string, Promise<void>>;
-    renderLayerStates?: Map<string, "mounting" | "mounted" | "unmounted">;
+    public async disposeAsync(): Promise<void> {
+        this.dispose();
+        await this.settled;
+    }
 }

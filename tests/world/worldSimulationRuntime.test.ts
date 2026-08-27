@@ -87,6 +87,30 @@ describe("WorldSimulationRuntime", () => {
         expect(runtime.getEntity("safe")).toBeDefined();
     });
 
+    test("reports bounded operation-queue pressure immediately and after drain", async () => {
+        let resolveLoad!: (value: undefined) => void;
+        const load = new Promise<undefined>(resolve => { resolveLoad = resolve; });
+        const runtime = new WorldSimulationRuntime<State>({
+            maxQueuedOperations: 1,
+            store: {
+                load: () => load,
+                save: () => Promise.resolve(),
+                delete: () => Promise.resolve(),
+                flush: () => Promise.resolve(),
+                dispose() {}
+            }
+        });
+
+        const first = runtime.wakeChunk(0, 0);
+        expect(runtime.stats.queuedOperations).toBe(1);
+        await expect(runtime.wakeChunk(1, 0)).rejects.toMatchObject({ name: "WorkQueueBackpressureError" });
+        expect(runtime.stats).toMatchObject({ queuedOperations: 1, shedOperations: 1 });
+        resolveLoad(undefined);
+        await first;
+        await Promise.resolve();
+        expect(runtime.stats).toMatchObject({ queuedOperations: 0, shedOperations: 1 });
+    });
+
     test("rejects malformed snapshot entities atomically", async () => {
         const base = {
             version: 1 as const,
@@ -204,6 +228,35 @@ describe("WorldSimulationRuntime", () => {
         const second = new WorldSimulationRuntime<State>({ chunkSize: 10, store });
         await second.wakeChunk(5, 0);
         expect(second.getEntity("sleeper")).toEqual(entity("sleeper", 52, 3));
+    });
+
+    test("keeps restored simulation time monotonic when an entity enters a new chunk", async () => {
+        const store = new MemorySimulationChunkStore<State>();
+        const first = new WorldSimulationRuntime<State>({
+            chunkSize: 10, activeTickIntervalSeconds: 1, backgroundTickIntervalSeconds: 1, store
+        });
+        first.addEntity(entity("traveler", 9, 2));
+        await first.advance(5);
+        await first.flush();
+
+        const second = new WorldSimulationRuntime<State>({
+            chunkSize: 10, activeTickIntervalSeconds: 1, backgroundTickIntervalSeconds: 1, store
+        });
+        await second.restoreStoredChunks();
+        const elapsedSeconds: number[] = [];
+        second.registerSystem({
+            id: "move-after-restore",
+            update(context) {
+                elapsedSeconds.push(context.elapsedSeconds);
+                const traveler = context.entities.find(candidate => candidate.id === "traveler");
+                if (traveler?.x === 9) context.moveEntity("traveler", 10, 2);
+            }
+        });
+
+        await second.advance(1);
+        await second.advance(1);
+        expect(elapsedSeconds).toEqual([6, 7]);
+        expect(second.stats.elapsedSeconds).toBe(7);
     });
 
     test("normalizes toroidal entities and limits catch-up work", async () => {

@@ -1,6 +1,12 @@
 import { PackedWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
 import { WorldVegetationGenerationOptions, WorldVegetationLayout } from "./generateVegetation";
 import { WorldGeneratorClient } from "./WorldGeneratorClient";
+import {
+    PriorityTaskQueue,
+    WorkLane,
+    WorkQueueBackpressureError
+} from "../runtime/PriorityTaskQueue";
+import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
@@ -15,11 +21,19 @@ export interface WorldGeneratorPoolOptions {
     workerOptions?: WorkerOptions;
     clientFactory?: () => ChunkGeneratorClient;
     reservedChunkWorkers?: number;
+    maxQueuedTasks?: number;
+    maxQueuedWeight?: number;
+    starvationMs?: number;
+    now?: () => number;
+    coordinator?: RuntimeWorkCoordinator;
+    domain?: string;
 }
 
 export interface ChunkRequestOptions {
     priority?: number;
     signal?: AbortSignal;
+    lane?: WorkLane;
+    weight?: number;
 }
 
 export interface WorldGeneratorPoolStats {
@@ -34,12 +48,17 @@ export interface WorldGeneratorPoolStats {
     busyVegetationWorkers: number;
     averageChunkMs: number;
     averageVegetationMs: number;
+    queuedWeight: number;
+    oldestQueuedMs: number;
+    shedTasks: number;
+    starvationPromotions: number;
+    workerFailures: number;
+    clientFactoryFailures: number;
 }
 
 interface QueuedTask {
     kind: "chunk" | "vegetation";
-    sequence: number;
-    priority: number;
+    queueId?: number;
     options: WorldChunkGenerationOptions | WorldVegetationGenerationOptions;
     signal?: AbortSignal;
     resolve(result: PackedWorldChunk | WorldVegetationLayout): void;
@@ -52,6 +71,7 @@ interface WorkerSlot {
     client: ChunkGeneratorClient;
     busy: boolean;
     taskKind?: QueuedTask["kind"];
+    task?: QueuedTask;
 }
 
 function abortError(): Error {
@@ -72,8 +92,7 @@ function defaultPoolSize(maxWorkers: number): number {
 export class WorldGeneratorPool {
     private readonly slots: WorkerSlot[];
     private readonly clientFactory: () => ChunkGeneratorClient;
-    private readonly queue: QueuedTask[] = [];
-    private sequence = 0;
+    private readonly queue: PriorityTaskQueue<QueuedTask>;
     private completed = 0;
     private disposed = false;
     private readonly maxWorkers: number;
@@ -81,6 +100,11 @@ export class WorldGeneratorPool {
     private desiredSize: number;
     private averageChunkMs = 0;
     private averageVegetationMs = 0;
+    private workerFailures = 0;
+    private clientFactoryFailures = 0;
+    private readonly coordinatorSignal: AbortSignal | undefined;
+    private readonly coordinatorAbort: (() => void) | undefined;
+    private readonly workCoordinator: RuntimeWorkCoordinator | undefined;
 
     constructor(workerUrl: string | URL, options: WorldGeneratorPoolOptions = {}) {
         this.maxWorkers = options.maxWorkers ?? 8;
@@ -96,7 +120,33 @@ export class WorldGeneratorPool {
         }
         this.clientFactory = options.clientFactory
             ?? (() => new WorldGeneratorClient(workerUrl, options.workerOptions ?? { type: "module" }));
-        this.slots = Array.from({ length: size }, () => ({ client: this.clientFactory(), busy: false }));
+        const queueOptions = {
+            maxPendingTasks: options.maxQueuedTasks ?? 512,
+            maxPendingWeight: options.maxQueuedWeight ?? 1024,
+            starvationMs: options.starvationMs,
+            now: options.now
+        };
+        this.workCoordinator = options.coordinator;
+        this.queue = options.coordinator
+            ? options.coordinator.createQueue<QueuedTask>(options.domain ?? "worker", queueOptions)
+            : new PriorityTaskQueue<QueuedTask>(queueOptions);
+        this.coordinatorSignal = options.coordinator?.signal;
+        this.coordinatorAbort = this.coordinatorSignal ? () => this.dispose() : undefined;
+        this.coordinatorSignal?.addEventListener("abort", this.coordinatorAbort!, { once: true });
+        const initialSlots: WorkerSlot[] = [];
+        try {
+            for (let index = 0; index < size; index += 1) {
+                initialSlots.push({ client: this.createClient(), busy: false });
+            }
+        } catch (reason) {
+            for (const slot of initialSlots) {
+                try { slot.client.dispose(); } catch { /* constructor cleanup is best effort */ }
+            }
+            if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
+            this.workCoordinator?.releaseQueue(this.queue);
+            throw reason;
+        }
+        this.slots = initialSlots;
     }
 
     public generateChunk(
@@ -108,8 +158,6 @@ export class WorldGeneratorPool {
         return new Promise<PackedWorldChunk>((resolve, reject) => {
             const task: QueuedTask = {
                 kind: "chunk",
-                sequence: this.sequence++,
-                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
                 options,
                 signal: request.signal,
                 resolve: result => resolve(result as PackedWorldChunk),
@@ -119,15 +167,20 @@ export class WorldGeneratorPool {
             if (request.signal) {
                 task.abort = () => {
                     if (task.settled) return;
-                    task.settled = true;
-                    const index = this.queue.indexOf(task);
-                    if (index >= 0) this.queue.splice(index, 1);
-                    reject(abortError());
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
                 };
                 request.signal.addEventListener("abort", task.abort, { once: true });
             }
-            this.queue.push(task);
-            this.queue.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "visible",
+                weight: request.weight ?? 1,
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError("World chunk request was shed")));
+            }
             this.dispatch();
         });
     }
@@ -141,8 +194,6 @@ export class WorldGeneratorPool {
         return new Promise<WorldVegetationLayout>((resolve, reject) => {
             const task: QueuedTask = {
                 kind: "vegetation",
-                sequence: this.sequence++,
-                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
                 options,
                 signal: request.signal,
                 resolve: result => resolve(result as WorldVegetationLayout),
@@ -152,21 +203,27 @@ export class WorldGeneratorPool {
             if (request.signal) {
                 task.abort = () => {
                     if (task.settled) return;
-                    task.settled = true;
-                    const index = this.queue.indexOf(task);
-                    if (index >= 0) this.queue.splice(index, 1);
-                    reject(abortError());
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
                 };
                 request.signal.addEventListener("abort", task.abort, { once: true });
             }
-            this.queue.push(task);
-            this.queue.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "prefetch",
+                weight: request.weight ?? Math.max(1, Math.ceil((options.points?.length ?? 0) / 256)),
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError("Vegetation request was shed")));
+            }
             this.dispatch();
         });
     }
 
     public get stats(): Readonly<WorldGeneratorPoolStats> {
-        const queued = this.queue.filter(task => !task.settled && !task.signal?.aborted);
+        const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
+        const queueStats = this.queue.stats;
         return {
             workers: this.slots.length,
             configuredWorkers: this.desiredSize,
@@ -178,7 +235,13 @@ export class WorldGeneratorPool {
             busyChunkWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "chunk").length,
             busyVegetationWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "vegetation").length,
             averageChunkMs: this.averageChunkMs,
-            averageVegetationMs: this.averageVegetationMs
+            averageVegetationMs: this.averageVegetationMs,
+            queuedWeight: queueStats.pendingWeight,
+            oldestQueuedMs: queueStats.oldestTaskAgeMs,
+            shedTasks: queueStats.shedTasks,
+            starvationPromotions: queueStats.starvationPromotions,
+            workerFailures: this.workerFailures,
+            clientFactoryFailures: this.clientFactoryFailures
         };
     }
 
@@ -188,7 +251,7 @@ export class WorldGeneratorPool {
             throw new RangeError(`worker pool size must be an integer between 1 and ${this.maxWorkers}`);
         }
         this.desiredSize = size;
-        this.reconcileSize();
+        this.reconcileSize(true);
         this.dispatch();
         return this.desiredSize;
     }
@@ -196,30 +259,52 @@ export class WorldGeneratorPool {
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
+        if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
         const error = new Error("WorldGeneratorPool was disposed");
-        for (const task of this.queue.splice(0)) this.finishTask(task, () => task.reject(error));
-        for (const slot of this.slots) slot.client.dispose();
+        this.queue.clear(error);
+        this.workCoordinator?.releaseQueue(this.queue, false);
+        for (const slot of this.slots) {
+            if (slot.task) this.finishTask(slot.task, () => slot.task!.reject(error));
+            try { slot.client.dispose(); } catch { /* continue releasing the remaining workers */ }
+        }
     }
 
     private dispatch(): void {
         if (this.disposed) return;
         for (const slot of this.slots) {
             if (slot.busy) continue;
-            // A Worker can enter an error state after its last request has
-            // settled. In that idle-error window there is no rejected pool
-            // task whose handler could replace the client, so never dispatch
-            // new work through a client that already reports itself disposed.
-            if (slot.client.isDisposed) slot.client = this.clientFactory();
             const task = this.takeNextTask();
             if (!task) return;
+            // Client construction may fail independently of the task. Reject
+            // one admitted request, leave the slot idle, and retry creation on
+            // the next dispatch instead of leaking the removed queue entry.
+            if (slot.client.isDisposed) {
+                const replacementError = this.replaceDisposedClient(slot);
+                if (replacementError) {
+                    this.finishTask(task, () => task.reject(replacementError));
+                    if (this.slots.every(candidate => candidate.client.isDisposed)) {
+                        this.queue.clear(replacementError);
+                    }
+                    continue;
+                }
+            }
             slot.busy = true;
             slot.taskKind = task.kind;
+            slot.task = task;
             const started = typeof performance === "undefined" ? Date.now() : performance.now();
-            const pending = task.kind === "chunk"
-                ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
-                : slot.client.generateVegetation
-                    ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
-                    : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+            // A custom client is allowed to fail synchronously. Preserve the
+            // existing immediate dispatch contract, but normalize a throw to
+            // a rejected promise so slot cleanup always runs.
+            let pending: Promise<PackedWorldChunk | WorldVegetationLayout>;
+            try {
+                pending = task.kind === "chunk"
+                    ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
+                    : slot.client.generateVegetation
+                        ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
+                        : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+            } catch (reason) {
+                pending = Promise.reject(reason);
+            }
             void pending.then(
                 result => {
                     if (!task!.settled) {
@@ -232,37 +317,32 @@ export class WorldGeneratorPool {
                         const error = reason instanceof Error ? reason : new Error(String(reason));
                         this.finishTask(task!, () => task!.reject(error));
                     }
-                    if (!this.disposed && slot.client.isDisposed) slot.client = this.clientFactory();
+                    if (slot.client.isDisposed) this.workerFailures += 1;
                 }
             ).finally(() => {
                 const finished = typeof performance === "undefined" ? Date.now() : performance.now();
                 this.recordDuration(task!.kind, Math.max(0, finished - started));
                 slot.busy = false;
                 slot.taskKind = undefined;
-                this.reconcileSize();
+                slot.task = undefined;
+                this.reconcileSize(false);
                 this.dispatch();
             });
         }
     }
 
     private takeNextTask(): QueuedTask | undefined {
-        for (let index = this.queue.length - 1; index >= 0; index -= 1) {
-            const task = this.queue[index];
-            if (!task.settled && !task.signal?.aborted) continue;
-            this.queue.splice(index, 1);
-            if (!task.settled) this.finishTask(task, () => task.reject(abortError()));
-        }
-        if (this.queue.length === 0) return undefined;
         const activeWorkers = Math.max(1, Math.min(this.desiredSize, this.slots.length));
         const maximumVegetation = activeWorkers === 1
             ? 1
             : Math.max(1, activeWorkers - this.reservedChunkWorkers);
         const busyVegetation = this.slots.filter(candidate =>
             candidate.busy && candidate.taskKind === "vegetation").length;
-        const index = busyVegetation >= maximumVegetation
-            ? this.queue.findIndex(task => task.kind === "chunk")
-            : 0;
-        return index < 0 ? undefined : this.queue.splice(index, 1)[0];
+        const task = this.queue.take(busyVegetation >= maximumVegetation
+            ? candidate => candidate.kind === "chunk"
+            : undefined);
+        if (task) task.queueId = undefined;
+        return task;
     }
 
     private recordDuration(kind: QueuedTask["kind"], durationMs: number): void {
@@ -283,7 +363,29 @@ export class WorldGeneratorPool {
         settle();
     }
 
-    private reconcileSize(): void {
+    private replaceDisposedClient(slot: WorkerSlot): Error | undefined {
+        try {
+            slot.client = this.createClient();
+            return undefined;
+        } catch (reason) {
+            this.clientFactoryFailures += 1;
+            return reason instanceof Error ? reason : new Error(String(reason));
+        }
+    }
+
+    private createClient(): ChunkGeneratorClient {
+        const client = this.clientFactory();
+        if (!client || typeof client.generateChunk !== "function" || typeof client.dispose !== "function") {
+            throw new TypeError("clientFactory must return a chunk generator client");
+        }
+        if (client.isDisposed) {
+            try { client.dispose(); } catch { /* invalid clients still need best-effort cleanup */ }
+            throw new Error("clientFactory returned an already disposed client");
+        }
+        return client;
+    }
+
+    private reconcileSize(throwOnFactoryFailure: boolean): void {
         if (this.disposed) return;
         while (this.slots.length > this.desiredSize) {
             let index = -1;
@@ -295,10 +397,16 @@ export class WorldGeneratorPool {
             }
             if (index < 0) break;
             const [slot] = this.slots.splice(index, 1);
-            slot.client.dispose();
+            try { slot.client.dispose(); } catch { /* continue shrinking the pool */ }
         }
         while (this.slots.length < this.desiredSize) {
-            this.slots.push({ client: this.clientFactory(), busy: false });
+            try {
+                this.slots.push({ client: this.createClient(), busy: false });
+            } catch (reason) {
+                this.clientFactoryFailures += 1;
+                if (throwOnFactoryFailure) throw reason;
+                break;
+            }
         }
     }
 }

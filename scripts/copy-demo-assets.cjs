@@ -16,6 +16,8 @@ const copies = [
     ["dist/pathfinding.mjs.map", "public/js/pathfinding.mjs.map"],
     ["dist/simulation.mjs", "public/js/simulation.mjs"],
     ["dist/simulation.mjs.map", "public/js/simulation.mjs.map"],
+    ["dist/persistence.mjs", "public/js/persistence.mjs"],
+    ["dist/persistence.mjs.map", "public/js/persistence.mjs.map"],
     ["node_modules/three/build/three.module.js", "public/js/vendor/three.module.js"],
     ["node_modules/three/build/three.core.js", "public/js/vendor/three.core.js"],
     ["node_modules/dat.gui/build/dat.gui.module.js", "public/js/vendor/dat.gui.module.js"],

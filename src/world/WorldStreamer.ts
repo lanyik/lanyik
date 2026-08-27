@@ -46,6 +46,12 @@ export interface WorldStreamingStats {
     averageTerrainTaskMs: number;
     averageVegetationTaskMs: number;
     averageChunkLoadMs: number;
+    queuedWeight: number;
+    oldestQueuedMs: number;
+    shedTasks: number;
+    starvationPromotions: number;
+    workerFailures: number;
+    clientFactoryFailures: number;
 }
 
 interface PendingChunk {
@@ -97,6 +103,7 @@ export class WorldStreamer {
     private readonly retryBaseDelayMs: number;
     private readonly residents = new Map<string, WorldChunkLease>();
     private readonly pending = new Map<string, PendingChunk>();
+    private readonly activeRequests = new Set<Promise<unknown>>();
     private wanted = new Set<string>();
     private centerChunkX = 0;
     private centerChunkY = 0;
@@ -191,12 +198,24 @@ export class WorldStreamer {
             busyVegetationWorkers: source?.busyVegetationWorkers ?? 0,
             averageTerrainTaskMs: source?.averageChunkMs ?? 0,
             averageVegetationTaskMs: source?.averageVegetationMs ?? 0,
-            averageChunkLoadMs: this.averageChunkLoadMs
+            averageChunkLoadMs: this.averageChunkLoadMs,
+            queuedWeight: source?.queuedWeight ?? 0,
+            oldestQueuedMs: source?.oldestQueuedMs ?? 0,
+            shedTasks: source?.shedTasks ?? 0,
+            starvationPromotions: source?.starvationPromotions ?? 0,
+            workerFailures: source?.workerFailures ?? 0,
+            clientFactoryFailures: source?.clientFactoryFailures ?? 0
         };
     }
 
     public get residentChunks(): readonly WorldChunk[] {
         return [...this.residents.values()].map(lease => lease.chunk);
+    }
+
+    // Resolves only after every request that was active at disposal has
+    // observed cancellation and released any lease it acquired meanwhile.
+    public get settled(): Promise<void> {
+        return Promise.allSettled([...this.activeRequests]).then(() => undefined);
     }
 
     public hasResident(chunkX: number, chunkY: number): boolean {
@@ -312,9 +331,11 @@ export class WorldStreamer {
         }).finally(() => {
             //A superseded aborted request must not delete its replacement.
             if (this.pending.get(key) === pending) this.pending.delete(key);
+            this.activeRequests.delete(promise);
         });
         pending = { controller, promise };
         this.pending.set(key, pending);
+        this.activeRequests.add(promise);
         return promise;
     }
 

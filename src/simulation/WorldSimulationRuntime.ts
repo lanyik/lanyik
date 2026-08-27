@@ -1,6 +1,9 @@
 import { Point } from "../interfaces";
+import { WorkQueueBackpressureError } from "../runtime/PriorityTaskQueue";
+import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 
 export const WORLD_SIMULATION_FORMAT_VERSION = 1;
+export const WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION = 1;
 
 export interface SimulationEntity<State = unknown> extends Point {
     id: string;
@@ -22,8 +25,21 @@ export interface SimulationChunkStore<State = unknown> {
     save(snapshot: SimulationChunkSnapshot<State>): Promise<void>;
     delete(chunkX: number, chunkY: number): Promise<void>;
     listChunks?(): Promise<readonly Point[]>;
+    replaceAll?(snapshots: readonly SimulationChunkSnapshot<State>[]): Promise<void>;
     flush(): Promise<void>;
     dispose(): void;
+}
+
+export interface WorldSimulationCheckpointChunk<State = unknown> extends SimulationChunkSnapshot<State> {
+    accumulator: number;
+}
+
+export interface WorldSimulationCheckpoint<State = unknown> {
+    version: typeof WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION;
+    elapsedSeconds: number;
+    checkpointElapsedSeconds: number;
+    tick: number;
+    chunks: readonly WorldSimulationCheckpointChunk<State>[];
 }
 
 function simulationChunkKey(chunkX: number, chunkY: number): string {
@@ -69,6 +85,15 @@ export class MemorySimulationChunkStore<State = unknown> implements SimulationCh
         return Promise.resolve([...this.snapshots.values()]
             .map(snapshot => ({ x: snapshot.chunkX, y: snapshot.chunkY }))
             .sort((first, second) => first.x - second.x || first.y - second.y));
+    }
+
+    public replaceAll(snapshots: readonly SimulationChunkSnapshot<State>[]): Promise<void> {
+        if (this.disposed) return Promise.reject(new Error("SimulationChunkStore has been disposed"));
+        this.snapshots.clear();
+        for (const snapshot of snapshots) {
+            this.snapshots.set(simulationChunkKey(snapshot.chunkX, snapshot.chunkY), cloneSnapshot(snapshot));
+        }
+        return Promise.resolve();
     }
 
     public flush(): Promise<void> { return Promise.resolve(); }
@@ -178,6 +203,26 @@ export class IndexedDbSimulationChunkStore<State = unknown> implements Simulatio
         return chunks.sort((first, second) => first.x - second.x || first.y - second.y);
     }
 
+    public replaceAll(snapshots: readonly SimulationChunkSnapshot<State>[]): Promise<void> {
+        if (this.disposed) return Promise.reject(new Error("SimulationChunkStore has been disposed"));
+        const copies = snapshots.map(cloneSnapshot);
+        return this.enqueue(async () => {
+            const database = await this.open();
+            const transaction = database.transaction(SIMULATION_OBJECT_STORE, "readwrite");
+            const store = transaction.objectStore(SIMULATION_OBJECT_STORE);
+            const keys = await idbResult(store.index("worldId").getAllKeys(this.worldId));
+            for (const key of keys) store.delete(key);
+            for (const snapshot of copies) {
+                store.put({
+                    ...snapshot,
+                    key: this.key(snapshot.chunkX, snapshot.chunkY),
+                    worldId: this.worldId
+                } satisfies StoredSimulationChunk<State>);
+            }
+            await idbTransactionComplete(transaction);
+        });
+    }
+
     public async flush(): Promise<void> {
         await this.pending;
         if (this.pendingError !== undefined) {
@@ -243,6 +288,8 @@ export interface WorldSimulationRuntimeOptions<State = unknown> {
     checkpointIntervalSeconds?: number;
     bounds?: { width: number; height: number; wrapX?: boolean; wrapY?: boolean };
     store?: SimulationChunkStore<State>;
+    maxQueuedOperations?: number;
+    workCoordinator?: RuntimeWorkCoordinator;
 }
 
 export interface SimulationActivityAnchor extends Point {
@@ -287,6 +334,8 @@ export interface WorldSimulationStats {
     ticksRun: number;
     ticksDropped: number;
     dirtyChunks: number;
+    queuedOperations: number;
+    shedOperations: number;
 }
 
 interface SimulationChunkRecord<State> {
@@ -319,6 +368,7 @@ export class WorldSimulationRuntime<State = unknown> {
     private readonly checkpointInterval: number;
     private readonly bounds: WorldSimulationRuntimeOptions<State>["bounds"];
     private readonly store: SimulationChunkStore<State> | undefined;
+    private readonly maxQueuedOperations: number;
     private readonly chunks = new Map<string, SimulationChunkRecord<State>>();
     private readonly orderedChunkKeys: string[] = [];
     private readonly entityChunks = new Map<string, string>();
@@ -326,17 +376,22 @@ export class WorldSimulationRuntime<State = unknown> {
     private readonly systems = new Map<string, SimulationSystem<State>>();
     private queue: Promise<void> = Promise.resolve();
     private queuedOperations = 0;
+    private shedOperations = 0;
     private elapsed = 0;
     private checkpointElapsed = 0;
     private tickCount = 0;
     private disposed = false;
     private storeDisposed = false;
     private lifecycleRevision = 0;
+    private readonly detachWorkTelemetry: (() => void) | undefined;
+    private readonly coordinatorSignal: AbortSignal | undefined;
+    private readonly coordinatorAbort: (() => void) | undefined;
     private activeChunkCount = 0;
     private dirtyChunkCount = 0;
     private snapshot: WorldSimulationStats = {
         elapsedSeconds: 0, tick: 0, residentChunks: 0, activeChunks: 0,
-        backgroundChunks: 0, entities: 0, ticksRun: 0, ticksDropped: 0, dirtyChunks: 0
+        backgroundChunks: 0, entities: 0, ticksRun: 0, ticksDropped: 0, dirtyChunks: 0,
+        queuedOperations: 0, shedOperations: 0
     };
 
     constructor(options: WorldSimulationRuntimeOptions<State> = {}) {
@@ -347,6 +402,7 @@ export class WorldSimulationRuntime<State = unknown> {
         this.checkpointInterval = options.checkpointIntervalSeconds ?? 30;
         this.bounds = options.bounds;
         this.store = options.store;
+        this.maxQueuedOperations = options.maxQueuedOperations ?? 1024;
         if (!Number.isSafeInteger(this.chunkSize) || this.chunkSize <= 0) throw new RangeError("simulation chunkSize must be a positive safe integer");
         for (const [name, value] of [
             ["activeTickIntervalSeconds", this.activeInterval],
@@ -356,10 +412,22 @@ export class WorldSimulationRuntime<State = unknown> {
         if (!Number.isInteger(this.maxTicksPerAdvance) || this.maxTicksPerAdvance <= 0) {
             throw new RangeError("maxTicksPerAdvance must be a positive integer");
         }
+        if (!Number.isSafeInteger(this.maxQueuedOperations) || this.maxQueuedOperations <= 0) {
+            throw new RangeError("maxQueuedOperations must be a positive safe integer");
+        }
         if (this.bounds && (!Number.isSafeInteger(this.bounds.width) || this.bounds.width <= 0
             || !Number.isSafeInteger(this.bounds.height) || this.bounds.height <= 0)) {
             throw new RangeError("simulation bounds must use positive safe integer dimensions");
         }
+        this.detachWorkTelemetry = options.workCoordinator?.registerTelemetry("simulation", () => ({
+            pendingTasks: Math.max(0, this.queuedOperations - 1),
+            pendingWeight: Math.max(0, this.queuedOperations - 1),
+            busyTasks: this.queuedOperations > 0 ? 1 : 0,
+            shedTasks: this.shedOperations
+        }));
+        this.coordinatorSignal = options.workCoordinator?.signal;
+        this.coordinatorAbort = this.coordinatorSignal ? () => this.dispose() : undefined;
+        this.coordinatorSignal?.addEventListener("abort", this.coordinatorAbort!, { once: true });
     }
 
     public get stats(): Readonly<WorldSimulationStats> { return this.snapshot; }
@@ -468,6 +536,7 @@ export class WorldSimulationRuntime<State = unknown> {
                 record.entities.set(entity.id, cloneEntity(entity));
             }
             this.assertLifecycleCurrent(lifecycleRevision);
+            if (saved) this.elapsed = Math.max(this.elapsed, saved.simulatedSeconds);
             for (const id of record.entities.keys()) this.entityChunks.set(id, key);
             this.registerChunk(key, record);
             this.updateStats(0, 0);
@@ -518,6 +587,10 @@ export class WorldSimulationRuntime<State = unknown> {
             }
             // No restored record is made visible until every indexed snapshot
             // has loaded and validated successfully.
+            this.elapsed = pending.reduce(
+                (elapsed, entry) => Math.max(elapsed, entry.snapshot.simulatedSeconds),
+                this.elapsed
+            );
             for (const { key, snapshot } of pending) {
                 const record: SimulationChunkRecord<State> = {
                     chunkX: snapshot.chunkX,
@@ -563,6 +636,127 @@ export class WorldSimulationRuntime<State = unknown> {
         return this.enqueueOperation(revision => this.advanceNow(deltaSeconds, revision));
     }
 
+    public createCheckpointSnapshot(): Promise<WorldSimulationCheckpoint<State>> {
+        return this.enqueueOperation(async lifecycleRevision => {
+            for (const record of this.chunks.values()) {
+                if (!record.dirty) continue;
+                await this.saveRecord(record, lifecycleRevision);
+                this.assertLifecycleCurrent(lifecycleRevision);
+            }
+            await this.store?.flush();
+            this.assertLifecycleCurrent(lifecycleRevision);
+
+            const snapshots = new Map<string, WorldSimulationCheckpointChunk<State>>();
+            if (this.store) {
+                if (!this.store.listChunks) {
+                    throw new Error("SimulationChunkStore does not support checkpoint enumeration");
+                }
+                const points = await this.store.listChunks();
+                for (const point of points) {
+                    this.assertChunkCoordinates(point.x, point.y);
+                    const stored = await this.store.load(point.x, point.y);
+                    this.assertLifecycleCurrent(lifecycleRevision);
+                    if (!stored) continue;
+                    this.assertSnapshot(stored, point.x, point.y);
+                    snapshots.set(simulationChunkKey(point.x, point.y), {
+                        ...cloneSnapshot(stored),
+                        accumulator: 0
+                    });
+                }
+            }
+            const capturedAt = Date.now();
+            for (const [key, record] of this.chunks) {
+                if (record.entities.size === 0) {
+                    snapshots.delete(key);
+                    continue;
+                }
+                snapshots.set(key, {
+                    version: WORLD_SIMULATION_FORMAT_VERSION,
+                    chunkX: record.chunkX,
+                    chunkY: record.chunkY,
+                    revision: record.revision,
+                    savedAt: capturedAt,
+                    simulatedSeconds: record.simulatedSeconds,
+                    accumulator: record.accumulator,
+                    entities: [...record.entities.values()].map(cloneEntity)
+                });
+            }
+            return {
+                version: WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION,
+                elapsedSeconds: this.elapsed,
+                checkpointElapsedSeconds: this.checkpointElapsed,
+                tick: this.tickCount,
+                chunks: [...snapshots.values()]
+                    .sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY)
+                    .map(cloneValue)
+            };
+        });
+    }
+
+    public restoreCheckpointSnapshot(snapshot: WorldSimulationCheckpoint<State>): Promise<void> {
+        return this.enqueueOperation(async lifecycleRevision => {
+            if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)
+                || snapshot.version !== WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION
+                || !Number.isFinite(snapshot.elapsedSeconds) || snapshot.elapsedSeconds < 0
+                || !Number.isFinite(snapshot.checkpointElapsedSeconds) || snapshot.checkpointElapsedSeconds < 0
+                || !Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0
+                || !Array.isArray(snapshot.chunks)) {
+                throw new TypeError("simulation checkpoint is invalid or incompatible");
+            }
+            const chunks: WorldSimulationCheckpointChunk<State>[] = snapshot.chunks.map(chunk => cloneValue(chunk));
+            const chunkKeys = new Set<string>();
+            const entityIds = new Set<string>();
+            for (const chunk of chunks) {
+                this.assertSnapshot(chunk, chunk.chunkX, chunk.chunkY);
+                if (!Number.isFinite(chunk.accumulator) || chunk.accumulator < 0) {
+                    throw new TypeError("simulation checkpoint accumulator is invalid");
+                }
+                const key = simulationChunkKey(chunk.chunkX, chunk.chunkY);
+                if (chunkKeys.has(key)) throw new TypeError("simulation checkpoint contains duplicate chunks");
+                chunkKeys.add(key);
+                for (const entity of chunk.entities) {
+                    if (entityIds.has(entity.id)) {
+                        throw new TypeError(`simulation checkpoint contains duplicate entity id "${entity.id}"`);
+                    }
+                    entityIds.add(entity.id);
+                }
+            }
+            if (this.store) {
+                if (!this.store.replaceAll) {
+                    throw new Error("SimulationChunkStore does not support atomic checkpoint replacement");
+                }
+                await this.store.replaceAll(chunks);
+                await this.store.flush();
+                this.assertLifecycleCurrent(lifecycleRevision);
+            }
+
+            this.chunks.clear();
+            this.orderedChunkKeys.length = 0;
+            this.entityChunks.clear();
+            this.activeChunkCount = 0;
+            this.dirtyChunkCount = 0;
+            this.elapsed = snapshot.elapsedSeconds;
+            this.checkpointElapsed = snapshot.checkpointElapsedSeconds;
+            this.tickCount = snapshot.tick;
+            for (const chunk of chunks) {
+                const key = simulationChunkKey(chunk.chunkX, chunk.chunkY);
+                const record: SimulationChunkRecord<State> = {
+                    chunkX: chunk.chunkX,
+                    chunkY: chunk.chunkY,
+                    revision: chunk.revision,
+                    accumulator: chunk.accumulator,
+                    simulatedSeconds: chunk.simulatedSeconds,
+                    entities: new Map(chunk.entities.map((entity: SimulationEntity<State>) => [entity.id, cloneEntity(entity)])),
+                    dirty: false,
+                    active: false
+                };
+                for (const id of record.entities.keys()) this.entityChunks.set(id, key);
+                this.registerChunk(key, record);
+            }
+            this.updateStats(0, 0);
+        });
+    }
+
     public flush(): Promise<void> {
         return this.enqueueOperation(async lifecycleRevision => {
             for (const record of this.chunks.values()) {
@@ -579,6 +773,8 @@ export class WorldSimulationRuntime<State = unknown> {
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
+        this.detachWorkTelemetry?.();
+        if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
         this.lifecycleRevision += 1;
         this.chunks.clear();
         this.orderedChunkKeys.length = 0;
@@ -810,7 +1006,9 @@ export class WorldSimulationRuntime<State = unknown> {
             elapsedSeconds: this.elapsed, tick: this.tickCount,
             residentChunks: this.chunks.size, activeChunks, backgroundChunks,
             entities: this.entityChunks.size, ticksRun, ticksDropped,
-            dirtyChunks: this.dirtyChunkCount
+            dirtyChunks: this.dirtyChunkCount,
+            queuedOperations: this.queuedOperations,
+            shedOperations: this.shedOperations
         };
     }
 
@@ -841,8 +1039,14 @@ export class WorldSimulationRuntime<State = unknown> {
 
     private enqueueOperation<T>(operation: (lifecycleRevision: number) => T | Promise<T>): Promise<T> {
         if (this.disposed) return Promise.reject(new Error("WorldSimulationRuntime has been disposed"));
+        if (this.queuedOperations >= this.maxQueuedOperations) {
+            this.shedOperations += 1;
+            this.updateQueueStats();
+            return Promise.reject(new WorkQueueBackpressureError("Simulation operation queue is full"));
+        }
         const lifecycleRevision = this.lifecycleRevision;
         this.queuedOperations += 1;
+        this.updateQueueStats();
         const result = this.queue.then(async () => {
             this.assertLifecycleCurrent(lifecycleRevision);
             const value = await operation(lifecycleRevision);
@@ -850,8 +1054,19 @@ export class WorldSimulationRuntime<State = unknown> {
             return value;
         });
         this.queue = result.then(() => undefined, () => undefined);
-        void result.finally(() => { this.queuedOperations -= 1; }).catch(() => undefined);
+        void result.finally(() => {
+            this.queuedOperations -= 1;
+            this.updateQueueStats();
+        }).catch(() => undefined);
         return result;
+    }
+
+    private updateQueueStats(): void {
+        this.snapshot = {
+            ...this.snapshot,
+            queuedOperations: this.queuedOperations,
+            shedOperations: this.shedOperations
+        };
     }
 
     private assertSynchronousMutationAllowed(): void {

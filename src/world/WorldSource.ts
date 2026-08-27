@@ -6,7 +6,6 @@ import {
     MAX_WORLD_GENERATION_CHUNK_SIZE,
     PackedWorldChunk,
     SparseWorldChunkStore,
-    WORLD_GENERATOR_VERSION,
     WorldTileOverride,
     WorldTileOverrideChange,
     assertPackedWorldChunk
@@ -21,6 +20,7 @@ import {
 import {
     IndexedDbWorldDeltaStore,
     normalizeWorldChunkDelta,
+    WorldChunkDelta,
     WorldDeltaStore
 } from "./WorldDeltaStore";
 import {
@@ -28,6 +28,11 @@ import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "./generateVegetation";
+import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
+import {
+    createWorldDescriptor,
+    WorldDescriptor
+} from "./WorldDescriptor";
 
 export interface WorldBounds {
     width: number;
@@ -56,6 +61,12 @@ export interface WorldSourceStats {
     busyVegetationWorkers?: number;
     averageChunkMs?: number;
     averageVegetationMs?: number;
+    queuedWeight?: number;
+    oldestQueuedMs?: number;
+    shedTasks?: number;
+    starvationPromotions?: number;
+    workerFailures?: number;
+    clientFactoryFailures?: number;
     cacheHits?: number;
     cacheMisses?: number;
     cacheWrites?: number;
@@ -80,6 +91,7 @@ export interface WorldChunkRevision {
 export interface WorldSource {
     readonly map: MapInfo;
     readonly chunkSize: number;
+    readonly descriptor?: WorldDescriptor;
     readonly bounds?: WorldBounds;
     readonly stats?: Readonly<WorldSourceStats>;
     resolveChunk(chunkX: number, chunkY: number): Point | undefined;
@@ -90,6 +102,7 @@ export interface WorldSource {
     hasTile(x: number, y: number): boolean;
     getChunkRevision?(chunkX: number, chunkY: number): WorldChunkRevision | undefined;
     clearCache?(): Promise<boolean>;
+    flushCache?(): Promise<void>;
     prepareVegetation?(
         options: WorldVegetationPreparationOptions,
         request?: ChunkRequestOptions
@@ -117,6 +130,8 @@ export interface MutableWorldSource extends WorldSource {
     clearTileOverride(x: number, y: number): boolean;
     flushDeltas?(): Promise<void>;
     clearDeltas?(): Promise<void>;
+    createDeltaCheckpointSnapshot?(): Promise<WorldDeltaCheckpoint>;
+    restoreDeltaCheckpointSnapshot?(snapshot: WorldDeltaCheckpoint): Promise<void>;
 }
 
 export function isMutableWorldSource(source: WorldSource): source is MutableWorldSource {
@@ -142,6 +157,7 @@ export interface ProceduralWorldSourceOptions {
     deltaStore?: boolean | WorldDeltaStore;
     deltaDatabaseName?: string;
     worldId?: string;
+    workCoordinator?: RuntimeWorkCoordinator;
 }
 
 export interface ToroidalWorldSourceOptions extends ProceduralWorldSourceOptions {
@@ -154,6 +170,15 @@ export interface ProceduralWorldSourceDependencies {
     store?: SparseWorldChunkStore;
     cache?: WorldChunkCache;
     deltaStore?: WorldDeltaStore;
+}
+
+export const WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = 1;
+
+export interface WorldDeltaCheckpoint {
+    version: typeof WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
+    worldId: string;
+    chunkSize: number;
+    deltas: readonly WorldChunkDelta[];
 }
 
 export type ToroidalWorldSourceDependencies = ProceduralWorldSourceDependencies;
@@ -507,6 +532,71 @@ class WorldDeltaSession {
         }
     }
 
+    public async createCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
+        await this.flush();
+        if (!this.deltaStore?.listWorld) {
+            throw new Error("WorldDeltaStore does not support checkpoint enumeration");
+        }
+        const deltas = await this.deltaStore.listWorld(this.worldId);
+        return {
+            version: WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
+            worldId: this.worldId,
+            chunkSize: this.chunkSize,
+            deltas: deltas.map(delta => normalizeWorldChunkDelta(
+                delta,
+                this.worldId,
+                delta.chunkX,
+                delta.chunkY,
+                { chunkSize: this.chunkSize }
+            ))
+        };
+    }
+
+    public async restoreCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
+        if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)
+            || snapshot.version !== WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
+            || snapshot.worldId !== this.worldId || snapshot.chunkSize !== this.chunkSize
+            || !Array.isArray(snapshot.deltas)) {
+            throw new TypeError("world delta checkpoint is invalid or incompatible");
+        }
+        if (!this.deltaStore?.replaceWorld) {
+            throw new Error("WorldDeltaStore does not support atomic checkpoint replacement");
+        }
+        const deltas = snapshot.deltas.map(delta => normalizeWorldChunkDelta(
+            delta,
+            this.worldId,
+            delta.chunkX,
+            delta.chunkY,
+            { chunkSize: this.chunkSize }
+        ));
+        const keys = new Set<string>();
+        for (const delta of deltas) {
+            const key = `${delta.chunkX},${delta.chunkY}`;
+            if (keys.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
+            keys.add(key);
+        }
+        await this.flush();
+        await this.deltaStore.replaceWorld(this.worldId, deltas);
+        await this.deltaStore.flush();
+        this.generation += 1;
+        this.chunks.clear();
+        this.revisionTombstones.clear();
+        this.baselineRevision = 0;
+        this.tileStore.clearTileOverrides();
+        for (const delta of deltas) {
+            const key = `${delta.chunkX},${delta.chunkY}`;
+            const state = this.state(key, delta.chunkX, delta.chunkY);
+            state.revision = delta.revision;
+            state.restored = true;
+            for (const entry of delta.entries) state.activeTiles.add(`${entry.x},${entry.y}`);
+            this.tileStore.setTileOverrides(delta.entries.map(entry => ({
+                x: entry.x,
+                y: entry.y,
+                changes: entry.override
+            })));
+        }
+    }
+
     public async clear(): Promise<void> {
         if (this.disposed) throw new Error("world delta session has been disposed");
         if (this.clearing) throw new Error("world deltas are already being cleared");
@@ -699,6 +789,8 @@ export class ToroidalWorldSource implements MutableWorldSource {
     public readonly chunkSize: number;
     public readonly bounds: WorldBounds;
     public readonly store: SparseWorldChunkStore;
+    public readonly descriptor: WorldDescriptor;
+    public readonly worldId: string;
     private readonly seed: string | number;
     private readonly pool: WorldGeneratorPool;
     private readonly chunkCountX: number;
@@ -708,7 +800,6 @@ export class ToroidalWorldSource implements MutableWorldSource {
     private readonly generatorVersion: number;
     private readonly deltaStore: WorldDeltaStore | undefined;
     private readonly ownsDeltaStore: boolean;
-    private readonly worldId: string;
     private readonly deltaSession: WorldDeltaSession;
     private cachedLoads = 0;
     private cacheEpoch = 0;
@@ -728,10 +819,13 @@ export class ToroidalWorldSource implements MutableWorldSource {
         this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
         validateChunkSize(this.chunkSize);
         this.seed = options.seed;
-        this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
-        if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
-            throw new RangeError("generatorVersion must be a positive integer");
-        }
+        this.descriptor = createWorldDescriptor({
+            seed: options.seed,
+            chunkSize: this.chunkSize,
+            generatorVersion: options.generatorVersion,
+            world: { width: options.width, height: options.height, topology: "toroidal" }
+        });
+        this.generatorVersion = this.descriptor.generatorVersion;
         this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
         const resolvedDeltas = resolveDeltaStore(options, dependencies);
         this.deltaStore = resolvedDeltas.store;
@@ -753,7 +847,9 @@ export class ToroidalWorldSource implements MutableWorldSource {
         try {
             this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
                 size: options.workerCount,
-                reservedChunkWorkers: options.reservedChunkWorkers
+                reservedChunkWorkers: options.reservedChunkWorkers,
+                coordinator: options.workCoordinator,
+                domain: "worker"
             });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
@@ -898,7 +994,19 @@ export class ToroidalWorldSource implements MutableWorldSource {
         return this.cache?.clear() ?? Promise.resolve(false);
     }
 
+    public flushCache(): Promise<void> {
+        return this.cache?.flush?.() ?? Promise.resolve();
+    }
+
     public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
+
+    public createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
+        return this.deltaSession.createCheckpointSnapshot();
+    }
+
+    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
+        return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    }
 
     public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }
 
@@ -932,6 +1040,8 @@ export class ToroidalWorldSource implements MutableWorldSource {
 export class ProceduralWorldSource implements MutableWorldSource {
     public readonly chunkSize: number;
     public readonly store: SparseWorldChunkStore;
+    public readonly descriptor: WorldDescriptor;
+    public readonly worldId: string;
     private readonly seed: string | number;
     private readonly pool: WorldGeneratorPool;
     private readonly cache: WorldChunkCache | undefined;
@@ -939,7 +1049,6 @@ export class ProceduralWorldSource implements MutableWorldSource {
     private readonly generatorVersion: number;
     private readonly deltaStore: WorldDeltaStore | undefined;
     private readonly ownsDeltaStore: boolean;
-    private readonly worldId: string;
     private readonly deltaSession: WorldDeltaSession;
     private cachedLoads = 0;
     private cacheEpoch = 0;
@@ -954,10 +1063,12 @@ export class ProceduralWorldSource implements MutableWorldSource {
         this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
         validateChunkSize(this.chunkSize);
         this.seed = options.seed;
-        this.generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
-        if (!Number.isInteger(this.generatorVersion) || this.generatorVersion <= 0) {
-            throw new RangeError("generatorVersion must be a positive integer");
-        }
+        this.descriptor = createWorldDescriptor({
+            seed: options.seed,
+            chunkSize: this.chunkSize,
+            generatorVersion: options.generatorVersion
+        });
+        this.generatorVersion = this.descriptor.generatorVersion;
         this.store = dependencies.store ?? new SparseWorldChunkStore();
         const resolvedDeltas = resolveDeltaStore(options, dependencies);
         this.deltaStore = resolvedDeltas.store;
@@ -973,7 +1084,9 @@ export class ProceduralWorldSource implements MutableWorldSource {
         try {
             this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
                 size: options.workerCount,
-                reservedChunkWorkers: options.reservedChunkWorkers
+                reservedChunkWorkers: options.reservedChunkWorkers,
+                coordinator: options.workCoordinator,
+                domain: "worker"
             });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
@@ -1080,7 +1193,19 @@ export class ProceduralWorldSource implements MutableWorldSource {
         return this.cache?.clear() ?? Promise.resolve(false);
     }
 
+    public flushCache(): Promise<void> {
+        return this.cache?.flush?.() ?? Promise.resolve();
+    }
+
     public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
+
+    public createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
+        return this.deltaSession.createCheckpointSnapshot();
+    }
+
+    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
+        return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    }
 
     public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }
 

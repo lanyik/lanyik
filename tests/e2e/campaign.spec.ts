@@ -65,6 +65,24 @@ test("an army marches off-camera and restores with its persistent outpost", asyn
     const destination = { x: arrived.army!.x, y: arrived.army!.y };
 
     await page.evaluate(() => (window as unknown as { saveCampaign(): Promise<void> }).saveCampaign());
+    // Simulate an interruption after the arrival snapshot committed but before
+    // its terrain delta survived. Reload must replay the latest arrival and
+    // recreate the missing outpost instead of trusting completedMarches alone.
+    await page.evaluate(() => new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open("three-hex-map-world-deltas-v1", 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const database = request.result;
+            const transaction = database.transaction("deltas", "readwrite");
+            transaction.objectStore("deltas").clear();
+            transaction.oncomplete = () => {
+                database.close();
+                resolve();
+            };
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+        };
+    }));
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(expected => {
         const diagnostics = (window as unknown as {

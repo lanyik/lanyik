@@ -153,7 +153,8 @@ export async function orderArmyMarch(
                 destination: copyPoint(destination),
                 route: [],
                 nextWaypointIndex: 0,
-                tileProgress: 0
+                tileProgress: 0,
+                completedMarches: army.state.completedMarches + 1
             }
             : {
                 ...army.state,

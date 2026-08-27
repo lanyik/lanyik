@@ -3,6 +3,7 @@ import { Group, Object3D } from "three";
 
 import { HexMap } from "../../src/HexMap";
 import { MapInfo } from "../../src/interfaces";
+import { LifecycleScope } from "../../src/runtime/LifecycleScope";
 import {
     WorldRenderLayer,
     WorldRenderLayerLifecycleError,
@@ -57,6 +58,7 @@ type LayerTestMap = {
     options: { size: number };
     mapData: MapInfo;
     worldSource: WorldSource;
+    worldController?: { source: WorldSource; lifecycle: LifecycleScope };
     worldRoot: Group;
     worldChunkLayers: Map<string, {
         chunk: WorldChunk; points: readonly { x: number; y: number }[]; revision: number;
@@ -69,6 +71,7 @@ type LayerTestMap = {
     worldRenderLayerObjects: Map<string, Map<string, Set<Object3D>>>;
     worldLayerRevision: number;
     frameTasks: { cancel(key: string): boolean };
+    worldChunkMountQueue: { forget(key: string): void };
     chunkScheduler: { invalidateScene(): void };
     applyWorldPatternToObject(): void;
     refreshWorldCopies(): void;
@@ -97,6 +100,7 @@ describe("HexMap custom world render layers", () => {
         map.worldRenderLayerObjects = new Map();
         map.worldLayerRevision = 1;
         map.frameTasks = { cancel: vi.fn(() => true) };
+        map.worldChunkMountQueue = { forget: vi.fn() };
         map.chunkScheduler = { invalidateScene: vi.fn() };
         map.applyWorldPatternToObject = vi.fn();
         map.refreshWorldCopies = vi.fn();
@@ -159,6 +163,60 @@ describe("HexMap custom world render layers", () => {
         expect(events).toEqual(["initialize", "unload", "dispose"]);
         expect(map.worldRoot.children).not.toContain(object);
         expect(map.worldRenderLayers.get(custom.id)).toBeUndefined();
+    });
+
+    test("aborts a stale world-layer host and rejects its late object publication", async () => {
+        const map = createLayerTestMap([]);
+        const lifecycle = new LifecycleScope("layer-world");
+        map.worldController = { source: map.worldSource, lifecycle };
+        let host: Parameters<NonNullable<WorldRenderLayer["initialize"]>>[0] | undefined;
+        await map.registerWorldRenderLayer({
+            id: "async-layer",
+            initialize: value => { host = value; },
+            mountChunk: vi.fn(),
+            unmountChunk: vi.fn(),
+            dispose: vi.fn()
+        });
+        expect(host?.signal.aborted).toBe(false);
+        expect("root" in host!).toBe(false);
+
+        await lifecycle.close();
+        const late = new Object3D();
+        host!.addObject(late);
+        expect(host!.signal.aborted).toBe(true);
+        expect(map.worldRoot.children).not.toContain(late);
+    });
+
+    test("keeps world settlement open until an aborted asynchronous mount drains", async () => {
+        const chunk: WorldChunk = {
+            chunkX: 0, chunkY: 0, chunkSize: 12, coreTiles: [{ x: 0, y: 0 }]
+        };
+        const map = createLayerTestMap([chunk]);
+        const lifecycle = new LifecycleScope("async-mount-world");
+        map.worldController = { source: map.worldSource, lifecycle };
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const late = new Object3D();
+        const mount = vi.fn(async (context: Parameters<WorldRenderLayer["mountChunk"]>[0]) => {
+            await gate;
+            context.addObject(late);
+        });
+        const registration = map.registerWorldRenderLayer({
+            id: "slow-layer",
+            mountChunk: mount,
+            unmountChunk: vi.fn(),
+            dispose: vi.fn()
+        });
+        await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+
+        const closing = lifecycle.close();
+        map.unmountWorldChunk(chunk);
+        expect(lifecycle.stats).toMatchObject({ state: "closing", pendingTasks: 1 });
+        release();
+        await Promise.all([registration, closing]);
+
+        expect(lifecycle.stats).toMatchObject({ state: "closed", pendingTasks: 0 });
+        expect(map.worldRoot.children).not.toContain(late);
     });
 
     test("rolls back a partial mount even when its unmount hook also fails", async () => {

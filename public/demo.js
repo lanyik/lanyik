@@ -14,6 +14,7 @@ const query = new URLSearchParams(window.location.search);
 const infiniteMode = query.has("infinite");
 const campaignMode = infiniteMode && query.has("campaign");
 const fastRenderMode = query.get("quality") === "fast";
+const TARGET_FRAME_MS = 1000 / 60;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
@@ -237,6 +238,11 @@ window.getWorldDiagnostics = () => ({
     worldStreaming: map.worldStreamingStats,
     frameTasks: map.frameTaskStats,
     adaptive: map.adaptiveStreamingStats,
+    gpuTiming: map.gpuTimingStats,
+    webglContext: map.webGlContextStats,
+    worldLifecycle: map.renderWorldController?.lifecycleStats,
+    worldEditing: map.worldEditingStats,
+    work: map.workStats,
     rendererMemory: map.renderer ? { ...map.renderer.info.memory } : undefined,
     renderer: map.renderer ? { ...map.renderer.info.render } : undefined,
     rendererPixelRatio: map.renderer?.getPixelRatio(),
@@ -371,13 +377,14 @@ async function regenerate() {
                 chunkSize: 24,
                 cache: true,
                 deltaStore: campaignMode,
+                workCoordinator: map.workCoordinator,
                 worldId: campaignMode ? `campaign-demo:${controls.seed}:terrain` : undefined
             });
             activeSource = undefined;
             await map.loadWorld({
                 source,
                 initialTile,
-                targetFrameMs: 1000 / 120,
+                targetFrameMs: TARGET_FRAME_MS,
                 adaptiveDegradeFrames: 6,
                 adaptiveRecoverFrames: 600,
                 adaptiveCooldownFrames: 6
@@ -408,12 +415,13 @@ async function regenerate() {
             height: Number(controls.height),
             workerUrl,
             chunkSize: 24,
-            cache: true
+            cache: true,
+            workCoordinator: map.workCoordinator
         });
         activeSource = undefined;
         await map.loadWorld({
             source,
-            targetFrameMs: 1000 / 120,
+            targetFrameMs: TARGET_FRAME_MS,
             adaptiveDegradeFrames: 6,
             adaptiveRecoverFrames: 600,
             adaptiveCooldownFrames: 6

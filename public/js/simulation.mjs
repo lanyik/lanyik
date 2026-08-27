@@ -1,5 +1,14 @@
+// src/runtime/PriorityTaskQueue.ts
+var WorkQueueBackpressureError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.name = "WorkQueueBackpressureError";
+  }
+};
+
 // src/simulation/WorldSimulationRuntime.ts
 var WORLD_SIMULATION_FORMAT_VERSION = 1;
+var WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION = 1;
 function simulationChunkKey(chunkX, chunkY) {
   return `${chunkX},${chunkY}`;
 }
@@ -35,6 +44,14 @@ var MemorySimulationChunkStore = class {
   listChunks() {
     if (this.disposed) return Promise.resolve([]);
     return Promise.resolve([...this.snapshots.values()].map((snapshot) => ({ x: snapshot.chunkX, y: snapshot.chunkY })).sort((first, second) => first.x - second.x || first.y - second.y));
+  }
+  replaceAll(snapshots) {
+    if (this.disposed) return Promise.reject(new Error("SimulationChunkStore has been disposed"));
+    this.snapshots.clear();
+    for (const snapshot of snapshots) {
+      this.snapshots.set(simulationChunkKey(snapshot.chunkX, snapshot.chunkY), cloneSnapshot(snapshot));
+    }
+    return Promise.resolve();
   }
   flush() {
     return Promise.resolve();
@@ -120,6 +137,25 @@ var IndexedDbSimulationChunkStore = class {
     });
     return chunks.sort((first, second) => first.x - second.x || first.y - second.y);
   }
+  replaceAll(snapshots) {
+    if (this.disposed) return Promise.reject(new Error("SimulationChunkStore has been disposed"));
+    const copies = snapshots.map(cloneSnapshot);
+    return this.enqueue(async () => {
+      const database = await this.open();
+      const transaction = database.transaction(SIMULATION_OBJECT_STORE, "readwrite");
+      const store = transaction.objectStore(SIMULATION_OBJECT_STORE);
+      const keys = await idbResult(store.index("worldId").getAllKeys(this.worldId));
+      for (const key of keys) store.delete(key);
+      for (const snapshot of copies) {
+        store.put({
+          ...snapshot,
+          key: this.key(snapshot.chunkX, snapshot.chunkY),
+          worldId: this.worldId
+        });
+      }
+      await idbTransactionComplete(transaction);
+    });
+  }
   async flush() {
     await this.pending;
     if (this.pendingError !== void 0) {
@@ -184,6 +220,7 @@ var WorldSimulationRuntime = class {
     this.systems = /* @__PURE__ */ new Map();
     this.queue = Promise.resolve();
     this.queuedOperations = 0;
+    this.shedOperations = 0;
     this.elapsed = 0;
     this.checkpointElapsed = 0;
     this.tickCount = 0;
@@ -201,7 +238,9 @@ var WorldSimulationRuntime = class {
       entities: 0,
       ticksRun: 0,
       ticksDropped: 0,
-      dirtyChunks: 0
+      dirtyChunks: 0,
+      queuedOperations: 0,
+      shedOperations: 0
     };
     this.chunkSize = options.chunkSize ?? 96;
     this.activeInterval = options.activeTickIntervalSeconds ?? 0.1;
@@ -210,6 +249,7 @@ var WorldSimulationRuntime = class {
     this.checkpointInterval = options.checkpointIntervalSeconds ?? 30;
     this.bounds = options.bounds;
     this.store = options.store;
+    this.maxQueuedOperations = options.maxQueuedOperations ?? 1024;
     if (!Number.isSafeInteger(this.chunkSize) || this.chunkSize <= 0) throw new RangeError("simulation chunkSize must be a positive safe integer");
     for (const [name, value] of [
       ["activeTickIntervalSeconds", this.activeInterval],
@@ -219,9 +259,21 @@ var WorldSimulationRuntime = class {
     if (!Number.isInteger(this.maxTicksPerAdvance) || this.maxTicksPerAdvance <= 0) {
       throw new RangeError("maxTicksPerAdvance must be a positive integer");
     }
+    if (!Number.isSafeInteger(this.maxQueuedOperations) || this.maxQueuedOperations <= 0) {
+      throw new RangeError("maxQueuedOperations must be a positive safe integer");
+    }
     if (this.bounds && (!Number.isSafeInteger(this.bounds.width) || this.bounds.width <= 0 || !Number.isSafeInteger(this.bounds.height) || this.bounds.height <= 0)) {
       throw new RangeError("simulation bounds must use positive safe integer dimensions");
     }
+    this.detachWorkTelemetry = options.workCoordinator?.registerTelemetry("simulation", () => ({
+      pendingTasks: Math.max(0, this.queuedOperations - 1),
+      pendingWeight: Math.max(0, this.queuedOperations - 1),
+      busyTasks: this.queuedOperations > 0 ? 1 : 0,
+      shedTasks: this.shedOperations
+    }));
+    this.coordinatorSignal = options.workCoordinator?.signal;
+    this.coordinatorAbort = this.coordinatorSignal ? () => this.dispose() : void 0;
+    this.coordinatorSignal?.addEventListener("abort", this.coordinatorAbort, { once: true });
   }
   get stats() {
     return this.snapshot;
@@ -325,6 +377,7 @@ var WorldSimulationRuntime = class {
         record.entities.set(entity.id, cloneEntity(entity));
       }
       this.assertLifecycleCurrent(lifecycleRevision);
+      if (saved) this.elapsed = Math.max(this.elapsed, saved.simulatedSeconds);
       for (const id of record.entities.keys()) this.entityChunks.set(id, key);
       this.registerChunk(key, record);
       this.updateStats(0, 0);
@@ -372,6 +425,10 @@ var WorldSimulationRuntime = class {
         }
         pending.push({ key, snapshot });
       }
+      this.elapsed = pending.reduce(
+        (elapsed, entry) => Math.max(elapsed, entry.snapshot.simulatedSeconds),
+        this.elapsed
+      );
       for (const { key, snapshot } of pending) {
         const record = {
           chunkX: snapshot.chunkX,
@@ -414,6 +471,116 @@ var WorldSimulationRuntime = class {
     if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) return Promise.reject(new RangeError("simulation deltaSeconds must be non-negative and finite"));
     return this.enqueueOperation((revision) => this.advanceNow(deltaSeconds, revision));
   }
+  createCheckpointSnapshot() {
+    return this.enqueueOperation(async (lifecycleRevision) => {
+      for (const record of this.chunks.values()) {
+        if (!record.dirty) continue;
+        await this.saveRecord(record, lifecycleRevision);
+        this.assertLifecycleCurrent(lifecycleRevision);
+      }
+      await this.store?.flush();
+      this.assertLifecycleCurrent(lifecycleRevision);
+      const snapshots = /* @__PURE__ */ new Map();
+      if (this.store) {
+        if (!this.store.listChunks) {
+          throw new Error("SimulationChunkStore does not support checkpoint enumeration");
+        }
+        const points = await this.store.listChunks();
+        for (const point of points) {
+          this.assertChunkCoordinates(point.x, point.y);
+          const stored = await this.store.load(point.x, point.y);
+          this.assertLifecycleCurrent(lifecycleRevision);
+          if (!stored) continue;
+          this.assertSnapshot(stored, point.x, point.y);
+          snapshots.set(simulationChunkKey(point.x, point.y), {
+            ...cloneSnapshot(stored),
+            accumulator: 0
+          });
+        }
+      }
+      const capturedAt = Date.now();
+      for (const [key, record] of this.chunks) {
+        if (record.entities.size === 0) {
+          snapshots.delete(key);
+          continue;
+        }
+        snapshots.set(key, {
+          version: WORLD_SIMULATION_FORMAT_VERSION,
+          chunkX: record.chunkX,
+          chunkY: record.chunkY,
+          revision: record.revision,
+          savedAt: capturedAt,
+          simulatedSeconds: record.simulatedSeconds,
+          accumulator: record.accumulator,
+          entities: [...record.entities.values()].map(cloneEntity)
+        });
+      }
+      return {
+        version: WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION,
+        elapsedSeconds: this.elapsed,
+        checkpointElapsedSeconds: this.checkpointElapsed,
+        tick: this.tickCount,
+        chunks: [...snapshots.values()].sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY).map(cloneValue)
+      };
+    });
+  }
+  restoreCheckpointSnapshot(snapshot) {
+    return this.enqueueOperation(async (lifecycleRevision) => {
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || snapshot.version !== WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION || !Number.isFinite(snapshot.elapsedSeconds) || snapshot.elapsedSeconds < 0 || !Number.isFinite(snapshot.checkpointElapsedSeconds) || snapshot.checkpointElapsedSeconds < 0 || !Number.isSafeInteger(snapshot.tick) || snapshot.tick < 0 || !Array.isArray(snapshot.chunks)) {
+        throw new TypeError("simulation checkpoint is invalid or incompatible");
+      }
+      const chunks = snapshot.chunks.map((chunk) => cloneValue(chunk));
+      const chunkKeys = /* @__PURE__ */ new Set();
+      const entityIds = /* @__PURE__ */ new Set();
+      for (const chunk of chunks) {
+        this.assertSnapshot(chunk, chunk.chunkX, chunk.chunkY);
+        if (!Number.isFinite(chunk.accumulator) || chunk.accumulator < 0) {
+          throw new TypeError("simulation checkpoint accumulator is invalid");
+        }
+        const key = simulationChunkKey(chunk.chunkX, chunk.chunkY);
+        if (chunkKeys.has(key)) throw new TypeError("simulation checkpoint contains duplicate chunks");
+        chunkKeys.add(key);
+        for (const entity of chunk.entities) {
+          if (entityIds.has(entity.id)) {
+            throw new TypeError(`simulation checkpoint contains duplicate entity id "${entity.id}"`);
+          }
+          entityIds.add(entity.id);
+        }
+      }
+      if (this.store) {
+        if (!this.store.replaceAll) {
+          throw new Error("SimulationChunkStore does not support atomic checkpoint replacement");
+        }
+        await this.store.replaceAll(chunks);
+        await this.store.flush();
+        this.assertLifecycleCurrent(lifecycleRevision);
+      }
+      this.chunks.clear();
+      this.orderedChunkKeys.length = 0;
+      this.entityChunks.clear();
+      this.activeChunkCount = 0;
+      this.dirtyChunkCount = 0;
+      this.elapsed = snapshot.elapsedSeconds;
+      this.checkpointElapsed = snapshot.checkpointElapsedSeconds;
+      this.tickCount = snapshot.tick;
+      for (const chunk of chunks) {
+        const key = simulationChunkKey(chunk.chunkX, chunk.chunkY);
+        const record = {
+          chunkX: chunk.chunkX,
+          chunkY: chunk.chunkY,
+          revision: chunk.revision,
+          accumulator: chunk.accumulator,
+          simulatedSeconds: chunk.simulatedSeconds,
+          entities: new Map(chunk.entities.map((entity) => [entity.id, cloneEntity(entity)])),
+          dirty: false,
+          active: false
+        };
+        for (const id of record.entities.keys()) this.entityChunks.set(id, key);
+        this.registerChunk(key, record);
+      }
+      this.updateStats(0, 0);
+    });
+  }
   flush() {
     return this.enqueueOperation(async (lifecycleRevision) => {
       for (const record of this.chunks.values()) {
@@ -429,6 +596,8 @@ var WorldSimulationRuntime = class {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.detachWorkTelemetry?.();
+    if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
     this.lifecycleRevision += 1;
     this.chunks.clear();
     this.orderedChunkKeys.length = 0;
@@ -652,7 +821,9 @@ var WorldSimulationRuntime = class {
       entities: this.entityChunks.size,
       ticksRun,
       ticksDropped,
-      dirtyChunks: this.dirtyChunkCount
+      dirtyChunks: this.dirtyChunkCount,
+      queuedOperations: this.queuedOperations,
+      shedOperations: this.shedOperations
     };
   }
   registerChunk(key, record) {
@@ -679,8 +850,14 @@ var WorldSimulationRuntime = class {
   }
   enqueueOperation(operation) {
     if (this.disposed) return Promise.reject(new Error("WorldSimulationRuntime has been disposed"));
+    if (this.queuedOperations >= this.maxQueuedOperations) {
+      this.shedOperations += 1;
+      this.updateQueueStats();
+      return Promise.reject(new WorkQueueBackpressureError("Simulation operation queue is full"));
+    }
     const lifecycleRevision = this.lifecycleRevision;
     this.queuedOperations += 1;
+    this.updateQueueStats();
     const result = this.queue.then(async () => {
       this.assertLifecycleCurrent(lifecycleRevision);
       const value = await operation(lifecycleRevision);
@@ -690,8 +867,16 @@ var WorldSimulationRuntime = class {
     this.queue = result.then(() => void 0, () => void 0);
     void result.finally(() => {
       this.queuedOperations -= 1;
+      this.updateQueueStats();
     }).catch(() => void 0);
     return result;
+  }
+  updateQueueStats() {
+    this.snapshot = {
+      ...this.snapshot,
+      queuedOperations: this.queuedOperations,
+      shedOperations: this.shedOperations
+    };
   }
   assertSynchronousMutationAllowed() {
     if (this.disposed) throw new Error("WorldSimulationRuntime has been disposed");
@@ -808,7 +993,8 @@ async function orderArmyMarch(runtime, pathfinder, armyId, destination, options 
       destination: copyPoint(destination),
       route: [],
       nextWaypointIndex: 0,
-      tileProgress: 0
+      tileProgress: 0,
+      completedMarches: army.state.completedMarches + 1
     } : {
       ...army.state,
       status: "marching",
@@ -834,6 +1020,7 @@ export {
   ArmyMarchRouteNotFoundError,
   IndexedDbSimulationChunkStore,
   MemorySimulationChunkStore,
+  WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION,
   WORLD_SIMULATION_FORMAT_VERSION,
   WorldSimulationRuntime,
   assertArmyMarchState,

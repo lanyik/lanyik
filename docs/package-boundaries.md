@@ -1,12 +1,26 @@
 # Package boundaries
 
+The runtime foundation types (`LifecycleScope`, `ResourceBudgetLedger`,
+`PriorityTaskQueue`, and `RuntimeWorkCoordinator`) are exported from the main
+entry. Recoverable checkpoint infrastructure is also available from the
+`three-hex-map/persistence` subpath. See
+[foundation-infrastructure.md](./foundation-infrastructure.md) for ownership
+and recovery contracts, and
+[foundation-v1-freeze.md](./foundation-v1-freeze.md) for the versioning rules
+and final freeze gate.
+
+`ResourceBudgetLedger` is the low-level owner API. Applications extending a
+`HexMap` should normally use `map.createResourceAccount(label)` and retain the
+returned reservation handles; `map.resourceBudget` is intentionally a frozen
+diagnostics-only view so an extension cannot clear or force the shared ledger.
+
 The renderer remains the default package entry. Optional game-runtime APIs use
 explicit subpaths:
 
 | Import | Responsibility |
 |---|---|
 | `three-hex-map` | HexMap, rendering, world sources, streaming and core helpers |
-| `three-hex-map/persistence` | IndexedDB chunk cache and sparse world deltas |
+| `three-hex-map/persistence` | IndexedDB chunk cache, sparse world deltas and recoverable checkpoints |
 | `three-hex-map/pathfinding` | Versioned hierarchical navigation summaries and routing |
 | `three-hex-map/simulation` | Camera-independent simulation runtime and snapshot stores |
 
@@ -15,7 +29,7 @@ Each subpath has independent ESM, CommonJS and declaration outputs. The classic
 pathfinding or simulation APIs. Those modules must be loaded through a module
 bundler or native ESM when needed.
 
-The 2026-08-26 validation build reports the root ESM at 643.51 KB unminified.
+The validation build reports the current root ESM size in the `tsup` output.
 This is a build observation rather than a fixed budget; use the `tsup` output
 from `npm run build:lib` as the current measurement. Pathfinding and simulation
 remain separate subpaths, so applications do not pull those optional runtimes

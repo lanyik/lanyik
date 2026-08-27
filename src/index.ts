@@ -12,6 +12,40 @@ export { Unit } from "./objects/Unit";
 export { PathFinder } from "./helpers/pathfinder";
 export { EventEmitter } from "./EventEmitter";
 export type { Listener } from "./EventEmitter";
+export { LifecycleDrainTimeoutError, LifecycleScope, lifecycleAbortError } from "./runtime/LifecycleScope";
+export type { LifecycleScopeOptions, LifecycleScopeStats, LifecycleState } from "./runtime/LifecycleScope";
+export {
+    ResourceBudgetLedger,
+    normalizeResourceCost,
+    estimateBufferGeometriesBytes,
+    estimateBufferGeometriesResourceBytes,
+    estimateObject3DResourceCost
+} from "./runtime/ResourceBudget";
+export type {
+    ResourceCost,
+    ResourceBudgetAccount,
+    ResourceBudgetAccountStats,
+    ResourceBudgetLimits,
+    ResourceBudgetView,
+    ResourceReservation,
+    ResourceReservationHandle,
+    ResourceBudgetStats,
+    BufferGeometryResourceBytes
+} from "./runtime/ResourceBudget";
+export { PriorityTaskQueue, WorkQueueBackpressureError } from "./runtime/PriorityTaskQueue";
+export type {
+    WorkLane,
+    PriorityTaskOptions,
+    PriorityTaskQueueOptions,
+    PriorityTaskQueueStats
+} from "./runtime/PriorityTaskQueue";
+export { RuntimeWorkCoordinator } from "./runtime/RuntimeWorkCoordinator";
+export type {
+    RuntimeWorkCoordinatorOptions,
+    RuntimeWorkCoordinatorStats,
+    RuntimeWorkDomainStats,
+    WorkDomainTelemetry
+} from "./runtime/RuntimeWorkCoordinator";
 
 export { FogOfWar, FogState } from "./objects/FogOfWar";
 export type { FogViewer, FogChange } from "./objects/FogOfWar";
@@ -45,9 +79,32 @@ export {
 export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateWorld";
 export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
+export {
+    createWorldDescriptor,
+    assertWorldDescriptor,
+    assertSupportedWorldGeneratorVersion,
+    serializeWorldDescriptor,
+    worldDescriptorsEqual,
+    WORLD_DESCRIPTOR_FORMAT_VERSION,
+    WORLD_WORKER_PROTOCOL_VERSION
+} from "./world/WorldDescriptor";
+export type {
+    WorldDescriptor,
+    CreateWorldDescriptorOptions,
+    ProceduralWorldKind
+} from "./world/WorldDescriptor";
 export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
 export { FrameTaskScheduler } from "./rendering/FrameTaskScheduler";
-export type { FrameTaskSchedulerOptions, FrameTaskSchedulerStats } from "./rendering/FrameTaskScheduler";
+export type {
+    FrameTaskSchedulerOptions,
+    FrameTaskSchedulerStats,
+    FrameTaskEnqueueOptions
+} from "./rendering/FrameTaskScheduler";
+export { WorldChunkMountQueue } from "./rendering/WorldChunkMountQueue";
+export type {
+    WorldChunkMountQueueOptions,
+    WorldChunkMountQueueStats
+} from "./rendering/WorldChunkMountQueue";
 export { mergeBufferUpdateRanges, commitBufferAttributeRanges } from "./rendering/BufferUpdateBatch";
 export type { BufferUpdateRange, GpuTileStateChange } from "./rendering/BufferUpdateBatch";
 export { AdaptiveStreamingController } from "./rendering/AdaptiveStreamingController";
@@ -57,6 +114,19 @@ export type {
     AdaptiveStreamingStats,
     AdaptiveStreamingSample
 } from "./rendering/AdaptiveStreamingController";
+export { WebGlGpuTimer } from "./rendering/WebGlGpuTimer";
+export type { WebGlGpuTimerOptions, WebGlGpuTimerStats } from "./rendering/WebGlGpuTimer";
+export { HexMapRendererHost } from "./rendering/HexMapRendererHost";
+export type {
+    HexMapRendererHostOptions,
+    WebGlContextState,
+    WebGlContextStats
+} from "./rendering/HexMapRendererHost";
+export { HexMapInteractionController } from "./rendering/HexMapInteractionController";
+export type {
+    HexMapInteractionControllerOptions,
+    HexMapInteractionStats
+} from "./rendering/HexMapInteractionController";
 export {
     generateWorldChunk,
     assertPackedWorldChunk,
@@ -121,7 +191,8 @@ export {
     isMutableWorldSource,
     isWorldVegetationSource,
     packedChunkFromWorldChunk,
-    getWorldSourceTile
+    getWorldSourceTile,
+    WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
 } from "./world/WorldSource";
 export type {
     WorldSource,
@@ -136,9 +207,16 @@ export type {
     ToroidalWorldSourceOptions,
     ToroidalWorldSourceDependencies,
     ProceduralWorldSourceOptions,
-    ProceduralWorldSourceDependencies
+    ProceduralWorldSourceDependencies,
+    WorldDeltaCheckpoint
 } from "./world/WorldSource";
 export { WorldStreamer } from "./world/WorldStreamer";
+export { WorldEditingFacade, worldTileVisualSignature } from "./world/WorldEditingFacade";
+export type {
+    WorldEditingFacadeOptions,
+    WorldEditResult,
+    WorldEditingStats
+} from "./world/WorldEditingFacade";
 export {
     ChunkResidencyCoordinator,
     getChunkResidencyCoordinator

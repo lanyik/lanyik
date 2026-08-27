@@ -1,4 +1,4 @@
-import { Group, Object3D } from "three";
+import { Object3D } from "three";
 
 import { WorldChunkLod, WorldChunkMetadata, WorldChunkKind } from "../helpers/chunks";
 import { MapInfo, Point } from "../interfaces";
@@ -8,8 +8,9 @@ import { WorldChunkActivation } from "./WorldChunkScheduler";
 export interface WorldRenderLayerHost {
     readonly map: MapInfo;
     readonly source: WorldSource;
-    readonly root: Group;
     readonly tileSize: number;
+    /** Aborted as soon as the owning render-world generation is superseded. */
+    readonly signal: AbortSignal;
     addObject(object: Object3D): void;
     removeObject(object: Object3D): void;
     invalidateVisibility(): void;
