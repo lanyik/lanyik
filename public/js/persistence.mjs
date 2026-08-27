@@ -1162,7 +1162,38 @@ var CheckpointCoordinator = class {
             record.state = "skipped";
             record.error = errorMessage(reason);
           }
-          journal = await this.persist(journal);
+          try {
+            journal = await this.persist(journal);
+          } catch (persistReason) {
+            let preparedTokenIsDurable;
+            try {
+              const durable = await this.journal.load(this.worldId);
+              const durableRecord = durable?.participants.find((candidate) => candidate.id === record.id);
+              preparedTokenIsDurable = Boolean(
+                durable && durable.sessionId === journal.sessionId && durable.generation === journal.generation && durable.revision > journal.revision && durableRecord && (durableRecord.state === "prepared" || durableRecord.state === "committed")
+              );
+            } catch {
+              preparedTokenIsDurable = void 0;
+            }
+            if (record.state === "prepared" && participant.rollback && preparedTokenIsDurable === false) {
+              try {
+                await this.runParticipant(
+                  controller,
+                  contextBase,
+                  (context) => participant.rollback(
+                    context,
+                    cloneToken(record.token),
+                    record.version
+                  )
+                );
+              } catch (rollbackReason) {
+                throw new CheckpointRecoveryError(
+                  `failed to persist prepared participant "${record.id}" (${errorMessage(persistReason)}); rollback also failed (${errorMessage(rollbackReason)})`
+                );
+              }
+            }
+            throw persistReason;
+          }
         }
         journal = await this.persist({ ...journal, phase: "committing" });
       }
@@ -1405,7 +1436,56 @@ function abortError2(message) {
   error.name = "AbortError";
   return error;
 }
-function stableSnapshotValue(value) {
+function stableSnapshotValue(value, context = { ancestors: /* @__PURE__ */ new WeakSet() }) {
+  if (value === void 0) return ["undefined"];
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return ["number", String(value)];
+    return Object.is(value, -0) ? ["number", "-0"] : value;
+  }
+  if (typeof value === "bigint") return ["bigint", value.toString()];
+  if (typeof value !== "object") {
+    throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
+  }
+  if (value instanceof ArrayBuffer) return ["bytes", ...new Uint8Array(value)];
+  if (ArrayBuffer.isView(value)) {
+    return [
+      value.constructor.name,
+      ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    ];
+  }
+  if (value instanceof Date) return ["date", stableSnapshotValue(value.getTime(), context)];
+  if (value instanceof RegExp) return ["regexp", value.source, value.flags, value.lastIndex];
+  if (context.ancestors.has(value)) {
+    throw new TypeError("checkpoint snapshot contains a cyclic object graph");
+  }
+  context.ancestors.add(value);
+  try {
+    if (value instanceof Map) {
+      return [
+        "map",
+        [...value].map(([key, entry]) => [
+          stableSnapshotValue(key, context),
+          stableSnapshotValue(entry, context)
+        ])
+      ];
+    }
+    if (value instanceof Set) {
+      return ["set", [...value].map((entry) => stableSnapshotValue(entry, context))];
+    }
+    if (Array.isArray(value)) return value.map((entry) => stableSnapshotValue(entry, context));
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      const name = value.constructor?.name || Object.prototype.toString.call(value);
+      throw new TypeError(`checkpoint snapshot contains unsupported ${name} object`);
+    }
+    const object = value;
+    return Object.keys(object).sort().map((key) => [key, stableSnapshotValue(object[key], context)]);
+  } finally {
+    context.ancestors.delete(value);
+  }
+}
+function legacyStableSnapshotValue(value) {
   if (value === void 0) return ["undefined"];
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -1420,32 +1500,40 @@ function stableSnapshotValue(value) {
       ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
     ];
   }
-  if (Array.isArray(value)) return value.map(stableSnapshotValue);
+  if (Array.isArray(value)) return value.map(legacyStableSnapshotValue);
   if (typeof value === "object") {
     const object = value;
-    return Object.keys(object).sort().map((key) => [key, stableSnapshotValue(object[key])]);
+    return Object.keys(object).sort().map((key) => [key, legacyStableSnapshotValue(object[key])]);
   }
   throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
 }
-function checksumCheckpointSnapshot(snapshot) {
-  const text = JSON.stringify(stableSnapshotValue(snapshot));
+function checksumStableValue(value) {
+  const text = JSON.stringify(value);
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
-    const value = text.charCodeAt(index);
-    hash ^= value & 255;
+    const value2 = text.charCodeAt(index);
+    hash ^= value2 & 255;
     hash = Math.imul(hash, 16777619) >>> 0;
-    hash ^= value >>> 8;
+    hash ^= value2 >>> 8;
     hash = Math.imul(hash, 16777619) >>> 0;
   }
   return hash.toString(16).padStart(8, "0");
+}
+function checksumCheckpointSnapshot(snapshot) {
+  return checksumStableValue(stableSnapshotValue(snapshot));
+}
+function legacyChecksumCheckpointSnapshot(snapshot) {
+  return checksumStableValue(legacyStableSnapshotValue(snapshot));
 }
 function cloneParticipantRecord(record) {
   return { ...record };
 }
 function cloneGeneration(generation) {
   return {
-    ...generation,
+    generation: generation.generation,
+    saveId: generation.saveId,
     descriptor: cloneValue(generation.descriptor),
+    committedAt: generation.committedAt,
     participants: generation.participants.map(cloneParticipantRecord)
   };
 }
@@ -1460,6 +1548,31 @@ function cloneManifest(manifest) {
 }
 function cloneStage(record) {
   return { ...record, snapshot: cloneValue(record.snapshot) };
+}
+function retainedStageKeys(manifest) {
+  const retained = /* @__PURE__ */ new Set();
+  for (const generation of [manifest, manifest?.previous]) {
+    for (const record of generation?.participants ?? []) {
+      if (record.state === "staged" && record.stageKey) retained.add(record.stageKey);
+    }
+  }
+  return retained;
+}
+function assertManifestStage(stage, manifest, record, allowLegacyChecksum = false) {
+  let checksumMatches = false;
+  if (stage) {
+    try {
+      checksumMatches = checksumCheckpointSnapshot(stage.snapshot) === record.checksum;
+    } catch (reason) {
+      if (!allowLegacyChecksum) throw reason;
+    }
+    if (!checksumMatches && allowLegacyChecksum) {
+      checksumMatches = legacyChecksumCheckpointSnapshot(stage.snapshot) === record.checksum;
+    }
+  }
+  if (!stage || stage.key !== record.stageKey || stage.worldId !== manifest.worldId || stage.generation !== manifest.generation || stage.saveId !== manifest.saveId || stage.participantId !== record.id || stage.participantVersion !== record.version || stage.checksum !== record.checksum || !checksumMatches) {
+    throw new CheckpointRecoveryError(`checkpoint stage for "${record.id}" is missing or corrupt`);
+  }
 }
 function assertParticipantRecords(records) {
   if (!Array.isArray(records)) throw new TypeError("checkpoint manifest participants must be an array");
@@ -1525,6 +1638,11 @@ var MemoryGenerationCheckpointStore = class {
     if (manifest.revision !== expectedRevision + 1) {
       return Promise.reject(new RangeError("checkpoint manifest revision must advance exactly once"));
     }
+    for (const record of manifest.participants) {
+      if (record.state === "staged") {
+        assertManifestStage(this.stages.get(record.stageKey), manifest, record);
+      }
+    }
     this.manifests.set(worldId, cloneManifest(manifest));
     return Promise.resolve();
   }
@@ -1536,6 +1654,18 @@ var MemoryGenerationCheckpointStore = class {
     this.assertActive();
     for (const key of keys) this.stages.delete(key);
     return Promise.resolve();
+  }
+  collectGarbage(worldId, cutoffCreatedAt) {
+    this.assertActive();
+    if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
+    const retained = retainedStageKeys(this.manifests.get(worldId));
+    let reclaimed = 0;
+    for (const [key, stage] of this.stages) {
+      if (stage.worldId !== worldId || retained.has(key) || stage.createdAt > cutoffCreatedAt) continue;
+      this.stages.delete(key);
+      reclaimed += 1;
+    }
+    return Promise.resolve(reclaimed);
   }
   dispose() {
     this.disposed = true;
@@ -1602,14 +1732,22 @@ var IndexedDbGenerationCheckpointStore = class {
       throw new RangeError("checkpoint manifest revision must advance exactly once");
     }
     const database = await this.open();
-    const transaction = database.transaction(MANIFEST_STORE, "readwrite");
+    const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
     const completion = transactionComplete4(transaction);
     try {
       const store = transaction.objectStore(MANIFEST_STORE);
+      const staging = transaction.objectStore(STAGING_STORE);
       const current = await requestResult4(store.get(worldId));
       const actualRevision = current?.revision ?? 0;
       if (actualRevision !== expectedRevision) {
         throw new CheckpointConflictError(expectedRevision, actualRevision);
+      }
+      for (const record of manifest.participants) {
+        if (record.state !== "staged") continue;
+        const stage = await requestResult4(
+          staging.get(record.stageKey)
+        );
+        assertManifestStage(stage, manifest, record);
       }
       store.put(cloneManifest(manifest));
       await completion;
@@ -1640,6 +1778,40 @@ var IndexedDbGenerationCheckpointStore = class {
     const store = transaction.objectStore(STAGING_STORE);
     for (const key of keys) store.delete(key);
     await transactionComplete4(transaction);
+  }
+  async collectGarbage(worldId, cutoffCreatedAt) {
+    this.assertActive();
+    if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
+    const database = await this.open();
+    const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
+    const completion = transactionComplete4(transaction);
+    try {
+      const manifestStore = transaction.objectStore(MANIFEST_STORE);
+      const staging = transaction.objectStore(STAGING_STORE);
+      const manifest = await requestResult4(
+        manifestStore.get(worldId)
+      );
+      if (manifest) assertGenerationCheckpointManifest(manifest, worldId);
+      const retained = retainedStageKeys(manifest);
+      const stages = await requestResult4(
+        staging.index("worldId").getAll(worldId)
+      );
+      let reclaimed = 0;
+      for (const stage of stages) {
+        if (retained.has(stage.key) || stage.createdAt > cutoffCreatedAt) continue;
+        staging.delete(stage.key);
+        reclaimed += 1;
+      }
+      await completion;
+      return reclaimed;
+    } catch (reason) {
+      try {
+        transaction.abort();
+      } catch {
+      }
+      await completion.catch(() => void 0);
+      throw reason;
+    }
   }
   dispose() {
     if (this.disposed) return;
@@ -1740,8 +1912,7 @@ var GenerationCheckpointCoordinator = class {
   collectGarbage(signal) {
     return this.enqueue(async () => {
       if (signal?.aborted) throw signal.reason ?? abortError2("Checkpoint garbage collection was aborted");
-      const manifest = await this.store.loadManifest(this.worldId);
-      return this.collectUnreferencedStages(manifest, signal);
+      return this.collectUnreferencedStages(signal);
     });
   }
   get settled() {
@@ -1857,7 +2028,7 @@ var GenerationCheckpointCoordinator = class {
       await this.store.compareAndSetManifest(this.worldId, existing?.revision ?? 0, manifest);
       this.latestGeneration = generation;
       this.completedCheckpoints += 1;
-      await this.collectUnreferencedStages(manifest, controller.signal);
+      await this.collectUnreferencedStages(controller.signal);
       return manifest;
     } catch (reason) {
       this.failedOperations += 1;
@@ -1877,7 +2048,7 @@ var GenerationCheckpointCoordinator = class {
   async recoverLatest(signal) {
     const manifest = await this.store.loadManifest(this.worldId);
     if (!manifest) {
-      await this.collectUnreferencedStages(void 0, signal);
+      await this.collectUnreferencedStages(signal);
       return void 0;
     }
     assertGenerationCheckpointManifest(manifest, this.worldId);
@@ -1895,9 +2066,7 @@ var GenerationCheckpointCoordinator = class {
           continue;
         }
         const stage = await this.store.loadStage(record.stageKey);
-        if (!stage || stage.worldId !== this.worldId || stage.saveId !== manifest.saveId || stage.participantId !== record.id || stage.checksum !== record.checksum || checksumCheckpointSnapshot(stage.snapshot) !== record.checksum) {
-          throw new CheckpointRecoveryError(`checkpoint stage for "${record.id}" is missing or corrupt`);
-        }
+        assertManifestStage(stage, manifest, record, true);
         let snapshot = stage.snapshot;
         if (record.version !== participant.version) {
           if (record.version > participant.version || !participant.migrate) {
@@ -1937,7 +2106,7 @@ var GenerationCheckpointCoordinator = class {
         await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
       }
       this.recoveredCheckpoints += 1;
-      await this.collectUnreferencedStages(manifest, controller.signal);
+      await this.collectUnreferencedStages(controller.signal);
     } catch (reason) {
       this.failedOperations += 1;
       throw reason;
@@ -1948,20 +2117,13 @@ var GenerationCheckpointCoordinator = class {
     this.migratedCheckpoints += 1;
     return this.createCheckpoint(signal);
   }
-  async collectUnreferencedStages(manifest, signal) {
+  async collectUnreferencedStages(signal) {
     if (signal?.aborted) throw signal.reason ?? abortError2("Checkpoint garbage collection was aborted");
-    const retained = /* @__PURE__ */ new Set();
-    for (const generation of [manifest, manifest?.previous]) {
-      for (const record of generation?.participants ?? []) {
-        if (record.state === "staged" && record.stageKey) retained.add(record.stageKey);
-      }
-    }
+    if (!this.store.collectGarbage) return 0;
     const cutoff = this.now() - this.orphanGraceMs;
-    const stages = await this.store.listStages(this.worldId);
-    const obsolete = stages.filter((stage) => !retained.has(stage.key) && stage.createdAt <= cutoff).map((stage) => stage.key);
-    await this.store.deleteStages(obsolete);
-    this.reclaimedStages += obsolete.length;
-    return obsolete.length;
+    const reclaimed = await this.store.collectGarbage(this.worldId, cutoff);
+    this.reclaimedStages += reclaimed;
+    return reclaimed;
   }
   assertDescriptor(descriptor) {
     if (serializeWorldDescriptor(descriptor) !== serializeWorldDescriptor(this.descriptor)) {

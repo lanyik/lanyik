@@ -1,8 +1,9 @@
 # Persistent campaign vertical slice
 
-The browser route `/?infinite&campaign` is the first end-to-end consumer of the
-streamed-world architecture. It is intentionally a small integration example,
-not a second game engine.
+The **Persistent campaign** mode in the `/` demo's control panel is the first
+end-to-end consumer of the streamed-world architecture. It is intentionally a
+small integration example, not a second game engine. The selected mode is
+remembered, so reloading `/` returns to the campaign and exercises recovery.
 
 ```text
 ProceduralWorldSource ──> streamed render chunks ──> HexMap
@@ -37,14 +38,17 @@ IndexedDbSimulationChunkStore <── WorldSimulationRuntime
    outpost from the same committed generation. Moving the camera to the
    destination then renders the restored delta.
 
-Run the automatic path with:
+Run it manually by opening:
 
 ```text
-http://127.0.0.1:3000/?infinite&campaign&autostart
+http://127.0.0.1:3000/
 ```
 
-The control panel can start another route, follow the army, or create an
-explicit save barrier. Clicking a visible passable tile also issues an order.
+Choose **Persistent campaign** under **World generation**. The campaign panel
+can start a route, follow the army, or create an explicit save barrier.
+Clicking a visible passable tile also issues an order. Legacy query flags such
+as `?infinite&campaign&autostart` remain available to deterministic browser
+automation, but they are no longer separate user-facing launch routes.
 
 ## Deliberate boundaries
 

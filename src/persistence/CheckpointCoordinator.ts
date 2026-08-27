@@ -528,7 +528,52 @@ export class CheckpointCoordinator {
                         record.state = "skipped";
                         record.error = errorMessage(reason);
                     }
-                    journal = await this.persist(journal);
+                    try {
+                        journal = await this.persist(journal);
+                    } catch (persistReason) {
+                        // prepare() may have created participant-owned durable
+                        // staging. If its token cannot be journaled, recovery
+                        // has no way to discover that staging, so reclaim it
+                        // while the token is still available in this process.
+                        let preparedTokenIsDurable: boolean | undefined;
+                        try {
+                            const durable = await this.journal.load(this.worldId);
+                            const durableRecord = durable?.participants.find(candidate => candidate.id === record.id);
+                            preparedTokenIsDurable = Boolean(
+                                durable
+                                && durable.sessionId === journal.sessionId
+                                && durable.generation === journal.generation
+                                && durable.revision > journal.revision
+                                && durableRecord
+                                && (durableRecord.state === "prepared" || durableRecord.state === "committed")
+                            );
+                        } catch {
+                            // A failed read leaves the CAS outcome ambiguous.
+                            // Keep staging rather than risk invalidating a
+                            // manifest that may already reference its token.
+                            preparedTokenIsDurable = undefined;
+                        }
+                        if (record.state === "prepared" && participant.rollback
+                            && preparedTokenIsDurable === false) {
+                            try {
+                                await this.runParticipant(
+                                    controller,
+                                    contextBase,
+                                    context => participant.rollback!(
+                                        context,
+                                        cloneToken(record.token),
+                                        record.version
+                                    )
+                                );
+                            } catch (rollbackReason) {
+                                throw new CheckpointRecoveryError(
+                                    `failed to persist prepared participant "${record.id}" (${errorMessage(persistReason)}); `
+                                    + `rollback also failed (${errorMessage(rollbackReason)})`
+                                );
+                            }
+                        }
+                        throw persistReason;
+                    }
                 }
                 journal = await this.persist({ ...journal, phase: "committing" });
             }

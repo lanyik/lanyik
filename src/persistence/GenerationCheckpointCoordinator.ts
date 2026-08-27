@@ -77,6 +77,10 @@ export interface GenerationCheckpointStore {
     ): Promise<void>;
     listStages(worldId: string): Promise<readonly GenerationCheckpointStageRecord[]>;
     deleteStages(keys: readonly string[]): Promise<void>;
+    // Implementations must read the active manifest and remove unreferenced
+    // stages atomically with respect to compareAndSetManifest(). Otherwise a
+    // collector can delete a verified stage immediately before it is published.
+    collectGarbage?(worldId: string, cutoffCreatedAt: number): Promise<number>;
     dispose(): void;
 }
 
@@ -119,7 +123,70 @@ function abortError(message: string): Error {
     return error;
 }
 
-function stableSnapshotValue(value: unknown): unknown {
+interface StableSnapshotContext {
+    readonly ancestors: WeakSet<object>;
+}
+
+function stableSnapshotValue(
+    value: unknown,
+    context: StableSnapshotContext = { ancestors: new WeakSet() }
+): unknown {
+    if (value === undefined) return ["undefined"];
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number") {
+        if (!Number.isFinite(value)) return ["number", String(value)];
+        return Object.is(value, -0) ? ["number", "-0"] : value;
+    }
+    if (typeof value === "bigint") return ["bigint", value.toString()];
+    if (typeof value !== "object") {
+        throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
+    }
+
+    if (value instanceof ArrayBuffer) return ["bytes", ...new Uint8Array(value)];
+    if (ArrayBuffer.isView(value)) {
+        return [
+            value.constructor.name,
+            ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+        ];
+    }
+    if (value instanceof Date) return ["date", stableSnapshotValue(value.getTime(), context)];
+    if (value instanceof RegExp) return ["regexp", value.source, value.flags, value.lastIndex];
+    if (context.ancestors.has(value)) {
+        throw new TypeError("checkpoint snapshot contains a cyclic object graph");
+    }
+    context.ancestors.add(value);
+    try {
+        if (value instanceof Map) {
+            return [
+                "map",
+                [...value].map(([key, entry]) => [
+                    stableSnapshotValue(key, context),
+                    stableSnapshotValue(entry, context)
+                ])
+            ];
+        }
+        if (value instanceof Set) {
+            return ["set", [...value].map(entry => stableSnapshotValue(entry, context))];
+        }
+        if (Array.isArray(value)) return value.map(entry => stableSnapshotValue(entry, context));
+
+        const prototype = Object.getPrototypeOf(value);
+        if (prototype !== Object.prototype && prototype !== null) {
+            const name = value.constructor?.name || Object.prototype.toString.call(value);
+            throw new TypeError(`checkpoint snapshot contains unsupported ${name} object`);
+        }
+        const object = value as Record<string, unknown>;
+        return Object.keys(object).sort().map(key => [key, stableSnapshotValue(object[key], context)]);
+    } finally {
+        context.ancestors.delete(value);
+    }
+}
+
+// v1 originally treated object types without enumerable own properties (for
+// example Map, Set, and Date) as the same empty object. Recovery accepts those
+// already-published checksums so an upgrade does not strand an existing save;
+// all newly staged snapshots use the type-aware representation above.
+function legacyStableSnapshotValue(value: unknown): unknown {
     if (value === undefined) return ["undefined"];
     if (value === null || typeof value === "string" || typeof value === "boolean") return value;
     if (typeof value === "number") {
@@ -134,16 +201,16 @@ function stableSnapshotValue(value: unknown): unknown {
             ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
         ];
     }
-    if (Array.isArray(value)) return value.map(stableSnapshotValue);
+    if (Array.isArray(value)) return value.map(legacyStableSnapshotValue);
     if (typeof value === "object") {
         const object = value as Record<string, unknown>;
-        return Object.keys(object).sort().map(key => [key, stableSnapshotValue(object[key])]);
+        return Object.keys(object).sort().map(key => [key, legacyStableSnapshotValue(object[key])]);
     }
     throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
 }
 
-export function checksumCheckpointSnapshot(snapshot: unknown): string {
-    const text = JSON.stringify(stableSnapshotValue(snapshot));
+function checksumStableValue(value: unknown): string {
+    const text = JSON.stringify(value);
     let hash = 0x811c9dc5;
     for (let index = 0; index < text.length; index += 1) {
         const value = text.charCodeAt(index);
@@ -155,14 +222,24 @@ export function checksumCheckpointSnapshot(snapshot: unknown): string {
     return hash.toString(16).padStart(8, "0");
 }
 
+export function checksumCheckpointSnapshot(snapshot: unknown): string {
+    return checksumStableValue(stableSnapshotValue(snapshot));
+}
+
+function legacyChecksumCheckpointSnapshot(snapshot: unknown): string {
+    return checksumStableValue(legacyStableSnapshotValue(snapshot));
+}
+
 function cloneParticipantRecord(record: GenerationCheckpointParticipantRecord): GenerationCheckpointParticipantRecord {
     return { ...record };
 }
 
 function cloneGeneration(generation: CommittedCheckpointGeneration): CommittedCheckpointGeneration {
     return {
-        ...generation,
+        generation: generation.generation,
+        saveId: generation.saveId,
         descriptor: cloneValue(generation.descriptor),
+        committedAt: generation.committedAt,
         participants: generation.participants.map(cloneParticipantRecord)
     };
 }
@@ -179,6 +256,42 @@ function cloneManifest(manifest: GenerationCheckpointManifest): GenerationCheckp
 
 function cloneStage(record: GenerationCheckpointStageRecord): GenerationCheckpointStageRecord {
     return { ...record, snapshot: cloneValue(record.snapshot) };
+}
+
+function retainedStageKeys(manifest: GenerationCheckpointManifest | undefined): Set<string> {
+    const retained = new Set<string>();
+    for (const generation of [manifest, manifest?.previous]) {
+        for (const record of generation?.participants ?? []) {
+            if (record.state === "staged" && record.stageKey) retained.add(record.stageKey);
+        }
+    }
+    return retained;
+}
+
+function assertManifestStage(
+    stage: GenerationCheckpointStageRecord | undefined,
+    manifest: GenerationCheckpointManifest,
+    record: GenerationCheckpointParticipantRecord,
+    allowLegacyChecksum = false
+): asserts stage is GenerationCheckpointStageRecord {
+    let checksumMatches = false;
+    if (stage) {
+        try {
+            checksumMatches = checksumCheckpointSnapshot(stage.snapshot) === record.checksum;
+        } catch (reason) {
+            if (!allowLegacyChecksum) throw reason;
+        }
+        if (!checksumMatches && allowLegacyChecksum) {
+            checksumMatches = legacyChecksumCheckpointSnapshot(stage.snapshot) === record.checksum;
+        }
+    }
+    if (!stage || stage.key !== record.stageKey || stage.worldId !== manifest.worldId
+        || stage.generation !== manifest.generation || stage.saveId !== manifest.saveId
+        || stage.participantId !== record.id || stage.participantVersion !== record.version
+        || stage.checksum !== record.checksum
+        || !checksumMatches) {
+        throw new CheckpointRecoveryError(`checkpoint stage for "${record.id}" is missing or corrupt`);
+    }
 }
 
 function assertParticipantRecords(records: unknown): asserts records is GenerationCheckpointParticipantRecord[] {
@@ -267,6 +380,11 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
         if (manifest.revision !== expectedRevision + 1) {
             return Promise.reject(new RangeError("checkpoint manifest revision must advance exactly once"));
         }
+        for (const record of manifest.participants) {
+            if (record.state === "staged") {
+                assertManifestStage(this.stages.get(record.stageKey!), manifest, record);
+            }
+        }
         this.manifests.set(worldId, cloneManifest(manifest));
         return Promise.resolve();
     }
@@ -282,6 +400,19 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
         this.assertActive();
         for (const key of keys) this.stages.delete(key);
         return Promise.resolve();
+    }
+
+    public collectGarbage(worldId: string, cutoffCreatedAt: number): Promise<number> {
+        this.assertActive();
+        if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
+        const retained = retainedStageKeys(this.manifests.get(worldId));
+        let reclaimed = 0;
+        for (const [key, stage] of this.stages) {
+            if (stage.worldId !== worldId || retained.has(key) || stage.createdAt > cutoffCreatedAt) continue;
+            this.stages.delete(key);
+            reclaimed += 1;
+        }
+        return Promise.resolve(reclaimed);
     }
 
     public dispose(): void { this.disposed = true; }
@@ -369,14 +500,22 @@ export class IndexedDbGenerationCheckpointStore implements GenerationCheckpointS
             throw new RangeError("checkpoint manifest revision must advance exactly once");
         }
         const database = await this.open();
-        const transaction = database.transaction(MANIFEST_STORE, "readwrite");
+        const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
         const completion = transactionComplete(transaction);
         try {
             const store = transaction.objectStore(MANIFEST_STORE);
+            const staging = transaction.objectStore(STAGING_STORE);
             const current = await requestResult(store.get(worldId)) as GenerationCheckpointManifest | undefined;
             const actualRevision = current?.revision ?? 0;
             if (actualRevision !== expectedRevision) {
                 throw new CheckpointConflictError(expectedRevision, actualRevision);
+            }
+            for (const record of manifest.participants) {
+                if (record.state !== "staged") continue;
+                const stage = await requestResult(
+                    staging.get(record.stageKey!)
+                ) as GenerationCheckpointStageRecord | undefined;
+                assertManifestStage(stage, manifest, record);
             }
             store.put(cloneManifest(manifest));
             await completion;
@@ -406,6 +545,38 @@ export class IndexedDbGenerationCheckpointStore implements GenerationCheckpointS
         const store = transaction.objectStore(STAGING_STORE);
         for (const key of keys) store.delete(key);
         await transactionComplete(transaction);
+    }
+
+    public async collectGarbage(worldId: string, cutoffCreatedAt: number): Promise<number> {
+        this.assertActive();
+        if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
+        const database = await this.open();
+        const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
+        const completion = transactionComplete(transaction);
+        try {
+            const manifestStore = transaction.objectStore(MANIFEST_STORE);
+            const staging = transaction.objectStore(STAGING_STORE);
+            const manifest = await requestResult(
+                manifestStore.get(worldId)
+            ) as GenerationCheckpointManifest | undefined;
+            if (manifest) assertGenerationCheckpointManifest(manifest, worldId);
+            const retained = retainedStageKeys(manifest);
+            const stages = await requestResult(
+                staging.index("worldId").getAll(worldId)
+            ) as GenerationCheckpointStageRecord[];
+            let reclaimed = 0;
+            for (const stage of stages) {
+                if (retained.has(stage.key) || stage.createdAt > cutoffCreatedAt) continue;
+                staging.delete(stage.key);
+                reclaimed += 1;
+            }
+            await completion;
+            return reclaimed;
+        } catch (reason) {
+            try { transaction.abort(); } catch { /* already complete */ }
+            await completion.catch(() => undefined);
+            throw reason;
+        }
     }
 
     public dispose(): void {
@@ -526,8 +697,7 @@ export class GenerationCheckpointCoordinator {
     public collectGarbage(signal?: AbortSignal): Promise<number> {
         return this.enqueue(async () => {
             if (signal?.aborted) throw signal.reason ?? abortError("Checkpoint garbage collection was aborted");
-            const manifest = await this.store.loadManifest(this.worldId);
-            return this.collectUnreferencedStages(manifest, signal);
+            return this.collectUnreferencedStages(signal);
         });
     }
 
@@ -647,7 +817,7 @@ export class GenerationCheckpointCoordinator {
             await this.store.compareAndSetManifest(this.worldId, existing?.revision ?? 0, manifest);
             this.latestGeneration = generation;
             this.completedCheckpoints += 1;
-            await this.collectUnreferencedStages(manifest, controller.signal);
+            await this.collectUnreferencedStages(controller.signal);
             return manifest;
         } catch (reason) {
             this.failedOperations += 1;
@@ -671,7 +841,7 @@ export class GenerationCheckpointCoordinator {
     private async recoverLatest(signal?: AbortSignal): Promise<GenerationCheckpointManifest | undefined> {
         const manifest = await this.store.loadManifest(this.worldId);
         if (!manifest) {
-            await this.collectUnreferencedStages(undefined, signal);
+            await this.collectUnreferencedStages(signal);
             return undefined;
         }
         assertGenerationCheckpointManifest(manifest, this.worldId);
@@ -692,11 +862,7 @@ export class GenerationCheckpointCoordinator {
                     continue;
                 }
                 const stage = await this.store.loadStage(record.stageKey!);
-                if (!stage || stage.worldId !== this.worldId || stage.saveId !== manifest.saveId
-                    || stage.participantId !== record.id || stage.checksum !== record.checksum
-                    || checksumCheckpointSnapshot(stage.snapshot) !== record.checksum) {
-                    throw new CheckpointRecoveryError(`checkpoint stage for "${record.id}" is missing or corrupt`);
-                }
+                assertManifestStage(stage, manifest, record, true);
                 let snapshot = stage.snapshot;
                 if (record.version !== participant.version) {
                     if (record.version > participant.version || !participant.migrate) {
@@ -737,7 +903,7 @@ export class GenerationCheckpointCoordinator {
                 await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
             }
             this.recoveredCheckpoints += 1;
-            await this.collectUnreferencedStages(manifest, controller.signal);
+            await this.collectUnreferencedStages(controller.signal);
         } catch (reason) {
             this.failedOperations += 1;
             throw reason;
@@ -749,23 +915,16 @@ export class GenerationCheckpointCoordinator {
         return this.createCheckpoint(signal);
     }
 
-    private async collectUnreferencedStages(
-        manifest: GenerationCheckpointManifest | undefined,
-        signal?: AbortSignal
-    ): Promise<number> {
+    private async collectUnreferencedStages(signal?: AbortSignal): Promise<number> {
         if (signal?.aborted) throw signal.reason ?? abortError("Checkpoint garbage collection was aborted");
-        const retained = new Set<string>();
-        for (const generation of [manifest, manifest?.previous]) {
-            for (const record of generation?.participants ?? []) {
-                if (record.state === "staged" && record.stageKey) retained.add(record.stageKey);
-            }
-        }
+        // Older custom stores do not have an atomic GC primitive. Skipping GC
+        // for them is safe (at worst it retains orphan staging); composing
+        // listStages() + deleteStages() here would reintroduce the publish race.
+        if (!this.store.collectGarbage) return 0;
         const cutoff = this.now() - this.orphanGraceMs;
-        const stages = await this.store.listStages(this.worldId);
-        const obsolete = stages.filter(stage => !retained.has(stage.key) && stage.createdAt <= cutoff).map(stage => stage.key);
-        await this.store.deleteStages(obsolete);
-        this.reclaimedStages += obsolete.length;
-        return obsolete.length;
+        const reclaimed = await this.store.collectGarbage(this.worldId, cutoff);
+        this.reclaimedStages += reclaimed;
+        return reclaimed;
     }
 
     private assertDescriptor(descriptor: WorldDescriptor): void {

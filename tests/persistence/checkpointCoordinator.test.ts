@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
     CHECKPOINT_JOURNAL_FORMAT_VERSION,
     CheckpointCoordinator,
+    CheckpointJournal,
     CheckpointParticipant,
     MemoryCheckpointJournalStore
 } from "../../src/persistence/CheckpointCoordinator";
@@ -34,6 +35,94 @@ describe("CheckpointCoordinator", () => {
             "commit:simulation:1", "commit:terrain:1"
         ]);
         expect(coordinator.stats.latestCommittedGeneration).toBe(1);
+    });
+
+    test("rolls back durable staging when a prepared token cannot be journaled", async () => {
+        class FailingPreparedJournalStore extends MemoryCheckpointJournalStore {
+            private writes = 0;
+
+            public override compareAndSet(
+                worldId: string,
+                expectedRevision: number,
+                journal: CheckpointJournal
+            ): Promise<void> {
+                this.writes += 1;
+                if (this.writes === 2) return Promise.reject(new Error("journal write failed"));
+                return super.compareAndSet(worldId, expectedRevision, journal);
+            }
+        }
+        const store = new FailingPreparedJournalStore();
+        const staged = new Set<string>();
+        let sequence = 0;
+        const rollback = vi.fn((_context: unknown, token: unknown) => { staged.delete(String(token)); });
+        const coordinator = new CheckpointCoordinator({
+            worldId: "world-prepare-journal-failure",
+            sessionId: "writer",
+            journal: store,
+            participants: [{
+                id: "state",
+                version: 1,
+                prepare: () => {
+                    const token = `stage-${++sequence}`;
+                    staged.add(token);
+                    return token;
+                },
+                commit: (_context, token: string) => { staged.delete(token); },
+                rollback
+            }]
+        });
+
+        await expect(coordinator.checkpoint()).rejects.toThrow("journal write failed");
+        expect(rollback).toHaveBeenCalledWith(
+            expect.objectContaining({ generation: 1 }),
+            "stage-1",
+            1
+        );
+        expect(staged).toEqual(new Set());
+        expect((await store.load("world-prepare-journal-failure"))?.participants[0].state).toBe("pending");
+
+        await expect(coordinator.checkpoint()).resolves.toMatchObject({ phase: "committed", generation: 2 });
+        expect(staged).toEqual(new Set());
+    });
+
+    test("keeps staging when the prepared journal write committed before reporting failure", async () => {
+        class AmbiguousPreparedJournalStore extends MemoryCheckpointJournalStore {
+            private writes = 0;
+
+            public override async compareAndSet(
+                worldId: string,
+                expectedRevision: number,
+                journal: CheckpointJournal
+            ): Promise<void> {
+                this.writes += 1;
+                await super.compareAndSet(worldId, expectedRevision, journal);
+                if (this.writes === 2) throw new Error("connection lost after journal commit");
+            }
+        }
+        const store = new AmbiguousPreparedJournalStore();
+        const staged = new Set<string>();
+        const rollback = vi.fn((_context: unknown, token: unknown) => { staged.delete(String(token)); });
+        const commit = vi.fn((_context: unknown, token: unknown) => { staged.delete(String(token)); });
+        const coordinator = new CheckpointCoordinator({
+            worldId: "world-ambiguous-prepare-write",
+            sessionId: "writer",
+            journal: store,
+            participants: [{
+                id: "state", version: 1,
+                prepare: () => { staged.add("stage-1"); return "stage-1"; },
+                commit,
+                rollback
+            }]
+        });
+
+        await expect(coordinator.checkpoint()).rejects.toThrow("connection lost after journal commit");
+        expect((await store.load("world-ambiguous-prepare-write"))?.participants[0].state).toBe("prepared");
+        expect(rollback).not.toHaveBeenCalled();
+        expect(staged).toEqual(new Set(["stage-1"]));
+
+        await expect(coordinator.recover()).resolves.toMatchObject({ phase: "committed", generation: 1 });
+        expect(commit).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }), "stage-1");
+        expect(staged).toEqual(new Set());
     });
 
     test("uses journal CAS to reject concurrent writers for the same world generation", async () => {

@@ -12362,6 +12362,7 @@ void main() {
       this.baselineRevision = 0;
       this.generation = 0;
       this.clearing = false;
+      this.restoring = false;
       this.disposed = false;
     }
     get stats() {
@@ -12387,6 +12388,7 @@ void main() {
     assertEditable() {
       if (this.disposed) throw new Error("world delta session has been disposed");
       if (this.clearing) throw new Error("world deltas are being cleared; await clearDeltas() before editing");
+      if (this.restoring) throw new Error("world deltas are being restored; await checkpoint recovery before editing");
     }
     persist(points) {
       if (points.length === 0) return;
@@ -12419,7 +12421,7 @@ void main() {
       }
     }
     restore(chunkX, chunkY) {
-      if (!this.deltaStore || this.disposed || this.clearing) return Promise.resolve();
+      if (!this.deltaStore || this.disposed || this.clearing || this.restoring) return Promise.resolve();
       const key = `${chunkX},${chunkY}`;
       const state = this.state(key, chunkX, chunkY);
       if (state.restored) return Promise.resolve();
@@ -12481,6 +12483,7 @@ void main() {
       }
     }
     async createCheckpointSnapshot() {
+      if (this.restoring) throw new Error("world deltas are being restored");
       await this.flush();
       if (!this.deltaStore?.listWorld) {
         throw new Error("WorldDeltaStore does not support checkpoint enumeration");
@@ -12519,30 +12522,40 @@ void main() {
         if (keys.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
         keys.add(key);
       }
-      await this.flush();
-      await this.deltaStore.replaceWorld(this.worldId, deltas);
-      await this.deltaStore.flush();
-      this.generation += 1;
-      this.chunks.clear();
-      this.revisionTombstones.clear();
-      this.baselineRevision = 0;
-      this.tileStore.clearTileOverrides();
-      for (const delta of deltas) {
-        const key = `${delta.chunkX},${delta.chunkY}`;
-        const state = this.state(key, delta.chunkX, delta.chunkY);
-        state.revision = delta.revision;
-        state.restored = true;
-        for (const entry of delta.entries) state.activeTiles.add(`${entry.x},${entry.y}`);
-        this.tileStore.setTileOverrides(delta.entries.map((entry) => ({
-          x: entry.x,
-          y: entry.y,
-          changes: entry.override
-        })));
+      if (this.disposed) throw new Error("world delta session has been disposed");
+      if (this.clearing) throw new Error("world deltas are being cleared");
+      if (this.restoring) throw new Error("world deltas are already being restored");
+      this.restoring = true;
+      try {
+        await this.flush();
+        await this.deltaStore.replaceWorld(this.worldId, deltas);
+        await this.deltaStore.flush();
+        if (this.disposed) throw new Error("world delta session has been disposed");
+        this.generation += 1;
+        this.chunks.clear();
+        this.revisionTombstones.clear();
+        this.baselineRevision = 0;
+        this.tileStore.clearTileOverrides();
+        for (const delta of deltas) {
+          const key = `${delta.chunkX},${delta.chunkY}`;
+          const state = this.state(key, delta.chunkX, delta.chunkY);
+          state.revision = delta.revision;
+          state.restored = true;
+          for (const entry of delta.entries) state.activeTiles.add(`${entry.x},${entry.y}`);
+          this.tileStore.setTileOverrides(delta.entries.map((entry) => ({
+            x: entry.x,
+            y: entry.y,
+            changes: entry.override
+          })));
+        }
+      } finally {
+        this.restoring = false;
       }
     }
     async clear() {
       if (this.disposed) throw new Error("world delta session has been disposed");
       if (this.clearing) throw new Error("world deltas are already being cleared");
+      if (this.restoring) throw new Error("world deltas are being restored");
       this.clearing = true;
       this.generation += 1;
       try {

@@ -1,7 +1,7 @@
 # Infrastructure v1 freeze contract
 
 Status: frozen on 2026-08-27. The acceptance commands at the end of this
-document passed together: 231 unit tests, type checking, build, browser E2E,
+document passed together: 237 unit tests, type checking, build, browser E2E,
 the explicit 500-generation soak, and the benchmark gate.
 
 The freeze covers lifecycle ownership, streamed world chunks, runtime work
@@ -21,22 +21,34 @@ only commit point.
 - A crash after publication exposes the complete new generation.
 - The manifest retains one complete previous generation; garbage collection
   keeps both referenced generations and removes only unreferenced staging data
-  after the configured grace period.
+  after the configured grace period. Previous-generation metadata is copied
+  without recursively retaining older manifests.
 - Competing writers use the manifest revision as a CAS fence. Records from
   different `saveId` values can never be combined into one generation.
+- Manifest publication revalidates every referenced stage in the same
+  manifest/staging transaction. Garbage collection reads the live manifest and
+  deletes stages under that same transaction fence, so it cannot remove a
+  verified stage immediately before publication.
 - Recovery validates the complete world descriptor and every participant
-  checksum before applying any snapshot.
+  checksum before applying any snapshot. Structured `Map`, `Set`, and `Date`
+  values have type-aware checksums; recovery still accepts already-published
+  v1 checksums and upgrades them on the next save.
 - A participant migration restores the old snapshot and publishes a new
   generation. Committed records are never rewritten in place.
 
 The campaign registers the real `WorldSimulationRuntime` and sparse terrain
 delta source as required participants. Their snapshot restore operations
 replace the complete backing store atomically. Rebuildable render/cache state
-is deliberately excluded from the authoritative checkpoint.
+is deliberately excluded from the authoritative checkpoint. Terrain edits are
+rejected with an explicit recovery-in-progress error during replacement rather
+than being accepted and then silently discarded.
 
 `CheckpointCoordinator` and `createFlushCheckpointParticipant()` remain
 available as compatibility APIs, but a flush participant is not a strict
-point-in-time save and must not become an authoritative gameplay save path.
+point-in-time save and must not become an authoritative gameplay save path. If
+a legacy participant prepares durable staging but its token journal write
+fails, the coordinator verifies whether that write committed; it either keeps
+the referenced staging for recovery or rolls back the unreferenced staging.
 
 ## Frozen world-generation protocol
 

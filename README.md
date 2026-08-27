@@ -249,17 +249,20 @@ unloaded terrain use `HierarchicalPathfinder` from
 `three-hex-map/pathfinding`; see
 [docs/hierarchical-pathfinding.md](docs/hierarchical-pathfinding.md).
 
-The regular demo uses the streamed finite toroidal source; open `/?infinite` to exercise this mode (the
-optional `x`/`y` query values test very large logical coordinates). Arbitrary
+Open the single demo entry at `/` and choose **World mode** in the control
+panel. It switches between the streamed finite toroidal source, the infinite
+world, and the persistent campaign without requiring a different user-facing
+URL. Infinite modes also expose their initial `x`/`y` coordinates in the same
+panel, and the selected mode is remembered across reloads. Query flags remain
+supported for automated tests and old bookmarks. Arbitrary
 `Unit` objects added through `map.add()` remain under the rebased world root;
 global simulation/pathfinding across unloaded chunks is intentionally an
 application-level concern rather than materializing the entire world again.
 
-Open `/?infinite&campaign` for the minimal persistent-campaign vertical slice.
+Select **Persistent campaign** in that panel for the minimal vertical slice.
 It orders an army across multiple source chunks, keeps it advancing after the
 camera moves away, creates an outpost through a World Delta on arrival, and
-restores both simulation and world state from IndexedDB after a reload. Add
-`&autostart` to issue the first long march automatically. See
+restores both simulation and world state from IndexedDB after a reload. See
 [docs/campaign-vertical-slice.md](docs/campaign-vertical-slice.md) for the
 runtime boundaries and verification flow.
 

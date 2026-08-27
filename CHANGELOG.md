@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Consolidated the finite, infinite, and persistent-campaign demos under the
+  `/` entry point with a remembered in-game world-mode selector; legacy query
+  flags remain available for automation and old bookmarks.
 - Terrain, water, grass and forests now expose lazy chunk-resource interfaces
   managed by a dedicated scheduler. Only distance/frustum-visible canonical or
   toroidal chunks construct CPU render data and submit GPU work.
@@ -87,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Made generation publication and orphan collection share a staging/manifest
+  transaction fence, so garbage collection cannot publish a manifest whose
+  verified stage was concurrently removed.
+- Bounded checkpoint history to exactly one previous generation and made
+  checksums type-aware for `Map`, `Set`, and `Date` while retaining recovery
+  compatibility with already-published v1 checksums.
+- Rejected terrain edits during checkpoint restore instead of silently losing
+  them, and reclaimed legacy participant staging when its prepared token could
+  not be journaled without an ambiguous commit.
 - Prevented failed checkpoint prepares from being resumed with tokens captured
   at a later application state; retries now abort/roll back the old generation.
 - Prevented impossible overweight tasks from evicting an entire queue, kept

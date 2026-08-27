@@ -2,6 +2,8 @@ import { GUI } from "./js/vendor/dat.gui.module.js";
 import { createI18n } from "./i18n.js";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
+const WORLD_MODE_STORAGE_KEY = "three-hex-world.mode";
+const WORLD_MODES = new Set(["finite", "infinite", "campaign"]);
 const {
     HexMap,
     ProceduralWorldSource,
@@ -11,8 +13,6 @@ const {
     MAX_WORLD_SIZE
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
-const infiniteMode = query.has("infinite");
-const campaignMode = infiniteMode && query.has("campaign");
 const fastRenderMode = query.get("quality") === "fast";
 const TARGET_FRAME_MS = 1000 / 60;
 const title = document.querySelector("[data-world-title]");
@@ -43,6 +43,26 @@ function persistLocale(locale) {
         localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     } catch {
         // Language switching still works when storage is unavailable.
+    }
+}
+
+function readInitialWorldMode() {
+    if (query.has("campaign")) return "campaign";
+    if (query.has("infinite")) return "infinite";
+    try {
+        const stored = localStorage.getItem(WORLD_MODE_STORAGE_KEY);
+        if (WORLD_MODES.has(stored)) return stored;
+    } catch {
+        // The root route still works with the finite default when storage is unavailable.
+    }
+    return "finite";
+}
+
+function persistWorldMode(mode) {
+    try {
+        localStorage.setItem(WORLD_MODE_STORAGE_KEY, mode);
+    } catch {
+        // Mode switching remains available for the current page session.
     }
 }
 
@@ -204,6 +224,9 @@ map.on("frame", samplePerformance);
 
 const controls = {
     language: i18n.locale,
+    worldMode: readInitialWorldMode(),
+    initialX: Number.parseInt(query.get("x") ?? "0", 10),
+    initialY: Number.parseInt(query.get("y") ?? "0", 10),
     seed: "new-world",
     width: 42,
     height: 32,
@@ -225,11 +248,13 @@ window.runCampaignUntilSettled = seconds => activeCampaign?.runUntilSettled(seco
 
 let activeSource;
 let activeCampaign;
+let activeWorldMode;
 let generating = false;
+let pendingRegeneration = false;
 let statusState = { kind: "initializing" };
 let campaignSnapshot;
 
-campaignPanel.hidden = !campaignMode;
+campaignPanel.hidden = true;
 
 window.getWorldDiagnostics = () => ({
     status: statusState.kind,
@@ -247,6 +272,7 @@ window.getWorldDiagnostics = () => ({
     renderer: map.renderer ? { ...map.renderer.info.render } : undefined,
     rendererPixelRatio: map.renderer?.getPixelRatio(),
     renderBackend,
+    worldMode: activeWorldMode ?? controls.worldMode,
     performance: { ...performanceSnapshot },
     cameraTarget: map.getCameraTarget().toArray(),
     campaign: activeCampaign?.diagnostics
@@ -261,7 +287,7 @@ window.addEventListener("beforeunload", () => {
 
 function renderCampaign(snapshot = campaignSnapshot) {
     campaignSnapshot = snapshot;
-    if (!campaignMode) return;
+    if (activeWorldMode !== "campaign") return;
     campaignTitle.textContent = i18n.t("campaign.title");
     const army = snapshot?.army;
     if (!army) {
@@ -351,8 +377,16 @@ async function clearCachedData() {
 }
 
 async function regenerate() {
-    if (generating) return;
+    if (generating) {
+        pendingRegeneration = true;
+        return;
+    }
     generating = true;
+    const requestedWorldMode = WORLD_MODES.has(controls.worldMode) ? controls.worldMode : "finite";
+    const infiniteMode = requestedWorldMode !== "finite";
+    const campaignMode = requestedWorldMode === "campaign";
+    persistWorldMode(requestedWorldMode);
+    syncWorldModeUi();
     setStatus("generating", {
         width: controls.width,
         height: controls.height,
@@ -365,11 +399,12 @@ async function regenerate() {
             activeCampaign = undefined;
             renderCampaign(null);
         }
+        activeWorldMode = requestedWorldMode;
         const workerUrl = new URL("./js/world-generator.worker.mjs", window.location.href);
         if (infiniteMode) {
             const initialTile = {
-                x: Number.parseInt(query.get("x") ?? "0", 10),
-                y: Number.parseInt(query.get("y") ?? "0", 10)
+                x: Number(controls.initialX),
+                y: Number(controls.initialY)
             };
             const source = new ProceduralWorldSource({
                 seed: controls.seed,
@@ -439,13 +474,17 @@ async function regenerate() {
         });
     } finally {
         generating = false;
+        if (pendingRegeneration) {
+            pendingRegeneration = false;
+            queueMicrotask(() => { void regenerate(); });
+        }
     }
 }
 
 map.on("hover", ({ x, y, tile }) => setStatus("tile", { x, y, tile }));
 map.on("click", ({ x, y, tile }) => {
     setStatus("selected", { x, y, tile });
-    if (campaignMode && activeCampaign && tile.type !== "sea"
+    if (activeWorldMode === "campaign" && activeCampaign && tile.type !== "sea"
         && tile.type !== "coastal" && tile.type !== "mountain") {
         void activeCampaign.orderTo({ x, y }).catch(console.error);
     }
@@ -456,24 +495,54 @@ const languageOptions = { English: "en", "简体中文": "zh-CN" };
 const languageController = gui.add(controls, "language", languageOptions);
 
 const worldFolder = gui.addFolder("World generation");
+const worldModeOptions = {
+    [i18n.t("worldMode.finite")]: "finite",
+    [i18n.t("worldMode.infinite")]: "infinite",
+    [i18n.t("worldMode.campaign")]: "campaign"
+};
+const worldModeController = worldFolder.add(controls, "worldMode", worldModeOptions);
+const worldModeSelect = worldModeController.domElement.querySelector("select");
+if (worldModeSelect) worldModeSelect.dataset.worldMode = "";
 const seedController = worldFolder.add(controls, "seed");
 const widthController = worldFolder.add(controls, "width", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 2);
 const heightController = worldFolder.add(controls, "height", MIN_WORLD_SIZE, MAX_WORLD_SIZE, 1);
+const initialXController = worldFolder.add(controls, "initialX").step(1);
+const initialYController = worldFolder.add(controls, "initialY").step(1);
 const generateController = worldFolder.add(controls, "regenerate");
 const clearCacheController = worldFolder.add(controls, "clearCachedData");
 worldFolder.open();
 
-let campaignFolder;
-let startMarchController;
-let followArmyController;
-let saveCampaignController;
-if (campaignMode) {
-    campaignFolder = gui.addFolder("Campaign");
-    startMarchController = campaignFolder.add(controls, "startCampaignMarch");
-    followArmyController = campaignFolder.add(controls, "followCampaignArmy");
-    saveCampaignController = campaignFolder.add(controls, "saveCampaign");
-    campaignFolder.open();
+const campaignFolder = gui.addFolder("Campaign");
+const startMarchController = campaignFolder.add(controls, "startCampaignMarch");
+const followArmyController = campaignFolder.add(controls, "followCampaignArmy");
+const saveCampaignController = campaignFolder.add(controls, "saveCampaign");
+campaignFolder.open();
+
+function setControllerVisible(controller, visible) {
+    const row = controller.domElement.closest("li");
+    if (row) row.style.display = visible ? "" : "none";
 }
+
+function syncWorldModeUi() {
+    const infinite = controls.worldMode !== "finite";
+    const campaign = controls.worldMode === "campaign";
+    setControllerVisible(widthController, !infinite);
+    setControllerVisible(heightController, !infinite);
+    setControllerVisible(initialXController, infinite);
+    setControllerVisible(initialYController, infinite);
+    if (campaignFolder.domElement.parentElement) {
+        campaignFolder.domElement.parentElement.style.display = campaign ? "" : "none";
+    }
+    campaignPanel.hidden = !campaign;
+}
+
+worldModeController.onChange(mode => {
+    if (!WORLD_MODES.has(mode)) return;
+    persistWorldMode(mode);
+    syncWorldModeUi();
+    void regenerate();
+});
+syncWorldModeUi();
 
 const terrainFolder = gui.addFolder("Terrain");
 const gridController = terrainFolder.add(map, "gridVisible");
@@ -494,9 +563,12 @@ const windController = vegetationFolder.add(map, "grassWindStrength", 0, 6, 0.1)
 
 const translatedControllers = [
     [languageController, "panel.language"],
+    [worldModeController, "control.worldMode"],
     [seedController, "control.seed"],
     [widthController, "control.width"],
     [heightController, "control.height"],
+    [initialXController, "control.initialX"],
+    [initialYController, "control.initialY"],
     [generateController, "control.generate"],
     [clearCacheController, "control.clearCache"],
     [gridController, "control.grid"],
@@ -509,21 +581,19 @@ const translatedControllers = [
     [foamController, "control.foam"],
     [treesController, "control.trees"],
     [grassController, "control.grass"],
-    [windController, "control.wind"]
-];
-if (campaignMode) translatedControllers.push(
+    [windController, "control.wind"],
     [startMarchController, "control.startMarch"],
     [followArmyController, "control.followArmy"],
     [saveCampaignController, "control.saveCampaign"]
-);
+];
 
 const translatedFolders = [
     [worldFolder, "panel.world"],
     [terrainFolder, "panel.terrain"],
     [waterFolder, "panel.water"],
-    [vegetationFolder, "panel.vegetation"]
+    [vegetationFolder, "panel.vegetation"],
+    [campaignFolder, "panel.campaign"]
 ];
-if (campaignMode) translatedFolders.push([campaignFolder, "panel.campaign"]);
 
 function applyLocale(locale) {
     controls.language = locale;
@@ -531,6 +601,11 @@ function applyLocale(locale) {
     document.documentElement.lang = locale;
     document.title = i18n.t("app.title");
     controlsHint.textContent = i18n.t("status.controlsHint");
+    if (worldModeSelect) {
+        [...worldModeSelect.options].forEach(option => {
+            option.textContent = i18n.t(`worldMode.${option.value}`);
+        });
+    }
     translatedControllers.forEach(([controller, key]) => controller.name(i18n.t(key)));
     translatedFolders.forEach(([folder, key]) => {
         folder.name = i18n.t(key);

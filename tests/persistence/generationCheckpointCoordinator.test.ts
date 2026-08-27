@@ -3,9 +3,12 @@ import "fake-indexeddb/auto";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+    checksumCheckpointSnapshot,
+    GENERATION_CHECKPOINT_FORMAT_VERSION,
     GenerationCheckpointCoordinator,
     GenerationCheckpointManifest,
     GenerationCheckpointStageRecord,
+    GenerationCheckpointStore,
     IndexedDbGenerationCheckpointStore,
     MemoryGenerationCheckpointStore
 } from "../../src/persistence/GenerationCheckpointCoordinator";
@@ -29,9 +32,14 @@ describe("GenerationCheckpointCoordinator", () => {
         const first = await coordinator.checkpoint();
         working = { coins: 2 };
         const second = await coordinator.checkpoint();
+        working = { coins: 3 };
+        const third = await coordinator.checkpoint();
 
         expect(second).toMatchObject({ generation: 2, revision: 2 });
         expect(second.previous).toMatchObject({ generation: 1, saveId: first.saveId });
+        expect(third).toMatchObject({ generation: 3, revision: 3 });
+        expect(third.previous).toMatchObject({ generation: 2, saveId: second.saveId });
+        expect("previous" in third.previous!).toBe(false);
         expect(await store.listStages("world")).toHaveLength(2);
 
         const restored: Array<{ coins: number }> = [];
@@ -46,7 +54,101 @@ describe("GenerationCheckpointCoordinator", () => {
             orphanGraceMs: 0
         });
         await reopened.recover();
-        expect(restored).toEqual([{ coins: 2 }]);
+        expect(restored).toEqual([{ coins: 3 }]);
+    });
+
+    test("checksums structured snapshots without collapsing Map, Set, or Date values", () => {
+        // Existing JSON-like snapshots keep their v1 checksum representation.
+        expect(checksumCheckpointSnapshot({ x: 1 })).toBe("8c5c1250");
+        expect(checksumCheckpointSnapshot({ b: 2, a: 1 }))
+            .toBe(checksumCheckpointSnapshot({ a: 1, b: 2 }));
+        expect(checksumCheckpointSnapshot(new Map([["value", 1]])))
+            .not.toBe(checksumCheckpointSnapshot(new Map([["value", 2]])));
+        expect(checksumCheckpointSnapshot(new Set([1])))
+            .not.toBe(checksumCheckpointSnapshot(new Set([2])));
+        expect(checksumCheckpointSnapshot(new Date(1)))
+            .not.toBe(checksumCheckpointSnapshot(new Date(2)));
+    });
+
+    test("recovers an already-published structured snapshot with its legacy v1 checksum", async () => {
+        const snapshot = new Map([["value", 7]]);
+        const stage: GenerationCheckpointStageRecord = {
+            key: "legacy-stage",
+            worldId: "legacy-checksum",
+            generation: 1,
+            saveId: "legacy-save",
+            participantId: "state",
+            participantVersion: 1,
+            createdAt: 1,
+            checksum: "5246234b",
+            snapshot
+        };
+        const manifest: GenerationCheckpointManifest = {
+            formatVersion: GENERATION_CHECKPOINT_FORMAT_VERSION,
+            worldId: "legacy-checksum",
+            revision: 1,
+            generation: 1,
+            saveId: "legacy-save",
+            descriptor,
+            committedAt: 1,
+            participants: [{
+                id: "state", version: 1, required: true, state: "staged",
+                stageKey: stage.key, checksum: stage.checksum
+            }]
+        };
+        const store = {
+            loadManifest: async () => structuredClone(manifest),
+            putStage: async () => undefined,
+            loadStage: async () => structuredClone(stage),
+            compareAndSetManifest: async () => undefined,
+            listStages: async () => [structuredClone(stage)],
+            deleteStages: async () => undefined,
+            dispose() {}
+        } satisfies GenerationCheckpointStore;
+        const restore = vi.fn();
+        const coordinator = new GenerationCheckpointCoordinator({
+            worldId: "legacy-checksum", descriptor, store,
+            participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
+        });
+
+        await coordinator.recover();
+        expect(restore).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }), snapshot);
+    });
+
+    test("never publishes a stage reclaimed between verification and manifest CAS", async () => {
+        let enterPublish!: () => void;
+        let releasePublish!: () => void;
+        const publishEntered = new Promise<void>(resolve => { enterPublish = resolve; });
+        const publishReleased = new Promise<void>(resolve => { releasePublish = resolve; });
+        class PausedPublishStore extends MemoryGenerationCheckpointStore {
+            override async compareAndSetManifest(
+                worldId: string,
+                expectedRevision: number,
+                manifest: GenerationCheckpointManifest
+            ): Promise<void> {
+                enterPublish();
+                await publishReleased;
+                return super.compareAndSetManifest(worldId, expectedRevision, manifest);
+            }
+        }
+        const store = new PausedPublishStore();
+        const participant = { id: "state", version: 1, capture: () => ({ durable: true }), restore() {} };
+        const writer = new GenerationCheckpointCoordinator({
+            worldId: "publish-race", descriptor, store, participants: [participant],
+            now: () => 10, orphanGraceMs: 0
+        });
+        const collector = new GenerationCheckpointCoordinator({
+            worldId: "publish-race", descriptor, store, participants: [participant],
+            now: () => 10, orphanGraceMs: 0
+        });
+
+        const checkpoint = writer.checkpoint();
+        await publishEntered;
+        await expect(collector.collectGarbage()).resolves.toBe(1);
+        releasePublish();
+
+        await expect(checkpoint).rejects.toThrow(/missing or corrupt/);
+        expect(await store.loadManifest("publish-race")).toBeUndefined();
     });
 
     test("keeps stages when a manifest commit reports an ambiguous failure", async () => {

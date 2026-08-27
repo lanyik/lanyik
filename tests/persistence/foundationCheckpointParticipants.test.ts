@@ -13,13 +13,68 @@ import {
     WorldSimulationRuntime
 } from "../../src/simulation/WorldSimulationRuntime";
 import { generateWorldChunk } from "../../src/world/generateWorldChunk";
-import { MemoryWorldDeltaStore } from "../../src/world/WorldDeltaStore";
+import { MemoryWorldDeltaStore, WorldChunkDelta } from "../../src/world/WorldDeltaStore";
 import { WorldGeneratorPool } from "../../src/world/WorldGeneratorPool";
 import { ProceduralWorldSource } from "../../src/world/WorldSource";
 
 interface State { value: string }
 
+class DeferredReplaceWorldDeltaStore extends MemoryWorldDeltaStore {
+    public readonly replaceEntered: Promise<void>;
+    private enterReplace!: () => void;
+    private releaseReplace!: () => void;
+    private readonly replaceReleased: Promise<void>;
+
+    constructor() {
+        super();
+        this.replaceEntered = new Promise(resolve => { this.enterReplace = resolve; });
+        this.replaceReleased = new Promise(resolve => { this.releaseReplace = resolve; });
+    }
+
+    public override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+        this.enterReplace();
+        await this.replaceReleased;
+        return super.replaceWorld(worldId, deltas);
+    }
+
+    public release(): void { this.releaseReplace(); }
+}
+
 describe("foundation generation checkpoint participants", () => {
+    test("rejects terrain edits while a checkpoint restore is replacing durable deltas", async () => {
+        const deltas = new DeferredReplaceWorldDeltaStore();
+        const source = new ProceduralWorldSource({
+            seed: "restore-lock",
+            workerUrl: "unused",
+            chunkSize: 12,
+            worldId: "restore-lock"
+        }, {
+            pool: new WorldGeneratorPool("unused", {
+                size: 1,
+                clientFactory: () => ({
+                    generateChunk: options => Promise.resolve(generateWorldChunk(options)),
+                    dispose() {},
+                    get isDisposed() { return false; }
+                })
+            }),
+            deltaStore: deltas
+        });
+        source.setTileOverride(2, 3, { unit: "committed" });
+        const snapshot = await source.createDeltaCheckpointSnapshot();
+        source.setTileOverride(2, 3, { unit: "newer-local-edit" });
+
+        const restoring = source.restoreDeltaCheckpointSnapshot(snapshot);
+        await deltas.replaceEntered;
+        expect(() => source.setTileOverride(4, 5, { unit: "must-not-disappear" }))
+            .toThrow(/being restored/);
+        deltas.release();
+        await restoring;
+
+        expect(source.store.getTileOverride(2, 3)).toEqual({ unit: "committed" });
+        expect(source.store.getTileOverride(4, 5)).toBeUndefined();
+        source.dispose();
+    });
+
     test("restores simulation and terrain deltas from the same manifest generation", async () => {
         const simulation = new WorldSimulationRuntime<State>({
             chunkSize: 12,
