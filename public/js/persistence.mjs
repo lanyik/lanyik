@@ -11,7 +11,7 @@ var Land = /* @__PURE__ */ ((Land2) => {
 })(Land || {});
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 3;
+var WORLD_GENERATOR_VERSION = 4;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -33,6 +33,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     roughness: field(2496678331, 0.31, 0.31, 3, 4),
     moisture: field(3355524772, 0.08, 0.08, 4, 2),
     temperature: field(2911926141, 0.035, 0.035, 3, 2),
+    forestPatch: field(1291169091, 0.026, 0.026, 3, 2),
+    lakePatch: field(374761393, 0.021, 0.021, 3, 2),
     openWarpAmplitude: 15,
     toroidalWarpAmplitude: 0.12,
     continentWeight: 0.72,
@@ -67,31 +69,61 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     tundraTemperature: 0.34,
     sandTemperature: 0.68,
     sandMoisture: 0.42,
-    hillElevation: 0.62
+    hillElevation: 0.57,
+    climateTransition: 0.08
   }),
   relief: Object.freeze({
     shoreline: 0,
     staticMountain: 1,
-    mountainElevationStart: 0.68,
-    mountainElevationSpan: 0.22,
-    mountainMinimum: 0.08,
-    mountainPower: 1.3,
-    mountainScale: 1.12,
-    mountainMaximum: 1.35
+    staticHill: 0.22,
+    plainMinimum: 0.018,
+    plainMaximum: 0.11,
+    plainElevationScale: 0.1,
+    plainRoughnessScale: 0.025,
+    valleyDepth: 0.035,
+    hillElevationStart: 0.55,
+    hillElevationEnd: 0.72,
+    hillScale: 0.22,
+    hillMinimum: 0.13,
+    hillMaximum: 0.38,
+    mountainElevationStart: 0.66,
+    mountainElevationSpan: 0.25,
+    mountainMinimum: 0.36,
+    mountainPower: 1.35,
+    mountainScale: 0.78,
+    mountainRidgeScale: 0.22,
+    mountainMaximum: 1.25
   }),
   vegetation: Object.freeze({
-    moistureStart: 0.48,
-    densityScale: 1.5,
-    maximumDensity: 0.58,
+    moistureStart: 0.36,
+    moistureFull: 0.7,
+    temperatureMinimum: 0.18,
+    temperatureMaximum: 0.9,
+    temperatureTransition: 0.12,
+    densityScale: 1,
+    maximumDensity: 0.72,
+    neutralDensity: 0.45,
+    patchStart: 0.38,
+    patchFull: 0.72,
+    patchMinimum: 0.22,
+    ridgePenalty: 0.72,
+    roughnessPenalty: 0.18,
     placementSalt: 668265263,
     palmTemperature: 0.67,
     piniaTemperature: 0.4
   }),
   lakes: Object.freeze({
     minimumElevation: 0.455,
-    maximumElevation: 0.56,
-    minimumMoisture: 0.74,
-    placementThreshold: 0.94,
+    maximumElevation: 0.63,
+    minimumMoisture: 0.56,
+    fullMoisture: 0.8,
+    valleyStart: 0.03,
+    valleyFull: 0.35,
+    patchStart: 0.4,
+    patchFull: 0.72,
+    minimumPotential: 0.18,
+    minimumNeighbors: 1,
+    placementScale: 0.65,
     placementSalt: 1821285621
   })
 });
@@ -142,7 +174,9 @@ function assertWorldStyleProfile(value) {
     "valley",
     "roughness",
     "moisture",
-    "temperature"
+    "temperature",
+    "forestPatch",
+    "lakePatch"
   ];
   for (const name of noiseFieldNames) {
     const candidate = profile.fields[name];
@@ -200,9 +234,11 @@ function assertWorldStyleProfile(value) {
     "tundraTemperature",
     "sandTemperature",
     "sandMoisture",
-    "hillElevation"
+    "hillElevation",
+    "climateTransition"
   ];
   for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
+  positive("terrain.climateTransition", terrain.climateTransition);
   if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
     throw new RangeError("terrain mountain thresholds must be ordered");
   }
@@ -210,29 +246,65 @@ function assertWorldStyleProfile(value) {
     throw new RangeError("terrain temperature thresholds must be ordered");
   }
   const relief = profile.relief;
-  if (finite("relief.shoreline", relief.shoreline) < 0 || finite("relief.staticMountain", relief.staticMountain) < 0 || finite("relief.mountainMinimum", relief.mountainMinimum) < 0 || finite("relief.mountainMaximum", relief.mountainMaximum) < 0) {
-    throw new RangeError("relief heights must be non-negative");
+  for (const [name, candidate] of Object.entries(relief)) {
+    if (finite(`relief.${name}`, candidate) < 0) {
+      throw new RangeError("relief heights and scales must be non-negative");
+    }
   }
   positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
   positive("relief.mountainPower", relief.mountainPower);
   positive("relief.mountainScale", relief.mountainScale);
   unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
+  unitInterval("relief.hillElevationStart", relief.hillElevationStart);
+  unitInterval("relief.hillElevationEnd", relief.hillElevationEnd);
+  if (!(relief.hillElevationStart < relief.hillElevationEnd) || !(relief.plainMinimum <= relief.plainMaximum) || !(relief.hillMinimum <= relief.hillMaximum) || !(relief.plainMaximum < relief.hillMinimum)) {
+    throw new RangeError("relief plain and hill ranges must be ordered");
+  }
   if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
     throw new RangeError("relief mountain range must be ordered");
+  }
+  if (relief.staticHill < relief.hillMinimum || relief.staticHill > relief.hillMaximum || relief.staticMountain < relief.mountainMinimum || relief.staticMountain > relief.mountainMaximum) {
+    throw new RangeError("static relief heights must stay inside their terrain ranges");
   }
   const lakes = profile.lakes;
   unitInterval("lakes.minimumElevation", lakes.minimumElevation);
   unitInterval("lakes.maximumElevation", lakes.maximumElevation);
   unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
-  unitInterval("lakes.placementThreshold", lakes.placementThreshold);
-  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation))) {
-    throw new RangeError("lake elevation thresholds must be ordered");
+  unitInterval("lakes.fullMoisture", lakes.fullMoisture);
+  unitInterval("lakes.valleyStart", lakes.valleyStart);
+  unitInterval("lakes.valleyFull", lakes.valleyFull);
+  unitInterval("lakes.patchStart", lakes.patchStart);
+  unitInterval("lakes.patchFull", lakes.patchFull);
+  unitInterval("lakes.minimumPotential", lakes.minimumPotential);
+  unitInterval("lakes.placementScale", lakes.placementScale);
+  if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
+    throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
+  }
+  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
+    throw new RangeError("lake thresholds must be ordered");
   }
   unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
+  unitInterval("vegetation.moistureFull", profile.vegetation.moistureFull);
   unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+  unitInterval("vegetation.neutralDensity", profile.vegetation.neutralDensity);
+  unitInterval("vegetation.temperatureMinimum", profile.vegetation.temperatureMinimum);
+  unitInterval("vegetation.temperatureMaximum", profile.vegetation.temperatureMaximum);
+  unitInterval("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  positive("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  unitInterval("vegetation.patchStart", profile.vegetation.patchStart);
+  unitInterval("vegetation.patchFull", profile.vegetation.patchFull);
+  unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
+  unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
+  unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
   unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
   unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
   positive("vegetation.densityScale", profile.vegetation.densityScale);
+  if (!(profile.vegetation.moistureStart < profile.vegetation.moistureFull) || !(profile.vegetation.temperatureMinimum < profile.vegetation.temperatureMaximum) || !(profile.vegetation.patchStart < profile.vegetation.patchFull)) {
+    throw new RangeError("vegetation suitability thresholds must be ordered");
+  }
+  if (profile.vegetation.neutralDensity > profile.vegetation.maximumDensity) {
+    throw new RangeError("vegetation neutral density must not exceed maximum density");
+  }
   if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
     throw new RangeError("vegetation temperature thresholds must be ordered");
   }
@@ -314,6 +386,60 @@ var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
 
+// src/world/WorldDescriptor.ts
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
+function assertChunkSize(value) {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+  }
+}
+function assertSupportedWorldGeneratorVersion(value) {
+  if (value !== WORLD_GENERATOR_VERSION) {
+    throw new RangeError(
+      `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
+    );
+  }
+}
+function assertWorldDescriptor(value) {
+  if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
+  const descriptor = value;
+  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world descriptor format ${String(descriptor.descriptorVersion)}`);
+  }
+  if (descriptor.sourceKind !== "procedural-infinite" && descriptor.sourceKind !== "procedural-toroidal") {
+    throw new TypeError("world descriptor sourceKind is invalid");
+  }
+  if (typeof descriptor.seed !== "string") throw new TypeError("world descriptor seed must be a string");
+  assertSupportedWorldGeneratorVersion(descriptor.generatorVersion);
+  if (descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
+  }
+  assertChunkSize(descriptor.chunkSize);
+  if (descriptor.sourceKind === "procedural-infinite") {
+    if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
+      throw new TypeError("infinite world descriptor topology is invalid");
+    }
+    return;
+  }
+  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
+    throw new TypeError("toroidal world descriptor topology is invalid");
+  }
+}
+function serializeWorldDescriptor(descriptor) {
+  assertWorldDescriptor(descriptor);
+  return JSON.stringify([
+    descriptor.descriptorVersion,
+    descriptor.sourceKind,
+    descriptor.seed,
+    descriptor.generatorVersion,
+    descriptor.chunkFormatVersion,
+    descriptor.chunkSize,
+    descriptor.topology,
+    descriptor.width ?? null,
+    descriptor.height ?? null
+  ]);
+}
+
 // src/world/WorldChunkCache.ts
 var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
 var DATABASE_VERSION = 1;
@@ -321,13 +447,13 @@ var CHUNK_STORE = "chunks";
 var META_STORE = "meta";
 var USAGE_KEY = "usage";
 function createWorldChunkCacheKey(options) {
+  if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
+  assertWorldDescriptor(options.descriptor);
+  if (!Number.isSafeInteger(options.chunkX) || !Number.isSafeInteger(options.chunkY)) {
+    throw new RangeError("world chunk cache coordinates must be safe integers");
+  }
   return JSON.stringify([
-    options.generatorVersion ?? WORLD_GENERATOR_VERSION,
-    String(options.seed),
-    options.chunkSize,
-    options.world?.topology ?? "infinite",
-    options.world?.width ?? null,
-    options.world?.height ?? null,
+    serializeWorldDescriptor(options.descriptor),
     options.chunkX,
     options.chunkY
   ]);
@@ -654,7 +780,7 @@ function assertChunkIdentity(worldId, chunkX, chunkY) {
     throw new RangeError("world delta chunk coordinates must be safe integers");
   }
 }
-function assertChunkSize(chunkSize) {
+function assertChunkSize2(chunkSize) {
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
     throw new RangeError("world delta chunkSize must be a positive safe integer");
   }
@@ -663,7 +789,7 @@ function tileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
   return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
 }
 function assertChanges(changes, chunkX, chunkY, options) {
-  assertChunkSize(options.chunkSize);
+  assertChunkSize2(options.chunkSize);
   if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
   if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
     throw new RangeError("expectedRevision must be a non-negative safe integer");
@@ -680,7 +806,7 @@ function assertChanges(changes, chunkX, chunkY, options) {
 }
 function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
   assertChunkIdentity(worldId, chunkX, chunkY);
-  assertChunkSize(options.chunkSize);
+  assertChunkSize2(options.chunkSize);
   const candidate = value;
   if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
     throw new TypeError("world chunk delta is invalid or incompatible");
@@ -1598,60 +1724,6 @@ function createFlushCheckpointParticipant(id, flush, options = {}) {
     prepare: (context) => ({ generation: context.generation }),
     commit: (context) => flush(context)
   };
-}
-
-// src/world/WorldDescriptor.ts
-var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-function assertChunkSize2(value) {
-  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
-    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
-  }
-}
-function assertSupportedWorldGeneratorVersion(value) {
-  if (value !== WORLD_GENERATOR_VERSION) {
-    throw new RangeError(
-      `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
-    );
-  }
-}
-function assertWorldDescriptor(value) {
-  if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
-  const descriptor = value;
-  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
-    throw new TypeError(`unsupported world descriptor format ${String(descriptor.descriptorVersion)}`);
-  }
-  if (descriptor.sourceKind !== "procedural-infinite" && descriptor.sourceKind !== "procedural-toroidal") {
-    throw new TypeError("world descriptor sourceKind is invalid");
-  }
-  if (typeof descriptor.seed !== "string") throw new TypeError("world descriptor seed must be a string");
-  assertSupportedWorldGeneratorVersion(descriptor.generatorVersion);
-  if (descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION) {
-    throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
-  }
-  assertChunkSize2(descriptor.chunkSize);
-  if (descriptor.sourceKind === "procedural-infinite") {
-    if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
-      throw new TypeError("infinite world descriptor topology is invalid");
-    }
-    return;
-  }
-  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
-    throw new TypeError("toroidal world descriptor topology is invalid");
-  }
-}
-function serializeWorldDescriptor(descriptor) {
-  assertWorldDescriptor(descriptor);
-  return JSON.stringify([
-    descriptor.descriptorVersion,
-    descriptor.sourceKind,
-    descriptor.seed,
-    descriptor.generatorVersion,
-    descriptor.chunkFormatVersion,
-    descriptor.chunkSize,
-    descriptor.topology,
-    descriptor.width ?? null,
-    descriptor.height ?? null
-  ]);
 }
 
 // src/persistence/GenerationCheckpointCoordinator.ts

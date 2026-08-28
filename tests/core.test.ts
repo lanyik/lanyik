@@ -3,6 +3,7 @@ import {
     EventEmitter,
     generateWorld,
     generateWorldChunk,
+    WORLD_GENERATOR_VERSION,
     WORLD_WORKER_PROTOCOL_VERSION,
     WorldGeneratorClient
 } from "../src/index";
@@ -102,13 +103,35 @@ describe("core safeguards", () => {
         const client = new WorldGeneratorClient("worker.mjs");
         const worker = FakeWorker.instances[0];
         const pending = client.generateChunk({ seed: 3, chunkX: -2, chunkY: 4, chunkSize: 12 });
-        const request = worker.messages[0] as { id: number; type: string };
+        const request = worker.messages[0] as { id: number; type: string; generatorVersion: number };
         expect(request.type).toBe("chunk");
+        expect(request.generatorVersion).toBe(WORLD_GENERATOR_VERSION);
         const chunk = generateWorldChunk({ seed: 3, chunkX: -2, chunkY: 4, chunkSize: 12 });
         worker.emit("message", {
-            data: { protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id: request.id, chunk }
+            data: {
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION,
+                id: request.id,
+                chunk
+            }
         });
         await expect(pending).resolves.toEqual(chunk);
         client.dispose();
+    });
+
+    test("rejects worker responses from a different generator identity", async () => {
+        const client = new WorldGeneratorClient("worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const pending = client.generateChunk({ seed: 3, chunkX: 0, chunkY: 0, chunkSize: 12 });
+        const request = worker.messages[0] as { id: number };
+        worker.emit("message", {
+            data: {
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION + 1,
+                id: request.id,
+                chunk: generateWorldChunk({ seed: 3, chunkX: 0, chunkY: 0, chunkSize: 12 })
+            }
+        });
+        await expect(pending).rejects.toThrow(/invalid message/);
     });
 });

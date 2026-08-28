@@ -47,6 +47,10 @@ export interface WorldSurfaceResolver {
 
 const isWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const smoothstep = (edge0: number, edge1: number, value: number): number => {
+    const t = clamp01((value - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+};
 const modulo = (value: number, period: number): number => ((value % period) + period) % period;
 
 function assertTileCoordinates(x: number, y: number): void {
@@ -80,28 +84,119 @@ function generatedRelief(
     profile: Readonly<WorldStyleProfile>
 ): number {
     const relief = profile.relief;
-    const elevationT = Math.max(0, (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan);
-    return Math.min(
-        relief.mountainMaximum,
-        relief.mountainMinimum + Math.pow(elevationT, relief.mountainPower) * relief.mountainScale
+    if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
+    const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
+    const plain = relief.plainMinimum
+        + landElevation * relief.plainElevationScale
+        + sample.roughness * relief.plainRoughnessScale
+        - sample.valley * relief.valleyDepth;
+    const hill = smoothstep(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation)
+        * relief.hillScale;
+    const mountainT = Math.max(
+        0,
+        (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
+    );
+    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale
+        + sample.ridge * clamp01(mountainT) * relief.mountainRidgeScale;
+    return Math.max(
+        relief.shoreline,
+        Math.min(relief.mountainMaximum, plain + hill + mountain)
     );
 }
 
-function biomeFor(type: Land): WorldBiome {
-    if (type === Land.sea || type === Land.coastal) return type === Land.coastal ? "coast" : "ocean";
-    if (type === Land.sand) return "dry";
-    if (type === Land.tundra || type === Land.snow) return "cold";
-    if (type === Land.mountain) return "alpine";
-    return "temperate";
+function biomeWeightsFor(
+    type: Land,
+    sample: LandformSample,
+    profile: Readonly<WorldStyleProfile>
+): WorldBiomeWeights {
+    if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+    const terrain = profile.terrain;
+    const transition = terrain.climateTransition;
+    const cold = 1 - smoothstep(
+        terrain.snowTemperature - transition,
+        terrain.tundraTemperature + transition,
+        sample.temperature
+    );
+    const dry = smoothstep(
+        terrain.sandTemperature - transition,
+        terrain.sandTemperature + transition,
+        sample.temperature
+    ) * (1 - smoothstep(
+        terrain.sandMoisture - transition,
+        terrain.sandMoisture + transition,
+        sample.moisture
+    ));
+    const alpine = clamp01(Math.max(
+        type === Land.mountain ? 0.7 : 0,
+        smoothstep(
+            terrain.mountainElevation - transition,
+            terrain.mountainPeakElevation,
+            sample.elevation
+        ) * (0.45 + sample.ridge * 0.55)
+    ));
+    const temperate = Math.max(0.02, (1 - cold) * (1 - dry) * (1 - alpine));
+    const sum = temperate + dry + cold + alpine;
+    return Object.freeze({
+        temperate: temperate / sum,
+        dry: dry / sum,
+        cold: cold / sum,
+        alpine: alpine / sum
+    });
 }
 
-function biomeWeightsFor(biome: WorldBiome): WorldBiomeWeights {
-    return Object.freeze({
-        temperate: biome === "temperate" ? 1 : 0,
-        dry: biome === "dry" ? 1 : 0,
-        cold: biome === "cold" ? 1 : 0,
-        alpine: biome === "alpine" ? 1 : 0
-    });
+function biomeFor(type: Land, weights: WorldBiomeWeights): WorldBiome {
+    if (type === Land.sea || type === Land.coastal) return type === Land.coastal ? "coast" : "ocean";
+    const weighted: Array<[WorldBiome, number]> = [
+        ["temperate", weights.temperate],
+        ["dry", weights.dry],
+        ["cold", weights.cold],
+        ["alpine", weights.alpine]
+    ];
+    return weighted.reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
+}
+
+function vegetationDensityFor(
+    type: Land,
+    sample: LandformSample,
+    profile: Readonly<WorldStyleProfile>
+): number {
+    if (isWater(type) || type === Land.mountain || type === Land.snow) return 0;
+    const vegetation = profile.vegetation;
+    const moisture = smoothstep(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
+    const cold = smoothstep(
+        vegetation.temperatureMinimum - vegetation.temperatureTransition,
+        vegetation.temperatureMinimum + vegetation.temperatureTransition,
+        sample.temperature
+    );
+    const heat = 1 - smoothstep(
+        vegetation.temperatureMaximum - vegetation.temperatureTransition,
+        vegetation.temperatureMaximum + vegetation.temperatureTransition,
+        sample.temperature
+    );
+    const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum)
+        * smoothstep(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
+    const slope = clamp01(1
+        - sample.ridge * vegetation.ridgePenalty
+        - sample.roughness * vegetation.roughnessPenalty);
+    return Math.min(
+        vegetation.maximumDensity,
+        moisture * cold * heat * patch * slope * vegetation.densityScale
+    );
+}
+
+function lakePotentialFor(
+    type: Land,
+    sample: LandformSample,
+    profile: Readonly<WorldStyleProfile>
+): number {
+    if (isWater(type) || type === Land.mountain || type === Land.snow) return 0;
+    const lakes = profile.lakes;
+    const elevation = smoothstep(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation)
+        * (1 - smoothstep(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
+    const moisture = smoothstep(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
+    const valley = smoothstep(lakes.valleyStart, lakes.valleyFull, sample.valley);
+    const patch = smoothstep(lakes.patchStart, lakes.patchFull, sample.lakePatch);
+    return clamp01(elevation * moisture * valley * patch);
 }
 
 function vegetationKindFor(
@@ -123,24 +218,15 @@ function sampleSurface(
 ): Readonly<WorldSurfaceSample> {
     const landform = Object.freeze({ ...sampler.sample(x, y) });
     const baseTerrain = classifyTerrain(landform, profile);
-    const biome = biomeFor(baseTerrain);
-    const vegetationDensity = isWater(baseTerrain) || baseTerrain === Land.mountain || baseTerrain === Land.snow
-        ? 0
-        : clamp01(Math.min(
-            profile.vegetation.maximumDensity,
-            (landform.moisture - profile.vegetation.moistureStart) * profile.vegetation.densityScale
-        ));
-    const lakePotential = baseTerrain === Land.land
-        && landform.elevation > profile.lakes.minimumElevation
-        && landform.elevation < profile.lakes.maximumElevation
-        && landform.moisture > profile.lakes.minimumMoisture
-        ? 1
-        : 0;
+    const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
+    const biome = biomeFor(baseTerrain, biomeWeights);
+    const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
+    const lakePotential = lakePotentialFor(baseTerrain, landform, profile);
     return Object.freeze({
         baseTerrain,
         relief: generatedRelief(landform, profile),
         biome,
-        biomeWeights: biomeWeightsFor(biome),
+        biomeWeights,
         vegetationDensity,
         vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : undefined,
         lakePotential,
@@ -172,8 +258,19 @@ function resolveTile(
     if (isWater(type) || type === Land.mountain || type === Land.snow) return Object.freeze(tile);
 
     const modifiers: string[] = [];
-    const lake = sample.lakePotential > 0
-        && randomAt(numericSeed, x, y, profile.lakes.placementSalt) > profile.lakes.placementThreshold;
+    const lakes = profile.lakes;
+    const isLakeCandidate = (candidate: Readonly<WorldSurfaceSample> | undefined, tileX: number, tileY: number): boolean =>
+        Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential
+            && randomAt(numericSeed, tileX, tileY, lakes.placementSalt)
+                < candidate.lakePotential * lakes.placementScale);
+    const lakeCandidate = isLakeCandidate(sample, x, y);
+    const lakeNeighbors = lakeCandidate
+        ? getNeighbors(x, y).reduce((count, neighbor) => {
+            const adjacent = sampleAt(neighbor.x, neighbor.y);
+            return count + (isLakeCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
+        }, 0)
+        : 0;
+    const lake = lakeCandidate && lakeNeighbors >= lakes.minimumNeighbors;
     if (lake) {
         modifiers.push("lake");
     } else {

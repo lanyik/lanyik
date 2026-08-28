@@ -7206,6 +7206,7 @@ void main() {
       const { size } = this.options;
       const defaultModel = this.options.cityModel ?? "Assets/models/monument";
       const cityScale = this.options.cityScale ?? 1;
+      const surfaceWindow = this.surface.createWindow();
       const cityTiles = [];
       if (onlyTiles) {
         for (const point of onlyTiles) {
@@ -7253,7 +7254,9 @@ void main() {
         const wrapper = new three.Group();
         wrapper.add(model);
         wrapper.scale.setScalar(cityScale);
-        wrapper.position.set(center.x, 0, center.y);
+        const groundHeight = surfaceWindow.getTileCenterHeight(x, y);
+        const labelOffset = modelHeight * cityScale + Math.round(size / 5);
+        wrapper.position.set(center.x, groundHeight, center.y);
         wrapper.userData[CITY_FOG_TILE_KEY] = key;
         this.add(wrapper);
         const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
@@ -7261,20 +7264,34 @@ void main() {
           fontface: "Georgia",
           borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
         });
-        sprite.position.set(center.x, modelHeight * cityScale + Math.round(size / 5), center.y);
+        sprite.position.set(center.x, groundHeight + labelOffset, center.y);
         sprite.userData[CITY_FOG_TILE_KEY] = key;
         this.add(sprite);
         this.cityFog.set(key, {
           wrapper,
           sprite,
+          x,
+          y,
+          labelOffset,
           materials: cityMaterials,
           owner,
           signature: this.citySignature(tile)
         });
       }
     }
+    refreshCitySurfaceHeights(points) {
+      const filter = points ? new Set(points.map((point) => `${point.x},${point.y}`)) : void 0;
+      const surfaceWindow = this.surface.createWindow();
+      for (const [key, city] of this.cityFog) {
+        if (filter && !filter.has(key)) continue;
+        const height = surfaceWindow.getTileCenterHeight(city.x, city.y);
+        city.wrapper.position.y = height;
+        city.sprite.position.y = height + city.labelOffset;
+      }
+    }
     async refreshCities(changes) {
       const latest = /* @__PURE__ */ new Map();
+      const surfaceWindow = this.surface.createWindow();
       for (const change of changes) latest.set(`${change.point.x},${change.point.y}`, change);
       const builds = [];
       for (const [key, { point, owner }] of latest) {
@@ -7283,6 +7300,9 @@ void main() {
         const existing = this.cityFog.get(key);
         if (existing?.signature === signature) {
           existing.owner = owner;
+          const height = surfaceWindow.getTileCenterHeight(point.x, point.y);
+          existing.wrapper.position.y = height;
+          existing.sprite.position.y = height + existing.labelOffset;
           continue;
         }
         if (existing) this.removeCity(key);
@@ -7619,6 +7639,7 @@ void main() {
       this.surface.setMountainHeight(value);
       if (this.landMaterial) this.landMaterial.uniforms.mountainHeight.value = value;
       this.refreshChunkHeightBounds();
+      this.refreshCitySurfaceHeights();
     }
     get beachWidth() {
       return this.landMaterial?.uniforms.beachWidth.value ?? this.waterMaterial?.uniforms.beachWidth.value ?? 0.35;
@@ -8147,9 +8168,10 @@ void main() {
     }
     buildChunkLod(record, lod) {
       const prepared = this.context.preparedChunks.get(`${record.modelPath}\0${record.chunkKey}`)?.lods.find((candidate) => candidate.lod === lod);
-      if (prepared) return this.buildPreparedChunkLod(prepared);
+      if (prepared) return this.buildPreparedChunkLod(record, prepared);
       const {
         map,
+        surface,
         size,
         treesPerTile,
         treeScale,
@@ -8158,15 +8180,19 @@ void main() {
         waterOptions,
         coastOptions
       } = this.context;
-      const density = Math.max(1, Math.round(treesPerTile * [1, 0.5, 0.2][lod]));
+      const maximumDensity = Math.max(1, Math.round(treesPerTile * [1, 0.5, 0.2][lod]));
       const matrix = new three.Matrix4();
       const scaleVector = new three.Vector3();
-      const matrices = new Float32Array(record.tiles.length * density * 16);
+      const matrices = new Float32Array(record.tiles.length * maximumDensity * 16);
       const ranges = /* @__PURE__ */ new Map();
+      const surfaceWindow = surface.createWindow();
       let instance = 0;
       for (const tile of record.tiles) {
         const key = `${tile.x},${tile.y}`;
         const center = getHexCenter(tile.x, tile.y, size);
+        const density = Math.max(1, Math.round(
+          maximumDensity * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+        ));
         const placed = [];
         const tileStart = instance;
         let attempts = 0;
@@ -8189,7 +8215,7 @@ void main() {
           matrix.scale(scaleVector.set(scale, scale, scale));
           matrix.setPosition(
             center.x + lx - record.root.position.x,
-            0,
+            surfaceWindow.getWorldHeight(center.x + lx, center.y + ly),
             center.y + ly - record.root.position.z
           );
           matrix.toArray(matrices, instance * 16);
@@ -8202,20 +8228,51 @@ void main() {
           originalMatrices: matrices.subarray(tileStart * 16, (tileStart + count) * 16)
         });
       }
-      return { instanceCount: instance, matrices: matrices.slice(0, instance * 16), ranges };
+      const compactMatrices = matrices.slice(0, instance * 16);
+      for (const range of ranges.values()) {
+        range.originalMatrices = compactMatrices.subarray(
+          range.start * 16,
+          (range.start + range.count) * 16
+        );
+      }
+      return { instanceCount: instance, matrices: compactMatrices, ranges };
     }
-    buildPreparedChunkLod(prepared) {
+    buildPreparedChunkLod(record, prepared) {
+      const matrices = new Float32Array(prepared.matrices.length);
       const ranges = /* @__PURE__ */ new Map();
+      const surfaceWindow = this.context.surface.createWindow();
+      let instanceCount = 0;
       prepared.tiles.forEach((tile, index) => {
-        const start = prepared.ranges[index * 2];
-        const count = prepared.ranges[index * 2 + 1];
+        const preparedStart = prepared.ranges[index * 2];
+        const preparedCount = prepared.ranges[index * 2 + 1];
+        const count = preparedCount === 0 ? 0 : Math.max(1, Math.round(
+          preparedCount * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+        ));
+        const start = instanceCount;
+        const source = prepared.matrices.subarray(preparedStart * 16, (preparedStart + count) * 16);
+        matrices.set(source, start * 16);
+        for (let instance = start; instance < start + count; instance += 1) {
+          const offset = instance * 16;
+          matrices[offset + 13] = surfaceWindow.getWorldHeight(
+            matrices[offset + 12] + record.root.position.x,
+            matrices[offset + 14] + record.root.position.z
+          );
+        }
+        instanceCount += count;
         ranges.set(`${tile.x},${tile.y}`, {
           start,
           count,
-          originalMatrices: prepared.matrices.subarray(start * 16, (start + count) * 16)
+          originalMatrices: matrices.subarray(start * 16, (start + count) * 16)
         });
       });
-      return { instanceCount: prepared.instanceCount, matrices: prepared.matrices, ranges };
+      const compactMatrices = matrices.slice(0, instanceCount * 16);
+      for (const range of ranges.values()) {
+        range.originalMatrices = compactMatrices.subarray(
+          range.start * 16,
+          (range.start + range.count) * 16
+        );
+      }
+      return { instanceCount, matrices: compactMatrices, ranges };
     }
     applyChunkLod(record, cached) {
       for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
@@ -8255,7 +8312,7 @@ void main() {
     return (value >>> 0) / 4294967296;
   }
   async function createForest(map, options, onlyTiles, sharedResources, preparedLayout) {
-    const { size } = options;
+    const { size, surface } = options;
     const treesPerTile = options.treesPerTile ?? 20;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
     const treeScale = options.treeScale ?? 1;
@@ -8319,7 +8376,12 @@ void main() {
           root,
           chunkKey2,
           "forest",
-          localizeWorldChunkBounds(getWorldChunkBounds(chunkTiles, size, 0, size * 3), origin),
+          localizeWorldChunkBounds(getWorldChunkBounds(
+            chunkTiles,
+            size,
+            surface.minimumHeight,
+            surface.maximumHeight + size * 3
+          ), origin),
           id
         );
         chunkRecords.set(id, {
@@ -8335,6 +8397,7 @@ void main() {
     }
     return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
       map,
+      surface,
       size,
       treesPerTile,
       treeScale,
@@ -8380,6 +8443,7 @@ attribute vec2 scale;   // x = width multiplier, y = height multiplier (world un
 attribute float phase;  // random wind phase offset, see wave below
 attribute float shade;  // random per-blade brightness multiplier (clump variation)
 attribute float fogState; // 0 = unseen (blade hidden), 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+attribute float groundHeight; // authoritative CPU surface height at the blade root
 
 varying float vHeightFactor;
 varying float vShade;
@@ -8414,7 +8478,7 @@ void main() {
     rotated.x += bend;
     rotated.z += bend * 0.4;
 
-    vec3 worldPos = vec3(bladeOffset.x + rotated.x, rotated.y, bladeOffset.y + rotated.z);
+    vec3 worldPos = vec3(bladeOffset.x + rotated.x, groundHeight + rotated.y, bladeOffset.y + rotated.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
 
     vHeightFactor = heightFactor;
@@ -8604,8 +8668,8 @@ void main() {
     }
     buildChunkGeometry(chunkKey2, chunkTiles, lod, origin) {
       const prepared = this.preparedChunks.get(chunkKey2)?.lods.find((candidate) => candidate.lod === lod);
-      if (prepared) return this.buildPreparedChunkGeometry(prepared);
-      const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
+      if (prepared) return this.buildPreparedChunkGeometry(prepared, origin);
+      const { size, surface, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
       const densityScale = [1, 0.38, 0.14][lod];
       const density = Math.max(1, Math.round(this.options.density * densityScale));
       const totalBlades = chunkTiles.length * density;
@@ -8616,8 +8680,10 @@ void main() {
       const phases = new Float32Array(totalBlades);
       const shades = new Float32Array(totalBlades);
       const fogStates = new Float32Array(totalBlades);
+      const groundHeights = new Float32Array(totalBlades);
       const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map((p) => [p.x, p.y]);
       const pendingRanges = [];
+      const surfaceWindow = surface.createWindow();
       let instance = 0;
       for (const tile of chunkTiles) {
         const key = `${tile.x},${tile.y}`;
@@ -8647,6 +8713,7 @@ void main() {
           phases[instance] = stableRandom2(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
           shades[instance] = 0.75 + stableRandom2(tile.x, tile.y, i * 97 + 59) * 0.35;
           fogStates[instance] = this.fogStates.get(key) ?? 2;
+          groundHeights[instance] = surfaceWindow.getWorldHeight(center.x + lx, center.y + ly);
           instance++;
         }
         pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
@@ -8660,11 +8727,20 @@ void main() {
       geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
       geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
       geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
+      geometry.setAttribute("groundHeight", new three.InstancedBufferAttribute(groundHeights, 1));
       return { geometry, ranges: pendingRanges };
     }
-    buildPreparedChunkGeometry(prepared) {
+    buildPreparedChunkGeometry(prepared, origin) {
       const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
       const fogStates = new Float32Array(prepared.instanceCount);
+      const groundHeights = new Float32Array(prepared.instanceCount);
+      const surfaceWindow = this.options.surface.createWindow();
+      for (let index = 0; index < prepared.instanceCount; index += 1) {
+        groundHeights[index] = surfaceWindow.getWorldHeight(
+          prepared.offsets[index * 2] + origin.x,
+          prepared.offsets[index * 2 + 1] + origin.y
+        );
+      }
       const ranges = prepared.tiles.map((tile, index) => {
         const key = `${tile.x},${tile.y}`;
         const start = prepared.ranges[index * 2];
@@ -8680,6 +8756,7 @@ void main() {
       geometry.setAttribute("phase", new three.InstancedBufferAttribute(prepared.phases, 1));
       geometry.setAttribute("shade", new three.InstancedBufferAttribute(prepared.shades, 1));
       geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
+      geometry.setAttribute("groundHeight", new three.InstancedBufferAttribute(groundHeights, 1));
       return { geometry, ranges };
     }
     dispose() {
@@ -8728,7 +8805,7 @@ void main() {
     return geometry;
   }
   function createGrassField(map, options, onlyTiles, sharedResources, preparedLayout) {
-    const { size } = options;
+    const { size, surface } = options;
     const density = options.density ?? 60;
     if (density <= 0) return null;
     const bladeWidth = options.bladeWidth ?? size * 0.03;
@@ -8770,7 +8847,12 @@ void main() {
         chunkKey2,
         "grass",
         localizeWorldChunkBounds(
-          getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation)),
+          getWorldChunkBounds(
+            chunkTiles,
+            size,
+            surface.minimumHeight,
+            surface.maximumHeight + bladeHeight * (1 + heightVariation)
+          ),
           origin
         )
       );
@@ -8778,6 +8860,7 @@ void main() {
     }
     return new GrassField(map, chunks, resources, {
       size,
+      surface,
       density,
       bladeWidth,
       bladeHeight,
@@ -10304,7 +10387,7 @@ void main() {
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 3;
+  var WORLD_GENERATOR_VERSION = 4;
 
   // src/world/WorldStyleProfile.ts
   var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -10326,6 +10409,8 @@ void main() {
       roughness: field(2496678331, 0.31, 0.31, 3, 4),
       moisture: field(3355524772, 0.08, 0.08, 4, 2),
       temperature: field(2911926141, 0.035, 0.035, 3, 2),
+      forestPatch: field(1291169091, 0.026, 0.026, 3, 2),
+      lakePatch: field(374761393, 0.021, 0.021, 3, 2),
       openWarpAmplitude: 15,
       toroidalWarpAmplitude: 0.12,
       continentWeight: 0.72,
@@ -10360,31 +10445,61 @@ void main() {
       tundraTemperature: 0.34,
       sandTemperature: 0.68,
       sandMoisture: 0.42,
-      hillElevation: 0.62
+      hillElevation: 0.57,
+      climateTransition: 0.08
     }),
     relief: Object.freeze({
       shoreline: 0,
       staticMountain: 1,
-      mountainElevationStart: 0.68,
-      mountainElevationSpan: 0.22,
-      mountainMinimum: 0.08,
-      mountainPower: 1.3,
-      mountainScale: 1.12,
-      mountainMaximum: 1.35
+      staticHill: 0.22,
+      plainMinimum: 0.018,
+      plainMaximum: 0.11,
+      plainElevationScale: 0.1,
+      plainRoughnessScale: 0.025,
+      valleyDepth: 0.035,
+      hillElevationStart: 0.55,
+      hillElevationEnd: 0.72,
+      hillScale: 0.22,
+      hillMinimum: 0.13,
+      hillMaximum: 0.38,
+      mountainElevationStart: 0.66,
+      mountainElevationSpan: 0.25,
+      mountainMinimum: 0.36,
+      mountainPower: 1.35,
+      mountainScale: 0.78,
+      mountainRidgeScale: 0.22,
+      mountainMaximum: 1.25
     }),
     vegetation: Object.freeze({
-      moistureStart: 0.48,
-      densityScale: 1.5,
-      maximumDensity: 0.58,
+      moistureStart: 0.36,
+      moistureFull: 0.7,
+      temperatureMinimum: 0.18,
+      temperatureMaximum: 0.9,
+      temperatureTransition: 0.12,
+      densityScale: 1,
+      maximumDensity: 0.72,
+      neutralDensity: 0.45,
+      patchStart: 0.38,
+      patchFull: 0.72,
+      patchMinimum: 0.22,
+      ridgePenalty: 0.72,
+      roughnessPenalty: 0.18,
       placementSalt: 668265263,
       palmTemperature: 0.67,
       piniaTemperature: 0.4
     }),
     lakes: Object.freeze({
       minimumElevation: 0.455,
-      maximumElevation: 0.56,
-      minimumMoisture: 0.74,
-      placementThreshold: 0.94,
+      maximumElevation: 0.63,
+      minimumMoisture: 0.56,
+      fullMoisture: 0.8,
+      valleyStart: 0.03,
+      valleyFull: 0.35,
+      patchStart: 0.4,
+      patchFull: 0.72,
+      minimumPotential: 0.18,
+      minimumNeighbors: 1,
+      placementScale: 0.65,
       placementSalt: 1821285621
     })
   });
@@ -10435,7 +10550,9 @@ void main() {
       "valley",
       "roughness",
       "moisture",
-      "temperature"
+      "temperature",
+      "forestPatch",
+      "lakePatch"
     ];
     for (const name of noiseFieldNames) {
       const candidate = profile.fields[name];
@@ -10493,9 +10610,11 @@ void main() {
       "tundraTemperature",
       "sandTemperature",
       "sandMoisture",
-      "hillElevation"
+      "hillElevation",
+      "climateTransition"
     ];
     for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
+    positive("terrain.climateTransition", terrain.climateTransition);
     if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
       throw new RangeError("terrain mountain thresholds must be ordered");
     }
@@ -10503,29 +10622,65 @@ void main() {
       throw new RangeError("terrain temperature thresholds must be ordered");
     }
     const relief = profile.relief;
-    if (finite("relief.shoreline", relief.shoreline) < 0 || finite("relief.staticMountain", relief.staticMountain) < 0 || finite("relief.mountainMinimum", relief.mountainMinimum) < 0 || finite("relief.mountainMaximum", relief.mountainMaximum) < 0) {
-      throw new RangeError("relief heights must be non-negative");
+    for (const [name, candidate] of Object.entries(relief)) {
+      if (finite(`relief.${name}`, candidate) < 0) {
+        throw new RangeError("relief heights and scales must be non-negative");
+      }
     }
     positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
     positive("relief.mountainPower", relief.mountainPower);
     positive("relief.mountainScale", relief.mountainScale);
     unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
+    unitInterval("relief.hillElevationStart", relief.hillElevationStart);
+    unitInterval("relief.hillElevationEnd", relief.hillElevationEnd);
+    if (!(relief.hillElevationStart < relief.hillElevationEnd) || !(relief.plainMinimum <= relief.plainMaximum) || !(relief.hillMinimum <= relief.hillMaximum) || !(relief.plainMaximum < relief.hillMinimum)) {
+      throw new RangeError("relief plain and hill ranges must be ordered");
+    }
     if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
       throw new RangeError("relief mountain range must be ordered");
+    }
+    if (relief.staticHill < relief.hillMinimum || relief.staticHill > relief.hillMaximum || relief.staticMountain < relief.mountainMinimum || relief.staticMountain > relief.mountainMaximum) {
+      throw new RangeError("static relief heights must stay inside their terrain ranges");
     }
     const lakes = profile.lakes;
     unitInterval("lakes.minimumElevation", lakes.minimumElevation);
     unitInterval("lakes.maximumElevation", lakes.maximumElevation);
     unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
-    unitInterval("lakes.placementThreshold", lakes.placementThreshold);
-    if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation))) {
-      throw new RangeError("lake elevation thresholds must be ordered");
+    unitInterval("lakes.fullMoisture", lakes.fullMoisture);
+    unitInterval("lakes.valleyStart", lakes.valleyStart);
+    unitInterval("lakes.valleyFull", lakes.valleyFull);
+    unitInterval("lakes.patchStart", lakes.patchStart);
+    unitInterval("lakes.patchFull", lakes.patchFull);
+    unitInterval("lakes.minimumPotential", lakes.minimumPotential);
+    unitInterval("lakes.placementScale", lakes.placementScale);
+    if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
+      throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
+    }
+    if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
+      throw new RangeError("lake thresholds must be ordered");
     }
     unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
+    unitInterval("vegetation.moistureFull", profile.vegetation.moistureFull);
     unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+    unitInterval("vegetation.neutralDensity", profile.vegetation.neutralDensity);
+    unitInterval("vegetation.temperatureMinimum", profile.vegetation.temperatureMinimum);
+    unitInterval("vegetation.temperatureMaximum", profile.vegetation.temperatureMaximum);
+    unitInterval("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+    positive("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+    unitInterval("vegetation.patchStart", profile.vegetation.patchStart);
+    unitInterval("vegetation.patchFull", profile.vegetation.patchFull);
+    unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
+    unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
+    unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
     unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
     unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
     positive("vegetation.densityScale", profile.vegetation.densityScale);
+    if (!(profile.vegetation.moistureStart < profile.vegetation.moistureFull) || !(profile.vegetation.temperatureMinimum < profile.vegetation.temperatureMaximum) || !(profile.vegetation.patchStart < profile.vegetation.patchFull)) {
+      throw new RangeError("vegetation suitability thresholds must be ordered");
+    }
+    if (profile.vegetation.neutralDensity > profile.vegetation.maximumDensity) {
+      throw new RangeError("vegetation neutral density must not exceed maximum density");
+    }
     if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
       throw new RangeError("vegetation temperature thresholds must be ordered");
     }
@@ -10555,7 +10710,7 @@ void main() {
     }
     return { ...resolved };
   }
-  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, latitude, edgeFalloff, profile) {
+  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
     const fields = profile.fields;
     const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
     const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
@@ -10570,7 +10725,9 @@ void main() {
       valley,
       roughness: clamp01(roughness),
       moisture,
-      temperature
+      temperature,
+      forestPatch: clamp01(forestPatch),
+      lakePatch: clamp01(lakePatch)
     };
   }
   function sampleOpenLandform(seed, x, y, domain, profile) {
@@ -10587,6 +10744,8 @@ void main() {
     const rough = open(fields.roughness, wx, wy);
     const moisture = open(fields.moisture, wx, wy);
     const temperature = open(fields.temperature, wx, wy);
+    const forestPatch = open(fields.forestPatch, wx, wy);
+    const lakePatch = open(fields.lakePatch, wx, wy);
     if (domain.topology === "infinite") {
       return composeSample(
         continent,
@@ -10596,6 +10755,8 @@ void main() {
         rough,
         moisture,
         temperature,
+        forestPatch,
+        lakePatch,
         void 0,
         0,
         profile
@@ -10612,6 +10773,8 @@ void main() {
       rough,
       moisture,
       temperature,
+      forestPatch,
+      lakePatch,
       Math.abs(ny),
       Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
       profile
@@ -10640,8 +10803,23 @@ void main() {
     const rough = periodic(fields.roughness, wx, wy);
     const moisture = periodic(fields.moisture, wx, wy);
     const temperature = periodic(fields.temperature, wx, wy);
+    const forestPatch = periodic(fields.forestPatch, wx, wy);
+    const lakePatch = periodic(fields.lakePatch, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0, profile);
+    return composeSample(
+      continent,
+      detail,
+      ridgeNoise,
+      valleyNoise,
+      rough,
+      moisture,
+      temperature,
+      forestPatch,
+      lakePatch,
+      latitude,
+      0,
+      profile
+    );
   }
   function createLandformSampler(options) {
     return createLandformSamplerForProfile(options, WORLD_STYLE_PROFILE);
@@ -10675,6 +10853,10 @@ void main() {
   // src/world/WorldSurfaceResolver.ts
   var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
   var clamp012 = (value) => Math.max(0, Math.min(1, value));
+  var smoothstep2 = (edge0, edge1, value) => {
+    const t = clamp012((value - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
   var modulo = (value, period) => (value % period + period) % period;
   function assertTileCoordinates(x, y) {
     if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
@@ -10700,26 +10882,94 @@ void main() {
   }
   function generatedRelief(sample, profile) {
     const relief = profile.relief;
-    const elevationT = Math.max(0, (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan);
-    return Math.min(
-      relief.mountainMaximum,
-      relief.mountainMinimum + Math.pow(elevationT, relief.mountainPower) * relief.mountainScale
+    if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
+    const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
+    const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
+    const hill = smoothstep2(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
+    const mountainT = Math.max(
+      0,
+      (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
+    );
+    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp012(mountainT) * relief.mountainRidgeScale;
+    return Math.max(
+      relief.shoreline,
+      Math.min(relief.mountainMaximum, plain + hill + mountain)
     );
   }
-  function biomeFor(type) {
-    if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
-    if (type === "sand" /* sand */) return "dry";
-    if (type === "tundra" /* tundra */ || type === "snow" /* snow */) return "cold";
-    if (type === "mountain" /* mountain */) return "alpine";
-    return "temperate";
-  }
-  function biomeWeightsFor(biome) {
+  function biomeWeightsFor(type, sample, profile) {
+    if (isWater2(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+    const terrain = profile.terrain;
+    const transition = terrain.climateTransition;
+    const cold = 1 - smoothstep2(
+      terrain.snowTemperature - transition,
+      terrain.tundraTemperature + transition,
+      sample.temperature
+    );
+    const dry = smoothstep2(
+      terrain.sandTemperature - transition,
+      terrain.sandTemperature + transition,
+      sample.temperature
+    ) * (1 - smoothstep2(
+      terrain.sandMoisture - transition,
+      terrain.sandMoisture + transition,
+      sample.moisture
+    ));
+    const alpine = clamp012(Math.max(
+      type === "mountain" /* mountain */ ? 0.7 : 0,
+      smoothstep2(
+        terrain.mountainElevation - transition,
+        terrain.mountainPeakElevation,
+        sample.elevation
+      ) * (0.45 + sample.ridge * 0.55)
+    ));
+    const temperate = Math.max(0.02, (1 - cold) * (1 - dry) * (1 - alpine));
+    const sum = temperate + dry + cold + alpine;
     return Object.freeze({
-      temperate: biome === "temperate" ? 1 : 0,
-      dry: biome === "dry" ? 1 : 0,
-      cold: biome === "cold" ? 1 : 0,
-      alpine: biome === "alpine" ? 1 : 0
+      temperate: temperate / sum,
+      dry: dry / sum,
+      cold: cold / sum,
+      alpine: alpine / sum
     });
+  }
+  function biomeFor(type, weights) {
+    if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
+    const weighted = [
+      ["temperate", weights.temperate],
+      ["dry", weights.dry],
+      ["cold", weights.cold],
+      ["alpine", weights.alpine]
+    ];
+    return weighted.reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
+  }
+  function vegetationDensityFor(type, sample, profile) {
+    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
+    const vegetation = profile.vegetation;
+    const moisture = smoothstep2(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
+    const cold = smoothstep2(
+      vegetation.temperatureMinimum - vegetation.temperatureTransition,
+      vegetation.temperatureMinimum + vegetation.temperatureTransition,
+      sample.temperature
+    );
+    const heat = 1 - smoothstep2(
+      vegetation.temperatureMaximum - vegetation.temperatureTransition,
+      vegetation.temperatureMaximum + vegetation.temperatureTransition,
+      sample.temperature
+    );
+    const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep2(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
+    const slope = clamp012(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
+    return Math.min(
+      vegetation.maximumDensity,
+      moisture * cold * heat * patch * slope * vegetation.densityScale
+    );
+  }
+  function lakePotentialFor(type, sample, profile) {
+    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
+    const lakes = profile.lakes;
+    const elevation = smoothstep2(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep2(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
+    const moisture = smoothstep2(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
+    const valley = smoothstep2(lakes.valleyStart, lakes.valleyFull, sample.valley);
+    const patch = smoothstep2(lakes.patchStart, lakes.patchFull, sample.lakePatch);
+    return clamp012(elevation * moisture * valley * patch);
   }
   function vegetationKindFor(sample, profile) {
     return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
@@ -10727,17 +10977,15 @@ void main() {
   function sampleSurface(sampler, profile, x, y) {
     const landform = Object.freeze({ ...sampler.sample(x, y) });
     const baseTerrain = classifyTerrain(landform, profile);
-    const biome = biomeFor(baseTerrain);
-    const vegetationDensity = isWater2(baseTerrain) || baseTerrain === "mountain" /* mountain */ || baseTerrain === "snow" /* snow */ ? 0 : clamp012(Math.min(
-      profile.vegetation.maximumDensity,
-      (landform.moisture - profile.vegetation.moistureStart) * profile.vegetation.densityScale
-    ));
-    const lakePotential = baseTerrain === "land" /* land */ && landform.elevation > profile.lakes.minimumElevation && landform.elevation < profile.lakes.maximumElevation && landform.moisture > profile.lakes.minimumMoisture ? 1 : 0;
+    const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
+    const biome = biomeFor(baseTerrain, biomeWeights);
+    const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
+    const lakePotential = lakePotentialFor(baseTerrain, landform, profile);
     return Object.freeze({
       baseTerrain,
       relief: generatedRelief(landform, profile),
       biome,
-      biomeWeights: biomeWeightsFor(biome),
+      biomeWeights,
       vegetationDensity,
       vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : void 0,
       lakePotential,
@@ -10758,7 +11006,14 @@ void main() {
     const tile = { type };
     if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return Object.freeze(tile);
     const modifiers = [];
-    const lake = sample.lakePotential > 0 && randomAt(numericSeed, x, y, profile.lakes.placementSalt) > profile.lakes.placementThreshold;
+    const lakes = profile.lakes;
+    const isLakeCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
+    const lakeCandidate = isLakeCandidate(sample, x, y);
+    const lakeNeighbors = lakeCandidate ? getNeighbors(x, y).reduce((count, neighbor) => {
+      const adjacent = sampleAt(neighbor.x, neighbor.y);
+      return count + (isLakeCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
+    }, 0) : 0;
+    const lake = lakeCandidate && lakeNeighbors >= lakes.minimumNeighbors;
     if (lake) {
       modifiers.push("lake");
     } else {
@@ -11322,7 +11577,7 @@ void main() {
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-  var WORLD_WORKER_PROTOCOL_VERSION = 1;
+  var WORLD_WORKER_PROTOCOL_VERSION = 2;
   function assertChunkSize(value) {
     if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -11766,7 +12021,7 @@ void main() {
       this.disposed = false;
       this.handleMessage = (event) => {
         const data = event.data;
-        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
+        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || data.generatorVersion !== WORLD_GENERATOR_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
           this.fail(new Error("World generation worker returned an invalid message"));
           return;
         }
@@ -11832,7 +12087,13 @@ void main() {
       return new Promise((resolve, reject) => {
         this.pending.set(id, { kind: "world", resolve: (value) => resolve(value), reject });
         try {
-          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "world", options });
+          this.worker.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
+            id,
+            type: "world",
+            options
+          });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -11854,7 +12115,13 @@ void main() {
           }
         });
         try {
-          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "chunk", options });
+          this.worker.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
+            id,
+            type: "chunk",
+            options
+          });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -11871,7 +12138,13 @@ void main() {
           reject
         });
         try {
-          this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "vegetation", options });
+          this.worker.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
+            id,
+            type: "vegetation",
+            options
+          });
         } catch (reason) {
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -12202,13 +12475,13 @@ void main() {
   var META_STORE = "meta";
   var USAGE_KEY = "usage";
   function createWorldChunkCacheKey(options) {
+    if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
+    assertWorldDescriptor(options.descriptor);
+    if (!Number.isSafeInteger(options.chunkX) || !Number.isSafeInteger(options.chunkY)) {
+      throw new RangeError("world chunk cache coordinates must be safe integers");
+    }
     return JSON.stringify([
-      options.generatorVersion ?? WORLD_GENERATOR_VERSION,
-      String(options.seed),
-      options.chunkSize,
-      options.world?.topology ?? "infinite",
-      options.world?.width ?? null,
-      options.world?.height ?? null,
+      serializeWorldDescriptor(options.descriptor),
       options.chunkX,
       options.chunkY
     ]);
@@ -13428,19 +13701,12 @@ void main() {
         generatorVersion: options.generatorVersion,
         world: { width: options.width, height: options.height, topology: "toroidal" }
       });
-      this.generatorVersion = this.descriptor.generatorVersion;
+      this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
       this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
       const resolvedDeltas = resolveDeltaStore(options, dependencies);
       this.deltaStore = resolvedDeltas.store;
       this.ownsDeltaStore = resolvedDeltas.owned;
-      this.worldId = resolveWorldId(options.worldId, JSON.stringify([
-        "toroidal",
-        String(options.seed),
-        options.width,
-        options.height,
-        this.chunkSize,
-        this.generatorVersion
-      ]));
+      this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
       this.chunkCountX = Math.ceil(options.width / this.chunkSize);
       this.chunkCountY = Math.ceil(options.height / this.chunkSize);
       this.store = dependencies.store ?? new SparseWorldChunkStore(this.bounds);
@@ -13494,7 +13760,7 @@ void main() {
         chunkSize: this.chunkSize,
         world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
       };
-      const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+      const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
       if (!packed) {
@@ -13530,7 +13796,7 @@ void main() {
       const resolved = this.resolveChunk(chunkX, chunkY);
       if (!resolved) return void 0;
       return {
-        terrainRevision: this.generatorVersion,
+        terrainRevision: this.worldFingerprint,
         deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
       };
     }
@@ -13632,15 +13898,12 @@ void main() {
         chunkSize: this.chunkSize,
         generatorVersion: options.generatorVersion
       });
-      this.generatorVersion = this.descriptor.generatorVersion;
+      this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
       this.store = dependencies.store ?? new SparseWorldChunkStore();
       const resolvedDeltas = resolveDeltaStore(options, dependencies);
       this.deltaStore = resolvedDeltas.store;
       this.ownsDeltaStore = resolvedDeltas.owned;
-      this.worldId = resolveWorldId(
-        options.worldId,
-        JSON.stringify(["infinite", String(options.seed), this.chunkSize, this.generatorVersion])
-      );
+      this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
       this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
       const resolvedCache = resolveCache(options, dependencies);
       this.cache = resolvedCache.cache;
@@ -13672,7 +13935,7 @@ void main() {
     async loadChunk(chunkX, chunkY, request = {}) {
       if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
       const generation = { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize };
-      const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+      const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
       if (!packed) {
@@ -13707,7 +13970,7 @@ void main() {
       const resolved = this.resolveChunk(chunkX, chunkY);
       if (!resolved) return void 0;
       return {
-        terrainRevision: this.generatorVersion,
+        terrainRevision: this.worldFingerprint,
         deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
       };
     }
@@ -15766,6 +16029,7 @@ void main() {
   }
 
   // src/world/WorldSurfaceView.ts
+  var clamp2 = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
   var CORNER_DIRECTIONS = [
     ["NE", "SE"],
     ["SE", "S"],
@@ -15867,8 +16131,15 @@ void main() {
       this.displayRevision += 1;
       return true;
     }
+    invalidate() {
+      this.displayRevision += 1;
+      return this.displayRevision;
+    }
     getEffectiveRelief(x, y) {
       return this.createWindow().getEffectiveRelief(x, y);
+    }
+    getEffectiveVegetationDensity(x, y) {
+      return this.createWindow().getEffectiveVegetationDensity(x, y);
     }
     getTileCenterHeight(x, y) {
       return this.createWindow().getTileCenterHeight(x, y);
@@ -15889,6 +16160,9 @@ void main() {
       this.contributions = /* @__PURE__ */ new Map();
       this.corners = /* @__PURE__ */ new Map();
       this.samples = /* @__PURE__ */ new Map();
+      this.generatedTiles = /* @__PURE__ */ new Map();
+      this.vegetation = /* @__PURE__ */ new Map();
+      this.resolverWindow = surface.resolver?.createWindow();
     }
     key(x, y) {
       const point = normalizeMapCoordinates(this.surface.map, x, y);
@@ -15903,10 +16177,23 @@ void main() {
       const key = `${point.x},${point.y}`;
       let sample = this.samples.get(key);
       if (!sample) {
-        sample = resolver.sampleGenerated(point.x, point.y);
+        sample = this.resolverWindow.sampleGenerated(point.x, point.y);
         this.samples.set(key, sample);
       }
       return sample;
+    }
+    resolveGeneratedTile(x, y) {
+      const resolver = this.surface.resolver;
+      if (!resolver) return void 0;
+      const point = normalizeMapCoordinates(this.surface.map, x, y);
+      if (!point) return void 0;
+      const key = `${point.x},${point.y}`;
+      let tile = this.generatedTiles.get(key);
+      if (!tile) {
+        tile = this.resolverWindow.resolveGeneratedTile(point.x, point.y);
+        this.generatedTiles.set(key, tile);
+      }
+      return tile;
     }
     contribution(x, y) {
       assertTileCoordinates2(x, y);
@@ -15914,21 +16201,48 @@ void main() {
       let contribution = this.contributions.get(key);
       if (contribution) return contribution;
       const tile = getMapTile(this.surface.map, x, y);
+      const sample = this.sampleGenerated(x, y);
+      const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
       if (isShoreline(tile)) {
         contribution = { shoreline: true, relief: 0 };
       } else if (tile?.type === "mountain" /* mountain */) {
         contribution = {
           shoreline: false,
-          relief: this.sampleGenerated(x, y)?.relief ?? this.surface.resolver?.profile.relief.mountainMinimum ?? 1
+          relief: sample ? clamp2(sample.relief, profile.relief.mountainMinimum, profile.relief.mountainMaximum) : profile.relief.staticMountain
+        };
+      } else if (tile?.modifiers?.includes("hill")) {
+        contribution = {
+          shoreline: false,
+          relief: sample ? clamp2(sample.relief, profile.relief.hillMinimum, profile.relief.hillMaximum) : profile.relief.staticHill
         };
       } else {
-        contribution = { shoreline: false, relief: 0 };
+        contribution = {
+          shoreline: false,
+          relief: sample ? clamp2(sample.relief, profile.relief.plainMinimum, profile.relief.plainMaximum) : 0
+        };
       }
       this.contributions.set(key, contribution);
       return contribution;
     }
     getEffectiveRelief(x, y) {
       return this.contribution(x, y).relief;
+    }
+    getEffectiveVegetationDensity(x, y) {
+      assertTileCoordinates2(x, y);
+      const key = this.key(x, y);
+      const cached = this.vegetation.get(key);
+      if (cached !== void 0) return cached;
+      const tile = getMapTile(this.surface.map, x, y);
+      let density = 0;
+      if (!isShoreline(tile) && tile?.type !== "mountain" /* mountain */ && tile?.type !== "snow" /* snow */ && tile?.modifiers?.includes("wood")) {
+        const sample = this.sampleGenerated(x, y);
+        const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
+        const generatedWood = this.resolveGeneratedTile(x, y)?.modifiers?.includes("wood") === true;
+        density = generatedWood ? sample?.vegetationDensity ?? profile.vegetation.neutralDensity : Math.max(sample?.vegetationDensity ?? 0, profile.vegetation.neutralDensity);
+      }
+      density = clamp2(density, 0, 1);
+      this.vegetation.set(key, density);
+      return density;
     }
     isShoreline(x, y) {
       return this.contribution(x, y).shoreline;
@@ -15977,6 +16291,9 @@ void main() {
       this.contributions.clear();
       this.corners.clear();
       this.samples.clear();
+      this.generatedTiles.clear();
+      this.vegetation.clear();
+      this.resolverWindow?.clear();
     }
   };
   function createWorldSurfaceView(options) {
@@ -16024,6 +16341,7 @@ void main() {
       this.initializedWorldRenderLayers = /* @__PURE__ */ new Set();
       this.worldRenderLayerInitRevisions = /* @__PURE__ */ new Map();
       this.worldRenderLayerObjects = /* @__PURE__ */ new Map();
+      this.surfaceHiddenObjects = /* @__PURE__ */ new Map();
       this.worldTileUpdateQueue = Promise.resolve();
       this.worldChunkSize = 24;
       this.renderOrigin = new three.Vector2();
@@ -16241,7 +16559,11 @@ void main() {
       const centerZ = (corner00.y + cornerWH.y) / 2;
       const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
       const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-      this.controls.target.set(centerX, 0, centerZ);
+      this.controls.target.set(
+        centerX,
+        this.worldSurface?.getWorldHeight(centerX, centerZ) ?? 0,
+        centerZ
+      );
       this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
       this.controls.update();
     }
@@ -16294,12 +16616,82 @@ void main() {
     positionMarker(marker, tile, reference = this.getCameraTarget()) {
       const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
       marker.position.setX(center.x);
+      marker.position.setY(
+        (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0) + this.options.size / 10 + 1.1
+      );
       marker.position.setZ(center.y);
     }
     updateMarkerPositions() {
       const hovered = this.interactions.hoveredTile;
       if (hovered && this.pointer.visible) this.positionMarker(this.pointer, hovered);
       if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
+    }
+    refreshCameraSurfaceTarget() {
+      const surface = this.worldSurface;
+      if (!surface) return;
+      const logicalTarget = this.getCameraTarget(this.logicalTargetScratch);
+      const nextY = surface.getWorldHeight(logicalTarget.x, logicalTarget.z);
+      const deltaY = nextY - this.controls.target.y;
+      this.controls.target.y = nextY;
+      this.camera.position.y += deltaY;
+      this.controls.update();
+    }
+    refreshRouteSurface() {
+      if (!this.routePath) return;
+      const path = this.routePath.map((point) => ({ ...point }));
+      this.drawRoutePath(path);
+    }
+    hideSurfaceObject(object) {
+      const state = this.surfaceHiddenObjects.get(object);
+      if (state) {
+        state.count += 1;
+        return;
+      }
+      this.surfaceHiddenObjects.set(object, { count: 1, visible: object.visible });
+      object.visible = false;
+    }
+    releaseSurfaceObject(object) {
+      const state = this.surfaceHiddenObjects.get(object);
+      if (!state) return;
+      state.count -= 1;
+      if (state.count > 0) return;
+      object.visible = state.visible;
+      this.surfaceHiddenObjects.delete(object);
+    }
+    async refreshCustomSurfaceLayers() {
+      const layers = this.worldRenderLayers.values().filter(
+        (layer) => !this.builtinWorldRenderLayerIds.has(layer.id) && this.initializedWorldRenderLayers.has(layer.id) && layer.surfaceChanged
+      );
+      await Promise.all(layers.map(async (layer) => {
+        const objects = /* @__PURE__ */ new Set();
+        for (const group of this.worldRenderLayerObjects.get(layer.id)?.values() ?? []) {
+          for (const object of group) objects.add(object);
+        }
+        for (const object of objects) this.hideSurfaceObject(object);
+        try {
+          await layer.surfaceChanged?.(this.createWorldRenderLayerHost(layer.id, "@world"));
+        } finally {
+          for (const object of objects) this.releaseSurfaceObject(object);
+        }
+      }));
+    }
+    async refreshSurfaceConsumers(surfaceRevision, rebuildVegetation, points) {
+      const surface = this.worldSurface;
+      const loadRevision = this.loadRevision;
+      if (!surface || surface.revision !== surfaceRevision || this.disposed) return;
+      this.terrain?.refreshCitySurfaceHeights(points);
+      this.refreshCameraSurfaceTarget();
+      this.updateMarkerPositions();
+      this.refreshRouteSurface();
+      const builds = [this.refreshCustomSurfaceLayers()];
+      if (rebuildVegetation) {
+        builds.push(this.rebuildSurfaceVegetation(loadRevision));
+      }
+      await Promise.all(builds);
+      if (this.disposed || this.loadRevision !== loadRevision || this.worldSurface !== surface || surface.revision !== surfaceRevision) return;
+      this.updateWorldChunkVisibility();
+      this.refreshWorldCopies();
+      this.emit("surfacechange", { revision: surfaceRevision, surface });
     }
     clearWorldCopies() {
       this.frameTasks.cancel(WORLD_COPY_REFRESH_TASK);
@@ -16786,7 +17178,11 @@ void main() {
       const center = getHexCenter(tile.x, tile.y, this.options.size);
       const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
       const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-      this.controls.target.set(center.x, 0, center.y);
+      this.controls.target.set(
+        center.x,
+        this.worldSurface?.getTileCenterHeight(tile.x, tile.y) ?? 0,
+        center.y
+      );
       this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
       this.controls.update();
     }
@@ -16894,6 +17290,7 @@ void main() {
       }));
       const grass = createGrassField(this.mapData, {
         size: this.options.size,
+        surface: this.worldSurface,
         density: density.grassDensity,
         bladeWidth: this.options.grassBladeWidth,
         bladeHeight: this.options.grassBladeHeight,
@@ -16954,6 +17351,7 @@ void main() {
       const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
       const build = preparation.then((prepared) => createForest(this.mapData, {
         size: this.options.size,
+        surface: this.worldSurface,
         treesPerTile: density.treesPerTile,
         treeModel: this.options.treeModel,
         treeScale: this.options.treeScale,
@@ -17183,6 +17581,7 @@ void main() {
         map: this.mapData,
         source,
         tileSize: this.options.size,
+        surface: this.worldSurface,
         signal,
         addObject: (object) => {
           if (!isCurrent()) return;
@@ -17613,6 +18012,7 @@ void main() {
       if (!this.mapData) return false;
       const forest = await createForest(this.mapData, {
         size: this.options.size,
+        surface: this.worldSurface,
         treesPerTile: this.options.treesPerTile,
         treeModel: this.options.treeModel,
         treeScale: this.options.treeScale,
@@ -17643,10 +18043,9 @@ void main() {
     //directly from a live GUI slider (see grassDensity/grassBladeWidth/
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
-    rebuildGrass() {
+    async rebuildGrass() {
       if (this.worldStreamer) {
-        this.rebuildStreamedGrass();
-        return;
+        return this.rebuildStreamedGrass();
       }
       this.clearWorldCopies();
       this.chunkScheduler.clear();
@@ -17655,9 +18054,10 @@ void main() {
         this.grass.dispose();
         this.grass = void 0;
       }
-      if (!this.mapData) return;
+      if (!this.mapData) return false;
       this.grass = createGrassField(this.mapData, {
         size: this.options.size,
+        surface: this.worldSurface,
         density: this.options.grassDensity,
         bladeWidth: this.options.grassBladeWidth,
         bladeHeight: this.options.grassBladeHeight,
@@ -17676,8 +18076,9 @@ void main() {
         this.reapplyFog();
       }
       this.refreshWorldCopies();
+      return true;
     }
-    rebuildStreamedGrass() {
+    async rebuildStreamedGrass() {
       this.chunkScheduler.clear();
       this.streamedGrassByChunkId.clear();
       for (const [key, record] of this.worldChunkLayers) {
@@ -17686,18 +18087,20 @@ void main() {
       this.streamedGrassResources?.dispose();
       this.streamedGrassResources = void 0;
       const layer = this.worldRenderLayers.get("@grass");
-      if (!layer) return;
+      if (!layer) return false;
+      const builds = [];
       for (const [key, record] of this.worldChunkLayers) {
         record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
+        record.vegetationAbort?.abort();
         record.vegetationPromise = void 0;
         record.vegetationAbort = void 0;
         const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
         record.renderLayerPromises?.set(layer.id, mounted);
-        void mounted.catch((error) => {
-          if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
-        });
+        builds.push(mounted);
       }
+      await Promise.all(builds);
       this.refreshWorldCopies();
+      return !this.disposed;
     }
     async rebuildStreamedForests(expectedRevision, forestRevision) {
       this.chunkScheduler.clear();
@@ -17712,12 +18115,57 @@ void main() {
       if (!layer) return false;
       for (const [key, record] of this.worldChunkLayers) {
         record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
+        record.vegetationAbort?.abort();
         record.vegetationPromise = void 0;
         record.vegetationAbort = void 0;
         const build = this.mountRegisteredWorldRenderLayer(layer, key, record);
         record.forestPromise = build;
         record.renderLayerPromises?.set(layer.id, build);
         builds.push(build);
+      }
+      await Promise.all(builds);
+      this.refreshWorldCopies();
+      return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
+    }
+    async rebuildSurfaceVegetation(expectedRevision) {
+      if (!this.worldStreamer) {
+        await Promise.all([this.rebuildGrass(), this.rebuildForest(expectedRevision)]);
+        return !this.disposed && expectedRevision === this.loadRevision;
+      }
+      const forestRevision = ++this.forestRevision;
+      this.chunkScheduler.clear();
+      this.streamedGrassByChunkId.clear();
+      this.streamedForestByChunkId.clear();
+      for (const [key, record] of this.worldChunkLayers) {
+        const context = this.createWorldRenderChunkContext("@grass", key, record);
+        this.unmountGrassWorldRenderLayer(context);
+        this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
+        record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
+        record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
+        record.vegetationAbort?.abort();
+        record.vegetationAbort = void 0;
+        record.vegetationPromise = void 0;
+      }
+      this.streamedGrassResources?.dispose();
+      this.streamedGrassResources = void 0;
+      this.streamedForestResources?.dispose();
+      this.streamedForestResources = new ForestSharedResources();
+      const grassLayer = this.worldRenderLayers.get("@grass");
+      const forestLayer = this.worldRenderLayers.get("@forest");
+      const builds = [];
+      for (const [key, record] of this.worldChunkLayers) {
+        record.renderLayerPromises ?? (record.renderLayerPromises = /* @__PURE__ */ new Map());
+        if (grassLayer) {
+          const build = this.mountRegisteredWorldRenderLayer(grassLayer, key, record);
+          record.renderLayerPromises.set(grassLayer.id, build);
+          builds.push(build);
+        }
+        if (forestLayer) {
+          const build = this.mountRegisteredWorldRenderLayer(forestLayer, key, record);
+          record.forestPromise = build;
+          record.renderLayerPromises.set(forestLayer.id, build);
+          builds.push(build);
+        }
       }
       await Promise.all(builds);
       this.refreshWorldCopies();
@@ -17862,9 +18310,19 @@ void main() {
     enqueueTileRenderRefreshes(points, source, refreshKind2 = "terrain") {
       const loadRevision = this.loadRevision;
       const controller = this.worldController;
-      const queued = this.worldTileUpdateQueue.then(() => {
+      const surfaceRevision = refreshKind2 === "terrain" ? this.worldSurface?.invalidate() : void 0;
+      const queued = this.worldTileUpdateQueue.then(async () => {
         if (!this.isWorldSessionCurrent(source, loadRevision)) return;
-        return this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind2);
+        await this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind2);
+        if (surfaceRevision !== void 0) {
+          const affected = /* @__PURE__ */ new Map();
+          for (const point of points) {
+            for (const candidate of [point, ...getMapNeighbors(this.mapData, point.x, point.y)]) {
+              affected.set(`${candidate.x},${candidate.y}`, candidate);
+            }
+          }
+          await this.refreshSurfaceConsumers(surfaceRevision, false, [...affected.values()]);
+        }
       });
       const refresh = controller?.source === source ? controller.lifecycle.track(queued) : queued;
       this.worldTileUpdateQueue = refresh.catch(() => void 0);
@@ -18309,9 +18767,19 @@ void main() {
       return this.terrain?.mountainHeight ?? this.options.mountainHeight;
     }
     set mountainHeight(value) {
+      if (!Number.isFinite(value) || value < 0) {
+        throw new RangeError("mountainHeight must be a non-negative finite number");
+      }
+      if (value === this.mountainHeight) return;
       this.options.mountainHeight = value;
       if (this.terrain) this.terrain.mountainHeight = value;
       else this.worldSurface?.setMountainHeight(value);
+      const revision = this.worldSurface?.revision;
+      if (revision !== void 0) {
+        void this.refreshSurfaceConsumers(revision, true).catch((error) => {
+          if (this.worldSurface?.revision === revision) this.emit("error", error);
+        });
+      }
     }
     get landformDebugMode() {
       return this.terrain?.landformDebugMode ?? this.options.landformDebugMode;
@@ -18422,7 +18890,7 @@ void main() {
     set treesPerTile(value) {
       if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
       this.options.treesPerTile = value;
-      void this.rebuildForest();
+      void this.rebuildForest().catch((error) => this.emit("error", error));
     }
     get treeScale() {
       return this.options.treeScale;
@@ -18430,7 +18898,7 @@ void main() {
     set treeScale(value) {
       if (!Number.isFinite(value) || value < 0) throw new RangeError("treeScale must be a non-negative finite number");
       this.options.treeScale = value;
-      void this.rebuildForest();
+      void this.rebuildForest().catch((error) => this.emit("error", error));
     }
     //Toggling visibility just flips the mesh's own `visible` flag (grass is
     //still generated even when disabled) - the terrain's own grass texture
@@ -18470,7 +18938,7 @@ void main() {
     set grassDensity(value) {
       if (!Number.isInteger(value) || value < 0) throw new RangeError("grassDensity must be a non-negative integer");
       this.options.grassDensity = value;
-      this.rebuildGrass();
+      void this.rebuildGrass().catch((error) => this.emit("error", error));
     }
     get grassBladeWidth() {
       return this.options.grassBladeWidth;
@@ -18478,7 +18946,7 @@ void main() {
     set grassBladeWidth(value) {
       if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeWidth must be a positive finite number");
       this.options.grassBladeWidth = value;
-      this.rebuildGrass();
+      void this.rebuildGrass().catch((error) => this.emit("error", error));
     }
     get grassBladeHeight() {
       return this.options.grassBladeHeight;
@@ -18486,7 +18954,7 @@ void main() {
     set grassBladeHeight(value) {
       if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeHeight must be a positive finite number");
       this.options.grassBladeHeight = value;
-      this.rebuildGrass();
+      void this.rebuildGrass().catch((error) => this.emit("error", error));
     }
     selectTile(x, y) {
       const normalized = this.mapData ? normalizeMapCoordinates(this.mapData, x, y) : { x, y };
@@ -18500,6 +18968,10 @@ void main() {
     }
     get size() {
       return this.options.size;
+    }
+    /** Current logical-world height authority; available after a world is loaded. */
+    get surface() {
+      return this.worldSurface;
     }
     get streamingStats() {
       return this.chunkScheduler.stats;
@@ -18551,14 +19023,19 @@ void main() {
     }
     drawRoutePath(path) {
       this.cleanRoutePath();
+      if (path.length === 0) return;
+      this.routePath = path.map((point) => ({ ...point }));
       let reference = this.getCameraTarget();
       const points = path.map((p) => {
         const center = this.nearestRepeatedCenter(p.x, p.y, reference);
-        const point = new three.Vector3(center.x, 10, center.y);
+        const point = new three.Vector3(
+          center.x,
+          (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0) + 1.1,
+          center.y
+        );
         reference = point;
         return point;
       });
-      if (points.length === 0) return;
       const origin = points[0].clone();
       const geometry = new three.BufferGeometry().setFromPoints(points.map((point) => point.clone().sub(origin)));
       const material = new three.LineBasicMaterial({ color: 16711680, linewidth: 5 });
@@ -18574,6 +19051,7 @@ void main() {
         for (const material of materials) material.dispose();
         this.routeLine = void 0;
       }
+      this.routePath = void 0;
     }
     //Escape hatch for consumers that want to add their own Object3D (units,
     //effects, custom markers) to the map's scene.
@@ -18602,10 +19080,14 @@ void main() {
       const center = getHexCenter(point.x, point.y, this.options.size);
       const current = this.getCameraTarget(this.logicalTargetScratch);
       const dx = center.x - current.x;
+      const targetY = this.worldSurface?.getTileCenterHeight(point.x, point.y) ?? 0;
+      const dy = targetY - current.y;
       const dz = center.y - current.z;
       this.camera.position.x += dx;
+      this.camera.position.y += dy;
       this.camera.position.z += dz;
       this.controls.target.x += dx;
+      this.controls.target.y += dy;
       this.controls.target.z += dz;
       this.controls.update();
     }
@@ -18720,7 +19202,8 @@ void main() {
         mapWidth: 0,
         mapHeight: 0,
         wrapX: false,
-        wrapY: false
+        wrapY: false,
+        surface: void 0
       };
       setOptions(this, options);
     }
@@ -18734,7 +19217,11 @@ void main() {
       this._unit = new three.Object3D();
       this._unit.add(model);
       let position = getHexCenter(this.options.x, this.options.y, this.options.size);
-      this._unit.position.set(position.x, 0, position.y);
+      this._unit.position.set(
+        position.x,
+        this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
+        position.y
+      );
       if (!this.activate("idle" /* idle */) && animations.length > 0) this.playClip(animations[0]);
     }
     //----------------------------------------------------------------------------------------------------------
@@ -18783,7 +19270,11 @@ void main() {
       this.options.x = position.x;
       if (this._unit) {
         const center = getHexCenter(position.x, position.y, this.options.size);
-        this._unit.position.set(center.x, this._unit.position.y, center.y);
+        this._unit.position.set(
+          center.x,
+          this.options.surface?.getWorldHeight(center.x, center.y) ?? 0,
+          center.y
+        );
       }
     }
     activate(action) {
@@ -18824,7 +19315,7 @@ void main() {
         mapHeight: this.options.mapHeight,
         wrapX: this.options.wrapX,
         wrapY: this.options.wrapY
-      }, this.unit.position);
+      }, this.unit.position, this.options.surface);
       for (let i = 1; i < points.length; i++) {
         pointsPath.add(new three.LineCurve3(points[i - 1], points[i]));
       }
@@ -18847,7 +19338,10 @@ void main() {
       while (this.needAnimate && token === this.movementToken) {
         this.pathFraction = Math.min(1, this.pathFraction + fractionStep);
         const newPosition = this.pointsPath.getPoint(this.pathFraction);
-        const tangent = this.pointsPath.getTangent(this.pathFraction).normalize();
+        newPosition.y = this.options.surface?.getWorldHeight(newPosition.x, newPosition.z) ?? 0;
+        const tangent = this.pointsPath.getTangent(this.pathFraction);
+        tangent.y = 0;
+        tangent.normalize();
         this.unit.position.copy(newPosition);
         if (tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(forward, tangent);
         if (this.movePath && this._viewCell) {
@@ -18882,11 +19376,22 @@ void main() {
       if (copyX === this.alignedCopyX && copyY === this.alignedCopyY && this.options.x === this.alignedTileX && this.options.y === this.alignedTileY) return;
       center.x += copyX * periodX;
       center.y += copyY * periodY;
-      this._unit.position.set(center.x, this._unit.position.y, center.y);
+      this._unit.position.set(
+        center.x,
+        this.options.surface?.getWorldHeight(center.x, center.y) ?? 0,
+        center.y
+      );
       this.alignedCopyX = copyX;
       this.alignedCopyY = copyY;
       this.alignedTileX = this.options.x;
       this.alignedTileY = this.options.y;
+    }
+    refreshSurface() {
+      if (!this._unit) return;
+      this._unit.position.y = this.options.surface?.getWorldHeight(
+        this._unit.position.x,
+        this._unit.position.z
+      ) ?? 0;
     }
     dispose() {
       this.needAnimate = false;
@@ -18904,20 +19409,26 @@ void main() {
       this.removeAllListeners();
     }
   };
-  function createContinuousHexPath(path, size, topology = {}, start) {
+  function createContinuousHexPath(path, size, topology = {}, start, surface) {
     const periodX = topology.wrapX && topology.mapWidth ? topology.mapWidth * size * 1.5 : 0;
     const periodY = topology.wrapY && topology.mapHeight ? topology.mapHeight * size * Math.sqrt(3) : 0;
     const points = [];
     for (let index = 0; index < path.length; index++) {
       if (index === 0 && start) {
-        points.push(start.clone());
+        const first = start.clone();
+        first.y = surface?.getWorldHeight(first.x, first.z) ?? 0;
+        points.push(first);
         continue;
       }
       const center = getHexCenter(path[index].x, path[index].y, size);
       const previous = points[index - 1];
       if (previous && periodX > 0) center.x += Math.round((previous.x - center.x) / periodX) * periodX;
       if (previous && periodY > 0) center.y += Math.round((previous.z - center.y) / periodY) * periodY;
-      points.push(new three.Vector3(center.x, 0, center.y));
+      points.push(new three.Vector3(
+        center.x,
+        surface?.getWorldHeight(center.x, center.y) ?? 0,
+        center.y
+      ));
     }
     return points;
   }
@@ -19067,6 +19578,9 @@ void main() {
       this._map = new HexMap(options);
       this._map.on("click", (payload) => this.cellClick(payload));
       this._map.on("hover", (payload) => this.cellHover(payload));
+      this._map.on("surfacechange", () => {
+        for (const unit of this._units) unit.refreshSurface();
+      });
       this._map.on("frame", ({ dtS }) => {
         const target = this._map.getCameraTarget(this.cameraTarget);
         for (const unit of this._units) {
@@ -19105,7 +19619,8 @@ void main() {
         mapWidth: mapData.w,
         mapHeight: mapData.h,
         wrapX: mapData.wrapX === true,
-        wrapY: mapData.wrapY === true
+        wrapY: mapData.wrapY === true,
+        surface: this._map.surface
       }));
       try {
         await Promise.all(units.map((unit) => unit.setUnit()));

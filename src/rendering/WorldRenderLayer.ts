@@ -5,11 +5,13 @@ import { MapInfo, Point } from "../interfaces";
 import { WorldChunk, WorldSource } from "../world/WorldSource";
 import { WorldChunkActivation } from "./WorldChunkScheduler";
 import type { WorldRenderRefreshKind } from "../world/WorldEditingFacade";
+import type { WorldSurfaceAnchor } from "../world/WorldSurfaceView";
 
 export interface WorldRenderLayerHost {
     readonly map: MapInfo;
     readonly source: WorldSource;
     readonly tileSize: number;
+    readonly surface?: WorldSurfaceAnchor;
     /** Aborted as soon as the owning render-world generation is superseded. */
     readonly signal: AbortSignal;
     addObject(object: Object3D): void;
@@ -44,6 +46,7 @@ export interface WorldRenderLayer {
     unmountChunk(context: WorldRenderChunkContext): void;
     /** Return false when the layer cannot handle this refresh kind incrementally. */
     refreshTiles?(context: WorldRenderTileRefreshContext): boolean | void | Promise<boolean | void>;
+    surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
     enabled?(metadata: WorldChunkMetadata): boolean;
     activateLod?(
         metadata: WorldChunkMetadata,

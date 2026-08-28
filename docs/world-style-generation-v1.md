@@ -1,6 +1,6 @@
 # 世界风格生成 v1 设计
 
-状态：阶段 0、1、2 已完成；generator v3 输出保持不变，阶段 3 及以后待实施。
+状态：阶段 0、1、2、3 已完成；generator v4 风格与校验和已冻结，阶段 4 及以后待实施。
 
 本文定义下一阶段的世界生成与地形表现方案。目标不是模拟真实地球，而是在保留六边格、区块流式加载、工作线程和现有资源预算的前提下，生成风格统一、自然、耐看的世界。
 
@@ -484,7 +484,7 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 
 ### 9.3 地表高度查询
 
-阶段 2 已建立包内 WorldSurfaceAnchor / WorldSurfaceView，并让 TerrainMesh 使用它复现 generator v3 的宏观山体。以下对象的迁移属于阶段 3，本阶段尚未改变它们的贴地行为：
+阶段 3 已把包内 WorldSurfaceAnchor / WorldSurfaceView 升级为 generator v4 的连续宏观地表，并完成以下对象的贴地迁移：
 
 以下对象统一使用 WorldSurfaceAnchor：
 
@@ -541,7 +541,7 @@ surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
 ### 9.6 裁剪与迷雾
 
 - 阶段 2 已把 Terrain 的水面、河床和山体 Y 边界改为从水深、波幅与地表上限推导；当前 Shader 仍保留的 1.57 倍有界山体细节已显式计入上限。
-- 草、树和自定义层的统一地表边界属于阶段 3。
+- 草和树的 Y 边界已经由统一地表上下限与对象余量推导；自定义层继续通过自己的 WorldChunkMetadata 声明边界。
 - 地形、水、草、树和自定义层的 Y 边界必须由统一地表上限与对象余量推导。
 - 不再依赖固定的 -size × 2 到 size × 3 经验范围。
 - 迷雾可以隐藏地形轮廓，但 WorldSurfaceAnchor 始终返回真实高度。
@@ -591,14 +591,15 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 
 ### 10.4 一次迁移
 
-准备工作已按两步完成，并保持 generator v3 输出不变：
+迁移已按三步完成：
 
 1. 提取 WorldSurfaceResolver。
 2. 建立 WorldSurfaceView 并复现现有视觉。
+3. 一次性升级到 generator v4，加入连续地表、气候、森林/湖泊斑块和全部贴地消费者。
 
-固定回归校验和分别为：无限区块 `ca3aee38`、环绕区块 `b20dfb95`、有界世界 `8bdd046b`。一次性生成、区块生成和工作线程现在共享同一解析器；工作线程在同一世界身份期间复用解析器。
+generator v4 固定格子回归校验和分别为：无限区块 `44464d15`、环绕区块 `70c9b162`、有界世界 `dd7b10a6`；规范量化地表校验和为 `7ffc9327`，森林/湖泊区域样本为 `8d450b92`。一次性生成、区块生成和工作线程共享同一解析器；工作线程按完整描述符指纹复用解析器。
 
-之后把风格调整、地表高度、气候植被和湖泊变化作为一次有意的生成器升级发布。descriptor v1 不需要因为单一内部风格而升级。
+本次只升级生成器版本与 Worker 协议，PackedWorldChunk 和 descriptor 仍为 v1；单一内部风格不增加描述符字段。
 
 旧生成器世界继续按严格描述符不匹配拒绝。自定义固定 worldId 的调用者必须主动迁移或清理旧地形编辑。
 
@@ -722,7 +723,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 - 固定编辑优先级、静态回退、岸线和 Y 边界测试。
 - 暂不改变默认世界。
 
-### 阶段 3：一次升级世界风格
+### 阶段 3：一次升级世界风格（已完成）
 
 - 绑定新的冻结风格配置和下一个生成器版本。
 - 统一世界指纹、缓存键、默认 worldId 和导航版本。
@@ -785,7 +786,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 | 非 Chromium 平台出现浮点边界差异 | 扩大平台支持时，在新生成器中统一量化 |
 | 自定义层使用高度但不处理 surfaceChanged | 文档和示例明确要求；以后主版本再考虑强制能力 |
 
-结论：阶段 0、1、2 已完成，没有发现需要重写基础设施的阻塞问题。下一步按阶段 3 做唯一一次生成器升级和贴地消费者迁移，不在当前 generator v3 上零散调整视觉语义。
+结论：阶段 0、1、2、3 已完成。generator v4 已统一生成、身份和贴地语义；下一步进入阶段 4，收紧 Shader 细节并完成 biome 材质与渲染性能验收，不再修改 generator v4 的宏观生成规则。
 
 ## 15. 完成标准
 

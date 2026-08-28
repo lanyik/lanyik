@@ -32,8 +32,8 @@ describe("foundation acceptance invariants", () => {
         expect(reverse).toBe(forward);
         expect(checksum(generate("different-seed"))).not.toBe(forward);
         expect(forward).toMatch(/^[0-9a-f]{8}$/);
-        // Generator v3: generation and rendering share the original seed.
-        expect(forward).toBe("c950f52e");
+        // Generator v4: continuous surface, climate and patch fields are frozen.
+        expect(forward).toBe("d010591e");
     });
 
     test("admitted resources and queued work stay inside hard limits under random churn", () => {

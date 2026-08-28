@@ -90,6 +90,7 @@ export type {
     LandformSampler,
     LandformSamplerOptions
 } from "./world/LandformSampler";
+export type { WorldSurfaceAnchor } from "./world/WorldSurfaceView";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export {
     createWorldDescriptor,

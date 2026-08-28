@@ -10,6 +10,7 @@ import {
     WorldRenderLayerRegistry
 } from "../../src/rendering/WorldRenderLayer";
 import { WorldChunk, WorldSource } from "../../src/world/WorldSource";
+import type { WorldSurfaceAnchor } from "../../src/world/WorldSurfaceView";
 import { deferred } from "../helpers/deferred";
 
 function layer(id: string, kinds?: readonly string[]): WorldRenderLayer {
@@ -70,6 +71,8 @@ type LayerTestMap = {
     initializedWorldRenderLayers: Set<string>;
     worldRenderLayerInitRevisions: Map<string, number>;
     worldRenderLayerObjects: Map<string, Map<string, Set<Object3D>>>;
+    surfaceHiddenObjects: Map<Object3D, { count: number; visible: boolean }>;
+    worldSurface?: WorldSurfaceAnchor;
     worldLayerRevision: number;
     frameTasks: { cancel(key: string): boolean };
     worldChunkMountQueue: { forget(key: string): void };
@@ -79,6 +82,7 @@ type LayerTestMap = {
     updateWorldChunkVisibility(): void;
     registerWorldRenderLayer: HexMap["registerWorldRenderLayer"];
     unregisterWorldRenderLayer: HexMap["unregisterWorldRenderLayer"];
+    refreshCustomSurfaceLayers(): Promise<void>;
     unmountWorldChunk(chunk: WorldChunk): void;
 };
 
@@ -99,6 +103,7 @@ describe("HexMap custom world render layers", () => {
         map.initializedWorldRenderLayers = new Set();
         map.worldRenderLayerInitRevisions = new Map();
         map.worldRenderLayerObjects = new Map();
+        map.surfaceHiddenObjects = new Map();
         map.worldLayerRevision = 1;
         map.frameTasks = { cancel: vi.fn(() => true) };
         map.worldChunkMountQueue = { forget: vi.fn() };
@@ -186,6 +191,39 @@ describe("HexMap custom world render layers", () => {
         host!.addObject(late);
         expect(host!.signal.aborted).toBe(true);
         expect(map.worldRoot.children).not.toContain(late);
+    });
+
+    test("publishes the surface anchor and hides custom objects during a surface refresh", async () => {
+        const map = createLayerTestMap([]);
+        const surface: WorldSurfaceAnchor = {
+            revision: 3,
+            minimumHeight: 0,
+            maximumHeight: 12,
+            getTileCenterHeight: () => 4,
+            getWorldHeight: () => 4
+        };
+        map.worldSurface = surface;
+        const object = new Object3D();
+        map.worldRoot.add(object);
+        const surfaceChanged = vi.fn(async host => {
+            expect(host.surface).toBe(surface);
+            expect(object.visible).toBe(false);
+        });
+        const custom: WorldRenderLayer = {
+            id: "surface-probe",
+            mountChunk: vi.fn(),
+            unmountChunk: vi.fn(),
+            surfaceChanged,
+            dispose: vi.fn()
+        };
+        map.worldRenderLayers.register(custom);
+        map.initializedWorldRenderLayers.add(custom.id);
+        map.worldRenderLayerObjects.set(custom.id, new Map([["@world", new Set([object])]]));
+
+        await map.refreshCustomSurfaceLayers();
+
+        expect(surfaceChanged).toHaveBeenCalledOnce();
+        expect(object.visible).toBe(true);
     });
 
     test("keeps world settlement open until an aborted asynchronous mount drains", async () => {

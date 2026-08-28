@@ -35,6 +35,10 @@ export interface LandformSample {
     roughness: number;
     moisture: number;
     temperature: number;
+    /** Low-frequency regional forest suitability field. */
+    forestPatch: number;
+    /** Low-frequency regional still-water suitability field. */
+    lakePatch: number;
 }
 
 export interface LandformSampler {
@@ -72,6 +76,8 @@ function composeSample(
     roughness: number,
     moistureNoise: number,
     temperatureNoise: number,
+    forestPatch: number,
+    lakePatch: number,
     latitude: number | undefined,
     edgeFalloff: number,
     profile: Readonly<WorldStyleProfile>
@@ -106,7 +112,9 @@ function composeSample(
         valley,
         roughness: clamp01(roughness),
         moisture,
-        temperature
+        temperature,
+        forestPatch: clamp01(forestPatch),
+        lakePatch: clamp01(lakePatch)
     };
 }
 
@@ -131,10 +139,13 @@ function sampleOpenLandform(
     const rough = open(fields.roughness, wx, wy);
     const moisture = open(fields.moisture, wx, wy);
     const temperature = open(fields.temperature, wx, wy);
+    const forestPatch = open(fields.forestPatch, wx, wy);
+    const lakePatch = open(fields.lakePatch, wx, wy);
 
     if (domain.topology === "infinite") {
         return composeSample(
-            continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, undefined, 0, profile
+            continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
+            forestPatch, lakePatch, undefined, 0, profile
         );
     }
     const nx = (x / (domain.width - 1)) * 2 - 1;
@@ -148,6 +159,8 @@ function sampleOpenLandform(
         rough,
         moisture,
         temperature,
+        forestPatch,
+        lakePatch,
         Math.abs(ny),
         Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
         profile
@@ -184,8 +197,13 @@ function sampleToroidalLandform(
     const rough = periodic(fields.roughness, wx, wy);
     const moisture = periodic(fields.moisture, wx, wy);
     const temperature = periodic(fields.temperature, wx, wy);
+    const forestPatch = periodic(fields.forestPatch, wx, wy);
+    const lakePatch = periodic(fields.lakePatch, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0, profile);
+    return composeSample(
+        continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
+        forestPatch, lakePatch, latitude, 0, profile
+    );
 }
 
 export function createLandformSampler(options: LandformSamplerOptions): LandformSampler {

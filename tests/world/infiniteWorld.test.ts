@@ -19,6 +19,8 @@ import {
     WorldChunkCache,
     WorldChunkCacheStats,
     createWorldChunkCacheKey,
+    createWorldDescriptor,
+    serializeWorldDescriptor,
     isMutableWorldSource,
     WorldStreamer
 } from "../../src/index";
@@ -39,7 +41,7 @@ import {
 } from "../../src/world/generateVegetation";
 
 const infiniteWorldId = (seed: string, chunkSize = 12): string =>
-    JSON.stringify(["infinite", seed, chunkSize, WORLD_GENERATOR_VERSION]);
+    serializeWorldDescriptor(createWorldDescriptor({ seed, chunkSize }));
 
 interface DeferredRequest {
     options: WorldChunkGenerationOptions;
@@ -825,22 +827,39 @@ describe("procedural world source", () => {
         expect(source.hasChunk(0, 0)).toBe(false);
         source.dispose();
     });
-    test("versions cache keys by generator, topology, dimensions and coordinates", () => {
+    test("uses the canonical descriptor fingerprint and chunk coordinates for cache keys", () => {
         const base = {
-            seed: "cache-key",
+            descriptor: createWorldDescriptor({ seed: "cache-key", chunkSize: 12 }),
             chunkX: 0,
-            chunkY: 0,
-            chunkSize: 12,
-            generatorVersion: 1
+            chunkY: 0
         };
         const infinite = createWorldChunkCacheKey(base);
         expect(createWorldChunkCacheKey({ ...base })).toBe(infinite);
-        expect(createWorldChunkCacheKey({ ...base, generatorVersion: 2 })).not.toBe(infinite);
         expect(createWorldChunkCacheKey({
             ...base,
-            world: { width: 24, height: 24, topology: "toroidal" }
+            descriptor: createWorldDescriptor({
+                seed: "cache-key",
+                chunkSize: 12,
+                world: { width: 24, height: 24, topology: "toroidal" }
+            })
+        })).not.toBe(infinite);
+        expect(createWorldChunkCacheKey({
+            ...base,
+            descriptor: createWorldDescriptor({ seed: "other", chunkSize: 12 })
         })).not.toBe(infinite);
         expect(createWorldChunkCacheKey({ ...base, chunkX: -1 })).not.toBe(infinite);
+    });
+
+    test("shares one descriptor fingerprint across world id and terrain revision", () => {
+        const pool = new WorldGeneratorPool("unused", {
+            size: 1,
+            clientFactory: () => new ImmediateChunkClient()
+        });
+        const source = new ProceduralWorldSource({ seed: "identity", workerUrl: "unused", chunkSize: 12 }, { pool });
+        const fingerprint = serializeWorldDescriptor(source.descriptor!);
+        expect(source.worldId).toBe(fingerprint);
+        expect(source.getChunkRevision(3, -2)?.terrainRevision).toBe(fingerprint);
+        source.dispose();
     });
 
     test("reuses cached chunks and exposes an explicit clear operation", async () => {

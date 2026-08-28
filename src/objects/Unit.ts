@@ -9,6 +9,7 @@ import { AnimationAction, AnimationClip, AnimationMixer, CurvePath, LoopOnce, Ob
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Land, UnitActions } from "../enums";
 import { EventEmitter } from "../EventEmitter";
+import type { WorldSurfaceAnchor } from "../world/WorldSurfaceView";
 
 //----------------------------------------------------------------------------------
 //Emits "start_move" when a moveTo() animation begins and "end_move" when the unit
@@ -71,7 +72,8 @@ export class Unit extends EventEmitter {
         mapWidth: 0,
         mapHeight: 0,
         wrapX: false,
-        wrapY: false
+        wrapY: false,
+        surface: undefined as WorldSurfaceAnchor | undefined
     };
 
     constructor(options:object = {}) {
@@ -100,7 +102,11 @@ export class Unit extends EventEmitter {
         //Get center of hexagon
         let position:Point = getHexCenter(this.options.x, this.options.y, this.options.size);
         //Set 3D model center to current hexagon
-        this._unit.position.set(position.x, 0, position.y);
+        this._unit.position.set(
+            position.x,
+            this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
+            position.y
+        );
         if (!this.activate(UnitActions.idle) && animations.length > 0) this.playClip(animations[0]);
     }
     //----------------------------------------------------------------------------------------------------------
@@ -155,7 +161,11 @@ export class Unit extends EventEmitter {
         this.options.x = position.x;
         if (this._unit) {
             const center = getHexCenter(position.x, position.y, this.options.size);
-            this._unit.position.set(center.x, this._unit.position.y, center.y);
+            this._unit.position.set(
+                center.x,
+                this.options.surface?.getWorldHeight(center.x, center.y) ?? 0,
+                center.y
+            );
         }
     }
 
@@ -205,7 +215,7 @@ export class Unit extends EventEmitter {
             mapHeight: this.options.mapHeight,
             wrapX: this.options.wrapX,
             wrapY: this.options.wrapY
-        }, this.unit.position);
+        }, this.unit.position, this.options.surface);
         for (let i = 1; i < points.length; i++) {
             pointsPath.add(new LineCurve3(points[i - 1], points[i]));
         }
@@ -233,7 +243,10 @@ export class Unit extends EventEmitter {
         while (this.needAnimate && token === this.movementToken) {
             this.pathFraction = Math.min(1, this.pathFraction + fractionStep);
             const newPosition = this.pointsPath.getPoint(this.pathFraction);
-            const tangent = this.pointsPath.getTangent(this.pathFraction).normalize();
+            newPosition.y = this.options.surface?.getWorldHeight(newPosition.x, newPosition.z) ?? 0;
+            const tangent = this.pointsPath.getTangent(this.pathFraction);
+            tangent.y = 0;
+            tangent.normalize();
             this.unit.position.copy(newPosition);
             if (tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(forward, tangent);
 
@@ -273,11 +286,23 @@ export class Unit extends EventEmitter {
             && this.options.x === this.alignedTileX && this.options.y === this.alignedTileY) return;
         center.x += copyX * periodX;
         center.y += copyY * periodY;
-        this._unit.position.set(center.x, this._unit.position.y, center.y);
+        this._unit.position.set(
+            center.x,
+            this.options.surface?.getWorldHeight(center.x, center.y) ?? 0,
+            center.y
+        );
         this.alignedCopyX = copyX;
         this.alignedCopyY = copyY;
         this.alignedTileX = this.options.x;
         this.alignedTileY = this.options.y;
+    }
+
+    public refreshSurface(): void {
+        if (!this._unit) return;
+        this._unit.position.y = this.options.surface?.getWorldHeight(
+            this._unit.position.x,
+            this._unit.position.z
+        ) ?? 0;
     }
 
     public dispose(): void {
@@ -308,7 +333,8 @@ export function createContinuousHexPath(
     path: readonly Point[],
     size: number,
     topology: UnitWorldTopology = {},
-    start?: Vector3
+    start?: Vector3,
+    surface?: WorldSurfaceAnchor
 ): Vector3[] {
     const periodX = topology.wrapX && topology.mapWidth ? topology.mapWidth * size * 1.5 : 0;
     const periodY = topology.wrapY && topology.mapHeight ? topology.mapHeight * size * Math.sqrt(3) : 0;
@@ -316,14 +342,20 @@ export function createContinuousHexPath(
 
     for (let index = 0; index < path.length; index++) {
         if (index === 0 && start) {
-            points.push(start.clone());
+            const first = start.clone();
+            first.y = surface?.getWorldHeight(first.x, first.z) ?? 0;
+            points.push(first);
             continue;
         }
         const center = getHexCenter(path[index].x, path[index].y, size);
         const previous = points[index - 1];
         if (previous && periodX > 0) center.x += Math.round((previous.x - center.x) / periodX) * periodX;
         if (previous && periodY > 0) center.y += Math.round((previous.z - center.y) / periodY) * periodY;
-        points.push(new Vector3(center.x, 0, center.y));
+        points.push(new Vector3(
+            center.x,
+            surface?.getWorldHeight(center.x, center.y) ?? 0,
+            center.y
+        ));
     }
     return points;
 }

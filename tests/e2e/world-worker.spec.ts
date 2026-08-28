@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { WORLD_GENERATOR_VERSION } from "../../src/world/WorldGeneratorVersion";
+import { WORLD_WORKER_PROTOCOL_VERSION } from "../../src/world/WorldDescriptor";
 
 interface WorkerProbe {
     kind: "message" | "error" | "messageerror" | "timeout";
@@ -12,7 +14,7 @@ interface WorkerProbe {
 
 test("world worker generates a transferable chunk in a real browser", async ({ page }) => {
     await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
-    const result = await page.evaluate(() => new Promise<WorkerProbe>(resolve => {
+    const result = await page.evaluate(({ protocolVersion, generatorVersion }) => new Promise<WorkerProbe>(resolve => {
         const worker = new Worker("/js/world-generator.worker.mjs", { type: "module" });
         const finish = (value: WorkerProbe): void => {
             worker.terminate();
@@ -33,12 +35,16 @@ test("world worker generates a transferable chunk in a real browser", async ({ p
         worker.addEventListener("messageerror", () => finish({ kind: "messageerror" }), { once: true });
         worker.postMessage({
             id: 1,
-            protocolVersion: 1,
+            protocolVersion,
+            generatorVersion,
             type: "chunk",
             options: { seed: "worker-probe", chunkX: 0, chunkY: 0, chunkSize: 24 }
         });
         setTimeout(() => finish({ kind: "timeout" }), 10_000);
-    }));
+    }), {
+        protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+        generatorVersion: WORLD_GENERATOR_VERSION
+    });
 
     expect(result).toEqual({ kind: "message", chunkLength: 26 * 26 });
 });

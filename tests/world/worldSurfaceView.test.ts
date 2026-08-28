@@ -51,7 +51,7 @@ describe("WorldSurfaceView", () => {
         map.data[4][4] = { type: Land.land, modifiers: ["lake"] };
         expect(surface.getEffectiveRelief(4, 4)).toBe(0);
         map.data[4][4] = { type: Land.land, modifiers: ["hill"] };
-        expect(surface.getEffectiveRelief(4, 4)).toBe(0);
+        expect(surface.getEffectiveRelief(4, 4)).toBeGreaterThan(0);
     });
 
     test("versions display-height changes without changing normalized relief", () => {
@@ -65,6 +65,19 @@ describe("WorldSurfaceView", () => {
         expect(surface.getTileCenterHeight(4, 4)).toBe(9);
         expect(surface.setMountainHeight(9)).toBe(false);
         expect(surface.revision).toBe(1);
+        expect(surface.invalidate()).toBe(2);
+        expect(surface.revision).toBe(2);
+    });
+
+    test("uses static hill relief and neutral density for authored woods", () => {
+        const map = staticMap(Land.land);
+        map.data[4][4] = { type: Land.land, modifiers: ["hill", "wood"] };
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 10 });
+        expect(surface.getEffectiveRelief(4, 4)).toBe(0.22);
+        expect(surface.getEffectiveVegetationDensity(4, 4)).toBe(0.45);
+        map.data[4][4] = { type: Land.land };
+        expect(surface.getEffectiveRelief(4, 4)).toBe(0);
+        expect(surface.getEffectiveVegetationDensity(4, 4)).toBe(0);
     });
 
     test("rejects resolver topology mismatches", () => {

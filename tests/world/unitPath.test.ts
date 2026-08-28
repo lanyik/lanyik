@@ -23,6 +23,26 @@ vi.mock("../../src/helpers/models", () => ({
 afterEach(() => vi.useRealTimers());
 
 describe("unit movement path", () => {
+    test("samples surface height per waypoint without adding pitch to the path contract", () => {
+        const surface = {
+            revision: 0,
+            minimumHeight: 0,
+            maximumHeight: 100,
+            getTileCenterHeight: (x: number, y: number) => x + y,
+            getWorldHeight: (x: number, z: number) => x * 0.1 + z * 0.01
+        };
+        const points = createContinuousHexPath(
+            [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }],
+            40,
+            {},
+            undefined,
+            surface
+        );
+        for (const point of points) {
+            expect(point.y).toBeCloseTo(surface.getWorldHeight(point.x, point.z), 10);
+        }
+    });
+
     test("uses the short visual route across a horizontal world seam", () => {
         const size = 40;
         const points = createContinuousHexPath(
@@ -37,6 +57,13 @@ describe("unit movement path", () => {
 
     test("animates glTF actions and lands exactly on the final waypoint", async () => {
         vi.useFakeTimers();
+        const surface = {
+            revision: 0,
+            minimumHeight: 0,
+            maximumHeight: 20,
+            getTileCenterHeight: (x: number) => x * 2,
+            getWorldHeight: (x: number) => x / 30
+        };
         const unit = new Unit({
             id: "test",
             type: "test-model",
@@ -44,7 +71,8 @@ describe("unit movement path", () => {
             y: 0,
             size: 40,
             animateSpeed: 0.2,
-            animateFrameRate: 10
+            animateFrameRate: 10,
+            surface
         });
         await unit.setUnit();
         const ended = vi.fn();
@@ -57,7 +85,10 @@ describe("unit movement path", () => {
 
         expect(unit.moving).toBe(false);
         expect(unit.unit.position.x).toBeCloseTo(60, 8);
+        expect(unit.unit.position.y).toBeCloseTo(surface.getWorldHeight(60), 8);
         expect(unit.unit.position.z).toBeCloseTo(0, 8);
+        expect(unit.unit.quaternion.x).toBeCloseTo(0, 8);
+        expect(unit.unit.quaternion.z).toBeCloseTo(0, 8);
         expect(ended).toHaveBeenCalledOnce();
         unit.dispose();
     });

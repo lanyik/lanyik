@@ -889,7 +889,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 3;
+var WORLD_GENERATOR_VERSION = 4;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -911,6 +911,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     roughness: field(2496678331, 0.31, 0.31, 3, 4),
     moisture: field(3355524772, 0.08, 0.08, 4, 2),
     temperature: field(2911926141, 0.035, 0.035, 3, 2),
+    forestPatch: field(1291169091, 0.026, 0.026, 3, 2),
+    lakePatch: field(374761393, 0.021, 0.021, 3, 2),
     openWarpAmplitude: 15,
     toroidalWarpAmplitude: 0.12,
     continentWeight: 0.72,
@@ -945,31 +947,61 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     tundraTemperature: 0.34,
     sandTemperature: 0.68,
     sandMoisture: 0.42,
-    hillElevation: 0.62
+    hillElevation: 0.57,
+    climateTransition: 0.08
   }),
   relief: Object.freeze({
     shoreline: 0,
     staticMountain: 1,
-    mountainElevationStart: 0.68,
-    mountainElevationSpan: 0.22,
-    mountainMinimum: 0.08,
-    mountainPower: 1.3,
-    mountainScale: 1.12,
-    mountainMaximum: 1.35
+    staticHill: 0.22,
+    plainMinimum: 0.018,
+    plainMaximum: 0.11,
+    plainElevationScale: 0.1,
+    plainRoughnessScale: 0.025,
+    valleyDepth: 0.035,
+    hillElevationStart: 0.55,
+    hillElevationEnd: 0.72,
+    hillScale: 0.22,
+    hillMinimum: 0.13,
+    hillMaximum: 0.38,
+    mountainElevationStart: 0.66,
+    mountainElevationSpan: 0.25,
+    mountainMinimum: 0.36,
+    mountainPower: 1.35,
+    mountainScale: 0.78,
+    mountainRidgeScale: 0.22,
+    mountainMaximum: 1.25
   }),
   vegetation: Object.freeze({
-    moistureStart: 0.48,
-    densityScale: 1.5,
-    maximumDensity: 0.58,
+    moistureStart: 0.36,
+    moistureFull: 0.7,
+    temperatureMinimum: 0.18,
+    temperatureMaximum: 0.9,
+    temperatureTransition: 0.12,
+    densityScale: 1,
+    maximumDensity: 0.72,
+    neutralDensity: 0.45,
+    patchStart: 0.38,
+    patchFull: 0.72,
+    patchMinimum: 0.22,
+    ridgePenalty: 0.72,
+    roughnessPenalty: 0.18,
     placementSalt: 668265263,
     palmTemperature: 0.67,
     piniaTemperature: 0.4
   }),
   lakes: Object.freeze({
     minimumElevation: 0.455,
-    maximumElevation: 0.56,
-    minimumMoisture: 0.74,
-    placementThreshold: 0.94,
+    maximumElevation: 0.63,
+    minimumMoisture: 0.56,
+    fullMoisture: 0.8,
+    valleyStart: 0.03,
+    valleyFull: 0.35,
+    patchStart: 0.4,
+    patchFull: 0.72,
+    minimumPotential: 0.18,
+    minimumNeighbors: 1,
+    placementScale: 0.65,
     placementSalt: 1821285621
   })
 });
@@ -1020,7 +1052,9 @@ function assertWorldStyleProfile(value) {
     "valley",
     "roughness",
     "moisture",
-    "temperature"
+    "temperature",
+    "forestPatch",
+    "lakePatch"
   ];
   for (const name of noiseFieldNames) {
     const candidate = profile.fields[name];
@@ -1078,9 +1112,11 @@ function assertWorldStyleProfile(value) {
     "tundraTemperature",
     "sandTemperature",
     "sandMoisture",
-    "hillElevation"
+    "hillElevation",
+    "climateTransition"
   ];
   for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
+  positive("terrain.climateTransition", terrain.climateTransition);
   if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
     throw new RangeError("terrain mountain thresholds must be ordered");
   }
@@ -1088,29 +1124,65 @@ function assertWorldStyleProfile(value) {
     throw new RangeError("terrain temperature thresholds must be ordered");
   }
   const relief = profile.relief;
-  if (finite("relief.shoreline", relief.shoreline) < 0 || finite("relief.staticMountain", relief.staticMountain) < 0 || finite("relief.mountainMinimum", relief.mountainMinimum) < 0 || finite("relief.mountainMaximum", relief.mountainMaximum) < 0) {
-    throw new RangeError("relief heights must be non-negative");
+  for (const [name, candidate] of Object.entries(relief)) {
+    if (finite(`relief.${name}`, candidate) < 0) {
+      throw new RangeError("relief heights and scales must be non-negative");
+    }
   }
   positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
   positive("relief.mountainPower", relief.mountainPower);
   positive("relief.mountainScale", relief.mountainScale);
   unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
+  unitInterval("relief.hillElevationStart", relief.hillElevationStart);
+  unitInterval("relief.hillElevationEnd", relief.hillElevationEnd);
+  if (!(relief.hillElevationStart < relief.hillElevationEnd) || !(relief.plainMinimum <= relief.plainMaximum) || !(relief.hillMinimum <= relief.hillMaximum) || !(relief.plainMaximum < relief.hillMinimum)) {
+    throw new RangeError("relief plain and hill ranges must be ordered");
+  }
   if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
     throw new RangeError("relief mountain range must be ordered");
+  }
+  if (relief.staticHill < relief.hillMinimum || relief.staticHill > relief.hillMaximum || relief.staticMountain < relief.mountainMinimum || relief.staticMountain > relief.mountainMaximum) {
+    throw new RangeError("static relief heights must stay inside their terrain ranges");
   }
   const lakes = profile.lakes;
   unitInterval("lakes.minimumElevation", lakes.minimumElevation);
   unitInterval("lakes.maximumElevation", lakes.maximumElevation);
   unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
-  unitInterval("lakes.placementThreshold", lakes.placementThreshold);
-  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation))) {
-    throw new RangeError("lake elevation thresholds must be ordered");
+  unitInterval("lakes.fullMoisture", lakes.fullMoisture);
+  unitInterval("lakes.valleyStart", lakes.valleyStart);
+  unitInterval("lakes.valleyFull", lakes.valleyFull);
+  unitInterval("lakes.patchStart", lakes.patchStart);
+  unitInterval("lakes.patchFull", lakes.patchFull);
+  unitInterval("lakes.minimumPotential", lakes.minimumPotential);
+  unitInterval("lakes.placementScale", lakes.placementScale);
+  if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
+    throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
+  }
+  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
+    throw new RangeError("lake thresholds must be ordered");
   }
   unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
+  unitInterval("vegetation.moistureFull", profile.vegetation.moistureFull);
   unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+  unitInterval("vegetation.neutralDensity", profile.vegetation.neutralDensity);
+  unitInterval("vegetation.temperatureMinimum", profile.vegetation.temperatureMinimum);
+  unitInterval("vegetation.temperatureMaximum", profile.vegetation.temperatureMaximum);
+  unitInterval("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  positive("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  unitInterval("vegetation.patchStart", profile.vegetation.patchStart);
+  unitInterval("vegetation.patchFull", profile.vegetation.patchFull);
+  unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
+  unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
+  unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
   unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
   unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
   positive("vegetation.densityScale", profile.vegetation.densityScale);
+  if (!(profile.vegetation.moistureStart < profile.vegetation.moistureFull) || !(profile.vegetation.temperatureMinimum < profile.vegetation.temperatureMaximum) || !(profile.vegetation.patchStart < profile.vegetation.patchFull)) {
+    throw new RangeError("vegetation suitability thresholds must be ordered");
+  }
+  if (profile.vegetation.neutralDensity > profile.vegetation.maximumDensity) {
+    throw new RangeError("vegetation neutral density must not exceed maximum density");
+  }
   if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
     throw new RangeError("vegetation temperature thresholds must be ordered");
   }
@@ -1140,7 +1212,7 @@ function resolveDomain(domain) {
   }
   return { ...resolved };
 }
-function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, latitude, edgeFalloff, profile) {
+function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
   const fields = profile.fields;
   const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
   const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
@@ -1155,7 +1227,9 @@ function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, mo
     valley,
     roughness: clamp01(roughness),
     moisture,
-    temperature
+    temperature,
+    forestPatch: clamp01(forestPatch),
+    lakePatch: clamp01(lakePatch)
   };
 }
 function sampleOpenLandform(seed, x, y, domain, profile) {
@@ -1172,6 +1246,8 @@ function sampleOpenLandform(seed, x, y, domain, profile) {
   const rough = open(fields.roughness, wx, wy);
   const moisture = open(fields.moisture, wx, wy);
   const temperature = open(fields.temperature, wx, wy);
+  const forestPatch = open(fields.forestPatch, wx, wy);
+  const lakePatch = open(fields.lakePatch, wx, wy);
   if (domain.topology === "infinite") {
     return composeSample(
       continent,
@@ -1181,6 +1257,8 @@ function sampleOpenLandform(seed, x, y, domain, profile) {
       rough,
       moisture,
       temperature,
+      forestPatch,
+      lakePatch,
       void 0,
       0,
       profile
@@ -1197,6 +1275,8 @@ function sampleOpenLandform(seed, x, y, domain, profile) {
     rough,
     moisture,
     temperature,
+    forestPatch,
+    lakePatch,
     Math.abs(ny),
     Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
     profile
@@ -1225,8 +1305,23 @@ function sampleToroidalLandform(seed, x, y, domain, profile) {
   const rough = periodic(fields.roughness, wx, wy);
   const moisture = periodic(fields.moisture, wx, wy);
   const temperature = periodic(fields.temperature, wx, wy);
+  const forestPatch = periodic(fields.forestPatch, wx, wy);
+  const lakePatch = periodic(fields.lakePatch, wx, wy);
   const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-  return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0, profile);
+  return composeSample(
+    continent,
+    detail,
+    ridgeNoise,
+    valleyNoise,
+    rough,
+    moisture,
+    temperature,
+    forestPatch,
+    lakePatch,
+    latitude,
+    0,
+    profile
+  );
 }
 function createLandformSamplerForProfile(options, profile) {
   if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
@@ -1254,6 +1349,10 @@ function createLandformSamplerForProfile(options, profile) {
 // src/world/WorldSurfaceResolver.ts
 var isWater = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
 var clamp012 = (value) => Math.max(0, Math.min(1, value));
+var smoothstep2 = (edge0, edge1, value) => {
+  const t = clamp012((value - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+};
 var modulo = (value, period) => (value % period + period) % period;
 function assertTileCoordinates(x, y) {
   if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
@@ -1279,26 +1378,94 @@ function classifyTerrain(sample, profile) {
 }
 function generatedRelief(sample, profile) {
   const relief = profile.relief;
-  const elevationT = Math.max(0, (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan);
-  return Math.min(
-    relief.mountainMaximum,
-    relief.mountainMinimum + Math.pow(elevationT, relief.mountainPower) * relief.mountainScale
+  if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
+  const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
+  const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
+  const hill = smoothstep2(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
+  const mountainT = Math.max(
+    0,
+    (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
+  );
+  const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp012(mountainT) * relief.mountainRidgeScale;
+  return Math.max(
+    relief.shoreline,
+    Math.min(relief.mountainMaximum, plain + hill + mountain)
   );
 }
-function biomeFor(type) {
-  if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
-  if (type === "sand" /* sand */) return "dry";
-  if (type === "tundra" /* tundra */ || type === "snow" /* snow */) return "cold";
-  if (type === "mountain" /* mountain */) return "alpine";
-  return "temperate";
-}
-function biomeWeightsFor(biome) {
+function biomeWeightsFor(type, sample, profile) {
+  if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+  const terrain = profile.terrain;
+  const transition = terrain.climateTransition;
+  const cold = 1 - smoothstep2(
+    terrain.snowTemperature - transition,
+    terrain.tundraTemperature + transition,
+    sample.temperature
+  );
+  const dry = smoothstep2(
+    terrain.sandTemperature - transition,
+    terrain.sandTemperature + transition,
+    sample.temperature
+  ) * (1 - smoothstep2(
+    terrain.sandMoisture - transition,
+    terrain.sandMoisture + transition,
+    sample.moisture
+  ));
+  const alpine = clamp012(Math.max(
+    type === "mountain" /* mountain */ ? 0.7 : 0,
+    smoothstep2(
+      terrain.mountainElevation - transition,
+      terrain.mountainPeakElevation,
+      sample.elevation
+    ) * (0.45 + sample.ridge * 0.55)
+  ));
+  const temperate = Math.max(0.02, (1 - cold) * (1 - dry) * (1 - alpine));
+  const sum = temperate + dry + cold + alpine;
   return Object.freeze({
-    temperate: biome === "temperate" ? 1 : 0,
-    dry: biome === "dry" ? 1 : 0,
-    cold: biome === "cold" ? 1 : 0,
-    alpine: biome === "alpine" ? 1 : 0
+    temperate: temperate / sum,
+    dry: dry / sum,
+    cold: cold / sum,
+    alpine: alpine / sum
   });
+}
+function biomeFor(type, weights) {
+  if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
+  const weighted = [
+    ["temperate", weights.temperate],
+    ["dry", weights.dry],
+    ["cold", weights.cold],
+    ["alpine", weights.alpine]
+  ];
+  return weighted.reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
+}
+function vegetationDensityFor(type, sample, profile) {
+  if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
+  const vegetation = profile.vegetation;
+  const moisture = smoothstep2(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
+  const cold = smoothstep2(
+    vegetation.temperatureMinimum - vegetation.temperatureTransition,
+    vegetation.temperatureMinimum + vegetation.temperatureTransition,
+    sample.temperature
+  );
+  const heat = 1 - smoothstep2(
+    vegetation.temperatureMaximum - vegetation.temperatureTransition,
+    vegetation.temperatureMaximum + vegetation.temperatureTransition,
+    sample.temperature
+  );
+  const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep2(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
+  const slope = clamp012(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
+  return Math.min(
+    vegetation.maximumDensity,
+    moisture * cold * heat * patch * slope * vegetation.densityScale
+  );
+}
+function lakePotentialFor(type, sample, profile) {
+  if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
+  const lakes = profile.lakes;
+  const elevation = smoothstep2(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep2(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
+  const moisture = smoothstep2(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
+  const valley = smoothstep2(lakes.valleyStart, lakes.valleyFull, sample.valley);
+  const patch = smoothstep2(lakes.patchStart, lakes.patchFull, sample.lakePatch);
+  return clamp012(elevation * moisture * valley * patch);
 }
 function vegetationKindFor(sample, profile) {
   return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
@@ -1306,17 +1473,15 @@ function vegetationKindFor(sample, profile) {
 function sampleSurface(sampler, profile, x, y) {
   const landform = Object.freeze({ ...sampler.sample(x, y) });
   const baseTerrain = classifyTerrain(landform, profile);
-  const biome = biomeFor(baseTerrain);
-  const vegetationDensity = isWater(baseTerrain) || baseTerrain === "mountain" /* mountain */ || baseTerrain === "snow" /* snow */ ? 0 : clamp012(Math.min(
-    profile.vegetation.maximumDensity,
-    (landform.moisture - profile.vegetation.moistureStart) * profile.vegetation.densityScale
-  ));
-  const lakePotential = baseTerrain === "land" /* land */ && landform.elevation > profile.lakes.minimumElevation && landform.elevation < profile.lakes.maximumElevation && landform.moisture > profile.lakes.minimumMoisture ? 1 : 0;
+  const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
+  const biome = biomeFor(baseTerrain, biomeWeights);
+  const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
+  const lakePotential = lakePotentialFor(baseTerrain, landform, profile);
   return Object.freeze({
     baseTerrain,
     relief: generatedRelief(landform, profile),
     biome,
-    biomeWeights: biomeWeightsFor(biome),
+    biomeWeights,
     vegetationDensity,
     vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : void 0,
     lakePotential,
@@ -1337,7 +1502,14 @@ function resolveTile(numericSeed, profile, x, y, sampleAt) {
   const tile = { type };
   if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return Object.freeze(tile);
   const modifiers = [];
-  const lake = sample.lakePotential > 0 && randomAt(numericSeed, x, y, profile.lakes.placementSalt) > profile.lakes.placementThreshold;
+  const lakes = profile.lakes;
+  const isLakeCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
+  const lakeCandidate = isLakeCandidate(sample, x, y);
+  const lakeNeighbors = lakeCandidate ? getNeighbors(x, y).reduce((count, neighbor) => {
+    const adjacent = sampleAt(neighbor.x, neighbor.y);
+    return count + (isLakeCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
+  }, 0) : 0;
+  const lake = lakeCandidate && lakeNeighbors >= lakes.minimumNeighbors;
   if (lake) {
     modifiers.push("lake");
   } else {
@@ -1850,6 +2022,94 @@ var SparseWorldChunkStore = class _SparseWorldChunkStore {
   }
 };
 
+// src/world/WorldDescriptor.ts
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
+function assertChunkSize(value) {
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
+    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
+  }
+}
+function assertSupportedWorldGeneratorVersion(value) {
+  if (value !== WORLD_GENERATOR_VERSION) {
+    throw new RangeError(
+      `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
+    );
+  }
+}
+function createWorldDescriptor(options) {
+  if (!options || typeof options !== "object") throw new TypeError("world descriptor options are required");
+  if (typeof options.seed !== "string" && typeof options.seed !== "number") {
+    throw new TypeError("world seed must be a string or number");
+  }
+  if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
+    throw new RangeError("numeric world seed must be finite");
+  }
+  const chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+  assertChunkSize(chunkSize);
+  const generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
+  assertSupportedWorldGeneratorVersion(generatorVersion);
+  const base = {
+    descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
+    seed: String(options.seed),
+    generatorVersion,
+    chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
+    chunkSize
+  };
+  if (!options.world) {
+    return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+  }
+  const world = options.world;
+  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
+    throw new TypeError("toroidal world descriptor bounds are invalid");
+  }
+  return {
+    ...base,
+    sourceKind: "procedural-toroidal",
+    topology: "toroidal",
+    width: world.width,
+    height: world.height
+  };
+}
+function assertWorldDescriptor(value) {
+  if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
+  const descriptor = value;
+  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world descriptor format ${String(descriptor.descriptorVersion)}`);
+  }
+  if (descriptor.sourceKind !== "procedural-infinite" && descriptor.sourceKind !== "procedural-toroidal") {
+    throw new TypeError("world descriptor sourceKind is invalid");
+  }
+  if (typeof descriptor.seed !== "string") throw new TypeError("world descriptor seed must be a string");
+  assertSupportedWorldGeneratorVersion(descriptor.generatorVersion);
+  if (descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION) {
+    throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
+  }
+  assertChunkSize(descriptor.chunkSize);
+  if (descriptor.sourceKind === "procedural-infinite") {
+    if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
+      throw new TypeError("infinite world descriptor topology is invalid");
+    }
+    return;
+  }
+  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
+    throw new TypeError("toroidal world descriptor topology is invalid");
+  }
+}
+function serializeWorldDescriptor(descriptor) {
+  assertWorldDescriptor(descriptor);
+  return JSON.stringify([
+    descriptor.descriptorVersion,
+    descriptor.sourceKind,
+    descriptor.seed,
+    descriptor.generatorVersion,
+    descriptor.chunkFormatVersion,
+    descriptor.chunkSize,
+    descriptor.topology,
+    descriptor.width ?? null,
+    descriptor.height ?? null
+  ]);
+}
+
 // src/world/generateVegetation.ts
 var import_robust_point_in_polygon = __toESM(require_robust_pnp(), 1);
 
@@ -2208,7 +2468,11 @@ var ProceduralWorldNavigationIndex = class {
     this.buildOptions = {
       movementType: this.movementType,
       movementCost: options.movementCost,
-      terrainRevision: options.terrainRevision ?? WORLD_GENERATOR_VERSION,
+      terrainRevision: options.terrainRevision ?? serializeWorldDescriptor(createWorldDescriptor({
+        seed: options.seed,
+        chunkSize: options.chunkSize,
+        world: options.world
+      })),
       deltaRevision: options.deltaRevision ?? 0,
       maxPortalsPerEntrance: options.maxPortalsPerEntrance
     };

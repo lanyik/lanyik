@@ -69,8 +69,10 @@ Version changes follow these rules:
 | Simulation or delta snapshot shape | Increment that participant version and provide a migration, or reject the old save |
 
 Changing a golden checksum without the corresponding explicit protocol change
-is a test failure, not routine snapshot maintenance. Worker responses are
-validated for protocol version and requested chunk identity. Browser E2E uses a
+is a test failure, not routine snapshot maintenance. Worker requests and
+responses are validated for protocol version and generator identity; chunk
+responses are additionally validated against the requested coordinates, size
+and packed format. Browser E2E uses a
 real module Worker crash and verifies that the bounded pool replaces it before
 serving the next request.
 

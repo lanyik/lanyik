@@ -3,7 +3,12 @@ import { getHexCenter } from "../helpers/helpers";
 import { getNeighborCoords } from "../helpers/neighbors";
 import { assertWrappableMap, getMapTile, normalizeMapCoordinates } from "../helpers/topology";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { WorldSurfaceResolver, WorldSurfaceSample } from "./WorldSurfaceResolver";
+import {
+    WorldSurfaceResolver,
+    WorldSurfaceResolverWindow,
+    WorldSurfaceSample
+} from "./WorldSurfaceResolver";
+import { WORLD_STYLE_PROFILE } from "./WorldStyleProfile";
 
 export interface WorldSurfaceAnchor {
     readonly revision: number;
@@ -20,8 +25,10 @@ export interface WorldSurfaceView extends WorldSurfaceAnchor {
     readonly tileSize: number;
     readonly mountainHeight: number;
     getEffectiveRelief(x: number, y: number): number;
+    getEffectiveVegetationDensity(x: number, y: number): number;
     createWindow(): WorldSurfaceWindow;
     setMountainHeight(value: number): boolean;
+    invalidate(): number;
 }
 
 export interface WorldSurfaceViewOptions {
@@ -35,6 +42,9 @@ interface SurfaceContribution {
     readonly shoreline: boolean;
     readonly relief: number;
 }
+
+const clamp = (value: number, minimum: number, maximum: number): number =>
+    Math.max(minimum, Math.min(maximum, value));
 
 const CORNER_DIRECTIONS = [
     ["NE", "SE"],
@@ -146,8 +156,17 @@ class MutableWorldSurfaceView implements WorldSurfaceView {
         return true;
     }
 
+    public invalidate(): number {
+        this.displayRevision += 1;
+        return this.displayRevision;
+    }
+
     public getEffectiveRelief(x: number, y: number): number {
         return this.createWindow().getEffectiveRelief(x, y);
+    }
+
+    public getEffectiveVegetationDensity(x: number, y: number): number {
+        return this.createWindow().getEffectiveVegetationDensity(x, y);
     }
 
     public getTileCenterHeight(x: number, y: number): number {
@@ -170,8 +189,13 @@ export class WorldSurfaceWindow {
     private readonly contributions = new Map<string, SurfaceContribution>();
     private readonly corners = new Map<string, readonly number[]>();
     private readonly samples = new Map<string, Readonly<WorldSurfaceSample>>();
+    private readonly generatedTiles = new Map<string, Readonly<TileInfo>>();
+    private readonly vegetation = new Map<string, number>();
+    private readonly resolverWindow?: WorldSurfaceResolverWindow;
 
-    constructor(private readonly surface: WorldSurfaceView) {}
+    constructor(private readonly surface: WorldSurfaceView) {
+        this.resolverWindow = surface.resolver?.createWindow();
+    }
 
     private key(x: number, y: number): string {
         const point = normalizeMapCoordinates(this.surface.map, x, y);
@@ -187,10 +211,24 @@ export class WorldSurfaceWindow {
         const key = `${point.x},${point.y}`;
         let sample = this.samples.get(key);
         if (!sample) {
-            sample = resolver.sampleGenerated(point.x, point.y);
+            sample = this.resolverWindow!.sampleGenerated(point.x, point.y)!;
             this.samples.set(key, sample);
         }
         return sample;
+    }
+
+    private resolveGeneratedTile(x: number, y: number): Readonly<TileInfo> | undefined {
+        const resolver = this.surface.resolver;
+        if (!resolver) return undefined;
+        const point = normalizeMapCoordinates(this.surface.map, x, y);
+        if (!point) return undefined;
+        const key = `${point.x},${point.y}`;
+        let tile = this.generatedTiles.get(key);
+        if (!tile) {
+            tile = this.resolverWindow!.resolveGeneratedTile(point.x, point.y);
+            this.generatedTiles.set(key, tile);
+        }
+        return tile;
     }
 
     private contribution(x: number, y: number): SurfaceContribution {
@@ -199,19 +237,31 @@ export class WorldSurfaceWindow {
         let contribution = this.contributions.get(key);
         if (contribution) return contribution;
         const tile = getMapTile(this.surface.map, x, y);
+        const sample = this.sampleGenerated(x, y);
+        const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
         if (isShoreline(tile)) {
             contribution = { shoreline: true, relief: 0 };
         } else if (tile?.type === Land.mountain) {
             contribution = {
                 shoreline: false,
-                relief: this.sampleGenerated(x, y)?.relief
-                    ?? this.surface.resolver?.profile.relief.mountainMinimum
-                    ?? 1
+                relief: sample
+                    ? clamp(sample.relief, profile.relief.mountainMinimum, profile.relief.mountainMaximum)
+                    : profile.relief.staticMountain
+            };
+        } else if (tile?.modifiers?.includes("hill")) {
+            contribution = {
+                shoreline: false,
+                relief: sample
+                    ? clamp(sample.relief, profile.relief.hillMinimum, profile.relief.hillMaximum)
+                    : profile.relief.staticHill
             };
         } else {
-            // Generator v3 has no macro height for hills or ordinary land.
-            // Their explicit ranges arrive with the next generator profile.
-            contribution = { shoreline: false, relief: 0 };
+            contribution = {
+                shoreline: false,
+                relief: sample
+                    ? clamp(sample.relief, profile.relief.plainMinimum, profile.relief.plainMaximum)
+                    : 0
+            };
         }
         this.contributions.set(key, contribution);
         return contribution;
@@ -219,6 +269,27 @@ export class WorldSurfaceWindow {
 
     public getEffectiveRelief(x: number, y: number): number {
         return this.contribution(x, y).relief;
+    }
+
+    public getEffectiveVegetationDensity(x: number, y: number): number {
+        assertTileCoordinates(x, y);
+        const key = this.key(x, y);
+        const cached = this.vegetation.get(key);
+        if (cached !== undefined) return cached;
+        const tile = getMapTile(this.surface.map, x, y);
+        let density = 0;
+        if (!isShoreline(tile) && tile?.type !== Land.mountain && tile?.type !== Land.snow
+            && tile?.modifiers?.includes("wood")) {
+            const sample = this.sampleGenerated(x, y);
+            const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
+            const generatedWood = this.resolveGeneratedTile(x, y)?.modifiers?.includes("wood") === true;
+            density = generatedWood
+                ? sample?.vegetationDensity ?? profile.vegetation.neutralDensity
+                : Math.max(sample?.vegetationDensity ?? 0, profile.vegetation.neutralDensity);
+        }
+        density = clamp(density, 0, 1);
+        this.vegetation.set(key, density);
+        return density;
     }
 
     public isShoreline(x: number, y: number): boolean {
@@ -274,6 +345,9 @@ export class WorldSurfaceWindow {
         this.contributions.clear();
         this.corners.clear();
         this.samples.clear();
+        this.generatedTiles.clear();
+        this.vegetation.clear();
+        this.resolverWindow?.clear();
     }
 }
 

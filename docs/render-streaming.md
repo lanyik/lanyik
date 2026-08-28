@@ -107,15 +107,25 @@ keeps the rest reproducible from seed plus dimensions.
 
 Eager, toroidal and infinite chunk generation now share one internal
 `WorldSurfaceResolver`. Its frozen profile is tied directly to generator version
-3, and short-lived resolver windows deduplicate one-ring coast samples without
+4. It produces continuous plain/valley/hill/mountain relief, biome weights,
+forest-patch density and lake-patch potential; short-lived resolver windows deduplicate one-ring samples without
 creating a world-sized cache. A worker retains one resolver while requests keep
-the same seed and topology; request order and chunk size do not enter the rules.
+the same canonical descriptor fingerprint; request order does not enter the rules.
 
 For rendering, one `WorldSurfaceView` combines that generated surface with the
 authoritative current `MapInfo`, so sparse terrain edits win over generated
 classification. `TerrainMesh` consumes a short-lived view window per render
-chunk for effective relief and symmetric shared-corner heights. Static maps use
-the same path with neutral mountain relief and do not guess a procedural seed.
+chunk for effective relief and symmetric shared-corner heights. Cities, units,
+selection markers, routes, camera targets, grass and trees consume the same
+surface anchor. Static maps use neutral mountain/hill relief and neutral authored
+forest density without guessing a procedural seed.
+
+Changing `mountainHeight` increments the surface revision, updates lightweight
+anchors immediately, hides and rebuilds vegetation, invokes custom-layer
+`surfaceChanged()` callbacks, and emits `surfacechange` only after the current
+world generation and surface revision still match. Terrain overrides invalidate
+the same revision and remount only affected resident chunks plus their one-ring
+dependents.
 
 ## Unified world sources
 
@@ -157,8 +167,9 @@ reuse the same cancellation path as normal camera demand.
 ## Persistent procedural cache
 
 Passing `cache: true` to `ToroidalWorldSource` or `ProceduralWorldSource` enables
-an IndexedDB cache for immutable packed base chunks. Keys include generator
-version, seed, topology, finite dimensions, chunk size and chunk coordinates.
+an IndexedDB cache for immutable packed base chunks. Keys contain the canonical
+serialized `WorldDescriptor` fingerprint plus chunk coordinates; the same
+fingerprint is also the default `worldId` and navigation `terrainRevision`.
 Changing any world-defining input therefore creates a distinct entry, while a
 generator version bump invalidates old terrain without a database migration.
 
@@ -199,8 +210,8 @@ Packed procedural base tiles are shared immutable variants. Per-coordinate
 gameplay fields use `ProceduralWorldSource.setTileOverride()` and
 `clearTileOverride()`, a sparse sidecar that survives chunk eviction for the
 source lifetime without expanding every generated cell into an object. Delta
-keys include topology, seed, dimensions, chunk size and generator version by
-default, while an explicit `worldId` lets applications control save slots.
+keys use the same canonical descriptor fingerprint by default, while an explicit
+`worldId` lets applications control save slots.
 Chunk snapshots carry a format version and monotonically increasing revision;
 incompatible or corrupt records are rejected rather than applied.
 
@@ -222,8 +233,10 @@ The response contains transferable `Float32Array`/`Uint32Array` buffers. Grass
 receives ready-to-bind offset, tile-offset, angle, scale, phase and shade
 attributes; forests receive ready-to-upload column-major instance matrices,
 grouped by tree model and 12x12 render chunk. The main thread still owns model
-loading, Three.js object creation, fog state and WebGL buffer upload, but no
-longer runs the per-blade/per-tree layout loops for streamed procedural worlds.
+loading, Three.js object creation, fog state and WebGL buffer upload. It writes
+the final per-instance Y from `WorldSurfaceView` and applies effective forest
+density before upload, so display height never enters worker output or caches.
+It no longer runs the per-blade/per-tree layout loops for streamed procedural worlds.
 Queued preparation is distance-prioritized and cancellable when a chunk is
 evicted. Static/custom sources without `prepareVegetation()` keep the existing
 synchronous layout path, so the optional `WorldSource` capability is backward

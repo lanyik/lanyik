@@ -66,6 +66,9 @@ export class GameEngine extends EventEmitter {
         this._map = new HexMap(options);
         this._map.on("click", (payload:{x:number,y:number,tile:TileInfo}) => this.cellClick(payload));
         this._map.on("hover", (payload:{x:number,y:number,tile:TileInfo}) => this.cellHover(payload));
+        this._map.on("surfacechange", () => {
+            for (const unit of this._units) unit.refreshSurface();
+        });
         this._map.on("frame", ({ dtS }:{ dtS:number }) => {
             const target = this._map.getCameraTarget(this.cameraTarget);
             for (const unit of this._units) {
@@ -106,7 +109,8 @@ export class GameEngine extends EventEmitter {
             mapWidth: mapData.w,
             mapHeight: mapData.h,
             wrapX: mapData.wrapX === true,
-            wrapY: mapData.wrapY === true
+            wrapY: mapData.wrapY === true,
+            surface: this._map.surface
         }));
         try {
             await Promise.all(units.map(unit => unit.setUnit()));

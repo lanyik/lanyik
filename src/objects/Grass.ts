@@ -41,9 +41,11 @@ import {
     WorldVegetationGrassLodLayout,
     WorldVegetationLayout
 } from "../world/generateVegetation";
+import { WorldSurfaceView } from "../world/WorldSurfaceView";
 
 export interface GrassOptions {
     size: number;
+    surface: WorldSurfaceView;
     density?: number;         // blades per tile, default 60
     bladeWidth?: number;      // world units, default size * 0.03
     bladeHeight?: number;     // world units, default size * 0.18
@@ -81,6 +83,7 @@ interface GrassChunkRecord {
 
 interface ResolvedGrassOptions {
     size: number;
+    surface: WorldSurfaceView;
     density: number;
     bladeWidth: number;
     bladeHeight: number;
@@ -94,7 +97,7 @@ export class GrassSharedResources {
     private clock = 0;
     private disposed = false;
 
-    constructor(options: GrassOptions) {
+    constructor(options: Omit<GrassOptions, "surface">) {
         const bladeHeight = options.bladeHeight ?? options.size * 0.18;
         this.material = new RawShaderMaterial({
             uniforms: {
@@ -287,8 +290,8 @@ export class GrassField extends Group {
         origin: Point
     ): GrassLodCache {
         const prepared = this.preparedChunks.get(chunkKey)?.lods.find(candidate => candidate.lod === lod);
-        if (prepared) return this.buildPreparedChunkGeometry(prepared);
-        const { size, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
+        if (prepared) return this.buildPreparedChunkGeometry(prepared, origin);
+        const { size, surface, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
         const densityScale = ([1, 0.38, 0.14] as const)[lod];
         const density = Math.max(1, Math.round(this.options.density * densityScale));
         const totalBlades = chunkTiles.length * density;
@@ -299,8 +302,10 @@ export class GrassField extends Group {
         const phases = new Float32Array(totalBlades);
         const shades = new Float32Array(totalBlades);
         const fogStates = new Float32Array(totalBlades);
+        const groundHeights = new Float32Array(totalBlades);
         const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map(p => [p.x, p.y]);
         const pendingRanges: { key: string, start: number, count: number }[] = [];
+        const surfaceWindow = surface.createWindow();
 
         let instance = 0;
         for (const tile of chunkTiles) {
@@ -335,6 +340,7 @@ export class GrassField extends Group {
                 phases[instance] = stableRandom(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
                 shades[instance] = 0.75 + stableRandom(tile.x, tile.y, i * 97 + 59) * 0.35;
                 fogStates[instance] = this.fogStates.get(key) ?? 2;
+                groundHeights[instance] = surfaceWindow.getWorldHeight(center.x + lx, center.y + ly);
                 instance++;
             }
 
@@ -350,13 +356,22 @@ export class GrassField extends Group {
         geometry.setAttribute("phase", new InstancedBufferAttribute(phases, 1));
         geometry.setAttribute("shade", new InstancedBufferAttribute(shades, 1));
         geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
+        geometry.setAttribute("groundHeight", new InstancedBufferAttribute(groundHeights, 1));
 
         return { geometry, ranges: pendingRanges };
     }
 
-    private buildPreparedChunkGeometry(prepared: WorldVegetationGrassLodLayout): GrassLodCache {
+    private buildPreparedChunkGeometry(prepared: WorldVegetationGrassLodLayout, origin: Point): GrassLodCache {
         const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
         const fogStates = new Float32Array(prepared.instanceCount);
+        const groundHeights = new Float32Array(prepared.instanceCount);
+        const surfaceWindow = this.options.surface.createWindow();
+        for (let index = 0; index < prepared.instanceCount; index += 1) {
+            groundHeights[index] = surfaceWindow.getWorldHeight(
+                prepared.offsets[index * 2] + origin.x,
+                prepared.offsets[index * 2 + 1] + origin.y
+            );
+        }
         const ranges = prepared.tiles.map((tile, index) => {
             const key = `${tile.x},${tile.y}`;
             const start = prepared.ranges[index * 2];
@@ -372,6 +387,7 @@ export class GrassField extends Group {
         geometry.setAttribute("phase", new InstancedBufferAttribute(prepared.phases, 1));
         geometry.setAttribute("shade", new InstancedBufferAttribute(prepared.shades, 1));
         geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
+        geometry.setAttribute("groundHeight", new InstancedBufferAttribute(groundHeights, 1));
         return { geometry, ranges };
     }
 
@@ -430,7 +446,7 @@ export function createGrassField(
     sharedResources?: GrassSharedResources,
     preparedLayout?: WorldVegetationLayout
 ): GrassField | null {
-    const { size } = options;
+    const { size, surface } = options;
     const density = options.density ?? 60;
     if (density <= 0) return null;
 
@@ -481,7 +497,12 @@ export function createGrassField(
             chunkKey,
             "grass",
             localizeWorldChunkBounds(
-                getWorldChunkBounds(chunkTiles, size, 0, bladeHeight * (1 + heightVariation)),
+                getWorldChunkBounds(
+                    chunkTiles,
+                    size,
+                    surface.minimumHeight,
+                    surface.maximumHeight + bladeHeight * (1 + heightVariation)
+                ),
                 origin
             )
         );
@@ -490,6 +511,7 @@ export function createGrassField(
 
     return new GrassField(map, chunks, resources, {
         size,
+        surface,
         density,
         bladeWidth,
         bladeHeight,

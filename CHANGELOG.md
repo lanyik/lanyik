@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Internal `WorldSurfaceResolver` and `WorldSurfaceView` authorities that
-  centralize generator-v3 classification, merge sparse terrain edits for
-  rendering, and provide deterministic shared-corner surface heights without
-  a world-sized cache.
+  centralize generator-v4 classification, continuous relief, biome weights,
+  vegetation/lake patches and sparse terrain edits while providing deterministic
+  shared-corner surface heights without a world-sized cache.
 - A deterministic continuous `LandformSampler` for elevation,
   continentalness, mountain ridges, valleys, roughness, moisture and
   temperature across bounded, toroidal and infinite worlds, plus live
@@ -70,9 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgraded procedural generation once to generator v4 and Worker protocol v2.
+  One canonical descriptor fingerprint now drives chunk-cache keys, default
+  world IDs and navigation terrain revisions; both Worker directions validate
+  generator identity.
+- Cities, units, paths, markers, camera targets, grass, trees and custom render
+  layers now consume the authoritative effective surface. Grass and tree Y are
+  resolved per instance on the main thread, and revisioned height changes rebuild
+  asynchronous consumers before emitting `surfacechange`.
 - Eager, toroidal and infinite chunk generation now use one frozen style
-  profile and resolver. Terrain consumes the same effective surface while the
-  existing generator-v3 tile outputs remain byte-for-byte stable.
+  profile and resolver. Terrain and placement consumers use the same effective
+  generator-v4 macro surface while sparse edits remain authoritative.
 - Refocused the README and documentation around the current streamed-world
   architecture, package entry points, demo modes and verification workflow;
   removed obsolete implementation plans and unreferenced legacy textures.
@@ -85,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Terrain atlas cells now retain detail at a two-hex span by default. One
   continuous world-space UV warp and macro tint field break up visible tiling
   without adding another `terrain.png` lookup; the span remains live-tunable.
-- Procedural terrain generation now uses generator version 3. Generation and
+- Procedural terrain generation now uses generator version 4. Generation and
   rendering consume the same seed and continuous elevation field; mountain
   tiles share edge/corner heights with their neighbors and hex centers are no
   longer forced into one peak per tile.

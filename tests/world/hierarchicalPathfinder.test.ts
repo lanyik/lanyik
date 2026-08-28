@@ -11,6 +11,7 @@ import {
 } from "../../src/world/HierarchicalPathfinder";
 import { StaticWorldSource, WorldChunk } from "../../src/world/WorldSource";
 import { getChunkResidencyCoordinator } from "../../src/world/ChunkResidencyCoordinator";
+import { createWorldDescriptor, serializeWorldDescriptor } from "../../src/world/WorldDescriptor";
 
 function world(width: number, height: number, wrapped = false): MapInfo {
     const data: MapInfo["data"] = {};
@@ -243,6 +244,9 @@ describe("ProceduralWorldNavigationIndex", () => {
         });
         const first = await index.getSummary(0, 0);
         expect(first?.portals.length).toBeGreaterThan(0);
+        expect(first?.terrainRevision).toBe(serializeWorldDescriptor(
+            createWorldDescriptor({ seed: "navigation", chunkSize: 12 })
+        ));
         expect(await index.getSummary(0, 0)).toEqual(first);
         await index.getSummary(1, 0);
         await index.getSummary(2, 0);

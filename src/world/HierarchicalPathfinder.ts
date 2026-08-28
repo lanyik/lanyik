@@ -13,7 +13,7 @@ import {
     generateWorldChunk,
     SparseWorldChunkStore
 } from "./generateWorldChunk";
-import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import { createWorldDescriptor, serializeWorldDescriptor } from "./WorldDescriptor";
 
 export const WORLD_NAVIGATION_FORMAT_VERSION = 2;
 
@@ -180,7 +180,11 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
         this.buildOptions = {
             movementType: this.movementType,
             movementCost: options.movementCost,
-            terrainRevision: options.terrainRevision ?? WORLD_GENERATOR_VERSION,
+            terrainRevision: options.terrainRevision ?? serializeWorldDescriptor(createWorldDescriptor({
+                seed: options.seed,
+                chunkSize: options.chunkSize,
+                world: options.world
+            })),
             deltaRevision: options.deltaRevision ?? 0,
             maxPortalsPerEntrance: options.maxPortalsPerEntrance
         };

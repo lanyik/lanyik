@@ -25,6 +25,7 @@ attribute vec2 scale;   // x = width multiplier, y = height multiplier (world un
 attribute float phase;  // random wind phase offset, see wave below
 attribute float shade;  // random per-blade brightness multiplier (clump variation)
 attribute float fogState; // 0 = unseen (blade hidden), 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+attribute float groundHeight; // authoritative CPU surface height at the blade root
 
 varying float vHeightFactor;
 varying float vShade;
@@ -59,7 +60,7 @@ void main() {
     rotated.x += bend;
     rotated.z += bend * 0.4;
 
-    vec3 worldPos = vec3(bladeOffset.x + rotated.x, rotated.y, bladeOffset.y + rotated.z);
+    vec3 worldPos = vec3(bladeOffset.x + rotated.x, groundHeight + rotated.y, bladeOffset.y + rotated.z);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
 
     vHeightFactor = heightFactor;

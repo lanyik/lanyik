@@ -104,7 +104,7 @@ import {
     resolveHexMapOptions
 } from "./HexMapOptions";
 import { createWorldSurfaceResolver } from "./world/WorldSurfaceResolver";
-import { createWorldSurfaceView, WorldSurfaceView } from "./world/WorldSurfaceView";
+import { createWorldSurfaceView, WorldSurfaceAnchor, WorldSurfaceView } from "./world/WorldSurfaceView";
 
 export type { HexMapOptions, WorldLoadOptions } from "./HexMapOptions";
 
@@ -147,6 +147,7 @@ export class HexMap extends EventEmitter {
     private selector!: Mesh;
     private pointer!: Mesh;
     private routeLine: Line | undefined;
+    private routePath: Point[] | undefined;
     private worldCopies: Group[] = [];
     private worldCopyGroups = new Map<string, Group>();
     private worldCopyObjects = new Map<string, Object3D>();
@@ -191,6 +192,7 @@ export class HexMap extends EventEmitter {
     private readonly initializedWorldRenderLayers = new Set<string>();
     private readonly worldRenderLayerInitRevisions = new Map<string, number>();
     private readonly worldRenderLayerObjects = new Map<string, Map<string, Set<Object3D>>>();
+    private readonly surfaceHiddenObjects = new Map<Object3D, { count: number, visible: boolean }>();
     private worldTileUpdateQueue: Promise<void> = Promise.resolve();
     private worldChunkSize = 24;
     private worldDemandChunkKey: string | undefined;
@@ -371,7 +373,11 @@ export class HexMap extends EventEmitter {
         const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
         const direction = this.camera.position.clone().sub(this.controls.target).normalize();
 
-        this.controls.target.set(centerX, 0, centerZ);
+        this.controls.target.set(
+            centerX,
+            this.worldSurface?.getWorldHeight(centerX, centerZ) ?? 0,
+            centerZ
+        );
         this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
         this.controls.update();
     }
@@ -431,6 +437,10 @@ export class HexMap extends EventEmitter {
     private positionMarker(marker: Mesh, tile: Point, reference = this.getCameraTarget()): void {
         const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
         marker.position.setX(center.x);
+        marker.position.setY(
+            (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0)
+            + this.options.size / 10 + 1.1
+        );
         marker.position.setZ(center.y);
     }
 
@@ -438,6 +448,87 @@ export class HexMap extends EventEmitter {
         const hovered = this.interactions.hoveredTile;
         if (hovered && this.pointer.visible) this.positionMarker(this.pointer, hovered);
         if (this.lastSelected && this.selector.visible) this.positionMarker(this.selector, this.lastSelected);
+    }
+
+    private refreshCameraSurfaceTarget(): void {
+        const surface = this.worldSurface;
+        if (!surface) return;
+        const logicalTarget = this.getCameraTarget(this.logicalTargetScratch);
+        const nextY = surface.getWorldHeight(logicalTarget.x, logicalTarget.z);
+        const deltaY = nextY - this.controls.target.y;
+        this.controls.target.y = nextY;
+        this.camera.position.y += deltaY;
+        this.controls.update();
+    }
+
+    private refreshRouteSurface(): void {
+        if (!this.routePath) return;
+        const path = this.routePath.map(point => ({ ...point }));
+        this.drawRoutePath(path);
+    }
+
+    private hideSurfaceObject(object: Object3D): void {
+        const state = this.surfaceHiddenObjects.get(object);
+        if (state) {
+            state.count += 1;
+            return;
+        }
+        this.surfaceHiddenObjects.set(object, { count: 1, visible: object.visible });
+        object.visible = false;
+    }
+
+    private releaseSurfaceObject(object: Object3D): void {
+        const state = this.surfaceHiddenObjects.get(object);
+        if (!state) return;
+        state.count -= 1;
+        if (state.count > 0) return;
+        object.visible = state.visible;
+        this.surfaceHiddenObjects.delete(object);
+    }
+
+    private async refreshCustomSurfaceLayers(): Promise<void> {
+        const layers = this.worldRenderLayers.values().filter(layer =>
+            !this.builtinWorldRenderLayerIds.has(layer.id)
+            && this.initializedWorldRenderLayers.has(layer.id)
+            && layer.surfaceChanged
+        );
+        await Promise.all(layers.map(async layer => {
+            const objects = new Set<Object3D>();
+            for (const group of this.worldRenderLayerObjects.get(layer.id)?.values() ?? []) {
+                for (const object of group) objects.add(object);
+            }
+            for (const object of objects) this.hideSurfaceObject(object);
+            try {
+                await layer.surfaceChanged?.(this.createWorldRenderLayerHost(layer.id, "@world"));
+            } finally {
+                for (const object of objects) this.releaseSurfaceObject(object);
+            }
+        }));
+    }
+
+    private async refreshSurfaceConsumers(
+        surfaceRevision: number,
+        rebuildVegetation: boolean,
+        points?: readonly Point[]
+    ): Promise<void> {
+        const surface = this.worldSurface;
+        const loadRevision = this.loadRevision;
+        if (!surface || surface.revision !== surfaceRevision || this.disposed) return;
+        this.terrain?.refreshCitySurfaceHeights(points);
+        this.refreshCameraSurfaceTarget();
+        this.updateMarkerPositions();
+        this.refreshRouteSurface();
+
+        const builds: Promise<unknown>[] = [this.refreshCustomSurfaceLayers()];
+        if (rebuildVegetation) {
+            builds.push(this.rebuildSurfaceVegetation(loadRevision));
+        }
+        await Promise.all(builds);
+        if (this.disposed || this.loadRevision !== loadRevision
+            || this.worldSurface !== surface || surface.revision !== surfaceRevision) return;
+        this.updateWorldChunkVisibility();
+        this.refreshWorldCopies();
+        this.emit("surfacechange" satisfies HexMapEventName, { revision: surfaceRevision, surface });
     }
 
     private clearWorldCopies(): void {
@@ -1047,7 +1138,11 @@ export class HexMap extends EventEmitter {
         const center = getHexCenter(tile.x, tile.y, this.options.size);
         const viewDistance = (this.controls.minDistance + this.controls.maxDistance) / 2;
         const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-        this.controls.target.set(center.x, 0, center.y);
+        this.controls.target.set(
+            center.x,
+            this.worldSurface?.getTileCenterHeight(tile.x, tile.y) ?? 0,
+            center.y
+        );
         this.camera.position.copy(this.controls.target).addScaledVector(direction, viewDistance);
         this.controls.update();
     }
@@ -1171,6 +1266,7 @@ export class HexMap extends EventEmitter {
         });
         const grass = createGrassField(this.mapData, {
             size: this.options.size,
+            surface: this.worldSurface!,
             density: density.grassDensity,
             bladeWidth: this.options.grassBladeWidth,
             bladeHeight: this.options.grassBladeHeight,
@@ -1241,6 +1337,7 @@ export class HexMap extends EventEmitter {
         const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
         const build = preparation.then(prepared => createForest(this.mapData, {
             size: this.options.size,
+            surface: this.worldSurface!,
             treesPerTile: density.treesPerTile,
             treeModel: this.options.treeModel,
             treeScale: this.options.treeScale,
@@ -1521,6 +1618,7 @@ export class HexMap extends EventEmitter {
             map: this.mapData,
             source,
             tileSize: this.options.size,
+            surface: this.worldSurface,
             signal,
             addObject: object => {
                 if (!isCurrent()) return;
@@ -1978,6 +2076,7 @@ export class HexMap extends EventEmitter {
 
         const forest = (await createForest(this.mapData, {
             size: this.options.size,
+            surface: this.worldSurface!,
             treesPerTile: this.options.treesPerTile,
             treeModel: this.options.treeModel,
             treeScale: this.options.treeScale,
@@ -2011,10 +2110,9 @@ export class HexMap extends EventEmitter {
     //directly from a live GUI slider (see grassDensity/grassBladeWidth/
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
-    private rebuildGrass(): void {
+    private async rebuildGrass(): Promise<boolean> {
         if (this.worldStreamer) {
-            this.rebuildStreamedGrass();
-            return;
+            return this.rebuildStreamedGrass();
         }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
@@ -2023,10 +2121,11 @@ export class HexMap extends EventEmitter {
             this.grass.dispose();
             this.grass = undefined;
         }
-        if (!this.mapData) return;
+        if (!this.mapData) return false;
 
         this.grass = createGrassField(this.mapData, {
             size: this.options.size,
+            surface: this.worldSurface!,
             density: this.options.grassDensity,
             bladeWidth: this.options.grassBladeWidth,
             bladeHeight: this.options.grassBladeHeight,
@@ -2046,9 +2145,10 @@ export class HexMap extends EventEmitter {
             this.reapplyFog(); // the fresh layer defaults to all-Visible
         }
         this.refreshWorldCopies();
+        return true;
     }
 
-    private rebuildStreamedGrass(): void {
+    private async rebuildStreamedGrass(): Promise<boolean> {
         this.chunkScheduler.clear();
         this.streamedGrassByChunkId.clear();
         for (const [key, record] of this.worldChunkLayers) {
@@ -2057,18 +2157,20 @@ export class HexMap extends EventEmitter {
         this.streamedGrassResources?.dispose();
         this.streamedGrassResources = undefined;
         const layer = this.worldRenderLayers.get("@grass");
-        if (!layer) return;
+        if (!layer) return false;
+        const builds: Promise<void>[] = [];
         for (const [key, record] of this.worldChunkLayers) {
             record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
+            record.vegetationAbort?.abort();
             record.vegetationPromise = undefined;
             record.vegetationAbort = undefined;
             const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
             record.renderLayerPromises?.set(layer.id, mounted);
-            void mounted.catch(error => {
-                if (this.worldChunkLayers.get(key) === record) this.emit("error", error);
-            });
+            builds.push(mounted);
         }
+        await Promise.all(builds);
         this.refreshWorldCopies();
+        return !this.disposed;
     }
 
     private async rebuildStreamedForests(expectedRevision: number, forestRevision: number): Promise<boolean> {
@@ -2084,6 +2186,7 @@ export class HexMap extends EventEmitter {
         if (!layer) return false;
         for (const [key, record] of this.worldChunkLayers) {
             record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
+            record.vegetationAbort?.abort();
             record.vegetationPromise = undefined;
             record.vegetationAbort = undefined;
             const build = this.mountRegisteredWorldRenderLayer(layer, key, record);
@@ -2094,6 +2197,54 @@ export class HexMap extends EventEmitter {
         await Promise.all(builds);
         this.refreshWorldCopies();
         return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
+    }
+
+    private async rebuildSurfaceVegetation(expectedRevision: number): Promise<boolean> {
+        if (!this.worldStreamer) {
+            await Promise.all([this.rebuildGrass(), this.rebuildForest(expectedRevision)]);
+            return !this.disposed && expectedRevision === this.loadRevision;
+        }
+
+        const forestRevision = ++this.forestRevision;
+        this.chunkScheduler.clear();
+        this.streamedGrassByChunkId.clear();
+        this.streamedForestByChunkId.clear();
+        for (const [key, record] of this.worldChunkLayers) {
+            const context = this.createWorldRenderChunkContext("@grass", key, record);
+            this.unmountGrassWorldRenderLayer(context);
+            this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
+            record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
+            record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
+            record.vegetationAbort?.abort();
+            record.vegetationAbort = undefined;
+            record.vegetationPromise = undefined;
+        }
+        this.streamedGrassResources?.dispose();
+        this.streamedGrassResources = undefined;
+        this.streamedForestResources?.dispose();
+        this.streamedForestResources = new ForestSharedResources();
+
+        const grassLayer = this.worldRenderLayers.get("@grass");
+        const forestLayer = this.worldRenderLayers.get("@forest");
+        const builds: Promise<void>[] = [];
+        for (const [key, record] of this.worldChunkLayers) {
+            record.renderLayerPromises ??= new Map();
+            if (grassLayer) {
+                const build = this.mountRegisteredWorldRenderLayer(grassLayer, key, record);
+                record.renderLayerPromises.set(grassLayer.id, build);
+                builds.push(build);
+            }
+            if (forestLayer) {
+                const build = this.mountRegisteredWorldRenderLayer(forestLayer, key, record);
+                record.forestPromise = build;
+                record.renderLayerPromises.set(forestLayer.id, build);
+                builds.push(build);
+            }
+        }
+        await Promise.all(builds);
+        this.refreshWorldCopies();
+        return !this.disposed && expectedRevision === this.loadRevision
+            && forestRevision === this.forestRevision;
     }
 
     public getTile(x: number, y: number): TileInfo | undefined {
@@ -2267,9 +2418,19 @@ export class HexMap extends EventEmitter {
     ): Promise<void> {
         const loadRevision = this.loadRevision;
         const controller = this.worldController;
-        const queued = this.worldTileUpdateQueue.then(() => {
+        const surfaceRevision = refreshKind === "terrain" ? this.worldSurface?.invalidate() : undefined;
+        const queued = this.worldTileUpdateQueue.then(async () => {
             if (!this.isWorldSessionCurrent(source, loadRevision)) return;
-            return this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind);
+            await this.refreshTileOverridesRendering(points, source, loadRevision, refreshKind);
+            if (surfaceRevision !== undefined) {
+                const affected = new Map<string, Point>();
+                for (const point of points) {
+                    for (const candidate of [point, ...getMapNeighbors(this.mapData, point.x, point.y)]) {
+                        affected.set(`${candidate.x},${candidate.y}`, candidate);
+                    }
+                }
+                await this.refreshSurfaceConsumers(surfaceRevision, false, [...affected.values()]);
+            }
         });
         const refresh = controller?.source === source
             ? controller.lifecycle.track(queued)
@@ -2772,9 +2933,19 @@ export class HexMap extends EventEmitter {
         return this.terrain?.mountainHeight ?? this.options.mountainHeight;
     }
     public set mountainHeight(value: number) {
+        if (!Number.isFinite(value) || value < 0) {
+            throw new RangeError("mountainHeight must be a non-negative finite number");
+        }
+        if (value === this.mountainHeight) return;
         this.options.mountainHeight = value;
         if (this.terrain) this.terrain.mountainHeight = value;
         else this.worldSurface?.setMountainHeight(value);
+        const revision = this.worldSurface?.revision;
+        if (revision !== undefined) {
+            void this.refreshSurfaceConsumers(revision, true).catch(error => {
+                if (this.worldSurface?.revision === revision) this.emit("error", error);
+            });
+        }
     }
 
     public get landformDebugMode(): LandformDebugMode {
@@ -2899,7 +3070,7 @@ export class HexMap extends EventEmitter {
     public set treesPerTile(value: number) {
         if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
         this.options.treesPerTile = value;
-        void this.rebuildForest();
+        void this.rebuildForest().catch(error => this.emit("error", error));
     }
 
     public get treeScale(): number {
@@ -2908,7 +3079,7 @@ export class HexMap extends EventEmitter {
     public set treeScale(value: number) {
         if (!Number.isFinite(value) || value < 0) throw new RangeError("treeScale must be a non-negative finite number");
         this.options.treeScale = value;
-        void this.rebuildForest();
+        void this.rebuildForest().catch(error => this.emit("error", error));
     }
 
     //Toggling visibility just flips the mesh's own `visible` flag (grass is
@@ -2956,7 +3127,7 @@ export class HexMap extends EventEmitter {
     public set grassDensity(value: number) {
         if (!Number.isInteger(value) || value < 0) throw new RangeError("grassDensity must be a non-negative integer");
         this.options.grassDensity = value;
-        this.rebuildGrass();
+        void this.rebuildGrass().catch(error => this.emit("error", error));
     }
 
     public get grassBladeWidth(): number {
@@ -2966,7 +3137,7 @@ export class HexMap extends EventEmitter {
     public set grassBladeWidth(value: number) {
         if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeWidth must be a positive finite number");
         this.options.grassBladeWidth = value;
-        this.rebuildGrass();
+        void this.rebuildGrass().catch(error => this.emit("error", error));
     }
 
     public get grassBladeHeight(): number {
@@ -2976,7 +3147,7 @@ export class HexMap extends EventEmitter {
     public set grassBladeHeight(value: number) {
         if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeHeight must be a positive finite number");
         this.options.grassBladeHeight = value;
-        this.rebuildGrass();
+        void this.rebuildGrass().catch(error => this.emit("error", error));
     }
 
     public selectTile(x: number, y: number): void {
@@ -2993,6 +3164,11 @@ export class HexMap extends EventEmitter {
 
     public get size(): number {
         return this.options.size;
+    }
+
+    /** Current logical-world height authority; available after a world is loaded. */
+    public get surface(): WorldSurfaceAnchor | undefined {
+        return this.worldSurface;
     }
 
     public get streamingStats(): Readonly<WorldChunkStreamingStats> {
@@ -3058,16 +3234,20 @@ export class HexMap extends EventEmitter {
 
     public drawRoutePath(path: Point[]): void {
         this.cleanRoutePath();
+        if (path.length === 0) return;
+        this.routePath = path.map(point => ({ ...point }));
 
         let reference = this.getCameraTarget();
         const points = path.map(p => {
             const center = this.nearestRepeatedCenter(p.x, p.y, reference);
-            const point = new Vector3(center.x, 10, center.y);
+            const point = new Vector3(
+                center.x,
+                (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0) + 1.1,
+                center.y
+            );
             reference = point;
             return point;
         });
-        if (points.length === 0) return;
-
         const origin = points[0].clone();
         const geometry = new BufferGeometry().setFromPoints(points.map(point => point.clone().sub(origin)));
         const material = new LineBasicMaterial({ color: 0xff0000, linewidth: 5 });
@@ -3084,6 +3264,7 @@ export class HexMap extends EventEmitter {
             for (const material of materials) material.dispose();
             this.routeLine = undefined;
         }
+        this.routePath = undefined;
     }
 
     //Escape hatch for consumers that want to add their own Object3D (units,
@@ -3116,10 +3297,14 @@ export class HexMap extends EventEmitter {
         const center = getHexCenter(point.x, point.y, this.options.size);
         const current = this.getCameraTarget(this.logicalTargetScratch);
         const dx = center.x - current.x;
+        const targetY = this.worldSurface?.getTileCenterHeight(point.x, point.y) ?? 0;
+        const dy = targetY - current.y;
         const dz = center.y - current.z;
         this.camera.position.x += dx;
+        this.camera.position.y += dy;
         this.camera.position.z += dz;
         this.controls.target.x += dx;
+        this.controls.target.y += dy;
         this.controls.target.z += dz;
         this.controls.update();
     }

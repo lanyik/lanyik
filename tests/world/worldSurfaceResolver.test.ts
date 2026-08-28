@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { Land } from "../../src/enums";
+import { getMapNeighbors } from "../../src/helpers/topology";
 import { generateWorld } from "../../src/world/generateWorld";
 import { generateWorldChunk } from "../../src/world/generateWorldChunk";
 import {
@@ -24,18 +25,18 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v3 outputs", () => {
+    test("preserves the frozen generator v4 outputs", () => {
         const infinite = generateWorldChunk({
-            seed: "surface-v3-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
+            seed: "surface-v4-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
         });
         const toroidal = generateWorldChunk({
-            seed: "surface-v3-toroidal",
+            seed: "surface-v4-toroidal",
             chunkX: 0,
             chunkY: 0,
             chunkSize: 24,
             world: { topology: "toroidal", width: 48, height: 36 }
         });
-        const bounded = generateWorld({ seed: "surface-v3-bounded", width: 32, height: 24 });
+        const bounded = generateWorld({ seed: "surface-v4-bounded", width: 32, height: 24 });
         const encoded: number[] = [];
         const land = [Land.sea, Land.coastal, Land.land, Land.sand, Land.tundra, Land.snow, Land.mountain];
         for (let x = 0; x < bounded.w; x += 1) {
@@ -47,9 +48,77 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("lake") ? 4 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("ca3aee38");
-        expect(checksum(toroidal.tiles)).toBe("b20dfb95");
-        expect(checksum(encoded)).toBe("8bdd046b");
+        expect(checksum(infinite.tiles)).toBe("44464d15");
+        expect(checksum(toroidal.tiles)).toBe("70c9b162");
+        expect(checksum(encoded)).toBe("dd7b10a6");
+    });
+
+    test("freezes continuous relief, biome, vegetation and lake fields", () => {
+        const resolver = createWorldSurfaceResolver({ seed: "surface-v4-fields" });
+        const encoded: number[] = [];
+        const reliefValues = new Set<number>();
+        const vegetationValues = new Set<number>();
+        const lakeValues = new Set<number>();
+        for (let x = -20; x < 20; x += 1) {
+            for (let y = -20; y < 20; y += 1) {
+                const sample = resolver.sampleGenerated(x, y);
+                const weights = sample.biomeWeights;
+                if (sample.baseTerrain !== Land.sea && sample.baseTerrain !== Land.coastal) {
+                    expect(weights.temperate + weights.dry + weights.cold + weights.alpine)
+                        .toBeCloseTo(1, 12);
+                }
+                const values = [
+                    sample.relief,
+                    weights.temperate,
+                    weights.dry,
+                    weights.cold,
+                    weights.alpine,
+                    sample.vegetationDensity,
+                    sample.lakePotential,
+                    sample.landform.forestPatch,
+                    sample.landform.lakePatch
+                ].map(value => Math.round(value * 65535));
+                encoded.push(...values);
+                reliefValues.add(values[0]);
+                vegetationValues.add(values[5]);
+                lakeValues.add(values[6]);
+            }
+        }
+        expect(reliefValues.size).toBeGreaterThan(100);
+        expect(vegetationValues.size).toBeGreaterThan(50);
+        expect(lakeValues.size).toBeGreaterThan(20);
+        expect(checksum(encoded)).toBe("7ffc9327");
+    });
+
+    test("forms neighboring lake cells and regional forests instead of isolated noise", () => {
+        const world = generateWorld({ seed: "gallery-a", width: 96, height: 96 });
+        const lakes: Array<{ x: number; y: number }> = [];
+        const woods: Array<{ x: number; y: number }> = [];
+        const encoded: number[] = [];
+        const land = [Land.sea, Land.coastal, Land.land, Land.sand, Land.tundra, Land.snow, Land.mountain];
+        for (let x = 0; x < world.w; x += 1) {
+            for (let y = 0; y < world.h; y += 1) {
+                const tile = world.data[x][y];
+                if (tile.modifiers?.includes("lake")) lakes.push({ x, y });
+                if (tile.modifiers?.includes("wood")) woods.push({ x, y });
+                encoded.push(land.indexOf(tile.type));
+                encoded.push((tile.modifiers?.includes("hill") ? 1 : 0)
+                    | (tile.modifiers?.includes("wood") ? 2 : 0)
+                    | (tile.modifiers?.includes("lake") ? 4 : 0));
+            }
+        }
+        expect(lakes.length).toBeGreaterThan(0);
+        for (const lake of lakes) {
+            expect(getMapNeighbors(world, lake.x, lake.y).some(neighbor =>
+                world.data[neighbor.x][neighbor.y].modifiers?.includes("lake")
+            )).toBe(true);
+        }
+        const adjacentWoods = woods.filter(wood => getMapNeighbors(world, wood.x, wood.y).some(neighbor =>
+            world.data[neighbor.x][neighbor.y].modifiers?.includes("wood")
+        ));
+        expect(woods.length).toBeGreaterThan(100);
+        expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
+        expect(checksum(encoded)).toBe("8d450b92");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {

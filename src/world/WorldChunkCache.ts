@@ -1,9 +1,8 @@
 import {
     assertPackedWorldChunk,
-    BoundedWorldChunkGeneration,
     PackedWorldChunk
 } from "./generateWorldChunk";
-import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import { assertWorldDescriptor, serializeWorldDescriptor, WorldDescriptor } from "./WorldDescriptor";
 
 const DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
 const DATABASE_VERSION = 1;
@@ -56,22 +55,19 @@ export interface IndexedDbWorldChunkCacheOptions {
 }
 
 export interface WorldChunkCacheKeyOptions {
-    seed: string | number;
+    descriptor: WorldDescriptor;
     chunkX: number;
     chunkY: number;
-    chunkSize: number;
-    world?: BoundedWorldChunkGeneration;
-    generatorVersion?: number;
 }
 
 export function createWorldChunkCacheKey(options: WorldChunkCacheKeyOptions): string {
+    if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
+    assertWorldDescriptor(options.descriptor);
+    if (!Number.isSafeInteger(options.chunkX) || !Number.isSafeInteger(options.chunkY)) {
+        throw new RangeError("world chunk cache coordinates must be safe integers");
+    }
     return JSON.stringify([
-        options.generatorVersion ?? WORLD_GENERATOR_VERSION,
-        String(options.seed),
-        options.chunkSize,
-        options.world?.topology ?? "infinite",
-        options.world?.width ?? null,
-        options.world?.height ?? null,
+        serializeWorldDescriptor(options.descriptor),
         options.chunkX,
         options.chunkY
     ]);

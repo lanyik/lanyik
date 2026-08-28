@@ -20,11 +20,16 @@ vi.mock("../../src/helpers/models", () => ({
     })
 }));
 
+vi.mock("../../src/objects/citysprite", async () => {
+    const { Sprite } = await import("three");
+    return { makeTextSprite: vi.fn(() => new Sprite()) };
+});
+
 import { Land, MapInfo, Point } from "../../src/index";
 import { getWorldChunkMetadata } from "../../src/helpers/chunks";
 import { createForest, ForestSharedResources } from "../../src/objects/Forest";
 import { createGrassField, GrassSharedResources } from "../../src/objects/Grass";
-import { TerrainMesh } from "../../src/objects/TerrainMesh";
+import { CITY_FOG_TILE_KEY, TerrainMesh } from "../../src/objects/TerrainMesh";
 import { TERRAIN_FAST_FRAGMENT_SHADER } from "../../src/shaders/terrain.fast.fragment";
 import { TERRAIN_FRAGMENT_SHADER } from "../../src/shaders/terrain.fragment";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
@@ -57,7 +62,7 @@ describe("streamed render resource sharing", () => {
         }
     });
 
-    test("computes terrain instance data once while caching three geometry LODs", () => {
+    test("computes terrain instance data once while caching three geometry LODs", async () => {
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
         const surface = createWorldSurfaceView({
@@ -69,6 +74,7 @@ describe("streamed render resource sharing", () => {
             tileSize: 10,
             mountainHeight: 6
         });
+        map.data[4][4].city = { name: "Anchored" };
         const terrain = new TerrainMesh(map, {
             size: 10,
             texturesBaseUrl: "textures/",
@@ -88,9 +94,9 @@ describe("streamed render resource sharing", () => {
         const mesh = meshes[0];
         const metadata = getWorldChunkMetadata(mesh)!;
         expect(metadata.bounds.minY).toBe(-2.5);
-        expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.35 * 1.57, 10);
+        expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.25 * 1.57, 10);
         terrain.mountainHeight = 8;
-        expect(metadata.bounds.maxY).toBeCloseTo(8 * 1.35 * 1.57, 10);
+        expect(metadata.bounds.maxY).toBeCloseTo(8 * 1.25 * 1.57, 10);
         const lod0 = terrain.activateChunk(metadata, 0)!;
         const otherLod0 = terrain.activateChunk(getWorldChunkMetadata(meshes[1])!, 0)!;
         expect(otherLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
@@ -117,6 +123,13 @@ describe("streamed render resource sharing", () => {
         ]);
         expect(fog.updateRanges).toEqual([{ start: 0, count: 3 }]);
 
+        await terrain.loadCities([{ x: 4, y: 4 }]);
+        const cityObjects = terrain.children.filter(child => child.userData[CITY_FOG_TILE_KEY] === "4,4");
+        const groundHeight = surface.getTileCenterHeight(4, 4);
+        expect(groundHeight).toBeGreaterThan(0);
+        expect(cityObjects.some(object => object.position.y === groundHeight)).toBe(true);
+        expect(cityObjects.some(object => object.position.y > groundHeight)).toBe(true);
+
         const firstMesh = meshes[0];
         map.data[0][0].type = Land.sand;
         expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toEqual([]);
@@ -131,7 +144,16 @@ describe("streamed render resource sharing", () => {
 
     test("shares one grass material and caches each LOD after its first build", () => {
         const map = mapWithVegetation();
-        const options = { size: 10, density: 4 };
+        const surface = createWorldSurfaceView({
+            map,
+            resolver: createWorldSurfaceResolver({
+                seed: "grass-ground",
+                domain: { topology: "bounded", width: map.w, height: map.h }
+            }),
+            tileSize: 10,
+            mountainHeight: 6
+        });
+        const options = { size: 10, density: 4, surface };
         const resources = new GrassSharedResources(options);
         const left = createGrassField(map, options, points(0), resources)!;
         const right = createGrassField(map, options, points(12), resources)!;
@@ -141,6 +163,7 @@ describe("streamed render resource sharing", () => {
 
         const metadata = getWorldChunkMetadata(leftMesh)!;
         const lod0 = left.activateChunk(metadata, 0)!;
+        expect([...lod0.getAttribute("groundHeight").array].some(value => value > 0)).toBe(true);
         const rightLod0 = right.activateChunk(getWorldChunkMetadata(rightMesh)!, 0)!;
         expect(rightLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
         expect(rightLod0.getIndex()).toBe(lod0.getIndex());
@@ -169,7 +192,16 @@ describe("streamed render resource sharing", () => {
 
     test("prepares each tree model once and reuses cached LOD transforms", async () => {
         const map = mapWithVegetation();
-        const options = { size: 10, treesPerTile: 2 };
+        const surface = createWorldSurfaceView({
+            map,
+            resolver: createWorldSurfaceResolver({
+                seed: "forest-ground",
+                domain: { topology: "bounded", width: map.w, height: map.h }
+            }),
+            tileSize: 10,
+            mountainHeight: 6
+        });
+        const options = { size: 10, treesPerTile: 2, surface };
         const resources = new ForestSharedResources();
         const left = (await createForest(map, options, points(0), resources))!;
         const right = (await createForest(map, options, points(12), resources))!;
@@ -186,17 +218,19 @@ describe("streamed render resource sharing", () => {
         expect(left.lodBuildCount).toBe(2);
 
         const instanced = leftRoot.children[0] as InstancedMesh;
+        expect([...instanced.instanceMatrix.array].filter((_value, index) => index % 16 === 13)
+            .some(value => value > 0)).toBe(true);
         instanced.instanceMatrix.clearUpdateRanges();
         instanced.instanceColor!.clearUpdateRanges();
         left.setFogStates([
             { x: 0, y: 0, state: 0 },
             { x: 0, y: 1, state: 1 }
         ]);
-        expect(instanced.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 64 }]);
-        expect(instanced.instanceColor!.updateRanges).toEqual([{ start: 0, count: 12 }]);
+        expect(instanced.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 32 }]);
+        expect(instanced.instanceColor!.updateRanges).toEqual([{ start: 0, count: 6 }]);
 
         left.setTileSuppressed(0, 2, true);
-        expect([...instanced.instanceMatrix.array.slice(64, 80)])
+        expect([...instanced.instanceMatrix.array.slice(32, 48)])
             .toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
         left.dispose();

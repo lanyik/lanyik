@@ -38,9 +38,11 @@ import {
     WorldVegetationForestLodLayout,
     WorldVegetationLayout
 } from "../world/generateVegetation";
+import { WorldSurfaceView } from "../world/WorldSurfaceView";
 
 export interface ForestOptions {
     size: number;
+    surface: WorldSurfaceView;
     treesPerTile?: number;
     treeModel?: string; // model folder path (see helpers/models.ts), default "Assets/models/pinia"
     treeScale?: number; // extra multiplier on top of the model's own info.json scale, default 1
@@ -91,6 +93,7 @@ interface ForestLodCache {
 
 interface ForestBuildContext {
     map: MapInfo;
+    surface: WorldSurfaceView;
     size: number;
     treesPerTile: number;
     treeScale: number;
@@ -321,20 +324,24 @@ export class ForestField extends Group {
     private buildChunkLod(record: ForestChunkRecord, lod: WorldChunkLod): ForestLodCache {
         const prepared = this.context.preparedChunks
             .get(`${record.modelPath}\u0000${record.chunkKey}`)?.lods.find(candidate => candidate.lod === lod);
-        if (prepared) return this.buildPreparedChunkLod(prepared);
+        if (prepared) return this.buildPreparedChunkLod(record, prepared);
         const {
-            map, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
+            map, surface, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
         } = this.context;
-        const density = Math.max(1, Math.round(treesPerTile * ([1, 0.5, 0.2] as const)[lod]));
+        const maximumDensity = Math.max(1, Math.round(treesPerTile * ([1, 0.5, 0.2] as const)[lod]));
 
         const matrix = new Matrix4();
         const scaleVector = new Vector3();
-        const matrices = new Float32Array(record.tiles.length * density * 16);
+        const matrices = new Float32Array(record.tiles.length * maximumDensity * 16);
         const ranges = new Map<string, { start: number, count: number, originalMatrices: Float32Array }>();
+        const surfaceWindow = surface.createWindow();
         let instance = 0;
         for (const tile of record.tiles) {
             const key = `${tile.x},${tile.y}`;
             const center = getHexCenter(tile.x, tile.y, size);
+            const density = Math.max(1, Math.round(
+                maximumDensity * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+            ));
             const placed: Point[] = [];
             const tileStart = instance;
             let attempts = 0;
@@ -359,7 +366,7 @@ export class ForestField extends Group {
                 matrix.scale(scaleVector.set(scale, scale, scale));
                 matrix.setPosition(
                     center.x + lx - record.root.position.x,
-                    0,
+                    surfaceWindow.getWorldHeight(center.x + lx, center.y + ly),
                     center.y + ly - record.root.position.z
                 );
                 matrix.toArray(matrices, instance * 16);
@@ -373,21 +380,55 @@ export class ForestField extends Group {
             });
         }
 
-        return { instanceCount: instance, matrices: matrices.slice(0, instance * 16), ranges };
+        const compactMatrices = matrices.slice(0, instance * 16);
+        for (const range of ranges.values()) {
+            range.originalMatrices = compactMatrices.subarray(
+                range.start * 16,
+                (range.start + range.count) * 16
+            );
+        }
+        return { instanceCount: instance, matrices: compactMatrices, ranges };
     }
 
-    private buildPreparedChunkLod(prepared: WorldVegetationForestLodLayout): ForestLodCache {
+    private buildPreparedChunkLod(
+        record: ForestChunkRecord,
+        prepared: WorldVegetationForestLodLayout
+    ): ForestLodCache {
+        const matrices = new Float32Array(prepared.matrices.length);
         const ranges = new Map<string, { start: number, count: number, originalMatrices: Float32Array }>();
+        const surfaceWindow = this.context.surface.createWindow();
+        let instanceCount = 0;
         prepared.tiles.forEach((tile, index) => {
-            const start = prepared.ranges[index * 2];
-            const count = prepared.ranges[index * 2 + 1];
+            const preparedStart = prepared.ranges[index * 2];
+            const preparedCount = prepared.ranges[index * 2 + 1];
+            const count = preparedCount === 0 ? 0 : Math.max(1, Math.round(
+                preparedCount * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+            ));
+            const start = instanceCount;
+            const source = prepared.matrices.subarray(preparedStart * 16, (preparedStart + count) * 16);
+            matrices.set(source, start * 16);
+            for (let instance = start; instance < start + count; instance += 1) {
+                const offset = instance * 16;
+                matrices[offset + 13] = surfaceWindow.getWorldHeight(
+                    matrices[offset + 12] + record.root.position.x,
+                    matrices[offset + 14] + record.root.position.z
+                );
+            }
+            instanceCount += count;
             ranges.set(`${tile.x},${tile.y}`, {
                 start,
                 count,
-                originalMatrices: prepared.matrices.subarray(start * 16, (start + count) * 16)
+                originalMatrices: matrices.subarray(start * 16, (start + count) * 16)
             });
         });
-        return { instanceCount: prepared.instanceCount, matrices: prepared.matrices, ranges };
+        const compactMatrices = matrices.slice(0, instanceCount * 16);
+        for (const range of ranges.values()) {
+            range.originalMatrices = compactMatrices.subarray(
+                range.start * 16,
+                (range.start + range.count) * 16
+            );
+        }
+        return { instanceCount, matrices: compactMatrices, ranges };
     }
 
     private applyChunkLod(record: ForestChunkRecord, cached: ForestLodCache): void {
@@ -455,7 +496,7 @@ export async function createForest(
     sharedResources?: ForestSharedResources,
     preparedLayout?: WorldVegetationLayout
 ): Promise<ForestField | null> {
-    const { size } = options;
+    const { size, surface } = options;
     const treesPerTile = options.treesPerTile ?? 20;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
     const treeScale = options.treeScale ?? 1;
@@ -530,7 +571,12 @@ export async function createForest(
                 root,
                 chunkKey,
                 "forest",
-                localizeWorldChunkBounds(getWorldChunkBounds(chunkTiles, size, 0, size * 3), origin),
+                localizeWorldChunkBounds(getWorldChunkBounds(
+                    chunkTiles,
+                    size,
+                    surface.minimumHeight,
+                    surface.maximumHeight + size * 3
+                ), origin),
                 id
             );
             chunkRecords.set(id, {
@@ -547,6 +593,7 @@ export async function createForest(
 
     return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
         map,
+        surface,
         size,
         treesPerTile,
         treeScale,

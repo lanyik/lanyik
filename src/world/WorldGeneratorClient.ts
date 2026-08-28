@@ -7,6 +7,7 @@ import {
     WorldChunkGenerationOptions
 } from "./generateWorldChunk";
 import { WORLD_WORKER_PROTOCOL_VERSION } from "./WorldDescriptor";
+import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 import {
     assertWorldVegetationLayout,
     WorldVegetationGenerationOptions,
@@ -15,6 +16,7 @@ import {
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    generatorVersion: typeof WORLD_GENERATOR_VERSION;
     id: number;
     world?: MapInfo;
     chunk?: PackedWorldChunk;
@@ -23,6 +25,7 @@ interface WorkerSuccessMessage {
 
 interface WorkerFailureMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    generatorVersion: typeof WORLD_GENERATOR_VERSION;
     id: number;
     error: { name: string; message: string; stack?: string };
 }
@@ -57,7 +60,13 @@ export class WorldGeneratorClient {
         return new Promise<MapInfo>((resolve, reject) => {
             this.pending.set(id, { kind: "world", resolve: value => resolve(value as MapInfo), reject });
             try {
-                this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "world", options });
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_GENERATOR_VERSION,
+                    id,
+                    type: "world",
+                    options
+                });
             } catch (reason) {
                 this.pending.delete(id);
                 reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -80,7 +89,13 @@ export class WorldGeneratorClient {
                 }
             });
             try {
-                this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "chunk", options });
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_GENERATOR_VERSION,
+                    id,
+                    type: "chunk",
+                    options
+                });
             } catch (reason) {
                 this.pending.delete(id);
                 reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -98,7 +113,13 @@ export class WorldGeneratorClient {
                 reject
             });
             try {
-                this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id, type: "vegetation", options });
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_GENERATOR_VERSION,
+                    id,
+                    type: "vegetation",
+                    options
+                });
             } catch (reason) {
                 this.pending.delete(id);
                 reject(reason instanceof Error ? reason : new Error(String(reason)));
@@ -121,6 +142,7 @@ export class WorldGeneratorClient {
     private handleMessage = (event: MessageEvent<WorkerResponse>): void => {
         const data = event.data;
         if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
+            || data.generatorVersion !== WORLD_GENERATOR_VERSION
             || typeof data.id !== "number"
             || (!("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));

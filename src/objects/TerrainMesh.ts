@@ -213,6 +213,9 @@ interface InstanceAttributes {
 interface CityFogEntry {
     wrapper: Group;
     sprite: Sprite;
+    x: number;
+    y: number;
+    labelOffset: number;
     materials: { material: Material & { color?: Color }, baseColor?: Color }[];
     owner?: object;
     signature: string;
@@ -758,6 +761,7 @@ export class TerrainMesh extends Group {
         const { size } = this.options;
         const defaultModel = this.options.cityModel ?? "Assets/models/monument";
         const cityScale = this.options.cityScale ?? 1;
+        const surfaceWindow = this.surface.createWindow();
 
         const cityTiles: Point[] = [];
         if (onlyTiles) {
@@ -816,7 +820,9 @@ export class TerrainMesh extends Group {
                 const wrapper = new Group();
                 wrapper.add(model);
                 wrapper.scale.setScalar(cityScale);
-                wrapper.position.set(center.x, 0, center.y);
+                const groundHeight = surfaceWindow.getTileCenterHeight(x, y);
+                const labelOffset = modelHeight * cityScale + Math.round(size / 5);
+                wrapper.position.set(center.x, groundHeight, center.y);
                 wrapper.userData[CITY_FOG_TILE_KEY] = key;
                 this.add(wrapper);
 
@@ -825,13 +831,16 @@ export class TerrainMesh extends Group {
                     fontface: "Georgia",
                     borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
                 });
-                sprite.position.set(center.x, modelHeight * cityScale + Math.round(size / 5), center.y);
+                sprite.position.set(center.x, groundHeight + labelOffset, center.y);
                 sprite.userData[CITY_FOG_TILE_KEY] = key;
                 this.add(sprite);
 
                 this.cityFog.set(key, {
                     wrapper,
                     sprite,
+                    x,
+                    y,
+                    labelOffset,
                     materials: cityMaterials,
                     owner,
                     signature: this.citySignature(tile)
@@ -839,8 +848,20 @@ export class TerrainMesh extends Group {
         }
     }
 
+    public refreshCitySurfaceHeights(points?: readonly Point[]): void {
+        const filter = points ? new Set(points.map(point => `${point.x},${point.y}`)) : undefined;
+        const surfaceWindow = this.surface.createWindow();
+        for (const [key, city] of this.cityFog) {
+            if (filter && !filter.has(key)) continue;
+            const height = surfaceWindow.getTileCenterHeight(city.x, city.y);
+            city.wrapper.position.y = height;
+            city.sprite.position.y = height + city.labelOffset;
+        }
+    }
+
     public async refreshCities(changes: readonly TerrainCityRefresh[]): Promise<void> {
         const latest = new Map<string, TerrainCityRefresh>();
+        const surfaceWindow = this.surface.createWindow();
         for (const change of changes) latest.set(`${change.point.x},${change.point.y}`, change);
         const builds: Promise<void>[] = [];
         for (const [key, { point, owner }] of latest) {
@@ -849,6 +870,9 @@ export class TerrainMesh extends Group {
             const existing = this.cityFog.get(key);
             if (existing?.signature === signature) {
                 existing.owner = owner;
+                const height = surfaceWindow.getTileCenterHeight(point.x, point.y);
+                existing.wrapper.position.y = height;
+                existing.sprite.position.y = height + existing.labelOffset;
                 continue;
             }
             if (existing) this.removeCity(key);
@@ -1235,6 +1259,7 @@ export class TerrainMesh extends Group {
         this.surface.setMountainHeight(value);
         if (this.landMaterial) this.landMaterial.uniforms.mountainHeight.value = value;
         this.refreshChunkHeightBounds();
+        this.refreshCitySurfaceHeights();
     }
 
     public get beachWidth(): number {

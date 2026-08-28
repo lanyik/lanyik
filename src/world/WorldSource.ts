@@ -31,6 +31,7 @@ import {
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 import {
     createWorldDescriptor,
+    serializeWorldDescriptor,
     WorldDescriptor
 } from "./WorldDescriptor";
 
@@ -810,7 +811,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
     private readonly chunkCountY: number;
     private readonly cache: WorldChunkCache | undefined;
     private readonly ownsCache: boolean;
-    private readonly generatorVersion: number;
+    private readonly worldFingerprint: string;
     private readonly deltaStore: WorldDeltaStore | undefined;
     private readonly ownsDeltaStore: boolean;
     private readonly deltaSession: WorldDeltaSession;
@@ -838,14 +839,12 @@ export class ToroidalWorldSource implements MutableWorldSource {
             generatorVersion: options.generatorVersion,
             world: { width: options.width, height: options.height, topology: "toroidal" }
         });
-        this.generatorVersion = this.descriptor.generatorVersion;
+        this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
         this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
         const resolvedDeltas = resolveDeltaStore(options, dependencies);
         this.deltaStore = resolvedDeltas.store;
         this.ownsDeltaStore = resolvedDeltas.owned;
-        this.worldId = resolveWorldId(options.worldId, JSON.stringify([
-            "toroidal", String(options.seed), options.width, options.height, this.chunkSize, this.generatorVersion
-        ]));
+        this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
         this.chunkCountX = Math.ceil(options.width / this.chunkSize);
         this.chunkCountY = Math.ceil(options.height / this.chunkSize);
         this.store = dependencies.store ?? new SparseWorldChunkStore(this.bounds);
@@ -909,7 +908,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
             chunkSize: this.chunkSize,
             world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
         } as const;
-        const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+        const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
         if (!packed) {
@@ -955,7 +954,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
         const resolved = this.resolveChunk(chunkX, chunkY);
         if (!resolved) return undefined;
         return {
-            terrainRevision: this.generatorVersion,
+            terrainRevision: this.worldFingerprint,
             deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
         };
     }
@@ -1059,7 +1058,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
     private readonly pool: WorldGeneratorPool;
     private readonly cache: WorldChunkCache | undefined;
     private readonly ownsCache: boolean;
-    private readonly generatorVersion: number;
+    private readonly worldFingerprint: string;
     private readonly deltaStore: WorldDeltaStore | undefined;
     private readonly ownsDeltaStore: boolean;
     private readonly deltaSession: WorldDeltaSession;
@@ -1081,15 +1080,12 @@ export class ProceduralWorldSource implements MutableWorldSource {
             chunkSize: this.chunkSize,
             generatorVersion: options.generatorVersion
         });
-        this.generatorVersion = this.descriptor.generatorVersion;
+        this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
         this.store = dependencies.store ?? new SparseWorldChunkStore();
         const resolvedDeltas = resolveDeltaStore(options, dependencies);
         this.deltaStore = resolvedDeltas.store;
         this.ownsDeltaStore = resolvedDeltas.owned;
-        this.worldId = resolveWorldId(
-            options.worldId,
-            JSON.stringify(["infinite", String(options.seed), this.chunkSize, this.generatorVersion])
-        );
+        this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
         this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
         const resolvedCache = resolveCache(options, dependencies);
         this.cache = resolvedCache.cache;
@@ -1130,7 +1126,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
     ): Promise<WorldChunk> {
         if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
         const generation = { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize };
-        const cacheKey = createWorldChunkCacheKey({ ...generation, generatorVersion: this.generatorVersion });
+        const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
         if (!packed) {
@@ -1174,7 +1170,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
         const resolved = this.resolveChunk(chunkX, chunkY);
         if (!resolved) return undefined;
         return {
-            terrainRevision: this.generatorVersion,
+            terrainRevision: this.worldFingerprint,
             deltaRevision: this.deltaSession.getRevision(resolved.x, resolved.y)
         };
     }
