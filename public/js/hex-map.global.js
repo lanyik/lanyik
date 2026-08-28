@@ -15018,16 +15018,9 @@ void main() {
       this.assertCoordinates(x, y);
       assertWorldTileOverride(changes);
       const point = this.normalizeRequired(x, y);
-      const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
-      const beforeTerrain = worldTileTerrainSignature(getMapTile(this.map, point.x, point.y));
-      const beforeCity = worldTileCitySignature(getMapTile(this.map, point.x, point.y));
+      const before = this.captureVisualState(point);
       source.setTileOverride(point.x, point.y, changes);
-      const after = getMapTile(this.map, point.x, point.y);
-      const dirty = this.visualSignature(after) !== before ? [point] : [];
-      const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
-      const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
-      this.record(1, dirty.length);
-      return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
+      return this.completeEdit(source, true, 1, [before]);
     }
     setTileOverrides(changes) {
       const source = this.mutableSource();
@@ -15042,38 +15035,12 @@ void main() {
         assertWorldTileOverride(change.changes);
         const point = this.normalizeRequired(change.x, change.y);
         const key = `${point.x},${point.y}`;
-        if (!before.has(key)) {
-          const tile = getMapTile(this.map, point.x, point.y);
-          before.set(key, {
-            point,
-            signature: this.visualSignature(tile),
-            terrainSignature: worldTileTerrainSignature(tile),
-            citySignature: worldTileCitySignature(tile)
-          });
-        }
+        if (!before.has(key)) before.set(key, this.captureVisualState(point));
         normalized.push({ x: point.x, y: point.y, changes: change.changes });
       }
       if (source.setTileOverrides) source.setTileOverrides(normalized);
       else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
-      const dirty = [...before.values()].filter(({ point, signature }) => this.visualSignature(getMapTile(this.map, point.x, point.y)) !== signature).map(({ point }) => point);
-      const dirtyKeys = new Set(dirty.map((point) => `${point.x},${point.y}`));
-      let kind = "none";
-      for (const [key, entry] of before) {
-        if (!dirtyKeys.has(key)) continue;
-        const current = refreshKind(
-          entry.terrainSignature,
-          entry.citySignature,
-          getMapTile(this.map, entry.point.x, entry.point.y)
-        );
-        if (current === "terrain") {
-          kind = "terrain";
-          break;
-        }
-        if (current === "city") kind = "city";
-      }
-      if (dirty.length > 0 && kind === "none") kind = "terrain";
-      this.record(before.size, dirty.length);
-      return { source, changed: normalized.length > 0, dirtyTiles: dirty, refreshKind: kind };
+      return this.completeEdit(source, normalized.length > 0, before.size, before.values());
     }
     clearTileOverride(x, y) {
       const source = this.mutableSource();
@@ -15082,19 +15049,11 @@ void main() {
       }
       const point = normalizeMapCoordinates(this.map, x, y);
       if (!point) return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
-      const beforeTile = getMapTile(this.map, point.x, point.y);
-      const before = this.visualSignature(beforeTile);
-      const beforeTerrain = worldTileTerrainSignature(beforeTile);
-      const beforeCity = worldTileCitySignature(beforeTile);
+      const before = this.captureVisualState(point);
       if (!source.clearTileOverride(point.x, point.y)) {
         return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
       }
-      const after = getMapTile(this.map, point.x, point.y);
-      const dirty = this.visualSignature(after) !== before ? [point] : [];
-      const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
-      const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
-      this.record(1, dirty.length);
-      return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
+      return this.completeEdit(source, true, 1, [before]);
     }
     flush() {
       const source = this.mutableSource();
@@ -15127,6 +15086,30 @@ void main() {
       const point = normalizeMapCoordinates(this.map, x, y);
       if (!point) throw new RangeError("tile override coordinates are outside the world bounds");
       return point;
+    }
+    captureVisualState(point) {
+      const tile = getMapTile(this.map, point.x, point.y);
+      return {
+        point,
+        visual: this.visualSignature(tile),
+        terrain: worldTileTerrainSignature(tile),
+        city: worldTileCitySignature(tile)
+      };
+    }
+    completeEdit(source, changed, changedTiles, before) {
+      const dirtyTiles = [];
+      let refresh = "none";
+      for (const state of before) {
+        const after = getMapTile(this.map, state.point.x, state.point.y);
+        if (this.visualSignature(after) === state.visual) continue;
+        dirtyTiles.push(state.point);
+        const detected = refreshKind(state.terrain, state.city, after);
+        if (detected === "terrain") refresh = "terrain";
+        else if (detected === "city" && refresh === "none") refresh = "city";
+      }
+      if (dirtyTiles.length > 0 && refresh === "none") refresh = "terrain";
+      this.record(changedTiles, dirtyTiles.length);
+      return { source, changed, dirtyTiles, refreshKind: refresh };
     }
     record(changedTiles, dirtyTiles) {
       this.editBatches += 1;
@@ -16350,15 +16333,7 @@ void main() {
       this.chunkScheduler.forget(forgotten);
     }
     refreshGrassWorldRenderLayer(context) {
-      if (context.refreshKind !== "city") return false;
-      for (const point of context.tiles) {
-        const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
-        for (const grass of new Set(this.streamedGrassByChunkId.values())) {
-          grass.setTileSuppressed(point.x, point.y, suppressed);
-        }
-      }
-      context.invalidateVisibility();
-      return true;
+      return this.refreshVegetationWorldRenderLayer(context, this.streamedGrassByChunkId.values());
     }
     mountForestWorldRenderLayer(context) {
       const record = this.worldChunkLayers.get(context.key);
@@ -16480,12 +16455,14 @@ void main() {
       this.chunkScheduler.forget(forgotten);
     }
     refreshForestWorldRenderLayer(context) {
+      return this.refreshVegetationWorldRenderLayer(context, this.streamedForestByChunkId.values());
+    }
+    refreshVegetationWorldRenderLayer(context, fields) {
       if (context.refreshKind !== "city") return false;
+      const uniqueFields = new Set(fields);
       for (const point of context.tiles) {
         const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
-        for (const forest of new Set(this.streamedForestByChunkId.values())) {
-          forest.setTileSuppressed(point.x, point.y, suppressed);
-        }
+        for (const field of uniqueFields) field.setTileSuppressed(point.x, point.y, suppressed);
       }
       context.invalidateVisibility();
       return true;

@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Focused the foundation test suite on distinct contracts: removed duplicate
+  acceptance and capability probes, centralized deterministic async gates,
+  strengthened structured-checksum and restore-lock coverage, and documented
+  the tiered verification policy.
 - Terrain atlas cells now retain detail at a two-hex span by default. One
   continuous world-space UV warp and macro tint field break up visible tiling
   without adding another `terrain.png` lookup; the span remains live-tunable.

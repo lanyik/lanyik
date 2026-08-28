@@ -4,6 +4,7 @@ import { Land } from "../../src/enums";
 import { MapInfo } from "../../src/interfaces";
 import { RenderWorldController } from "../../src/rendering/RenderWorldController";
 import { StaticWorldSource } from "../../src/world/WorldSource";
+import { deferred } from "../helpers/deferred";
 
 function world(): MapInfo {
     const data: MapInfo["data"] = {};
@@ -47,10 +48,9 @@ describe("RenderWorldController", () => {
 
     test("does not inherit a custom source promise that ignores cancellation", async () => {
         const source = new StaticWorldSource(world(), { chunkSize: 12 });
-        let markStarted!: () => void;
-        const started = new Promise<void>(resolve => { markStarted = resolve; });
+        const started = deferred();
         vi.spyOn(source, "loadChunk").mockImplementation(() => {
-            markStarted();
+            started.resolve();
             return new Promise(() => undefined);
         });
         const controller = new RenderWorldController(source, undefined, { drainTimeoutMs: 20 });
@@ -61,7 +61,7 @@ describe("RenderWorldController", () => {
             maxRetries: 0
         });
         void controller.setCenterTile(0, 0);
-        await started;
+        await started.promise;
 
         controller.stop();
         await controller.settled;

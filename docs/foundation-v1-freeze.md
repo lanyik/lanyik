@@ -1,8 +1,9 @@
 # Infrastructure v1 freeze contract
 
 Status: frozen on 2026-08-27. The acceptance commands at the end of this
-document passed together: 237 unit tests, type checking, build, browser E2E,
-the explicit 500-generation soak, and the benchmark gate.
+document passed together on the freeze revision. Exact test counts are not part
+of the contract; the protected invariants and test-layer policy are documented
+in [testing.md](./testing.md).
 
 The freeze covers lifecycle ownership, streamed world chunks, runtime work
 scheduling, resource budgeting, checkpoint persistence, and render-layer
@@ -93,6 +94,9 @@ work-queue counts remain bounded.
 
 ## Freeze gate
 
+See [testing.md](./testing.md) for the responsibility of each layer and the
+precise meaning of the 500-iteration soak.
+
 Run on one revision:
 
 ```powershell
@@ -108,6 +112,9 @@ After the gate passes, infrastructure changes require a demonstrated contract
 defect or an explicitly scoped infrastructure v2 (for example WebGPU,
 multiplayer synchronization, cloud saves, or a new supported browser family).
 Terrain content, gameplay data, and tuning parameters may continue to evolve
-through the versioned interfaces. `AssetRegistry` is intentionally deferred
+through the versioned interfaces. The proposed next world-generation/content
+step is specified in [world-style-generation-v1.md](./world-style-generation-v1.md);
+it deliberately consumes the frozen streaming and render ownership contracts
+instead of reopening them. `AssetRegistry` is intentionally deferred
 until the first real unit/building assets define its actual lookup and lifetime
 requirements; it must build on the existing resource accounts.

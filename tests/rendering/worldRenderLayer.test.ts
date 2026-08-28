@@ -10,6 +10,7 @@ import {
     WorldRenderLayerRegistry
 } from "../../src/rendering/WorldRenderLayer";
 import { WorldChunk, WorldSource } from "../../src/world/WorldSource";
+import { deferred } from "../helpers/deferred";
 
 function layer(id: string, kinds?: readonly string[]): WorldRenderLayer {
     return {
@@ -194,11 +195,10 @@ describe("HexMap custom world render layers", () => {
         const map = createLayerTestMap([chunk]);
         const lifecycle = new LifecycleScope("async-mount-world");
         map.worldController = { source: map.worldSource, lifecycle };
-        let release!: () => void;
-        const gate = new Promise<void>(resolve => { release = resolve; });
+        const gate = deferred();
         const late = new Object3D();
         const mount = vi.fn(async (context: Parameters<WorldRenderLayer["mountChunk"]>[0]) => {
-            await gate;
+            await gate.promise;
             context.addObject(late);
         });
         const registration = map.registerWorldRenderLayer({
@@ -212,7 +212,7 @@ describe("HexMap custom world render layers", () => {
         const closing = lifecycle.close();
         map.unmountWorldChunk(chunk);
         expect(lifecycle.stats).toMatchObject({ state: "closing", pendingTasks: 1 });
-        release();
+        gate.resolve();
         await Promise.all([registration, closing]);
 
         expect(lifecycle.stats).toMatchObject({ state: "closed", pendingTasks: 0 });

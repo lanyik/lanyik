@@ -19,7 +19,6 @@ Run:
 
 ```sh
 npm run benchmark:render-backends
-npm run test:e2e -- tests/e2e/render-capabilities.spec.ts
 ```
 
 The fixed benchmark uses the same 12×12 render-chunk granularity as the runtime,
@@ -40,11 +39,11 @@ position/radius record plus up to 0.381MiB for compacted indices. Those sizes ar
 reasonable, but a compute dispatch, synchronization and indirect draw would be
 new work that does not eliminate a meaningful current CPU cost.
 
-These numbers are a CPU crossover test, not a fabricated GPU benchmark. The
-Playwright capability probe found WebGL 2 through ANGLE/SwiftShader and exposed
-`navigator.gpu`, but the headless environment returned no WebGPU adapter. It
-records this result without failing the suite so hardware-backed CI or a local
-machine can provide an honest adapter-specific result later.
+These numbers are a CPU crossover test, not a fabricated GPU benchmark. Backend
+availability is environment-specific and a capability report alone proves no
+runtime contract. A future WebGPU prototype must therefore execute and verify
+its real rendering path on supported hardware instead of adding a non-failing
+availability probe to the foundation suite.
 
 ## Migration cost and compatibility
 

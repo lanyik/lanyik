@@ -28,6 +28,13 @@ export interface WorldEditingStats {
     readonly visualDirtyTiles: number;
 }
 
+interface TileVisualState {
+    readonly point: Point;
+    readonly visual: string;
+    readonly terrain: string;
+    readonly city: string;
+}
+
 export function worldTileTerrainSignature(tile: TileInfo | undefined): string {
     const modifiers = tile?.modifiers ? [...tile.modifiers].sort() : [];
     const rivers = tile?.rivers
@@ -88,28 +95,16 @@ export class WorldEditingFacade {
         this.assertCoordinates(x, y);
         assertWorldTileOverride(changes);
         const point = this.normalizeRequired(x, y);
-        const before = this.visualSignature(getMapTile(this.map, point.x, point.y));
-        const beforeTerrain = worldTileTerrainSignature(getMapTile(this.map, point.x, point.y));
-        const beforeCity = worldTileCitySignature(getMapTile(this.map, point.x, point.y));
+        const before = this.captureVisualState(point);
         source.setTileOverride(point.x, point.y, changes);
-        const after = getMapTile(this.map, point.x, point.y);
-        const dirty = this.visualSignature(after) !== before ? [point] : [];
-        const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
-        const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
-        this.record(1, dirty.length);
-        return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
+        return this.completeEdit(source, true, 1, [before]);
     }
 
     public setTileOverrides(changes: readonly WorldTileOverrideChange[]): WorldEditResult {
         const source = this.mutableSource();
         if (!Array.isArray(changes)) throw new TypeError("tile overrides must be an array");
         const normalized: WorldTileOverrideChange[] = [];
-        const before = new Map<string, {
-            point: Point;
-            signature: string;
-            terrainSignature: string;
-            citySignature: string;
-        }>();
+        const before = new Map<string, TileVisualState>();
         for (const change of changes) {
             if (!change || typeof change !== "object") {
                 throw new RangeError("tile override coordinates must be safe integers");
@@ -118,40 +113,12 @@ export class WorldEditingFacade {
             assertWorldTileOverride(change.changes);
             const point = this.normalizeRequired(change.x, change.y);
             const key = `${point.x},${point.y}`;
-            if (!before.has(key)) {
-                const tile = getMapTile(this.map, point.x, point.y);
-                before.set(key, {
-                    point,
-                    signature: this.visualSignature(tile),
-                    terrainSignature: worldTileTerrainSignature(tile),
-                    citySignature: worldTileCitySignature(tile)
-                });
-            }
+            if (!before.has(key)) before.set(key, this.captureVisualState(point));
             normalized.push({ x: point.x, y: point.y, changes: change.changes });
         }
         if (source.setTileOverrides) source.setTileOverrides(normalized);
         else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
-        const dirty = [...before.values()]
-            .filter(({ point, signature }) => this.visualSignature(getMapTile(this.map, point.x, point.y)) !== signature)
-            .map(({ point }) => point);
-        const dirtyKeys = new Set(dirty.map(point => `${point.x},${point.y}`));
-        let kind: WorldRenderRefreshKind = "none";
-        for (const [key, entry] of before) {
-            if (!dirtyKeys.has(key)) continue;
-            const current = refreshKind(
-                entry.terrainSignature,
-                entry.citySignature,
-                getMapTile(this.map, entry.point.x, entry.point.y)
-            );
-            if (current === "terrain") {
-                kind = "terrain";
-                break;
-            }
-            if (current === "city") kind = "city";
-        }
-        if (dirty.length > 0 && kind === "none") kind = "terrain";
-        this.record(before.size, dirty.length);
-        return { source, changed: normalized.length > 0, dirtyTiles: dirty, refreshKind: kind };
+        return this.completeEdit(source, normalized.length > 0, before.size, before.values());
     }
 
     public clearTileOverride(x: number, y: number): WorldEditResult {
@@ -161,19 +128,11 @@ export class WorldEditingFacade {
         }
         const point = normalizeMapCoordinates(this.map, x, y);
         if (!point) return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
-        const beforeTile = getMapTile(this.map, point.x, point.y);
-        const before = this.visualSignature(beforeTile);
-        const beforeTerrain = worldTileTerrainSignature(beforeTile);
-        const beforeCity = worldTileCitySignature(beforeTile);
+        const before = this.captureVisualState(point);
         if (!source.clearTileOverride(point.x, point.y)) {
             return { source, changed: false, dirtyTiles: [], refreshKind: "none" };
         }
-        const after = getMapTile(this.map, point.x, point.y);
-        const dirty = this.visualSignature(after) !== before ? [point] : [];
-        const detected = dirty.length > 0 ? refreshKind(beforeTerrain, beforeCity, after) : "none";
-        const kind = dirty.length > 0 && detected === "none" ? "terrain" : detected;
-        this.record(1, dirty.length);
-        return { source, changed: true, dirtyTiles: dirty, refreshKind: kind };
+        return this.completeEdit(source, true, 1, [before]);
     }
 
     public flush(): Promise<void> {
@@ -210,6 +169,39 @@ export class WorldEditingFacade {
         const point = normalizeMapCoordinates(this.map, x, y);
         if (!point) throw new RangeError("tile override coordinates are outside the world bounds");
         return point;
+    }
+
+    private captureVisualState(point: Point): TileVisualState {
+        const tile = getMapTile(this.map, point.x, point.y);
+        return {
+            point,
+            visual: this.visualSignature(tile),
+            terrain: worldTileTerrainSignature(tile),
+            city: worldTileCitySignature(tile)
+        };
+    }
+
+    private completeEdit(
+        source: MutableWorldSource,
+        changed: boolean,
+        changedTiles: number,
+        before: Iterable<TileVisualState>
+    ): WorldEditResult {
+        const dirtyTiles: Point[] = [];
+        let refresh: WorldRenderRefreshKind = "none";
+        for (const state of before) {
+            const after = getMapTile(this.map, state.point.x, state.point.y);
+            if (this.visualSignature(after) === state.visual) continue;
+            dirtyTiles.push(state.point);
+            const detected = refreshKind(state.terrain, state.city, after);
+            if (detected === "terrain") refresh = "terrain";
+            else if (detected === "city" && refresh === "none") refresh = "city";
+        }
+        // A custom visual signature may include application fields unknown to
+        // the built-in classifier. Conservatively rebuild terrain in that case.
+        if (dirtyTiles.length > 0 && refresh === "none") refresh = "terrain";
+        this.record(changedTiles, dirtyTiles.length);
+        return { source, changed, dirtyTiles, refreshKind: refresh };
     }
 
     private record(changedTiles: number, dirtyTiles: number): void {

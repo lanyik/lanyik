@@ -16,28 +16,22 @@ import { generateWorldChunk } from "../../src/world/generateWorldChunk";
 import { MemoryWorldDeltaStore, WorldChunkDelta } from "../../src/world/WorldDeltaStore";
 import { WorldGeneratorPool } from "../../src/world/WorldGeneratorPool";
 import { ProceduralWorldSource } from "../../src/world/WorldSource";
+import { deferred } from "../helpers/deferred";
 
 interface State { value: string }
 
 class DeferredReplaceWorldDeltaStore extends MemoryWorldDeltaStore {
-    public readonly replaceEntered: Promise<void>;
-    private enterReplace!: () => void;
-    private releaseReplace!: () => void;
-    private readonly replaceReleased: Promise<void>;
-
-    constructor() {
-        super();
-        this.replaceEntered = new Promise(resolve => { this.enterReplace = resolve; });
-        this.replaceReleased = new Promise(resolve => { this.releaseReplace = resolve; });
-    }
+    private readonly entered = deferred();
+    private readonly released = deferred();
+    public readonly replaceEntered = this.entered.promise;
 
     public override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
-        this.enterReplace();
-        await this.replaceReleased;
+        this.entered.resolve();
+        await this.released.promise;
         return super.replaceWorld(worldId, deltas);
     }
 
-    public release(): void { this.releaseReplace(); }
+    public release(): void { this.released.resolve(); }
 }
 
 describe("foundation generation checkpoint participants", () => {
@@ -67,6 +61,8 @@ describe("foundation generation checkpoint participants", () => {
         await deltas.replaceEntered;
         expect(() => source.setTileOverride(4, 5, { unit: "must-not-disappear" }))
             .toThrow(/being restored/);
+        await expect(source.createDeltaCheckpointSnapshot()).rejects.toThrow(/being restored/);
+        await expect(source.clearDeltas()).rejects.toThrow(/being restored/);
         deltas.release();
         await restoring;
 

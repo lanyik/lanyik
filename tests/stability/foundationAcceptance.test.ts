@@ -1,7 +1,5 @@
 import { describe, expect, test } from "vitest";
 
-import { CheckpointCoordinator, MemoryCheckpointJournalStore } from "../../src/persistence/CheckpointCoordinator";
-import { LifecycleScope } from "../../src/runtime/LifecycleScope";
 import { PriorityTaskQueue } from "../../src/runtime/PriorityTaskQueue";
 import { ResourceBudgetLedger } from "../../src/runtime/ResourceBudget";
 import { generateWorldChunk, PackedWorldChunk } from "../../src/world/generateWorldChunk";
@@ -38,44 +36,6 @@ describe("foundation acceptance invariants", () => {
         expect(forward).toBe("c950f52e");
     });
 
-    test("repeated checkpoint and recovery converges to the last committed state", async () => {
-        const journal = new MemoryCheckpointJournalStore();
-        let working = { coins: 0, buildings: [] as string[] };
-        let durable = { coins: 0, buildings: [] as string[] };
-        let injectedFailure = false;
-        const participant = () => ({
-            id: "economy",
-            version: 1,
-            prepare: () => structuredClone(working),
-            commit: (_context: unknown, token: unknown) => {
-                if (!injectedFailure && (token as typeof working).coins === 13) {
-                    injectedFailure = true;
-                    throw new Error("injected commit interruption");
-                }
-                durable = structuredClone(token as typeof working);
-            }
-        });
-        let coordinator = new CheckpointCoordinator({
-            worldId: "acceptance-save", sessionId: "first-process", journal, participants: [participant()]
-        });
-        for (let generation = 1; generation <= 25; generation += 1) {
-            working = { coins: generation, buildings: Array.from({ length: generation % 5 }, (_, i) => `b${i}`) };
-            try {
-                await coordinator.checkpoint();
-            } catch {
-                coordinator = new CheckpointCoordinator({
-                    worldId: "acceptance-save",
-                    sessionId: `restart-${generation}`,
-                    journal,
-                    participants: [participant()]
-                });
-                await coordinator.recover();
-            }
-        }
-        expect(durable).toEqual(working);
-        expect(coordinator.stats.latestCommittedGeneration).toBeGreaterThan(0);
-    });
-
     test("admitted resources and queued work stay inside hard limits under random churn", () => {
         const resources = new ResourceBudgetLedger({ cpuBytes: 4096, gpuBytes: 2048 });
         const queue = new PriorityTaskQueue<number>({ maxPendingTasks: 32, maxPendingWeight: 64 });
@@ -100,21 +60,4 @@ describe("foundation acceptance invariants", () => {
         }
     });
 
-    test("one thousand replaced lifecycle generations drain with no late publication", async () => {
-        let published = 0;
-        const drains: Promise<void>[] = [];
-        const tasks: Promise<number>[] = [];
-        for (let generation = 0; generation < 1_000; generation += 1) {
-            const scope = new LifecycleScope(`soak-${generation}`);
-            const task = scope.track(Promise.resolve(generation));
-            tasks.push(task.then(value => {
-                scope.publish(value, () => { published += 1; });
-                return value;
-            }));
-            drains.push(scope.close());
-        }
-        await Promise.all(tasks);
-        await Promise.all(drains);
-        expect(published).toBe(0);
-    });
 });

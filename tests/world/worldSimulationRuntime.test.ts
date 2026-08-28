@@ -8,6 +8,7 @@ import {
     SimulationEntity,
     WorldSimulationRuntime
 } from "../../src/simulation/WorldSimulationRuntime";
+import { deferred } from "../helpers/deferred";
 
 interface State { ticks: number }
 
@@ -15,12 +16,11 @@ const entity = (id: string, x: number, y: number): SimulationEntity<State> => ({
 
 describe("WorldSimulationRuntime", () => {
     test("does not resurrect a chunk when a pending wake completes after dispose", async () => {
-        let resolveLoad!: (value: undefined) => void;
-        const load = new Promise<undefined>(resolve => { resolveLoad = resolve; });
+        const load = deferred<undefined>();
         let storeDisposed = false;
         const runtime = new WorldSimulationRuntime<State>({
             store: {
-                load: () => load,
+                load: () => load.promise,
                 save: () => Promise.resolve(),
                 delete: () => Promise.resolve(),
                 flush: () => Promise.resolve(),
@@ -31,7 +31,7 @@ describe("WorldSimulationRuntime", () => {
         const waking = runtime.wakeChunk(1, 0);
         runtime.dispose();
         expect(storeDisposed).toBe(false);
-        resolveLoad(undefined);
+        load.resolve(undefined);
 
         await expect(waking).rejects.toThrow("disposed");
         await Promise.resolve();
@@ -67,11 +67,10 @@ describe("WorldSimulationRuntime", () => {
     });
 
     test("rejects synchronous structural mutation while an async operation is pending", async () => {
-        let resolveLoad!: (value: undefined) => void;
-        const load = new Promise<undefined>(resolve => { resolveLoad = resolve; });
+        const load = deferred<undefined>();
         const runtime = new WorldSimulationRuntime<State>({
             store: {
-                load: () => load,
+                load: () => load.promise,
                 save: () => Promise.resolve(),
                 delete: () => Promise.resolve(),
                 flush: () => Promise.resolve(),
@@ -81,19 +80,18 @@ describe("WorldSimulationRuntime", () => {
 
         const waking = runtime.wakeChunk(0, 0);
         expect(() => runtime.addEntity(entity("racy", 0, 0))).toThrow("operation is pending");
-        resolveLoad(undefined);
+        load.resolve(undefined);
         await waking;
         runtime.addEntity(entity("safe", 0, 0));
         expect(runtime.getEntity("safe")).toBeDefined();
     });
 
     test("reports bounded operation-queue pressure immediately and after drain", async () => {
-        let resolveLoad!: (value: undefined) => void;
-        const load = new Promise<undefined>(resolve => { resolveLoad = resolve; });
+        const load = deferred<undefined>();
         const runtime = new WorldSimulationRuntime<State>({
             maxQueuedOperations: 1,
             store: {
-                load: () => load,
+                load: () => load.promise,
                 save: () => Promise.resolve(),
                 delete: () => Promise.resolve(),
                 flush: () => Promise.resolve(),
@@ -105,7 +103,7 @@ describe("WorldSimulationRuntime", () => {
         expect(runtime.stats.queuedOperations).toBe(1);
         await expect(runtime.wakeChunk(1, 0)).rejects.toMatchObject({ name: "WorkQueueBackpressureError" });
         expect(runtime.stats).toMatchObject({ queuedOperations: 1, shedOperations: 1 });
-        resolveLoad(undefined);
+        load.resolve(undefined);
         await first;
         await Promise.resolve();
         expect(runtime.stats).toMatchObject({ queuedOperations: 0, shedOperations: 1 });

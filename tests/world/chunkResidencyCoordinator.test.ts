@@ -7,6 +7,7 @@ import {
     getChunkResidencyCoordinator
 } from "../../src/world/ChunkResidencyCoordinator";
 import { StaticWorldSource, WorldChunk } from "../../src/world/WorldSource";
+import { deferred } from "../helpers/deferred";
 
 function world(width = 24, height = 12, wrapped = false): MapInfo {
     const data: MapInfo["data"] = {};
@@ -81,12 +82,11 @@ describe("ChunkResidencyCoordinator", () => {
     });
 
     test("aborting one waiter does not cancel another owner of the same load", async () => {
-        let complete!: () => void;
+        const loadGate = deferred();
         class DeferredSource extends CountingSource {
-            public override loadChunk(chunkX: number, chunkY: number): Promise<WorldChunk> {
-                return new Promise(resolve => {
-                    complete = () => resolve(super.loadChunk(chunkX, chunkY));
-                });
+            public override async loadChunk(chunkX: number, chunkY: number): Promise<WorldChunk> {
+                await loadGate.promise;
+                return super.loadChunk(chunkX, chunkY);
             }
         }
         const source = new DeferredSource(world());
@@ -95,7 +95,7 @@ describe("ChunkResidencyCoordinator", () => {
         const cancelled = residency.acquireChunk(0, 0, { owner: "prefetch", signal: controller.signal });
         const required = residency.acquireChunk(0, 0, { owner: "render" });
         controller.abort();
-        complete();
+        loadGate.resolve();
 
         await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
         const lease = await required;

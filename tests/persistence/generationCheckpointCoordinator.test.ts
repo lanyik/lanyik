@@ -13,6 +13,7 @@ import {
     MemoryGenerationCheckpointStore
 } from "../../src/persistence/GenerationCheckpointCoordinator";
 import { createWorldDescriptor } from "../../src/world/WorldDescriptor";
+import { deferred } from "../helpers/deferred";
 
 const descriptor = createWorldDescriptor({ seed: "strict-save", chunkSize: 24 });
 
@@ -57,7 +58,7 @@ describe("GenerationCheckpointCoordinator", () => {
         expect(restored).toEqual([{ coins: 3 }]);
     });
 
-    test("checksums structured snapshots without collapsing Map, Set, or Date values", () => {
+    test("checksums supported structured snapshots and rejects ambiguous object graphs", () => {
         // Existing JSON-like snapshots keep their v1 checksum representation.
         expect(checksumCheckpointSnapshot({ x: 1 })).toBe("8c5c1250");
         expect(checksumCheckpointSnapshot({ b: 2, a: 1 }))
@@ -68,6 +69,14 @@ describe("GenerationCheckpointCoordinator", () => {
             .not.toBe(checksumCheckpointSnapshot(new Set([2])));
         expect(checksumCheckpointSnapshot(new Date(1)))
             .not.toBe(checksumCheckpointSnapshot(new Date(2)));
+        expect(checksumCheckpointSnapshot(/first/gi))
+            .not.toBe(checksumCheckpointSnapshot(/second/gi));
+
+        const cyclic: { self?: unknown } = {};
+        cyclic.self = cyclic;
+        expect(() => checksumCheckpointSnapshot(cyclic)).toThrow(/cyclic/);
+        expect(() => checksumCheckpointSnapshot(new (class Snapshot { value = 1; })()))
+            .toThrow(/unsupported Snapshot/);
     });
 
     test("recovers an already-published structured snapshot with its legacy v1 checksum", async () => {
@@ -116,18 +125,16 @@ describe("GenerationCheckpointCoordinator", () => {
     });
 
     test("never publishes a stage reclaimed between verification and manifest CAS", async () => {
-        let enterPublish!: () => void;
-        let releasePublish!: () => void;
-        const publishEntered = new Promise<void>(resolve => { enterPublish = resolve; });
-        const publishReleased = new Promise<void>(resolve => { releasePublish = resolve; });
+        const publishEntered = deferred();
+        const publishReleased = deferred();
         class PausedPublishStore extends MemoryGenerationCheckpointStore {
             override async compareAndSetManifest(
                 worldId: string,
                 expectedRevision: number,
                 manifest: GenerationCheckpointManifest
             ): Promise<void> {
-                enterPublish();
-                await publishReleased;
+                publishEntered.resolve();
+                await publishReleased.promise;
                 return super.compareAndSetManifest(worldId, expectedRevision, manifest);
             }
         }
@@ -143,9 +150,9 @@ describe("GenerationCheckpointCoordinator", () => {
         });
 
         const checkpoint = writer.checkpoint();
-        await publishEntered;
+        await publishEntered.promise;
         await expect(collector.collectGarbage()).resolves.toBe(1);
-        releasePublish();
+        publishReleased.resolve();
 
         await expect(checkpoint).rejects.toThrow(/missing or corrupt/);
         expect(await store.loadManifest("publish-race")).toBeUndefined();

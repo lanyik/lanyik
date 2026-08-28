@@ -1,20 +1,20 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { LifecycleDrainTimeoutError, LifecycleScope } from "../../src/runtime/LifecycleScope";
+import { deferred } from "../helpers/deferred";
 
 describe("LifecycleScope", () => {
     test("rejects late publication and drains tracked work after close", async () => {
-        let resolve!: (value: number) => void;
-        const pending = new Promise<number>(done => { resolve = done; });
+        const pending = deferred<number>();
         const scope = new LifecycleScope("world-1");
         const observer = vi.fn();
         const release = vi.fn();
-        const task = scope.track(pending);
+        const task = scope.track(pending.promise);
 
         const settled = scope.close();
         expect(scope.signal.aborted).toBe(true);
         expect(scope.stats.state).toBe("closing");
-        resolve(42);
+        pending.resolve(42);
         expect(await task).toBe(42);
         expect(scope.publish(42, observer, release)).toBe(false);
         await settled;

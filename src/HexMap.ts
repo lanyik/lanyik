@@ -1210,15 +1210,7 @@ export class HexMap extends EventEmitter {
     }
 
     private refreshGrassWorldRenderLayer(context: WorldRenderTileRefreshContext): boolean {
-        if (context.refreshKind !== "city") return false;
-        for (const point of context.tiles) {
-            const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
-            for (const grass of new Set(this.streamedGrassByChunkId.values())) {
-                grass.setTileSuppressed(point.x, point.y, suppressed);
-            }
-        }
-        context.invalidateVisibility();
-        return true;
+        return this.refreshVegetationWorldRenderLayer(context, this.streamedGrassByChunkId.values());
     }
 
     private mountForestWorldRenderLayer(context: WorldRenderChunkContext): Promise<void> {
@@ -1368,12 +1360,18 @@ export class HexMap extends EventEmitter {
     }
 
     private refreshForestWorldRenderLayer(context: WorldRenderTileRefreshContext): boolean {
+        return this.refreshVegetationWorldRenderLayer(context, this.streamedForestByChunkId.values());
+    }
+
+    private refreshVegetationWorldRenderLayer(
+        context: WorldRenderTileRefreshContext,
+        fields: Iterable<{ setTileSuppressed(x: number, y: number, suppressed: boolean): void }>
+    ): boolean {
         if (context.refreshKind !== "city") return false;
+        const uniqueFields = new Set(fields);
         for (const point of context.tiles) {
             const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
-            for (const forest of new Set(this.streamedForestByChunkId.values())) {
-                forest.setTileSuppressed(point.x, point.y, suppressed);
-            }
+            for (const field of uniqueFields) field.setTileSuppressed(point.x, point.y, suppressed);
         }
         context.invalidateVisibility();
         return true;
