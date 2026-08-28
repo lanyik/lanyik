@@ -10,11 +10,245 @@ var Land = /* @__PURE__ */ ((Land2) => {
   return Land2;
 })(Land || {});
 
+// src/world/WorldGeneratorVersion.ts
+var WORLD_GENERATOR_VERSION = 3;
+
+// src/world/WorldStyleProfile.ts
+var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
+  salt,
+  openScale,
+  toroidalScale,
+  octaves,
+  minimumToroidalCells
+});
+var WORLD_STYLE_PROFILE = Object.freeze({
+  generatorVersion: WORLD_GENERATOR_VERSION,
+  fields: Object.freeze({
+    warpX: field(1374496523, 0.018, 0.022, 3, 2),
+    warpY: field(1757159915, 0.018, 0.022, 3, 2),
+    continent: field(0, 0.052, 0.052, 5, 2),
+    detail: field(2738958700, 0.145, 0.145, 3, 3),
+    ridge: field(2654435769, 0.032, 0.032, 4, 2),
+    valley: field(2135587861, 0.024, 0.024, 3, 2),
+    roughness: field(2496678331, 0.31, 0.31, 3, 4),
+    moisture: field(3355524772, 0.08, 0.08, 4, 2),
+    temperature: field(2911926141, 0.035, 0.035, 3, 2),
+    openWarpAmplitude: 15,
+    toroidalWarpAmplitude: 0.12,
+    continentWeight: 0.72,
+    detailWeight: 0.16,
+    landMaskStart: 0.38,
+    landMaskEnd: 0.68,
+    ridgeExponent: 2.35,
+    ridgeWeight: 0.27,
+    valleyMaskStart: 0.34,
+    valleyMaskEnd: 0.7,
+    valleyExponent: 3.1,
+    valleyWeight: 0.075,
+    elevationBias: 0.01,
+    moistureNoiseWeight: 0.86,
+    moistureValleyWeight: 0.18,
+    moistureRidgeWeight: 0.08,
+    temperatureNoiseMinimum: 0.18,
+    temperatureNoiseWeight: 0.74,
+    temperatureLatitudeWeight: 0.82,
+    temperatureElevationStart: 0.55,
+    temperatureElevationWeight: 0.8,
+    temperatureLatitudeNoiseWeight: 0.18,
+    boundedEdgePower: 3,
+    boundedEdgeFalloff: 0.58
+  }),
+  terrain: Object.freeze({
+    seaLevel: 0.43,
+    mountainElevation: 0.7,
+    mountainRidge: 0.2,
+    mountainPeakElevation: 0.82,
+    snowTemperature: 0.18,
+    tundraTemperature: 0.34,
+    sandTemperature: 0.68,
+    sandMoisture: 0.42,
+    hillElevation: 0.62
+  }),
+  relief: Object.freeze({
+    shoreline: 0,
+    staticMountain: 1,
+    mountainElevationStart: 0.68,
+    mountainElevationSpan: 0.22,
+    mountainMinimum: 0.08,
+    mountainPower: 1.3,
+    mountainScale: 1.12,
+    mountainMaximum: 1.35
+  }),
+  vegetation: Object.freeze({
+    moistureStart: 0.48,
+    densityScale: 1.5,
+    maximumDensity: 0.58,
+    placementSalt: 668265263,
+    palmTemperature: 0.67,
+    piniaTemperature: 0.4
+  }),
+  lakes: Object.freeze({
+    minimumElevation: 0.455,
+    maximumElevation: 0.56,
+    minimumMoisture: 0.74,
+    placementThreshold: 0.94,
+    placementSalt: 1821285621
+  })
+});
+var finite = (name, value) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`${name} must be a finite number`);
+  }
+  return value;
+};
+var positive = (name, value) => {
+  const number = finite(name, value);
+  if (number <= 0) throw new RangeError(`${name} must be positive`);
+  return number;
+};
+var nonNegative = (name, value) => {
+  const number = finite(name, value);
+  if (number < 0) throw new RangeError(`${name} must be non-negative`);
+  return number;
+};
+var unitInterval = (name, value) => {
+  const number = finite(name, value);
+  if (number < 0 || number > 1) throw new RangeError(`${name} must be between 0 and 1`);
+  return number;
+};
+function assertFiniteNumbers(value, path) {
+  for (const [name, candidate] of Object.entries(value)) {
+    const key = path ? `${path}.${name}` : name;
+    if (typeof candidate === "number") finite(key, candidate);
+    else if (candidate && typeof candidate === "object") assertFiniteNumbers(candidate, key);
+  }
+}
+function assertWorldStyleProfile(value) {
+  if (!value || typeof value !== "object") throw new TypeError("world style profile must be an object");
+  const profile = value;
+  if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
+    throw new RangeError("world style profile generatorVersion is unsupported");
+  }
+  if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes) {
+    throw new TypeError("world style profile groups are required");
+  }
+  assertFiniteNumbers(profile, "");
+  const noiseFieldNames = [
+    "warpX",
+    "warpY",
+    "continent",
+    "detail",
+    "ridge",
+    "valley",
+    "roughness",
+    "moisture",
+    "temperature"
+  ];
+  for (const name of noiseFieldNames) {
+    const candidate = profile.fields[name];
+    if (!candidate || typeof candidate !== "object") {
+      throw new TypeError(`fields.${name} must be a noise field profile`);
+    }
+    const noise = candidate;
+    positive(`fields.${name}.openScale`, noise.openScale);
+    positive(`fields.${name}.toroidalScale`, noise.toroidalScale);
+    if (!Number.isInteger(noise.octaves) || noise.octaves <= 0) {
+      throw new RangeError(`fields.${name}.octaves must be a positive integer`);
+    }
+    if (!Number.isInteger(noise.minimumToroidalCells) || noise.minimumToroidalCells <= 0) {
+      throw new RangeError(`fields.${name}.minimumToroidalCells must be a positive integer`);
+    }
+    if (!Number.isSafeInteger(noise.salt)) throw new RangeError(`fields.${name}.salt must be a safe integer`);
+  }
+  const nonNegativeFieldNames = [
+    "openWarpAmplitude",
+    "toroidalWarpAmplitude",
+    "continentWeight",
+    "detailWeight",
+    "ridgeWeight",
+    "valleyWeight",
+    "moistureNoiseWeight",
+    "moistureValleyWeight",
+    "moistureRidgeWeight",
+    "temperatureNoiseMinimum",
+    "temperatureNoiseWeight",
+    "temperatureLatitudeWeight",
+    "temperatureElevationStart",
+    "temperatureElevationWeight",
+    "temperatureLatitudeNoiseWeight",
+    "boundedEdgeFalloff"
+  ];
+  for (const name of nonNegativeFieldNames) nonNegative(`fields.${name}`, profile.fields[name]);
+  finite("fields.elevationBias", profile.fields.elevationBias);
+  unitInterval("fields.landMaskStart", profile.fields.landMaskStart);
+  unitInterval("fields.landMaskEnd", profile.fields.landMaskEnd);
+  unitInterval("fields.valleyMaskStart", profile.fields.valleyMaskStart);
+  unitInterval("fields.valleyMaskEnd", profile.fields.valleyMaskEnd);
+  if (!(profile.fields.landMaskStart < profile.fields.landMaskEnd) || !(profile.fields.valleyMaskStart < profile.fields.valleyMaskEnd)) {
+    throw new RangeError("world style field mask thresholds must be ordered");
+  }
+  positive("fields.ridgeExponent", profile.fields.ridgeExponent);
+  positive("fields.valleyExponent", profile.fields.valleyExponent);
+  positive("fields.boundedEdgePower", profile.fields.boundedEdgePower);
+  const terrain = profile.terrain;
+  const terrainNames = [
+    "seaLevel",
+    "mountainElevation",
+    "mountainRidge",
+    "mountainPeakElevation",
+    "snowTemperature",
+    "tundraTemperature",
+    "sandTemperature",
+    "sandMoisture",
+    "hillElevation"
+  ];
+  for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
+  if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
+    throw new RangeError("terrain mountain thresholds must be ordered");
+  }
+  if (!(finite("terrain.snowTemperature", terrain.snowTemperature) < finite("terrain.tundraTemperature", terrain.tundraTemperature))) {
+    throw new RangeError("terrain temperature thresholds must be ordered");
+  }
+  const relief = profile.relief;
+  if (finite("relief.shoreline", relief.shoreline) < 0 || finite("relief.staticMountain", relief.staticMountain) < 0 || finite("relief.mountainMinimum", relief.mountainMinimum) < 0 || finite("relief.mountainMaximum", relief.mountainMaximum) < 0) {
+    throw new RangeError("relief heights must be non-negative");
+  }
+  positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
+  positive("relief.mountainPower", relief.mountainPower);
+  positive("relief.mountainScale", relief.mountainScale);
+  unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
+  if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
+    throw new RangeError("relief mountain range must be ordered");
+  }
+  const lakes = profile.lakes;
+  unitInterval("lakes.minimumElevation", lakes.minimumElevation);
+  unitInterval("lakes.maximumElevation", lakes.maximumElevation);
+  unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
+  unitInterval("lakes.placementThreshold", lakes.placementThreshold);
+  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation))) {
+    throw new RangeError("lake elevation thresholds must be ordered");
+  }
+  unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
+  unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+  unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
+  unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
+  positive("vegetation.densityScale", profile.vegetation.densityScale);
+  if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
+    throw new RangeError("vegetation temperature thresholds must be ordered");
+  }
+  if (!Number.isSafeInteger(profile.vegetation.placementSalt) || !Number.isSafeInteger(profile.lakes.placementSalt)) {
+    throw new RangeError("world style placement salts must be safe integers");
+  }
+}
+assertWorldStyleProfile(WORLD_STYLE_PROFILE);
+
+// src/world/LandformSampler.ts
+var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
+
 // src/world/generateWorldChunk.ts
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 var WORLD_CHUNK_FORMAT_VERSION = 1;
 var WORLD_CHUNK_PADDING = 1;
-var WORLD_GENERATOR_VERSION = 3;
 function cloneWorldTileOverride(value) {
   const copy = { ...value };
   if (value.modifiers) copy.modifiers = [...value.modifiers];

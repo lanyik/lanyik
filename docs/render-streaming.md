@@ -105,6 +105,18 @@ fully materialized `MapInfo`. The browser demo instead uses
 does not allocate all 262,144 tile objects. It generates the camera window and
 keeps the rest reproducible from seed plus dimensions.
 
+Eager, toroidal and infinite chunk generation now share one internal
+`WorldSurfaceResolver`. Its frozen profile is tied directly to generator version
+3, and short-lived resolver windows deduplicate one-ring coast samples without
+creating a world-sized cache. A worker retains one resolver while requests keep
+the same seed and topology; request order and chunk size do not enter the rules.
+
+For rendering, one `WorldSurfaceView` combines that generated surface with the
+authoritative current `MapInfo`, so sparse terrain edits win over generated
+classification. `TerrainMesh` consumes a short-lived view window per render
+chunk for effective relief and symmetric shared-corner heights. Static maps use
+the same path with neutral mountain relief and do not guess a procedural seed.
+
 ## Unified world sources
 
 `HexMap.loadWorld()` owns one source for the duration of a load session. Calling

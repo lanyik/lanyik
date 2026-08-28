@@ -52,11 +52,7 @@ import { TERRAIN_FAST_FRAGMENT_SHADER } from "../shaders/terrain.fast.fragment";
 import { WATER_VERTEX_SHADER } from "../shaders/water.vertex";
 import { WATER_FRAGMENT_SHADER } from "../shaders/water.fragment";
 import { WATER_FAST_FRAGMENT_SHADER } from "../shaders/water.fast.fragment";
-import {
-    createLandformSampler,
-    LandformSampler,
-    LandformSamplerOptions
-} from "../world/LandformSampler";
+import { WorldSurfaceView } from "../world/WorldSurfaceView";
 
 export interface TerrainAtlasCell { cellX: number, cellY: number }
 export interface TerrainAtlas {
@@ -82,13 +78,13 @@ export interface TerrainMeshOptions {
     size: number;
     texturesBaseUrl: string;   // folder containing terrain.png / land-atlas.json
     atlas: TerrainAtlas;
+    /** Authoritative effective terrain and height view for this world session. */
+    surface: WorldSurfaceView;
     gridColor?: ColorRepresentation;
     gridWidth?: number;
     gridOpacity?: number;
     gridVisible?: boolean;
     shaderQuality?: "full" | "fast";
-    /** Deterministic procedural field attached to every terrain instance. */
-    landform?: LandformSamplerOptions;
     /** Development heatmap; does not rebuild terrain or change generated tiles. */
     landformDebugMode?: LandformDebugMode;
     /** Number of hex rows/columns covered by one repeat of an atlas cell. */
@@ -149,11 +145,6 @@ export interface TerrainMeshOptions {
     //the landBlendWidth transition band between differently-typed land tiles
     //(plus patchy strength modulation). 0 restores straight bands.
     landBlendCurvature?: number;
-
-    //Mountains: vertical scale (world units) of the world-space mountain
-    //height field. Adjacent mountain tiles sample one continuous surface (see
-    //the terrain vertex shader's mountainHeightAt). Default size * 0.6.
-    mountainHeight?: number;
 
     //Rivers/lakes: land tiles with the "river"/"lake" modifier render animated
     //water on the land layer - a channel through the hex (river) or a full
@@ -293,7 +284,7 @@ export class TerrainMesh extends Group {
     private atlasCellIndex: { [type: string]: number } = {};
     private clock = 0;
     private lodBuilds = 0;
-    private readonly landformSampler: LandformSampler | undefined;
+    private readonly surface: WorldSurfaceView;
     //Single Color instances shared by BOTH materials' uniforms (the water
     //layer's own colors AND the land layer's painted curved-coast water - see
     //seaColorShallow in terrain.fragment.ts): mutating them via the
@@ -305,7 +296,10 @@ export class TerrainMesh extends Group {
     constructor(map: MapInfo, private options: TerrainMeshOptions, initialTiles?: readonly Point[]) {
         super();
         this.map = map;
-        this.landformSampler = options.landform ? createLandformSampler(options.landform) : undefined;
+        if (options.surface.map !== map || options.surface.tileSize !== options.size) {
+            throw new TypeError("terrain surface must match the map and tile size");
+        }
+        this.surface = options.surface;
         this.buildAtlasCellIndex();
         this.fogTexture = this.loadFogTexture();
         //One shared texture for both layers (via commonUniforms) - only the
@@ -366,28 +360,18 @@ export class TerrainMesh extends Group {
         return waterIndex === -1 ? 0 : waterIndex + 1;
     }
 
-    //Macro mountain height at a tile centre. Geometry uses elevation rather
-    //than the generator's contour-derived ridge value, so a closed ridge
-    //classification band cannot become a volcanic crater rim. Relief starts
-    //near zero at the mountain threshold and rises non-linearly, avoiding the
-    //broad raised plateau produced by giving every mountain a large base.
-    //Static maps without a LandformSampler retain a neutral height of 1.
-    private mountainReliefFor(x: number, y: number): number {
-        if (getMapTile(this.map, x, y)?.type !== Land.mountain) return 0;
-        const sample = this.landformSampler?.sample(x, y);
-        if (!sample) return 1;
-        const elevationT = Math.max(0, (sample.elevation - 0.68) / 0.22);
-        return Math.min(1.35, 0.08 + Math.pow(elevationT, 1.3) * 1.12);
-    }
-
     //Builds the per-instance attribute arrays (offset/style/neighbors/neighbor
     //priorities/kinds) shared by every layer - land and water tiles are laid
     //out identically, only the geometry/shader differ.
     private buildInstanceAttributes(tiles: Point[], origin: Point): InstanceAttributes {
         const { size } = this.options;
+        const surface = this.surface.createWindow();
+        const reliefFor = (point: Point) => surface.isShoreline(point.x, point.y)
+            ? -1
+            : surface.getEffectiveRelief(point.x, point.y);
         const attrs: InstanceAttributes = {
             offset: new Float32Array(tiles.length * 2),
-            style: new Float32Array(tiles.length * 3),
+            style: new Float32Array(tiles.length * 4),
             neighborsA: new Float32Array(tiles.length * 3),
             neighborsB: new Float32Array(tiles.length * 3),
             neighborsPriorityA: new Float32Array(tiles.length * 3),
@@ -408,11 +392,14 @@ export class TerrainMesh extends Group {
             attrs.offset[i * 2 + 0] = center.x - origin.x;
             attrs.offset[i * 2 + 1] = center.y - origin.y; // chunk-local Z
 
-            attrs.style[i * 3 + 0] = this.atlasCellIndex[info.type] ?? 0;
-            attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
-            attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
+            attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type] ?? 0;
+            attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
+            attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
+            attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y)
+                ? -1
+                : surface.getEffectiveRelief(tile.x, tile.y);
             attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
-            const landform = this.landformSampler?.sample(tile.x, tile.y);
+            const landform = surface.sampleGenerated(tile.x, tile.y)?.landform;
             if (landform) {
                 attrs.landform[i * 4 + 0] = landform.elevation;
                 attrs.landform[i * 4 + 1] = landform.ridge;
@@ -451,12 +438,12 @@ export class TerrainMesh extends Group {
             attrs.neighborsKindB[i * 3 + 1] = this.kindFor(n.x, n.y);
             attrs.neighborsKindB[i * 3 + 2] = this.kindFor(ne.x, ne.y);
 
-            attrs.reliefNeighborsA[i * 3 + 0] = this.mountainReliefFor(se.x, se.y);
-            attrs.reliefNeighborsA[i * 3 + 1] = this.mountainReliefFor(s.x, s.y);
-            attrs.reliefNeighborsA[i * 3 + 2] = this.mountainReliefFor(sw.x, sw.y);
-            attrs.reliefNeighborsB[i * 3 + 0] = this.mountainReliefFor(nw.x, nw.y);
-            attrs.reliefNeighborsB[i * 3 + 1] = this.mountainReliefFor(n.x, n.y);
-            attrs.reliefNeighborsB[i * 3 + 2] = this.mountainReliefFor(ne.x, ne.y);
+            attrs.reliefNeighborsA[i * 3 + 0] = reliefFor(se);
+            attrs.reliefNeighborsA[i * 3 + 1] = reliefFor(s);
+            attrs.reliefNeighborsA[i * 3 + 2] = reliefFor(sw);
+            attrs.reliefNeighborsB[i * 3 + 0] = reliefFor(nw);
+            attrs.reliefNeighborsB[i * 3 + 1] = reliefFor(n);
+            attrs.reliefNeighborsB[i * 3 + 2] = reliefFor(ne);
 
             attrs.waterEdges[i * 4 + 0] = waterEdgeValue(this.map, tile.x, tile.y);
             attrs.waterEdges[i * 4 + 1] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
@@ -464,6 +451,7 @@ export class TerrainMesh extends Group {
             attrs.waterEdges[i * 4 + 3] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
         });
 
+        surface.clear();
         return attrs;
     }
 
@@ -487,7 +475,7 @@ export class TerrainMesh extends Group {
 
         const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
         geometry.setAttribute("offset", new InstancedBufferAttribute(attrs.offset, 2));
-        geometry.setAttribute("style", new InstancedBufferAttribute(attrs.style, 3));
+        geometry.setAttribute("style", new InstancedBufferAttribute(attrs.style, 4));
         geometry.setAttribute("neighborsA", new InstancedBufferAttribute(attrs.neighborsA, 3));
         geometry.setAttribute("neighborsB", new InstancedBufferAttribute(attrs.neighborsB, 3));
         geometry.setAttribute("neighborsPriorityA", new InstancedBufferAttribute(attrs.neighborsPriorityA, 3));
@@ -566,6 +554,36 @@ export class TerrainMesh extends Group {
         return texture;
     }
 
+    private chunkHeightBounds(layer: "land" | "water"): { minY: number; maxY: number } {
+        const waterDepth = this.options.waterDepth ?? this.options.size * 0.25;
+        if (layer === "water") {
+            const waveAmplitude = Math.abs(this.options.waterWaveAmplitude ?? 1.6);
+            return {
+                minY: -waterDepth - waveAmplitude,
+                maxY: Math.max(0, -waterDepth + waveAmplitude)
+            };
+        }
+        const riverDepth = this.options.riverDepth ?? waterDepth * 0.6;
+        // The current shader keeps a bounded 1.57x world-space crag detail
+        // multiplier over the authoritative macro surface. Stage 4 will
+        // tighten that detail; until then the margin is explicit rather than
+        // the previous size-based empirical range.
+        return {
+            minY: -Math.max(waterDepth, riverDepth),
+            maxY: this.surface.maximumHeight * 1.57
+        };
+    }
+
+    private refreshChunkHeightBounds(): void {
+        for (const record of this.chunkRecords.values()) {
+            const metadata = getWorldChunkMetadata(record.mesh);
+            if (!metadata) continue;
+            const bounds = this.chunkHeightBounds(record.layer);
+            metadata.bounds.minY = bounds.minY;
+            metadata.bounds.maxY = bounds.maxY;
+        }
+    }
+
     //Subdivided (not a single flat triangle per wedge) so the beach slope and
     //landBlendWidth/beachWidth's smoothstep-based falloffs actually have interior
     //vertices to sample - with only the 2 outer corners + center (0 subdivisions),
@@ -579,8 +597,7 @@ export class TerrainMesh extends Group {
                 landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
                 landBlendEnabled: { value: (this.options.landBlendEnabled ?? true) ? 1.0 : 0.0 },
                 landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
-                mountainAtlasIndex: { value: this.atlasCellIndex[Land.mountain] ?? -2 },
-                mountainHeight: { value: this.options.mountainHeight ?? this.options.size * 0.6 },
+                mountainHeight: { value: this.surface.mountainHeight },
                 seaColorShallow: { value: this.waterShallow },
                 seaColorDeep: { value: this.waterDeep },
                 uTime: { value: 0 },
@@ -631,7 +648,12 @@ export class TerrainMesh extends Group {
                 chunkKey,
                 "land",
                 localizeWorldChunkBounds(
-                    getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3),
+                    getWorldChunkBounds(
+                        chunkTiles,
+                        this.options.size,
+                        this.chunkHeightBounds("land").minY,
+                        this.chunkHeightBounds("land").maxY
+                    ),
                     origin
                 )
             );
@@ -698,7 +720,12 @@ export class TerrainMesh extends Group {
                 chunkKey,
                 "water",
                 localizeWorldChunkBounds(
-                    getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size),
+                    getWorldChunkBounds(
+                        chunkTiles,
+                        this.options.size,
+                        this.chunkHeightBounds("water").minY,
+                        this.chunkHeightBounds("water").maxY
+                    ),
                     origin
                 )
             );
@@ -1202,10 +1229,12 @@ export class TerrainMesh extends Group {
     }
 
     public get mountainHeight(): number {
-        return this.landMaterial?.uniforms.mountainHeight.value ?? this.options.size * 0.6;
+        return this.surface.mountainHeight;
     }
     public set mountainHeight(value: number) {
+        this.surface.setMountainHeight(value);
         if (this.landMaterial) this.landMaterial.uniforms.mountainHeight.value = value;
+        this.refreshChunkHeightBounds();
     }
 
     public get beachWidth(): number {

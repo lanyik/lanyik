@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Internal `WorldSurfaceResolver` and `WorldSurfaceView` authorities that
+  centralize generator-v3 classification, merge sparse terrain edits for
+  rendering, and provide deterministic shared-corner surface heights without
+  a world-sized cache.
 - A deterministic continuous `LandformSampler` for elevation,
   continentalness, mountain ridges, valleys, roughness, moisture and
   temperature across bounded, toroidal and infinite worlds, plus live
@@ -66,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Eager, toroidal and infinite chunk generation now use one frozen style
+  profile and resolver. Terrain consumes the same effective surface while the
+  existing generator-v3 tile outputs remain byte-for-byte stable.
 - Refocused the README and documentation around the current streamed-world
   architecture, package entry points, demo modes and verification workflow;
   removed obsolete implementation plans and unreferenced legacy textures.

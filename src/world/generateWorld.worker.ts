@@ -1,11 +1,16 @@
 import { generateWorld, WorldGenerationOptions } from "./generateWorld";
-import { generateWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
+import {
+    createWorldChunkSurfaceResolver,
+    generateWorldChunkWithResolver,
+    WorldChunkGenerationOptions
+} from "./generateWorldChunk";
 import {
     generateWorldVegetation,
     WorldVegetationGenerationOptions,
     worldVegetationTransferables
 } from "./generateVegetation";
 import { WORLD_WORKER_PROTOCOL_VERSION } from "./WorldDescriptor";
+import { WorldSurfaceResolver } from "./WorldSurfaceResolver";
 
 interface GenerateWorldRequest {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -35,6 +40,23 @@ const scope = globalThis as unknown as {
     postMessage(message: unknown, transfer?: Transferable[]): void;
 };
 
+let chunkResolver: WorldSurfaceResolver | undefined;
+let chunkResolverKey: string | undefined;
+
+function resolverFor(options: WorldChunkGenerationOptions): WorldSurfaceResolver {
+    const key = JSON.stringify([
+        String(options.seed),
+        options.world?.topology ?? "infinite",
+        options.world?.width ?? null,
+        options.world?.height ?? null
+    ]);
+    if (!chunkResolver || chunkResolverKey !== key) {
+        chunkResolver = createWorldChunkSurfaceResolver(options);
+        chunkResolverKey = key;
+    }
+    return chunkResolver;
+}
+
 scope.addEventListener("message", event => {
     try {
         const request = event.data;
@@ -44,7 +66,7 @@ scope.addEventListener("message", event => {
             throw new TypeError("World generator received an invalid request");
         }
         if (request.type === "chunk") {
-            const chunk = generateWorldChunk(request.options);
+            const chunk = generateWorldChunkWithResolver(request.options, resolverFor(request.options));
             scope.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION, id: request.id, chunk }, [chunk.tiles.buffer]);
         } else if (request.type === "vegetation") {
             const vegetation = generateWorldVegetation(request.options);

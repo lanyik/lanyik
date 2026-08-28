@@ -27,6 +27,8 @@ import { createGrassField, GrassSharedResources } from "../../src/objects/Grass"
 import { TerrainMesh } from "../../src/objects/TerrainMesh";
 import { TERRAIN_FAST_FRAGMENT_SHADER } from "../../src/shaders/terrain.fast.fragment";
 import { TERRAIN_FRAGMENT_SHADER } from "../../src/shaders/terrain.fragment";
+import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
+import { createWorldSurfaceView } from "../../src/world/WorldSurfaceView";
 
 function mapWithVegetation(): MapInfo {
     const data: MapInfo["data"] = {};
@@ -58,6 +60,15 @@ describe("streamed render resource sharing", () => {
     test("computes terrain instance data once while caching three geometry LODs", () => {
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
+        const surface = createWorldSurfaceView({
+            map,
+            resolver: createWorldSurfaceResolver({
+                seed: "rendered-relief",
+                domain: { topology: "bounded", width: map.w, height: map.h }
+            }),
+            tileSize: 10,
+            mountainHeight: 6
+        });
         const terrain = new TerrainMesh(map, {
             size: 10,
             texturesBaseUrl: "textures/",
@@ -69,13 +80,17 @@ describe("streamed render resource sharing", () => {
                 cellSpacing: 0,
                 textures: { [Land.land]: { cellX: 0, cellY: 0 } }
             },
-            landform: { seed: "rendered-relief" }
+            surface
         }, []);
         terrain.addTiles(points(0));
         terrain.addTiles(points(12));
         const meshes = terrain.children.filter(child => getWorldChunkMetadata(child)) as Mesh[];
         const mesh = meshes[0];
         const metadata = getWorldChunkMetadata(mesh)!;
+        expect(metadata.bounds.minY).toBe(-2.5);
+        expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.35 * 1.57, 10);
+        terrain.mountainHeight = 8;
+        expect(metadata.bounds.maxY).toBeCloseTo(8 * 1.35 * 1.57, 10);
         const lod0 = terrain.activateChunk(metadata, 0)!;
         const otherLod0 = terrain.activateChunk(getWorldChunkMetadata(meshes[1])!, 0)!;
         expect(otherLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
@@ -84,6 +99,7 @@ describe("streamed render resource sharing", () => {
         const landform = lod0.getAttribute("landform") as InstancedBufferAttribute;
         expect(landform.itemSize).toBe(4);
         expect([...landform.array].some(value => value !== 0)).toBe(true);
+        expect(lod0.getAttribute("style").itemSize).toBe(4);
         const lod0Offsets = lod0.getAttribute("offset").array;
         const lod1 = terrain.activateChunk(metadata, 1)!;
         expect(lod1.getAttribute("offset").array).toBe(lod0Offsets);

@@ -3,8 +3,14 @@ import {
     periodicFractalNoise2D,
     seedToUint32
 } from "./noise";
+import {
+    assertWorldStyleProfile,
+    WORLD_STYLE_PROFILE,
+    WorldNoiseFieldProfile,
+    WorldStyleProfile
+} from "./WorldStyleProfile";
 
-export const LANDFORM_SEA_LEVEL = 0.43;
+export const LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 
 export type LandformDomain =
     | { topology: "infinite" }
@@ -67,25 +73,32 @@ function composeSample(
     moistureNoise: number,
     temperatureNoise: number,
     latitude: number | undefined,
-    edgeFalloff: number
+    edgeFalloff: number,
+    profile: Readonly<WorldStyleProfile>
 ): LandformSample {
     // Both ridges and valleys start as long, thin bands. Domain warping is
     // applied by the callers before these fields are sampled, which keeps the
     // bands from following the noise lattice and gives them geological bends.
-    const landMask = smoothstep(0.38, 0.68, continent);
-    const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), 2.35) * landMask;
-    const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), 3.1) * smoothstep(0.34, 0.7, continent);
-    const elevation = continent * 0.72
-        + detail * 0.16
-        + ridge * 0.27
-        - valley * 0.075
-        + 0.01
+    const fields = profile.fields;
+    const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
+    const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
+    const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent)
+        * smoothstep(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
+    const elevation = continent * fields.continentWeight
+        + detail * fields.detailWeight
+        + ridge * fields.ridgeWeight
+        - valley * fields.valleyWeight
+        + fields.elevationBias
         - edgeFalloff;
-    const moisture = clamp01(moistureNoise * 0.86 + valley * 0.18 - ridge * 0.08);
+    const moisture = clamp01(moistureNoise * fields.moistureNoiseWeight
+        + valley * fields.moistureValleyWeight
+        - ridge * fields.moistureRidgeWeight);
     const temperature = clamp01(latitude === undefined
-        ? 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8
-        : 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8
-            + (temperatureNoise - 0.5) * 0.18);
+        ? fields.temperatureNoiseMinimum + temperatureNoise * fields.temperatureNoiseWeight
+            - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight
+        : 1 - latitude * fields.temperatureLatitudeWeight
+            - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight
+            + (temperatureNoise - 0.5) * fields.temperatureLatitudeNoiseWeight);
     return {
         elevation,
         continentalness: continent,
@@ -101,22 +114,28 @@ function sampleOpenLandform(
     seed: number,
     x: number,
     y: number,
-    domain: Extract<LandformDomain, { topology: "infinite" | "bounded" }>
+    domain: Extract<LandformDomain, { topology: "infinite" | "bounded" }>,
+    profile: Readonly<WorldStyleProfile>
 ): LandformSample {
-    const warpX = (fractalNoise2D(seed ^ 0x51ed270b, x * 0.018, y * 0.018, 3) - 0.5) * 15;
-    const warpY = (fractalNoise2D(seed ^ 0x68bc21eb, x * 0.018, y * 0.018, 3) - 0.5) * 15;
+    const fields = profile.fields;
+    const open = (field: WorldNoiseFieldProfile, sampleX: number, sampleY: number) =>
+        fractalNoise2D(seed ^ field.salt, sampleX * field.openScale, sampleY * field.openScale, field.octaves);
+    const warpX = (open(fields.warpX, x, y) - 0.5) * fields.openWarpAmplitude;
+    const warpY = (open(fields.warpY, x, y) - 0.5) * fields.openWarpAmplitude;
     const wx = x + warpX;
     const wy = y + warpY;
-    const continent = fractalNoise2D(seed, wx * 0.052, wy * 0.052, 5);
-    const detail = fractalNoise2D(seed ^ 0xa341316c, wx * 0.145, wy * 0.145, 3);
-    const ridgeNoise = fractalNoise2D(seed ^ 0x9e3779b9, wx * 0.032, wy * 0.032, 4);
-    const valleyNoise = fractalNoise2D(seed ^ 0x7f4a7c15, wx * 0.024, wy * 0.024, 3);
-    const rough = fractalNoise2D(seed ^ 0x94d049bb, wx * 0.31, wy * 0.31, 3);
-    const moisture = fractalNoise2D(seed ^ 0xc8013ea4, wx * 0.08, wy * 0.08, 4);
-    const temperature = fractalNoise2D(seed ^ 0xad90777d, wx * 0.035, wy * 0.035, 3);
+    const continent = open(fields.continent, wx, wy);
+    const detail = open(fields.detail, wx, wy);
+    const ridgeNoise = open(fields.ridge, wx, wy);
+    const valleyNoise = open(fields.valley, wx, wy);
+    const rough = open(fields.roughness, wx, wy);
+    const moisture = open(fields.moisture, wx, wy);
+    const temperature = open(fields.temperature, wx, wy);
 
     if (domain.topology === "infinite") {
-        return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, undefined, 0);
+        return composeSample(
+            continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, undefined, 0, profile
+        );
     }
     const nx = (x / (domain.width - 1)) * 2 - 1;
     const ny = (y / (domain.height - 1)) * 2 - 1;
@@ -130,7 +149,8 @@ function sampleOpenLandform(
         moisture,
         temperature,
         Math.abs(ny),
-        Math.pow(edge, 3) * 0.58
+        Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
+        profile
     );
 }
 
@@ -138,38 +158,52 @@ function sampleToroidalLandform(
     seed: number,
     x: number,
     y: number,
-    domain: Extract<LandformDomain, { topology: "toroidal" }>
+    domain: Extract<LandformDomain, { topology: "toroidal" }>,
+    profile: Readonly<WorldStyleProfile>
 ): LandformSample {
+    const fields = profile.fields;
     const nx = x / domain.width;
     const ny = y / domain.height;
-    const cells = (scale: number, dimension: number, minimum: number) =>
-        Math.max(minimum, Math.round(dimension * scale));
-    const periodic = (salt: number, u: number, v: number, scale: number, minimum: number, octaves: number) =>
+    const periodic = (field: WorldNoiseFieldProfile, u: number, v: number) =>
         periodicFractalNoise2D(
-            seed ^ salt,
+            seed ^ field.salt,
             u,
             v,
-            cells(scale, domain.width, minimum),
-            cells(scale, domain.height, minimum),
-            octaves
+            Math.max(field.minimumToroidalCells, Math.round(domain.width * field.toroidalScale)),
+            Math.max(field.minimumToroidalCells, Math.round(domain.height * field.toroidalScale)),
+            field.octaves
         );
-    const warpX = (periodic(0x51ed270b, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
-    const warpY = (periodic(0x68bc21eb, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
+    const warpX = (periodic(fields.warpX, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
+    const warpY = (periodic(fields.warpY, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
     const wx = nx + warpX;
     const wy = ny + warpY;
-    const continent = periodic(0, wx, wy, 0.052, 2, 5);
-    const detail = periodic(0xa341316c, wx, wy, 0.145, 3, 3);
-    const ridgeNoise = periodic(0x9e3779b9, wx, wy, 0.032, 2, 4);
-    const valleyNoise = periodic(0x7f4a7c15, wx, wy, 0.024, 2, 3);
-    const rough = periodic(0x94d049bb, wx, wy, 0.31, 4, 3);
-    const moisture = periodic(0xc8013ea4, wx, wy, 0.08, 2, 4);
-    const temperature = periodic(0xad90777d, wx, wy, 0.035, 2, 3);
+    const continent = periodic(fields.continent, wx, wy);
+    const detail = periodic(fields.detail, wx, wy);
+    const ridgeNoise = periodic(fields.ridge, wx, wy);
+    const valleyNoise = periodic(fields.valley, wx, wy);
+    const rough = periodic(fields.roughness, wx, wy);
+    const moisture = periodic(fields.moisture, wx, wy);
+    const temperature = periodic(fields.temperature, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0);
+    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0, profile);
 }
 
 export function createLandformSampler(options: LandformSamplerOptions): LandformSampler {
+    return createLandformSamplerForProfile(options, WORLD_STYLE_PROFILE);
+}
+
+export function createLandformSamplerForProfile(
+    options: LandformSamplerOptions,
+    profile: Readonly<WorldStyleProfile>
+): LandformSampler {
     if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
+    if (typeof options.seed !== "string" && typeof options.seed !== "number") {
+        throw new TypeError("landform seed must be a string or number");
+    }
+    if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
+        throw new RangeError("numeric landform seed must be finite");
+    }
+    assertWorldStyleProfile(profile);
     const numericSeed = seedToUint32(options.seed);
     const domain = resolveDomain(options.domain);
     return {
@@ -180,8 +214,8 @@ export function createLandformSampler(options: LandformSamplerOptions): Landform
                 throw new RangeError("landform coordinates must be finite numbers");
             }
             return domain.topology === "toroidal"
-                ? sampleToroidalLandform(numericSeed, x, y, domain)
-                : sampleOpenLandform(numericSeed, x, y, domain);
+                ? sampleToroidalLandform(numericSeed, x, y, domain, profile)
+                : sampleOpenLandform(numericSeed, x, y, domain, profile);
         }
     };
 }

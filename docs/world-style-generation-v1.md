@@ -1,6 +1,6 @@
 # 世界风格生成 v1 设计
 
-状态：设计完成，尚未实施。
+状态：阶段 0、1、2 已完成；generator v3 输出保持不变，阶段 3 及以后待实施。
 
 本文定义下一阶段的世界生成与地形表现方案。目标不是模拟真实地球，而是在保留六边格、区块流式加载、工作线程和现有资源预算的前提下，生成风格统一、自然、耐看的世界。
 
@@ -109,6 +109,7 @@ interface WorldSurfaceResolver {
 
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
+    createWindow(): WorldSurfaceResolverWindow;
 }
 ~~~
 
@@ -142,12 +143,14 @@ interface WorldSurfaceSample {
     readonly vegetationDensity: number;
     readonly vegetationKind?: "palm" | "pinia" | "oak";
     readonly lakePotential: number;
+    readonly landform: Readonly<LandformSample>;
 }
 ~~~
 
 说明：
 
 - relief 是归一化的生成高度，不是最终世界 Y。
+- landform 保留生成器 v3 的原始连续场，只供渲染调试和后续风格阶段复用。
 - biome 是主标签，主要用于统计和树种选择。
 - biomeWeights 用于连续材质混合，不能直接按 biome 画硬边界。
 - vegetationDensity 和 lakePotential 都是连续值，不是最终布尔结果。
@@ -165,13 +168,20 @@ WorldSurfaceView 负责把当前 MapInfo、可选解析器和显示尺度合并�
 ~~~ts
 interface WorldSurfaceAnchor {
     readonly revision: number;
+    readonly minimumHeight: number;
+    readonly maximumHeight: number;
     getTileCenterHeight(x: number, y: number): number;
     getWorldHeight(worldX: number, worldZ: number): number;
 }
 
 interface WorldSurfaceView extends WorldSurfaceAnchor {
+    readonly map: MapInfo;
     readonly resolver?: WorldSurfaceResolver;
+    readonly tileSize: number;
+    readonly mountainHeight: number;
     getEffectiveRelief(x: number, y: number): number;
+    createWindow(): WorldSurfaceWindow;
+    setMountainHeight(value: number): boolean;
 }
 ~~~
 
@@ -192,7 +202,7 @@ type 或 modifiers 编辑只改变所属高度范围，不代表自由修改高�
 
 ### 4.5 临时采样窗口
 
-WorldSurfaceWindow 只用于一次区块构建：
+WorldSurfaceResolverWindow 和 WorldSurfaceWindow 都只用于一次生成块或渲染块构建：前者缓存生成样本与最终生成格子，后者缓存当前 MapInfo 合并稀疏编辑后的地表贡献、共享顶角和高度查询。
 
 - 缓存核心格子、输出邻域和计算需要的有限外圈。
 - 环绕世界先规范化坐标再作为缓存键。
@@ -210,7 +220,7 @@ WorldSurfaceWindow 只用于一次区块构建：
 | src/world/WorldStyleProfile.ts | 当前冻结风格配置和校验 |
 | src/world/WorldSurfaceResolver.ts | 唯一生成规则 |
 | src/world/WorldSurfaceView.ts | 生效格子、显示尺度和地表高度查询 |
-| 解析器内部辅助代码 | 短命 WorldSurfaceWindow |
+| 解析器和视图内部辅助代码 | 短命 WorldSurfaceResolverWindow / WorldSurfaceWindow |
 
 依赖方向固定为：
 
@@ -456,10 +466,12 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 
 当前 Terrain 已使用 15 个顶点属性位置，不能随意增加字段。
 
-建议打包：
+阶段 2 已把 style 从 vec3 扩为 vec4，w 分量保存生效 relief；岸线、水体、湖泊和地图外空位使用负值哨兵，CPU 与 Shader 据此得到相同的共享顶角归零规则。这个改动没有增加属性位置。
 
-- style 从 vec3 扩为 vec4，新增分量存格子中心 relief。
-- fogState 从标量扩为一个 vec4：一个分量存迷雾，三个分量存独立 biome 权重，第四个权重由总和推导。
+当前打包状态与后续安排：
+
+- style 扩为 vec4 已完成。
+- fogState 扩为一个 vec4 属于阶段 4：一个分量存迷雾，三个分量存独立 biome 权重，第四个权重由总和推导。
 - landform vec4 继续保存四种调试字段。
 - 删除重复 varying，例如不能同时传 vElevation 和 vLandform.x。
 
@@ -471,6 +483,8 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 - 不先占满能力再假设用户 GPU 更强。
 
 ### 9.3 地表高度查询
+
+阶段 2 已建立包内 WorldSurfaceAnchor / WorldSurfaceView，并让 TerrainMesh 使用它复现 generator v3 的宏观山体。以下对象的迁移属于阶段 3，本阶段尚未改变它们的贴地行为：
 
 以下对象统一使用 WorldSurfaceAnchor：
 
@@ -526,6 +540,8 @@ surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
 
 ### 9.6 裁剪与迷雾
 
+- 阶段 2 已把 Terrain 的水面、河床和山体 Y 边界改为从水深、波幅与地表上限推导；当前 Shader 仍保留的 1.57 倍有界山体细节已显式计入上限。
+- 草、树和自定义层的统一地表边界属于阶段 3。
 - 地形、水、草、树和自定义层的 Y 边界必须由统一地表上限与对象余量推导。
 - 不再依赖固定的 -size × 2 到 size × 3 经验范围。
 - 迷雾可以隐藏地形轮廓，但 WorldSurfaceAnchor 始终返回真实高度。
@@ -575,10 +591,12 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 
 ### 10.4 一次迁移
 
-准备工作分两步保持 generator v3 输出不变：
+准备工作已按两步完成，并保持 generator v3 输出不变：
 
 1. 提取 WorldSurfaceResolver。
 2. 建立 WorldSurfaceView 并复现现有视觉。
+
+固定回归校验和分别为：无限区块 `ca3aee38`、环绕区块 `b20dfb95`、有界世界 `8bdd046b`。一次性生成、区块生成和工作线程现在共享同一解析器；工作线程在同一世界身份期间复用解析器。
 
 之后把风格调整、地表高度、气候植被和湖泊变化作为一次有意的生成器升级发布。descriptor v1 不需要因为单一内部风格而升级。
 
@@ -682,7 +700,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 
 ## 13. 实施顺序
 
-### 阶段 0：建立基线
+### 阶段 0：建立基线（已完成）
 
 - 固定种子、拓扑和镜头。
 - 记录当前格子校验和、地表样本、截图和性能。
@@ -690,14 +708,14 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 - 记录当前 15 个属性位置和最低测试设备能力。
 - 不改变生成结果。
 
-### 阶段 1：提取统一解析器
+### 阶段 1：提取统一解析器（已完成）
 
 - 新建 WorldSurfaceResolver。
 - 合并一次性生成与区块生成的重复规则。
 - 默认配置完整复现 generator v3。
 - 格子校验和不得变化。
 
-### 阶段 2：建立生效地表
+### 阶段 2：建立生效地表（已完成）
 
 - 新建 WorldSurfaceView 和短命 WorldSurfaceWindow。
 - TerrainMesh 通过视图复现当前山体高度。
@@ -767,7 +785,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 | 非 Chromium 平台出现浮点边界差异 | 扩大平台支持时，在新生成器中统一量化 |
 | 自定义层使用高度但不处理 surfaceChanged | 文档和示例明确要求；以后主版本再考虑强制能力 |
 
-结论：方案可实施，没有需要先重写基础设施的阻塞问题。应先完成阶段 0 和阶段 1，再开始视觉参数调整。
+结论：阶段 0、1、2 已完成，没有发现需要重写基础设施的阻塞问题。下一步按阶段 3 做唯一一次生成器升级和贴地消费者迁移，不在当前 generator v3 上零散调整视觉语义。
 
 ## 15. 完成标准
 

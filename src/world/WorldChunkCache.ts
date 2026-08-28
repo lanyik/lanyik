@@ -1,9 +1,9 @@
 import {
     assertPackedWorldChunk,
     BoundedWorldChunkGeneration,
-    PackedWorldChunk,
-    WORLD_GENERATOR_VERSION
+    PackedWorldChunk
 } from "./generateWorldChunk";
+import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 const DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
 const DATABASE_VERSION = 1;

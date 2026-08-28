@@ -11,9 +11,9 @@ import {
 import {
     BoundedWorldChunkGeneration,
     generateWorldChunk,
-    SparseWorldChunkStore,
-    WORLD_GENERATOR_VERSION
+    SparseWorldChunkStore
 } from "./generateWorldChunk";
+import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 export const WORLD_NAVIGATION_FORMAT_VERSION = 2;
 

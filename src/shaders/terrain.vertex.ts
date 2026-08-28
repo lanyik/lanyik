@@ -23,7 +23,6 @@ uniform float sandAtlasIndex;
 // neighbouring instances therefore evaluate the same height at every shared
 // vertex instead of building one cone per tile. The lighting normal is derived
 // by finite differences; mountainHeight is the vertical scale in world units.
-uniform float mountainAtlasIndex;
 uniform float mountainHeight;
 
 // Rivers/lakes (tiles with the "river"/"lake" modifier - see helpers/rivers.ts
@@ -51,7 +50,7 @@ attribute vec3 position;
 attribute vec2 uv;
 
 attribute vec2 offset;       // world-space (x,z) offset of this tile instance
-attribute vec3 style;        // x = atlas cell index, y = modifier bitmask (reserved for hill/etc.), z = edge-blend priority
+attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
 attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
 attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
 attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
@@ -67,7 +66,7 @@ attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - 
 // worker count cannot change the visible macro landform.
 attribute vec4 landform;
 // Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
-// Together with landform.x at this tile centre these define a continuous fan
+// Together with style.w at this tile centre these define a continuous fan
 // surface whose shared edge endpoints are identical in adjacent instances.
 attribute vec3 reliefNeighborsA;
 attribute vec3 reliefNeighborsB;
@@ -133,21 +132,14 @@ float valueNoise(vec2 p) {
     );
 }
 
-float isMountain(float atlasIndex) {
-    return abs(atlasIndex - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-}
-
 float centerMountainRelief() {
-    if (isMountain(style.x) < 0.5) return 0.0;
-    // Static maps do not carry generator fields; retain their historical
-    // neutral mountain scale. Procedural mountain tiles cannot legitimately
-    // have elevation 0, so zero is an unambiguous missing-sampler sentinel.
-    if (landform.x <= 0.001) return 1.0;
-    float elevationT = max((landform.x - 0.68) / 0.22, 0.0);
-    return min(1.35, 0.08 + pow(elevationT, 1.3) * 1.12);
+    return style.w;
 }
 
 float cornerRelief(float center, float a, float b) {
+    // -1 is the CPU surface view's explicit shoreline/out-of-map sentinel.
+    // A shared corner touching water is held at the shoreline baseline.
+    if (center < -0.5 || a < -0.5 || b < -0.5) return 0.0;
     // Mountain centres carry relief and ordinary land centres carry zero.
     // Averaging the same three centres makes every tile touching this world
     // vertex resolve the exact same height. Ordinary land therefore becomes
@@ -383,7 +375,7 @@ void main() {
     float raiseY = 0.0;
     vec2 mountainSlope = vec2(0.0);
     float elevation = 0.0;
-    float reliefInfluence = max(centerMountainRelief(), max(
+    float reliefInfluence = max(max(centerMountainRelief(), 0.0), max(
         max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
         max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
     ));

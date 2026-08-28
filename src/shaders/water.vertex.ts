@@ -33,7 +33,7 @@ attribute vec3 position;
 attribute vec2 uv;
 
 attribute vec2 offset;
-attribute vec3 style;        // x = atlas cell index (unused here), y = modifiers, z = priority (0 = sea, 1 = coastal)
+attribute vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
 attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal

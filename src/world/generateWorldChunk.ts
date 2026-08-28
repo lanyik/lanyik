@@ -1,20 +1,16 @@
 import { Land } from "../enums";
-import { getNeighbors } from "../helpers/neighbors";
 import { MapInfo, Point, TileInfo } from "../interfaces";
+import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 import {
-    createLandformSampler,
-    LANDFORM_SEA_LEVEL,
-    LandformSample,
-    LandformSampler
-} from "./LandformSampler";
-import { randomAt, seedToUint32 } from "./noise";
-import { generateToroidalWorldTile } from "./generateWorld";
+    createWorldSurfaceResolver,
+    WorldSurfaceResolver
+} from "./WorldSurfaceResolver";
 
 export const DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 export const MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 export const WORLD_CHUNK_FORMAT_VERSION = 1;
 export const WORLD_CHUNK_PADDING = 1;
-export const WORLD_GENERATOR_VERSION = 3;
+export { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 export interface BoundedWorldChunkGeneration {
     width: number;
@@ -165,52 +161,6 @@ function resolveChunkSize(value = DEFAULT_WORLD_GENERATION_CHUNK_SIZE): number {
     return value;
 }
 
-function classifyTerrain({ elevation, ridge, moisture, temperature }: LandformSample): Land {
-    if (elevation < LANDFORM_SEA_LEVEL) return Land.sea;
-    if ((elevation > 0.7 && ridge > 0.2) || elevation > 0.82) return Land.mountain;
-    if (temperature < 0.18) return Land.snow;
-    if (temperature < 0.34) return Land.tundra;
-    if (temperature > 0.68 && moisture < 0.42) return Land.sand;
-    return Land.land;
-}
-
-function baseTerrainAt(sampler: LandformSampler, x: number, y: number): Land {
-    return classifyTerrain(sampler.sample(x, y));
-}
-
-function isWater(type: Land): boolean {
-    return type === Land.sea || type === Land.coastal;
-}
-
-function terrainAt(sampler: LandformSampler, x: number, y: number): Land {
-    const base = baseTerrainAt(sampler, x, y);
-    if (base !== Land.sea) return base;
-    const touchesLand = getNeighbors(x, y).some(neighbor => !isWater(baseTerrainAt(sampler, neighbor.x, neighbor.y)));
-    return touchesLand ? Land.coastal : Land.sea;
-}
-
-function encodeTile(seed: number, sampler: LandformSampler, x: number, y: number): number {
-    const climate = sampler.sample(x, y);
-    const type = terrainAt(sampler, x, y);
-    let packed = LAND_CODE.get(type) ?? 0;
-    if (isWater(type) || type === Land.mountain || type === Land.snow) return packed;
-
-    const lake = type === Land.land
-        && climate.elevation > LANDFORM_SEA_LEVEL + 0.025
-        && climate.elevation < 0.56
-        && climate.moisture > 0.74
-        && randomAt(seed, x, y, 0x6c8e9cf5) > 0.94;
-    if (lake) return packed | FLAG_LAKE;
-    if (climate.elevation > 0.62) packed |= FLAG_HILL;
-
-    const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
-    if (randomAt(seed, x, y, 0x27d4eb2f) < forestChance) {
-        const treeCode = climate.temperature > 0.67 ? 1 : climate.temperature < 0.4 ? 2 : 3;
-        packed |= FLAG_WOOD | (treeCode << TREE_SHIFT);
-    }
-    return packed;
-}
-
 function encodeTileInfo(tile: TileInfo): number {
     let packed = LAND_CODE.get(tile.type) ?? 0;
     if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
@@ -236,18 +186,44 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
     assertChunkCoordinate("chunkY", options.chunkY);
     validateBoundedWorld(options.world);
     const chunkSize = resolveChunkSize(options.chunkSize);
-    const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-    const tiles = new Uint16Array(stride * stride);
-    const seed = seedToUint32(options.seed);
-    const sampler = createLandformSampler({
-        // Keep the source seed identical to TerrainMesh's sampler input.
-        // Passing the already-hashed decoration seed here would hash it a
-        // second time and classify a different height field than we render.
+    const resolver = createWorldChunkSurfaceResolver(options);
+    return generateWorldChunkWithResolver(options, resolver, chunkSize);
+}
+
+export function createWorldChunkSurfaceResolver(options: WorldChunkGenerationOptions): WorldSurfaceResolver {
+    if (!options || typeof options !== "object") throw new TypeError("world chunk generation options are required");
+    validateBoundedWorld(options.world);
+    return createWorldSurfaceResolver({
         seed: options.seed,
         domain: options.world
             ? { topology: "toroidal", width: options.world.width, height: options.world.height }
             : { topology: "infinite" }
     });
+}
+
+export function generateWorldChunkWithResolver(
+    options: WorldChunkGenerationOptions,
+    resolver: WorldSurfaceResolver,
+    resolvedChunkSize?: number
+): PackedWorldChunk {
+    assertChunkCoordinate("chunkX", options.chunkX);
+    assertChunkCoordinate("chunkY", options.chunkY);
+    validateBoundedWorld(options.world);
+    const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
+    const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
+    const tiles = new Uint16Array(stride * stride);
+    const expectedDomain = options.world
+        ? { topology: "toroidal" as const, width: options.world.width, height: options.world.height }
+        : { topology: "infinite" as const };
+    if (!resolver || resolver.seed !== String(options.seed)
+        || resolver.domain.topology !== expectedDomain.topology
+        || (expectedDomain.topology === "toroidal"
+            && (resolver.domain.topology !== "toroidal"
+                || resolver.domain.width !== expectedDomain.width
+                || resolver.domain.height !== expectedDomain.height))) {
+        throw new TypeError("world surface resolver does not match the chunk request");
+    }
+    const window = resolver.createWindow();
     const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
     const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
     if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)
@@ -259,18 +235,10 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
         for (let localY = 0; localY < stride; localY += 1) {
             const x = originX + localX;
             const y = originY + localY;
-            tiles[localX * stride + localY] = options.world
-                ? encodeTileInfo(generateToroidalWorldTile(
-                    options.seed,
-                    x,
-                    y,
-                    options.world.width,
-                    options.world.height,
-                    sampler
-                ))
-                : encodeTile(seed, sampler, x, y);
+            tiles[localX * stride + localY] = encodeTileInfo(window.resolveGeneratedTile(x, y));
         }
     }
+    window.clear();
     return {
         version: WORLD_CHUNK_FORMAT_VERSION,
         chunkX: options.chunkX,

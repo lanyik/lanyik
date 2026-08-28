@@ -103,6 +103,8 @@ import {
     WorldLoadOptions,
     resolveHexMapOptions
 } from "./HexMapOptions";
+import { createWorldSurfaceResolver } from "./world/WorldSurfaceResolver";
+import { createWorldSurfaceView, WorldSurfaceView } from "./world/WorldSurfaceView";
 
 export type { HexMapOptions, WorldLoadOptions } from "./HexMapOptions";
 
@@ -171,6 +173,7 @@ export class HexMap extends EventEmitter {
     private loadRevision = 0;
     private forestRevision = 0;
     private worldSource: WorldSource | undefined;
+    private worldSurface: WorldSurfaceView | undefined;
     private worldStreamer: WorldStreamer | undefined;
     private worldResidency: ChunkResidencyCoordinator | undefined;
     private worldController: RenderWorldController | undefined;
@@ -894,6 +897,7 @@ export class HexMap extends EventEmitter {
             throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
         }
         let adaptiveController: AdaptiveStreamingController;
+        let worldSurface: WorldSurfaceView;
         try {
             adaptiveController = new AdaptiveStreamingController({
                 enabled: options.adaptiveStreaming ?? true,
@@ -911,6 +915,19 @@ export class HexMap extends EventEmitter {
                 degradeFrames: options.adaptiveDegradeFrames,
                 recoverFrames: options.adaptiveRecoverFrames,
                 cooldownFrames: options.adaptiveCooldownFrames
+            });
+            const descriptor = source.descriptor;
+            const resolver = descriptor ? createWorldSurfaceResolver({
+                seed: descriptor.seed,
+                domain: descriptor.topology === "toroidal"
+                    ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
+                    : { topology: "infinite" }
+            }) : undefined;
+            worldSurface = createWorldSurfaceView({
+                map: source.map,
+                resolver,
+                tileSize: this.options.size,
+                mountainHeight: this.options.mountainHeight
             });
         } catch (reason) {
             source.dispose();
@@ -938,6 +955,7 @@ export class HexMap extends EventEmitter {
         this.lastStreamingTarget = undefined;
         this.streamingVelocity.set(0, 0);
         this.mapData = source.map;
+        this.worldSurface = worldSurface;
         this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
         this.fogStates = new FogStateStore(source.map);
         this.floatingOriginThreshold = threshold;
@@ -1767,6 +1785,7 @@ export class HexMap extends EventEmitter {
         }
         this.worldStreamer = undefined;
         this.worldSource = undefined;
+        this.worldSurface = undefined;
         this.worldResidency = undefined;
         this.worldController = undefined;
         this.worldTileUpdateQueue = Promise.resolve();
@@ -1860,6 +1879,7 @@ export class HexMap extends EventEmitter {
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
     private async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)): Promise<boolean> {
+        if (!this.worldSurface) throw new Error("No world surface is loaded");
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.terrain) {
@@ -1871,21 +1891,12 @@ export class HexMap extends EventEmitter {
             size: this.options.size,
             texturesBaseUrl: this.options.texturesBaseUrl,
             atlas: this.atlas,
+            surface: this.worldSurface,
             gridVisible: this.options.gridVisible,
             gridColor: this.options.gridColor,
             gridWidth: this.options.gridWidth,
             gridOpacity: this.options.gridOpacity,
             shaderQuality: this.options.terrainShaderQuality,
-            landform: this.worldSource?.descriptor ? {
-                seed: this.worldSource.descriptor.seed,
-                domain: this.worldSource.descriptor.topology === "toroidal"
-                    ? {
-                        topology: "toroidal",
-                        width: this.worldSource.descriptor.width!,
-                        height: this.worldSource.descriptor.height!
-                    }
-                    : { topology: "infinite" }
-            } : undefined,
             landformDebugMode: this.options.landformDebugMode,
             terrainTextureRegionSize: this.options.terrainTextureRegionSize,
             waterColorShallow: this.options.waterColorShallow,
@@ -1910,7 +1921,6 @@ export class HexMap extends EventEmitter {
             waterCornerRounding: this.options.waterCornerRounding,
             coastCurvature: this.options.coastCurvature,
             landBlendCurvature: this.options.landBlendCurvature,
-            mountainHeight: this.options.mountainHeight,
             riverWidth: this.options.riverWidth,
             riverBankWidth: this.options.riverBankWidth,
             riverCurvature: this.options.riverCurvature,
@@ -2764,6 +2774,7 @@ export class HexMap extends EventEmitter {
     public set mountainHeight(value: number) {
         this.options.mountainHeight = value;
         if (this.terrain) this.terrain.mountainHeight = value;
+        else this.worldSurface?.setMountainHeight(value);
     }
 
     public get landformDebugMode(): LandformDebugMode {

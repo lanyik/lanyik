@@ -5000,7 +5000,6 @@ uniform float sandAtlasIndex;
 // neighbouring instances therefore evaluate the same height at every shared
 // vertex instead of building one cone per tile. The lighting normal is derived
 // by finite differences; mountainHeight is the vertical scale in world units.
-uniform float mountainAtlasIndex;
 uniform float mountainHeight;
 
 // Rivers/lakes (tiles with the "river"/"lake" modifier - see helpers/rivers.ts
@@ -5028,7 +5027,7 @@ attribute vec3 position;
 attribute vec2 uv;
 
 attribute vec2 offset;       // world-space (x,z) offset of this tile instance
-attribute vec3 style;        // x = atlas cell index, y = modifier bitmask (reserved for hill/etc.), z = edge-blend priority
+attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
 attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
 attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
 attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
@@ -5044,7 +5043,7 @@ attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - 
 // worker count cannot change the visible macro landform.
 attribute vec4 landform;
 // Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
-// Together with landform.x at this tile centre these define a continuous fan
+// Together with style.w at this tile centre these define a continuous fan
 // surface whose shared edge endpoints are identical in adjacent instances.
 attribute vec3 reliefNeighborsA;
 attribute vec3 reliefNeighborsB;
@@ -5110,21 +5109,14 @@ float valueNoise(vec2 p) {
     );
 }
 
-float isMountain(float atlasIndex) {
-    return abs(atlasIndex - mountainAtlasIndex) < 0.5 ? 1.0 : 0.0;
-}
-
 float centerMountainRelief() {
-    if (isMountain(style.x) < 0.5) return 0.0;
-    // Static maps do not carry generator fields; retain their historical
-    // neutral mountain scale. Procedural mountain tiles cannot legitimately
-    // have elevation 0, so zero is an unambiguous missing-sampler sentinel.
-    if (landform.x <= 0.001) return 1.0;
-    float elevationT = max((landform.x - 0.68) / 0.22, 0.0);
-    return min(1.35, 0.08 + pow(elevationT, 1.3) * 1.12);
+    return style.w;
 }
 
 float cornerRelief(float center, float a, float b) {
+    // -1 is the CPU surface view's explicit shoreline/out-of-map sentinel.
+    // A shared corner touching water is held at the shoreline baseline.
+    if (center < -0.5 || a < -0.5 || b < -0.5) return 0.0;
     // Mountain centres carry relief and ordinary land centres carry zero.
     // Averaging the same three centres makes every tile touching this world
     // vertex resolve the exact same height. Ordinary land therefore becomes
@@ -5360,7 +5352,7 @@ void main() {
     float raiseY = 0.0;
     vec2 mountainSlope = vec2(0.0);
     float elevation = 0.0;
-    float reliefInfluence = max(centerMountainRelief(), max(
+    float reliefInfluence = max(max(centerMountainRelief(), 0.0), max(
         max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
         max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
     ));
@@ -6276,7 +6268,7 @@ attribute vec3 position;
 attribute vec2 uv;
 
 attribute vec2 offset;
-attribute vec3 style;        // x = atlas cell index (unused here), y = modifiers, z = priority (0 = sea, 1 = coastal)
+attribute vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
 attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
@@ -6783,205 +6775,6 @@ void main() {
 }
 `;
 
-  // src/world/noise.ts
-  var UINT32_MAX = 4294967295;
-  function seedToUint32(seed) {
-    const text = String(seed);
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
-  }
-  function randomGridValue(seed, x, y) {
-    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-    hash = Math.imul(hash ^ hash >>> 15, 739982445);
-    hash = Math.imul(hash ^ hash >>> 12, 695872825);
-    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-  }
-  var smooth = (value) => value * value * (3 - 2 * value);
-  var lerp = (from, to, amount) => from + (to - from) * amount;
-  function positiveModulo2(value, modulus) {
-    return (value % modulus + modulus) % modulus;
-  }
-  function valueNoise2D(seed, x, y) {
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function fractalNoise2D(seed, x, y, octaves) {
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-    const px = Math.max(1, Math.round(periodX));
-    const py = Math.max(1, Math.round(periodY));
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const sample = (gx, gy) => randomGridValue(
-      seed,
-      positiveModulo2(gx, px),
-      positiveModulo2(gy, py)
-    );
-    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-    const baseCellsX = Math.max(1, Math.round(cellsX));
-    const baseCellsY = Math.max(1, Math.round(cellsY));
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      const periodX = baseCellsX * frequency;
-      const periodY = baseCellsY * frequency;
-      total += periodicValueNoise2D(
-        seed + Math.imul(octave, 2654435769) >>> 0,
-        normalizedX * periodX,
-        normalizedY * periodY,
-        periodX,
-        periodY
-      ) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function randomAt(seed, x, y, salt) {
-    return randomGridValue((seed ^ salt) >>> 0, x, y);
-  }
-
-  // src/world/LandformSampler.ts
-  var LANDFORM_SEA_LEVEL = 0.43;
-  var clamp01 = (value) => Math.max(0, Math.min(1, value));
-  var smoothstep = (edge0, edge1, value) => {
-    const t = clamp01((value - edge0) / (edge1 - edge0));
-    return t * t * (3 - 2 * t);
-  };
-  function assertDimension(name, value) {
-    if (!Number.isInteger(value) || value < 2) {
-      throw new RangeError(`landform ${name} must be an integer >= 2`);
-    }
-  }
-  function resolveDomain(domain) {
-    const resolved = domain ?? { topology: "infinite" };
-    if (resolved.topology !== "infinite") {
-      assertDimension("width", resolved.width);
-      assertDimension("height", resolved.height);
-    }
-    return { ...resolved };
-  }
-  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, latitude, edgeFalloff) {
-    const landMask = smoothstep(0.38, 0.68, continent);
-    const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), 2.35) * landMask;
-    const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), 3.1) * smoothstep(0.34, 0.7, continent);
-    const elevation = continent * 0.72 + detail * 0.16 + ridge * 0.27 - valley * 0.075 + 0.01 - edgeFalloff;
-    const moisture = clamp01(moistureNoise * 0.86 + valley * 0.18 - ridge * 0.08);
-    const temperature = clamp01(latitude === void 0 ? 0.18 + temperatureNoise * 0.74 - Math.max(0, elevation - 0.55) * 0.8 : 1 - latitude * 0.82 - Math.max(0, elevation - 0.55) * 0.8 + (temperatureNoise - 0.5) * 0.18);
-    return {
-      elevation,
-      continentalness: continent,
-      ridge,
-      valley,
-      roughness: clamp01(roughness),
-      moisture,
-      temperature
-    };
-  }
-  function sampleOpenLandform(seed, x, y, domain) {
-    const warpX = (fractalNoise2D(seed ^ 1374496523, x * 0.018, y * 0.018, 3) - 0.5) * 15;
-    const warpY = (fractalNoise2D(seed ^ 1757159915, x * 0.018, y * 0.018, 3) - 0.5) * 15;
-    const wx = x + warpX;
-    const wy = y + warpY;
-    const continent = fractalNoise2D(seed, wx * 0.052, wy * 0.052, 5);
-    const detail = fractalNoise2D(seed ^ 2738958700, wx * 0.145, wy * 0.145, 3);
-    const ridgeNoise = fractalNoise2D(seed ^ 2654435769, wx * 0.032, wy * 0.032, 4);
-    const valleyNoise = fractalNoise2D(seed ^ 2135587861, wx * 0.024, wy * 0.024, 3);
-    const rough = fractalNoise2D(seed ^ 2496678331, wx * 0.31, wy * 0.31, 3);
-    const moisture = fractalNoise2D(seed ^ 3355524772, wx * 0.08, wy * 0.08, 4);
-    const temperature = fractalNoise2D(seed ^ 2911926141, wx * 0.035, wy * 0.035, 3);
-    if (domain.topology === "infinite") {
-      return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, void 0, 0);
-    }
-    const nx = x / (domain.width - 1) * 2 - 1;
-    const ny = y / (domain.height - 1) * 2 - 1;
-    const edge = Math.max(Math.abs(nx), Math.abs(ny));
-    return composeSample(
-      continent,
-      detail,
-      ridgeNoise,
-      valleyNoise,
-      rough,
-      moisture,
-      temperature,
-      Math.abs(ny),
-      Math.pow(edge, 3) * 0.58
-    );
-  }
-  function sampleToroidalLandform(seed, x, y, domain) {
-    const nx = x / domain.width;
-    const ny = y / domain.height;
-    const cells = (scale, dimension, minimum) => Math.max(minimum, Math.round(dimension * scale));
-    const periodic = (salt, u, v, scale, minimum, octaves) => periodicFractalNoise2D(
-      seed ^ salt,
-      u,
-      v,
-      cells(scale, domain.width, minimum),
-      cells(scale, domain.height, minimum),
-      octaves
-    );
-    const warpX = (periodic(1374496523, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
-    const warpY = (periodic(1757159915, nx, ny, 0.022, 2, 3) - 0.5) * 0.12;
-    const wx = nx + warpX;
-    const wy = ny + warpY;
-    const continent = periodic(0, wx, wy, 0.052, 2, 5);
-    const detail = periodic(2738958700, wx, wy, 0.145, 3, 3);
-    const ridgeNoise = periodic(2654435769, wx, wy, 0.032, 2, 4);
-    const valleyNoise = periodic(2135587861, wx, wy, 0.024, 2, 3);
-    const rough = periodic(2496678331, wx, wy, 0.31, 4, 3);
-    const moisture = periodic(3355524772, wx, wy, 0.08, 2, 4);
-    const temperature = periodic(2911926141, wx, wy, 0.035, 2, 3);
-    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0);
-  }
-  function createLandformSampler(options) {
-    if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
-    const numericSeed = seedToUint32(options.seed);
-    const domain = resolveDomain(options.domain);
-    return {
-      numericSeed,
-      domain,
-      sample(x, y) {
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          throw new RangeError("landform coordinates must be finite numbers");
-        }
-        return domain.topology === "toroidal" ? sampleToroidalLandform(numericSeed, x, y, domain) : sampleOpenLandform(numericSeed, x, y, domain);
-      }
-    };
-  }
-  function sampleLandform(seed, x, y, domain) {
-    return createLandformSampler({ seed, domain }).sample(x, y);
-  }
-
   // src/objects/TerrainMesh.ts
   var LANDFORM_DEBUG_VALUE = {
     off: 0,
@@ -7008,7 +6801,10 @@ void main() {
       this.clock = 0;
       this.lodBuilds = 0;
       this.map = map;
-      this.landformSampler = options.landform ? createLandformSampler(options.landform) : void 0;
+      if (options.surface.map !== map || options.surface.tileSize !== options.size) {
+        throw new TypeError("terrain surface must match the map and tile size");
+      }
+      this.surface = options.surface;
       this.buildAtlasCellIndex();
       this.fogTexture = this.loadFogTexture();
       this.atlasTexture = this.loadAtlasTexture();
@@ -7060,27 +6856,16 @@ void main() {
       const waterIndex = WATER_TYPES.indexOf(tile.type);
       return waterIndex === -1 ? 0 : waterIndex + 1;
     }
-    //Macro mountain height at a tile centre. Geometry uses elevation rather
-    //than the generator's contour-derived ridge value, so a closed ridge
-    //classification band cannot become a volcanic crater rim. Relief starts
-    //near zero at the mountain threshold and rises non-linearly, avoiding the
-    //broad raised plateau produced by giving every mountain a large base.
-    //Static maps without a LandformSampler retain a neutral height of 1.
-    mountainReliefFor(x, y) {
-      if (getMapTile(this.map, x, y)?.type !== "mountain" /* mountain */) return 0;
-      const sample = this.landformSampler?.sample(x, y);
-      if (!sample) return 1;
-      const elevationT = Math.max(0, (sample.elevation - 0.68) / 0.22);
-      return Math.min(1.35, 0.08 + Math.pow(elevationT, 1.3) * 1.12);
-    }
     //Builds the per-instance attribute arrays (offset/style/neighbors/neighbor
     //priorities/kinds) shared by every layer - land and water tiles are laid
     //out identically, only the geometry/shader differ.
     buildInstanceAttributes(tiles, origin) {
       const { size } = this.options;
+      const surface = this.surface.createWindow();
+      const reliefFor = (point) => surface.isShoreline(point.x, point.y) ? -1 : surface.getEffectiveRelief(point.x, point.y);
       const attrs = {
         offset: new Float32Array(tiles.length * 2),
-        style: new Float32Array(tiles.length * 3),
+        style: new Float32Array(tiles.length * 4),
         neighborsA: new Float32Array(tiles.length * 3),
         neighborsB: new Float32Array(tiles.length * 3),
         neighborsPriorityA: new Float32Array(tiles.length * 3),
@@ -7099,11 +6884,12 @@ void main() {
         const center = getHexCenter(tile.x, tile.y, size);
         attrs.offset[i * 2 + 0] = center.x - origin.x;
         attrs.offset[i * 2 + 1] = center.y - origin.y;
-        attrs.style[i * 3 + 0] = this.atlasCellIndex[info.type] ?? 0;
-        attrs.style[i * 3 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
-        attrs.style[i * 3 + 2] = LandPriority[info.type] ?? 0;
+        attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type] ?? 0;
+        attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
+        attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
+        attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y) ? -1 : surface.getEffectiveRelief(tile.x, tile.y);
         attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
-        const landform = this.landformSampler?.sample(tile.x, tile.y);
+        const landform = surface.sampleGenerated(tile.x, tile.y)?.landform;
         if (landform) {
           attrs.landform[i * 4 + 0] = landform.elevation;
           attrs.landform[i * 4 + 1] = landform.ridge;
@@ -7134,17 +6920,18 @@ void main() {
         attrs.neighborsKindB[i * 3 + 0] = this.kindFor(nw.x, nw.y);
         attrs.neighborsKindB[i * 3 + 1] = this.kindFor(n.x, n.y);
         attrs.neighborsKindB[i * 3 + 2] = this.kindFor(ne.x, ne.y);
-        attrs.reliefNeighborsA[i * 3 + 0] = this.mountainReliefFor(se.x, se.y);
-        attrs.reliefNeighborsA[i * 3 + 1] = this.mountainReliefFor(s.x, s.y);
-        attrs.reliefNeighborsA[i * 3 + 2] = this.mountainReliefFor(sw.x, sw.y);
-        attrs.reliefNeighborsB[i * 3 + 0] = this.mountainReliefFor(nw.x, nw.y);
-        attrs.reliefNeighborsB[i * 3 + 1] = this.mountainReliefFor(n.x, n.y);
-        attrs.reliefNeighborsB[i * 3 + 2] = this.mountainReliefFor(ne.x, ne.y);
+        attrs.reliefNeighborsA[i * 3 + 0] = reliefFor(se);
+        attrs.reliefNeighborsA[i * 3 + 1] = reliefFor(s);
+        attrs.reliefNeighborsA[i * 3 + 2] = reliefFor(sw);
+        attrs.reliefNeighborsB[i * 3 + 0] = reliefFor(nw);
+        attrs.reliefNeighborsB[i * 3 + 1] = reliefFor(n);
+        attrs.reliefNeighborsB[i * 3 + 2] = reliefFor(ne);
         attrs.waterEdges[i * 4 + 0] = waterEdgeValue(this.map, tile.x, tile.y);
         attrs.waterEdges[i * 4 + 1] = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
         attrs.waterEdges[i * 4 + 2] = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
         attrs.waterEdges[i * 4 + 3] = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
       });
+      surface.clear();
       return attrs;
     }
     buildInstancedGeometry(tiles, numSubdivisions, borderSubdivisions = numSubdivisions, origin = { x: 0, y: 0 }, attributes) {
@@ -7158,7 +6945,7 @@ void main() {
       geometry.instanceCount = tiles.length;
       const attrs = attributes ?? this.buildInstanceAttributes(tiles, origin);
       geometry.setAttribute("offset", new three.InstancedBufferAttribute(attrs.offset, 2));
-      geometry.setAttribute("style", new three.InstancedBufferAttribute(attrs.style, 3));
+      geometry.setAttribute("style", new three.InstancedBufferAttribute(attrs.style, 4));
       geometry.setAttribute("neighborsA", new three.InstancedBufferAttribute(attrs.neighborsA, 3));
       geometry.setAttribute("neighborsB", new three.InstancedBufferAttribute(attrs.neighborsB, 3));
       geometry.setAttribute("neighborsPriorityA", new three.InstancedBufferAttribute(attrs.neighborsPriorityA, 3));
@@ -7232,6 +7019,30 @@ void main() {
       texture.wrapS = texture.wrapT = three.RepeatWrapping;
       return texture;
     }
+    chunkHeightBounds(layer) {
+      const waterDepth = this.options.waterDepth ?? this.options.size * 0.25;
+      if (layer === "water") {
+        const waveAmplitude = Math.abs(this.options.waterWaveAmplitude ?? 1.6);
+        return {
+          minY: -waterDepth - waveAmplitude,
+          maxY: Math.max(0, -waterDepth + waveAmplitude)
+        };
+      }
+      const riverDepth = this.options.riverDepth ?? waterDepth * 0.6;
+      return {
+        minY: -Math.max(waterDepth, riverDepth),
+        maxY: this.surface.maximumHeight * 1.57
+      };
+    }
+    refreshChunkHeightBounds() {
+      for (const record of this.chunkRecords.values()) {
+        const metadata = getWorldChunkMetadata(record.mesh);
+        if (!metadata) continue;
+        const bounds = this.chunkHeightBounds(record.layer);
+        metadata.bounds.minY = bounds.minY;
+        metadata.bounds.maxY = bounds.maxY;
+      }
+    }
     //Subdivided (not a single flat triangle per wedge) so the beach slope and
     //landBlendWidth/beachWidth's smoothstep-based falloffs actually have interior
     //vertices to sample - with only the 2 outer corners + center (0 subdivisions),
@@ -7245,8 +7056,7 @@ void main() {
           landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
           landBlendEnabled: { value: this.options.landBlendEnabled ?? true ? 1 : 0 },
           landBlendCurvature: { value: this.options.landBlendCurvature ?? 0.5 },
-          mountainAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] ?? -2 },
-          mountainHeight: { value: this.options.mountainHeight ?? this.options.size * 0.6 },
+          mountainHeight: { value: this.surface.mountainHeight },
           seaColorShallow: { value: this.waterShallow },
           seaColorDeep: { value: this.waterDeep },
           uTime: { value: 0 },
@@ -7291,7 +7101,12 @@ void main() {
           chunkKey2,
           "land",
           localizeWorldChunkBounds(
-            getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size * 3),
+            getWorldChunkBounds(
+              chunkTiles,
+              this.options.size,
+              this.chunkHeightBounds("land").minY,
+              this.chunkHeightBounds("land").maxY
+            ),
             origin
           )
         );
@@ -7354,7 +7169,12 @@ void main() {
           chunkKey2,
           "water",
           localizeWorldChunkBounds(
-            getWorldChunkBounds(chunkTiles, this.options.size, -this.options.size * 2, this.options.size),
+            getWorldChunkBounds(
+              chunkTiles,
+              this.options.size,
+              this.chunkHeightBounds("water").minY,
+              this.chunkHeightBounds("water").maxY
+            ),
             origin
           )
         );
@@ -7793,10 +7613,12 @@ void main() {
       if (this.landMaterial) this.landMaterial.uniforms.landBlendCurvature.value = value;
     }
     get mountainHeight() {
-      return this.landMaterial?.uniforms.mountainHeight.value ?? this.options.size * 0.6;
+      return this.surface.mountainHeight;
     }
     set mountainHeight(value) {
+      this.surface.setMountainHeight(value);
       if (this.landMaterial) this.landMaterial.uniforms.mountainHeight.value = value;
+      this.refreshChunkHeightBounds();
     }
     get beachWidth() {
       return this.landMaterial?.uniforms.beachWidth.value ?? this.waterMaterial?.uniforms.beachWidth.value ?? 0.35;
@@ -10297,11 +10119,11 @@ void main() {
       return defined.length > 0 ? Math.max(...defined) : void 0;
     }
     validate() {
-      const positive = (name, value) => {
+      const positive2 = (name, value) => {
         if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be positive`);
       };
-      positive("targetFrameMs", this.targetFrameMs);
-      positive("baseFrameBudgetMs", this.options.baseFrameBudgetMs);
+      positive2("targetFrameMs", this.targetFrameMs);
+      positive2("baseFrameBudgetMs", this.options.baseFrameBudgetMs);
       if (!Number.isInteger(this.options.baseMaxTasksPerFrame) || this.options.baseMaxTasksPerFrame <= 0) {
         throw new RangeError("baseMaxTasksPerFrame must be a positive integer");
       }
@@ -10394,101 +10216,637 @@ void main() {
     }
   };
 
-  // src/world/generateWorld.ts
-  var MIN_WORLD_SIZE = 8;
-  var MAX_WORLD_SIZE = 512;
-  var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
-  function assertDimension2(name, value) {
-    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+  // src/world/noise.ts
+  var UINT32_MAX = 4294967295;
+  function seedToUint32(seed) {
+    const text = String(seed);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+  function randomGridValue(seed, x, y) {
+    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+    hash = Math.imul(hash ^ hash >>> 15, 739982445);
+    hash = Math.imul(hash ^ hash >>> 12, 695872825);
+    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+  }
+  var smooth = (value) => value * value * (3 - 2 * value);
+  var lerp = (from, to, amount) => from + (to - from) * amount;
+  function positiveModulo2(value, modulus) {
+    return (value % modulus + modulus) % modulus;
+  }
+  function valueNoise2D(seed, x, y) {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function fractalNoise2D(seed, x, y, octaves) {
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+    const px = Math.max(1, Math.round(periodX));
+    const py = Math.max(1, Math.round(periodY));
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const sample = (gx, gy) => randomGridValue(
+      seed,
+      positiveModulo2(gx, px),
+      positiveModulo2(gy, py)
+    );
+    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+    const baseCellsX = Math.max(1, Math.round(cellsX));
+    const baseCellsY = Math.max(1, Math.round(cellsY));
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      const periodX = baseCellsX * frequency;
+      const periodY = baseCellsY * frequency;
+      total += periodicValueNoise2D(
+        seed + Math.imul(octave, 2654435769) >>> 0,
+        normalizedX * periodX,
+        normalizedY * periodY,
+        periodX,
+        periodY
+      ) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function randomAt(seed, x, y, salt) {
+    return randomGridValue((seed ^ salt) >>> 0, x, y);
+  }
+
+  // src/world/WorldGeneratorVersion.ts
+  var WORLD_GENERATOR_VERSION = 3;
+
+  // src/world/WorldStyleProfile.ts
+  var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
+    salt,
+    openScale,
+    toroidalScale,
+    octaves,
+    minimumToroidalCells
+  });
+  var WORLD_STYLE_PROFILE = Object.freeze({
+    generatorVersion: WORLD_GENERATOR_VERSION,
+    fields: Object.freeze({
+      warpX: field(1374496523, 0.018, 0.022, 3, 2),
+      warpY: field(1757159915, 0.018, 0.022, 3, 2),
+      continent: field(0, 0.052, 0.052, 5, 2),
+      detail: field(2738958700, 0.145, 0.145, 3, 3),
+      ridge: field(2654435769, 0.032, 0.032, 4, 2),
+      valley: field(2135587861, 0.024, 0.024, 3, 2),
+      roughness: field(2496678331, 0.31, 0.31, 3, 4),
+      moisture: field(3355524772, 0.08, 0.08, 4, 2),
+      temperature: field(2911926141, 0.035, 0.035, 3, 2),
+      openWarpAmplitude: 15,
+      toroidalWarpAmplitude: 0.12,
+      continentWeight: 0.72,
+      detailWeight: 0.16,
+      landMaskStart: 0.38,
+      landMaskEnd: 0.68,
+      ridgeExponent: 2.35,
+      ridgeWeight: 0.27,
+      valleyMaskStart: 0.34,
+      valleyMaskEnd: 0.7,
+      valleyExponent: 3.1,
+      valleyWeight: 0.075,
+      elevationBias: 0.01,
+      moistureNoiseWeight: 0.86,
+      moistureValleyWeight: 0.18,
+      moistureRidgeWeight: 0.08,
+      temperatureNoiseMinimum: 0.18,
+      temperatureNoiseWeight: 0.74,
+      temperatureLatitudeWeight: 0.82,
+      temperatureElevationStart: 0.55,
+      temperatureElevationWeight: 0.8,
+      temperatureLatitudeNoiseWeight: 0.18,
+      boundedEdgePower: 3,
+      boundedEdgeFalloff: 0.58
+    }),
+    terrain: Object.freeze({
+      seaLevel: 0.43,
+      mountainElevation: 0.7,
+      mountainRidge: 0.2,
+      mountainPeakElevation: 0.82,
+      snowTemperature: 0.18,
+      tundraTemperature: 0.34,
+      sandTemperature: 0.68,
+      sandMoisture: 0.42,
+      hillElevation: 0.62
+    }),
+    relief: Object.freeze({
+      shoreline: 0,
+      staticMountain: 1,
+      mountainElevationStart: 0.68,
+      mountainElevationSpan: 0.22,
+      mountainMinimum: 0.08,
+      mountainPower: 1.3,
+      mountainScale: 1.12,
+      mountainMaximum: 1.35
+    }),
+    vegetation: Object.freeze({
+      moistureStart: 0.48,
+      densityScale: 1.5,
+      maximumDensity: 0.58,
+      placementSalt: 668265263,
+      palmTemperature: 0.67,
+      piniaTemperature: 0.4
+    }),
+    lakes: Object.freeze({
+      minimumElevation: 0.455,
+      maximumElevation: 0.56,
+      minimumMoisture: 0.74,
+      placementThreshold: 0.94,
+      placementSalt: 1821285621
+    })
+  });
+  var finite = (name, value) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new TypeError(`${name} must be a finite number`);
+    }
+    return value;
+  };
+  var positive = (name, value) => {
+    const number = finite(name, value);
+    if (number <= 0) throw new RangeError(`${name} must be positive`);
+    return number;
+  };
+  var nonNegative = (name, value) => {
+    const number = finite(name, value);
+    if (number < 0) throw new RangeError(`${name} must be non-negative`);
+    return number;
+  };
+  var unitInterval = (name, value) => {
+    const number = finite(name, value);
+    if (number < 0 || number > 1) throw new RangeError(`${name} must be between 0 and 1`);
+    return number;
+  };
+  function assertFiniteNumbers(value, path) {
+    for (const [name, candidate] of Object.entries(value)) {
+      const key = path ? `${path}.${name}` : name;
+      if (typeof candidate === "number") finite(key, candidate);
+      else if (candidate && typeof candidate === "object") assertFiniteNumbers(candidate, key);
     }
   }
-  function classifyTerrain({ elevation, ridge, moisture, temperature }) {
-    if (elevation < LANDFORM_SEA_LEVEL) return "sea" /* sea */;
-    if (elevation > 0.7 && ridge > 0.2 || elevation > 0.82) return "mountain" /* mountain */;
-    if (temperature < 0.18) return "snow" /* snow */;
-    if (temperature < 0.34) return "tundra" /* tundra */;
-    if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
+  function assertWorldStyleProfile(value) {
+    if (!value || typeof value !== "object") throw new TypeError("world style profile must be an object");
+    const profile = value;
+    if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
+      throw new RangeError("world style profile generatorVersion is unsupported");
+    }
+    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes) {
+      throw new TypeError("world style profile groups are required");
+    }
+    assertFiniteNumbers(profile, "");
+    const noiseFieldNames = [
+      "warpX",
+      "warpY",
+      "continent",
+      "detail",
+      "ridge",
+      "valley",
+      "roughness",
+      "moisture",
+      "temperature"
+    ];
+    for (const name of noiseFieldNames) {
+      const candidate = profile.fields[name];
+      if (!candidate || typeof candidate !== "object") {
+        throw new TypeError(`fields.${name} must be a noise field profile`);
+      }
+      const noise = candidate;
+      positive(`fields.${name}.openScale`, noise.openScale);
+      positive(`fields.${name}.toroidalScale`, noise.toroidalScale);
+      if (!Number.isInteger(noise.octaves) || noise.octaves <= 0) {
+        throw new RangeError(`fields.${name}.octaves must be a positive integer`);
+      }
+      if (!Number.isInteger(noise.minimumToroidalCells) || noise.minimumToroidalCells <= 0) {
+        throw new RangeError(`fields.${name}.minimumToroidalCells must be a positive integer`);
+      }
+      if (!Number.isSafeInteger(noise.salt)) throw new RangeError(`fields.${name}.salt must be a safe integer`);
+    }
+    const nonNegativeFieldNames = [
+      "openWarpAmplitude",
+      "toroidalWarpAmplitude",
+      "continentWeight",
+      "detailWeight",
+      "ridgeWeight",
+      "valleyWeight",
+      "moistureNoiseWeight",
+      "moistureValleyWeight",
+      "moistureRidgeWeight",
+      "temperatureNoiseMinimum",
+      "temperatureNoiseWeight",
+      "temperatureLatitudeWeight",
+      "temperatureElevationStart",
+      "temperatureElevationWeight",
+      "temperatureLatitudeNoiseWeight",
+      "boundedEdgeFalloff"
+    ];
+    for (const name of nonNegativeFieldNames) nonNegative(`fields.${name}`, profile.fields[name]);
+    finite("fields.elevationBias", profile.fields.elevationBias);
+    unitInterval("fields.landMaskStart", profile.fields.landMaskStart);
+    unitInterval("fields.landMaskEnd", profile.fields.landMaskEnd);
+    unitInterval("fields.valleyMaskStart", profile.fields.valleyMaskStart);
+    unitInterval("fields.valleyMaskEnd", profile.fields.valleyMaskEnd);
+    if (!(profile.fields.landMaskStart < profile.fields.landMaskEnd) || !(profile.fields.valleyMaskStart < profile.fields.valleyMaskEnd)) {
+      throw new RangeError("world style field mask thresholds must be ordered");
+    }
+    positive("fields.ridgeExponent", profile.fields.ridgeExponent);
+    positive("fields.valleyExponent", profile.fields.valleyExponent);
+    positive("fields.boundedEdgePower", profile.fields.boundedEdgePower);
+    const terrain = profile.terrain;
+    const terrainNames = [
+      "seaLevel",
+      "mountainElevation",
+      "mountainRidge",
+      "mountainPeakElevation",
+      "snowTemperature",
+      "tundraTemperature",
+      "sandTemperature",
+      "sandMoisture",
+      "hillElevation"
+    ];
+    for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
+    if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
+      throw new RangeError("terrain mountain thresholds must be ordered");
+    }
+    if (!(finite("terrain.snowTemperature", terrain.snowTemperature) < finite("terrain.tundraTemperature", terrain.tundraTemperature))) {
+      throw new RangeError("terrain temperature thresholds must be ordered");
+    }
+    const relief = profile.relief;
+    if (finite("relief.shoreline", relief.shoreline) < 0 || finite("relief.staticMountain", relief.staticMountain) < 0 || finite("relief.mountainMinimum", relief.mountainMinimum) < 0 || finite("relief.mountainMaximum", relief.mountainMaximum) < 0) {
+      throw new RangeError("relief heights must be non-negative");
+    }
+    positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
+    positive("relief.mountainPower", relief.mountainPower);
+    positive("relief.mountainScale", relief.mountainScale);
+    unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
+    if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
+      throw new RangeError("relief mountain range must be ordered");
+    }
+    const lakes = profile.lakes;
+    unitInterval("lakes.minimumElevation", lakes.minimumElevation);
+    unitInterval("lakes.maximumElevation", lakes.maximumElevation);
+    unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
+    unitInterval("lakes.placementThreshold", lakes.placementThreshold);
+    if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation))) {
+      throw new RangeError("lake elevation thresholds must be ordered");
+    }
+    unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
+    unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+    unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
+    unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
+    positive("vegetation.densityScale", profile.vegetation.densityScale);
+    if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
+      throw new RangeError("vegetation temperature thresholds must be ordered");
+    }
+    if (!Number.isSafeInteger(profile.vegetation.placementSalt) || !Number.isSafeInteger(profile.lakes.placementSalt)) {
+      throw new RangeError("world style placement salts must be safe integers");
+    }
+  }
+  assertWorldStyleProfile(WORLD_STYLE_PROFILE);
+
+  // src/world/LandformSampler.ts
+  var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
+  var clamp01 = (value) => Math.max(0, Math.min(1, value));
+  var smoothstep = (edge0, edge1, value) => {
+    const t = clamp01((value - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
+  function assertDimension(name, value) {
+    if (!Number.isInteger(value) || value < 2) {
+      throw new RangeError(`landform ${name} must be an integer >= 2`);
+    }
+  }
+  function resolveDomain(domain) {
+    const resolved = domain ?? { topology: "infinite" };
+    if (resolved.topology !== "infinite") {
+      assertDimension("width", resolved.width);
+      assertDimension("height", resolved.height);
+    }
+    return { ...resolved };
+  }
+  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, latitude, edgeFalloff, profile) {
+    const fields = profile.fields;
+    const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
+    const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
+    const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent) * smoothstep(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
+    const elevation = continent * fields.continentWeight + detail * fields.detailWeight + ridge * fields.ridgeWeight - valley * fields.valleyWeight + fields.elevationBias - edgeFalloff;
+    const moisture = clamp01(moistureNoise * fields.moistureNoiseWeight + valley * fields.moistureValleyWeight - ridge * fields.moistureRidgeWeight);
+    const temperature = clamp01(latitude === void 0 ? fields.temperatureNoiseMinimum + temperatureNoise * fields.temperatureNoiseWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight : 1 - latitude * fields.temperatureLatitudeWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight + (temperatureNoise - 0.5) * fields.temperatureLatitudeNoiseWeight);
+    return {
+      elevation,
+      continentalness: continent,
+      ridge,
+      valley,
+      roughness: clamp01(roughness),
+      moisture,
+      temperature
+    };
+  }
+  function sampleOpenLandform(seed, x, y, domain, profile) {
+    const fields = profile.fields;
+    const open = (field2, sampleX, sampleY) => fractalNoise2D(seed ^ field2.salt, sampleX * field2.openScale, sampleY * field2.openScale, field2.octaves);
+    const warpX = (open(fields.warpX, x, y) - 0.5) * fields.openWarpAmplitude;
+    const warpY = (open(fields.warpY, x, y) - 0.5) * fields.openWarpAmplitude;
+    const wx = x + warpX;
+    const wy = y + warpY;
+    const continent = open(fields.continent, wx, wy);
+    const detail = open(fields.detail, wx, wy);
+    const ridgeNoise = open(fields.ridge, wx, wy);
+    const valleyNoise = open(fields.valley, wx, wy);
+    const rough = open(fields.roughness, wx, wy);
+    const moisture = open(fields.moisture, wx, wy);
+    const temperature = open(fields.temperature, wx, wy);
+    if (domain.topology === "infinite") {
+      return composeSample(
+        continent,
+        detail,
+        ridgeNoise,
+        valleyNoise,
+        rough,
+        moisture,
+        temperature,
+        void 0,
+        0,
+        profile
+      );
+    }
+    const nx = x / (domain.width - 1) * 2 - 1;
+    const ny = y / (domain.height - 1) * 2 - 1;
+    const edge = Math.max(Math.abs(nx), Math.abs(ny));
+    return composeSample(
+      continent,
+      detail,
+      ridgeNoise,
+      valleyNoise,
+      rough,
+      moisture,
+      temperature,
+      Math.abs(ny),
+      Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
+      profile
+    );
+  }
+  function sampleToroidalLandform(seed, x, y, domain, profile) {
+    const fields = profile.fields;
+    const nx = x / domain.width;
+    const ny = y / domain.height;
+    const periodic = (field2, u, v) => periodicFractalNoise2D(
+      seed ^ field2.salt,
+      u,
+      v,
+      Math.max(field2.minimumToroidalCells, Math.round(domain.width * field2.toroidalScale)),
+      Math.max(field2.minimumToroidalCells, Math.round(domain.height * field2.toroidalScale)),
+      field2.octaves
+    );
+    const warpX = (periodic(fields.warpX, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
+    const warpY = (periodic(fields.warpY, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
+    const wx = nx + warpX;
+    const wy = ny + warpY;
+    const continent = periodic(fields.continent, wx, wy);
+    const detail = periodic(fields.detail, wx, wy);
+    const ridgeNoise = periodic(fields.ridge, wx, wy);
+    const valleyNoise = periodic(fields.valley, wx, wy);
+    const rough = periodic(fields.roughness, wx, wy);
+    const moisture = periodic(fields.moisture, wx, wy);
+    const temperature = periodic(fields.temperature, wx, wy);
+    const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
+    return composeSample(continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature, latitude, 0, profile);
+  }
+  function createLandformSampler(options) {
+    return createLandformSamplerForProfile(options, WORLD_STYLE_PROFILE);
+  }
+  function createLandformSamplerForProfile(options, profile) {
+    if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
+    if (typeof options.seed !== "string" && typeof options.seed !== "number") {
+      throw new TypeError("landform seed must be a string or number");
+    }
+    if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
+      throw new RangeError("numeric landform seed must be finite");
+    }
+    assertWorldStyleProfile(profile);
+    const numericSeed = seedToUint32(options.seed);
+    const domain = resolveDomain(options.domain);
+    return {
+      numericSeed,
+      domain,
+      sample(x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          throw new RangeError("landform coordinates must be finite numbers");
+        }
+        return domain.topology === "toroidal" ? sampleToroidalLandform(numericSeed, x, y, domain, profile) : sampleOpenLandform(numericSeed, x, y, domain, profile);
+      }
+    };
+  }
+  function sampleLandform(seed, x, y, domain) {
+    return createLandformSampler({ seed, domain }).sample(x, y);
+  }
+
+  // src/world/WorldSurfaceResolver.ts
+  var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
+  var clamp012 = (value) => Math.max(0, Math.min(1, value));
+  var modulo = (value, period) => (value % period + period) % period;
+  function assertTileCoordinates(x, y) {
+    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+      throw new RangeError("world surface coordinates must be safe integers");
+    }
+  }
+  function normalizeCoordinates(domain, x, y) {
+    assertTileCoordinates(x, y);
+    if (domain.topology === "infinite") return { x, y };
+    if (domain.topology === "toroidal") {
+      return { x: modulo(x, domain.width), y: modulo(y, domain.height) };
+    }
+    return x >= 0 && x < domain.width && y >= 0 && y < domain.height ? { x, y } : void 0;
+  }
+  function classifyTerrain(sample, profile) {
+    const terrain = profile.terrain;
+    if (sample.elevation < terrain.seaLevel) return "sea" /* sea */;
+    if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
+    if (sample.temperature < terrain.snowTemperature) return "snow" /* snow */;
+    if (sample.temperature < terrain.tundraTemperature) return "tundra" /* tundra */;
+    if (sample.temperature > terrain.sandTemperature && sample.moisture < terrain.sandMoisture) return "sand" /* sand */;
     return "land" /* land */;
   }
-  function decorateTile(seed, x, y, climate, type) {
-    const tile = { type };
-    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return tile;
-    const modifiers = [];
-    const lake = type === "land" /* land */ && climate.elevation > LANDFORM_SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
-    if (lake) {
-      modifiers.push("lake");
-    } else {
-      if (climate.elevation > 0.62) modifiers.push("hill");
-      const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
-      if (randomAt(seed, x, y, 668265263) < forestChance) {
-        modifiers.push("wood");
-        tile.treeModel = climate.temperature > 0.67 ? "Assets/models/palm" : climate.temperature < 0.4 ? "Assets/models/pinia" : "Assets/models/oak";
-      }
-    }
-    if (modifiers.length > 0) tile.modifiers = modifiers;
-    return tile;
+  function generatedRelief(sample, profile) {
+    const relief = profile.relief;
+    const elevationT = Math.max(0, (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan);
+    return Math.min(
+      relief.mountainMaximum,
+      relief.mountainMinimum + Math.pow(elevationT, relief.mountainPower) * relief.mountainScale
+    );
   }
-  var modulo = (value, period) => (value % period + period) % period;
-  function generateToroidalWorldTile(seed, x, y, width, height, sampler = createLandformSampler({
-    seed,
-    domain: { topology: "toroidal", width, height }
-  })) {
-    const numericSeed = seedToUint32(seed);
-    const canonicalX = modulo(x, width);
-    const canonicalY = modulo(y, height);
-    const climate = sampler.sample(canonicalX, canonicalY);
-    let type = classifyTerrain(climate);
+  function biomeFor(type) {
+    if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
+    if (type === "sand" /* sand */) return "dry";
+    if (type === "tundra" /* tundra */ || type === "snow" /* snow */) return "cold";
+    if (type === "mountain" /* mountain */) return "alpine";
+    return "temperate";
+  }
+  function biomeWeightsFor(biome) {
+    return Object.freeze({
+      temperate: biome === "temperate" ? 1 : 0,
+      dry: biome === "dry" ? 1 : 0,
+      cold: biome === "cold" ? 1 : 0,
+      alpine: biome === "alpine" ? 1 : 0
+    });
+  }
+  function vegetationKindFor(sample, profile) {
+    return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
+  }
+  function sampleSurface(sampler, profile, x, y) {
+    const landform = Object.freeze({ ...sampler.sample(x, y) });
+    const baseTerrain = classifyTerrain(landform, profile);
+    const biome = biomeFor(baseTerrain);
+    const vegetationDensity = isWater2(baseTerrain) || baseTerrain === "mountain" /* mountain */ || baseTerrain === "snow" /* snow */ ? 0 : clamp012(Math.min(
+      profile.vegetation.maximumDensity,
+      (landform.moisture - profile.vegetation.moistureStart) * profile.vegetation.densityScale
+    ));
+    const lakePotential = baseTerrain === "land" /* land */ && landform.elevation > profile.lakes.minimumElevation && landform.elevation < profile.lakes.maximumElevation && landform.moisture > profile.lakes.minimumMoisture ? 1 : 0;
+    return Object.freeze({
+      baseTerrain,
+      relief: generatedRelief(landform, profile),
+      biome,
+      biomeWeights: biomeWeightsFor(biome),
+      vegetationDensity,
+      vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : void 0,
+      lakePotential,
+      landform
+    });
+  }
+  function resolveTile(numericSeed, profile, x, y, sampleAt) {
+    const sample = sampleAt(x, y);
+    if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
+    let type = sample.baseTerrain;
     if (type === "sea" /* sea */) {
-      const touchesLand = getNeighbors(canonicalX, canonicalY).some((neighbor) => {
-        const nx = modulo(neighbor.x, width);
-        const ny = modulo(neighbor.y, height);
-        return !isWater2(classifyTerrain(sampler.sample(nx, ny)));
+      const touchesLand = getNeighbors(x, y).some((neighbor) => {
+        const adjacent = sampleAt(neighbor.x, neighbor.y);
+        return adjacent !== void 0 && adjacent.baseTerrain !== "sea" /* sea */;
       });
       if (touchesLand) type = "coastal" /* coastal */;
     }
-    return decorateTile(numericSeed, canonicalX, canonicalY, climate, type);
+    const tile = { type };
+    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return Object.freeze(tile);
+    const modifiers = [];
+    const lake = sample.lakePotential > 0 && randomAt(numericSeed, x, y, profile.lakes.placementSalt) > profile.lakes.placementThreshold;
+    if (lake) {
+      modifiers.push("lake");
+    } else {
+      if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+      if (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) < sample.vegetationDensity) {
+        modifiers.push("wood");
+        tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
+      }
+    }
+    if (modifiers.length > 0) {
+      tile.modifiers = modifiers;
+      Object.freeze(modifiers);
+    }
+    return Object.freeze(tile);
   }
-  function generateWorld({ seed, width, height, topology = "bounded" }) {
-    assertDimension2("width", width);
-    assertDimension2("height", height);
-    if (topology !== "bounded" && topology !== "toroidal") {
-      throw new RangeError('topology must be either "bounded" or "toroidal"');
+  var FrozenWorldSurfaceResolver = class {
+    constructor(options) {
+      if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
+      this.seed = String(options.seed);
+      this.profile = options.profile ?? WORLD_STYLE_PROFILE;
+      this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
+      this.domain = Object.freeze({ ...this.sampler.domain });
     }
-    if (topology === "toroidal" && width % 2 !== 0) {
-      throw new RangeError("toroidal worlds require an even width");
+    sampleGenerated(x, y) {
+      const point = normalizeCoordinates(this.domain, x, y);
+      if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
+      return sampleSurface(this.sampler, this.profile, point.x, point.y);
     }
-    const numericSeed = seedToUint32(seed);
-    const data = {};
-    const toroidal = topology === "toroidal";
-    const sampler = createLandformSampler({
-      seed,
-      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
-    });
-    for (let x = 0; x < width; x += 1) {
-      data[x] = {};
-      for (let y = 0; y < height; y += 1) {
-        if (toroidal) {
-          data[x][y] = generateToroidalWorldTile(seed, x, y, width, height, sampler);
-          continue;
+    resolveGeneratedTile(x, y) {
+      const point = normalizeCoordinates(this.domain, x, y);
+      if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
+      return resolveTile(
+        this.sampler.numericSeed,
+        this.profile,
+        point.x,
+        point.y,
+        (sampleX, sampleY) => {
+          const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
+          return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
         }
-        const climate = sampler.sample(x, y);
-        data[x][y] = decorateTile(numericSeed, x, y, climate, classifyTerrain(climate));
-      }
+      );
     }
-    const world = { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
-    for (let x = 0; x < width; x += 1) {
-      for (let y = 0; y < height; y += 1) {
-        const tile = data[x][y];
-        if (toroidal || tile.type !== "sea" /* sea */) continue;
-        const touchesLand = getMapNeighbors(world, x, y).some(({ x: nx, y: ny }) => {
-          const neighbor = data[nx]?.[ny];
-          return neighbor !== void 0 && !isWater2(neighbor.type);
-        });
-        if (touchesLand) tile.type = "coastal" /* coastal */;
-      }
+    createWindow() {
+      return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed);
     }
-    return world;
+  };
+  var WorldSurfaceResolverWindow = class {
+    constructor(resolver, numericSeed) {
+      this.resolver = resolver;
+      this.numericSeed = numericSeed;
+      this.samples = /* @__PURE__ */ new Map();
+      this.tiles = /* @__PURE__ */ new Map();
+    }
+    sampleGenerated(x, y) {
+      const point = normalizeCoordinates(this.resolver.domain, x, y);
+      if (!point) return void 0;
+      const key = `${point.x},${point.y}`;
+      let sample = this.samples.get(key);
+      if (!sample) {
+        sample = this.resolver.sampleGenerated(point.x, point.y);
+        this.samples.set(key, sample);
+      }
+      return sample;
+    }
+    resolveGeneratedTile(x, y) {
+      const point = normalizeCoordinates(this.resolver.domain, x, y);
+      if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
+      const key = `${point.x},${point.y}`;
+      let tile = this.tiles.get(key);
+      if (!tile) {
+        tile = resolveTile(
+          this.numericSeed,
+          this.resolver.profile,
+          point.x,
+          point.y,
+          (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+        );
+        this.tiles.set(key, tile);
+      }
+      return tile;
+    }
+    clear() {
+      this.samples.clear();
+      this.tiles.clear();
+    }
+  };
+  function createWorldSurfaceResolver(options) {
+    return new FrozenWorldSurfaceResolver(options);
   }
 
   // src/world/generateWorldChunk.ts
@@ -10496,7 +10854,6 @@ void main() {
   var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
   var WORLD_CHUNK_FORMAT_VERSION = 1;
   var WORLD_CHUNK_PADDING = 1;
-  var WORLD_GENERATOR_VERSION = 3;
   function cloneWorldTileOverride(value) {
     const copy = { ...value };
     if (value.modifiers) copy.modifiers = [...value.modifiers];
@@ -10571,41 +10928,6 @@ void main() {
     }
     return value;
   }
-  function classifyTerrain2({ elevation, ridge, moisture, temperature }) {
-    if (elevation < LANDFORM_SEA_LEVEL) return "sea" /* sea */;
-    if (elevation > 0.7 && ridge > 0.2 || elevation > 0.82) return "mountain" /* mountain */;
-    if (temperature < 0.18) return "snow" /* snow */;
-    if (temperature < 0.34) return "tundra" /* tundra */;
-    if (temperature > 0.68 && moisture < 0.42) return "sand" /* sand */;
-    return "land" /* land */;
-  }
-  function baseTerrainAt(sampler, x, y) {
-    return classifyTerrain2(sampler.sample(x, y));
-  }
-  function isWater3(type) {
-    return type === "sea" /* sea */ || type === "coastal" /* coastal */;
-  }
-  function terrainAt(sampler, x, y) {
-    const base = baseTerrainAt(sampler, x, y);
-    if (base !== "sea" /* sea */) return base;
-    const touchesLand = getNeighbors(x, y).some((neighbor) => !isWater3(baseTerrainAt(sampler, neighbor.x, neighbor.y)));
-    return touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
-  }
-  function encodeTile(seed, sampler, x, y) {
-    const climate = sampler.sample(x, y);
-    const type = terrainAt(sampler, x, y);
-    let packed = LAND_CODE.get(type) ?? 0;
-    if (isWater3(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return packed;
-    const lake = type === "land" /* land */ && climate.elevation > LANDFORM_SEA_LEVEL + 0.025 && climate.elevation < 0.56 && climate.moisture > 0.74 && randomAt(seed, x, y, 1821285621) > 0.94;
-    if (lake) return packed | FLAG_LAKE;
-    if (climate.elevation > 0.62) packed |= FLAG_HILL;
-    const forestChance = Math.max(0, Math.min(0.58, (climate.moisture - 0.48) * 1.5));
-    if (randomAt(seed, x, y, 668265263) < forestChance) {
-      const treeCode = climate.temperature > 0.67 ? 1 : climate.temperature < 0.4 ? 2 : 3;
-      packed |= FLAG_WOOD | treeCode << TREE_SHIFT;
-    }
-    return packed;
-  }
   function encodeTileInfo(tile) {
     let packed = LAND_CODE.get(tile.type) ?? 0;
     if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
@@ -10626,16 +10948,29 @@ void main() {
     assertChunkCoordinate("chunkY", options.chunkY);
     validateBoundedWorld(options.world);
     const chunkSize = resolveChunkSize(options.chunkSize);
-    const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-    const tiles = new Uint16Array(stride * stride);
-    const seed = seedToUint32(options.seed);
-    const sampler = createLandformSampler({
-      // Keep the source seed identical to TerrainMesh's sampler input.
-      // Passing the already-hashed decoration seed here would hash it a
-      // second time and classify a different height field than we render.
+    const resolver = createWorldChunkSurfaceResolver(options);
+    return generateWorldChunkWithResolver(options, resolver, chunkSize);
+  }
+  function createWorldChunkSurfaceResolver(options) {
+    if (!options || typeof options !== "object") throw new TypeError("world chunk generation options are required");
+    validateBoundedWorld(options.world);
+    return createWorldSurfaceResolver({
       seed: options.seed,
       domain: options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" }
     });
+  }
+  function generateWorldChunkWithResolver(options, resolver, resolvedChunkSize) {
+    assertChunkCoordinate("chunkX", options.chunkX);
+    assertChunkCoordinate("chunkY", options.chunkY);
+    validateBoundedWorld(options.world);
+    const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
+    const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
+    const tiles = new Uint16Array(stride * stride);
+    const expectedDomain = options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" };
+    if (!resolver || resolver.seed !== String(options.seed) || resolver.domain.topology !== expectedDomain.topology || expectedDomain.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== expectedDomain.width || resolver.domain.height !== expectedDomain.height)) {
+      throw new TypeError("world surface resolver does not match the chunk request");
+    }
+    const window2 = resolver.createWindow();
     const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
     const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
     if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(originX + stride - 1) || !Number.isSafeInteger(originY + stride - 1)) {
@@ -10645,16 +10980,10 @@ void main() {
       for (let localY = 0; localY < stride; localY += 1) {
         const x = originX + localX;
         const y = originY + localY;
-        tiles[localX * stride + localY] = options.world ? encodeTileInfo(generateToroidalWorldTile(
-          options.seed,
-          x,
-          y,
-          options.world.width,
-          options.world.height,
-          sampler
-        )) : encodeTile(seed, sampler, x, y);
+        tiles[localX * stride + localY] = encodeTileInfo(window2.resolveGeneratedTile(x, y));
       }
     }
+    window2.clear();
     return {
       version: WORLD_CHUNK_FORMAT_VERSION,
       chunkX: options.chunkX,
@@ -10941,6 +11270,55 @@ void main() {
       this.chunkSize = void 0;
     }
   };
+
+  // src/world/generateWorld.ts
+  var MIN_WORLD_SIZE = 8;
+  var MAX_WORLD_SIZE = 512;
+  function assertDimension2(name, value) {
+    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+    }
+  }
+  function cloneGeneratedTile(tile) {
+    return {
+      ...tile,
+      modifiers: tile.modifiers ? [...tile.modifiers] : void 0,
+      rivers: tile.rivers?.map((river) => ({ ...river })),
+      city: tile.city ? { ...tile.city } : void 0
+    };
+  }
+  function generateWorld({ seed, width, height, topology = "bounded" }) {
+    assertDimension2("width", width);
+    assertDimension2("height", height);
+    if (topology !== "bounded" && topology !== "toroidal") {
+      throw new RangeError('topology must be either "bounded" or "toroidal"');
+    }
+    if (topology === "toroidal" && width % 2 !== 0) {
+      throw new RangeError("toroidal worlds require an even width");
+    }
+    const data = {};
+    const toroidal = topology === "toroidal";
+    const resolver = createWorldSurfaceResolver({
+      seed,
+      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
+    });
+    const windowSize = 24;
+    for (let startX = 0; startX < width; startX += windowSize) {
+      for (let startY = 0; startY < height; startY += windowSize) {
+        const window2 = resolver.createWindow();
+        const endX = Math.min(width, startX + windowSize);
+        const endY = Math.min(height, startY + windowSize);
+        for (let x = startX; x < endX; x += 1) {
+          data[x] ?? (data[x] = {});
+          for (let y = startY; y < endY; y += 1) {
+            data[x][y] = cloneGeneratedTile(window2.resolveGeneratedTile(x, y));
+          }
+        }
+        window2.clear();
+      }
+    }
+    return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
+  }
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
@@ -15335,7 +15713,7 @@ void main() {
     if (!["off", "elevation", "ridge", "valley", "roughness"].includes(options.landformDebugMode)) {
       throw new RangeError("landformDebugMode is invalid");
     }
-    const positive = (name, value) => {
+    const positive2 = (name, value) => {
       if (!Number.isFinite(value) || value <= 0) {
         throw new RangeError(`${name} must be a positive finite number`);
       }
@@ -15345,10 +15723,10 @@ void main() {
         throw new RangeError(`${name} must be a non-negative safe integer`);
       }
     };
-    positive("size", options.size);
-    positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
-    positive("renderDistance", options.renderDistance);
-    positive("maxPixelRatio", options.maxPixelRatio);
+    positive2("size", options.size);
+    positive2("terrainTextureRegionSize", options.terrainTextureRegionSize);
+    positive2("renderDistance", options.renderDistance);
+    positive2("maxPixelRatio", options.maxPixelRatio);
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
       throw new RangeError('terrainShaderQuality must be "full" or "fast"');
     }
@@ -15362,11 +15740,11 @@ void main() {
     nonNegativeSafeInteger("cpuChunkCacheSize", options.cpuChunkCacheSize);
     nonNegativeSafeInteger("gpuChunkCacheBytes", options.gpuChunkCacheBytes);
     nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
-    positive("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
+    positive2("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
     nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
     nonNegativeSafeInteger("grassDensity", options.grassDensity);
-    positive("grassBladeWidth", options.grassBladeWidth);
-    positive("grassBladeHeight", options.grassBladeHeight);
+    positive2("grassBladeWidth", options.grassBladeWidth);
+    positive2("grassBladeHeight", options.grassBladeHeight);
     if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
       throw new RangeError("treeScale must be a non-negative finite number");
     }
@@ -15385,6 +15763,224 @@ void main() {
         throw new RangeError(`${name} must be a finite number between 0 and 1`);
       }
     }
+  }
+
+  // src/world/WorldSurfaceView.ts
+  var CORNER_DIRECTIONS = [
+    ["NE", "SE"],
+    ["SE", "S"],
+    ["S", "SW"],
+    ["SW", "NW"],
+    ["NW", "N"],
+    ["N", "NE"]
+  ];
+  var CORNER_VECTORS = [
+    { x: 1, y: 0 },
+    { x: 0.5, y: Math.sqrt(3) / 2 },
+    { x: -0.5, y: Math.sqrt(3) / 2 },
+    { x: -1, y: 0 },
+    { x: -0.5, y: -Math.sqrt(3) / 2 },
+    { x: 0.5, y: -Math.sqrt(3) / 2 }
+  ];
+  function assertTileCoordinates2(x, y) {
+    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+      throw new RangeError("world surface tile coordinates must be safe integers");
+    }
+  }
+  function assertMapMatchesResolver(map, resolver) {
+    if (!resolver) return;
+    const domain = resolver.domain;
+    if (domain.topology === "infinite") {
+      if (!map.infinite || map.wrapX || map.wrapY) {
+        throw new TypeError("infinite surface resolver does not match the map topology");
+      }
+      return;
+    }
+    if (map.infinite || map.w !== domain.width || map.h !== domain.height) {
+      throw new TypeError("surface resolver dimensions do not match the map");
+    }
+    const toroidal = domain.topology === "toroidal";
+    if (Boolean(map.wrapX) !== toroidal || Boolean(map.wrapY) !== toroidal) {
+      throw new TypeError("surface resolver wrapping does not match the map topology");
+    }
+  }
+  function isShoreline(tile) {
+    return !tile || tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */ || Boolean(tile.modifiers?.includes("lake"));
+  }
+  function nearestTile(worldX, worldZ, size) {
+    const approximateX = worldX / (size * 1.5);
+    const approximateY = worldZ / (size * Math.sqrt(3));
+    const x0 = Math.floor(approximateX);
+    const y0 = Math.floor(approximateY);
+    let best = { x: x0, y: y0 };
+    let bestDistance = Infinity;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const candidate = { x: x0 + dx, y: y0 + dy };
+        const center = getHexCenter(candidate.x, candidate.y, size);
+        const distance = (center.x - worldX) ** 2 + (center.y - worldZ) ** 2;
+        if (distance < bestDistance) {
+          best = candidate;
+          bestDistance = distance;
+        }
+      }
+    }
+    return best;
+  }
+  var MutableWorldSurfaceView = class {
+    constructor(options) {
+      this.displayRevision = 0;
+      if (!options || typeof options !== "object" || !options.map) {
+        throw new TypeError("world surface view options with a map are required");
+      }
+      if (!Number.isFinite(options.tileSize) || options.tileSize <= 0) {
+        throw new RangeError("world surface tileSize must be a positive finite number");
+      }
+      if (!Number.isFinite(options.mountainHeight) || options.mountainHeight < 0) {
+        throw new RangeError("world surface mountainHeight must be a non-negative finite number");
+      }
+      assertWrappableMap(options.map);
+      assertMapMatchesResolver(options.map, options.resolver);
+      this.map = options.map;
+      this.resolver = options.resolver;
+      this.tileSize = options.tileSize;
+      this.displayMountainHeight = options.mountainHeight;
+    }
+    get revision() {
+      return this.displayRevision;
+    }
+    get mountainHeight() {
+      return this.displayMountainHeight;
+    }
+    get minimumHeight() {
+      return 0;
+    }
+    get maximumHeight() {
+      return this.displayMountainHeight * (this.resolver?.profile.relief.mountainMaximum ?? 1);
+    }
+    setMountainHeight(value) {
+      if (!Number.isFinite(value) || value < 0) {
+        throw new RangeError("world surface mountainHeight must be a non-negative finite number");
+      }
+      if (value === this.displayMountainHeight) return false;
+      this.displayMountainHeight = value;
+      this.displayRevision += 1;
+      return true;
+    }
+    getEffectiveRelief(x, y) {
+      return this.createWindow().getEffectiveRelief(x, y);
+    }
+    getTileCenterHeight(x, y) {
+      return this.createWindow().getTileCenterHeight(x, y);
+    }
+    getWorldHeight(worldX, worldZ) {
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        throw new RangeError("world surface coordinates must be finite numbers");
+      }
+      return this.createWindow().getWorldHeight(worldX, worldZ);
+    }
+    createWindow() {
+      return new WorldSurfaceWindow(this);
+    }
+  };
+  var WorldSurfaceWindow = class {
+    constructor(surface) {
+      this.surface = surface;
+      this.contributions = /* @__PURE__ */ new Map();
+      this.corners = /* @__PURE__ */ new Map();
+      this.samples = /* @__PURE__ */ new Map();
+    }
+    key(x, y) {
+      const point = normalizeMapCoordinates(this.surface.map, x, y);
+      return point ? `${point.x},${point.y}` : `outside:${x},${y}`;
+    }
+    sampleGenerated(x, y) {
+      assertTileCoordinates2(x, y);
+      const resolver = this.surface.resolver;
+      if (!resolver) return void 0;
+      const point = normalizeMapCoordinates(this.surface.map, x, y);
+      if (!point) return void 0;
+      const key = `${point.x},${point.y}`;
+      let sample = this.samples.get(key);
+      if (!sample) {
+        sample = resolver.sampleGenerated(point.x, point.y);
+        this.samples.set(key, sample);
+      }
+      return sample;
+    }
+    contribution(x, y) {
+      assertTileCoordinates2(x, y);
+      const key = this.key(x, y);
+      let contribution = this.contributions.get(key);
+      if (contribution) return contribution;
+      const tile = getMapTile(this.surface.map, x, y);
+      if (isShoreline(tile)) {
+        contribution = { shoreline: true, relief: 0 };
+      } else if (tile?.type === "mountain" /* mountain */) {
+        contribution = {
+          shoreline: false,
+          relief: this.sampleGenerated(x, y)?.relief ?? this.surface.resolver?.profile.relief.mountainMinimum ?? 1
+        };
+      } else {
+        contribution = { shoreline: false, relief: 0 };
+      }
+      this.contributions.set(key, contribution);
+      return contribution;
+    }
+    getEffectiveRelief(x, y) {
+      return this.contribution(x, y).relief;
+    }
+    isShoreline(x, y) {
+      return this.contribution(x, y).shoreline;
+    }
+    getCornerReliefs(x, y) {
+      const key = this.key(x, y);
+      let values = this.corners.get(key);
+      if (values) return values;
+      const center = this.contribution(x, y);
+      values = Object.freeze(CORNER_DIRECTIONS.map(([firstDirection, secondDirection]) => {
+        const first = getNeighborCoords(x, y, firstDirection);
+        const second = getNeighborCoords(x, y, secondDirection);
+        const firstContribution = this.contribution(first.x, first.y);
+        const secondContribution = this.contribution(second.x, second.y);
+        if (center.shoreline || firstContribution.shoreline || secondContribution.shoreline) return 0;
+        return (center.relief + firstContribution.relief + secondContribution.relief) / 3;
+      }));
+      this.corners.set(key, values);
+      return values;
+    }
+    getTileCenterHeight(x, y) {
+      const corners = this.getCornerReliefs(x, y);
+      return corners.reduce((sum, height) => sum + height, 0) / corners.length * this.surface.mountainHeight;
+    }
+    getWorldHeight(worldX, worldZ) {
+      const tile = nearestTile(worldX, worldZ, this.surface.tileSize);
+      if (!getMapTile(this.surface.map, tile.x, tile.y)) return this.surface.minimumHeight;
+      const center = getHexCenter(tile.x, tile.y, this.surface.tileSize);
+      const localX = (worldX - center.x) / this.surface.tileSize;
+      const localZ = (worldZ - center.y) / this.surface.tileSize;
+      let angle = Math.atan2(localZ, localX);
+      if (angle < 0) angle += Math.PI * 2;
+      const cornerIndex = Math.min(5, Math.floor(angle / (Math.PI / 3)));
+      const nextCornerIndex = (cornerIndex + 1) % 6;
+      const first = CORNER_VECTORS[cornerIndex];
+      const second = CORNER_VECTORS[nextCornerIndex];
+      const determinant = first.x * second.y - first.y * second.x;
+      const firstWeight = (localX * second.y - localZ * second.x) / determinant;
+      const secondWeight = (first.x * localZ - first.y * localX) / determinant;
+      const corners = this.getCornerReliefs(tile.x, tile.y);
+      const centerRelief = corners.reduce((sum, height) => sum + height, 0) / corners.length;
+      const relief = centerRelief * (1 - firstWeight - secondWeight) + corners[cornerIndex] * firstWeight + corners[nextCornerIndex] * secondWeight;
+      return Math.max(0, relief) * this.surface.mountainHeight;
+    }
+    clear() {
+      this.contributions.clear();
+      this.corners.clear();
+      this.samples.clear();
+    }
+  };
+  function createWorldSurfaceView(options) {
+    return new MutableWorldSurfaceView(options);
   }
 
   // src/HexMap.ts
@@ -15954,8 +16550,8 @@ void main() {
       return geometry ? { geometries: [geometry] } : void 0;
     }
     activateGrassWorldChunk(metadata, lod, objects) {
-      const field = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
-      const geometry = field?.activateChunk(metadata, lod);
+      const field2 = this.streamedGrassByChunkId.get(metadata.id) ?? this.grass;
+      const geometry = field2?.activateChunk(metadata, lod);
       if (geometry) {
         for (const object of objects) if (object.isMesh) object.geometry = geometry;
       }
@@ -16055,6 +16651,7 @@ void main() {
         throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
       }
       let adaptiveController;
+      let worldSurface;
       try {
         adaptiveController = new AdaptiveStreamingController({
           enabled: options.adaptiveStreaming ?? true,
@@ -16072,6 +16669,17 @@ void main() {
           degradeFrames: options.adaptiveDegradeFrames,
           recoverFrames: options.adaptiveRecoverFrames,
           cooldownFrames: options.adaptiveCooldownFrames
+        });
+        const descriptor = source.descriptor;
+        const resolver = descriptor ? createWorldSurfaceResolver({
+          seed: descriptor.seed,
+          domain: descriptor.topology === "toroidal" ? { topology: "toroidal", width: descriptor.width, height: descriptor.height } : { topology: "infinite" }
+        }) : void 0;
+        worldSurface = createWorldSurfaceView({
+          map: source.map,
+          resolver,
+          tileSize: this.options.size,
+          mountainHeight: this.options.mountainHeight
         });
       } catch (reason) {
         source.dispose();
@@ -16098,6 +16706,7 @@ void main() {
       this.lastStreamingTarget = void 0;
       this.streamingVelocity.set(0, 0);
       this.mapData = source.map;
+      this.worldSurface = worldSurface;
       this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
       this.fogStates = new FogStateStore(source.map);
       this.floatingOriginThreshold = threshold;
@@ -16462,7 +17071,7 @@ void main() {
       const uniqueFields = new Set(fields);
       for (const point of context.tiles) {
         const suppressed = Boolean(getMapTile(this.mapData, point.x, point.y)?.city);
-        for (const field of uniqueFields) field.setTileSuppressed(point.x, point.y, suppressed);
+        for (const field2 of uniqueFields) field2.setTileSuppressed(point.x, point.y, suppressed);
       }
       context.invalidateVisibility();
       return true;
@@ -16804,6 +17413,7 @@ void main() {
       }
       this.worldStreamer = void 0;
       this.worldSource = void 0;
+      this.worldSurface = void 0;
       this.worldResidency = void 0;
       this.worldController = void 0;
       this.worldTileUpdateQueue = Promise.resolve();
@@ -16907,6 +17517,7 @@ void main() {
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
     async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)) {
+      if (!this.worldSurface) throw new Error("No world surface is loaded");
       this.clearWorldCopies();
       this.chunkScheduler.clear();
       if (this.terrain) {
@@ -16917,19 +17528,12 @@ void main() {
         size: this.options.size,
         texturesBaseUrl: this.options.texturesBaseUrl,
         atlas: this.atlas,
+        surface: this.worldSurface,
         gridVisible: this.options.gridVisible,
         gridColor: this.options.gridColor,
         gridWidth: this.options.gridWidth,
         gridOpacity: this.options.gridOpacity,
         shaderQuality: this.options.terrainShaderQuality,
-        landform: this.worldSource?.descriptor ? {
-          seed: this.worldSource.descriptor.seed,
-          domain: this.worldSource.descriptor.topology === "toroidal" ? {
-            topology: "toroidal",
-            width: this.worldSource.descriptor.width,
-            height: this.worldSource.descriptor.height
-          } : { topology: "infinite" }
-        } : void 0,
         landformDebugMode: this.options.landformDebugMode,
         terrainTextureRegionSize: this.options.terrainTextureRegionSize,
         waterColorShallow: this.options.waterColorShallow,
@@ -16954,7 +17558,6 @@ void main() {
         waterCornerRounding: this.options.waterCornerRounding,
         coastCurvature: this.options.coastCurvature,
         landBlendCurvature: this.options.landBlendCurvature,
-        mountainHeight: this.options.mountainHeight,
         riverWidth: this.options.riverWidth,
         riverBankWidth: this.options.riverBankWidth,
         riverCurvature: this.options.riverCurvature,
@@ -17477,11 +18080,11 @@ void main() {
       const terrainChanges = [];
       const grassChanges = /* @__PURE__ */ new Map();
       const forestChanges = /* @__PURE__ */ new Map();
-      const enqueue = (batches, field, change) => {
-        if (!field) return;
-        const batch = batches.get(field) ?? [];
+      const enqueue = (batches, field2, change) => {
+        if (!field2) return;
+        const batch = batches.get(field2) ?? [];
         batch.push(change);
-        batches.set(field, batch);
+        batches.set(field2, batch);
       };
       for (const { x, y, state } of changes) {
         const change = { x, y, state };
@@ -17503,8 +18106,8 @@ void main() {
         renderedStates.set(`${x},${y}`, state);
       }
       this.terrain?.setFogStates(terrainChanges);
-      for (const [field, batch] of grassChanges) field.setFogStates(batch);
-      for (const [field, batch] of forestChanges) field.setFogStates(batch);
+      for (const [field2, batch] of grassChanges) field2.setFogStates(batch);
+      for (const [field2, batch] of forestChanges) field2.setFogStates(batch);
       if (renderedStates.size === 0) return;
       for (const copy of this.worldCopies) {
         copy.traverse((object) => {
@@ -17708,6 +18311,7 @@ void main() {
     set mountainHeight(value) {
       this.options.mountainHeight = value;
       if (this.terrain) this.terrain.mountainHeight = value;
+      else this.worldSurface?.setMountainHeight(value);
     }
     get landformDebugMode() {
       return this.terrain?.landformDebugMode ?? this.options.landformDebugMode;

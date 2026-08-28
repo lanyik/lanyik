@@ -2,9 +2,9 @@ import {
     BoundedWorldChunkGeneration,
     DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
     MAX_WORLD_GENERATION_CHUNK_SIZE,
-    WORLD_CHUNK_FORMAT_VERSION,
-    WORLD_GENERATOR_VERSION
+    WORLD_CHUNK_FORMAT_VERSION
 } from "./generateWorldChunk";
+import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 export const WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
 export const WORLD_WORKER_PROTOCOL_VERSION = 1;
