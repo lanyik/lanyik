@@ -97,7 +97,6 @@ export async function createCampaignDemo({
         movementType: MOVEMENT_TYPE,
         passable: isPassable,
         movementCost,
-        terrainRevision: engine.WORLD_GENERATOR_VERSION,
         deltaRevision: 0
     });
     const pathfinder = new HierarchicalPathfinder(source, navigation, isPassable, {

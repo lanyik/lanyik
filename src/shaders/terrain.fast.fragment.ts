@@ -33,8 +33,8 @@ varying vec3 vNeighborsKindA;
 varying vec3 vNeighborsKindB;
 varying vec3 vEdgeFactorsA;
 varying vec3 vEdgeFactorsB;
-varying float vElevation;
 varying vec4 vLandform;
+varying vec4 vBiomeWeights;
 varying vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
@@ -58,7 +58,7 @@ vec3 elevationDebugColor(float value) {
 }
 
 vec3 landformDebugColor() {
-    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 1.5) return elevationDebugColor(vLandform.x);
     if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
     if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
@@ -103,6 +103,18 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     return color;
 }
 
+vec3 applyBiomeMaterial(vec3 color) {
+    vec4 weights = max(vBiomeWeights, 0.0);
+    weights /= max(dot(weights, vec4(1.0)), 0.0001);
+    vec3 tint = weights.x * vec3(0.97, 1.04, 0.96)
+        + weights.y * vec3(1.12, 1.01, 0.82)
+        + weights.z * vec3(0.90, 0.99, 1.09)
+        + weights.w * vec3(0.86, 0.90, 0.94);
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float desaturate = weights.z * 0.10 + weights.w * 0.24;
+    return mix(color, vec3(luminance), desaturate) * tint;
+}
+
 float riverSegDist(vec2 p, vec2 dir, float apothem) {
     float t = clamp(dot(p, dir), 0.0, apothem);
     return length(p - dir * t);
@@ -140,6 +152,7 @@ void main() {
 
     vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
+    texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     float coast = straightCoastField();
     if (coast > 0.0) {

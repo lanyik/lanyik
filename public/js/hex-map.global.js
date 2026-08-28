@@ -4975,6 +4975,8 @@
   }
 
   // src/shaders/terrain.vertex.ts
+  var TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
+  var TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
   var TERRAIN_VERTEX_SHADER = `
 // highp to match terrain.fragment.ts (see its precision comment) - vWorldXZ /
 // vLocal feed the river noise there, and varyings shouldn't lose precision on
@@ -5037,7 +5039,9 @@ attribute vec3 neighborsKindB; // NW/N/NE
 // x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
 // mask. Packed to leave two attribute slots for neighbour relief samples.
 attribute vec4 waterEdges;
-attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+// x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
+// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
+attribute vec4 fogState;
 // x elevation, y ridge strength, z valley strength, w roughness. Values are
 // sampled in global tile coordinates by LandformSampler, so chunk order and
 // worker count cannot change the visible macro landform.
@@ -5071,8 +5075,10 @@ varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel
 varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
 varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
 varying vec3 vNeighborsKindB;
-varying float vElevation;  // normalized mountain elevation (0 flat .. ~1 peak), for snowcap tinting
+// x = final normalized macro+detail elevation; y/z/w = generated
+// ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
 varying vec4 vLandform;
+varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -5169,20 +5175,19 @@ float mountainMacroReliefAt(vec2 p) {
 }
 
 // The generator-driven macro surface supplies the massif and summit heights.
-// Four cheap world-space samples only bend/break that surface at sub-range
-// scale; they never manufacture a contour line or override the macro field.
+// Two world-space samples add only bounded micro detail. This displacement is
+// deliberately tiny so CPU-grounded objects remain visually attached and the
+// generated macro relief, rather than the shader, owns the mountain silhouette.
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
+    float macroRelief = mountainMacroReliefAt(p);
+    if (macroRelief <= 0.0) return 0.0;
     vec2 w = tileOffset + p + worldOffset;
     vec2 terrainP = w / hexSize;
-    float warp = valueNoise(terrainP * 0.075 + vec2(17.3, 41.7)) - 0.5;
-    vec2 q = terrainP + vec2(warp * 4.2, warp * -2.7);
-    vec2 stretched = vec2(q.x * 0.62 + q.y * 0.16, q.y * 0.24 - q.x * 0.05);
-    float crestA = valueNoise(stretched * 0.38 + vec2(37.2, 11.8));
-    float crestB = valueNoise(stretched * 0.57 + vec2(-19.4, 53.1));
-    float crest = max(crestA, crestB * 0.92);
-    float crag = valueNoise(q * 0.86 + vec2(61.3, -18.2));
-    float detailScale = 0.42 + pow(crest, 1.7) * 1.05 + (crag - 0.5) * 0.2;
-    return mountainMacroReliefAt(p) * max(detailScale, 0.25);
+    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
+    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
+    float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
+    float detailGate = smoothstep(0.08, 0.32, macroRelief);
+    return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
 }
 
 // Tracks the strongest "closeness to a water-adjacent edge" (see
@@ -5303,7 +5308,7 @@ void main() {
     // Unseen (fog of war): keep the tile perfectly flat - a coastal land
     // tile's sunken beach rim would betray that water sits next door, which
     // the fog is supposed to hide.
-    float fogVisible = fogState < 0.5 ? 0.0 : 1.0;
+    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
 
     // Land only sinks *half* the way down to waterLevel - the water layer
     // rises to meet it the other half (see water.vertex.ts's riseY), so the
@@ -5407,9 +5412,13 @@ void main() {
     vNeighborsPriorityB = neighborsPriorityB;
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
-    vElevation = elevation;
-    vLandform = landform;
-    vFogState = fogState;
+    vLandform = vec4(elevation, landform.yzw);
+    vec3 independentBiomeWeights = clamp(fogState.yzw, 0.0, 1.0);
+    vBiomeWeights = vec4(
+        max(0.0, 1.0 - independentBiomeWeights.x - independentBiomeWeights.y - independentBiomeWeights.z),
+        independentBiomeWeights
+    );
+    vFogState = fogState.x;
     vRiverEdges = riverEdges;
     vRiverSeaMouthEdges = riverSeaMouthEdges;
     vRiverLakeMouthEdges = riverLakeMouthEdges;
@@ -5523,8 +5532,8 @@ varying vec2 vLocal;
 varying vec2 vWorldXZ;
 varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
 varying vec3 vNeighborsKindB; // (NW,N,NE)
-varying float vElevation;     // normalized mountain elevation, 0 on flat tiles
-varying vec4 vLandform;       // elevation, ridge, valley, roughness
+varying vec4 vLandform;       // final elevation, generated ridge, valley, roughness
+varying vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -5551,9 +5560,9 @@ vec3 elevationDebugColor(float value) {
 
 vec3 landformDebugColor() {
     // Mode 1 shows the final displaced surface, including the continuous
-    // cross-hex mountain field. It is intentionally not the centre-only
-    // generator sample stored in vLandform.x.
-    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    // cross-hex mountain field. The vertex stage deliberately replaces the
+    // centre-only generator elevation in x while retaining y/z/w diagnostics.
+    if (landformDebugMode < 1.5) return elevationDebugColor(vLandform.x);
     if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
     if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
@@ -5686,6 +5695,21 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
     color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
     return color;
+}
+
+// Continuous climate material variation without another atlas fetch. The
+// generator supplies normalized weights; recomputing the normalization here
+// also absorbs half-float/interpolation drift on lower-end GPUs.
+vec3 applyBiomeMaterial(vec3 color) {
+    vec4 weights = max(vBiomeWeights, 0.0);
+    weights /= max(dot(weights, vec4(1.0)), 0.0001);
+    vec3 tint = weights.x * vec3(0.97, 1.04, 0.96)
+        + weights.y * vec3(1.12, 1.01, 0.82)
+        + weights.z * vec3(0.90, 0.99, 1.09)
+        + weights.w * vec3(0.86, 0.90, 0.94);
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float desaturate = weights.z * 0.10 + weights.w * 0.24;
+    return mix(color, vec3(luminance), desaturate) * tint;
 }
 
 // Blends towards a neighboring tile's atlas texture near the edge actually
@@ -5866,6 +5890,7 @@ void main() {
         texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
         texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
+    texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
     // with a water tile; bending it with static world-space noise moves the
@@ -5933,12 +5958,12 @@ void main() {
     // Mountain snow only survives on local high summits. A warped world-space
     // snowline breaks the constant-height rings that used to outline every
     // ridge and made the terrain read as rows of volcanic craters.
-    if (vElevation > 0.0) {
+    if (vLandform.x > 0.0) {
         float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
             + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
         float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
-        float snowT = smoothstep(snowLine, snowLine + 0.2, vElevation);
+        float snowT = smoothstep(snowLine, snowLine + 0.2, vLandform.x);
         texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
     }
 
@@ -6083,8 +6108,8 @@ varying vec3 vNeighborsKindA;
 varying vec3 vNeighborsKindB;
 varying vec3 vEdgeFactorsA;
 varying vec3 vEdgeFactorsB;
-varying float vElevation;
 varying vec4 vLandform;
+varying vec4 vBiomeWeights;
 varying vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
@@ -6108,7 +6133,7 @@ vec3 elevationDebugColor(float value) {
 }
 
 vec3 landformDebugColor() {
-    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    if (landformDebugMode < 1.5) return elevationDebugColor(vLandform.x);
     if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
     if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
@@ -6153,6 +6178,18 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     return color;
 }
 
+vec3 applyBiomeMaterial(vec3 color) {
+    vec4 weights = max(vBiomeWeights, 0.0);
+    weights /= max(dot(weights, vec4(1.0)), 0.0001);
+    vec3 tint = weights.x * vec3(0.97, 1.04, 0.96)
+        + weights.y * vec3(1.12, 1.01, 0.82)
+        + weights.z * vec3(0.90, 0.99, 1.09)
+        + weights.w * vec3(0.86, 0.90, 0.94);
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float desaturate = weights.z * 0.10 + weights.w * 0.24;
+    return mix(color, vec3(luminance), desaturate) * tint;
+}
+
 float riverSegDist(vec2 p, vec2 dir, float apothem) {
     float t = clamp(dot(p, dir), 0.0, apothem);
     return length(p - dir * t);
@@ -6190,6 +6227,7 @@ void main() {
 
     vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
+    texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
@@ -6273,7 +6311,7 @@ attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
 attribute vec3 neighborsKindB; // NW/N/NE
-attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+attribute vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
 
 varying vec2 vUV;
 varying float vBorder;
@@ -6409,7 +6447,7 @@ void main() {
     // tile to land's rest height (y=0). A tile that kept animating - or even
     // just sat visibly lower than its land neighbors - would still read as
     // "there is water here" through fog that is supposed to hide everything.
-    float fogVisible = fogState < 0.5 ? 0.0 : 1.0;
+    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
 
     // damp the wave out towards the shore (beachT -> 1) instead of a purely
     // radial falloff - a radial one shrinks towards *every* corner regardless
@@ -6450,7 +6488,7 @@ void main() {
     vNeighborsPriorityB = neighborsPriorityB;
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
-    vFogState = fogState;
+    vFogState = fogState.x;
     // Same upright-for-the-camera mapping as terrain.vertex.ts's vFogUV -
     // u along world -Z, v along world -X - so land and water sample the fog
     // texture identically and it stays continuous across the two layers.
@@ -6873,8 +6911,9 @@ void main() {
         neighborsKindA: new Float32Array(tiles.length * 3),
         neighborsKindB: new Float32Array(tiles.length * 3),
         waterEdges: new Float32Array(tiles.length * 4),
-        fogState: new Float32Array(tiles.length),
-        // filled per tile below
+        // x = fog state; y/z/w = dry/cold/alpine. Temperate is inferred
+        // in the terrain shader, so this remains one attribute location.
+        fogState: new Float32Array(tiles.length * 4),
         landform: new Float32Array(tiles.length * 4),
         reliefNeighborsA: new Float32Array(tiles.length * 3),
         reliefNeighborsB: new Float32Array(tiles.length * 3)
@@ -6888,8 +6927,12 @@ void main() {
         attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
         attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
         attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y) ? -1 : surface.getEffectiveRelief(tile.x, tile.y);
-        attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
-        const landform = surface.sampleGenerated(tile.x, tile.y)?.landform;
+        const sample = surface.sampleGenerated(tile.x, tile.y);
+        attrs.fogState[i * 4 + 0] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
+        attrs.fogState[i * 4 + 1] = sample?.biomeWeights.dry ?? 0;
+        attrs.fogState[i * 4 + 2] = sample?.biomeWeights.cold ?? 0;
+        attrs.fogState[i * 4 + 3] = sample?.biomeWeights.alpine ?? 0;
+        const landform = sample?.landform;
         if (landform) {
           attrs.landform[i * 4 + 0] = landform.elevation;
           attrs.landform[i * 4 + 1] = landform.ridge;
@@ -6953,7 +6996,7 @@ void main() {
       geometry.setAttribute("neighborsKindA", new three.InstancedBufferAttribute(attrs.neighborsKindA, 3));
       geometry.setAttribute("neighborsKindB", new three.InstancedBufferAttribute(attrs.neighborsKindB, 3));
       geometry.setAttribute("waterEdges", new three.InstancedBufferAttribute(attrs.waterEdges, 4));
-      geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 1));
+      geometry.setAttribute("fogState", new three.InstancedBufferAttribute(attrs.fogState, 4));
       geometry.setAttribute("landform", new three.InstancedBufferAttribute(attrs.landform, 4));
       geometry.setAttribute("reliefNeighborsA", new three.InstancedBufferAttribute(attrs.reliefNeighborsA, 3));
       geometry.setAttribute("reliefNeighborsB", new three.InstancedBufferAttribute(attrs.reliefNeighborsB, 3));
@@ -7031,7 +7074,7 @@ void main() {
       const riverDepth = this.options.riverDepth ?? waterDepth * 0.6;
       return {
         minY: -Math.max(waterDepth, riverDepth),
-        maxY: this.surface.maximumHeight * 1.57
+        maxY: this.surface.maximumHeight * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER
       };
     }
     refreshChunkHeightBounds() {
@@ -7787,7 +7830,8 @@ void main() {
         if (!entry) return;
         const attribute = entry.mesh.geometry.getAttribute("fogState");
         if (!attribute) return;
-        attribute.array[entry.index] = state;
+        const componentOffset = entry.index * 4;
+        attribute.array[componentOffset] = state;
         const metadata = getWorldChunkMetadata(entry.mesh);
         const record = metadata ? this.chunkRecords.get(metadata.id) : void 0;
         const geometries = record ? /* @__PURE__ */ new Set([
@@ -7798,7 +7842,7 @@ void main() {
           const target = geometry.getAttribute("fogState");
           if (!target) continue;
           const ranges = updates.get(target) ?? [];
-          ranges.push({ start: entry.index, count: 1 });
+          ranges.push({ start: componentOffset, count: 4 });
           updates.set(target, ranges);
         }
       };
@@ -15916,6 +15960,7 @@ void main() {
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
+    mountainHeight: 80,
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
     riverWidth: 0.28,
@@ -15961,7 +16006,7 @@ void main() {
       riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_HEX_MAP_OPTIONS.waterColorShallow,
       riverColorDeep: options.riverColorDeep ?? options.waterColorDeep ?? DEFAULT_HEX_MAP_OPTIONS.waterColorDeep,
       riverDepth: options.riverDepth ?? waterDepth * 0.6,
-      mountainHeight: options.mountainHeight ?? size * 0.6,
+      mountainHeight: options.mountainHeight ?? DEFAULT_HEX_MAP_OPTIONS.mountainHeight,
       grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
       grassBladeHeight,
       grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35

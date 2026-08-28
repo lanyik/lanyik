@@ -93,8 +93,8 @@ varying vec2 vLocal;
 varying vec2 vWorldXZ;
 varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
 varying vec3 vNeighborsKindB; // (NW,N,NE)
-varying float vElevation;     // normalized mountain elevation, 0 on flat tiles
-varying vec4 vLandform;       // elevation, ridge, valley, roughness
+varying vec4 vLandform;       // final elevation, generated ridge, valley, roughness
+varying vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -121,9 +121,9 @@ vec3 elevationDebugColor(float value) {
 
 vec3 landformDebugColor() {
     // Mode 1 shows the final displaced surface, including the continuous
-    // cross-hex mountain field. It is intentionally not the centre-only
-    // generator sample stored in vLandform.x.
-    if (landformDebugMode < 1.5) return elevationDebugColor(vElevation);
+    // cross-hex mountain field. The vertex stage deliberately replaces the
+    // centre-only generator elevation in x while retaining y/z/w diagnostics.
+    if (landformDebugMode < 1.5) return elevationDebugColor(vLandform.x);
     if (landformDebugMode < 2.5) return mix(vec3(0.08, 0.03, 0.12), vec3(1.0, 0.38, 0.08), vLandform.y);
     if (landformDebugMode < 3.5) return mix(vec3(0.08, 0.09, 0.12), vec3(0.08, 0.76, 1.0), vLandform.z);
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
@@ -256,6 +256,21 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
     color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
     return color;
+}
+
+// Continuous climate material variation without another atlas fetch. The
+// generator supplies normalized weights; recomputing the normalization here
+// also absorbs half-float/interpolation drift on lower-end GPUs.
+vec3 applyBiomeMaterial(vec3 color) {
+    vec4 weights = max(vBiomeWeights, 0.0);
+    weights /= max(dot(weights, vec4(1.0)), 0.0001);
+    vec3 tint = weights.x * vec3(0.97, 1.04, 0.96)
+        + weights.y * vec3(1.12, 1.01, 0.82)
+        + weights.z * vec3(0.90, 0.99, 1.09)
+        + weights.w * vec3(0.86, 0.90, 0.94);
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float desaturate = weights.z * 0.10 + weights.w * 0.24;
+    return mix(color, vec3(luminance), desaturate) * tint;
 }
 
 // Blends towards a neighboring tile's atlas texture near the edge actually
@@ -436,6 +451,7 @@ void main() {
         texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
         texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
+    texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
     // with a water tile; bending it with static world-space noise moves the
@@ -503,12 +519,12 @@ void main() {
     // Mountain snow only survives on local high summits. A warped world-space
     // snowline breaks the constant-height rings that used to outline every
     // ridge and made the terrain read as rows of volcanic craters.
-    if (vElevation > 0.0) {
+    if (vLandform.x > 0.0) {
         float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
             + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
         float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
-        float snowT = smoothstep(snowLine, snowLine + 0.2, vElevation);
+        float snowT = smoothstep(snowLine, snowLine + 0.2, vLandform.x);
         texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
     }
 

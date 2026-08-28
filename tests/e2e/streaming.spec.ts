@@ -18,7 +18,7 @@ interface Diagnostics {
     rendererMemory?: { geometries: number; textures: number };
     renderer?: { calls: number; triangles: number };
     rendererPixelRatio?: number;
-    adaptive?: { targetFrameMs: number };
+    adaptive?: { enabled: boolean; targetFrameMs: number };
     gpuTiming?: { supported: boolean; pendingQueries: number; completedSamples: number };
     worldLifecycle?: { state: string; pendingTasks: number; rejectedPublications: number };
     frameTasks?: { pendingTasks: number; pendingWeight: number; shedTasks: number };
@@ -83,8 +83,12 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
     expect(sample.renderer!.calls).toBeLessThanOrEqual(12);
     expect(sample.renderer!.triangles).toBeLessThan(10_000);
     expect(sample.rendererPixelRatio).toBeLessThanOrEqual(1);
-    expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 60);
+    expect(sample.adaptive!.enabled).toBe(false);
+    expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 240);
     expect(sample.renderBackend!.renderer.length).toBeGreaterThan(0);
+    expect(await page.evaluate(() => (window as unknown as {
+        hexWorld: { mountainHeight: number };
+    }).hexWorld.mountainHeight)).toBe(80);
 });
 
 test("streams across long distances while residency and GPU caches stay bounded", async ({ page }, testInfo) => {

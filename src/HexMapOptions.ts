@@ -50,6 +50,7 @@ export interface HexMapOptions {
     waterCornerRounding?: number;
     coastCurvature?: number;
     landBlendCurvature?: number;
+    /** World-space vertical scale for generated relief. Defaults to 80. */
     mountainHeight?: number;
     landformDebugMode?: LandformDebugMode;
     /** Atlas texture detail span in hex rows/columns. Defaults to 2. */
@@ -136,7 +137,6 @@ export type ResolvedHexMapOptions = Required<Omit<
     | "riverColorShallow"
     | "riverColorDeep"
     | "riverDepth"
-    | "mountainHeight"
 >> & {
     element: string;
     waterDepth: number;
@@ -144,12 +144,10 @@ export type ResolvedHexMapOptions = Required<Omit<
     riverColorShallow: ColorRepresentation;
     riverColorDeep: ColorRepresentation;
     riverDepth: number;
-    mountainHeight: number;
 };
 
-// Derived defaults (water depth, fog scale, river colours/depth and mountain
-// height) are resolved in resolveHexMapOptions because they depend on other
-// caller-provided values.
+// Derived defaults (water depth, fog scale, river colours/depth) are resolved
+// in resolveHexMapOptions because they depend on other caller-provided values.
 export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     | "element"
     | "waterDepth"
@@ -157,7 +155,6 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     | "riverColorShallow"
     | "riverColorDeep"
     | "riverDepth"
-    | "mountainHeight"
 >> = {
     size: 40,
     maxPixelRatio: 2,
@@ -193,6 +190,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     waterCornerRounding: 0.4,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
+    mountainHeight: 80,
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
     riverWidth: 0.28,
@@ -243,7 +241,7 @@ export function resolveHexMapOptions(options: HexMapOptions): ResolvedHexMapOpti
             ?? options.waterColorDeep
             ?? DEFAULT_HEX_MAP_OPTIONS.waterColorDeep,
         riverDepth: options.riverDepth ?? waterDepth * 0.6,
-        mountainHeight: options.mountainHeight ?? size * 0.6,
+        mountainHeight: options.mountainHeight ?? DEFAULT_HEX_MAP_OPTIONS.mountainHeight,
         grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
         grassBladeHeight,
         grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35

@@ -127,6 +127,13 @@ world generation and surface revision still match. Terrain overrides invalidate
 the same revision and remount only affected resident chunks plus their one-ring
 dependents.
 
+`mountainHeight` defaults to 80 world units. The vertex shader owns only a
+world-coordinate micro displacement bounded to ±1.5% around the CPU macro
+surface, and chunk Y bounds include the matching 1.015 multiplier. Terrain keeps
+15 vertex attribute locations: `fogState` is a packed vec4 containing fog plus
+three independent biome weights, with temperate inferred in both full and fast
+materials. The continuous biome tint adds no terrain-atlas lookup.
+
 ## Unified world sources
 
 `HexMap.loadWorld()` owns one source for the duration of a load session. Calling

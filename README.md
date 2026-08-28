@@ -144,6 +144,12 @@ Use `ToroidalWorldSource` when the same Worker/cache model needs finite periodic
 bounds. It accepts even widths and dimensions from 8 to 512. Implement
 `WorldSource` directly for HTTP, editor, IndexedDB or server-authoritative data.
 
+Generated relief uses an 80-world-unit `mountainHeight` display scale by
+default. The browser demo keeps rendering on `requestAnimationFrame`, records a
+240 FPS performance target, and disables automatic quality migration so FPS
+comparisons use a fixed workload. The observable ceiling is still the
+browser/display refresh rate rather than a library-side frame lock.
+
 ### Package entry points
 
 | Import | Responsibility |

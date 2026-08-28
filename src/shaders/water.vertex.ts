@@ -38,7 +38,7 @@ attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
 attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
 attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
 attribute vec3 neighborsKindB; // NW/N/NE
-attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+attribute vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
 
 varying vec2 vUV;
 varying float vBorder;
@@ -174,7 +174,7 @@ void main() {
     // tile to land's rest height (y=0). A tile that kept animating - or even
     // just sat visibly lower than its land neighbors - would still read as
     // "there is water here" through fog that is supposed to hide everything.
-    float fogVisible = fogState < 0.5 ? 0.0 : 1.0;
+    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
 
     // damp the wave out towards the shore (beachT -> 1) instead of a purely
     // radial falloff - a radial one shrinks towards *every* corner regardless
@@ -215,7 +215,7 @@ void main() {
     vNeighborsPriorityB = neighborsPriorityB;
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
-    vFogState = fogState;
+    vFogState = fogState.x;
     // Same upright-for-the-camera mapping as terrain.vertex.ts's vFogUV -
     // u along world -Z, v along world -X - so land and water sample the fog
     // texture identically and it stays continuous across the two layers.

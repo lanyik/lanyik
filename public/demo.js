@@ -15,7 +15,8 @@ const {
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const fastRenderMode = query.get("quality") === "fast";
-const TARGET_FRAME_MS = 1000 / 60;
+const TARGET_FRAME_RATE = 240;
+const TARGET_FRAME_MS = 1000 / TARGET_FRAME_RATE;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
@@ -90,7 +91,6 @@ const map = new HexMap({
     coastalWaveDistortion: 0.5,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
-    mountainHeight: 30,
     ...(fastRenderMode ? {
         maxPixelRatio: 1,
         antialias: false,
@@ -422,10 +422,8 @@ async function regenerate() {
             await map.loadWorld({
                 source,
                 initialTile,
-                targetFrameMs: TARGET_FRAME_MS,
-                adaptiveDegradeFrames: 6,
-                adaptiveRecoverFrames: 600,
-                adaptiveCooldownFrames: 6
+                adaptiveStreaming: false,
+                targetFrameMs: TARGET_FRAME_MS
             });
             activeSource = source;
             if (campaignMode) {
@@ -459,10 +457,8 @@ async function regenerate() {
         activeSource = undefined;
         await map.loadWorld({
             source,
-            targetFrameMs: TARGET_FRAME_MS,
-            adaptiveDegradeFrames: 6,
-            adaptiveRecoverFrames: 600,
-            adaptiveCooldownFrames: 6
+            adaptiveStreaming: false,
+            targetFrameMs: TARGET_FRAME_MS
         });
         activeSource = source;
         setStatus("generated", {
@@ -554,7 +550,7 @@ const blendCurveController = terrainFolder.add(map, "landBlendCurvature", 0, 1, 
 const textureRegionController = terrainFolder.add(map, "terrainTextureRegionSize", 1, 8, 0.5);
 const textureRegionInput = textureRegionController.domElement.querySelector("input");
 if (textureRegionInput) textureRegionInput.dataset.textureRegion = "";
-const mountainController = terrainFolder.add(map, "mountainHeight", 0, 80, 1);
+const mountainController = terrainFolder.add(map, "mountainHeight", 0, 160, 1);
 const landformDebugOptions = {
     [i18n.t("landformDebug.off")]: "off",
     [i18n.t("landformDebug.elevation")]: "elevation",

@@ -1,3 +1,6 @@
+export const TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
+export const TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
+
 export const TERRAIN_VERTEX_SHADER = `
 // highp to match terrain.fragment.ts (see its precision comment) - vWorldXZ /
 // vLocal feed the river noise there, and varyings shouldn't lose precision on
@@ -60,7 +63,9 @@ attribute vec3 neighborsKindB; // NW/N/NE
 // x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
 // mask. Packed to leave two attribute slots for neighbour relief samples.
 attribute vec4 waterEdges;
-attribute float fogState; // 0 = unseen, 1 = explored (darkened), 2 = visible - see FogOfWar.ts
+// x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
+// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
+attribute vec4 fogState;
 // x elevation, y ridge strength, z valley strength, w roughness. Values are
 // sampled in global tile coordinates by LandformSampler, so chunk order and
 // worker count cannot change the visible macro landform.
@@ -94,8 +99,10 @@ varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel
 varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
 varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
 varying vec3 vNeighborsKindB;
-varying float vElevation;  // normalized mountain elevation (0 flat .. ~1 peak), for snowcap tinting
+// x = final normalized macro+detail elevation; y/z/w = generated
+// ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
 varying vec4 vLandform;
+varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -192,20 +199,19 @@ float mountainMacroReliefAt(vec2 p) {
 }
 
 // The generator-driven macro surface supplies the massif and summit heights.
-// Four cheap world-space samples only bend/break that surface at sub-range
-// scale; they never manufacture a contour line or override the macro field.
+// Two world-space samples add only bounded micro detail. This displacement is
+// deliberately tiny so CPU-grounded objects remain visually attached and the
+// generated macro relief, rather than the shader, owns the mountain silhouette.
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
+    float macroRelief = mountainMacroReliefAt(p);
+    if (macroRelief <= 0.0) return 0.0;
     vec2 w = tileOffset + p + worldOffset;
     vec2 terrainP = w / hexSize;
-    float warp = valueNoise(terrainP * 0.075 + vec2(17.3, 41.7)) - 0.5;
-    vec2 q = terrainP + vec2(warp * 4.2, warp * -2.7);
-    vec2 stretched = vec2(q.x * 0.62 + q.y * 0.16, q.y * 0.24 - q.x * 0.05);
-    float crestA = valueNoise(stretched * 0.38 + vec2(37.2, 11.8));
-    float crestB = valueNoise(stretched * 0.57 + vec2(-19.4, 53.1));
-    float crest = max(crestA, crestB * 0.92);
-    float crag = valueNoise(q * 0.86 + vec2(61.3, -18.2));
-    float detailScale = 0.42 + pow(crest, 1.7) * 1.05 + (crag - 0.5) * 0.2;
-    return mountainMacroReliefAt(p) * max(detailScale, 0.25);
+    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
+    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
+    float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
+    float detailGate = smoothstep(0.08, 0.32, macroRelief);
+    return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
 }
 
 // Tracks the strongest "closeness to a water-adjacent edge" (see
@@ -326,7 +332,7 @@ void main() {
     // Unseen (fog of war): keep the tile perfectly flat - a coastal land
     // tile's sunken beach rim would betray that water sits next door, which
     // the fog is supposed to hide.
-    float fogVisible = fogState < 0.5 ? 0.0 : 1.0;
+    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
 
     // Land only sinks *half* the way down to waterLevel - the water layer
     // rises to meet it the other half (see water.vertex.ts's riseY), so the
@@ -430,9 +436,13 @@ void main() {
     vNeighborsPriorityB = neighborsPriorityB;
     vNeighborsKindA = neighborsKindA;
     vNeighborsKindB = neighborsKindB;
-    vElevation = elevation;
-    vLandform = landform;
-    vFogState = fogState;
+    vLandform = vec4(elevation, landform.yzw);
+    vec3 independentBiomeWeights = clamp(fogState.yzw, 0.0, 1.0);
+    vBiomeWeights = vec4(
+        max(0.0, 1.0 - independentBiomeWeights.x - independentBiomeWeights.y - independentBiomeWeights.z),
+        independentBiomeWeights
+    );
+    vFogState = fogState.x;
     vRiverEdges = riverEdges;
     vRiverSeaMouthEdges = riverSeaMouthEdges;
     vRiverLakeMouthEdges = riverLakeMouthEdges;

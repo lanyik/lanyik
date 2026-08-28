@@ -6,7 +6,33 @@ interface DemoDiagnostics {
     worldMode: "finite" | "infinite" | "campaign";
     worldStreaming?: { residentChunks: number };
     campaign?: { ready: boolean };
+    renderer?: { triangles: number };
 }
+
+test("links the full terrain shader within the supported attribute budget", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => {
+        if (message.type() === "error") errors.push(message.text());
+    });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+        const state = (window as unknown as {
+            getWorldDiagnostics?: () => DemoDiagnostics;
+        }).getWorldDiagnostics?.();
+        return state?.status === "generated" && !state.generating
+            && (state.renderer?.triangles ?? 0) > 0;
+    });
+    const maxVertexAttributes = await page.evaluate(() => {
+        const renderer = (window as unknown as {
+            hexWorld: { renderer: { getContext(): WebGLRenderingContext } };
+        }).hexWorld.renderer;
+        const gl = renderer.getContext();
+        return gl.getParameter(gl.MAX_VERTEX_ATTRIBS) as number;
+    });
+    expect(maxVertexAttributes).toBeGreaterThanOrEqual(15);
+    expect(errors).toEqual([]);
+});
 
 test("switches and remembers world mode from the root demo control panel", async ({ page }) => {
     test.setTimeout(90_000);

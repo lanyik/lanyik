@@ -46,7 +46,10 @@ import { lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue,
 import { createHexagonGeometry, createHexagonLodGeometry } from "./hexagonGeometry";
 import { makeTextSprite } from "./citysprite";
 import { loadModel } from "../helpers/models";
-import { TERRAIN_VERTEX_SHADER } from "../shaders/terrain.vertex";
+import {
+    TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER,
+    TERRAIN_VERTEX_SHADER
+} from "../shaders/terrain.vertex";
 import { TERRAIN_FRAGMENT_SHADER } from "../shaders/terrain.fragment";
 import { TERRAIN_FAST_FRAGMENT_SHADER } from "../shaders/terrain.fast.fragment";
 import { WATER_VERTEX_SHADER } from "../shaders/water.vertex";
@@ -382,7 +385,9 @@ export class TerrainMesh extends Group {
             neighborsKindA: new Float32Array(tiles.length * 3),
             neighborsKindB: new Float32Array(tiles.length * 3),
             waterEdges: new Float32Array(tiles.length * 4),
-            fogState: new Float32Array(tiles.length), // filled per tile below
+            // x = fog state; y/z/w = dry/cold/alpine. Temperate is inferred
+            // in the terrain shader, so this remains one attribute location.
+            fogState: new Float32Array(tiles.length * 4),
             landform: new Float32Array(tiles.length * 4),
             reliefNeighborsA: new Float32Array(tiles.length * 3),
             reliefNeighborsB: new Float32Array(tiles.length * 3)
@@ -401,8 +406,12 @@ export class TerrainMesh extends Group {
             attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y)
                 ? -1
                 : surface.getEffectiveRelief(tile.x, tile.y);
-            attrs.fogState[i] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
-            const landform = surface.sampleGenerated(tile.x, tile.y)?.landform;
+            const sample = surface.sampleGenerated(tile.x, tile.y);
+            attrs.fogState[i * 4 + 0] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
+            attrs.fogState[i * 4 + 1] = sample?.biomeWeights.dry ?? 0;
+            attrs.fogState[i * 4 + 2] = sample?.biomeWeights.cold ?? 0;
+            attrs.fogState[i * 4 + 3] = sample?.biomeWeights.alpine ?? 0;
+            const landform = sample?.landform;
             if (landform) {
                 attrs.landform[i * 4 + 0] = landform.elevation;
                 attrs.landform[i * 4 + 1] = landform.ridge;
@@ -486,7 +495,7 @@ export class TerrainMesh extends Group {
         geometry.setAttribute("neighborsKindA", new InstancedBufferAttribute(attrs.neighborsKindA, 3));
         geometry.setAttribute("neighborsKindB", new InstancedBufferAttribute(attrs.neighborsKindB, 3));
         geometry.setAttribute("waterEdges", new InstancedBufferAttribute(attrs.waterEdges, 4));
-        geometry.setAttribute("fogState", new InstancedBufferAttribute(attrs.fogState, 1));
+        geometry.setAttribute("fogState", new InstancedBufferAttribute(attrs.fogState, 4));
         geometry.setAttribute("landform", new InstancedBufferAttribute(attrs.landform, 4));
         geometry.setAttribute("reliefNeighborsA", new InstancedBufferAttribute(attrs.reliefNeighborsA, 3));
         geometry.setAttribute("reliefNeighborsB", new InstancedBufferAttribute(attrs.reliefNeighborsB, 3));
@@ -567,13 +576,11 @@ export class TerrainMesh extends Group {
             };
         }
         const riverDepth = this.options.riverDepth ?? waterDepth * 0.6;
-        // The current shader keeps a bounded 1.57x world-space crag detail
-        // multiplier over the authoritative macro surface. Stage 4 will
-        // tighten that detail; until then the margin is explicit rather than
-        // the previous size-based empirical range.
+        // Shader micro detail is explicitly bounded around the authoritative
+        // CPU macro surface. Keep culling bounds derived from that same limit.
         return {
             minY: -Math.max(waterDepth, riverDepth),
-            maxY: this.surface.maximumHeight * 1.57
+            maxY: this.surface.maximumHeight * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER
         };
     }
 
@@ -1430,7 +1437,8 @@ export class TerrainMesh extends Group {
             if (!entry) return;
             const attribute = entry.mesh.geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
             if (!attribute) return;
-            (attribute.array as Float32Array)[entry.index] = state;
+            const componentOffset = entry.index * 4;
+            (attribute.array as Float32Array)[componentOffset] = state;
             const metadata = getWorldChunkMetadata(entry.mesh);
             const record = metadata ? this.chunkRecords.get(metadata.id) : undefined;
             const geometries = record
@@ -1443,7 +1451,10 @@ export class TerrainMesh extends Group {
                 const target = geometry.getAttribute("fogState") as InstancedBufferAttribute | undefined;
                 if (!target) continue;
                 const ranges = updates.get(target) ?? [];
-                ranges.push({ start: entry.index, count: 1 });
+                // Upload the packed instance vec4. Its biome components are
+                // unchanged, but a contiguous vec4 range avoids fragmented
+                // component updates across shared LOD attribute arrays.
+                ranges.push({ start: componentOffset, count: 4 });
                 updates.set(target, ranges);
             }
         };

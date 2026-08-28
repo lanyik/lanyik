@@ -32,6 +32,10 @@ import { createGrassField, GrassSharedResources } from "../../src/objects/Grass"
 import { CITY_FOG_TILE_KEY, TerrainMesh } from "../../src/objects/TerrainMesh";
 import { TERRAIN_FAST_FRAGMENT_SHADER } from "../../src/shaders/terrain.fast.fragment";
 import { TERRAIN_FRAGMENT_SHADER } from "../../src/shaders/terrain.fragment";
+import {
+    TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER,
+    TERRAIN_VERTEX_SHADER
+} from "../../src/shaders/terrain.vertex";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldSurfaceView } from "../../src/world/WorldSurfaceView";
 
@@ -58,8 +62,14 @@ describe("streamed render resource sharing", () => {
     test("de-tiles atlas cells without adding another texture lookup site", () => {
         for (const shader of [TERRAIN_FRAGMENT_SHADER, TERRAIN_FAST_FRAGMENT_SHADER]) {
             expect(shader).toContain("vec3 terrainPattern()");
+            expect(shader).toContain("vec3 applyBiomeMaterial(vec3 color)");
+            expect(shader).toContain("varying vec4 vBiomeWeights");
+            expect(shader).not.toContain("varying float vElevation");
             expect(shader.match(/texture2D\(map,/g)).toHaveLength(1);
         }
+        expect(TERRAIN_VERTEX_SHADER).toContain("attribute vec4 fogState");
+        expect(TERRAIN_VERTEX_SHADER).toContain("varying vec4 vBiomeWeights");
+        expect(TERRAIN_VERTEX_SHADER).not.toContain("varying float vElevation");
     });
 
     test("computes terrain instance data once while caching three geometry LODs", async () => {
@@ -94,9 +104,9 @@ describe("streamed render resource sharing", () => {
         const mesh = meshes[0];
         const metadata = getWorldChunkMetadata(mesh)!;
         expect(metadata.bounds.minY).toBe(-2.5);
-        expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.25 * 1.57, 10);
+        expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.25 * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER, 10);
         terrain.mountainHeight = 8;
-        expect(metadata.bounds.maxY).toBeCloseTo(8 * 1.25 * 1.57, 10);
+        expect(metadata.bounds.maxY).toBeCloseTo(8 * 1.25 * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER, 10);
         const lod0 = terrain.activateChunk(metadata, 0)!;
         const otherLod0 = terrain.activateChunk(getWorldChunkMetadata(meshes[1])!, 0)!;
         expect(otherLod0.getAttribute("position")).toBe(lod0.getAttribute("position"));
@@ -106,6 +116,14 @@ describe("streamed render resource sharing", () => {
         expect(landform.itemSize).toBe(4);
         expect([...landform.array].some(value => value !== 0)).toBe(true);
         expect(lod0.getAttribute("style").itemSize).toBe(4);
+        expect(Object.keys(lod0.attributes)).toHaveLength(15);
+        const packedFogBiome = lod0.getAttribute("fogState") as InstancedBufferAttribute;
+        expect(packedFogBiome.itemSize).toBe(4);
+        const independentBiomeSum = packedFogBiome.array[1]
+            + packedFogBiome.array[2]
+            + packedFogBiome.array[3];
+        expect(independentBiomeSum).toBeGreaterThanOrEqual(0);
+        expect(independentBiomeSum).toBeLessThanOrEqual(1.000001);
         const lod0Offsets = lod0.getAttribute("offset").array;
         const lod1 = terrain.activateChunk(metadata, 1)!;
         expect(lod1.getAttribute("offset").array).toBe(lod0Offsets);
@@ -115,13 +133,15 @@ describe("streamed render resource sharing", () => {
         expect(terrain.lodBuildCount).toBe(4);
 
         const fog = lod0.getAttribute("fogState") as InstancedBufferAttribute;
+        const biomeBeforeFogUpdate = [...fog.array.slice(1, 4)];
         fog.clearUpdateRanges();
         terrain.setFogStates([
             { x: 0, y: 0, state: 0 },
             { x: 0, y: 1, state: 1 },
             { x: 0, y: 2, state: 1 }
         ]);
-        expect(fog.updateRanges).toEqual([{ start: 0, count: 3 }]);
+        expect(fog.updateRanges).toEqual([{ start: 0, count: 12 }]);
+        expect([...fog.array.slice(1, 4)]).toEqual(biomeBeforeFogUpdate);
 
         await terrain.loadCities([{ x: 4, y: 4 }]);
         const cityObjects = terrain.children.filter(child => child.userData[CITY_FOG_TILE_KEY] === "4,4");

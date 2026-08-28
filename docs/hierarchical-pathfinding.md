@@ -29,7 +29,7 @@ import {
     HierarchicalPathfinder,
     ProceduralWorldNavigationIndex
 } from "three-hex-map/pathfinding";
-import { getChunkResidencyCoordinator, WORLD_GENERATOR_VERSION } from "three-hex-map";
+import { getChunkResidencyCoordinator } from "three-hex-map";
 
 const navigation = new ProceduralWorldNavigationIndex({
     seed: "endless-continent",
@@ -37,7 +37,6 @@ const navigation = new ProceduralWorldNavigationIndex({
     movementType: "walker",
     passable: tile => unitTerrain[tile.type] !== undefined,
     movementCost: tile => unitTerrain[tile.type],
-    terrainRevision: WORLD_GENERATOR_VERSION,
     deltaRevision: 0
 });
 
@@ -65,6 +64,10 @@ route.release();
 `ProceduralWorldNavigationIndex` deterministically derives summaries from
 packed terrain without calling `WorldSource.loadChunk()` or installing tiles in
 the render source. Its LRU bounds summary memory independently of world size.
+Unless explicitly overridden for an authored source, its `terrainRevision` is
+the canonical serialized world descriptor fingerprint, matching procedural and
+toroidal `WorldSource.getChunkRevision()`; a bare generator version is not a
+complete terrain identity.
 For authored/server worlds, build summaries with
 `buildWorldNavigationSummary()` and store them in `MemoryWorldNavigationIndex`
 or implement `WorldNavigationIndex` over a database/CDN.
