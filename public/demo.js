@@ -128,7 +128,10 @@ const renderBackend = inspectRenderBackend();
 
 const PERFORMANCE_SAMPLE_INTERVAL = 500;
 let performanceSampleStart = performance.now();
-let performanceFrameCount = 0;
+let performanceCpuFrameMsTotal = 0;
+let performanceCpuFrameSamples = 0;
+let performanceGpuFrameMsTotal = 0;
+let performanceGpuFrameSamples = 0;
 let performanceNumberFormatter;
 let performanceCompactFormatter;
 let performanceSnapshot = {
@@ -189,19 +192,33 @@ function updatePerformanceLocale(locale) {
     renderPerformance();
 }
 
-function samplePerformance() {
+function samplePerformance({ cpuFrameMs, gpuFrameMs } = {}) {
     const now = performance.now();
     const elapsed = now - performanceSampleStart;
-    performanceFrameCount += 1;
+    if (Number.isFinite(cpuFrameMs) && cpuFrameMs > 0) {
+        performanceCpuFrameMsTotal += cpuFrameMs;
+        performanceCpuFrameSamples += 1;
+    }
+    if (Number.isFinite(gpuFrameMs) && gpuFrameMs > 0) {
+        performanceGpuFrameMsTotal += gpuFrameMs;
+        performanceGpuFrameSamples += 1;
+    }
     if (elapsed < PERFORMANCE_SAMPLE_INTERVAL) return;
 
     const rendererInfo = map.renderer?.info;
     const streaming = map.streamingStats;
     const worldStreaming = map.worldStreamingStats;
     const heapSize = performance.memory?.usedJSHeapSize;
+    const averageCpuFrameMs = performanceCpuFrameSamples > 0
+        ? performanceCpuFrameMsTotal / performanceCpuFrameSamples
+        : null;
+    const averageGpuFrameMs = performanceGpuFrameSamples > 0
+        ? performanceGpuFrameMsTotal / performanceGpuFrameSamples
+        : null;
+    const frameTime = Math.max(averageCpuFrameMs ?? 0, averageGpuFrameMs ?? 0) || null;
     performanceSnapshot = {
-        fps: performanceFrameCount * 1000 / elapsed,
-        frameTime: elapsed / performanceFrameCount,
+        fps: frameTime === null ? null : 1000 / frameTime,
+        frameTime,
         memory: Number.isFinite(heapSize) ? heapSize / 1048576 : null,
         drawCalls: rendererInfo?.render.calls ?? null,
         triangles: rendererInfo?.render.triangles ?? null,
@@ -216,7 +233,10 @@ function samplePerformance() {
         cacheStorage: worldStreaming ? worldStreaming.cachedBytes / 1048576 : null,
         backend: renderBackend.label
     };
-    performanceFrameCount = 0;
+    performanceCpuFrameMsTotal = 0;
+    performanceCpuFrameSamples = 0;
+    performanceGpuFrameMsTotal = 0;
+    performanceGpuFrameSamples = 0;
     performanceSampleStart = now;
     renderPerformance();
 }

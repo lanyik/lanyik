@@ -29,6 +29,7 @@ interface Diagnostics {
         busyTasks: number;
         domains: Record<string, unknown>;
     };
+    performance?: { fps: number | null; frameTime: number | null };
     renderBackend?: { renderer: string; software: boolean };
 }
 
@@ -70,7 +71,9 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
         const state = (window as unknown as { getWorldDiagnostics(): Diagnostics }).getWorldDiagnostics();
         return state.worldStreaming?.pendingChunks === 0
             && state.worldStreaming.queuedChunks === 0
-            && (state.renderer?.triangles ?? 0) > 0;
+            && (state.renderer?.triangles ?? 0) > 0
+            && (state.performance?.fps ?? 0) > 0
+            && (state.performance?.frameTime ?? 0) > 0;
     });
     const sample = await diagnostics(page);
     await testInfo.attach("default-render-budget.json", {
@@ -85,6 +88,7 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
     expect(sample.rendererPixelRatio).toBeLessThanOrEqual(1);
     expect(sample.adaptive!.enabled).toBe(false);
     expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 240);
+    expect(sample.performance!.fps! * sample.performance!.frameTime!).toBeCloseTo(1000, 6);
     expect(sample.renderBackend!.renderer.length).toBeGreaterThan(0);
     expect(await page.evaluate(() => (window as unknown as {
         hexWorld: { mountainHeight: number };

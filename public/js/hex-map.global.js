@@ -16415,8 +16415,10 @@ void main() {
       };
       this.animate = (t) => {
         if (this.disposed) return;
+        const cpuFrameStart = performance.now();
         if (this.rendererHost.contextStats.state !== "ready") {
           this.lastFrameTime = void 0;
+          this.lastCpuFrameMs = void 0;
           this.animationFrameId = window.requestAnimationFrame(this.animate);
           return;
         }
@@ -16460,8 +16462,14 @@ void main() {
           if (record.grass) grassResources.add(record.grass.resources);
         }
         for (const resources of grassResources) resources.update(dtS);
-        this.emit("frame", { t, dtS });
+        this.emit("frame", {
+          t,
+          dtS,
+          cpuFrameMs: this.lastCpuFrameMs,
+          gpuFrameMs
+        });
         this.rendererHost.render();
+        this.lastCpuFrameMs = performance.now() - cpuFrameStart;
         this.animationFrameId = window.requestAnimationFrame(this.animate);
       };
       this.options = resolveHexMapOptions(options);
