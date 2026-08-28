@@ -1,7 +1,7 @@
 {
   "name": "three-hex-map",
   "version": "0.5.0",
-  "description": "A civ like 3D hexagonal terrain map based on three.js, rendered via instancing/shaders.",
+  "description": "A browser-first 3D hex-world renderer and streamed-world runtime built on three.js.",
   "type": "module",
   "main": "dist/hex-map.cjs",
   "module": "dist/hex-map.mjs",
@@ -62,7 +62,7 @@
     "webgl"
   ],
   "author": "Oleg Gunyakov",
-  "license": "ISC",
+  "license": "MPL-2.0",
   "bugs": {
     "url": "https://github.com/lanyik/lanyik/issues"
   },

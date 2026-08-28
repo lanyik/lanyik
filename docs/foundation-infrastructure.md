@@ -1,6 +1,6 @@
-# Foundation infrastructure
+# Runtime foundation architecture
 
-这轮基建把“世界渲染能跑”提升为“可替换、可恢复、资源有界、可验收”。核心原则不是让所有子系统使用同一个执行循环，而是让它们共享同一组所有权、世代、预算、取消与验收语义。
+当前运行时基础设施把“世界渲染能跑”提升为“可替换、可恢复、资源有界、可验收”。核心原则不是让所有子系统使用同一个执行循环，而是让它们共享同一组所有权、世代、预算、取消与验收语义。冻结边界见 [foundation-v1-freeze.md](./foundation-v1-freeze.md)，测试分层与执行策略见 [testing.md](./testing.md)。
 
 ## 1. 生命周期与故障恢复
 
@@ -94,22 +94,10 @@ preparing -> committing -> committed
 - 同 seed/chunk 输入产生同 checksum，且不依赖请求顺序。
 - checkpoint 中途故障后重启，最终状态等于最后提交 generation。
 - checkpoint prepare 失败后，同进程重试也会回滚旧 token 并从全新 generation 捕获。
-- 5,000 次随机资源/队列 churn 中 admission 始终有界。
+- 固定种子的资源/队列 churn 中 admission 始终有界。
 - 超重任务、后台 starvation、资源账户销毁、GPU query 饱和和不响应取消的生命周期均有独立回归测试。
-- 1,000 次 lifecycle 替换后 pending 为零且没有晚到发布。
-- E2E 连续快速替换 40 个世界，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
+- E2E 连续快速替换世界时，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
 - 定时 CI 运行可配置的长时间浏览器 soak（默认 500 个世界世代），混合稳态替换和取消突发，并持续采样生命周期、调度域、WebGL 资源和强制 GC 后的 JS heap 上界。
 - benchmark gate 对生成、植被、GPU range 合并、导航摘要和模拟 tick 设置宽松但强制的回归上限。
 
-常用命令：
-
-```bash
-npm test
-npm run test:stability
-npm run typecheck
-npm run benchmark:check
-npm run test:e2e
-# PowerShell: $env:FOUNDATION_SOAK_ITERATIONS=500; npm run test:soak
-```
-
-CI 的 verify job 执行单测、类型检查、生成物一致性和 benchmark gate；浏览器 job 执行功能 E2E、生命周期与资源增长检查。每日定时运行会把 `FOUNDATION_SOAK_ITERATIONS` 提升到 500，并在成功或失败时保留采样附件。
+完整命令和各层适用范围统一维护在 [testing.md](./testing.md)，不在架构文档中重复容易漂移的测试数量或命令清单。

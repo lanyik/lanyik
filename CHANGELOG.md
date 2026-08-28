@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refocused the README and documentation around the current streamed-world
+  architecture, package entry points, demo modes and verification workflow;
+  removed obsolete implementation plans and unreferenced legacy textures.
+- Corrected package and README license metadata to match the repository's
+  Mozilla Public License 2.0 text.
 - Focused the foundation test suite on distinct contracts: removed duplicate
   acceptance and capability probes, centralized deterministic async gates,
   strengthened structured-checksum and restore-lock coverage, and documented
