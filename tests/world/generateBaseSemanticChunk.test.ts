@@ -12,7 +12,10 @@ import {
     createCoreInfiniteWorldDescriptorV2,
     createCoreToroidalWorldDescriptorV2
 } from "../../src/world/SemanticCatalogsV2";
-import { generateBaseSemanticChunk } from "../../src/world/generateBaseSemanticChunk";
+import {
+    createBaseSemanticChunkGenerator,
+    generateBaseSemanticChunk
+} from "../../src/world/generateBaseSemanticChunk";
 import { createWorldDescriptorV2 } from "../../src/world/WorldDescriptorV2";
 import { createSemanticWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 
@@ -135,5 +138,20 @@ describe("v2 base semantic generation", () => {
         expect(chunk.climate).toHaveLength(BASE_SEMANTIC_CHUNK_TILE_COUNT * 2);
         expect(chunk.vegetationDensity).toHaveLength(BASE_SEMANTIC_CHUNK_TILE_COUNT);
         expect(chunk.vegetationProfile).toHaveLength(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+    });
+
+    test("samples sparse macro heights through the exact chunk quantizer", () => {
+        const infinite = createCoreInfiniteWorldDescriptorV2("semantic-v2-sparse-height");
+        const generator = createBaseSemanticChunkGenerator(infinite);
+        const chunk = generator.generate(-2, 3);
+        for (const [localX, localY] of [[0, 0], [4, 12], [31, 31]] as const) {
+            expect(generator.sampleMacroHeight(-64 + localX, 96 + localY))
+                .toBe(chunk.macroHeight[semanticTileIndex(localX, localY)]);
+        }
+
+        const toroidal = createCoreToroidalWorldDescriptorV2("semantic-v2-sparse-torus", 64, 32);
+        const toroidalGenerator = createBaseSemanticChunkGenerator(toroidal);
+        expect(toroidalGenerator.sampleMacroHeight(-4, 36))
+            .toBe(toroidalGenerator.sampleMacroHeight(60, 4));
     });
 });

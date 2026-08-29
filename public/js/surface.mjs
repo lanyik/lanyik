@@ -1773,6 +1773,9 @@ function createBaseSemanticChunkGenerator(descriptor) {
     identity: serializeWorldDescriptorV2(descriptor),
     generate(chunkX, chunkY) {
       return generateWithResolver(descriptor, resolver, chunkX, chunkY);
+    },
+    sampleMacroHeight(tileX, tileY) {
+      return quantizeUnitToUint16(resolver.sampleGenerated(tileX, tileY).landform.elevation);
     }
   });
 }

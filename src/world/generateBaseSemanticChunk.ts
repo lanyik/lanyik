@@ -37,6 +37,7 @@ export interface BaseSemanticChunkGenerator {
     readonly descriptor: InfiniteWorldDescriptorV2 | ToroidalWorldDescriptorV2;
     readonly identity: string;
     generate(chunkX: number, chunkY: number): BaseSemanticChunk;
+    sampleMacroHeight(tileX: number, tileY: number): number;
 }
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -168,6 +169,9 @@ export function createBaseSemanticChunkGenerator(descriptor: WorldDescriptorV2):
         identity: serializeWorldDescriptorV2(descriptor),
         generate(chunkX: number, chunkY: number): BaseSemanticChunk {
             return generateWithResolver(descriptor, resolver, chunkX, chunkY);
+        },
+        sampleMacroHeight(tileX: number, tileY: number): number {
+            return quantizeUnitToUint16(resolver.sampleGenerated(tileX, tileY).landform.elevation);
         }
     });
 }
