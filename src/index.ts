@@ -154,6 +154,22 @@ export type {
     LightingUniformSet,
     ThreeLightingRendererTarget
 } from "./rendering/ThreeLightingAdapter";
+export {
+    ThreePmremEnvironmentCompiler,
+    LightingEnvironmentSupersededError,
+    LightingEnvironmentManager
+} from "./rendering/LightingEnvironmentManager";
+export type {
+    AnalyticSkyEnvironmentSource,
+    EquirectangularEnvironmentSource,
+    CubeEnvironmentSource,
+    LightingEnvironmentSource,
+    CompiledLightingEnvironment,
+    LightingEnvironmentCompiler,
+    LightingEnvironmentTaskScheduler,
+    LightingEnvironmentActivator,
+    LightingEnvironmentManagerStats
+} from "./rendering/LightingEnvironmentManager";
 export { HexMapInteractionController } from "./rendering/HexMapInteractionController";
 export type {
     HexMapInteractionControllerOptions,
