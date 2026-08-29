@@ -20,10 +20,10 @@ import {
     assertWorldDescriptorV2
 } from "./WorldDescriptorV2";
 
-const STATIC_PLAIN_HEIGHT = 32_768;
-const STATIC_HILL_HEIGHT = 39_321;
-const STATIC_MOUNTAIN_HEIGHT = 52_428;
-const STATIC_WOOD_DENSITY = 140;
+export const STATIC_PLAIN_HEIGHT = 32_768;
+export const STATIC_HILL_HEIGHT = 39_321;
+export const STATIC_MOUNTAIN_HEIGHT = 52_428;
+export const STATIC_WOOD_DENSITY = 140;
 const ALLOWED_MODIFIERS = new Set(["hill", "wood", "lake", "river"]);
 const LAND_TYPES = new Set<string>(Object.values(Land));
 
@@ -34,7 +34,7 @@ export interface CompileStaticSemanticChunkOptions {
     readonly chunkY: number;
 }
 
-function assertStaticInputs(map: MapInfo, descriptor: StaticWorldDescriptorV2): void {
+export function assertStaticMapDescriptor(map: MapInfo, descriptor: StaticWorldDescriptorV2): void {
     assertWorldDescriptorV2(descriptor);
     assertCoreWorldSemanticsV2(descriptor);
     if (descriptor.sourceKind !== "static" || descriptor.topology !== "finite") {
@@ -46,7 +46,7 @@ function assertStaticInputs(map: MapInfo, descriptor: StaticWorldDescriptorV2): 
     }
 }
 
-function assertStaticTile(tile: TileInfo, x: number, y: number): void {
+export function assertStaticSemanticTile(tile: TileInfo, x: number, y: number): void {
     if (!tile || typeof tile !== "object" || !LAND_TYPES.has(tile.type)) {
         throw new TypeError(`static semantic tile ${x},${y} has an invalid terrain type`);
     }
@@ -62,7 +62,7 @@ function assertStaticTile(tile: TileInfo, x: number, y: number): void {
     }
 }
 
-function macroHeightFor(tile: Readonly<TileInfo>, seaLevel: number): number {
+export function staticMacroHeightFor(tile: Readonly<TileInfo>, seaLevel: number): number {
     if (tile.type === Land.sea) return Math.max(0, seaLevel - 4_096);
     if (tile.type === Land.coastal) return Math.max(0, seaLevel - 1);
     if (tile.type === Land.mountain) return STATIC_MOUNTAIN_HEIGHT;
@@ -124,7 +124,7 @@ export function compileStaticSemanticChunk(
     options: Readonly<CompileStaticSemanticChunkOptions>
 ): BaseSemanticChunk {
     if (!options || typeof options !== "object") throw new TypeError("static semantic compile options are required");
-    assertStaticInputs(options.map, options.descriptor);
+    assertStaticMapDescriptor(options.map, options.descriptor);
     const origin = chunkOrigin(options.chunkX, options.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
     if (origin.x < 0 || origin.y < 0 || origin.x >= options.descriptor.width || origin.y >= options.descriptor.height) {
         throw new RangeError("static semantic chunk key is outside the finite world");
@@ -143,10 +143,10 @@ export function compileStaticSemanticChunk(
             const worldY = origin.y + localY;
             const tile = getMapTile(options.map, worldX, worldY);
             if (!tile) throw new TypeError(`static semantic map is missing tile ${worldX},${worldY}`);
-            assertStaticTile(tile, worldX, worldY);
+            assertStaticSemanticTile(tile, worldX, worldY);
             const tileIndex = semanticTileIndex(localX, localY);
             substrateClass[tileIndex] = substrateFor(tile);
-            macroHeight[tileIndex] = macroHeightFor(tile, options.descriptor.seaLevel);
+            macroHeight[tileIndex] = staticMacroHeightFor(tile, options.descriptor.seaLevel);
             writeBiomeAndClimate(tile, tileIndex, biomeWeights, climate);
             vegetationDensity[tileIndex] = tile.modifiers?.includes("wood") ? STATIC_WOOD_DENSITY : 0;
             vegetationProfile[tileIndex] = vegetationProfileFor(tile);
@@ -169,4 +169,3 @@ export function compileStaticSemanticChunk(
         vegetationProfile
     }, semanticCatalogLimits(options.descriptor));
 }
-

@@ -8,7 +8,7 @@ import {
 import { HydrologyRegion, HydrologyRegionKey } from "./HydrologyRegion";
 import {
     HydrologyRegionAssembler,
-    canonicalIntegerHydrologyPoint
+    canonicalHydrologyPoint
 } from "./HydrologyRegionAssembler";
 import {
     MACRO_DRAINAGE_NODE_STEP_TILES,
@@ -185,7 +185,7 @@ export class InfiniteHydrologyRegionSource {
             key,
             validWidth: HYDROLOGY_REGION_SIZE,
             validHeight: HYDROLOGY_REGION_SIZE,
-            canonicalizePort: canonicalIntegerHydrologyPoint
+            canonicalizePort: canonicalHydrologyPoint
         });
         const candidates = this.basinResolver.candidateSites(origin.x, origin.y);
         for (const candidate of candidates) {

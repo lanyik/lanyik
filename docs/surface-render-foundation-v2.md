@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker、静态显式 feature 适配及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -210,9 +210,11 @@ catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis h
 - sea ground 为 `seaLevel - 4096`，coastal 为 `seaLevel - 1`，普通地面为 `32768`，hill 为 `39321`，mountain 为 `52428`；
 - land/sand/tundra/mountain 分别映射 temperate/dry/cold/alpine，snow 固定为 cold 180 + alpine 75；
 - `wood` 密度固定为 140，profile 从冻结 terrain 与 `palm/pinia/pine` 模型身份解释；
-- `lake/river` modifier 在本阶段只保留“水下地面不被改写”的语义边界，实际 feature/body 编译在阶段 B 的静态 HydrologyRegion 适配器完成。
+- `lake/river` modifier 不改写地面高度或 substrate；`StaticHydrologyRegionSource` 将它们编译为独立的 feature/body。
 
 静态 descriptor 的 `sourceContentHash` 是上游资源加载器对完整静态语义内容计算的身份，adapter 不用 MapInfo 对象地址或伪 seed 替代它。相同 descriptor 与输入在请求顺序之外逐字节一致。
+
+`StaticHydrologyRegionSource` 在构造时完整校验并快照水文图，之后不再读取调用方 `MapInfo`。湖泊只能标在无 hill 的普通 land 上；六边相邻的 lake 格组成一个稳定 body，每个格产生半径 1 格、共享水位 `33792` 的连续切片。河流也只能使用这种水下地面，并且每个 river 格必须显式携带 `(riverIndex, riverTileIndex)`：同一 river 的索引从 0 连续、按索引相邻，只有共同声明同一格的河链才允许汇流。适配器把共享格合并为单一有向无环图，每个唯一河格贡献一单位来水后按拓扑累加 discharge；分叉出口、环、断索引、非相邻段、孤立出口以及同时邻接多个不同终点水体都确定性失败。河流只可终止到海洋、一个 lake body 或另一条显式共享且继续下游的河链，不根据邻近 river modifier 猜测连接。
 
 ## 6. 水文区域与水体权威
 
@@ -300,9 +302,9 @@ interface HydrologyBodyRef {
 }
 ~~~
 
-控制点相对区域原点量化。同一条河跨区时共享稳定 `riverId`，各段使用独立 `segmentId` 并通过 boundary port 连接；不把一条长河复制到所有经过区域。基础 region 只能由 `MacroDrainageGraph` 裁剪产生，不能根据当前邻区内容二次猜测连接。
+控制点相对区域原点量化。同一条河跨区时共享稳定 `riverId`，各段使用独立 `segmentId` 并通过 boundary port 连接；不把一条长河复制到所有经过区域。程序世界的基础 region 只能由 `MacroDrainageGraph` 裁剪产生，静态世界只能由已校验的显式有序河链产生；两者都不能根据当前邻区内容二次猜测连接。
 
-当前格式版本 1 的基础 region revision 为 0，控制点使用每逻辑格 64 单位的 `Int16` 量化；128 格边长因此只占 8192 个量化单位。端口同时保存 region-local 点、规范 world tile 交点、非零八方向 flow、水位、宽度和 discharge class。角点 crossing 使用 `MIN_X/MAX_X/MIN_Y/MAX_Y` bitmask 的组合表示成一个连接，不拆成两条互不相干的边。每区上限固定为 1024 ports、1024 river segments、256 lake slices、512 mouths、1024 body refs，每段最多 64 个控制点；越界、重复 ID、孤立 port、无 mouth 的终止河段、逆水位或下游收窄均拒绝发布。
+当前格式版本 1 的基础 region revision 为 0，控制点使用每逻辑格 64 单位的 `Int16` 量化。逻辑格中心位于整数坐标，因此一个 `validSize` 区域的几何核心是 `[-0.5, validSize - 0.5)`；量化后的闭合裁切边界是 `[-32, validSize × 64 - 32]`，相邻区域在同一个半格 world 交点各自保存端口。端口的规范 world 坐标只允许安全整数或半整数，同时保存 region-local 点、非零八方向 flow、水位、宽度和 discharge class。角点 crossing 使用 `MIN_X/MAX_X/MIN_Y/MAX_Y` bitmask 的组合表示成一个连接，不拆成两条互不相干的边。每区上限固定为 1024 ports、1024 river segments、256 lake slices、512 mouths、1024 body refs，每段最多 64 个控制点；越界、重复 ID、孤立 port、无 mouth 的终止河段、逆水位或下游收窄均拒绝发布。
 
 有限/环绕 `MacroDrainageHydrologySource` 在构造时完整校验一次全局图；裁一个 region 时只扫描该区加一个 8 格宏观步长 halo，正常候选窗口约 18×18 个节点，不按全图节点数线性扫描。基础河流阈值固定为 discharge 8，每条有效宏观边裁成区内线段；`riverId` 由终点节点决定，segment、mouth 和 connection ID 由规范排水边与裁切交点决定。河宽等级和水位沿流向不减/不升。陆锁终点的湖面取最低入流 spill level，湖泊以 4～16 格的有界连续影响圆切入相交 region；同一湖在 topology seam 两侧的 slice 使用不同 feature ID、同一个 body ID。
 
@@ -929,6 +931,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 从排水图裁剪 128×128 region、boundary port 和空间索引，不从边键随机创造河流。
 - 生成海域、湖盆、长河、汇流和河口。
 - 实现 derived hydrology raster 查询，不持久化逐格河流权威。
+- 将静态 MapInfo 的显式有序河链与湖格编译为同一 HydrologyRegion feature/body 契约，不猜测缺失拓扑。
 - 覆盖无限和 32 倍数环绕拓扑，包括末端 partial hydrology region 与四角接缝。
 
 完成标志：所有下游路径有限终止；跨任意 region 请求顺序，河流端口、宽度、水位、流量和 body ID 完全一致。

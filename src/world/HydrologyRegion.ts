@@ -4,6 +4,7 @@ import { chunkOrigin } from "./WorldGrid";
 
 export const HYDROLOGY_REGION_REVISION = 0;
 export const HYDROLOGY_POINT_QUANTIZATION = 64;
+export const HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE = -HYDROLOGY_POINT_QUANTIZATION / 2;
 export const MAX_HYDROLOGY_REGION_PORTS = 1_024;
 export const MAX_HYDROLOGY_REGION_RIVERS = 1_024;
 export const MAX_HYDROLOGY_REGION_LAKES = 256;
@@ -152,6 +153,13 @@ function assertPoint(name: string, point: Int16Array): void {
     }
 }
 
+export function hydrologyRegionMaximumQuantizedCoordinate(validSize: number): number {
+    if (!Number.isInteger(validSize) || validSize <= 0 || validSize > HYDROLOGY_REGION_SIZE) {
+        throw new RangeError("hydrology region valid size is invalid");
+    }
+    return validSize * HYDROLOGY_POINT_QUANTIZATION - HYDROLOGY_POINT_QUANTIZATION / 2;
+}
+
 function assertEndpoint(name: string, endpoint: RiverEndpoint): void {
     if (!endpoint || typeof endpoint !== "object") throw new TypeError(`${name} is required`);
     if (endpoint.kind === "node") assertStableId(`${name} node`, endpoint.nodeId);
@@ -210,17 +218,19 @@ function assertPort(port: Readonly<HydrologyPort>, bounds: Readonly<HydrologyReg
         throw new RangeError("hydrology port boundary mask is invalid");
     }
     assertPoint("hydrology port point", port.point);
-    const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    if (port.point[0] < 0 || port.point[0] > maximumX || port.point[1] < 0 || port.point[1] > maximumY
-        || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_X) !== 0 && port.point[0] !== 0
+    const minimum = HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE;
+    const maximumX = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxXExclusive);
+    const maximumY = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxYExclusive);
+    if (port.point[0] < minimum || port.point[0] > maximumX
+        || port.point[1] < minimum || port.point[1] > maximumY
+        || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_X) !== 0 && port.point[0] !== minimum
         || (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_X) !== 0 && port.point[0] !== maximumX
-        || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_Y) !== 0 && port.point[1] !== 0
+        || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_Y) !== 0 && port.point[1] !== minimum
         || (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_Y) !== 0 && port.point[1] !== maximumY) {
         throw new RangeError("hydrology port point does not lie on its declared boundary");
     }
-    if (!Number.isSafeInteger(port.canonicalTileX) || !Number.isSafeInteger(port.canonicalTileY)) {
-        throw new RangeError("hydrology port canonical point must use safe integer tiles");
+    if (!Number.isSafeInteger(port.canonicalTileX * 2) || !Number.isSafeInteger(port.canonicalTileY * 2)) {
+        throw new RangeError("hydrology port canonical point must use safe half-tile coordinates");
     }
     if (!(port.flowDirection instanceof Int8Array) || port.flowDirection.length !== 2
         || port.flowDirection[0] < -1 || port.flowDirection[0] > 1
@@ -248,12 +258,14 @@ function assertRiver(segment: Readonly<RiverFeatureSegment>, bounds: Readonly<Hy
         || !(segment.levelProfile instanceof Uint16Array) || segment.levelProfile.length !== pointCount) {
         throw new TypeError("river profiles must match its control point count");
     }
-    const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
+    const minimum = HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE;
+    const maximumX = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxXExclusive);
+    const maximumY = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxYExclusive);
     for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
         const x = segment.controlPoints[pointIndex * 2];
         const y = segment.controlPoints[pointIndex * 2 + 1];
-        if (x < 0 || x > maximumX || y < 0 || y > maximumY || segment.widthProfile[pointIndex] === 0) {
+        if (x < minimum || x > maximumX || y < minimum || y > maximumY
+            || segment.widthProfile[pointIndex] === 0) {
             throw new RangeError("river geometry lies outside valid bounds or has zero width");
         }
         if (pointIndex > 0
@@ -280,10 +292,11 @@ function assertLake(lake: Readonly<LakeFeature>, bounds: Readonly<HydrologyRegio
     assertUint16("lake level", lake.level);
     assertUint8("lake profile", lake.profileIndex);
     if (lake.radius === 0) throw new RangeError("lake radius must be positive");
-    const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    if (lake.center[0] + lake.radius < 0 || lake.center[0] - lake.radius > maximumX
-        || lake.center[1] + lake.radius < 0 || lake.center[1] - lake.radius > maximumY) {
+    const minimum = HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE;
+    const maximumX = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxXExclusive);
+    const maximumY = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxYExclusive);
+    if (lake.center[0] + lake.radius < minimum || lake.center[0] - lake.radius > maximumX
+        || lake.center[1] + lake.radius < minimum || lake.center[1] - lake.radius > maximumY) {
         throw new RangeError("lake feature does not intersect its region");
     }
 }
@@ -295,10 +308,11 @@ function assertMouth(mouth: Readonly<RiverMouthFeature>, bounds: Readonly<Hydrol
     assertStableId("river mouth segment", mouth.segmentId);
     assertStableId("river mouth target body", mouth.targetBodyId);
     assertPoint("river mouth point", mouth.point);
-    const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
-    if (mouth.point[0] < 0 || mouth.point[0] > maximumX
-        || mouth.point[1] < 0 || mouth.point[1] > maximumY) {
+    const minimum = HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE;
+    const maximumX = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxXExclusive);
+    const maximumY = hydrologyRegionMaximumQuantizedCoordinate(bounds.maxYExclusive);
+    if (mouth.point[0] < minimum || mouth.point[0] > maximumX
+        || mouth.point[1] < minimum || mouth.point[1] > maximumY) {
         throw new RangeError("river mouth lies outside its region");
     }
     assertUint8("river mouth width class", mouth.widthClass);
@@ -486,7 +500,7 @@ export function createHydrologyRegion(input: Readonly<HydrologyRegionInput>): Hy
 export function hydrologyPortConnectionSignature(port: Readonly<HydrologyPort>): string {
     assertStableId("hydrology connection", port.connectionId);
     assertStableId("hydrology port river", port.riverId);
-    if (!Number.isSafeInteger(port.canonicalTileX) || !Number.isSafeInteger(port.canonicalTileY)
+    if (!Number.isSafeInteger(port.canonicalTileX * 2) || !Number.isSafeInteger(port.canonicalTileY * 2)
         || !(port.flowDirection instanceof Int8Array) || port.flowDirection.length !== 2) {
         throw new TypeError("hydrology port is not valid for a connection signature");
     }

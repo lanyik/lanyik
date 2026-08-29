@@ -33,8 +33,8 @@ function featureRegion(): HydrologyRegion {
             segmentId: "segment:river:0",
             endpoint: "entry",
             boundaryMask: HYDROLOGY_BOUNDARY_MIN_X,
-            point: new Int16Array([0, 64 * HYDROLOGY_POINT_QUANTIZATION]),
-            canonicalTileX: 0,
+            point: new Int16Array([-HYDROLOGY_POINT_QUANTIZATION / 2, 64 * HYDROLOGY_POINT_QUANTIZATION]),
+            canonicalTileX: -0.5,
             canonicalTileY: 64,
             flowDirection: new Int8Array([1, 0]),
             widthClass: 4,
@@ -45,9 +45,9 @@ function featureRegion(): HydrologyRegion {
             riverId: "river:0",
             segmentId: "segment:river:0",
             controlPoints: new Int16Array([
-                0,
+                -HYDROLOGY_POINT_QUANTIZATION / 2,
                 64 * HYDROLOGY_POINT_QUANTIZATION,
-                128 * HYDROLOGY_POINT_QUANTIZATION,
+                127.5 * HYDROLOGY_POINT_QUANTIZATION,
                 64 * HYDROLOGY_POINT_QUANTIZATION
             ]),
             widthProfile: new Uint8Array([4, 4]),
@@ -73,7 +73,7 @@ function featureRegion(): HydrologyRegion {
             segmentId: "segment:river:0",
             targetBodyId: "ocean",
             point: new Int16Array([
-                128 * HYDROLOGY_POINT_QUANTIZATION,
+                127.5 * HYDROLOGY_POINT_QUANTIZATION,
                 64 * HYDROLOGY_POINT_QUANTIZATION
             ]),
             widthClass: 4,
@@ -116,7 +116,7 @@ describe("derived hydrology query", () => {
             flowY: 0,
             body: { bodyId: "river:0" }
         });
-        expect(index.query(127.75, 64, 80, 80)).toMatchObject({
+        expect(index.query(127.25, 64, 80, 80)).toMatchObject({
             kind: HYDROLOGY_KIND_OCEAN,
             flowX: 0,
             flowY: 0,
@@ -163,7 +163,20 @@ describe("derived hydrology query", () => {
 
     test("rejects queries and raster lattices outside explicit valid bounds", () => {
         const index = new HydrologyRegionSpatialIndex(featureRegion());
-        expect(() => index.query(128, 0, 100, 80)).toThrow(/outside/);
+        expect(index.query(-0.5, -0.5, 100, 80)).toMatchObject({ kind: HYDROLOGY_KIND_NONE });
+        expect(() => index.query(127.5, 0, 100, 80)).toThrow(/outside/);
+        expect(() => index.query(0, 127.5, 100, 80)).toThrow(/outside/);
+        expect(() => deriveHydrologyRaster({
+            index,
+            width: 1,
+            height: 1,
+            localOriginX: -0.5,
+            localOriginY: -0.5,
+            stepX: 1,
+            stepY: 1,
+            groundHeight: new Uint16Array(1),
+            seaLevel: 80
+        })).not.toThrow();
         expect(() => deriveHydrologyRaster({
             index,
             width: 2,

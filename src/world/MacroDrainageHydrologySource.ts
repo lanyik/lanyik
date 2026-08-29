@@ -1,7 +1,7 @@
 import { HydrologyRegion, HydrologyRegionKey } from "./HydrologyRegion";
 import {
     HydrologyRegionAssembler,
-    canonicalIntegerHydrologyPoint
+    canonicalHydrologyPoint
 } from "./HydrologyRegionAssembler";
 import {
     MACRO_DRAINAGE_NODE_STEP_TILES,
@@ -100,7 +100,7 @@ export class MacroDrainageHydrologySource {
             validWidth,
             validHeight,
             canonicalizePort: (tileX, tileY) => {
-                const canonical = canonicalIntegerHydrologyPoint(tileX, tileY);
+                const canonical = canonicalHydrologyPoint(tileX, tileY);
                 return toroidal ? Object.freeze({
                     tileX: positiveModulo(canonical.tileX, this.graph.worldWidth),
                     tileY: positiveModulo(canonical.tileY, this.graph.worldHeight)

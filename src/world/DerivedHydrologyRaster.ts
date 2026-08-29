@@ -145,9 +145,9 @@ export function deriveHydrologyRaster(
     }
     const lastX = options.localOriginX + (options.width - 1) * options.stepX;
     const lastY = options.localOriginY + (options.height - 1) * options.stepY;
-    if (options.localOriginX < 0 || options.localOriginY < 0
-        || lastX >= options.index.region.validBounds.maxXExclusive
-        || lastY >= options.index.region.validBounds.maxYExclusive) {
+    if (options.localOriginX < -0.5 || options.localOriginY < -0.5
+        || lastX >= options.index.region.validBounds.maxXExclusive - 0.5
+        || lastY >= options.index.region.validBounds.maxYExclusive - 0.5) {
         throw new RangeError("derived hydrology sampling lattice leaves region valid bounds");
     }
     const samples = new Array<HydrologySample>(length);

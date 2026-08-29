@@ -25,8 +25,8 @@ function validInput(): HydrologyRegionInput {
             segmentId: "segment:0",
             endpoint: "entry",
             boundaryMask: HYDROLOGY_BOUNDARY_MIN_X,
-            point: new Int16Array([0, HYDROLOGY_POINT_QUANTIZATION]),
-            canonicalTileX: 0,
+            point: new Int16Array([-HYDROLOGY_POINT_QUANTIZATION / 2, HYDROLOGY_POINT_QUANTIZATION]),
+            canonicalTileX: -0.5,
             canonicalTileY: 1,
             flowDirection: new Int8Array([1, 0]),
             widthClass: 2,
@@ -37,9 +37,9 @@ function validInput(): HydrologyRegionInput {
             riverId: "river:0",
             segmentId: "segment:0",
             controlPoints: new Int16Array([
-                0,
+                -HYDROLOGY_POINT_QUANTIZATION / 2,
                 HYDROLOGY_POINT_QUANTIZATION,
-                HYDROLOGY_POINT_QUANTIZATION * 2,
+                HYDROLOGY_POINT_QUANTIZATION * 1.5,
                 HYDROLOGY_POINT_QUANTIZATION
             ]),
             widthProfile: new Uint8Array([2, 2]),
@@ -55,7 +55,7 @@ function validInput(): HydrologyRegionInput {
             segmentId: "segment:0",
             targetBodyId: "ocean",
             point: new Int16Array([
-                HYDROLOGY_POINT_QUANTIZATION * 2,
+                HYDROLOGY_POINT_QUANTIZATION * 1.5,
                 HYDROLOGY_POINT_QUANTIZATION
             ]),
             widthClass: 2,
@@ -77,15 +77,15 @@ describe("HydrologyRegion", () => {
         expect(Object.isFrozen(region.rivers)).toBe(true);
         assertHydrologyRegion(region);
         expect(hydrologyPortConnectionSignature(region.boundaryPorts[0]))
-            .toBe('["connection:0","river:0",0,1,1,0,2,100,1]');
+            .toBe('["connection:0","river:0",-0.5,1,1,0,2,100,1]');
     });
 
     test("supports a canonical corner port without duplicating the crossing", () => {
         const base = validInput();
         const point = base.boundaryPorts[0].point.slice();
-        point[1] = 0;
+        point[1] = -HYDROLOGY_POINT_QUANTIZATION / 2;
         const controlPoints = base.rivers[0].controlPoints.slice();
-        controlPoints[1] = 0;
+        controlPoints[1] = -HYDROLOGY_POINT_QUANTIZATION / 2;
         const input: HydrologyRegionInput = {
             ...base,
             boundaryPorts: [{

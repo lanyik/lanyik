@@ -127,6 +127,8 @@ export type {
 export {
     HYDROLOGY_REGION_REVISION,
     HYDROLOGY_POINT_QUANTIZATION,
+    HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE,
+    hydrologyRegionMaximumQuantizedCoordinate,
     MAX_HYDROLOGY_REGION_PORTS,
     MAX_HYDROLOGY_REGION_RIVERS,
     MAX_HYDROLOGY_REGION_LAKES,
@@ -207,3 +209,10 @@ export type {
     DerivedHydrologyRaster,
     DeriveHydrologyRasterOptions
 } from "./world/DerivedHydrologyRaster";
+
+export {
+    STATIC_EXPLICIT_WATER_LEVEL_OFFSET,
+    STATIC_EXPLICIT_WATER_LEVEL,
+    STATIC_LAKE_TILE_RADIUS,
+    StaticHydrologyRegionSource
+} from "./world/StaticHydrologyRegionSource";

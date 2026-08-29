@@ -238,16 +238,16 @@ export class HydrologyRegionSpatialIndex {
 
     public query(localX: number, localY: number, groundHeight: number, seaLevel: number): HydrologySample {
         if (!Number.isFinite(localX) || !Number.isFinite(localY)
-            || localX < 0 || localX >= this.region.validBounds.maxXExclusive
-            || localY < 0 || localY >= this.region.validBounds.maxYExclusive) {
+            || localX < -0.5 || localX >= this.region.validBounds.maxXExclusive - 0.5
+            || localY < -0.5 || localY >= this.region.validBounds.maxYExclusive - 0.5) {
             throw new RangeError("hydrology query point lies outside region valid bounds");
         }
         if (!Number.isInteger(groundHeight) || groundHeight < 0 || groundHeight > 0xffff
             || !Number.isInteger(seaLevel) || seaLevel < 0 || seaLevel > 0xffff) {
             throw new RangeError("hydrology query heights must be uint16 values");
         }
-        const cellX = Math.floor(localX / HYDROLOGY_SPATIAL_CELL_SIZE);
-        const cellY = Math.floor(localY / HYDROLOGY_SPATIAL_CELL_SIZE);
+        const cellX = clamp(Math.floor(localX / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountX - 1);
+        const cellY = clamp(Math.floor(localY / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountY - 1);
         const bucket = this.buckets[cellX * this.cellCountY + cellY];
         let best: WaterCandidate | undefined;
         if (groundHeight < seaLevel) {

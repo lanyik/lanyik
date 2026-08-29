@@ -4,6 +4,7 @@ import {
     HYDROLOGY_BOUNDARY_MIN_X,
     HYDROLOGY_BOUNDARY_MIN_Y,
     HYDROLOGY_POINT_QUANTIZATION,
+    HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE,
     HYDROLOGY_REGION_REVISION,
     HydrologyBodyKind,
     HydrologyBodyRef,
@@ -17,7 +18,8 @@ import {
     RIVER_HYDROLOGY_PROFILE,
     RiverFeatureSegment,
     RiverMouthFeature,
-    createHydrologyRegion
+    createHydrologyRegion,
+    hydrologyRegionMaximumQuantizedCoordinate
 } from "./HydrologyRegion";
 import { HYDROLOGY_REGION_SIZE } from "./SurfaceCompileProfile";
 import { chunkOrigin } from "./WorldGrid";
@@ -132,9 +134,9 @@ function interpolateUint16(first: number, second: number, amount: number): numbe
 
 function boundaryMask(localX: number, localY: number, maximumX: number, maximumY: number): number {
     let mask = 0;
-    if (localX === 0) mask |= HYDROLOGY_BOUNDARY_MIN_X;
+    if (localX === HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE) mask |= HYDROLOGY_BOUNDARY_MIN_X;
     if (localX === maximumX) mask |= HYDROLOGY_BOUNDARY_MAX_X;
-    if (localY === 0) mask |= HYDROLOGY_BOUNDARY_MIN_Y;
+    if (localY === HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE) mask |= HYDROLOGY_BOUNDARY_MIN_Y;
     if (localY === maximumY) mask |= HYDROLOGY_BOUNDARY_MAX_Y;
     if (mask === 0) throw new Error("clipped hydrology endpoint is not on a region boundary");
     return mask;
@@ -164,15 +166,17 @@ export class HydrologyRegionAssembler {
     }
 
     public addDrainageEdge(edge: Readonly<HydrologyDrainageEdgeInput>): boolean {
-        const endX = this.origin.x + this.options.validWidth;
-        const endY = this.origin.y + this.options.validHeight;
+        const minimumX = this.origin.x - 0.5;
+        const minimumY = this.origin.y - 0.5;
+        const endX = this.origin.x + this.options.validWidth - 0.5;
+        const endY = this.origin.y + this.options.validHeight - 0.5;
         const clipped = clipLineToRegion(
             edge.sourceX,
             edge.sourceY,
             edge.parentX,
             edge.parentY,
-            this.origin.x,
-            this.origin.y,
+            minimumX,
+            minimumY,
             endX,
             endY
         );
@@ -208,8 +212,8 @@ export class HydrologyRegionAssembler {
                 boundaryMask: boundaryMask(
                     localStartX,
                     localStartY,
-                    this.options.validWidth * HYDROLOGY_POINT_QUANTIZATION,
-                    this.options.validHeight * HYDROLOGY_POINT_QUANTIZATION
+                    hydrologyRegionMaximumQuantizedCoordinate(this.options.validWidth),
+                    hydrologyRegionMaximumQuantizedCoordinate(this.options.validHeight)
                 ),
                 point: new Int16Array([localStartX, localStartY]),
                 canonicalTileX: canonical.tileX,
@@ -232,8 +236,8 @@ export class HydrologyRegionAssembler {
                 boundaryMask: boundaryMask(
                     localEndX,
                     localEndY,
-                    this.options.validWidth * HYDROLOGY_POINT_QUANTIZATION,
-                    this.options.validHeight * HYDROLOGY_POINT_QUANTIZATION
+                    hydrologyRegionMaximumQuantizedCoordinate(this.options.validWidth),
+                    hydrologyRegionMaximumQuantizedCoordinate(this.options.validHeight)
                 ),
                 point: new Int16Array([localEndX, localEndY]),
                 canonicalTileX: canonical.tileX,
@@ -279,11 +283,13 @@ export class HydrologyRegionAssembler {
     }
 
     public addLakeSlice(lake: Readonly<HydrologyLakeSliceInput>): boolean {
-        const endX = this.origin.x + this.options.validWidth;
-        const endY = this.origin.y + this.options.validHeight;
-        if (lake.centerX + lake.radiusTiles < this.origin.x
+        const minimumX = this.origin.x - 0.5;
+        const minimumY = this.origin.y - 0.5;
+        const endX = this.origin.x + this.options.validWidth - 0.5;
+        const endY = this.origin.y + this.options.validHeight - 0.5;
+        if (lake.centerX + lake.radiusTiles < minimumX
             || lake.centerX - lake.radiusTiles > endX
-            || lake.centerY + lake.radiusTiles < this.origin.y
+            || lake.centerY + lake.radiusTiles < minimumY
             || lake.centerY - lake.radiusTiles > endY) return false;
         const localCenterX = quantizeLocal(lake.centerX, this.origin.x);
         const localCenterY = quantizeLocal(lake.centerY, this.origin.y);
@@ -330,12 +336,12 @@ export class HydrologyRegionAssembler {
     }
 }
 
-export function canonicalIntegerHydrologyPoint(tileX: number, tileY: number): CanonicalHydrologyPoint {
-    const roundedX = Math.round(tileX);
-    const roundedY = Math.round(tileY);
+export function canonicalHydrologyPoint(tileX: number, tileY: number): CanonicalHydrologyPoint {
+    const roundedX = Math.round(tileX * 2) / 2;
+    const roundedY = Math.round(tileY * 2) / 2;
     if (Math.abs(tileX - roundedX) > CLIP_EPSILON || Math.abs(tileY - roundedY) > CLIP_EPSILON
-        || !Number.isSafeInteger(roundedX) || !Number.isSafeInteger(roundedY)) {
-        throw new Error("macro drainage boundary crossing is not an integer logical tile");
+        || !Number.isSafeInteger(roundedX * 2) || !Number.isSafeInteger(roundedY * 2)) {
+        throw new Error("hydrology boundary crossing is not a half-tile logical coordinate");
     }
     return Object.freeze({ tileX: roundedX, tileY: roundedY });
 }
