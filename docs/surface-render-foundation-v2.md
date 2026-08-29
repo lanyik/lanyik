@@ -807,6 +807,8 @@ map.renderStyle.update({
 
 冲突校验覆盖操作 bounds 加 `SURFACE_INFLUENCE_RADIUS_TILES`，并在 canonical SurfaceLattice texel/轮廓交点上检查连续地面和水位，不能只检查 tile 中心。`preserve-channel` 生成的最终 semantic overrides 必须再次通过同一校验后才能提交。
 
+已落地的河床约束冷核 `collectSurfaceHydrologyDepthViolations` 不建立第二份河流解释：它直接复用正式 surface compiler 的 region/authored river 投影、closest-point、binary16 水位量化、EffectiveWindow 连续语义采样和 marching-squares 标量格。每个相交 render core 同时检查 q4 标量格点，以及“地面 -（水位 - 最小水深）”等值线落入河岸内部的端点/中点；结果携带稳定 feature ID、逻辑坐标和真实 ground/level。单 window 固定最多检查 262144 个约束样本并最多发布 65536 个 violation，超限明确要求拆分 authoring 操作，不能在实时事务中无界扫描。
+
 ### 13.3 ChangeSet
 
 热路径不使用 `Set<string>` 表达变化域。域使用 bitmask，bounds 在事务提交时按 chunk 聚合：

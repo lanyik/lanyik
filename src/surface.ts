@@ -104,8 +104,16 @@ export {
     compileLakeSurfaceField
 } from "./world/compileLakeSurfaceField";
 export type { LakeSurfaceCompilation } from "./world/compileLakeSurfaceField";
-export { compileSurfaceField } from "./world/compileSurfaceField";
-export type { SurfaceFieldCompilation } from "./world/compileSurfaceField";
+export {
+    MAX_SURFACE_HYDROLOGY_CONSTRAINT_SAMPLES,
+    MAX_SURFACE_HYDROLOGY_DEPTH_VIOLATIONS,
+    collectSurfaceHydrologyDepthViolations,
+    compileSurfaceField
+} from "./world/compileSurfaceField";
+export type {
+    SurfaceFieldCompilation,
+    SurfaceHydrologyDepthViolation
+} from "./world/compileSurfaceField";
 export {
     createCompiledSurfaceSample,
     CompiledSurfaceSampler

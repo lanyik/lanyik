@@ -28,12 +28,13 @@ import {
 import { HYDROLOGY_REGION_SIZE, SURFACE_COMPILE_PROFILE, surfaceInfluenceRadiusWorld } from "./SurfaceCompileProfile";
 import {
     SurfaceContourRasterContext,
+    SurfaceContourSegment,
     createSurfaceContourRasterContext,
     quantizeSurfaceCoverage,
     rasterSurfaceContourDistances,
     surfaceScalarContours
 } from "./SurfaceContours";
-import { surfaceTexelCenterAxis, surfaceToWorld } from "./SurfaceLattice";
+import { surfaceTexelCenterAxis, surfaceToWorld, worldToSurface } from "./SurfaceLattice";
 import {
     TransferableEffectiveWindow,
     TransferableHydrologyRegionSlice,
@@ -50,6 +51,19 @@ import {
 export interface SurfaceFieldCompilation {
     readonly field: CompiledSurfaceField;
     readonly waterBodies: CompiledWaterBodyPalette;
+}
+
+export const MAX_SURFACE_HYDROLOGY_CONSTRAINT_SAMPLES = 262_144;
+export const MAX_SURFACE_HYDROLOGY_DEPTH_VIOLATIONS = 65_536;
+
+export interface SurfaceHydrologyDepthViolation {
+    readonly featureId: string;
+    readonly sampleKind: "scalar-grid" | "depth-contour";
+    readonly u: number;
+    readonly v: number;
+    readonly groundHeight: number;
+    readonly waterLevel: number;
+    readonly minimumDepth: number;
 }
 
 interface RiverSpan {
@@ -470,6 +484,129 @@ function intersectBounds(
         maxV: Math.min(first.maxV, second.maxV)
     };
     return bounds.minU < bounds.maxU && bounds.minV < bounds.maxV ? bounds : undefined;
+}
+
+function surfaceHydrologyValidationBounds(
+    window: Readonly<TransferableEffectiveWindow>,
+    shape: Readonly<RiverShape>
+): SurfaceHydrologyLogicalBounds | undefined {
+    const originU = window.renderKey.chunkX * SURFACE_COMPILE_PROFILE.renderChunkSize;
+    const originV = window.renderKey.chunkY * SURFACE_COMPILE_PROFILE.renderChunkSize;
+    return intersectBounds(shape.bounds, {
+        minU: originU - 0.5,
+        minV: originV - 0.5,
+        maxU: originU + SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5,
+        maxV: originV + SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5
+    });
+}
+
+function contourValidationPoints(
+    contour: Readonly<SurfaceContourSegment>,
+    hexSize: number
+): readonly [number, number][] {
+    const start = worldToSurface(contour.start.x, contour.start.z, hexSize);
+    const end = worldToSurface(contour.end.x, contour.end.z, hexSize);
+    return [
+        [start.u, start.v],
+        [(start.u + end.u) * 0.5, (start.v + end.v) * 0.5],
+        [end.u, end.v]
+    ];
+}
+
+/**
+ * Cold authoring validation that intentionally shares the compiler's river
+ * projection, closest-point, continuous semantic and contour kernels.
+ */
+export function collectSurfaceHydrologyDepthViolations(
+    window: Readonly<TransferableEffectiveWindow>,
+    minimumDepth: number
+): readonly SurfaceHydrologyDepthViolation[] {
+    assertTransferableEffectiveWindow(window);
+    if (!Number.isFinite(minimumDepth) || minimumDepth < 0) {
+        throw new RangeError("surface hydrology minimum depth must be non-negative and finite");
+    }
+    const hexSize = window.dependencyKey.metrics.hexSize;
+    const heightScale = window.dependencyKey.metrics.heightScale;
+    if (minimumDepth > heightScale) {
+        throw new RangeError("surface hydrology minimum depth cannot exceed the height scale");
+    }
+    const queryBounds = surfaceHydrologyQueryBounds(window, surfaceInfluenceRadiusWorld(hexSize));
+    const lakes = compileLakeSurfaceField(window);
+    const catalog = buildBodyCatalog(window, lakes.waterBodies);
+    const shapes = collectRiverShapes(window, queryBounds, hexSize, catalog);
+    const violations: SurfaceHydrologyDepthViolation[] = [];
+    const semanticSample: EffectiveWindowSemanticSample = {
+        groundHeight: 0, biome0: 0, biome1: 0, biome2: 0, biome3: 0
+    };
+    let sampleCount = 0;
+    const reserveSample = (): void => {
+        sampleCount += 1;
+        if (sampleCount > MAX_SURFACE_HYDROLOGY_CONSTRAINT_SAMPLES) {
+            throw new RangeError("surface hydrology constraint samples exceed the fixed authoring budget");
+        }
+    };
+    const inspect = (
+        shape: Readonly<RiverShape>,
+        u: number,
+        v: number,
+        sampleKind: SurfaceHydrologyDepthViolation["sampleKind"]
+    ): void => {
+        reserveSample();
+        const closest = closestRiver(shape, u, v);
+        if (closest.edgeDistance > 0) return;
+        const valid = sampleEffectiveWindowSemantic(window, u, v, heightScale, semanticSample);
+        if (!valid) return;
+        const levelBits = finiteFloat16Bits(
+            "surface hydrology constraint level",
+            Math.round(closest.level) / 0xffff * heightScale
+        );
+        const waterLevel = float16BitsToFloat32(levelBits);
+        if (semanticSample.groundHeight <= waterLevel - minimumDepth) return;
+        if (violations.length >= MAX_SURFACE_HYDROLOGY_DEPTH_VIOLATIONS) {
+            throw new RangeError("surface hydrology depth violations exceed the fixed authoring budget");
+        }
+        violations.push(Object.freeze({
+            featureId: shape.bodyId,
+            sampleKind,
+            u,
+            v,
+            groundHeight: semanticSample.groundHeight,
+            waterLevel,
+            minimumDepth
+        }));
+    };
+
+    const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+    for (const shape of shapes) {
+        const bounds = surfaceHydrologyValidationBounds(window, shape);
+        if (!bounds) continue;
+        const minimumGridU = Math.ceil(bounds.minU * samplesPerTile);
+        const maximumGridU = Math.ceil(bounds.maxU * samplesPerTile);
+        const minimumGridV = Math.ceil(bounds.minV * samplesPerTile);
+        const maximumGridV = Math.ceil(bounds.maxV * samplesPerTile);
+        for (let gridU = minimumGridU; gridU < maximumGridU; gridU += 1) {
+            for (let gridV = minimumGridV; gridV < maximumGridV; gridV += 1) {
+                inspect(shape, gridU / samplesPerTile, gridV / samplesPerTile, "scalar-grid");
+            }
+        }
+        const depthContours = surfaceScalarContours(bounds, hexSize, (u, v) => {
+            reserveSample();
+            const closest = closestRiver(shape, u, v);
+            const valid = sampleEffectiveWindowSemantic(window, u, v, heightScale, semanticSample);
+            if (!valid) return heightScale;
+            const waterLevel = float16BitsToFloat32(finiteFloat16Bits(
+                "surface hydrology contour level",
+                Math.round(closest.level) / 0xffff * heightScale
+            ));
+            return semanticSample.groundHeight - (waterLevel - minimumDepth);
+        });
+        for (const contour of depthContours) {
+            for (const [u, v] of contourValidationPoints(contour, hexSize)) {
+                inspect(shape, u, v, "depth-contour");
+            }
+        }
+    }
+    return Object.freeze(violations);
 }
 
 function signedRiverDistances(
