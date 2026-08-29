@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、BaseSemanticChunk SoA/二进制格式、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -137,6 +137,7 @@ HydrologyRegion 128
 
 ~~~ts
 interface BaseSemanticChunk {
+    readonly formatVersion: 2;
     readonly key: SemanticChunkKey;
     readonly revision: number;
     readonly validBounds: LocalTileBounds;
@@ -150,7 +151,7 @@ interface BaseSemanticChunk {
 }
 ~~~
 
-数组布局固定为 X-major 或 Y-major 中的一种，由 chunk format 锁定；所有模块只能通过共享索引函数访问，不各自重写下标公式。
+数组布局固定为 X-major，tile 索引为 `localX * 32 + localY`；四个 biome 通道和两个 climate 通道分别在每个 tile 内交错。所有模块只能通过共享索引函数访问，不各自重写下标公式。有效 tile 的四个量化 biome 权重整数和严格为 255；partial chunk 的 `validBounds` 外所有字段字节必须为零，避免无效区垃圾数据破坏逐字节确定性。
 
 字段语义：
 
@@ -167,7 +168,9 @@ interface BaseSemanticChunk {
 
 海洋不通过一个独立 mesh modifier 表示。低于冻结海平面的有效宏观地表形成基础海域；湖盆与河流来自水文区域。按格派生出的水体结果属于查询缓存，不与水文 feature 形成第二份权威。
 
-所有数组长度、枚举范围、权重和量化值在发布到 Store 前一次性校验。对象式 `getTile()` 仅作为按需只读视图存在，不在生成、编译、导航或渲染热路径保存大量对象。
+所有数组长度、枚举范围、权重和量化值在发布到 Store 前一次性校验。发布操作接管 typed array 的独占所有权，生产者之后不得修改；Store 和 lease 不向消费者暴露可写权威引用。对象式 `getTile()` 仅作为按需只读视图存在，不在生成、编译、导航或渲染热路径保存大量对象。
+
+缓存序列化固定为 11,304 字节小端格式：40 字节版本化头部保存 `BSC2` magic、格式、两个有符号 64 位 chunk 坐标、无符号 64 位 revision、valid bounds 和总长度，随后依次保存 substrate、`Uint16` macro height、biome、climate、vegetation density 与 vegetation profile。反序列化后必须重新执行同一完整校验；catalog identity 不重复写入 chunk，而由外部 world identity/cache key 精确绑定。
 
 ### 5.2 生成与量化
 
