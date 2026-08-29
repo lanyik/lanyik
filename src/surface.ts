@@ -73,6 +73,8 @@ export type {
     BuildTransferableEffectiveWindowOptions
 } from "./world/TransferableEffectiveWindow";
 
+export { compileSemanticSurfaceField } from "./world/compileSemanticSurfaceField";
+
 export {
     surfaceColumnStagger,
     surfaceStagger,
