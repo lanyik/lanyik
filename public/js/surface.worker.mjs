@@ -6568,20 +6568,30 @@ function compileVegetationSeeds(window, field2) {
         ) / UINT32_RANGE2;
         const localU = localTileX - 0.5 + (column + jitterX) / VEGETATION_CANDIDATE_COLUMNS_PER_TILE;
         const localV = localTileY - 0.5 + (row + jitterY) / VEGETATION_CANDIDATE_ROWS_PER_TILE;
+        const candidateWorld = surfaceToWorld(localU, localV, hexSize);
+        const storedX = Math.fround(candidateWorld.x - localWorldOrigin.x);
+        const storedZ = Math.fround(candidateWorld.z - localWorldOrigin.z);
+        const storedLogical = worldToSurface(
+          storedX + localWorldOrigin.x,
+          storedZ + localWorldOrigin.z,
+          hexSize
+        );
+        const maximum = chunkSize - 0.5;
+        if (storedLogical.u < -0.5 || storedLogical.u >= maximum || storedLogical.v < -0.5 || storedLogical.v >= maximum) continue;
         const density = sampleEffectiveWindowVegetationDensityLocal(
           window,
-          origin.x - window.originTileX + localU,
-          origin.y - window.originTileY + localV
+          origin.x - window.originTileX + storedLogical.u,
+          origin.y - window.originTileY + storedLogical.v
         );
         if (density === void 0 || density <= 0) continue;
-        sampler.sampleSurface(localU, localV, surfaceSample);
+        sampler.sampleSurface(storedLogical.u, storedLogical.v, surfaceSample);
         if (surfaceSample.waterKind === SURFACE_WATER_KIND_RIVER || surfaceSample.shorelineDistance <= 0) continue;
         const shoreFactor = clamp(
           surfaceSample.shorelineDistance / (hexSize * VEGETATION_SHORE_FADE_TILES),
           0,
           1
         );
-        const slope = slopeAt(sampler, localU, localV, hexSize);
+        const slope = slopeAt(sampler, storedLogical.u, storedLogical.v, hexSize);
         const slopeFactor = 1 - smoothstep3(
           VEGETATION_SLOPE_FADE_START,
           VEGETATION_MAXIMUM_SLOPE,
@@ -6596,11 +6606,10 @@ function compileVegetationSeeds(window, field2) {
           ACCEPTANCE_SALT
         ) / UINT32_RANGE2;
         if (choice >= acceptance) continue;
-        const world = surfaceToWorld(localU, localV, hexSize);
         const offset = count * 3;
-        positions[offset] = world.x - localWorldOrigin.x;
-        positions[offset + 1] = surfaceSample.groundHeight;
-        positions[offset + 2] = world.z - localWorldOrigin.z;
+        positions[offset] = storedX;
+        positions[offset + 1] = Math.fround(surfaceSample.groundHeight);
+        positions[offset + 2] = storedZ;
         instanceIdentity[count] = tileIdentity * VEGETATION_CANDIDATES_PER_TILE + candidate;
         profileIndex[count] = window.vegetationProfile[semanticIndex];
         placementSeed[count] = candidateHash(

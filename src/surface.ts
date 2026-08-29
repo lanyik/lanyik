@@ -140,6 +140,18 @@ export type {
     CompiledSurfaceChunkInput
 } from "./world/CompiledSurfaceChunk";
 export { compileSurfaceChunk } from "./world/compileSurfaceChunk";
+export {
+    StaleSurfaceCompilationError,
+    SurfaceLeaseNotCurrentError,
+    SurfaceCompilationService
+} from "./world/SurfaceCompilationService";
+export type {
+    SurfaceCompilationPool,
+    SurfaceCompilationServiceOptions,
+    SurfaceCompilationRequest,
+    ResidentSurfaceLease,
+    SurfaceCompilationServiceStats
+} from "./world/SurfaceCompilationService";
 
 export {
     assertEnvironmentHandle,

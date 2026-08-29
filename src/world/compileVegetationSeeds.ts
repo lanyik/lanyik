@@ -14,7 +14,7 @@ import { CompiledSurfaceField, SURFACE_WATER_KIND_RIVER } from "./CompiledSurfac
 import { hashSafeIntegerCoordinates } from "./DeterministicHash";
 import { sampleEffectiveWindowVegetationDensityLocal } from "./EffectiveWindowSampler";
 import { SURFACE_COMPILE_PROFILE } from "./SurfaceCompileProfile";
-import { surfaceToWorld } from "./SurfaceLattice";
+import { surfaceToWorld, worldToSurface } from "./SurfaceLattice";
 import {
     EFFECTIVE_WINDOW_TILE_SIZE,
     TransferableEffectiveWindow,
@@ -134,13 +134,28 @@ export function compileVegetationSeeds(
                     + (column + jitterX) / VEGETATION_CANDIDATE_COLUMNS_PER_TILE;
                 const localV = localTileY - 0.5
                     + (row + jitterY) / VEGETATION_CANDIDATE_ROWS_PER_TILE;
+                // Positions are published as float32 chunk-local world values.
+                // All authoritative sampling must therefore use the logical
+                // point reconstructed from those exact stored XZ values, not
+                // the higher-precision candidate that the renderer cannot see.
+                const candidateWorld = surfaceToWorld(localU, localV, hexSize);
+                const storedX = Math.fround(candidateWorld.x - localWorldOrigin.x);
+                const storedZ = Math.fround(candidateWorld.z - localWorldOrigin.z);
+                const storedLogical = worldToSurface(
+                    storedX + localWorldOrigin.x,
+                    storedZ + localWorldOrigin.z,
+                    hexSize
+                );
+                const maximum = chunkSize - 0.5;
+                if (storedLogical.u < -0.5 || storedLogical.u >= maximum
+                    || storedLogical.v < -0.5 || storedLogical.v >= maximum) continue;
                 const density = sampleEffectiveWindowVegetationDensityLocal(
                     window,
-                    origin.x - window.originTileX + localU,
-                    origin.y - window.originTileY + localV
+                    origin.x - window.originTileX + storedLogical.u,
+                    origin.y - window.originTileY + storedLogical.v
                 );
                 if (density === undefined || density <= 0) continue;
-                sampler.sampleSurface(localU, localV, surfaceSample);
+                sampler.sampleSurface(storedLogical.u, storedLogical.v, surfaceSample);
                 if (surfaceSample.waterKind === SURFACE_WATER_KIND_RIVER
                     || surfaceSample.shorelineDistance <= 0) continue;
                 const shoreFactor = clamp(
@@ -149,7 +164,7 @@ export function compileVegetationSeeds(
                     0,
                     1
                 );
-                const slope = slopeAt(sampler, localU, localV, hexSize);
+                const slope = slopeAt(sampler, storedLogical.u, storedLogical.v, hexSize);
                 const slopeFactor = 1 - smoothstep(
                     VEGETATION_SLOPE_FADE_START,
                     VEGETATION_MAXIMUM_SLOPE,
@@ -162,11 +177,10 @@ export function compileVegetationSeeds(
                 if (choice >= acceptance) continue;
                 // A render chunk spans 16 columns, so its global U origin is
                 // even and has exactly the same stagger phase as local U=0.
-                const world = surfaceToWorld(localU, localV, hexSize);
                 const offset = count * 3;
-                positions[offset] = world.x - localWorldOrigin.x;
-                positions[offset + 1] = surfaceSample.groundHeight;
-                positions[offset + 2] = world.z - localWorldOrigin.z;
+                positions[offset] = storedX;
+                positions[offset + 1] = Math.fround(surfaceSample.groundHeight);
+                positions[offset + 2] = storedZ;
                 instanceIdentity[count] = tileIdentity * VEGETATION_CANDIDATES_PER_TILE + candidate;
                 profileIndex[count] = window.vegetationProfile[semanticIndex];
                 placementSeed[count] = candidateHash(
