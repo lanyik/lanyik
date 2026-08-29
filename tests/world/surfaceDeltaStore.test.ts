@@ -177,6 +177,69 @@ describe("MemorySurfaceDeltaStore", () => {
         })).rejects.toBeInstanceOf(SurfaceDeltaConflictError);
     });
 
+    test("rejects revision-only semantic upserts with identical authoritative content", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("no-op");
+        const worldIdentity = serializeWorldDescriptorV2(descriptor);
+        const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
+        await store.commit({
+            worldIdentity,
+            semanticMutations: [{
+                operation: "upsert",
+                key: { chunkX: 0, chunkY: 0 },
+                expectedRevision: 0,
+                payload: heightPayload()
+            }],
+            hydrologyMutations: []
+        });
+        await expect(store.commit({
+            worldIdentity,
+            semanticMutations: [{
+                operation: "upsert",
+                key: { chunkX: 0, chunkY: 0 },
+                expectedRevision: 1,
+                payload: heightPayload()
+            }],
+            hydrologyMutations: []
+        })).rejects.toThrow(/does not change authoritative content/);
+        expect(store.snapshot().effectiveRevision).toBe(1);
+    });
+
+    test("rejects revision-only hydrology upserts with identical feature content", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("hydrology-no-op");
+        const worldIdentity = serializeWorldDescriptorV2(descriptor);
+        const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
+        const feature = river(
+            "river:no-op",
+            { kind: "spring", sourceId: "spring:no-op" },
+            { kind: "ocean", bodyId: "ocean" },
+            40_000,
+            35_000
+        );
+        await store.commit({
+            worldIdentity,
+            semanticMutations: [],
+            hydrologyMutations: [{
+                operation: "upsert",
+                featureId: feature.featureId,
+                featureKind: "river",
+                expectedRevision: 0,
+                feature
+            }]
+        });
+        await expect(store.commit({
+            worldIdentity,
+            semanticMutations: [],
+            hydrologyMutations: [{
+                operation: "upsert",
+                featureId: feature.featureId,
+                featureKind: "river",
+                expectedRevision: 1,
+                feature
+            }]
+        })).rejects.toThrow(/does not change authoritative content/);
+        expect(store.snapshot().effectiveRevision).toBe(1);
+    });
+
     test("validates the complete candidate hydrology graph before publication", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("graph");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);

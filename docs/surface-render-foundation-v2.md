@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service，以及原生事务式 IndexedDB delta store/save barrier 已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。编辑冲突策略上层、ChangeSet 脏区传播、消费者接线及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service、原生事务式 IndexedDB delta store/save barrier，以及 exact-domain/resident-filtered `WorldChangeSet` 已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。编辑冲突策略上层、消费者接线及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -827,6 +827,12 @@ interface WorldChangeSet {
     readonly renderChunks: readonly DirtyRenderChunk[];
 }
 ~~~
+
+已落地的 `createWorldChangeSet` 只接受同一 world 的 before-snapshot、紧随其后的原子 commit、显式 `BaseHydrologyChangeIndex` 和当前 resident hydrology/render keys。semantic upsert 会逐 tile、逐字段比较 old/new 完整 sparse delta：height、substrate/biome 和 vegetation 各自聚合独立 local bounds，再形成 chunk union；只改 revision 而不改权威内容的重复 upsert 已在 store 层直接拒绝。输出使用稳定数值 bitmask、数值坐标 Map 与规范排序数组，不用 `Set<string>` 表达变化域。
+
+render dirty 不枚举世界，而是只对 resident 16×16 key 测试其“两格 halo + core”依赖 bounds；hydrology region 同样只筛选 resident 128×128 key。因此跨越极远坐标的长河不会按 AABB 填满中间全部 chunk。有限边界使用实际末端尺寸，toroidal 的 semantic cell、render dependency window 和 feature bounds 都投影到同一 q64 周期域，边缝另一侧的 resident chunk 会正确命中。
+
+水文影响不能只使用被编辑 feature 自己的几何。builder 在 before/after 有效图上合并 authored 反向引用与基础索引的规范 `referencesTo`，沿依赖闭包收集所有引用河流的 old/new bounds；例如修改湖水位会同时脏掉引用该湖的远端河段。基础 feature 因此必须由 `BaseHydrologyChangeIndex.resolveBoundsQ64` 显式提供几何 bounds；存在基础节点却缺 bounds 会确定性失败，不从 resident region 猜测。公开 `hydrologyFeatures` 仍只列事务直接修改的稳定 ID，而 region/render 筛选使用完整反向依赖闭包。
 
 传播规则由 domain 表驱动：
 

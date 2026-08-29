@@ -413,9 +413,34 @@ export {
     MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS,
     authoredHydrologyFeatureBoundsQ64,
     hydrologyRegionBoundsQ64,
+    projectHydrologyBoundsQ64,
     HydrologyFeatureSpatialIndex
 } from "./world/HydrologyFeatureSpatialIndex";
 export type { HydrologyFeatureBoundsQ64 } from "./world/HydrologyFeatureSpatialIndex";
+
+export {
+    WORLD_CHANGE_DOMAIN_HEIGHT,
+    WORLD_CHANGE_DOMAIN_MATERIAL,
+    WORLD_CHANGE_DOMAIN_HYDROLOGY,
+    WORLD_CHANGE_DOMAIN_VEGETATION,
+    WORLD_CHANGE_DOMAIN_NAVIGATION,
+    WORLD_CHANGE_DOMAIN_FOG,
+    WORLD_CHANGE_DOMAIN_APPLICATION,
+    WORLD_CHANGE_DOMAIN_ALL,
+    createWorldChangeSet
+} from "./world/WorldChangeSet";
+export type {
+    TileBounds,
+    DirtySemanticDomainBounds,
+    DirtySemanticChunk,
+    DirtyHydrologyFeature,
+    DirtyHydrologyRegion,
+    DirtyRenderChunk,
+    WorldChangeSet,
+    BaseHydrologyChangeIndex,
+    WorldChangeResidency,
+    CreateWorldChangeSetOptions
+} from "./world/WorldChangeSet";
 
 export {
     createEffectiveHydrologyRegion,

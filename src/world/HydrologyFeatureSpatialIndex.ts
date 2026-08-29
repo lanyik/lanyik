@@ -124,11 +124,15 @@ function periodicIntervals(minimum: number, maximum: number, period: number): re
         ]);
 }
 
-function projectedBounds(
+export function projectHydrologyBoundsQ64(
     descriptor: WorldDescriptorV2,
     bounds: Readonly<HydrologyFeatureBoundsQ64>
 ): readonly HydrologyFeatureBoundsQ64[] {
-    if (descriptor.sourceKind !== "procedural-toroidal") return Object.freeze([bounds]);
+    assertWorldDescriptorV2(descriptor);
+    assertBounds(bounds);
+    if (descriptor.sourceKind !== "procedural-toroidal") {
+        return Object.freeze([Object.freeze({ ...bounds })]);
+    }
     const periodX = descriptor.width * HYDROLOGY_POINT_QUANTIZATION;
     const periodY = descriptor.height * HYDROLOGY_POINT_QUANTIZATION;
     if (!Number.isSafeInteger(periodX) || !Number.isSafeInteger(periodY)) {
@@ -208,7 +212,7 @@ export class HydrologyFeatureSpatialIndex {
             const deltaIndex = upserts.length;
             upserts.push(delta);
             const bounds = authoredHydrologyFeatureBoundsQ64(delta.feature);
-            for (const projected of projectedBounds(descriptor, bounds)) {
+            for (const projected of projectHydrologyBoundsQ64(descriptor, bounds)) {
                 items.push({ bounds: projected, deltaIndex });
             }
         }

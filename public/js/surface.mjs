@@ -5294,8 +5294,12 @@ function periodicIntervals(minimum, maximum, period) {
     { minimum: domainMinimum, maximum: domainMinimum + end - domainMaximum }
   ]);
 }
-function projectedBounds(descriptor, bounds) {
-  if (descriptor.sourceKind !== "procedural-toroidal") return Object.freeze([bounds]);
+function projectHydrologyBoundsQ64(descriptor, bounds) {
+  assertWorldDescriptorV2(descriptor);
+  assertBounds(bounds);
+  if (descriptor.sourceKind !== "procedural-toroidal") {
+    return Object.freeze([Object.freeze({ ...bounds })]);
+  }
   const periodX = descriptor.width * HYDROLOGY_POINT_QUANTIZATION;
   const periodY = descriptor.height * HYDROLOGY_POINT_QUANTIZATION;
   if (!Number.isSafeInteger(periodX) || !Number.isSafeInteger(periodY)) {
@@ -5360,7 +5364,7 @@ var HydrologyFeatureSpatialIndex = class {
       const deltaIndex = upserts.length;
       upserts.push(delta);
       const bounds = authoredHydrologyFeatureBoundsQ64(delta.feature);
-      for (const projected of projectedBounds(descriptor, bounds)) {
+      for (const projected of projectHydrologyBoundsQ64(descriptor, bounds)) {
         items.push({ bounds: projected, deltaIndex });
       }
     }
@@ -10092,6 +10096,25 @@ function stringBytes(value) {
   if (!Number.isSafeInteger(bytes)) throw new RangeError("surface delta string size exceeds safe integers");
   return bytes;
 }
+function arraysEqual(first, second) {
+  if (first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) {
+    if (first[index] !== second[index]) return false;
+  }
+  return true;
+}
+function semanticDeltaContentEqual(first, second) {
+  return arraysEqual(first.tileIndex, second.tileIndex) && arraysEqual(first.fieldMask, second.fieldMask) && arraysEqual(first.macroHeight, second.macroHeight) && arraysEqual(first.substrateClass, second.substrateClass) && arraysEqual(first.biomeWeights, second.biomeWeights) && arraysEqual(first.vegetationDensity, second.vegetationDensity) && arraysEqual(first.vegetationProfile, second.vegetationProfile);
+}
+function hydrologyFeatureContentEqual(first, second) {
+  if (first.kind !== second.kind || first.featureId !== second.featureId) return false;
+  if (first.kind === "lake" || second.kind === "lake") {
+    return first.kind === "lake" && second.kind === "lake" && first.level === second.level && first.profileIndex === second.profileIndex && arraysEqual(first.polygon, second.polygon);
+  }
+  const sourceEqual = first.source.kind === second.source.kind && (first.source.kind === "spring" && second.source.kind === "spring" ? first.source.sourceId === second.source.sourceId : first.source.kind === "river" && second.source.kind === "river" && first.source.riverId === second.source.riverId);
+  const outletEqual = first.outlet.kind === second.outlet.kind && (first.outlet.kind === "river" && second.outlet.kind === "river" ? first.outlet.riverId === second.outlet.riverId : first.outlet.kind !== "river" && second.outlet.kind !== "river" && first.outlet.bodyId === second.outlet.bodyId);
+  return sourceEqual && outletEqual && first.dischargeClass === second.dischargeClass && first.profileIndex === second.profileIndex && arraysEqual(first.controlPoints, second.controlPoints) && arraysEqual(first.widthProfile, second.widthProfile) && arraysEqual(first.levelProfile, second.levelProfile);
+}
 function surfaceDeltaTransactionResidentBytes(input) {
   if (!input || typeof input !== "object" || !Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
     throw new TypeError("surface delta transaction is required for byte accounting");
@@ -10423,6 +10446,9 @@ var MemorySurfaceDeltaStore = class {
       revision
     }, semanticCatalogLimits(this.descriptor));
     assertSemanticDeltaBounds(this.descriptor, delta);
+    if (current?.delta && semanticDeltaContentEqual(current.delta, delta)) {
+      throw new Error("semantic upsert does not change authoritative content");
+    }
     semanticByKey.set(identity, Object.freeze({ key, revision, delta }));
     return Object.freeze({ operation: "upsert", expectedRevision: mutation.expectedRevision, delta });
   }
@@ -10465,6 +10491,9 @@ var MemorySurfaceDeltaStore = class {
       featureKind: mutation.featureKind,
       operation: "delete"
     });
+    if (currentDelta?.operation === "upsert" && delta.operation === "upsert" && hydrologyFeatureContentEqual(currentDelta.feature, delta.feature)) {
+      throw new Error("hydrology upsert does not change authoritative content");
+    }
     hydrologyById.set(mutation.featureId, delta);
     return Object.freeze({ expectedRevision: mutation.expectedRevision, delta });
   }
@@ -10967,6 +10996,428 @@ var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends Memor
     return this.databasePromise;
   }
 };
+
+// src/world/WorldChangeSet.ts
+var WORLD_CHANGE_DOMAIN_HEIGHT = 1 << 0;
+var WORLD_CHANGE_DOMAIN_MATERIAL = 1 << 1;
+var WORLD_CHANGE_DOMAIN_HYDROLOGY = 1 << 2;
+var WORLD_CHANGE_DOMAIN_VEGETATION = 1 << 3;
+var WORLD_CHANGE_DOMAIN_NAVIGATION = 1 << 4;
+var WORLD_CHANGE_DOMAIN_FOG = 1 << 5;
+var WORLD_CHANGE_DOMAIN_APPLICATION = 1 << 6;
+var WORLD_CHANGE_DOMAIN_ALL = WORLD_CHANGE_DOMAIN_HEIGHT | WORLD_CHANGE_DOMAIN_MATERIAL | WORLD_CHANGE_DOMAIN_HYDROLOGY | WORLD_CHANGE_DOMAIN_VEGETATION | WORLD_CHANGE_DOMAIN_NAVIGATION | WORLD_CHANGE_DOMAIN_FOG | WORLD_CHANGE_DOMAIN_APPLICATION;
+var SURFACE_DELTA_CHANGE_DOMAINS = WORLD_CHANGE_DOMAIN_HEIGHT | WORLD_CHANGE_DOMAIN_MATERIAL | WORLD_CHANGE_DOMAIN_HYDROLOGY | WORLD_CHANGE_DOMAIN_VEGETATION;
+function includeTile(bounds, tileIndex) {
+  const x = Math.floor(tileIndex / WORLD_SEMANTIC_CHUNK_SIZE);
+  const y = tileIndex - x * WORLD_SEMANTIC_CHUNK_SIZE;
+  if (!bounds) return { minX: x, minY: y, maxXExclusive: x + 1, maxYExclusive: y + 1 };
+  bounds.minX = Math.min(bounds.minX, x);
+  bounds.minY = Math.min(bounds.minY, y);
+  bounds.maxXExclusive = Math.max(bounds.maxXExclusive, x + 1);
+  bounds.maxYExclusive = Math.max(bounds.maxYExclusive, y + 1);
+  return bounds;
+}
+function frozenTileBounds(bounds) {
+  return Object.freeze({ ...bounds });
+}
+function entryHas(delta, index, field2) {
+  return delta !== void 0 && index >= 0 && (delta.fieldMask[index] & field2) !== 0;
+}
+function scalarFieldChanged(before, beforeIndex, after, afterIndex, field2, values) {
+  const beforePresent = entryHas(before, beforeIndex, field2);
+  const afterPresent = entryHas(after, afterIndex, field2);
+  if (beforePresent !== afterPresent) return true;
+  return beforePresent && values(before)[beforeIndex] !== values(after)[afterIndex];
+}
+function biomeFieldChanged(before, beforeIndex, after, afterIndex) {
+  const beforePresent = entryHas(before, beforeIndex, SEMANTIC_DELTA_FIELD_BIOME);
+  const afterPresent = entryHas(after, afterIndex, SEMANTIC_DELTA_FIELD_BIOME);
+  if (beforePresent !== afterPresent) return true;
+  if (!beforePresent) return false;
+  for (let basis = 0; basis < 4; basis += 1) {
+    if (before.biomeWeights[beforeIndex * 4 + basis] !== after.biomeWeights[afterIndex * 4 + basis]) return true;
+  }
+  return false;
+}
+function vegetationFieldChanged(before, beforeIndex, after, afterIndex) {
+  const beforePresent = entryHas(before, beforeIndex, SEMANTIC_DELTA_FIELD_VEGETATION);
+  const afterPresent = entryHas(after, afterIndex, SEMANTIC_DELTA_FIELD_VEGETATION);
+  if (beforePresent !== afterPresent) return true;
+  return beforePresent && (before.vegetationDensity[beforeIndex] !== after.vegetationDensity[afterIndex] || before.vegetationProfile[beforeIndex] !== after.vegetationProfile[afterIndex]);
+}
+function semanticDirtyChunk(descriptor, key, before, after) {
+  if (before) assertSparseSemanticDelta(before, semanticCatalogLimits(descriptor));
+  if (after) assertSparseSemanticDelta(after, semanticCatalogLimits(descriptor));
+  const domainBounds = /* @__PURE__ */ new Map();
+  let beforeIndex = 0;
+  let afterIndex = 0;
+  while (beforeIndex < (before?.tileIndex.length ?? 0) || afterIndex < (after?.tileIndex.length ?? 0)) {
+    const beforeTile = beforeIndex < (before?.tileIndex.length ?? 0) ? before.tileIndex[beforeIndex] : Number.POSITIVE_INFINITY;
+    const afterTile = afterIndex < (after?.tileIndex.length ?? 0) ? after.tileIndex[afterIndex] : Number.POSITIVE_INFINITY;
+    const tileIndex = Math.min(beforeTile, afterTile);
+    const currentBefore = beforeTile === tileIndex ? beforeIndex : -1;
+    const currentAfter = afterTile === tileIndex ? afterIndex : -1;
+    if (scalarFieldChanged(
+      before,
+      currentBefore,
+      after,
+      currentAfter,
+      SEMANTIC_DELTA_FIELD_HEIGHT,
+      (delta) => delta.macroHeight
+    )) {
+      domainBounds.set(
+        WORLD_CHANGE_DOMAIN_HEIGHT,
+        includeTile(domainBounds.get(WORLD_CHANGE_DOMAIN_HEIGHT), tileIndex)
+      );
+    }
+    const substrateChanged = scalarFieldChanged(
+      before,
+      currentBefore,
+      after,
+      currentAfter,
+      SEMANTIC_DELTA_FIELD_SUBSTRATE,
+      (delta) => delta.substrateClass
+    );
+    if (substrateChanged || biomeFieldChanged(before, currentBefore, after, currentAfter)) {
+      domainBounds.set(
+        WORLD_CHANGE_DOMAIN_MATERIAL,
+        includeTile(domainBounds.get(WORLD_CHANGE_DOMAIN_MATERIAL), tileIndex)
+      );
+    }
+    if (vegetationFieldChanged(before, currentBefore, after, currentAfter)) {
+      domainBounds.set(
+        WORLD_CHANGE_DOMAIN_VEGETATION,
+        includeTile(domainBounds.get(WORLD_CHANGE_DOMAIN_VEGETATION), tileIndex)
+      );
+    }
+    if (beforeTile === tileIndex) beforeIndex += 1;
+    if (afterTile === tileIndex) afterIndex += 1;
+  }
+  if (domainBounds.size === 0) {
+    throw new Error("surface semantic commit changed only revision without changing authoritative fields");
+  }
+  let domains = 0;
+  let union2;
+  const orderedDomainBounds = [];
+  for (const domain of [
+    WORLD_CHANGE_DOMAIN_HEIGHT,
+    WORLD_CHANGE_DOMAIN_MATERIAL,
+    WORLD_CHANGE_DOMAIN_VEGETATION
+  ]) {
+    const bounds = domainBounds.get(domain);
+    if (!bounds) continue;
+    domains |= domain;
+    union2 = union2 ? {
+      minX: Math.min(union2.minX, bounds.minX),
+      minY: Math.min(union2.minY, bounds.minY),
+      maxXExclusive: Math.max(union2.maxXExclusive, bounds.maxXExclusive),
+      maxYExclusive: Math.max(union2.maxYExclusive, bounds.maxYExclusive)
+    } : { ...bounds };
+    orderedDomainBounds.push(Object.freeze({ domain, localBounds: frozenTileBounds(bounds) }));
+  }
+  return Object.freeze({
+    key: Object.freeze({ chunkX: key.chunkX, chunkY: key.chunkY }),
+    domains,
+    localBounds: frozenTileBounds(union2),
+    domainBounds: Object.freeze(orderedDomainBounds)
+  });
+}
+function projectedTileBounds(descriptor, chunkKey, localBounds) {
+  const origin = chunkOrigin(chunkKey.chunkX, chunkKey.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  const half = HYDROLOGY_POINT_QUANTIZATION / 2;
+  return projectHydrologyBoundsQ64(descriptor, {
+    minX: (origin.x + localBounds.minX) * HYDROLOGY_POINT_QUANTIZATION - half,
+    minY: (origin.y + localBounds.minY) * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxX: (origin.x + localBounds.maxXExclusive) * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxY: (origin.y + localBounds.maxYExclusive) * HYDROLOGY_POINT_QUANTIZATION - half
+  });
+}
+function intersects2(first, second) {
+  return first.minX <= second.maxX && first.maxX >= second.minX && first.minY <= second.maxY && first.maxY >= second.minY;
+}
+function projectedRenderDependencyBounds(descriptor, key) {
+  const origin = chunkOrigin(
+    key.chunkX,
+    key.chunkY,
+    SURFACE_COMPILE_PROFILE.renderChunkSize
+  );
+  const radius = SURFACE_COMPILE_PROFILE.influenceRadiusTiles;
+  const half = HYDROLOGY_POINT_QUANTIZATION / 2;
+  return projectHydrologyBoundsQ64(descriptor, {
+    minX: (origin.x - radius) * HYDROLOGY_POINT_QUANTIZATION - half,
+    minY: (origin.y - radius) * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxX: (origin.x + SURFACE_COMPILE_PROFILE.renderChunkSize + radius) * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxY: (origin.y + SURFACE_COMPILE_PROFILE.renderChunkSize + radius) * HYDROLOGY_POINT_QUANTIZATION - half
+  });
+}
+function projectedRegionBounds(descriptor, key) {
+  const origin = chunkOrigin(key.regionX, key.regionY, HYDROLOGY_REGION_SIZE);
+  let width = HYDROLOGY_REGION_SIZE;
+  let height = HYDROLOGY_REGION_SIZE;
+  if (descriptor.sourceKind !== "procedural-infinite") {
+    width = Math.min(width, descriptor.width - origin.x);
+    height = Math.min(height, descriptor.height - origin.y);
+    if (origin.x < 0 || origin.y < 0 || width <= 0 || height <= 0) {
+      throw new RangeError("resident hydrology region key is outside the canonical world domain");
+    }
+  }
+  const half = HYDROLOGY_POINT_QUANTIZATION / 2;
+  return projectHydrologyBoundsQ64(descriptor, {
+    minX: origin.x * HYDROLOGY_POINT_QUANTIZATION - half,
+    minY: origin.y * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxX: (origin.x + width) * HYDROLOGY_POINT_QUANTIZATION - half,
+    maxY: (origin.y + height) * HYDROLOGY_POINT_QUANTIZATION - half
+  });
+}
+function anyIntersection(first, second) {
+  for (const left of first) for (const right of second) if (intersects2(left, right)) return true;
+  return false;
+}
+function effectiveDeltaMap(snapshot) {
+  return new Map(snapshot.hydrologyDeltas.map((delta) => [delta.featureId, delta]));
+}
+function effectiveNode(featureId, deltas, base) {
+  const delta = deltas.get(featureId);
+  if (delta) {
+    if (delta.operation === "delete") return void 0;
+    const feature = delta.feature;
+    return feature.kind === "lake" ? {
+      kind: "lake",
+      featureId,
+      level: feature.level
+    } : {
+      kind: "river",
+      featureId,
+      source: feature.source,
+      outlet: feature.outlet,
+      sourceLevel: feature.levelProfile[0],
+      outletLevel: feature.levelProfile[feature.levelProfile.length - 1]
+    };
+  }
+  return base.resolveFeature(featureId);
+}
+function effectiveRawBounds(featureId, deltas, base) {
+  const delta = deltas.get(featureId);
+  if (delta) return delta.operation === "upsert" ? authoredHydrologyFeatureBoundsQ64(delta.feature) : void 0;
+  const node = base.resolveFeature(featureId);
+  if (!node) return void 0;
+  const bounds = base.resolveBoundsQ64(featureId);
+  if (!bounds) throw new Error(`base hydrology feature ${featureId} is missing change bounds`);
+  return bounds;
+}
+function nodeReferences(node, targetId) {
+  return node?.kind === "river" && (node.source.kind === "river" && node.source.riverId === targetId || node.outlet.kind === "river" && node.outlet.riverId === targetId || node.outlet.kind === "lake" && node.outlet.bodyId === targetId);
+}
+function authoredReverseReferences(deltas) {
+  const reverse = /* @__PURE__ */ new Map();
+  const include = (target, featureId) => {
+    const values = reverse.get(target);
+    if (values) values.push(featureId);
+    else reverse.set(target, [featureId]);
+  };
+  for (const delta of deltas.values()) {
+    if (delta.operation !== "upsert" || delta.feature.kind !== "river") continue;
+    if (delta.feature.source.kind === "river") {
+      include(delta.feature.source.riverId, delta.featureId);
+    }
+    if (delta.feature.outlet.kind === "river") {
+      include(delta.feature.outlet.riverId, delta.featureId);
+    } else if (delta.feature.outlet.kind === "lake") {
+      include(delta.feature.outlet.bodyId, delta.featureId);
+    }
+  }
+  for (const values of reverse.values()) values.sort();
+  return reverse;
+}
+function addReverseReferences(output, targetId, deltas, authoredReverse, base) {
+  for (const featureId of authoredReverse.get(targetId) ?? []) {
+    if (nodeReferences(effectiveNode(featureId, deltas, base), targetId)) output.set(featureId, true);
+  }
+  const baseReferences = base.referencesTo(targetId);
+  let previous;
+  for (const featureId of baseReferences) {
+    if (typeof featureId !== "string" || featureId.length === 0 || previous !== void 0 && previous >= featureId) {
+      throw new Error("base hydrology reverse references must be unique ascending identities");
+    }
+    previous = featureId;
+    if (nodeReferences(effectiveNode(featureId, deltas, base), targetId)) output.set(featureId, true);
+  }
+}
+function projectedEffectiveBounds(descriptor, featureId, deltas, base) {
+  const bounds = effectiveRawBounds(featureId, deltas, base);
+  return bounds ? projectHydrologyBoundsQ64(descriptor, bounds) : Object.freeze([]);
+}
+function hydrologyImpacts(descriptor, before, after, changedIds, base) {
+  const beforeReverse = authoredReverseReferences(before);
+  const afterReverse = authoredReverseReferences(after);
+  const visited = /* @__PURE__ */ new Map();
+  const queue = [...changedIds].sort();
+  for (const id of queue) visited.set(id, true);
+  const bounds = [];
+  for (let index = 0; index < queue.length; index += 1) {
+    if (index >= MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL) {
+      throw new RangeError("hydrology change dependency closure exceeds its fixed traversal budget");
+    }
+    const featureId = queue[index];
+    bounds.push(...projectedEffectiveBounds(descriptor, featureId, before, base));
+    bounds.push(...projectedEffectiveBounds(descriptor, featureId, after, base));
+    const references = /* @__PURE__ */ new Map();
+    addReverseReferences(references, featureId, before, beforeReverse, base);
+    addReverseReferences(references, featureId, after, afterReverse, base);
+    for (const reference of [...references.keys()].sort()) {
+      if (visited.has(reference)) continue;
+      visited.set(reference, true);
+      queue.push(reference);
+    }
+  }
+  return Object.freeze(bounds);
+}
+function validateResidencyKey(descriptor, key, chunkSize, name) {
+  const origin = chunkOrigin(key.chunkX, key.chunkY, chunkSize);
+  if (descriptor.sourceKind === "procedural-infinite") return;
+  if (origin.x < 0 || origin.y < 0 || origin.x >= descriptor.width || origin.y >= descriptor.height) {
+    throw new RangeError(`${name} is outside the canonical world domain`);
+  }
+}
+function sortedUniqueRenderKeys(descriptor, keys, chunkSize, name) {
+  if (!Array.isArray(keys)) throw new TypeError(`${name} residency must be an array`);
+  const sorted = keys.map((key) => {
+    if (!key || typeof key !== "object") throw new TypeError(`${name} residency key is invalid`);
+    validateResidencyKey(descriptor, key, chunkSize, name);
+    return Object.freeze({ chunkX: key.chunkX, chunkY: key.chunkY });
+  }).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index - 1].chunkX === sorted[index].chunkX && sorted[index - 1].chunkY === sorted[index].chunkY) {
+      throw new Error(`${name} residency contains a duplicate key`);
+    }
+  }
+  return Object.freeze(sorted);
+}
+function createWorldChangeSet(options) {
+  if (!options || typeof options !== "object") {
+    throw new TypeError("world change set options are required");
+  }
+  assertWorldDescriptorV2(options.descriptor);
+  const worldIdentity = serializeWorldDescriptorV2(options.descriptor);
+  if (!options.baseHydrology || typeof options.baseHydrology.resolveFeature !== "function" || typeof options.baseHydrology.referencesTo !== "function" || typeof options.baseHydrology.resolveBoundsQ64 !== "function") {
+    throw new TypeError("world change set requires a base hydrology change index");
+  }
+  if (!options.before || options.before.worldIdentity !== worldIdentity || !options.commit || options.commit.worldIdentity !== worldIdentity || options.commit.revision !== options.before.effectiveRevision + 1 || options.commit.transactionId !== BigInt(options.commit.revision)) {
+    throw new Error("world change set snapshot and commit are not one atomic revision");
+  }
+  const semanticChunks = [];
+  const semanticImpacts = [];
+  let domains = 0;
+  for (const change of options.commit.semanticChanges) {
+    const key = change.operation === "upsert" ? change.delta.key : change.key;
+    if (change.expectedRevision !== options.before.getSemanticRevision(key.chunkX, key.chunkY)) {
+      throw new Error("world change semantic CAS does not match its before snapshot");
+    }
+    const beforeDelta = options.before.getSemanticDelta(key.chunkX, key.chunkY);
+    const afterDelta = change.operation === "upsert" ? change.delta : void 0;
+    const dirty = semanticDirtyChunk(options.descriptor, key, beforeDelta, afterDelta);
+    semanticChunks.push(dirty);
+    domains |= dirty.domains;
+    for (const domainBounds of dirty.domainBounds) {
+      semanticImpacts.push({
+        domain: domainBounds.domain,
+        bounds: projectedTileBounds(options.descriptor, dirty.key, domainBounds.localBounds)
+      });
+    }
+  }
+  semanticChunks.sort((first, second) => first.key.chunkX - second.key.chunkX || first.key.chunkY - second.key.chunkY);
+  const beforeHydrology = effectiveDeltaMap(options.before);
+  const afterHydrology = new Map(beforeHydrology);
+  const hydrologyFeatures = [];
+  const changedHydrologyIds = [];
+  for (const change of options.commit.hydrologyChanges) {
+    const delta = change.delta;
+    if (change.expectedRevision !== options.before.getHydrologyRevision(delta.featureId)) {
+      throw new Error("world change hydrology CAS does not match its before snapshot");
+    }
+    const previousBounds = projectedEffectiveBounds(
+      options.descriptor,
+      delta.featureId,
+      beforeHydrology,
+      options.baseHydrology
+    );
+    afterHydrology.set(delta.featureId, delta);
+    const nextBounds = projectedEffectiveBounds(
+      options.descriptor,
+      delta.featureId,
+      afterHydrology,
+      options.baseHydrology
+    );
+    hydrologyFeatures.push(Object.freeze({
+      featureId: delta.featureId,
+      featureKind: delta.featureKind,
+      operation: delta.operation,
+      previousBounds,
+      nextBounds
+    }));
+    changedHydrologyIds.push(delta.featureId);
+    domains |= WORLD_CHANGE_DOMAIN_HYDROLOGY;
+  }
+  hydrologyFeatures.sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0);
+  const hydrologyImpactBounds = hydrologyImpacts(
+    options.descriptor,
+    beforeHydrology,
+    afterHydrology,
+    changedHydrologyIds,
+    options.baseHydrology
+  );
+  const residentRegions = sortedUniqueRenderKeys(
+    options.descriptor,
+    options.residency.hydrologyRegions.map((key) => ({
+      chunkX: key.regionX,
+      chunkY: key.regionY
+    })),
+    HYDROLOGY_REGION_SIZE,
+    "hydrology region"
+  );
+  const hydrologyRegions = [];
+  for (const key of residentRegions) {
+    const regionKey = Object.freeze({ regionX: key.chunkX, regionY: key.chunkY });
+    if (anyIntersection(
+      projectedRegionBounds(options.descriptor, regionKey),
+      hydrologyImpactBounds
+    )) {
+      hydrologyRegions.push(Object.freeze({
+        key: regionKey,
+        domains: WORLD_CHANGE_DOMAIN_HYDROLOGY
+      }));
+    }
+  }
+  const residentRenderChunks = sortedUniqueRenderKeys(
+    options.descriptor,
+    options.residency.renderChunks,
+    SURFACE_COMPILE_PROFILE.renderChunkSize,
+    "render chunk"
+  );
+  const renderChunks = [];
+  for (const key of residentRenderChunks) {
+    const dependencyBounds = projectedRenderDependencyBounds(options.descriptor, key);
+    let renderDomains = 0;
+    for (const impact of semanticImpacts) {
+      if (anyIntersection(dependencyBounds, impact.bounds)) renderDomains |= impact.domain;
+    }
+    if (anyIntersection(dependencyBounds, hydrologyImpactBounds)) {
+      renderDomains |= WORLD_CHANGE_DOMAIN_HYDROLOGY;
+    }
+    renderDomains &= SURFACE_DELTA_CHANGE_DOMAINS;
+    if (renderDomains !== 0) renderChunks.push(Object.freeze({ key, domains: renderDomains }));
+  }
+  return Object.freeze({
+    worldIdentity,
+    revision: options.commit.revision,
+    transactionId: options.commit.transactionId,
+    domains,
+    semanticChunks: Object.freeze(semanticChunks),
+    hydrologyFeatures: Object.freeze(hydrologyFeatures),
+    hydrologyRegions: Object.freeze(hydrologyRegions),
+    renderChunks: Object.freeze(renderChunks)
+  });
+}
 
 // src/world/MacroDrainageTree.ts
 var MACRO_DRAINAGE_TERMINAL = -1;
@@ -13472,6 +13923,14 @@ export {
   VEGETATION_CANDIDATES_PER_TILE,
   VEGETATION_CANDIDATE_COLUMNS_PER_TILE,
   VEGETATION_CANDIDATE_ROWS_PER_TILE,
+  WORLD_CHANGE_DOMAIN_ALL,
+  WORLD_CHANGE_DOMAIN_APPLICATION,
+  WORLD_CHANGE_DOMAIN_FOG,
+  WORLD_CHANGE_DOMAIN_HEIGHT,
+  WORLD_CHANGE_DOMAIN_HYDROLOGY,
+  WORLD_CHANGE_DOMAIN_MATERIAL,
+  WORLD_CHANGE_DOMAIN_NAVIGATION,
+  WORLD_CHANGE_DOMAIN_VEGETATION,
   WORLD_CHUNK_FORMAT_VERSION_V2,
   WORLD_DESCRIPTOR_FORMAT_VERSION_V2,
   WORLD_GENERATOR_VERSION_V2,
@@ -13551,6 +14010,7 @@ export {
   createSurfaceGroundGeometry,
   createSurfaceGroundGeometryData,
   createSurfaceRequestToken,
+  createWorldChangeSet,
   createWorldDescriptorV2,
   deriveHydrologyRaster,
   derivedHydrologyRasterIndex,
@@ -13575,6 +14035,7 @@ export {
   macroDrainageNodeId,
   macroDrainageNodeTile,
   macroDrainageTerminalBodyId,
+  projectHydrologyBoundsQ64,
   readSurfaceArrayTextureCapabilities,
   semanticBiomeWeightIndex,
   semanticCatalogLimits,

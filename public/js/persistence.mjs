@@ -2278,6 +2278,25 @@ function stringBytes(value) {
   if (!Number.isSafeInteger(bytes)) throw new RangeError("surface delta string size exceeds safe integers");
   return bytes;
 }
+function arraysEqual(first, second) {
+  if (first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) {
+    if (first[index] !== second[index]) return false;
+  }
+  return true;
+}
+function semanticDeltaContentEqual(first, second) {
+  return arraysEqual(first.tileIndex, second.tileIndex) && arraysEqual(first.fieldMask, second.fieldMask) && arraysEqual(first.macroHeight, second.macroHeight) && arraysEqual(first.substrateClass, second.substrateClass) && arraysEqual(first.biomeWeights, second.biomeWeights) && arraysEqual(first.vegetationDensity, second.vegetationDensity) && arraysEqual(first.vegetationProfile, second.vegetationProfile);
+}
+function hydrologyFeatureContentEqual(first, second) {
+  if (first.kind !== second.kind || first.featureId !== second.featureId) return false;
+  if (first.kind === "lake" || second.kind === "lake") {
+    return first.kind === "lake" && second.kind === "lake" && first.level === second.level && first.profileIndex === second.profileIndex && arraysEqual(first.polygon, second.polygon);
+  }
+  const sourceEqual = first.source.kind === second.source.kind && (first.source.kind === "spring" && second.source.kind === "spring" ? first.source.sourceId === second.source.sourceId : first.source.kind === "river" && second.source.kind === "river" && first.source.riverId === second.source.riverId);
+  const outletEqual = first.outlet.kind === second.outlet.kind && (first.outlet.kind === "river" && second.outlet.kind === "river" ? first.outlet.riverId === second.outlet.riverId : first.outlet.kind !== "river" && second.outlet.kind !== "river" && first.outlet.bodyId === second.outlet.bodyId);
+  return sourceEqual && outletEqual && first.dischargeClass === second.dischargeClass && first.profileIndex === second.profileIndex && arraysEqual(first.controlPoints, second.controlPoints) && arraysEqual(first.widthProfile, second.widthProfile) && arraysEqual(first.levelProfile, second.levelProfile);
+}
 function surfaceDeltaTransactionResidentBytes(input) {
   if (!input || typeof input !== "object" || !Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
     throw new TypeError("surface delta transaction is required for byte accounting");
@@ -2609,6 +2628,9 @@ var MemorySurfaceDeltaStore = class {
       revision
     }, semanticCatalogLimits(this.descriptor));
     assertSemanticDeltaBounds(this.descriptor, delta);
+    if (current?.delta && semanticDeltaContentEqual(current.delta, delta)) {
+      throw new Error("semantic upsert does not change authoritative content");
+    }
     semanticByKey.set(identity, Object.freeze({ key, revision, delta }));
     return Object.freeze({ operation: "upsert", expectedRevision: mutation.expectedRevision, delta });
   }
@@ -2651,6 +2673,9 @@ var MemorySurfaceDeltaStore = class {
       featureKind: mutation.featureKind,
       operation: "delete"
     });
+    if (currentDelta?.operation === "upsert" && delta.operation === "upsert" && hydrologyFeatureContentEqual(currentDelta.feature, delta.feature)) {
+      throw new Error("hydrology upsert does not change authoritative content");
+    }
     hydrologyById.set(mutation.featureId, delta);
     return Object.freeze({ expectedRevision: mutation.expectedRevision, delta });
   }
