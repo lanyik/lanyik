@@ -421,11 +421,13 @@ export interface SurfaceDeltaStore {
     readonly descriptor: WorldDescriptorV2;
     readonly worldIdentity: string;
     snapshot(): SurfaceDeltaSnapshot;
+    preview(input: Readonly<SurfaceDeltaTransactionInput>): Promise<PreparedSurfaceDeltaCommit>;
     commit(input: Readonly<SurfaceDeltaTransactionInput>): Promise<SurfaceDeltaCommit>;
     flush(): Promise<void>;
 }
 
 export interface PreparedSurfaceDeltaCommit {
+    readonly before: SurfaceDeltaSnapshot;
     readonly commit: SurfaceDeltaCommit;
     readonly snapshot: SurfaceDeltaSnapshot;
 }
@@ -453,6 +455,16 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
 
     public snapshot(): SurfaceDeltaSnapshot {
         return this.current;
+    }
+
+    public preview(
+        input: Readonly<SurfaceDeltaTransactionInput>
+    ): Promise<PreparedSurfaceDeltaCommit> {
+        try {
+            return Promise.resolve(this.prepareCommit(input));
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
     }
 
     public commit(input: Readonly<SurfaceDeltaTransactionInput>): Promise<SurfaceDeltaCommit> {
@@ -514,11 +526,12 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
             semanticChanges: Object.freeze(semanticChanges),
             hydrologyChanges: Object.freeze(hydrologyChanges)
         });
-        return Object.freeze({ commit, snapshot: next });
+        return Object.freeze({ before: this.current, commit, snapshot: next });
     }
 
     protected publishPreparedCommit(prepared: Readonly<PreparedSurfaceDeltaCommit>): void {
-        if (prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1
+        if (prepared.before !== this.current
+            || prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1
             || prepared.commit.revision !== prepared.snapshot.effectiveRevision
             || prepared.commit.worldIdentity !== this.worldIdentity
             || prepared.snapshot.worldIdentity !== this.worldIdentity) {

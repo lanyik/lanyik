@@ -393,7 +393,8 @@ export type {
     SurfaceSemanticDeltaState,
     EffectiveHydrologyGraphNode,
     BaseHydrologyFeatureIndex,
-    SurfaceDeltaStore
+    SurfaceDeltaStore,
+    PreparedSurfaceDeltaCommit
 } from "./world/SurfaceDeltaStore";
 export {
     INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,

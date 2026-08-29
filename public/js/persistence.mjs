@@ -2409,6 +2409,13 @@ var MemorySurfaceDeltaStore = class {
   snapshot() {
     return this.current;
   }
+  preview(input) {
+    try {
+      return Promise.resolve(this.prepareCommit(input));
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  }
   commit(input) {
     try {
       const prepared = this.prepareCommit(input);
@@ -2461,10 +2468,10 @@ var MemorySurfaceDeltaStore = class {
       semanticChanges: Object.freeze(semanticChanges),
       hydrologyChanges: Object.freeze(hydrologyChanges)
     });
-    return Object.freeze({ commit, snapshot: next });
+    return Object.freeze({ before: this.current, commit, snapshot: next });
   }
   publishPreparedCommit(prepared) {
-    if (prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1 || prepared.commit.revision !== prepared.snapshot.effectiveRevision || prepared.commit.worldIdentity !== this.worldIdentity || prepared.snapshot.worldIdentity !== this.worldIdentity) {
+    if (prepared.before !== this.current || prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1 || prepared.commit.revision !== prepared.snapshot.effectiveRevision || prepared.commit.worldIdentity !== this.worldIdentity || prepared.snapshot.worldIdentity !== this.worldIdentity) {
       throw new Error("prepared surface delta commit no longer follows the current snapshot");
     }
     this.current = prepared.snapshot;
@@ -2939,6 +2946,18 @@ var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends Memor
       this.barrierFailures.push({ sequence, reason: asError(reason) });
     });
     return operation;
+  }
+  preview(input) {
+    if (this.closing || this.closed) {
+      return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+    }
+    let snapshot;
+    try {
+      snapshot = this.snapshotTransactionInput(input);
+    } catch (reason) {
+      return Promise.reject(asError(reason));
+    }
+    return this.tail.then(() => this.prepareCommit(snapshot, true));
   }
   async flush() {
     const targetSequence = this.lastSubmittedSequence;

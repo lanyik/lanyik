@@ -405,6 +405,8 @@ delta 绑定完整 world identity、chunk key 和正整数 revision。二进制�
 
 已落地的 `SurfaceDeltaStore.commit` 是统一异步原子边界；内存实现仍在同一调用内完成 candidate 校验和引用交换，但以 Promise 暴露相同契约，调用方不得依赖同步副作用。`IndexedDbSurfaceDeltaStore.open` 先从规范二进制记录严格恢复完整 snapshot，构造时必须显式提供 descriptor、基础水文索引和 pending commit 字节预算。每个提交在进入队列时深复制 key、调度无关输入、所有 typed array 及 source/outlet identity，调用方后续修改不会改变已接收事务；队列超过预算立即以 typed backpressure error 拒绝，不把无限编辑堆在内存中。
 
+同一 store 还提供异步 `preview(transaction)` 冷路径：它运行与 commit 完全相同的 CAS、范围、图连通性和规范化校验，返回 `{ before, commit, snapshot }` 三个不可变对象，但绝不发布候选。durable 实现先深复制输入并排在已接收 commit barrier 之后预演，所以候选的 `before` 精确指向预演时已持久发布的快照；preview 不预留 revision，后续真实 commit 仍须重新执行 CAS，任何并发写入都明确失败而不会偷用旧候选。编辑冲突策略用该候选 snapshot 建立临时 `EffectiveWorldView` 并运行正式 CPU surface kernel，不能自己修改 store 内部 map 或把 preview 当成提交。
+
 durable commit 在一个原生 IndexedDB readwrite transaction 中读取并 CAS 完整 world effective revision，同时写入 meta、所有变化的 `SSD2` semantic 记录、语义删除 revision 记录及 `HFD2` hydrology upsert/tombstone。只有 transaction `complete` 后才发布内存 snapshot 和 resolve commit；失败、abort 或另一个标签页先提交导致的 session revision 冲突都保持旧 snapshot，不存在“内存已成功、后台落盘失败”的第二种可见性。pending byte 由公开的确定性计量同时覆盖 owned transaction 对象、事务期间生成的规范二进制，以及发布湖多边形时必需的独立 canonical copy；其余 durable prepare 直接接管已深复制的 typed array，不再复制第三份候选 payload。`flush()` 捕获调用前已经接收的 sequence barrier，并再次报告该范围内任何提交失败；`close()` 先执行同一 barrier 再关闭连接。统计明确给出 effective/persisted revision、pending commits/bytes 与最大预算。
 
 已落地的 `HydrologyFeatureSpatialIndex` 在每个 delta 快照上只索引完整 upsert，tombstone 继续由 feature ID 遮蔽表处理。索引是叶容量 8、最多 16384 个 item 的确定性 packed BVH；普通 feature 使用一个按最大河宽保守扩张的 q64 AABB，环绕 feature 的连续 bounds 投影到规范 `[-0.5, period-0.5]` 域并最多拆成四个 AABB。它不沿长河枚举所有 128×128 region；查询结果去重后恢复稳定 feature ID 顺序。超过固定 item 预算或环绕 q64 周期超出安全整数时明确失败。

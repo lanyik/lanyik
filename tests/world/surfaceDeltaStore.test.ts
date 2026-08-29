@@ -59,6 +59,31 @@ function baseIndex(nodes: readonly EffectiveHydrologyGraphNode[]): BaseHydrology
 }
 
 describe("MemorySurfaceDeltaStore", () => {
+    test("previews an immutable candidate without publishing it", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("preview");
+        const worldIdentity = serializeWorldDescriptorV2(descriptor);
+        const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
+        const before = store.snapshot();
+        const payload = heightPayload(17, 41_000);
+        const prepared = await store.preview({
+            worldIdentity,
+            semanticMutations: [{
+                operation: "upsert",
+                key: { chunkX: -1, chunkY: 2 },
+                expectedRevision: 0,
+                payload
+            }],
+            hydrologyMutations: []
+        });
+
+        expect(prepared.before).toBe(before);
+        expect(prepared.commit).toMatchObject({ revision: 1, transactionId: 1n });
+        expect(prepared.snapshot.getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(41_000);
+        expect(store.snapshot()).toBe(before);
+        payload.macroHeight[0] = 1;
+        expect(prepared.snapshot.getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(41_000);
+    });
+
     test("commits semantic and hydrology mutations under one immutable revision", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("atomic");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);

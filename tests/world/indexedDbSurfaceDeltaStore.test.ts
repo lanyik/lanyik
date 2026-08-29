@@ -93,6 +93,39 @@ afterEach(() => {
 });
 
 describe("IndexedDbSurfaceDeltaStore", () => {
+    test("previews after queued durable commits without publishing or persisting the candidate", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("durable-preview");
+        const worldIdentity = serializeWorldDescriptorV2(descriptor);
+        const name = databaseName("preview");
+        const store = await IndexedDbSurfaceDeltaStore.open({
+            descriptor,
+            baseHydrology: EMPTY_BASE_INDEX,
+            databaseName: name,
+            maxPendingCommitBytes: 1024 * 1024
+        });
+        const committed = store.commit(semanticUpsert(worldIdentity));
+        const previewed = store.preview(semanticUpsert(worldIdentity, 1, 42_000));
+        await committed;
+        const prepared = await previewed;
+
+        expect(prepared.before).toBe(store.snapshot());
+        expect(prepared.before.effectiveRevision).toBe(1);
+        expect(prepared.snapshot.effectiveRevision).toBe(2);
+        expect(prepared.snapshot.getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(42_000);
+        expect(store.snapshot().effectiveRevision).toBe(1);
+        await store.close();
+
+        const reopened = await IndexedDbSurfaceDeltaStore.open({
+            descriptor,
+            baseHydrology: EMPTY_BASE_INDEX,
+            databaseName: name,
+            maxPendingCommitBytes: 1024 * 1024
+        });
+        expect(reopened.snapshot().effectiveRevision).toBe(1);
+        expect(reopened.snapshot().getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(40_000);
+        await reopened.close();
+    });
+
     test("publishes only after one native transaction and restores canonical binary records", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("durable-surface");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);

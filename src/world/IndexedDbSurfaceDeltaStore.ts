@@ -290,6 +290,21 @@ export class IndexedDbSurfaceDeltaStore extends MemorySurfaceDeltaStore {
         return operation;
     }
 
+    public override preview(
+        input: Readonly<SurfaceDeltaTransactionInput>
+    ): Promise<PreparedSurfaceDeltaCommit> {
+        if (this.closing || this.closed) {
+            return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+        }
+        let snapshot: SurfaceDeltaTransactionInput;
+        try {
+            snapshot = this.snapshotTransactionInput(input);
+        } catch (reason) {
+            return Promise.reject(asError(reason));
+        }
+        return this.tail.then(() => this.prepareCommit(snapshot, true));
+    }
+
     public override async flush(): Promise<void> {
         const targetSequence = this.lastSubmittedSequence;
         const barrier = this.tail;
