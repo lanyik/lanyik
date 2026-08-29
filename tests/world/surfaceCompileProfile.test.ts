@@ -23,7 +23,7 @@ describe("SurfaceCompileProfile v1", () => {
             influenceRadiusTiles: 2,
             textureLayerSize: 66,
             pageLayers: 128,
-            waterGeometryCoverageThreshold: 0,
+            waterGeometryCoverageThreshold: 0.5,
             waterFullPatchCoverage: 128
         });
         expect(Object.isFrozen(SURFACE_COMPILE_PROFILE)).toBe(true);

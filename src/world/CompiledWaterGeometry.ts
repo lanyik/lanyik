@@ -3,11 +3,11 @@ import {
     CompiledSurfaceField,
     assertCompiledSurfaceField
 } from "./CompiledSurfaceField";
-import { SURFACE_COMPILE_PROFILE, SURFACE_CORE_TEXELS } from "./SurfaceCompileProfile";
+import { SURFACE_COMPILE_PROFILE } from "./SurfaceCompileProfile";
 
 export const COMPILED_WATER_GEOMETRY_FORMAT_VERSION = 1;
-export const MAX_COMPILED_WATER_COVERAGE_VERTICES = 16_641;
-export const MAX_COMPILED_WATER_COVERAGE_TRIANGLES = 16_384;
+export const MAX_COMPILED_WATER_COVERAGE_VERTICES = 24_576;
+export const MAX_COMPILED_WATER_COVERAGE_TRIANGLES = 24_576;
 
 export interface CompiledNoWaterGeometry {
     readonly formatVersion: typeof COMPILED_WATER_GEOMETRY_FORMAT_VERSION;
@@ -35,6 +35,8 @@ interface CoverageVertex {
     readonly key: string;
     readonly u: number;
     readonly v: number;
+    readonly fieldX: number;
+    readonly fieldY: number;
     readonly coverage: number;
 }
 
@@ -45,39 +47,45 @@ interface MutableCoverageGeometry {
     readonly vertexByKey: Map<string, number>;
 }
 
-function coverageAtGridVertex(field: Readonly<CompiledSurfaceField>, gridX: number, gridY: number): number {
-    const size = SURFACE_COMPILE_PROFILE.textureLayerSize;
-    const firstX = gridX;
-    const firstY = gridY;
-    return (
-        field.waterCoverage[firstX * size + firstY]
-        + field.waterCoverage[(firstX + 1) * size + firstY]
-        + field.waterCoverage[firstX * size + firstY + 1]
-        + field.waterCoverage[(firstX + 1) * size + firstY + 1]
-    ) * 0.25;
-}
-
-function gridVertex(field: Readonly<CompiledSurfaceField>, gridX: number, gridY: number): CoverageVertex {
+function fieldVertex(field: Readonly<CompiledSurfaceField>, fieldX: number, fieldY: number): CoverageVertex {
     const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
     return {
-        key: `g:${gridX}:${gridY}`,
-        u: -0.5 + gridX / samplesPerTile,
-        v: -0.5 + gridY / samplesPerTile,
-        coverage: coverageAtGridVertex(field, gridX, gridY)
+        key: `g:${fieldX}:${fieldY}`,
+        u: (fieldX + 0.5 - SURFACE_COMPILE_PROFILE.gutterTexels) / samplesPerTile - 0.5,
+        v: (fieldY + 0.5 - SURFACE_COMPILE_PROFILE.gutterTexels) / samplesPerTile - 0.5,
+        fieldX,
+        fieldY,
+        coverage: field.waterCoverage[fieldX * SURFACE_COMPILE_PROFILE.textureLayerSize + fieldY]
     };
 }
 
-function crossing(first: Readonly<CoverageVertex>, second: Readonly<CoverageVertex>): CoverageVertex {
-    const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
-    const amount = (threshold - first.coverage) / (second.coverage - first.coverage);
+function interpolateVertex(
+    first: Readonly<CoverageVertex>,
+    second: Readonly<CoverageVertex>,
+    amount: number,
+    keyPrefix: string
+): CoverageVertex {
     if (amount <= 0) return first;
     if (amount >= 1) return second;
     return {
-        key: first.key < second.key ? `e:${first.key}:${second.key}` : `e:${second.key}:${first.key}`,
+        key: first.key < second.key
+            ? `${keyPrefix}:${first.key}:${second.key}` : `${keyPrefix}:${second.key}:${first.key}`,
         u: first.u + (second.u - first.u) * amount,
         v: first.v + (second.v - first.v) * amount,
-        coverage: threshold
+        fieldX: first.fieldX + (second.fieldX - first.fieldX) * amount,
+        fieldY: first.fieldY + (second.fieldY - first.fieldY) * amount,
+        coverage: first.coverage + (second.coverage - first.coverage) * amount
     };
+}
+
+function coverageCrossing(first: Readonly<CoverageVertex>, second: Readonly<CoverageVertex>): CoverageVertex {
+    const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
+    return interpolateVertex(
+        first,
+        second,
+        (threshold - first.coverage) / (second.coverage - first.coverage),
+        "e"
+    );
 }
 
 function clippedWetPolygon(vertices: readonly CoverageVertex[]): readonly CoverageVertex[] {
@@ -87,7 +95,7 @@ function clippedWetPolygon(vertices: readonly CoverageVertex[]): readonly Covera
     let previousWet = previous.coverage > threshold;
     for (const current of vertices) {
         const currentWet = current.coverage > threshold;
-        if (currentWet !== previousWet) output.push(crossing(previous, current));
+        if (currentWet !== previousWet) output.push(coverageCrossing(previous, current));
         if (currentWet) output.push(current);
         previous = current;
         previousWet = currentWet;
@@ -95,16 +103,62 @@ function clippedWetPolygon(vertices: readonly CoverageVertex[]): readonly Covera
     return output;
 }
 
+function clipCoreBoundary(
+    vertices: readonly CoverageVertex[],
+    axis: "u" | "v",
+    limit: number,
+    keepGreater: boolean
+): readonly CoverageVertex[] {
+    if (vertices.length === 0) return vertices;
+    const output: CoverageVertex[] = [];
+    let previous = vertices[vertices.length - 1];
+    let previousInside = keepGreater ? previous[axis] >= limit : previous[axis] <= limit;
+    for (const current of vertices) {
+        const currentInside = keepGreater ? current[axis] >= limit : current[axis] <= limit;
+        if (currentInside !== previousInside) {
+            const amount = (limit - previous[axis]) / (current[axis] - previous[axis]);
+            output.push(interpolateVertex(previous, current, amount, `c:${axis}:${limit}`));
+        }
+        if (currentInside) output.push(current);
+        previous = current;
+        previousInside = currentInside;
+    }
+    return output;
+}
+
+function clipToCore(vertices: readonly CoverageVertex[]): readonly CoverageVertex[] {
+    const minimum = -0.5;
+    const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+    return clipCoreBoundary(
+        clipCoreBoundary(
+            clipCoreBoundary(
+                clipCoreBoundary(vertices, "u", minimum, true),
+                "u",
+                maximum,
+                false
+            ),
+            "v",
+            minimum,
+            true
+        ),
+        "v",
+        maximum,
+        false
+    );
+}
+
 function outputVertex(output: MutableCoverageGeometry, vertex: Readonly<CoverageVertex>): number {
     const existing = output.vertexByKey.get(vertex.key);
     if (existing !== undefined) return existing;
     const index = output.positions.length / 3;
-    output.positions.push(vertex.u, 0, vertex.v);
+    const u = Math.fround(vertex.u);
+    const v = Math.fround(vertex.v);
+    output.positions.push(u, 0, v);
     output.surfaceFieldCoordinates.push(
-        (vertex.u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
-            - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels,
-        (vertex.v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
-            - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels
+        Math.fround((u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
+            - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels),
+        Math.fround((v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
+            - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels)
     );
     output.vertexByKey.set(vertex.key, index);
     return index;
@@ -132,7 +186,7 @@ function addClippedTriangle(
     second: Readonly<CoverageVertex>,
     third: Readonly<CoverageVertex>
 ): void {
-    const polygon = clippedWetPolygon([first, second, third]);
+    const polygon = clipToCore(clippedWetPolygon([first, second, third]));
     for (let index = 1; index < polygon.length - 1; index += 1) {
         addCoverageTriangle(output, polygon[0], polygon[index], polygon[index + 1]);
     }
@@ -177,10 +231,10 @@ export function assertCompiledWaterGeometry(geometry: Readonly<CompiledWaterGeom
         seenCoordinates.add(key);
         const fieldX = geometry.surfaceFieldCoordinates[index * 2];
         const fieldY = geometry.surfaceFieldCoordinates[index * 2 + 1];
-        if (fieldX !== (u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
-                - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels
-            || fieldY !== (v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
-                - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels) {
+        if (fieldX !== Math.fround((u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
+                - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels)
+            || fieldY !== Math.fround((v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval
+                - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels)) {
             throw new Error("compiled water field coordinate drifted from its texel-center phase");
         }
     }
@@ -218,13 +272,13 @@ export function assertCompiledWaterGeometry(geometry: Readonly<CompiledWaterGeom
 
 export function compileWaterGeometry(field: Readonly<CompiledSurfaceField>): CompiledWaterGeometry {
     assertCompiledSurfaceField(field);
-    const gridSize = SURFACE_CORE_TEXELS + 1;
+    const gridSize = SURFACE_COMPILE_PROFILE.textureLayerSize;
     const vertices = new Array<CoverageVertex>(gridSize * gridSize);
     let allDry = true;
     let allFull = true;
     for (let gridX = 0; gridX < gridSize; gridX += 1) {
         for (let gridY = 0; gridY < gridSize; gridY += 1) {
-            const vertex = gridVertex(field, gridX, gridY);
+            const vertex = fieldVertex(field, gridX, gridY);
             vertices[gridX * gridSize + gridY] = vertex;
             if (vertex.coverage > SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold) allDry = false;
             if (vertex.coverage < SURFACE_COMPILE_PROFILE.waterFullPatchCoverage) allFull = false;
@@ -244,8 +298,8 @@ export function compileWaterGeometry(field: Readonly<CompiledSurfaceField>): Com
         indices: [],
         vertexByKey: new Map()
     };
-    for (let gridX = 0; gridX < SURFACE_CORE_TEXELS; gridX += 1) {
-        for (let gridY = 0; gridY < SURFACE_CORE_TEXELS; gridY += 1) {
+    for (let gridX = 0; gridX < gridSize - 1; gridX += 1) {
+        for (let gridY = 0; gridY < gridSize - 1; gridY += 1) {
             const bottomLeft = vertices[gridX * gridSize + gridY];
             const topLeft = vertices[gridX * gridSize + gridY + 1];
             const bottomRight = vertices[(gridX + 1) * gridSize + gridY];
@@ -255,7 +309,10 @@ export function compileWaterGeometry(field: Readonly<CompiledSurfaceField>): Com
         }
     }
     if (output.indices.length === 0) {
-        throw new Error("surface water coverage classification produced no geometry");
+        return Object.freeze({
+            formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+            kind: "none" as const
+        });
     }
     const geometry: CompiledWaterCoverageGeometry = Object.freeze({
         formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,

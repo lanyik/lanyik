@@ -23,7 +23,7 @@ export const SURFACE_COMPILE_PROFILE: Readonly<SurfaceCompileProfile> = Object.f
     influenceRadiusTiles: 2,
     textureLayerSize: 66,
     pageLayers: 128,
-    waterGeometryCoverageThreshold: 0,
+    waterGeometryCoverageThreshold: 0.5,
     waterFullPatchCoverage: 128
 });
 
@@ -82,7 +82,7 @@ export function assertSurfaceCompileProfile(profile: Readonly<SurfaceCompileProf
         || profile.influenceRadiusTiles !== 2
         || profile.textureLayerSize !== 66
         || profile.pageLayers !== 128
-        || profile.waterGeometryCoverageThreshold !== 0
+        || profile.waterGeometryCoverageThreshold !== 0.5
         || profile.waterFullPatchCoverage !== 128) {
         throw new RangeError("surface compile profile does not match the frozen profile v1");
     }

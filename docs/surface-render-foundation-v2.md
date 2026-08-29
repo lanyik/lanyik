@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、generation-safe paged array-texture 池、三档共享 Ground topology 及 no-water/full-patch/coverage 水面几何已冻结，窄河 sweep、save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、base bounds、generation-safe paged array-texture 池、三档共享 Ground topology 及 no-water/full-patch/coverage 水面几何已冻结，窄河 sweep、视觉位移 bounds、save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -650,6 +650,8 @@ source chunk 驻留不再使用 Chebyshev 正方形半径直接生成整圈坐�
 
 这样 32×32 不会因为离散 `ceil(renderDistance / chunkSpan)` 恰好相同而比 24×24 无条件多驻留 78% 的格子。
 
+已落地的 `compileSurfaceBounds` 扫描 near Ground 的 65×65 canonical 顶点，得到固定三角 topology 的精确 ground min/max；`fullPatch` 扫描同一组水面顶点，`coverage` 则扫描实际 chunk-local geometry 顶点并通过 `CompiledSurfaceSampler` 取归一化 body 水位。水平范围把 logical core 经 `surfaceToWorld` 转成相对偶列 chunk origin 的 world-XZ AABB，因此随 `hexSize` 线性缩放而 Y 高度不变。格式验证要求 ground/water/base 范围有限、有序，base 必须恰好包住两者。当前结果明确命名并记录未加纯视觉位移的 base height；最终 `CompiledSurfaceChunk.bounds` 还必须在波浪/微位移 profile 冻结后加入其最大上下界，现阶段不得直接把 base range 冒充最终剔除 AABB。
+
 ## 11. 水面渲染
 
 ### 11.1 混合几何策略
@@ -663,9 +665,9 @@ source chunk 驻留不再使用 Chebyshev 正方形半径直接生成整圈坐�
 
 水面几何只决定覆盖与基础水位；颜色、波纹、泡沫和反射从同一表面场读取。
 
-已落地的 `compileWaterGeometry` 先在 Ground 的 65×65 canonical 顶点上，用 66×66 X-major coverage 的四邻 texel 精确双线性平均。所有顶点为 0 时输出无 buffer 的 `none`，所有顶点 coverage 至少 128 时输出借用 shared near topology 的 `fullPatch`；其余情况沿与 near Ground 完全相同的固定对角线，把每个基础三角按 `coverage > 0` 线性裁切为 `coverage` mesh，因此任何非零量化 AA coverage 都不会被几何阶段吞掉。`0/128` 是 compile profile v1 的冻结选择阈值。
+已落地的 `compileWaterGeometry` 直接在 66×66 X-major coverage texel-center lattice 上工作，不先降采样到 Ground 顶点。全部物理 texel 为 0 时输出无 buffer 的 `none`，全部至少为 128 时输出借用 shared near topology 的 `fullPatch`；其余情况先沿固定对角线把每个 texel cell 三角按 `coverage > 0.5` 线性裁水，再裁到 Ground 的 `[-0.5, 15.5]²` core。原始 byte=1 仍位于 0.5 等值线内，且所有水面轮廓顶点直接采样时都有正 coverage 和合法 body payload，不会在岸边把顶点水位拉到 Y=0；`0.5/128` 是 compile profile v1 的冻结选择阈值。
 
-chunk-local coverage 输出直接是 GPU-ready 且互不别名的 `position(u,0,v)`、`surfaceFieldCoordinate` 和 `Uint16` index 三个 transferable buffer；理论硬上限为 16641 顶点、16384 三角。发布验证拒绝越界/重复顶点、错误 texel phase、非正 Y 绕序、坏索引和非流形三角边。轮廓 crossing 只由共享量化 coverage 端点与固定阈值决定，相邻 chunk 的边界顶点逐位一致。`SurfaceWaterGeometryBinding` 对 `none` 不创建对象、对 `fullPatch` 明确借用共享 Ground geometry、只拥有并释放 `coverage` 的私有 `BufferGeometry`，避免卸载一个水块时误 dispose 全局 patch。窄河 spline sweep 与 coverage mesh 的汇流焊接仍是本节下一子阶段。
+chunk-local coverage 输出直接是 GPU-ready 且互不别名的 `position(u,0,v)`、`surfaceFieldCoordinate` 和 `Uint16` index 三个 transferable buffer；包含 core clipping 的固定硬上限为 24576 顶点、24576 三角。发布验证拒绝越界/重复顶点、错误 texel phase、非正 Y 绕序、坏索引和非流形三角边。轮廓 crossing 只由共享量化 coverage 端点与固定阈值决定，相邻 chunk 的边界顶点逐位一致。`SurfaceWaterGeometryBinding` 对 `none` 不创建对象、对 `fullPatch` 明确借用共享 Ground geometry、只拥有并释放 `coverage` 的私有 `BufferGeometry`，避免卸载一个水块时误 dispose 全局 patch。窄河 spline sweep 与 coverage mesh 的汇流焊接仍是本节下一子阶段。
 
 “全水 patch / coverage mesh / sweep mesh”的选择阈值由 compile profile 冻结，并只在 Worker 编译时根据量化输入决定；它不能随帧率、镜头或加载顺序切换。相同 dependency key 必须产生逐字节相同的 geometry kind 和索引缓冲。
 

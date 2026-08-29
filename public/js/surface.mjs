@@ -10,7 +10,7 @@ var SURFACE_COMPILE_PROFILE = Object.freeze({
   influenceRadiusTiles: 2,
   textureLayerSize: 66,
   pageLayers: 128,
-  waterGeometryCoverageThreshold: 0,
+  waterGeometryCoverageThreshold: 0.5,
   waterFullPatchCoverage: 128
 });
 var SURFACE_CORE_TEXELS = SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
@@ -48,7 +48,7 @@ function assertSurfaceCompileProfile(profile) {
   if (!Number.isFinite(profile.waterGeometryCoverageThreshold) || profile.waterGeometryCoverageThreshold < 0 || profile.waterGeometryCoverageThreshold >= 1 || profile.waterFullPatchCoverage !== 128) {
     throw new RangeError("surface water geometry thresholds do not match profile v1");
   }
-  if (profile.renderChunkSize !== 16 || profile.samplesPerTileInterval !== 4 || profile.gutterTexels !== 1 || profile.influenceRadiusTiles !== 2 || profile.textureLayerSize !== 66 || profile.pageLayers !== 128 || profile.waterGeometryCoverageThreshold !== 0 || profile.waterFullPatchCoverage !== 128) {
+  if (profile.renderChunkSize !== 16 || profile.samplesPerTileInterval !== 4 || profile.gutterTexels !== 1 || profile.influenceRadiusTiles !== 2 || profile.textureLayerSize !== 66 || profile.pageLayers !== 128 || profile.waterGeometryCoverageThreshold !== 0.5 || profile.waterFullPatchCoverage !== 128) {
     throw new RangeError("surface compile profile does not match the frozen profile v1");
   }
 }
@@ -2695,7 +2695,7 @@ function surfaceScalarContours(bounds, hexSize, scalar) {
       values[gridU * height + gridV] = value;
     }
   }
-  const crossing2 = (firstU, firstV, firstValue, secondU, secondV, secondValue) => {
+  const crossing = (firstU, firstV, firstValue, secondU, secondV, secondValue) => {
     const amount = -firstValue / (secondValue - firstValue);
     return surfaceToWorld(
       firstU + (secondU - firstU) * amount,
@@ -2723,16 +2723,16 @@ function surfaceScalarContours(bounds, hexSize, scalar) {
       const step = 1 / samplesPerTile;
       const crossings = [void 0, void 0, void 0, void 0];
       if (inside[0] !== inside[1]) {
-        crossings[0] = crossing2(u, v, cell[0], u, v + step, cell[1]);
+        crossings[0] = crossing(u, v, cell[0], u, v + step, cell[1]);
       }
       if (inside[1] !== inside[2]) {
-        crossings[1] = crossing2(u, v + step, cell[1], u + step, v + step, cell[2]);
+        crossings[1] = crossing(u, v + step, cell[1], u + step, v + step, cell[2]);
       }
       if (inside[2] !== inside[3]) {
-        crossings[2] = crossing2(u + step, v + step, cell[2], u + step, v, cell[3]);
+        crossings[2] = crossing(u + step, v + step, cell[2], u + step, v, cell[3]);
       }
       if (inside[3] !== inside[0]) {
-        crossings[3] = crossing2(u + step, v, cell[3], u, v, cell[0]);
+        crossings[3] = crossing(u + step, v, cell[3], u, v, cell[0]);
       }
       addContourSegments(
         segments,
@@ -4018,6 +4018,356 @@ var CompiledSurfaceSampler = class {
   }
 };
 
+// src/world/CompiledWaterGeometry.ts
+var COMPILED_WATER_GEOMETRY_FORMAT_VERSION = 1;
+var MAX_COMPILED_WATER_COVERAGE_VERTICES = 24576;
+var MAX_COMPILED_WATER_COVERAGE_TRIANGLES = 24576;
+function fieldVertex(field2, fieldX, fieldY) {
+  const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+  return {
+    key: `g:${fieldX}:${fieldY}`,
+    u: (fieldX + 0.5 - SURFACE_COMPILE_PROFILE.gutterTexels) / samplesPerTile - 0.5,
+    v: (fieldY + 0.5 - SURFACE_COMPILE_PROFILE.gutterTexels) / samplesPerTile - 0.5,
+    fieldX,
+    fieldY,
+    coverage: field2.waterCoverage[fieldX * SURFACE_COMPILE_PROFILE.textureLayerSize + fieldY]
+  };
+}
+function interpolateVertex(first, second, amount, keyPrefix) {
+  if (amount <= 0) return first;
+  if (amount >= 1) return second;
+  return {
+    key: first.key < second.key ? `${keyPrefix}:${first.key}:${second.key}` : `${keyPrefix}:${second.key}:${first.key}`,
+    u: first.u + (second.u - first.u) * amount,
+    v: first.v + (second.v - first.v) * amount,
+    fieldX: first.fieldX + (second.fieldX - first.fieldX) * amount,
+    fieldY: first.fieldY + (second.fieldY - first.fieldY) * amount,
+    coverage: first.coverage + (second.coverage - first.coverage) * amount
+  };
+}
+function coverageCrossing(first, second) {
+  const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
+  return interpolateVertex(
+    first,
+    second,
+    (threshold - first.coverage) / (second.coverage - first.coverage),
+    "e"
+  );
+}
+function clippedWetPolygon(vertices) {
+  const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
+  const output = [];
+  let previous = vertices[vertices.length - 1];
+  let previousWet = previous.coverage > threshold;
+  for (const current of vertices) {
+    const currentWet = current.coverage > threshold;
+    if (currentWet !== previousWet) output.push(coverageCrossing(previous, current));
+    if (currentWet) output.push(current);
+    previous = current;
+    previousWet = currentWet;
+  }
+  return output;
+}
+function clipCoreBoundary(vertices, axis, limit, keepGreater) {
+  if (vertices.length === 0) return vertices;
+  const output = [];
+  let previous = vertices[vertices.length - 1];
+  let previousInside = keepGreater ? previous[axis] >= limit : previous[axis] <= limit;
+  for (const current of vertices) {
+    const currentInside = keepGreater ? current[axis] >= limit : current[axis] <= limit;
+    if (currentInside !== previousInside) {
+      const amount = (limit - previous[axis]) / (current[axis] - previous[axis]);
+      output.push(interpolateVertex(previous, current, amount, `c:${axis}:${limit}`));
+    }
+    if (currentInside) output.push(current);
+    previous = current;
+    previousInside = currentInside;
+  }
+  return output;
+}
+function clipToCore(vertices) {
+  const minimum = -0.5;
+  const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+  return clipCoreBoundary(
+    clipCoreBoundary(
+      clipCoreBoundary(
+        clipCoreBoundary(vertices, "u", minimum, true),
+        "u",
+        maximum,
+        false
+      ),
+      "v",
+      minimum,
+      true
+    ),
+    "v",
+    maximum,
+    false
+  );
+}
+function outputVertex(output, vertex) {
+  const existing = output.vertexByKey.get(vertex.key);
+  if (existing !== void 0) return existing;
+  const index = output.positions.length / 3;
+  const u = Math.fround(vertex.u);
+  const v = Math.fround(vertex.v);
+  output.positions.push(u, 0, v);
+  output.surfaceFieldCoordinates.push(
+    Math.fround((u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels),
+    Math.fround((v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels)
+  );
+  output.vertexByKey.set(vertex.key, index);
+  return index;
+}
+function addCoverageTriangle(output, first, second, third) {
+  const area = (second.u - first.u) * (third.v - first.v) - (second.v - first.v) * (third.u - first.u);
+  if (Math.abs(area) <= Number.EPSILON) return;
+  const firstIndex = outputVertex(output, first);
+  const secondIndex = outputVertex(output, second);
+  const thirdIndex = outputVertex(output, third);
+  if (area < 0) output.indices.push(firstIndex, secondIndex, thirdIndex);
+  else output.indices.push(firstIndex, thirdIndex, secondIndex);
+}
+function addClippedTriangle(output, first, second, third) {
+  const polygon = clipToCore(clippedWetPolygon([first, second, third]));
+  for (let index = 1; index < polygon.length - 1; index += 1) {
+    addCoverageTriangle(output, polygon[0], polygon[index], polygon[index + 1]);
+  }
+}
+function assertCompiledWaterGeometry(geometry) {
+  if (!geometry || typeof geometry !== "object" || geometry.formatVersion !== COMPILED_WATER_GEOMETRY_FORMAT_VERSION || geometry.kind !== "none" && geometry.kind !== "fullPatch" && geometry.kind !== "coverage") {
+    throw new TypeError("compiled water geometry format or kind is invalid");
+  }
+  if (geometry.kind !== "coverage") {
+    if ("positions" in geometry || "surfaceFieldCoordinates" in geometry || "indices" in geometry) {
+      throw new TypeError("marker water geometry cannot carry chunk-local buffers");
+    }
+    return;
+  }
+  if (!(geometry.positions instanceof Float32Array) || geometry.positions.length === 0 || geometry.positions.length % 3 !== 0 || !(geometry.surfaceFieldCoordinates instanceof Float32Array) || geometry.surfaceFieldCoordinates.length !== geometry.positions.length / 3 * 2 || !(geometry.indices instanceof Uint16Array) || geometry.indices.length === 0 || geometry.indices.length % 3 !== 0 || geometry.positions.length / 3 > MAX_COMPILED_WATER_COVERAGE_VERTICES || geometry.indices.length / 3 > MAX_COMPILED_WATER_COVERAGE_TRIANGLES) {
+    throw new TypeError("compiled water coverage arrays exceed their fixed layout or budget");
+  }
+  const vertexCount = geometry.positions.length / 3;
+  const minimum = -0.5;
+  const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+  const seenCoordinates = /* @__PURE__ */ new Set();
+  for (let index = 0; index < vertexCount; index += 1) {
+    const u = geometry.positions[index * 3];
+    const y = geometry.positions[index * 3 + 1];
+    const v = geometry.positions[index * 3 + 2];
+    if (!Number.isFinite(u) || y !== 0 || !Number.isFinite(v) || u < minimum || u > maximum || v < minimum || v > maximum) {
+      throw new RangeError("compiled water coverage vertex is outside the render chunk core");
+    }
+    const key = `${u}:${v}`;
+    if (seenCoordinates.has(key)) throw new Error("compiled water coverage contains duplicate vertices");
+    seenCoordinates.add(key);
+    const fieldX = geometry.surfaceFieldCoordinates[index * 2];
+    const fieldY = geometry.surfaceFieldCoordinates[index * 2 + 1];
+    if (fieldX !== Math.fround((u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels) || fieldY !== Math.fround((v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels)) {
+      throw new Error("compiled water field coordinate drifted from its texel-center phase");
+    }
+  }
+  const edgeUses = /* @__PURE__ */ new Map();
+  for (let offset = 0; offset < geometry.indices.length; offset += 3) {
+    const first = geometry.indices[offset];
+    const second = geometry.indices[offset + 1];
+    const third = geometry.indices[offset + 2];
+    if (first >= vertexCount || second >= vertexCount || third >= vertexCount || first === second || second === third || first === third) {
+      throw new RangeError("compiled water coverage triangle index is invalid");
+    }
+    const firstU = geometry.positions[first * 3];
+    const firstV = geometry.positions[first * 3 + 2];
+    const secondU = geometry.positions[second * 3];
+    const secondV = geometry.positions[second * 3 + 2];
+    const thirdU = geometry.positions[third * 3];
+    const thirdV = geometry.positions[third * 3 + 2];
+    const area = (secondU - firstU) * (thirdV - firstV) - (secondV - firstV) * (thirdU - firstU);
+    if (!(area < 0)) throw new Error("compiled water coverage triangles must face positive world Y");
+    for (const [edgeFirst, edgeSecond] of [
+      [first, second],
+      [second, third],
+      [third, first]
+    ]) {
+      const key = edgeFirst < edgeSecond ? `${edgeFirst}:${edgeSecond}` : `${edgeSecond}:${edgeFirst}`;
+      const uses = (edgeUses.get(key) ?? 0) + 1;
+      if (uses > 2) throw new Error("compiled water coverage geometry is non-manifold");
+      edgeUses.set(key, uses);
+    }
+  }
+}
+function compileWaterGeometry(field2) {
+  assertCompiledSurfaceField(field2);
+  const gridSize = SURFACE_COMPILE_PROFILE.textureLayerSize;
+  const vertices = new Array(gridSize * gridSize);
+  let allDry = true;
+  let allFull = true;
+  for (let gridX = 0; gridX < gridSize; gridX += 1) {
+    for (let gridY = 0; gridY < gridSize; gridY += 1) {
+      const vertex = fieldVertex(field2, gridX, gridY);
+      vertices[gridX * gridSize + gridY] = vertex;
+      if (vertex.coverage > SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold) allDry = false;
+      if (vertex.coverage < SURFACE_COMPILE_PROFILE.waterFullPatchCoverage) allFull = false;
+    }
+  }
+  if (allDry) return Object.freeze({
+    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+    kind: "none"
+  });
+  if (allFull) return Object.freeze({
+    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+    kind: "fullPatch"
+  });
+  const output = {
+    positions: [],
+    surfaceFieldCoordinates: [],
+    indices: [],
+    vertexByKey: /* @__PURE__ */ new Map()
+  };
+  for (let gridX = 0; gridX < gridSize - 1; gridX += 1) {
+    for (let gridY = 0; gridY < gridSize - 1; gridY += 1) {
+      const bottomLeft = vertices[gridX * gridSize + gridY];
+      const topLeft = vertices[gridX * gridSize + gridY + 1];
+      const bottomRight = vertices[(gridX + 1) * gridSize + gridY];
+      const topRight = vertices[(gridX + 1) * gridSize + gridY + 1];
+      addClippedTriangle(output, bottomLeft, topRight, bottomRight);
+      addClippedTriangle(output, bottomLeft, topLeft, topRight);
+    }
+  }
+  if (output.indices.length === 0) {
+    return Object.freeze({
+      formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+      kind: "none"
+    });
+  }
+  const geometry = Object.freeze({
+    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+    kind: "coverage",
+    positions: new Float32Array(output.positions),
+    surfaceFieldCoordinates: new Float32Array(output.surfaceFieldCoordinates),
+    indices: new Uint16Array(output.indices)
+  });
+  assertCompiledWaterGeometry(geometry);
+  return geometry;
+}
+function compiledWaterGeometryTransferables(geometry) {
+  assertCompiledWaterGeometry(geometry);
+  if (geometry.kind !== "coverage") return Object.freeze([]);
+  const buffers = [
+    geometry.positions.buffer,
+    geometry.surfaceFieldCoordinates.buffer,
+    geometry.indices.buffer
+  ];
+  if (buffers.some((buffer) => !(buffer instanceof ArrayBuffer)) || new Set(buffers).size !== buffers.length) {
+    throw new TypeError("compiled water geometry requires distinct owned transferable buffers");
+  }
+  return Object.freeze(buffers);
+}
+if (COMPILED_SURFACE_TEXEL_COUNT !== SURFACE_COMPILE_PROFILE.textureLayerSize ** 2) {
+  throw new Error("compiled water geometry and surface field dimensions disagree");
+}
+
+// src/world/CompiledSurfaceBounds.ts
+var COMPILED_SURFACE_BOUNDS_FORMAT_VERSION = 1;
+function finiteOrdered(name, minimum, maximum) {
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > maximum) {
+    throw new RangeError(`${name} bounds must be finite and ordered`);
+  }
+}
+function assertCompiledSurfaceBounds(bounds) {
+  if (!bounds || typeof bounds !== "object" || bounds.formatVersion !== COMPILED_SURFACE_BOUNDS_FORMAT_VERSION) {
+    throw new TypeError("compiled surface bounds format is invalid");
+  }
+  finiteOrdered("compiled surface X", bounds.minimumX, bounds.maximumX);
+  finiteOrdered("compiled surface Z", bounds.minimumZ, bounds.maximumZ);
+  finiteOrdered(
+    "compiled surface ground height",
+    bounds.minimumGroundHeight,
+    bounds.maximumGroundHeight
+  );
+  if (bounds.minimumWaterHeight === null !== (bounds.maximumWaterHeight === null)) {
+    throw new TypeError("compiled surface water bounds must be both present or both absent");
+  }
+  if (bounds.minimumWaterHeight !== null && bounds.maximumWaterHeight !== null) {
+    finiteOrdered("compiled surface water height", bounds.minimumWaterHeight, bounds.maximumWaterHeight);
+  }
+  finiteOrdered("compiled surface base height", bounds.minimumBaseHeight, bounds.maximumBaseHeight);
+  const expectedMinimum = bounds.minimumWaterHeight === null ? bounds.minimumGroundHeight : Math.min(bounds.minimumGroundHeight, bounds.minimumWaterHeight);
+  const expectedMaximum = bounds.maximumWaterHeight === null ? bounds.maximumGroundHeight : Math.max(bounds.maximumGroundHeight, bounds.maximumWaterHeight);
+  if (bounds.minimumBaseHeight !== expectedMinimum || bounds.maximumBaseHeight !== expectedMaximum) {
+    throw new Error("compiled surface base height does not enclose its ground and water ranges exactly");
+  }
+}
+function compileSurfaceBounds(field2, waterGeometry, hexSize) {
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("compiled surface bounds require a positive finite hex size");
+  }
+  assertCompiledWaterGeometry(waterGeometry);
+  const sampler = new CompiledSurfaceSampler(field2);
+  const sample = createCompiledSurfaceSample();
+  const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+  const origin = surfaceToWorld(0, 0, hexSize);
+  let minimumX = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let minimumZ = Number.POSITIVE_INFINITY;
+  let maximumZ = Number.NEGATIVE_INFINITY;
+  let minimumGroundHeight = Number.POSITIVE_INFINITY;
+  let maximumGroundHeight = Number.NEGATIVE_INFINITY;
+  let minimumWaterHeight = Number.POSITIVE_INFINITY;
+  let maximumWaterHeight = Number.NEGATIVE_INFINITY;
+  const includeWater = (localU, localV) => {
+    sampler.sampleBilinear(localU, localV, sample);
+    if (!(sample.waterCoverage > 0) || sample.waterBodyIndex === 0) {
+      throw new Error("compiled water geometry vertex has no sampleable water payload");
+    }
+    minimumWaterHeight = Math.min(minimumWaterHeight, sample.waterLevel);
+    maximumWaterHeight = Math.max(maximumWaterHeight, sample.waterLevel);
+  };
+  for (let gridX = 0; gridX <= SURFACE_CORE_TEXELS; gridX += 1) {
+    const localU = -0.5 + gridX / samplesPerTile;
+    for (let gridY = 0; gridY <= SURFACE_CORE_TEXELS; gridY += 1) {
+      const localV = -0.5 + gridY / samplesPerTile;
+      const world = surfaceToWorld(localU, localV, hexSize);
+      minimumX = Math.min(minimumX, world.x - origin.x);
+      maximumX = Math.max(maximumX, world.x - origin.x);
+      minimumZ = Math.min(minimumZ, world.z - origin.z);
+      maximumZ = Math.max(maximumZ, world.z - origin.z);
+      const groundHeight = sampler.sampleGroundHeight(localU, localV);
+      minimumGroundHeight = Math.min(minimumGroundHeight, groundHeight);
+      maximumGroundHeight = Math.max(maximumGroundHeight, groundHeight);
+      if (waterGeometry.kind === "fullPatch") includeWater(localU, localV);
+    }
+  }
+  if (waterGeometry.kind === "coverage") {
+    for (let index = 0; index < waterGeometry.positions.length / 3; index += 1) {
+      includeWater(
+        waterGeometry.positions[index * 3],
+        waterGeometry.positions[index * 3 + 2]
+      );
+    }
+  }
+  const hasWater = waterGeometry.kind !== "none";
+  if (hasWater && (!Number.isFinite(minimumWaterHeight) || !Number.isFinite(maximumWaterHeight))) {
+    throw new Error("compiled water geometry produced no finite height bounds");
+  }
+  const waterMinimum = hasWater ? minimumWaterHeight : null;
+  const waterMaximum = hasWater ? maximumWaterHeight : null;
+  const bounds = Object.freeze({
+    formatVersion: COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
+    minimumX,
+    maximumX,
+    minimumZ,
+    maximumZ,
+    minimumGroundHeight,
+    maximumGroundHeight,
+    minimumWaterHeight: waterMinimum,
+    maximumWaterHeight: waterMaximum,
+    minimumBaseHeight: waterMinimum === null ? minimumGroundHeight : Math.min(minimumGroundHeight, waterMinimum),
+    maximumBaseHeight: waterMaximum === null ? maximumGroundHeight : Math.max(maximumGroundHeight, waterMaximum)
+  });
+  assertCompiledSurfaceBounds(bounds);
+  return bounds;
+}
+
 // src/rendering/SurfaceTexturePool.ts
 import {
   ByteType,
@@ -4610,207 +4960,6 @@ var SurfaceGroundGeometrySet = class {
     this.geometries.clear();
   }
 };
-
-// src/world/CompiledWaterGeometry.ts
-var COMPILED_WATER_GEOMETRY_FORMAT_VERSION = 1;
-var MAX_COMPILED_WATER_COVERAGE_VERTICES = 16641;
-var MAX_COMPILED_WATER_COVERAGE_TRIANGLES = 16384;
-function coverageAtGridVertex(field2, gridX, gridY) {
-  const size = SURFACE_COMPILE_PROFILE.textureLayerSize;
-  const firstX = gridX;
-  const firstY = gridY;
-  return (field2.waterCoverage[firstX * size + firstY] + field2.waterCoverage[(firstX + 1) * size + firstY] + field2.waterCoverage[firstX * size + firstY + 1] + field2.waterCoverage[(firstX + 1) * size + firstY + 1]) * 0.25;
-}
-function gridVertex(field2, gridX, gridY) {
-  const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
-  return {
-    key: `g:${gridX}:${gridY}`,
-    u: -0.5 + gridX / samplesPerTile,
-    v: -0.5 + gridY / samplesPerTile,
-    coverage: coverageAtGridVertex(field2, gridX, gridY)
-  };
-}
-function crossing(first, second) {
-  const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
-  const amount = (threshold - first.coverage) / (second.coverage - first.coverage);
-  if (amount <= 0) return first;
-  if (amount >= 1) return second;
-  return {
-    key: first.key < second.key ? `e:${first.key}:${second.key}` : `e:${second.key}:${first.key}`,
-    u: first.u + (second.u - first.u) * amount,
-    v: first.v + (second.v - first.v) * amount,
-    coverage: threshold
-  };
-}
-function clippedWetPolygon(vertices) {
-  const threshold = SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold;
-  const output = [];
-  let previous = vertices[vertices.length - 1];
-  let previousWet = previous.coverage > threshold;
-  for (const current of vertices) {
-    const currentWet = current.coverage > threshold;
-    if (currentWet !== previousWet) output.push(crossing(previous, current));
-    if (currentWet) output.push(current);
-    previous = current;
-    previousWet = currentWet;
-  }
-  return output;
-}
-function outputVertex(output, vertex) {
-  const existing = output.vertexByKey.get(vertex.key);
-  if (existing !== void 0) return existing;
-  const index = output.positions.length / 3;
-  output.positions.push(vertex.u, 0, vertex.v);
-  output.surfaceFieldCoordinates.push(
-    (vertex.u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels,
-    (vertex.v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels
-  );
-  output.vertexByKey.set(vertex.key, index);
-  return index;
-}
-function addCoverageTriangle(output, first, second, third) {
-  const area = (second.u - first.u) * (third.v - first.v) - (second.v - first.v) * (third.u - first.u);
-  if (Math.abs(area) <= Number.EPSILON) return;
-  const firstIndex = outputVertex(output, first);
-  const secondIndex = outputVertex(output, second);
-  const thirdIndex = outputVertex(output, third);
-  if (area < 0) output.indices.push(firstIndex, secondIndex, thirdIndex);
-  else output.indices.push(firstIndex, thirdIndex, secondIndex);
-}
-function addClippedTriangle(output, first, second, third) {
-  const polygon = clippedWetPolygon([first, second, third]);
-  for (let index = 1; index < polygon.length - 1; index += 1) {
-    addCoverageTriangle(output, polygon[0], polygon[index], polygon[index + 1]);
-  }
-}
-function assertCompiledWaterGeometry(geometry) {
-  if (!geometry || typeof geometry !== "object" || geometry.formatVersion !== COMPILED_WATER_GEOMETRY_FORMAT_VERSION || geometry.kind !== "none" && geometry.kind !== "fullPatch" && geometry.kind !== "coverage") {
-    throw new TypeError("compiled water geometry format or kind is invalid");
-  }
-  if (geometry.kind !== "coverage") {
-    if ("positions" in geometry || "surfaceFieldCoordinates" in geometry || "indices" in geometry) {
-      throw new TypeError("marker water geometry cannot carry chunk-local buffers");
-    }
-    return;
-  }
-  if (!(geometry.positions instanceof Float32Array) || geometry.positions.length === 0 || geometry.positions.length % 3 !== 0 || !(geometry.surfaceFieldCoordinates instanceof Float32Array) || geometry.surfaceFieldCoordinates.length !== geometry.positions.length / 3 * 2 || !(geometry.indices instanceof Uint16Array) || geometry.indices.length === 0 || geometry.indices.length % 3 !== 0 || geometry.positions.length / 3 > MAX_COMPILED_WATER_COVERAGE_VERTICES || geometry.indices.length / 3 > MAX_COMPILED_WATER_COVERAGE_TRIANGLES) {
-    throw new TypeError("compiled water coverage arrays exceed their fixed layout or budget");
-  }
-  const vertexCount = geometry.positions.length / 3;
-  const minimum = -0.5;
-  const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
-  const seenCoordinates = /* @__PURE__ */ new Set();
-  for (let index = 0; index < vertexCount; index += 1) {
-    const u = geometry.positions[index * 3];
-    const y = geometry.positions[index * 3 + 1];
-    const v = geometry.positions[index * 3 + 2];
-    if (!Number.isFinite(u) || y !== 0 || !Number.isFinite(v) || u < minimum || u > maximum || v < minimum || v > maximum) {
-      throw new RangeError("compiled water coverage vertex is outside the render chunk core");
-    }
-    const key = `${u}:${v}`;
-    if (seenCoordinates.has(key)) throw new Error("compiled water coverage contains duplicate vertices");
-    seenCoordinates.add(key);
-    const fieldX = geometry.surfaceFieldCoordinates[index * 2];
-    const fieldY = geometry.surfaceFieldCoordinates[index * 2 + 1];
-    if (fieldX !== (u + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels || fieldY !== (v + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5 + SURFACE_COMPILE_PROFILE.gutterTexels) {
-      throw new Error("compiled water field coordinate drifted from its texel-center phase");
-    }
-  }
-  const edgeUses = /* @__PURE__ */ new Map();
-  for (let offset = 0; offset < geometry.indices.length; offset += 3) {
-    const first = geometry.indices[offset];
-    const second = geometry.indices[offset + 1];
-    const third = geometry.indices[offset + 2];
-    if (first >= vertexCount || second >= vertexCount || third >= vertexCount || first === second || second === third || first === third) {
-      throw new RangeError("compiled water coverage triangle index is invalid");
-    }
-    const firstU = geometry.positions[first * 3];
-    const firstV = geometry.positions[first * 3 + 2];
-    const secondU = geometry.positions[second * 3];
-    const secondV = geometry.positions[second * 3 + 2];
-    const thirdU = geometry.positions[third * 3];
-    const thirdV = geometry.positions[third * 3 + 2];
-    const area = (secondU - firstU) * (thirdV - firstV) - (secondV - firstV) * (thirdU - firstU);
-    if (!(area < 0)) throw new Error("compiled water coverage triangles must face positive world Y");
-    for (const [edgeFirst, edgeSecond] of [
-      [first, second],
-      [second, third],
-      [third, first]
-    ]) {
-      const key = edgeFirst < edgeSecond ? `${edgeFirst}:${edgeSecond}` : `${edgeSecond}:${edgeFirst}`;
-      const uses = (edgeUses.get(key) ?? 0) + 1;
-      if (uses > 2) throw new Error("compiled water coverage geometry is non-manifold");
-      edgeUses.set(key, uses);
-    }
-  }
-}
-function compileWaterGeometry(field2) {
-  assertCompiledSurfaceField(field2);
-  const gridSize = SURFACE_CORE_TEXELS + 1;
-  const vertices = new Array(gridSize * gridSize);
-  let allDry = true;
-  let allFull = true;
-  for (let gridX = 0; gridX < gridSize; gridX += 1) {
-    for (let gridY = 0; gridY < gridSize; gridY += 1) {
-      const vertex = gridVertex(field2, gridX, gridY);
-      vertices[gridX * gridSize + gridY] = vertex;
-      if (vertex.coverage > SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold) allDry = false;
-      if (vertex.coverage < SURFACE_COMPILE_PROFILE.waterFullPatchCoverage) allFull = false;
-    }
-  }
-  if (allDry) return Object.freeze({
-    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
-    kind: "none"
-  });
-  if (allFull) return Object.freeze({
-    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
-    kind: "fullPatch"
-  });
-  const output = {
-    positions: [],
-    surfaceFieldCoordinates: [],
-    indices: [],
-    vertexByKey: /* @__PURE__ */ new Map()
-  };
-  for (let gridX = 0; gridX < SURFACE_CORE_TEXELS; gridX += 1) {
-    for (let gridY = 0; gridY < SURFACE_CORE_TEXELS; gridY += 1) {
-      const bottomLeft = vertices[gridX * gridSize + gridY];
-      const topLeft = vertices[gridX * gridSize + gridY + 1];
-      const bottomRight = vertices[(gridX + 1) * gridSize + gridY];
-      const topRight = vertices[(gridX + 1) * gridSize + gridY + 1];
-      addClippedTriangle(output, bottomLeft, topRight, bottomRight);
-      addClippedTriangle(output, bottomLeft, topLeft, topRight);
-    }
-  }
-  if (output.indices.length === 0) {
-    throw new Error("surface water coverage classification produced no geometry");
-  }
-  const geometry = Object.freeze({
-    formatVersion: COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
-    kind: "coverage",
-    positions: new Float32Array(output.positions),
-    surfaceFieldCoordinates: new Float32Array(output.surfaceFieldCoordinates),
-    indices: new Uint16Array(output.indices)
-  });
-  assertCompiledWaterGeometry(geometry);
-  return geometry;
-}
-function compiledWaterGeometryTransferables(geometry) {
-  assertCompiledWaterGeometry(geometry);
-  if (geometry.kind !== "coverage") return Object.freeze([]);
-  const buffers = [
-    geometry.positions.buffer,
-    geometry.surfaceFieldCoordinates.buffer,
-    geometry.indices.buffer
-  ];
-  if (buffers.some((buffer) => !(buffer instanceof ArrayBuffer)) || new Set(buffers).size !== buffers.length) {
-    throw new TypeError("compiled water geometry requires distinct owned transferable buffers");
-  }
-  return Object.freeze(buffers);
-}
-if (COMPILED_SURFACE_TEXEL_COUNT !== SURFACE_COMPILE_PROFILE.textureLayerSize ** 2) {
-  throw new Error("compiled water geometry and surface field dimensions disagree");
-}
 
 // src/rendering/SurfaceWaterGeometry.ts
 import { BufferAttribute as BufferAttribute2, BufferGeometry as BufferGeometry2 } from "three";
@@ -10690,6 +10839,7 @@ var StaticHydrologyRegionSource = class {
 export {
   BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
   BASE_SEMANTIC_CHUNK_TILE_COUNT,
+  COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
   COMPILED_SURFACE_FIELD_FORMAT_VERSION,
   COMPILED_SURFACE_TEXEL_COUNT,
   COMPILED_WATER_BODY_PALETTE_FORMAT_VERSION,
@@ -10807,6 +10957,7 @@ export {
   assertAuthoredLakeFeature,
   assertAuthoredRiverFeature,
   assertBaseSemanticChunk,
+  assertCompiledSurfaceBounds,
   assertCompiledSurfaceField,
   assertCompiledWaterBodyPalette,
   assertCompiledWaterGeometry,
@@ -10832,6 +10983,7 @@ export {
   compileLakeSurfaceField,
   compileOceanSurfaceField,
   compileSemanticSurfaceField,
+  compileSurfaceBounds,
   compileSurfaceField,
   compileWaterGeometry,
   compiledSurfaceFieldResidentBytes,

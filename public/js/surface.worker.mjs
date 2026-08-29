@@ -10,7 +10,7 @@ var SURFACE_COMPILE_PROFILE = Object.freeze({
   influenceRadiusTiles: 2,
   textureLayerSize: 66,
   pageLayers: 128,
-  waterGeometryCoverageThreshold: 0,
+  waterGeometryCoverageThreshold: 0.5,
   waterFullPatchCoverage: 128
 });
 var SURFACE_CORE_TEXELS = SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
@@ -48,7 +48,7 @@ function assertSurfaceCompileProfile(profile) {
   if (!Number.isFinite(profile.waterGeometryCoverageThreshold) || profile.waterGeometryCoverageThreshold < 0 || profile.waterGeometryCoverageThreshold >= 1 || profile.waterFullPatchCoverage !== 128) {
     throw new RangeError("surface water geometry thresholds do not match profile v1");
   }
-  if (profile.renderChunkSize !== 16 || profile.samplesPerTileInterval !== 4 || profile.gutterTexels !== 1 || profile.influenceRadiusTiles !== 2 || profile.textureLayerSize !== 66 || profile.pageLayers !== 128 || profile.waterGeometryCoverageThreshold !== 0 || profile.waterFullPatchCoverage !== 128) {
+  if (profile.renderChunkSize !== 16 || profile.samplesPerTileInterval !== 4 || profile.gutterTexels !== 1 || profile.influenceRadiusTiles !== 2 || profile.textureLayerSize !== 66 || profile.pageLayers !== 128 || profile.waterGeometryCoverageThreshold !== 0.5 || profile.waterFullPatchCoverage !== 128) {
     throw new RangeError("surface compile profile does not match the frozen profile v1");
   }
 }

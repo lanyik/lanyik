@@ -103,6 +103,12 @@ export {
     CompiledSurfaceSampler
 } from "./world/CompiledSurfaceSampler";
 export type { MutableCompiledSurfaceSample } from "./world/CompiledSurfaceSampler";
+export {
+    COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
+    assertCompiledSurfaceBounds,
+    compileSurfaceBounds
+} from "./world/CompiledSurfaceBounds";
+export type { CompiledSurfaceBounds } from "./world/CompiledSurfaceBounds";
 
 export {
     SURFACE_STATIC_GPU_BYTES_PER_TEXEL,
