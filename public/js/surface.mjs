@@ -2561,6 +2561,7 @@ function compiledWaterBodyPaletteIndex(palette, bodyId) {
 }
 
 // src/world/SurfaceContours.ts
+var MAX_SURFACE_SCALAR_CONTOUR_SAMPLES = 16384;
 function interpolateCrossing(firstU, firstV, firstHeight, secondU, secondV, secondHeight, threshold, hexSize) {
   const amount = (threshold - firstHeight) / (secondHeight - firstHeight);
   return surfaceToWorld(
@@ -2659,6 +2660,80 @@ function surfaceHeightContours(window, threshold, hexSize) {
         crossings,
         inside[0],
         (heights[0] + heights[1] + heights[2] + heights[3]) / 4 < threshold
+      );
+    }
+  }
+  return Object.freeze(segments);
+}
+function surfaceScalarContours(bounds, hexSize, scalar) {
+  if (!bounds || typeof bounds !== "object" || !Number.isFinite(bounds.minU) || !Number.isFinite(bounds.minV) || !Number.isFinite(bounds.maxU) || !Number.isFinite(bounds.maxV) || bounds.minU >= bounds.maxU || bounds.minV >= bounds.maxV || !Number.isFinite(hexSize) || hexSize <= 0 || typeof scalar !== "function") {
+    throw new RangeError("surface scalar contour input is invalid");
+  }
+  const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+  const minimumGridU = Math.floor(bounds.minU * samplesPerTile);
+  const minimumGridV = Math.floor(bounds.minV * samplesPerTile);
+  const maximumGridU = Math.ceil(bounds.maxU * samplesPerTile);
+  const maximumGridV = Math.ceil(bounds.maxV * samplesPerTile);
+  const width = maximumGridU - minimumGridU + 1;
+  const height = maximumGridV - minimumGridV + 1;
+  if (!Number.isSafeInteger(width * height) || width * height > MAX_SURFACE_SCALAR_CONTOUR_SAMPLES) {
+    throw new RangeError("surface scalar contour grid exceeds its fixed sample budget");
+  }
+  const values = new Float64Array(width * height);
+  for (let gridU = 0; gridU < width; gridU += 1) {
+    const u = (minimumGridU + gridU) / samplesPerTile;
+    for (let gridV = 0; gridV < height; gridV += 1) {
+      const value = scalar(u, (minimumGridV + gridV) / samplesPerTile);
+      if (!Number.isFinite(value)) {
+        throw new RangeError("surface scalar contour callback must return finite values");
+      }
+      values[gridU * height + gridV] = value;
+    }
+  }
+  const crossing = (firstU, firstV, firstValue, secondU, secondV, secondValue) => {
+    const amount = -firstValue / (secondValue - firstValue);
+    return surfaceToWorld(
+      firstU + (secondU - firstU) * amount,
+      firstV + (secondV - firstV) * amount,
+      hexSize
+    );
+  };
+  const segments = [];
+  for (let gridU = 0; gridU < width - 1; gridU += 1) {
+    const u = (minimumGridU + gridU) / samplesPerTile;
+    for (let gridV = 0; gridV < height - 1; gridV += 1) {
+      const v = (minimumGridV + gridV) / samplesPerTile;
+      const bottomLeft = gridU * height + gridV;
+      const topLeft = bottomLeft + 1;
+      const bottomRight = bottomLeft + height;
+      const topRight = bottomRight + 1;
+      const cell = [
+        values[bottomLeft],
+        values[topLeft],
+        values[topRight],
+        values[bottomRight]
+      ];
+      const inside = cell.map((value) => value < 0);
+      if (inside.every((value) => value === inside[0])) continue;
+      const step = 1 / samplesPerTile;
+      const crossings = [void 0, void 0, void 0, void 0];
+      if (inside[0] !== inside[1]) {
+        crossings[0] = crossing(u, v, cell[0], u, v + step, cell[1]);
+      }
+      if (inside[1] !== inside[2]) {
+        crossings[1] = crossing(u, v + step, cell[1], u + step, v + step, cell[2]);
+      }
+      if (inside[2] !== inside[3]) {
+        crossings[2] = crossing(u + step, v + step, cell[2], u + step, v, cell[3]);
+      }
+      if (inside[3] !== inside[0]) {
+        crossings[3] = crossing(u + step, v, cell[3], u, v, cell[0]);
+      }
+      addContourSegments(
+        segments,
+        crossings,
+        inside[0],
+        (cell[0] + cell[1] + cell[2] + cell[3]) * 0.25 < 0
       );
     }
   }
@@ -2831,7 +2906,7 @@ var MAX_SURFACE_PERIODIC_FEATURE_IMAGES = 16;
 function compareIdentity2(first, second) {
   return first < second ? -1 : first > second ? 1 : 0;
 }
-function intersects(first, second) {
+function surfaceHydrologyBoundsIntersect(first, second) {
   return first.minU <= second.maxU && first.maxU >= second.minU && first.minV <= second.maxV && first.maxV >= second.minV;
 }
 function translatedBounds(bounds, offsetU, offsetV) {
@@ -2850,17 +2925,17 @@ function periodicOffsets(minimum, maximum, queryMinimum, queryMaximum, period) {
   for (let image = first; image <= last; image += 1) offsets2.push(image * period);
   return offsets2;
 }
-function projectedOffsets(window, bounds, queryBounds2) {
+function surfaceHydrologyProjectedOffsets(window, bounds, queryBounds) {
   const periodU = window.domain.topology === "toroidal" ? window.domain.width : void 0;
   const periodV = window.domain.topology === "toroidal" ? window.domain.height : void 0;
-  const uOffsets = periodicOffsets(bounds.minU, bounds.maxU, queryBounds2.minU, queryBounds2.maxU, periodU);
-  const vOffsets = periodicOffsets(bounds.minV, bounds.maxV, queryBounds2.minV, queryBounds2.maxV, periodV);
+  const uOffsets = periodicOffsets(bounds.minU, bounds.maxU, queryBounds.minU, queryBounds.maxU, periodU);
+  const vOffsets = periodicOffsets(bounds.minV, bounds.maxV, queryBounds.minV, queryBounds.maxV, periodV);
   if (uOffsets.length * vOffsets.length > MAX_SURFACE_PERIODIC_FEATURE_IMAGES) {
     throw new RangeError("surface hydrology feature exceeds its periodic image budget");
   }
   return Object.freeze(uOffsets.flatMap((u) => vOffsets.map((v) => Object.freeze({ u, v }))));
 }
-function circleShapes(window, region, lake, queryBounds2) {
+function circleShapes(window, region, lake, queryBounds) {
   const centerU = region.key.regionX * HYDROLOGY_REGION_SIZE + lake.center[0] / HYDROLOGY_POINT_QUANTIZATION;
   const centerV = region.key.regionY * HYDROLOGY_REGION_SIZE + lake.center[1] / HYDROLOGY_POINT_QUANTIZATION;
   const radius = lake.radius / HYDROLOGY_POINT_QUANTIZATION;
@@ -2870,7 +2945,7 @@ function circleShapes(window, region, lake, queryBounds2) {
     maxU: centerU + radius,
     maxV: centerV + radius
   };
-  return Object.freeze(projectedOffsets(window, bounds, queryBounds2).map((offset) => Object.freeze({
+  return Object.freeze(surfaceHydrologyProjectedOffsets(window, bounds, queryBounds).map((offset) => Object.freeze({
     shapeKind: "circle",
     bodyId: lake.bodyId,
     stableIdentity: lake.bodyId,
@@ -2895,9 +2970,9 @@ function polygonBounds(points) {
   }
   return { minU, minV, maxU, maxV };
 }
-function polygonShapes(window, lake, queryBounds2) {
+function polygonShapes(window, lake, queryBounds) {
   const bounds = polygonBounds(lake.polygon);
-  return Object.freeze(projectedOffsets(window, bounds, queryBounds2).map((offset) => {
+  return Object.freeze(surfaceHydrologyProjectedOffsets(window, bounds, queryBounds).map((offset) => {
     const points = new Float64Array(lake.polygon.length);
     for (let index = 0; index < points.length; index += 2) {
       points[index] = lake.polygon[index] / HYDROLOGY_POINT_QUANTIZATION + offset.u;
@@ -2921,7 +2996,7 @@ function registerBody(bodies, bodyId, profileIndex, level) {
   }
   if (!existing) bodies.set(bodyId, { bodyId, kind: "lake", profileIndex, level });
 }
-function collectLakeShapes(window, queryBounds2) {
+function collectLakeShapes(window, queryBounds) {
   const shapes = [];
   const bodies = /* @__PURE__ */ new Map();
   for (const region of window.hydrologyRegions) {
@@ -2934,13 +3009,13 @@ function collectLakeShapes(window, queryBounds2) {
         throw new Error("surface lake slice lost its canonical body definition");
       }
       registerBody(bodies, lake.bodyId, lake.profileIndex, lake.level);
-      shapes.push(...circleShapes(window, region, lake, queryBounds2));
+      shapes.push(...circleShapes(window, region, lake, queryBounds));
     }
   }
   for (const delta of window.authoredHydrology) {
     if (delta.feature.kind !== "lake") continue;
     registerBody(bodies, delta.feature.featureId, delta.feature.profileIndex, delta.feature.level);
-    shapes.push(...polygonShapes(window, delta.feature, queryBounds2));
+    shapes.push(...polygonShapes(window, delta.feature, queryBounds));
   }
   return Object.freeze({ shapes: Object.freeze(shapes), bodies });
 }
@@ -3083,7 +3158,7 @@ function shapeContains(shape, u, v) {
   }
   return polygonContains(shape.points, u, v);
 }
-function queryBounds(window, saturation) {
+function surfaceHydrologyQueryBounds(window, saturation) {
   const hexSize = window.dependencyKey.metrics.hexSize;
   const firstU = surfaceTexelCenterAxis(window.renderKey.chunkX, -SURFACE_COMPILE_PROFILE.gutterTexels);
   const lastU = surfaceTexelCenterAxis(
@@ -3109,7 +3184,7 @@ function compileLakeSurfaceField(window) {
   const heightScale = window.dependencyKey.metrics.heightScale;
   const saturation = surfaceInfluenceRadiusWorld(hexSize);
   const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
-  const bounds = queryBounds(window, saturation);
+  const bounds = surfaceHydrologyQueryBounds(window, saturation);
   const collected = collectLakeShapes(window, bounds);
   if (collected.shapes.length === 0) return ocean;
   const contourContext = createSurfaceContourRasterContext(window, hexSize);
@@ -3158,7 +3233,7 @@ function compileLakeSurfaceField(window) {
     return magnitude;
   };
   for (const shape of collected.shapes) {
-    if (!intersects(shape.bounds, bounds)) continue;
+    if (!surfaceHydrologyBoundsIntersect(shape.bounds, bounds)) continue;
     const contours = shape.shapeKind === "circle" ? circleContours(shape, bounds, hexSize) : polygonContours(shape, bounds, hexSize);
     const shapeMagnitude = rasterSurfaceContourDistances(contourContext, contours, saturation);
     const heightDistance = distanceForLevel(shape.level);
@@ -3250,6 +3325,525 @@ function compileLakeSurfaceField(window) {
     }),
     waterBodies: palette
   });
+}
+
+// src/world/HydrologyGeometry.ts
+var HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
+var HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
+function hydrologyRiverHalfWidthTiles(widthClass2) {
+  if (!Number.isInteger(widthClass2) || widthClass2 <= 0 || widthClass2 > 255) {
+    throw new RangeError("hydrology river width class must be a positive uint8 value");
+  }
+  return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES + widthClass2 * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
+}
+
+// src/world/compileSurfaceField.ts
+function compareIdentity3(first, second) {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+function registerBody2(catalog, body) {
+  const existing = catalog.get(body.bodyId);
+  if (existing && (existing.kind !== body.kind || existing.profileIndex !== body.profileIndex)) {
+    throw new Error("surface hydrology body definitions disagree on kind or profile");
+  }
+  if (!existing) catalog.set(body.bodyId, Object.freeze({ ...body }));
+}
+function buildBodyCatalog(window, existing) {
+  const catalog = /* @__PURE__ */ new Map();
+  for (const body of existing.entries) registerBody2(catalog, body);
+  registerBody2(catalog, { bodyId: OCEAN_BODY_ID, kind: "ocean", profileIndex: 0 });
+  for (const region of window.hydrologyRegions) {
+    const suppressed = new Set(region.suppressedBaseFeatureIds);
+    for (const body of region.bodies) {
+      if (body.bodyId !== OCEAN_BODY_ID && suppressed.has(body.bodyId)) continue;
+      registerBody2(catalog, body);
+    }
+  }
+  for (const delta of window.authoredHydrology) {
+    registerBody2(catalog, {
+      bodyId: delta.feature.featureId,
+      kind: delta.feature.kind,
+      profileIndex: delta.feature.profileIndex
+    });
+  }
+  return catalog;
+}
+function logicalPoints(points, originU, originV) {
+  const output = new Float64Array(points.length);
+  for (let index = 0; index < points.length; index += 2) {
+    output[index] = originU + points[index] / HYDROLOGY_POINT_QUANTIZATION;
+    output[index + 1] = originV + points[index + 1] / HYDROLOGY_POINT_QUANTIZATION;
+  }
+  return output;
+}
+function riverBounds(points, widthProfile) {
+  let minU = Number.POSITIVE_INFINITY;
+  let minV = Number.POSITIVE_INFINITY;
+  let maxU = Number.NEGATIVE_INFINITY;
+  let maxV = Number.NEGATIVE_INFINITY;
+  let maximumHalfWidth = 0;
+  for (let index = 0; index < points.length; index += 2) {
+    minU = Math.min(minU, points[index]);
+    minV = Math.min(minV, points[index + 1]);
+    maxU = Math.max(maxU, points[index]);
+    maxV = Math.max(maxV, points[index + 1]);
+    maximumHalfWidth = Math.max(
+      maximumHalfWidth,
+      hydrologyRiverHalfWidthTiles(widthProfile[index / 2])
+    );
+  }
+  return {
+    minU: minU - maximumHalfWidth,
+    minV: minV - maximumHalfWidth,
+    maxU: maxU + maximumHalfWidth,
+    maxV: maxV + maximumHalfWidth
+  };
+}
+function clipRiverSegmentAmounts(startU, startV, endU, endV, bounds) {
+  const deltaU = endU - startU;
+  const deltaV = endV - startV;
+  let minimum = 0;
+  let maximum = 1;
+  const constraints = [
+    [-deltaU, startU - bounds.minU],
+    [deltaU, bounds.maxU - startU],
+    [-deltaV, startV - bounds.minV],
+    [deltaV, bounds.maxV - startV]
+  ];
+  for (const [direction, distance] of constraints) {
+    if (direction === 0) {
+      if (distance < 0) return void 0;
+      continue;
+    }
+    const amount = distance / direction;
+    if (direction < 0) minimum = Math.max(minimum, amount);
+    else maximum = Math.min(maximum, amount);
+    if (minimum > maximum) return void 0;
+  }
+  return [minimum, maximum];
+}
+function buildRiverSpans(points, widthProfile, levelProfile, offsetU, offsetV, hexSize, queryBounds) {
+  const pointCount = points.length / 2;
+  const segmentLengths = new Float64Array(pointCount - 1);
+  const remainingAfterSegment = new Float64Array(pointCount - 1);
+  let remaining = 0;
+  for (let pointIndex = pointCount - 2; pointIndex >= 0; pointIndex -= 1) {
+    const length = Math.hypot(
+      points[pointIndex * 2 + 2] - points[pointIndex * 2],
+      points[pointIndex * 2 + 3] - points[pointIndex * 2 + 1]
+    );
+    segmentLengths[pointIndex] = length;
+    remainingAfterSegment[pointIndex] = remaining;
+    remaining += length;
+  }
+  const output = [];
+  for (let pointIndex = 0; pointIndex < pointCount - 1; pointIndex += 1) {
+    const originalStartU = points[pointIndex * 2] + offsetU;
+    const originalStartV = points[pointIndex * 2 + 1] + offsetV;
+    const originalEndU = points[pointIndex * 2 + 2] + offsetU;
+    const originalEndV = points[pointIndex * 2 + 3] + offsetV;
+    const deltaU = originalEndU - originalStartU;
+    const deltaV = originalEndV - originalStartV;
+    const startWidth = hydrologyRiverHalfWidthTiles(widthProfile[pointIndex]);
+    const endWidth = hydrologyRiverHalfWidthTiles(widthProfile[pointIndex + 1]);
+    const maximumHalfWidth = Math.max(startWidth, endWidth);
+    const clipped = clipRiverSegmentAmounts(
+      originalStartU,
+      originalStartV,
+      originalEndU,
+      originalEndV,
+      {
+        minU: queryBounds.minU - maximumHalfWidth,
+        minV: queryBounds.minV - maximumHalfWidth,
+        maxU: queryBounds.maxU + maximumHalfWidth,
+        maxV: queryBounds.maxV + maximumHalfWidth
+      }
+    );
+    if (!clipped || clipped[0] === clipped[1]) continue;
+    const amounts = [clipped[0], clipped[1]];
+    if (deltaU !== 0) {
+      const clippedStartU = originalStartU + deltaU * clipped[0];
+      const clippedEndU = originalStartU + deltaU * clipped[1];
+      for (let column = Math.floor(Math.min(clippedStartU, clippedEndU)) + 1; column < Math.max(clippedStartU, clippedEndU); column += 1) {
+        const amount = (column - originalStartU) / deltaU;
+        if (amount > clipped[0] && amount < clipped[1]) amounts.push(amount);
+      }
+    }
+    amounts.sort((first, second) => first - second);
+    for (let partIndex = 0; partIndex < amounts.length - 1; partIndex += 1) {
+      const first = amounts[partIndex];
+      const second = amounts[partIndex + 1];
+      const startU = originalStartU + deltaU * first;
+      const startV = originalStartV + deltaV * first;
+      const endU = originalStartU + deltaU * second;
+      const endV = originalStartV + deltaV * second;
+      const logicalLength = Math.hypot(endU - startU, endV - startV);
+      if (logicalLength <= 0) continue;
+      const worldStart = surfaceToWorld(startU, startV, hexSize);
+      const worldEnd = surfaceToWorld(endU, endV, hexSize);
+      const worldDeltaX = worldEnd.x - worldStart.x;
+      const worldDeltaZ = worldEnd.z - worldStart.z;
+      const worldLength = Math.hypot(worldDeltaX, worldDeltaZ);
+      output.push(Object.freeze({
+        startU,
+        startV,
+        endU,
+        endV,
+        startHalfWidth: startWidth + (endWidth - startWidth) * first,
+        endHalfWidth: startWidth + (endWidth - startWidth) * second,
+        startLevel: levelProfile[pointIndex] + (levelProfile[pointIndex + 1] - levelProfile[pointIndex]) * first,
+        endLevel: levelProfile[pointIndex] + (levelProfile[pointIndex + 1] - levelProfile[pointIndex]) * second,
+        logicalLength,
+        remainingLogicalLength: segmentLengths[pointIndex] * (1 - second) + remainingAfterSegment[pointIndex],
+        flowX: worldDeltaX / worldLength,
+        flowZ: worldDeltaZ / worldLength
+      }));
+    }
+  }
+  return Object.freeze(output);
+}
+function projectedRiverShapes(window, input, queryBounds, hexSize) {
+  const bounds = riverBounds(input.points, input.widthProfile);
+  return Object.freeze(surfaceHydrologyProjectedOffsets(window, bounds, queryBounds).flatMap((offset) => {
+    const spans = buildRiverSpans(
+      input.points,
+      input.widthProfile,
+      input.levelProfile,
+      offset.u,
+      offset.v,
+      hexSize,
+      queryBounds
+    );
+    if (spans.length === 0) return [];
+    let minU = Number.POSITIVE_INFINITY;
+    let minV = Number.POSITIVE_INFINITY;
+    let maxU = Number.NEGATIVE_INFINITY;
+    let maxV = Number.NEGATIVE_INFINITY;
+    for (const span of spans) {
+      const maximumHalfWidth = Math.max(span.startHalfWidth, span.endHalfWidth);
+      minU = Math.min(minU, span.startU - maximumHalfWidth, span.endU - maximumHalfWidth);
+      minV = Math.min(minV, span.startV - maximumHalfWidth, span.endV - maximumHalfWidth);
+      maxU = Math.max(maxU, span.startU + maximumHalfWidth, span.endU + maximumHalfWidth);
+      maxV = Math.max(maxV, span.startV + maximumHalfWidth, span.endV + maximumHalfWidth);
+    }
+    return [Object.freeze({
+      bodyId: input.bodyId,
+      stableIdentity: input.stableIdentity,
+      profileIndex: input.profileIndex,
+      dischargeClass: input.dischargeClass,
+      mouthTarget: input.mouthTarget,
+      bounds: Object.freeze({ minU, minV, maxU, maxV }),
+      spans: Object.freeze(spans)
+    })];
+  }));
+}
+function mouthTarget(catalog, targetBodyId) {
+  if (targetBodyId === void 0) return void 0;
+  const target = catalog.get(targetBodyId);
+  if (!target || target.kind !== "ocean" && target.kind !== "lake") {
+    throw new Error("surface river mouth target is missing or is not terminal water");
+  }
+  return target;
+}
+function baseRiverInput(region, river, mouth, catalog) {
+  const originU = region.key.regionX * HYDROLOGY_REGION_SIZE;
+  const originV = region.key.regionY * HYDROLOGY_REGION_SIZE;
+  const body = catalog.get(river.riverId);
+  if (!body || body.kind !== "river") {
+    throw new Error("surface base river lost its body profile");
+  }
+  return {
+    bodyId: river.riverId,
+    stableIdentity: `${river.riverId}:${river.segmentId}`,
+    profileIndex: body.profileIndex,
+    dischargeClass: river.dischargeClass,
+    points: logicalPoints(river.controlPoints, originU, originV),
+    widthProfile: river.widthProfile,
+    levelProfile: river.levelProfile,
+    mouthTarget: mouthTarget(catalog, mouth?.targetBodyId)
+  };
+}
+function authoredRiverInput(river, catalog) {
+  const targetBodyId = river.outlet.kind === "ocean" || river.outlet.kind === "lake" ? river.outlet.bodyId : void 0;
+  return {
+    bodyId: river.featureId,
+    stableIdentity: river.featureId,
+    profileIndex: river.profileIndex,
+    dischargeClass: river.dischargeClass,
+    points: logicalPoints(river.controlPoints, 0, 0),
+    widthProfile: river.widthProfile,
+    levelProfile: river.levelProfile,
+    mouthTarget: mouthTarget(catalog, targetBodyId)
+  };
+}
+function collectRiverShapes(window, queryBounds, hexSize, catalog) {
+  const shapes = [];
+  for (const region of window.hydrologyRegions) {
+    const suppressed = new Set(region.suppressedBaseFeatureIds);
+    const mouthBySegment = new Map(region.mouths.map((mouth) => [mouth.segmentId, mouth]));
+    for (const river of region.rivers) {
+      if (suppressed.has(river.riverId)) continue;
+      const body = catalog.get(river.riverId);
+      if (!body || body.kind !== "river") {
+        throw new Error("surface river segment lost its canonical body definition");
+      }
+      shapes.push(...projectedRiverShapes(
+        window,
+        baseRiverInput(region, river, mouthBySegment.get(river.segmentId), catalog),
+        queryBounds,
+        hexSize
+      ));
+    }
+  }
+  for (const delta of window.authoredHydrology) {
+    if (delta.feature.kind !== "river") continue;
+    shapes.push(...projectedRiverShapes(
+      window,
+      authoredRiverInput(delta.feature, catalog),
+      queryBounds,
+      hexSize
+    ));
+  }
+  return Object.freeze(shapes);
+}
+function closestRiver(shape, u, v) {
+  let bestEdgeDistance = Number.POSITIVE_INFINITY;
+  let best;
+  for (const span of shape.spans) {
+    const deltaU = span.endU - span.startU;
+    const deltaV = span.endV - span.startV;
+    const lengthSquared = deltaU * deltaU + deltaV * deltaV;
+    const amount = Math.max(0, Math.min(
+      1,
+      ((u - span.startU) * deltaU + (v - span.startV) * deltaV) / lengthSquared
+    ));
+    const distance = Math.hypot(
+      u - (span.startU + deltaU * amount),
+      v - (span.startV + deltaV * amount)
+    );
+    const halfWidth = span.startHalfWidth + (span.endHalfWidth - span.startHalfWidth) * amount;
+    const edgeDistance = distance - halfWidth;
+    if (edgeDistance >= bestEdgeDistance) continue;
+    bestEdgeDistance = edgeDistance;
+    best = {
+      edgeDistance,
+      halfWidth,
+      level: span.startLevel + (span.endLevel - span.startLevel) * amount,
+      distanceToEnd: span.logicalLength * (1 - amount) + span.remainingLogicalLength,
+      flowX: span.flowX,
+      flowZ: span.flowZ
+    };
+  }
+  if (!best) throw new Error("surface river closest-point query found no span");
+  return best;
+}
+function intersectBounds(first, second) {
+  const bounds = {
+    minU: Math.max(first.minU, second.minU),
+    minV: Math.max(first.minV, second.minV),
+    maxU: Math.min(first.maxU, second.maxU),
+    maxV: Math.min(first.maxV, second.maxV)
+  };
+  return bounds.minU < bounds.maxU && bounds.minV < bounds.maxV ? bounds : void 0;
+}
+function signedRiverDistances(window, shape, activeBounds, contourContext, groundHeight, logicalU, logicalV, saturation) {
+  const hexSize = window.dependencyKey.metrics.hexSize;
+  const heightScale = window.dependencyKey.metrics.heightScale;
+  const semanticSample = {
+    groundHeight: 0,
+    biome0: 0,
+    biome1: 0,
+    biome2: 0,
+    biome3: 0
+  };
+  const bankContours = surfaceScalarContours(
+    activeBounds,
+    hexSize,
+    (u, v) => closestRiver(shape, u, v).edgeDistance
+  );
+  const bedContours = surfaceScalarContours(activeBounds, hexSize, (u, v) => {
+    const closest = closestRiver(shape, u, v);
+    const valid = sampleEffectiveWindowSemantic(window, u, v, heightScale, semanticSample);
+    if (!valid) return heightScale;
+    return semanticSample.groundHeight - closest.level / 65535 * heightScale;
+  });
+  const bankMagnitude = rasterSurfaceContourDistances(contourContext, bankContours, saturation);
+  const bedMagnitude = rasterSurfaceContourDistances(contourContext, bedContours, saturation);
+  const distance = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
+  distance.fill(saturation);
+  const closestOutput = new Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const influenceU = saturation / (1.5 * hexSize);
+  const influenceV = saturation / (Math.sqrt(3) * hexSize) + 0.5;
+  for (let index = 0; index < COMPILED_SURFACE_TEXEL_COUNT; index += 1) {
+    if (logicalU[index] < shape.bounds.minU - influenceU || logicalU[index] > shape.bounds.maxU + influenceU || logicalV[index] < shape.bounds.minV - influenceV || logicalV[index] > shape.bounds.maxV + influenceV) continue;
+    const closest = closestRiver(shape, logicalU[index], logicalV[index]);
+    closestOutput[index] = closest;
+    const bankDistance = closest.edgeDistance < 0 ? -bankMagnitude[index] : bankMagnitude[index];
+    const levelBits = finiteFloat16Bits(
+      "compiled river level",
+      Math.round(closest.level) / 65535 * heightScale
+    );
+    const bedWet = float16BitsToFloat32(groundHeight[index]) < float16BitsToFloat32(levelBits);
+    const bedDistance = bedWet ? -bedMagnitude[index] : bedMagnitude[index];
+    distance[index] = Math.max(bankDistance, bedDistance);
+  }
+  return Object.freeze({ distance, closest: Object.freeze(closestOutput) });
+}
+function snorm8(value) {
+  return Math.max(-127, Math.min(127, Math.round(value * 127)));
+}
+function compileSurfaceField(window) {
+  assertTransferableEffectiveWindow(window);
+  const lakes = compileLakeSurfaceField(window);
+  const hexSize = window.dependencyKey.metrics.hexSize;
+  const heightScale = window.dependencyKey.metrics.heightScale;
+  const saturation = surfaceInfluenceRadiusWorld(hexSize);
+  const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+  const queryBounds = surfaceHydrologyQueryBounds(window, saturation);
+  const bodyCatalog = buildBodyCatalog(window, lakes.waterBodies);
+  const shapes = collectRiverShapes(window, queryBounds, hexSize, bodyCatalog);
+  if (shapes.length === 0) return lakes;
+  const groundHeight = lakes.field.groundHeight.slice();
+  const materialWeights = lakes.field.materialWeights.slice();
+  const waterLevel = lakes.field.waterLevel.slice();
+  const waterDepth = lakes.field.waterDepth.slice();
+  const shorelineDistance = lakes.field.shorelineDistance.slice();
+  const flow = lakes.field.flow.slice();
+  const waterCoverage = lakes.field.waterCoverage.slice();
+  const waterKind = lakes.field.waterKind.slice();
+  const waterProfile = lakes.field.waterProfile.slice();
+  const waterBodyIndex = new Uint8Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const logicalU = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const logicalV = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const unionDistance = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const winnerPriority = new Uint16Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const winnerIdentity = new Array(COMPILED_SURFACE_TEXEL_COUNT);
+  const winnerBody = new Array(COMPILED_SURFACE_TEXEL_COUNT);
+  for (let texelX = -SURFACE_COMPILE_PROFILE.gutterTexels; texelX < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelX += 1) {
+    const u = surfaceTexelCenterAxis(window.renderKey.chunkX, texelX);
+    for (let texelY = -SURFACE_COMPILE_PROFILE.gutterTexels; texelY < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelY += 1) {
+      const index = surfaceFieldTexelIndex(texelX, texelY);
+      logicalU[index] = u;
+      logicalV[index] = surfaceTexelCenterAxis(window.renderKey.chunkY, texelY);
+      unionDistance[index] = float16BitsToFloat32(shorelineDistance[index]);
+      if (waterCoverage[index] === 0) continue;
+      const entry = lakes.waterBodies.entries[waterBodyIndexFromField(lakes, index) - 1];
+      if (!entry) throw new Error("compiled lake field has an invalid body palette reference");
+      winnerBody[index] = entry.bodyId;
+      winnerIdentity[index] = entry.bodyId;
+      winnerPriority[index] = waterKind[index] === SURFACE_WATER_KIND_LAKE ? 1 : 0;
+    }
+  }
+  const contourContext = createSurfaceContourRasterContext(window, hexSize);
+  for (const shape of shapes) {
+    if (!surfaceHydrologyBoundsIntersect(shape.bounds, queryBounds)) continue;
+    const activeBounds = intersectBounds(shape.bounds, queryBounds);
+    if (!activeBounds) continue;
+    const compiled = signedRiverDistances(
+      window,
+      shape,
+      activeBounds,
+      contourContext,
+      groundHeight,
+      logicalU,
+      logicalV,
+      saturation
+    );
+    const priority = 2 + shape.dischargeClass;
+    for (let index = 0; index < COMPILED_SURFACE_TEXEL_COUNT; index += 1) {
+      const closest = compiled.closest[index];
+      if (!closest) continue;
+      const signedDistance = compiled.distance[index];
+      unionDistance[index] = Math.min(unionDistance[index], signedDistance);
+      const wet = signedDistance < 0;
+      const rawCoverage = quantizeSurfaceCoverage(signedDistance, antialiasRadius);
+      const coverage = wet ? Math.max(128, rawCoverage) : Math.min(127, rawCoverage);
+      if (coverage === 0) continue;
+      const atMouth = shape.mouthTarget !== void 0 && closest.distanceToEnd <= closest.halfWidth * 0.5;
+      const body = atMouth ? shape.mouthTarget : bodyCatalog.get(shape.bodyId);
+      if (!body) throw new Error("compiled river candidate lost its body definition");
+      const identity = atMouth ? body.bodyId : shape.stableIdentity;
+      if (coverage < waterCoverage[index] || coverage === waterCoverage[index] && priority < winnerPriority[index] || coverage === waterCoverage[index] && priority === winnerPriority[index] && winnerIdentity[index] !== void 0 && winnerIdentity[index] <= identity) continue;
+      const levelBits = finiteFloat16Bits(
+        "compiled river level",
+        Math.round(closest.level) / 65535 * heightScale
+      );
+      const flowX = atMouth ? 0 : snorm8(closest.flowX);
+      const flowZ = atMouth ? 0 : snorm8(closest.flowZ);
+      if (!atMouth && flowX === 0 && flowZ === 0) {
+        throw new Error("compiled river flow quantized to a zero direction");
+      }
+      waterCoverage[index] = coverage;
+      waterKind[index] = body.kind === "river" ? SURFACE_WATER_KIND_RIVER : body.kind === "lake" ? SURFACE_WATER_KIND_LAKE : SURFACE_WATER_KIND_OCEAN;
+      waterProfile[index] = body.profileIndex;
+      waterLevel[index] = levelBits;
+      waterDepth[index] = finiteFloat16Bits(
+        "compiled river depth",
+        Math.max(0, float16BitsToFloat32(levelBits) - float16BitsToFloat32(groundHeight[index]))
+      );
+      flow[index * 2] = flowX;
+      flow[index * 2 + 1] = flowZ;
+      winnerPriority[index] = priority;
+      winnerIdentity[index] = identity;
+      winnerBody[index] = body.bodyId;
+    }
+  }
+  const usedBodies = /* @__PURE__ */ new Map();
+  for (let index = 0; index < COMPILED_SURFACE_TEXEL_COUNT; index += 1) {
+    const wet = unionDistance[index] < 0;
+    const rawCoverage = quantizeSurfaceCoverage(unionDistance[index], antialiasRadius);
+    const coverage = wet ? Math.max(128, rawCoverage) : Math.min(127, rawCoverage);
+    waterCoverage[index] = coverage;
+    shorelineDistance[index] = finiteFloat16Bits(
+      "compiled hydrology union shoreline distance",
+      Math.max(-saturation, Math.min(saturation, unionDistance[index]))
+    );
+    const bodyId = winnerBody[index];
+    if (coverage === 0 || bodyId === void 0) {
+      waterLevel[index] = 0;
+      waterDepth[index] = 0;
+      waterKind[index] = 0;
+      waterProfile[index] = 0;
+      flow[index * 2] = 0;
+      flow[index * 2 + 1] = 0;
+      winnerBody[index] = void 0;
+      continue;
+    }
+    const body = bodyCatalog.get(bodyId);
+    if (!body) throw new Error("compiled hydrology texel lost its body definition");
+    usedBodies.set(bodyId, body);
+  }
+  const palette = createCompiledWaterBodyPalette([...usedBodies.values()].sort((first, second) => compareIdentity3(first.bodyId, second.bodyId)));
+  const paletteIndex = new Map(palette.entries.map((body, index) => [body.bodyId, index + 1]));
+  for (let index = 0; index < COMPILED_SURFACE_TEXEL_COUNT; index += 1) {
+    const bodyId = winnerBody[index];
+    if (bodyId === void 0) continue;
+    const bodyIndex = paletteIndex.get(bodyId);
+    if (bodyIndex === void 0) throw new Error("compiled hydrology palette lost a winning body");
+    waterBodyIndex[index] = bodyIndex;
+  }
+  return Object.freeze({
+    field: createCompiledSurfaceField({
+      groundHeight,
+      materialWeights,
+      waterLevel,
+      waterDepth,
+      shorelineDistance,
+      flow,
+      waterCoverage,
+      waterKind,
+      waterProfile,
+      waterBodyIndex
+    }),
+    waterBodies: palette
+  });
+}
+function waterBodyIndexFromField(compilation, index) {
+  const bodyIndex = compilation.field.waterBodyIndex[index];
+  if (bodyIndex === 0 || bodyIndex > compilation.waterBodies.entries.length) {
+    throw new Error("compiled surface field body index is outside its palette");
+  }
+  return bodyIndex;
 }
 
 // src/world/SemanticCatalogsV2.ts
@@ -4859,16 +5453,6 @@ var MemorySurfaceDeltaStore = class {
   }
 };
 
-// src/world/HydrologyGeometry.ts
-var HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
-var HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
-function hydrologyRiverHalfWidthTiles(widthClass2) {
-  if (!Number.isInteger(widthClass2) || widthClass2 <= 0 || widthClass2 > 255) {
-    throw new RangeError("hydrology river width class must be a positive uint8 value");
-  }
-  return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES + widthClass2 * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
-}
-
 // src/world/HydrologyFeatureSpatialIndex.ts
 var HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE = 8;
 var MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS = 16384;
@@ -4970,7 +5554,7 @@ function unionBounds(items, start, end) {
   }
   return { minX, minY, maxX, maxY };
 }
-function intersects2(first, second) {
+function intersects(first, second) {
   return first.minX <= second.maxX && first.maxX >= second.minX && first.minY <= second.maxY && first.maxY >= second.minY;
 }
 function compareItems(axis, first, second) {
@@ -5020,11 +5604,11 @@ var HydrologyFeatureSpatialIndex = class {
     const matches = /* @__PURE__ */ new Set();
     while (stack.length > 0) {
       const node = this.nodes[stack.pop()];
-      if (!intersects2(node, bounds)) continue;
+      if (!intersects(node, bounds)) continue;
       if (node.count > 0) {
         for (let index = node.start; index < node.start + node.count; index += 1) {
           const item = this.items[index];
-          if (intersects2(item.bounds, bounds)) matches.add(item.deltaIndex);
+          if (intersects(item.bounds, bounds)) matches.add(item.deltaIndex);
         }
       } else {
         stack.push(node.left, node.right);
@@ -6532,7 +7116,7 @@ function assertSemanticWorldSource(source) {
 }
 
 // src/world/EffectiveWorldView.ts
-function compareIdentity3(first, second) {
+function compareIdentity4(first, second) {
   return first < second ? -1 : first > second ? 1 : 0;
 }
 function collectBaseFeatureIds(region) {
@@ -6542,7 +7126,7 @@ function collectBaseFeatureIds(region) {
   for (const lake of region.lakes) featureIds.add(lake.bodyId);
   for (const mouth of region.mouths) featureIds.add(mouth.riverId);
   for (const body of region.bodies) if (body.bodyId !== "ocean") featureIds.add(body.bodyId);
-  return Object.freeze([...featureIds].sort(compareIdentity3));
+  return Object.freeze([...featureIds].sort(compareIdentity4));
 }
 function effectiveBaseSlices(region, suppressedFeatureIds) {
   if (suppressedFeatureIds.size === 0) {
@@ -8497,7 +9081,7 @@ var HydrologyRegionSpatialIndex = class {
 // src/world/DerivedHydrologyRaster.ts
 var MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES = 1048576;
 var MAX_DERIVED_HYDROLOGY_BODY_PALETTE = 255;
-function compareIdentity4(first, second) {
+function compareIdentity5(first, second) {
   return first < second ? -1 : first > second ? 1 : 0;
 }
 function derivedHydrologyRasterIndex(x, y, width, height) {
@@ -8574,7 +9158,7 @@ function deriveHydrologyRaster(options) {
       if (sample.body) usedBodies.set(sample.body.bodyId, sample.body);
     }
   }
-  const bodies = [...usedBodies.values()].sort((first, second) => compareIdentity4(first.bodyId, second.bodyId));
+  const bodies = [...usedBodies.values()].sort((first, second) => compareIdentity5(first.bodyId, second.bodyId));
   if (bodies.length > MAX_DERIVED_HYDROLOGY_BODY_PALETTE) {
     throw new RangeError("derived hydrology raster exceeds the uint8 body palette");
   }
@@ -9228,6 +9812,7 @@ export {
   compileLakeSurfaceField,
   compileOceanSurfaceField,
   compileSemanticSurfaceField,
+  compileSurfaceField,
   compiledSurfaceFieldResidentBytes,
   compiledSurfaceFieldTransferables,
   compiledWaterBodyPaletteIndex,

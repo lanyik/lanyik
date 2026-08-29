@@ -96,6 +96,8 @@ export {
     compileLakeSurfaceField
 } from "./world/compileLakeSurfaceField";
 export type { LakeSurfaceCompilation } from "./world/compileLakeSurfaceField";
+export { compileSurfaceField } from "./world/compileSurfaceField";
+export type { SurfaceFieldCompilation } from "./world/compileSurfaceField";
 
 export {
     surfaceColumnStagger,

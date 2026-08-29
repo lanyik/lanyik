@@ -41,7 +41,7 @@ export interface LakeSurfaceCompilation {
     readonly waterBodies: CompiledWaterBodyPalette;
 }
 
-interface LogicalBounds {
+export interface SurfaceHydrologyLogicalBounds {
     readonly minU: number;
     readonly minV: number;
     readonly maxU: number;
@@ -53,7 +53,7 @@ interface LakeShapeBase {
     readonly stableIdentity: string;
     readonly level: number;
     readonly profileIndex: number;
-    readonly bounds: LogicalBounds;
+    readonly bounds: SurfaceHydrologyLogicalBounds;
 }
 
 interface CircleLakeShape extends LakeShapeBase {
@@ -78,12 +78,19 @@ function compareIdentity(first: string, second: string): number {
     return first < second ? -1 : first > second ? 1 : 0;
 }
 
-function intersects(first: Readonly<LogicalBounds>, second: Readonly<LogicalBounds>): boolean {
+export function surfaceHydrologyBoundsIntersect(
+    first: Readonly<SurfaceHydrologyLogicalBounds>,
+    second: Readonly<SurfaceHydrologyLogicalBounds>
+): boolean {
     return first.minU <= second.maxU && first.maxU >= second.minU
         && first.minV <= second.maxV && first.maxV >= second.minV;
 }
 
-function translatedBounds(bounds: Readonly<LogicalBounds>, offsetU: number, offsetV: number): LogicalBounds {
+function translatedBounds(
+    bounds: Readonly<SurfaceHydrologyLogicalBounds>,
+    offsetU: number,
+    offsetV: number
+): SurfaceHydrologyLogicalBounds {
     return {
         minU: bounds.minU + offsetU,
         minV: bounds.minV + offsetV,
@@ -107,10 +114,10 @@ function periodicOffsets(
     return offsets;
 }
 
-function projectedOffsets(
+export function surfaceHydrologyProjectedOffsets(
     window: Readonly<TransferableEffectiveWindow>,
-    bounds: Readonly<LogicalBounds>,
-    queryBounds: Readonly<LogicalBounds>
+    bounds: Readonly<SurfaceHydrologyLogicalBounds>,
+    queryBounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): readonly Readonly<{ u: number; v: number }>[] {
     const periodU = window.domain.topology === "toroidal" ? window.domain.width : undefined;
     const periodV = window.domain.topology === "toroidal" ? window.domain.height : undefined;
@@ -126,7 +133,7 @@ function circleShapes(
     window: Readonly<TransferableEffectiveWindow>,
     region: Readonly<TransferableHydrologyRegionSlice>,
     lake: Readonly<LakeFeature>,
-    queryBounds: Readonly<LogicalBounds>
+    queryBounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): readonly CircleLakeShape[] {
     const centerU = region.key.regionX * HYDROLOGY_REGION_SIZE
         + lake.center[0] / HYDROLOGY_POINT_QUANTIZATION;
@@ -135,7 +142,7 @@ function circleShapes(
     const radius = lake.radius / HYDROLOGY_POINT_QUANTIZATION;
     const bounds = { minU: centerU - radius, minV: centerV - radius,
         maxU: centerU + radius, maxV: centerV + radius };
-    return Object.freeze(projectedOffsets(window, bounds, queryBounds).map(offset => Object.freeze({
+    return Object.freeze(surfaceHydrologyProjectedOffsets(window, bounds, queryBounds).map(offset => Object.freeze({
         shapeKind: "circle" as const,
         bodyId: lake.bodyId,
         stableIdentity: lake.bodyId,
@@ -148,7 +155,7 @@ function circleShapes(
     })));
 }
 
-function polygonBounds(points: Float64Array): LogicalBounds {
+function polygonBounds(points: Float64Array): SurfaceHydrologyLogicalBounds {
     let minU = Number.POSITIVE_INFINITY;
     let minV = Number.POSITIVE_INFINITY;
     let maxU = Number.NEGATIVE_INFINITY;
@@ -165,10 +172,10 @@ function polygonBounds(points: Float64Array): LogicalBounds {
 function polygonShapes(
     window: Readonly<TransferableEffectiveWindow>,
     lake: Readonly<AuthoredLakeFeature>,
-    queryBounds: Readonly<LogicalBounds>
+    queryBounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): readonly PolygonLakeShape[] {
     const bounds = polygonBounds(lake.polygon);
-    return Object.freeze(projectedOffsets(window, bounds, queryBounds).map(offset => {
+    return Object.freeze(surfaceHydrologyProjectedOffsets(window, bounds, queryBounds).map(offset => {
         const points = new Float64Array(lake.polygon.length);
         for (let index = 0; index < points.length; index += 2) {
             points[index] = lake.polygon[index] / HYDROLOGY_POINT_QUANTIZATION + offset.u;
@@ -202,7 +209,7 @@ function registerBody(
 
 function collectLakeShapes(
     window: Readonly<TransferableEffectiveWindow>,
-    queryBounds: Readonly<LogicalBounds>
+    queryBounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): Readonly<{ shapes: readonly LakeShape[]; bodies: ReadonlyMap<string, BodyDefinition> }> {
     const shapes: LakeShape[] = [];
     const bodies = new Map<string, BodyDefinition>();
@@ -232,7 +239,7 @@ function clipSegment(
     startV: number,
     endU: number,
     endV: number,
-    bounds: Readonly<LogicalBounds>
+    bounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): readonly [number, number] | undefined {
     const deltaU = endU - startU;
     const deltaV = endV - startV;
@@ -263,7 +270,7 @@ function addLogicalSegment(
     startV: number,
     endU: number,
     endV: number,
-    clipBounds: Readonly<LogicalBounds>,
+    clipBounds: Readonly<SurfaceHydrologyLogicalBounds>,
     hexSize: number
 ): void {
     const clipped = clipSegment(startU, startV, endU, endV, clipBounds);
@@ -295,7 +302,7 @@ function criticalCircleAngles(
     centerU: number,
     centerV: number,
     radius: number,
-    bounds: Readonly<LogicalBounds>
+    bounds: Readonly<SurfaceHydrologyLogicalBounds>
 ): readonly number[] {
     const full = Math.PI * 2;
     const angles = [0, full];
@@ -323,7 +330,7 @@ function criticalCircleAngles(
 
 function circleContours(
     shape: Readonly<CircleLakeShape>,
-    clipBounds: Readonly<LogicalBounds>,
+    clipBounds: Readonly<SurfaceHydrologyLogicalBounds>,
     hexSize: number
 ): readonly SurfaceContourSegment[] {
     const output: SurfaceContourSegment[] = [];
@@ -355,7 +362,7 @@ function circleContours(
 
 function polygonContours(
     shape: Readonly<PolygonLakeShape>,
-    clipBounds: Readonly<LogicalBounds>,
+    clipBounds: Readonly<SurfaceHydrologyLogicalBounds>,
     hexSize: number
 ): readonly SurfaceContourSegment[] {
     const output: SurfaceContourSegment[] = [];
@@ -413,7 +420,10 @@ function shapeContains(shape: Readonly<LakeShape>, u: number, v: number): boolea
     return polygonContains(shape.points, u, v);
 }
 
-function queryBounds(window: Readonly<TransferableEffectiveWindow>, saturation: number): LogicalBounds {
+export function surfaceHydrologyQueryBounds(
+    window: Readonly<TransferableEffectiveWindow>,
+    saturation: number
+): SurfaceHydrologyLogicalBounds {
     const hexSize = window.dependencyKey.metrics.hexSize;
     const firstU = surfaceTexelCenterAxis(window.renderKey.chunkX, -SURFACE_COMPILE_PROFILE.gutterTexels);
     const lastU = surfaceTexelCenterAxis(
@@ -443,7 +453,7 @@ export function compileLakeSurfaceField(
     const saturation = surfaceInfluenceRadiusWorld(hexSize);
     const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize)
         / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
-    const bounds = queryBounds(window, saturation);
+    const bounds = surfaceHydrologyQueryBounds(window, saturation);
     const collected = collectLakeShapes(window, bounds);
     if (collected.shapes.length === 0) return ocean;
     const contourContext = createSurfaceContourRasterContext(window, hexSize);
@@ -499,7 +509,7 @@ export function compileLakeSurfaceField(
     };
 
     for (const shape of collected.shapes) {
-        if (!intersects(shape.bounds, bounds)) continue;
+        if (!surfaceHydrologyBoundsIntersect(shape.bounds, bounds)) continue;
         const contours = shape.shapeKind === "circle"
             ? circleContours(shape, bounds, hexSize)
             : polygonContours(shape, bounds, hexSize);
