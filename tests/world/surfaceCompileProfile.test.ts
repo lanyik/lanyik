@@ -7,7 +7,8 @@ import {
     SURFACE_FIELD_CPU_BYTES,
     SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL,
     WORLD_SEMANTIC_CHUNK_SIZE,
-    assertSurfaceCompileProfile
+    assertSurfaceCompileProfile,
+    surfaceInfluenceRadiusWorld
 } from "../../src/world/SurfaceCompileProfile";
 
 describe("SurfaceCompileProfile v1", () => {
@@ -27,6 +28,8 @@ describe("SurfaceCompileProfile v1", () => {
         expect(SURFACE_CORE_TEXELS).toBe(64);
         expect(HYDROLOGY_REGION_SIZE / WORLD_SEMANTIC_CHUNK_SIZE).toBe(4);
         expect(WORLD_SEMANTIC_CHUNK_SIZE / SURFACE_COMPILE_PROFILE.renderChunkSize).toBe(2);
+        expect(surfaceInfluenceRadiusWorld(3)).toBe(6);
+        expect(() => surfaceInfluenceRadiusWorld(0)).toThrow(/positive finite/);
     });
 
     test("keeps the logical static field below the contracted 80 KiB budget", () => {

@@ -3,7 +3,8 @@ export {
     SURFACE_COMPILE_PROFILE_VERSION,
     SURFACE_CORE_TEXELS,
     WORLD_SEMANTIC_CHUNK_SIZE,
-    HYDROLOGY_REGION_SIZE
+    HYDROLOGY_REGION_SIZE,
+    surfaceInfluenceRadiusWorld
 } from "./world/SurfaceCompileProfile";
 export type { SurfaceCompileProfile } from "./world/SurfaceCompileProfile";
 

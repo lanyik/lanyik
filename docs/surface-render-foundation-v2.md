@@ -43,7 +43,7 @@ DynamicFogStore ── 独立高频状态场 ── FogLayer
 | 近景表面场核心 | 64×64 texel | `SURFACE_COMPILE_PROFILE_VERSION` | 每个逻辑坐标间隔四个 texel，高度、材质、岸线、水深和流向 |
 | 标准模拟块 | 64×64 格 | 应用模拟格式 | 默认实体驻留和后台模拟分区；不进入世界表面格式 |
 
-当前生产候选固定为 `SurfaceCompileProfile v1 = { renderChunkSize: 16, samplesPerTileInterval: 4, gutterTexels: 1, influenceRadiusTiles: 2, textureLayerSize: 66, pageLayers: 128 }`。64×64 核心每边增加一个采样 texel 的 gutter，得到 66×66 GPU 层。编译器输入使用两格语义 halo；岸线距离和所有邻域核在两格处饱和，因而不会形成无限脏区。输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
+当前生产候选固定为 `SurfaceCompileProfile v1 = { renderChunkSize: 16, samplesPerTileInterval: 4, gutterTexels: 1, influenceRadiusTiles: 2, textureLayerSize: 66, pageLayers: 128 }`。64×64 核心每边增加一个采样 texel 的 gutter，得到 66×66 GPU 层。编译器输入使用两格语义 halo；岸线距离和所有邻域核在 `surfaceInfluenceRadiusWorld(hexSize) = 2 × hexSize` 处饱和，因而不会形成无限脏区。这里的“格”按 hex radius 度量，不是中心距 `sqrt(3) × hexSize`；20×20 输入到 66×66 物理层每侧最小余量为 `2.0625 × hexSize`，所以 2h 的圆形世界空间读取闭包完全落在声明依赖内。输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
 
 32 与 128 是存档和生成格式；16、4 与 66 是可丢弃表面编译器的版本化常量。它们都不作为普通运行参数暴露，但后者可以在不改变 world identity 或存档的情况下随新的 compile profile 升级。特别是：
 

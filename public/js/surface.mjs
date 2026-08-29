@@ -47,6 +47,12 @@ function assertSurfaceCompileProfile(profile) {
     throw new RangeError("surface compile profile does not match the frozen profile v1");
   }
 }
+function surfaceInfluenceRadiusWorld(hexSize) {
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("surface influence radius requires a positive finite hex size");
+  }
+  return SURFACE_COMPILE_PROFILE.influenceRadiusTiles * hexSize;
+}
 assertSurfaceCompileProfile(SURFACE_COMPILE_PROFILE);
 
 // src/world/HalfFloat.ts
@@ -2752,7 +2758,7 @@ function compileOceanSurfaceField(window) {
   const seaWorldLevel = window.seaLevel / 65535 * heightScale;
   const seaLevelBits = finiteFloat16Bits("compiled ocean level", seaWorldLevel);
   const quantizedSeaWorldLevel = float16BitsToFloat32(seaLevelBits);
-  const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * hexSize;
+  const saturation = surfaceInfluenceRadiusWorld(hexSize);
   const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
   const contours = surfaceHeightContours(window, window.seaLevel, hexSize);
   const contourDistances = surfaceContourDistances(window, contours, hexSize, saturation);
@@ -3081,7 +3087,7 @@ function compileLakeSurfaceField(window) {
   const ocean = compileOceanSurfaceField(window);
   const hexSize = window.dependencyKey.metrics.hexSize;
   const heightScale = window.dependencyKey.metrics.heightScale;
-  const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * hexSize;
+  const saturation = surfaceInfluenceRadiusWorld(hexSize);
   const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
   const bounds = queryBounds(window, saturation);
   const collected = collectLakeShapes(window, bounds);
@@ -9249,6 +9255,7 @@ export {
   surfaceColumnStagger,
   surfaceDependencyKeysEqual,
   surfaceFieldTexelIndex,
+  surfaceInfluenceRadiusWorld,
   surfaceRequestTokensEqual,
   surfaceStagger,
   surfaceTexelCenterAxis,

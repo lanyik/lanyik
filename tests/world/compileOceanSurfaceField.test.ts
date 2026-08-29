@@ -11,7 +11,7 @@ import {
 } from "../../src/world/CompiledWaterBodyPalette";
 import { float16BitsToFloat32 } from "../../src/world/HalfFloat";
 import { OCEAN_BODY_ID } from "../../src/world/MacroDrainageGraph";
-import { SURFACE_COMPILE_PROFILE } from "../../src/world/SurfaceCompileProfile";
+import { surfaceInfluenceRadiusWorld } from "../../src/world/SurfaceCompileProfile";
 import { compileOceanSurfaceField } from "../../src/world/compileOceanSurfaceField";
 import { createSurfaceCompilerTestWindow } from "./surfaceCompilerFixture";
 
@@ -53,7 +53,7 @@ describe("compileOceanSurfaceField", () => {
             seaLevel: 30_000,
             macroHeight: () => 20_000
         }));
-        const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * 2;
+        const saturation = surfaceInfluenceRadiusWorld(2);
 
         expect(land.waterBodies.entries).toEqual([]);
         expect(land.field.waterCoverage.every(value => value === 0)).toBe(true);

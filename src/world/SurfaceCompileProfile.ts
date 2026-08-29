@@ -77,4 +77,11 @@ export function assertSurfaceCompileProfile(profile: Readonly<SurfaceCompileProf
     }
 }
 
+export function surfaceInfluenceRadiusWorld(hexSize: number): number {
+    if (!Number.isFinite(hexSize) || hexSize <= 0) {
+        throw new RangeError("surface influence radius requires a positive finite hex size");
+    }
+    return SURFACE_COMPILE_PROFILE.influenceRadiusTiles * hexSize;
+}
+
 assertSurfaceCompileProfile(SURFACE_COMPILE_PROFILE);

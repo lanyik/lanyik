@@ -14,7 +14,11 @@ import { float16BitsToFloat32, finiteFloat16Bits } from "./HalfFloat";
 import { AuthoredLakeFeature } from "./HydrologyFeatureDelta";
 import { OCEAN_BODY_ID } from "./HydrologyIdentity";
 import { HYDROLOGY_POINT_QUANTIZATION, LakeFeature } from "./HydrologyRegion";
-import { HYDROLOGY_REGION_SIZE, SURFACE_COMPILE_PROFILE } from "./SurfaceCompileProfile";
+import {
+    HYDROLOGY_REGION_SIZE,
+    SURFACE_COMPILE_PROFILE,
+    surfaceInfluenceRadiusWorld
+} from "./SurfaceCompileProfile";
 import {
     SurfaceContourSegment,
     createSurfaceContourRasterContext,
@@ -436,7 +440,7 @@ export function compileLakeSurfaceField(
     const ocean = compileOceanSurfaceField(window);
     const hexSize = window.dependencyKey.metrics.hexSize;
     const heightScale = window.dependencyKey.metrics.heightScale;
-    const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * hexSize;
+    const saturation = surfaceInfluenceRadiusWorld(hexSize);
     const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize)
         / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
     const bounds = queryBounds(window, saturation);

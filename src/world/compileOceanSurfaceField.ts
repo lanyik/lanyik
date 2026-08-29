@@ -11,7 +11,7 @@ import {
 } from "./CompiledWaterBodyPalette";
 import { finiteFloat16Bits, float16BitsToFloat32 } from "./HalfFloat";
 import { OCEAN_BODY_ID } from "./HydrologyIdentity";
-import { SURFACE_COMPILE_PROFILE } from "./SurfaceCompileProfile";
+import { SURFACE_COMPILE_PROFILE, surfaceInfluenceRadiusWorld } from "./SurfaceCompileProfile";
 import {
     quantizeSurfaceCoverage,
     surfaceContourDistances,
@@ -49,7 +49,7 @@ export function compileOceanSurfaceField(
     const seaWorldLevel = window.seaLevel / 0xffff * heightScale;
     const seaLevelBits = finiteFloat16Bits("compiled ocean level", seaWorldLevel);
     const quantizedSeaWorldLevel = float16BitsToFloat32(seaLevelBits);
-    const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * hexSize;
+    const saturation = surfaceInfluenceRadiusWorld(hexSize);
     const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize)
         / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
     const contours = surfaceHeightContours(window, window.seaLevel, hexSize);
