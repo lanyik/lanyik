@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和无限水文有限依赖分区已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -227,7 +227,9 @@ interface BaseSemanticChunk {
 
 有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。无限世界使用确定性的有界流域 resolver：逻辑世界按 512×512 格的 canonical cell 放置一个与 8 格宏观节点对齐、每轴最多抖动 64 格的 Voronoi site。site 始终位于 cell 中央 `[192, 320]` 范围，因此任意宏观节点只需比较自身 cell 周围 3×3 个 site；生成一个 128×128 region 所有候选流域时，地形依赖严格限制在 5×5 个 basin cell 内。该上界由 site 抖动范围和六边格世界度量共同证明，不依赖当前已加载邻区。
 
-每个无限流域在上述有限窗口内从基础海域终点（若存在）或稳定湖盆终点运行确定性的 priority-flood；节点按冻结 tie-break 顺序获得严格下降到已结算 parent 的 `drainageRank`，priority-flood spill level 保证下游水位不逆升。Voronoi 边界是排水分界线，不在边界随机创造跨流域河流；单个流域仍可跨越多个 128×128 region 并生成正常 boundary port。512、8、64、3×3 和 5×5 都属于生成器版本契约，不是运行时参数。若实现无法维持这个有限依赖窗口、流域连通性和终止证明，无限模式不能发布为 v2 水文源。
+每个无限流域在上述有限窗口内从基础海域终点（若存在）或稳定湖盆终点运行确定性的 priority-flood。低分辨率排水 raster 固定为 X-major，并使用冻结顺序的八邻域；海域节点为 rank 0 终点，无海流域选择最低高度、再按 X-major 索引打破平局的稳定湖盆终点。其他节点只连接到已经结算的 parent，按结算顺序获得严格下降的 `drainageRank`；priority-flood spill level 保证下游水位不逆升，反向 rank 累加保证汇流 discharge 不减。发布前拒绝非连通流域掩码、海域高于海平面、非二值掩码或任何 rank/水位/discharge 不变量错误。
+
+Voronoi 边界是排水分界线，不在边界随机创造跨流域河流；单个流域仍可跨越多个 128×128 region 并生成正常 boundary port。512、8、64、3×3 和 5×5 都属于生成器版本契约，不是运行时参数。若实现无法维持这个有限依赖窗口、流域连通性和终止证明，无限模式不能发布为 v2 水文源。
 
 ### 6.3 HydrologyRegion
 
