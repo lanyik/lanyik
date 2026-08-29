@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋 coverage/岸线 SDF 核与 chunk-local 水体 palette 已冻结，save barrier、持久化 store、显式湖河合并编译及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊 coverage 与岸线 SDF 核、chunk-local 水体 palette 已冻结，save barrier、持久化 store、显式河流/河口合并编译及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -319,6 +319,8 @@ interface HydrologyBodyRef {
 
 `DerivedHydrologyRaster` 使用紧凑的局部 body index，配套只读 body palette 映射到稳定 ID、水位和 profile。CPU 查询返回稳定 ID；GPU 只读取 kind/profile 等着色索引，不上传或比较完整 feature ID。
 
+`OCEAN_BODY_ID = "ocean"` 是格式级保留身份：基础 region 只有 kind 为 ocean、profile 为 0 的 body 可以使用它，任何非 ocean body 以及 authored lake/river 在权威发布边界即被拒绝。局部 palette 不负责修复冲突身份。
+
 ### 6.5 跨区域确定性
 
 相邻区域对公共边使用同一个规范化边键定位由排水图产生的 crossing。边键按唯一 canonical owner 规则计算 port payload，两侧各序列化指向本区 segment endpoint 的引用；两侧必须得到完全相同的规范交点、方向、水位、宽度等级、流量等级、连接 ID 和 body ID。
@@ -531,7 +533,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 已落地的 `CompiledSurfaceField` 格式版本 1 与 `SURFACE_COMPILER_REVISION = 1` 固定为 66×66 X-major SoA：十个数组拥有互不别名的独立 transferable `ArrayBuffer`，合计严格为 78408 bytes，也就是 18 bytes/texel。共享 binary16 codec 使用 IEEE 754 round-to-nearest-even、规范 NaN 和有符号零；发布字段拒绝 NaN/Infinity、材质权重和不为 255、SNORM `-128`、dry texel 非零水体 payload、非零 coverage texel 缺 body/kind、河流零 flow，以及不等于“量化 waterLevel - 量化 groundHeight”的 waterDepth。抗锯齿带允许中心位于陆侧而 coverage 小于 128 的 texel 保留水体 payload，此时规范 depth 为 0；coverage 达到 128 后则要求量化水位不低于量化地面。错误数据不会靠 shader clamp 掩盖。
 
-`shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
+`shorelineDistance` 的基础轮廓距离经 `surfaceToWorld` 在世界 XZ 平面做欧氏点线度量，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。形状与水位地形的交集使用 signed `max`，多个水体的并集使用 signed `min`，因此 Boolean 交角使用确定性的保守组合，而每个组成轮廓仍保持真实世界尺度。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 
 已落地的 `CompiledWaterBodyPalette` 格式版本 1 使用严格递增、唯一的稳定 body ID，字段索引为一基，0 保留给无水；profile 是 uint8，海洋固定使用 `OCEAN_BODY_ID` 和 profile 0。每个 compiled chunk 的 body palette 最多包含 255 个相交水体；超过上限是 feature 预算或编译错误，不能合并 ID。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。按上述逻辑布局，一个含 gutter 的静态表面场低于 80 KiB CPU 数据并处于同量级 GPU 数据，验收以实际内部格式和驱动分配为准。
 
@@ -552,6 +554,8 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 当前已落地的 `compileSemanticSurfaceField` 只实现并明确命名为上述第 1 步的连续语义地面核，不冒充完整水文编译器。它按全局 `surfaceTexelCenterAxis` 对四个 tile center 做双线性采样，finite 边缘忽略 valid mask 外的规范零值并重新归一化；宏观 `uint16` 高度通过 dependency key 的 `heightScale` 转为世界 Y 后量化为 binary16。四项 descriptor biome basis 暂作为冻结的四个 material basis 输入，插值后用最大余数法恢复严格和 255；后续坡度、substrate 与湿岸调制只能在保持该守恒量的前提下加入。循环复用固定 scratch，不在 4356 texel 热循环中创建临时对象。正坐标、负坐标和相邻块两列共享 texel 已锁定逐位测试。
 
 已落地的 `compileOceanSurfaceField` 在上述地面核之上完成海洋子阶段。它只读取 transfer window 中 descriptor 冻结的 uint16 海平面，以 20×20 tile-center 宏观高度运行确定性 marching-squares 轮廓；四交点 saddle 由 cell-center 高度与左下角状态唯一消歧。无水体策略的共享 `SurfaceContours` 核把轮廓经 `surfaceToWorld` 转到世界 XZ，以保守 surface bounds 只访问两格影响范围内的 texel，再计算真实欧氏点线最短距离并饱和；coverage 使用固定一个 texel 宽的线性抗锯齿带。判湿、水位和水深统一使用最终 binary16 精度，陆侧少量 coverage 被限制到 127，水侧被限制到至少 128。全陆块不创建 palette entry，全海块直接得到饱和负 SDF 与 255 coverage；海岸跨相邻 chunk 的两列共享字段已逐位锁定。该函数仍不处理显式湖泊、河流和河口，完整编译入口将在这些 feature 合并后发布。
+
+已落地的 `compileLakeSurfaceField` 继续合并未被 delta suppression 的基础圆形 lake slice 与完整 authored polygon。基础圆弧按每逻辑格四段的 profile 采样密度自适应细分，并先用矩形临界角裁掉当前影响窗口外的弧，超大半径不会展开整圆；polygon 边先裁到影响 bounds，并在每个整数列处分段，使偶列 stagger 下的世界轮廓仍是精确折线。每个 lake shape 的世界距离与该湖水位生成的地形阈值距离取 signed `max`，再与海洋及其他湖泊取 signed `min`；同水位只构建一次阈值场，同一块的世界 texel 坐标只构建一次 `SurfaceContourRasterContext`。winner 先比 coverage，再按 lake 高于 ocean、稳定 body ID 字典序打破平局；最终 palette 重新按 body ID 排序并重映射所有 texel。toroidal 几何按显式 domain 枚举与两格窗口相交的周期镜像，单 feature 最多 16 个，超出即作为格式/authoring 错误失败。基础圆湖、完整替换、地形交线、海湖重叠、周期 seam 和 chunk 公共列均有冻结测试。该阶段仍不处理河流与河口。
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 

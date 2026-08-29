@@ -24,6 +24,14 @@ export interface SurfaceContourSegment {
     readonly end: SurfaceWorldPoint;
 }
 
+export interface SurfaceContourRasterContext {
+    readonly renderChunkX: number;
+    readonly renderChunkY: number;
+    readonly hexSize: number;
+    readonly worldX: Float64Array;
+    readonly worldZ: Float64Array;
+}
+
 function interpolateCrossing(
     firstU: number,
     firstV: number,
@@ -140,18 +148,13 @@ function surfaceAxisToTexel(axis: number, renderChunkCoordinate: number): number
         * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5;
 }
 
-export function surfaceContourDistances(
+export function createSurfaceContourRasterContext(
     window: Readonly<TransferableEffectiveWindow>,
-    contours: readonly SurfaceContourSegment[],
-    hexSize: number,
-    saturation: number
-): Float64Array {
-    if (!Array.isArray(contours) || !Number.isFinite(saturation) || saturation <= 0) {
-        throw new RangeError("surface contour distance input is invalid");
+    hexSize: number
+): SurfaceContourRasterContext {
+    if (!Number.isFinite(hexSize) || hexSize <= 0) {
+        throw new RangeError("surface contour raster hex size must be positive and finite");
     }
-    const distances = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
-    distances.fill(saturation);
-    if (contours.length === 0) return distances;
     const worldX = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
     const worldZ = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
     for (let texelX = -SURFACE_COMPILE_PROFILE.gutterTexels;
@@ -169,6 +172,34 @@ export function surfaceContourDistances(
             worldZ[index] = Math.sqrt(3) * hexSize * (v + stagger);
         }
     }
+    return Object.freeze({
+        renderChunkX: window.renderKey.chunkX,
+        renderChunkY: window.renderKey.chunkY,
+        hexSize,
+        worldX,
+        worldZ
+    });
+}
+
+export function rasterSurfaceContourDistances(
+    context: Readonly<SurfaceContourRasterContext>,
+    contours: readonly SurfaceContourSegment[],
+    saturation: number
+): Float64Array {
+    if (!context || typeof context !== "object"
+        || !Number.isSafeInteger(context.renderChunkX) || !Number.isSafeInteger(context.renderChunkY)
+        || !Number.isFinite(context.hexSize) || context.hexSize <= 0
+        || !(context.worldX instanceof Float64Array)
+        || context.worldX.length !== COMPILED_SURFACE_TEXEL_COUNT
+        || !(context.worldZ instanceof Float64Array)
+        || context.worldZ.length !== COMPILED_SURFACE_TEXEL_COUNT
+        || !Array.isArray(contours) || !Number.isFinite(saturation) || saturation <= 0) {
+        throw new RangeError("surface contour raster input is invalid");
+    }
+    const distances = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
+    distances.fill(saturation);
+    if (contours.length === 0) return distances;
+    const hexSize = context.hexSize;
     const surfaceRadiusU = saturation / (1.5 * hexSize);
     // Z depends on v + stagger(u); the additional half tile covers the full
     // possible stagger difference while exact world distance decides inclusion.
@@ -177,29 +208,42 @@ export function surfaceContourDistances(
         const start = worldToSurface(contour.start.x, contour.start.z, hexSize);
         const end = worldToSurface(contour.end.x, contour.end.z, hexSize);
         const minimumTexelX = Math.max(-SURFACE_COMPILE_PROFILE.gutterTexels, Math.floor(
-            surfaceAxisToTexel(Math.min(start.u, end.u) - surfaceRadiusU, window.renderKey.chunkX)
+            surfaceAxisToTexel(Math.min(start.u, end.u) - surfaceRadiusU, context.renderChunkX)
         ));
         const maximumTexelX = Math.min(SURFACE_COMPILE_PROFILE.textureLayerSize
             - SURFACE_COMPILE_PROFILE.gutterTexels - 1, Math.ceil(
-            surfaceAxisToTexel(Math.max(start.u, end.u) + surfaceRadiusU, window.renderKey.chunkX)
+            surfaceAxisToTexel(Math.max(start.u, end.u) + surfaceRadiusU, context.renderChunkX)
         ));
         const minimumTexelY = Math.max(-SURFACE_COMPILE_PROFILE.gutterTexels, Math.floor(
-            surfaceAxisToTexel(Math.min(start.v, end.v) - surfaceRadiusV, window.renderKey.chunkY)
+            surfaceAxisToTexel(Math.min(start.v, end.v) - surfaceRadiusV, context.renderChunkY)
         ));
         const maximumTexelY = Math.min(SURFACE_COMPILE_PROFILE.textureLayerSize
             - SURFACE_COMPILE_PROFILE.gutterTexels - 1, Math.ceil(
-            surfaceAxisToTexel(Math.max(start.v, end.v) + surfaceRadiusV, window.renderKey.chunkY)
+            surfaceAxisToTexel(Math.max(start.v, end.v) + surfaceRadiusV, context.renderChunkY)
         ));
         for (let texelX = minimumTexelX; texelX <= maximumTexelX; texelX += 1) {
             for (let texelY = minimumTexelY; texelY <= maximumTexelY; texelY += 1) {
                 const index = surfaceFieldTexelIndex(texelX, texelY);
                 distances[index] = Math.min(distances[index], pointSegmentDistance(
-                    worldX[index], worldZ[index], contour
+                    context.worldX[index], context.worldZ[index], contour
                 ));
             }
         }
     }
     return distances;
+}
+
+export function surfaceContourDistances(
+    window: Readonly<TransferableEffectiveWindow>,
+    contours: readonly SurfaceContourSegment[],
+    hexSize: number,
+    saturation: number
+): Float64Array {
+    return rasterSurfaceContourDistances(
+        createSurfaceContourRasterContext(window, hexSize),
+        contours,
+        saturation
+    );
 }
 
 export function quantizeSurfaceCoverage(signedDistance: number, antialiasRadius: number): number {

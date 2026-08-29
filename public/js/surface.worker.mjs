@@ -1654,6 +1654,9 @@ function assertInfiniteDrainagePartitionContract() {
 }
 assertInfiniteDrainagePartitionContract();
 
+// src/world/HydrologyIdentity.ts
+var OCEAN_BODY_ID = "ocean";
+
 // src/world/HydrologyRegion.ts
 var HYDROLOGY_REGION_REVISION = 0;
 var HYDROLOGY_POINT_QUANTIZATION = 64;
@@ -1833,6 +1836,13 @@ function assertBody(body) {
     throw new TypeError("hydrology body kind is invalid");
   }
   assertUint8("hydrology body profile", body.profileIndex);
+  if (body.kind === "ocean") {
+    if (body.bodyId !== OCEAN_BODY_ID || body.profileIndex !== OCEAN_HYDROLOGY_PROFILE) {
+      throw new Error("ocean body must use its reserved identity and profile");
+    }
+  } else if (body.bodyId === OCEAN_BODY_ID) {
+    throw new Error("non-ocean body cannot use the reserved ocean identity");
+  }
 }
 function assertHydrologyRegion(region) {
   if (!region || typeof region !== "object" || region.formatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
@@ -2558,9 +2568,6 @@ function assertMacroDrainageTree(tree, valid, topology = "bounded") {
     }
   }
 }
-
-// src/world/HydrologyIdentity.ts
-var OCEAN_BODY_ID = "ocean";
 
 // src/world/MacroDrainageGraph.ts
 var MACRO_DRAINAGE_NODE_STEP_TILES = 8;

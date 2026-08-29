@@ -125,6 +125,15 @@ describe("HydrologyRegion", () => {
         };
         expect(() => createHydrologyRegion(duplicateBodies)).toThrow(/unique canonical identity/);
 
+        const reservedOcean: HydrologyRegionInput = {
+            ...validInput(),
+            bodies: [
+                { bodyId: "river:0", kind: "river", profileIndex: 2 },
+                { bodyId: "ocean", kind: "lake", profileIndex: 1 }
+            ]
+        };
+        expect(() => createHydrologyRegion(reservedOcean)).toThrow(/reserved ocean/);
+
         const negativeFinite: HydrologyRegionInput = {
             ...validInput(),
             key: { regionX: -1, regionY: 0 }

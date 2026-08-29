@@ -1,6 +1,7 @@
 import { HYDROLOGY_REGION_SIZE } from "./SurfaceCompileProfile";
 import { HYDROLOGY_REGION_FORMAT_VERSION } from "./WorldDescriptorV2";
 import { chunkOrigin } from "./WorldGrid";
+import { OCEAN_BODY_ID } from "./HydrologyIdentity";
 
 export const HYDROLOGY_REGION_REVISION = 0;
 export const HYDROLOGY_POINT_QUANTIZATION = 64;
@@ -327,6 +328,13 @@ function assertBody(body: Readonly<HydrologyBodyRef>): void {
         throw new TypeError("hydrology body kind is invalid");
     }
     assertUint8("hydrology body profile", body.profileIndex);
+    if (body.kind === "ocean") {
+        if (body.bodyId !== OCEAN_BODY_ID || body.profileIndex !== OCEAN_HYDROLOGY_PROFILE) {
+            throw new Error("ocean body must use its reserved identity and profile");
+        }
+    } else if (body.bodyId === OCEAN_BODY_ID) {
+        throw new Error("non-ocean body cannot use the reserved ocean identity");
+    }
 }
 
 export function assertHydrologyRegion(region: Readonly<HydrologyRegion>): void {

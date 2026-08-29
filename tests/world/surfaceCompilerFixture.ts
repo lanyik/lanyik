@@ -1,17 +1,24 @@
 import { createSurfaceDependencyKey } from "../../src/world/SurfaceDependencyKey";
+import { HydrologyFeatureUpsertDelta } from "../../src/world/HydrologyFeatureDelta";
 import {
     EFFECTIVE_WINDOW_TILE_COUNT,
     EFFECTIVE_WINDOW_TILE_SIZE,
     TransferableEffectiveWindow,
-    TransferableHydrologyRegionSlice
+    TransferableHydrologyRegionSlice,
+    TransferableWorldDomain
 } from "../../src/world/TransferableEffectiveWindow";
+
+export const SURFACE_COMPILER_TEST_WORLD_IDENTITY = "world:surface-compiler-test";
 
 interface SurfaceCompilerTestWindowOptions {
     readonly renderChunkX?: number;
     readonly renderChunkY?: number;
     readonly seaLevel?: number;
+    readonly domain?: TransferableWorldDomain;
     readonly tileIsValid?: (tileX: number, tileY: number) => boolean;
     readonly macroHeight?: (tileX: number, tileY: number) => number;
+    readonly hydrologyRegions?: readonly TransferableHydrologyRegionSlice[];
+    readonly authoredHydrology?: readonly HydrologyFeatureUpsertDelta[];
 }
 
 function axisKeys(origin: number, chunkSize: number): number[] {
@@ -20,10 +27,14 @@ function axisKeys(origin: number, chunkSize: number): number[] {
     return first === last ? [first] : [first, last];
 }
 
-function emptyHydrologyRegion(regionX: number, regionY: number): TransferableHydrologyRegionSlice {
+function emptyHydrologyRegion(
+    regionX: number,
+    regionY: number,
+    topology: TransferableWorldDomain["topology"]
+): TransferableHydrologyRegionSlice {
     return Object.freeze({
         key: Object.freeze({ regionX, regionY }),
-        topology: "infinite" as const,
+        topology,
         validBounds: Object.freeze({
             minX: 0 as const,
             minY: 0 as const,
@@ -45,6 +56,7 @@ export function createSurfaceCompilerTestWindow(
 ): TransferableEffectiveWindow {
     const renderChunkX = options.renderChunkX ?? 0;
     const renderChunkY = options.renderChunkY ?? 0;
+    const domain = options.domain ?? Object.freeze({ topology: "infinite" as const });
     const originTileX = renderChunkX * 16 - 2;
     const originTileY = renderChunkY * 16 - 2;
     const tileIsValid = options.tileIsValid ?? (() => true);
@@ -78,22 +90,49 @@ export function createSurfaceCompilerTestWindow(
         axisKeys(originTileY, 32).map(chunkY => ({
             key: { chunkX, chunkY }, baseRevision: 0, deltaRevision: 0
         })));
-    const hydrologyRegions = axisKeys(originTileX, 128).flatMap(regionX =>
-        axisKeys(originTileY, 128).map(regionY => emptyHydrologyRegion(regionX, regionY)));
+    const hydrologyRegions = options.hydrologyRegions ?? axisKeys(originTileX, 128).flatMap(regionX =>
+        axisKeys(originTileY, 128).map(regionY => emptyHydrologyRegion(regionX, regionY, domain.topology)));
+    const authoredHydrology = options.authoredHydrology ?? [];
+    const featureDependencies = new Map<string, {
+        featureId: string;
+        featureKind: "river" | "lake";
+        revision: number;
+    }>();
+    for (const region of hydrologyRegions) {
+        for (const featureId of region.suppressedBaseFeatureIds) {
+            const delta = authoredHydrology.find(candidate => candidate.featureId === featureId);
+            if (!delta) throw new Error("test suppressed feature requires its authored upsert");
+            featureDependencies.set(featureId, {
+                featureId,
+                featureKind: delta.featureKind,
+                revision: delta.revision
+            });
+        }
+    }
+    for (const delta of authoredHydrology) featureDependencies.set(delta.featureId, {
+        featureId: delta.featureId,
+        featureKind: delta.featureKind,
+        revision: delta.revision
+    });
+    const effectiveRevision = authoredHydrology.reduce(
+        (revision, delta) => Math.max(revision, delta.revision),
+        0
+    );
     const dependencyKey = createSurfaceDependencyKey({
-        worldIdentity: "world:surface-compiler-test",
+        worldIdentity: SURFACE_COMPILER_TEST_WORLD_IDENTITY,
         renderKey: { chunkX: renderChunkX, chunkY: renderChunkY },
         metrics: { hexSize: 2, heightScale: 10 },
         semantic,
         hydrologyRegions: hydrologyRegions.map(region => ({ key: region.key, baseRevision: 0 })),
-        hydrologyFeatures: []
+        hydrologyFeatures: [...featureDependencies.values()]
+            .sort((first, second) => first.featureId < second.featureId ? -1 : 1)
     });
     return Object.freeze({
         formatVersion: 1 as const,
         worldIdentity: dependencyKey.worldIdentity,
-        effectiveRevision: 0,
+        effectiveRevision,
         seaLevel: options.seaLevel ?? 28_180,
-        domain: Object.freeze({ topology: "infinite" as const }),
+        domain,
         renderKey: dependencyKey.renderKey,
         originTileX,
         originTileY,
@@ -105,7 +144,7 @@ export function createSurfaceCompilerTestWindow(
         vegetationDensity,
         vegetationProfile,
         hydrologyRegions: Object.freeze(hydrologyRegions),
-        authoredHydrology: Object.freeze([]),
+        authoredHydrology: Object.freeze([...authoredHydrology]),
         dependencyKey
     });
 }

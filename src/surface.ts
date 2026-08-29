@@ -90,6 +90,11 @@ export type {
 } from "./world/CompiledWaterBodyPalette";
 export { compileOceanSurfaceField } from "./world/compileOceanSurfaceField";
 export type { OceanSurfaceCompilation } from "./world/compileOceanSurfaceField";
+export {
+    MAX_SURFACE_PERIODIC_FEATURE_IMAGES,
+    compileLakeSurfaceField
+} from "./world/compileLakeSurfaceField";
+export type { LakeSurfaceCompilation } from "./world/compileLakeSurfaceField";
 
 export {
     surfaceColumnStagger,

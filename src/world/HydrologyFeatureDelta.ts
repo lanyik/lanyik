@@ -1,4 +1,5 @@
 import { HYDROLOGY_POINT_QUANTIZATION } from "./HydrologyRegion";
+import { OCEAN_BODY_ID } from "./HydrologyIdentity";
 
 export const HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION = 1;
 export const MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS = 256;
@@ -288,6 +289,9 @@ export function assertAuthoredRiverFeature(feature: Readonly<AuthoredRiverFeatur
         throw new TypeError("authored river feature is invalid");
     }
     assertStableId("authored river feature", feature.featureId);
+    if (feature.featureId === OCEAN_BODY_ID) {
+        throw new Error("authored river cannot use the reserved ocean body identity");
+    }
     assertQuantizedPoints(
         "authored river control points",
         feature.controlPoints,
@@ -312,11 +316,19 @@ export function assertAuthoredRiverFeature(feature: Readonly<AuthoredRiverFeatur
         throw new TypeError("authored river outlet is required");
     }
     if (feature.outlet.kind === "ocean") {
-        if (feature.outlet.bodyId !== "ocean") throw new Error("authored ocean outlet must use the ocean body");
+        if (feature.outlet.bodyId !== OCEAN_BODY_ID) {
+            throw new Error("authored ocean outlet must use the ocean body");
+        }
     } else if (feature.outlet.kind === "lake") {
         assertStableId("authored river outlet lake", feature.outlet.bodyId);
+        if (feature.outlet.bodyId === OCEAN_BODY_ID) {
+            throw new Error("authored lake outlet cannot use the reserved ocean body identity");
+        }
     } else if (feature.outlet.kind === "river") {
         assertStableId("authored river outlet river", feature.outlet.riverId);
+        if (feature.outlet.riverId === OCEAN_BODY_ID) {
+            throw new Error("authored river outlet cannot use the reserved ocean body identity");
+        }
         if (feature.outlet.riverId === feature.featureId) throw new Error("authored river cannot outlet to itself");
     } else throw new TypeError("authored river outlet kind is invalid");
     for (let index = 0; index < pointCount; index += 1) {
@@ -367,6 +379,9 @@ export function assertAuthoredLakeFeature(feature: Readonly<AuthoredLakeFeature>
         throw new TypeError("authored lake feature is invalid");
     }
     assertStableId("authored lake feature", feature.featureId);
+    if (feature.featureId === OCEAN_BODY_ID) {
+        throw new Error("authored lake cannot use the reserved ocean body identity");
+    }
     assertQuantizedPoints(
         "authored lake polygon",
         feature.polygon,

@@ -81,6 +81,16 @@ describe("HydrologyFeatureDelta", () => {
     test("rejects malformed or self-intersecting full feature geometry", () => {
         expect(() => createAuthoredRiverFeature({
             ...river(),
+            featureId: "ocean"
+        })).toThrow(/reserved ocean/);
+        expect(() => createAuthoredLakeFeature({
+            featureId: "ocean",
+            polygon: new Float64Array([0, 0, 64, 0, 0, 64]),
+            level: 1,
+            profileIndex: 0
+        })).toThrow(/reserved ocean/);
+        expect(() => createAuthoredRiverFeature({
+            ...river(),
             widthProfile: new Uint8Array([2, 1, 3])
         })).toThrow(/narrow/);
         expect(() => createAuthoredRiverFeature({
