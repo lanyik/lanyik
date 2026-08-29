@@ -33,6 +33,10 @@ describe("CompiledSurfaceBounds", () => {
         expect(compiled.bounds.maximumWaterHeight).toBeNull();
         expect(compiled.bounds.minimumBaseHeight).toBe(expectedGround);
         expect(compiled.bounds.maximumBaseHeight).toBe(expectedGround);
+        expect(compiled.bounds.groundMaximumDisplacement).toBe(0.05);
+        expect(compiled.bounds.waterMaximumDisplacement).toBe(0);
+        expect(compiled.bounds.minimumVisualHeight).toBe(expectedGround - 0.05);
+        expect(compiled.bounds.maximumVisualHeight).toBe(expectedGround + 0.05);
         assertCompiledSurfaceBounds(compiled.bounds);
     });
 
@@ -43,6 +47,8 @@ describe("CompiledSurfaceBounds", () => {
         expect(full.bounds.minimumWaterHeight).toBe(expectedWater);
         expect(full.bounds.maximumWaterHeight).toBe(expectedWater);
         expect(full.bounds.maximumBaseHeight).toBe(expectedWater);
+        expect(full.bounds.waterMaximumDisplacement).toBe(0.24);
+        expect(full.bounds.maximumVisualHeight).toBe(expectedWater + 0.24);
 
         const coastline = compileSurfaceField(createSurfaceCompilerTestWindow({
             seaLevel: 35_000,
@@ -56,7 +62,7 @@ describe("CompiledSurfaceBounds", () => {
         expect(bounds.maximumBaseHeight).toBeGreaterThanOrEqual(bounds.maximumGroundHeight);
     });
 
-    test("scales only the local world-XZ range with hex size", () => {
+    test("scales local world-XZ and bounded visual displacement with hex size", () => {
         const compiled = compileUniform(10_000, 20_000, 1);
         const doubled = compileSurfaceBounds(compiled.compilation.field, compiled.geometry, 2);
         expect(doubled.minimumX).toBeCloseTo(compiled.bounds.minimumX * 2, 12);
@@ -65,6 +71,8 @@ describe("CompiledSurfaceBounds", () => {
         expect(doubled.maximumZ).toBeCloseTo(compiled.bounds.maximumZ * 2, 12);
         expect(doubled.minimumGroundHeight).toBe(compiled.bounds.minimumGroundHeight);
         expect(doubled.maximumGroundHeight).toBe(compiled.bounds.maximumGroundHeight);
+        expect(doubled.groundMaximumDisplacement)
+            .toBe(compiled.bounds.groundMaximumDisplacement * 2);
     });
 
     test("rejects a base range that does not exactly enclose its components", () => {
@@ -73,5 +81,9 @@ describe("CompiledSurfaceBounds", () => {
             ...bounds,
             maximumBaseHeight: bounds.maximumBaseHeight + 1
         })).toThrow(/exactly/);
+        expect(() => assertCompiledSurfaceBounds({
+            ...bounds,
+            maximumVisualHeight: bounds.maximumVisualHeight + 1
+        })).toThrow(/visual height/);
     });
 });

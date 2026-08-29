@@ -10,9 +10,43 @@ import {
     compiledWaterGeometryTransferables
 } from "../../src/world/CompiledWaterGeometry";
 import { finiteFloat16Bits } from "../../src/world/HalfFloat";
+import {
+    createAuthoredRiverFeature,
+    createHydrologyFeatureDelta
+} from "../../src/world/HydrologyFeatureDelta";
+import { HYDROLOGY_POINT_QUANTIZATION } from "../../src/world/HydrologyRegion";
 import { SURFACE_COMPILE_PROFILE } from "../../src/world/SurfaceCompileProfile";
 import { compileSurfaceField } from "../../src/world/compileSurfaceField";
 import { createSurfaceCompilerTestWindow } from "./surfaceCompilerFixture";
+import { SURFACE_COMPILER_TEST_WORLD_IDENTITY } from "./surfaceCompilerFixture";
+
+function minimumWidthRiver() {
+    const feature = createAuthoredRiverFeature({
+        featureId: "river:minimum-width-geometry",
+        source: { kind: "spring", sourceId: "spring:minimum-width-geometry" },
+        outlet: { kind: "ocean", bodyId: "ocean" },
+        controlPoints: new Float64Array([
+            2 * HYDROLOGY_POINT_QUANTIZATION,
+            5 * HYDROLOGY_POINT_QUANTIZATION,
+            30 * HYDROLOGY_POINT_QUANTIZATION,
+            5 * HYDROLOGY_POINT_QUANTIZATION
+        ]),
+        widthProfile: new Uint8Array([1, 1]),
+        levelProfile: new Uint16Array([40_000, 40_000]),
+        dischargeClass: 1,
+        profileIndex: 2
+    });
+    const delta = createHydrologyFeatureDelta({
+        worldIdentity: SURFACE_COMPILER_TEST_WORLD_IDENTITY,
+        revision: 1,
+        featureId: feature.featureId,
+        featureKind: "river",
+        operation: "upsert",
+        feature
+    });
+    if (delta.operation !== "upsert") throw new Error("test river must be an upsert");
+    return delta;
+}
 
 function isolatedMinimumCoverageField() {
     const materialWeights = new Uint8Array(COMPILED_SURFACE_TEXEL_COUNT * 4);
@@ -127,6 +161,34 @@ describe("compiled water geometry", () => {
         const secondBoundary = boundaryValues(second.positions, -0.5);
         expect(firstBoundary.length).toBeGreaterThan(0);
         expect(secondBoundary).toEqual(firstBoundary);
+    });
+
+    test("resolves the frozen minimum-width river with one shared coverage path", () => {
+        const river = minimumWidthRiver();
+        const options = {
+            seaLevel: 0,
+            macroHeight: () => 20_000,
+            authoredHydrology: [river]
+        };
+        const first = compileWaterGeometry(compileSurfaceField(createSurfaceCompilerTestWindow({
+            ...options,
+            renderChunkX: 0
+        })).field);
+        const second = compileWaterGeometry(compileSurfaceField(createSurfaceCompilerTestWindow({
+            ...options,
+            renderChunkX: 1
+        })).field);
+        if (first.kind !== "coverage" || second.kind !== "coverage") {
+            throw new Error("minimum-width river must compile as coverage geometry");
+        }
+        const firstBoundary = boundaryValues(
+            first.positions,
+            SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5
+        );
+        const secondBoundary = boundaryValues(second.positions, -0.5);
+        expect(firstBoundary).toEqual(secondBoundary);
+        expect(firstBoundary.length).toBeGreaterThanOrEqual(2);
+        expect(firstBoundary[firstBoundary.length - 1] - firstBoundary[0]).toBeGreaterThan(1.4);
     });
 
     test("rejects corrupted coverage winding", () => {

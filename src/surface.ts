@@ -7,6 +7,14 @@ export {
     surfaceInfluenceRadiusWorld
 } from "./world/SurfaceCompileProfile";
 export type { SurfaceCompileProfile } from "./world/SurfaceCompileProfile";
+export {
+    SURFACE_VISUAL_PROFILE_VERSION,
+    SURFACE_VISUAL_PROFILE,
+    assertSurfaceVisualProfile,
+    surfaceGroundMaximumDisplacement,
+    surfaceWaterMaximumDisplacement
+} from "./world/SurfaceVisualProfile";
+export type { SurfaceVisualProfile } from "./world/SurfaceVisualProfile";
 
 export {
     HALF_FLOAT_POSITIVE_INFINITY,
