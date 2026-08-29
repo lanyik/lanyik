@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -203,6 +203,16 @@ catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis h
 ### 5.3 静态世界
 
 `StaticWorldSource` 在加载边界把 `MapInfo` 编译为相同的 32×32 SoA chunk，并把静态河流、湖泊和河口编译成相同的基础 hydrology feature/region。静态来源可以没有程序种子，但必须提供确定的基础高度、水体和植被解释；它不能把静态湖泊重新塞进 `substrateClass`。进入 `EffectiveWorldView` 后，渲染层不区分静态与程序世界。
+
+已落地的 `StaticSemanticWorldSource` 在构造时一次性快照并编译整个有限 `MapInfo`，之后不再读取调用方对象；缺格、未知或重复 modifier、非法 terrain、环绕/无限 topology 与 descriptor 尺寸不一致都会立即失败。边缘 chunk 写入精确 `validBounds`，bounds 外保持全零。当前 core 静态解释冻结为：
+
+- `sea/coastal/sand → sand substrate`，`mountain → rock`，其余为 soil；
+- sea ground 为 `seaLevel - 4096`，coastal 为 `seaLevel - 1`，普通地面为 `32768`，hill 为 `39321`，mountain 为 `52428`；
+- land/sand/tundra/mountain 分别映射 temperate/dry/cold/alpine，snow 固定为 cold 180 + alpine 75；
+- `wood` 密度固定为 140，profile 从冻结 terrain 与 `palm/pinia/pine` 模型身份解释；
+- `lake/river` modifier 在本阶段只保留“水下地面不被改写”的语义边界，实际 feature/body 编译在阶段 B 的静态 HydrologyRegion 适配器完成。
+
+静态 descriptor 的 `sourceContentHash` 是上游资源加载器对完整静态语义内容计算的身份，adapter 不用 MapInfo 对象地址或伪 seed 替代它。相同 descriptor 与输入在请求顺序之外逐字节一致。
 
 ## 6. 水文区域与水体权威
 
@@ -779,6 +789,10 @@ Worker 池至少支持三个明确任务：
 3. `compileSurfaceChunk`：将 effective window 编译为 16×16 CompiledSurfaceChunk。
 
 当前已落地的独立 `surface.worker` bundle 使用最终 protocol version 3 和 generator version 6；请求固定包含 `requestId + type + descriptor + key`，成功与失败响应分别使用 `generateSemanticChunkResult` 和 `surfaceWorkerError` 判别项，不用可选 payload 猜测响应类型。语义任务转移六个 SoA payload buffer；主线程收到后按 descriptor catalog 重新完整校验并重新发布冻结 chunk，错误 key、错误版本、未知 request ID 或损坏数组会终止该 Worker client，而不是继续使用可疑结果。每个 Worker 以完整规范 descriptor identity 复用一个无状态 generator/resolver，切换 identity 时整体替换，避免逐 chunk 重建 resolver 或跨世界污染缓存。
+
+`InfiniteSemanticWorldSource`、`ToroidalSemanticWorldSource` 与 `StaticSemanticWorldSource` 实现同一个无 `MapInfo` 运行时视图的接口，并通过独立 `./surface` 包入口暴露。程序 source 使用两层 number-keyed Map 保存坐标，不在热路径拼字符串；同 key 并发请求合并，只有最后一个等待者取消才中止底层任务。默认 32 MiB CPU cache 按实际 typed-array 字节计费，只 LRU 淘汰 lease 计数为零的 chunk；超预算但仍被租用的数据显式留在 resident 统计中，不伪装成已经释放。环绕 source 只加载规范 key，负/越界输入先由 `resolveChunk` 映射；无限 source 对整个安全整数 chunk bounds 生效。
+
+`SurfaceWorkerPool` 每个 Worker 同时只执行一个任务，使用统一 visible/prefetch/background 优先级、权重背压和 starvation aging；Worker 进程失败默认最多重试一次，确定性生成错误不重试。任务取消、重试、cache hit/miss、resident/leased 字节和 Worker 占用均有独立统计。
 
 该 bundle 是尚未接入生产渲染器的 v2 构建入口，不是运行时 fallback；当前生产 `world-generator.worker` 在最终切换前仍服务 v1。后续 `generateHydrologyRegion` 和 `compileSurfaceChunk` 必须扩展同一个 protocol-3 discriminated union，不能另加可选字段协议或按异常回退旧 Worker。
 

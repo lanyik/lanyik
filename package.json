@@ -27,6 +27,11 @@
       "import": "./dist/simulation.mjs",
       "require": "./dist/simulation.cjs"
     },
+    "./surface": {
+      "types": "./dist/types/surface.d.ts",
+      "import": "./dist/surface.mjs",
+      "require": "./dist/surface.cjs"
+    },
     "./world-generator.worker": "./dist/world-generator.worker.mjs",
     "./surface.worker": "./dist/surface.worker.mjs"
   },

@@ -58,6 +58,23 @@ export const CORE_WORLD_SEMANTICS_V2: Readonly<WorldDescriptorV2Semantics> = Obj
     })
 });
 
+export function assertCoreWorldSemanticsV2(semantics: Readonly<WorldDescriptorV2Semantics>): void {
+    if (!semantics || typeof semantics !== "object"
+        || semantics.seaLevel !== CORE_WORLD_SEMANTICS_V2.seaLevel
+        || semantics.substrateCatalog.id !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.id
+        || semantics.substrateCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.contentHash
+        || semantics.substrateCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.entryCount
+        || semantics.vegetationCatalog.id !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.id
+        || semantics.vegetationCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.contentHash
+        || semantics.vegetationCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.entryCount
+        || !Array.isArray(semantics.biomeBasis) || semantics.biomeBasis.length !== 4
+        || semantics.biomeBasis.some((basis, index) =>
+            basis.id !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].id
+            || basis.contentHash !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].contentHash)) {
+        throw new TypeError("world semantics do not match the frozen core v2 catalogs or sea level");
+    }
+}
+
 export function createCoreInfiniteWorldDescriptorV2(seed: string | number): InfiniteWorldDescriptorV2 {
     return createWorldDescriptorV2({
         ...CORE_WORLD_SEMANTICS_V2,

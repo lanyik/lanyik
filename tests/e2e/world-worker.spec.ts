@@ -108,6 +108,37 @@ test("surface worker transfers one validated protocol-3 semantic chunk", async (
     });
 });
 
+test("surface entry loads an infinite semantic source through the real worker", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    const result = await page.evaluate(async () => {
+        const surfaceUrl = "/js/surface.mjs";
+        const surface = await import(surfaceUrl) as typeof import("../../src/surface");
+        const descriptor = surface.createCoreInfiniteWorldDescriptorV2("surface-source-probe");
+        const source = new surface.InfiniteSemanticWorldSource({
+            descriptor,
+            workerUrl: new URL("/js/surface.worker.mjs", window.location.href),
+            workerPoolOptions: { size: 1 }
+        });
+        const chunk = await source.loadChunk(-2, 3);
+        const loaded = {
+            key: chunk.key,
+            firstBiomeSum: chunk.biomeWeights[0] + chunk.biomeWeights[1]
+                + chunk.biomeWeights[2] + chunk.biomeWeights[3],
+            stats: source.stats
+        };
+        source.releaseChunk(chunk);
+        const released = source.stats;
+        source.dispose();
+        return { loaded, released };
+    });
+    expect(result.loaded).toMatchObject({
+        key: { chunkX: -2, chunkY: 3 },
+        firstBiomeSum: 255,
+        stats: { residentChunks: 1, leasedChunks: 1, workers: 1 }
+    });
+    expect(result.released).toMatchObject({ residentChunks: 1, leasedChunks: 0 });
+});
+
 test("worker pool replaces a real crashed Worker and serves the next request", async ({ page }) => {
     await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => Boolean((window as unknown as { HexMap?: unknown }).HexMap));

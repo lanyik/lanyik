@@ -49,22 +49,110 @@ function assertSurfaceCompileProfile(profile) {
 }
 assertSurfaceCompileProfile(SURFACE_COMPILE_PROFILE);
 
-// src/world/WorldGrid.ts
-function assertLogicalCoordinate(name, value) {
-  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+// src/helpers/neighbors.ts
+var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
+function getNeighborCoords(x, y, direction) {
+  const odd = x % 2 !== 0;
+  switch (direction) {
+    case "NE":
+      return { x: x + 1, y: odd ? y - 1 : y };
+    case "N":
+      return { x, y: y - 1 };
+    case "NW":
+      return { x: x - 1, y: odd ? y - 1 : y };
+    case "SW":
+      return { x: x - 1, y: odd ? y : y + 1 };
+    case "S":
+      return { x, y: y + 1 };
+    case "SE":
+      return { x: x + 1, y: odd ? y : y + 1 };
+  }
 }
-function chunkOrigin(chunkX, chunkY, chunkSize) {
-  assertLogicalCoordinate("chunk x", chunkX);
-  assertLogicalCoordinate("chunk y", chunkY);
-  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
-    throw new RangeError("chunk size must be a positive safe integer");
+function getNeighbors(x, y) {
+  return NEIGHBOR_DIRECTIONS.map((direction) => ({ direction, ...getNeighborCoords(x, y, direction) }));
+}
+
+// src/helpers/topology.ts
+function positiveModulo(value, modulus) {
+  if (!Number.isFinite(value) || !Number.isFinite(modulus) || modulus <= 0) {
+    throw new RangeError("positiveModulo requires a finite value and a positive finite modulus");
   }
-  const x = chunkX * chunkSize;
-  const y = chunkY * chunkSize;
-  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(x + chunkSize - 1) || !Number.isSafeInteger(y + chunkSize - 1)) {
-    throw new RangeError("chunk bounds exceed the safe logical coordinate range");
+  return (value % modulus + modulus) % modulus;
+}
+function normalizeMapCoordinates(map, x, y) {
+  if (map.infinite) {
+    return Number.isInteger(x) && Number.isInteger(y) ? { x, y } : null;
   }
-  return { x, y };
+  if (map.w <= 0 || map.h <= 0) return null;
+  let normalizedX = x;
+  let normalizedY = y;
+  if (map.wrapX) normalizedX = positiveModulo(normalizedX, map.w);
+  else if (normalizedX < 0 || normalizedX >= map.w) return null;
+  if (map.wrapY) normalizedY = positiveModulo(normalizedY, map.h);
+  else if (normalizedY < 0 || normalizedY >= map.h) return null;
+  return { x: normalizedX, y: normalizedY };
+}
+function getMapTile(map, x, y) {
+  const normalized = normalizeMapCoordinates(map, x, y);
+  if (!normalized) return void 0;
+  return map.tileAt?.(normalized.x, normalized.y) ?? map.data[normalized.x]?.[normalized.y];
+}
+
+// src/world/SurfaceLattice.ts
+function surfaceColumnStagger(column) {
+  if (!Number.isSafeInteger(column)) {
+    throw new RangeError("surface lattice column must be a safe integer");
+  }
+  return positiveModulo(column, 2) === 0 ? 0.5 : 0;
+}
+function surfaceStagger(u) {
+  if (!Number.isFinite(u) || !Number.isSafeInteger(Math.floor(u))) {
+    throw new RangeError("surface lattice u coordinate must have a safe integer column");
+  }
+  const column = Math.floor(u);
+  const t = u - column;
+  const current = surfaceColumnStagger(column);
+  return current + (surfaceColumnStagger(column + 1) - current) * t;
+}
+function surfaceToWorld(u, v, hexSize) {
+  if (!Number.isFinite(v)) throw new RangeError("surface lattice v coordinate must be finite");
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("surface lattice hex size must be positive and finite");
+  }
+  return {
+    x: 1.5 * hexSize * u,
+    z: Math.sqrt(3) * hexSize * (v + surfaceStagger(u))
+  };
+}
+function worldToSurface(x, z, hexSize) {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    throw new RangeError("surface lattice world coordinates must be finite");
+  }
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("surface lattice hex size must be positive and finite");
+  }
+  const u = x / (1.5 * hexSize);
+  if (!Number.isSafeInteger(Math.floor(u))) {
+    throw new RangeError("surface lattice world x exceeds the safe logical range");
+  }
+  return {
+    u,
+    v: z / (Math.sqrt(3) * hexSize) - surfaceStagger(u)
+  };
+}
+function surfaceTexelCenterAxis(renderChunkCoordinate, texelIndex) {
+  if (!Number.isSafeInteger(renderChunkCoordinate)) {
+    throw new RangeError("render chunk coordinate must be a safe integer");
+  }
+  const maximumTexel = SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval + SURFACE_COMPILE_PROFILE.gutterTexels - 1;
+  if (!Number.isInteger(texelIndex) || texelIndex < -SURFACE_COMPILE_PROFILE.gutterTexels || texelIndex > maximumTexel) {
+    throw new RangeError("surface texel index is outside the physical layer");
+  }
+  const chunkOrigin2 = renderChunkCoordinate * SURFACE_COMPILE_PROFILE.renderChunkSize;
+  if (!Number.isSafeInteger(chunkOrigin2)) {
+    throw new RangeError("render chunk origin exceeds the safe logical range");
+  }
+  return chunkOrigin2 - 0.5 + (texelIndex + 0.5) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
 }
 
 // src/world/WorldDescriptorV2.ts
@@ -89,6 +177,12 @@ function assertIdentity(name, value, catalog) {
     throw new RangeError(`${name} entryCount must be an integer between 1 and 256`);
   }
 }
+function cloneBasis(identity) {
+  return Object.freeze({ id: identity.id, contentHash: identity.contentHash });
+}
+function cloneCatalog(identity) {
+  return Object.freeze({ id: identity.id, contentHash: identity.contentHash, entryCount: identity.entryCount });
+}
 function assertSemantics(value) {
   if (!Number.isInteger(value.seaLevel) || value.seaLevel < 0 || value.seaLevel > 65535) {
     throw new RangeError("world descriptor seaLevel must be a uint16 value");
@@ -109,6 +203,72 @@ function assertFiniteBounds(width, height) {
   if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
     throw new RangeError("world descriptor bounds must be positive safe integers");
   }
+}
+function canonicalSeed(seed) {
+  if (typeof seed !== "string" && typeof seed !== "number") {
+    throw new TypeError("procedural world descriptor seed must be a string or number");
+  }
+  if (typeof seed === "number" && !Number.isFinite(seed)) {
+    throw new RangeError("numeric procedural world descriptor seed must be finite");
+  }
+  return String(seed);
+}
+function createWorldDescriptorV2(options) {
+  if (!options || typeof options !== "object") throw new TypeError("world descriptor v2 options are required");
+  assertSemantics(options);
+  const [firstBiome, secondBiome, thirdBiome, fourthBiome] = options.biomeBasis;
+  const base = {
+    descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION_V2,
+    generatorVersion: WORLD_GENERATOR_VERSION_V2,
+    chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION_V2,
+    hydrologyRegionFormatVersion: HYDROLOGY_REGION_FORMAT_VERSION,
+    seaLevel: options.seaLevel,
+    substrateCatalog: cloneCatalog(options.substrateCatalog),
+    biomeBasis: Object.freeze([
+      cloneBasis(firstBiome),
+      cloneBasis(secondBiome),
+      cloneBasis(thirdBiome),
+      cloneBasis(fourthBiome)
+    ]),
+    vegetationCatalog: cloneCatalog(options.vegetationCatalog)
+  };
+  let descriptor;
+  if (options.sourceKind === "static") {
+    assertContentHash("static world sourceContentHash", options.sourceContentHash);
+    assertFiniteBounds(options.width, options.height);
+    descriptor = {
+      ...base,
+      sourceKind: "static",
+      topology: "finite",
+      sourceContentHash: options.sourceContentHash,
+      width: options.width,
+      height: options.height
+    };
+  } else if (options.sourceKind === "procedural-infinite") {
+    descriptor = {
+      ...base,
+      sourceKind: "procedural-infinite",
+      topology: "infinite",
+      seed: canonicalSeed(options.seed)
+    };
+  } else if (options.sourceKind === "procedural-toroidal") {
+    assertFiniteBounds(options.width, options.height);
+    if (options.width < WORLD_SEMANTIC_CHUNK_SIZE || options.height < WORLD_SEMANTIC_CHUNK_SIZE || options.width % WORLD_SEMANTIC_CHUNK_SIZE !== 0 || options.height % WORLD_SEMANTIC_CHUNK_SIZE !== 0) {
+      throw new RangeError("toroidal v2 bounds must be positive multiples of the semantic chunk size");
+    }
+    descriptor = {
+      ...base,
+      sourceKind: "procedural-toroidal",
+      topology: "toroidal",
+      seed: canonicalSeed(options.seed),
+      width: options.width,
+      height: options.height
+    };
+  } else {
+    throw new TypeError("world descriptor v2 sourceKind is invalid");
+  }
+  assertWorldDescriptorV2(descriptor);
+  return Object.freeze(descriptor);
 }
 function assertWorldDescriptorV2(value) {
   if (!value || typeof value !== "object") throw new TypeError("world descriptor v2 must be an object");
@@ -170,8 +330,90 @@ function serializeWorldDescriptorV2(descriptor) {
     ]
   ]);
 }
+function worldDescriptorsV2Equal(first, second) {
+  return serializeWorldDescriptorV2(first) === serializeWorldDescriptorV2(second);
+}
 if (HYDROLOGY_REGION_SIZE % WORLD_SEMANTIC_CHUNK_SIZE !== 0) {
   throw new Error("world descriptor v2 formats are not spatially aligned");
+}
+
+// src/world/SemanticCatalogsV2.ts
+var CORE_SUBSTRATE_ENTRIES = Object.freeze(["soil", "sand", "rock"]);
+var CORE_VEGETATION_PROFILE_ENTRIES = Object.freeze([
+  "tropical-palm-mix",
+  "temperate-oak-mix",
+  "boreal-pine-mix",
+  "alpine-scrub-mix"
+]);
+var CORE_WORLD_SEMANTICS_V2 = Object.freeze({
+  seaLevel: 28180,
+  substrateCatalog: Object.freeze({
+    id: "core/substrate-v1",
+    contentHash: "sha256:26c47bb7a026006adb6752e18242a954e9c127fc282b13c98e087030e77aff4e",
+    entryCount: CORE_SUBSTRATE_ENTRIES.length
+  }),
+  biomeBasis: Object.freeze([
+    Object.freeze({
+      id: "temperate",
+      contentHash: "sha256:59c7239eff9fb5f96d39d6acecf201748d5f0582a1b8882806f6c681e9e50668"
+    }),
+    Object.freeze({
+      id: "dry",
+      contentHash: "sha256:1c9fdbff28acbfc7950eab9e0823710a42b7a23bd5088ecd648165d84e09f65c"
+    }),
+    Object.freeze({
+      id: "cold",
+      contentHash: "sha256:13e616d6a945fd47356aa67c7da81dc27adc935ad88496e1d07ac4a66761d3e5"
+    }),
+    Object.freeze({
+      id: "alpine",
+      contentHash: "sha256:ef636273bfe43421e259e6067c48752f85e80c264ea971d963c93e9e6f1723c4"
+    })
+  ]),
+  vegetationCatalog: Object.freeze({
+    id: "core/vegetation-v1",
+    contentHash: "sha256:d930afdbc24859f54d002bc060ef3075efcb906f975ac10032e699e087677a51",
+    entryCount: CORE_VEGETATION_PROFILE_ENTRIES.length
+  })
+});
+function assertCoreWorldSemanticsV2(semantics) {
+  if (!semantics || typeof semantics !== "object" || semantics.seaLevel !== CORE_WORLD_SEMANTICS_V2.seaLevel || semantics.substrateCatalog.id !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.id || semantics.substrateCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.contentHash || semantics.substrateCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.entryCount || semantics.vegetationCatalog.id !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.id || semantics.vegetationCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.contentHash || semantics.vegetationCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.entryCount || !Array.isArray(semantics.biomeBasis) || semantics.biomeBasis.length !== 4 || semantics.biomeBasis.some((basis, index) => basis.id !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].id || basis.contentHash !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].contentHash)) {
+    throw new TypeError("world semantics do not match the frozen core v2 catalogs or sea level");
+  }
+}
+function createCoreInfiniteWorldDescriptorV2(seed) {
+  return createWorldDescriptorV2({
+    ...CORE_WORLD_SEMANTICS_V2,
+    sourceKind: "procedural-infinite",
+    seed
+  });
+}
+function createCoreToroidalWorldDescriptorV2(seed, width, height) {
+  return createWorldDescriptorV2({
+    ...CORE_WORLD_SEMANTICS_V2,
+    sourceKind: "procedural-toroidal",
+    seed,
+    width,
+    height
+  });
+}
+
+// src/world/WorldGrid.ts
+function assertLogicalCoordinate(name, value) {
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+}
+function chunkOrigin(chunkX, chunkY, chunkSize) {
+  assertLogicalCoordinate("chunk x", chunkX);
+  assertLogicalCoordinate("chunk y", chunkY);
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+    throw new RangeError("chunk size must be a positive safe integer");
+  }
+  const x = chunkX * chunkSize;
+  const y = chunkY * chunkSize;
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(x + chunkSize - 1) || !Number.isSafeInteger(y + chunkSize - 1)) {
+    throw new RangeError("chunk bounds exceed the safe logical coordinate range");
+  }
+  return { x, y };
 }
 
 // src/world/BaseSemanticChunk.ts
@@ -179,6 +421,7 @@ var BASE_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_
 var BASE_SEMANTIC_CHUNK_HEADER_BYTES = 40;
 var BIOME_BASIS_COUNT = 4;
 var CLIMATE_CHANNEL_COUNT = 2;
+var SERIALIZED_MAGIC = 843273026;
 var SUBSTRATE_OFFSET = BASE_SEMANTIC_CHUNK_HEADER_BYTES;
 var MACRO_HEIGHT_OFFSET = SUBSTRATE_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT;
 var BIOME_WEIGHTS_OFFSET = MACRO_HEIGHT_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT * Uint16Array.BYTES_PER_ELEMENT;
@@ -192,11 +435,29 @@ var FULL_LOCAL_BOUNDS = Object.freeze({
   maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
   maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
 });
+function semanticCatalogLimits(descriptor) {
+  return Object.freeze({
+    substrateCount: descriptor.substrateCatalog.entryCount,
+    vegetationProfileCount: descriptor.vegetationCatalog.entryCount
+  });
+}
 function semanticTileIndex(localX, localY) {
   if (!Number.isInteger(localX) || localX < 0 || localX >= WORLD_SEMANTIC_CHUNK_SIZE || !Number.isInteger(localY) || localY < 0 || localY >= WORLD_SEMANTIC_CHUNK_SIZE) {
     throw new RangeError("semantic tile coordinate is outside its chunk");
   }
   return localX * WORLD_SEMANTIC_CHUNK_SIZE + localY;
+}
+function semanticBiomeWeightIndex(tileIndex, basisIndex) {
+  if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= BASE_SEMANTIC_CHUNK_TILE_COUNT || !Number.isInteger(basisIndex) || basisIndex < 0 || basisIndex >= BIOME_BASIS_COUNT) {
+    throw new RangeError("semantic biome weight index is invalid");
+  }
+  return tileIndex * BIOME_BASIS_COUNT + basisIndex;
+}
+function semanticClimateIndex(tileIndex, channelIndex) {
+  if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= BASE_SEMANTIC_CHUNK_TILE_COUNT || !Number.isInteger(channelIndex) || channelIndex < 0 || channelIndex >= CLIMATE_CHANNEL_COUNT) {
+    throw new RangeError("semantic climate index is invalid");
+  }
+  return tileIndex * CLIMATE_CHANNEL_COUNT + channelIndex;
 }
 function assertCatalogLimits(limits) {
   if (!Number.isInteger(limits.substrateCount) || limits.substrateCount <= 0 || limits.substrateCount > 256 || !Number.isInteger(limits.vegetationProfileCount) || limits.vegetationProfileCount <= 0 || limits.vegetationProfileCount > 256) {
@@ -274,74 +535,120 @@ function createBaseSemanticChunk(input, limits) {
   assertBaseSemanticChunk(chunk, limits);
   return chunk;
 }
-
-// src/world/SemanticCatalogsV2.ts
-var CORE_SUBSTRATE_ENTRIES = Object.freeze(["soil", "sand", "rock"]);
-var CORE_VEGETATION_PROFILE_ENTRIES = Object.freeze([
-  "tropical-palm-mix",
-  "temperate-oak-mix",
-  "boreal-pine-mix",
-  "alpine-scrub-mix"
-]);
-var CORE_WORLD_SEMANTICS_V2 = Object.freeze({
-  seaLevel: 28180,
-  substrateCatalog: Object.freeze({
-    id: "core/substrate-v1",
-    contentHash: "sha256:26c47bb7a026006adb6752e18242a954e9c127fc282b13c98e087030e77aff4e",
-    entryCount: CORE_SUBSTRATE_ENTRIES.length
-  }),
-  biomeBasis: Object.freeze([
-    Object.freeze({
-      id: "temperate",
-      contentHash: "sha256:59c7239eff9fb5f96d39d6acecf201748d5f0582a1b8882806f6c681e9e50668"
-    }),
-    Object.freeze({
-      id: "dry",
-      contentHash: "sha256:1c9fdbff28acbfc7950eab9e0823710a42b7a23bd5088ecd648165d84e09f65c"
-    }),
-    Object.freeze({
-      id: "cold",
-      contentHash: "sha256:13e616d6a945fd47356aa67c7da81dc27adc935ad88496e1d07ac4a66761d3e5"
-    }),
-    Object.freeze({
-      id: "alpine",
-      contentHash: "sha256:ef636273bfe43421e259e6067c48752f85e80c264ea971d963c93e9e6f1723c4"
-    })
-  ]),
-  vegetationCatalog: Object.freeze({
-    id: "core/vegetation-v1",
-    contentHash: "sha256:d930afdbc24859f54d002bc060ef3075efcb906f975ac10032e699e087677a51",
-    entryCount: CORE_VEGETATION_PROFILE_ENTRIES.length
-  })
-});
-function assertCoreWorldSemanticsV2(semantics) {
-  if (!semantics || typeof semantics !== "object" || semantics.seaLevel !== CORE_WORLD_SEMANTICS_V2.seaLevel || semantics.substrateCatalog.id !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.id || semantics.substrateCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.contentHash || semantics.substrateCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.entryCount || semantics.vegetationCatalog.id !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.id || semantics.vegetationCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.contentHash || semantics.vegetationCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.entryCount || !Array.isArray(semantics.biomeBasis) || semantics.biomeBasis.length !== 4 || semantics.biomeBasis.some((basis, index) => basis.id !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].id || basis.contentHash !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].contentHash)) {
-    throw new TypeError("world semantics do not match the frozen core v2 catalogs or sea level");
+function getBaseSemanticTile(chunk, localX, localY) {
+  const tileIndex = semanticTileIndex(localX, localY);
+  if (!tileIsValid(tileIndex, chunk.validBounds)) {
+    throw new RangeError("semantic tile coordinate is outside the chunk valid bounds");
   }
+  const biomeOffset = tileIndex * BIOME_BASIS_COUNT;
+  const climateOffset = tileIndex * CLIMATE_CHANNEL_COUNT;
+  return Object.freeze({
+    substrateClass: chunk.substrateClass[tileIndex],
+    macroHeight: chunk.macroHeight[tileIndex],
+    biomeWeights: Object.freeze([
+      chunk.biomeWeights[biomeOffset],
+      chunk.biomeWeights[biomeOffset + 1],
+      chunk.biomeWeights[biomeOffset + 2],
+      chunk.biomeWeights[biomeOffset + 3]
+    ]),
+    temperature: chunk.climate[climateOffset],
+    moisture: chunk.climate[climateOffset + 1],
+    vegetationDensity: chunk.vegetationDensity[tileIndex],
+    vegetationProfile: chunk.vegetationProfile[tileIndex]
+  });
+}
+function serializeBaseSemanticChunk(chunk, limits) {
+  assertBaseSemanticChunk(chunk, limits);
+  const buffer = new ArrayBuffer(BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES);
+  const view = new DataView(buffer);
+  view.setUint32(0, SERIALIZED_MAGIC, true);
+  view.setUint16(4, chunk.formatVersion, true);
+  view.setUint16(6, BASE_SEMANTIC_CHUNK_HEADER_BYTES, true);
+  view.setBigInt64(8, BigInt(chunk.key.chunkX), true);
+  view.setBigInt64(16, BigInt(chunk.key.chunkY), true);
+  view.setBigUint64(24, BigInt(chunk.revision), true);
+  view.setUint8(32, chunk.validBounds.minX);
+  view.setUint8(33, chunk.validBounds.minY);
+  view.setUint8(34, chunk.validBounds.maxXExclusive);
+  view.setUint8(35, chunk.validBounds.maxYExclusive);
+  view.setUint32(36, BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES, true);
+  new Uint8Array(buffer, SUBSTRATE_OFFSET, chunk.substrateClass.length).set(chunk.substrateClass);
+  for (let index = 0; index < chunk.macroHeight.length; index += 1) {
+    view.setUint16(MACRO_HEIGHT_OFFSET + index * Uint16Array.BYTES_PER_ELEMENT, chunk.macroHeight[index], true);
+  }
+  new Uint8Array(buffer, BIOME_WEIGHTS_OFFSET, chunk.biomeWeights.length).set(chunk.biomeWeights);
+  new Uint8Array(buffer, CLIMATE_OFFSET, chunk.climate.length).set(chunk.climate);
+  new Uint8Array(buffer, VEGETATION_DENSITY_OFFSET, chunk.vegetationDensity.length).set(chunk.vegetationDensity);
+  new Uint8Array(buffer, VEGETATION_PROFILE_OFFSET, chunk.vegetationProfile.length).set(chunk.vegetationProfile);
+  return buffer;
+}
+function safeBigIntNumber(name, value) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || BigInt(number) !== value) {
+    throw new RangeError(`${name} exceeds the safe integer range`);
+  }
+  return number;
+}
+function deserializeBaseSemanticChunk(buffer, limits) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES) {
+    throw new TypeError("serialized base semantic chunk has an invalid byte length");
+  }
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== SERIALIZED_MAGIC || view.getUint16(4, true) !== WORLD_CHUNK_FORMAT_VERSION_V2 || view.getUint16(6, true) !== BASE_SEMANTIC_CHUNK_HEADER_BYTES || view.getUint32(36, true) !== BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES) {
+    throw new TypeError("serialized base semantic chunk header is invalid or unsupported");
+  }
+  const macroHeight = new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+  for (let index = 0; index < macroHeight.length; index += 1) {
+    macroHeight[index] = view.getUint16(MACRO_HEIGHT_OFFSET + index * Uint16Array.BYTES_PER_ELEMENT, true);
+  }
+  return createBaseSemanticChunk({
+    key: {
+      chunkX: safeBigIntNumber("semantic chunk x", view.getBigInt64(8, true)),
+      chunkY: safeBigIntNumber("semantic chunk y", view.getBigInt64(16, true))
+    },
+    revision: safeBigIntNumber("semantic chunk revision", view.getBigUint64(24, true)),
+    validBounds: {
+      minX: view.getUint8(32),
+      minY: view.getUint8(33),
+      maxXExclusive: view.getUint8(34),
+      maxYExclusive: view.getUint8(35)
+    },
+    substrateClass: new Uint8Array(buffer, SUBSTRATE_OFFSET, BASE_SEMANTIC_CHUNK_TILE_COUNT).slice(),
+    macroHeight,
+    biomeWeights: new Uint8Array(
+      buffer,
+      BIOME_WEIGHTS_OFFSET,
+      BASE_SEMANTIC_CHUNK_TILE_COUNT * BIOME_BASIS_COUNT
+    ).slice(),
+    climate: new Uint8Array(
+      buffer,
+      CLIMATE_OFFSET,
+      BASE_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNEL_COUNT
+    ).slice(),
+    vegetationDensity: new Uint8Array(
+      buffer,
+      VEGETATION_DENSITY_OFFSET,
+      BASE_SEMANTIC_CHUNK_TILE_COUNT
+    ).slice(),
+    vegetationProfile: new Uint8Array(
+      buffer,
+      VEGETATION_PROFILE_OFFSET,
+      BASE_SEMANTIC_CHUNK_TILE_COUNT
+    ).slice()
+  }, limits);
 }
 
-// src/helpers/neighbors.ts
-var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
-function getNeighborCoords(x, y, direction) {
-  const odd = x % 2 !== 0;
-  switch (direction) {
-    case "NE":
-      return { x: x + 1, y: odd ? y - 1 : y };
-    case "N":
-      return { x, y: y - 1 };
-    case "NW":
-      return { x: x - 1, y: odd ? y - 1 : y };
-    case "SW":
-      return { x: x - 1, y: odd ? y : y + 1 };
-    case "S":
-      return { x, y: y + 1 };
-    case "SE":
-      return { x: x + 1, y: odd ? y : y + 1 };
-  }
-}
-function getNeighbors(x, y) {
-  return NEIGHBOR_DIRECTIONS.map((direction) => ({ direction, ...getNeighborCoords(x, y, direction) }));
-}
+// src/enums.ts
+var Land = /* @__PURE__ */ ((Land2) => {
+  Land2["sea"] = "sea";
+  Land2["coastal"] = "coastal";
+  Land2["land"] = "land";
+  Land2["sand"] = "sand";
+  Land2["tundra"] = "tundra";
+  Land2["snow"] = "snow";
+  Land2["mountain"] = "mountain";
+  return Land2;
+})(Land || {});
 
 // src/world/noise.ts
 var UINT32_MAX = 4294967295;
@@ -362,7 +669,7 @@ function randomGridValue(seed, x, y) {
 }
 var smooth = (value) => value * value * (3 - 2 * value);
 var lerp = (from, to, amount) => from + (to - from) * amount;
-function positiveModulo(value, modulus) {
+function positiveModulo2(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function valueNoise2D(seed, x, y) {
@@ -396,8 +703,8 @@ function periodicValueNoise2D(seed, x, y, periodX, periodY) {
   const ty = smooth(y - y0);
   const sample = (gx, gy) => randomGridValue(
     seed,
-    positiveModulo(gx, px),
-    positiveModulo(gy, py)
+    positiveModulo2(gx, px),
+    positiveModulo2(gy, py)
   );
   const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
   const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
@@ -947,7 +1254,7 @@ var SEMANTIC_NOISE_BASE_CELL_SHIFTS = Object.freeze({
 });
 var smooth2 = (value) => value * value * (3 - 2 * value);
 var lerp2 = (from, to, amount) => from + (to - from) * amount;
-var positiveModulo2 = (value, modulus) => (value % modulus + modulus) % modulus;
+var positiveModulo3 = (value, modulus) => (value % modulus + modulus) % modulus;
 function assertSafeCoordinates(x, y) {
   if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
     throw new RangeError("semantic landform coordinates must be safe integers");
@@ -991,8 +1298,8 @@ function safeValueNoise2D(seed, x, y, offsetX, offsetY, cellShift, wrapWidth, wr
   }
   const randomCell = (cellX, cellY) => hashSafeIntegerCoordinates(
     seed,
-    periodX === void 0 ? cellX : positiveModulo2(cellX, periodX),
-    periodY === void 0 ? cellY : positiveModulo2(cellY, periodY)
+    periodX === void 0 ? cellX : positiveModulo3(cellX, periodX),
+    periodY === void 0 ? cellY : positiveModulo3(cellY, periodY)
   ) / UINT32_MAX2;
   const top = lerp2(
     randomCell(xAxis.cell, yAxis.cell),
@@ -1033,8 +1340,8 @@ function sampleSemanticLandform(seed, x, y, domain, profile) {
   const fields = profile.fields;
   const wrapWidth = domain.topology === "toroidal" ? domain.width : void 0;
   const wrapHeight = domain.topology === "toroidal" ? domain.height : void 0;
-  const sampleX = wrapWidth === void 0 ? x : positiveModulo2(x, wrapWidth);
-  const sampleY = wrapHeight === void 0 ? y : positiveModulo2(y, wrapHeight);
+  const sampleX = wrapWidth === void 0 ? x : positiveModulo3(x, wrapWidth);
+  const sampleY = wrapHeight === void 0 ? y : positiveModulo3(y, wrapHeight);
   const field2 = (spec, shift, offsetX = 0, offsetY = 0) => safeFractalNoise2D(
     (seed ^ spec.salt) >>> 0,
     sampleX,
@@ -1469,6 +1776,14 @@ function createBaseSemanticChunkGenerator(descriptor) {
     }
   });
 }
+function generateBaseSemanticChunk(options) {
+  if (!options || typeof options !== "object") throw new TypeError("semantic chunk generation options are required");
+  return createBaseSemanticChunkGenerator(options.descriptor).generate(options.chunkX, options.chunkY);
+}
+function semanticGeneratorIdentity(descriptor) {
+  assertCoreDescriptor(descriptor);
+  return serializeWorldDescriptorV2(descriptor);
+}
 
 // src/world/SurfaceWorkerProtocol.ts
 var SURFACE_WORKER_PROTOCOL_VERSION = 3;
@@ -1488,73 +1803,1079 @@ function assertGenerateSemanticChunkWorkerRequest(value) {
   }
   chunkOrigin(request.key.chunkX, request.key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
 }
-function semanticChunkTransferables(chunk) {
-  const buffers = [
-    chunk.substrateClass.buffer,
-    chunk.macroHeight.buffer,
-    chunk.biomeWeights.buffer,
-    chunk.climate.buffer,
-    chunk.vegetationDensity.buffer,
-    chunk.vegetationProfile.buffer
-  ];
-  const unique = /* @__PURE__ */ new Set();
-  for (const buffer of buffers) {
-    if (!(buffer instanceof ArrayBuffer)) {
-      throw new TypeError("surface worker semantic arrays must own transferable ArrayBuffers");
-    }
-    unique.add(buffer);
-  }
-  return [...unique];
-}
-function serializeSurfaceWorkerError(reason) {
-  const error = reason instanceof Error ? reason : new Error(String(reason));
-  return Object.freeze({
-    name: error.name,
-    message: error.message,
-    ...error.stack ? { stack: error.stack } : {}
-  });
+function createGenerateSemanticChunkWorkerRequest(requestId, descriptor, key) {
+  const request = {
+    protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+    generatorVersion: WORLD_GENERATOR_VERSION_V2,
+    requestId,
+    type: "generateSemanticChunk",
+    descriptor,
+    key: Object.freeze({ chunkX: key.chunkX, chunkY: key.chunkY })
+  };
+  assertGenerateSemanticChunkWorkerRequest(request);
+  return Object.freeze(request);
 }
 
-// src/world/surface.worker.ts
-var scope = globalThis;
-var semanticGenerator;
-function generatorFor(request) {
-  const identity = serializeWorldDescriptorV2(request.descriptor);
-  if (!semanticGenerator || semanticGenerator.identity !== identity) {
-    semanticGenerator = createBaseSemanticChunkGenerator(request.descriptor);
+// src/world/SurfaceWorkerClient.ts
+function remoteError(response) {
+  if (!response.error || typeof response.error.name !== "string" || typeof response.error.message !== "string") {
+    return new Error("surface worker returned an invalid remote error");
   }
-  return semanticGenerator;
+  const error = new Error(response.error.message);
+  error.name = response.error.name;
+  if (typeof response.error.stack === "string") error.stack = response.error.stack;
+  return error;
 }
-function recoverRequestId(value) {
-  if (!value || typeof value !== "object") return null;
-  const requestId = value.requestId;
-  return Number.isSafeInteger(requestId) && requestId > 0 ? requestId : null;
+function assertResponseEnvelope(value) {
+  if (!value || typeof value !== "object") throw new TypeError("surface worker response must be an object");
+  const response = value;
+  if (response.protocolVersion !== SURFACE_WORKER_PROTOCOL_VERSION || response.generatorVersion !== WORLD_GENERATOR_VERSION_V2 || !Number.isSafeInteger(response.requestId) || response.requestId <= 0 || response.type !== "generateSemanticChunkResult" && response.type !== "surfaceWorkerError") {
+    throw new TypeError("surface worker response envelope is invalid or unsupported");
+  }
 }
-function recoverRequestType(value) {
-  if (!value || typeof value !== "object") return null;
-  return value.type === "generateSemanticChunk" ? "generateSemanticChunk" : null;
-}
-scope.addEventListener("message", (event) => {
-  try {
-    assertGenerateSemanticChunkWorkerRequest(event.data);
-    const request = event.data;
-    const chunk = generatorFor(request).generate(request.key.chunkX, request.key.chunkY);
-    scope.postMessage({
-      protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
-      generatorVersion: WORLD_GENERATOR_VERSION_V2,
-      requestId: request.requestId,
-      type: "generateSemanticChunkResult",
-      chunk
-    }, semanticChunkTransferables(chunk));
-  } catch (reason) {
-    scope.postMessage({
-      protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
-      generatorVersion: WORLD_GENERATOR_VERSION_V2,
-      requestId: recoverRequestId(event.data),
-      type: "surfaceWorkerError",
-      requestType: recoverRequestType(event.data),
-      error: serializeSurfaceWorkerError(reason)
+var SurfaceWorkerClient = class {
+  constructor(workerUrl, workerOptions = { type: "module" }) {
+    this.pending = /* @__PURE__ */ new Map();
+    this.nextRequestId = 1;
+    this.disposed = false;
+    this.handleMessage = (event) => {
+      try {
+        assertResponseEnvelope(event.data);
+        const response = event.data;
+        const request = this.pending.get(response.requestId);
+        if (!request) throw new Error("surface worker returned an unknown request id");
+        if (response.type === "surfaceWorkerError") {
+          if (response.requestType !== "generateSemanticChunk") {
+            throw new TypeError("surface worker error does not match its pending request type");
+          }
+          this.pending.delete(response.requestId);
+          request.reject(remoteError(response));
+          return;
+        }
+        const chunk = this.publishChunk(response, request);
+        this.pending.delete(response.requestId);
+        request.resolve(chunk);
+      } catch (reason) {
+        this.fail(reason instanceof Error ? reason : new Error(String(reason)));
+      }
+    };
+    this.handleWorkerError = (event) => {
+      this.fail(event.error instanceof Error ? event.error : new Error(event.message));
+    };
+    this.handleMessageError = () => {
+      this.fail(new Error("surface worker returned an unreadable message"));
+    };
+    this.worker = new Worker(workerUrl, workerOptions);
+    this.worker.addEventListener("message", this.handleMessage);
+    this.worker.addEventListener("error", this.handleWorkerError);
+    this.worker.addEventListener("messageerror", this.handleMessageError);
+  }
+  generateSemanticChunk(options) {
+    if (this.disposed) return Promise.reject(new Error("SurfaceWorkerClient has been disposed"));
+    if (!options || typeof options !== "object") {
+      return Promise.reject(new TypeError("semantic chunk worker options are required"));
+    }
+    if (!Number.isSafeInteger(this.nextRequestId)) {
+      return Promise.reject(new RangeError("surface worker request id space is exhausted"));
+    }
+    const requestId = this.nextRequestId;
+    let request;
+    try {
+      request = createGenerateSemanticChunkWorkerRequest(requestId, options.descriptor, options.key);
+    } catch (reason) {
+      return Promise.reject(reason instanceof Error ? reason : new Error(String(reason)));
+    }
+    this.nextRequestId += 1;
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, {
+        descriptor: options.descriptor,
+        key: Object.freeze({ chunkX: options.key.chunkX, chunkY: options.key.chunkY }),
+        resolve,
+        reject
+      });
+      try {
+        this.worker.postMessage(request);
+      } catch (reason) {
+        this.pending.delete(requestId);
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      }
     });
   }
-});
-//# sourceMappingURL=surface.worker.mjs.map
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.worker.removeEventListener("message", this.handleMessage);
+    this.worker.removeEventListener("error", this.handleWorkerError);
+    this.worker.removeEventListener("messageerror", this.handleMessageError);
+    this.worker.terminate();
+    const error = new Error("surface worker was disposed");
+    for (const request of this.pending.values()) request.reject(error);
+    this.pending.clear();
+  }
+  get isDisposed() {
+    return this.disposed;
+  }
+  publishChunk(response, request) {
+    if (!response.chunk || response.chunk.key?.chunkX !== request.key.chunkX || response.chunk.key?.chunkY !== request.key.chunkY) {
+      throw new TypeError("surface worker returned a semantic chunk for the wrong request");
+    }
+    return createBaseSemanticChunk({
+      key: response.chunk.key,
+      revision: response.chunk.revision,
+      validBounds: response.chunk.validBounds,
+      substrateClass: response.chunk.substrateClass,
+      macroHeight: response.chunk.macroHeight,
+      biomeWeights: response.chunk.biomeWeights,
+      climate: response.chunk.climate,
+      vegetationDensity: response.chunk.vegetationDensity,
+      vegetationProfile: response.chunk.vegetationProfile
+    }, semanticCatalogLimits(request.descriptor));
+  }
+  fail(error) {
+    for (const request of this.pending.values()) request.reject(error);
+    this.pending.clear();
+    this.dispose();
+  }
+};
+
+// src/runtime/PriorityTaskQueue.ts
+var WorkQueueBackpressureError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.name = "WorkQueueBackpressureError";
+  }
+};
+var LANE_RANK = {
+  critical: 0,
+  interactive: 1,
+  visible: 2,
+  prefetch: 3,
+  background: 4
+};
+function cancellationError(message) {
+  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+var PriorityTaskQueue = class {
+  constructor(options = {}) {
+    this.entries = /* @__PURE__ */ new Map();
+    this.keyed = /* @__PURE__ */ new Map();
+    this.nextId = 1;
+    this.sequence = 0;
+    this.pendingWeight = 0;
+    this.cancelledTasks = 0;
+    this.shedTasks = 0;
+    this.maxPendingTasks = options.maxPendingTasks ?? Number.MAX_SAFE_INTEGER;
+    this.maxPendingWeight = options.maxPendingWeight ?? Number.MAX_SAFE_INTEGER;
+    this.starvationMs = options.starvationMs ?? 2e3;
+    this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+    if (!Number.isSafeInteger(this.maxPendingTasks) || this.maxPendingTasks <= 0) {
+      throw new RangeError("maxPendingTasks must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(this.maxPendingWeight) || this.maxPendingWeight <= 0) {
+      throw new RangeError("maxPendingWeight must be a positive safe integer");
+    }
+    if (!Number.isFinite(this.starvationMs) || this.starvationMs <= 0) {
+      throw new RangeError("starvationMs must be positive and finite");
+    }
+  }
+  enqueue(value, options = {}) {
+    const lane = options.lane ?? "visible";
+    const priority = options.priority ?? 0;
+    const weight = options.weight ?? 1;
+    if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
+    if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
+    if (!Number.isSafeInteger(weight) || weight <= 0) throw new RangeError("task weight must be a positive safe integer");
+    if (options.key !== void 0 && options.key.length === 0) throw new TypeError("task key cannot be empty");
+    if (options.signal?.aborted) {
+      this.notifyCancellation(options.cancelled, cancellationError("Task was aborted before it was queued"));
+      return void 0;
+    }
+    if (weight > this.maxPendingWeight) {
+      this.shedTasks += 1;
+      this.notifyCancellation(
+        options.cancelled,
+        new WorkQueueBackpressureError(
+          `Task weight ${weight} exceeds the queue limit ${this.maxPendingWeight}`
+        )
+      );
+      return void 0;
+    }
+    if (options.key !== void 0) {
+      const previous = this.keyed.get(options.key);
+      if (previous !== void 0) this.remove(previous, cancellationError("Task was replaced"), true);
+    }
+    const entry = {
+      id: this.nextId++,
+      key: options.key,
+      lane,
+      priority,
+      weight,
+      sequence: this.sequence++,
+      enqueuedAt: this.now(),
+      value,
+      signal: options.signal,
+      cancelled: options.cancelled
+    };
+    if (options.signal) {
+      entry.abort = () => this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+      options.signal.addEventListener("abort", entry.abort, { once: true });
+    }
+    this.entries.set(entry.id, entry);
+    if (entry.key !== void 0) this.keyed.set(entry.key, entry.id);
+    this.pendingWeight += weight;
+    this.shedOverflow();
+    return this.entries.has(entry.id) ? entry.id : void 0;
+  }
+  take(predicate) {
+    const now = this.now();
+    let selected;
+    for (const entry of this.entries.values()) {
+      if (entry.signal?.aborted) {
+        this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+        continue;
+      }
+      if (predicate && !predicate(entry.value)) continue;
+      if (!selected || this.compare(entry, selected, now) < 0) selected = entry;
+    }
+    if (!selected) return void 0;
+    this.detach(selected);
+    return selected.value;
+  }
+  cancelKey(key, reason = cancellationError("Queued task was cancelled")) {
+    const id = this.keyed.get(key);
+    return id === void 0 ? false : this.remove(id, reason, true);
+  }
+  cancel(id, reason = cancellationError("Queued task was cancelled")) {
+    return this.remove(id, reason, true);
+  }
+  clear(reason = cancellationError("Work queue was cleared")) {
+    for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
+  }
+  get values() {
+    return [...this.entries.values()].map((entry) => entry.value);
+  }
+  get stats() {
+    const now = this.now();
+    let oldestTaskAgeMs = 0;
+    let starvationPromotions = 0;
+    for (const entry of this.entries.values()) {
+      const age = Math.max(0, now - entry.enqueuedAt);
+      oldestTaskAgeMs = Math.max(oldestTaskAgeMs, age);
+      starvationPromotions += Math.min(LANE_RANK[entry.lane], Math.floor(age / this.starvationMs));
+    }
+    return {
+      pendingTasks: this.entries.size,
+      pendingWeight: this.pendingWeight,
+      oldestTaskAgeMs,
+      cancelledTasks: this.cancelledTasks,
+      shedTasks: this.shedTasks,
+      starvationPromotions
+    };
+  }
+  shedOverflow() {
+    while (this.entries.size > this.maxPendingTasks || this.pendingWeight > this.maxPendingWeight) {
+      let worst;
+      for (const entry of this.entries.values()) {
+        if (!worst || this.compareForEviction(entry, worst) > 0) worst = entry;
+      }
+      if (!worst) return;
+      this.shedTasks += 1;
+      this.remove(
+        worst.id,
+        new WorkQueueBackpressureError("Queued task was shed by the configured backpressure limit"),
+        false
+      );
+    }
+  }
+  compare(first, second, now) {
+    const firstStarved = this.isStarved(first, now);
+    const secondStarved = this.isStarved(second, now);
+    if (firstStarved !== secondStarved) return firstStarved ? -1 : 1;
+    if (firstStarved) return first.sequence - second.sequence;
+    return this.effectiveLane(first, now) - this.effectiveLane(second, now) || first.priority - second.priority || first.sequence - second.sequence;
+  }
+  // Dispatch aging prevents starvation among admitted work. Admission is a
+  // different policy boundary: an old background task must not evict a fresh
+  // critical task merely because the tab was suspended long enough for its
+  // wall-clock starvation deadline to elapse.
+  compareForEviction(first, second) {
+    return LANE_RANK[first.lane] - LANE_RANK[second.lane] || first.priority - second.priority || first.sequence - second.sequence;
+  }
+  isStarved(entry, now) {
+    const deadlineWindows = LANE_RANK[entry.lane] + 1;
+    return Math.max(0, now - entry.enqueuedAt) >= this.starvationMs * deadlineWindows;
+  }
+  effectiveLane(entry, now) {
+    const promotions = Math.min(LANE_RANK[entry.lane], Math.floor(Math.max(0, now - entry.enqueuedAt) / this.starvationMs));
+    return LANE_RANK[entry.lane] - promotions;
+  }
+  remove(id, reason, countCancellation) {
+    const entry = this.entries.get(id);
+    if (!entry) return false;
+    this.detach(entry);
+    if (countCancellation) this.cancelledTasks += 1;
+    this.notifyCancellation(entry.cancelled, reason);
+    return true;
+  }
+  notifyCancellation(observer, reason) {
+    try {
+      observer?.(reason);
+    } catch {
+    }
+  }
+  detach(entry) {
+    this.entries.delete(entry.id);
+    if (entry.key !== void 0 && this.keyed.get(entry.key) === entry.id) this.keyed.delete(entry.key);
+    if (entry.signal && entry.abort) entry.signal.removeEventListener("abort", entry.abort);
+    this.pendingWeight = Math.max(0, this.pendingWeight - entry.weight);
+  }
+};
+
+// src/world/SurfaceWorkerPool.ts
+function abortError() {
+  if (typeof DOMException !== "undefined") return new DOMException("surface worker task was aborted", "AbortError");
+  const error = new Error("surface worker task was aborted");
+  error.name = "AbortError";
+  return error;
+}
+function defaultPoolSize(maxWorkers) {
+  const hardware = typeof navigator === "undefined" ? 4 : navigator.hardwareConcurrency || 4;
+  return Math.max(1, Math.min(maxWorkers, hardware - 1));
+}
+var SurfaceWorkerPool = class {
+  constructor(workerUrl, options = {}) {
+    this.slots = [];
+    this.completed = 0;
+    this.workerFailures = 0;
+    this.retried = 0;
+    this.averageSemanticChunkMs = 0;
+    this.disposed = false;
+    const maxWorkers = options.maxWorkers ?? 8;
+    if (!Number.isInteger(maxWorkers) || maxWorkers <= 0 || maxWorkers > 8) {
+      throw new RangeError("surface worker maxWorkers must be an integer between 1 and 8");
+    }
+    const size = options.size ?? defaultPoolSize(maxWorkers);
+    if (!Number.isInteger(size) || size <= 0 || size > maxWorkers) {
+      throw new RangeError(`surface worker pool size must be an integer between 1 and ${maxWorkers}`);
+    }
+    this.maximumWorkerRetries = options.maximumWorkerRetries ?? 1;
+    if (!Number.isInteger(this.maximumWorkerRetries) || this.maximumWorkerRetries < 0 || this.maximumWorkerRetries > 2) {
+      throw new RangeError("surface worker retry count must be an integer between 0 and 2");
+    }
+    this.clientFactory = options.clientFactory ?? (() => new SurfaceWorkerClient(workerUrl, options.workerOptions ?? { type: "module" }));
+    this.queue = new PriorityTaskQueue({
+      maxPendingTasks: options.maxQueuedTasks ?? 512,
+      maxPendingWeight: options.maxQueuedWeight ?? 512,
+      starvationMs: options.starvationMs,
+      now: options.now
+    });
+    try {
+      for (let index = 0; index < size; index += 1) {
+        this.slots.push({ client: this.createClient(), busy: false });
+      }
+    } catch (reason) {
+      for (const slot of this.slots) {
+        try {
+          slot.client.dispose();
+        } catch {
+        }
+      }
+      this.slots.length = 0;
+      throw reason;
+    }
+  }
+  generateSemanticChunk(options, request = {}) {
+    if (this.disposed) return Promise.reject(new Error("SurfaceWorkerPool has been disposed"));
+    if (request.signal?.aborted) return Promise.reject(abortError());
+    return new Promise((resolve, reject) => {
+      const task = {
+        options,
+        signal: request.signal,
+        resolve,
+        reject,
+        attempts: 0,
+        settled: false
+      };
+      if (request.signal) {
+        task.abort = () => {
+          if (task.settled) return;
+          if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
+          this.finishTask(task, () => reject(abortError()));
+        };
+        request.signal.addEventListener("abort", task.abort, { once: true });
+      }
+      task.queueId = this.queue.enqueue(task, {
+        priority: Number.isFinite(request.priority) ? request.priority : 0,
+        lane: request.lane ?? "visible",
+        weight: request.weight ?? 1,
+        cancelled: (reason) => this.finishTask(task, () => reject(reason))
+      });
+      if (task.queueId === void 0 && !task.settled) {
+        this.finishTask(task, () => reject(new WorkQueueBackpressureError("surface worker task was shed")));
+      }
+      this.dispatch();
+    });
+  }
+  get stats() {
+    const queue = this.queue.stats;
+    return Object.freeze({
+      workers: this.slots.length,
+      busyWorkers: this.slots.filter((slot) => slot.busy).length,
+      queued: queue.pendingTasks,
+      completed: this.completed,
+      workerFailures: this.workerFailures,
+      retried: this.retried,
+      queuedWeight: queue.pendingWeight,
+      oldestQueuedMs: queue.oldestTaskAgeMs,
+      shedTasks: queue.shedTasks,
+      starvationPromotions: queue.starvationPromotions,
+      averageSemanticChunkMs: this.averageSemanticChunkMs
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    const error = new Error("surface worker pool was disposed");
+    this.queue.clear(error);
+    for (const slot of this.slots) {
+      if (slot.task) this.finishTask(slot.task, () => slot.task.reject(error));
+      try {
+        slot.client.dispose();
+      } catch {
+      }
+    }
+  }
+  dispatch() {
+    if (this.disposed) return;
+    for (const slot of this.slots) {
+      if (slot.busy) continue;
+      const task = this.queue.take();
+      if (!task) return;
+      task.queueId = void 0;
+      slot.busy = true;
+      slot.task = task;
+      if (slot.client.isDisposed) {
+        try {
+          slot.client = this.createClient();
+        } catch (reason) {
+          const error = reason instanceof Error ? reason : new Error(String(reason));
+          this.finishTask(task, () => task.reject(error));
+          this.releaseSlot(slot);
+          continue;
+        }
+      }
+      this.execute(slot, task);
+    }
+  }
+  execute(slot, task) {
+    const started = typeof performance === "undefined" ? Date.now() : performance.now();
+    let pending;
+    try {
+      pending = slot.client.generateSemanticChunk(task.options);
+    } catch (reason) {
+      pending = Promise.reject(reason);
+    }
+    void pending.then((chunk) => {
+      this.recordDuration(started);
+      if (!task.settled) {
+        this.completed += 1;
+        this.finishTask(task, () => task.resolve(chunk));
+      }
+      this.releaseSlot(slot);
+    }, (reason) => {
+      this.recordDuration(started);
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      const workerFailed = slot.client.isDisposed && !this.disposed;
+      if (workerFailed) this.workerFailures += 1;
+      if (!task.settled && workerFailed && task.attempts < this.maximumWorkerRetries) {
+        task.attempts += 1;
+        this.retried += 1;
+        try {
+          slot.client = this.createClient();
+          this.execute(slot, task);
+          return;
+        } catch (replacementReason) {
+          const replacementError = replacementReason instanceof Error ? replacementReason : new Error(String(replacementReason));
+          this.finishTask(task, () => task.reject(replacementError));
+          this.releaseSlot(slot);
+          return;
+        }
+      }
+      if (!task.settled) this.finishTask(task, () => task.reject(error));
+      this.releaseSlot(slot);
+    });
+  }
+  releaseSlot(slot) {
+    slot.busy = false;
+    slot.task = void 0;
+    this.dispatch();
+  }
+  finishTask(task, settle) {
+    if (task.settled) return;
+    task.settled = true;
+    if (task.signal && task.abort) task.signal.removeEventListener("abort", task.abort);
+    settle();
+  }
+  createClient() {
+    const client = this.clientFactory();
+    if (!client || typeof client.generateSemanticChunk !== "function" || typeof client.dispose !== "function") {
+      throw new TypeError("surface worker client factory returned an invalid client");
+    }
+    if (client.isDisposed) {
+      try {
+        client.dispose();
+      } catch {
+      }
+      throw new Error("surface worker client factory returned a disposed client");
+    }
+    return client;
+  }
+  recordDuration(started) {
+    const finished = typeof performance === "undefined" ? Date.now() : performance.now();
+    const duration = Math.max(0, finished - started);
+    this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0 ? duration : this.averageSemanticChunkMs + (duration - this.averageSemanticChunkMs) * 0.2;
+  }
+};
+
+// src/world/compileStaticSemanticChunk.ts
+var STATIC_PLAIN_HEIGHT = 32768;
+var STATIC_HILL_HEIGHT = 39321;
+var STATIC_MOUNTAIN_HEIGHT = 52428;
+var STATIC_WOOD_DENSITY = 140;
+var ALLOWED_MODIFIERS = /* @__PURE__ */ new Set(["hill", "wood", "lake", "river"]);
+var LAND_TYPES = new Set(Object.values(Land));
+function assertStaticInputs(map, descriptor) {
+  assertWorldDescriptorV2(descriptor);
+  assertCoreWorldSemanticsV2(descriptor);
+  if (descriptor.sourceKind !== "static" || descriptor.topology !== "finite") {
+    throw new TypeError("static semantic compiler requires a static finite descriptor");
+  }
+  if (!map || typeof map !== "object" || map.infinite || map.wrapX || map.wrapY || map.w !== descriptor.width || map.h !== descriptor.height) {
+    throw new TypeError("static MapInfo topology does not match its v2 descriptor");
+  }
+}
+function assertStaticTile(tile, x, y) {
+  if (!tile || typeof tile !== "object" || !LAND_TYPES.has(tile.type)) {
+    throw new TypeError(`static semantic tile ${x},${y} has an invalid terrain type`);
+  }
+  if (tile.modifiers !== void 0) {
+    if (!Array.isArray(tile.modifiers) || tile.modifiers.some((modifier) => typeof modifier !== "string" || !ALLOWED_MODIFIERS.has(modifier)) || new Set(tile.modifiers).size !== tile.modifiers.length) {
+      throw new TypeError(`static semantic tile ${x},${y} has invalid or duplicate modifiers`);
+    }
+  }
+  if (tile.treeModel !== void 0 && typeof tile.treeModel !== "string") {
+    throw new TypeError(`static semantic tile ${x},${y} has an invalid tree model identity`);
+  }
+}
+function macroHeightFor(tile, seaLevel) {
+  if (tile.type === "sea" /* sea */) return Math.max(0, seaLevel - 4096);
+  if (tile.type === "coastal" /* coastal */) return Math.max(0, seaLevel - 1);
+  if (tile.type === "mountain" /* mountain */) return STATIC_MOUNTAIN_HEIGHT;
+  if (tile.modifiers?.includes("hill")) return STATIC_HILL_HEIGHT;
+  return STATIC_PLAIN_HEIGHT;
+}
+function substrateFor2(tile) {
+  if (tile.type === "mountain" /* mountain */) return 2 /* Rock */;
+  if (tile.type === "sand" /* sand */ || tile.type === "coastal" /* coastal */ || tile.type === "sea" /* sea */) {
+    return 1 /* Sand */;
+  }
+  return 0 /* Soil */;
+}
+function vegetationProfileFor2(tile) {
+  const model = tile.treeModel?.toLowerCase() ?? "";
+  if (tile.type === "mountain" /* mountain */ || tile.type === "snow" /* snow */) return 3 /* Alpine */;
+  if (model.includes("palm") || tile.type === "sand" /* sand */) return 0 /* Tropical */;
+  if (model.includes("pinia") || model.includes("pine") || tile.type === "tundra" /* tundra */) {
+    return 2 /* Boreal */;
+  }
+  return 1 /* Temperate */;
+}
+function writeBiomeAndClimate(tile, tileIndex, biomeWeights, climate) {
+  const biomeOffset = tileIndex * 4;
+  const climateOffset = tileIndex * 2;
+  if (tile.type === "mountain" /* mountain */) {
+    biomeWeights[biomeOffset + 3] = 255;
+    climate[climateOffset] = 72;
+    climate[climateOffset + 1] = 96;
+  } else if (tile.type === "snow" /* snow */) {
+    biomeWeights[biomeOffset + 2] = 180;
+    biomeWeights[biomeOffset + 3] = 75;
+    climate[climateOffset] = 24;
+    climate[climateOffset + 1] = 128;
+  } else if (tile.type === "tundra" /* tundra */) {
+    biomeWeights[biomeOffset + 2] = 255;
+    climate[climateOffset] = 72;
+    climate[climateOffset + 1] = 128;
+  } else if (tile.type === "sand" /* sand */ || tile.type === "coastal" /* coastal */ || tile.type === "sea" /* sea */) {
+    biomeWeights[biomeOffset + 1] = 255;
+    climate[climateOffset] = tile.type === "sand" /* sand */ ? 224 : 160;
+    climate[climateOffset + 1] = tile.type === "sand" /* sand */ ? 48 : 255;
+  } else {
+    biomeWeights[biomeOffset] = 255;
+    climate[climateOffset] = 152;
+    climate[climateOffset + 1] = 152;
+  }
+}
+function compileStaticSemanticChunk(options) {
+  if (!options || typeof options !== "object") throw new TypeError("static semantic compile options are required");
+  assertStaticInputs(options.map, options.descriptor);
+  const origin = chunkOrigin(options.chunkX, options.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  if (origin.x < 0 || origin.y < 0 || origin.x >= options.descriptor.width || origin.y >= options.descriptor.height) {
+    throw new RangeError("static semantic chunk key is outside the finite world");
+  }
+  const validWidth = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, options.descriptor.width - origin.x);
+  const validHeight = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, options.descriptor.height - origin.y);
+  const substrateClass = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+  const macroHeight = new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+  const biomeWeights = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT * 4);
+  const climate = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT * 2);
+  const vegetationDensity = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+  const vegetationProfile = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+  for (let localX = 0; localX < validWidth; localX += 1) {
+    for (let localY = 0; localY < validHeight; localY += 1) {
+      const worldX = origin.x + localX;
+      const worldY = origin.y + localY;
+      const tile = getMapTile(options.map, worldX, worldY);
+      if (!tile) throw new TypeError(`static semantic map is missing tile ${worldX},${worldY}`);
+      assertStaticTile(tile, worldX, worldY);
+      const tileIndex = semanticTileIndex(localX, localY);
+      substrateClass[tileIndex] = substrateFor2(tile);
+      macroHeight[tileIndex] = macroHeightFor(tile, options.descriptor.seaLevel);
+      writeBiomeAndClimate(tile, tileIndex, biomeWeights, climate);
+      vegetationDensity[tileIndex] = tile.modifiers?.includes("wood") ? STATIC_WOOD_DENSITY : 0;
+      vegetationProfile[tileIndex] = vegetationProfileFor2(tile);
+    }
+  }
+  return createBaseSemanticChunk({
+    key: { chunkX: options.chunkX, chunkY: options.chunkY },
+    revision: 0,
+    validBounds: {
+      minX: 0,
+      minY: 0,
+      maxXExclusive: validWidth,
+      maxYExclusive: validHeight
+    },
+    substrateClass,
+    macroHeight,
+    biomeWeights,
+    climate,
+    vegetationDensity,
+    vegetationProfile
+  }, semanticCatalogLimits(options.descriptor));
+}
+
+// src/world/CoordinatePairMap.ts
+var CoordinatePairMap = class {
+  constructor() {
+    this.columns = /* @__PURE__ */ new Map();
+    this.entryCount = 0;
+  }
+  get size() {
+    return this.entryCount;
+  }
+  get(x, y) {
+    return this.columns.get(x)?.get(y);
+  }
+  has(x, y) {
+    return this.columns.get(x)?.has(y) ?? false;
+  }
+  set(x, y, value) {
+    let column = this.columns.get(x);
+    if (!column) {
+      column = /* @__PURE__ */ new Map();
+      this.columns.set(x, column);
+    }
+    if (!column.has(y)) this.entryCount += 1;
+    column.set(y, value);
+    return this;
+  }
+  delete(x, y) {
+    const column = this.columns.get(x);
+    if (!column || !column.delete(y)) return false;
+    this.entryCount -= 1;
+    if (column.size === 0) this.columns.delete(x);
+    return true;
+  }
+  clear() {
+    this.columns.clear();
+    this.entryCount = 0;
+  }
+  *values() {
+    for (const column of this.columns.values()) yield* column.values();
+  }
+  *entries() {
+    for (const [x, column] of this.columns) {
+      for (const [y, value] of column) yield [x, y, value];
+    }
+  }
+};
+
+// src/world/SemanticWorldSource.ts
+var DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES = 32 * 1024 * 1024;
+function positiveModulo4(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function abortError2() {
+  if (typeof DOMException !== "undefined") return new DOMException("semantic chunk request was aborted", "AbortError");
+  const error = new Error("semantic chunk request was aborted");
+  error.name = "AbortError";
+  return error;
+}
+function semanticChunkBytes(chunk) {
+  return chunk.substrateClass.byteLength + chunk.macroHeight.byteLength + chunk.biomeWeights.byteLength + chunk.climate.byteLength + chunk.vegetationDensity.byteLength + chunk.vegetationProfile.byteLength;
+}
+function validateChunkKey(chunkX, chunkY) {
+  try {
+    chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    return true;
+  } catch {
+    return false;
+  }
+}
+var ProceduralSemanticWorldSourceBase = class {
+  constructor(options, expectedKind) {
+    this.cache = new CoordinatePairMap();
+    this.inFlight = new CoordinatePairMap();
+    this.cacheBytes = 0;
+    this.cacheClock = 0;
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
+    this.disposed = false;
+    if (!options || typeof options !== "object") throw new TypeError("procedural semantic source options are required");
+    assertWorldDescriptorV2(options.descriptor);
+    if (options.descriptor.sourceKind !== expectedKind) {
+      throw new TypeError(`semantic source requires a ${expectedKind} descriptor`);
+    }
+    this.descriptor = options.descriptor;
+    this.worldIdentity = serializeWorldDescriptorV2(this.descriptor);
+    this.bounds = this.descriptor.sourceKind === "procedural-toroidal" ? Object.freeze({ width: this.descriptor.width, height: this.descriptor.height, topology: "toroidal" }) : void 0;
+    this.cacheMaxBytes = options.cacheMaxBytes ?? DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES;
+    if (!Number.isSafeInteger(this.cacheMaxBytes) || this.cacheMaxBytes < BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES) {
+      throw new RangeError("semantic chunk cache must hold at least one serialized chunk");
+    }
+    if (options.workerPool) {
+      if (options.workerUrl !== void 0 || options.workerPoolOptions !== void 0) {
+        throw new TypeError("external semantic workerPool cannot be combined with workerUrl or workerPoolOptions");
+      }
+      this.pool = options.workerPool;
+      this.ownsPool = false;
+    } else {
+      if (!options.workerUrl) throw new TypeError("procedural semantic source requires a surface worker URL");
+      this.pool = new SurfaceWorkerPool(options.workerUrl, options.workerPoolOptions);
+      this.ownsPool = true;
+    }
+  }
+  resolveChunk(chunkX, chunkY) {
+    if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) return void 0;
+    if (this.descriptor.sourceKind === "procedural-infinite") {
+      return validateChunkKey(chunkX, chunkY) ? { chunkX, chunkY } : void 0;
+    }
+    const countX = this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
+    const countY = this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
+    return {
+      chunkX: positiveModulo4(chunkX, countX),
+      chunkY: positiveModulo4(chunkY, countY)
+    };
+  }
+  chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
+    const first = this.resolveChunk(chunkX, chunkY);
+    const second = this.resolveChunk(centerChunkX, centerChunkY);
+    if (!first || !second) return Number.POSITIVE_INFINITY;
+    let dx = Math.abs(first.chunkX - second.chunkX);
+    let dy = Math.abs(first.chunkY - second.chunkY);
+    if (this.descriptor.sourceKind === "procedural-toroidal") {
+      const countX = this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
+      const countY = this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
+      dx = Math.min(dx, countX - dx);
+      dy = Math.min(dy, countY - dy);
+    }
+    return Math.hypot(dx, dy);
+  }
+  loadChunk(chunkX, chunkY, request = {}) {
+    if (this.disposed) return Promise.reject(new Error("semantic world source has been disposed"));
+    if (request.signal?.aborted) return Promise.reject(abortError2());
+    const resolved = this.resolveChunk(chunkX, chunkY);
+    if (!resolved || resolved.chunkX !== chunkX || resolved.chunkY !== chunkY) {
+      return Promise.reject(new RangeError("semantic chunk request must use a canonical in-domain key"));
+    }
+    const cached = this.cache.get(chunkX, chunkY);
+    if (cached) {
+      this.cacheHits += 1;
+      cached.references += 1;
+      this.touch(cached);
+      return Promise.resolve(cached.chunk);
+    }
+    this.cacheMisses += 1;
+    let pending = this.inFlight.get(chunkX, chunkY);
+    if (!pending) {
+      const controller = new AbortController();
+      const created = {
+        controller,
+        waiters: 0,
+        settled: false,
+        promise: void 0
+      };
+      created.promise = this.pool.generateSemanticChunk({
+        descriptor: this.descriptor,
+        key: resolved
+      }, {
+        priority: request.priority,
+        lane: request.lane,
+        weight: request.weight,
+        signal: controller.signal
+      }).then((chunk) => {
+        if (this.disposed) throw new Error("semantic world source was disposed during generation");
+        this.insert(chunk);
+        return chunk;
+      }).finally(() => {
+        created.settled = true;
+        this.inFlight.delete(chunkX, chunkY);
+        if (created.waiters === 0) this.evictUnleased();
+      });
+      pending = created;
+      this.inFlight.set(chunkX, chunkY, pending);
+    }
+    return this.waitFor(pending, request.signal);
+  }
+  releaseChunk(chunk) {
+    const entry = this.cache.get(chunk.key.chunkX, chunk.key.chunkY);
+    if (!entry || entry.chunk !== chunk || entry.references <= 0) {
+      throw new Error("semantic chunk release does not match an active source lease");
+    }
+    entry.references -= 1;
+    this.touch(entry);
+    this.evictUnleased();
+  }
+  hasChunk(chunkX, chunkY) {
+    return this.cache.has(chunkX, chunkY);
+  }
+  get stats() {
+    const worker = this.pool.stats;
+    let leasedChunks = 0;
+    for (const entry of this.cache.values()) {
+      if (entry.references > 0) leasedChunks += 1;
+    }
+    return Object.freeze({
+      residentChunks: this.cache.size,
+      residentBytes: this.cacheBytes,
+      leasedChunks,
+      inFlightChunks: this.inFlight.size,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      workers: worker.workers,
+      busyWorkers: worker.busyWorkers,
+      queuedWorkerTasks: worker.queued
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const pending of this.inFlight.values()) pending.controller.abort();
+    if (this.ownsPool) this.pool.dispose();
+    this.cache.clear();
+    this.cacheBytes = 0;
+  }
+  waitFor(pending, signal) {
+    pending.waiters += 1;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (settle) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        pending.waiters -= 1;
+        if (pending.waiters === 0 && !pending.settled) pending.controller.abort();
+        settle();
+      };
+      const onAbort = () => finish(() => reject(abortError2()));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      pending.promise.then((chunk) => finish(() => {
+        const entry = this.cache.get(chunk.key.chunkX, chunk.key.chunkY);
+        if (!entry || entry.chunk !== chunk) {
+          reject(new Error("generated semantic chunk was not published to its source cache"));
+          return;
+        }
+        entry.references += 1;
+        this.touch(entry);
+        this.evictUnleased();
+        resolve(chunk);
+      }), (reason) => finish(() => reject(reason instanceof Error ? reason : new Error(String(reason)))));
+      if (signal?.aborted) onAbort();
+    });
+  }
+  insert(chunk) {
+    if (this.cache.has(chunk.key.chunkX, chunk.key.chunkY)) {
+      throw new Error("semantic worker produced a duplicate resident chunk");
+    }
+    const bytes = semanticChunkBytes(chunk);
+    const entry = { chunk, bytes, references: 0, lastUsed: 0 };
+    this.touch(entry);
+    this.cache.set(chunk.key.chunkX, chunk.key.chunkY, entry);
+    this.cacheBytes += bytes;
+  }
+  touch(entry) {
+    if (this.cacheClock >= Number.MAX_SAFE_INTEGER) {
+      const entries = [...this.cache.values()].sort((first, second) => first.lastUsed - second.lastUsed);
+      for (let index = 0; index < entries.length; index += 1) entries[index].lastUsed = index + 1;
+      this.cacheClock = entries.length;
+    }
+    this.cacheClock += 1;
+    entry.lastUsed = this.cacheClock;
+  }
+  evictUnleased() {
+    while (this.cacheBytes > this.cacheMaxBytes) {
+      let candidate;
+      for (const entry of this.cache.values()) {
+        if (entry.references === 0 && (!candidate || entry.lastUsed < candidate.lastUsed)) candidate = entry;
+      }
+      if (!candidate) return;
+      this.cache.delete(candidate.chunk.key.chunkX, candidate.chunk.key.chunkY);
+      this.cacheBytes -= candidate.bytes;
+    }
+  }
+};
+var InfiniteSemanticWorldSource = class extends ProceduralSemanticWorldSourceBase {
+  constructor(options) {
+    super(options, "procedural-infinite");
+  }
+};
+var ToroidalSemanticWorldSource = class extends ProceduralSemanticWorldSourceBase {
+  constructor(options) {
+    super(options, "procedural-toroidal");
+  }
+};
+var StaticSemanticWorldSource = class {
+  constructor(map, descriptor) {
+    this.chunks = new CoordinatePairMap();
+    this.residentBytes = 0;
+    this.disposed = false;
+    assertWorldDescriptorV2(descriptor);
+    if (descriptor.sourceKind !== "static") {
+      throw new TypeError("StaticSemanticWorldSource requires a static descriptor");
+    }
+    this.descriptor = descriptor;
+    this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+    this.bounds = Object.freeze({ width: descriptor.width, height: descriptor.height, topology: "finite" });
+    const countX = Math.ceil(descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE);
+    const countY = Math.ceil(descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE);
+    for (let chunkX = 0; chunkX < countX; chunkX += 1) {
+      for (let chunkY = 0; chunkY < countY; chunkY += 1) {
+        const chunk = compileStaticSemanticChunk({ map, descriptor, chunkX, chunkY });
+        const bytes = semanticChunkBytes(chunk);
+        this.chunks.set(chunkX, chunkY, { chunk, bytes, references: 0, lastUsed: 0 });
+        this.residentBytes += bytes;
+      }
+    }
+  }
+  resolveChunk(chunkX, chunkY) {
+    return Number.isSafeInteger(chunkX) && Number.isSafeInteger(chunkY) && this.chunks.has(chunkX, chunkY) ? { chunkX, chunkY } : void 0;
+  }
+  chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
+    const first = this.resolveChunk(chunkX, chunkY);
+    const second = this.resolveChunk(centerChunkX, centerChunkY);
+    return first && second ? Math.hypot(first.chunkX - second.chunkX, first.chunkY - second.chunkY) : Number.POSITIVE_INFINITY;
+  }
+  loadChunk(chunkX, chunkY, request = {}) {
+    if (this.disposed) return Promise.reject(new Error("static semantic source has been disposed"));
+    if (request.signal?.aborted) return Promise.reject(abortError2());
+    const entry = this.chunks.get(chunkX, chunkY);
+    if (entry) entry.references += 1;
+    return entry ? Promise.resolve(entry.chunk) : Promise.reject(new RangeError("static semantic chunk is outside the finite world"));
+  }
+  releaseChunk(chunk) {
+    const entry = this.chunks.get(chunk.key.chunkX, chunk.key.chunkY);
+    if (!entry || entry.chunk !== chunk || entry.references <= 0) {
+      throw new Error("static semantic chunk release does not match an active source lease");
+    }
+    entry.references -= 1;
+  }
+  hasChunk(chunkX, chunkY) {
+    return this.chunks.has(chunkX, chunkY);
+  }
+  get stats() {
+    let leasedChunks = 0;
+    for (const entry of this.chunks.values()) {
+      if (entry.references > 0) leasedChunks += 1;
+    }
+    return Object.freeze({
+      residentChunks: this.chunks.size,
+      residentBytes: this.residentBytes,
+      leasedChunks,
+      inFlightChunks: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      workers: 0,
+      busyWorkers: 0,
+      queuedWorkerTasks: 0
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.chunks.clear();
+    this.residentBytes = 0;
+  }
+};
+function assertSemanticWorldSource(source) {
+  if (!source || typeof source !== "object") throw new TypeError("semantic world source must be an object");
+  assertWorldDescriptorV2(source.descriptor);
+  if (source.worldIdentity !== serializeWorldDescriptorV2(source.descriptor)) {
+    throw new TypeError("semantic world source identity does not match its descriptor");
+  }
+  for (const method of ["resolveChunk", "chunkDistance", "loadChunk", "releaseChunk", "hasChunk", "dispose"]) {
+    if (typeof source[method] !== "function") throw new TypeError(`semantic world source must implement ${method}()`);
+  }
+}
+export {
+  BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
+  BASE_SEMANTIC_CHUNK_TILE_COUNT,
+  CORE_SUBSTRATE_ENTRIES,
+  CORE_VEGETATION_PROFILE_ENTRIES,
+  CORE_WORLD_SEMANTICS_V2,
+  DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES,
+  HYDROLOGY_REGION_FORMAT_VERSION,
+  HYDROLOGY_REGION_SIZE,
+  InfiniteSemanticWorldSource,
+  SURFACE_COMPILE_PROFILE,
+  SURFACE_COMPILE_PROFILE_VERSION,
+  SURFACE_CORE_TEXELS,
+  SURFACE_WORKER_PROTOCOL_VERSION,
+  StaticSemanticWorldSource,
+  SurfaceWorkerClient,
+  SurfaceWorkerPool,
+  ToroidalSemanticWorldSource,
+  WORLD_CHUNK_FORMAT_VERSION_V2,
+  WORLD_DESCRIPTOR_FORMAT_VERSION_V2,
+  WORLD_GENERATOR_VERSION_V2,
+  WORLD_SEMANTIC_CHUNK_SIZE,
+  assertBaseSemanticChunk,
+  assertCoreWorldSemanticsV2,
+  assertGenerateSemanticChunkWorkerRequest,
+  assertSemanticWorldSource,
+  assertWorldDescriptorV2,
+  createBaseSemanticChunkGenerator,
+  createCoreInfiniteWorldDescriptorV2,
+  createCoreToroidalWorldDescriptorV2,
+  createGenerateSemanticChunkWorkerRequest,
+  createWorldDescriptorV2,
+  deserializeBaseSemanticChunk,
+  generateBaseSemanticChunk,
+  getBaseSemanticTile,
+  semanticBiomeWeightIndex,
+  semanticCatalogLimits,
+  semanticClimateIndex,
+  semanticGeneratorIdentity,
+  semanticTileIndex,
+  serializeBaseSemanticChunk,
+  serializeWorldDescriptorV2,
+  surfaceColumnStagger,
+  surfaceStagger,
+  surfaceTexelCenterAxis,
+  surfaceToWorld,
+  worldDescriptorsV2Equal,
+  worldToSurface
+};
+//# sourceMappingURL=surface.mjs.map

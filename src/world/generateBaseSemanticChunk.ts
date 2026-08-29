@@ -6,9 +6,9 @@ import {
     semanticTileIndex
 } from "./BaseSemanticChunk";
 import {
-    CORE_WORLD_SEMANTICS_V2,
     CoreSubstrateClass,
-    CoreVegetationProfile
+    CoreVegetationProfile,
+    assertCoreWorldSemanticsV2
 } from "./SemanticCatalogsV2";
 import { WORLD_SEMANTIC_CHUNK_SIZE } from "./SurfaceCompileProfile";
 import { chunkOrigin } from "./WorldGrid";
@@ -99,17 +99,9 @@ function assertCoreDescriptor(
     if (descriptor.sourceKind === "static") {
         throw new TypeError("procedural semantic generation cannot consume a static descriptor");
     }
-    if (descriptor.seaLevel !== quantizeUnitToUint16(WORLD_STYLE_PROFILE.terrain.seaLevel)
-        || descriptor.substrateCatalog.id !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.id
-        || descriptor.substrateCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.contentHash
-        || descriptor.substrateCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.substrateCatalog.entryCount
-        || descriptor.vegetationCatalog.id !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.id
-        || descriptor.vegetationCatalog.contentHash !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.contentHash
-        || descriptor.vegetationCatalog.entryCount !== CORE_WORLD_SEMANTICS_V2.vegetationCatalog.entryCount
-        || descriptor.biomeBasis.some((basis, index) =>
-            basis.id !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].id
-            || basis.contentHash !== CORE_WORLD_SEMANTICS_V2.biomeBasis[index].contentHash)) {
-        throw new TypeError("procedural semantic generator does not support the descriptor catalogs or sea level");
+    assertCoreWorldSemanticsV2(descriptor);
+    if (descriptor.seaLevel !== quantizeUnitToUint16(WORLD_STYLE_PROFILE.terrain.seaLevel)) {
+        throw new TypeError("procedural semantic generator sea level does not match its style profile");
     }
 }
 
