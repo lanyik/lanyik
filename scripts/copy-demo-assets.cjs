@@ -12,6 +12,8 @@ const copies = [
     ["dist/hex-map.global.js.map", "public/js/hex-map.global.js.map"],
     ["dist/world-generator.worker.mjs", "public/js/world-generator.worker.mjs"],
     ["dist/world-generator.worker.mjs.map", "public/js/world-generator.worker.mjs.map"],
+    ["dist/surface.worker.mjs", "public/js/surface.worker.mjs"],
+    ["dist/surface.worker.mjs.map", "public/js/surface.worker.mjs.map"],
     ["dist/pathfinding.mjs", "public/js/pathfinding.mjs"],
     ["dist/pathfinding.mjs.map", "public/js/pathfinding.mjs.map"],
     ["dist/simulation.mjs", "public/js/simulation.mjs"],

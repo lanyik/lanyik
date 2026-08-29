@@ -27,7 +27,8 @@
       "import": "./dist/simulation.mjs",
       "require": "./dist/simulation.cjs"
     },
-    "./world-generator.worker": "./dist/world-generator.worker.mjs"
+    "./world-generator.worker": "./dist/world-generator.worker.mjs",
+    "./surface.worker": "./dist/surface.worker.mjs"
   },
   "unpkg": "dist/hex-map.global.js",
   "files": [

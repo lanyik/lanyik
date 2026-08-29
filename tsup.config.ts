@@ -16,7 +16,8 @@ export default defineConfig({
         "persistence": "src/persistence.ts",
         "pathfinding": "src/pathfinding.ts",
         "simulation": "src/simulation.ts",
-        "world-generator.worker": "src/world/generateWorld.worker.ts"
+        "world-generator.worker": "src/world/generateWorld.worker.ts",
+        "surface.worker": "src/world/surface.worker.ts"
     },
     format: ["esm", "cjs"],
     outDir: "dist",

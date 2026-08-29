@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { WORLD_GENERATOR_VERSION } from "../../src/world/WorldGeneratorVersion";
 import { WORLD_WORKER_PROTOCOL_VERSION } from "../../src/world/WorldDescriptor";
+import { createCoreInfiniteWorldDescriptorV2 } from "../../src/world/SemanticCatalogsV2";
+import { SURFACE_WORKER_PROTOCOL_VERSION } from "../../src/world/SurfaceWorkerProtocol";
+import { WORLD_GENERATOR_VERSION_V2 } from "../../src/world/WorldDescriptorV2";
 
 interface WorkerProbe {
     kind: "message" | "error" | "messageerror" | "timeout";
@@ -47,6 +50,62 @@ test("world worker generates a transferable chunk in a real browser", async ({ p
     });
 
     expect(result).toEqual({ kind: "message", chunkLength: 26 * 26 });
+});
+
+test("surface worker transfers one validated protocol-3 semantic chunk", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    const descriptor = createCoreInfiniteWorldDescriptorV2("surface-worker-probe");
+    const result = await page.evaluate(({ protocolVersion, generatorVersion, descriptor }) =>
+        new Promise<Record<string, unknown>>(resolve => {
+            const worker = new Worker("/js/surface.worker.mjs", { type: "module" });
+            const finish = (value: Record<string, unknown>): void => {
+                worker.terminate();
+                resolve(value);
+            };
+            worker.addEventListener("message", event => {
+                const chunk = event.data?.chunk;
+                finish({
+                    type: event.data?.type,
+                    requestId: event.data?.requestId,
+                    chunkX: chunk?.key?.chunkX,
+                    chunkY: chunk?.key?.chunkY,
+                    substrateLength: chunk?.substrateClass?.length,
+                    heightLength: chunk?.macroHeight?.length,
+                    biomeLength: chunk?.biomeWeights?.length,
+                    firstBiomeSum: chunk?.biomeWeights
+                        ? chunk.biomeWeights[0] + chunk.biomeWeights[1]
+                            + chunk.biomeWeights[2] + chunk.biomeWeights[3]
+                        : -1
+                });
+            }, { once: true });
+            worker.addEventListener("error", event => finish({
+                type: "browserError",
+                message: event.message
+            }), { once: true });
+            worker.postMessage({
+                protocolVersion,
+                generatorVersion,
+                requestId: 11,
+                type: "generateSemanticChunk",
+                descriptor,
+                key: { chunkX: -3, chunkY: 2 }
+            });
+            setTimeout(() => finish({ type: "timeout" }), 10_000);
+        }), {
+        protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+        generatorVersion: WORLD_GENERATOR_VERSION_V2,
+        descriptor
+    });
+    expect(result).toEqual({
+        type: "generateSemanticChunkResult",
+        requestId: 11,
+        chunkX: -3,
+        chunkY: 2,
+        substrateLength: 1024,
+        heightLength: 1024,
+        biomeLength: 4096,
+        firstBiomeSum: 255
+    });
 });
 
 test("worker pool replaces a real crashed Worker and serves the next request", async ({ page }) => {

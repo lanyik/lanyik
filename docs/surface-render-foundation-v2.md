@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序语义块量化、安全整数噪声格、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -777,6 +777,10 @@ Worker 池至少支持三个明确任务：
 1. `generateSemanticChunk`：生成 32×32 BaseSemanticChunk。
 2. `generateHydrologyRegion`：从确定性 `MacroDrainageGraph` 裁出 128×128 HydrologyRegion。
 3. `compileSurfaceChunk`：将 effective window 编译为 16×16 CompiledSurfaceChunk。
+
+当前已落地的独立 `surface.worker` bundle 使用最终 protocol version 3 和 generator version 6；请求固定包含 `requestId + type + descriptor + key`，成功与失败响应分别使用 `generateSemanticChunkResult` 和 `surfaceWorkerError` 判别项，不用可选 payload 猜测响应类型。语义任务转移六个 SoA payload buffer；主线程收到后按 descriptor catalog 重新完整校验并重新发布冻结 chunk，错误 key、错误版本、未知 request ID 或损坏数组会终止该 Worker client，而不是继续使用可疑结果。每个 Worker 以完整规范 descriptor identity 复用一个无状态 generator/resolver，切换 identity 时整体替换，避免逐 chunk 重建 resolver 或跨世界污染缓存。
+
+该 bundle 是尚未接入生产渲染器的 v2 构建入口，不是运行时 fallback；当前生产 `world-generator.worker` 在最终切换前仍服务 v1。后续 `generateHydrologyRegion` 和 `compileSurfaceChunk` 必须扩展同一个 protocol-3 discriminated union，不能另加可选字段协议或按异常回退旧 Worker。
 
 有限/环绕世界的低分辨率排水图准备可以是独立任务；无限 resolver 则按 region 的有限依赖窗口求值。二者与 semantic generation 共用确定性 resolver 基础和统一调度器。任务协议使用 discriminated union，不用可选字段猜测任务类型。
 

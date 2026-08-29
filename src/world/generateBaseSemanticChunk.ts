@@ -33,6 +33,12 @@ export interface GenerateBaseSemanticChunkOptions {
     readonly chunkY: number;
 }
 
+export interface BaseSemanticChunkGenerator {
+    readonly descriptor: InfiniteWorldDescriptorV2 | ToroidalWorldDescriptorV2;
+    readonly identity: string;
+    generate(chunkX: number, chunkY: number): BaseSemanticChunk;
+}
+
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 function quantizeUnitToUint16(value: number): number {
@@ -107,25 +113,20 @@ function assertCoreDescriptor(
     }
 }
 
-export function generateBaseSemanticChunk(
-    options: Readonly<GenerateBaseSemanticChunkOptions>
+function generateWithResolver(
+    descriptor: InfiniteWorldDescriptorV2 | ToroidalWorldDescriptorV2,
+    resolver: ReturnType<typeof createSemanticWorldSurfaceResolver>,
+    chunkX: number,
+    chunkY: number
 ): BaseSemanticChunk {
-    if (!options || typeof options !== "object") throw new TypeError("semantic chunk generation options are required");
-    assertCoreDescriptor(options.descriptor);
-    const origin = chunkOrigin(options.chunkX, options.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
-    if (options.descriptor.sourceKind === "procedural-toroidal") {
-        const chunksX = options.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
-        const chunksY = options.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
-        if (options.chunkX < 0 || options.chunkX >= chunksX || options.chunkY < 0 || options.chunkY >= chunksY) {
+    const origin = chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    if (descriptor.sourceKind === "procedural-toroidal") {
+        const chunksX = descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
+        const chunksY = descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
+        if (chunkX < 0 || chunkX >= chunksX || chunkY < 0 || chunkY >= chunksY) {
             throw new RangeError("toroidal semantic chunk key must be canonical and inside the world");
         }
     }
-    const resolver = createSemanticWorldSurfaceResolver({
-        seed: options.descriptor.seed,
-        domain: options.descriptor.sourceKind === "procedural-toroidal"
-            ? { topology: "toroidal", width: options.descriptor.width, height: options.descriptor.height }
-            : { topology: "infinite" }
-    });
     const substrateClass = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
     const macroHeight = new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
     const biomeWeights = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT * 4);
@@ -148,7 +149,7 @@ export function generateBaseSemanticChunk(
     }
 
     return createBaseSemanticChunk({
-        key: { chunkX: options.chunkX, chunkY: options.chunkY },
+        key: { chunkX, chunkY },
         revision: 0,
         substrateClass,
         macroHeight,
@@ -157,9 +158,33 @@ export function generateBaseSemanticChunk(
         vegetationDensity,
         vegetationProfile
     }, {
-        substrateCount: options.descriptor.substrateCatalog.entryCount,
-        vegetationProfileCount: options.descriptor.vegetationCatalog.entryCount
+        substrateCount: descriptor.substrateCatalog.entryCount,
+        vegetationProfileCount: descriptor.vegetationCatalog.entryCount
     });
+}
+
+export function createBaseSemanticChunkGenerator(descriptor: WorldDescriptorV2): BaseSemanticChunkGenerator {
+    assertCoreDescriptor(descriptor);
+    const resolver = createSemanticWorldSurfaceResolver({
+        seed: descriptor.seed,
+        domain: descriptor.sourceKind === "procedural-toroidal"
+            ? { topology: "toroidal", width: descriptor.width, height: descriptor.height }
+            : { topology: "infinite" }
+    });
+    return Object.freeze({
+        descriptor,
+        identity: serializeWorldDescriptorV2(descriptor),
+        generate(chunkX: number, chunkY: number): BaseSemanticChunk {
+            return generateWithResolver(descriptor, resolver, chunkX, chunkY);
+        }
+    });
+}
+
+export function generateBaseSemanticChunk(
+    options: Readonly<GenerateBaseSemanticChunkOptions>
+): BaseSemanticChunk {
+    if (!options || typeof options !== "object") throw new TypeError("semantic chunk generation options are required");
+    return createBaseSemanticChunkGenerator(options.descriptor).generate(options.chunkX, options.chunkY);
 }
 
 export function semanticGeneratorIdentity(descriptor: WorldDescriptorV2): string {
