@@ -6,6 +6,7 @@ import {
     MACRO_DRAINAGE_TERMINAL,
     MacroDrainageRaster,
     buildMacroDrainageTree,
+    buildToroidalMacroDrainageTree,
     macroDrainageIndex
 } from "../../src/world/MacroDrainageTree";
 
@@ -136,5 +137,21 @@ describe("MacroDrainageTree", () => {
         expect(tree.validNodeCount).toBe(4096);
         expect(tree.maxDrainageRank).toBe(4095);
         expect(tree.discharge[tree.terminalIndices[0]]).toBe(4096);
+    });
+
+    test("routes across both seams when the raster topology is toroidal", () => {
+        const input = raster(
+            4,
+            4,
+            (x, y) => x === 0 && y === 0 ? 80 : 120 + x * 4 + y,
+            (x, y) => x === 0 && y === 0
+        );
+        const seamNode = macroDrainageIndex(3, 0, 4);
+        const bounded = buildMacroDrainageTree(input);
+        const toroidal = buildToroidalMacroDrainageTree(input);
+        expect(bounded.downstream[seamNode]).not.toBe(0);
+        expect(toroidal.downstream[seamNode]).toBe(0);
+        assertAllPathsTerminate(toroidal, input.valid);
+        expect(() => buildToroidalMacroDrainageTree(raster(2, 3, () => 100))).toThrow(/at least three/);
     });
 });

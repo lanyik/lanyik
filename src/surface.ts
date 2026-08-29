@@ -109,3 +109,17 @@ export type {
     ProceduralSemanticWorldSourceOptions
 } from "./world/SemanticWorldSource";
 
+export {
+    MACRO_DRAINAGE_NODE_STEP_TILES,
+    MAX_MACRO_DRAINAGE_GRAPH_NODES,
+    OCEAN_BODY_ID,
+    buildMacroDrainageGraph,
+    assertMacroDrainageGraph,
+    macroDrainageNodeTile,
+    macroDrainageNodeId,
+    macroDrainageTerminalBodyId
+} from "./world/MacroDrainageGraph";
+export type {
+    MacroDrainageGraph,
+    BuildMacroDrainageGraphOptions
+} from "./world/MacroDrainageGraph";

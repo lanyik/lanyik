@@ -100,7 +100,10 @@ export function macroDrainageIndex(x: number, y: number, height: number): number
     return x * height + y;
 }
 
-function assertRaster(raster: Readonly<MacroDrainageRaster>): number {
+function assertRaster(
+    raster: Readonly<MacroDrainageRaster>,
+    topology: "bounded" | "toroidal"
+): number {
     if (!Number.isInteger(raster.width) || raster.width <= 0
         || !Number.isInteger(raster.height) || raster.height <= 0) {
         throw new RangeError("macro drainage raster dimensions must be positive integers");
@@ -131,7 +134,7 @@ function assertRaster(raster: Readonly<MacroDrainageRaster>): number {
         if (raster.valid[index] !== 0) validCount += 1;
     }
     if (validCount === 0) throw new RangeError("macro drainage raster must contain a valid node");
-    assertConnected(raster, validCount);
+    assertConnected(raster, validCount, topology);
     return validCount;
 }
 
@@ -139,19 +142,49 @@ function forEachNeighbor(
     index: number,
     width: number,
     height: number,
+    topology: "bounded" | "toroidal",
     visit: (neighbor: number) => void
 ): void {
     const x = Math.floor(index / height);
     const y = index - x * height;
     for (let direction = 0; direction < NEIGHBOR_X.length; direction += 1) {
-        const neighborX = x + NEIGHBOR_X[direction];
-        const neighborY = y + NEIGHBOR_Y[direction];
-        if (neighborX < 0 || neighborX >= width || neighborY < 0 || neighborY >= height) continue;
+        let neighborX = x + NEIGHBOR_X[direction];
+        let neighborY = y + NEIGHBOR_Y[direction];
+        if (topology === "toroidal") {
+            neighborX = (neighborX + width) % width;
+            neighborY = (neighborY + height) % height;
+        } else if (neighborX < 0 || neighborX >= width || neighborY < 0 || neighborY >= height) {
+            continue;
+        }
         visit(macroDrainageIndex(neighborX, neighborY, height));
     }
 }
 
-function assertConnected(raster: Readonly<MacroDrainageRaster>, validCount: number): void {
+function areNeighbors(
+    first: number,
+    second: number,
+    width: number,
+    height: number,
+    topology: "bounded" | "toroidal"
+): boolean {
+    const firstX = Math.floor(first / height);
+    const firstY = first - firstX * height;
+    const secondX = Math.floor(second / height);
+    const secondY = second - secondX * height;
+    let distanceX = Math.abs(firstX - secondX);
+    let distanceY = Math.abs(firstY - secondY);
+    if (topology === "toroidal") {
+        distanceX = Math.min(distanceX, width - distanceX);
+        distanceY = Math.min(distanceY, height - distanceY);
+    }
+    return distanceX <= 1 && distanceY <= 1 && (distanceX !== 0 || distanceY !== 0);
+}
+
+function assertConnected(
+    raster: Readonly<MacroDrainageRaster>,
+    validCount: number,
+    topology: "bounded" | "toroidal"
+): void {
     const first = raster.valid.findIndex(value => value !== 0);
     const visited = new Uint8Array(raster.valid.length);
     const queue = new Int32Array(validCount);
@@ -161,7 +194,7 @@ function assertConnected(raster: Readonly<MacroDrainageRaster>, validCount: numb
     visited[first] = 1;
     while (read < written) {
         const index = queue[read++];
-        forEachNeighbor(index, raster.width, raster.height, neighbor => {
+        forEachNeighbor(index, raster.width, raster.height, topology, neighbor => {
             if (raster.valid[neighbor] === 0 || visited[neighbor] !== 0) return;
             visited[neighbor] = 1;
             queue[written++] = neighbor;
@@ -185,8 +218,11 @@ function betterParent(
                 || (drainageRank[candidate] === drainageRank[current] && candidate < current)));
 }
 
-export function buildMacroDrainageTree(raster: Readonly<MacroDrainageRaster>): MacroDrainageTree {
-    const validNodeCount = assertRaster(raster);
+function buildMacroDrainageTreeForTopology(
+    raster: Readonly<MacroDrainageRaster>,
+    topology: "bounded" | "toroidal"
+): MacroDrainageTree {
+    const validNodeCount = assertRaster(raster, topology);
     const length = raster.valid.length;
     const downstream = new Int32Array(length);
     downstream.fill(MACRO_DRAINAGE_INVALID);
@@ -225,7 +261,7 @@ export function buildMacroDrainageTree(raster: Readonly<MacroDrainageRaster>): M
 
     const heap = new DrainageMinHeap();
     const relaxFrom = (parent: number) => {
-        forEachNeighbor(parent, raster.width, raster.height, neighbor => {
+        forEachNeighbor(parent, raster.width, raster.height, topology, neighbor => {
             if (raster.valid[neighbor] === 0 || settled[neighbor] !== 0) return;
             const candidateSpill = Math.max(raster.groundHeight[neighbor], spillLevel[parent]);
             if (candidateSpill < bestSpill[neighbor]) {
@@ -277,26 +313,66 @@ export function buildMacroDrainageTree(raster: Readonly<MacroDrainageRaster>): M
         validNodeCount,
         maxDrainageRank: settlementOrder.length
     });
-    assertMacroDrainageTree(tree, raster.valid);
+    assertMacroDrainageTree(tree, raster.valid, topology);
     return tree;
 }
 
-export function assertMacroDrainageTree(tree: Readonly<MacroDrainageTree>, valid: Uint8Array): void {
+export function buildMacroDrainageTree(raster: Readonly<MacroDrainageRaster>): MacroDrainageTree {
+    return buildMacroDrainageTreeForTopology(raster, "bounded");
+}
+
+export function buildToroidalMacroDrainageTree(raster: Readonly<MacroDrainageRaster>): MacroDrainageTree {
+    if (raster.width < 3 || raster.height < 3) {
+        throw new RangeError("toroidal macro drainage raster dimensions must each be at least three");
+    }
+    return buildMacroDrainageTreeForTopology(raster, "toroidal");
+}
+
+export function assertMacroDrainageTree(
+    tree: Readonly<MacroDrainageTree>,
+    valid: Uint8Array,
+    topology: "bounded" | "toroidal" = "bounded"
+): void {
+    if (!tree || typeof tree !== "object"
+        || !Number.isInteger(tree.width) || tree.width <= 0
+        || !Number.isInteger(tree.height) || tree.height <= 0
+        || (tree.terminalKind !== "ocean" && tree.terminalKind !== "lake")
+        || (topology !== "bounded" && topology !== "toroidal")) {
+        throw new TypeError("macro drainage tree shape or topology is invalid");
+    }
     const length = tree.width * tree.height;
     if (!(valid instanceof Uint8Array) || valid.length !== length
-        || tree.downstream.length !== length
-        || tree.drainageRank.length !== length
-        || tree.spillLevel.length !== length
-        || tree.discharge.length !== length) {
+        || !(tree.terminalIndices instanceof Uint32Array)
+        || !(tree.downstream instanceof Int32Array) || tree.downstream.length !== length
+        || !(tree.drainageRank instanceof Uint32Array) || tree.drainageRank.length !== length
+        || !(tree.spillLevel instanceof Uint16Array) || tree.spillLevel.length !== length
+        || !(tree.discharge instanceof Uint32Array) || tree.discharge.length !== length) {
         throw new TypeError("macro drainage tree arrays do not match its dimensions");
     }
+    if (!Number.isSafeInteger(tree.validNodeCount) || tree.validNodeCount <= 0 || tree.validNodeCount > length
+        || !Number.isSafeInteger(tree.maxDrainageRank)
+        || tree.maxDrainageRank < 0 || tree.maxDrainageRank >= tree.validNodeCount
+        || tree.terminalIndices.length !== tree.validNodeCount - tree.maxDrainageRank
+        || tree.terminalIndices.length === 0) {
+        throw new RangeError("macro drainage tree summary is outside its supported bounds");
+    }
+    const terminalMask = new Uint8Array(length);
+    for (const terminal of tree.terminalIndices) {
+        if (terminal >= length || valid[terminal] === 0 || terminalMask[terminal] !== 0) {
+            throw new Error("macro drainage terminal list contains an invalid or duplicate node");
+        }
+        terminalMask[terminal] = 1;
+    }
+    const nodeAtRank = new Uint32Array(tree.maxDrainageRank + 1);
+    const rankSeen = new Uint8Array(tree.maxDrainageRank + 1);
     let validCount = 0;
     let observedMaxRank = 0;
     for (let index = 0; index < length; index += 1) {
+        if (valid[index] > 1) throw new TypeError("macro drainage valid mask must contain only zero or one");
         if (valid[index] === 0) {
             if (tree.downstream[index] !== MACRO_DRAINAGE_INVALID
                 || tree.drainageRank[index] !== MACRO_DRAINAGE_INVALID_RANK
-                || tree.discharge[index] !== 0) {
+                || tree.discharge[index] !== 0 || terminalMask[index] !== 0) {
                 throw new Error("macro drainage tree populated an invalid node");
             }
             continue;
@@ -305,12 +381,19 @@ export function assertMacroDrainageTree(tree: Readonly<MacroDrainageTree>, valid
         observedMaxRank = Math.max(observedMaxRank, tree.drainageRank[index]);
         const parent = tree.downstream[index];
         if (parent === MACRO_DRAINAGE_TERMINAL) {
-            if (tree.drainageRank[index] !== 0) {
-                throw new Error("macro drainage terminal must have rank zero");
+            if (tree.drainageRank[index] !== 0 || terminalMask[index] === 0) {
+                throw new Error("macro drainage terminal must be listed exactly once with rank zero");
             }
             continue;
         }
-        if (parent < 0 || parent >= length || valid[parent] === 0) {
+        const rank = tree.drainageRank[index];
+        if (terminalMask[index] !== 0 || rank === 0 || rank > tree.maxDrainageRank || rankSeen[rank] !== 0) {
+            throw new Error("macro drainage non-terminal ranks must form one canonical order");
+        }
+        rankSeen[rank] = 1;
+        nodeAtRank[rank] = index;
+        if (parent < 0 || parent >= length || valid[parent] === 0
+            || !areNeighbors(index, parent, tree.width, tree.height, topology)) {
             throw new Error("macro drainage node has an invalid downstream parent");
         }
         if (tree.drainageRank[parent] >= tree.drainageRank[index]) {
@@ -325,5 +408,20 @@ export function assertMacroDrainageTree(tree: Readonly<MacroDrainageTree>, valid
     }
     if (validCount !== tree.validNodeCount || observedMaxRank !== tree.maxDrainageRank) {
         throw new Error("macro drainage tree summary does not match its arrays");
+    }
+    const expectedDischarge = new Uint32Array(length);
+    for (let index = 0; index < length; index += 1) {
+        if (valid[index] !== 0) expectedDischarge[index] = 1;
+    }
+    for (let rank = tree.maxDrainageRank; rank > 0; rank -= 1) {
+        if (rankSeen[rank] === 0) throw new Error("macro drainage rank order contains a gap");
+        const index = nodeAtRank[rank];
+        const parent = tree.downstream[index];
+        expectedDischarge[parent] = Math.min(0xffff_ffff, expectedDischarge[parent] + expectedDischarge[index]);
+    }
+    for (let index = 0; index < length; index += 1) {
+        if (tree.discharge[index] !== expectedDischarge[index]) {
+            throw new Error("macro drainage discharge does not match the canonical accumulation");
+        }
     }
 }

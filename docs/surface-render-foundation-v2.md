@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。HydrologyRegion 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -254,6 +254,10 @@ catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis h
 - boundary port 由排水边与 region 边界的交点产生；端口是图的序列化切口，不是通过边键随机创造河流的来源。
 
 有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。无限世界使用确定性的有界流域 resolver：逻辑世界按 512×512 格的 canonical cell 放置一个与 8 格宏观节点对齐、每轴最多抖动 64 格的 Voronoi site。site 始终位于 cell 中央 `[192, 320]` 范围，因此任意宏观节点只需比较自身 cell 周围 3×3 个 site；生成一个 128×128 region 所有候选流域时，地形依赖严格限制在 5×5 个 basin cell 内。该上界由 site 抖动范围和六边格世界度量共同证明，不依赖当前已加载邻区。
+
+当前有限/环绕实现固定每 8 个逻辑格采一个宏观节点，位置为该 8×8 单元的 `(4, 4)`；有限世界末端不足 8 格时夹到最后一个有效逻辑格。构建器通过统一 `SemanticWorldSource` 以最多 32 个、默认 8 个并发 lease 读取 32×32 semantic chunk，完成后全部释放；请求顺序和并发数不参与结果。完整图最多允许 1,048,576 个节点，超出预算在加载前确定性失败。`dischargeClass = floor(log2(discharge))`，节点和湖盆身份由规范宏观节点位置生成，海域统一使用 `OCEAN_BODY_ID`。
+
+有限图使用有边界八邻域；环绕图在两个轴上使用真正的 toroidal 八邻域，不把 topology seam 当作出口或边界。发布验证会重新检查终点清单、连续且唯一的非终点 rank、相邻下游边、spill level 单调性以及从每节点单位来水反向累加得到的精确 discharge；终点映射和 discharge class 不匹配时拒绝发布。
 
 每个无限流域在上述有限窗口内从基础海域终点（若存在）或稳定湖盆终点运行确定性的 priority-flood。低分辨率排水 raster 固定为 X-major，并使用冻结顺序的八邻域；海域节点为 rank 0 终点，无海流域选择最低高度、再按 X-major 索引打破平局的稳定湖盆终点。其他节点只连接到已经结算的 parent，按结算顺序获得严格下降的 `drainageRank`；priority-flood spill level 保证下游水位不逆升，反向 rank 累加保证汇流 discharge 不减。发布前拒绝非连通流域掩码、海域高于海平面、非二值掩码或任何 rank/水位/discharge 不变量错误。
 
