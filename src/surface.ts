@@ -60,6 +60,20 @@ export type {
 } from "./world/SurfaceDependencyKey";
 
 export {
+    TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION,
+    EFFECTIVE_WINDOW_TILE_SIZE,
+    EFFECTIVE_WINDOW_TILE_COUNT,
+    assertTransferableEffectiveWindow,
+    buildTransferableEffectiveWindow,
+    transferableEffectiveWindowTransferables
+} from "./world/TransferableEffectiveWindow";
+export type {
+    TransferableHydrologyRegionSlice,
+    TransferableEffectiveWindow,
+    BuildTransferableEffectiveWindowOptions
+} from "./world/TransferableEffectiveWindow";
+
+export {
     surfaceColumnStagger,
     surfaceStagger,
     surfaceToWorld,

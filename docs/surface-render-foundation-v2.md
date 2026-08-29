@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key 与 request token 已冻结，save barrier、持久化 store、编译传输窗口、编译算法及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token 与独立所有权编译传输窗口已冻结，save barrier、持久化 store、编译算法及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -472,6 +472,8 @@ interface ResidentSurfaceLease {
 compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
 
 请求快照包含 16×16 核心区、两格语义 halo 和相交水文 feature。`TransferableEffectiveWindow` 拥有从池中取得的独立传输 buffer；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。Worker 返回后 buffer 回池。首次装载同一 32×32 semantic chunk 下的四个 render chunks 时，调度器可以合并快照构建和任务投递，但四个编译结果仍拥有独立 token、缓存和失效范围。
+
+已落地的 transfer window 格式版本 1 固定为 20×20 X-major semantic SoA 与 binary valid mask；finite 边界外 payload 必须全零，infinite 负坐标和 toroidal seam 在复制前映射到规范 source key。构建器并行租用且最多去重到 4 个 semantic chunks 与 4 个 hydrology regions，使用 `Promise.allSettled` 保证任一加载失败时也归还所有已成功 lease。水文部分复制完整、可重新运行 `assertHydrologyRegion` 的基础 region，再单列有序 suppression IDs 和相交的完整 authored upserts；不传输失去内部引用闭包的预过滤残片。所有 semantic、port、segment、lake、mouth 与 authored feature typed arrays 都是互不别名的新 `ArrayBuffer`；真实 transfer detach 后 resident base 与 delta buffer 保持完整。
 
 地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；编译块只提供表面场、真实 bounds 和可选的混合水面 geometry。`CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
 
