@@ -2252,6 +2252,52 @@ async function buildTransferableEffectiveWindow(options) {
   }
 }
 
+// src/world/EffectiveWindowSampler.ts
+function windowIndex(window, tileX, tileY) {
+  const localX = tileX - window.originTileX;
+  const localY = tileY - window.originTileY;
+  if (localX < 0 || localX >= EFFECTIVE_WINDOW_TILE_SIZE || localY < 0 || localY >= EFFECTIVE_WINDOW_TILE_SIZE) return -1;
+  return localX * EFFECTIVE_WINDOW_TILE_SIZE + localY;
+}
+function sampleEffectiveWindowSemantic(window, u, v, heightScale, output) {
+  if (!Number.isFinite(u) || !Number.isFinite(v) || !Number.isFinite(heightScale) || heightScale <= 0) {
+    throw new RangeError("effective window sample coordinates or height scale are invalid");
+  }
+  const tileX = Math.floor(u);
+  const tileY = Math.floor(v);
+  const fractionX = u - tileX;
+  const fractionY = v - tileY;
+  let validWeight = 0;
+  let macroHeight = 0;
+  let biome0 = 0;
+  let biome1 = 0;
+  let biome2 = 0;
+  let biome3 = 0;
+  for (let offsetX = 0; offsetX <= 1; offsetX += 1) {
+    const weightX = offsetX === 0 ? 1 - fractionX : fractionX;
+    for (let offsetY = 0; offsetY <= 1; offsetY += 1) {
+      const index = windowIndex(window, tileX + offsetX, tileY + offsetY);
+      if (index < 0 || window.valid[index] === 0) continue;
+      const weight = weightX * (offsetY === 0 ? 1 - fractionY : fractionY);
+      const biomeOffset = index * 4;
+      validWeight += weight;
+      macroHeight += window.macroHeight[index] * weight;
+      biome0 += window.biomeWeights[biomeOffset] * weight;
+      biome1 += window.biomeWeights[biomeOffset + 1] * weight;
+      biome2 += window.biomeWeights[biomeOffset + 2] * weight;
+      biome3 += window.biomeWeights[biomeOffset + 3] * weight;
+    }
+  }
+  if (validWeight <= 0) return false;
+  const inverseWeight = 1 / validWeight;
+  output.groundHeight = macroHeight * inverseWeight / 65535 * heightScale;
+  output.biome0 = biome0 * inverseWeight;
+  output.biome1 = biome1 * inverseWeight;
+  output.biome2 = biome2 * inverseWeight;
+  output.biome3 = biome3 * inverseWeight;
+  return true;
+}
+
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
 function getNeighborCoords(x, y, direction) {
@@ -2359,47 +2405,6 @@ function surfaceTexelCenterAxis(renderChunkCoordinate, texelIndex) {
 }
 
 // src/world/compileSemanticSurfaceField.ts
-function windowIndex(window, tileX, tileY) {
-  const localX = tileX - window.originTileX;
-  const localY = tileY - window.originTileY;
-  if (localX < 0 || localX >= EFFECTIVE_WINDOW_TILE_SIZE || localY < 0 || localY >= EFFECTIVE_WINDOW_TILE_SIZE) return -1;
-  return localX * EFFECTIVE_WINDOW_TILE_SIZE + localY;
-}
-function sampleSemantic(window, u, v, heightScale, output) {
-  const tileX = Math.floor(u);
-  const tileY = Math.floor(v);
-  const fractionX = u - tileX;
-  const fractionY = v - tileY;
-  let validWeight = 0;
-  let macroHeight = 0;
-  let biome0 = 0;
-  let biome1 = 0;
-  let biome2 = 0;
-  let biome3 = 0;
-  for (let offsetX = 0; offsetX <= 1; offsetX += 1) {
-    const weightX = offsetX === 0 ? 1 - fractionX : fractionX;
-    for (let offsetY = 0; offsetY <= 1; offsetY += 1) {
-      const index = windowIndex(window, tileX + offsetX, tileY + offsetY);
-      if (index < 0 || window.valid[index] === 0) continue;
-      const weight = weightX * (offsetY === 0 ? 1 - fractionY : fractionY);
-      const biomeOffset = index * 4;
-      validWeight += weight;
-      macroHeight += window.macroHeight[index] * weight;
-      biome0 += window.biomeWeights[biomeOffset] * weight;
-      biome1 += window.biomeWeights[biomeOffset + 1] * weight;
-      biome2 += window.biomeWeights[biomeOffset + 2] * weight;
-      biome3 += window.biomeWeights[biomeOffset + 3] * weight;
-    }
-  }
-  if (validWeight <= 0) return false;
-  const inverseWeight = 1 / validWeight;
-  output.groundHeight = macroHeight * inverseWeight / 65535 * heightScale;
-  output.biome0 = biome0 * inverseWeight;
-  output.biome1 = biome1 * inverseWeight;
-  output.biome2 = biome2 * inverseWeight;
-  output.biome3 = biome3 * inverseWeight;
-  return true;
-}
 function quantizeMaterialWeights(materialWeights, offset, sample, valid, scratch) {
   if (!valid) {
     materialWeights[offset] = 255;
@@ -2441,7 +2446,13 @@ function compileSemanticSurfaceField(window) {
   const groundHeight = new Uint16Array(COMPILED_SURFACE_TEXEL_COUNT);
   const materialWeights = new Uint8Array(COMPILED_SURFACE_TEXEL_COUNT * 4);
   const shorelineDistance = new Uint16Array(COMPILED_SURFACE_TEXEL_COUNT);
-  const sample = { groundHeight: 0, biome0: 0, biome1: 0, biome2: 0, biome3: 0 };
+  const sample = {
+    groundHeight: 0,
+    biome0: 0,
+    biome1: 0,
+    biome2: 0,
+    biome3: 0
+  };
   const materialScratch = {
     values: new Float64Array(4),
     quantized: new Uint8Array(4),
@@ -2456,7 +2467,7 @@ function compileSemanticSurfaceField(window) {
     for (let texelY = -SURFACE_COMPILE_PROFILE.gutterTexels; texelY < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelY += 1) {
       const v = surfaceTexelCenterAxis(window.renderKey.chunkY, texelY);
       const index = surfaceFieldTexelIndex(texelX, texelY);
-      const sampleIsValid = sampleSemantic(
+      const sampleIsValid = sampleEffectiveWindowSemantic(
         window,
         u,
         v,
@@ -4839,6 +4850,16 @@ var MemorySurfaceDeltaStore = class {
   }
 };
 
+// src/world/HydrologyGeometry.ts
+var HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
+var HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
+function hydrologyRiverHalfWidthTiles(widthClass2) {
+  if (!Number.isInteger(widthClass2) || widthClass2 <= 0 || widthClass2 > 255) {
+    throw new RangeError("hydrology river width class must be a positive uint8 value");
+  }
+  return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES + widthClass2 * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
+}
+
 // src/world/HydrologyFeatureSpatialIndex.ts
 var HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE = 8;
 var MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS = 16384;
@@ -4870,9 +4891,14 @@ function authoredHydrologyFeatureBoundsQ64(feature) {
     throw new TypeError("authored hydrology feature is required for spatial bounds");
   }
   if (feature.kind === "lake") return boundsForPoints(feature.polygon, 0);
-  let maximumWidth = 0;
-  for (const width of feature.widthProfile) maximumWidth = Math.max(maximumWidth, width);
-  return boundsForPoints(feature.controlPoints, maximumWidth * HYDROLOGY_POINT_QUANTIZATION);
+  let maximumHalfWidth = 0;
+  for (const widthClass2 of feature.widthProfile) {
+    maximumHalfWidth = Math.max(maximumHalfWidth, hydrologyRiverHalfWidthTiles(widthClass2));
+  }
+  return boundsForPoints(
+    feature.controlPoints,
+    maximumHalfWidth * HYDROLOGY_POINT_QUANTIZATION
+  );
 }
 function hydrologyRegionBoundsQ64(region) {
   assertHydrologyRegion(region);
@@ -8203,8 +8229,6 @@ function createProceduralHydrologyRegionGenerator(options) {
 
 // src/world/HydrologyRegionSpatialIndex.ts
 var HYDROLOGY_SPATIAL_CELL_SIZE = 16;
-var HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
-var HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
 var HYDROLOGY_KIND_NONE = 0;
 var HYDROLOGY_KIND_OCEAN = 1;
 var HYDROLOGY_KIND_LAKE = 2;
@@ -8279,12 +8303,6 @@ function rangeFor(minimum, maximum, count) {
     clamp(Math.floor(minimum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1),
     clamp(Math.floor(maximum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1)
   ];
-}
-function hydrologyRiverHalfWidthTiles(widthClass2) {
-  if (!Number.isInteger(widthClass2) || widthClass2 <= 0 || widthClass2 > 255) {
-    throw new RangeError("hydrology river width class must be a positive uint8 value");
-  }
-  return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES + widthClass2 * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
 }
 var HydrologyRegionSpatialIndex = class {
   constructor(region) {

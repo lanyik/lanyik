@@ -8,10 +8,18 @@ import {
     RiverMouthFeature,
     assertHydrologyRegion
 } from "./HydrologyRegion";
+import {
+    HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
+    HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
+    hydrologyRiverHalfWidthTiles
+} from "./HydrologyGeometry";
 
 export const HYDROLOGY_SPATIAL_CELL_SIZE = 16;
-export const HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
-export const HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
+export {
+    HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
+    HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
+    hydrologyRiverHalfWidthTiles
+};
 
 export const HYDROLOGY_KIND_NONE = 0;
 export const HYDROLOGY_KIND_OCEAN = 1;
@@ -140,14 +148,6 @@ function rangeFor(minimum: number, maximum: number, count: number): readonly [nu
         clamp(Math.floor(minimum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1),
         clamp(Math.floor(maximum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1)
     ];
-}
-
-export function hydrologyRiverHalfWidthTiles(widthClass: number): number {
-    if (!Number.isInteger(widthClass) || widthClass <= 0 || widthClass > 0xff) {
-        throw new RangeError("hydrology river width class must be a positive uint8 value");
-    }
-    return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES
-        + widthClass * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
 }
 
 export class HydrologyRegionSpatialIndex {

@@ -67,7 +67,7 @@ describe("HydrologyFeatureSpatialIndex", () => {
         expect(index.query({ minX: 30_000, minY: 30_000, maxX: 31_000, maxY: 31_000 })).toEqual([]);
         expect(authoredHydrologyFeatureBoundsQ64(
             features.find(feature => feature.kind === "river")!
-        ).minX).toBeLessThan(0);
+        ).minX).toBe(-48);
     });
 
     test("projects seam-crossing toroidal bounds into both canonical edges", () => {

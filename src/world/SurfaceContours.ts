@@ -32,6 +32,15 @@ export interface SurfaceContourRasterContext {
     readonly worldZ: Float64Array;
 }
 
+export interface SurfaceScalarContourBounds {
+    readonly minU: number;
+    readonly minV: number;
+    readonly maxU: number;
+    readonly maxV: number;
+}
+
+export const MAX_SURFACE_SCALAR_CONTOUR_SAMPLES = 16_384;
+
 function interpolateCrossing(
     firstU: number,
     firstV: number,
@@ -123,6 +132,97 @@ export function surfaceHeightContours(
                 crossings,
                 inside[0],
                 (heights[0] + heights[1] + heights[2] + heights[3]) / 4 < threshold
+            );
+        }
+    }
+    return Object.freeze(segments);
+}
+
+export function surfaceScalarContours(
+    bounds: Readonly<SurfaceScalarContourBounds>,
+    hexSize: number,
+    scalar: (u: number, v: number) => number
+): readonly SurfaceContourSegment[] {
+    if (!bounds || typeof bounds !== "object"
+        || !Number.isFinite(bounds.minU) || !Number.isFinite(bounds.minV)
+        || !Number.isFinite(bounds.maxU) || !Number.isFinite(bounds.maxV)
+        || bounds.minU >= bounds.maxU || bounds.minV >= bounds.maxV
+        || !Number.isFinite(hexSize) || hexSize <= 0 || typeof scalar !== "function") {
+        throw new RangeError("surface scalar contour input is invalid");
+    }
+    const samplesPerTile = SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+    const minimumGridU = Math.floor(bounds.minU * samplesPerTile);
+    const minimumGridV = Math.floor(bounds.minV * samplesPerTile);
+    const maximumGridU = Math.ceil(bounds.maxU * samplesPerTile);
+    const maximumGridV = Math.ceil(bounds.maxV * samplesPerTile);
+    const width = maximumGridU - minimumGridU + 1;
+    const height = maximumGridV - minimumGridV + 1;
+    if (!Number.isSafeInteger(width * height)
+        || width * height > MAX_SURFACE_SCALAR_CONTOUR_SAMPLES) {
+        throw new RangeError("surface scalar contour grid exceeds its fixed sample budget");
+    }
+    const values = new Float64Array(width * height);
+    for (let gridU = 0; gridU < width; gridU += 1) {
+        const u = (minimumGridU + gridU) / samplesPerTile;
+        for (let gridV = 0; gridV < height; gridV += 1) {
+            const value = scalar(u, (minimumGridV + gridV) / samplesPerTile);
+            if (!Number.isFinite(value)) {
+                throw new RangeError("surface scalar contour callback must return finite values");
+            }
+            values[gridU * height + gridV] = value;
+        }
+    }
+    const crossing = (
+        firstU: number,
+        firstV: number,
+        firstValue: number,
+        secondU: number,
+        secondV: number,
+        secondValue: number
+    ): SurfaceWorldPoint => {
+        const amount = -firstValue / (secondValue - firstValue);
+        return surfaceToWorld(
+            firstU + (secondU - firstU) * amount,
+            firstV + (secondV - firstV) * amount,
+            hexSize
+        );
+    };
+    const segments: SurfaceContourSegment[] = [];
+    for (let gridU = 0; gridU < width - 1; gridU += 1) {
+        const u = (minimumGridU + gridU) / samplesPerTile;
+        for (let gridV = 0; gridV < height - 1; gridV += 1) {
+            const v = (minimumGridV + gridV) / samplesPerTile;
+            const bottomLeft = gridU * height + gridV;
+            const topLeft = bottomLeft + 1;
+            const bottomRight = bottomLeft + height;
+            const topRight = bottomRight + 1;
+            const cell = [
+                values[bottomLeft],
+                values[topLeft],
+                values[topRight],
+                values[bottomRight]
+            ];
+            const inside = cell.map(value => value < 0);
+            if (inside.every(value => value === inside[0])) continue;
+            const step = 1 / samplesPerTile;
+            const crossings: (SurfaceWorldPoint | undefined)[] = [undefined, undefined, undefined, undefined];
+            if (inside[0] !== inside[1]) {
+                crossings[0] = crossing(u, v, cell[0], u, v + step, cell[1]);
+            }
+            if (inside[1] !== inside[2]) {
+                crossings[1] = crossing(u, v + step, cell[1], u + step, v + step, cell[2]);
+            }
+            if (inside[2] !== inside[3]) {
+                crossings[2] = crossing(u + step, v + step, cell[2], u + step, v, cell[3]);
+            }
+            if (inside[3] !== inside[0]) {
+                crossings[3] = crossing(u + step, v, cell[3], u, v, cell[0]);
+            }
+            addContourSegments(
+                segments,
+                crossings,
+                inside[0],
+                (cell[0] + cell[1] + cell[2] + cell[3]) * 0.25 < 0
             );
         }
     }

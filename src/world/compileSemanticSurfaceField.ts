@@ -5,6 +5,10 @@ import {
     surfaceFieldTexelIndex
 } from "./CompiledSurfaceField";
 import { finiteFloat16Bits } from "./HalfFloat";
+import {
+    EffectiveWindowSemanticSample,
+    sampleEffectiveWindowSemantic
+} from "./EffectiveWindowSampler";
 import { SURFACE_COMPILE_PROFILE, surfaceInfluenceRadiusWorld } from "./SurfaceCompileProfile";
 import { surfaceTexelCenterAxis } from "./SurfaceLattice";
 import {
@@ -13,74 +17,16 @@ import {
     assertTransferableEffectiveWindow
 } from "./TransferableEffectiveWindow";
 
-interface SemanticSample {
-    groundHeight: number;
-    biome0: number;
-    biome1: number;
-    biome2: number;
-    biome3: number;
-}
-
 interface MaterialScratch {
     readonly values: Float64Array;
     readonly quantized: Uint8Array;
     readonly fractions: Float64Array;
 }
 
-function windowIndex(window: Readonly<TransferableEffectiveWindow>, tileX: number, tileY: number): number {
-    const localX = tileX - window.originTileX;
-    const localY = tileY - window.originTileY;
-    if (localX < 0 || localX >= EFFECTIVE_WINDOW_TILE_SIZE
-        || localY < 0 || localY >= EFFECTIVE_WINDOW_TILE_SIZE) return -1;
-    return localX * EFFECTIVE_WINDOW_TILE_SIZE + localY;
-}
-
-function sampleSemantic(
-    window: Readonly<TransferableEffectiveWindow>,
-    u: number,
-    v: number,
-    heightScale: number,
-    output: SemanticSample
-): boolean {
-    const tileX = Math.floor(u);
-    const tileY = Math.floor(v);
-    const fractionX = u - tileX;
-    const fractionY = v - tileY;
-    let validWeight = 0;
-    let macroHeight = 0;
-    let biome0 = 0;
-    let biome1 = 0;
-    let biome2 = 0;
-    let biome3 = 0;
-    for (let offsetX = 0; offsetX <= 1; offsetX += 1) {
-        const weightX = offsetX === 0 ? 1 - fractionX : fractionX;
-        for (let offsetY = 0; offsetY <= 1; offsetY += 1) {
-            const index = windowIndex(window, tileX + offsetX, tileY + offsetY);
-            if (index < 0 || window.valid[index] === 0) continue;
-            const weight = weightX * (offsetY === 0 ? 1 - fractionY : fractionY);
-            const biomeOffset = index * 4;
-            validWeight += weight;
-            macroHeight += window.macroHeight[index] * weight;
-            biome0 += window.biomeWeights[biomeOffset] * weight;
-            biome1 += window.biomeWeights[biomeOffset + 1] * weight;
-            biome2 += window.biomeWeights[biomeOffset + 2] * weight;
-            biome3 += window.biomeWeights[biomeOffset + 3] * weight;
-        }
-    }
-    if (validWeight <= 0) return false;
-    const inverseWeight = 1 / validWeight;
-    output.groundHeight = macroHeight * inverseWeight / 0xffff * heightScale;
-    output.biome0 = biome0 * inverseWeight;
-    output.biome1 = biome1 * inverseWeight;
-    output.biome2 = biome2 * inverseWeight;
-    output.biome3 = biome3 * inverseWeight;
-    return true;
-}
-
 function quantizeMaterialWeights(
     materialWeights: Uint8Array,
     offset: number,
-    sample: Readonly<SemanticSample>,
+    sample: Readonly<EffectiveWindowSemanticSample>,
     valid: boolean,
     scratch: MaterialScratch
 ): void {
@@ -127,7 +73,9 @@ export function compileSemanticSurfaceField(
     const groundHeight = new Uint16Array(COMPILED_SURFACE_TEXEL_COUNT);
     const materialWeights = new Uint8Array(COMPILED_SURFACE_TEXEL_COUNT * 4);
     const shorelineDistance = new Uint16Array(COMPILED_SURFACE_TEXEL_COUNT);
-    const sample: SemanticSample = { groundHeight: 0, biome0: 0, biome1: 0, biome2: 0, biome3: 0 };
+    const sample: EffectiveWindowSemanticSample = {
+        groundHeight: 0, biome0: 0, biome1: 0, biome2: 0, biome3: 0
+    };
     const materialScratch: MaterialScratch = {
         values: new Float64Array(4),
         quantized: new Uint8Array(4),
@@ -146,7 +94,7 @@ export function compileSemanticSurfaceField(
             texelY += 1) {
             const v = surfaceTexelCenterAxis(window.renderKey.chunkY, texelY);
             const index = surfaceFieldTexelIndex(texelX, texelY);
-            const sampleIsValid = sampleSemantic(
+            const sampleIsValid = sampleEffectiveWindowSemantic(
                 window,
                 u,
                 v,

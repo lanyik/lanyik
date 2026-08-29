@@ -9,6 +9,7 @@ import {
     HydrologyRegion,
     assertHydrologyRegion
 } from "./HydrologyRegion";
+import { hydrologyRiverHalfWidthTiles } from "./HydrologyGeometry";
 import { HYDROLOGY_REGION_SIZE } from "./SurfaceCompileProfile";
 import { chunkOrigin } from "./WorldGrid";
 import {
@@ -79,9 +80,14 @@ export function authoredHydrologyFeatureBoundsQ64(
         throw new TypeError("authored hydrology feature is required for spatial bounds");
     }
     if (feature.kind === "lake") return boundsForPoints(feature.polygon, 0);
-    let maximumWidth = 0;
-    for (const width of feature.widthProfile) maximumWidth = Math.max(maximumWidth, width);
-    return boundsForPoints(feature.controlPoints, maximumWidth * HYDROLOGY_POINT_QUANTIZATION);
+    let maximumHalfWidth = 0;
+    for (const widthClass of feature.widthProfile) {
+        maximumHalfWidth = Math.max(maximumHalfWidth, hydrologyRiverHalfWidthTiles(widthClass));
+    }
+    return boundsForPoints(
+        feature.controlPoints,
+        maximumHalfWidth * HYDROLOGY_POINT_QUANTIZATION
+    );
 }
 
 export function hydrologyRegionBoundsQ64(

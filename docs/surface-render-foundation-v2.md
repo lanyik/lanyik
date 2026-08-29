@@ -342,7 +342,7 @@ interface HydrologyBodyRef {
 
 每个区域在加载后构建可丢弃的紧凑只读空间索引；索引不进入权威格式。查询 16×16 渲染块时只返回与块 bounds 加固定 halo 相交的 feature，不扫描区域全部河流。
 
-当前 `HydrologyRegionSpatialIndex` 固定使用 16×16 逻辑格空间桶，按 feature 的扩张 bounds 一次登记 river/lake 索引；单点查询只检查所在桶。河流半宽由 `0.5 + widthClass × 0.25` 逻辑格冻结派生，河段沿控制点插值 width/level，并以 1 格 coverage 过渡带输出离散 coverage、kind、level、depth、八方向 flow、profile 与稳定 body ref。mouth 在末端半个河宽内确定性切换到目标 ocean/lake body，并把目标水体 flow 归零。
+当前 `HydrologyRegionSpatialIndex` 固定使用 16×16 逻辑格空间桶，按 feature 的扩张 bounds 一次登记 river/lake 索引；单点查询只检查所在桶。基础 region 与 authored river 的 `widthProfile` 都解释为同一 width class，半宽由共享 `0.5 + widthClass × 0.25` 逻辑格冻结派生；authoring feature BVH 也只按该真实最大半宽扩张，不把 class 数值误当整格宽度。河段沿控制点插值 width/level，并以 1 格 coverage 过渡带输出离散 coverage、kind、level、depth、八方向 flow、profile 与稳定 body ref。mouth 在末端半个河宽内确定性切换到目标 ocean/lake body，并把目标水体 flow 归零。
 
 `DerivedHydrologyRaster` 是上述查询在调用方规则采样格上的 X-major typed-array 快照，携带 world identity、region key/revision 和最多 255 项的按 body ID 排序局部 palette。无水固定全零，body index 0 固定表示无水；palette 超限、kind/body 不匹配或非河流具有 flow 均立即失败。该 raster 没有序列化入口，也不进入存档；当前 64×64 查询已加入性能门，与冷 basin build、相邻 cache hit 和 resident bytes 一起防止复杂度回退。
 
@@ -551,7 +551,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 6. 选择共享地面 topology，生成必要的水面 coverage mesh 和植被确定性种子。
 7. 量化输出，并计算保守 bounds、字节数和内容哈希。
 
-当前已落地的 `compileSemanticSurfaceField` 只实现并明确命名为上述第 1 步的连续语义地面核，不冒充完整水文编译器。它按全局 `surfaceTexelCenterAxis` 对四个 tile center 做双线性采样，finite 边缘忽略 valid mask 外的规范零值并重新归一化；宏观 `uint16` 高度通过 dependency key 的 `heightScale` 转为世界 Y 后量化为 binary16。四项 descriptor biome basis 暂作为冻结的四个 material basis 输入，插值后用最大余数法恢复严格和 255；后续坡度、substrate 与湿岸调制只能在保持该守恒量的前提下加入。循环复用固定 scratch，不在 4356 texel 热循环中创建临时对象。正坐标、负坐标和相邻块两列共享 texel 已锁定逐位测试。
+当前已落地的 `compileSemanticSurfaceField` 只实现并明确命名为上述第 1 步的连续语义地面核，不冒充完整水文编译器。它通过共享 `EffectiveWindowSampler` 按全局 `surfaceTexelCenterAxis` 对四个 tile center 做双线性采样，finite 边缘忽略 valid mask 外的规范零值并重新归一化；可变水位水文轮廓复用同一无分配采样函数，不另写地面插值。宏观 `uint16` 高度通过 dependency key 的 `heightScale` 转为世界 Y 后量化为 binary16。四项 descriptor biome basis 暂作为冻结的四个 material basis 输入，插值后用最大余数法恢复严格和 255；后续坡度、substrate 与湿岸调制只能在保持该守恒量的前提下加入。循环复用固定 scratch，不在 4356 texel 热循环中创建临时对象。正坐标、负坐标和相邻块两列共享 texel 已锁定逐位测试。
 
 已落地的 `compileOceanSurfaceField` 在上述地面核之上完成海洋子阶段。它只读取 transfer window 中 descriptor 冻结的 uint16 海平面，以 20×20 tile-center 宏观高度运行确定性 marching-squares 轮廓；四交点 saddle 由 cell-center 高度与左下角状态唯一消歧。无水体策略的共享 `SurfaceContours` 核把轮廓经 `surfaceToWorld` 转到世界 XZ，以保守 surface bounds 只访问两格影响范围内的 texel，再计算真实欧氏点线最短距离并饱和；coverage 使用固定一个 texel 宽的线性抗锯齿带。判湿、水位和水深统一使用最终 binary16 精度，陆侧少量 coverage 被限制到 127，水侧被限制到至少 128。全陆块不创建 palette entry，全海块直接得到饱和负 SDF 与 255 coverage；海岸跨相邻 chunk 的两列共享字段已逐位锁定。该函数仍不处理显式湖泊、河流和河口，完整编译入口将在这些 feature 合并后发布。
 
