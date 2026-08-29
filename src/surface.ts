@@ -115,8 +115,10 @@ export type {
     SurfaceHydrologyDepthViolation
 } from "./world/compileSurfaceField";
 export {
+    SURFACE_GROUND_SLOPE_SAMPLE_STEP,
     createCompiledSurfaceSample,
-    CompiledSurfaceSampler
+    CompiledSurfaceSampler,
+    sampleCompiledGroundSlope
 } from "./world/CompiledSurfaceSampler";
 export type { MutableCompiledSurfaceSample } from "./world/CompiledSurfaceSampler";
 export {
@@ -172,6 +174,35 @@ export type {
     SurfaceQueryServiceStats,
     SurfaceWaterQueryResult
 } from "./world/SurfaceQueryService";
+export {
+    NAVIGATION_OVERRIDE_SECTION_FORMAT_VERSION,
+    MAX_NAVIGATION_OVERRIDE_ENTRIES,
+    NAVIGATION_OVERRIDE_SECTION_BASE_RESIDENT_BYTES,
+    assertNavigationOverrideSection,
+    createNavigationOverrideSection,
+    navigationOverrideEntryIndex,
+    navigationOverrideSectionResidentBytes
+} from "./world/NavigationOverrideSection";
+export type {
+    NavigationOverrideSection,
+    NavigationOverrideSectionInput
+} from "./world/NavigationOverrideSection";
+export {
+    NAVIGATION_CHUNK_SUMMARY_FORMAT_VERSION,
+    NAVIGATION_COST_FRACTION_BITS,
+    NAVIGATION_COST_SCALE,
+    NAVIGATION_CHUNK_SUMMARY_BASE_RESIDENT_BYTES,
+    assertNavigationMovementProfile,
+    createNavigationMovementProfile,
+    assertNavigationChunkSummary,
+    compileNavigationChunkSummary,
+    navigationChunkSummaryResidentBytes
+} from "./world/NavigationChunkSummary";
+export type {
+    NavigationMovementProfile,
+    NavigationChunkSummary,
+    CompileNavigationChunkSummaryOptions
+} from "./world/NavigationChunkSummary";
 
 export {
     assertEnvironmentHandle,

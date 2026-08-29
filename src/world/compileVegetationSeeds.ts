@@ -8,7 +8,8 @@ import {
 } from "./CompiledVegetationSeeds";
 import {
     CompiledSurfaceSampler,
-    createCompiledSurfaceSample
+    createCompiledSurfaceSample,
+    sampleCompiledGroundSlope
 } from "./CompiledSurfaceSampler";
 import { CompiledSurfaceField, SURFACE_WATER_KIND_RIVER } from "./CompiledSurfaceField";
 import { hashSafeIntegerCoordinates } from "./DeterministicHash";
@@ -31,7 +32,6 @@ const PLACEMENT_SALT = 0xd1b5_4a35;
 const VEGETATION_SLOPE_FADE_START = 0.35;
 const VEGETATION_MAXIMUM_SLOPE = 0.75;
 const VEGETATION_SHORE_FADE_TILES = 1;
-const VEGETATION_SLOPE_SAMPLE_STEP = 0.25;
 
 function clamp(value: number, minimum: number, maximum: number): number {
     return Math.max(minimum, Math.min(maximum, value));
@@ -50,37 +50,6 @@ function candidateHash(
     salt: number
 ): number {
     return hashSafeIntegerCoordinates(worldSeed, tileX, tileY, (salt + candidate) >>> 0);
-}
-
-function slopeAt(
-    sampler: CompiledSurfaceSampler,
-    localU: number,
-    localV: number,
-    hexSize: number
-): number {
-    const minimum = -0.5;
-    const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
-    const minimumU = Math.max(minimum, localU - VEGETATION_SLOPE_SAMPLE_STEP);
-    const maximumU = Math.min(maximum, localU + VEGETATION_SLOPE_SAMPLE_STEP);
-    const minimumV = Math.max(minimum, localV - VEGETATION_SLOPE_SAMPLE_STEP);
-    const maximumV = Math.min(maximum, localV + VEGETATION_SLOPE_SAMPLE_STEP);
-    const heightU = sampler.sampleGroundHeight(maximumU, localV)
-        - sampler.sampleGroundHeight(minimumU, localV);
-    const heightV = sampler.sampleGroundHeight(localU, maximumV)
-        - sampler.sampleGroundHeight(localU, minimumV);
-    const worldUMinimum = surfaceToWorld(minimumU, localV, hexSize);
-    const worldUMaximum = surfaceToWorld(maximumU, localV, hexSize);
-    const worldVMinimum = surfaceToWorld(localU, minimumV, hexSize);
-    const worldVMaximum = surfaceToWorld(localU, maximumV, hexSize);
-    const deltaUx = worldUMaximum.x - worldUMinimum.x;
-    const deltaUz = worldUMaximum.z - worldUMinimum.z;
-    const deltaVz = worldVMaximum.z - worldVMinimum.z;
-    if (!(deltaUx > 0) || !(deltaVz > 0)) {
-        throw new Error("vegetation slope stencil collapsed at the surface core boundary");
-    }
-    const gradientZ = heightV / deltaVz;
-    const gradientX = (heightU - gradientZ * deltaUz) / deltaUx;
-    return Math.hypot(gradientX, gradientZ);
 }
 
 function ownerIndex(
@@ -164,7 +133,12 @@ export function compileVegetationSeeds(
                     0,
                     1
                 );
-                const slope = slopeAt(sampler, storedLogical.u, storedLogical.v, hexSize);
+                const slope = sampleCompiledGroundSlope(
+                    sampler,
+                    storedLogical.u,
+                    storedLogical.v,
+                    hexSize
+                );
                 const slopeFactor = 1 - smoothstep(
                     VEGETATION_SLOPE_FADE_START,
                     VEGETATION_MAXIMUM_SLOPE,

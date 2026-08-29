@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service、无 GPU 的 latest-snapshot `SurfaceQueryService`、原生事务式 IndexedDB delta store/save barrier、exact-domain/resident-filtered `WorldChangeSet`，以及类型化 `SurfaceWorldEditor` 与三种水文冲突策略已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。显式 hydrology rebake、导航/模拟摘要、消费者接线及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service、无 GPU 的 latest-snapshot `SurfaceQueryService`、32×32 `NavigationChunkSummary` 纯 CPU 编译契约、原生事务式 IndexedDB delta store/save barrier、exact-domain/resident-filtered `WorldChangeSet`，以及类型化 `SurfaceWorldEditor` 与三种水文冲突策略已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。显式 hydrology rebake、导航摘要服务/寻路器、模拟消费及生产接线后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -164,7 +164,7 @@ interface BaseSemanticChunk {
 | vegetationDensity | 1× `Uint8`/格 | 区域植被密度，不是实例列表 |
 | vegetationProfile | 1× `Uint8`/格 | descriptor 冻结的生态组合索引，可按权重产生多个物种 |
 
-权威字段只保存不能从其他权威字段唯一推出的基础事实。坡度、湿岸、材质输出、水深、`ocean/lake/river` 分类和默认通行性均为派生结果，不回写 semantic chunk。若应用需要人为禁止通行，使用独立、显式的 navigation override section；它不能伪装成 `substrateClass`，也不能改变渲染水体身份。
+权威字段只保存不能从其他权威字段唯一推出的基础事实。坡度、湿岸、材质输出、水深、`ocean/lake/river` 分类和默认通行性均为派生结果，不回写 semantic chunk。若应用需要人为禁止或强制允许通行，使用独立、显式的 `NavigationOverrideSection`；它不能伪装成 `substrateClass`，也不能改变渲染水体身份。当前格式 1 使用一个 semantic key、正整数独立 revision、唯一升序 `Uint16 tileIndex` 与同长 `Uint16 traversalCostQ8`：值 0 是显式阻断，正值是绕过派生坡度/水体判定的绝对 Q8 通行成本。空 section 由“不存在该 section”唯一表达，数组不得别名；该 section 由应用导航状态拥有，不进入 surface delta 或 surface world identity。
 
 海洋不通过一个独立 mesh modifier 表示。低于冻结海平面的有效宏观地表形成基础海域；湖盆与河流来自水文区域。按格派生出的水体结果属于查询缓存，不与水文 feature 形成第二份权威。
 
@@ -947,7 +947,11 @@ Worker 池至少支持三个明确任务：
 
 ### 16.1 导航
 
-导航摘要按 32×32 semantic chunk 构建，读取 `EffectiveWorldView` 的 substrate/navigation override，并通过共享 hydrology query kernel 得到静态水体与坡度结果。导航可以持有有字节预算的 derived hydrology raster，但不能另建一套逐格水体权威。高度或水文 change domain 会精确失效相交摘要；材质和纯视觉风格不影响导航。
+导航摘要按 32×32 semantic chunk 构建，读取 `EffectiveWorldView` 的有效范围与 revision，并通过四个精确对齐的 current 16×16 compiled CPU field 得到静态水体与坡度结果。导航可以持有有字节预算的 compiled/derived 查询结果，但不能另建一套逐格水体权威。高度或水文 change domain 会精确失效相交摘要；材质、substrate 涂刷和纯视觉风格不隐式改变导航，人工规则只通过独立 navigation override revision 进入。
+
+已落地的格式 1 `NavigationChunkSummary` 固定保存 world/key、effective/base/delta/override revision、完整 movement profile、四个有序 `SurfaceDependencyKey`、1024 项 valid/Q8 traversal cost/component label，以及按 tile index、六方向顺序排列的跨 chunk portal edge。movement profile 显式给出最大 Ground 坡度、dry 基础/坡度成本和 ocean/lake/river 的绝对成本或不可通行 `null`，不从可换皮的 substrate catalog 猜玩法规则。水体只在共享 coverage `> 0.5` 时采用 water cost；dry 坡度通过与植被共用的 `sampleCompiledGroundSlope` 读取 canonical Ground 三角高度，成本量化为 `round(cost × 256)`，0 只表示阻断或 invalid。
+
+`compileNavigationChunkSummary` 一次验证四个 published chunk、相同 metrics、world identity、2×2 render key 布局，以及每个 surface dependency 中目标 semantic 的精确 base/delta revision。然后应用 sparse override、按全局六边格奇偶性做确定性 flood-fill，并输出紧凑 portal edge。finite 域外不生成 portal；toroidal 先规范坐标，所以 32×32 单 chunk 世界的四条 seam 是同一摘要内部连接，不会伪造自指 portal。输出 typed arrays 互不别名，resident bytes 包含实际数组和四个结构化 dependency 序列；全陆地、显式阻断带、全海洋强制桥和单 chunk 环绕 seam 均有冻结测试。
 
 长程导航可以持有 semantic lease，但不能为了寻路创建 GPU surface。
 

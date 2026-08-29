@@ -4,6 +4,9 @@ import {
 } from "./CompiledSurfaceField";
 import { float16BitsToFloat32 } from "./HalfFloat";
 import { SURFACE_COMPILE_PROFILE, SURFACE_CORE_TEXELS } from "./SurfaceCompileProfile";
+import { surfaceToWorld } from "./SurfaceLattice";
+
+export const SURFACE_GROUND_SLOPE_SAMPLE_STEP = 0.25;
 
 export interface MutableCompiledSurfaceSample {
     groundHeight: number;
@@ -223,4 +226,48 @@ export class CompiledSurfaceSampler {
         output.groundHeight = this.sampleGroundHeight(localU, localV);
         return output;
     }
+}
+
+// Shared gameplay/vegetation slope kernel. The stencil works in logical
+// coordinates, converts both basis directions through SurfaceLattice, and uses
+// the same canonical Ground triangle sampler as placement and navigation.
+export function sampleCompiledGroundSlope(
+    sampler: CompiledSurfaceSampler,
+    localU: number,
+    localV: number,
+    hexSize: number
+): number {
+    if (!(sampler instanceof CompiledSurfaceSampler)) {
+        throw new TypeError("compiled ground slope requires a surface sampler");
+    }
+    if (!Number.isFinite(hexSize) || hexSize <= 0) {
+        throw new RangeError("compiled ground slope requires a positive finite hex size");
+    }
+    const minimum = -0.5;
+    const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+    if (!Number.isFinite(localU) || !Number.isFinite(localV)
+        || localU < minimum || localU > maximum || localV < minimum || localV > maximum) {
+        throw new RangeError("compiled ground slope coordinate is outside the render chunk core");
+    }
+    const minimumU = Math.max(minimum, localU - SURFACE_GROUND_SLOPE_SAMPLE_STEP);
+    const maximumU = Math.min(maximum, localU + SURFACE_GROUND_SLOPE_SAMPLE_STEP);
+    const minimumV = Math.max(minimum, localV - SURFACE_GROUND_SLOPE_SAMPLE_STEP);
+    const maximumV = Math.min(maximum, localV + SURFACE_GROUND_SLOPE_SAMPLE_STEP);
+    const heightU = sampler.sampleGroundHeight(maximumU, localV)
+        - sampler.sampleGroundHeight(minimumU, localV);
+    const heightV = sampler.sampleGroundHeight(localU, maximumV)
+        - sampler.sampleGroundHeight(localU, minimumV);
+    const worldUMinimum = surfaceToWorld(minimumU, localV, hexSize);
+    const worldUMaximum = surfaceToWorld(maximumU, localV, hexSize);
+    const worldVMinimum = surfaceToWorld(localU, minimumV, hexSize);
+    const worldVMaximum = surfaceToWorld(localU, maximumV, hexSize);
+    const deltaUx = worldUMaximum.x - worldUMinimum.x;
+    const deltaUz = worldUMaximum.z - worldUMinimum.z;
+    const deltaVz = worldVMaximum.z - worldVMinimum.z;
+    if (!(deltaUx > 0) || !(deltaVz > 0)) {
+        throw new Error("compiled ground slope stencil collapsed at the surface core boundary");
+    }
+    const gradientZ = heightV / deltaVz;
+    const gradientX = (heightU - gradientZ * deltaUz) / deltaUx;
+    return Math.hypot(gradientX, gradientZ);
 }
