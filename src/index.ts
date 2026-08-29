@@ -135,6 +135,25 @@ export type {
     WebGlContextState,
     WebGlContextStats
 } from "./rendering/HexMapRendererHost";
+export {
+    assertEnvironmentHandle,
+    createEnvironmentHandle,
+    assertLightingState,
+    createLightingState,
+    lightingStatesEqual
+} from "./rendering/LightingState";
+export type {
+    ReadonlyLinearRgb,
+    ReadonlyDirection3,
+    EnvironmentHandle,
+    LightingState,
+    LightingStateInput
+} from "./rendering/LightingState";
+export { ThreeLightingAdapter } from "./rendering/ThreeLightingAdapter";
+export type {
+    LightingUniformSet,
+    ThreeLightingRendererTarget
+} from "./rendering/ThreeLightingAdapter";
 export { HexMapInteractionController } from "./rendering/HexMapInteractionController";
 export type {
     HexMapInteractionControllerOptions,

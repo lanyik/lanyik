@@ -119,6 +119,26 @@ export type {
     CompiledVegetationSeedsInput
 } from "./world/CompiledVegetationSeeds";
 export { compileVegetationSeeds } from "./world/compileVegetationSeeds";
+
+export {
+    assertEnvironmentHandle,
+    createEnvironmentHandle,
+    assertLightingState,
+    createLightingState,
+    lightingStatesEqual
+} from "./rendering/LightingState";
+export type {
+    ReadonlyLinearRgb,
+    ReadonlyDirection3,
+    EnvironmentHandle,
+    LightingState,
+    LightingStateInput
+} from "./rendering/LightingState";
+export { ThreeLightingAdapter } from "./rendering/ThreeLightingAdapter";
+export type {
+    LightingUniformSet,
+    ThreeLightingRendererTarget
+} from "./rendering/ThreeLightingAdapter";
 export {
     COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
     assertCompiledSurfaceBounds,
