@@ -3374,6 +3374,248 @@ var HydrologyFeatureSpatialIndex = class {
   }
 };
 
+// src/world/CoordinatePairMap.ts
+var CoordinatePairMap = class {
+  constructor() {
+    this.columns = /* @__PURE__ */ new Map();
+    this.entryCount = 0;
+  }
+  get size() {
+    return this.entryCount;
+  }
+  get(x, y) {
+    return this.columns.get(x)?.get(y);
+  }
+  has(x, y) {
+    return this.columns.get(x)?.has(y) ?? false;
+  }
+  set(x, y, value) {
+    let column = this.columns.get(x);
+    if (!column) {
+      column = /* @__PURE__ */ new Map();
+      this.columns.set(x, column);
+    }
+    if (!column.has(y)) this.entryCount += 1;
+    column.set(y, value);
+    return this;
+  }
+  delete(x, y) {
+    const column = this.columns.get(x);
+    if (!column || !column.delete(y)) return false;
+    this.entryCount -= 1;
+    if (column.size === 0) this.columns.delete(x);
+    return true;
+  }
+  clear() {
+    this.columns.clear();
+    this.entryCount = 0;
+  }
+  *values() {
+    for (const column of this.columns.values()) yield* column.values();
+  }
+  *entries() {
+    for (const [x, column] of this.columns) {
+      for (const [y, value] of column) yield [x, y, value];
+    }
+  }
+};
+
+// src/runtime/PriorityTaskQueue.ts
+var WorkQueueBackpressureError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.name = "WorkQueueBackpressureError";
+  }
+};
+var LANE_RANK = {
+  critical: 0,
+  interactive: 1,
+  visible: 2,
+  prefetch: 3,
+  background: 4
+};
+function cancellationError(message) {
+  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+var PriorityTaskQueue = class {
+  constructor(options = {}) {
+    this.entries = /* @__PURE__ */ new Map();
+    this.keyed = /* @__PURE__ */ new Map();
+    this.nextId = 1;
+    this.sequence = 0;
+    this.pendingWeight = 0;
+    this.cancelledTasks = 0;
+    this.shedTasks = 0;
+    this.maxPendingTasks = options.maxPendingTasks ?? Number.MAX_SAFE_INTEGER;
+    this.maxPendingWeight = options.maxPendingWeight ?? Number.MAX_SAFE_INTEGER;
+    this.starvationMs = options.starvationMs ?? 2e3;
+    this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+    if (!Number.isSafeInteger(this.maxPendingTasks) || this.maxPendingTasks <= 0) {
+      throw new RangeError("maxPendingTasks must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(this.maxPendingWeight) || this.maxPendingWeight <= 0) {
+      throw new RangeError("maxPendingWeight must be a positive safe integer");
+    }
+    if (!Number.isFinite(this.starvationMs) || this.starvationMs <= 0) {
+      throw new RangeError("starvationMs must be positive and finite");
+    }
+  }
+  enqueue(value, options = {}) {
+    const lane = options.lane ?? "visible";
+    const priority = options.priority ?? 0;
+    const weight = options.weight ?? 1;
+    if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
+    if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
+    if (!Number.isSafeInteger(weight) || weight <= 0) throw new RangeError("task weight must be a positive safe integer");
+    if (options.key !== void 0 && options.key.length === 0) throw new TypeError("task key cannot be empty");
+    if (options.signal?.aborted) {
+      this.notifyCancellation(options.cancelled, cancellationError("Task was aborted before it was queued"));
+      return void 0;
+    }
+    if (weight > this.maxPendingWeight) {
+      this.shedTasks += 1;
+      this.notifyCancellation(
+        options.cancelled,
+        new WorkQueueBackpressureError(
+          `Task weight ${weight} exceeds the queue limit ${this.maxPendingWeight}`
+        )
+      );
+      return void 0;
+    }
+    if (options.key !== void 0) {
+      const previous = this.keyed.get(options.key);
+      if (previous !== void 0) this.remove(previous, cancellationError("Task was replaced"), true);
+    }
+    const entry = {
+      id: this.nextId++,
+      key: options.key,
+      lane,
+      priority,
+      weight,
+      sequence: this.sequence++,
+      enqueuedAt: this.now(),
+      value,
+      signal: options.signal,
+      cancelled: options.cancelled
+    };
+    if (options.signal) {
+      entry.abort = () => this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+      options.signal.addEventListener("abort", entry.abort, { once: true });
+    }
+    this.entries.set(entry.id, entry);
+    if (entry.key !== void 0) this.keyed.set(entry.key, entry.id);
+    this.pendingWeight += weight;
+    this.shedOverflow();
+    return this.entries.has(entry.id) ? entry.id : void 0;
+  }
+  take(predicate) {
+    const now = this.now();
+    let selected;
+    for (const entry of this.entries.values()) {
+      if (entry.signal?.aborted) {
+        this.remove(entry.id, cancellationError("Queued task was aborted"), true);
+        continue;
+      }
+      if (predicate && !predicate(entry.value)) continue;
+      if (!selected || this.compare(entry, selected, now) < 0) selected = entry;
+    }
+    if (!selected) return void 0;
+    this.detach(selected);
+    return selected.value;
+  }
+  cancelKey(key, reason = cancellationError("Queued task was cancelled")) {
+    const id = this.keyed.get(key);
+    return id === void 0 ? false : this.remove(id, reason, true);
+  }
+  cancel(id, reason = cancellationError("Queued task was cancelled")) {
+    return this.remove(id, reason, true);
+  }
+  clear(reason = cancellationError("Work queue was cleared")) {
+    for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
+  }
+  get values() {
+    return [...this.entries.values()].map((entry) => entry.value);
+  }
+  get stats() {
+    const now = this.now();
+    let oldestTaskAgeMs = 0;
+    let starvationPromotions = 0;
+    for (const entry of this.entries.values()) {
+      const age = Math.max(0, now - entry.enqueuedAt);
+      oldestTaskAgeMs = Math.max(oldestTaskAgeMs, age);
+      starvationPromotions += Math.min(LANE_RANK[entry.lane], Math.floor(age / this.starvationMs));
+    }
+    return {
+      pendingTasks: this.entries.size,
+      pendingWeight: this.pendingWeight,
+      oldestTaskAgeMs,
+      cancelledTasks: this.cancelledTasks,
+      shedTasks: this.shedTasks,
+      starvationPromotions
+    };
+  }
+  shedOverflow() {
+    while (this.entries.size > this.maxPendingTasks || this.pendingWeight > this.maxPendingWeight) {
+      let worst;
+      for (const entry of this.entries.values()) {
+        if (!worst || this.compareForEviction(entry, worst) > 0) worst = entry;
+      }
+      if (!worst) return;
+      this.shedTasks += 1;
+      this.remove(
+        worst.id,
+        new WorkQueueBackpressureError("Queued task was shed by the configured backpressure limit"),
+        false
+      );
+    }
+  }
+  compare(first, second, now) {
+    const firstStarved = this.isStarved(first, now);
+    const secondStarved = this.isStarved(second, now);
+    if (firstStarved !== secondStarved) return firstStarved ? -1 : 1;
+    if (firstStarved) return first.sequence - second.sequence;
+    return this.effectiveLane(first, now) - this.effectiveLane(second, now) || first.priority - second.priority || first.sequence - second.sequence;
+  }
+  // Dispatch aging prevents starvation among admitted work. Admission is a
+  // different policy boundary: an old background task must not evict a fresh
+  // critical task merely because the tab was suspended long enough for its
+  // wall-clock starvation deadline to elapse.
+  compareForEviction(first, second) {
+    return LANE_RANK[first.lane] - LANE_RANK[second.lane] || first.priority - second.priority || first.sequence - second.sequence;
+  }
+  isStarved(entry, now) {
+    const deadlineWindows = LANE_RANK[entry.lane] + 1;
+    return Math.max(0, now - entry.enqueuedAt) >= this.starvationMs * deadlineWindows;
+  }
+  effectiveLane(entry, now) {
+    const promotions = Math.min(LANE_RANK[entry.lane], Math.floor(Math.max(0, now - entry.enqueuedAt) / this.starvationMs));
+    return LANE_RANK[entry.lane] - promotions;
+  }
+  remove(id, reason, countCancellation) {
+    const entry = this.entries.get(id);
+    if (!entry) return false;
+    this.detach(entry);
+    if (countCancellation) this.cancelledTasks += 1;
+    this.notifyCancellation(entry.cancelled, reason);
+    return true;
+  }
+  notifyCancellation(observer, reason) {
+    try {
+      observer?.(reason);
+    } catch {
+    }
+  }
+  detach(entry) {
+    this.entries.delete(entry.id);
+    if (entry.key !== void 0 && this.keyed.get(entry.key) === entry.id) this.keyed.delete(entry.key);
+    if (entry.signal && entry.abort) entry.signal.removeEventListener("abort", entry.abort);
+    this.pendingWeight = Math.max(0, this.pendingWeight - entry.weight);
+  }
+};
+
 // src/world/SurfaceWorkerProtocol.ts
 var SURFACE_WORKER_PROTOCOL_VERSION = 3;
 function assertWorkerRequestEnvelope(value, expectedType) {
@@ -3627,202 +3869,6 @@ var SurfaceWorkerClient = class {
   }
 };
 
-// src/runtime/PriorityTaskQueue.ts
-var WorkQueueBackpressureError = class extends Error {
-  constructor() {
-    super(...arguments);
-    this.name = "WorkQueueBackpressureError";
-  }
-};
-var LANE_RANK = {
-  critical: 0,
-  interactive: 1,
-  visible: 2,
-  prefetch: 3,
-  background: 4
-};
-function cancellationError(message) {
-  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
-}
-var PriorityTaskQueue = class {
-  constructor(options = {}) {
-    this.entries = /* @__PURE__ */ new Map();
-    this.keyed = /* @__PURE__ */ new Map();
-    this.nextId = 1;
-    this.sequence = 0;
-    this.pendingWeight = 0;
-    this.cancelledTasks = 0;
-    this.shedTasks = 0;
-    this.maxPendingTasks = options.maxPendingTasks ?? Number.MAX_SAFE_INTEGER;
-    this.maxPendingWeight = options.maxPendingWeight ?? Number.MAX_SAFE_INTEGER;
-    this.starvationMs = options.starvationMs ?? 2e3;
-    this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
-    if (!Number.isSafeInteger(this.maxPendingTasks) || this.maxPendingTasks <= 0) {
-      throw new RangeError("maxPendingTasks must be a positive safe integer");
-    }
-    if (!Number.isSafeInteger(this.maxPendingWeight) || this.maxPendingWeight <= 0) {
-      throw new RangeError("maxPendingWeight must be a positive safe integer");
-    }
-    if (!Number.isFinite(this.starvationMs) || this.starvationMs <= 0) {
-      throw new RangeError("starvationMs must be positive and finite");
-    }
-  }
-  enqueue(value, options = {}) {
-    const lane = options.lane ?? "visible";
-    const priority = options.priority ?? 0;
-    const weight = options.weight ?? 1;
-    if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
-    if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
-    if (!Number.isSafeInteger(weight) || weight <= 0) throw new RangeError("task weight must be a positive safe integer");
-    if (options.key !== void 0 && options.key.length === 0) throw new TypeError("task key cannot be empty");
-    if (options.signal?.aborted) {
-      this.notifyCancellation(options.cancelled, cancellationError("Task was aborted before it was queued"));
-      return void 0;
-    }
-    if (weight > this.maxPendingWeight) {
-      this.shedTasks += 1;
-      this.notifyCancellation(
-        options.cancelled,
-        new WorkQueueBackpressureError(
-          `Task weight ${weight} exceeds the queue limit ${this.maxPendingWeight}`
-        )
-      );
-      return void 0;
-    }
-    if (options.key !== void 0) {
-      const previous = this.keyed.get(options.key);
-      if (previous !== void 0) this.remove(previous, cancellationError("Task was replaced"), true);
-    }
-    const entry = {
-      id: this.nextId++,
-      key: options.key,
-      lane,
-      priority,
-      weight,
-      sequence: this.sequence++,
-      enqueuedAt: this.now(),
-      value,
-      signal: options.signal,
-      cancelled: options.cancelled
-    };
-    if (options.signal) {
-      entry.abort = () => this.remove(entry.id, cancellationError("Queued task was aborted"), true);
-      options.signal.addEventListener("abort", entry.abort, { once: true });
-    }
-    this.entries.set(entry.id, entry);
-    if (entry.key !== void 0) this.keyed.set(entry.key, entry.id);
-    this.pendingWeight += weight;
-    this.shedOverflow();
-    return this.entries.has(entry.id) ? entry.id : void 0;
-  }
-  take(predicate) {
-    const now = this.now();
-    let selected;
-    for (const entry of this.entries.values()) {
-      if (entry.signal?.aborted) {
-        this.remove(entry.id, cancellationError("Queued task was aborted"), true);
-        continue;
-      }
-      if (predicate && !predicate(entry.value)) continue;
-      if (!selected || this.compare(entry, selected, now) < 0) selected = entry;
-    }
-    if (!selected) return void 0;
-    this.detach(selected);
-    return selected.value;
-  }
-  cancelKey(key, reason = cancellationError("Queued task was cancelled")) {
-    const id = this.keyed.get(key);
-    return id === void 0 ? false : this.remove(id, reason, true);
-  }
-  cancel(id, reason = cancellationError("Queued task was cancelled")) {
-    return this.remove(id, reason, true);
-  }
-  clear(reason = cancellationError("Work queue was cleared")) {
-    for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
-  }
-  get values() {
-    return [...this.entries.values()].map((entry) => entry.value);
-  }
-  get stats() {
-    const now = this.now();
-    let oldestTaskAgeMs = 0;
-    let starvationPromotions = 0;
-    for (const entry of this.entries.values()) {
-      const age = Math.max(0, now - entry.enqueuedAt);
-      oldestTaskAgeMs = Math.max(oldestTaskAgeMs, age);
-      starvationPromotions += Math.min(LANE_RANK[entry.lane], Math.floor(age / this.starvationMs));
-    }
-    return {
-      pendingTasks: this.entries.size,
-      pendingWeight: this.pendingWeight,
-      oldestTaskAgeMs,
-      cancelledTasks: this.cancelledTasks,
-      shedTasks: this.shedTasks,
-      starvationPromotions
-    };
-  }
-  shedOverflow() {
-    while (this.entries.size > this.maxPendingTasks || this.pendingWeight > this.maxPendingWeight) {
-      let worst;
-      for (const entry of this.entries.values()) {
-        if (!worst || this.compareForEviction(entry, worst) > 0) worst = entry;
-      }
-      if (!worst) return;
-      this.shedTasks += 1;
-      this.remove(
-        worst.id,
-        new WorkQueueBackpressureError("Queued task was shed by the configured backpressure limit"),
-        false
-      );
-    }
-  }
-  compare(first, second, now) {
-    const firstStarved = this.isStarved(first, now);
-    const secondStarved = this.isStarved(second, now);
-    if (firstStarved !== secondStarved) return firstStarved ? -1 : 1;
-    if (firstStarved) return first.sequence - second.sequence;
-    return this.effectiveLane(first, now) - this.effectiveLane(second, now) || first.priority - second.priority || first.sequence - second.sequence;
-  }
-  // Dispatch aging prevents starvation among admitted work. Admission is a
-  // different policy boundary: an old background task must not evict a fresh
-  // critical task merely because the tab was suspended long enough for its
-  // wall-clock starvation deadline to elapse.
-  compareForEviction(first, second) {
-    return LANE_RANK[first.lane] - LANE_RANK[second.lane] || first.priority - second.priority || first.sequence - second.sequence;
-  }
-  isStarved(entry, now) {
-    const deadlineWindows = LANE_RANK[entry.lane] + 1;
-    return Math.max(0, now - entry.enqueuedAt) >= this.starvationMs * deadlineWindows;
-  }
-  effectiveLane(entry, now) {
-    const promotions = Math.min(LANE_RANK[entry.lane], Math.floor(Math.max(0, now - entry.enqueuedAt) / this.starvationMs));
-    return LANE_RANK[entry.lane] - promotions;
-  }
-  remove(id, reason, countCancellation) {
-    const entry = this.entries.get(id);
-    if (!entry) return false;
-    this.detach(entry);
-    if (countCancellation) this.cancelledTasks += 1;
-    this.notifyCancellation(entry.cancelled, reason);
-    return true;
-  }
-  notifyCancellation(observer, reason) {
-    try {
-      observer?.(reason);
-    } catch {
-    }
-  }
-  detach(entry) {
-    this.entries.delete(entry.id);
-    if (entry.key !== void 0 && this.keyed.get(entry.key) === entry.id) this.keyed.delete(entry.key);
-    if (entry.signal && entry.abort) entry.signal.removeEventListener("abort", entry.abort);
-    this.pendingWeight = Math.max(0, this.pendingWeight - entry.weight);
-  }
-};
-
 // src/world/SurfaceWorkerPool.ts
 function abortError() {
   if (typeof DOMException !== "undefined") return new DOMException("surface worker task was aborted", "AbortError");
@@ -4070,6 +4116,293 @@ var SurfaceWorkerPool = class {
   }
 };
 
+// src/world/HydrologyWorldSource.ts
+var DEFAULT_HYDROLOGY_REGION_CACHE_BYTES = 16 * 1024 * 1024;
+var HYDROLOGY_REGION_BASE_RESIDENT_BYTES = 256;
+var HYDROLOGY_PORT_RESIDENT_BYTES = 128;
+var HYDROLOGY_RIVER_RESIDENT_BYTES = 160;
+var HYDROLOGY_LAKE_RESIDENT_BYTES = 96;
+var HYDROLOGY_MOUTH_RESIDENT_BYTES = 96;
+var HYDROLOGY_BODY_RESIDENT_BYTES = 64;
+function positiveModulo5(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function abortError2() {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("hydrology region request was aborted", "AbortError");
+  }
+  const error = new Error("hydrology region request was aborted");
+  error.name = "AbortError";
+  return error;
+}
+function stringPayloadBytes(value) {
+  const bytes = value.length * 2;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError("hydrology string size exceeds safe integers");
+  return bytes;
+}
+function endpointPayloadBytes(endpoint) {
+  return stringPayloadBytes(endpoint.kind === "node" ? endpoint.nodeId : endpoint.kind === "port" ? endpoint.connectionId : endpoint.bodyId);
+}
+function hydrologyRegionResidentBytes(region) {
+  assertHydrologyRegion(region);
+  let bytes = HYDROLOGY_REGION_BASE_RESIDENT_BYTES + region.boundaryPorts.length * HYDROLOGY_PORT_RESIDENT_BYTES + region.rivers.length * HYDROLOGY_RIVER_RESIDENT_BYTES + region.lakes.length * HYDROLOGY_LAKE_RESIDENT_BYTES + region.mouths.length * HYDROLOGY_MOUTH_RESIDENT_BYTES + region.bodies.length * HYDROLOGY_BODY_RESIDENT_BYTES + stringPayloadBytes(region.worldIdentity);
+  for (const port of region.boundaryPorts) {
+    bytes += port.point.byteLength + port.flowDirection.byteLength;
+    bytes += stringPayloadBytes(port.connectionId) + stringPayloadBytes(port.riverId) + stringPayloadBytes(port.segmentId);
+  }
+  for (const river of region.rivers) {
+    bytes += river.controlPoints.byteLength + river.widthProfile.byteLength + river.levelProfile.byteLength;
+    bytes += stringPayloadBytes(river.riverId) + stringPayloadBytes(river.segmentId) + endpointPayloadBytes(river.entry) + endpointPayloadBytes(river.exit);
+  }
+  for (const lake of region.lakes) {
+    bytes += lake.center.byteLength + stringPayloadBytes(lake.featureId) + stringPayloadBytes(lake.bodyId);
+  }
+  for (const mouth of region.mouths) {
+    bytes += mouth.point.byteLength + stringPayloadBytes(mouth.mouthId) + stringPayloadBytes(mouth.riverId) + stringPayloadBytes(mouth.segmentId) + stringPayloadBytes(mouth.targetBodyId);
+  }
+  for (const body of region.bodies) bytes += stringPayloadBytes(body.bodyId);
+  if (!Number.isSafeInteger(bytes)) throw new RangeError("hydrology region resident size exceeds safe integers");
+  return bytes;
+}
+function validateRegionContract(region, descriptor, key) {
+  assertHydrologyRegion(region);
+  const expectedWidth = descriptor.sourceKind === "procedural-toroidal" ? Math.min(HYDROLOGY_REGION_SIZE, descriptor.width - key.regionX * HYDROLOGY_REGION_SIZE) : HYDROLOGY_REGION_SIZE;
+  const expectedHeight = descriptor.sourceKind === "procedural-toroidal" ? Math.min(HYDROLOGY_REGION_SIZE, descriptor.height - key.regionY * HYDROLOGY_REGION_SIZE) : HYDROLOGY_REGION_SIZE;
+  if (region.worldIdentity !== serializeWorldDescriptorV2(descriptor) || region.topology !== descriptor.topology || region.key.regionX !== key.regionX || region.key.regionY !== key.regionY || region.revision !== HYDROLOGY_REGION_REVISION || region.validBounds.minX !== 0 || region.validBounds.minY !== 0 || region.validBounds.maxXExclusive !== expectedWidth || region.validBounds.maxYExclusive !== expectedHeight) {
+    throw new TypeError("hydrology pool returned a region outside its requested world contract");
+  }
+}
+var ProceduralHydrologyWorldSource = class {
+  constructor(options) {
+    this.cache = new CoordinatePairMap();
+    this.inFlight = new CoordinatePairMap();
+    this.cacheBytes = 0;
+    this.cacheClock = 0;
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
+    this.disposed = false;
+    if (!options || typeof options !== "object" || !options.descriptor || options.descriptor.sourceKind !== "procedural-infinite" && options.descriptor.sourceKind !== "procedural-toroidal") {
+      throw new TypeError("procedural hydrology source requires a procedural descriptor");
+    }
+    this.descriptor = options.descriptor;
+    this.worldIdentity = serializeWorldDescriptorV2(options.descriptor);
+    if (options.descriptor.sourceKind === "procedural-toroidal") {
+      this.regionCountX = Math.ceil(options.descriptor.width / HYDROLOGY_REGION_SIZE);
+      this.regionCountY = Math.ceil(options.descriptor.height / HYDROLOGY_REGION_SIZE);
+    }
+    this.cacheMaxBytes = options.cacheMaxBytes ?? DEFAULT_HYDROLOGY_REGION_CACHE_BYTES;
+    const minimumCacheBytes = HYDROLOGY_REGION_BASE_RESIDENT_BYTES + stringPayloadBytes(this.worldIdentity);
+    if (!Number.isSafeInteger(this.cacheMaxBytes) || this.cacheMaxBytes < minimumCacheBytes) {
+      throw new RangeError("hydrology region cache must hold at least one empty region");
+    }
+    if (options.workerPool) {
+      if (options.workerUrl !== void 0 || options.workerPoolOptions !== void 0) {
+        throw new TypeError("external hydrology workerPool cannot be combined with worker URL or options");
+      }
+      this.pool = options.workerPool;
+      this.ownsPool = false;
+    } else {
+      if (!options.workerUrl) throw new TypeError("procedural hydrology source requires a surface worker URL");
+      if (options.workerPoolOptions?.size !== void 0 && options.workerPoolOptions.size !== 1 || options.workerPoolOptions?.maxWorkers !== void 0 && options.workerPoolOptions.maxWorkers !== 1) {
+        throw new RangeError("owned hydrology worker pool must use exactly one affinity worker");
+      }
+      this.pool = new SurfaceWorkerPool(options.workerUrl, {
+        ...options.workerPoolOptions,
+        size: 1,
+        maxWorkers: 1
+      });
+      this.ownsPool = true;
+    }
+  }
+  resolveRegion(regionX, regionY) {
+    if (!Number.isSafeInteger(regionX) || !Number.isSafeInteger(regionY)) return void 0;
+    if (this.descriptor.sourceKind === "procedural-toroidal") {
+      return Object.freeze({
+        regionX: positiveModulo5(regionX, this.regionCountX),
+        regionY: positiveModulo5(regionY, this.regionCountY)
+      });
+    }
+    try {
+      chunkOrigin(regionX, regionY, HYDROLOGY_REGION_SIZE);
+      return Object.freeze({ regionX, regionY });
+    } catch {
+      return void 0;
+    }
+  }
+  regionDistance(regionX, regionY, centerRegionX, centerRegionY) {
+    const first = this.resolveRegion(regionX, regionY);
+    const second = this.resolveRegion(centerRegionX, centerRegionY);
+    if (!first || !second) return Number.POSITIVE_INFINITY;
+    if (this.descriptor.sourceKind === "procedural-infinite") {
+      return Math.hypot(first.regionX - second.regionX, first.regionY - second.regionY);
+    }
+    const distanceX = Math.min(
+      Math.abs(first.regionX - second.regionX),
+      this.regionCountX - Math.abs(first.regionX - second.regionX)
+    );
+    const distanceY = Math.min(
+      Math.abs(first.regionY - second.regionY),
+      this.regionCountY - Math.abs(first.regionY - second.regionY)
+    );
+    return Math.hypot(distanceX, distanceY);
+  }
+  loadRegion(regionX, regionY, request = {}) {
+    if (this.disposed) return Promise.reject(new Error("procedural hydrology source has been disposed"));
+    if (request.signal?.aborted) return Promise.reject(abortError2());
+    const key = this.resolveRegion(regionX, regionY);
+    if (!key || key.regionX !== regionX || key.regionY !== regionY) {
+      return Promise.reject(new RangeError("hydrology region request must use a canonical in-domain key"));
+    }
+    const cached = this.cache.get(regionX, regionY);
+    if (cached) {
+      this.cacheHits += 1;
+      cached.references += 1;
+      this.touch(cached);
+      return Promise.resolve(cached.region);
+    }
+    this.cacheMisses += 1;
+    let pending = this.inFlight.get(regionX, regionY);
+    if (!pending) {
+      const controller = new AbortController();
+      const created = {
+        controller,
+        waiters: 0,
+        settled: false,
+        promise: void 0
+      };
+      created.promise = this.pool.generateHydrologyRegion({
+        descriptor: this.descriptor,
+        key
+      }, {
+        priority: request.priority,
+        lane: request.lane,
+        weight: request.weight,
+        signal: controller.signal
+      }).then((region) => {
+        if (this.disposed) throw new Error("hydrology source was disposed during generation");
+        validateRegionContract(region, this.descriptor, key);
+        this.insert(region);
+        return region;
+      }).finally(() => {
+        created.settled = true;
+        this.inFlight.delete(regionX, regionY);
+        if (created.waiters === 0) this.evictUnleased();
+      });
+      pending = created;
+      this.inFlight.set(regionX, regionY, pending);
+    }
+    return this.waitFor(pending, request.signal);
+  }
+  releaseRegion(region) {
+    const entry = this.cache.get(region.key.regionX, region.key.regionY);
+    if (!entry || entry.region !== region || entry.references <= 0) {
+      throw new Error("hydrology region release does not match an active source lease");
+    }
+    entry.references -= 1;
+    this.touch(entry);
+    this.evictUnleased();
+  }
+  hasRegion(regionX, regionY) {
+    return this.cache.has(regionX, regionY);
+  }
+  get stats() {
+    const worker = this.pool.stats;
+    let leasedRegions = 0;
+    for (const entry of this.cache.values()) {
+      if (entry.references > 0) leasedRegions += 1;
+    }
+    return Object.freeze({
+      residentRegions: this.cache.size,
+      residentBytes: this.cacheBytes,
+      leasedRegions,
+      inFlightRegions: this.inFlight.size,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      workers: worker.workers,
+      busyWorkers: worker.busyWorkers,
+      queuedWorkerTasks: worker.queued
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const pending of this.inFlight.values()) pending.controller.abort();
+    if (this.ownsPool) this.pool.dispose();
+    this.cache.clear();
+    this.cacheBytes = 0;
+  }
+  waitFor(pending, signal) {
+    pending.waiters += 1;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        pending.waiters -= 1;
+        if (signal) signal.removeEventListener("abort", abort);
+        if (pending.waiters === 0 && !pending.settled) pending.controller.abort();
+      };
+      const abort = () => {
+        finish();
+        reject(abortError2());
+      };
+      if (signal) signal.addEventListener("abort", abort, { once: true });
+      pending.promise.then((region) => {
+        if (settled) return;
+        finish();
+        const entry = this.cache.get(region.key.regionX, region.key.regionY);
+        if (!entry || entry.region !== region) {
+          reject(new Error("generated hydrology region was not published to its source cache"));
+          return;
+        }
+        entry.references += 1;
+        this.touch(entry);
+        this.evictUnleased();
+        resolve(region);
+      }, (reason) => {
+        if (settled) return;
+        finish();
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      });
+      if (signal?.aborted) abort();
+    });
+  }
+  insert(region) {
+    const existing = this.cache.get(region.key.regionX, region.key.regionY);
+    if (existing) throw new Error("hydrology source generated a duplicate resident region");
+    const bytes = hydrologyRegionResidentBytes(region);
+    const entry = { region, bytes, references: 0, lastUsed: 0 };
+    this.touch(entry);
+    this.cache.set(region.key.regionX, region.key.regionY, entry);
+    this.cacheBytes += bytes;
+  }
+  touch(entry) {
+    if (this.cacheClock >= Number.MAX_SAFE_INTEGER) {
+      const entries = [...this.cache.values()].sort((first, second) => first.lastUsed - second.lastUsed);
+      for (let index = 0; index < entries.length; index += 1) entries[index].lastUsed = index + 1;
+      this.cacheClock = entries.length;
+    }
+    this.cacheClock += 1;
+    entry.lastUsed = this.cacheClock;
+  }
+  evictUnleased() {
+    while (this.cacheBytes > this.cacheMaxBytes) {
+      let candidate;
+      for (const entry of this.cache.values()) {
+        if (entry.references === 0 && (!candidate || entry.lastUsed < candidate.lastUsed)) candidate = entry;
+      }
+      if (!candidate) return;
+      this.cache.delete(candidate.region.key.regionX, candidate.region.key.regionY);
+      this.cacheBytes -= candidate.bytes;
+    }
+  }
+};
+function assertHydrologyWorldSource(source) {
+  if (!source || typeof source !== "object" || source.worldIdentity !== serializeWorldDescriptorV2(source.descriptor) || typeof source.resolveRegion !== "function" || typeof source.regionDistance !== "function" || typeof source.loadRegion !== "function" || typeof source.releaseRegion !== "function" || typeof source.hasRegion !== "function" || typeof source.dispose !== "function") {
+    throw new TypeError("hydrology world source does not satisfy the v2 runtime contract");
+  }
+}
+
 // src/world/compileStaticSemanticChunk.ts
 var STATIC_PLAIN_HEIGHT = 32768;
 var STATIC_HILL_HEIGHT = 39321;
@@ -4197,58 +4530,12 @@ function compileStaticSemanticChunk(options) {
   }, semanticCatalogLimits(options.descriptor));
 }
 
-// src/world/CoordinatePairMap.ts
-var CoordinatePairMap = class {
-  constructor() {
-    this.columns = /* @__PURE__ */ new Map();
-    this.entryCount = 0;
-  }
-  get size() {
-    return this.entryCount;
-  }
-  get(x, y) {
-    return this.columns.get(x)?.get(y);
-  }
-  has(x, y) {
-    return this.columns.get(x)?.has(y) ?? false;
-  }
-  set(x, y, value) {
-    let column = this.columns.get(x);
-    if (!column) {
-      column = /* @__PURE__ */ new Map();
-      this.columns.set(x, column);
-    }
-    if (!column.has(y)) this.entryCount += 1;
-    column.set(y, value);
-    return this;
-  }
-  delete(x, y) {
-    const column = this.columns.get(x);
-    if (!column || !column.delete(y)) return false;
-    this.entryCount -= 1;
-    if (column.size === 0) this.columns.delete(x);
-    return true;
-  }
-  clear() {
-    this.columns.clear();
-    this.entryCount = 0;
-  }
-  *values() {
-    for (const column of this.columns.values()) yield* column.values();
-  }
-  *entries() {
-    for (const [x, column] of this.columns) {
-      for (const [y, value] of column) yield [x, y, value];
-    }
-  }
-};
-
 // src/world/SemanticWorldSource.ts
 var DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES = 32 * 1024 * 1024;
-function positiveModulo5(value, modulus) {
+function positiveModulo6(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
-function abortError2() {
+function abortError3() {
   if (typeof DOMException !== "undefined") return new DOMException("semantic chunk request was aborted", "AbortError");
   const error = new Error("semantic chunk request was aborted");
   error.name = "AbortError";
@@ -4306,8 +4593,8 @@ var ProceduralSemanticWorldSourceBase = class {
     const countX = this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
     const countY = this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
     return {
-      chunkX: positiveModulo5(chunkX, countX),
-      chunkY: positiveModulo5(chunkY, countY)
+      chunkX: positiveModulo6(chunkX, countX),
+      chunkY: positiveModulo6(chunkY, countY)
     };
   }
   chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
@@ -4326,7 +4613,7 @@ var ProceduralSemanticWorldSourceBase = class {
   }
   loadChunk(chunkX, chunkY, request = {}) {
     if (this.disposed) return Promise.reject(new Error("semantic world source has been disposed"));
-    if (request.signal?.aborted) return Promise.reject(abortError2());
+    if (request.signal?.aborted) return Promise.reject(abortError3());
     const resolved = this.resolveChunk(chunkX, chunkY);
     if (!resolved || resolved.chunkX !== chunkX || resolved.chunkY !== chunkY) {
       return Promise.reject(new RangeError("semantic chunk request must use a canonical in-domain key"));
@@ -4420,7 +4707,7 @@ var ProceduralSemanticWorldSourceBase = class {
         if (pending.waiters === 0 && !pending.settled) pending.controller.abort();
         settle();
       };
-      const onAbort = () => finish(() => reject(abortError2()));
+      const onAbort = () => finish(() => reject(abortError3()));
       signal?.addEventListener("abort", onAbort, { once: true });
       pending.promise.then((chunk) => finish(() => {
         const entry = this.cache.get(chunk.key.chunkX, chunk.key.chunkY);
@@ -4510,7 +4797,7 @@ var StaticSemanticWorldSource = class {
   }
   loadChunk(chunkX, chunkY, request = {}) {
     if (this.disposed) return Promise.reject(new Error("static semantic source has been disposed"));
-    if (request.signal?.aborted) return Promise.reject(abortError2());
+    if (request.signal?.aborted) return Promise.reject(abortError3());
     const entry = this.chunks.get(chunkX, chunkY);
     if (entry) entry.references += 1;
     return entry ? Promise.resolve(entry.chunk) : Promise.reject(new RangeError("static semantic chunk is outside the finite world"));
@@ -4559,6 +4846,203 @@ function assertSemanticWorldSource(source) {
     if (typeof source[method] !== "function") throw new TypeError(`semantic world source must implement ${method}()`);
   }
 }
+
+// src/world/EffectiveWorldView.ts
+function compareIdentity2(first, second) {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+function collectBaseFeatureIds(region) {
+  const featureIds = /* @__PURE__ */ new Set();
+  for (const port of region.boundaryPorts) featureIds.add(port.riverId);
+  for (const river of region.rivers) featureIds.add(river.riverId);
+  for (const lake of region.lakes) featureIds.add(lake.bodyId);
+  for (const mouth of region.mouths) featureIds.add(mouth.riverId);
+  for (const body of region.bodies) if (body.bodyId !== "ocean") featureIds.add(body.bodyId);
+  return Object.freeze([...featureIds].sort(compareIdentity2));
+}
+function effectiveBaseSlices(region, suppressedFeatureIds) {
+  if (suppressedFeatureIds.size === 0) {
+    return Object.freeze({
+      boundaryPorts: region.boundaryPorts,
+      rivers: region.rivers,
+      lakes: region.lakes,
+      mouths: region.mouths,
+      bodies: region.bodies
+    });
+  }
+  return Object.freeze({
+    boundaryPorts: Object.freeze(region.boundaryPorts.filter((port) => !suppressedFeatureIds.has(port.riverId))),
+    rivers: Object.freeze(region.rivers.filter((river) => !suppressedFeatureIds.has(river.riverId))),
+    lakes: Object.freeze(region.lakes.filter((lake) => !suppressedFeatureIds.has(lake.bodyId))),
+    mouths: Object.freeze(region.mouths.filter((mouth) => !suppressedFeatureIds.has(mouth.riverId))),
+    bodies: Object.freeze(region.bodies.filter((body) => body.bodyId === "ocean" || !suppressedFeatureIds.has(body.bodyId)))
+  });
+}
+function createEffectiveHydrologyRegion(options) {
+  if (!options || typeof options !== "object") {
+    throw new TypeError("effective hydrology region options are required");
+  }
+  assertHydrologyRegion(options.base);
+  const worldIdentity = serializeWorldDescriptorV2(options.descriptor);
+  if (options.base.worldIdentity !== worldIdentity || options.deltaSnapshot.worldIdentity !== worldIdentity || options.featureIndex.worldIdentity !== worldIdentity) {
+    throw new TypeError("effective hydrology inputs belong to different worlds");
+  }
+  if (options.base.topology !== options.descriptor.topology) {
+    throw new TypeError("effective hydrology base topology does not match its descriptor");
+  }
+  if (options.base.revision > options.deltaSnapshot.effectiveRevision) {
+    throw new RangeError("base hydrology region is newer than its effective snapshot");
+  }
+  const suppressedBaseFeatureIds = collectBaseFeatureIds(options.base).filter((featureId) => options.deltaSnapshot.getHydrologyDelta(featureId) !== void 0);
+  const suppressedFeatureIds = new Set(suppressedBaseFeatureIds);
+  const authoredFeatures = options.featureIndex.queryRegion(options.base);
+  for (const delta of authoredFeatures) {
+    if (delta.revision > options.deltaSnapshot.effectiveRevision) {
+      throw new RangeError("authored hydrology feature is newer than its effective snapshot");
+    }
+  }
+  return Object.freeze({
+    worldIdentity,
+    key: options.base.key,
+    effectiveRevision: options.deltaSnapshot.effectiveRevision,
+    baseRevision: options.base.revision,
+    base: options.base,
+    effectiveBase: effectiveBaseSlices(options.base, suppressedFeatureIds),
+    suppressedBaseFeatureIds: Object.freeze(suppressedBaseFeatureIds),
+    authoredFeatures
+  });
+}
+function effectiveHydrologySuppressesBaseFeature(region, featureId) {
+  if (typeof featureId !== "string" || featureId.length === 0) {
+    throw new TypeError("effective hydrology base feature identity is required");
+  }
+  let minimum = 0;
+  let maximum = region.suppressedBaseFeatureIds.length - 1;
+  while (minimum <= maximum) {
+    const middle = minimum + maximum >>> 1;
+    const candidate = region.suppressedBaseFeatureIds[middle];
+    if (candidate === featureId) return true;
+    if (candidate < featureId) minimum = middle + 1;
+    else maximum = middle - 1;
+  }
+  return false;
+}
+var EffectiveWorldView = class {
+  constructor(options) {
+    this.semanticLeases = /* @__PURE__ */ new Map();
+    this.hydrologyLeases = /* @__PURE__ */ new Map();
+    this.disposed = false;
+    if (!options || typeof options !== "object") {
+      throw new TypeError("effective world view options are required");
+    }
+    assertSemanticWorldSource(options.semanticSource);
+    assertHydrologyWorldSource(options.hydrologySource);
+    const worldIdentity = options.semanticSource.worldIdentity;
+    if (options.hydrologySource.worldIdentity !== worldIdentity || options.deltaSnapshot.worldIdentity !== worldIdentity) {
+      throw new TypeError("effective world view sources and delta snapshot belong to different worlds");
+    }
+    this.descriptor = options.semanticSource.descriptor;
+    this.worldIdentity = worldIdentity;
+    this.effectiveRevision = options.deltaSnapshot.effectiveRevision;
+    this.deltaSnapshot = options.deltaSnapshot;
+    this.semanticSource = options.semanticSource;
+    this.hydrologySource = options.hydrologySource;
+    this.featureIndex = new HydrologyFeatureSpatialIndex(
+      this.descriptor,
+      this.deltaSnapshot.hydrologyDeltas
+    );
+  }
+  resolveSemanticChunk(chunkX, chunkY) {
+    this.assertActive();
+    return this.semanticSource.resolveChunk(chunkX, chunkY);
+  }
+  resolveHydrologyRegion(regionX, regionY) {
+    this.assertActive();
+    return this.hydrologySource.resolveRegion(regionX, regionY);
+  }
+  async loadSemanticChunk(chunkX, chunkY, request = {}) {
+    this.assertActive();
+    const resolved = this.semanticSource.resolveChunk(chunkX, chunkY);
+    if (!resolved || resolved.chunkX !== chunkX || resolved.chunkY !== chunkY) {
+      throw new RangeError("effective semantic request must use a canonical in-domain key");
+    }
+    const base = await this.semanticSource.loadChunk(chunkX, chunkY, request);
+    if (this.disposed) {
+      this.semanticSource.releaseChunk(base);
+      throw new Error("effective world view was disposed during semantic loading");
+    }
+    try {
+      const effective = createEffectiveSemanticChunk({
+        descriptor: this.descriptor,
+        base,
+        delta: this.deltaSnapshot.getSemanticDelta(chunkX, chunkY),
+        effectiveRevision: this.effectiveRevision
+      });
+      this.semanticLeases.set(effective, base);
+      return effective;
+    } catch (reason) {
+      this.semanticSource.releaseChunk(base);
+      throw reason;
+    }
+  }
+  releaseSemanticChunk(chunk) {
+    const base = this.semanticLeases.get(chunk);
+    if (!base) throw new Error("effective semantic release does not match an active view lease");
+    this.semanticLeases.delete(chunk);
+    this.semanticSource.releaseChunk(base);
+  }
+  async loadHydrologyRegion(regionX, regionY, request = {}) {
+    this.assertActive();
+    const resolved = this.hydrologySource.resolveRegion(regionX, regionY);
+    if (!resolved || resolved.regionX !== regionX || resolved.regionY !== regionY) {
+      throw new RangeError("effective hydrology request must use a canonical in-domain key");
+    }
+    const base = await this.hydrologySource.loadRegion(regionX, regionY, request);
+    if (this.disposed) {
+      this.hydrologySource.releaseRegion(base);
+      throw new Error("effective world view was disposed during hydrology loading");
+    }
+    try {
+      const effective = createEffectiveHydrologyRegion({
+        descriptor: this.descriptor,
+        base,
+        deltaSnapshot: this.deltaSnapshot,
+        featureIndex: this.featureIndex
+      });
+      this.hydrologyLeases.set(effective, base);
+      return effective;
+    } catch (reason) {
+      this.hydrologySource.releaseRegion(base);
+      throw reason;
+    }
+  }
+  releaseHydrologyRegion(region) {
+    const base = this.hydrologyLeases.get(region);
+    if (!base) throw new Error("effective hydrology release does not match an active view lease");
+    this.hydrologyLeases.delete(region);
+    this.hydrologySource.releaseRegion(base);
+  }
+  get stats() {
+    return Object.freeze({
+      effectiveRevision: this.effectiveRevision,
+      leasedSemanticChunks: this.semanticLeases.size,
+      leasedHydrologyRegions: this.hydrologyLeases.size,
+      authoredHydrologyFeatures: this.featureIndex.featureCount,
+      authoredHydrologyIndexItems: this.featureIndex.itemCount
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const base of this.semanticLeases.values()) this.semanticSource.releaseChunk(base);
+    for (const base of this.hydrologyLeases.values()) this.hydrologySource.releaseRegion(base);
+    this.semanticLeases.clear();
+    this.hydrologyLeases.clear();
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("effective world view has been disposed");
+  }
+};
 
 // src/world/MacroDrainageTree.ts
 var MACRO_DRAINAGE_TERMINAL = -1;
@@ -4923,7 +5407,7 @@ function assertMacroDrainageTree(tree, valid, topology = "bounded") {
 var MACRO_DRAINAGE_NODE_STEP_TILES = 8;
 var MAX_MACRO_DRAINAGE_GRAPH_NODES = 1048576;
 var OCEAN_BODY_ID = "ocean";
-function abortError3() {
+function abortError4() {
   if (typeof DOMException !== "undefined") return new DOMException("macro drainage graph build was aborted", "AbortError");
   const error = new Error("macro drainage graph build was aborted");
   error.name = "AbortError";
@@ -5045,7 +5529,7 @@ async function buildMacroDrainageGraph(source, options = {}) {
   if (!Number.isInteger(maximumConcurrentChunkLoads) || maximumConcurrentChunkLoads <= 0 || maximumConcurrentChunkLoads > 32) {
     throw new RangeError("macro drainage chunk concurrency must be an integer between 1 and 32");
   }
-  if (options.signal?.aborted) throw abortError3();
+  if (options.signal?.aborted) throw abortError4();
   const width = Math.ceil(source.bounds.width / MACRO_DRAINAGE_NODE_STEP_TILES);
   const height = Math.ceil(source.bounds.height / MACRO_DRAINAGE_NODE_STEP_TILES);
   const length = width * height;
@@ -5063,7 +5547,7 @@ async function buildMacroDrainageGraph(source, options = {}) {
     for (let chunkY = 0; chunkY < chunkCountY; chunkY += 1) keys.push({ chunkX, chunkY });
   }
   const sampleChunk = async (key) => {
-    if (options.signal?.aborted) throw abortError3();
+    if (options.signal?.aborted) throw abortError4();
     const chunk = await source.loadChunk(key.chunkX, key.chunkY, {
       signal: options.signal,
       lane: "background",
@@ -5365,7 +5849,7 @@ var MIN_RIVER_DISCHARGE = 8;
 var MIN_LAKE_RADIUS_TILES = 4;
 var MAX_LAKE_RADIUS_TILES = 16;
 var MACRO_NODE_CENTER_OFFSET = MACRO_DRAINAGE_NODE_STEP_TILES / 2;
-function positiveModulo6(value, modulus) {
+function positiveModulo7(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function wrappedNodeStep(from, to, count) {
@@ -5398,8 +5882,8 @@ var MacroDrainageHydrologySource = class {
       return regionX >= 0 && regionX < this.regionCountX && regionY >= 0 && regionY < this.regionCountY ? Object.freeze({ regionX, regionY }) : void 0;
     }
     return Object.freeze({
-      regionX: positiveModulo6(regionX, this.regionCountX),
-      regionY: positiveModulo6(regionY, this.regionCountY)
+      regionX: positiveModulo7(regionX, this.regionCountX),
+      regionY: positiveModulo7(regionY, this.regionCountY)
     });
   }
   buildRegion(regionX, regionY) {
@@ -5422,17 +5906,17 @@ var MacroDrainageHydrologySource = class {
       canonicalizePort: (tileX, tileY) => {
         const canonical = canonicalHydrologyPoint(tileX, tileY);
         return toroidal ? Object.freeze({
-          tileX: positiveModulo6(canonical.tileX, this.graph.worldWidth),
-          tileY: positiveModulo6(canonical.tileY, this.graph.worldHeight)
+          tileX: positiveModulo7(canonical.tileX, this.graph.worldWidth),
+          tileY: positiveModulo7(canonical.tileY, this.graph.worldHeight)
         }) : canonical;
       }
     });
     const [minimumNodeX, maximumNodeX] = nodeAxisRange(origin.x, endX, this.graph.width, toroidal);
     const [minimumNodeY, maximumNodeY] = nodeAxisRange(origin.y, endY, this.graph.height, toroidal);
     for (let unwrappedNodeX = minimumNodeX; unwrappedNodeX <= maximumNodeX; unwrappedNodeX += 1) {
-      const nodeX = toroidal ? positiveModulo6(unwrappedNodeX, this.graph.width) : unwrappedNodeX;
+      const nodeX = toroidal ? positiveModulo7(unwrappedNodeX, this.graph.width) : unwrappedNodeX;
       for (let unwrappedNodeY = minimumNodeY; unwrappedNodeY <= maximumNodeY; unwrappedNodeY += 1) {
-        const nodeY = toroidal ? positiveModulo6(unwrappedNodeY, this.graph.height) : unwrappedNodeY;
+        const nodeY = toroidal ? positiveModulo7(unwrappedNodeY, this.graph.height) : unwrappedNodeY;
         const sourceIndex = macroDrainageIndex(nodeX, nodeY, this.graph.height);
         const sourceTile = macroDrainageNodeTile(this.graph, sourceIndex);
         const physicalSourceX = toroidal ? unwrappedNodeX * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : sourceTile.x;
@@ -5928,10 +6412,10 @@ var InfiniteHydrologyRegionSource = class {
 };
 
 // src/world/ProceduralHydrologyRegionGenerator.ts
-function positiveModulo7(value, modulus) {
+function positiveModulo8(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
-function abortError4() {
+function abortError5() {
   if (typeof DOMException !== "undefined") {
     return new DOMException("local semantic generation was aborted", "AbortError");
   }
@@ -5962,8 +6446,8 @@ var GeneratorToroidalSemanticSource = class {
   resolveChunk(chunkX, chunkY) {
     if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) return void 0;
     return Object.freeze({
-      chunkX: positiveModulo7(chunkX, this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE),
-      chunkY: positiveModulo7(chunkY, this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE)
+      chunkX: positiveModulo8(chunkX, this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE),
+      chunkY: positiveModulo8(chunkY, this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE)
     });
   }
   chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
@@ -5984,7 +6468,7 @@ var GeneratorToroidalSemanticSource = class {
   }
   loadChunk(chunkX, chunkY, request = {}) {
     if (this.disposed) return Promise.reject(new Error("local toroidal semantic source has been disposed"));
-    if (request.signal?.aborted) return Promise.reject(abortError4());
+    if (request.signal?.aborted) return Promise.reject(abortError5());
     const key = this.resolveChunk(chunkX, chunkY);
     if (!key || key.chunkX !== chunkX || key.chunkY !== chunkY) {
       return Promise.reject(new RangeError("local toroidal semantic request requires a canonical chunk key"));
@@ -6067,293 +6551,6 @@ function createProceduralHydrologyRegionGenerator(options) {
     options.descriptor,
     createBaseSemanticChunkGenerator(options.descriptor)
   );
-}
-
-// src/world/HydrologyWorldSource.ts
-var DEFAULT_HYDROLOGY_REGION_CACHE_BYTES = 16 * 1024 * 1024;
-var HYDROLOGY_REGION_BASE_RESIDENT_BYTES = 256;
-var HYDROLOGY_PORT_RESIDENT_BYTES = 128;
-var HYDROLOGY_RIVER_RESIDENT_BYTES = 160;
-var HYDROLOGY_LAKE_RESIDENT_BYTES = 96;
-var HYDROLOGY_MOUTH_RESIDENT_BYTES = 96;
-var HYDROLOGY_BODY_RESIDENT_BYTES = 64;
-function positiveModulo8(value, modulus) {
-  return (value % modulus + modulus) % modulus;
-}
-function abortError5() {
-  if (typeof DOMException !== "undefined") {
-    return new DOMException("hydrology region request was aborted", "AbortError");
-  }
-  const error = new Error("hydrology region request was aborted");
-  error.name = "AbortError";
-  return error;
-}
-function stringPayloadBytes(value) {
-  const bytes = value.length * 2;
-  if (!Number.isSafeInteger(bytes)) throw new RangeError("hydrology string size exceeds safe integers");
-  return bytes;
-}
-function endpointPayloadBytes(endpoint) {
-  return stringPayloadBytes(endpoint.kind === "node" ? endpoint.nodeId : endpoint.kind === "port" ? endpoint.connectionId : endpoint.bodyId);
-}
-function hydrologyRegionResidentBytes(region) {
-  assertHydrologyRegion(region);
-  let bytes = HYDROLOGY_REGION_BASE_RESIDENT_BYTES + region.boundaryPorts.length * HYDROLOGY_PORT_RESIDENT_BYTES + region.rivers.length * HYDROLOGY_RIVER_RESIDENT_BYTES + region.lakes.length * HYDROLOGY_LAKE_RESIDENT_BYTES + region.mouths.length * HYDROLOGY_MOUTH_RESIDENT_BYTES + region.bodies.length * HYDROLOGY_BODY_RESIDENT_BYTES + stringPayloadBytes(region.worldIdentity);
-  for (const port of region.boundaryPorts) {
-    bytes += port.point.byteLength + port.flowDirection.byteLength;
-    bytes += stringPayloadBytes(port.connectionId) + stringPayloadBytes(port.riverId) + stringPayloadBytes(port.segmentId);
-  }
-  for (const river of region.rivers) {
-    bytes += river.controlPoints.byteLength + river.widthProfile.byteLength + river.levelProfile.byteLength;
-    bytes += stringPayloadBytes(river.riverId) + stringPayloadBytes(river.segmentId) + endpointPayloadBytes(river.entry) + endpointPayloadBytes(river.exit);
-  }
-  for (const lake of region.lakes) {
-    bytes += lake.center.byteLength + stringPayloadBytes(lake.featureId) + stringPayloadBytes(lake.bodyId);
-  }
-  for (const mouth of region.mouths) {
-    bytes += mouth.point.byteLength + stringPayloadBytes(mouth.mouthId) + stringPayloadBytes(mouth.riverId) + stringPayloadBytes(mouth.segmentId) + stringPayloadBytes(mouth.targetBodyId);
-  }
-  for (const body of region.bodies) bytes += stringPayloadBytes(body.bodyId);
-  if (!Number.isSafeInteger(bytes)) throw new RangeError("hydrology region resident size exceeds safe integers");
-  return bytes;
-}
-function validateRegionContract(region, descriptor, key) {
-  assertHydrologyRegion(region);
-  const expectedWidth = descriptor.sourceKind === "procedural-toroidal" ? Math.min(HYDROLOGY_REGION_SIZE, descriptor.width - key.regionX * HYDROLOGY_REGION_SIZE) : HYDROLOGY_REGION_SIZE;
-  const expectedHeight = descriptor.sourceKind === "procedural-toroidal" ? Math.min(HYDROLOGY_REGION_SIZE, descriptor.height - key.regionY * HYDROLOGY_REGION_SIZE) : HYDROLOGY_REGION_SIZE;
-  if (region.worldIdentity !== serializeWorldDescriptorV2(descriptor) || region.topology !== descriptor.topology || region.key.regionX !== key.regionX || region.key.regionY !== key.regionY || region.revision !== HYDROLOGY_REGION_REVISION || region.validBounds.minX !== 0 || region.validBounds.minY !== 0 || region.validBounds.maxXExclusive !== expectedWidth || region.validBounds.maxYExclusive !== expectedHeight) {
-    throw new TypeError("hydrology pool returned a region outside its requested world contract");
-  }
-}
-var ProceduralHydrologyWorldSource = class {
-  constructor(options) {
-    this.cache = new CoordinatePairMap();
-    this.inFlight = new CoordinatePairMap();
-    this.cacheBytes = 0;
-    this.cacheClock = 0;
-    this.cacheHits = 0;
-    this.cacheMisses = 0;
-    this.disposed = false;
-    if (!options || typeof options !== "object" || !options.descriptor || options.descriptor.sourceKind !== "procedural-infinite" && options.descriptor.sourceKind !== "procedural-toroidal") {
-      throw new TypeError("procedural hydrology source requires a procedural descriptor");
-    }
-    this.descriptor = options.descriptor;
-    this.worldIdentity = serializeWorldDescriptorV2(options.descriptor);
-    if (options.descriptor.sourceKind === "procedural-toroidal") {
-      this.regionCountX = Math.ceil(options.descriptor.width / HYDROLOGY_REGION_SIZE);
-      this.regionCountY = Math.ceil(options.descriptor.height / HYDROLOGY_REGION_SIZE);
-    }
-    this.cacheMaxBytes = options.cacheMaxBytes ?? DEFAULT_HYDROLOGY_REGION_CACHE_BYTES;
-    const minimumCacheBytes = HYDROLOGY_REGION_BASE_RESIDENT_BYTES + stringPayloadBytes(this.worldIdentity);
-    if (!Number.isSafeInteger(this.cacheMaxBytes) || this.cacheMaxBytes < minimumCacheBytes) {
-      throw new RangeError("hydrology region cache must hold at least one empty region");
-    }
-    if (options.workerPool) {
-      if (options.workerUrl !== void 0 || options.workerPoolOptions !== void 0) {
-        throw new TypeError("external hydrology workerPool cannot be combined with worker URL or options");
-      }
-      this.pool = options.workerPool;
-      this.ownsPool = false;
-    } else {
-      if (!options.workerUrl) throw new TypeError("procedural hydrology source requires a surface worker URL");
-      if (options.workerPoolOptions?.size !== void 0 && options.workerPoolOptions.size !== 1 || options.workerPoolOptions?.maxWorkers !== void 0 && options.workerPoolOptions.maxWorkers !== 1) {
-        throw new RangeError("owned hydrology worker pool must use exactly one affinity worker");
-      }
-      this.pool = new SurfaceWorkerPool(options.workerUrl, {
-        ...options.workerPoolOptions,
-        size: 1,
-        maxWorkers: 1
-      });
-      this.ownsPool = true;
-    }
-  }
-  resolveRegion(regionX, regionY) {
-    if (!Number.isSafeInteger(regionX) || !Number.isSafeInteger(regionY)) return void 0;
-    if (this.descriptor.sourceKind === "procedural-toroidal") {
-      return Object.freeze({
-        regionX: positiveModulo8(regionX, this.regionCountX),
-        regionY: positiveModulo8(regionY, this.regionCountY)
-      });
-    }
-    try {
-      chunkOrigin(regionX, regionY, HYDROLOGY_REGION_SIZE);
-      return Object.freeze({ regionX, regionY });
-    } catch {
-      return void 0;
-    }
-  }
-  regionDistance(regionX, regionY, centerRegionX, centerRegionY) {
-    const first = this.resolveRegion(regionX, regionY);
-    const second = this.resolveRegion(centerRegionX, centerRegionY);
-    if (!first || !second) return Number.POSITIVE_INFINITY;
-    if (this.descriptor.sourceKind === "procedural-infinite") {
-      return Math.hypot(first.regionX - second.regionX, first.regionY - second.regionY);
-    }
-    const distanceX = Math.min(
-      Math.abs(first.regionX - second.regionX),
-      this.regionCountX - Math.abs(first.regionX - second.regionX)
-    );
-    const distanceY = Math.min(
-      Math.abs(first.regionY - second.regionY),
-      this.regionCountY - Math.abs(first.regionY - second.regionY)
-    );
-    return Math.hypot(distanceX, distanceY);
-  }
-  loadRegion(regionX, regionY, request = {}) {
-    if (this.disposed) return Promise.reject(new Error("procedural hydrology source has been disposed"));
-    if (request.signal?.aborted) return Promise.reject(abortError5());
-    const key = this.resolveRegion(regionX, regionY);
-    if (!key || key.regionX !== regionX || key.regionY !== regionY) {
-      return Promise.reject(new RangeError("hydrology region request must use a canonical in-domain key"));
-    }
-    const cached = this.cache.get(regionX, regionY);
-    if (cached) {
-      this.cacheHits += 1;
-      cached.references += 1;
-      this.touch(cached);
-      return Promise.resolve(cached.region);
-    }
-    this.cacheMisses += 1;
-    let pending = this.inFlight.get(regionX, regionY);
-    if (!pending) {
-      const controller = new AbortController();
-      const created = {
-        controller,
-        waiters: 0,
-        settled: false,
-        promise: void 0
-      };
-      created.promise = this.pool.generateHydrologyRegion({
-        descriptor: this.descriptor,
-        key
-      }, {
-        priority: request.priority,
-        lane: request.lane,
-        weight: request.weight,
-        signal: controller.signal
-      }).then((region) => {
-        if (this.disposed) throw new Error("hydrology source was disposed during generation");
-        validateRegionContract(region, this.descriptor, key);
-        this.insert(region);
-        return region;
-      }).finally(() => {
-        created.settled = true;
-        this.inFlight.delete(regionX, regionY);
-        if (created.waiters === 0) this.evictUnleased();
-      });
-      pending = created;
-      this.inFlight.set(regionX, regionY, pending);
-    }
-    return this.waitFor(pending, request.signal);
-  }
-  releaseRegion(region) {
-    const entry = this.cache.get(region.key.regionX, region.key.regionY);
-    if (!entry || entry.region !== region || entry.references <= 0) {
-      throw new Error("hydrology region release does not match an active source lease");
-    }
-    entry.references -= 1;
-    this.touch(entry);
-    this.evictUnleased();
-  }
-  hasRegion(regionX, regionY) {
-    return this.cache.has(regionX, regionY);
-  }
-  get stats() {
-    const worker = this.pool.stats;
-    let leasedRegions = 0;
-    for (const entry of this.cache.values()) {
-      if (entry.references > 0) leasedRegions += 1;
-    }
-    return Object.freeze({
-      residentRegions: this.cache.size,
-      residentBytes: this.cacheBytes,
-      leasedRegions,
-      inFlightRegions: this.inFlight.size,
-      cacheHits: this.cacheHits,
-      cacheMisses: this.cacheMisses,
-      workers: worker.workers,
-      busyWorkers: worker.busyWorkers,
-      queuedWorkerTasks: worker.queued
-    });
-  }
-  dispose() {
-    if (this.disposed) return;
-    this.disposed = true;
-    for (const pending of this.inFlight.values()) pending.controller.abort();
-    if (this.ownsPool) this.pool.dispose();
-    this.cache.clear();
-    this.cacheBytes = 0;
-  }
-  waitFor(pending, signal) {
-    pending.waiters += 1;
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        pending.waiters -= 1;
-        if (signal) signal.removeEventListener("abort", abort);
-        if (pending.waiters === 0 && !pending.settled) pending.controller.abort();
-      };
-      const abort = () => {
-        finish();
-        reject(abortError5());
-      };
-      if (signal) signal.addEventListener("abort", abort, { once: true });
-      pending.promise.then((region) => {
-        if (settled) return;
-        finish();
-        const entry = this.cache.get(region.key.regionX, region.key.regionY);
-        if (!entry || entry.region !== region) {
-          reject(new Error("generated hydrology region was not published to its source cache"));
-          return;
-        }
-        entry.references += 1;
-        this.touch(entry);
-        this.evictUnleased();
-        resolve(region);
-      }, (reason) => {
-        if (settled) return;
-        finish();
-        reject(reason instanceof Error ? reason : new Error(String(reason)));
-      });
-      if (signal?.aborted) abort();
-    });
-  }
-  insert(region) {
-    const existing = this.cache.get(region.key.regionX, region.key.regionY);
-    if (existing) throw new Error("hydrology source generated a duplicate resident region");
-    const bytes = hydrologyRegionResidentBytes(region);
-    const entry = { region, bytes, references: 0, lastUsed: 0 };
-    this.touch(entry);
-    this.cache.set(region.key.regionX, region.key.regionY, entry);
-    this.cacheBytes += bytes;
-  }
-  touch(entry) {
-    if (this.cacheClock >= Number.MAX_SAFE_INTEGER) {
-      const entries = [...this.cache.values()].sort((first, second) => first.lastUsed - second.lastUsed);
-      for (let index = 0; index < entries.length; index += 1) entries[index].lastUsed = index + 1;
-      this.cacheClock = entries.length;
-    }
-    this.cacheClock += 1;
-    entry.lastUsed = this.cacheClock;
-  }
-  evictUnleased() {
-    while (this.cacheBytes > this.cacheMaxBytes) {
-      let candidate;
-      for (const entry of this.cache.values()) {
-        if (entry.references === 0 && (!candidate || entry.lastUsed < candidate.lastUsed)) candidate = entry;
-      }
-      if (!candidate) return;
-      this.cache.delete(candidate.region.key.regionX, candidate.region.key.regionY);
-      this.cacheBytes -= candidate.bytes;
-    }
-  }
-};
-function assertHydrologyWorldSource(source) {
-  if (!source || typeof source !== "object" || source.worldIdentity !== serializeWorldDescriptorV2(source.descriptor) || typeof source.resolveRegion !== "function" || typeof source.regionDistance !== "function" || typeof source.loadRegion !== "function" || typeof source.releaseRegion !== "function" || typeof source.hasRegion !== "function" || typeof source.dispose !== "function") {
-    throw new TypeError("hydrology world source does not satisfy the v2 runtime contract");
-  }
 }
 
 // src/world/HydrologyRegionSpatialIndex.ts
@@ -6625,7 +6822,7 @@ var HydrologyRegionSpatialIndex = class {
 // src/world/DerivedHydrologyRaster.ts
 var MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES = 1048576;
 var MAX_DERIVED_HYDROLOGY_BODY_PALETTE = 255;
-function compareIdentity2(first, second) {
+function compareIdentity3(first, second) {
   return first < second ? -1 : first > second ? 1 : 0;
 }
 function derivedHydrologyRasterIndex(x, y, width, height) {
@@ -6702,7 +6899,7 @@ function deriveHydrologyRaster(options) {
       if (sample.body) usedBodies.set(sample.body.bodyId, sample.body);
     }
   }
-  const bodies = [...usedBodies.values()].sort((first, second) => compareIdentity2(first.bodyId, second.bodyId));
+  const bodies = [...usedBodies.values()].sort((first, second) => compareIdentity3(first.bodyId, second.bodyId));
   if (bodies.length > MAX_DERIVED_HYDROLOGY_BODY_PALETTE) {
     throw new RangeError("derived hydrology raster exceeds the uint8 body palette");
   }
@@ -7233,6 +7430,7 @@ export {
   DEFAULT_HYDROLOGY_REGION_CACHE_BYTES,
   DEFAULT_INFINITE_HYDROLOGY_RESIDENT_BASINS,
   DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES,
+  EffectiveWorldView,
   HYDROLOGY_BOUNDARY_MAX_X,
   HYDROLOGY_BOUNDARY_MAX_Y,
   HYDROLOGY_BOUNDARY_MIN_X,
@@ -7331,6 +7529,7 @@ export {
   createBaseSemanticChunkGenerator,
   createCoreInfiniteWorldDescriptorV2,
   createCoreToroidalWorldDescriptorV2,
+  createEffectiveHydrologyRegion,
   createEffectiveSemanticChunk,
   createGenerateHydrologyRegionWorkerRequest,
   createGenerateSemanticChunkWorkerRequest,
@@ -7343,6 +7542,7 @@ export {
   derivedHydrologyRasterIndex,
   deserializeBaseSemanticChunk,
   deserializeSparseSemanticDelta,
+  effectiveHydrologySuppressesBaseFeature,
   generateBaseSemanticChunk,
   getBaseSemanticTile,
   getEffectiveSemanticTile,

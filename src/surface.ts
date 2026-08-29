@@ -166,6 +166,19 @@ export {
 export type { HydrologyFeatureBoundsQ64 } from "./world/HydrologyFeatureSpatialIndex";
 
 export {
+    createEffectiveHydrologyRegion,
+    effectiveHydrologySuppressesBaseFeature,
+    EffectiveWorldView
+} from "./world/EffectiveWorldView";
+export type {
+    EffectiveHydrologyRegion,
+    EffectiveBaseHydrologySlices,
+    CreateEffectiveHydrologyRegionOptions,
+    EffectiveWorldViewOptions,
+    EffectiveWorldViewStats
+} from "./world/EffectiveWorldView";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
