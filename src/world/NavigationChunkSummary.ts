@@ -66,12 +66,7 @@ export interface NavigationChunkSummary {
     readonly deltaRevision: number;
     readonly overrideRevision: number;
     readonly profile: NavigationMovementProfile;
-    readonly surfaceDependencies: readonly [
-        SurfaceDependencyKey,
-        SurfaceDependencyKey,
-        SurfaceDependencyKey,
-        SurfaceDependencyKey
-    ];
+    readonly surfaceDependencies: readonly SurfaceDependencyKey[];
     readonly valid: Uint8Array;
     // Zero is blocked/invalid; positive values are absolute Q8 traversal costs.
     readonly traversalCostQ8: Uint16Array;
@@ -161,25 +156,40 @@ function expectedSurfaceKey(
     return Object.freeze({ chunkX: originX + Math.floor(index / 2), chunkY: originY + index % 2 });
 }
 
+function requiredSurfaceIndices(bounds: Readonly<{
+    minX: number;
+    minY: number;
+    maxXExclusive: number;
+    maxYExclusive: number;
+}>): readonly number[] {
+    const required: number[] = [];
+    for (let quadrant = 0; quadrant < 4; quadrant += 1) {
+        const minimumX = Math.floor(quadrant / 2) * SURFACE_COMPILE_PROFILE.renderChunkSize;
+        const minimumY = (quadrant % 2) * SURFACE_COMPILE_PROFILE.renderChunkSize;
+        const maximumX = minimumX + SURFACE_COMPILE_PROFILE.renderChunkSize;
+        const maximumY = minimumY + SURFACE_COMPILE_PROFILE.renderChunkSize;
+        if (bounds.minX < maximumX && bounds.maxXExclusive > minimumX
+            && bounds.minY < maximumY && bounds.maxYExclusive > minimumY) required.push(quadrant);
+    }
+    if (required.length === 0) throw new Error("navigation valid bounds require no surface chunks");
+    return Object.freeze(required);
+}
+
 function assertSurfaceInputs(
     worldIdentity: string,
     semantic: Readonly<EffectiveSemanticChunk>,
     surfaces: readonly CompiledSurfaceChunk[]
-): asserts surfaces is readonly [
-    CompiledSurfaceChunk,
-    CompiledSurfaceChunk,
-    CompiledSurfaceChunk,
-    CompiledSurfaceChunk
-] {
-    if (!Array.isArray(surfaces) || surfaces.length !== 4) {
-        throw new TypeError("navigation summary requires exactly four aligned surface chunks");
+): void {
+    const required = requiredSurfaceIndices(semantic.validBounds);
+    if (!Array.isArray(surfaces) || surfaces.length !== required.length) {
+        throw new TypeError("navigation summary surface chunks do not match semantic valid bounds");
     }
     let firstHexSize: number | undefined;
     let firstHeightScale: number | undefined;
     for (let index = 0; index < surfaces.length; index += 1) {
         const surface = surfaces[index];
         assertCompiledSurfaceChunk(surface);
-        const expected = expectedSurfaceKey(semantic.key, index);
+        const expected = expectedSurfaceKey(semantic.key, required[index]);
         if (surface.key.chunkX !== expected.chunkX || surface.key.chunkY !== expected.chunkY
             || surface.dependencyKey.worldIdentity !== worldIdentity) {
             throw new TypeError("navigation surface chunk is not aligned with its semantic owner");
@@ -362,7 +372,8 @@ export function assertNavigationChunkSummary(summary: Readonly<NavigationChunkSu
         || !Number.isSafeInteger(summary.overrideRevision) || summary.overrideRevision < 0
         || !Number.isInteger(summary.componentCount) || summary.componentCount < 0
         || summary.componentCount > BASE_SEMANTIC_CHUNK_TILE_COUNT
-        || !Array.isArray(summary.surfaceDependencies) || summary.surfaceDependencies.length !== 4
+        || !Array.isArray(summary.surfaceDependencies)
+        || summary.surfaceDependencies.length < 1 || summary.surfaceDependencies.length > 4
         || !(summary.valid instanceof Uint8Array)
         || summary.valid.length !== BASE_SEMANTIC_CHUNK_TILE_COUNT
         || !(summary.traversalCostQ8 instanceof Uint16Array)
@@ -409,11 +420,22 @@ export function assertNavigationChunkSummary(summary: Readonly<NavigationChunkSu
         previousTile = tile;
         previousDirection = direction;
     }
+    const requiredDependencies = new Set<number>();
+    for (let tileIndex = 0; tileIndex < BASE_SEMANTIC_CHUNK_TILE_COUNT; tileIndex += 1) {
+        if (summary.valid[tileIndex] === 0) continue;
+        const localX = Math.floor(tileIndex / WORLD_SEMANTIC_CHUNK_SIZE);
+        const localY = tileIndex - localX * WORLD_SEMANTIC_CHUNK_SIZE;
+        requiredDependencies.add(surfaceIndex(localX, localY));
+    }
+    const required = [...requiredDependencies].sort((first, second) => first - second);
+    if (required.length !== summary.surfaceDependencies.length) {
+        throw new Error("navigation surface dependency count does not match valid tiles");
+    }
     let firstMetrics: string | undefined;
     for (let index = 0; index < summary.surfaceDependencies.length; index += 1) {
         const dependency = summary.surfaceDependencies[index];
         assertSurfaceDependencyKey(dependency);
-        const expected = expectedSurfaceKey(summary.key, index);
+        const expected = expectedSurfaceKey(summary.key, required[index]);
         if (dependency.worldIdentity !== summary.worldIdentity
             || dependency.renderKey.chunkX !== expected.chunkX
             || dependency.renderKey.chunkY !== expected.chunkY) {
@@ -458,7 +480,11 @@ export function compileNavigationChunkSummary(
 
     const valid = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
     const traversalCostQ8 = new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
-    const samplers = options.surfaces.map(surface => new CompiledSurfaceSampler(surface.field));
+    const required = requiredSurfaceIndices(semantic.validBounds);
+    const samplers: Array<CompiledSurfaceSampler | undefined> = new Array(4);
+    for (let index = 0; index < options.surfaces.length; index += 1) {
+        samplers[required[index]] = new CompiledSurfaceSampler(options.surfaces[index].field);
+    }
     const scratch = createCompiledSurfaceSample();
     const hexSize = options.surfaces[0].dependencyKey.metrics.hexSize;
     for (let localX = 0; localX < WORLD_SEMANTIC_CHUNK_SIZE; localX += 1) {
@@ -480,6 +506,7 @@ export function compileNavigationChunkSummary(
             const localU = localX % SURFACE_COMPILE_PROFILE.renderChunkSize;
             const localV = localY % SURFACE_COMPILE_PROFILE.renderChunkSize;
             const sampler = samplers[owner];
+            if (!sampler) throw new Error("navigation valid tile has no aligned surface sampler");
             sampler.sampleSurface(localU, localV, scratch);
             if (scratch.waterCoverage > SURFACE_COMPILE_PROFILE.waterGeometryCoverageThreshold) {
                 const cost = waterCost(profile, scratch.waterKind);
@@ -536,6 +563,25 @@ export function navigationChunkSummaryResidentBytes(
         + summary.component.byteLength
         + summary.portalTileIndex.byteLength
         + summary.portalDirection.byteLength;
+}
+
+export function rebaseNavigationChunkSummary(
+    summary: Readonly<NavigationChunkSummary>,
+    effectiveRevision: number
+): NavigationChunkSummary {
+    assertNavigationChunkSummary(summary);
+    if (!Number.isSafeInteger(effectiveRevision)
+        || effectiveRevision < summary.baseRevision
+        || effectiveRevision < summary.deltaRevision) {
+        throw new RangeError("navigation summary rebase revision is older than its exact dependencies");
+    }
+    if (effectiveRevision === summary.effectiveRevision) return summary;
+    const rebased: NavigationChunkSummary = Object.freeze({
+        ...summary,
+        effectiveRevision
+    });
+    assertNavigationChunkSummary(rebased);
+    return rebased;
 }
 
 if (BASE_SEMANTIC_CHUNK_TILE_COUNT !== 1024

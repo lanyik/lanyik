@@ -98,3 +98,19 @@ export function navigationOverrideSectionResidentBytes(
         + section.tileIndex.byteLength
         + section.traversalCostQ8.byteLength;
 }
+
+export function serializeNavigationOverrideSection(
+    section: Readonly<NavigationOverrideSection> | undefined
+): string {
+    if (!section) return "null";
+    assertNavigationOverrideSection(section);
+    return JSON.stringify([
+        section.formatVersion,
+        section.worldIdentity,
+        section.key.chunkX,
+        section.key.chunkY,
+        section.revision,
+        [...section.tileIndex],
+        [...section.traversalCostQ8]
+    ]);
+}

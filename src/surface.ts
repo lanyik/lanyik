@@ -181,7 +181,8 @@ export {
     assertNavigationOverrideSection,
     createNavigationOverrideSection,
     navigationOverrideEntryIndex,
-    navigationOverrideSectionResidentBytes
+    navigationOverrideSectionResidentBytes,
+    serializeNavigationOverrideSection
 } from "./world/NavigationOverrideSection";
 export type {
     NavigationOverrideSection,
@@ -196,13 +197,28 @@ export {
     createNavigationMovementProfile,
     assertNavigationChunkSummary,
     compileNavigationChunkSummary,
-    navigationChunkSummaryResidentBytes
+    navigationChunkSummaryResidentBytes,
+    rebaseNavigationChunkSummary
 } from "./world/NavigationChunkSummary";
 export type {
     NavigationMovementProfile,
     NavigationChunkSummary,
     CompileNavigationChunkSummaryOptions
 } from "./world/NavigationChunkSummary";
+export {
+    NAVIGATION_SUMMARY_REQUEST_TOKEN_FORMAT_VERSION,
+    MAX_NAVIGATION_SUMMARY_REVISION_ATTEMPTS,
+    NavigationSummarySupersededError,
+    NavigationSummaryLeaseNotCurrentError,
+    NavigationSummaryService
+} from "./world/NavigationSummaryService";
+export type {
+    NavigationSummaryRequestToken,
+    NavigationSummaryServiceOptions,
+    NavigationSummaryRequest,
+    NavigationSummaryLease,
+    NavigationSummaryServiceStats
+} from "./world/NavigationSummaryService";
 
 export {
     assertEnvironmentHandle,

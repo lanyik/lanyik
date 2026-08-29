@@ -32,26 +32,36 @@ const LAND_PROFILE: Readonly<NavigationMovementProfile> = Object.freeze({
     riverCost: null
 });
 
-function staticDescriptor(): WorldDescriptorV2 {
+function staticDescriptor(width = 32, height = 32): WorldDescriptorV2 {
     return createWorldDescriptorV2({
         ...CORE_WORLD_SEMANTICS_V2,
         sourceKind: "static",
         sourceContentHash: `sha256:${"1".repeat(64)}`,
-        width: 32,
-        height: 32
+        width,
+        height
     });
 }
 
 function effectiveSemantic(descriptor: WorldDescriptorV2) {
     const biomeWeights = new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT * 4);
-    for (let index = 0; index < BASE_SEMANTIC_CHUNK_TILE_COUNT; index += 1) {
-        biomeWeights[index * 4] = 255;
+    const macroHeight = new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT);
+    const maxXExclusive = descriptor.sourceKind === "procedural-infinite"
+        ? 32 : Math.min(32, descriptor.width);
+    const maxYExclusive = descriptor.sourceKind === "procedural-infinite"
+        ? 32 : Math.min(32, descriptor.height);
+    for (let localX = 0; localX < maxXExclusive; localX += 1) {
+        for (let localY = 0; localY < maxYExclusive; localY += 1) {
+            const index = semanticTileIndex(localX, localY);
+            biomeWeights[index * 4] = 255;
+            macroHeight[index] = 40_000;
+        }
     }
     const base = createBaseSemanticChunk({
         key: { chunkX: 0, chunkY: 0 },
         revision: 0,
+        validBounds: { minX: 0, minY: 0, maxXExclusive, maxYExclusive },
         substrateClass: new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT),
-        macroHeight: new Uint16Array(BASE_SEMANTIC_CHUNK_TILE_COUNT).fill(40_000),
+        macroHeight,
         biomeWeights,
         climate: new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT * 2),
         vegetationDensity: new Uint8Array(BASE_SEMANTIC_CHUNK_TILE_COUNT),
@@ -68,7 +78,12 @@ function surfaces(descriptor: WorldDescriptorV2, macroHeight: number) {
     const hydrologyRegions = descriptor.sourceKind === "procedural-infinite" ? undefined : [{
         key: { regionX: 0, regionY: 0 },
         topology: descriptor.topology,
-        validBounds: { minX: 0 as const, minY: 0 as const, maxXExclusive: 32, maxYExclusive: 32 },
+        validBounds: {
+            minX: 0 as const,
+            minY: 0 as const,
+            maxXExclusive: Math.min(128, descriptor.width),
+            maxYExclusive: Math.min(128, descriptor.height)
+        },
         baseRevision: 0,
         suppressedBaseFeatureIds: Object.freeze([]),
         boundaryPorts: Object.freeze([]),
@@ -77,12 +92,15 @@ function surfaces(descriptor: WorldDescriptorV2, macroHeight: number) {
         mouths: Object.freeze([]),
         bodies: Object.freeze([])
     }] as const;
-    return [
+    const keys = [
         { renderChunkX: 0, renderChunkY: 0 },
         { renderChunkX: 0, renderChunkY: 1 },
         { renderChunkX: 1, renderChunkY: 0 },
         { renderChunkX: 1, renderChunkY: 1 }
-    ].map(key => compileSurfaceChunk(createSurfaceCompilerTestWindow({
+    ].filter(key => descriptor.sourceKind === "procedural-infinite"
+        || key.renderChunkX * 16 < descriptor.width
+        && key.renderChunkY * 16 < descriptor.height);
+    return keys.map(key => compileSurfaceChunk(createSurfaceCompilerTestWindow({
         worldIdentity,
         ...key,
         seaLevel: descriptor.seaLevel,
@@ -124,6 +142,23 @@ describe("NavigationChunkSummary", () => {
         expect(summary.portalTileIndex).toHaveLength(0);
         expect(summary.overrideRevision).toBe(0);
         expect(navigationChunkSummaryResidentBytes(summary)).toBeGreaterThan(5_000);
+        expect(() => assertNavigationChunkSummary(summary)).not.toThrow();
+    });
+
+    test("loads only the exact surface quadrants required by a partial finite chunk", () => {
+        const descriptor = staticDescriptor(13, 20);
+        const summary = compileNavigationChunkSummary({
+            descriptor,
+            semantic: effectiveSemantic(descriptor),
+            surfaces: surfaces(descriptor, 40_000),
+            profile: LAND_PROFILE
+        });
+        expect(summary.surfaceDependencies).toHaveLength(2);
+        expect(summary.valid.reduce((count, value) => count + value, 0)).toBe(260);
+        expect(summary.componentCount).toBe(1);
+        expect(summary.portalTileIndex).toHaveLength(0);
+        expect(summary.traversalCostQ8[semanticTileIndex(12, 19)]).toBe(256);
+        expect(summary.traversalCostQ8[semanticTileIndex(13, 19)]).toBe(0);
         expect(() => assertNavigationChunkSummary(summary)).not.toThrow();
     });
 
