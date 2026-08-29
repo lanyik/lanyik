@@ -439,6 +439,30 @@ export {
     WORLD_CHANGE_DOMAIN_ALL,
     createWorldChangeSet
 } from "./world/WorldChangeSet";
+
+export {
+    MAX_SURFACE_EDIT_AREA_SAMPLES,
+    MAX_SURFACE_EDIT_VALIDATION_RENDER_CHUNKS,
+    MAX_PRESERVE_CHANNEL_PASSES,
+    MAX_SURFACE_EDIT_CONFLICT_DETAILS,
+    MAX_SURFACE_EDIT_LAKE_CONNECTIVITY_CELLS,
+    createSurfaceEditArea,
+    SurfaceEditConflictError,
+    SurfaceEditBusyError,
+    SurfaceWorldEditor
+} from "./world/SurfaceWorldEditor";
+export type {
+    SurfaceWaterConflictPolicy,
+    SurfaceEditFalloff,
+    SurfaceEditAreaSample,
+    SurfaceEditArea,
+    RaiseTerrainOptions,
+    PaintMaterialOptions,
+    PaintVegetationOptions,
+    SurfaceEditTransaction,
+    SurfaceWorldEditorOptions,
+    SurfaceEditConflictDetail
+} from "./world/SurfaceWorldEditor";
 export type {
     TileBounds,
     DirtySemanticDomainBounds,

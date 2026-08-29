@@ -294,8 +294,14 @@ function chunkLocation(tileX, tileY, chunkSize) {
     localY: tileY - chunkY * chunkSize
   };
 }
+function semanticChunkLocation(tileX, tileY) {
+  return chunkLocation(tileX, tileY, WORLD_SEMANTIC_CHUNK_SIZE);
+}
 function hydrologyRegionLocation(tileX, tileY) {
   return chunkLocation(tileX, tileY, HYDROLOGY_REGION_SIZE);
+}
+function renderChunkLocation(tileX, tileY) {
+  return chunkLocation(tileX, tileY, SURFACE_COMPILE_PROFILE.renderChunkSize);
 }
 function chunkOrigin(chunkX, chunkY, chunkSize) {
   assertLogicalCoordinate("chunk x", chunkX);
@@ -4699,7 +4705,7 @@ function compileVegetationSeeds(window, field2) {
       const tileY = origin.y + localTileY;
       const semanticIndex = ownerIndex(window, tileX, tileY);
       if (window.valid[semanticIndex] === 0) continue;
-      const tileIdentity = localTileX * chunkSize + localTileY;
+      const tileIdentity2 = localTileX * chunkSize + localTileY;
       for (let candidate = 0; candidate < VEGETATION_CANDIDATES_PER_TILE; candidate += 1) {
         const column = candidate % VEGETATION_CANDIDATE_COLUMNS_PER_TILE;
         const row = Math.floor(candidate / VEGETATION_CANDIDATE_COLUMNS_PER_TILE);
@@ -4761,7 +4767,7 @@ function compileVegetationSeeds(window, field2) {
         positions[offset] = storedX;
         positions[offset + 1] = Math.fround(surfaceSample.groundHeight);
         positions[offset + 2] = storedZ;
-        instanceIdentity[count] = tileIdentity * VEGETATION_CANDIDATES_PER_TILE + candidate;
+        instanceIdentity[count] = tileIdentity2 * VEGETATION_CANDIDATES_PER_TILE + candidate;
         profileIndex[count] = window.vegetationProfile[semanticIndex];
         placementSeed[count] = candidateHash(
           worldSeed,
@@ -10373,9 +10379,9 @@ var MemorySurfaceDeltaStore = class {
     for (const state of this.current.semanticStates) semanticByKey.set(semanticKeyIdentity(state.key), state);
     const hydrologyById = /* @__PURE__ */ new Map();
     for (const delta of this.current.hydrologyDeltas) hydrologyById.set(delta.featureId, delta);
-    const semanticMutations = [...input.semanticMutations].sort((first, second) => compareSemanticKeys(first.key, second.key));
+    const semanticMutations2 = [...input.semanticMutations].sort((first, second) => compareSemanticKeys(first.key, second.key));
     const hydrologyMutations = [...input.hydrologyMutations].sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0);
-    const semanticChanges = semanticMutations.map((mutation) => this.applySemanticMutation(
+    const semanticChanges = semanticMutations2.map((mutation) => this.applySemanticMutation(
       semanticByKey,
       mutation,
       revision,
@@ -10520,7 +10526,7 @@ var MemorySurfaceDeltaStore = class {
   }
   snapshotTransactionInput(input) {
     this.assertTransaction(input);
-    const semanticMutations = input.semanticMutations.map((mutation) => Object.freeze(
+    const semanticMutations2 = input.semanticMutations.map((mutation) => Object.freeze(
       mutation.operation === "upsert" ? {
         operation: mutation.operation,
         key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
@@ -10548,7 +10554,7 @@ var MemorySurfaceDeltaStore = class {
     ));
     const snapshot = Object.freeze({
       worldIdentity: input.worldIdentity,
-      semanticMutations: Object.freeze(semanticMutations),
+      semanticMutations: Object.freeze(semanticMutations2),
       hydrologyMutations: Object.freeze(hydrologyMutations)
     });
     surfaceDeltaTransactionResidentBytes(snapshot);
@@ -11662,6 +11668,942 @@ function createWorldChangeSet(options) {
     hydrologyRegions: Object.freeze(hydrologyRegions),
     renderChunks: Object.freeze(renderChunks)
   });
+}
+
+// src/world/SurfaceWorldEditor.ts
+var MAX_SURFACE_EDIT_AREA_SAMPLES = 65536;
+var MAX_SURFACE_EDIT_VALIDATION_RENDER_CHUNKS = 4096;
+var MAX_PRESERVE_CHANNEL_PASSES = 8;
+var MAX_SURFACE_EDIT_CONFLICT_DETAILS = 1024;
+var MAX_SURFACE_EDIT_LAKE_CONNECTIVITY_CELLS = 1048576;
+var MAX_INTERNAL_SURFACE_EDIT_CONFLICTS = 131072;
+var SurfaceEditConflictError = class extends Error {
+  constructor(policy, conflictCount, details) {
+    super(`surface ${policy} edit has ${conflictCount} hydrology conflict(s)`);
+    this.policy = policy;
+    this.conflictCount = conflictCount;
+    this.details = details;
+    this.name = "SurfaceEditConflictError";
+  }
+};
+var SurfaceEditBusyError = class extends Error {
+  constructor() {
+    super("surface editor already has an in-flight transaction");
+    this.name = "SurfaceEditBusyError";
+  }
+};
+function assertUint83(name, value) {
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new RangeError(`${name} must be a uint8 value`);
+  }
+}
+function assertFeatureIdentity(featureId) {
+  if (typeof featureId !== "string" || featureId.length === 0 || featureId.length > 256 || featureId.trim() !== featureId || /[\u0000-\u001f\u007f]/u.test(featureId)) {
+    throw new TypeError("surface edit feature ID must be a canonical stable identity");
+  }
+}
+function createSurfaceEditArea(samples) {
+  if (!Array.isArray(samples) || samples.length === 0 || samples.length > MAX_SURFACE_EDIT_AREA_SAMPLES) {
+    throw new RangeError("surface edit area must contain a bounded non-empty sample array");
+  }
+  const owned = samples.map((sample) => {
+    if (!sample || typeof sample !== "object" || !Number.isSafeInteger(sample.tileX) || !Number.isSafeInteger(sample.tileY)) {
+      throw new RangeError("surface edit area coordinates must be safe integers");
+    }
+    if (!Number.isInteger(sample.strength) || sample.strength <= 0 || sample.strength > 255) {
+      throw new RangeError("surface edit area strength must be an integer from 1 through 255");
+    }
+    return Object.freeze({ tileX: sample.tileX, tileY: sample.tileY, strength: sample.strength });
+  }).sort((first, second) => first.tileX - second.tileX || first.tileY - second.tileY);
+  for (let index = 1; index < owned.length; index += 1) {
+    if (owned[index - 1].tileX === owned[index].tileX && owned[index - 1].tileY === owned[index].tileY) {
+      throw new Error("surface edit area contains duplicate tile coordinates");
+    }
+  }
+  return Object.freeze({ samples: Object.freeze(owned) });
+}
+function cloneArea(area) {
+  if (!area || typeof area !== "object") throw new TypeError("surface edit area is required");
+  return createSurfaceEditArea(area.samples);
+}
+function cloneExactPaintArea(area) {
+  const owned = cloneArea(area);
+  if (owned.samples.some((sample) => sample.strength !== 255)) {
+    throw new RangeError("absolute material and vegetation edits require strength 255 samples");
+  }
+  return owned;
+}
+var MutableSurfaceEditTransaction = class {
+  constructor() {
+    this.operations = [];
+    this.sealed = false;
+  }
+  raiseTerrain(area, options) {
+    this.assertOpen();
+    if (!options || typeof options !== "object" || !Number.isFinite(options.delta) || options.delta === 0 || options.delta < -1 || options.delta > 1) {
+      throw new RangeError("terrain delta must be a finite non-zero normalized value in [-1, 1]");
+    }
+    if (options.falloff !== "constant" && options.falloff !== "linear" && options.falloff !== "smooth") {
+      throw new TypeError("terrain edit falloff is invalid");
+    }
+    if (options.waterPolicy !== "reject" && options.waterPolicy !== "preserve-channel" && options.waterPolicy !== "coupled") {
+      throw new TypeError("terrain edit water policy is invalid");
+    }
+    this.operations.push(Object.freeze({
+      kind: "raise-terrain",
+      area: cloneArea(area),
+      options: Object.freeze({ ...options })
+    }));
+  }
+  paintMaterial(area, options) {
+    this.assertOpen();
+    if (!options || typeof options !== "object" || options.substrateClass === void 0 && options.biomeWeights === void 0) {
+      throw new TypeError("material edit requires substrateClass or biomeWeights");
+    }
+    if (options.substrateClass !== void 0) assertUint83("material substrate class", options.substrateClass);
+    let biomeWeights;
+    if (options.biomeWeights !== void 0) {
+      if (!Array.isArray(options.biomeWeights) || options.biomeWeights.length !== 4) {
+        throw new TypeError("material biome weights must contain four uint8 values");
+      }
+      for (const value of options.biomeWeights) assertUint83("material biome weight", value);
+      if (options.biomeWeights.reduce((sum, value) => sum + value, 0) !== 255) {
+        throw new RangeError("material biome weights must sum to 255");
+      }
+      biomeWeights = Object.freeze([...options.biomeWeights]);
+    }
+    this.operations.push(Object.freeze({
+      kind: "paint-material",
+      area: cloneExactPaintArea(area),
+      options: Object.freeze({
+        ...options.substrateClass !== void 0 ? { substrateClass: options.substrateClass } : {},
+        ...biomeWeights ? { biomeWeights } : {}
+      })
+    }));
+  }
+  paintVegetation(area, options) {
+    this.assertOpen();
+    if (!options || typeof options !== "object") throw new TypeError("vegetation edit options are required");
+    assertUint83("vegetation density", options.density);
+    assertUint83("vegetation profile", options.profile);
+    this.operations.push(Object.freeze({
+      kind: "paint-vegetation",
+      area: cloneExactPaintArea(area),
+      options: Object.freeze({ density: options.density, profile: options.profile })
+    }));
+  }
+  upsertHydrology(feature) {
+    this.assertOpen();
+    if (!feature || typeof feature !== "object") throw new TypeError("hydrology edit feature is required");
+    const owned = feature.kind === "river" ? createAuthoredRiverFeature({
+      ...feature,
+      controlPoints: feature.controlPoints.slice(),
+      widthProfile: feature.widthProfile.slice(),
+      levelProfile: feature.levelProfile.slice()
+    }) : feature.kind === "lake" ? createAuthoredLakeFeature(feature) : (() => {
+      throw new TypeError("hydrology edit feature kind is invalid");
+    })();
+    this.operations.push(Object.freeze({ kind: "upsert-hydrology", feature: owned }));
+  }
+  deleteHydrology(featureId, featureKind) {
+    this.assertOpen();
+    assertFeatureIdentity(featureId);
+    if (featureKind !== "river" && featureKind !== "lake") {
+      throw new TypeError("hydrology delete kind is invalid");
+    }
+    this.operations.push(Object.freeze({ kind: "delete-hydrology", featureId, featureKind }));
+  }
+  finish() {
+    this.assertOpen();
+    this.sealed = true;
+    if (this.operations.length === 0) throw new Error("surface edit transaction cannot be empty");
+    const policies = new Set(this.operations.flatMap((operation) => operation.kind === "raise-terrain" ? [operation.options.waterPolicy] : []));
+    if (policies.size > 1) {
+      throw new Error("all height operations in one surface transaction must use one water policy");
+    }
+    const hasHeightEdits = policies.size === 1;
+    const hasHydrologyEdits = this.operations.some((operation) => operation.kind === "upsert-hydrology" || operation.kind === "delete-hydrology");
+    const waterPolicy = policies.values().next().value;
+    if (hasHeightEdits && hasHydrologyEdits && waterPolicy !== "coupled") {
+      throw new Error("height and hydrology mutations in one transaction require the coupled policy");
+    }
+    if (waterPolicy === "coupled" && !hasHydrologyEdits) {
+      throw new Error("coupled terrain edits require at least one hydrology mutation");
+    }
+    return Object.freeze({
+      operations: Object.freeze([...this.operations]),
+      ...waterPolicy ? { waterPolicy } : {},
+      hasHeightEdits,
+      hasHydrologyEdits
+    });
+  }
+  assertOpen() {
+    if (this.sealed) throw new Error("surface edit transaction has already been finalized");
+  }
+};
+function chunkIdentity(key) {
+  return `${key.chunkX}:${key.chunkY}`;
+}
+function tileIdentity(tileX, tileY) {
+  return `${tileX}:${tileY}`;
+}
+function renderIdentity(chunkX, chunkY) {
+  return `${chunkX}:${chunkY}`;
+}
+function mutableEntries(delta) {
+  const entries = /* @__PURE__ */ new Map();
+  if (!delta) return entries;
+  for (let index = 0; index < delta.tileIndex.length; index += 1) {
+    const biomeOffset = index * 4;
+    entries.set(delta.tileIndex[index], {
+      fieldMask: delta.fieldMask[index],
+      macroHeight: delta.macroHeight[index],
+      substrateClass: delta.substrateClass[index],
+      biome0: delta.biomeWeights[biomeOffset],
+      biome1: delta.biomeWeights[biomeOffset + 1],
+      biome2: delta.biomeWeights[biomeOffset + 2],
+      biome3: delta.biomeWeights[biomeOffset + 3],
+      vegetationDensity: delta.vegetationDensity[index],
+      vegetationProfile: delta.vegetationProfile[index]
+    });
+  }
+  return entries;
+}
+function semanticPayload(chunk) {
+  const ordered = [...chunk.entries.entries()].filter(([, entry]) => entry.fieldMask !== 0).sort((first, second) => first[0] - second[0]);
+  if (ordered.length === 0) return void 0;
+  const payload = {
+    tileIndex: new Uint16Array(ordered.length),
+    fieldMask: new Uint8Array(ordered.length),
+    macroHeight: new Uint16Array(ordered.length),
+    substrateClass: new Uint8Array(ordered.length),
+    biomeWeights: new Uint8Array(ordered.length * 4),
+    vegetationDensity: new Uint8Array(ordered.length),
+    vegetationProfile: new Uint8Array(ordered.length)
+  };
+  ordered.forEach(([tileIndex, entry], index) => {
+    payload.tileIndex[index] = tileIndex;
+    payload.fieldMask[index] = entry.fieldMask;
+    payload.macroHeight[index] = entry.macroHeight;
+    payload.substrateClass[index] = entry.substrateClass;
+    payload.biomeWeights[index * 4] = entry.biome0;
+    payload.biomeWeights[index * 4 + 1] = entry.biome1;
+    payload.biomeWeights[index * 4 + 2] = entry.biome2;
+    payload.biomeWeights[index * 4 + 3] = entry.biome3;
+    payload.vegetationDensity[index] = entry.vegetationDensity;
+    payload.vegetationProfile[index] = entry.vegetationProfile;
+  });
+  return payload;
+}
+function arraysEqual2(first, second) {
+  if (first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) if (first[index] !== second[index]) return false;
+  return true;
+}
+function payloadEqualsDelta(payload, delta) {
+  if (!payload || !delta) return payload === void 0 && delta === void 0;
+  return arraysEqual2(payload.tileIndex, delta.tileIndex) && arraysEqual2(payload.fieldMask, delta.fieldMask) && arraysEqual2(payload.macroHeight, delta.macroHeight) && arraysEqual2(payload.substrateClass, delta.substrateClass) && arraysEqual2(payload.biomeWeights, delta.biomeWeights) && arraysEqual2(payload.vegetationDensity, delta.vegetationDensity) && arraysEqual2(payload.vegetationProfile, delta.vegetationProfile);
+}
+function semanticMutations(chunks) {
+  const mutations = [];
+  for (const chunk of chunks) {
+    const payload = semanticPayload(chunk);
+    if (payloadEqualsDelta(payload, chunk.before)) continue;
+    mutations.push(payload ? {
+      operation: "upsert",
+      key: chunk.key,
+      expectedRevision: chunk.expectedRevision,
+      payload
+    } : {
+      operation: "delete",
+      key: chunk.key,
+      expectedRevision: chunk.expectedRevision
+    });
+  }
+  return Object.freeze(mutations);
+}
+function falloffAmount(strength, falloff) {
+  if (falloff === "constant") return 1;
+  const normalized = strength / 255;
+  return falloff === "linear" ? normalized : normalized * normalized * (3 - 2 * normalized);
+}
+function quantizedHeightDelta(delta, strength, falloff) {
+  const magnitude = Math.round(Math.abs(delta) * 65535 * falloffAmount(strength, falloff));
+  return delta < 0 ? -magnitude : magnitude;
+}
+function bodyIdAt(compilation, index) {
+  const paletteIndex = compilation.field.waterBodyIndex[index];
+  if (paletteIndex === 0) return void 0;
+  return compilation.waterBodies.entries[paletteIndex - 1]?.bodyId;
+}
+function freezeConflict(conflict) {
+  return Object.freeze(conflict);
+}
+var SurfaceWorldEditor = class {
+  constructor(options) {
+    this.busy = false;
+    if (!options || typeof options !== "object") throw new TypeError("surface world editor options are required");
+    this.worldIdentity = options.store.worldIdentity;
+    if (options.semanticSource.worldIdentity !== this.worldIdentity || options.hydrologySource.worldIdentity !== this.worldIdentity || serializeWorldDescriptorV2(options.store.descriptor) !== this.worldIdentity) {
+      throw new TypeError("surface world editor inputs belong to different worlds");
+    }
+    if (!options.baseHydrology || typeof options.baseHydrology.resolveFeature !== "function" || typeof options.baseHydrology.referencesTo !== "function" || typeof options.baseHydrology.resolveBoundsQ64 !== "function") {
+      throw new TypeError("surface world editor requires a base hydrology change index");
+    }
+    if (!options.metrics || !Number.isFinite(options.metrics.hexSize) || options.metrics.hexSize <= 0 || !Number.isFinite(options.metrics.heightScale) || options.metrics.heightScale <= 0) {
+      throw new RangeError("surface world editor metrics must be positive and finite");
+    }
+    if (!Number.isFinite(options.minimumExplicitWaterDepth) || options.minimumExplicitWaterDepth < 0 || options.minimumExplicitWaterDepth > options.metrics.heightScale) {
+      throw new RangeError("surface world editor minimum water depth is outside the height scale");
+    }
+    if (typeof options.residency !== "function") {
+      throw new TypeError("surface world editor requires an explicit residency provider");
+    }
+    this.descriptor = options.store.descriptor;
+    this.store = options.store;
+    this.semanticSource = options.semanticSource;
+    this.hydrologySource = options.hydrologySource;
+    this.baseHydrology = options.baseHydrology;
+    this.metrics = Object.freeze({ ...options.metrics });
+    this.minimumDepth = options.minimumExplicitWaterDepth;
+    this.residency = options.residency;
+  }
+  edit(callback) {
+    if (this.busy) return Promise.reject(new SurfaceEditBusyError());
+    if (typeof callback !== "function") return Promise.reject(new TypeError("surface edit callback is required"));
+    this.busy = true;
+    return this.executeEdit(callback).finally(() => {
+      this.busy = false;
+    });
+  }
+  async executeEdit(callback) {
+    await this.store.flush();
+    const transaction = new MutableSurfaceEditTransaction();
+    const callbackResult = callback(transaction);
+    if (callbackResult && typeof callbackResult.then === "function") {
+      throw new TypeError("surface edit callback must be synchronous");
+    }
+    const plan = transaction.finish();
+    const before = this.store.snapshot();
+    const materialized = await this.materialize(plan, before);
+    let prepared = await this.store.preview(materialized.buildInput());
+    if (prepared.before !== before) {
+      throw new Error("surface edit base changed while its authoritative mutations were materialized");
+    }
+    if (plan.hasHeightEdits || plan.hasHydrologyEdits) {
+      if (plan.waterPolicy === "preserve-channel") {
+        prepared = await this.preserveChannels(materialized, prepared);
+      } else {
+        const validation = await this.validateCandidate(materialized, prepared.snapshot, plan.hasHeightEdits);
+        if (validation.conflictCount > 0) {
+          throw this.conflictError(
+            plan.waterPolicy ?? "coupled",
+            validation.conflictCount,
+            validation.conflicts
+          );
+        }
+      }
+    }
+    const changeSet = createWorldChangeSet({
+      descriptor: this.descriptor,
+      baseHydrology: this.baseHydrology,
+      before: prepared.before,
+      commit: prepared.commit,
+      residency: this.residency()
+    });
+    await this.store.commitPrepared(prepared);
+    return changeSet;
+  }
+  canonicalTile(tileX, tileY) {
+    if (this.descriptor.sourceKind === "procedural-infinite") return { x: tileX, y: tileY };
+    if (this.descriptor.topology === "toroidal") {
+      return {
+        x: positiveModulo2(tileX, this.descriptor.width),
+        y: positiveModulo2(tileY, this.descriptor.height)
+      };
+    }
+    if (tileX < 0 || tileX >= this.descriptor.width || tileY < 0 || tileY >= this.descriptor.height) {
+      throw new RangeError("surface edit area contains a tile outside the finite world");
+    }
+    return { x: tileX, y: tileY };
+  }
+  canonicalArea(area) {
+    const seen = /* @__PURE__ */ new Set();
+    return Object.freeze(area.samples.map((sample) => {
+      const canonical = this.canonicalTile(sample.tileX, sample.tileY);
+      const tileKey = tileIdentity(canonical.x, canonical.y);
+      if (seen.has(tileKey)) {
+        throw new Error("surface edit area aliases one canonical tile more than once");
+      }
+      seen.add(tileKey);
+      return Object.freeze({
+        tileX: canonical.x,
+        tileY: canonical.y,
+        strength: sample.strength,
+        tileKey
+      });
+    }));
+  }
+  async materialize(plan, before) {
+    const tasksByChunk = /* @__PURE__ */ new Map();
+    const hydrologyOperations = [];
+    for (const operation of plan.operations) {
+      if (operation.kind === "upsert-hydrology" || operation.kind === "delete-hydrology") {
+        hydrologyOperations.push(operation);
+        continue;
+      }
+      for (const sample of this.canonicalArea(operation.area)) {
+        const location = semanticChunkLocation(sample.tileX, sample.tileY);
+        const key = Object.freeze({ chunkX: location.chunkX, chunkY: location.chunkY });
+        const identity = chunkIdentity(key);
+        let group = tasksByChunk.get(identity);
+        if (!group) {
+          group = { key, tasks: [] };
+          tasksByChunk.set(identity, group);
+        }
+        group.tasks.push({ operation, sample });
+      }
+    }
+    const view = new EffectiveWorldView({
+      semanticSource: this.semanticSource,
+      hydrologySource: this.hydrologySource,
+      deltaSnapshot: before
+    });
+    const chunks = [];
+    const heightEdits = /* @__PURE__ */ new Map();
+    try {
+      const groups = [...tasksByChunk.values()].sort((first, second) => first.key.chunkX - second.key.chunkX || first.key.chunkY - second.key.chunkY);
+      for (const group of groups) {
+        const effective = await view.loadSemanticChunk(group.key.chunkX, group.key.chunkY);
+        try {
+          const beforeDelta = before.getSemanticDelta(group.key.chunkX, group.key.chunkY);
+          const chunk = {
+            key: group.key,
+            before: beforeDelta,
+            expectedRevision: before.getSemanticRevision(group.key.chunkX, group.key.chunkY),
+            entries: mutableEntries(beforeDelta)
+          };
+          for (const task of group.tasks) {
+            const location = semanticChunkLocation(task.sample.tileX, task.sample.tileY);
+            const tileIndex = semanticTileIndex(location.localX, location.localY);
+            const baseBiomeOffset = semanticBiomeWeightIndex(tileIndex, 0);
+            const base = Object.freeze({
+              substrateClass: effective.base.substrateClass[tileIndex],
+              macroHeight: effective.base.macroHeight[tileIndex],
+              biomeWeights: Object.freeze([
+                effective.base.biomeWeights[baseBiomeOffset],
+                effective.base.biomeWeights[baseBiomeOffset + 1],
+                effective.base.biomeWeights[baseBiomeOffset + 2],
+                effective.base.biomeWeights[baseBiomeOffset + 3]
+              ]),
+              temperature: 0,
+              moisture: 0,
+              vegetationDensity: effective.base.vegetationDensity[tileIndex],
+              vegetationProfile: effective.base.vegetationProfile[tileIndex]
+            });
+            let entry = chunk.entries.get(tileIndex);
+            if (!entry) {
+              entry = {
+                fieldMask: 0,
+                macroHeight: 0,
+                substrateClass: 0,
+                biome0: 0,
+                biome1: 0,
+                biome2: 0,
+                biome3: 0,
+                vegetationDensity: 0,
+                vegetationProfile: 0
+              };
+              chunk.entries.set(tileIndex, entry);
+            }
+            if (task.operation.kind === "raise-terrain") {
+              const effectiveBefore = getEffectiveSemanticTile(
+                effective,
+                location.localX,
+                location.localY
+              ).macroHeight;
+              if (!heightEdits.has(task.sample.tileKey)) {
+                heightEdits.set(task.sample.tileKey, {
+                  tileX: task.sample.tileX,
+                  tileY: task.sample.tileY,
+                  tileKey: task.sample.tileKey,
+                  tileIndex,
+                  chunk,
+                  entry,
+                  baseHeight: base.macroHeight,
+                  beforeHeight: effectiveBefore
+                });
+              }
+              const current = (entry.fieldMask & SEMANTIC_DELTA_FIELD_HEIGHT) !== 0 ? entry.macroHeight : base.macroHeight;
+              const increment = quantizedHeightDelta(
+                task.operation.options.delta,
+                task.sample.strength,
+                task.operation.options.falloff
+              );
+              const next = Math.max(0, Math.min(65535, current + increment));
+              if (next === base.macroHeight) {
+                entry.macroHeight = 0;
+                entry.fieldMask &= ~SEMANTIC_DELTA_FIELD_HEIGHT;
+              } else {
+                entry.macroHeight = next;
+                entry.fieldMask |= SEMANTIC_DELTA_FIELD_HEIGHT;
+              }
+            } else if (task.operation.kind === "paint-material") {
+              const options = task.operation.options;
+              if (options.substrateClass !== void 0) {
+                if (options.substrateClass === base.substrateClass) {
+                  entry.substrateClass = 0;
+                  entry.fieldMask &= ~SEMANTIC_DELTA_FIELD_SUBSTRATE;
+                } else {
+                  entry.substrateClass = options.substrateClass;
+                  entry.fieldMask |= SEMANTIC_DELTA_FIELD_SUBSTRATE;
+                }
+              }
+              if (options.biomeWeights) {
+                if (arraysEqual2(options.biomeWeights, base.biomeWeights)) {
+                  entry.biome0 = 0;
+                  entry.biome1 = 0;
+                  entry.biome2 = 0;
+                  entry.biome3 = 0;
+                  entry.fieldMask &= ~SEMANTIC_DELTA_FIELD_BIOME;
+                } else {
+                  [entry.biome0, entry.biome1, entry.biome2, entry.biome3] = options.biomeWeights;
+                  entry.fieldMask |= SEMANTIC_DELTA_FIELD_BIOME;
+                }
+              }
+            } else {
+              if (task.operation.options.density === base.vegetationDensity && task.operation.options.profile === base.vegetationProfile) {
+                entry.vegetationDensity = 0;
+                entry.vegetationProfile = 0;
+                entry.fieldMask &= ~SEMANTIC_DELTA_FIELD_VEGETATION;
+              } else {
+                entry.vegetationDensity = task.operation.options.density;
+                entry.vegetationProfile = task.operation.options.profile;
+                entry.fieldMask |= SEMANTIC_DELTA_FIELD_VEGETATION;
+              }
+            }
+          }
+          chunks.push(chunk);
+        } finally {
+          view.releaseSemanticChunk(effective);
+        }
+      }
+    } finally {
+      view.dispose();
+    }
+    const hydrologyMutations = [];
+    const changedHydrologyIds = /* @__PURE__ */ new Set();
+    const hydrologyBounds = [];
+    for (const operation of hydrologyOperations) {
+      const featureId = operation.kind === "upsert-hydrology" ? operation.feature.featureId : operation.featureId;
+      assertFeatureIdentity(featureId);
+      if (changedHydrologyIds.has(featureId)) {
+        throw new Error("surface edit transaction contains duplicate hydrology features");
+      }
+      changedHydrologyIds.add(featureId);
+      const previous = before.getHydrologyDelta(featureId);
+      const previousBounds = previous ? previous.operation === "upsert" ? authoredHydrologyFeatureBoundsQ64(previous.feature) : void 0 : this.baseHydrology.resolveBoundsQ64(featureId);
+      if (previousBounds) hydrologyBounds.push(...projectHydrologyBoundsQ64(this.descriptor, previousBounds));
+      if (operation.kind === "upsert-hydrology") {
+        hydrologyBounds.push(...projectHydrologyBoundsQ64(
+          this.descriptor,
+          authoredHydrologyFeatureBoundsQ64(operation.feature)
+        ));
+        hydrologyMutations.push({
+          operation: "upsert",
+          featureId,
+          featureKind: operation.feature.kind,
+          expectedRevision: before.getHydrologyRevision(featureId),
+          feature: operation.feature
+        });
+      } else {
+        hydrologyMutations.push({
+          operation: "delete",
+          featureId,
+          featureKind: operation.featureKind,
+          expectedRevision: before.getHydrologyRevision(featureId)
+        });
+      }
+    }
+    const buildInput = () => {
+      const currentSemanticMutations = semanticMutations(chunks);
+      if (currentSemanticMutations.length === 0 && hydrologyMutations.length === 0) {
+        throw new Error("surface edit transaction does not change authoritative content");
+      }
+      return {
+        worldIdentity: this.worldIdentity,
+        semanticMutations: currentSemanticMutations,
+        hydrologyMutations
+      };
+    };
+    return Object.freeze({
+      before,
+      chunks: Object.freeze(chunks),
+      heightEdits,
+      hydrologyMutations: Object.freeze(hydrologyMutations),
+      changedHydrologyIds,
+      hydrologyBounds: Object.freeze(hydrologyBounds),
+      buildInput
+    });
+  }
+  validationRenderKeys(edit) {
+    const keys = /* @__PURE__ */ new Map();
+    const add = (chunkX, chunkY) => {
+      let canonicalX = chunkX;
+      let canonicalY = chunkY;
+      if (this.descriptor.sourceKind !== "procedural-infinite") {
+        const countX = Math.ceil(this.descriptor.width / SURFACE_COMPILE_PROFILE.renderChunkSize);
+        const countY = Math.ceil(this.descriptor.height / SURFACE_COMPILE_PROFILE.renderChunkSize);
+        if (this.descriptor.topology === "toroidal") {
+          canonicalX = positiveModulo2(chunkX, countX);
+          canonicalY = positiveModulo2(chunkY, countY);
+        } else if (chunkX < 0 || chunkX >= countX || chunkY < 0 || chunkY >= countY) return;
+      }
+      const identity = renderIdentity(canonicalX, canonicalY);
+      if (keys.has(identity)) return;
+      if (keys.size >= MAX_SURFACE_EDIT_VALIDATION_RENDER_CHUNKS) {
+        throw new RangeError("surface edit validation exceeds its fixed render-chunk budget");
+      }
+      keys.set(identity, Object.freeze({ chunkX: canonicalX, chunkY: canonicalY }));
+    };
+    for (const state of edit.heightEdits.values()) {
+      for (let offsetX = -SURFACE_COMPILE_PROFILE.influenceRadiusTiles; offsetX <= SURFACE_COMPILE_PROFILE.influenceRadiusTiles; offsetX += 1) {
+        for (let offsetY = -SURFACE_COMPILE_PROFILE.influenceRadiusTiles; offsetY <= SURFACE_COMPILE_PROFILE.influenceRadiusTiles; offsetY += 1) {
+          const location = renderChunkLocation(state.tileX + offsetX, state.tileY + offsetY);
+          add(location.chunkX, location.chunkY);
+        }
+      }
+    }
+    for (const bounds of edit.hydrologyBounds) {
+      const minimumTileX = Math.floor(bounds.minX / HYDROLOGY_POINT_QUANTIZATION) - SURFACE_COMPILE_PROFILE.influenceRadiusTiles;
+      const minimumTileY = Math.floor(bounds.minY / HYDROLOGY_POINT_QUANTIZATION) - SURFACE_COMPILE_PROFILE.influenceRadiusTiles;
+      const maximumTileX = Math.ceil(bounds.maxX / HYDROLOGY_POINT_QUANTIZATION) + SURFACE_COMPILE_PROFILE.influenceRadiusTiles;
+      const maximumTileY = Math.ceil(bounds.maxY / HYDROLOGY_POINT_QUANTIZATION) + SURFACE_COMPILE_PROFILE.influenceRadiusTiles;
+      const minimumChunk = renderChunkLocation(minimumTileX, minimumTileY);
+      const maximumChunk = renderChunkLocation(maximumTileX, maximumTileY);
+      for (let chunkX = minimumChunk.chunkX; chunkX <= maximumChunk.chunkX; chunkX += 1) {
+        for (let chunkY = minimumChunk.chunkY; chunkY <= maximumChunk.chunkY; chunkY += 1) {
+          add(chunkX, chunkY);
+        }
+      }
+    }
+    return Object.freeze([...keys.values()].sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY));
+  }
+  addConflict(output, conflict) {
+    output.conflictCount += 1;
+    if (output.conflictCount > MAX_INTERNAL_SURFACE_EDIT_CONFLICTS) {
+      throw new RangeError("surface edit conflicts exceed the fixed validation budget");
+    }
+    output.conflicts.push(freezeConflict(conflict));
+  }
+  inspectCompiledTransition(renderKey, before, after, afterWindow, changedHydrologyIds, conflicts, changedBodiesSeen, changedLakeCells, lakeCellCount) {
+    for (let texelX = 0; texelX < SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval; texelX += 1) {
+      const u = surfaceTexelCenterAxis(renderKey.chunkX, texelX);
+      for (let texelY = 0; texelY < SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval; texelY += 1) {
+        const index = surfaceFieldTexelIndex(texelX, texelY);
+        const v = surfaceTexelCenterAxis(renderKey.chunkY, texelY);
+        const afterKind = after.field.waterKind[index];
+        const afterBody = bodyIdAt(after, index);
+        if (after.field.waterCoverage[index] >= 128 && (afterKind === SURFACE_WATER_KIND_LAKE || afterKind === SURFACE_WATER_KIND_RIVER) && afterBody) {
+          if (changedHydrologyIds.has(afterBody)) changedBodiesSeen.add(afterBody);
+          const lakeCells = afterKind === SURFACE_WATER_KIND_LAKE ? changedLakeCells.get(afterBody) : void 0;
+          if (lakeCells) {
+            let gridU = Math.round(u * 8);
+            let gridV = Math.round(v * 8);
+            if (this.descriptor.topology === "toroidal") {
+              gridU = positiveModulo2(gridU, this.descriptor.width * 8);
+              gridV = positiveModulo2(gridV, this.descriptor.height * 8);
+            }
+            const identity = `${gridU}:${gridV}`;
+            if (!lakeCells.has(identity)) {
+              lakeCellCount.value += 1;
+              if (lakeCellCount.value > MAX_SURFACE_EDIT_LAKE_CONNECTIVITY_CELLS) {
+                throw new RangeError(
+                  "surface edit lake connectivity exceeds its fixed cell budget"
+                );
+              }
+              lakeCells.set(identity, Object.freeze({ gridU, gridV }));
+            }
+          }
+          const depth = float16BitsToFloat32(after.field.waterDepth[index]);
+          if (depth < this.minimumDepth) {
+            this.addConflict(conflicts, {
+              kind: "explicit-depth",
+              featureId: afterBody,
+              renderChunkX: renderKey.chunkX,
+              renderChunkY: renderKey.chunkY,
+              u,
+              v,
+              groundHeight: float16BitsToFloat32(after.field.groundHeight[index]),
+              waterLevel: float16BitsToFloat32(after.field.waterLevel[index]),
+              minimumDepth: this.minimumDepth,
+              window: afterWindow
+            });
+          }
+        }
+        if (!before || before.field.waterCoverage[index] < 128) continue;
+        const beforeKind = before.field.waterKind[index];
+        if (beforeKind !== SURFACE_WATER_KIND_LAKE && beforeKind !== SURFACE_WATER_KIND_RIVER) continue;
+        const beforeBody = bodyIdAt(before, index);
+        if (!beforeBody || changedHydrologyIds.has(beforeBody)) continue;
+        if (after.field.waterCoverage[index] < 128 || afterBody !== beforeBody) {
+          this.addConflict(conflicts, {
+            kind: "explicit-continuity",
+            featureId: beforeBody,
+            renderChunkX: renderKey.chunkX,
+            renderChunkY: renderKey.chunkY,
+            u,
+            v,
+            groundHeight: float16BitsToFloat32(after.field.groundHeight[index]),
+            waterLevel: float16BitsToFloat32(before.field.waterLevel[index]),
+            minimumDepth: this.minimumDepth,
+            window: afterWindow
+          });
+        }
+      }
+    }
+  }
+  async validateCandidate(edit, candidate, compareBefore) {
+    const renderKeys = this.validationRenderKeys(edit);
+    const beforeView = compareBefore ? new EffectiveWorldView({
+      semanticSource: this.semanticSource,
+      hydrologySource: this.hydrologySource,
+      deltaSnapshot: edit.before
+    }) : void 0;
+    const afterView = new EffectiveWorldView({
+      semanticSource: this.semanticSource,
+      hydrologySource: this.hydrologySource,
+      deltaSnapshot: candidate
+    });
+    const conflicts = { conflicts: [], conflictCount: 0 };
+    const changedBodiesSeen = /* @__PURE__ */ new Set();
+    const changedLakeCells = /* @__PURE__ */ new Map();
+    for (const mutation of edit.hydrologyMutations) {
+      if (mutation.operation === "upsert" && mutation.feature.kind === "lake") {
+        changedLakeCells.set(mutation.featureId, /* @__PURE__ */ new Map());
+      }
+    }
+    const lakeCellCount = { value: 0 };
+    try {
+      for (const renderKey of renderKeys) {
+        const afterWindow = await buildTransferableEffectiveWindow({
+          view: afterView,
+          renderKey,
+          metrics: this.metrics
+        });
+        const afterCompilation = compileSurfaceField(afterWindow);
+        let beforeCompilation;
+        if (beforeView) {
+          const beforeWindow = await buildTransferableEffectiveWindow({
+            view: beforeView,
+            renderKey,
+            metrics: this.metrics
+          });
+          beforeCompilation = compileSurfaceField(beforeWindow);
+        }
+        this.inspectCompiledTransition(
+          renderKey,
+          beforeCompilation,
+          afterCompilation,
+          afterWindow,
+          edit.changedHydrologyIds,
+          conflicts,
+          changedBodiesSeen,
+          changedLakeCells,
+          lakeCellCount
+        );
+        for (const violation of collectSurfaceHydrologyDepthViolations(
+          afterWindow,
+          this.minimumDepth
+        )) {
+          this.addConflict(conflicts, {
+            kind: "river-depth",
+            featureId: violation.featureId,
+            renderChunkX: renderKey.chunkX,
+            renderChunkY: renderKey.chunkY,
+            u: violation.u,
+            v: violation.v,
+            groundHeight: violation.groundHeight,
+            waterLevel: violation.waterLevel,
+            minimumDepth: violation.minimumDepth,
+            window: afterWindow
+          });
+        }
+      }
+      for (const mutation of edit.hydrologyMutations) {
+        if (mutation.operation === "delete" || changedBodiesSeen.has(mutation.featureId)) continue;
+        this.addConflict(conflicts, {
+          kind: "feature-dry",
+          featureId: mutation.featureId,
+          renderChunkX: 0,
+          renderChunkY: 0,
+          minimumDepth: this.minimumDepth
+        });
+      }
+      for (const [featureId, cells] of changedLakeCells) {
+        if (cells.size <= 1 || this.lakeCellsAreConnected(cells)) continue;
+        const first = cells.values().next().value;
+        this.addConflict(conflicts, {
+          kind: "lake-disconnected",
+          featureId,
+          renderChunkX: Math.floor(first.gridU / 8 / SURFACE_COMPILE_PROFILE.renderChunkSize),
+          renderChunkY: Math.floor(first.gridV / 8 / SURFACE_COMPILE_PROFILE.renderChunkSize),
+          u: first.gridU / 8,
+          v: first.gridV / 8,
+          minimumDepth: this.minimumDepth
+        });
+      }
+      return Object.freeze({
+        conflicts: Object.freeze(conflicts.conflicts),
+        conflictCount: conflicts.conflictCount,
+        changedBodiesSeen
+      });
+    } finally {
+      beforeView?.dispose();
+      afterView.dispose();
+    }
+  }
+  lakeCellsAreConnected(cells) {
+    const first = cells.values().next().value;
+    if (!first) return false;
+    const visited = /* @__PURE__ */ new Set();
+    const queue = [first];
+    const periodU = this.descriptor.sourceKind === "procedural-infinite" ? void 0 : this.descriptor.width * 8;
+    const periodV = this.descriptor.sourceKind === "procedural-infinite" ? void 0 : this.descriptor.height * 8;
+    for (let index = 0; index < queue.length; index += 1) {
+      const cell = queue[index];
+      const identity = `${cell.gridU}:${cell.gridV}`;
+      if (visited.has(identity)) continue;
+      visited.add(identity);
+      for (let offsetU = -2; offsetU <= 2; offsetU += 2) {
+        for (let offsetV = -2; offsetV <= 2; offsetV += 2) {
+          if (offsetU === 0 && offsetV === 0) continue;
+          let gridU = cell.gridU + offsetU;
+          let gridV = cell.gridV + offsetV;
+          if (this.descriptor.topology === "toroidal") {
+            gridU = positiveModulo2(gridU, periodU);
+            gridV = positiveModulo2(gridV, periodV);
+          }
+          const neighbor = cells.get(`${gridU}:${gridV}`);
+          if (neighbor && !visited.has(`${gridU}:${gridV}`)) queue.push(neighbor);
+        }
+      }
+    }
+    return visited.size === cells.size;
+  }
+  conflictError(policy, conflictCount, conflicts) {
+    const details = conflicts.slice(0, MAX_SURFACE_EDIT_CONFLICT_DETAILS).map((conflict) => {
+      const { window: _window, ...detail } = conflict;
+      return Object.freeze(detail);
+    });
+    return new SurfaceEditConflictError(policy, conflictCount, Object.freeze(details));
+  }
+  capPreservedHeights(edit, conflicts) {
+    const caps = /* @__PURE__ */ new Map();
+    for (const conflict of conflicts) {
+      if (conflict.u === void 0 || conflict.v === void 0 || conflict.waterLevel === void 0 || !conflict.window) continue;
+      const window = conflict.window;
+      const tileX = Math.floor(conflict.u);
+      const tileY = Math.floor(conflict.v);
+      const fractionX = conflict.u - tileX;
+      const fractionY = conflict.v - tileY;
+      let validWeight = 0;
+      let currentHeight = 0;
+      let weightedIncrement = 0;
+      const adjustable = [];
+      for (let offsetX = 0; offsetX <= 1; offsetX += 1) {
+        const weightX = offsetX === 0 ? 1 - fractionX : fractionX;
+        for (let offsetY = 0; offsetY <= 1; offsetY += 1) {
+          const localX = tileX + offsetX - window.originTileX;
+          const localY = tileY + offsetY - window.originTileY;
+          if (localX < 0 || localX >= EFFECTIVE_WINDOW_TILE_SIZE || localY < 0 || localY >= EFFECTIVE_WINDOW_TILE_SIZE) continue;
+          const index = localX * EFFECTIVE_WINDOW_TILE_SIZE + localY;
+          if (window.valid[index] === 0) continue;
+          const weight = weightX * (offsetY === 0 ? 1 - fractionY : fractionY);
+          validWeight += weight;
+          currentHeight += window.macroHeight[index] * weight;
+          const canonical = this.canonicalTile(tileX + offsetX, tileY + offsetY);
+          const state = edit.heightEdits.get(tileIdentity(canonical.x, canonical.y));
+          if (!state) continue;
+          const current = (state.entry.fieldMask & SEMANTIC_DELTA_FIELD_HEIGHT) !== 0 ? state.entry.macroHeight : state.baseHeight;
+          if (current <= state.beforeHeight) continue;
+          weightedIncrement += (current - state.beforeHeight) * weight;
+          adjustable.push({ state, weight, current });
+        }
+      }
+      if (validWeight <= 0 || adjustable.length === 0) continue;
+      currentHeight /= validWeight;
+      weightedIncrement /= validWeight;
+      const targetHeight = (conflict.waterLevel - conflict.minimumDepth) / this.metrics.heightScale * 65535;
+      const baselineHeight = currentHeight - weightedIncrement;
+      if (baselineHeight > targetHeight || weightedIncrement <= 0) continue;
+      const scale = Math.max(0, Math.min(1, (targetHeight - baselineHeight) / weightedIncrement));
+      for (const item of adjustable) {
+        const cap = Math.max(item.state.beforeHeight, Math.floor(
+          item.state.beforeHeight + (item.current - item.state.beforeHeight) * scale
+        ));
+        caps.set(item.state.tileKey, Math.min(caps.get(item.state.tileKey) ?? 65535, cap));
+      }
+    }
+    let changed = false;
+    for (const [tileKey, cap] of caps) {
+      const state = edit.heightEdits.get(tileKey);
+      const current = (state.entry.fieldMask & SEMANTIC_DELTA_FIELD_HEIGHT) !== 0 ? state.entry.macroHeight : state.baseHeight;
+      if (cap >= current) continue;
+      state.entry.macroHeight = cap;
+      if (cap === state.baseHeight) {
+        state.entry.macroHeight = 0;
+        state.entry.fieldMask &= ~SEMANTIC_DELTA_FIELD_HEIGHT;
+      } else {
+        state.entry.fieldMask |= SEMANTIC_DELTA_FIELD_HEIGHT;
+      }
+      changed = true;
+    }
+    return changed;
+  }
+  async preserveChannels(edit, initial) {
+    let prepared = initial;
+    for (let pass = 0; pass < MAX_PRESERVE_CHANNEL_PASSES; pass += 1) {
+      const validation = await this.validateCandidate(edit, prepared.snapshot, true);
+      if (validation.conflictCount === 0) return prepared;
+      if (!this.capPreservedHeights(edit, validation.conflicts)) {
+        throw this.conflictError(
+          "preserve-channel",
+          validation.conflictCount,
+          validation.conflicts
+        );
+      }
+      let input;
+      try {
+        input = edit.buildInput();
+      } catch (reason) {
+        if (reason instanceof Error && /does not change authoritative content/u.test(reason.message)) {
+          throw this.conflictError(
+            "preserve-channel",
+            validation.conflictCount,
+            validation.conflicts
+          );
+        }
+        throw reason;
+      }
+      prepared = await this.store.preview(input);
+      if (prepared.before !== edit.before) {
+        throw new Error("surface edit base changed during preserve-channel validation");
+      }
+    }
+    const finalValidation = await this.validateCandidate(edit, prepared.snapshot, true);
+    if (finalValidation.conflictCount > 0) {
+      throw this.conflictError(
+        "preserve-channel",
+        finalValidation.conflictCount,
+        finalValidation.conflicts
+      );
+    }
+    return prepared;
+  }
+};
+if (COMPILED_SURFACE_TEXEL_COUNT !== SURFACE_COMPILE_PROFILE.textureLayerSize ** 2) {
+  throw new Error("surface editor compile profile drifted from the compiled field layout");
 }
 
 // src/world/MacroDrainageTree.ts
@@ -14104,10 +15046,15 @@ export {
   MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS,
   MAX_LAKE_RADIUS_TILES,
   MAX_MACRO_DRAINAGE_GRAPH_NODES,
+  MAX_PRESERVE_CHANNEL_PASSES,
   MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS,
   MAX_SURFACE_DEPENDENCY_HYDROLOGY_FEATURES,
   MAX_SURFACE_DEPENDENCY_HYDROLOGY_REGIONS,
   MAX_SURFACE_DEPENDENCY_SEMANTIC_CHUNKS,
+  MAX_SURFACE_EDIT_AREA_SAMPLES,
+  MAX_SURFACE_EDIT_CONFLICT_DETAILS,
+  MAX_SURFACE_EDIT_LAKE_CONNECTIVITY_CELLS,
+  MAX_SURFACE_EDIT_VALIDATION_RENDER_CHUNKS,
   MAX_SURFACE_HYDROLOGY_CONSTRAINT_SAMPLES,
   MAX_SURFACE_HYDROLOGY_DEPTH_VIOLATIONS,
   MAX_SURFACE_PERIODIC_FEATURE_IMAGES,
@@ -14157,12 +15104,15 @@ export {
   SurfaceDeltaSaveBarrierError,
   SurfaceDeltaSessionConflictError,
   SurfaceDeltaSnapshot,
+  SurfaceEditBusyError,
+  SurfaceEditConflictError,
   SurfaceGroundGeometrySet,
   SurfaceLeaseNotCurrentError,
   SurfaceTexturePool,
   SurfaceWaterGeometryBinding,
   SurfaceWorkerClient,
   SurfaceWorkerPool,
+  SurfaceWorldEditor,
   TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION,
   ThreeLightingAdapter,
   ThreePmremEnvironmentCompiler,
@@ -14255,6 +15205,7 @@ export {
   createSparseSemanticDelta,
   createSurfaceCoverageGeometry,
   createSurfaceDependencyKey,
+  createSurfaceEditArea,
   createSurfaceGroundGeometry,
   createSurfaceGroundGeometryData,
   createSurfaceRequestToken,
