@@ -2794,6 +2794,402 @@ function createHydrologyFeatureDelta(input) {
   return delta;
 }
 
+// src/world/SurfaceDeltaStore.ts
+var SURFACE_DELTA_TRANSACTION_FORMAT_VERSION = 1;
+var MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS = 4096;
+var MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL = 1048576;
+var SurfaceDeltaConflictError = class extends Error {
+  constructor(targetKind, targetId, expectedRevision, actualRevision) {
+    super(`${targetKind} delta revision conflict for ${targetId}: expected ${expectedRevision}, received ${actualRevision}`);
+    this.targetKind = targetKind;
+    this.targetId = targetId;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "SurfaceDeltaConflictError";
+  }
+};
+function semanticKeyIdentity(key) {
+  return `${key.chunkX}:${key.chunkY}`;
+}
+function compareSemanticKeys(first, second) {
+  return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
+}
+function assertRevision(name, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function assertFeatureId(name, featureId) {
+  if (typeof featureId !== "string" || featureId.length === 0 || featureId.length > 256 || featureId.trim() !== featureId || /[\u0000-\u001f\u007f]/u.test(featureId)) {
+    throw new TypeError(`${name} must be a canonical stable identity`);
+  }
+}
+function assertCanonicalSemanticKey(descriptor, key) {
+  if (!key || typeof key !== "object") throw new TypeError("semantic mutation key is required");
+  const origin = chunkOrigin(key.chunkX, key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  if (descriptor.sourceKind === "procedural-infinite") return;
+  const chunkCountX = Math.ceil(descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE);
+  const chunkCountY = Math.ceil(descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE);
+  if (key.chunkX < 0 || key.chunkX >= chunkCountX || key.chunkY < 0 || key.chunkY >= chunkCountY || origin.x < 0 || origin.y < 0) {
+    throw new RangeError("semantic mutation must use a canonical in-domain chunk key");
+  }
+}
+function assertSemanticDeltaBounds(descriptor, delta) {
+  if (descriptor.sourceKind !== "static") return;
+  const origin = chunkOrigin(delta.key.chunkX, delta.key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  const validWidth = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, descriptor.width - origin.x);
+  const validHeight = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, descriptor.height - origin.y);
+  for (const tileIndex of delta.tileIndex) {
+    const localX = Math.floor(tileIndex / WORLD_SEMANTIC_CHUNK_SIZE);
+    const localY = tileIndex - localX * WORLD_SEMANTIC_CHUNK_SIZE;
+    if (localX >= validWidth || localY >= validHeight) {
+      throw new RangeError("semantic mutation tile lies outside the finite world");
+    }
+  }
+}
+function authoredGraphNode(feature) {
+  if (feature.kind === "lake") {
+    return Object.freeze({ kind: "lake", featureId: feature.featureId, level: feature.level });
+  }
+  return Object.freeze({
+    kind: "river",
+    featureId: feature.featureId,
+    source: feature.source,
+    outlet: feature.outlet,
+    sourceLevel: feature.levelProfile[0],
+    outletLevel: feature.levelProfile[feature.levelProfile.length - 1]
+  });
+}
+function ownedSemanticPayload(payload) {
+  return {
+    tileIndex: payload.tileIndex.slice(),
+    fieldMask: payload.fieldMask.slice(),
+    macroHeight: payload.macroHeight.slice(),
+    substrateClass: payload.substrateClass.slice(),
+    biomeWeights: payload.biomeWeights.slice(),
+    vegetationDensity: payload.vegetationDensity.slice(),
+    vegetationProfile: payload.vegetationProfile.slice()
+  };
+}
+function ownedHydrologyFeature(feature) {
+  return feature.kind === "river" ? {
+    ...feature,
+    controlPoints: feature.controlPoints.slice(),
+    widthProfile: feature.widthProfile.slice(),
+    levelProfile: feature.levelProfile.slice()
+  } : {
+    ...feature,
+    polygon: feature.polygon.slice()
+  };
+}
+function assertGraphNode(node, expectedId) {
+  if (!node || typeof node !== "object" || node.featureId !== expectedId) {
+    throw new TypeError("base hydrology feature index returned a mismatched feature identity");
+  }
+  assertFeatureId("base hydrology feature", node.featureId);
+  if (node.kind === "lake") {
+    if (!Number.isInteger(node.level) || node.level < 0 || node.level > 65535) {
+      throw new RangeError("base hydrology lake level must be a uint16 value");
+    }
+    return;
+  }
+  if (node.kind !== "river" || !Number.isInteger(node.sourceLevel) || node.sourceLevel < 0 || node.sourceLevel > 65535 || !Number.isInteger(node.outletLevel) || node.outletLevel < 0 || node.outletLevel > 65535 || node.outletLevel > node.sourceLevel) {
+    throw new RangeError("base hydrology river levels or kind are invalid");
+  }
+  if (!node.source || typeof node.source !== "object" || !node.outlet || typeof node.outlet !== "object") {
+    throw new TypeError("base hydrology river source and outlet are required");
+  }
+  if (node.source.kind === "spring") assertFeatureId("base hydrology spring", node.source.sourceId);
+  else if (node.source.kind === "river") assertFeatureId("base hydrology source river", node.source.riverId);
+  else throw new TypeError("base hydrology river source kind is invalid");
+  if (node.outlet.kind === "ocean") {
+    if (node.outlet.bodyId !== "ocean") throw new Error("base hydrology ocean outlet must use ocean");
+  } else if (node.outlet.kind === "lake") assertFeatureId("base hydrology outlet lake", node.outlet.bodyId);
+  else if (node.outlet.kind === "river") assertFeatureId("base hydrology outlet river", node.outlet.riverId);
+  else throw new TypeError("base hydrology river outlet kind is invalid");
+}
+function assertCanonicalReferences(featureId, references) {
+  if (!Array.isArray(references)) {
+    throw new TypeError("base hydrology reverse references must be an array");
+  }
+  let previous;
+  for (const reference of references) {
+    assertFeatureId("base hydrology reverse reference", reference);
+    if (previous !== void 0 && previous >= reference) {
+      throw new Error("base hydrology reverse references must use unique ascending identities");
+    }
+    previous = reference;
+  }
+  if (references.includes(featureId)) {
+    throw new Error("base hydrology feature cannot reverse-reference itself");
+  }
+}
+var SurfaceDeltaSnapshot = class {
+  constructor(worldIdentity, effectiveRevision, state) {
+    this.worldIdentity = worldIdentity;
+    this.effectiveRevision = effectiveRevision;
+    this.state = state;
+    this.semanticStates = Object.freeze([...state.semanticByKey.values()].sort((first, second) => compareSemanticKeys(first.key, second.key)));
+    this.hydrologyDeltas = Object.freeze([...state.hydrologyById.values()].sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0));
+    Object.freeze(this);
+  }
+  getSemanticDelta(chunkX, chunkY) {
+    chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    return this.state.semanticByKey.get(semanticKeyIdentity({ chunkX, chunkY }))?.delta;
+  }
+  getSemanticRevision(chunkX, chunkY) {
+    chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    return this.state.semanticByKey.get(semanticKeyIdentity({ chunkX, chunkY }))?.revision ?? 0;
+  }
+  getHydrologyDelta(featureId) {
+    assertFeatureId("hydrology snapshot feature", featureId);
+    return this.state.hydrologyById.get(featureId);
+  }
+  getHydrologyRevision(featureId) {
+    return this.getHydrologyDelta(featureId)?.revision ?? 0;
+  }
+};
+var MemorySurfaceDeltaStore = class {
+  constructor(descriptor, baseHydrology) {
+    assertWorldDescriptorV2(descriptor);
+    if (!baseHydrology || typeof baseHydrology.resolveFeature !== "function" || typeof baseHydrology.referencesTo !== "function") {
+      throw new TypeError("surface delta store requires a valid base hydrology feature index");
+    }
+    this.descriptor = descriptor;
+    this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+    this.baseHydrology = baseHydrology;
+    this.current = new SurfaceDeltaSnapshot(this.worldIdentity, 0, {
+      semanticByKey: /* @__PURE__ */ new Map(),
+      hydrologyById: /* @__PURE__ */ new Map()
+    });
+  }
+  snapshot() {
+    return this.current;
+  }
+  commit(input) {
+    this.assertTransaction(input);
+    if (this.current.effectiveRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("surface delta revision space is exhausted");
+    }
+    const revision = this.current.effectiveRevision + 1;
+    const semanticByKey = /* @__PURE__ */ new Map();
+    for (const state of this.current.semanticStates) semanticByKey.set(semanticKeyIdentity(state.key), state);
+    const hydrologyById = /* @__PURE__ */ new Map();
+    for (const delta of this.current.hydrologyDeltas) hydrologyById.set(delta.featureId, delta);
+    const semanticMutations = [...input.semanticMutations].sort((first, second) => compareSemanticKeys(first.key, second.key));
+    const hydrologyMutations = [...input.hydrologyMutations].sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0);
+    const semanticChanges = semanticMutations.map((mutation) => this.applySemanticMutation(
+      semanticByKey,
+      mutation,
+      revision
+    ));
+    const hydrologyChanges = hydrologyMutations.map((mutation) => this.applyHydrologyMutation(
+      hydrologyById,
+      mutation,
+      revision
+    ));
+    this.assertEffectiveHydrologyGraph(hydrologyById, hydrologyMutations);
+    const next = new SurfaceDeltaSnapshot(this.worldIdentity, revision, {
+      semanticByKey,
+      hydrologyById
+    });
+    const commit = Object.freeze({
+      formatVersion: SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
+      worldIdentity: this.worldIdentity,
+      revision,
+      transactionId: BigInt(revision),
+      semanticChanges: Object.freeze(semanticChanges),
+      hydrologyChanges: Object.freeze(hydrologyChanges)
+    });
+    this.current = next;
+    return commit;
+  }
+  assertTransaction(input) {
+    if (!input || typeof input !== "object" || input.worldIdentity !== this.worldIdentity) {
+      throw new TypeError("surface delta transaction world identity is invalid");
+    }
+    if (!Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
+      throw new TypeError("surface delta transaction mutation lists are required");
+    }
+    const mutationCount = input.semanticMutations.length + input.hydrologyMutations.length;
+    if (mutationCount <= 0 || mutationCount > MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS) {
+      throw new RangeError("surface delta transaction mutation count is outside its fixed budget");
+    }
+    const semanticKeys = /* @__PURE__ */ new Set();
+    for (const mutation of input.semanticMutations) {
+      if (!mutation || typeof mutation !== "object" || mutation.operation !== "upsert" && mutation.operation !== "delete") {
+        throw new TypeError("surface semantic mutation operation is invalid");
+      }
+      assertCanonicalSemanticKey(this.descriptor, mutation.key);
+      assertRevision("surface semantic expected revision", mutation.expectedRevision);
+      const identity = semanticKeyIdentity(mutation.key);
+      if (semanticKeys.has(identity)) throw new Error("surface delta transaction contains duplicate semantic chunks");
+      semanticKeys.add(identity);
+    }
+    const featureIds = /* @__PURE__ */ new Set();
+    for (const mutation of input.hydrologyMutations) {
+      if (!mutation || typeof mutation !== "object" || mutation.operation !== "upsert" && mutation.operation !== "delete") {
+        throw new TypeError("surface hydrology mutation operation is invalid");
+      }
+      assertFeatureId("surface hydrology mutation", mutation.featureId);
+      if (mutation.featureKind !== "river" && mutation.featureKind !== "lake") {
+        throw new TypeError("surface hydrology mutation kind is invalid");
+      }
+      assertRevision("surface hydrology expected revision", mutation.expectedRevision);
+      if (featureIds.has(mutation.featureId)) {
+        throw new Error("surface delta transaction contains duplicate hydrology features");
+      }
+      featureIds.add(mutation.featureId);
+    }
+  }
+  applySemanticMutation(semanticByKey, mutation, revision) {
+    const identity = semanticKeyIdentity(mutation.key);
+    const current = semanticByKey.get(identity);
+    const actualRevision = current?.revision ?? 0;
+    if (actualRevision !== mutation.expectedRevision) {
+      throw new SurfaceDeltaConflictError("semantic", identity, mutation.expectedRevision, actualRevision);
+    }
+    const key = Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY });
+    if (mutation.operation === "delete") {
+      if (!current?.delta) throw new Error("cannot delete an absent semantic delta");
+      const state = Object.freeze({ key, revision });
+      semanticByKey.set(identity, state);
+      return Object.freeze({
+        operation: "delete",
+        key,
+        expectedRevision: mutation.expectedRevision,
+        revision
+      });
+    }
+    if (!mutation.payload || typeof mutation.payload !== "object") {
+      throw new TypeError("semantic upsert requires a complete sparse delta payload");
+    }
+    const delta = createSparseSemanticDelta({
+      ...ownedSemanticPayload(mutation.payload),
+      worldIdentity: this.worldIdentity,
+      key,
+      revision
+    }, semanticCatalogLimits(this.descriptor));
+    assertSemanticDeltaBounds(this.descriptor, delta);
+    semanticByKey.set(identity, Object.freeze({ key, revision, delta }));
+    return Object.freeze({ operation: "upsert", expectedRevision: mutation.expectedRevision, delta });
+  }
+  applyHydrologyMutation(hydrologyById, mutation, revision) {
+    const currentDelta = hydrologyById.get(mutation.featureId);
+    const actualRevision = currentDelta?.revision ?? 0;
+    if (actualRevision !== mutation.expectedRevision) {
+      throw new SurfaceDeltaConflictError(
+        "hydrology",
+        mutation.featureId,
+        mutation.expectedRevision,
+        actualRevision
+      );
+    }
+    const currentFeature = this.resolveEffectiveHydrologyFeature(mutation.featureId, hydrologyById);
+    if (mutation.operation === "delete") {
+      if (!currentFeature) throw new Error("cannot delete an absent hydrology feature");
+      if (currentFeature.kind !== mutation.featureKind) {
+        throw new Error("hydrology delete kind does not match the effective feature");
+      }
+    } else {
+      if (!mutation.feature || mutation.feature.featureId !== mutation.featureId || mutation.feature.kind !== mutation.featureKind) {
+        throw new Error("hydrology upsert identity or kind does not match its complete feature");
+      }
+      if (currentFeature && currentFeature.kind !== mutation.featureKind) {
+        throw new Error("hydrology feature kind cannot change under a stable identity");
+      }
+    }
+    const delta = createHydrologyFeatureDelta(mutation.operation === "upsert" ? {
+      worldIdentity: this.worldIdentity,
+      revision,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "upsert",
+      feature: ownedHydrologyFeature(mutation.feature)
+    } : {
+      worldIdentity: this.worldIdentity,
+      revision,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "delete"
+    });
+    hydrologyById.set(mutation.featureId, delta);
+    return Object.freeze({ expectedRevision: mutation.expectedRevision, delta });
+  }
+  resolveEffectiveHydrologyFeature(featureId, hydrologyById) {
+    const delta = hydrologyById.get(featureId);
+    if (delta) return delta.operation === "upsert" ? authoredGraphNode(delta.feature) : void 0;
+    const base = this.baseHydrology.resolveFeature(featureId);
+    if (base) assertGraphNode(base, featureId);
+    return base;
+  }
+  assertEffectiveHydrologyGraph(hydrologyById, mutations) {
+    const ids = /* @__PURE__ */ new Set();
+    for (const delta of hydrologyById.values()) {
+      if (delta.operation === "upsert") ids.add(delta.featureId);
+    }
+    for (const mutation of mutations) {
+      const references = this.baseHydrology.referencesTo(mutation.featureId);
+      assertCanonicalReferences(mutation.featureId, references);
+      for (const featureId of references) ids.add(featureId);
+      if (this.resolveEffectiveHydrologyFeature(mutation.featureId, hydrologyById)) {
+        ids.add(mutation.featureId);
+      }
+    }
+    const orderedIds = [...ids].sort();
+    for (const featureId of orderedIds) {
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (node) this.assertHydrologyConnections(node, hydrologyById);
+    }
+    for (const featureId of orderedIds) {
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (node?.kind === "river") this.assertHydrologyOutletAcyclic(featureId, hydrologyById);
+    }
+  }
+  assertHydrologyConnections(node, hydrologyById) {
+    if (node.kind === "lake") return;
+    if (node.source.kind === "river") {
+      const source = this.resolveEffectiveHydrologyFeature(node.source.riverId, hydrologyById);
+      if (!source || source.kind !== "river") {
+        throw new Error(`hydrology river ${node.featureId} has a missing river source`);
+      }
+      if (source.outlet.kind !== "river" || source.outlet.riverId !== node.featureId) {
+        throw new Error(`hydrology river ${node.featureId} source does not outlet to it`);
+      }
+      if (source.outletLevel < node.sourceLevel) {
+        throw new Error(`hydrology river ${node.featureId} rises above its source river`);
+      }
+    }
+    if (node.outlet.kind === "ocean") {
+      if (node.outletLevel < this.descriptor.seaLevel) {
+        throw new Error(`hydrology river ${node.featureId} reaches ocean below sea level`);
+      }
+      return;
+    }
+    const outletId = node.outlet.kind === "lake" ? node.outlet.bodyId : node.outlet.riverId;
+    const outlet = this.resolveEffectiveHydrologyFeature(outletId, hydrologyById);
+    if (!outlet || outlet.kind !== node.outlet.kind) {
+      throw new Error(`hydrology river ${node.featureId} has a missing or mismatched outlet`);
+    }
+    const outletLevel = outlet.kind === "lake" ? outlet.level : outlet.sourceLevel;
+    if (node.outletLevel < outletLevel) {
+      throw new Error(`hydrology river ${node.featureId} rises at its outlet`);
+    }
+  }
+  assertHydrologyOutletAcyclic(startId, hydrologyById) {
+    const visited = /* @__PURE__ */ new Set();
+    let featureId = startId;
+    for (let count = 0; count < MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL; count += 1) {
+      if (visited.has(featureId)) throw new Error("effective hydrology outlet graph contains a cycle");
+      visited.add(featureId);
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (!node || node.kind !== "river" || node.outlet.kind !== "river") return;
+      featureId = node.outlet.riverId;
+    }
+    throw new RangeError("effective hydrology graph exceeds its fixed traversal budget");
+  }
+};
+
 // src/world/SurfaceWorkerProtocol.ts
 var SURFACE_WORKER_PROTOCOL_VERSION = 3;
 function assertWorkerRequestEnvelope(value, expectedType) {
@@ -6680,6 +7076,7 @@ export {
   MAX_AUTHORED_LAKE_POLYGON_POINTS,
   MAX_DERIVED_HYDROLOGY_BODY_PALETTE,
   MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES,
+  MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL,
   MAX_HYDROLOGY_REGION_BODIES,
   MAX_HYDROLOGY_REGION_LAKES,
   MAX_HYDROLOGY_REGION_MOUTHS,
@@ -6688,10 +7085,12 @@ export {
   MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS,
   MAX_LAKE_RADIUS_TILES,
   MAX_MACRO_DRAINAGE_GRAPH_NODES,
+  MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS,
   MIN_INFINITE_HYDROLOGY_RESIDENT_BASINS,
   MIN_LAKE_RADIUS_TILES,
   MIN_RIVER_DISCHARGE,
   MacroDrainageHydrologySource,
+  MemorySurfaceDeltaStore,
   OCEAN_BODY_ID,
   OCEAN_HYDROLOGY_PROFILE,
   ProceduralHydrologyWorldSource,
@@ -6710,9 +7109,12 @@ export {
   SURFACE_COMPILE_PROFILE,
   SURFACE_COMPILE_PROFILE_VERSION,
   SURFACE_CORE_TEXELS,
+  SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
   SURFACE_WORKER_PROTOCOL_VERSION,
   StaticHydrologyRegionSource,
   StaticSemanticWorldSource,
+  SurfaceDeltaConflictError,
+  SurfaceDeltaSnapshot,
   SurfaceWorkerClient,
   SurfaceWorkerPool,
   ToroidalSemanticWorldSource,

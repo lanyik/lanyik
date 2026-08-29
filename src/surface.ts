@@ -129,6 +129,34 @@ export type {
 } from "./world/HydrologyFeatureDelta";
 
 export {
+    SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
+    MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS,
+    MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL,
+    SurfaceDeltaConflictError,
+    SurfaceDeltaSnapshot,
+    MemorySurfaceDeltaStore
+} from "./world/SurfaceDeltaStore";
+export type {
+    SurfaceSemanticDeltaPayload,
+    SurfaceSemanticUpsertMutation,
+    SurfaceSemanticDeleteMutation,
+    SurfaceSemanticMutation,
+    SurfaceHydrologyUpsertMutation,
+    SurfaceHydrologyDeleteMutation,
+    SurfaceHydrologyMutation,
+    SurfaceDeltaTransactionInput,
+    SurfaceSemanticUpsertChange,
+    SurfaceSemanticDeleteChange,
+    SurfaceSemanticChange,
+    SurfaceHydrologyChange,
+    SurfaceDeltaCommit,
+    SurfaceSemanticDeltaState,
+    EffectiveHydrologyGraphNode,
+    BaseHydrologyFeatureIndex,
+    SurfaceDeltaStore
+} from "./world/SurfaceDeltaStore";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
