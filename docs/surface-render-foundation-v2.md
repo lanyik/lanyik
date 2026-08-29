@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口及 generation-safe paged array-texture 池已冻结，save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、generation-safe paged array-texture 池及三档共享 Ground topology 已冻结，save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -615,6 +615,10 @@ WebGL context 恢复时优先从 resident `CompiledSurfaceChunk` 重新创建纹
 ### 10.1 几何
 
 每个 16×16 渲染块使用一张在 `SurfaceLatticeSpec (u,v)` 上焊接的三角晶格，不再为每个 hex 提交 subdivision 3 的独立实例。每档 LOD 的平面 `BufferGeometry` 全局共享；chunk 只提供逻辑起点、变换、纹理 layer 和编译 bounds。共享几何通过 `surfaceToWorld` 放置，分析式六边格仍由逻辑 tile ownership 决定，不要求地面三角形逐个沿 hex 边界切开。
+
+已落地的 `SurfaceGroundGeometrySet` 每个 session 只拥有 near/mid/far 三张共享平面 topology。near 使用每格四段的完整 65×65 顶点网格，共 4225 顶点、8192 三角；mid/far 内部分别按 2/4 texel stride 粗化为 1217 顶点/2176 三角和 481 顶点/704 三角。三档外边都保留全部 256 个唯一 canonical near-grid 顶点及 256 条四分之一格边界段，中/远档用半格/一格厚的确定性 transition ring 把细边界连接到粗内部，不生成 T-junction、skirt 或逐块私有 geometry。
+
+共享 `position` 保存 chunk-local `(u, 0, v)`；16 格 chunk origin 在 `u` 轴恒为偶列，因此同一几何的 stagger phase 对所有 chunk 一致。`surfaceFieldCoordinate` 保存已含 gutter 和半 texel phase 的物理 texel 坐标：左右边分别为 `0.5/64.5`，供 shader 用同一组 `texelFetch` 手动插值。纯 typed-array 构建结果在创建 Three.js geometry 前验证索引范围、正 Y 绕序、严格 256 平方逻辑面积、唯一顶点、完整边界和每条非边界 edge 恰好被两个三角共享；公共边 world 坐标与三档边界集合有冻结测试。
 
 - 顶点只保存局部 `(u,v)` 和表面场采样坐标。
 - 顶点 shader 从 groundHeight 读取宏观高度。

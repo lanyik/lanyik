@@ -106,6 +106,18 @@ export {
     readSurfaceArrayTextureCapabilities,
     SurfaceTexturePool
 } from "./rendering/SurfaceTexturePool";
+
+export {
+    SURFACE_GROUND_LODS,
+    assertSurfaceGroundGeometryData,
+    createSurfaceGroundGeometryData,
+    createSurfaceGroundGeometry,
+    SurfaceGroundGeometrySet
+} from "./rendering/SurfaceGroundGeometry";
+export type {
+    SurfaceGroundLod,
+    SurfaceGroundGeometryData
+} from "./rendering/SurfaceGroundGeometry";
 export type {
     SurfaceTextureCapabilitySource,
     SurfaceArrayTextureCapabilities,
