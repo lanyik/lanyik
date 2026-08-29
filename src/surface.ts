@@ -157,6 +157,15 @@ export type {
 } from "./world/SurfaceDeltaStore";
 
 export {
+    HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE,
+    MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS,
+    authoredHydrologyFeatureBoundsQ64,
+    hydrologyRegionBoundsQ64,
+    HydrologyFeatureSpatialIndex
+} from "./world/HydrologyFeatureSpatialIndex";
+export type { HydrologyFeatureBoundsQ64 } from "./world/HydrologyFeatureSpatialIndex";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,

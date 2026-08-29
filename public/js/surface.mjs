@@ -3190,6 +3190,190 @@ var MemorySurfaceDeltaStore = class {
   }
 };
 
+// src/world/HydrologyFeatureSpatialIndex.ts
+var HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE = 8;
+var MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS = 16384;
+function assertBounds(bounds) {
+  if (!bounds || typeof bounds !== "object" || !Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY) || !Number.isFinite(bounds.maxX) || !Number.isFinite(bounds.maxY) || bounds.minX > bounds.maxX || bounds.minY > bounds.maxY) {
+    throw new RangeError("hydrology feature query bounds are invalid");
+  }
+}
+function boundsForPoints(points, expansion) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < points.length; index += 2) {
+    minX = Math.min(minX, points[index]);
+    minY = Math.min(minY, points[index + 1]);
+    maxX = Math.max(maxX, points[index]);
+    maxY = Math.max(maxY, points[index + 1]);
+  }
+  return Object.freeze({
+    minX: minX - expansion,
+    minY: minY - expansion,
+    maxX: maxX + expansion,
+    maxY: maxY + expansion
+  });
+}
+function authoredHydrologyFeatureBoundsQ64(feature) {
+  if (!feature || typeof feature !== "object") {
+    throw new TypeError("authored hydrology feature is required for spatial bounds");
+  }
+  if (feature.kind === "lake") return boundsForPoints(feature.polygon, 0);
+  let maximumWidth = 0;
+  for (const width of feature.widthProfile) maximumWidth = Math.max(maximumWidth, width);
+  return boundsForPoints(feature.controlPoints, maximumWidth * HYDROLOGY_POINT_QUANTIZATION);
+}
+function hydrologyRegionBoundsQ64(region) {
+  assertHydrologyRegion(region);
+  const origin = chunkOrigin(region.key.regionX, region.key.regionY, HYDROLOGY_REGION_SIZE);
+  return Object.freeze({
+    minX: origin.x * HYDROLOGY_POINT_QUANTIZATION - HYDROLOGY_POINT_QUANTIZATION / 2,
+    minY: origin.y * HYDROLOGY_POINT_QUANTIZATION - HYDROLOGY_POINT_QUANTIZATION / 2,
+    maxX: (origin.x + region.validBounds.maxXExclusive) * HYDROLOGY_POINT_QUANTIZATION - HYDROLOGY_POINT_QUANTIZATION / 2,
+    maxY: (origin.y + region.validBounds.maxYExclusive) * HYDROLOGY_POINT_QUANTIZATION - HYDROLOGY_POINT_QUANTIZATION / 2
+  });
+}
+function positiveModulo4(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function periodicIntervals(minimum, maximum, period) {
+  const domainMinimum = -HYDROLOGY_POINT_QUANTIZATION / 2;
+  const domainMaximum = domainMinimum + period;
+  const span = maximum - minimum;
+  if (span >= period) return Object.freeze([{ minimum: domainMinimum, maximum: domainMaximum }]);
+  const start = domainMinimum + positiveModulo4(minimum - domainMinimum, period);
+  const end = start + span;
+  return end <= domainMaximum ? Object.freeze([{ minimum: start, maximum: end }]) : Object.freeze([
+    { minimum: start, maximum: domainMaximum },
+    { minimum: domainMinimum, maximum: domainMinimum + end - domainMaximum }
+  ]);
+}
+function projectedBounds(descriptor, bounds) {
+  if (descriptor.sourceKind !== "procedural-toroidal") return Object.freeze([bounds]);
+  const periodX = descriptor.width * HYDROLOGY_POINT_QUANTIZATION;
+  const periodY = descriptor.height * HYDROLOGY_POINT_QUANTIZATION;
+  if (!Number.isSafeInteger(periodX) || !Number.isSafeInteger(periodY)) {
+    throw new RangeError("toroidal hydrology q64 period exceeds the safe integer range");
+  }
+  const xIntervals = periodicIntervals(bounds.minX, bounds.maxX, periodX);
+  const yIntervals = periodicIntervals(bounds.minY, bounds.maxY, periodY);
+  const output = [];
+  for (const x of xIntervals) {
+    for (const y of yIntervals) {
+      output.push(Object.freeze({
+        minX: x.minimum,
+        minY: y.minimum,
+        maxX: x.maximum,
+        maxY: y.maximum
+      }));
+    }
+  }
+  return Object.freeze(output);
+}
+function unionBounds(items, start, end) {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (let index = start; index < end; index += 1) {
+    const bounds = items[index].bounds;
+    minX = Math.min(minX, bounds.minX);
+    minY = Math.min(minY, bounds.minY);
+    maxX = Math.max(maxX, bounds.maxX);
+    maxY = Math.max(maxY, bounds.maxY);
+  }
+  return { minX, minY, maxX, maxY };
+}
+function intersects(first, second) {
+  return first.minX <= second.maxX && first.maxX >= second.minX && first.minY <= second.maxY && first.maxY >= second.minY;
+}
+function compareItems(axis, first, second) {
+  const firstCenter = axis === "x" ? first.bounds.minX + first.bounds.maxX : first.bounds.minY + first.bounds.maxY;
+  const secondCenter = axis === "x" ? second.bounds.minX + second.bounds.maxX : second.bounds.minY + second.bounds.maxY;
+  return firstCenter - secondCenter || first.deltaIndex - second.deltaIndex || first.bounds.minX - second.bounds.minX || first.bounds.minY - second.bounds.minY;
+}
+var HydrologyFeatureSpatialIndex = class {
+  constructor(descriptor, deltas) {
+    this.nodes = [];
+    assertWorldDescriptorV2(descriptor);
+    if (!Array.isArray(deltas)) throw new TypeError("hydrology feature spatial index deltas must be an array");
+    this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+    const upserts = [];
+    const items = [];
+    let previousId;
+    for (const delta of deltas) {
+      assertHydrologyFeatureDelta(delta);
+      if (delta.worldIdentity !== this.worldIdentity) {
+        throw new TypeError("hydrology feature spatial index delta belongs to another world");
+      }
+      if (previousId !== void 0 && previousId >= delta.featureId) {
+        throw new Error("hydrology feature spatial index deltas must use unique ascending feature identities");
+      }
+      previousId = delta.featureId;
+      if (delta.operation === "delete") continue;
+      const deltaIndex = upserts.length;
+      upserts.push(delta);
+      const bounds = authoredHydrologyFeatureBoundsQ64(delta.feature);
+      for (const projected of projectedBounds(descriptor, bounds)) {
+        items.push({ bounds: projected, deltaIndex });
+      }
+    }
+    if (items.length > MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS) {
+      throw new RangeError("hydrology feature spatial index exceeds its fixed item budget");
+    }
+    this.deltas = Object.freeze(upserts);
+    this.items = items;
+    this.featureCount = upserts.length;
+    this.itemCount = items.length;
+    this.root = items.length === 0 ? -1 : this.buildNode(0, items.length);
+  }
+  query(bounds) {
+    assertBounds(bounds);
+    if (this.root < 0) return Object.freeze([]);
+    const stack = [this.root];
+    const matches = /* @__PURE__ */ new Set();
+    while (stack.length > 0) {
+      const node = this.nodes[stack.pop()];
+      if (!intersects(node, bounds)) continue;
+      if (node.count > 0) {
+        for (let index = node.start; index < node.start + node.count; index += 1) {
+          const item = this.items[index];
+          if (intersects(item.bounds, bounds)) matches.add(item.deltaIndex);
+        }
+      } else {
+        stack.push(node.left, node.right);
+      }
+    }
+    return Object.freeze([...matches].sort((first, second) => first - second).map((index) => this.deltas[index]));
+  }
+  queryRegion(region) {
+    if (region.worldIdentity !== this.worldIdentity) {
+      throw new TypeError("hydrology feature spatial query region belongs to another world");
+    }
+    return this.query(hydrologyRegionBoundsQ64(region));
+  }
+  buildNode(start, end) {
+    const bounds = unionBounds(this.items, start, end);
+    const nodeIndex = this.nodes.length;
+    this.nodes.push({ ...bounds, start: 0, count: 0, left: -1, right: -1 });
+    const count = end - start;
+    if (count <= HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE) {
+      this.nodes[nodeIndex] = Object.freeze({ ...bounds, start, count, left: -1, right: -1 });
+      return nodeIndex;
+    }
+    const axis = bounds.maxX - bounds.minX >= bounds.maxY - bounds.minY ? "x" : "y";
+    const sorted = this.items.slice(start, end).sort((first, second) => compareItems(axis, first, second));
+    this.items.splice(start, count, ...sorted);
+    const middle = start + Math.floor(count / 2);
+    const left = this.buildNode(start, middle);
+    const right = this.buildNode(middle, end);
+    this.nodes[nodeIndex] = Object.freeze({ ...bounds, start: 0, count: 0, left, right });
+    return nodeIndex;
+  }
+};
+
 // src/world/SurfaceWorkerProtocol.ts
 var SURFACE_WORKER_PROTOCOL_VERSION = 3;
 function assertWorkerRequestEnvelope(value, expectedType) {
@@ -4061,7 +4245,7 @@ var CoordinatePairMap = class {
 
 // src/world/SemanticWorldSource.ts
 var DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES = 32 * 1024 * 1024;
-function positiveModulo4(value, modulus) {
+function positiveModulo5(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function abortError2() {
@@ -4122,8 +4306,8 @@ var ProceduralSemanticWorldSourceBase = class {
     const countX = this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
     const countY = this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
     return {
-      chunkX: positiveModulo4(chunkX, countX),
-      chunkY: positiveModulo4(chunkY, countY)
+      chunkX: positiveModulo5(chunkX, countX),
+      chunkY: positiveModulo5(chunkY, countY)
     };
   }
   chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
@@ -5181,7 +5365,7 @@ var MIN_RIVER_DISCHARGE = 8;
 var MIN_LAKE_RADIUS_TILES = 4;
 var MAX_LAKE_RADIUS_TILES = 16;
 var MACRO_NODE_CENTER_OFFSET = MACRO_DRAINAGE_NODE_STEP_TILES / 2;
-function positiveModulo5(value, modulus) {
+function positiveModulo6(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function wrappedNodeStep(from, to, count) {
@@ -5214,8 +5398,8 @@ var MacroDrainageHydrologySource = class {
       return regionX >= 0 && regionX < this.regionCountX && regionY >= 0 && regionY < this.regionCountY ? Object.freeze({ regionX, regionY }) : void 0;
     }
     return Object.freeze({
-      regionX: positiveModulo5(regionX, this.regionCountX),
-      regionY: positiveModulo5(regionY, this.regionCountY)
+      regionX: positiveModulo6(regionX, this.regionCountX),
+      regionY: positiveModulo6(regionY, this.regionCountY)
     });
   }
   buildRegion(regionX, regionY) {
@@ -5238,17 +5422,17 @@ var MacroDrainageHydrologySource = class {
       canonicalizePort: (tileX, tileY) => {
         const canonical = canonicalHydrologyPoint(tileX, tileY);
         return toroidal ? Object.freeze({
-          tileX: positiveModulo5(canonical.tileX, this.graph.worldWidth),
-          tileY: positiveModulo5(canonical.tileY, this.graph.worldHeight)
+          tileX: positiveModulo6(canonical.tileX, this.graph.worldWidth),
+          tileY: positiveModulo6(canonical.tileY, this.graph.worldHeight)
         }) : canonical;
       }
     });
     const [minimumNodeX, maximumNodeX] = nodeAxisRange(origin.x, endX, this.graph.width, toroidal);
     const [minimumNodeY, maximumNodeY] = nodeAxisRange(origin.y, endY, this.graph.height, toroidal);
     for (let unwrappedNodeX = minimumNodeX; unwrappedNodeX <= maximumNodeX; unwrappedNodeX += 1) {
-      const nodeX = toroidal ? positiveModulo5(unwrappedNodeX, this.graph.width) : unwrappedNodeX;
+      const nodeX = toroidal ? positiveModulo6(unwrappedNodeX, this.graph.width) : unwrappedNodeX;
       for (let unwrappedNodeY = minimumNodeY; unwrappedNodeY <= maximumNodeY; unwrappedNodeY += 1) {
-        const nodeY = toroidal ? positiveModulo5(unwrappedNodeY, this.graph.height) : unwrappedNodeY;
+        const nodeY = toroidal ? positiveModulo6(unwrappedNodeY, this.graph.height) : unwrappedNodeY;
         const sourceIndex = macroDrainageIndex(nodeX, nodeY, this.graph.height);
         const sourceTile = macroDrainageNodeTile(this.graph, sourceIndex);
         const physicalSourceX = toroidal ? unwrappedNodeX * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : sourceTile.x;
@@ -5744,7 +5928,7 @@ var InfiniteHydrologyRegionSource = class {
 };
 
 // src/world/ProceduralHydrologyRegionGenerator.ts
-function positiveModulo6(value, modulus) {
+function positiveModulo7(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function abortError4() {
@@ -5778,8 +5962,8 @@ var GeneratorToroidalSemanticSource = class {
   resolveChunk(chunkX, chunkY) {
     if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) return void 0;
     return Object.freeze({
-      chunkX: positiveModulo6(chunkX, this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE),
-      chunkY: positiveModulo6(chunkY, this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE)
+      chunkX: positiveModulo7(chunkX, this.descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE),
+      chunkY: positiveModulo7(chunkY, this.descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE)
     });
   }
   chunkDistance(chunkX, chunkY, centerChunkX, centerChunkY) {
@@ -5893,7 +6077,7 @@ var HYDROLOGY_RIVER_RESIDENT_BYTES = 160;
 var HYDROLOGY_LAKE_RESIDENT_BYTES = 96;
 var HYDROLOGY_MOUTH_RESIDENT_BYTES = 96;
 var HYDROLOGY_BODY_RESIDENT_BYTES = 64;
-function positiveModulo7(value, modulus) {
+function positiveModulo8(value, modulus) {
   return (value % modulus + modulus) % modulus;
 }
 function abortError5() {
@@ -5987,8 +6171,8 @@ var ProceduralHydrologyWorldSource = class {
     if (!Number.isSafeInteger(regionX) || !Number.isSafeInteger(regionY)) return void 0;
     if (this.descriptor.sourceKind === "procedural-toroidal") {
       return Object.freeze({
-        regionX: positiveModulo7(regionX, this.regionCountX),
-        regionY: positiveModulo7(regionY, this.regionCountY)
+        regionX: positiveModulo8(regionX, this.regionCountX),
+        regionY: positiveModulo8(regionY, this.regionCountY)
       });
     }
     try {
@@ -7054,6 +7238,7 @@ export {
   HYDROLOGY_BOUNDARY_MIN_X,
   HYDROLOGY_BOUNDARY_MIN_Y,
   HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+  HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE,
   HYDROLOGY_KIND_LAKE,
   HYDROLOGY_KIND_NONE,
   HYDROLOGY_KIND_OCEAN,
@@ -7067,6 +7252,7 @@ export {
   HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
   HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
   HYDROLOGY_SPATIAL_CELL_SIZE,
+  HydrologyFeatureSpatialIndex,
   HydrologyRegionSpatialIndex,
   InfiniteHydrologyRegionSource,
   InfiniteSemanticWorldSource,
@@ -7077,6 +7263,7 @@ export {
   MAX_DERIVED_HYDROLOGY_BODY_PALETTE,
   MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES,
   MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL,
+  MAX_HYDROLOGY_FEATURE_SPATIAL_INDEX_ITEMS,
   MAX_HYDROLOGY_REGION_BODIES,
   MAX_HYDROLOGY_REGION_LAKES,
   MAX_HYDROLOGY_REGION_MOUTHS,
@@ -7136,6 +7323,7 @@ export {
   assertSemanticWorldSource,
   assertSparseSemanticDelta,
   assertWorldDescriptorV2,
+  authoredHydrologyFeatureBoundsQ64,
   authoredHydrologyPoint,
   buildMacroDrainageGraph,
   createAuthoredLakeFeature,
@@ -7159,6 +7347,7 @@ export {
   getBaseSemanticTile,
   getEffectiveSemanticTile,
   hydrologyPortConnectionSignature,
+  hydrologyRegionBoundsQ64,
   hydrologyRegionMaximumQuantizedCoordinate,
   hydrologyRegionResidentBytes,
   hydrologyRiverHalfWidthTiles,

@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、`EffectiveSemanticChunk` 只读合并内核及原子内存事务/CAS 快照内核已落地；save barrier、持久化 store、完整 EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、`EffectiveSemanticChunk` 只读合并内核及原子内存事务/CAS 快照内核已落地；save barrier、持久化 store、完整 EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -396,6 +396,8 @@ delta 绑定完整 world identity、chunk key 和正整数 revision。二进制�
 已落地的阶段性 `MemorySurfaceDeltaStore` 明确区分 mutation payload 与最终 delta：调用方只提供完整 payload、目标 identity 和每个实体的 `expectedRevision`，store 规范排序整批 mutation 后统一分配一个新 revision，再构造最终 `SparseSemanticDelta`/`HydrologyFeatureDelta`。语义删除仍保留独立 revision 元数据，避免“有值→删除→再写入”退回 revision 0 的 ABA；hydrology tombstone 本身保存 revision。候选 semantic/hydrology map、有限世界 chunk/tile bounds、稳定 kind、基础图反向引用、source/outlet 存在性、水位单调性和 outlet DAG 全部通过后才以一次引用交换发布 copy-on-write 快照，失败不会留下部分语义写入。
 
 基础水文不能从当前 resident region 反推。store 构造必须显式接收不可变 `BaseHydrologyFeatureIndex`，其正向元数据用于沿 outlet 求值，其有序完整反向引用用于验证删除或覆盖不会悬空既有河流；确实没有基础河湖的世界也要显式传入空索引，不使用缺省空图 fallback。当前内存内核尚不冒充 durable store：commit 日志字节预算、save barrier 与 IndexedDB 原子快照将在持久化层落地后再标记完成。
+
+已落地的 `HydrologyFeatureSpatialIndex` 在每个 delta 快照上只索引完整 upsert，tombstone 继续由 feature ID 遮蔽表处理。索引是叶容量 8、最多 16384 个 item 的确定性 packed BVH；普通 feature 使用一个按最大河宽保守扩张的 q64 AABB，环绕 feature 的连续 bounds 投影到规范 `[-0.5, period-0.5]` 域并最多拆成四个 AABB。它不沿长河枚举所有 128×128 region；查询结果去重后恢复稳定 feature ID 顺序。超过固定 item 预算或环绕 q64 周期超出安全整数时明确失败。
 
 commit record 是原子可见性边界，不要求永久保留完整操作历史。Store 在 save barrier 下把已提交 semantic mutations 折叠进 chunk delta、把 hydrology mutations 折叠进 feature record/tombstone；只有新快照和索引持久化成功后才能回收旧 commit。统计和预算必须包含待压缩 commit 字节，避免长期编辑使日志无界增长。
 
