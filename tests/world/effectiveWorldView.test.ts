@@ -161,7 +161,7 @@ describe("EffectiveWorldView", () => {
             dischargeClass: 3,
             profileIndex: 0
         });
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -240,7 +240,7 @@ describe("EffectiveWorldView", () => {
             hydrologySource,
             deltaSnapshot: store.snapshot()
         });
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",

@@ -287,7 +287,7 @@ describe("SurfaceCompilationService", () => {
         const fixture = createFixture("surface-service-edit", pool);
         const first = await fixture.service.requestSurface({ view: fixture.view, ...REQUEST });
         first.release();
-        fixture.store.commit({
+        await fixture.store.commit({
             worldIdentity: fixture.view.worldIdentity,
             semanticMutations: [{
                 operation: "upsert",

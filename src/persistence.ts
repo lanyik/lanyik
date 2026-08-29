@@ -17,6 +17,18 @@ export {
     WORLD_DELTA_FORMAT_VERSION
 } from "./world/WorldDeltaStore";
 export {
+    INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+    indexedDbSurfaceDeltaCommitBytes,
+    SurfaceDeltaSessionConflictError,
+    SurfaceDeltaCommitBackpressureError,
+    SurfaceDeltaSaveBarrierError,
+    IndexedDbSurfaceDeltaStore
+} from "./world/IndexedDbSurfaceDeltaStore";
+export type {
+    IndexedDbSurfaceDeltaStoreOptions,
+    IndexedDbSurfaceDeltaStoreStats
+} from "./world/IndexedDbSurfaceDeltaStore";
+export {
     CheckpointCoordinator,
     CheckpointConflictError,
     CheckpointRecoveryError,

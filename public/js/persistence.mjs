@@ -1156,6 +1156,2004 @@ var IndexedDbWorldDeltaStore = class extends MemoryWorldDeltaStore {
   }
 };
 
+// src/world/SurfaceCompileProfile.ts
+var WORLD_SEMANTIC_CHUNK_SIZE = 32;
+var HYDROLOGY_REGION_SIZE = 128;
+var SURFACE_COMPILE_PROFILE_VERSION = 1;
+var SURFACE_COMPILE_PROFILE = Object.freeze({
+  version: SURFACE_COMPILE_PROFILE_VERSION,
+  renderChunkSize: 16,
+  samplesPerTileInterval: 4,
+  gutterTexels: 1,
+  influenceRadiusTiles: 2,
+  textureLayerSize: 66,
+  pageLayers: 128,
+  waterGeometryCoverageThreshold: 0.5,
+  waterFullPatchCoverage: 128
+});
+var SURFACE_CORE_TEXELS = SURFACE_COMPILE_PROFILE.renderChunkSize * SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
+var SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL = 18;
+var SURFACE_FIELD_CPU_BYTES = SURFACE_COMPILE_PROFILE.textureLayerSize * SURFACE_COMPILE_PROFILE.textureLayerSize * SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL;
+function assertSurfaceCompileProfile(profile) {
+  const integerFields = [
+    profile.version,
+    profile.renderChunkSize,
+    profile.samplesPerTileInterval,
+    profile.gutterTexels,
+    profile.influenceRadiusTiles,
+    profile.textureLayerSize,
+    profile.pageLayers
+  ];
+  if (integerFields.some((value) => !Number.isInteger(value) || value <= 0)) {
+    throw new RangeError("surface compile profile fields must be positive integers");
+  }
+  if (profile.version !== SURFACE_COMPILE_PROFILE_VERSION) {
+    throw new RangeError("surface compile profile version is unsupported");
+  }
+  if (WORLD_SEMANTIC_CHUNK_SIZE % profile.renderChunkSize !== 0 || HYDROLOGY_REGION_SIZE % WORLD_SEMANTIC_CHUNK_SIZE !== 0) {
+    throw new RangeError("surface compile profile must align with the world formats");
+  }
+  const coreTexels = profile.renderChunkSize * profile.samplesPerTileInterval;
+  if (profile.textureLayerSize !== coreTexels + profile.gutterTexels * 2) {
+    throw new RangeError("surface texture layer size does not match its core and gutter");
+  }
+  if (profile.influenceRadiusTiles < profile.gutterTexels) {
+    throw new RangeError("surface influence radius cannot be smaller than its texture gutter");
+  }
+  if (profile.pageLayers > 128) {
+    throw new RangeError("surface texture page exceeds the profile v1 layer budget");
+  }
+  if (!Number.isFinite(profile.waterGeometryCoverageThreshold) || profile.waterGeometryCoverageThreshold < 0 || profile.waterGeometryCoverageThreshold >= 1 || profile.waterFullPatchCoverage !== 128) {
+    throw new RangeError("surface water geometry thresholds do not match profile v1");
+  }
+  if (profile.renderChunkSize !== 16 || profile.samplesPerTileInterval !== 4 || profile.gutterTexels !== 1 || profile.influenceRadiusTiles !== 2 || profile.textureLayerSize !== 66 || profile.pageLayers !== 128 || profile.waterGeometryCoverageThreshold !== 0.5 || profile.waterFullPatchCoverage !== 128) {
+    throw new RangeError("surface compile profile does not match the frozen profile v1");
+  }
+}
+assertSurfaceCompileProfile(SURFACE_COMPILE_PROFILE);
+
+// src/world/WorldDescriptorV2.ts
+var WORLD_GENERATOR_VERSION_V2 = 6;
+var WORLD_DESCRIPTOR_FORMAT_VERSION_V2 = 2;
+var WORLD_CHUNK_FORMAT_VERSION_V2 = 2;
+var HYDROLOGY_REGION_FORMAT_VERSION = 1;
+var CONTENT_HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
+function assertContentHash(name, value) {
+  if (typeof value !== "string" || !CONTENT_HASH_PATTERN.test(value)) {
+    throw new TypeError(`${name} must be a lowercase sha256 content hash`);
+  }
+}
+function assertIdentity(name, value, catalog) {
+  if (!value || typeof value !== "object") throw new TypeError(`${name} identity must be an object`);
+  const identity = value;
+  if (typeof identity.id !== "string" || identity.id.trim() !== identity.id || identity.id.length === 0) {
+    throw new TypeError(`${name} id must be a non-empty canonical string`);
+  }
+  assertContentHash(`${name} contentHash`, identity.contentHash);
+  if (catalog && (!Number.isInteger(identity.entryCount) || identity.entryCount <= 0 || identity.entryCount > 256)) {
+    throw new RangeError(`${name} entryCount must be an integer between 1 and 256`);
+  }
+}
+function assertSemantics(value) {
+  if (!Number.isInteger(value.seaLevel) || value.seaLevel < 0 || value.seaLevel > 65535) {
+    throw new RangeError("world descriptor seaLevel must be a uint16 value");
+  }
+  assertIdentity("substrate catalog", value.substrateCatalog, true);
+  assertIdentity("vegetation catalog", value.vegetationCatalog, true);
+  if (!Array.isArray(value.biomeBasis) || value.biomeBasis.length !== 4) {
+    throw new TypeError("world descriptor must contain exactly four biome basis identities");
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const basis of value.biomeBasis) {
+    assertIdentity("biome basis", basis, false);
+    if (ids.has(basis.id)) throw new TypeError("world descriptor biome basis ids must be unique");
+    ids.add(basis.id);
+  }
+}
+function assertFiniteBounds(width, height) {
+  if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
+    throw new RangeError("world descriptor bounds must be positive safe integers");
+  }
+}
+function assertWorldDescriptorV2(value) {
+  if (!value || typeof value !== "object") throw new TypeError("world descriptor v2 must be an object");
+  const descriptor = value;
+  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION_V2 || descriptor.generatorVersion !== WORLD_GENERATOR_VERSION_V2 || descriptor.chunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION_V2 || descriptor.hydrologyRegionFormatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
+    throw new TypeError("world descriptor v2 format or generator version is unsupported");
+  }
+  assertSemantics(descriptor);
+  if (descriptor.sourceKind === "static") {
+    if (descriptor.topology !== "finite" || "seed" in descriptor) {
+      throw new TypeError("static world descriptor v2 topology is invalid");
+    }
+    assertContentHash("static world sourceContentHash", descriptor.sourceContentHash);
+    assertFiniteBounds(descriptor.width, descriptor.height);
+    return;
+  }
+  if (descriptor.sourceKind === "procedural-infinite") {
+    if (descriptor.topology !== "infinite" || typeof descriptor.seed !== "string" || "width" in descriptor || "height" in descriptor || "sourceContentHash" in descriptor) {
+      throw new TypeError("infinite world descriptor v2 topology is invalid");
+    }
+    return;
+  }
+  if (descriptor.sourceKind === "procedural-toroidal") {
+    if (descriptor.topology !== "toroidal" || typeof descriptor.seed !== "string" || "sourceContentHash" in descriptor) {
+      throw new TypeError("toroidal world descriptor v2 topology is invalid");
+    }
+    assertFiniteBounds(descriptor.width, descriptor.height);
+    if (descriptor.width < WORLD_SEMANTIC_CHUNK_SIZE || descriptor.height < WORLD_SEMANTIC_CHUNK_SIZE || descriptor.width % WORLD_SEMANTIC_CHUNK_SIZE !== 0 || descriptor.height % WORLD_SEMANTIC_CHUNK_SIZE !== 0) {
+      throw new RangeError("toroidal v2 bounds must be positive multiples of the semantic chunk size");
+    }
+    return;
+  }
+  throw new TypeError("world descriptor v2 sourceKind is invalid");
+}
+function serializeWorldDescriptorV2(descriptor) {
+  assertWorldDescriptorV2(descriptor);
+  return JSON.stringify([
+    descriptor.descriptorVersion,
+    descriptor.sourceKind,
+    "seed" in descriptor ? descriptor.seed : null,
+    "sourceContentHash" in descriptor ? descriptor.sourceContentHash : null,
+    descriptor.generatorVersion,
+    descriptor.chunkFormatVersion,
+    descriptor.hydrologyRegionFormatVersion,
+    descriptor.topology,
+    "width" in descriptor ? descriptor.width : null,
+    "height" in descriptor ? descriptor.height : null,
+    descriptor.seaLevel,
+    [
+      descriptor.substrateCatalog.id,
+      descriptor.substrateCatalog.contentHash,
+      descriptor.substrateCatalog.entryCount
+    ],
+    descriptor.biomeBasis.map((basis) => [basis.id, basis.contentHash]),
+    [
+      descriptor.vegetationCatalog.id,
+      descriptor.vegetationCatalog.contentHash,
+      descriptor.vegetationCatalog.entryCount
+    ]
+  ]);
+}
+if (HYDROLOGY_REGION_SIZE % WORLD_SEMANTIC_CHUNK_SIZE !== 0) {
+  throw new Error("world descriptor v2 formats are not spatially aligned");
+}
+
+// src/world/WorldGrid.ts
+function assertLogicalCoordinate(name, value) {
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+}
+function chunkOrigin(chunkX, chunkY, chunkSize) {
+  assertLogicalCoordinate("chunk x", chunkX);
+  assertLogicalCoordinate("chunk y", chunkY);
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+    throw new RangeError("chunk size must be a positive safe integer");
+  }
+  const x = chunkX * chunkSize;
+  const y = chunkY * chunkSize;
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(x + chunkSize - 1) || !Number.isSafeInteger(y + chunkSize - 1)) {
+    throw new RangeError("chunk bounds exceed the safe logical coordinate range");
+  }
+  return { x, y };
+}
+
+// src/world/HydrologyIdentity.ts
+var OCEAN_BODY_ID = "ocean";
+
+// src/world/HydrologyRegion.ts
+var HYDROLOGY_POINT_QUANTIZATION = 64;
+var HYDROLOGY_REGION_MINIMUM_QUANTIZED_COORDINATE = -HYDROLOGY_POINT_QUANTIZATION / 2;
+var HYDROLOGY_BOUNDARY_MIN_X = 1;
+var HYDROLOGY_BOUNDARY_MAX_X = 2;
+var HYDROLOGY_BOUNDARY_MIN_Y = 4;
+var HYDROLOGY_BOUNDARY_MAX_Y = 8;
+var ALL_BOUNDARY_BITS = HYDROLOGY_BOUNDARY_MIN_X | HYDROLOGY_BOUNDARY_MAX_X | HYDROLOGY_BOUNDARY_MIN_Y | HYDROLOGY_BOUNDARY_MAX_Y;
+
+// src/world/HydrologyFeatureDelta.ts
+var HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION = 1;
+var MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS = 256;
+var MAX_AUTHORED_LAKE_POLYGON_POINTS = 256;
+var MAX_AUTHORED_HYDROLOGY_ID_LENGTH = 256;
+var MAX_HYDROLOGY_FEATURE_WORLD_IDENTITY_LENGTH = 16384;
+var HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES = 48;
+var HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC = 843335240;
+var SERIALIZED_OPERATION_DELETE = 0;
+var SERIALIZED_OPERATION_UPSERT = 1;
+var SERIALIZED_FEATURE_RIVER = 1;
+var SERIALIZED_FEATURE_LAKE = 2;
+var SERIALIZED_SOURCE_NONE = 0;
+var SERIALIZED_SOURCE_SPRING = 1;
+var SERIALIZED_SOURCE_RIVER = 2;
+var SERIALIZED_OUTLET_NONE = 0;
+var SERIALIZED_OUTLET_OCEAN = 1;
+var SERIALIZED_OUTLET_LAKE = 2;
+var SERIALIZED_OUTLET_RIVER = 3;
+function assertStableId(name, value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_AUTHORED_HYDROLOGY_ID_LENGTH || value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new TypeError(`${name} must be a canonical stable identity`);
+  }
+}
+function assertUint8(name, value) {
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new RangeError(`${name} must be a uint8 value`);
+  }
+}
+function assertUint16(name, value) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new RangeError(`${name} must be a uint16 value`);
+  }
+}
+function pointAt(points, index) {
+  return { x: points[index * 2], y: points[index * 2 + 1] };
+}
+function comparePoint(first, second) {
+  return first.x - second.x || first.y - second.y;
+}
+function assertQuantizedPoints(name, points, minimum, maximum) {
+  if (!(points instanceof Float64Array) || points.length % 2 !== 0 || points.length / 2 < minimum || points.length / 2 > maximum) {
+    throw new TypeError(`${name} does not match its bounded q64 layout`);
+  }
+  for (const coordinate of points) {
+    if (!Number.isSafeInteger(coordinate)) {
+      throw new RangeError(`${name} coordinates must be safe q64 integers`);
+    }
+  }
+}
+function orientation(first, second, third) {
+  const firstX = BigInt(first.x);
+  const firstY = BigInt(first.y);
+  const secondX = BigInt(second.x);
+  const secondY = BigInt(second.y);
+  const thirdX = BigInt(third.x);
+  const thirdY = BigInt(third.y);
+  return (secondX - firstX) * (thirdY - firstY) - (secondY - firstY) * (thirdX - firstX);
+}
+function between(value, first, second) {
+  return value >= Math.min(first, second) && value <= Math.max(first, second);
+}
+function pointOnSegment(point, first, second) {
+  return orientation(first, second, point) === 0n && between(point.x, first.x, second.x) && between(point.y, first.y, second.y);
+}
+function segmentsIntersect(firstStart, firstEnd, secondStart, secondEnd) {
+  const firstOrientation = orientation(firstStart, firstEnd, secondStart);
+  const secondOrientation = orientation(firstStart, firstEnd, secondEnd);
+  const thirdOrientation = orientation(secondStart, secondEnd, firstStart);
+  const fourthOrientation = orientation(secondStart, secondEnd, firstEnd);
+  if ((firstOrientation > 0n && secondOrientation < 0n || firstOrientation < 0n && secondOrientation > 0n) && (thirdOrientation > 0n && fourthOrientation < 0n || thirdOrientation < 0n && fourthOrientation > 0n)) return true;
+  return firstOrientation === 0n && pointOnSegment(secondStart, firstStart, firstEnd) || secondOrientation === 0n && pointOnSegment(secondEnd, firstStart, firstEnd) || thirdOrientation === 0n && pointOnSegment(firstStart, secondStart, secondEnd) || fourthOrientation === 0n && pointOnSegment(firstEnd, secondStart, secondEnd);
+}
+function adjacentSegmentsOverlap(previous, current, next) {
+  return orientation(previous, current, next) === 0n && (pointOnSegment(next, previous, current) || pointOnSegment(previous, current, next));
+}
+function polygonTwiceArea(points) {
+  let area = 0n;
+  const pointCount = points.length / 2;
+  for (let index = 0; index < pointCount; index += 1) {
+    const current = pointAt(points, index);
+    const next = pointAt(points, (index + 1) % pointCount);
+    area += BigInt(current.x) * BigInt(next.y) - BigInt(current.y) * BigInt(next.x);
+  }
+  return area;
+}
+function assertSimpleCanonicalPolygon(points) {
+  const pointCount = points.length / 2;
+  const identities = /* @__PURE__ */ new Set();
+  let minimumIndex = 0;
+  for (let index = 0; index < pointCount; index += 1) {
+    const point = pointAt(points, index);
+    const identity = `${point.x}:${point.y}`;
+    if (identities.has(identity)) throw new Error("authored lake polygon contains a repeated vertex");
+    identities.add(identity);
+    if (comparePoint(point, pointAt(points, minimumIndex)) < 0) minimumIndex = index;
+  }
+  for (let index = 0; index < pointCount; index += 1) {
+    if (adjacentSegmentsOverlap(
+      pointAt(points, (index - 1 + pointCount) % pointCount),
+      pointAt(points, index),
+      pointAt(points, (index + 1) % pointCount)
+    )) {
+      throw new Error("authored lake polygon cannot contain overlapping adjacent edges");
+    }
+  }
+  if (minimumIndex !== 0) throw new Error("authored lake polygon must start at its lexicographic minimum");
+  if (polygonTwiceArea(points) <= 0n) {
+    throw new Error("authored lake polygon must be non-degenerate and counter-clockwise");
+  }
+  for (let firstIndex = 0; firstIndex < pointCount; firstIndex += 1) {
+    const firstNext = (firstIndex + 1) % pointCount;
+    const firstStart = pointAt(points, firstIndex);
+    const firstEnd = pointAt(points, firstNext);
+    for (let secondIndex = firstIndex + 1; secondIndex < pointCount; secondIndex += 1) {
+      const secondNext = (secondIndex + 1) % pointCount;
+      if (secondIndex === firstIndex || secondIndex === firstNext || secondNext === firstIndex) continue;
+      if (segmentsIntersect(firstStart, firstEnd, pointAt(points, secondIndex), pointAt(points, secondNext))) {
+        throw new Error("authored lake polygon must be simple and non-self-intersecting");
+      }
+    }
+  }
+}
+function assertSimpleRiverLine(points) {
+  const pointCount = points.length / 2;
+  const identities = /* @__PURE__ */ new Set();
+  for (let index = 0; index < pointCount; index += 1) {
+    const point = pointAt(points, index);
+    const identity = `${point.x}:${point.y}`;
+    if (identities.has(identity)) throw new Error("authored river contains a repeated control point");
+    identities.add(identity);
+  }
+  for (let index = 1; index < pointCount - 1; index += 1) {
+    if (adjacentSegmentsOverlap(
+      pointAt(points, index - 1),
+      pointAt(points, index),
+      pointAt(points, index + 1)
+    )) {
+      throw new Error("authored river cannot contain overlapping adjacent spans");
+    }
+  }
+  for (let firstIndex = 0; firstIndex < pointCount - 1; firstIndex += 1) {
+    const firstStart = pointAt(points, firstIndex);
+    const firstEnd = pointAt(points, firstIndex + 1);
+    for (let secondIndex = firstIndex + 2; secondIndex < pointCount - 1; secondIndex += 1) {
+      if (segmentsIntersect(
+        firstStart,
+        firstEnd,
+        pointAt(points, secondIndex),
+        pointAt(points, secondIndex + 1)
+      )) {
+        throw new Error("authored river must be a simple non-self-intersecting line");
+      }
+    }
+  }
+}
+function canonicalPolygon(input) {
+  assertQuantizedPoints(
+    "authored lake polygon",
+    input,
+    3,
+    MAX_AUTHORED_LAKE_POLYGON_POINTS
+  );
+  const pointCount = input.length / 2;
+  const identities = /* @__PURE__ */ new Set();
+  let minimumIndex = 0;
+  for (let index = 0; index < pointCount; index += 1) {
+    const point = pointAt(input, index);
+    const identity = `${point.x}:${point.y}`;
+    if (identities.has(identity)) throw new Error("authored lake polygon contains a repeated vertex");
+    identities.add(identity);
+    if (comparePoint(point, pointAt(input, minimumIndex)) < 0) minimumIndex = index;
+  }
+  const area = polygonTwiceArea(input);
+  const counterClockwise = area > 0n;
+  if (area === 0n) throw new Error("authored lake polygon is degenerate");
+  const output = new Float64Array(input.length);
+  for (let targetIndex = 0; targetIndex < pointCount; targetIndex += 1) {
+    const sourceIndex = counterClockwise ? (minimumIndex + targetIndex) % pointCount : (minimumIndex - targetIndex + pointCount) % pointCount;
+    output[targetIndex * 2] = input[sourceIndex * 2];
+    output[targetIndex * 2 + 1] = input[sourceIndex * 2 + 1];
+  }
+  assertSimpleCanonicalPolygon(output);
+  return output;
+}
+function cloneSource(source) {
+  return source.kind === "spring" ? Object.freeze({ kind: "spring", sourceId: source.sourceId }) : Object.freeze({ kind: "river", riverId: source.riverId });
+}
+function cloneOutlet(outlet) {
+  if (outlet.kind === "river") return Object.freeze({ kind: "river", riverId: outlet.riverId });
+  return Object.freeze({ kind: outlet.kind, bodyId: outlet.bodyId });
+}
+function assertAuthoredRiverFeature(feature) {
+  if (!feature || typeof feature !== "object" || feature.kind !== "river") {
+    throw new TypeError("authored river feature is invalid");
+  }
+  assertStableId("authored river feature", feature.featureId);
+  if (feature.featureId === OCEAN_BODY_ID) {
+    throw new Error("authored river cannot use the reserved ocean body identity");
+  }
+  assertQuantizedPoints(
+    "authored river control points",
+    feature.controlPoints,
+    2,
+    MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS
+  );
+  const pointCount = feature.controlPoints.length / 2;
+  if (!(feature.widthProfile instanceof Uint8Array) || feature.widthProfile.length !== pointCount || !(feature.levelProfile instanceof Uint16Array) || feature.levelProfile.length !== pointCount) {
+    throw new TypeError("authored river profiles must match its control point count");
+  }
+  assertSimpleRiverLine(feature.controlPoints);
+  if (!feature.source || typeof feature.source !== "object") {
+    throw new TypeError("authored river source is required");
+  }
+  if (feature.source.kind === "spring") assertStableId("authored river spring", feature.source.sourceId);
+  else if (feature.source.kind === "river") {
+    assertStableId("authored river source river", feature.source.riverId);
+    if (feature.source.riverId === feature.featureId) throw new Error("authored river cannot source from itself");
+  } else throw new TypeError("authored river source kind is invalid");
+  if (!feature.outlet || typeof feature.outlet !== "object") {
+    throw new TypeError("authored river outlet is required");
+  }
+  if (feature.outlet.kind === "ocean") {
+    if (feature.outlet.bodyId !== OCEAN_BODY_ID) {
+      throw new Error("authored ocean outlet must use the ocean body");
+    }
+  } else if (feature.outlet.kind === "lake") {
+    assertStableId("authored river outlet lake", feature.outlet.bodyId);
+    if (feature.outlet.bodyId === OCEAN_BODY_ID) {
+      throw new Error("authored lake outlet cannot use the reserved ocean body identity");
+    }
+  } else if (feature.outlet.kind === "river") {
+    assertStableId("authored river outlet river", feature.outlet.riverId);
+    if (feature.outlet.riverId === OCEAN_BODY_ID) {
+      throw new Error("authored river outlet cannot use the reserved ocean body identity");
+    }
+    if (feature.outlet.riverId === feature.featureId) throw new Error("authored river cannot outlet to itself");
+  } else throw new TypeError("authored river outlet kind is invalid");
+  for (let index = 0; index < pointCount; index += 1) {
+    if (feature.widthProfile[index] === 0) throw new RangeError("authored river width must be positive");
+    if (index > 0) {
+      const previous = pointAt(feature.controlPoints, index - 1);
+      const current = pointAt(feature.controlPoints, index);
+      if (previous.x === current.x && previous.y === current.y) {
+        throw new Error("authored river cannot contain a zero-length span");
+      }
+      if (feature.widthProfile[index] < feature.widthProfile[index - 1] || feature.levelProfile[index] > feature.levelProfile[index - 1]) {
+        throw new Error("authored river cannot narrow or rise downstream");
+      }
+    }
+  }
+  assertUint8("authored river discharge class", feature.dischargeClass);
+  assertUint8("authored river profile", feature.profileIndex);
+}
+function createAuthoredRiverFeature(input) {
+  if (!input || typeof input !== "object") throw new TypeError("authored river input is required");
+  if (!input.source || typeof input.source !== "object") {
+    throw new TypeError("authored river source is required");
+  }
+  if (!input.outlet || typeof input.outlet !== "object") {
+    throw new TypeError("authored river outlet is required");
+  }
+  const feature = Object.freeze({
+    kind: "river",
+    featureId: input.featureId,
+    source: cloneSource(input.source),
+    outlet: cloneOutlet(input.outlet),
+    controlPoints: input.controlPoints,
+    widthProfile: input.widthProfile,
+    levelProfile: input.levelProfile,
+    dischargeClass: input.dischargeClass,
+    profileIndex: input.profileIndex
+  });
+  assertAuthoredRiverFeature(feature);
+  return feature;
+}
+function assertAuthoredLakeFeature(feature) {
+  if (!feature || typeof feature !== "object" || feature.kind !== "lake") {
+    throw new TypeError("authored lake feature is invalid");
+  }
+  assertStableId("authored lake feature", feature.featureId);
+  if (feature.featureId === OCEAN_BODY_ID) {
+    throw new Error("authored lake cannot use the reserved ocean body identity");
+  }
+  assertQuantizedPoints(
+    "authored lake polygon",
+    feature.polygon,
+    3,
+    MAX_AUTHORED_LAKE_POLYGON_POINTS
+  );
+  assertSimpleCanonicalPolygon(feature.polygon);
+  assertUint16("authored lake level", feature.level);
+  assertUint8("authored lake profile", feature.profileIndex);
+}
+function createAuthoredLakeFeature(input) {
+  if (!input || typeof input !== "object") throw new TypeError("authored lake input is required");
+  const feature = Object.freeze({
+    kind: "lake",
+    featureId: input.featureId,
+    polygon: canonicalPolygon(input.polygon),
+    level: input.level,
+    profileIndex: input.profileIndex
+  });
+  assertAuthoredLakeFeature(feature);
+  return feature;
+}
+function assertHydrologyFeatureDelta(delta) {
+  if (!delta || typeof delta !== "object" || delta.formatVersion !== HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION) {
+    throw new TypeError("hydrology feature delta format version is unsupported");
+  }
+  if (typeof delta.worldIdentity !== "string" || delta.worldIdentity.length === 0 || delta.worldIdentity.length > MAX_HYDROLOGY_FEATURE_WORLD_IDENTITY_LENGTH) {
+    throw new TypeError("hydrology feature delta world identity is invalid");
+  }
+  if (!Number.isSafeInteger(delta.revision) || delta.revision <= 0) {
+    throw new RangeError("hydrology feature delta revision must be a positive safe integer");
+  }
+  assertStableId("hydrology delta feature", delta.featureId);
+  if (delta.featureKind !== "river" && delta.featureKind !== "lake") {
+    throw new TypeError("hydrology delta feature kind is invalid");
+  }
+  if (delta.operation === "delete") {
+    if ("feature" in delta) throw new Error("hydrology tombstone cannot carry a feature payload");
+    return;
+  }
+  if (delta.operation !== "upsert" || !delta.feature || delta.feature.kind !== delta.featureKind || delta.feature.featureId !== delta.featureId) {
+    throw new Error("hydrology upsert identity or kind does not match its complete feature");
+  }
+  if (delta.feature.kind === "river") assertAuthoredRiverFeature(delta.feature);
+  else assertAuthoredLakeFeature(delta.feature);
+}
+function createHydrologyFeatureDelta(input) {
+  if (!input || typeof input !== "object") throw new TypeError("hydrology feature delta input is required");
+  let delta;
+  if (input.operation === "upsert") {
+    if (!input.feature || typeof input.feature !== "object") {
+      throw new TypeError("hydrology feature delta upsert requires a complete feature");
+    }
+    const feature = input.feature.kind === "river" ? createAuthoredRiverFeature(input.feature) : input.feature.kind === "lake" ? createAuthoredLakeFeature(input.feature) : (() => {
+      throw new TypeError("hydrology feature delta kind is invalid");
+    })();
+    delta = Object.freeze({
+      formatVersion: HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+      worldIdentity: input.worldIdentity,
+      revision: input.revision,
+      featureId: input.featureId,
+      featureKind: input.featureKind,
+      operation: "upsert",
+      feature
+    });
+  } else if (input.operation === "delete") {
+    delta = Object.freeze({
+      formatVersion: HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+      worldIdentity: input.worldIdentity,
+      revision: input.revision,
+      featureId: input.featureId,
+      featureKind: input.featureKind,
+      operation: "delete"
+    });
+  } else throw new TypeError("hydrology feature delta operation is invalid");
+  assertHydrologyFeatureDelta(delta);
+  return delta;
+}
+function serializedLayout(worldIdentityBytes, featureIdBytes, sourceIdBytes, outletIdBytes, pointCount, riverPayload) {
+  const worldIdentity = HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES;
+  const featureId = worldIdentity + worldIdentityBytes;
+  const sourceId = featureId + featureIdBytes;
+  const outletId = sourceId + sourceIdBytes;
+  const points = outletId + outletIdBytes;
+  const widthProfile = points + pointCount * 2 * BigInt64Array.BYTES_PER_ELEMENT;
+  const levelProfile = widthProfile + (riverPayload ? pointCount : 0);
+  const totalBytes = levelProfile + (riverPayload ? pointCount * Uint16Array.BYTES_PER_ELEMENT : 0);
+  if (!Number.isSafeInteger(totalBytes)) {
+    throw new RangeError("serialized hydrology feature delta exceeds the safe byte range");
+  }
+  return { worldIdentity, featureId, sourceId, outletId, points, widthProfile, levelProfile, totalBytes };
+}
+function encoded(value) {
+  return new TextEncoder().encode(value);
+}
+function sourceIdentity(source) {
+  return source.kind === "spring" ? source.sourceId : source.riverId;
+}
+function outletIdentity(outlet) {
+  return outlet.kind === "river" ? outlet.riverId : outlet.bodyId;
+}
+function serializedSourceKind(source) {
+  return source.kind === "spring" ? SERIALIZED_SOURCE_SPRING : SERIALIZED_SOURCE_RIVER;
+}
+function serializedOutletKind(outlet) {
+  return outlet.kind === "ocean" ? SERIALIZED_OUTLET_OCEAN : outlet.kind === "lake" ? SERIALIZED_OUTLET_LAKE : SERIALIZED_OUTLET_RIVER;
+}
+function hydrologyFeatureDeltaSerializedBytes(delta) {
+  assertHydrologyFeatureDelta(delta);
+  const worldIdentityBytes = encoded(delta.worldIdentity).byteLength;
+  const featureIdBytes = encoded(delta.featureId).byteLength;
+  const river = delta.operation === "upsert" && delta.feature.kind === "river" ? delta.feature : void 0;
+  const sourceIdBytes = river ? encoded(sourceIdentity(river.source)).byteLength : 0;
+  const outletIdBytes = river ? encoded(outletIdentity(river.outlet)).byteLength : 0;
+  const pointCount = delta.operation === "delete" ? 0 : (delta.feature.kind === "river" ? delta.feature.controlPoints : delta.feature.polygon).length / 2;
+  return serializedLayout(
+    worldIdentityBytes,
+    featureIdBytes,
+    sourceIdBytes,
+    outletIdBytes,
+    pointCount,
+    river !== void 0
+  ).totalBytes;
+}
+function serializeHydrologyFeatureDelta(delta) {
+  assertHydrologyFeatureDelta(delta);
+  const worldIdentity = encoded(delta.worldIdentity);
+  const featureId = encoded(delta.featureId);
+  const river = delta.operation === "upsert" && delta.feature.kind === "river" ? delta.feature : void 0;
+  const sourceId = river ? encoded(sourceIdentity(river.source)) : new Uint8Array(0);
+  const outletId = river ? encoded(outletIdentity(river.outlet)) : new Uint8Array(0);
+  const points = delta.operation === "delete" ? void 0 : delta.feature.kind === "river" ? delta.feature.controlPoints : delta.feature.polygon;
+  const pointCount = points ? points.length / 2 : 0;
+  const layout = serializedLayout(
+    worldIdentity.byteLength,
+    featureId.byteLength,
+    sourceId.byteLength,
+    outletId.byteLength,
+    pointCount,
+    river !== void 0
+  );
+  const buffer = new ArrayBuffer(layout.totalBytes);
+  const view = new DataView(buffer);
+  view.setUint32(0, HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC, true);
+  view.setUint16(4, HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION, true);
+  view.setUint16(6, HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES, true);
+  view.setUint8(8, delta.operation === "delete" ? SERIALIZED_OPERATION_DELETE : SERIALIZED_OPERATION_UPSERT);
+  view.setUint8(9, delta.featureKind === "river" ? SERIALIZED_FEATURE_RIVER : SERIALIZED_FEATURE_LAKE);
+  view.setUint8(10, river ? serializedSourceKind(river.source) : SERIALIZED_SOURCE_NONE);
+  view.setUint8(11, river ? serializedOutletKind(river.outlet) : SERIALIZED_OUTLET_NONE);
+  view.setBigUint64(12, BigInt(delta.revision), true);
+  view.setUint32(20, worldIdentity.byteLength, true);
+  view.setUint32(24, featureId.byteLength, true);
+  view.setUint32(28, sourceId.byteLength, true);
+  view.setUint32(32, outletId.byteLength, true);
+  view.setUint16(36, pointCount, true);
+  view.setUint8(38, river?.dischargeClass ?? 0);
+  view.setUint8(39, delta.operation === "upsert" ? delta.feature.profileIndex : 0);
+  view.setUint16(40, delta.operation === "upsert" && delta.feature.kind === "lake" ? delta.feature.level : 0, true);
+  view.setUint16(42, 0, true);
+  view.setUint32(44, layout.totalBytes, true);
+  new Uint8Array(buffer, layout.worldIdentity, worldIdentity.byteLength).set(worldIdentity);
+  new Uint8Array(buffer, layout.featureId, featureId.byteLength).set(featureId);
+  new Uint8Array(buffer, layout.sourceId, sourceId.byteLength).set(sourceId);
+  new Uint8Array(buffer, layout.outletId, outletId.byteLength).set(outletId);
+  if (points) {
+    for (let index = 0; index < points.length; index += 1) {
+      view.setBigInt64(
+        layout.points + index * BigInt64Array.BYTES_PER_ELEMENT,
+        BigInt(points[index]),
+        true
+      );
+    }
+  }
+  if (river) {
+    new Uint8Array(buffer, layout.widthProfile, pointCount).set(river.widthProfile);
+    for (let index = 0; index < pointCount; index += 1) {
+      view.setUint16(
+        layout.levelProfile + index * Uint16Array.BYTES_PER_ELEMENT,
+        river.levelProfile[index],
+        true
+      );
+    }
+  }
+  return buffer;
+}
+function decoded(name, buffer, offset, length) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(buffer, offset, length)
+    );
+  } catch {
+    throw new TypeError(`serialized hydrology ${name} is not valid UTF-8`);
+  }
+}
+function safeBigIntNumber(name, value) {
+  const numeric = Number(value);
+  if (!Number.isSafeInteger(numeric) || BigInt(numeric) !== value) {
+    throw new RangeError(`serialized hydrology ${name} exceeds the safe integer range`);
+  }
+  return numeric;
+}
+function deserializeHydrologyFeatureDelta(buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES) {
+    throw new TypeError("serialized hydrology feature delta has an invalid byte length");
+  }
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC || view.getUint16(4, true) !== HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION || view.getUint16(6, true) !== HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES || view.getUint16(42, true) !== 0 || view.getUint32(44, true) !== buffer.byteLength) {
+    throw new TypeError("serialized hydrology feature delta header is invalid or unsupported");
+  }
+  const operation = view.getUint8(8);
+  const featureKind = view.getUint8(9);
+  const sourceKind = view.getUint8(10);
+  const outletKind = view.getUint8(11);
+  const worldIdentityBytes = view.getUint32(20, true);
+  const featureIdBytes = view.getUint32(24, true);
+  const sourceIdBytes = view.getUint32(28, true);
+  const outletIdBytes = view.getUint32(32, true);
+  const pointCount = view.getUint16(36, true);
+  const dischargeClass = view.getUint8(38);
+  const profileIndex = view.getUint8(39);
+  const lakeLevel = view.getUint16(40, true);
+  const isRiverUpsert = operation === SERIALIZED_OPERATION_UPSERT && featureKind === SERIALIZED_FEATURE_RIVER;
+  const layout = serializedLayout(
+    worldIdentityBytes,
+    featureIdBytes,
+    sourceIdBytes,
+    outletIdBytes,
+    pointCount,
+    isRiverUpsert
+  );
+  if (layout.totalBytes !== buffer.byteLength || worldIdentityBytes === 0 || featureIdBytes === 0) {
+    throw new TypeError("serialized hydrology feature delta byte layout is invalid");
+  }
+  const worldIdentity = decoded("world identity", buffer, layout.worldIdentity, worldIdentityBytes);
+  const featureId = decoded("feature identity", buffer, layout.featureId, featureIdBytes);
+  const revision = safeBigIntNumber("revision", view.getBigUint64(12, true));
+  const kind = featureKind === SERIALIZED_FEATURE_RIVER ? "river" : featureKind === SERIALIZED_FEATURE_LAKE ? "lake" : void 0;
+  if (!kind) throw new TypeError("serialized hydrology feature kind is invalid");
+  if (operation === SERIALIZED_OPERATION_DELETE) {
+    if (sourceKind !== SERIALIZED_SOURCE_NONE || outletKind !== SERIALIZED_OUTLET_NONE || sourceIdBytes !== 0 || outletIdBytes !== 0 || pointCount !== 0 || dischargeClass !== 0 || profileIndex !== 0 || lakeLevel !== 0) {
+      throw new Error("serialized hydrology tombstone contains non-canonical payload");
+    }
+    return createHydrologyFeatureDelta({
+      worldIdentity,
+      revision,
+      featureId,
+      featureKind: kind,
+      operation: "delete"
+    });
+  }
+  if (operation !== SERIALIZED_OPERATION_UPSERT) {
+    throw new TypeError("serialized hydrology feature operation is invalid");
+  }
+  const points = new Float64Array(pointCount * 2);
+  for (let index = 0; index < points.length; index += 1) {
+    points[index] = safeBigIntNumber(
+      "q64 coordinate",
+      view.getBigInt64(layout.points + index * BigInt64Array.BYTES_PER_ELEMENT, true)
+    );
+  }
+  if (kind === "lake") {
+    if (sourceKind !== SERIALIZED_SOURCE_NONE || outletKind !== SERIALIZED_OUTLET_NONE || sourceIdBytes !== 0 || outletIdBytes !== 0 || dischargeClass !== 0) {
+      throw new Error("serialized authored lake contains non-canonical river payload");
+    }
+    const feature = {
+      kind: "lake",
+      featureId,
+      polygon: points,
+      level: lakeLevel,
+      profileIndex
+    };
+    assertAuthoredLakeFeature(feature);
+    return createHydrologyFeatureDelta({
+      worldIdentity,
+      revision,
+      featureId,
+      featureKind: kind,
+      operation: "upsert",
+      feature
+    });
+  }
+  if (lakeLevel !== 0 || sourceIdBytes === 0 || outletIdBytes === 0) {
+    throw new Error("serialized authored river header is non-canonical");
+  }
+  const sourceId = decoded("river source identity", buffer, layout.sourceId, sourceIdBytes);
+  const outletId = decoded("river outlet identity", buffer, layout.outletId, outletIdBytes);
+  const source = sourceKind === SERIALIZED_SOURCE_SPRING ? { kind: "spring", sourceId } : sourceKind === SERIALIZED_SOURCE_RIVER ? { kind: "river", riverId: sourceId } : (() => {
+    throw new TypeError("serialized authored river source kind is invalid");
+  })();
+  const outlet = outletKind === SERIALIZED_OUTLET_OCEAN ? { kind: "ocean", bodyId: outletId } : outletKind === SERIALIZED_OUTLET_LAKE ? { kind: "lake", bodyId: outletId } : outletKind === SERIALIZED_OUTLET_RIVER ? { kind: "river", riverId: outletId } : (() => {
+    throw new TypeError("serialized authored river outlet kind is invalid");
+  })();
+  const widthProfile = new Uint8Array(buffer, layout.widthProfile, pointCount).slice();
+  const levelProfile = new Uint16Array(pointCount);
+  for (let index = 0; index < pointCount; index += 1) {
+    levelProfile[index] = view.getUint16(
+      layout.levelProfile + index * Uint16Array.BYTES_PER_ELEMENT,
+      true
+    );
+  }
+  return createHydrologyFeatureDelta({
+    worldIdentity,
+    revision,
+    featureId,
+    featureKind: kind,
+    operation: "upsert",
+    feature: {
+      kind: "river",
+      featureId,
+      source,
+      outlet,
+      controlPoints: points,
+      widthProfile,
+      levelProfile,
+      dischargeClass,
+      profileIndex
+    }
+  });
+}
+
+// src/world/BaseSemanticChunk.ts
+var BASE_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
+var BASE_SEMANTIC_CHUNK_HEADER_BYTES = 40;
+var BIOME_BASIS_COUNT = 4;
+var CLIMATE_CHANNEL_COUNT = 2;
+var SUBSTRATE_OFFSET = BASE_SEMANTIC_CHUNK_HEADER_BYTES;
+var MACRO_HEIGHT_OFFSET = SUBSTRATE_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT;
+var BIOME_WEIGHTS_OFFSET = MACRO_HEIGHT_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT * Uint16Array.BYTES_PER_ELEMENT;
+var CLIMATE_OFFSET = BIOME_WEIGHTS_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT * BIOME_BASIS_COUNT;
+var VEGETATION_DENSITY_OFFSET = CLIMATE_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNEL_COUNT;
+var VEGETATION_PROFILE_OFFSET = VEGETATION_DENSITY_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT;
+var BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = VEGETATION_PROFILE_OFFSET + BASE_SEMANTIC_CHUNK_TILE_COUNT;
+var FULL_LOCAL_BOUNDS = Object.freeze({
+  minX: 0,
+  minY: 0,
+  maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
+  maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
+});
+function semanticCatalogLimits(descriptor) {
+  return Object.freeze({
+    substrateCount: descriptor.substrateCatalog.entryCount,
+    vegetationProfileCount: descriptor.vegetationCatalog.entryCount
+  });
+}
+
+// src/world/SparseSemanticDelta.ts
+var SPARSE_SEMANTIC_DELTA_FORMAT_VERSION = 1;
+var SPARSE_SEMANTIC_DELTA_HEADER_BYTES = 40;
+var SPARSE_SEMANTIC_DELTA_BYTES_PER_ENTRY = 12;
+var MAX_SPARSE_SEMANTIC_DELTA_WORLD_IDENTITY_LENGTH = 16384;
+var SEMANTIC_DELTA_FIELD_HEIGHT = 1 << 0;
+var SEMANTIC_DELTA_FIELD_SUBSTRATE = 1 << 1;
+var SEMANTIC_DELTA_FIELD_BIOME = 1 << 2;
+var SEMANTIC_DELTA_FIELD_VEGETATION = 1 << 3;
+var SEMANTIC_DELTA_ALL_FIELDS = SEMANTIC_DELTA_FIELD_HEIGHT | SEMANTIC_DELTA_FIELD_SUBSTRATE | SEMANTIC_DELTA_FIELD_BIOME | SEMANTIC_DELTA_FIELD_VEGETATION;
+var BIOME_BASIS_COUNT2 = 4;
+var SERIALIZED_MAGIC = 843338579;
+function assertCatalogLimits(limits) {
+  if (!limits || !Number.isInteger(limits.substrateCount) || limits.substrateCount <= 0 || limits.substrateCount > 256 || !Number.isInteger(limits.vegetationProfileCount) || limits.vegetationProfileCount <= 0 || limits.vegetationProfileCount > 256) {
+    throw new RangeError("sparse semantic delta catalog limits must be integers between 1 and 256");
+  }
+}
+function offsets(identityBytes, entryCount) {
+  const identity = SPARSE_SEMANTIC_DELTA_HEADER_BYTES;
+  const tileIndex = identity + identityBytes;
+  const fieldMask = tileIndex + entryCount * Uint16Array.BYTES_PER_ELEMENT;
+  const macroHeight = fieldMask + entryCount;
+  const substrateClass = macroHeight + entryCount * Uint16Array.BYTES_PER_ELEMENT;
+  const biomeWeights = substrateClass + entryCount;
+  const vegetationDensity = biomeWeights + entryCount * BIOME_BASIS_COUNT2;
+  const vegetationProfile = vegetationDensity + entryCount;
+  const totalBytes = vegetationProfile + entryCount;
+  if (!Number.isSafeInteger(totalBytes)) {
+    throw new RangeError("serialized sparse semantic delta exceeds safe byte addressing");
+  }
+  return {
+    identity,
+    tileIndex,
+    fieldMask,
+    macroHeight,
+    substrateClass,
+    biomeWeights,
+    vegetationDensity,
+    vegetationProfile,
+    totalBytes
+  };
+}
+function safeBigIntNumber2(name, value) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || BigInt(number) !== value) {
+    throw new RangeError(`${name} exceeds the safe integer range`);
+  }
+  return number;
+}
+function assertSparseSemanticDelta(delta, limits) {
+  if (!delta || typeof delta !== "object" || delta.formatVersion !== SPARSE_SEMANTIC_DELTA_FORMAT_VERSION) {
+    throw new TypeError("sparse semantic delta format version is unsupported");
+  }
+  assertCatalogLimits(limits);
+  if (typeof delta.worldIdentity !== "string" || delta.worldIdentity.length === 0 || delta.worldIdentity.length > MAX_SPARSE_SEMANTIC_DELTA_WORLD_IDENTITY_LENGTH) {
+    throw new TypeError("sparse semantic delta world identity is invalid");
+  }
+  if (!delta.key || !Number.isSafeInteger(delta.key.chunkX) || !Number.isSafeInteger(delta.key.chunkY)) {
+    throw new RangeError("sparse semantic delta key must use safe integers");
+  }
+  chunkOrigin(delta.key.chunkX, delta.key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  if (!Number.isSafeInteger(delta.revision) || delta.revision <= 0) {
+    throw new RangeError("sparse semantic delta revision must be a positive safe integer");
+  }
+  const entryCount = delta.tileIndex?.length;
+  if (!(delta.tileIndex instanceof Uint16Array) || entryCount <= 0 || entryCount > BASE_SEMANTIC_CHUNK_TILE_COUNT || !(delta.fieldMask instanceof Uint8Array) || delta.fieldMask.length !== entryCount || !(delta.macroHeight instanceof Uint16Array) || delta.macroHeight.length !== entryCount || !(delta.substrateClass instanceof Uint8Array) || delta.substrateClass.length !== entryCount || !(delta.biomeWeights instanceof Uint8Array) || delta.biomeWeights.length !== entryCount * BIOME_BASIS_COUNT2 || !(delta.vegetationDensity instanceof Uint8Array) || delta.vegetationDensity.length !== entryCount || !(delta.vegetationProfile instanceof Uint8Array) || delta.vegetationProfile.length !== entryCount) {
+    throw new TypeError("sparse semantic delta arrays do not match the frozen layout");
+  }
+  let previousTileIndex = -1;
+  for (let entryIndex = 0; entryIndex < entryCount; entryIndex += 1) {
+    const tileIndex = delta.tileIndex[entryIndex];
+    const mask = delta.fieldMask[entryIndex];
+    const biomeOffset = entryIndex * BIOME_BASIS_COUNT2;
+    if (tileIndex <= previousTileIndex || tileIndex >= BASE_SEMANTIC_CHUNK_TILE_COUNT) {
+      throw new Error("sparse semantic delta tile indices must be unique ascending X-major indices");
+    }
+    previousTileIndex = tileIndex;
+    if (mask === 0 || (mask & ~SEMANTIC_DELTA_ALL_FIELDS) !== 0) {
+      throw new RangeError("sparse semantic delta field mask is empty or unknown");
+    }
+    if ((mask & SEMANTIC_DELTA_FIELD_HEIGHT) === 0 && delta.macroHeight[entryIndex] !== 0) {
+      throw new Error("sparse semantic delta unused height slot must be zero");
+    }
+    if ((mask & SEMANTIC_DELTA_FIELD_SUBSTRATE) !== 0) {
+      if (delta.substrateClass[entryIndex] >= limits.substrateCount) {
+        throw new RangeError("sparse semantic delta substrate exceeds its catalog");
+      }
+    } else if (delta.substrateClass[entryIndex] !== 0) {
+      throw new Error("sparse semantic delta unused substrate slot must be zero");
+    }
+    const biomeSum = delta.biomeWeights[biomeOffset] + delta.biomeWeights[biomeOffset + 1] + delta.biomeWeights[biomeOffset + 2] + delta.biomeWeights[biomeOffset + 3];
+    if ((mask & SEMANTIC_DELTA_FIELD_BIOME) !== 0) {
+      if (biomeSum !== 255) {
+        throw new RangeError("sparse semantic delta biome weights must sum to 255");
+      }
+    } else if (biomeSum !== 0) {
+      throw new Error("sparse semantic delta unused biome slots must be zero");
+    }
+    if ((mask & SEMANTIC_DELTA_FIELD_VEGETATION) !== 0) {
+      if (delta.vegetationProfile[entryIndex] >= limits.vegetationProfileCount) {
+        throw new RangeError("sparse semantic delta vegetation profile exceeds its catalog");
+      }
+    } else if (delta.vegetationDensity[entryIndex] !== 0 || delta.vegetationProfile[entryIndex] !== 0) {
+      throw new Error("sparse semantic delta unused vegetation slots must be zero");
+    }
+  }
+}
+function createSparseSemanticDelta(input, limits) {
+  if (!input || typeof input !== "object") throw new TypeError("sparse semantic delta input is required");
+  const delta = Object.freeze({
+    formatVersion: SPARSE_SEMANTIC_DELTA_FORMAT_VERSION,
+    worldIdentity: input.worldIdentity,
+    key: Object.freeze({ chunkX: input.key.chunkX, chunkY: input.key.chunkY }),
+    revision: input.revision,
+    tileIndex: input.tileIndex,
+    fieldMask: input.fieldMask,
+    macroHeight: input.macroHeight,
+    substrateClass: input.substrateClass,
+    biomeWeights: input.biomeWeights,
+    vegetationDensity: input.vegetationDensity,
+    vegetationProfile: input.vegetationProfile
+  });
+  assertSparseSemanticDelta(delta, limits);
+  return delta;
+}
+function sparseSemanticDeltaSerializedBytes(delta) {
+  const identityBytes = new TextEncoder().encode(delta.worldIdentity).byteLength;
+  return offsets(identityBytes, delta.tileIndex.length).totalBytes;
+}
+function serializeSparseSemanticDelta(delta, limits) {
+  assertSparseSemanticDelta(delta, limits);
+  const identity = new TextEncoder().encode(delta.worldIdentity);
+  const layout = offsets(identity.byteLength, delta.tileIndex.length);
+  const buffer = new ArrayBuffer(layout.totalBytes);
+  const view = new DataView(buffer);
+  view.setUint32(0, SERIALIZED_MAGIC, true);
+  view.setUint16(4, delta.formatVersion, true);
+  view.setUint16(6, SPARSE_SEMANTIC_DELTA_HEADER_BYTES, true);
+  view.setBigInt64(8, BigInt(delta.key.chunkX), true);
+  view.setBigInt64(16, BigInt(delta.key.chunkY), true);
+  view.setBigUint64(24, BigInt(delta.revision), true);
+  view.setUint32(32, identity.byteLength, true);
+  view.setUint16(36, delta.tileIndex.length, true);
+  view.setUint16(38, SPARSE_SEMANTIC_DELTA_BYTES_PER_ENTRY, true);
+  new Uint8Array(buffer, layout.identity, identity.byteLength).set(identity);
+  for (let index = 0; index < delta.tileIndex.length; index += 1) {
+    view.setUint16(layout.tileIndex + index * Uint16Array.BYTES_PER_ELEMENT, delta.tileIndex[index], true);
+    view.setUint16(layout.macroHeight + index * Uint16Array.BYTES_PER_ELEMENT, delta.macroHeight[index], true);
+  }
+  new Uint8Array(buffer, layout.fieldMask, delta.fieldMask.length).set(delta.fieldMask);
+  new Uint8Array(buffer, layout.substrateClass, delta.substrateClass.length).set(delta.substrateClass);
+  new Uint8Array(buffer, layout.biomeWeights, delta.biomeWeights.length).set(delta.biomeWeights);
+  new Uint8Array(buffer, layout.vegetationDensity, delta.vegetationDensity.length).set(delta.vegetationDensity);
+  new Uint8Array(buffer, layout.vegetationProfile, delta.vegetationProfile.length).set(delta.vegetationProfile);
+  return buffer;
+}
+function deserializeSparseSemanticDelta(buffer, limits) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < SPARSE_SEMANTIC_DELTA_HEADER_BYTES) {
+    throw new TypeError("serialized sparse semantic delta has an invalid byte length");
+  }
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== SERIALIZED_MAGIC || view.getUint16(4, true) !== SPARSE_SEMANTIC_DELTA_FORMAT_VERSION || view.getUint16(6, true) !== SPARSE_SEMANTIC_DELTA_HEADER_BYTES || view.getUint16(38, true) !== SPARSE_SEMANTIC_DELTA_BYTES_PER_ENTRY) {
+    throw new TypeError("serialized sparse semantic delta header is invalid or unsupported");
+  }
+  const identityBytes = view.getUint32(32, true);
+  const entryCount = view.getUint16(36, true);
+  const layout = offsets(identityBytes, entryCount);
+  if (layout.totalBytes !== buffer.byteLength) {
+    throw new TypeError("serialized sparse semantic delta byte length does not match its header");
+  }
+  let worldIdentity;
+  try {
+    worldIdentity = new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(buffer, layout.identity, identityBytes)
+    );
+  } catch {
+    throw new TypeError("serialized sparse semantic delta world identity is not valid UTF-8");
+  }
+  const tileIndex = new Uint16Array(entryCount);
+  const macroHeight = new Uint16Array(entryCount);
+  for (let index = 0; index < entryCount; index += 1) {
+    tileIndex[index] = view.getUint16(layout.tileIndex + index * Uint16Array.BYTES_PER_ELEMENT, true);
+    macroHeight[index] = view.getUint16(
+      layout.macroHeight + index * Uint16Array.BYTES_PER_ELEMENT,
+      true
+    );
+  }
+  return createSparseSemanticDelta({
+    worldIdentity,
+    key: {
+      chunkX: safeBigIntNumber2("sparse semantic delta chunk x", view.getBigInt64(8, true)),
+      chunkY: safeBigIntNumber2("sparse semantic delta chunk y", view.getBigInt64(16, true))
+    },
+    revision: safeBigIntNumber2("sparse semantic delta revision", view.getBigUint64(24, true)),
+    tileIndex,
+    fieldMask: new Uint8Array(buffer, layout.fieldMask, entryCount).slice(),
+    macroHeight,
+    substrateClass: new Uint8Array(buffer, layout.substrateClass, entryCount).slice(),
+    biomeWeights: new Uint8Array(buffer, layout.biomeWeights, entryCount * BIOME_BASIS_COUNT2).slice(),
+    vegetationDensity: new Uint8Array(buffer, layout.vegetationDensity, entryCount).slice(),
+    vegetationProfile: new Uint8Array(buffer, layout.vegetationProfile, entryCount).slice()
+  }, limits);
+}
+
+// src/world/SurfaceDeltaStore.ts
+var SURFACE_DELTA_TRANSACTION_FORMAT_VERSION = 1;
+var MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS = 4096;
+var MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL = 1048576;
+var SurfaceDeltaConflictError = class extends Error {
+  constructor(targetKind, targetId, expectedRevision, actualRevision) {
+    super(`${targetKind} delta revision conflict for ${targetId}: expected ${expectedRevision}, received ${actualRevision}`);
+    this.targetKind = targetKind;
+    this.targetId = targetId;
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "SurfaceDeltaConflictError";
+  }
+};
+function semanticKeyIdentity(key) {
+  return `${key.chunkX}:${key.chunkY}`;
+}
+function compareSemanticKeys(first, second) {
+  return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
+}
+function assertRevision(name, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function assertFeatureId(name, featureId) {
+  if (typeof featureId !== "string" || featureId.length === 0 || featureId.length > 256 || featureId.trim() !== featureId || /[\u0000-\u001f\u007f]/u.test(featureId)) {
+    throw new TypeError(`${name} must be a canonical stable identity`);
+  }
+}
+function assertCanonicalSemanticKey(descriptor, key) {
+  if (!key || typeof key !== "object") throw new TypeError("semantic mutation key is required");
+  const origin = chunkOrigin(key.chunkX, key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  if (descriptor.sourceKind === "procedural-infinite") return;
+  const chunkCountX = Math.ceil(descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE);
+  const chunkCountY = Math.ceil(descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE);
+  if (key.chunkX < 0 || key.chunkX >= chunkCountX || key.chunkY < 0 || key.chunkY >= chunkCountY || origin.x < 0 || origin.y < 0) {
+    throw new RangeError("semantic mutation must use a canonical in-domain chunk key");
+  }
+}
+function assertSemanticDeltaBounds(descriptor, delta) {
+  if (descriptor.sourceKind !== "static") return;
+  const origin = chunkOrigin(delta.key.chunkX, delta.key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+  const validWidth = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, descriptor.width - origin.x);
+  const validHeight = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, descriptor.height - origin.y);
+  for (const tileIndex of delta.tileIndex) {
+    const localX = Math.floor(tileIndex / WORLD_SEMANTIC_CHUNK_SIZE);
+    const localY = tileIndex - localX * WORLD_SEMANTIC_CHUNK_SIZE;
+    if (localX >= validWidth || localY >= validHeight) {
+      throw new RangeError("semantic mutation tile lies outside the finite world");
+    }
+  }
+}
+function authoredGraphNode(feature) {
+  if (feature.kind === "lake") {
+    return Object.freeze({ kind: "lake", featureId: feature.featureId, level: feature.level });
+  }
+  return Object.freeze({
+    kind: "river",
+    featureId: feature.featureId,
+    source: feature.source,
+    outlet: feature.outlet,
+    sourceLevel: feature.levelProfile[0],
+    outletLevel: feature.levelProfile[feature.levelProfile.length - 1]
+  });
+}
+function ownedSemanticPayload(payload) {
+  return {
+    tileIndex: payload.tileIndex.slice(),
+    fieldMask: payload.fieldMask.slice(),
+    macroHeight: payload.macroHeight.slice(),
+    substrateClass: payload.substrateClass.slice(),
+    biomeWeights: payload.biomeWeights.slice(),
+    vegetationDensity: payload.vegetationDensity.slice(),
+    vegetationProfile: payload.vegetationProfile.slice()
+  };
+}
+function ownedHydrologyFeature(feature) {
+  return feature.kind === "river" ? {
+    ...feature,
+    source: feature.source.kind === "spring" ? Object.freeze({ kind: "spring", sourceId: feature.source.sourceId }) : Object.freeze({ kind: "river", riverId: feature.source.riverId }),
+    outlet: feature.outlet.kind === "river" ? Object.freeze({ kind: "river", riverId: feature.outlet.riverId }) : feature.outlet.kind === "lake" ? Object.freeze({ kind: "lake", bodyId: feature.outlet.bodyId }) : Object.freeze({ kind: "ocean", bodyId: feature.outlet.bodyId }),
+    controlPoints: feature.controlPoints.slice(),
+    widthProfile: feature.widthProfile.slice(),
+    levelProfile: feature.levelProfile.slice()
+  } : {
+    ...feature,
+    polygon: feature.polygon.slice()
+  };
+}
+function stringBytes(value) {
+  const bytes = value.length * 2;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError("surface delta string size exceeds safe integers");
+  return bytes;
+}
+function surfaceDeltaTransactionResidentBytes(input) {
+  if (!input || typeof input !== "object" || !Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
+    throw new TypeError("surface delta transaction is required for byte accounting");
+  }
+  let bytes = 256 + stringBytes(input.worldIdentity);
+  for (const mutation of input.semanticMutations) {
+    bytes += 96;
+    if (mutation.operation === "upsert") {
+      const payload = mutation.payload;
+      bytes += payload.tileIndex.byteLength + payload.fieldMask.byteLength + payload.macroHeight.byteLength + payload.substrateClass.byteLength + payload.biomeWeights.byteLength + payload.vegetationDensity.byteLength + payload.vegetationProfile.byteLength;
+    }
+  }
+  for (const mutation of input.hydrologyMutations) {
+    bytes += 128 + stringBytes(mutation.featureId);
+    if (mutation.operation === "upsert") {
+      const feature = mutation.feature;
+      if (feature.kind === "river") {
+        bytes += stringBytes(feature.source.kind === "spring" ? feature.source.sourceId : feature.source.riverId);
+        bytes += stringBytes(feature.outlet.kind === "river" ? feature.outlet.riverId : feature.outlet.bodyId);
+        bytes += feature.controlPoints.byteLength + feature.widthProfile.byteLength + feature.levelProfile.byteLength;
+      } else bytes += feature.polygon.byteLength;
+    }
+  }
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("surface delta transaction byte accounting exceeds safe integers");
+  }
+  return bytes;
+}
+function assertGraphNode(node, expectedId) {
+  if (!node || typeof node !== "object" || node.featureId !== expectedId) {
+    throw new TypeError("base hydrology feature index returned a mismatched feature identity");
+  }
+  assertFeatureId("base hydrology feature", node.featureId);
+  if (node.kind === "lake") {
+    if (!Number.isInteger(node.level) || node.level < 0 || node.level > 65535) {
+      throw new RangeError("base hydrology lake level must be a uint16 value");
+    }
+    return;
+  }
+  if (node.kind !== "river" || !Number.isInteger(node.sourceLevel) || node.sourceLevel < 0 || node.sourceLevel > 65535 || !Number.isInteger(node.outletLevel) || node.outletLevel < 0 || node.outletLevel > 65535 || node.outletLevel > node.sourceLevel) {
+    throw new RangeError("base hydrology river levels or kind are invalid");
+  }
+  if (!node.source || typeof node.source !== "object" || !node.outlet || typeof node.outlet !== "object") {
+    throw new TypeError("base hydrology river source and outlet are required");
+  }
+  if (node.source.kind === "spring") assertFeatureId("base hydrology spring", node.source.sourceId);
+  else if (node.source.kind === "river") assertFeatureId("base hydrology source river", node.source.riverId);
+  else throw new TypeError("base hydrology river source kind is invalid");
+  if (node.outlet.kind === "ocean") {
+    if (node.outlet.bodyId !== "ocean") throw new Error("base hydrology ocean outlet must use ocean");
+  } else if (node.outlet.kind === "lake") assertFeatureId("base hydrology outlet lake", node.outlet.bodyId);
+  else if (node.outlet.kind === "river") assertFeatureId("base hydrology outlet river", node.outlet.riverId);
+  else throw new TypeError("base hydrology river outlet kind is invalid");
+}
+function assertCanonicalReferences(featureId, references) {
+  if (!Array.isArray(references)) {
+    throw new TypeError("base hydrology reverse references must be an array");
+  }
+  let previous;
+  for (const reference of references) {
+    assertFeatureId("base hydrology reverse reference", reference);
+    if (previous !== void 0 && previous >= reference) {
+      throw new Error("base hydrology reverse references must use unique ascending identities");
+    }
+    previous = reference;
+  }
+  if (references.includes(featureId)) {
+    throw new Error("base hydrology feature cannot reverse-reference itself");
+  }
+}
+var SurfaceDeltaSnapshot = class {
+  constructor(worldIdentity, effectiveRevision, state) {
+    this.worldIdentity = worldIdentity;
+    this.effectiveRevision = effectiveRevision;
+    this.state = state;
+    this.semanticStates = Object.freeze([...state.semanticByKey.values()].sort((first, second) => compareSemanticKeys(first.key, second.key)));
+    this.hydrologyDeltas = Object.freeze([...state.hydrologyById.values()].sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0));
+    Object.freeze(this);
+  }
+  getSemanticDelta(chunkX, chunkY) {
+    chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    return this.state.semanticByKey.get(semanticKeyIdentity({ chunkX, chunkY }))?.delta;
+  }
+  getSemanticRevision(chunkX, chunkY) {
+    chunkOrigin(chunkX, chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+    return this.state.semanticByKey.get(semanticKeyIdentity({ chunkX, chunkY }))?.revision ?? 0;
+  }
+  getHydrologyDelta(featureId) {
+    assertFeatureId("hydrology snapshot feature", featureId);
+    return this.state.hydrologyById.get(featureId);
+  }
+  getHydrologyRevision(featureId) {
+    return this.getHydrologyDelta(featureId)?.revision ?? 0;
+  }
+};
+var MemorySurfaceDeltaStore = class {
+  constructor(descriptor, baseHydrology) {
+    assertWorldDescriptorV2(descriptor);
+    if (!baseHydrology || typeof baseHydrology.resolveFeature !== "function" || typeof baseHydrology.referencesTo !== "function") {
+      throw new TypeError("surface delta store requires a valid base hydrology feature index");
+    }
+    this.descriptor = descriptor;
+    this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+    this.baseHydrology = baseHydrology;
+    this.current = new SurfaceDeltaSnapshot(this.worldIdentity, 0, {
+      semanticByKey: /* @__PURE__ */ new Map(),
+      hydrologyById: /* @__PURE__ */ new Map()
+    });
+  }
+  snapshot() {
+    return this.current;
+  }
+  commit(input) {
+    try {
+      const prepared = this.prepareCommit(input);
+      this.publishPreparedCommit(prepared);
+      return Promise.resolve(prepared.commit);
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  }
+  flush() {
+    return Promise.resolve();
+  }
+  prepareCommit(input, ownsInput = false) {
+    this.assertTransaction(input);
+    if (this.current.effectiveRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("surface delta revision space is exhausted");
+    }
+    const revision = this.current.effectiveRevision + 1;
+    const semanticByKey = /* @__PURE__ */ new Map();
+    for (const state of this.current.semanticStates) semanticByKey.set(semanticKeyIdentity(state.key), state);
+    const hydrologyById = /* @__PURE__ */ new Map();
+    for (const delta of this.current.hydrologyDeltas) hydrologyById.set(delta.featureId, delta);
+    const semanticMutations = [...input.semanticMutations].sort((first, second) => compareSemanticKeys(first.key, second.key));
+    const hydrologyMutations = [...input.hydrologyMutations].sort((first, second) => first.featureId < second.featureId ? -1 : first.featureId > second.featureId ? 1 : 0);
+    const semanticChanges = semanticMutations.map((mutation) => this.applySemanticMutation(
+      semanticByKey,
+      mutation,
+      revision,
+      ownsInput
+    ));
+    const hydrologyChanges = hydrologyMutations.map((mutation) => this.applyHydrologyMutation(
+      hydrologyById,
+      mutation,
+      revision,
+      ownsInput
+    ));
+    this.assertEffectiveHydrologyGraph(
+      hydrologyById,
+      hydrologyMutations.map((mutation) => mutation.featureId)
+    );
+    const next = new SurfaceDeltaSnapshot(this.worldIdentity, revision, {
+      semanticByKey,
+      hydrologyById
+    });
+    const commit = Object.freeze({
+      formatVersion: SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
+      worldIdentity: this.worldIdentity,
+      revision,
+      transactionId: BigInt(revision),
+      semanticChanges: Object.freeze(semanticChanges),
+      hydrologyChanges: Object.freeze(hydrologyChanges)
+    });
+    return Object.freeze({ commit, snapshot: next });
+  }
+  publishPreparedCommit(prepared) {
+    if (prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1 || prepared.commit.revision !== prepared.snapshot.effectiveRevision || prepared.commit.worldIdentity !== this.worldIdentity || prepared.snapshot.worldIdentity !== this.worldIdentity) {
+      throw new Error("prepared surface delta commit no longer follows the current snapshot");
+    }
+    this.current = prepared.snapshot;
+  }
+  installSnapshot(effectiveRevision, semanticStates, hydrologyDeltas) {
+    assertRevision("surface delta snapshot revision", effectiveRevision);
+    const semanticByKey = /* @__PURE__ */ new Map();
+    const hydrologyById = /* @__PURE__ */ new Map();
+    let maximumRevision = 0;
+    for (const state of semanticStates) {
+      if (!state || typeof state !== "object") {
+        throw new TypeError("persisted surface semantic state is invalid");
+      }
+      assertCanonicalSemanticKey(this.descriptor, state.key);
+      if (!Number.isSafeInteger(state.revision) || state.revision <= 0 || state.revision > effectiveRevision) {
+        throw new RangeError("persisted surface semantic revision is invalid");
+      }
+      const identity = semanticKeyIdentity(state.key);
+      if (semanticByKey.has(identity)) {
+        throw new Error("persisted surface snapshot contains duplicate semantic keys");
+      }
+      if (state.delta) {
+        const delta = createSparseSemanticDelta(state.delta, semanticCatalogLimits(this.descriptor));
+        if (delta.worldIdentity !== this.worldIdentity || delta.key.chunkX !== state.key.chunkX || delta.key.chunkY !== state.key.chunkY || delta.revision !== state.revision) {
+          throw new Error("persisted sparse semantic delta does not match its state record");
+        }
+        assertSemanticDeltaBounds(this.descriptor, delta);
+        semanticByKey.set(identity, Object.freeze({
+          key: delta.key,
+          revision: state.revision,
+          delta
+        }));
+      } else {
+        semanticByKey.set(identity, Object.freeze({
+          key: Object.freeze({ chunkX: state.key.chunkX, chunkY: state.key.chunkY }),
+          revision: state.revision
+        }));
+      }
+      maximumRevision = Math.max(maximumRevision, state.revision);
+    }
+    for (const input of hydrologyDeltas) {
+      const delta = createHydrologyFeatureDelta(input);
+      if (delta.worldIdentity !== this.worldIdentity || delta.revision > effectiveRevision) {
+        throw new Error("persisted hydrology delta does not match its snapshot");
+      }
+      if (hydrologyById.has(delta.featureId)) {
+        throw new Error("persisted surface snapshot contains duplicate hydrology features");
+      }
+      hydrologyById.set(delta.featureId, delta);
+      maximumRevision = Math.max(maximumRevision, delta.revision);
+    }
+    if (maximumRevision !== effectiveRevision) {
+      throw new Error("persisted surface snapshot revision has no matching committed mutation");
+    }
+    this.assertEffectiveHydrologyGraph(hydrologyById, [...hydrologyById.keys()]);
+    this.current = new SurfaceDeltaSnapshot(this.worldIdentity, effectiveRevision, {
+      semanticByKey,
+      hydrologyById
+    });
+  }
+  assertTransaction(input) {
+    if (!input || typeof input !== "object" || input.worldIdentity !== this.worldIdentity) {
+      throw new TypeError("surface delta transaction world identity is invalid");
+    }
+    if (!Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
+      throw new TypeError("surface delta transaction mutation lists are required");
+    }
+    const mutationCount = input.semanticMutations.length + input.hydrologyMutations.length;
+    if (mutationCount <= 0 || mutationCount > MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS) {
+      throw new RangeError("surface delta transaction mutation count is outside its fixed budget");
+    }
+    const semanticKeys = /* @__PURE__ */ new Set();
+    for (const mutation of input.semanticMutations) {
+      if (!mutation || typeof mutation !== "object" || mutation.operation !== "upsert" && mutation.operation !== "delete") {
+        throw new TypeError("surface semantic mutation operation is invalid");
+      }
+      assertCanonicalSemanticKey(this.descriptor, mutation.key);
+      assertRevision("surface semantic expected revision", mutation.expectedRevision);
+      const identity = semanticKeyIdentity(mutation.key);
+      if (semanticKeys.has(identity)) throw new Error("surface delta transaction contains duplicate semantic chunks");
+      semanticKeys.add(identity);
+    }
+    const featureIds = /* @__PURE__ */ new Set();
+    for (const mutation of input.hydrologyMutations) {
+      if (!mutation || typeof mutation !== "object" || mutation.operation !== "upsert" && mutation.operation !== "delete") {
+        throw new TypeError("surface hydrology mutation operation is invalid");
+      }
+      assertFeatureId("surface hydrology mutation", mutation.featureId);
+      if (mutation.featureKind !== "river" && mutation.featureKind !== "lake") {
+        throw new TypeError("surface hydrology mutation kind is invalid");
+      }
+      assertRevision("surface hydrology expected revision", mutation.expectedRevision);
+      if (featureIds.has(mutation.featureId)) {
+        throw new Error("surface delta transaction contains duplicate hydrology features");
+      }
+      featureIds.add(mutation.featureId);
+    }
+  }
+  snapshotTransactionInput(input) {
+    this.assertTransaction(input);
+    const semanticMutations = input.semanticMutations.map((mutation) => Object.freeze(
+      mutation.operation === "upsert" ? {
+        operation: mutation.operation,
+        key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+        expectedRevision: mutation.expectedRevision,
+        payload: Object.freeze(ownedSemanticPayload(mutation.payload))
+      } : {
+        operation: mutation.operation,
+        key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+        expectedRevision: mutation.expectedRevision
+      }
+    ));
+    const hydrologyMutations = input.hydrologyMutations.map((mutation) => Object.freeze(
+      mutation.operation === "upsert" ? {
+        operation: mutation.operation,
+        featureId: mutation.featureId,
+        featureKind: mutation.featureKind,
+        expectedRevision: mutation.expectedRevision,
+        feature: Object.freeze(ownedHydrologyFeature(mutation.feature))
+      } : {
+        operation: mutation.operation,
+        featureId: mutation.featureId,
+        featureKind: mutation.featureKind,
+        expectedRevision: mutation.expectedRevision
+      }
+    ));
+    const snapshot = Object.freeze({
+      worldIdentity: input.worldIdentity,
+      semanticMutations: Object.freeze(semanticMutations),
+      hydrologyMutations: Object.freeze(hydrologyMutations)
+    });
+    surfaceDeltaTransactionResidentBytes(snapshot);
+    return snapshot;
+  }
+  applySemanticMutation(semanticByKey, mutation, revision, ownsInput) {
+    const identity = semanticKeyIdentity(mutation.key);
+    const current = semanticByKey.get(identity);
+    const actualRevision = current?.revision ?? 0;
+    if (actualRevision !== mutation.expectedRevision) {
+      throw new SurfaceDeltaConflictError("semantic", identity, mutation.expectedRevision, actualRevision);
+    }
+    const key = Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY });
+    if (mutation.operation === "delete") {
+      if (!current?.delta) throw new Error("cannot delete an absent semantic delta");
+      const state = Object.freeze({ key, revision });
+      semanticByKey.set(identity, state);
+      return Object.freeze({
+        operation: "delete",
+        key,
+        expectedRevision: mutation.expectedRevision,
+        revision
+      });
+    }
+    if (!mutation.payload || typeof mutation.payload !== "object") {
+      throw new TypeError("semantic upsert requires a complete sparse delta payload");
+    }
+    const delta = createSparseSemanticDelta({
+      ...ownsInput ? mutation.payload : ownedSemanticPayload(mutation.payload),
+      worldIdentity: this.worldIdentity,
+      key,
+      revision
+    }, semanticCatalogLimits(this.descriptor));
+    assertSemanticDeltaBounds(this.descriptor, delta);
+    semanticByKey.set(identity, Object.freeze({ key, revision, delta }));
+    return Object.freeze({ operation: "upsert", expectedRevision: mutation.expectedRevision, delta });
+  }
+  applyHydrologyMutation(hydrologyById, mutation, revision, ownsInput) {
+    const currentDelta = hydrologyById.get(mutation.featureId);
+    const actualRevision = currentDelta?.revision ?? 0;
+    if (actualRevision !== mutation.expectedRevision) {
+      throw new SurfaceDeltaConflictError(
+        "hydrology",
+        mutation.featureId,
+        mutation.expectedRevision,
+        actualRevision
+      );
+    }
+    const currentFeature = this.resolveEffectiveHydrologyFeature(mutation.featureId, hydrologyById);
+    if (mutation.operation === "delete") {
+      if (!currentFeature) throw new Error("cannot delete an absent hydrology feature");
+      if (currentFeature.kind !== mutation.featureKind) {
+        throw new Error("hydrology delete kind does not match the effective feature");
+      }
+    } else {
+      if (!mutation.feature || mutation.feature.featureId !== mutation.featureId || mutation.feature.kind !== mutation.featureKind) {
+        throw new Error("hydrology upsert identity or kind does not match its complete feature");
+      }
+      if (currentFeature && currentFeature.kind !== mutation.featureKind) {
+        throw new Error("hydrology feature kind cannot change under a stable identity");
+      }
+    }
+    const delta = createHydrologyFeatureDelta(mutation.operation === "upsert" ? {
+      worldIdentity: this.worldIdentity,
+      revision,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "upsert",
+      feature: ownsInput ? mutation.feature : ownedHydrologyFeature(mutation.feature)
+    } : {
+      worldIdentity: this.worldIdentity,
+      revision,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "delete"
+    });
+    hydrologyById.set(mutation.featureId, delta);
+    return Object.freeze({ expectedRevision: mutation.expectedRevision, delta });
+  }
+  resolveEffectiveHydrologyFeature(featureId, hydrologyById) {
+    const delta = hydrologyById.get(featureId);
+    if (delta) return delta.operation === "upsert" ? authoredGraphNode(delta.feature) : void 0;
+    const base = this.baseHydrology.resolveFeature(featureId);
+    if (base) assertGraphNode(base, featureId);
+    return base;
+  }
+  assertEffectiveHydrologyGraph(hydrologyById, changedFeatureIds) {
+    const ids = /* @__PURE__ */ new Set();
+    for (const delta of hydrologyById.values()) {
+      if (delta.operation === "upsert") ids.add(delta.featureId);
+    }
+    for (const changedFeatureId of changedFeatureIds) {
+      const references = this.baseHydrology.referencesTo(changedFeatureId);
+      assertCanonicalReferences(changedFeatureId, references);
+      for (const featureId of references) ids.add(featureId);
+      if (this.resolveEffectiveHydrologyFeature(changedFeatureId, hydrologyById)) {
+        ids.add(changedFeatureId);
+      }
+    }
+    const orderedIds = [...ids].sort();
+    for (const featureId of orderedIds) {
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (node) this.assertHydrologyConnections(node, hydrologyById);
+    }
+    for (const featureId of orderedIds) {
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (node?.kind === "river") this.assertHydrologyOutletAcyclic(featureId, hydrologyById);
+    }
+  }
+  assertHydrologyConnections(node, hydrologyById) {
+    if (node.kind === "lake") return;
+    if (node.source.kind === "river") {
+      const source = this.resolveEffectiveHydrologyFeature(node.source.riverId, hydrologyById);
+      if (!source || source.kind !== "river") {
+        throw new Error(`hydrology river ${node.featureId} has a missing river source`);
+      }
+      if (source.outlet.kind !== "river" || source.outlet.riverId !== node.featureId) {
+        throw new Error(`hydrology river ${node.featureId} source does not outlet to it`);
+      }
+      if (source.outletLevel < node.sourceLevel) {
+        throw new Error(`hydrology river ${node.featureId} rises above its source river`);
+      }
+    }
+    if (node.outlet.kind === "ocean") {
+      if (node.outletLevel < this.descriptor.seaLevel) {
+        throw new Error(`hydrology river ${node.featureId} reaches ocean below sea level`);
+      }
+      return;
+    }
+    const outletId = node.outlet.kind === "lake" ? node.outlet.bodyId : node.outlet.riverId;
+    const outlet = this.resolveEffectiveHydrologyFeature(outletId, hydrologyById);
+    if (!outlet || outlet.kind !== node.outlet.kind) {
+      throw new Error(`hydrology river ${node.featureId} has a missing or mismatched outlet`);
+    }
+    const outletLevel = outlet.kind === "lake" ? outlet.level : outlet.sourceLevel;
+    if (node.outletLevel < outletLevel) {
+      throw new Error(`hydrology river ${node.featureId} rises at its outlet`);
+    }
+  }
+  assertHydrologyOutletAcyclic(startId, hydrologyById) {
+    const visited = /* @__PURE__ */ new Set();
+    let featureId = startId;
+    for (let count = 0; count < MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL; count += 1) {
+      if (visited.has(featureId)) throw new Error("effective hydrology outlet graph contains a cycle");
+      visited.add(featureId);
+      const node = this.resolveEffectiveHydrologyFeature(featureId, hydrologyById);
+      if (!node || node.kind !== "river" || node.outlet.kind !== "river") return;
+      featureId = node.outlet.riverId;
+    }
+    throw new RangeError("effective hydrology graph exceeds its fixed traversal budget");
+  }
+};
+
+// src/world/IndexedDbSurfaceDeltaStore.ts
+var INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION = 1;
+var DEFAULT_SURFACE_DELTA_DATABASE_NAME = "three-hex-map-surface-deltas-v2";
+var SURFACE_DELTA_DATABASE_VERSION = 1;
+var META_STORE2 = "surface-meta";
+var SEMANTIC_STORE = "surface-semantic";
+var HYDROLOGY_STORE = "surface-hydrology";
+function semanticRecordKey(worldIdentity, chunkX, chunkY) {
+  return JSON.stringify([worldIdentity, chunkX, chunkY]);
+}
+function hydrologyRecordKey(worldIdentity, featureId) {
+  return JSON.stringify([worldIdentity, featureId]);
+}
+function requestResult3(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(
+      request.error ?? new Error("surface delta IndexedDB request failed")
+    ), { once: true });
+  });
+}
+function transactionComplete3(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(
+      transaction.error ?? new Error("surface delta IndexedDB transaction aborted")
+    ), { once: true });
+    transaction.addEventListener("error", () => reject(
+      transaction.error ?? new Error("surface delta IndexedDB transaction failed")
+    ), { once: true });
+  });
+}
+function asError(reason) {
+  return reason instanceof Error ? reason : new Error(String(reason));
+}
+function assertStoredRevision(name, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function indexedDbSurfaceDeltaCommitBytes(descriptor, input) {
+  const worldIdentity = serializeWorldDescriptorV2(descriptor);
+  if (!input || typeof input !== "object" || input.worldIdentity !== worldIdentity) {
+    throw new TypeError("durable surface delta byte accounting requires a matching world identity");
+  }
+  let bytes = surfaceDeltaTransactionResidentBytes(input);
+  const limits = semanticCatalogLimits(descriptor);
+  for (const mutation of input.semanticMutations) {
+    if (mutation.operation === "upsert") {
+      const delta = createSparseSemanticDelta({
+        ...mutation.payload,
+        worldIdentity,
+        key: mutation.key,
+        revision: 1
+      }, limits);
+      bytes += sparseSemanticDeltaSerializedBytes(delta);
+    }
+  }
+  for (const mutation of input.hydrologyMutations) {
+    const delta = createHydrologyFeatureDelta(mutation.operation === "upsert" ? {
+      worldIdentity,
+      revision: 1,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "upsert",
+      feature: mutation.feature
+    } : {
+      worldIdentity,
+      revision: 1,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "delete"
+    });
+    bytes += hydrologyFeatureDeltaSerializedBytes(delta);
+    if (mutation.operation === "upsert" && mutation.feature.kind === "lake") {
+      bytes += mutation.feature.polygon.byteLength;
+    }
+  }
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("durable surface delta transaction bytes exceed safe integers");
+  }
+  return bytes;
+}
+var SurfaceDeltaSessionConflictError = class extends Error {
+  constructor(expectedRevision, actualRevision) {
+    super(`durable surface delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "SurfaceDeltaSessionConflictError";
+  }
+};
+var SurfaceDeltaCommitBackpressureError = class extends Error {
+  constructor(requestedBytes, pendingBytes, maximumBytes) {
+    super("surface delta commit exceeds the pending durable-write byte budget");
+    this.requestedBytes = requestedBytes;
+    this.pendingBytes = pendingBytes;
+    this.maximumBytes = maximumBytes;
+    this.name = "SurfaceDeltaCommitBackpressureError";
+  }
+};
+var SurfaceDeltaSaveBarrierError = class extends Error {
+  constructor(errors) {
+    super(`surface delta save barrier observed ${errors.length} failed commits`);
+    this.errors = errors;
+    this.name = "SurfaceDeltaSaveBarrierError";
+  }
+};
+var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends MemorySurfaceDeltaStore {
+  constructor(options) {
+    super(options.descriptor, options.baseHydrology);
+    this.tail = Promise.resolve();
+    this.barrierFailures = [];
+    this.nextSequence = 1;
+    this.lastSubmittedSequence = 0;
+    this.pendingCommits = 0;
+    this.pendingCommitBytes = 0;
+    this.closing = false;
+    this.closed = false;
+    this.databaseName = options.databaseName ?? DEFAULT_SURFACE_DELTA_DATABASE_NAME;
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    this.maxPendingCommitBytes = options.maxPendingCommitBytes;
+    if (this.databaseName.trim().length === 0) {
+      throw new TypeError("surface delta databaseName must be a non-empty string");
+    }
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("surface delta openTimeoutMs must be positive and finite");
+    }
+    if (!Number.isSafeInteger(this.maxPendingCommitBytes) || this.maxPendingCommitBytes <= 0) {
+      throw new RangeError("surface delta pending commit budget must be a positive safe integer");
+    }
+  }
+  static async open(options) {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("IndexedDB surface delta store options are required");
+    }
+    const store = new _IndexedDbSurfaceDeltaStore(options);
+    try {
+      await store.hydrate();
+      return store;
+    } catch (reason) {
+      try {
+        (await store.databasePromise)?.close();
+      } catch {
+      }
+      store.closed = true;
+      throw reason;
+    }
+  }
+  commit(input) {
+    if (this.closing || this.closed) {
+      return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+    }
+    let snapshot;
+    let bytes;
+    try {
+      snapshot = this.snapshotTransactionInput(input);
+      bytes = indexedDbSurfaceDeltaCommitBytes(this.descriptor, snapshot);
+    } catch (reason) {
+      return Promise.reject(asError(reason));
+    }
+    if (bytes > this.maxPendingCommitBytes - this.pendingCommitBytes) {
+      return Promise.reject(new SurfaceDeltaCommitBackpressureError(
+        bytes,
+        this.pendingCommitBytes,
+        this.maxPendingCommitBytes
+      ));
+    }
+    if (!Number.isSafeInteger(this.nextSequence)) {
+      return Promise.reject(new RangeError("surface delta commit sequence space is exhausted"));
+    }
+    const sequence = this.nextSequence;
+    this.nextSequence += 1;
+    this.lastSubmittedSequence = sequence;
+    this.pendingCommits += 1;
+    this.pendingCommitBytes += bytes;
+    const operation = this.tail.then(() => this.persistCommit(snapshot));
+    this.tail = operation.then(() => void 0, () => void 0);
+    void operation.then(() => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+    }, (reason) => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+      this.barrierFailures.push({ sequence, reason: asError(reason) });
+    });
+    return operation;
+  }
+  async flush() {
+    const targetSequence = this.lastSubmittedSequence;
+    const barrier = this.tail;
+    await barrier;
+    const observed = this.barrierFailures.filter((failure) => failure.sequence <= targetSequence);
+    if (observed.length === 0) return;
+    for (let index = this.barrierFailures.length - 1; index >= 0; index -= 1) {
+      if (this.barrierFailures[index].sequence <= targetSequence) {
+        this.barrierFailures.splice(index, 1);
+      }
+    }
+    if (observed.length === 1) throw observed[0].reason;
+    throw new SurfaceDeltaSaveBarrierError(Object.freeze(observed.map((failure) => failure.reason)));
+  }
+  get stats() {
+    return Object.freeze({
+      effectiveRevision: this.current.effectiveRevision,
+      persistedRevision: this.current.effectiveRevision,
+      pendingCommits: this.pendingCommits,
+      pendingCommitBytes: this.pendingCommitBytes,
+      maximumPendingCommitBytes: this.maxPendingCommitBytes
+    });
+  }
+  async close() {
+    if (this.closed) return;
+    this.closing = true;
+    let failure;
+    try {
+      await this.flush();
+    } catch (reason) {
+      failure = reason;
+    }
+    try {
+      (await this.databasePromise)?.close();
+    } finally {
+      this.closed = true;
+    }
+    if (failure !== void 0) throw failure;
+  }
+  async persistCommit(input) {
+    const prepared = this.prepareCommit(input, true);
+    const database = await this.openDatabase();
+    const transaction = database.transaction(
+      [META_STORE2, SEMANTIC_STORE, HYDROLOGY_STORE],
+      "readwrite"
+    );
+    const completion = transactionComplete3(transaction);
+    try {
+      const metaStore = transaction.objectStore(META_STORE2);
+      const semanticStore = transaction.objectStore(SEMANTIC_STORE);
+      const hydrologyStore = transaction.objectStore(HYDROLOGY_STORE);
+      const currentMeta = await requestResult3(
+        metaStore.get(this.worldIdentity)
+      );
+      const actualRevision = this.validateMeta(currentMeta);
+      const expectedRevision = this.current.effectiveRevision;
+      if (actualRevision !== expectedRevision) {
+        throw new SurfaceDeltaSessionConflictError(expectedRevision, actualRevision);
+      }
+      const limits = semanticCatalogLimits(this.descriptor);
+      for (const change of prepared.commit.semanticChanges) {
+        const key = change.operation === "upsert" ? change.delta.key : change.key;
+        const revision = change.operation === "upsert" ? change.delta.revision : change.revision;
+        const record = {
+          key: semanticRecordKey(this.worldIdentity, key.chunkX, key.chunkY),
+          formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+          worldIdentity: this.worldIdentity,
+          chunkX: key.chunkX,
+          chunkY: key.chunkY,
+          revision,
+          ...change.operation === "upsert" ? { payload: serializeSparseSemanticDelta(change.delta, limits) } : {}
+        };
+        semanticStore.put(record);
+      }
+      for (const change of prepared.commit.hydrologyChanges) {
+        const delta = change.delta;
+        const record = {
+          key: hydrologyRecordKey(this.worldIdentity, delta.featureId),
+          formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+          worldIdentity: this.worldIdentity,
+          featureId: delta.featureId,
+          revision: delta.revision,
+          payload: serializeHydrologyFeatureDelta(delta)
+        };
+        hydrologyStore.put(record);
+      }
+      metaStore.put({
+        key: this.worldIdentity,
+        formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+        worldIdentity: this.worldIdentity,
+        effectiveRevision: prepared.commit.revision
+      });
+      await completion;
+    } catch (reason) {
+      try {
+        transaction.abort();
+      } catch {
+      }
+      await completion.catch(() => void 0);
+      throw reason;
+    }
+    this.publishPreparedCommit(prepared);
+    return prepared.commit;
+  }
+  async hydrate() {
+    const database = await this.openDatabase();
+    const transaction = database.transaction(
+      [META_STORE2, SEMANTIC_STORE, HYDROLOGY_STORE],
+      "readonly"
+    );
+    const completion = transactionComplete3(transaction);
+    const metaRequest = transaction.objectStore(META_STORE2).get(this.worldIdentity);
+    const semanticRequest = transaction.objectStore(SEMANTIC_STORE).index("worldIdentity").getAll(this.worldIdentity);
+    const hydrologyRequest = transaction.objectStore(HYDROLOGY_STORE).index("worldIdentity").getAll(this.worldIdentity);
+    const [meta, semanticRecords, hydrologyRecords] = await Promise.all([
+      requestResult3(metaRequest),
+      requestResult3(semanticRequest),
+      requestResult3(hydrologyRequest)
+    ]);
+    await completion;
+    const effectiveRevision = this.validateMeta(meta);
+    if (!meta) {
+      if (semanticRecords.length !== 0 || hydrologyRecords.length !== 0) {
+        throw new Error("surface delta database contains records without an atomic meta revision");
+      }
+      return;
+    }
+    const semanticStates = semanticRecords.map((record) => this.loadSemanticRecord(
+      record,
+      effectiveRevision
+    ));
+    const hydrologyDeltas = hydrologyRecords.map((record) => this.loadHydrologyRecord(
+      record,
+      effectiveRevision
+    ));
+    this.installSnapshot(effectiveRevision, semanticStates, hydrologyDeltas);
+  }
+  validateMeta(record) {
+    if (!record) return 0;
+    if (!record || typeof record !== "object" || record.key !== this.worldIdentity || record.worldIdentity !== this.worldIdentity || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION) {
+      throw new TypeError("surface delta IndexedDB meta record is invalid or incompatible");
+    }
+    assertStoredRevision("surface delta IndexedDB meta revision", record.effectiveRevision);
+    if (record.effectiveRevision === 0) {
+      throw new RangeError("surface delta IndexedDB must not persist an empty revision zero meta record");
+    }
+    return record.effectiveRevision;
+  }
+  loadSemanticRecord(record, effectiveRevision) {
+    if (!record || typeof record !== "object" || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION || record.worldIdentity !== this.worldIdentity || record.key !== semanticRecordKey(this.worldIdentity, record.chunkX, record.chunkY)) {
+      throw new TypeError("surface semantic IndexedDB record is invalid or incompatible");
+    }
+    assertStoredRevision("surface semantic IndexedDB revision", record.revision);
+    if (record.revision <= 0 || record.revision > effectiveRevision) {
+      throw new RangeError("surface semantic IndexedDB revision is outside its snapshot");
+    }
+    const key = Object.freeze({ chunkX: record.chunkX, chunkY: record.chunkY });
+    if (record.payload === void 0) return Object.freeze({ key, revision: record.revision });
+    if (!(record.payload instanceof ArrayBuffer)) {
+      throw new TypeError("surface semantic IndexedDB payload must be a binary delta");
+    }
+    const delta = deserializeSparseSemanticDelta(
+      record.payload,
+      semanticCatalogLimits(this.descriptor)
+    );
+    if (delta.worldIdentity !== this.worldIdentity || delta.key.chunkX !== record.chunkX || delta.key.chunkY !== record.chunkY || delta.revision !== record.revision) {
+      throw new Error("surface semantic IndexedDB payload does not match its record key");
+    }
+    return Object.freeze({ key: delta.key, revision: record.revision, delta });
+  }
+  loadHydrologyRecord(record, effectiveRevision) {
+    if (!record || typeof record !== "object" || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION || record.worldIdentity !== this.worldIdentity || record.key !== hydrologyRecordKey(this.worldIdentity, record.featureId) || !(record.payload instanceof ArrayBuffer)) {
+      throw new TypeError("surface hydrology IndexedDB record is invalid or incompatible");
+    }
+    assertStoredRevision("surface hydrology IndexedDB revision", record.revision);
+    if (record.revision <= 0 || record.revision > effectiveRevision) {
+      throw new RangeError("surface hydrology IndexedDB revision is outside its snapshot");
+    }
+    const delta = deserializeHydrologyFeatureDelta(record.payload);
+    if (delta.worldIdentity !== this.worldIdentity || delta.featureId !== record.featureId || delta.revision !== record.revision) {
+      throw new Error("surface hydrology IndexedDB payload does not match its record key");
+    }
+    return delta;
+  }
+  openDatabase() {
+    if (this.databasePromise) return this.databasePromise;
+    if (typeof indexedDB === "undefined") {
+      return Promise.reject(new Error("IndexedDB is unavailable for durable surface deltas"));
+    }
+    this.databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.databaseName, SURFACE_DELTA_DATABASE_VERSION);
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("opening surface delta IndexedDB timed out"));
+      }, this.openTimeoutMs);
+      const finish = (callback, value) => {
+        if (settled) {
+          value.close();
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        callback(value);
+      };
+      const fail = (reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(asError(reason));
+      };
+      request.addEventListener("upgradeneeded", () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(META_STORE2)) {
+          database.createObjectStore(META_STORE2, { keyPath: "key" });
+        }
+        if (!database.objectStoreNames.contains(SEMANTIC_STORE)) {
+          database.createObjectStore(SEMANTIC_STORE, { keyPath: "key" }).createIndex("worldIdentity", "worldIdentity", { unique: false });
+        }
+        if (!database.objectStoreNames.contains(HYDROLOGY_STORE)) {
+          database.createObjectStore(HYDROLOGY_STORE, { keyPath: "key" }).createIndex("worldIdentity", "worldIdentity", { unique: false });
+        }
+      });
+      request.addEventListener("success", () => {
+        request.result.addEventListener("versionchange", () => request.result.close());
+        finish(resolve, request.result);
+      }, { once: true });
+      request.addEventListener("error", () => fail(
+        request.error ?? new Error("opening surface delta IndexedDB failed")
+      ), { once: true });
+      request.addEventListener("blocked", () => fail(
+        new Error("opening surface delta IndexedDB was blocked")
+      ), { once: true });
+    });
+    return this.databasePromise;
+  }
+};
+
 // src/persistence/CheckpointCoordinator.ts
 var CHECKPOINT_JOURNAL_FORMAT_VERSION = 1;
 var CheckpointConflictError = class extends Error {
@@ -1266,13 +3264,13 @@ var MemoryCheckpointJournalStore = class {
 };
 var JOURNAL_DATABASE_VERSION = 1;
 var JOURNAL_OBJECT_STORE = "checkpoints";
-function requestResult3(request) {
+function requestResult4(request) {
   return new Promise((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
     request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
   });
 }
-function transactionComplete3(transaction) {
+function transactionComplete4(transaction) {
   return new Promise((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
@@ -1293,8 +3291,8 @@ var IndexedDbCheckpointJournalStore = class {
     if (this.disposed) throw new Error("CheckpointJournalStore has been disposed");
     const database = await this.open();
     const transaction = database.transaction(JOURNAL_OBJECT_STORE, "readonly");
-    const journal = await requestResult3(transaction.objectStore(JOURNAL_OBJECT_STORE).get(worldId));
-    await transactionComplete3(transaction);
+    const journal = await requestResult4(transaction.objectStore(JOURNAL_OBJECT_STORE).get(worldId));
+    await transactionComplete4(transaction);
     if (!journal) return void 0;
     assertCheckpointJournal(journal, worldId);
     return cloneJournal(journal);
@@ -1307,10 +3305,10 @@ var IndexedDbCheckpointJournalStore = class {
     }
     const database = await this.open();
     const transaction = database.transaction(JOURNAL_OBJECT_STORE, "readwrite");
-    const completion = transactionComplete3(transaction);
+    const completion = transactionComplete4(transaction);
     try {
       const store = transaction.objectStore(JOURNAL_OBJECT_STORE);
-      const current = await requestResult3(store.get(worldId));
+      const current = await requestResult4(store.get(worldId));
       const actualRevision = current?.revision ?? 0;
       if (actualRevision !== expectedRevision) {
         throw new CheckpointConflictError(expectedRevision, actualRevision);
@@ -2005,13 +4003,13 @@ var MemoryGenerationCheckpointStore = class {
 var MANIFEST_STORE = "manifests";
 var STAGING_STORE = "staging";
 var GENERATION_DATABASE_VERSION = 1;
-function requestResult4(request) {
+function requestResult5(request) {
   return new Promise((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
     request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
   });
 }
-function transactionComplete4(transaction) {
+function transactionComplete5(transaction) {
   return new Promise((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
@@ -2032,8 +4030,8 @@ var IndexedDbGenerationCheckpointStore = class {
     this.assertActive();
     const database = await this.open();
     const transaction = database.transaction(MANIFEST_STORE, "readonly");
-    const manifest = await requestResult4(transaction.objectStore(MANIFEST_STORE).get(worldId));
-    await transactionComplete4(transaction);
+    const manifest = await requestResult5(transaction.objectStore(MANIFEST_STORE).get(worldId));
+    await transactionComplete5(transaction);
     if (!manifest) return void 0;
     assertGenerationCheckpointManifest(manifest, worldId);
     return cloneManifest(manifest);
@@ -2043,14 +4041,14 @@ var IndexedDbGenerationCheckpointStore = class {
     const database = await this.open();
     const transaction = database.transaction(STAGING_STORE, "readwrite");
     transaction.objectStore(STAGING_STORE).add(cloneStage(record));
-    await transactionComplete4(transaction);
+    await transactionComplete5(transaction);
   }
   async loadStage(key) {
     this.assertActive();
     const database = await this.open();
     const transaction = database.transaction(STAGING_STORE, "readonly");
-    const record = await requestResult4(transaction.objectStore(STAGING_STORE).get(key));
-    await transactionComplete4(transaction);
+    const record = await requestResult5(transaction.objectStore(STAGING_STORE).get(key));
+    await transactionComplete5(transaction);
     return record ? cloneStage(record) : void 0;
   }
   async compareAndSetManifest(worldId, expectedRevision, manifest) {
@@ -2061,18 +4059,18 @@ var IndexedDbGenerationCheckpointStore = class {
     }
     const database = await this.open();
     const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
-    const completion = transactionComplete4(transaction);
+    const completion = transactionComplete5(transaction);
     try {
       const store = transaction.objectStore(MANIFEST_STORE);
       const staging = transaction.objectStore(STAGING_STORE);
-      const current = await requestResult4(store.get(worldId));
+      const current = await requestResult5(store.get(worldId));
       const actualRevision = current?.revision ?? 0;
       if (actualRevision !== expectedRevision) {
         throw new CheckpointConflictError(expectedRevision, actualRevision);
       }
       for (const record of manifest.participants) {
         if (record.state !== "staged") continue;
-        const stage = await requestResult4(
+        const stage = await requestResult5(
           staging.get(record.stageKey)
         );
         assertManifestStage(stage, manifest, record);
@@ -2092,10 +4090,10 @@ var IndexedDbGenerationCheckpointStore = class {
     this.assertActive();
     const database = await this.open();
     const transaction = database.transaction(STAGING_STORE, "readonly");
-    const records = await requestResult4(
+    const records = await requestResult5(
       transaction.objectStore(STAGING_STORE).index("worldId").getAll(worldId)
     );
-    await transactionComplete4(transaction);
+    await transactionComplete5(transaction);
     return records.map(cloneStage);
   }
   async deleteStages(keys) {
@@ -2105,23 +4103,23 @@ var IndexedDbGenerationCheckpointStore = class {
     const transaction = database.transaction(STAGING_STORE, "readwrite");
     const store = transaction.objectStore(STAGING_STORE);
     for (const key of keys) store.delete(key);
-    await transactionComplete4(transaction);
+    await transactionComplete5(transaction);
   }
   async collectGarbage(worldId, cutoffCreatedAt) {
     this.assertActive();
     if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
     const database = await this.open();
     const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
-    const completion = transactionComplete4(transaction);
+    const completion = transactionComplete5(transaction);
     try {
       const manifestStore = transaction.objectStore(MANIFEST_STORE);
       const staging = transaction.objectStore(STAGING_STORE);
-      const manifest = await requestResult4(
+      const manifest = await requestResult5(
         manifestStore.get(worldId)
       );
       if (manifest) assertGenerationCheckpointManifest(manifest, worldId);
       const retained = retainedStageKeys(manifest);
-      const stages = await requestResult4(
+      const stages = await requestResult5(
         staging.index("worldId").getAll(worldId)
       );
       let reclaimed = 0;
@@ -2539,13 +4537,18 @@ export {
   CheckpointRecoveryError,
   GENERATION_CHECKPOINT_FORMAT_VERSION,
   GenerationCheckpointCoordinator,
+  INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
   IndexedDbCheckpointJournalStore,
   IndexedDbGenerationCheckpointStore,
+  IndexedDbSurfaceDeltaStore,
   IndexedDbWorldChunkCache,
   IndexedDbWorldDeltaStore,
   MemoryCheckpointJournalStore,
   MemoryGenerationCheckpointStore,
   MemoryWorldDeltaStore,
+  SurfaceDeltaCommitBackpressureError,
+  SurfaceDeltaSaveBarrierError,
+  SurfaceDeltaSessionConflictError,
   WORLD_DELTA_FORMAT_VERSION,
   WorldDeltaConflictError,
   assertCheckpointJournal,
@@ -2556,6 +4559,7 @@ export {
   createSimulationGenerationParticipant,
   createWorldChunkCacheKey,
   createWorldDeltaGenerationParticipant,
+  indexedDbSurfaceDeltaCommitBytes,
   normalizeWorldChunkDelta
 };
 //# sourceMappingURL=persistence.mjs.map

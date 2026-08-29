@@ -222,6 +222,14 @@ function ownedSemanticPayload(payload: Readonly<SurfaceSemanticDeltaPayload>): S
 function ownedHydrologyFeature(feature: Readonly<AuthoredHydrologyFeature>): AuthoredHydrologyFeature {
     return feature.kind === "river" ? {
         ...feature,
+        source: feature.source.kind === "spring"
+            ? Object.freeze({ kind: "spring", sourceId: feature.source.sourceId })
+            : Object.freeze({ kind: "river", riverId: feature.source.riverId }),
+        outlet: feature.outlet.kind === "river"
+            ? Object.freeze({ kind: "river", riverId: feature.outlet.riverId })
+            : feature.outlet.kind === "lake"
+                ? Object.freeze({ kind: "lake", bodyId: feature.outlet.bodyId })
+                : Object.freeze({ kind: "ocean", bodyId: feature.outlet.bodyId }),
         controlPoints: feature.controlPoints.slice(),
         widthProfile: feature.widthProfile.slice(),
         levelProfile: feature.levelProfile.slice()
@@ -229,6 +237,50 @@ function ownedHydrologyFeature(feature: Readonly<AuthoredHydrologyFeature>): Aut
         ...feature,
         polygon: feature.polygon.slice()
     };
+}
+
+function stringBytes(value: string): number {
+    const bytes = value.length * 2;
+    if (!Number.isSafeInteger(bytes)) throw new RangeError("surface delta string size exceeds safe integers");
+    return bytes;
+}
+
+export function surfaceDeltaTransactionResidentBytes(
+    input: Readonly<SurfaceDeltaTransactionInput>
+): number {
+    if (!input || typeof input !== "object"
+        || !Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
+        throw new TypeError("surface delta transaction is required for byte accounting");
+    }
+    let bytes = 256 + stringBytes(input.worldIdentity);
+    for (const mutation of input.semanticMutations) {
+        bytes += 96;
+        if (mutation.operation === "upsert") {
+            const payload = mutation.payload;
+            bytes += payload.tileIndex.byteLength + payload.fieldMask.byteLength
+                + payload.macroHeight.byteLength + payload.substrateClass.byteLength
+                + payload.biomeWeights.byteLength + payload.vegetationDensity.byteLength
+                + payload.vegetationProfile.byteLength;
+        }
+    }
+    for (const mutation of input.hydrologyMutations) {
+        bytes += 128 + stringBytes(mutation.featureId);
+        if (mutation.operation === "upsert") {
+            const feature = mutation.feature;
+            if (feature.kind === "river") {
+                bytes += stringBytes(feature.source.kind === "spring"
+                    ? feature.source.sourceId : feature.source.riverId);
+                bytes += stringBytes(feature.outlet.kind === "river"
+                    ? feature.outlet.riverId : feature.outlet.bodyId);
+                bytes += feature.controlPoints.byteLength + feature.widthProfile.byteLength
+                    + feature.levelProfile.byteLength;
+            } else bytes += feature.polygon.byteLength;
+        }
+    }
+    if (!Number.isSafeInteger(bytes)) {
+        throw new RangeError("surface delta transaction byte accounting exceeds safe integers");
+    }
+    return bytes;
 }
 
 function assertGraphNode(node: Readonly<EffectiveHydrologyGraphNode>, expectedId: string): void {
@@ -320,14 +372,20 @@ export interface SurfaceDeltaStore {
     readonly descriptor: WorldDescriptorV2;
     readonly worldIdentity: string;
     snapshot(): SurfaceDeltaSnapshot;
-    commit(input: Readonly<SurfaceDeltaTransactionInput>): SurfaceDeltaCommit;
+    commit(input: Readonly<SurfaceDeltaTransactionInput>): Promise<SurfaceDeltaCommit>;
+    flush(): Promise<void>;
+}
+
+export interface PreparedSurfaceDeltaCommit {
+    readonly commit: SurfaceDeltaCommit;
+    readonly snapshot: SurfaceDeltaSnapshot;
 }
 
 export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
     public readonly descriptor: WorldDescriptorV2;
     public readonly worldIdentity: string;
-    private readonly baseHydrology: BaseHydrologyFeatureIndex;
-    private current: SurfaceDeltaSnapshot;
+    protected readonly baseHydrology: BaseHydrologyFeatureIndex;
+    protected current: SurfaceDeltaSnapshot;
 
     constructor(descriptor: WorldDescriptorV2, baseHydrology: BaseHydrologyFeatureIndex) {
         assertWorldDescriptorV2(descriptor);
@@ -348,7 +406,22 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
         return this.current;
     }
 
-    public commit(input: Readonly<SurfaceDeltaTransactionInput>): SurfaceDeltaCommit {
+    public commit(input: Readonly<SurfaceDeltaTransactionInput>): Promise<SurfaceDeltaCommit> {
+        try {
+            const prepared = this.prepareCommit(input);
+            this.publishPreparedCommit(prepared);
+            return Promise.resolve(prepared.commit);
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
+    }
+
+    public flush(): Promise<void> { return Promise.resolve(); }
+
+    protected prepareCommit(
+        input: Readonly<SurfaceDeltaTransactionInput>,
+        ownsInput = false
+    ): PreparedSurfaceDeltaCommit {
         this.assertTransaction(input);
         if (this.current.effectiveRevision >= Number.MAX_SAFE_INTEGER) {
             throw new RangeError("surface delta revision space is exhausted");
@@ -366,15 +439,20 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
         const semanticChanges = semanticMutations.map(mutation => this.applySemanticMutation(
             semanticByKey,
             mutation,
-            revision
+            revision,
+            ownsInput
         ));
         const hydrologyChanges = hydrologyMutations.map(mutation => this.applyHydrologyMutation(
             hydrologyById,
             mutation,
-            revision
+            revision,
+            ownsInput
         ));
 
-        this.assertEffectiveHydrologyGraph(hydrologyById, hydrologyMutations);
+        this.assertEffectiveHydrologyGraph(
+            hydrologyById,
+            hydrologyMutations.map(mutation => mutation.featureId)
+        );
         const next = new SurfaceDeltaSnapshot(this.worldIdentity, revision, {
             semanticByKey,
             hydrologyById
@@ -387,11 +465,84 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
             semanticChanges: Object.freeze(semanticChanges),
             hydrologyChanges: Object.freeze(hydrologyChanges)
         });
-        this.current = next;
-        return commit;
+        return Object.freeze({ commit, snapshot: next });
     }
 
-    private assertTransaction(input: Readonly<SurfaceDeltaTransactionInput>): void {
+    protected publishPreparedCommit(prepared: Readonly<PreparedSurfaceDeltaCommit>): void {
+        if (prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1
+            || prepared.commit.revision !== prepared.snapshot.effectiveRevision
+            || prepared.commit.worldIdentity !== this.worldIdentity
+            || prepared.snapshot.worldIdentity !== this.worldIdentity) {
+            throw new Error("prepared surface delta commit no longer follows the current snapshot");
+        }
+        this.current = prepared.snapshot;
+    }
+
+    protected installSnapshot(
+        effectiveRevision: number,
+        semanticStates: readonly SurfaceSemanticDeltaState[],
+        hydrologyDeltas: readonly HydrologyFeatureDelta[]
+    ): void {
+        assertRevision("surface delta snapshot revision", effectiveRevision);
+        const semanticByKey = new Map<string, SurfaceSemanticDeltaState>();
+        const hydrologyById = new Map<string, HydrologyFeatureDelta>();
+        let maximumRevision = 0;
+        for (const state of semanticStates) {
+            if (!state || typeof state !== "object") {
+                throw new TypeError("persisted surface semantic state is invalid");
+            }
+            assertCanonicalSemanticKey(this.descriptor, state.key);
+            if (!Number.isSafeInteger(state.revision) || state.revision <= 0
+                || state.revision > effectiveRevision) {
+                throw new RangeError("persisted surface semantic revision is invalid");
+            }
+            const identity = semanticKeyIdentity(state.key);
+            if (semanticByKey.has(identity)) {
+                throw new Error("persisted surface snapshot contains duplicate semantic keys");
+            }
+            if (state.delta) {
+                const delta = createSparseSemanticDelta(state.delta, semanticCatalogLimits(this.descriptor));
+                if (delta.worldIdentity !== this.worldIdentity
+                    || delta.key.chunkX !== state.key.chunkX || delta.key.chunkY !== state.key.chunkY
+                    || delta.revision !== state.revision) {
+                    throw new Error("persisted sparse semantic delta does not match its state record");
+                }
+                assertSemanticDeltaBounds(this.descriptor, delta);
+                semanticByKey.set(identity, Object.freeze({
+                    key: delta.key,
+                    revision: state.revision,
+                    delta
+                }));
+            } else {
+                semanticByKey.set(identity, Object.freeze({
+                    key: Object.freeze({ chunkX: state.key.chunkX, chunkY: state.key.chunkY }),
+                    revision: state.revision
+                }));
+            }
+            maximumRevision = Math.max(maximumRevision, state.revision);
+        }
+        for (const input of hydrologyDeltas) {
+            const delta = createHydrologyFeatureDelta(input);
+            if (delta.worldIdentity !== this.worldIdentity || delta.revision > effectiveRevision) {
+                throw new Error("persisted hydrology delta does not match its snapshot");
+            }
+            if (hydrologyById.has(delta.featureId)) {
+                throw new Error("persisted surface snapshot contains duplicate hydrology features");
+            }
+            hydrologyById.set(delta.featureId, delta);
+            maximumRevision = Math.max(maximumRevision, delta.revision);
+        }
+        if (maximumRevision !== effectiveRevision) {
+            throw new Error("persisted surface snapshot revision has no matching committed mutation");
+        }
+        this.assertEffectiveHydrologyGraph(hydrologyById, [...hydrologyById.keys()]);
+        this.current = new SurfaceDeltaSnapshot(this.worldIdentity, effectiveRevision, {
+            semanticByKey,
+            hydrologyById
+        });
+    }
+
+    protected assertTransaction(input: Readonly<SurfaceDeltaTransactionInput>): void {
         if (!input || typeof input !== "object" || input.worldIdentity !== this.worldIdentity) {
             throw new TypeError("surface delta transaction world identity is invalid");
         }
@@ -432,10 +583,50 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
         }
     }
 
+    protected snapshotTransactionInput(
+        input: Readonly<SurfaceDeltaTransactionInput>
+    ): SurfaceDeltaTransactionInput {
+        this.assertTransaction(input);
+        const semanticMutations = input.semanticMutations.map(mutation => Object.freeze(
+            mutation.operation === "upsert" ? {
+                operation: mutation.operation,
+                key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+                expectedRevision: mutation.expectedRevision,
+                payload: Object.freeze(ownedSemanticPayload(mutation.payload))
+            } : {
+                operation: mutation.operation,
+                key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+                expectedRevision: mutation.expectedRevision
+            }
+        ));
+        const hydrologyMutations = input.hydrologyMutations.map(mutation => Object.freeze(
+            mutation.operation === "upsert" ? {
+                operation: mutation.operation,
+                featureId: mutation.featureId,
+                featureKind: mutation.featureKind,
+                expectedRevision: mutation.expectedRevision,
+                feature: Object.freeze(ownedHydrologyFeature(mutation.feature))
+            } : {
+                operation: mutation.operation,
+                featureId: mutation.featureId,
+                featureKind: mutation.featureKind,
+                expectedRevision: mutation.expectedRevision
+            }
+        ));
+        const snapshot: SurfaceDeltaTransactionInput = Object.freeze({
+            worldIdentity: input.worldIdentity,
+            semanticMutations: Object.freeze(semanticMutations),
+            hydrologyMutations: Object.freeze(hydrologyMutations)
+        });
+        surfaceDeltaTransactionResidentBytes(snapshot);
+        return snapshot;
+    }
+
     private applySemanticMutation(
         semanticByKey: Map<string, SurfaceSemanticDeltaState>,
         mutation: Readonly<SurfaceSemanticMutation>,
-        revision: number
+        revision: number,
+        ownsInput: boolean
     ): SurfaceSemanticChange {
         const identity = semanticKeyIdentity(mutation.key);
         const current = semanticByKey.get(identity);
@@ -459,7 +650,7 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
             throw new TypeError("semantic upsert requires a complete sparse delta payload");
         }
         const delta = createSparseSemanticDelta({
-            ...ownedSemanticPayload(mutation.payload),
+            ...(ownsInput ? mutation.payload : ownedSemanticPayload(mutation.payload)),
             worldIdentity: this.worldIdentity,
             key,
             revision
@@ -472,7 +663,8 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
     private applyHydrologyMutation(
         hydrologyById: Map<string, HydrologyFeatureDelta>,
         mutation: Readonly<SurfaceHydrologyMutation>,
-        revision: number
+        revision: number,
+        ownsInput: boolean
     ): SurfaceHydrologyChange {
         const currentDelta = hydrologyById.get(mutation.featureId);
         const actualRevision = currentDelta?.revision ?? 0;
@@ -505,7 +697,7 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
             featureId: mutation.featureId,
             featureKind: mutation.featureKind,
             operation: "upsert",
-            feature: ownedHydrologyFeature(mutation.feature)
+            feature: ownsInput ? mutation.feature : ownedHydrologyFeature(mutation.feature)
         } : {
             worldIdentity: this.worldIdentity,
             revision,
@@ -530,18 +722,18 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
 
     private assertEffectiveHydrologyGraph(
         hydrologyById: ReadonlyMap<string, HydrologyFeatureDelta>,
-        mutations: readonly SurfaceHydrologyMutation[]
+        changedFeatureIds: readonly string[]
     ): void {
         const ids = new Set<string>();
         for (const delta of hydrologyById.values()) {
             if (delta.operation === "upsert") ids.add(delta.featureId);
         }
-        for (const mutation of mutations) {
-            const references = this.baseHydrology.referencesTo(mutation.featureId);
-            assertCanonicalReferences(mutation.featureId, references);
+        for (const changedFeatureId of changedFeatureIds) {
+            const references = this.baseHydrology.referencesTo(changedFeatureId);
+            assertCanonicalReferences(changedFeatureId, references);
             for (const featureId of references) ids.add(featureId);
-            if (this.resolveEffectiveHydrologyFeature(mutation.featureId, hydrologyById)) {
-                ids.add(mutation.featureId);
+            if (this.resolveEffectiveHydrologyFeature(changedFeatureId, hydrologyById)) {
+                ids.add(changedFeatureId);
             }
         }
         const orderedIds = [...ids].sort();

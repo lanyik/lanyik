@@ -371,6 +371,7 @@ export {
     SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
     MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS,
     MAX_EFFECTIVE_HYDROLOGY_GRAPH_TRAVERSAL,
+    surfaceDeltaTransactionResidentBytes,
     SurfaceDeltaConflictError,
     SurfaceDeltaSnapshot,
     MemorySurfaceDeltaStore
@@ -394,6 +395,18 @@ export type {
     BaseHydrologyFeatureIndex,
     SurfaceDeltaStore
 } from "./world/SurfaceDeltaStore";
+export {
+    INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+    indexedDbSurfaceDeltaCommitBytes,
+    SurfaceDeltaSessionConflictError,
+    SurfaceDeltaCommitBackpressureError,
+    SurfaceDeltaSaveBarrierError,
+    IndexedDbSurfaceDeltaStore
+} from "./world/IndexedDbSurfaceDeltaStore";
+export type {
+    IndexedDbSurfaceDeltaStoreOptions,
+    IndexedDbSurfaceDeltaStoreStats
+} from "./world/IndexedDbSurfaceDeltaStore";
 
 export {
     HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE,

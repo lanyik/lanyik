@@ -59,7 +59,7 @@ function baseIndex(nodes: readonly EffectiveHydrologyGraphNode[]): BaseHydrology
 }
 
 describe("MemorySurfaceDeltaStore", () => {
-    test("commits semantic and hydrology mutations under one immutable revision", () => {
+    test("commits semantic and hydrology mutations under one immutable revision", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("atomic");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);
         const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
@@ -72,7 +72,7 @@ describe("MemorySurfaceDeltaStore", () => {
             40_000,
             30_000
         );
-        const commit = store.commit({
+        const commit = await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -104,11 +104,11 @@ describe("MemorySurfaceDeltaStore", () => {
             ? stored.feature.levelProfile[0] : 0).toBe(40_000);
     });
 
-    test("rejects one stale entity CAS without publishing any part of the transaction", () => {
+    test("rejects one stale entity CAS without publishing any part of the transaction", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("cas");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);
         const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -118,7 +118,7 @@ describe("MemorySurfaceDeltaStore", () => {
             }],
             hydrologyMutations: []
         });
-        expect(() => store.commit({
+        await expect(store.commit({
             worldIdentity,
             semanticMutations: [
                 {
@@ -134,17 +134,17 @@ describe("MemorySurfaceDeltaStore", () => {
                 }
             ],
             hydrologyMutations: []
-        })).toThrow(SurfaceDeltaConflictError);
+        })).rejects.toBeInstanceOf(SurfaceDeltaConflictError);
         expect(store.snapshot().effectiveRevision).toBe(1);
         expect(store.snapshot().getSemanticDelta(1, 0)).toBeUndefined();
         expect(store.snapshot().getSemanticDelta(0, 0)).toBeDefined();
     });
 
-    test("retains semantic tombstone revisions to prevent ABA after deletion", () => {
+    test("retains semantic tombstone revisions to prevent ABA after deletion", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("aba");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);
         const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -154,7 +154,7 @@ describe("MemorySurfaceDeltaStore", () => {
             }],
             hydrologyMutations: []
         });
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "delete",
@@ -165,7 +165,7 @@ describe("MemorySurfaceDeltaStore", () => {
         });
         expect(store.snapshot().getSemanticDelta(0, 0)).toBeUndefined();
         expect(store.snapshot().getSemanticRevision(0, 0)).toBe(2);
-        expect(() => store.commit({
+        await expect(store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -174,10 +174,10 @@ describe("MemorySurfaceDeltaStore", () => {
                 payload: heightPayload()
             }],
             hydrologyMutations: []
-        })).toThrow(SurfaceDeltaConflictError);
+        })).rejects.toBeInstanceOf(SurfaceDeltaConflictError);
     });
 
-    test("validates the complete candidate hydrology graph before publication", () => {
+    test("validates the complete candidate hydrology graph before publication", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("graph");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);
         const baseRiver: EffectiveHydrologyGraphNode = {
@@ -196,7 +196,7 @@ describe("MemorySurfaceDeltaStore", () => {
             34_000,
             30_000
         );
-        expect(() => store.commit({
+        await expect(store.commit({
             worldIdentity,
             semanticMutations: [],
             hydrologyMutations: [{
@@ -206,7 +206,7 @@ describe("MemorySurfaceDeltaStore", () => {
                 expectedRevision: 0,
                 feature: downstream
             }]
-        })).toThrow(/does not outlet/);
+        })).rejects.toThrow(/does not outlet/);
         expect(store.snapshot().effectiveRevision).toBe(0);
 
         const rewiredBase = river(
@@ -216,7 +216,7 @@ describe("MemorySurfaceDeltaStore", () => {
             45_000,
             35_000
         );
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [],
             hydrologyMutations: [rewiredBase, downstream].map(feature => ({
@@ -243,7 +243,7 @@ describe("MemorySurfaceDeltaStore", () => {
             35_000,
             35_000
         );
-        expect(() => store.commit({
+        await expect(store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",
@@ -258,12 +258,12 @@ describe("MemorySurfaceDeltaStore", () => {
                 expectedRevision: 0,
                 feature
             }))
-        })).toThrow(/cycle/);
+        })).rejects.toThrow(/cycle/);
         expect(store.snapshot().effectiveRevision).toBe(1);
         expect(store.snapshot().getSemanticDelta(4, -1)).toBeUndefined();
     });
 
-    test("rejects deletion that would strand a base reverse reference", () => {
+    test("rejects deletion that would strand a base reverse reference", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("delete-reference");
         const worldIdentity = serializeWorldDescriptorV2(descriptor);
         const lake: EffectiveHydrologyGraphNode = {
@@ -278,7 +278,7 @@ describe("MemorySurfaceDeltaStore", () => {
             outletLevel: 31_000
         };
         const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([lake, riverNode]));
-        expect(() => store.commit({
+        await expect(store.commit({
             worldIdentity,
             semanticMutations: [],
             hydrologyMutations: [{
@@ -287,7 +287,7 @@ describe("MemorySurfaceDeltaStore", () => {
                 featureKind: "lake",
                 expectedRevision: 0
             }]
-        })).toThrow(/missing or mismatched outlet/);
+        })).rejects.toThrow(/missing or mismatched outlet/);
         expect(store.snapshot().getHydrologyDelta("lake:base")).toBeUndefined();
     });
 });

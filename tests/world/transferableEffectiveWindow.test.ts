@@ -197,7 +197,7 @@ describe("TransferableEffectiveWindow", () => {
             level: 30_000,
             profileIndex: 3
         });
-        store.commit({
+        await store.commit({
             worldIdentity,
             semanticMutations: [{
                 operation: "upsert",

@@ -10077,6 +10077,8 @@ function ownedSemanticPayload(payload) {
 function ownedHydrologyFeature(feature) {
   return feature.kind === "river" ? {
     ...feature,
+    source: feature.source.kind === "spring" ? Object.freeze({ kind: "spring", sourceId: feature.source.sourceId }) : Object.freeze({ kind: "river", riverId: feature.source.riverId }),
+    outlet: feature.outlet.kind === "river" ? Object.freeze({ kind: "river", riverId: feature.outlet.riverId }) : feature.outlet.kind === "lake" ? Object.freeze({ kind: "lake", bodyId: feature.outlet.bodyId }) : Object.freeze({ kind: "ocean", bodyId: feature.outlet.bodyId }),
     controlPoints: feature.controlPoints.slice(),
     widthProfile: feature.widthProfile.slice(),
     levelProfile: feature.levelProfile.slice()
@@ -10084,6 +10086,39 @@ function ownedHydrologyFeature(feature) {
     ...feature,
     polygon: feature.polygon.slice()
   };
+}
+function stringBytes(value) {
+  const bytes = value.length * 2;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError("surface delta string size exceeds safe integers");
+  return bytes;
+}
+function surfaceDeltaTransactionResidentBytes(input) {
+  if (!input || typeof input !== "object" || !Array.isArray(input.semanticMutations) || !Array.isArray(input.hydrologyMutations)) {
+    throw new TypeError("surface delta transaction is required for byte accounting");
+  }
+  let bytes = 256 + stringBytes(input.worldIdentity);
+  for (const mutation of input.semanticMutations) {
+    bytes += 96;
+    if (mutation.operation === "upsert") {
+      const payload = mutation.payload;
+      bytes += payload.tileIndex.byteLength + payload.fieldMask.byteLength + payload.macroHeight.byteLength + payload.substrateClass.byteLength + payload.biomeWeights.byteLength + payload.vegetationDensity.byteLength + payload.vegetationProfile.byteLength;
+    }
+  }
+  for (const mutation of input.hydrologyMutations) {
+    bytes += 128 + stringBytes(mutation.featureId);
+    if (mutation.operation === "upsert") {
+      const feature = mutation.feature;
+      if (feature.kind === "river") {
+        bytes += stringBytes(feature.source.kind === "spring" ? feature.source.sourceId : feature.source.riverId);
+        bytes += stringBytes(feature.outlet.kind === "river" ? feature.outlet.riverId : feature.outlet.bodyId);
+        bytes += feature.controlPoints.byteLength + feature.widthProfile.byteLength + feature.levelProfile.byteLength;
+      } else bytes += feature.polygon.byteLength;
+    }
+  }
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("surface delta transaction byte accounting exceeds safe integers");
+  }
+  return bytes;
 }
 function assertGraphNode(node, expectedId) {
   if (!node || typeof node !== "object" || node.featureId !== expectedId) {
@@ -10170,6 +10205,18 @@ var MemorySurfaceDeltaStore = class {
     return this.current;
   }
   commit(input) {
+    try {
+      const prepared = this.prepareCommit(input);
+      this.publishPreparedCommit(prepared);
+      return Promise.resolve(prepared.commit);
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  }
+  flush() {
+    return Promise.resolve();
+  }
+  prepareCommit(input, ownsInput = false) {
     this.assertTransaction(input);
     if (this.current.effectiveRevision >= Number.MAX_SAFE_INTEGER) {
       throw new RangeError("surface delta revision space is exhausted");
@@ -10184,14 +10231,19 @@ var MemorySurfaceDeltaStore = class {
     const semanticChanges = semanticMutations.map((mutation) => this.applySemanticMutation(
       semanticByKey,
       mutation,
-      revision
+      revision,
+      ownsInput
     ));
     const hydrologyChanges = hydrologyMutations.map((mutation) => this.applyHydrologyMutation(
       hydrologyById,
       mutation,
-      revision
+      revision,
+      ownsInput
     ));
-    this.assertEffectiveHydrologyGraph(hydrologyById, hydrologyMutations);
+    this.assertEffectiveHydrologyGraph(
+      hydrologyById,
+      hydrologyMutations.map((mutation) => mutation.featureId)
+    );
     const next = new SurfaceDeltaSnapshot(this.worldIdentity, revision, {
       semanticByKey,
       hydrologyById
@@ -10204,8 +10256,69 @@ var MemorySurfaceDeltaStore = class {
       semanticChanges: Object.freeze(semanticChanges),
       hydrologyChanges: Object.freeze(hydrologyChanges)
     });
-    this.current = next;
-    return commit;
+    return Object.freeze({ commit, snapshot: next });
+  }
+  publishPreparedCommit(prepared) {
+    if (prepared.snapshot.effectiveRevision !== this.current.effectiveRevision + 1 || prepared.commit.revision !== prepared.snapshot.effectiveRevision || prepared.commit.worldIdentity !== this.worldIdentity || prepared.snapshot.worldIdentity !== this.worldIdentity) {
+      throw new Error("prepared surface delta commit no longer follows the current snapshot");
+    }
+    this.current = prepared.snapshot;
+  }
+  installSnapshot(effectiveRevision, semanticStates, hydrologyDeltas) {
+    assertRevision4("surface delta snapshot revision", effectiveRevision);
+    const semanticByKey = /* @__PURE__ */ new Map();
+    const hydrologyById = /* @__PURE__ */ new Map();
+    let maximumRevision = 0;
+    for (const state of semanticStates) {
+      if (!state || typeof state !== "object") {
+        throw new TypeError("persisted surface semantic state is invalid");
+      }
+      assertCanonicalSemanticKey(this.descriptor, state.key);
+      if (!Number.isSafeInteger(state.revision) || state.revision <= 0 || state.revision > effectiveRevision) {
+        throw new RangeError("persisted surface semantic revision is invalid");
+      }
+      const identity = semanticKeyIdentity(state.key);
+      if (semanticByKey.has(identity)) {
+        throw new Error("persisted surface snapshot contains duplicate semantic keys");
+      }
+      if (state.delta) {
+        const delta = createSparseSemanticDelta(state.delta, semanticCatalogLimits(this.descriptor));
+        if (delta.worldIdentity !== this.worldIdentity || delta.key.chunkX !== state.key.chunkX || delta.key.chunkY !== state.key.chunkY || delta.revision !== state.revision) {
+          throw new Error("persisted sparse semantic delta does not match its state record");
+        }
+        assertSemanticDeltaBounds(this.descriptor, delta);
+        semanticByKey.set(identity, Object.freeze({
+          key: delta.key,
+          revision: state.revision,
+          delta
+        }));
+      } else {
+        semanticByKey.set(identity, Object.freeze({
+          key: Object.freeze({ chunkX: state.key.chunkX, chunkY: state.key.chunkY }),
+          revision: state.revision
+        }));
+      }
+      maximumRevision = Math.max(maximumRevision, state.revision);
+    }
+    for (const input of hydrologyDeltas) {
+      const delta = createHydrologyFeatureDelta(input);
+      if (delta.worldIdentity !== this.worldIdentity || delta.revision > effectiveRevision) {
+        throw new Error("persisted hydrology delta does not match its snapshot");
+      }
+      if (hydrologyById.has(delta.featureId)) {
+        throw new Error("persisted surface snapshot contains duplicate hydrology features");
+      }
+      hydrologyById.set(delta.featureId, delta);
+      maximumRevision = Math.max(maximumRevision, delta.revision);
+    }
+    if (maximumRevision !== effectiveRevision) {
+      throw new Error("persisted surface snapshot revision has no matching committed mutation");
+    }
+    this.assertEffectiveHydrologyGraph(hydrologyById, [...hydrologyById.keys()]);
+    this.current = new SurfaceDeltaSnapshot(this.worldIdentity, effectiveRevision, {
+      semanticByKey,
+      hydrologyById
+    });
   }
   assertTransaction(input) {
     if (!input || typeof input !== "object" || input.worldIdentity !== this.worldIdentity) {
@@ -10245,7 +10358,43 @@ var MemorySurfaceDeltaStore = class {
       featureIds.add(mutation.featureId);
     }
   }
-  applySemanticMutation(semanticByKey, mutation, revision) {
+  snapshotTransactionInput(input) {
+    this.assertTransaction(input);
+    const semanticMutations = input.semanticMutations.map((mutation) => Object.freeze(
+      mutation.operation === "upsert" ? {
+        operation: mutation.operation,
+        key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+        expectedRevision: mutation.expectedRevision,
+        payload: Object.freeze(ownedSemanticPayload(mutation.payload))
+      } : {
+        operation: mutation.operation,
+        key: Object.freeze({ chunkX: mutation.key.chunkX, chunkY: mutation.key.chunkY }),
+        expectedRevision: mutation.expectedRevision
+      }
+    ));
+    const hydrologyMutations = input.hydrologyMutations.map((mutation) => Object.freeze(
+      mutation.operation === "upsert" ? {
+        operation: mutation.operation,
+        featureId: mutation.featureId,
+        featureKind: mutation.featureKind,
+        expectedRevision: mutation.expectedRevision,
+        feature: Object.freeze(ownedHydrologyFeature(mutation.feature))
+      } : {
+        operation: mutation.operation,
+        featureId: mutation.featureId,
+        featureKind: mutation.featureKind,
+        expectedRevision: mutation.expectedRevision
+      }
+    ));
+    const snapshot = Object.freeze({
+      worldIdentity: input.worldIdentity,
+      semanticMutations: Object.freeze(semanticMutations),
+      hydrologyMutations: Object.freeze(hydrologyMutations)
+    });
+    surfaceDeltaTransactionResidentBytes(snapshot);
+    return snapshot;
+  }
+  applySemanticMutation(semanticByKey, mutation, revision, ownsInput) {
     const identity = semanticKeyIdentity(mutation.key);
     const current = semanticByKey.get(identity);
     const actualRevision = current?.revision ?? 0;
@@ -10268,7 +10417,7 @@ var MemorySurfaceDeltaStore = class {
       throw new TypeError("semantic upsert requires a complete sparse delta payload");
     }
     const delta = createSparseSemanticDelta({
-      ...ownedSemanticPayload(mutation.payload),
+      ...ownsInput ? mutation.payload : ownedSemanticPayload(mutation.payload),
       worldIdentity: this.worldIdentity,
       key,
       revision
@@ -10277,7 +10426,7 @@ var MemorySurfaceDeltaStore = class {
     semanticByKey.set(identity, Object.freeze({ key, revision, delta }));
     return Object.freeze({ operation: "upsert", expectedRevision: mutation.expectedRevision, delta });
   }
-  applyHydrologyMutation(hydrologyById, mutation, revision) {
+  applyHydrologyMutation(hydrologyById, mutation, revision, ownsInput) {
     const currentDelta = hydrologyById.get(mutation.featureId);
     const actualRevision = currentDelta?.revision ?? 0;
     if (actualRevision !== mutation.expectedRevision) {
@@ -10308,7 +10457,7 @@ var MemorySurfaceDeltaStore = class {
       featureId: mutation.featureId,
       featureKind: mutation.featureKind,
       operation: "upsert",
-      feature: ownedHydrologyFeature(mutation.feature)
+      feature: ownsInput ? mutation.feature : ownedHydrologyFeature(mutation.feature)
     } : {
       worldIdentity: this.worldIdentity,
       revision,
@@ -10326,17 +10475,17 @@ var MemorySurfaceDeltaStore = class {
     if (base) assertGraphNode(base, featureId);
     return base;
   }
-  assertEffectiveHydrologyGraph(hydrologyById, mutations) {
+  assertEffectiveHydrologyGraph(hydrologyById, changedFeatureIds) {
     const ids = /* @__PURE__ */ new Set();
     for (const delta of hydrologyById.values()) {
       if (delta.operation === "upsert") ids.add(delta.featureId);
     }
-    for (const mutation of mutations) {
-      const references = this.baseHydrology.referencesTo(mutation.featureId);
-      assertCanonicalReferences(mutation.featureId, references);
+    for (const changedFeatureId of changedFeatureIds) {
+      const references = this.baseHydrology.referencesTo(changedFeatureId);
+      assertCanonicalReferences(changedFeatureId, references);
       for (const featureId of references) ids.add(featureId);
-      if (this.resolveEffectiveHydrologyFeature(mutation.featureId, hydrologyById)) {
-        ids.add(mutation.featureId);
+      if (this.resolveEffectiveHydrologyFeature(changedFeatureId, hydrologyById)) {
+        ids.add(changedFeatureId);
       }
     }
     const orderedIds = [...ids].sort();
@@ -10390,6 +10539,432 @@ var MemorySurfaceDeltaStore = class {
       featureId = node.outlet.riverId;
     }
     throw new RangeError("effective hydrology graph exceeds its fixed traversal budget");
+  }
+};
+
+// src/world/IndexedDbSurfaceDeltaStore.ts
+var INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION = 1;
+var DEFAULT_SURFACE_DELTA_DATABASE_NAME = "three-hex-map-surface-deltas-v2";
+var SURFACE_DELTA_DATABASE_VERSION = 1;
+var META_STORE = "surface-meta";
+var SEMANTIC_STORE = "surface-semantic";
+var HYDROLOGY_STORE = "surface-hydrology";
+function semanticRecordKey(worldIdentity, chunkX, chunkY) {
+  return JSON.stringify([worldIdentity, chunkX, chunkY]);
+}
+function hydrologyRecordKey(worldIdentity, featureId) {
+  return JSON.stringify([worldIdentity, featureId]);
+}
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result), { once: true });
+    request.addEventListener("error", () => reject(
+      request.error ?? new Error("surface delta IndexedDB request failed")
+    ), { once: true });
+  });
+}
+function transactionComplete(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener("abort", () => reject(
+      transaction.error ?? new Error("surface delta IndexedDB transaction aborted")
+    ), { once: true });
+    transaction.addEventListener("error", () => reject(
+      transaction.error ?? new Error("surface delta IndexedDB transaction failed")
+    ), { once: true });
+  });
+}
+function asError(reason) {
+  return reason instanceof Error ? reason : new Error(String(reason));
+}
+function assertStoredRevision(name, revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function indexedDbSurfaceDeltaCommitBytes(descriptor, input) {
+  const worldIdentity = serializeWorldDescriptorV2(descriptor);
+  if (!input || typeof input !== "object" || input.worldIdentity !== worldIdentity) {
+    throw new TypeError("durable surface delta byte accounting requires a matching world identity");
+  }
+  let bytes = surfaceDeltaTransactionResidentBytes(input);
+  const limits = semanticCatalogLimits(descriptor);
+  for (const mutation of input.semanticMutations) {
+    if (mutation.operation === "upsert") {
+      const delta = createSparseSemanticDelta({
+        ...mutation.payload,
+        worldIdentity,
+        key: mutation.key,
+        revision: 1
+      }, limits);
+      bytes += sparseSemanticDeltaSerializedBytes(delta);
+    }
+  }
+  for (const mutation of input.hydrologyMutations) {
+    const delta = createHydrologyFeatureDelta(mutation.operation === "upsert" ? {
+      worldIdentity,
+      revision: 1,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "upsert",
+      feature: mutation.feature
+    } : {
+      worldIdentity,
+      revision: 1,
+      featureId: mutation.featureId,
+      featureKind: mutation.featureKind,
+      operation: "delete"
+    });
+    bytes += hydrologyFeatureDeltaSerializedBytes(delta);
+    if (mutation.operation === "upsert" && mutation.feature.kind === "lake") {
+      bytes += mutation.feature.polygon.byteLength;
+    }
+  }
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("durable surface delta transaction bytes exceed safe integers");
+  }
+  return bytes;
+}
+var SurfaceDeltaSessionConflictError = class extends Error {
+  constructor(expectedRevision, actualRevision) {
+    super(`durable surface delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
+    this.expectedRevision = expectedRevision;
+    this.actualRevision = actualRevision;
+    this.name = "SurfaceDeltaSessionConflictError";
+  }
+};
+var SurfaceDeltaCommitBackpressureError = class extends Error {
+  constructor(requestedBytes, pendingBytes, maximumBytes) {
+    super("surface delta commit exceeds the pending durable-write byte budget");
+    this.requestedBytes = requestedBytes;
+    this.pendingBytes = pendingBytes;
+    this.maximumBytes = maximumBytes;
+    this.name = "SurfaceDeltaCommitBackpressureError";
+  }
+};
+var SurfaceDeltaSaveBarrierError = class extends Error {
+  constructor(errors) {
+    super(`surface delta save barrier observed ${errors.length} failed commits`);
+    this.errors = errors;
+    this.name = "SurfaceDeltaSaveBarrierError";
+  }
+};
+var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends MemorySurfaceDeltaStore {
+  constructor(options) {
+    super(options.descriptor, options.baseHydrology);
+    this.tail = Promise.resolve();
+    this.barrierFailures = [];
+    this.nextSequence = 1;
+    this.lastSubmittedSequence = 0;
+    this.pendingCommits = 0;
+    this.pendingCommitBytes = 0;
+    this.closing = false;
+    this.closed = false;
+    this.databaseName = options.databaseName ?? DEFAULT_SURFACE_DELTA_DATABASE_NAME;
+    this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
+    this.maxPendingCommitBytes = options.maxPendingCommitBytes;
+    if (this.databaseName.trim().length === 0) {
+      throw new TypeError("surface delta databaseName must be a non-empty string");
+    }
+    if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+      throw new RangeError("surface delta openTimeoutMs must be positive and finite");
+    }
+    if (!Number.isSafeInteger(this.maxPendingCommitBytes) || this.maxPendingCommitBytes <= 0) {
+      throw new RangeError("surface delta pending commit budget must be a positive safe integer");
+    }
+  }
+  static async open(options) {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("IndexedDB surface delta store options are required");
+    }
+    const store = new _IndexedDbSurfaceDeltaStore(options);
+    try {
+      await store.hydrate();
+      return store;
+    } catch (reason) {
+      try {
+        (await store.databasePromise)?.close();
+      } catch {
+      }
+      store.closed = true;
+      throw reason;
+    }
+  }
+  commit(input) {
+    if (this.closing || this.closed) {
+      return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+    }
+    let snapshot;
+    let bytes;
+    try {
+      snapshot = this.snapshotTransactionInput(input);
+      bytes = indexedDbSurfaceDeltaCommitBytes(this.descriptor, snapshot);
+    } catch (reason) {
+      return Promise.reject(asError(reason));
+    }
+    if (bytes > this.maxPendingCommitBytes - this.pendingCommitBytes) {
+      return Promise.reject(new SurfaceDeltaCommitBackpressureError(
+        bytes,
+        this.pendingCommitBytes,
+        this.maxPendingCommitBytes
+      ));
+    }
+    if (!Number.isSafeInteger(this.nextSequence)) {
+      return Promise.reject(new RangeError("surface delta commit sequence space is exhausted"));
+    }
+    const sequence = this.nextSequence;
+    this.nextSequence += 1;
+    this.lastSubmittedSequence = sequence;
+    this.pendingCommits += 1;
+    this.pendingCommitBytes += bytes;
+    const operation = this.tail.then(() => this.persistCommit(snapshot));
+    this.tail = operation.then(() => void 0, () => void 0);
+    void operation.then(() => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+    }, (reason) => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+      this.barrierFailures.push({ sequence, reason: asError(reason) });
+    });
+    return operation;
+  }
+  async flush() {
+    const targetSequence = this.lastSubmittedSequence;
+    const barrier = this.tail;
+    await barrier;
+    const observed = this.barrierFailures.filter((failure) => failure.sequence <= targetSequence);
+    if (observed.length === 0) return;
+    for (let index = this.barrierFailures.length - 1; index >= 0; index -= 1) {
+      if (this.barrierFailures[index].sequence <= targetSequence) {
+        this.barrierFailures.splice(index, 1);
+      }
+    }
+    if (observed.length === 1) throw observed[0].reason;
+    throw new SurfaceDeltaSaveBarrierError(Object.freeze(observed.map((failure) => failure.reason)));
+  }
+  get stats() {
+    return Object.freeze({
+      effectiveRevision: this.current.effectiveRevision,
+      persistedRevision: this.current.effectiveRevision,
+      pendingCommits: this.pendingCommits,
+      pendingCommitBytes: this.pendingCommitBytes,
+      maximumPendingCommitBytes: this.maxPendingCommitBytes
+    });
+  }
+  async close() {
+    if (this.closed) return;
+    this.closing = true;
+    let failure;
+    try {
+      await this.flush();
+    } catch (reason) {
+      failure = reason;
+    }
+    try {
+      (await this.databasePromise)?.close();
+    } finally {
+      this.closed = true;
+    }
+    if (failure !== void 0) throw failure;
+  }
+  async persistCommit(input) {
+    const prepared = this.prepareCommit(input, true);
+    const database = await this.openDatabase();
+    const transaction = database.transaction(
+      [META_STORE, SEMANTIC_STORE, HYDROLOGY_STORE],
+      "readwrite"
+    );
+    const completion = transactionComplete(transaction);
+    try {
+      const metaStore = transaction.objectStore(META_STORE);
+      const semanticStore = transaction.objectStore(SEMANTIC_STORE);
+      const hydrologyStore = transaction.objectStore(HYDROLOGY_STORE);
+      const currentMeta = await requestResult(
+        metaStore.get(this.worldIdentity)
+      );
+      const actualRevision = this.validateMeta(currentMeta);
+      const expectedRevision = this.current.effectiveRevision;
+      if (actualRevision !== expectedRevision) {
+        throw new SurfaceDeltaSessionConflictError(expectedRevision, actualRevision);
+      }
+      const limits = semanticCatalogLimits(this.descriptor);
+      for (const change of prepared.commit.semanticChanges) {
+        const key = change.operation === "upsert" ? change.delta.key : change.key;
+        const revision = change.operation === "upsert" ? change.delta.revision : change.revision;
+        const record = {
+          key: semanticRecordKey(this.worldIdentity, key.chunkX, key.chunkY),
+          formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+          worldIdentity: this.worldIdentity,
+          chunkX: key.chunkX,
+          chunkY: key.chunkY,
+          revision,
+          ...change.operation === "upsert" ? { payload: serializeSparseSemanticDelta(change.delta, limits) } : {}
+        };
+        semanticStore.put(record);
+      }
+      for (const change of prepared.commit.hydrologyChanges) {
+        const delta = change.delta;
+        const record = {
+          key: hydrologyRecordKey(this.worldIdentity, delta.featureId),
+          formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+          worldIdentity: this.worldIdentity,
+          featureId: delta.featureId,
+          revision: delta.revision,
+          payload: serializeHydrologyFeatureDelta(delta)
+        };
+        hydrologyStore.put(record);
+      }
+      metaStore.put({
+        key: this.worldIdentity,
+        formatVersion: INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+        worldIdentity: this.worldIdentity,
+        effectiveRevision: prepared.commit.revision
+      });
+      await completion;
+    } catch (reason) {
+      try {
+        transaction.abort();
+      } catch {
+      }
+      await completion.catch(() => void 0);
+      throw reason;
+    }
+    this.publishPreparedCommit(prepared);
+    return prepared.commit;
+  }
+  async hydrate() {
+    const database = await this.openDatabase();
+    const transaction = database.transaction(
+      [META_STORE, SEMANTIC_STORE, HYDROLOGY_STORE],
+      "readonly"
+    );
+    const completion = transactionComplete(transaction);
+    const metaRequest = transaction.objectStore(META_STORE).get(this.worldIdentity);
+    const semanticRequest = transaction.objectStore(SEMANTIC_STORE).index("worldIdentity").getAll(this.worldIdentity);
+    const hydrologyRequest = transaction.objectStore(HYDROLOGY_STORE).index("worldIdentity").getAll(this.worldIdentity);
+    const [meta, semanticRecords, hydrologyRecords] = await Promise.all([
+      requestResult(metaRequest),
+      requestResult(semanticRequest),
+      requestResult(hydrologyRequest)
+    ]);
+    await completion;
+    const effectiveRevision = this.validateMeta(meta);
+    if (!meta) {
+      if (semanticRecords.length !== 0 || hydrologyRecords.length !== 0) {
+        throw new Error("surface delta database contains records without an atomic meta revision");
+      }
+      return;
+    }
+    const semanticStates = semanticRecords.map((record) => this.loadSemanticRecord(
+      record,
+      effectiveRevision
+    ));
+    const hydrologyDeltas = hydrologyRecords.map((record) => this.loadHydrologyRecord(
+      record,
+      effectiveRevision
+    ));
+    this.installSnapshot(effectiveRevision, semanticStates, hydrologyDeltas);
+  }
+  validateMeta(record) {
+    if (!record) return 0;
+    if (!record || typeof record !== "object" || record.key !== this.worldIdentity || record.worldIdentity !== this.worldIdentity || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION) {
+      throw new TypeError("surface delta IndexedDB meta record is invalid or incompatible");
+    }
+    assertStoredRevision("surface delta IndexedDB meta revision", record.effectiveRevision);
+    if (record.effectiveRevision === 0) {
+      throw new RangeError("surface delta IndexedDB must not persist an empty revision zero meta record");
+    }
+    return record.effectiveRevision;
+  }
+  loadSemanticRecord(record, effectiveRevision) {
+    if (!record || typeof record !== "object" || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION || record.worldIdentity !== this.worldIdentity || record.key !== semanticRecordKey(this.worldIdentity, record.chunkX, record.chunkY)) {
+      throw new TypeError("surface semantic IndexedDB record is invalid or incompatible");
+    }
+    assertStoredRevision("surface semantic IndexedDB revision", record.revision);
+    if (record.revision <= 0 || record.revision > effectiveRevision) {
+      throw new RangeError("surface semantic IndexedDB revision is outside its snapshot");
+    }
+    const key = Object.freeze({ chunkX: record.chunkX, chunkY: record.chunkY });
+    if (record.payload === void 0) return Object.freeze({ key, revision: record.revision });
+    if (!(record.payload instanceof ArrayBuffer)) {
+      throw new TypeError("surface semantic IndexedDB payload must be a binary delta");
+    }
+    const delta = deserializeSparseSemanticDelta(
+      record.payload,
+      semanticCatalogLimits(this.descriptor)
+    );
+    if (delta.worldIdentity !== this.worldIdentity || delta.key.chunkX !== record.chunkX || delta.key.chunkY !== record.chunkY || delta.revision !== record.revision) {
+      throw new Error("surface semantic IndexedDB payload does not match its record key");
+    }
+    return Object.freeze({ key: delta.key, revision: record.revision, delta });
+  }
+  loadHydrologyRecord(record, effectiveRevision) {
+    if (!record || typeof record !== "object" || record.formatVersion !== INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION || record.worldIdentity !== this.worldIdentity || record.key !== hydrologyRecordKey(this.worldIdentity, record.featureId) || !(record.payload instanceof ArrayBuffer)) {
+      throw new TypeError("surface hydrology IndexedDB record is invalid or incompatible");
+    }
+    assertStoredRevision("surface hydrology IndexedDB revision", record.revision);
+    if (record.revision <= 0 || record.revision > effectiveRevision) {
+      throw new RangeError("surface hydrology IndexedDB revision is outside its snapshot");
+    }
+    const delta = deserializeHydrologyFeatureDelta(record.payload);
+    if (delta.worldIdentity !== this.worldIdentity || delta.featureId !== record.featureId || delta.revision !== record.revision) {
+      throw new Error("surface hydrology IndexedDB payload does not match its record key");
+    }
+    return delta;
+  }
+  openDatabase() {
+    if (this.databasePromise) return this.databasePromise;
+    if (typeof indexedDB === "undefined") {
+      return Promise.reject(new Error("IndexedDB is unavailable for durable surface deltas"));
+    }
+    this.databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.databaseName, SURFACE_DELTA_DATABASE_VERSION);
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("opening surface delta IndexedDB timed out"));
+      }, this.openTimeoutMs);
+      const finish = (callback, value) => {
+        if (settled) {
+          value.close();
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        callback(value);
+      };
+      const fail = (reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(asError(reason));
+      };
+      request.addEventListener("upgradeneeded", () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(META_STORE)) {
+          database.createObjectStore(META_STORE, { keyPath: "key" });
+        }
+        if (!database.objectStoreNames.contains(SEMANTIC_STORE)) {
+          database.createObjectStore(SEMANTIC_STORE, { keyPath: "key" }).createIndex("worldIdentity", "worldIdentity", { unique: false });
+        }
+        if (!database.objectStoreNames.contains(HYDROLOGY_STORE)) {
+          database.createObjectStore(HYDROLOGY_STORE, { keyPath: "key" }).createIndex("worldIdentity", "worldIdentity", { unique: false });
+        }
+      });
+      request.addEventListener("success", () => {
+        request.result.addEventListener("versionchange", () => request.result.close());
+        finish(resolve, request.result);
+      }, { once: true });
+      request.addEventListener("error", () => fail(
+        request.error ?? new Error("opening surface delta IndexedDB failed")
+      ), { once: true });
+      request.addEventListener("blocked", () => fail(
+        new Error("opening surface delta IndexedDB was blocked")
+      ), { once: true });
+    });
+    return this.databasePromise;
   }
 };
 
@@ -12807,6 +13382,8 @@ export {
   HYDROLOGY_SPATIAL_CELL_SIZE,
   HydrologyFeatureSpatialIndex,
   HydrologyRegionSpatialIndex,
+  INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
+  IndexedDbSurfaceDeltaStore,
   InfiniteHydrologyRegionSource,
   InfiniteSemanticWorldSource,
   LAKE_HYDROLOGY_PROFILE,
@@ -12877,7 +13454,10 @@ export {
   StaticHydrologyRegionSource,
   StaticSemanticWorldSource,
   SurfaceCompilationService,
+  SurfaceDeltaCommitBackpressureError,
   SurfaceDeltaConflictError,
+  SurfaceDeltaSaveBarrierError,
+  SurfaceDeltaSessionConflictError,
   SurfaceDeltaSnapshot,
   SurfaceGroundGeometrySet,
   SurfaceLeaseNotCurrentError,
@@ -12990,6 +13570,7 @@ export {
   hydrologyRegionMaximumQuantizedCoordinate,
   hydrologyRegionResidentBytes,
   hydrologyRiverHalfWidthTiles,
+  indexedDbSurfaceDeltaCommitBytes,
   lightingStatesEqual,
   macroDrainageNodeId,
   macroDrainageNodeTile,
@@ -13008,6 +13589,7 @@ export {
   sparseSemanticDeltaEntryIndex,
   sparseSemanticDeltaSerializedBytes,
   surfaceColumnStagger,
+  surfaceDeltaTransactionResidentBytes,
   surfaceDependencyKeysEqual,
   surfaceFieldTexelIndex,
   surfaceGroundMaximumDisplacement,
