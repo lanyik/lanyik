@@ -179,3 +179,31 @@ export type {
     InfiniteHydrologyRegionSourceOptions,
     InfiniteHydrologyRegionSourceStats
 } from "./world/InfiniteHydrologyRegionSource";
+
+export {
+    HYDROLOGY_SPATIAL_CELL_SIZE,
+    HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
+    HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
+    HYDROLOGY_KIND_NONE,
+    HYDROLOGY_KIND_OCEAN,
+    HYDROLOGY_KIND_LAKE,
+    HYDROLOGY_KIND_RIVER,
+    hydrologyRiverHalfWidthTiles,
+    HydrologyRegionSpatialIndex
+} from "./world/HydrologyRegionSpatialIndex";
+export type {
+    HydrologyKind,
+    HydrologySample
+} from "./world/HydrologyRegionSpatialIndex";
+
+export {
+    MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES,
+    MAX_DERIVED_HYDROLOGY_BODY_PALETTE,
+    derivedHydrologyRasterIndex,
+    assertDerivedHydrologyRaster,
+    deriveHydrologyRaster
+} from "./world/DerivedHydrologyRaster";
+export type {
+    DerivedHydrologyRaster,
+    DeriveHydrologyRasterOptions
+} from "./world/DerivedHydrologyRaster";

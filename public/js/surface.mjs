@@ -4516,6 +4516,399 @@ var InfiniteHydrologyRegionSource = class {
     this.cacheBytes -= oldest.bytes;
   }
 };
+
+// src/world/HydrologyRegionSpatialIndex.ts
+var HYDROLOGY_SPATIAL_CELL_SIZE = 16;
+var HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES = 0.5;
+var HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES = 0.25;
+var HYDROLOGY_KIND_NONE = 0;
+var HYDROLOGY_KIND_OCEAN = 1;
+var HYDROLOGY_KIND_LAKE = 2;
+var HYDROLOGY_KIND_RIVER = 3;
+var OCEAN_BODY_REF = Object.freeze({
+  bodyId: "ocean",
+  kind: "ocean",
+  profileIndex: OCEAN_HYDROLOGY_PROFILE
+});
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+function compareCandidate(first, second) {
+  if (!second) return true;
+  return first.coverage > second.coverage || first.coverage === second.coverage && (first.priority > second.priority || first.priority === second.priority && first.stableIdentity < second.stableIdentity);
+}
+function profileAt(profile, index, amount) {
+  return Math.round(profile[index] + (profile[index + 1] - profile[index]) * amount);
+}
+function closestRiverPoint(river, x, y) {
+  let bestDistanceSquared = Number.POSITIVE_INFINITY;
+  let bestLevel = 0;
+  let bestHalfWidth = 0;
+  let bestFlowX = 0;
+  let bestFlowY = 0;
+  let bestSegmentIndex = -1;
+  let bestSegmentAmount = 0;
+  const pointCount = river.controlPoints.length / 2;
+  for (let segmentIndex = 0; segmentIndex < pointCount - 1; segmentIndex += 1) {
+    const startX = river.controlPoints[segmentIndex * 2] / HYDROLOGY_POINT_QUANTIZATION;
+    const startY = river.controlPoints[segmentIndex * 2 + 1] / HYDROLOGY_POINT_QUANTIZATION;
+    const endX = river.controlPoints[segmentIndex * 2 + 2] / HYDROLOGY_POINT_QUANTIZATION;
+    const endY = river.controlPoints[segmentIndex * 2 + 3] / HYDROLOGY_POINT_QUANTIZATION;
+    const deltaX = endX - startX;
+    const deltaY = endY - startY;
+    const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+    if (lengthSquared === 0) continue;
+    const amount = clamp(((x - startX) * deltaX + (y - startY) * deltaY) / lengthSquared, 0, 1);
+    const closestX = startX + deltaX * amount;
+    const closestY = startY + deltaY * amount;
+    const distanceSquared = (x - closestX) ** 2 + (y - closestY) ** 2;
+    if (distanceSquared >= bestDistanceSquared) continue;
+    bestDistanceSquared = distanceSquared;
+    bestLevel = profileAt(river.levelProfile, segmentIndex, amount);
+    bestHalfWidth = hydrologyRiverHalfWidthTiles(profileAt(river.widthProfile, segmentIndex, amount));
+    bestFlowX = Math.sign(deltaX);
+    bestFlowY = Math.sign(deltaY);
+    bestSegmentIndex = segmentIndex;
+    bestSegmentAmount = amount;
+  }
+  if (!Number.isFinite(bestDistanceSquared)) throw new Error("river segment has no non-zero geometry span");
+  let bestDistanceToEnd = 0;
+  for (let segmentIndex = bestSegmentIndex; segmentIndex < pointCount - 1; segmentIndex += 1) {
+    const startX = river.controlPoints[segmentIndex * 2] / HYDROLOGY_POINT_QUANTIZATION;
+    const startY = river.controlPoints[segmentIndex * 2 + 1] / HYDROLOGY_POINT_QUANTIZATION;
+    const endX = river.controlPoints[segmentIndex * 2 + 2] / HYDROLOGY_POINT_QUANTIZATION;
+    const endY = river.controlPoints[segmentIndex * 2 + 3] / HYDROLOGY_POINT_QUANTIZATION;
+    const length = Math.hypot(endX - startX, endY - startY);
+    bestDistanceToEnd += segmentIndex === bestSegmentIndex ? length * (1 - bestSegmentAmount) : length;
+  }
+  return {
+    distance: Math.sqrt(bestDistanceSquared),
+    level: bestLevel,
+    halfWidth: bestHalfWidth,
+    flowX: bestFlowX,
+    flowY: bestFlowY,
+    distanceToEnd: bestDistanceToEnd
+  };
+}
+function rangeFor(minimum, maximum, count) {
+  return [
+    clamp(Math.floor(minimum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1),
+    clamp(Math.floor(maximum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1)
+  ];
+}
+function hydrologyRiverHalfWidthTiles(widthClass2) {
+  if (!Number.isInteger(widthClass2) || widthClass2 <= 0 || widthClass2 > 255) {
+    throw new RangeError("hydrology river width class must be a positive uint8 value");
+  }
+  return HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES + widthClass2 * HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES;
+}
+var HydrologyRegionSpatialIndex = class {
+  constructor(region) {
+    assertHydrologyRegion(region);
+    this.region = region;
+    this.cellCountX = Math.ceil(region.validBounds.maxXExclusive / HYDROLOGY_SPATIAL_CELL_SIZE);
+    this.cellCountY = Math.ceil(region.validBounds.maxYExclusive / HYDROLOGY_SPATIAL_CELL_SIZE);
+    const mutableBuckets = Array.from(
+      { length: this.cellCountX * this.cellCountY },
+      () => ({ rivers: [], lakes: [] })
+    );
+    const addToBuckets = (kind, featureIndex, minimumX, minimumY, maximumX, maximumY) => {
+      const [minimumCellX, maximumCellX] = rangeFor(minimumX, maximumX, this.cellCountX);
+      const [minimumCellY, maximumCellY] = rangeFor(minimumY, maximumY, this.cellCountY);
+      for (let cellX = minimumCellX; cellX <= maximumCellX; cellX += 1) {
+        for (let cellY = minimumCellY; cellY <= maximumCellY; cellY += 1) {
+          mutableBuckets[cellX * this.cellCountY + cellY][kind].push(featureIndex);
+        }
+      }
+    };
+    for (let riverIndex = 0; riverIndex < region.rivers.length; riverIndex += 1) {
+      const river = region.rivers[riverIndex];
+      let minimumX = Number.POSITIVE_INFINITY;
+      let minimumY = Number.POSITIVE_INFINITY;
+      let maximumX = Number.NEGATIVE_INFINITY;
+      let maximumY = Number.NEGATIVE_INFINITY;
+      let maximumHalfWidth = 0;
+      for (let pointIndex = 0; pointIndex < river.widthProfile.length; pointIndex += 1) {
+        minimumX = Math.min(
+          minimumX,
+          river.controlPoints[pointIndex * 2] / HYDROLOGY_POINT_QUANTIZATION
+        );
+        minimumY = Math.min(
+          minimumY,
+          river.controlPoints[pointIndex * 2 + 1] / HYDROLOGY_POINT_QUANTIZATION
+        );
+        maximumX = Math.max(
+          maximumX,
+          river.controlPoints[pointIndex * 2] / HYDROLOGY_POINT_QUANTIZATION
+        );
+        maximumY = Math.max(
+          maximumY,
+          river.controlPoints[pointIndex * 2 + 1] / HYDROLOGY_POINT_QUANTIZATION
+        );
+        maximumHalfWidth = Math.max(maximumHalfWidth, hydrologyRiverHalfWidthTiles(
+          river.widthProfile[pointIndex]
+        ));
+      }
+      addToBuckets(
+        "rivers",
+        riverIndex,
+        minimumX - maximumHalfWidth - 0.5,
+        minimumY - maximumHalfWidth - 0.5,
+        maximumX + maximumHalfWidth + 0.5,
+        maximumY + maximumHalfWidth + 0.5
+      );
+    }
+    for (let lakeIndex = 0; lakeIndex < region.lakes.length; lakeIndex += 1) {
+      const lake = region.lakes[lakeIndex];
+      const centerX = lake.center[0] / HYDROLOGY_POINT_QUANTIZATION;
+      const centerY = lake.center[1] / HYDROLOGY_POINT_QUANTIZATION;
+      const radius = lake.radius / HYDROLOGY_POINT_QUANTIZATION;
+      addToBuckets(
+        "lakes",
+        lakeIndex,
+        centerX - radius - 0.5,
+        centerY - radius - 0.5,
+        centerX + radius + 0.5,
+        centerY + radius + 0.5
+      );
+    }
+    this.buckets = Object.freeze(mutableBuckets.map((bucket) => Object.freeze({
+      rivers: Object.freeze(bucket.rivers),
+      lakes: Object.freeze(bucket.lakes)
+    })));
+    this.bodies = new Map(region.bodies.map((body) => [body.bodyId, body]));
+    this.mouths = new Map(region.mouths.map((mouth) => [mouth.segmentId, mouth]));
+  }
+  query(localX, localY, groundHeight, seaLevel) {
+    if (!Number.isFinite(localX) || !Number.isFinite(localY) || localX < 0 || localX >= this.region.validBounds.maxXExclusive || localY < 0 || localY >= this.region.validBounds.maxYExclusive) {
+      throw new RangeError("hydrology query point lies outside region valid bounds");
+    }
+    if (!Number.isInteger(groundHeight) || groundHeight < 0 || groundHeight > 65535 || !Number.isInteger(seaLevel) || seaLevel < 0 || seaLevel > 65535) {
+      throw new RangeError("hydrology query heights must be uint16 values");
+    }
+    const cellX = Math.floor(localX / HYDROLOGY_SPATIAL_CELL_SIZE);
+    const cellY = Math.floor(localY / HYDROLOGY_SPATIAL_CELL_SIZE);
+    const bucket = this.buckets[cellX * this.cellCountY + cellY];
+    let best;
+    if (groundHeight < seaLevel) {
+      best = {
+        coverage: 255,
+        kind: HYDROLOGY_KIND_OCEAN,
+        level: seaLevel,
+        flowX: 0,
+        flowY: 0,
+        body: OCEAN_BODY_REF,
+        priority: 0,
+        stableIdentity: "ocean"
+      };
+    }
+    for (const lakeIndex of bucket.lakes) {
+      const lake = this.region.lakes[lakeIndex];
+      if (groundHeight > lake.level) continue;
+      const distance = Math.hypot(
+        localX - lake.center[0] / HYDROLOGY_POINT_QUANTIZATION,
+        localY - lake.center[1] / HYDROLOGY_POINT_QUANTIZATION
+      );
+      const coverage = clamp(Math.round((lake.radius / HYDROLOGY_POINT_QUANTIZATION + 0.5 - distance) * 255), 0, 255);
+      if (coverage === 0) continue;
+      const body = this.bodies.get(lake.bodyId);
+      if (!body) throw new Error("hydrology lake query lost its body reference");
+      const candidate = {
+        coverage,
+        kind: HYDROLOGY_KIND_LAKE,
+        level: lake.level,
+        flowX: 0,
+        flowY: 0,
+        body,
+        priority: 1,
+        stableIdentity: lake.bodyId
+      };
+      if (compareCandidate(candidate, best)) best = candidate;
+    }
+    for (const riverIndex of bucket.rivers) {
+      const river = this.region.rivers[riverIndex];
+      const closest = closestRiverPoint(river, localX, localY);
+      const coverage = clamp(Math.round((closest.halfWidth + 0.5 - closest.distance) * 255), 0, 255);
+      if (coverage === 0) continue;
+      const body = this.bodies.get(river.riverId);
+      if (!body) throw new Error("hydrology river query lost its body reference");
+      const candidate = {
+        coverage,
+        kind: HYDROLOGY_KIND_RIVER,
+        level: closest.level,
+        flowX: closest.flowX,
+        flowY: closest.flowY,
+        body,
+        priority: 2 + river.dischargeClass,
+        stableIdentity: `${river.riverId}:${river.segmentId}`,
+        mouth: this.mouths.get(river.segmentId),
+        mouthDistance: closest.distanceToEnd,
+        halfWidth: closest.halfWidth
+      };
+      if (compareCandidate(candidate, best)) best = candidate;
+    }
+    if (!best) {
+      return Object.freeze({
+        coverage: 0,
+        kind: HYDROLOGY_KIND_NONE,
+        level: 0,
+        depth: 0,
+        flowX: 0,
+        flowY: 0,
+        profileIndex: 0
+      });
+    }
+    if (best.mouth && best.mouthDistance !== void 0 && best.halfWidth !== void 0 && best.mouthDistance <= best.halfWidth * 0.5) {
+      const target = this.bodies.get(best.mouth.targetBodyId);
+      if (!target) throw new Error("hydrology mouth query lost its target body reference");
+      best = {
+        ...best,
+        kind: target.kind === "ocean" ? HYDROLOGY_KIND_OCEAN : HYDROLOGY_KIND_LAKE,
+        flowX: 0,
+        flowY: 0,
+        body: target,
+        stableIdentity: target.bodyId
+      };
+    }
+    return Object.freeze({
+      coverage: best.coverage,
+      kind: best.kind,
+      level: best.level,
+      depth: Math.max(0, best.level - groundHeight),
+      flowX: best.flowX,
+      flowY: best.flowY,
+      profileIndex: best.body.profileIndex,
+      body: best.body
+    });
+  }
+};
+
+// src/world/DerivedHydrologyRaster.ts
+var MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES = 1048576;
+var MAX_DERIVED_HYDROLOGY_BODY_PALETTE = 255;
+function compareIdentity2(first, second) {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+function derivedHydrologyRasterIndex(x, y, width, height) {
+  if (!Number.isInteger(x) || x < 0 || !Number.isInteger(y) || y < 0 || !Number.isInteger(width) || width <= 0 || x >= width || !Number.isInteger(height) || height <= 0 || y >= height) {
+    throw new RangeError("derived hydrology raster coordinate is invalid");
+  }
+  const index = x * height + y;
+  if (!Number.isSafeInteger(index)) throw new RangeError("derived hydrology raster index is unsafe");
+  return index;
+}
+function assertDerivedHydrologyRaster(raster) {
+  if (!raster || typeof raster !== "object" || typeof raster.worldIdentity !== "string" || raster.worldIdentity.length === 0 || !raster.regionKey || !Number.isSafeInteger(raster.regionKey.regionX) || !Number.isSafeInteger(raster.regionKey.regionY) || !Number.isSafeInteger(raster.regionRevision) || raster.regionRevision < 0 || !Number.isInteger(raster.width) || raster.width <= 0 || !Number.isInteger(raster.height) || raster.height <= 0 || !Number.isFinite(raster.localOriginX) || !Number.isFinite(raster.localOriginY) || !Number.isFinite(raster.stepX) || raster.stepX <= 0 || !Number.isFinite(raster.stepY) || raster.stepY <= 0) {
+    throw new TypeError("derived hydrology raster metadata is invalid");
+  }
+  const length = raster.width * raster.height;
+  if (!Number.isSafeInteger(length) || length > MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES || !(raster.coverage instanceof Uint8Array) || raster.coverage.length !== length || !(raster.kind instanceof Uint8Array) || raster.kind.length !== length || !(raster.level instanceof Uint16Array) || raster.level.length !== length || !(raster.depth instanceof Uint16Array) || raster.depth.length !== length || !(raster.flow instanceof Int8Array) || raster.flow.length !== length * 2 || !(raster.profile instanceof Uint8Array) || raster.profile.length !== length || !(raster.bodyIndex instanceof Uint8Array) || raster.bodyIndex.length !== length || !Array.isArray(raster.bodies) || raster.bodies.length > MAX_DERIVED_HYDROLOGY_BODY_PALETTE) {
+    throw new TypeError("derived hydrology raster arrays violate the frozen layout");
+  }
+  let previousBodyId;
+  for (const body of raster.bodies) {
+    if (!body || typeof body.bodyId !== "string" || body.bodyId.length === 0 || body.kind !== "ocean" && body.kind !== "lake" && body.kind !== "river" || !Number.isInteger(body.profileIndex) || body.profileIndex < 0 || body.profileIndex > 255 || previousBodyId !== void 0 && previousBodyId >= body.bodyId) {
+      throw new Error("derived hydrology body palette is invalid or not canonical");
+    }
+    previousBodyId = body.bodyId;
+  }
+  for (let index = 0; index < length; index += 1) {
+    const bodyIndex = raster.bodyIndex[index];
+    if (raster.coverage[index] === 0) {
+      if (raster.kind[index] !== HYDROLOGY_KIND_NONE || bodyIndex !== 0 || raster.level[index] !== 0 || raster.depth[index] !== 0 || raster.flow[index * 2] !== 0 || raster.flow[index * 2 + 1] !== 0 || raster.profile[index] !== 0) {
+        throw new Error("dry derived hydrology samples must use the zero representation");
+      }
+      continue;
+    }
+    if (raster.kind[index] < 1 || raster.kind[index] > 3 || bodyIndex === 0 || bodyIndex > raster.bodies.length || raster.profile[index] !== raster.bodies[bodyIndex - 1].profileIndex || raster.depth[index] > raster.level[index] || raster.flow[index * 2] < -1 || raster.flow[index * 2] > 1 || raster.flow[index * 2 + 1] < -1 || raster.flow[index * 2 + 1] > 1) {
+      throw new Error("wet derived hydrology sample has an invalid kind, flow or body reference");
+    }
+    const bodyKind = raster.bodies[bodyIndex - 1].kind;
+    if (raster.kind[index] === 1 && bodyKind !== "ocean" || raster.kind[index] === 2 && bodyKind !== "lake" || raster.kind[index] === 3 && bodyKind !== "river" || raster.kind[index] !== 3 && (raster.flow[index * 2] !== 0 || raster.flow[index * 2 + 1] !== 0)) {
+      throw new Error("derived hydrology kind does not match its body or flow semantics");
+    }
+  }
+}
+function deriveHydrologyRaster(options) {
+  if (!options || typeof options !== "object" || !(options.index instanceof HydrologyRegionSpatialIndex)) {
+    throw new TypeError("derived hydrology raster requires a spatial index");
+  }
+  if (!Number.isInteger(options.width) || options.width <= 0 || !Number.isInteger(options.height) || options.height <= 0) {
+    throw new RangeError("derived hydrology raster dimensions must be positive integers");
+  }
+  const length = options.width * options.height;
+  if (!Number.isSafeInteger(length) || length > MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES || !(options.groundHeight instanceof Uint16Array) || options.groundHeight.length !== length) {
+    throw new RangeError("derived hydrology raster exceeds its sample budget or ground input");
+  }
+  if (!Number.isFinite(options.localOriginX) || !Number.isFinite(options.localOriginY) || !Number.isFinite(options.stepX) || options.stepX <= 0 || !Number.isFinite(options.stepY) || options.stepY <= 0 || !Number.isInteger(options.seaLevel) || options.seaLevel < 0 || options.seaLevel > 65535) {
+    throw new RangeError("derived hydrology sampling lattice or sea level is invalid");
+  }
+  const lastX = options.localOriginX + (options.width - 1) * options.stepX;
+  const lastY = options.localOriginY + (options.height - 1) * options.stepY;
+  if (options.localOriginX < 0 || options.localOriginY < 0 || lastX >= options.index.region.validBounds.maxXExclusive || lastY >= options.index.region.validBounds.maxYExclusive) {
+    throw new RangeError("derived hydrology sampling lattice leaves region valid bounds");
+  }
+  const samples = new Array(length);
+  const usedBodies = /* @__PURE__ */ new Map();
+  for (let x = 0; x < options.width; x += 1) {
+    for (let y = 0; y < options.height; y += 1) {
+      const index = derivedHydrologyRasterIndex(x, y, options.width, options.height);
+      const sample = options.index.query(
+        options.localOriginX + x * options.stepX,
+        options.localOriginY + y * options.stepY,
+        options.groundHeight[index],
+        options.seaLevel
+      );
+      samples[index] = sample;
+      if (sample.body) usedBodies.set(sample.body.bodyId, sample.body);
+    }
+  }
+  const bodies = [...usedBodies.values()].sort((first, second) => compareIdentity2(first.bodyId, second.bodyId));
+  if (bodies.length > MAX_DERIVED_HYDROLOGY_BODY_PALETTE) {
+    throw new RangeError("derived hydrology raster exceeds the uint8 body palette");
+  }
+  const paletteIndices = new Map(bodies.map((body, index) => [body.bodyId, index + 1]));
+  const coverage = new Uint8Array(length);
+  const kind = new Uint8Array(length);
+  const level = new Uint16Array(length);
+  const depth = new Uint16Array(length);
+  const flow = new Int8Array(length * 2);
+  const profile = new Uint8Array(length);
+  const bodyIndex = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const sample = samples[index];
+    coverage[index] = sample.coverage;
+    kind[index] = sample.kind;
+    level[index] = sample.level;
+    depth[index] = sample.depth;
+    flow[index * 2] = sample.flowX;
+    flow[index * 2 + 1] = sample.flowY;
+    profile[index] = sample.profileIndex;
+    if (sample.body) bodyIndex[index] = paletteIndices.get(sample.body.bodyId);
+  }
+  const region = options.index.region;
+  const raster = Object.freeze({
+    worldIdentity: region.worldIdentity,
+    regionKey: region.key,
+    regionRevision: region.revision,
+    width: options.width,
+    height: options.height,
+    localOriginX: options.localOriginX,
+    localOriginY: options.localOriginY,
+    stepX: options.stepX,
+    stepY: options.stepY,
+    coverage,
+    kind,
+    level,
+    depth,
+    flow,
+    profile,
+    bodyIndex,
+    bodies: Object.freeze(bodies)
+  });
+  assertDerivedHydrologyRaster(raster);
+  return raster;
+}
 export {
   BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
   BASE_SEMANTIC_CHUNK_TILE_COUNT,
@@ -4528,14 +4921,24 @@ export {
   HYDROLOGY_BOUNDARY_MAX_Y,
   HYDROLOGY_BOUNDARY_MIN_X,
   HYDROLOGY_BOUNDARY_MIN_Y,
+  HYDROLOGY_KIND_LAKE,
+  HYDROLOGY_KIND_NONE,
+  HYDROLOGY_KIND_OCEAN,
+  HYDROLOGY_KIND_RIVER,
   HYDROLOGY_POINT_QUANTIZATION,
   HYDROLOGY_REGION_FORMAT_VERSION,
   HYDROLOGY_REGION_REVISION,
   HYDROLOGY_REGION_SIZE,
+  HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
+  HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
+  HYDROLOGY_SPATIAL_CELL_SIZE,
+  HydrologyRegionSpatialIndex,
   InfiniteHydrologyRegionSource,
   InfiniteSemanticWorldSource,
   LAKE_HYDROLOGY_PROFILE,
   MACRO_DRAINAGE_NODE_STEP_TILES,
+  MAX_DERIVED_HYDROLOGY_BODY_PALETTE,
+  MAX_DERIVED_HYDROLOGY_RASTER_SAMPLES,
   MAX_HYDROLOGY_REGION_BODIES,
   MAX_HYDROLOGY_REGION_LAKES,
   MAX_HYDROLOGY_REGION_MOUTHS,
@@ -4565,6 +4968,7 @@ export {
   WORLD_SEMANTIC_CHUNK_SIZE,
   assertBaseSemanticChunk,
   assertCoreWorldSemanticsV2,
+  assertDerivedHydrologyRaster,
   assertGenerateSemanticChunkWorkerRequest,
   assertHydrologyRegion,
   assertMacroDrainageGraph,
@@ -4577,10 +4981,13 @@ export {
   createGenerateSemanticChunkWorkerRequest,
   createHydrologyRegion,
   createWorldDescriptorV2,
+  deriveHydrologyRaster,
+  derivedHydrologyRasterIndex,
   deserializeBaseSemanticChunk,
   generateBaseSemanticChunk,
   getBaseSemanticTile,
   hydrologyPortConnectionSignature,
+  hydrologyRiverHalfWidthTiles,
   macroDrainageNodeId,
   macroDrainageNodeTile,
   macroDrainageTerminalBodyId,

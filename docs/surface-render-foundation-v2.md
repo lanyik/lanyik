@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源和无限 basin 缓存求值源，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker/derived query 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker、静态显式 feature 适配及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -335,6 +335,10 @@ interface HydrologyBodyRef {
 ### 6.7 空间索引与预算
 
 每个区域在加载后构建可丢弃的紧凑只读空间索引；索引不进入权威格式。查询 16×16 渲染块时只返回与块 bounds 加固定 halo 相交的 feature，不扫描区域全部河流。
+
+当前 `HydrologyRegionSpatialIndex` 固定使用 16×16 逻辑格空间桶，按 feature 的扩张 bounds 一次登记 river/lake 索引；单点查询只检查所在桶。河流半宽由 `0.5 + widthClass × 0.25` 逻辑格冻结派生，河段沿控制点插值 width/level，并以 1 格 coverage 过渡带输出离散 coverage、kind、level、depth、八方向 flow、profile 与稳定 body ref。mouth 在末端半个河宽内确定性切换到目标 ocean/lake body，并把目标水体 flow 归零。
+
+`DerivedHydrologyRaster` 是上述查询在调用方规则采样格上的 X-major typed-array 快照，携带 world identity、region key/revision 和最多 255 项的按 body ID 排序局部 palette。无水固定全零，body index 0 固定表示无水；palette 超限、kind/body 不匹配或非河流具有 flow 均立即失败。该 raster 没有序列化入口，也不进入存档；当前 64×64 查询已加入性能门，与冷 basin build、相邻 cache hit 和 resident bytes 一起防止复杂度回退。
 
 生成器必须限制单区域 feature 数、控制点数和序列化字节。超出冻结上限是生成错误，需要修正规则或升级版本，不能静默截断造成跨区断流。
 

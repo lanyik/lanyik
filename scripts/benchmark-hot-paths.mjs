@@ -13,8 +13,10 @@ import {
 import { buildWorldNavigationSummary } from "../dist/pathfinding.mjs";
 import { WorldSimulationRuntime } from "../dist/simulation.mjs";
 import {
+    HydrologyRegionSpatialIndex,
     InfiniteHydrologyRegionSource,
-    createCoreInfiniteWorldDescriptorV2
+    createCoreInfiniteWorldDescriptorV2,
+    deriveHydrologyRaster
 } from "../dist/surface.mjs";
 
 const round = (value, digits = 2) => {
@@ -245,10 +247,27 @@ function benchmarkInfiniteHydrology() {
     started = performance.now();
     const warm = source.buildRegion(1, 0);
     const adjacentCachedBuildMs = performance.now() - started;
+    started = performance.now();
+    const raster = deriveHydrologyRaster({
+        index: new HydrologyRegionSpatialIndex(cold),
+        width: 64,
+        height: 64,
+        localOriginX: 0,
+        localOriginY: 0,
+        stepX: 2,
+        stepY: 2,
+        groundHeight: new Uint16Array(64 * 64).fill(32768),
+        seaLevel: source.descriptor.seaLevel
+    });
+    const derivedRasterMs = performance.now() - started;
     return {
         operation: "infinite hydrology cold region plus adjacent cached region",
         coldBuildMs: round(coldBuildMs),
         adjacentCachedBuildMs: round(adjacentCachedBuildMs),
+        derivedRasterMs: round(derivedRasterMs),
+        derivedRasterBytes: raster.coverage.byteLength + raster.kind.byteLength
+            + raster.level.byteLength + raster.depth.byteLength + raster.flow.byteLength
+            + raster.profile.byteLength + raster.bodyIndex.byteLength,
         coldFeatures: cold.rivers.length + cold.lakes.length + cold.mouths.length,
         warmFeatures: warm.rivers.length + warm.lakes.length + warm.mouths.length,
         residentBasins: source.stats.residentBasins,
@@ -338,6 +357,7 @@ if (process.argv.includes("--check")) {
     under("navigationSummaries.exactDurationMs", results.navigationSummaries.exactDurationMs, 2_500);
     under("infiniteHydrology.coldBuildMs", results.infiniteHydrology.coldBuildMs, 2_500);
     under("infiniteHydrology.adjacentCachedBuildMs", results.infiniteHydrology.adjacentCachedBuildMs, 250);
+    under("infiniteHydrology.derivedRasterMs", results.infiniteHydrology.derivedRasterMs, 250);
     under("infiniteHydrology.residentBytes", results.infiniteHydrology.residentBytes, 32 * 1024 * 1024);
     under("simulationRuntime.coldInsertMs", results.simulationRuntime.coldInsertMs, 500);
     under("simulationRuntime.denseNoopTickMs", results.simulationRuntime.denseNoopTickMs, 2_000);
