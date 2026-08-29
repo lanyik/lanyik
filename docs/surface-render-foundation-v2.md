@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口与连续语义地面编译核已冻结，save barrier、持久化 store、完整水文/SDF 编译及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋 coverage/岸线 SDF 核与 chunk-local 水体 palette 已冻结，save barrier、持久化 store、显式湖河合并编译及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -473,7 +473,7 @@ compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency k
 
 请求快照包含 16×16 核心区、两格语义 halo 和相交水文 feature。`TransferableEffectiveWindow` 拥有从池中取得的独立传输 buffer；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。Worker 返回后 buffer 回池。首次装载同一 32×32 semantic chunk 下的四个 render chunks 时，调度器可以合并快照构建和任务投递，但四个编译结果仍拥有独立 token、缓存和失效范围。
 
-已落地的 transfer window 格式版本 1 固定为 20×20 X-major semantic SoA 与 binary valid mask；finite 边界外 payload 必须全零，infinite 负坐标和 toroidal seam 在复制前映射到规范 source key。构建器并行租用且最多去重到 4 个 semantic chunks 与 4 个 hydrology regions，使用 `Promise.allSettled` 保证任一加载失败时也归还所有已成功 lease。水文部分复制完整、可重新运行 `assertHydrologyRegion` 的基础 region，再单列有序 suppression IDs 和相交的完整 authored upserts；不传输失去内部引用闭包的预过滤残片。所有 semantic、port、segment、lake、mouth 与 authored feature typed arrays 都是互不别名的新 `ArrayBuffer`；真实 transfer detach 后 resident base 与 delta buffer 保持完整。
+已落地的 transfer window 格式版本 1 固定为 20×20 X-major semantic SoA、binary valid mask 与 descriptor 冻结的 `seaLevel` uint16；finite 边界外 payload 必须全零，infinite 负坐标和 toroidal seam 在复制前映射到规范 source key。构建器并行租用且最多去重到 4 个 semantic chunks 与 4 个 hydrology regions，使用 `Promise.allSettled` 保证任一加载失败时也归还所有已成功 lease。水文部分复制完整、可重新运行 `assertHydrologyRegion` 的基础 region，再单列有序 suppression IDs 和相交的完整 authored upserts；不传输失去内部引用闭包的预过滤残片。所有 semantic、port、segment、lake、mouth 与 authored feature typed arrays 都是互不别名的新 `ArrayBuffer`；真实 transfer detach 后 resident base 与 delta buffer 保持完整。
 
 地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；编译块只提供表面场、真实 bounds 和可选的混合水面 geometry。`CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
 
@@ -529,11 +529,11 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 浮点字段的 CPU 数组保存 IEEE 754 binary16 原始位，CPU 通过共享解码器读取，GPU 原样上传为 half-float texel。Shader 对参与宏观几何和查询一致性的字段使用 `texelFetch` 后手动插值，不依赖厂商纹理过滤舍入或可选的浮点线性过滤扩展。
 
-已落地的 `CompiledSurfaceField` 格式版本 1 与 `SURFACE_COMPILER_REVISION = 1` 固定为 66×66 X-major SoA：十个数组拥有互不别名的独立 transferable `ArrayBuffer`，合计严格为 78408 bytes，也就是 18 bytes/texel。共享 binary16 codec 使用 IEEE 754 round-to-nearest-even、规范 NaN 和有符号零；发布字段拒绝 NaN/Infinity、材质权重和不为 255、SNORM `-128`、dry texel 非零水体 payload、wet texel 缺 body/kind、河流零 flow，以及不等于“量化 waterLevel - 量化 groundHeight”的 waterDepth。错误数据不会靠 shader clamp 掩盖。
+已落地的 `CompiledSurfaceField` 格式版本 1 与 `SURFACE_COMPILER_REVISION = 1` 固定为 66×66 X-major SoA：十个数组拥有互不别名的独立 transferable `ArrayBuffer`，合计严格为 78408 bytes，也就是 18 bytes/texel。共享 binary16 codec 使用 IEEE 754 round-to-nearest-even、规范 NaN 和有符号零；发布字段拒绝 NaN/Infinity、材质权重和不为 255、SNORM `-128`、dry texel 非零水体 payload、非零 coverage texel 缺 body/kind、河流零 flow，以及不等于“量化 waterLevel - 量化 groundHeight”的 waterDepth。抗锯齿带允许中心位于陆侧而 coverage 小于 128 的 texel 保留水体 payload，此时规范 depth 为 0；coverage 达到 128 后则要求量化水位不低于量化地面。错误数据不会靠 shader clamp 掩盖。
 
 `shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 
-每个 compiled chunk 的 body palette 最多包含 255 个相交水体；超过上限是 feature 预算或编译错误，不能合并 ID。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。按上述逻辑布局，一个含 gutter 的静态表面场低于 80 KiB CPU 数据并处于同量级 GPU 数据，验收以实际内部格式和驱动分配为准。
+已落地的 `CompiledWaterBodyPalette` 格式版本 1 使用严格递增、唯一的稳定 body ID，字段索引为一基，0 保留给无水；profile 是 uint8，海洋固定使用 `OCEAN_BODY_ID` 和 profile 0。每个 compiled chunk 的 body palette 最多包含 255 个相交水体；超过上限是 feature 预算或编译错误，不能合并 ID。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。按上述逻辑布局，一个含 gutter 的静态表面场低于 80 KiB CPU 数据并处于同量级 GPU 数据，验收以实际内部格式和驱动分配为准。
 
 动态战争迷雾不进入该静态表面层。雾使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 共用 slot 页号和 layer 号，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
 
@@ -550,6 +550,8 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 7. 量化输出，并计算保守 bounds、字节数和内容哈希。
 
 当前已落地的 `compileSemanticSurfaceField` 只实现并明确命名为上述第 1 步的连续语义地面核，不冒充完整水文编译器。它按全局 `surfaceTexelCenterAxis` 对四个 tile center 做双线性采样，finite 边缘忽略 valid mask 外的规范零值并重新归一化；宏观 `uint16` 高度通过 dependency key 的 `heightScale` 转为世界 Y 后量化为 binary16。四项 descriptor biome basis 暂作为冻结的四个 material basis 输入，插值后用最大余数法恢复严格和 255；后续坡度、substrate 与湿岸调制只能在保持该守恒量的前提下加入。循环复用固定 scratch，不在 4356 texel 热循环中创建临时对象。正坐标、负坐标和相邻块两列共享 texel 已锁定逐位测试。
+
+已落地的 `compileOceanSurfaceField` 在上述地面核之上完成海洋子阶段。它只读取 transfer window 中 descriptor 冻结的 uint16 海平面，以 20×20 tile-center 宏观高度运行确定性 marching-squares 轮廓；四交点 saddle 由 cell-center 高度与左下角状态唯一消歧。轮廓先经 `surfaceToWorld` 转到世界 XZ，再计算 texel 到线段的真实欧氏最短距离并在两格影响半径饱和；coverage 使用固定一个 texel 宽的线性抗锯齿带。判湿、水位和水深统一使用最终 binary16 精度，陆侧少量 coverage 被限制到 127，水侧被限制到至少 128。全陆块不创建 palette entry，全海块直接得到饱和负 SDF 与 255 coverage；海岸跨相邻 chunk 的两列共享字段已逐位锁定。该函数仍不处理显式湖泊、河流和河口，完整编译入口将在这些 feature 合并后发布。
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 

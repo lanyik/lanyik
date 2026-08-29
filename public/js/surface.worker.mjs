@@ -2559,10 +2559,12 @@ function assertMacroDrainageTree(tree, valid, topology = "bounded") {
   }
 }
 
+// src/world/HydrologyIdentity.ts
+var OCEAN_BODY_ID = "ocean";
+
 // src/world/MacroDrainageGraph.ts
 var MACRO_DRAINAGE_NODE_STEP_TILES = 8;
 var MAX_MACRO_DRAINAGE_GRAPH_NODES = 1048576;
-var OCEAN_BODY_ID = "ocean";
 function abortError() {
   if (typeof DOMException !== "undefined") return new DOMException("macro drainage graph build was aborted", "AbortError");
   const error = new Error("macro drainage graph build was aborted");

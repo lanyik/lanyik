@@ -14,10 +14,11 @@ import {
 } from "./MacroDrainageTree";
 import { SemanticWorldSource } from "./SemanticWorldSource";
 import { WORLD_SEMANTIC_CHUNK_SIZE } from "./SurfaceCompileProfile";
+import { OCEAN_BODY_ID } from "./HydrologyIdentity";
 
 export const MACRO_DRAINAGE_NODE_STEP_TILES = 8;
 export const MAX_MACRO_DRAINAGE_GRAPH_NODES = 1_048_576;
-export const OCEAN_BODY_ID = "ocean";
+export { OCEAN_BODY_ID };
 
 export interface MacroDrainageGraph {
     readonly revision: 0;

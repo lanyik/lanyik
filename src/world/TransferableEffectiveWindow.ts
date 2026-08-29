@@ -52,6 +52,7 @@ export interface TransferableEffectiveWindow {
     readonly formatVersion: typeof TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION;
     readonly worldIdentity: string;
     readonly effectiveRevision: number;
+    readonly seaLevel: number;
     readonly renderKey: RenderChunkKey;
     readonly originTileX: number;
     readonly originTileY: number;
@@ -261,7 +262,8 @@ export function assertTransferableEffectiveWindow(window: Readonly<TransferableE
         || window.worldIdentity !== window.dependencyKey.worldIdentity
         || window.renderKey.chunkX !== window.dependencyKey.renderKey.chunkX
         || window.renderKey.chunkY !== window.dependencyKey.renderKey.chunkY
-        || !Number.isSafeInteger(window.effectiveRevision) || window.effectiveRevision < 0) {
+        || !Number.isSafeInteger(window.effectiveRevision) || window.effectiveRevision < 0
+        || !Number.isInteger(window.seaLevel) || window.seaLevel < 0 || window.seaLevel > 0xffff) {
         throw new TypeError("transferable effective window identity, key or revision is invalid");
     }
     assertSurfaceDependencyKey(window.dependencyKey);
@@ -489,6 +491,7 @@ export async function buildTransferableEffectiveWindow(
             formatVersion: TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION,
             worldIdentity: options.view.worldIdentity,
             effectiveRevision: options.view.effectiveRevision,
+            seaLevel: options.view.descriptor.seaLevel,
             renderKey: dependencyKey.renderKey,
             originTileX,
             originTileY,

@@ -101,8 +101,8 @@ export function assertCompiledSurfaceField(field: Readonly<CompiledSurfaceField>
             || field.waterBodyIndex[index] === 0) {
             throw new RangeError("wet surface texels require a valid water kind and body palette index");
         }
-        if (waterDepth < 0 || waterLevel < groundHeight) {
-            throw new Error("wet surface texels cannot contain negative depth or water below ground");
+        if (waterDepth < 0 || field.waterCoverage[index] >= 128 && waterLevel < groundHeight) {
+            throw new Error("wet-majority surface texels cannot contain negative depth or water below ground");
         }
         if (field.waterDepth[index] !== finiteFloat16Bits(
             "compiled surface water depth",

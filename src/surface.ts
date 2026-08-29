@@ -76,6 +76,21 @@ export type {
 export { compileSemanticSurfaceField } from "./world/compileSemanticSurfaceField";
 
 export {
+    COMPILED_WATER_BODY_PALETTE_FORMAT_VERSION,
+    MAX_COMPILED_WATER_BODIES,
+    assertCompiledWaterBodyPalette,
+    createCompiledWaterBodyPalette,
+    compiledWaterBodyPaletteIndex
+} from "./world/CompiledWaterBodyPalette";
+export type {
+    CompiledWaterBodyKind,
+    CompiledWaterBody,
+    CompiledWaterBodyPalette
+} from "./world/CompiledWaterBodyPalette";
+export { compileOceanSurfaceField } from "./world/compileOceanSurfaceField";
+export type { OceanSurfaceCompilation } from "./world/compileOceanSurfaceField";
+
+export {
     surfaceColumnStagger,
     surfaceStagger,
     surfaceToWorld,
