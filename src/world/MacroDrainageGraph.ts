@@ -55,7 +55,7 @@ function abortError(): Error {
     return error;
 }
 
-function classifyDischarge(discharge: number): number {
+export function macroDrainageDischargeClass(discharge: number): number {
     return Math.min(255, Math.floor(Math.log2(Math.max(1, discharge))));
 }
 
@@ -65,7 +65,7 @@ function treeFor(raster: Readonly<MacroDrainageRaster>, topology: MacroDrainageG
         : buildMacroDrainageTree(raster);
 }
 
-function assignTerminalNodes(tree: Readonly<MacroDrainageTree>): Uint32Array {
+export function assignMacroDrainageTerminalNodes(tree: Readonly<MacroDrainageTree>): Uint32Array {
     const terminalNode = new Uint32Array(tree.downstream.length);
     terminalNode.fill(0xffff_ffff);
     for (const terminal of tree.terminalIndices) terminalNode[terminal] = terminal;
@@ -102,7 +102,14 @@ export function macroDrainageNodeTile(
 
 export function macroDrainageNodeId(graph: Readonly<MacroDrainageGraph>, index: number): string {
     const tile = macroDrainageNodeTile(graph, index);
-    return `node:${tile.x}:${tile.y}`;
+    return macroDrainageTileNodeId(tile.x, tile.y);
+}
+
+export function macroDrainageTileNodeId(tileX: number, tileY: number): string {
+    if (!Number.isSafeInteger(tileX) || !Number.isSafeInteger(tileY)) {
+        throw new RangeError("macro drainage node tile must use safe integer coordinates");
+    }
+    return `node:${tileX}:${tileY}`;
 }
 
 export function macroDrainageTerminalBodyId(graph: Readonly<MacroDrainageGraph>, index: number): string {
@@ -139,7 +146,7 @@ export function assertMacroDrainageGraph(graph: Readonly<MacroDrainageGraph>): v
     if (graph.validNodeCount !== length) {
         throw new Error("complete macro drainage graph must populate every node");
     }
-    const expectedTerminalNode = assignTerminalNodes(graph);
+    const expectedTerminalNode = assignMacroDrainageTerminalNodes(graph);
     let oceanCount = 0;
     for (let index = 0; index < length; index += 1) {
         if (graph.ocean[index] > 1) throw new TypeError("macro drainage ocean mask must contain only zero or one");
@@ -153,7 +160,7 @@ export function assertMacroDrainageGraph(graph: Readonly<MacroDrainageGraph>): v
         const terminal = graph.terminalNode[index];
         if (terminal >= length || graph.downstream[terminal] !== MACRO_DRAINAGE_TERMINAL
             || terminal !== expectedTerminalNode[index]
-            || graph.dischargeClass[index] !== classifyDischarge(graph.discharge[index])) {
+            || graph.dischargeClass[index] !== macroDrainageDischargeClass(graph.discharge[index])) {
             throw new Error("macro drainage graph terminal or discharge class is invalid");
         }
     }
@@ -263,7 +270,7 @@ export async function buildMacroDrainageGraph(
     const tree = treeFor(raster, source.bounds.topology);
     const dischargeClass = new Uint8Array(length);
     for (let index = 0; index < length; index += 1) {
-        dischargeClass[index] = classifyDischarge(tree.discharge[index]);
+        dischargeClass[index] = macroDrainageDischargeClass(tree.discharge[index]);
     }
     const graph: MacroDrainageGraph = Object.freeze({
         revision: 0,
@@ -282,7 +289,7 @@ export async function buildMacroDrainageGraph(
         spillLevel: tree.spillLevel,
         discharge: tree.discharge,
         dischargeClass,
-        terminalNode: assignTerminalNodes(tree),
+        terminalNode: assignMacroDrainageTerminalNodes(tree),
         terminalKind: tree.terminalKind,
         terminalIndices: tree.terminalIndices,
         validNodeCount: tree.validNodeCount,

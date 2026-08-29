@@ -32,6 +32,41 @@ export interface MacroDrainageTree {
     readonly maxDrainageRank: number;
 }
 
+export function deriveMacroDrainageTerminalWaterLevels(
+    tree: Readonly<MacroDrainageTree>,
+    raster: Pick<MacroDrainageRaster, "groundHeight" | "ocean" | "seaLevel">
+): Uint16Array {
+    const length = tree.downstream.length;
+    if (!(raster.groundHeight instanceof Uint16Array) || raster.groundHeight.length !== length
+        || !(raster.ocean instanceof Uint8Array) || raster.ocean.length !== length
+        || !Number.isInteger(raster.seaLevel) || raster.seaLevel < 0 || raster.seaLevel > 0xffff) {
+        throw new TypeError("macro drainage terminal levels require matching raster arrays");
+    }
+    const levels = new Uint16Array(length);
+    levels.fill(0xffff);
+    const resolved = new Uint8Array(length);
+    for (const terminal of tree.terminalIndices) {
+        if (raster.ocean[terminal] !== 0) {
+            levels[terminal] = raster.seaLevel;
+            resolved[terminal] = 1;
+        }
+    }
+    for (let index = 0; index < length; index += 1) {
+        const parent = tree.downstream[index];
+        if (parent < 0 || raster.ocean[parent] !== 0
+            || tree.downstream[parent] !== MACRO_DRAINAGE_TERMINAL) continue;
+        levels[parent] = Math.min(levels[parent], tree.spillLevel[index]);
+        resolved[parent] = 1;
+    }
+    for (const terminal of tree.terminalIndices) {
+        if (resolved[terminal] === 0) levels[terminal] = raster.groundHeight[terminal];
+        if (levels[terminal] < raster.groundHeight[terminal]) {
+            throw new Error("macro drainage terminal water level falls below its ground");
+        }
+    }
+    return levels;
+}
+
 class DrainageMinHeap {
     private readonly indices: number[] = [];
     private readonly priorities: number[] = [];

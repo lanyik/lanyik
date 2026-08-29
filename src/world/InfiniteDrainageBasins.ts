@@ -43,7 +43,10 @@ function checkedCellOrigin(cell: number): number {
     return origin;
 }
 
-function compareBasinKeys(first: InfiniteDrainageBasinKey, second: InfiniteDrainageBasinKey): number {
+export function compareInfiniteDrainageBasinKeys(
+    first: InfiniteDrainageBasinKey,
+    second: InfiniteDrainageBasinKey
+): number {
     return first.cellX - second.cellX || first.cellY - second.cellY;
 }
 
@@ -51,7 +54,11 @@ function columnStagger(column: number): number {
     return positiveModulo(column, 2) === 0 ? 0.5 : 0;
 }
 
-function siteDistanceSquared(site: InfiniteDrainageBasinSite, tileX: number, tileY: number): number {
+export function infiniteDrainageSiteDistanceSquared(
+    site: InfiniteDrainageBasinSite,
+    tileX: number,
+    tileY: number
+): number {
     const deltaX = site.tileX - tileX;
     const deltaY = site.tileY - tileY + columnStagger(site.tileX) - columnStagger(tileX);
     const worldX = 1.5 * deltaX;
@@ -115,12 +122,12 @@ export class InfiniteDrainageBasinResolver {
     public resolve(tileX: number, tileY: number): InfiniteDrainageBasinSite {
         const sites = this.candidateSites(tileX, tileY);
         let best = sites[0];
-        let bestDistance = siteDistanceSquared(best, tileX, tileY);
+        let bestDistance = infiniteDrainageSiteDistanceSquared(best, tileX, tileY);
         for (let index = 1; index < sites.length; index += 1) {
             const candidate = sites[index];
-            const distance = siteDistanceSquared(candidate, tileX, tileY);
+            const distance = infiniteDrainageSiteDistanceSquared(candidate, tileX, tileY);
             if (distance < bestDistance
-                || (distance === bestDistance && compareBasinKeys(candidate, best) < 0)) {
+                || (distance === bestDistance && compareInfiniteDrainageBasinKeys(candidate, best) < 0)) {
                 best = candidate;
                 bestDistance = distance;
             }

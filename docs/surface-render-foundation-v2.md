@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式及其局部裁切源，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。水文 Worker/derived query、无限 region 求值及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源和无限 basin 缓存求值源，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker/derived query 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -260,6 +260,10 @@ catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis h
 有限图使用有边界八邻域；环绕图在两个轴上使用真正的 toroidal 八邻域，不把 topology seam 当作出口或边界。发布验证会重新检查终点清单、连续且唯一的非终点 rank、相邻下游边、spill level 单调性以及从每节点单位来水反向累加得到的精确 discharge；终点映射和 discharge class 不匹配时拒绝发布。
 
 每个无限流域在上述有限窗口内从基础海域终点（若存在）或稳定湖盆终点运行确定性的 priority-flood。低分辨率排水 raster 固定为 X-major，并使用冻结顺序的八邻域；海域节点为 rank 0 终点，无海流域选择最低高度、再按 X-major 索引打破平局的稳定湖盆终点。其他节点只连接到已经结算的 parent，按结算顺序获得严格下降的 `drainageRank`；priority-flood spill level 保证下游水位不逆升，反向 rank 累加保证汇流 discharge 不减。发布前拒绝非连通流域掩码、海域高于海平面、非二值掩码或任何 rank/水位/discharge 不变量错误。
+
+当前无限实现按 canonical basin 而不是按请求 region 建图。单 basin 只在自身 cell 周围 3×3 cell 的 192×192 宏观候选窗口判定 Voronoi mask，并用周围 5×5 个 site 证明 owner；mask 若触及该窗口外边界立即失败。确定 owner 后只对该 basin 约 4096 个有效宏观节点调用 `BaseSemanticChunkGenerator.sampleMacroHeight`，该入口与完整 chunk 使用同一个 resolver 和 uint16 量化函数，不另建高度权威。一个 region 的 3×3 候选 basin 的实际高度采样并集仍严格位于 home cell 周围 5×5，site hash 判定不读取地形。
+
+完成的 basin graph 按 `(cellX, cellY)` 使用 number-keyed LRU 缓存；默认保留 16 个，允许 9～64 个，因而至少容纳一次 region 请求的全部候选 basin。缓存不参与 ID、rank 或 feature 结果，只避免相邻 128×128 region 重复 priority-flood。无限 region 仍仅扫描本区加一个宏观步长 halo，从 canonical basin graph 裁边；负 region key、相邻区逆序请求和共享 port signature 已冻结测试。
 
 Voronoi 边界是排水分界线，不在边界随机创造跨流域河流；单个流域仍可跨越多个 128×128 region 并生成正常 boundary port。512、8、64、3×3 和 5×5 都属于生成器版本契约，不是运行时参数。若实现无法维持这个有限依赖窗口、流域连通性和终止证明，无限模式不能发布为 v2 水文源。
 

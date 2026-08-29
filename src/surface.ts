@@ -169,3 +169,13 @@ export {
     MAX_LAKE_RADIUS_TILES,
     MacroDrainageHydrologySource
 } from "./world/MacroDrainageHydrologySource";
+
+export {
+    DEFAULT_INFINITE_HYDROLOGY_RESIDENT_BASINS,
+    MIN_INFINITE_HYDROLOGY_RESIDENT_BASINS,
+    InfiniteHydrologyRegionSource
+} from "./world/InfiniteHydrologyRegionSource";
+export type {
+    InfiniteHydrologyRegionSourceOptions,
+    InfiniteHydrologyRegionSourceStats
+} from "./world/InfiniteHydrologyRegionSource";

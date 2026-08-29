@@ -12,6 +12,10 @@ import {
 } from "../dist/hex-map.mjs";
 import { buildWorldNavigationSummary } from "../dist/pathfinding.mjs";
 import { WorldSimulationRuntime } from "../dist/simulation.mjs";
+import {
+    InfiniteHydrologyRegionSource,
+    createCoreInfiniteWorldDescriptorV2
+} from "../dist/surface.mjs";
 
 const round = (value, digits = 2) => {
     const scale = 10 ** digits;
@@ -231,6 +235,29 @@ function benchmarkNavigationSummaries() {
     };
 }
 
+function benchmarkInfiniteHydrology() {
+    const source = new InfiniteHydrologyRegionSource({
+        descriptor: createCoreInfiniteWorldDescriptorV2("perf-infinite-hydrology")
+    });
+    let started = performance.now();
+    const cold = source.buildRegion(0, 0);
+    const coldBuildMs = performance.now() - started;
+    started = performance.now();
+    const warm = source.buildRegion(1, 0);
+    const adjacentCachedBuildMs = performance.now() - started;
+    return {
+        operation: "infinite hydrology cold region plus adjacent cached region",
+        coldBuildMs: round(coldBuildMs),
+        adjacentCachedBuildMs: round(adjacentCachedBuildMs),
+        coldFeatures: cold.rivers.length + cold.lakes.length + cold.mouths.length,
+        warmFeatures: warm.rivers.length + warm.lakes.length + warm.mouths.length,
+        residentBasins: source.stats.residentBasins,
+        residentBytes: source.stats.residentBytes,
+        basinBuilds: source.stats.basinBuilds,
+        basinCacheHits: source.stats.basinCacheHits
+    };
+}
+
 async function benchmarkSimulationRuntime() {
     const cold = new WorldSimulationRuntime({
         chunkSize: 10,
@@ -283,6 +310,7 @@ const results = {
     gpuRangeBatching: benchmarkGpuRangeBatching(),
     adaptiveController: benchmarkAdaptiveController(),
     navigationSummaries: benchmarkNavigationSummaries(),
+    infiniteHydrology: benchmarkInfiniteHydrology(),
     simulationRuntime: await benchmarkSimulationRuntime()
 };
 
@@ -308,6 +336,9 @@ if (process.argv.includes("--check")) {
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);
     under("navigationSummaries.exactDurationMs", results.navigationSummaries.exactDurationMs, 2_500);
+    under("infiniteHydrology.coldBuildMs", results.infiniteHydrology.coldBuildMs, 2_500);
+    under("infiniteHydrology.adjacentCachedBuildMs", results.infiniteHydrology.adjacentCachedBuildMs, 250);
+    under("infiniteHydrology.residentBytes", results.infiniteHydrology.residentBytes, 32 * 1024 * 1024);
     under("simulationRuntime.coldInsertMs", results.simulationRuntime.coldInsertMs, 500);
     under("simulationRuntime.denseNoopTickMs", results.simulationRuntime.denseNoopTickMs, 2_000);
     if (results.toroidalWindow.residentChunks !== 25) {
