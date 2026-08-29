@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**评审修订稿、待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、SurfaceLattice CPU 契约和 WebGL2 array-texture 能力门已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -498,6 +498,7 @@ canonical near-grid 顶点先从 field 双线性取样，三角内部再使用�
 - 每页固定 128 layers，低于 WebGL2 保证的 256 层上限。
 - 高度/水体、材质、流向/coverage 分别使用同层索引的 `DataArrayTexture`。
 - 静态字段与动态雾使用独立纹理和更新记录，但共用同一 slot allocator，避免 shader 需要绑定任意的 surface-page/fog-page 组合。
+- 所有表面场和雾 array texture 上传显式使用 `unpackAlignment = 1`；66 像素宽的 R8 行不能依赖 WebGL 默认四字节对齐。
 - CPU slot handle 保存 `pageIndex + layerIndex + generation`，不得持有可被复用的裸 layer 引用。
 - layer 回收后 generation 增加；迟到的 Worker 或上传任务发现 generation 不匹配时直接丢弃。
 
