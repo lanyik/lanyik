@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import { BaseSemanticChunk } from "../../src/world/BaseSemanticChunk";
 import { EffectiveWorldView } from "../../src/world/EffectiveWorldView";
-import { createAuthoredRiverFeature } from "../../src/world/HydrologyFeatureDelta";
+import {
+    createAuthoredLakeFeature,
+    createAuthoredRiverFeature
+} from "../../src/world/HydrologyFeatureDelta";
 import { HydrologyRegion, createHydrologyRegion } from "../../src/world/HydrologyRegion";
 import { HydrologyWorldSource, HydrologyWorldSourceStats } from "../../src/world/HydrologyWorldSource";
 import {
@@ -176,12 +179,23 @@ describe("TransferableEffectiveWindow", () => {
         const feature = createAuthoredRiverFeature({
             featureId: "river:window",
             source: { kind: "spring", sourceId: "spring:window" },
-            outlet: { kind: "ocean", bodyId: "ocean" },
+            outlet: { kind: "lake", bodyId: "lake:outlet" },
             controlPoints: new Float64Array([0, 0, 256, 256]),
             widthProfile: new Uint8Array([1, 2]),
             levelProfile: new Uint16Array([35_000, 30_000]),
             dischargeClass: 2,
             profileIndex: 0
+        });
+        const outletLake = createAuthoredLakeFeature({
+            featureId: "lake:outlet",
+            polygon: new Float64Array([
+                20_000, 20_000,
+                20_128, 20_000,
+                20_128, 20_128,
+                20_000, 20_128
+            ]),
+            level: 30_000,
+            profileIndex: 3
         });
         store.commit({
             worldIdentity,
@@ -199,13 +213,22 @@ describe("TransferableEffectiveWindow", () => {
                     vegetationProfile: new Uint8Array(1)
                 }
             }],
-            hydrologyMutations: [{
-                operation: "upsert",
-                featureId: feature.featureId,
-                featureKind: "river",
-                expectedRevision: 0,
-                feature
-            }]
+            hydrologyMutations: [
+                {
+                    operation: "upsert",
+                    featureId: outletLake.featureId,
+                    featureKind: "lake",
+                    expectedRevision: 0,
+                    feature: outletLake
+                },
+                {
+                    operation: "upsert",
+                    featureId: feature.featureId,
+                    featureKind: "river",
+                    expectedRevision: 0,
+                    feature
+                }
+            ]
         });
         const semanticSource = new SemanticSourceStub(descriptor);
         const hydrologySource = new HydrologySourceStub(descriptor);
@@ -228,7 +251,8 @@ describe("TransferableEffectiveWindow", () => {
         expect(window.macroHeight[2 * EFFECTIVE_WINDOW_TILE_SIZE + 2]).toBe(50_000);
         expect(window.dependencyKey.semantic).toHaveLength(4);
         expect(window.dependencyKey.hydrologyRegions).toHaveLength(4);
-        expect(window.authoredHydrology.map(delta => delta.featureId)).toEqual(["river:window"]);
+        expect(window.authoredHydrology.map(delta => delta.featureId))
+            .toEqual(["lake:outlet", "river:window"]);
         expect(() => assertTransferableEffectiveWindow({
             ...window,
             domain: { topology: "finite", width: 128, height: 128 }

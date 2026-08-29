@@ -488,6 +488,15 @@ export async function buildTransferableEffectiveWindow(
             for (const delta of region.authoredFeatures) authoredById.set(delta.featureId, delta);
             for (const featureId of region.suppressedBaseFeatureIds) featureDependencyIds.add(featureId);
         }
+        for (const delta of [...authoredById.values()]) {
+            if (delta.feature.kind !== "river" || delta.feature.outlet.kind !== "lake") continue;
+            const target = options.view.deltaSnapshot.getHydrologyDelta(delta.feature.outlet.bodyId);
+            if (!target) continue;
+            if (target.operation !== "upsert" || target.feature.kind !== "lake") {
+                throw new Error("effective window authored river lost its lake outlet body");
+            }
+            authoredById.set(target.featureId, target);
+        }
         for (const featureId of authoredById.keys()) featureDependencyIds.add(featureId);
         const authoredHydrology = Object.freeze([...authoredById.values()]
             .sort((first, second) => first.featureId < second.featureId ? -1 : 1)
