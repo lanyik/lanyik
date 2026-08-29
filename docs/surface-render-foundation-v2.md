@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、BaseSemanticChunk SoA/二进制格式、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序语义块量化、安全整数噪声格、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -176,8 +176,23 @@ interface BaseSemanticChunk {
 
 `WorldSurfaceResolver` 保留纯生成规则职责，但输出一次量化写入 `BaseSemanticChunk`。主线程不再为了渲染重新调用 resolver。`substrateClass`、biome profile 和 vegetation profile 的索引表由 descriptor/schema version 冻结；调整索引含义必须升级生成器或 chunk format，不能仅替换资源文件后继续解释旧索引。
 
+生成器 v6 的程序语义入口使用独立的安全整数噪声格，不调用 v1 会截断格点坐标的 hash。噪声缩放不计算可能溢出安全整数精度的 `x * frequency`，而是先以数学 floor 把逻辑 tile 拆成 2 的幂次 cell 与 cell 内余数，再散列 cell 的符号、低 32 位和高位。基础 cell shift 冻结为：`warpX/warpY/continent/ridge/valley/temperature/forestPatch/lakePatch = 5`、`detail/roughness = 3`、`moisture = 4`；每个 octave 将 shift 减一，最高频 cell 仍至少为两格。环绕尺寸是 32 的倍数，因此所有这些 cell 周期都能整除拓扑宽高并精确闭合。该组 shift 属于生成器 v6 契约，不读取 v1 profile 中的浮点 `openScale/toroidalScale`。
+
+当前 core catalog 的规范索引为：
+
+- substrate：`soil=0, sand=1, rock=2`；
+- biome basis：`temperate, dry, cold, alpine`，顺序即四通道顺序；
+- vegetation profile：`tropical-palm-mix=0, temperate-oak-mix=1, boreal-pine-mix=2, alpine-scrub-mix=3`。
+
+catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis hash 绑定 `{version:1,id}`。运行时只接受 descriptor 中完全相同的 ID、entry count 和内容 hash，不按同名资源猜测，也没有未知 catalog fallback。
+
 量化规则由生成器版本和 chunk format 共同冻结：
 
+- `macroHeight = round(clamp01(elevation) * 65535)`，descriptor 海平面同样量化为 `28180`；
+- climate 两通道和 vegetation density 分别使用 `round(clamp01(value) * 255)`；
+- 四个 biome 浮点权重先归一化，再用 largest-remainder 量化到整数和 255；余数相同时按冻结的 biome basis 顺序分配；
+- 海平面以下仍保存连续 ground height、substrate 和非零 biome 权重，海洋身份由海平面与高度派生，不写进 substrate；
+- substrate 和 vegetation profile 只由冻结阈值与上述 catalog 解释产生，不保存字符串或逐格对象；
 - 相同 descriptor 与坐标得到逐字节相同的 semantic chunk。
 - 结果与请求顺序、Worker 数量、source chunk 是否命中缓存无关。
 - 邻块共享边界使用相同全局采样点和舍入规则。

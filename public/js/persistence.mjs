@@ -324,6 +324,21 @@ assertWorldStyleProfile(WORLD_STYLE_PROFILE);
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 
+// src/world/SemanticLandformSampler.ts
+var SEMANTIC_NOISE_BASE_CELL_SHIFTS = Object.freeze({
+  warpX: 5,
+  warpY: 5,
+  continent: 5,
+  detail: 3,
+  ridge: 5,
+  valley: 5,
+  roughness: 3,
+  moisture: 4,
+  temperature: 5,
+  forestPatch: 5,
+  lakePatch: 5
+});
+
 // src/world/generateWorldChunk.ts
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 var WORLD_CHUNK_FORMAT_VERSION = 1;

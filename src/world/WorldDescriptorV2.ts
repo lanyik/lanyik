@@ -79,6 +79,25 @@ export type CreateWorldDescriptorV2Options = WorldDescriptorV2Semantics & (
     | { readonly sourceKind: "procedural-toroidal"; readonly seed: string | number; readonly width: number; readonly height: number }
 );
 
+export type CreateStaticWorldDescriptorV2Options = WorldDescriptorV2Semantics & {
+    readonly sourceKind: "static";
+    readonly sourceContentHash: string;
+    readonly width: number;
+    readonly height: number;
+};
+
+export type CreateInfiniteWorldDescriptorV2Options = WorldDescriptorV2Semantics & {
+    readonly sourceKind: "procedural-infinite";
+    readonly seed: string | number;
+};
+
+export type CreateToroidalWorldDescriptorV2Options = WorldDescriptorV2Semantics & {
+    readonly sourceKind: "procedural-toroidal";
+    readonly seed: string | number;
+    readonly width: number;
+    readonly height: number;
+};
+
 function assertContentHash(name: string, value: unknown): asserts value is string {
     if (typeof value !== "string" || !CONTENT_HASH_PATTERN.test(value)) {
         throw new TypeError(`${name} must be a lowercase sha256 content hash`);
@@ -140,6 +159,10 @@ function canonicalSeed(seed: unknown): string {
     return String(seed);
 }
 
+export function createWorldDescriptorV2(options: CreateStaticWorldDescriptorV2Options): StaticWorldDescriptorV2;
+export function createWorldDescriptorV2(options: CreateInfiniteWorldDescriptorV2Options): InfiniteWorldDescriptorV2;
+export function createWorldDescriptorV2(options: CreateToroidalWorldDescriptorV2Options): ToroidalWorldDescriptorV2;
+export function createWorldDescriptorV2(options: CreateWorldDescriptorV2Options): WorldDescriptorV2;
 export function createWorldDescriptorV2(options: CreateWorldDescriptorV2Options): WorldDescriptorV2 {
     if (!options || typeof options !== "object") throw new TypeError("world descriptor v2 options are required");
     assertSemantics(options as Partial<WorldDescriptorV2Base>);

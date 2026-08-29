@@ -10761,7 +10761,7 @@ void main() {
     }
     return { ...resolved };
   }
-  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
+  function composeLandformSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
     const fields = profile.fields;
     const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
     const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
@@ -10798,7 +10798,7 @@ void main() {
     const forestPatch = open(fields.forestPatch, wx, wy);
     const lakePatch = open(fields.lakePatch, wx, wy);
     if (domain.topology === "infinite") {
-      return composeSample(
+      return composeLandformSample(
         continent,
         detail,
         ridgeNoise,
@@ -10816,7 +10816,7 @@ void main() {
     const nx = x / (domain.width - 1) * 2 - 1;
     const ny = y / (domain.height - 1) * 2 - 1;
     const edge = Math.max(Math.abs(nx), Math.abs(ny));
-    return composeSample(
+    return composeLandformSample(
       continent,
       detail,
       ridgeNoise,
@@ -10857,7 +10857,7 @@ void main() {
     const forestPatch = periodic(fields.forestPatch, wx, wy);
     const lakePatch = periodic(fields.lakePatch, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(
+    return composeLandformSample(
       continent,
       detail,
       ridgeNoise,
@@ -10947,8 +10947,11 @@ void main() {
       Math.min(relief.mountainMaximum, plain + hill + mountain)
     );
   }
-  function biomeWeightsFor(type, sample, profile) {
-    if (isWater2(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+  function biomeWeightsFor(type, sample, profile, includeSubmergedGround = false) {
+    if (isWater2(type) && !includeSubmergedGround) {
+      return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+    }
+    const materialTerrain = isWater2(type) ? "land" /* land */ : type;
     const terrain = profile.terrain;
     const transition = terrain.climateTransition;
     const cold = 1 - smoothstep2(
@@ -10966,7 +10969,7 @@ void main() {
       sample.moisture
     ));
     const alpine = clamp012(Math.max(
-      type === "mountain" /* mountain */ ? 0.7 : 0,
+      materialTerrain === "mountain" /* mountain */ ? 0.7 : 0,
       smoothstep2(
         terrain.mountainElevation - transition,
         terrain.mountainPeakElevation,
@@ -11082,11 +11085,11 @@ void main() {
     return Object.freeze(tile);
   }
   var FrozenWorldSurfaceResolver = class {
-    constructor(options) {
+    constructor(options, samplerFactory = createLandformSamplerForProfile) {
       if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
       this.seed = String(options.seed);
       this.profile = options.profile ?? WORLD_STYLE_PROFILE;
-      this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
+      this.sampler = samplerFactory({ seed: options.seed, domain: options.domain }, this.profile);
       this.domain = Object.freeze({ ...this.sampler.domain });
     }
     sampleGenerated(x, y) {

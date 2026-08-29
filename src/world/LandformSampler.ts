@@ -68,7 +68,7 @@ function resolveDomain(domain: LandformDomain | undefined): LandformDomain {
     return { ...resolved };
 }
 
-function composeSample(
+export function composeLandformSample(
     continent: number,
     detail: number,
     ridgeNoise: number,
@@ -143,7 +143,7 @@ function sampleOpenLandform(
     const lakePatch = open(fields.lakePatch, wx, wy);
 
     if (domain.topology === "infinite") {
-        return composeSample(
+        return composeLandformSample(
             continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
             forestPatch, lakePatch, undefined, 0, profile
         );
@@ -151,7 +151,7 @@ function sampleOpenLandform(
     const nx = (x / (domain.width - 1)) * 2 - 1;
     const ny = (y / (domain.height - 1)) * 2 - 1;
     const edge = Math.max(Math.abs(nx), Math.abs(ny));
-    return composeSample(
+    return composeLandformSample(
         continent,
         detail,
         ridgeNoise,
@@ -200,7 +200,7 @@ function sampleToroidalLandform(
     const forestPatch = periodic(fields.forestPatch, wx, wy);
     const lakePatch = periodic(fields.lakePatch, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-    return composeSample(
+    return composeLandformSample(
         continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
         forestPatch, lakePatch, latitude, 0, profile
     );

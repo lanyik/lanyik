@@ -8,6 +8,7 @@ import {
     LandformSampler
 } from "./LandformSampler";
 import { randomAt } from "./noise";
+import { createSemanticLandformSamplerForProfile } from "./SemanticLandformSampler";
 import { WORLD_STYLE_PROFILE, WorldStyleProfile } from "./WorldStyleProfile";
 
 export type WorldBiome = "ocean" | "coast" | "temperate" | "dry" | "cold" | "alpine";
@@ -107,9 +108,13 @@ function generatedRelief(
 function biomeWeightsFor(
     type: Land,
     sample: LandformSample,
-    profile: Readonly<WorldStyleProfile>
+    profile: Readonly<WorldStyleProfile>,
+    includeSubmergedGround = false
 ): WorldBiomeWeights {
-    if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+    if (isWater(type) && !includeSubmergedGround) {
+        return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
+    }
+    const materialTerrain = isWater(type) ? Land.land : type;
     const terrain = profile.terrain;
     const transition = terrain.climateTransition;
     const cold = 1 - smoothstep(
@@ -127,7 +132,7 @@ function biomeWeightsFor(
         sample.moisture
     ));
     const alpine = clamp01(Math.max(
-        type === Land.mountain ? 0.7 : 0,
+        materialTerrain === Land.mountain ? 0.7 : 0,
         smoothstep(
             terrain.mountainElevation - transition,
             terrain.mountainPeakElevation,
@@ -142,6 +147,16 @@ function biomeWeightsFor(
         cold: cold / sum,
         alpine: alpine / sum
     });
+}
+
+// V2 keeps water authority outside the semantic substrate. Submerged ground
+// therefore needs the same climate/material basis as exposed land instead of
+// the all-zero v1 rendering sentinel.
+export function deriveSemanticBiomeWeights(
+    sample: Readonly<WorldSurfaceSample>,
+    profile: Readonly<WorldStyleProfile> = WORLD_STYLE_PROFILE
+): WorldBiomeWeights {
+    return biomeWeightsFor(sample.baseTerrain, sample.landform, profile, true);
 }
 
 function biomeFor(type: Land, weights: WorldBiomeWeights): WorldBiome {
@@ -291,17 +306,25 @@ function resolveTile(
     return Object.freeze(tile);
 }
 
+type LandformSamplerFactory = (
+    options: { readonly seed: string | number; readonly domain?: LandformDomain },
+    profile: Readonly<WorldStyleProfile>
+) => LandformSampler;
+
 class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
     public readonly seed: string;
     public readonly domain: LandformDomain;
     public readonly profile: Readonly<WorldStyleProfile>;
     private readonly sampler: LandformSampler;
 
-    constructor(options: WorldSurfaceResolverOptions) {
+    constructor(
+        options: WorldSurfaceResolverOptions,
+        samplerFactory: LandformSamplerFactory = createLandformSamplerForProfile
+    ) {
         if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
         this.seed = String(options.seed);
         this.profile = options.profile ?? WORLD_STYLE_PROFILE;
-        this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
+        this.sampler = samplerFactory({ seed: options.seed, domain: options.domain }, this.profile);
         this.domain = Object.freeze({ ...this.sampler.domain });
     }
 
@@ -375,4 +398,8 @@ export class WorldSurfaceResolverWindow {
 
 export function createWorldSurfaceResolver(options: WorldSurfaceResolverOptions): WorldSurfaceResolver {
     return new FrozenWorldSurfaceResolver(options);
+}
+
+export function createSemanticWorldSurfaceResolver(options: WorldSurfaceResolverOptions): WorldSurfaceResolver {
+    return new FrozenWorldSurfaceResolver(options, createSemanticLandformSamplerForProfile);
 }
