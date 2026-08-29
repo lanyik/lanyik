@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service、原生事务式 IndexedDB delta store/save barrier、exact-domain/resident-filtered `WorldChangeSet`，以及类型化 `SurfaceWorldEditor` 与三种水文冲突策略已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。显式 hydrology rebake、消费者接线及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、最终视觉 bounds、generation-safe paged array-texture 池、三档共享 Ground topology、no-water/full-patch/coverage 统一水面几何、确定性植被 placement seeds、最终 `CompiledSurfaceChunk`、protocol-3 `compileSurfaceChunk` Worker/client/pool、compiled CPU cache/lease acceptance service、无 GPU 的 latest-snapshot `SurfaceQueryService`、原生事务式 IndexedDB delta store/save barrier、exact-domain/resident-filtered `WorldChangeSet`，以及类型化 `SurfaceWorldEditor` 与三种水文冲突策略已冻结；共享 `LightingState`、Three PBR/custom-shader 适配边界和预算调度的 PMREM 双缓冲生命周期亦已冻结。显式 hydrology rebake、导航/模拟摘要、消费者接线及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -485,6 +485,8 @@ interface ResidentSurfaceLease {
 
 compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
 
+同一 current demand 可以通过 `retainCurrentSurface(key, effectiveRevision)` 增加独立 lease holder；它只在 render key、全局 effective revision、request token 和 dependency 身份仍精确 current 时成功，并复用同一个 token/chunk。释放查询 holder 不会释放 Layer holder，查询也不会仅为了读取一次就签发新 generation、把仍挂载的同块 Layer lease 判旧。revision 不同、尚在编译、已取消或没有现存 holder 时返回 `undefined`，调用方必须从明确的新快照请求，不能退回无 token cache 对象。
+
 已落地的 `SurfaceCompilationService` 固定服务一个显式 world identity/session epoch，但每次请求接收一个不可变 `EffectiveWorldView` 快照，因而编辑后未受影响块仍可按完整 dependency key 命中同一 compiled cache。service 在任何异步工作前复制 render key、metrics 和调度参数，并用 session 内单调且全局唯一的 generation 签发 token；同 render key 的新需求先使旧 demand/lease 失去 current 身份。window 构建、Worker 返回和 cache hit 三个边界都重新检查 demand，Worker 结果还必须通过完整 chunk 发布校验、精确 token 比较和精确 dependency 比较，迟到或伪造结果不会进入 cache。失败、取消和 lease 释放会移除不再服务的 demand，因此随探索距离保留的状态只有有预算的 compiled cache 和调用方明确持有的 lease，不另留无界 generation map。
 
 compiled cache 使用完整结构化 dependency 序列化值作为 Map key 和 LRU 身份，构造时必须显式提供正安全整数 CPU 字节预算，不猜测 renderer 总预算的分配比例。resident accounting 直接使用 `compiledSurfaceChunkResidentBytes`；LRU 只淘汰 lease 为零的条目，仍被租用的条目允许显式超过预算并保留在统计中，最后一个 lease 释放时立即再次执行预算淘汰。cache hit 为当前 token 新建 lease，不改写缓存 chunk；`assertCurrent` 是 CPU query、纹理上传和 Layer 挂载前的统一验收门。service 不拥有外部 Worker pool，dispose 只取消自身 demand、丢弃 cache 引用并使全部既有 lease 失效。
@@ -597,7 +599,11 @@ canonical near-grid 顶点先从 field 双线性取样，三角内部再使用�
 
 dry texel 的 water payload 规范为零，因此水位、深度和 flow 不与 dry 零值直接混插。采样器先用 `bilinearWeight × coverage` 选最大贡献 body，同分取更小 X-major texel index；随后只对该 body 的非零 coverage taps 归一化 waterLevel/depth/flow，flow 最后恢复单位方向。这样 shoreline 不会把水面拉向 Y=0，重叠 body 也不会把两套水位平均成不存在的第三套水面。合成字段、固定三角线两侧、竞争 body、最小 coverage、越界和相邻 chunk 公共边均有冻结测试；shader reference evaluator 后续必须逐项复用这些顺序和 tie-break。
 
-查询服务只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须改从最新 `EffectiveWorldView` 运行同一个 surface query kernel；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
+已落地的 `SurfaceQueryService` 是公开 compiled-field 查询边界，只接收 delta store、semantic/hydrology source、CPU compilation service 和冻结 metrics，不持有 renderer、texture pool 或 Three/WebGL 对象。连续坐标按半开核心 owner `floor((u + 0.5) / 16)` 定位，因此公共边只属于后一块的 `local=-0.5`；finite 域严格拒绝 `[-0.5,width-0.5) × [-0.5,height-0.5)` 外输入，toroidal 域先规范到该半开周期。world-space 查询先走唯一 `worldToSurface`，不会重写 stagger。
+
+服务先尝试保留同 revision 的 current lease；否则为 `store.snapshot()` 创建 `EffectiveWorldView` 并以 interactive CPU task 请求编译。同一 `(snapshot identity, render key)` 的并发调用合并一次工作，各 caller 独立取消，只有最后一个 waiter 离开才取消底层任务。Worker 完成、`assertCurrent` 前和采样后都比较 store 的快照对象身份；期间发生 commit 或 token 被另一 demand 替换时，旧 lease 立即释放并从最新快照重提。固定最多四次，持续编辑/挂载争用后抛出 `SurfaceQuerySupersededError`，绝不返回旧 revision 或无 token resident field。每个 immutable compiled chunk 的 `CompiledSurfaceSampler` 只验证/构造一次并保存在弱引用表中，实际点采样复用固定 scratch。
+
+公开结果冻结 `effectiveRevision`、规范逻辑坐标、render key、Ground 三角高度、岸线距离、四项材质权重，以及可选的稳定 water body ID/kind/profile、静态 level/depth、coverage 和归一化 flow。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射；玩法高度由调用方明确选择 groundHeight 或静态 water level，视觉水面位移不能反向成为查询权威。
 
 ## 9. GPU 表面场池
 
@@ -956,6 +962,8 @@ Worker 池至少支持三个明确任务：
 射线先与 render chunk 保守 bounds 和地面/水面 mesh 相交，再把世界坐标逆映射到逻辑六边格。最终高度使用 CPU `CompiledSurfaceField` 的同一三角插值。
 
 格子选择、路线和建造预览从逻辑坐标生成，不依赖逐 hex mesh 实例 ID。CPU compiled field 不存在或 token 已过期时，查询服务获取当前 Effective Snapshot 并使用同一共享 surface/hydrology kernel，不触发 GPU 资源创建，也不返回旧 resident field。
+
+当前 `SurfaceQueryService.queryLogical/queryWorld` 已冻结上述行为；同 snapshot/chunk 合并、单 waiter 取消、复用挂载 token、公共边 owner，以及“编译期间提交编辑后只能返回新 revision”均有测试。生产 picking/贴地调用点将在阶段 H 与 v2 Layer 一次性接线；在此之前不把它桥接到 v1 `WorldSurfaceView`。
 
 ## 17. 格式、身份和失败策略
 

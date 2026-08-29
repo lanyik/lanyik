@@ -75,10 +75,12 @@ interface CacheEntry {
 interface ActiveDemand {
     readonly keyIdentity: string;
     readonly key: RenderChunkKey;
+    readonly effectiveRevision: number;
     readonly requestToken: SurfaceRequestToken;
     readonly controller: AbortController;
+    readonly leases: Set<ResidentSurfaceLeaseImpl>;
     serializedDependencyKey?: string;
-    lease?: ResidentSurfaceLeaseImpl;
+    entry?: CacheEntry;
 }
 
 function abortError(message: string): Error {
@@ -124,6 +126,7 @@ class ResidentSurfaceLeaseImpl implements ResidentSurfaceLease {
         public readonly requestToken: SurfaceRequestToken,
         public readonly chunk: CompiledSurfaceChunk,
         public readonly owner: SurfaceCompilationService,
+        public readonly demand: ActiveDemand,
         public readonly entry: CacheEntry,
         private readonly onRelease: (lease: ResidentSurfaceLeaseImpl) => void
     ) {}
@@ -142,7 +145,7 @@ class ResidentSurfaceLeaseImpl implements ResidentSurfaceLease {
 // keys can survive immutable edit snapshots without weakening acceptance.
 export class SurfaceCompilationService {
     private readonly pool: SurfaceCompilationPool;
-    private readonly worldIdentity: string;
+    public readonly worldIdentity: string;
     private readonly sessionEpoch: number;
     private readonly cacheMaxBytes: number;
     private readonly activeDemands = new Map<string, ActiveDemand>();
@@ -213,8 +216,10 @@ export class SurfaceCompilationService {
         const demand: ActiveDemand = {
             keyIdentity: identity,
             key: requestSnapshot.key,
+            effectiveRevision: requestSnapshot.view.effectiveRevision,
             requestToken,
-            controller
+            controller,
+            leases: new Set()
         };
         this.activeDemands.set(identity, demand);
         const externalSignal = requestSnapshot.task?.signal;
@@ -225,10 +230,28 @@ export class SurfaceCompilationService {
         return this.fulfillRequest(requestSnapshot, demand, controller.signal).finally(() => {
             externalSignal?.removeEventListener("abort", abortFromExternal);
             this.inFlightRequests -= 1;
-            if (!demand.lease && this.activeDemands.get(identity) === demand) {
+            if (demand.leases.size === 0 && this.activeDemands.get(identity) === demand) {
                 this.activeDemands.delete(identity);
             }
         });
+    }
+
+    // Adds an independent holder to the exact current demand without issuing a
+    // new generation. CPU queries use this to observe a mounted result without
+    // invalidating the render layer that owns the original lease.
+    public retainCurrentSurface(
+        key: Readonly<RenderChunkKey>,
+        effectiveRevision: number
+    ): ResidentSurfaceLease | undefined {
+        if (this.disposed) throw new Error("SurfaceCompilationService has been disposed");
+        const identity = keyIdentity(key);
+        if (!Number.isSafeInteger(effectiveRevision) || effectiveRevision < 0) {
+            throw new RangeError("surface retained lease revision must be a non-negative safe integer");
+        }
+        const demand = this.activeDemands.get(identity);
+        if (!demand || demand.effectiveRevision !== effectiveRevision || !demand.entry
+            || demand.leases.size === 0 || demand.controller.signal.aborted) return undefined;
+        return this.createLease(demand, demand.entry);
     }
 
     public isCurrent(lease: Readonly<ResidentSurfaceLease>): boolean {
@@ -236,7 +259,7 @@ export class SurfaceCompilationService {
             || lease.owner !== this || lease.released) return false;
         const identity = keyIdentity(lease.chunk.key);
         const demand = this.activeDemands.get(identity);
-        return demand?.lease === lease
+        return demand === lease.demand && demand.leases.has(lease)
             && surfaceRequestTokensEqual(demand.requestToken, lease.requestToken)
             && demand.serializedDependencyKey === lease.entry.serializedDependencyKey;
     }
@@ -282,10 +305,14 @@ export class SurfaceCompilationService {
         if (lease.owner !== this || lease.entry.leases <= 0 || this.activeLeases <= 0) {
             throw new Error("resident surface lease release does not match this service");
         }
+        if (!lease.demand.leases.has(lease)) {
+            throw new Error("resident surface lease is missing from its demand");
+        }
         lease.entry.leases -= 1;
         this.activeLeases -= 1;
+        lease.demand.leases.delete(lease);
         const identity = keyIdentity(lease.chunk.key);
-        if (this.activeDemands.get(identity)?.lease === lease) {
+        if (this.activeDemands.get(identity) === lease.demand && lease.demand.leases.size === 0) {
             this.activeDemands.delete(identity);
         }
         if (!this.disposed) this.evictToBudget();
@@ -403,12 +430,14 @@ export class SurfaceCompilationService {
             demand.requestToken,
             entry.chunk,
             this,
+            demand,
             entry,
             released => this.releaseLease(released)
         );
         entry.leases += 1;
         this.activeLeases += 1;
-        demand.lease = lease;
+        demand.entry = entry;
+        demand.leases.add(lease);
         return lease;
     }
 

@@ -11,6 +11,13 @@ export interface SurfaceWorldCoordinate {
     readonly z: number;
 }
 
+export interface SurfaceRenderChunkLocation extends SurfaceCoordinate {
+    readonly chunkX: number;
+    readonly chunkY: number;
+    readonly localU: number;
+    readonly localV: number;
+}
+
 export function surfaceColumnStagger(column: number): number {
     if (!Number.isSafeInteger(column)) {
         throw new RangeError("surface lattice column must be a safe integer");
@@ -54,6 +61,45 @@ export function worldToSurface(x: number, z: number, hexSize: number): SurfaceCo
         u,
         v: z / (Math.sqrt(3) * hexSize) - surfaceStagger(u)
     };
+}
+
+function surfaceRenderChunkAxis(name: string, coordinate: number): {
+    readonly chunk: number;
+    readonly local: number;
+} {
+    if (!Number.isFinite(coordinate) || !Number.isSafeInteger(Math.floor(coordinate))) {
+        throw new RangeError(`${name} must have a safe finite logical column`);
+    }
+    const size = SURFACE_COMPILE_PROFILE.renderChunkSize;
+    const shifted = coordinate + 0.5;
+    if (!Number.isFinite(shifted) || !Number.isSafeInteger(Math.floor(shifted))) {
+        throw new RangeError(`${name} exceeds the safe render chunk ownership range`);
+    }
+    const chunk = Math.floor(shifted / size);
+    const origin = chunk * size;
+    if (!Number.isSafeInteger(chunk) || !Number.isSafeInteger(origin)) {
+        throw new RangeError(`${name} render chunk origin exceeds the safe logical range`);
+    }
+    const local = coordinate - origin;
+    if (local < -0.5 || local >= size - 0.5) {
+        throw new Error(`${name} did not resolve to the canonical half-open render core`);
+    }
+    return { chunk, local };
+}
+
+// Continuous queries share the renderer's half-open core ownership rule. In
+// particular, u/v = chunkOrigin + 15.5 belongs to the following chunk at -0.5.
+export function surfaceRenderChunkLocation(u: number, v: number): SurfaceRenderChunkLocation {
+    const horizontal = surfaceRenderChunkAxis("surface u coordinate", u);
+    const vertical = surfaceRenderChunkAxis("surface v coordinate", v);
+    return Object.freeze({
+        u,
+        v,
+        chunkX: horizontal.chunk,
+        chunkY: vertical.chunk,
+        localU: horizontal.local,
+        localV: vertical.local
+    });
 }
 
 // Returns one axis of the globally phased texel-center coordinate. The same

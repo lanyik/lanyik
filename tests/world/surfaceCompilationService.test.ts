@@ -253,6 +253,26 @@ describe("SurfaceCompilationService", () => {
         view.dispose();
     });
 
+    test("retains independent holders of the exact current revision without replacing its token", async () => {
+        const pool = new ImmediatePool();
+        const { view, service } = createFixture("surface-service-retain", pool);
+        const renderLease = await service.requestSurface({ view, ...REQUEST });
+        const queryLease = service.retainCurrentSurface(REQUEST.key, view.effectiveRevision);
+        expect(queryLease).toBeDefined();
+        expect(queryLease!.requestToken).toEqual(renderLease.requestToken);
+        expect(queryLease!.chunk).toBe(renderLease.chunk);
+        expect(service.isCurrent(renderLease)).toBe(true);
+        expect(service.isCurrent(queryLease!)).toBe(true);
+        expect(service.retainCurrentSurface(REQUEST.key, view.effectiveRevision + 1)).toBeUndefined();
+
+        queryLease!.release();
+        expect(service.isCurrent(renderLease)).toBe(true);
+        renderLease.release();
+        expect(service.stats.activeLeases).toBe(0);
+        service.dispose();
+        view.dispose();
+    });
+
     test("rejects a superseded Worker result before it can enter the cache", async () => {
         const pool = new DeferredPool();
         const { view, service } = createFixture("surface-service-stale", pool);

@@ -160,6 +160,18 @@ export type {
     ResidentSurfaceLease,
     SurfaceCompilationServiceStats
 } from "./world/SurfaceCompilationService";
+export {
+    MAX_SURFACE_QUERY_REVISION_ATTEMPTS,
+    SurfaceQueryService,
+    SurfaceQuerySupersededError
+} from "./world/SurfaceQueryService";
+export type {
+    SurfaceQueryRequestOptions,
+    SurfaceQueryResult,
+    SurfaceQueryServiceOptions,
+    SurfaceQueryServiceStats,
+    SurfaceWaterQueryResult
+} from "./world/SurfaceQueryService";
 
 export {
     assertEnvironmentHandle,
@@ -252,10 +264,16 @@ export type {
 
 export {
     surfaceColumnStagger,
+    surfaceRenderChunkLocation,
     surfaceStagger,
     surfaceToWorld,
     worldToSurface,
     surfaceTexelCenterAxis
+} from "./world/SurfaceLattice";
+export type {
+    SurfaceCoordinate,
+    SurfaceRenderChunkLocation,
+    SurfaceWorldCoordinate
 } from "./world/SurfaceLattice";
 
 export {

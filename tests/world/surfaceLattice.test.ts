@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { getHexCenter } from "../../src/helpers/helpers";
 import {
     surfaceColumnStagger,
+    surfaceRenderChunkLocation,
     surfaceStagger,
     surfaceTexelCenterAxis,
     surfaceToWorld,
@@ -67,6 +68,21 @@ describe("SurfaceLattice", () => {
         expect(surfaceTexelCenterAxis(0, 0)).toBe(-0.375);
     });
 
+    test("assigns continuous public edges to one half-open render core", () => {
+        expect(surfaceRenderChunkLocation(-0.5, -0.5)).toMatchObject({
+            chunkX: 0, chunkY: 0, localU: -0.5, localV: -0.5
+        });
+        expect(surfaceRenderChunkLocation(15.5, 4.25)).toMatchObject({
+            chunkX: 1, chunkY: 0, localU: -0.5, localV: 4.25
+        });
+        expect(surfaceRenderChunkLocation(-0.5001, -16.5)).toMatchObject({
+            chunkX: -1, chunkY: -1, localV: -0.5
+        });
+        expect(surfaceRenderChunkLocation(-16.5, 15.5)).toMatchObject({
+            chunkX: -1, chunkY: 1, localU: -0.5, localV: -0.5
+        });
+    });
+
     test("rejects coordinates that cannot preserve the lattice contract", () => {
         expect(() => surfaceColumnStagger(0.5)).toThrow(/safe integer/);
         expect(() => surfaceToWorld(0, 0, 0)).toThrow(/hex size/);
@@ -74,5 +90,6 @@ describe("SurfaceLattice", () => {
         expect(() => surfaceTexelCenterAxis(0, -2)).toThrow(/physical layer/);
         expect(() => surfaceTexelCenterAxis(0, 65)).toThrow(/physical layer/);
         expect(() => surfaceTexelCenterAxis(Number.MAX_SAFE_INTEGER, 0)).toThrow(/origin/);
+        expect(() => surfaceRenderChunkLocation(Number.MAX_SAFE_INTEGER, 0)).toThrow(/origin|range/);
     });
 });
