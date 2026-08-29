@@ -3363,6 +3363,679 @@ async function buildMacroDrainageGraph(source, options = {}) {
   assertMacroDrainageGraph(graph);
   return graph;
 }
+
+// src/world/HydrologyRegion.ts
+var HYDROLOGY_REGION_REVISION = 0;
+var HYDROLOGY_POINT_QUANTIZATION = 64;
+var MAX_HYDROLOGY_REGION_PORTS = 1024;
+var MAX_HYDROLOGY_REGION_RIVERS = 1024;
+var MAX_HYDROLOGY_REGION_LAKES = 256;
+var MAX_HYDROLOGY_REGION_MOUTHS = 512;
+var MAX_HYDROLOGY_REGION_BODIES = 1024;
+var MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS = 64;
+var HYDROLOGY_BOUNDARY_MIN_X = 1;
+var HYDROLOGY_BOUNDARY_MAX_X = 2;
+var HYDROLOGY_BOUNDARY_MIN_Y = 4;
+var HYDROLOGY_BOUNDARY_MAX_Y = 8;
+var OCEAN_HYDROLOGY_PROFILE = 0;
+var LAKE_HYDROLOGY_PROFILE = 1;
+var RIVER_HYDROLOGY_PROFILE = 2;
+var ALL_BOUNDARY_BITS = HYDROLOGY_BOUNDARY_MIN_X | HYDROLOGY_BOUNDARY_MAX_X | HYDROLOGY_BOUNDARY_MIN_Y | HYDROLOGY_BOUNDARY_MAX_Y;
+var MAX_STABLE_ID_LENGTH = 256;
+var MAX_WORLD_IDENTITY_LENGTH = 16384;
+function assertStableId(name, value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_STABLE_ID_LENGTH || !/^[\x21-\x7e]+$/.test(value)) {
+    throw new TypeError(`${name} must be a bounded printable ASCII identity`);
+  }
+}
+function assertUint8(name, value) {
+  if (!Number.isInteger(value) || value < 0 || value > 255) {
+    throw new RangeError(`${name} must be a uint8 value`);
+  }
+}
+function assertUint16(name, value) {
+  if (!Number.isInteger(value) || value < 0 || value > 65535) {
+    throw new RangeError(`${name} must be a uint16 value`);
+  }
+}
+function assertPoint(name, point) {
+  if (!(point instanceof Int16Array) || point.length !== 2) {
+    throw new TypeError(`${name} must contain one quantized xy pair`);
+  }
+}
+function assertEndpoint(name, endpoint) {
+  if (!endpoint || typeof endpoint !== "object") throw new TypeError(`${name} is required`);
+  if (endpoint.kind === "node") assertStableId(`${name} node`, endpoint.nodeId);
+  else if (endpoint.kind === "port") assertStableId(`${name} connection`, endpoint.connectionId);
+  else if (endpoint.kind === "body") assertStableId(`${name} body`, endpoint.bodyId);
+  else throw new TypeError(`${name} kind is invalid`);
+}
+function assertCanonicalOrder(name, values, identity) {
+  let previous;
+  for (const value of values) {
+    const current = identity(value);
+    if (previous !== void 0 && previous >= current) {
+      throw new Error(`${name} must use unique canonical identity order`);
+    }
+    previous = current;
+  }
+}
+function compareIdentity(first, second) {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+function endpointIdentity(endpoint) {
+  if (endpoint.kind === "node") return `node:${endpoint.nodeId}`;
+  if (endpoint.kind === "port") return `port:${endpoint.connectionId}`;
+  return `body:${endpoint.bodyId}`;
+}
+function cloneEndpoint(endpoint) {
+  if (endpoint.kind === "node") return Object.freeze({ kind: "node", nodeId: endpoint.nodeId });
+  if (endpoint.kind === "port") {
+    return Object.freeze({ kind: "port", connectionId: endpoint.connectionId });
+  }
+  return Object.freeze({ kind: "body", bodyId: endpoint.bodyId });
+}
+function assertPort(port, bounds) {
+  if (!port || typeof port !== "object") throw new TypeError("hydrology port must be an object");
+  assertStableId("hydrology connection", port.connectionId);
+  assertStableId("hydrology port river", port.riverId);
+  assertStableId("hydrology port segment", port.segmentId);
+  if (port.endpoint !== "entry" && port.endpoint !== "exit") {
+    throw new TypeError("hydrology port endpoint kind is invalid");
+  }
+  if (!Number.isInteger(port.boundaryMask) || port.boundaryMask <= 0 || (port.boundaryMask & ~ALL_BOUNDARY_BITS) !== 0 || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_X) !== 0 && (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_X) !== 0 || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_Y) !== 0 && (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_Y) !== 0) {
+    throw new RangeError("hydrology port boundary mask is invalid");
+  }
+  assertPoint("hydrology port point", port.point);
+  const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  if (port.point[0] < 0 || port.point[0] > maximumX || port.point[1] < 0 || port.point[1] > maximumY || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_X) !== 0 && port.point[0] !== 0 || (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_X) !== 0 && port.point[0] !== maximumX || (port.boundaryMask & HYDROLOGY_BOUNDARY_MIN_Y) !== 0 && port.point[1] !== 0 || (port.boundaryMask & HYDROLOGY_BOUNDARY_MAX_Y) !== 0 && port.point[1] !== maximumY) {
+    throw new RangeError("hydrology port point does not lie on its declared boundary");
+  }
+  if (!Number.isSafeInteger(port.canonicalTileX) || !Number.isSafeInteger(port.canonicalTileY)) {
+    throw new RangeError("hydrology port canonical point must use safe integer tiles");
+  }
+  if (!(port.flowDirection instanceof Int8Array) || port.flowDirection.length !== 2 || port.flowDirection[0] < -1 || port.flowDirection[0] > 1 || port.flowDirection[1] < -1 || port.flowDirection[1] > 1 || port.flowDirection[0] === 0 && port.flowDirection[1] === 0) {
+    throw new RangeError("hydrology port flow direction must be a non-zero canonical step");
+  }
+  assertUint8("hydrology port width class", port.widthClass);
+  assertUint16("hydrology port level", port.level);
+  assertUint8("hydrology port discharge class", port.dischargeClass);
+  if (port.widthClass === 0) throw new RangeError("hydrology port width class must be positive");
+}
+function assertRiver(segment, bounds) {
+  if (!segment || typeof segment !== "object") throw new TypeError("river segment must be an object");
+  assertStableId("river identity", segment.riverId);
+  assertStableId("river segment identity", segment.segmentId);
+  if (!(segment.controlPoints instanceof Int16Array) || segment.controlPoints.length < 4 || segment.controlPoints.length % 2 !== 0 || segment.controlPoints.length / 2 > MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS) {
+    throw new TypeError("river control points violate the bounded quantized layout");
+  }
+  const pointCount = segment.controlPoints.length / 2;
+  if (!(segment.widthProfile instanceof Uint8Array) || segment.widthProfile.length !== pointCount || !(segment.levelProfile instanceof Uint16Array) || segment.levelProfile.length !== pointCount) {
+    throw new TypeError("river profiles must match its control point count");
+  }
+  const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
+    const x = segment.controlPoints[pointIndex * 2];
+    const y = segment.controlPoints[pointIndex * 2 + 1];
+    if (x < 0 || x > maximumX || y < 0 || y > maximumY || segment.widthProfile[pointIndex] === 0) {
+      throw new RangeError("river geometry lies outside valid bounds or has zero width");
+    }
+    if (pointIndex > 0 && (segment.widthProfile[pointIndex] < segment.widthProfile[pointIndex - 1] || segment.levelProfile[pointIndex] > segment.levelProfile[pointIndex - 1])) {
+      throw new Error("river width cannot shrink and level cannot rise downstream");
+    }
+  }
+  assertUint8("river discharge class", segment.dischargeClass);
+  assertEndpoint("river entry", segment.entry);
+  assertEndpoint("river exit", segment.exit);
+  if (segment.entry.kind === "body") throw new Error("river entry cannot originate in a terminal body");
+  if (endpointIdentity(segment.entry) === endpointIdentity(segment.exit)) {
+    throw new Error("river segment endpoints must be distinct");
+  }
+}
+function assertLake(lake, bounds) {
+  if (!lake || typeof lake !== "object") throw new TypeError("lake feature must be an object");
+  assertStableId("lake feature identity", lake.featureId);
+  assertStableId("lake body identity", lake.bodyId);
+  assertPoint("lake center", lake.center);
+  assertUint16("lake radius", lake.radius);
+  assertUint16("lake level", lake.level);
+  assertUint8("lake profile", lake.profileIndex);
+  if (lake.radius === 0) throw new RangeError("lake radius must be positive");
+  const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  if (lake.center[0] + lake.radius < 0 || lake.center[0] - lake.radius > maximumX || lake.center[1] + lake.radius < 0 || lake.center[1] - lake.radius > maximumY) {
+    throw new RangeError("lake feature does not intersect its region");
+  }
+}
+function assertMouth(mouth, bounds) {
+  if (!mouth || typeof mouth !== "object") throw new TypeError("river mouth must be an object");
+  assertStableId("river mouth identity", mouth.mouthId);
+  assertStableId("river mouth river", mouth.riverId);
+  assertStableId("river mouth segment", mouth.segmentId);
+  assertStableId("river mouth target body", mouth.targetBodyId);
+  assertPoint("river mouth point", mouth.point);
+  const maximumX = bounds.maxXExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  const maximumY = bounds.maxYExclusive * HYDROLOGY_POINT_QUANTIZATION;
+  if (mouth.point[0] < 0 || mouth.point[0] > maximumX || mouth.point[1] < 0 || mouth.point[1] > maximumY) {
+    throw new RangeError("river mouth lies outside its region");
+  }
+  assertUint8("river mouth width class", mouth.widthClass);
+  assertUint8("river mouth discharge class", mouth.dischargeClass);
+  if (mouth.widthClass === 0) throw new RangeError("river mouth width class must be positive");
+}
+function assertBody(body) {
+  if (!body || typeof body !== "object") throw new TypeError("hydrology body reference must be an object");
+  assertStableId("hydrology body identity", body.bodyId);
+  if (body.kind !== "ocean" && body.kind !== "lake" && body.kind !== "river") {
+    throw new TypeError("hydrology body kind is invalid");
+  }
+  assertUint8("hydrology body profile", body.profileIndex);
+}
+function assertHydrologyRegion(region) {
+  if (!region || typeof region !== "object" || region.formatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
+    throw new TypeError("hydrology region format version is unsupported");
+  }
+  if (typeof region.worldIdentity !== "string" || region.worldIdentity.length === 0 || region.worldIdentity.length > MAX_WORLD_IDENTITY_LENGTH) {
+    throw new TypeError("hydrology region world identity is invalid");
+  }
+  if (region.topology !== "finite" && region.topology !== "toroidal" && region.topology !== "infinite") {
+    throw new TypeError("hydrology region topology is invalid");
+  }
+  if (!region.key || !Number.isSafeInteger(region.key.regionX) || !Number.isSafeInteger(region.key.regionY) || region.topology !== "infinite" && (region.key.regionX < 0 || region.key.regionY < 0)) {
+    throw new RangeError("hydrology region key is invalid for its topology");
+  }
+  chunkOrigin(region.key.regionX, region.key.regionY, HYDROLOGY_REGION_SIZE);
+  if (!Number.isSafeInteger(region.revision) || region.revision < 0) {
+    throw new RangeError("hydrology region revision must be a non-negative safe integer");
+  }
+  const bounds = region.validBounds;
+  if (!bounds || bounds.minX !== 0 || bounds.minY !== 0 || !Number.isInteger(bounds.maxXExclusive) || !Number.isInteger(bounds.maxYExclusive) || bounds.maxXExclusive <= 0 || bounds.maxXExclusive > HYDROLOGY_REGION_SIZE || bounds.maxYExclusive <= 0 || bounds.maxYExclusive > HYDROLOGY_REGION_SIZE) {
+    throw new RangeError("hydrology region valid bounds are invalid");
+  }
+  if (!Array.isArray(region.boundaryPorts) || region.boundaryPorts.length > MAX_HYDROLOGY_REGION_PORTS || !Array.isArray(region.rivers) || region.rivers.length > MAX_HYDROLOGY_REGION_RIVERS || !Array.isArray(region.lakes) || region.lakes.length > MAX_HYDROLOGY_REGION_LAKES || !Array.isArray(region.mouths) || region.mouths.length > MAX_HYDROLOGY_REGION_MOUTHS || !Array.isArray(region.bodies) || region.bodies.length > MAX_HYDROLOGY_REGION_BODIES) {
+    throw new RangeError("hydrology region feature counts exceed the frozen budgets");
+  }
+  for (const port of region.boundaryPorts) assertPort(port, bounds);
+  for (const river of region.rivers) assertRiver(river, bounds);
+  for (const lake of region.lakes) assertLake(lake, bounds);
+  for (const mouth of region.mouths) assertMouth(mouth, bounds);
+  for (const body of region.bodies) assertBody(body);
+  assertCanonicalOrder("hydrology ports", region.boundaryPorts, (port) => `${port.connectionId}:${port.endpoint}`);
+  assertCanonicalOrder("river segments", region.rivers, (river) => river.segmentId);
+  assertCanonicalOrder("lake features", region.lakes, (lake) => lake.featureId);
+  assertCanonicalOrder("river mouths", region.mouths, (mouth) => mouth.mouthId);
+  assertCanonicalOrder("hydrology bodies", region.bodies, (body) => body.bodyId);
+  const bodies = new Map(region.bodies.map((body) => [body.bodyId, body]));
+  const rivers = new Map(region.rivers.map((river) => [river.segmentId, river]));
+  const portsBySegmentEndpoint = /* @__PURE__ */ new Set();
+  for (const port of region.boundaryPorts) {
+    const segment = rivers.get(port.segmentId);
+    if (!segment || segment.riverId !== port.riverId || bodies.get(port.riverId)?.kind !== "river") {
+      throw new Error("hydrology port references an unknown river segment or body");
+    }
+    const endpoint = port.endpoint === "entry" ? segment.entry : segment.exit;
+    if (endpoint.kind !== "port" || endpoint.connectionId !== port.connectionId) {
+      throw new Error("hydrology port does not match its river endpoint");
+    }
+    const pointOffset = port.endpoint === "entry" ? 0 : segment.controlPoints.length - 2;
+    const profileIndex = port.endpoint === "entry" ? 0 : segment.widthProfile.length - 1;
+    const segmentDirectionX = Math.sign(
+      segment.controlPoints[segment.controlPoints.length - 2] - segment.controlPoints[0]
+    );
+    const segmentDirectionY = Math.sign(
+      segment.controlPoints[segment.controlPoints.length - 1] - segment.controlPoints[1]
+    );
+    if (port.point[0] !== segment.controlPoints[pointOffset] || port.point[1] !== segment.controlPoints[pointOffset + 1] || port.flowDirection[0] !== segmentDirectionX || port.flowDirection[1] !== segmentDirectionY || port.widthClass !== segment.widthProfile[profileIndex] || port.level !== segment.levelProfile[profileIndex] || port.dischargeClass !== segment.dischargeClass) {
+      throw new Error("hydrology port geometry or flow class does not match its segment");
+    }
+    const endpointKey = `${port.segmentId}:${port.endpoint}`;
+    if (portsBySegmentEndpoint.has(endpointKey)) {
+      throw new Error("river segment endpoint has duplicate boundary ports");
+    }
+    portsBySegmentEndpoint.add(endpointKey);
+  }
+  for (const segment of region.rivers) {
+    if (bodies.get(segment.riverId)?.kind !== "river") {
+      throw new Error("river segment has no matching river body");
+    }
+    for (const [kind, endpoint] of [["entry", segment.entry], ["exit", segment.exit]]) {
+      if (endpoint.kind === "port" && !portsBySegmentEndpoint.has(`${segment.segmentId}:${kind}`)) {
+        throw new Error("river boundary endpoint has no matching port");
+      }
+      if (endpoint.kind === "body" && !bodies.has(endpoint.bodyId)) {
+        throw new Error("river terminal endpoint references an unknown body");
+      }
+    }
+  }
+  for (const lake of region.lakes) {
+    const body = bodies.get(lake.bodyId);
+    if (body?.kind !== "lake" || body.profileIndex !== lake.profileIndex) {
+      throw new Error("lake feature has no matching lake body");
+    }
+  }
+  const mouthBySegment = /* @__PURE__ */ new Set();
+  for (const mouth of region.mouths) {
+    const segment = rivers.get(mouth.segmentId);
+    if (!segment || segment.riverId !== mouth.riverId || segment.exit.kind !== "body" || segment.exit.bodyId !== mouth.targetBodyId || bodies.get(mouth.riverId)?.kind !== "river" || bodies.get(mouth.targetBodyId)?.kind !== "ocean" && bodies.get(mouth.targetBodyId)?.kind !== "lake" || mouth.point[0] !== segment.controlPoints[segment.controlPoints.length - 2] || mouth.point[1] !== segment.controlPoints[segment.controlPoints.length - 1] || mouth.widthClass !== segment.widthProfile[segment.widthProfile.length - 1] || mouth.dischargeClass !== segment.dischargeClass || mouthBySegment.has(mouth.segmentId)) {
+      throw new Error("river mouth does not match one terminal river segment");
+    }
+    mouthBySegment.add(mouth.segmentId);
+  }
+  for (const segment of region.rivers) {
+    if (segment.exit.kind === "body" && !mouthBySegment.has(segment.segmentId)) {
+      throw new Error("terminal river segment has no mouth feature");
+    }
+  }
+}
+function clonePort(port) {
+  return Object.freeze({ ...port });
+}
+function cloneRiver(river) {
+  return Object.freeze({ ...river, entry: cloneEndpoint(river.entry), exit: cloneEndpoint(river.exit) });
+}
+function createHydrologyRegion(input) {
+  if (!input || typeof input !== "object") throw new TypeError("hydrology region input is required");
+  const boundaryPorts = input.boundaryPorts.map(clonePort).sort((first, second) => compareIdentity(
+    `${first.connectionId}:${first.endpoint}`,
+    `${second.connectionId}:${second.endpoint}`
+  ));
+  const rivers = input.rivers.map(cloneRiver).sort((first, second) => compareIdentity(first.segmentId, second.segmentId));
+  const lakes = input.lakes.map((lake) => Object.freeze({ ...lake })).sort((first, second) => compareIdentity(first.featureId, second.featureId));
+  const mouths = input.mouths.map((mouth) => Object.freeze({ ...mouth })).sort((first, second) => compareIdentity(first.mouthId, second.mouthId));
+  const bodies = input.bodies.map((body) => Object.freeze({ ...body })).sort((first, second) => compareIdentity(first.bodyId, second.bodyId));
+  const region = Object.freeze({
+    formatVersion: HYDROLOGY_REGION_FORMAT_VERSION,
+    worldIdentity: input.worldIdentity,
+    topology: input.topology,
+    key: Object.freeze({ regionX: input.key.regionX, regionY: input.key.regionY }),
+    revision: input.revision,
+    validBounds: Object.freeze({
+      minX: 0,
+      minY: 0,
+      maxXExclusive: input.validBounds.maxXExclusive,
+      maxYExclusive: input.validBounds.maxYExclusive
+    }),
+    boundaryPorts: Object.freeze(boundaryPorts),
+    rivers: Object.freeze(rivers),
+    lakes: Object.freeze(lakes),
+    mouths: Object.freeze(mouths),
+    bodies: Object.freeze(bodies)
+  });
+  assertHydrologyRegion(region);
+  return region;
+}
+function hydrologyPortConnectionSignature(port) {
+  assertStableId("hydrology connection", port.connectionId);
+  assertStableId("hydrology port river", port.riverId);
+  if (!Number.isSafeInteger(port.canonicalTileX) || !Number.isSafeInteger(port.canonicalTileY) || !(port.flowDirection instanceof Int8Array) || port.flowDirection.length !== 2) {
+    throw new TypeError("hydrology port is not valid for a connection signature");
+  }
+  return JSON.stringify([
+    port.connectionId,
+    port.riverId,
+    port.canonicalTileX,
+    port.canonicalTileY,
+    port.flowDirection[0],
+    port.flowDirection[1],
+    port.widthClass,
+    port.level,
+    port.dischargeClass
+  ]);
+}
+
+// src/world/MacroDrainageHydrologySource.ts
+var MIN_RIVER_DISCHARGE = 8;
+var MIN_LAKE_RADIUS_TILES = 4;
+var MAX_LAKE_RADIUS_TILES = 16;
+var CLIP_EPSILON = 1e-9;
+var MACRO_NODE_CENTER_OFFSET = MACRO_DRAINAGE_NODE_STEP_TILES / 2;
+function positiveModulo5(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function compareIdentity2(first, second) {
+  return first < second ? -1 : first > second ? 1 : 0;
+}
+function clipAxis(start, delta, minimum, maximum, interval) {
+  if (delta === 0) return start >= minimum && start <= maximum;
+  let first = (minimum - start) / delta;
+  let second = (maximum - start) / delta;
+  if (first > second) [first, second] = [second, first];
+  interval.minimum = Math.max(interval.minimum, first);
+  interval.maximum = Math.min(interval.maximum, second);
+  return interval.maximum - interval.minimum > CLIP_EPSILON;
+}
+function clipLineToRegion(startX, startY, endX, endY, minimumX, minimumY, maximumX, maximumY) {
+  const deltaX = endX - startX;
+  const deltaY = endY - startY;
+  const interval = { minimum: 0, maximum: 1 };
+  if (!clipAxis(startX, deltaX, minimumX, maximumX, interval) || !clipAxis(startY, deltaY, minimumY, maximumY, interval)) return void 0;
+  const startT = Math.max(0, interval.minimum);
+  const endT = Math.min(1, interval.maximum);
+  if (endT - startT <= CLIP_EPSILON) return void 0;
+  return {
+    startX: startX + deltaX * startT,
+    startY: startY + deltaY * startT,
+    endX: startX + deltaX * endT,
+    endY: startY + deltaY * endT,
+    startT,
+    endT
+  };
+}
+function wrappedNodeStep(from, to, count) {
+  let step = to - from;
+  if (step > 1) step -= count;
+  else if (step < -1) step += count;
+  if (step < -1 || step > 1) throw new Error("toroidal drainage edge is not a neighboring node step");
+  return step;
+}
+function quantizeLocal(value, origin) {
+  const quantized = Math.round((value - origin) * HYDROLOGY_POINT_QUANTIZATION);
+  if (quantized < -32768 || quantized > 32767) {
+    throw new RangeError("hydrology local coordinate exceeds its int16 format");
+  }
+  return quantized;
+}
+function interpolateUint16(first, second, amount) {
+  return Math.max(0, Math.min(65535, Math.round(first + (second - first) * amount)));
+}
+function boundaryMask(localX, localY, maximumX, maximumY) {
+  let mask = 0;
+  if (localX === 0) mask |= HYDROLOGY_BOUNDARY_MIN_X;
+  if (localX === maximumX) mask |= HYDROLOGY_BOUNDARY_MAX_X;
+  if (localY === 0) mask |= HYDROLOGY_BOUNDARY_MIN_Y;
+  if (localY === maximumY) mask |= HYDROLOGY_BOUNDARY_MAX_Y;
+  if (mask === 0) throw new Error("clipped hydrology endpoint is not on a region boundary");
+  return mask;
+}
+function canonicalPortCoordinate(value, span, toroidal) {
+  const rounded = Math.round(value);
+  if (Math.abs(value - rounded) > CLIP_EPSILON || !Number.isSafeInteger(rounded)) {
+    throw new Error("macro drainage boundary crossing is not an integer logical tile");
+  }
+  return toroidal ? positiveModulo5(rounded, span) : rounded;
+}
+function nodeAxisRange(minimum, maximum, count, toroidal) {
+  const minimumNode = Math.ceil(
+    (minimum - MACRO_DRAINAGE_NODE_STEP_TILES - MACRO_NODE_CENTER_OFFSET) / MACRO_DRAINAGE_NODE_STEP_TILES
+  );
+  const maximumNode = Math.floor(
+    (maximum + MACRO_DRAINAGE_NODE_STEP_TILES - MACRO_NODE_CENTER_OFFSET) / MACRO_DRAINAGE_NODE_STEP_TILES
+  );
+  return toroidal ? [minimumNode, maximumNode] : [Math.max(0, minimumNode), Math.min(count - 1, maximumNode)];
+}
+function terminalRiverId(graph, sourceIndex) {
+  return `river:${macroDrainageNodeId(graph, graph.terminalNode[sourceIndex])}`;
+}
+function edgeId(graph, source, parent) {
+  return `edge:${macroDrainageNodeId(graph, source)}>${macroDrainageNodeId(graph, parent)}`;
+}
+function widthClass(dischargeClass) {
+  return Math.min(255, dischargeClass + 1);
+}
+function addBody(bodies, body) {
+  const existing = bodies.get(body.bodyId);
+  if (existing && (existing.kind !== body.kind || existing.profileIndex !== body.profileIndex)) {
+    throw new Error("hydrology body identity resolved to conflicting kinds or profiles");
+  }
+  if (!existing) bodies.set(body.bodyId, Object.freeze(body));
+}
+var MacroDrainageHydrologySource = class {
+  constructor(graph) {
+    assertMacroDrainageGraph(graph);
+    this.graph = graph;
+    this.regionCountX = Math.ceil(graph.worldWidth / HYDROLOGY_REGION_SIZE);
+    this.regionCountY = Math.ceil(graph.worldHeight / HYDROLOGY_REGION_SIZE);
+    this.terminalWaterLevel = new Uint16Array(graph.downstream.length);
+    this.terminalWaterLevelResolved = new Uint8Array(graph.downstream.length);
+    this.initializeTerminalWaterLevels();
+  }
+  resolveRegion(regionX, regionY) {
+    if (!Number.isSafeInteger(regionX) || !Number.isSafeInteger(regionY)) return void 0;
+    if (this.graph.topology === "finite") {
+      return regionX >= 0 && regionX < this.regionCountX && regionY >= 0 && regionY < this.regionCountY ? Object.freeze({ regionX, regionY }) : void 0;
+    }
+    return Object.freeze({
+      regionX: positiveModulo5(regionX, this.regionCountX),
+      regionY: positiveModulo5(regionY, this.regionCountY)
+    });
+  }
+  buildRegion(regionX, regionY) {
+    const key = this.resolveRegion(regionX, regionY);
+    if (!key || key.regionX !== regionX || key.regionY !== regionY) {
+      throw new RangeError("hydrology region build requires a canonical in-domain key");
+    }
+    const origin = chunkOrigin(regionX, regionY, HYDROLOGY_REGION_SIZE);
+    const validWidth = Math.min(HYDROLOGY_REGION_SIZE, this.graph.worldWidth - origin.x);
+    const validHeight = Math.min(HYDROLOGY_REGION_SIZE, this.graph.worldHeight - origin.y);
+    const endX = origin.x + validWidth;
+    const endY = origin.y + validHeight;
+    const rivers = [];
+    const ports = [];
+    const lakes = [];
+    const mouths = [];
+    const bodies = /* @__PURE__ */ new Map();
+    const segmentIds = /* @__PURE__ */ new Set();
+    const toroidal = this.graph.topology === "toroidal";
+    const [minimumNodeX, maximumNodeX] = nodeAxisRange(origin.x, endX, this.graph.width, toroidal);
+    const [minimumNodeY, maximumNodeY] = nodeAxisRange(origin.y, endY, this.graph.height, toroidal);
+    for (let unwrappedNodeX = minimumNodeX; unwrappedNodeX <= maximumNodeX; unwrappedNodeX += 1) {
+      const nodeX = toroidal ? positiveModulo5(unwrappedNodeX, this.graph.width) : unwrappedNodeX;
+      for (let unwrappedNodeY = minimumNodeY; unwrappedNodeY <= maximumNodeY; unwrappedNodeY += 1) {
+        const nodeY = toroidal ? positiveModulo5(unwrappedNodeY, this.graph.height) : unwrappedNodeY;
+        const sourceIndex = macroDrainageIndex(nodeX, nodeY, this.graph.height);
+        const sourceTile = macroDrainageNodeTile(this.graph, sourceIndex);
+        const physicalSourceX = toroidal ? unwrappedNodeX * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : sourceTile.x;
+        const physicalSourceY = toroidal ? unwrappedNodeY * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : sourceTile.y;
+        if (physicalSourceX >= origin.x && physicalSourceX < endX && physicalSourceY >= origin.y && physicalSourceY < endY && this.graph.ocean[sourceIndex] !== 0) {
+          addBody(bodies, {
+            bodyId: OCEAN_BODY_ID,
+            kind: "ocean",
+            profileIndex: OCEAN_HYDROLOGY_PROFILE
+          });
+        }
+        const parentIndex = this.graph.downstream[sourceIndex];
+        if (parentIndex === MACRO_DRAINAGE_TERMINAL || this.graph.ocean[sourceIndex] !== 0 || this.graph.discharge[sourceIndex] < MIN_RIVER_DISCHARGE) continue;
+        const parentX = Math.floor(parentIndex / this.graph.height);
+        const parentY = parentIndex - parentX * this.graph.height;
+        const parentTile = macroDrainageNodeTile(this.graph, parentIndex);
+        const physicalParentX = toroidal ? (unwrappedNodeX + wrappedNodeStep(nodeX, parentX, this.graph.width)) * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : parentTile.x;
+        const physicalParentY = toroidal ? (unwrappedNodeY + wrappedNodeStep(nodeY, parentY, this.graph.height)) * MACRO_DRAINAGE_NODE_STEP_TILES + MACRO_NODE_CENTER_OFFSET : parentTile.y;
+        const clipped = clipLineToRegion(
+          physicalSourceX,
+          physicalSourceY,
+          physicalParentX,
+          physicalParentY,
+          origin.x,
+          origin.y,
+          endX,
+          endY
+        );
+        if (!clipped) continue;
+        const localStartX = quantizeLocal(clipped.startX, origin.x);
+        const localStartY = quantizeLocal(clipped.startY, origin.y);
+        const localEndX = quantizeLocal(clipped.endX, origin.x);
+        const localEndY = quantizeLocal(clipped.endY, origin.y);
+        const canonicalEdgeId = edgeId(this.graph, sourceIndex, parentIndex);
+        const segmentId = `segment:${canonicalEdgeId}@${regionX}:${regionY}:${localStartX},${localStartY}>${localEndX},${localEndY}`;
+        if (segmentIds.has(segmentId)) throw new Error("hydrology region produced a duplicate segment identity");
+        segmentIds.add(segmentId);
+        const riverId = terminalRiverId(this.graph, sourceIndex);
+        const edgeDischargeClass = this.graph.dischargeClass[sourceIndex];
+        const edgeWidthClass = widthClass(edgeDischargeClass);
+        const startLevel = interpolateUint16(
+          this.graph.spillLevel[sourceIndex],
+          this.graph.downstream[parentIndex] === MACRO_DRAINAGE_TERMINAL ? this.terminalWaterLevel[parentIndex] : this.graph.spillLevel[parentIndex],
+          clipped.startT
+        );
+        const endLevel = interpolateUint16(
+          this.graph.spillLevel[sourceIndex],
+          this.graph.downstream[parentIndex] === MACRO_DRAINAGE_TERMINAL ? this.terminalWaterLevel[parentIndex] : this.graph.spillLevel[parentIndex],
+          clipped.endT
+        );
+        const directionX = Math.sign(physicalParentX - physicalSourceX);
+        const directionY = Math.sign(physicalParentY - physicalSourceY);
+        let entry = {
+          kind: "node",
+          nodeId: macroDrainageNodeId(this.graph, sourceIndex)
+        };
+        let exit = this.graph.downstream[parentIndex] === MACRO_DRAINAGE_TERMINAL ? { kind: "body", bodyId: macroDrainageTerminalBodyId(this.graph, sourceIndex) } : { kind: "node", nodeId: macroDrainageNodeId(this.graph, parentIndex) };
+        if (clipped.startT > CLIP_EPSILON) {
+          const canonicalTileX = canonicalPortCoordinate(clipped.startX, this.graph.worldWidth, toroidal);
+          const canonicalTileY = canonicalPortCoordinate(clipped.startY, this.graph.worldHeight, toroidal);
+          const connectionId = `connection:${canonicalEdgeId}@${canonicalTileX}:${canonicalTileY}`;
+          entry = { kind: "port", connectionId };
+          ports.push({
+            connectionId,
+            riverId,
+            segmentId,
+            endpoint: "entry",
+            boundaryMask: boundaryMask(
+              localStartX,
+              localStartY,
+              validWidth * HYDROLOGY_POINT_QUANTIZATION,
+              validHeight * HYDROLOGY_POINT_QUANTIZATION
+            ),
+            point: new Int16Array([localStartX, localStartY]),
+            canonicalTileX,
+            canonicalTileY,
+            flowDirection: new Int8Array([directionX, directionY]),
+            widthClass: edgeWidthClass,
+            level: startLevel,
+            dischargeClass: edgeDischargeClass
+          });
+        }
+        if (clipped.endT < 1 - CLIP_EPSILON) {
+          const canonicalTileX = canonicalPortCoordinate(clipped.endX, this.graph.worldWidth, toroidal);
+          const canonicalTileY = canonicalPortCoordinate(clipped.endY, this.graph.worldHeight, toroidal);
+          const connectionId = `connection:${canonicalEdgeId}@${canonicalTileX}:${canonicalTileY}`;
+          exit = { kind: "port", connectionId };
+          ports.push({
+            connectionId,
+            riverId,
+            segmentId,
+            endpoint: "exit",
+            boundaryMask: boundaryMask(
+              localEndX,
+              localEndY,
+              validWidth * HYDROLOGY_POINT_QUANTIZATION,
+              validHeight * HYDROLOGY_POINT_QUANTIZATION
+            ),
+            point: new Int16Array([localEndX, localEndY]),
+            canonicalTileX,
+            canonicalTileY,
+            flowDirection: new Int8Array([directionX, directionY]),
+            widthClass: edgeWidthClass,
+            level: endLevel,
+            dischargeClass: edgeDischargeClass
+          });
+        }
+        const segment = {
+          riverId,
+          segmentId,
+          controlPoints: new Int16Array([localStartX, localStartY, localEndX, localEndY]),
+          widthProfile: new Uint8Array([edgeWidthClass, edgeWidthClass]),
+          levelProfile: new Uint16Array([startLevel, endLevel]),
+          dischargeClass: edgeDischargeClass,
+          entry,
+          exit
+        };
+        rivers.push(segment);
+        addBody(bodies, { bodyId: riverId, kind: "river", profileIndex: RIVER_HYDROLOGY_PROFILE });
+        if (exit.kind === "body") {
+          const targetKind = this.graph.ocean[parentIndex] !== 0 ? "ocean" : "lake";
+          addBody(bodies, {
+            bodyId: exit.bodyId,
+            kind: targetKind,
+            profileIndex: targetKind === "ocean" ? OCEAN_HYDROLOGY_PROFILE : LAKE_HYDROLOGY_PROFILE
+          });
+          mouths.push({
+            mouthId: `mouth:${canonicalEdgeId}`,
+            riverId,
+            segmentId,
+            targetBodyId: exit.bodyId,
+            point: new Int16Array([localEndX, localEndY]),
+            widthClass: edgeWidthClass,
+            dischargeClass: edgeDischargeClass
+          });
+        }
+      }
+    }
+    this.addLakeSlices(key, origin.x, origin.y, validWidth, validHeight, lakes, bodies);
+    return createHydrologyRegion({
+      worldIdentity: this.graph.worldIdentity,
+      topology: this.graph.topology,
+      key,
+      revision: HYDROLOGY_REGION_REVISION,
+      validBounds: { minX: 0, minY: 0, maxXExclusive: validWidth, maxYExclusive: validHeight },
+      boundaryPorts: ports,
+      rivers,
+      lakes,
+      mouths,
+      bodies: [...bodies.values()].sort((first, second) => compareIdentity2(first.bodyId, second.bodyId))
+    });
+  }
+  addLakeSlices(key, originX, originY, validWidth, validHeight, lakes, bodies) {
+    if (this.graph.terminalKind !== "lake") return;
+    const toroidal = this.graph.topology === "toroidal";
+    for (const terminal of this.graph.terminalIndices) {
+      const bodyId = macroDrainageTerminalBodyId(this.graph, terminal);
+      const center = macroDrainageNodeTile(this.graph, terminal);
+      const radiusTiles = Math.min(
+        MAX_LAKE_RADIUS_TILES,
+        MIN_LAKE_RADIUS_TILES + this.graph.dischargeClass[terminal]
+      );
+      const radius = radiusTiles * HYDROLOGY_POINT_QUANTIZATION;
+      const shiftsX = toroidal ? [-this.graph.worldWidth, 0, this.graph.worldWidth] : [0];
+      const shiftsY = toroidal ? [-this.graph.worldHeight, 0, this.graph.worldHeight] : [0];
+      for (const shiftX of shiftsX) {
+        for (const shiftY of shiftsY) {
+          const physicalCenterX = center.x + shiftX;
+          const physicalCenterY = center.y + shiftY;
+          if (physicalCenterX + radiusTiles < originX || physicalCenterX - radiusTiles > originX + validWidth || physicalCenterY + radiusTiles < originY || physicalCenterY - radiusTiles > originY + validHeight) continue;
+          const localCenterX = quantizeLocal(physicalCenterX, originX);
+          const localCenterY = quantizeLocal(physicalCenterY, originY);
+          lakes.push({
+            featureId: `lake-slice:${bodyId}@${key.regionX}:${key.regionY}:${localCenterX},${localCenterY}`,
+            bodyId,
+            center: new Int16Array([localCenterX, localCenterY]),
+            radius,
+            level: this.terminalWaterLevel[terminal],
+            profileIndex: LAKE_HYDROLOGY_PROFILE
+          });
+          addBody(bodies, { bodyId, kind: "lake", profileIndex: LAKE_HYDROLOGY_PROFILE });
+        }
+      }
+    }
+  }
+  initializeTerminalWaterLevels() {
+    this.terminalWaterLevel.fill(65535);
+    for (const terminal of this.graph.terminalIndices) {
+      if (this.graph.ocean[terminal] !== 0) {
+        this.terminalWaterLevel[terminal] = this.graph.seaLevel;
+        this.terminalWaterLevelResolved[terminal] = 1;
+      }
+    }
+    for (let index = 0; index < this.graph.downstream.length; index += 1) {
+      const parent = this.graph.downstream[index];
+      if (parent < 0 || this.graph.ocean[parent] !== 0 || this.graph.downstream[parent] !== MACRO_DRAINAGE_TERMINAL) continue;
+      this.terminalWaterLevel[parent] = Math.min(
+        this.terminalWaterLevel[parent],
+        this.graph.spillLevel[index]
+      );
+      this.terminalWaterLevelResolved[parent] = 1;
+    }
+    for (const terminal of this.graph.terminalIndices) {
+      if (this.terminalWaterLevelResolved[terminal] === 0) {
+        this.terminalWaterLevel[terminal] = this.graph.groundHeight[terminal];
+      }
+      if (this.terminalWaterLevel[terminal] < this.graph.groundHeight[terminal]) {
+        throw new Error("hydrology terminal water level falls below its ground");
+      }
+    }
+  }
+};
 export {
   BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
   BASE_SEMANTIC_CHUNK_TILE_COUNT,
@@ -3370,12 +4043,31 @@ export {
   CORE_VEGETATION_PROFILE_ENTRIES,
   CORE_WORLD_SEMANTICS_V2,
   DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES,
+  HYDROLOGY_BOUNDARY_MAX_X,
+  HYDROLOGY_BOUNDARY_MAX_Y,
+  HYDROLOGY_BOUNDARY_MIN_X,
+  HYDROLOGY_BOUNDARY_MIN_Y,
+  HYDROLOGY_POINT_QUANTIZATION,
   HYDROLOGY_REGION_FORMAT_VERSION,
+  HYDROLOGY_REGION_REVISION,
   HYDROLOGY_REGION_SIZE,
   InfiniteSemanticWorldSource,
+  LAKE_HYDROLOGY_PROFILE,
   MACRO_DRAINAGE_NODE_STEP_TILES,
+  MAX_HYDROLOGY_REGION_BODIES,
+  MAX_HYDROLOGY_REGION_LAKES,
+  MAX_HYDROLOGY_REGION_MOUTHS,
+  MAX_HYDROLOGY_REGION_PORTS,
+  MAX_HYDROLOGY_REGION_RIVERS,
+  MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS,
+  MAX_LAKE_RADIUS_TILES,
   MAX_MACRO_DRAINAGE_GRAPH_NODES,
+  MIN_LAKE_RADIUS_TILES,
+  MIN_RIVER_DISCHARGE,
+  MacroDrainageHydrologySource,
   OCEAN_BODY_ID,
+  OCEAN_HYDROLOGY_PROFILE,
+  RIVER_HYDROLOGY_PROFILE,
   SURFACE_COMPILE_PROFILE,
   SURFACE_COMPILE_PROFILE_VERSION,
   SURFACE_CORE_TEXELS,
@@ -3391,6 +4083,7 @@ export {
   assertBaseSemanticChunk,
   assertCoreWorldSemanticsV2,
   assertGenerateSemanticChunkWorkerRequest,
+  assertHydrologyRegion,
   assertMacroDrainageGraph,
   assertSemanticWorldSource,
   assertWorldDescriptorV2,
@@ -3399,10 +4092,12 @@ export {
   createCoreInfiniteWorldDescriptorV2,
   createCoreToroidalWorldDescriptorV2,
   createGenerateSemanticChunkWorkerRequest,
+  createHydrologyRegion,
   createWorldDescriptorV2,
   deserializeBaseSemanticChunk,
   generateBaseSemanticChunk,
   getBaseSemanticTile,
+  hydrologyPortConnectionSignature,
   macroDrainageNodeId,
   macroDrainageNodeTile,
   macroDrainageTerminalBodyId,

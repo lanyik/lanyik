@@ -123,3 +123,49 @@ export type {
     MacroDrainageGraph,
     BuildMacroDrainageGraphOptions
 } from "./world/MacroDrainageGraph";
+
+export {
+    HYDROLOGY_REGION_REVISION,
+    HYDROLOGY_POINT_QUANTIZATION,
+    MAX_HYDROLOGY_REGION_PORTS,
+    MAX_HYDROLOGY_REGION_RIVERS,
+    MAX_HYDROLOGY_REGION_LAKES,
+    MAX_HYDROLOGY_REGION_MOUTHS,
+    MAX_HYDROLOGY_REGION_BODIES,
+    MAX_HYDROLOGY_SEGMENT_CONTROL_POINTS,
+    HYDROLOGY_BOUNDARY_MIN_X,
+    HYDROLOGY_BOUNDARY_MAX_X,
+    HYDROLOGY_BOUNDARY_MIN_Y,
+    HYDROLOGY_BOUNDARY_MAX_Y,
+    OCEAN_HYDROLOGY_PROFILE,
+    LAKE_HYDROLOGY_PROFILE,
+    RIVER_HYDROLOGY_PROFILE,
+    assertHydrologyRegion,
+    createHydrologyRegion,
+    hydrologyPortConnectionSignature
+} from "./world/HydrologyRegion";
+export type {
+    HydrologyFeatureId,
+    HydrologySegmentId,
+    HydrologyBodyId,
+    HydrologyConnectionId,
+    HydrologyBodyKind,
+    HydrologyRegionTopology,
+    HydrologyRegionKey,
+    HydrologyRegionValidBounds,
+    RiverEndpoint,
+    HydrologyPort,
+    RiverFeatureSegment,
+    LakeFeature,
+    RiverMouthFeature,
+    HydrologyBodyRef,
+    HydrologyRegion,
+    HydrologyRegionInput
+} from "./world/HydrologyRegion";
+
+export {
+    MIN_RIVER_DISCHARGE,
+    MIN_LAKE_RADIUS_TILES,
+    MAX_LAKE_RADIUS_TILES,
+    MacroDrainageHydrologySource
+} from "./world/MacroDrainageHydrologySource";

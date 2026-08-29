@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。HydrologyRegion 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式及其局部裁切源，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地。水文 Worker/derived query、无限 region 求值及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -298,6 +298,10 @@ interface HydrologyBodyRef {
 
 控制点相对区域原点量化。同一条河跨区时共享稳定 `riverId`，各段使用独立 `segmentId` 并通过 boundary port 连接；不把一条长河复制到所有经过区域。基础 region 只能由 `MacroDrainageGraph` 裁剪产生，不能根据当前邻区内容二次猜测连接。
 
+当前格式版本 1 的基础 region revision 为 0，控制点使用每逻辑格 64 单位的 `Int16` 量化；128 格边长因此只占 8192 个量化单位。端口同时保存 region-local 点、规范 world tile 交点、非零八方向 flow、水位、宽度和 discharge class。角点 crossing 使用 `MIN_X/MAX_X/MIN_Y/MAX_Y` bitmask 的组合表示成一个连接，不拆成两条互不相干的边。每区上限固定为 1024 ports、1024 river segments、256 lake slices、512 mouths、1024 body refs，每段最多 64 个控制点；越界、重复 ID、孤立 port、无 mouth 的终止河段、逆水位或下游收窄均拒绝发布。
+
+有限/环绕 `MacroDrainageHydrologySource` 在构造时完整校验一次全局图；裁一个 region 时只扫描该区加一个 8 格宏观步长 halo，正常候选窗口约 18×18 个节点，不按全图节点数线性扫描。基础河流阈值固定为 discharge 8，每条有效宏观边裁成区内线段；`riverId` 由终点节点决定，segment、mouth 和 connection ID 由规范排水边与裁切交点决定。河宽等级和水位沿流向不减/不升。陆锁终点的湖面取最低入流 spill level，湖泊以 4～16 格的有界连续影响圆切入相交 region；同一湖在 topology seam 两侧的 slice 使用不同 feature ID、同一个 body ID。
+
 ### 6.4 水体身份
 
 - **海洋**：所有由冻结海平面形成的基础海域使用保留的 `OCEAN_BODY_ID`。v2 不对无限世界执行依赖加载范围的海洋连通块编号；若以后玩法必须区分多个海盆，需要升级水文格式。
@@ -309,7 +313,9 @@ interface HydrologyBodyRef {
 
 ### 6.5 跨区域确定性
 
-相邻区域对公共边使用同一个规范化边键定位由排水图产生的 crossing。边键的唯一拥有者序列化 boundary port；两侧必须得到完全相同的端点、方向、宽度等级、流量等级、连接 ID 和 body ID。
+相邻区域对公共边使用同一个规范化边键定位由排水图产生的 crossing。边键按唯一 canonical owner 规则计算 port payload，两侧各序列化指向本区 segment endpoint 的引用；两侧必须得到完全相同的规范交点、方向、水位、宽度等级、流量等级、连接 ID 和 body ID。
+
+当前裁切器由 canonical drainage edge 唯一计算 crossing 内容，两侧 region 各保存一个指向本区 segment endpoint 的 port record；比较时使用不含 region-local side/segment ID 的 connection signature。环绕 world seam 将交点规范到 0，四角 seam 的两个 slice 因而共享一个 connection ID、规范交点、方向、水位、宽度、流量和 river/body 身份。
 
 区域内部河段从固定宏观排水边和端口约束重建，不读取“当前已经加载的邻区”。汇流只允许流量增加，河口必须连接海域、湖泊或下一段有效端口。发现 rank 不下降、孤立出口、重复 feature ID 或边界不匹配时生成失败，不用局部伪河或断头贴图降级。
 
