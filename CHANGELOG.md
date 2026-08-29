@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Internal `WorldSurfaceResolver` and `WorldSurfaceView` authorities that
-  centralize generator-v4 classification, continuous relief, biome weights,
+  centralize versioned terrain classification, continuous relief, biome weights,
   vegetation/lake patches and sparse terrain edits while providing deterministic
   shared-corner surface heights without a world-sized cache.
 - A deterministic continuous `LandformSampler` for elevation,
@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moving behind those boundaries.
 - Deterministic and fault-injected acceptance tests, rapid replacement E2E, and
   a configurable scheduled browser soak with lifecycle, WebGL and JS-heap hard bounds.
+- A topology-aware world-style review corpus with fixed bounded, 512×512
+  toroidal, positive/negative infinite, pressure and minimum-size samples;
+  Playwright emits far, middle, near and elevation-debug views plus runtime metrics.
 - Frozen world descriptors and Worker protocol versions, literal golden
   generation checksums, real Worker-crash replacement E2E, and repeated real
   WebGL context-loss recovery with bounded resources.
@@ -70,7 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Upgraded procedural generation once to generator v4 and Worker protocol v2.
+- Upgraded procedural generation to generator v5 after the fixed gallery
+  reproduced peppered forests. Wood placement now uses a continuous regional
+  density threshold with bounded deterministic edge jitter; generator checksums
+  and cache/save identity advance while chunk, descriptor and Worker formats stay unchanged.
+- Established the versioned generator identity at v4 and Worker protocol v2.
   One canonical descriptor fingerprint now drives chunk-cache keys, default
   world IDs and navigation terrain revisions; both Worker directions validate
   generator identity.
@@ -80,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asynchronous consumers before emitting `surfacechange`.
 - Eager, toroidal and infinite chunk generation now use one frozen style
   profile and resolver. Terrain and placement consumers use the same effective
-  generator-v4 macro surface while sparse edits remain authoritative.
+  current macro surface while sparse edits remain authoritative.
 - Refocused the README and documentation around the current streamed-world
   architecture, package entry points, demo modes and verification workflow;
   removed obsolete implementation plans and unreferenced legacy textures.
@@ -93,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Terrain atlas cells now retain detail at a two-hex span by default. One
   continuous world-space UV warp and macro tint field break up visible tiling
   without adding another `terrain.png` lookup; the span remains live-tunable.
-- Procedural terrain generation now uses generator version 4. Generation and
+- Procedural terrain generation now uses generator version 5. Generation and
   rendering consume the same seed and continuous elevation field; mountain
   tiles share edge/corner heights with their neighbors and hex centers are no
   longer forced into one peak per tile.

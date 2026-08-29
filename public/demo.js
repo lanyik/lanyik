@@ -15,6 +15,7 @@ const {
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const fastRenderMode = query.get("quality") === "fast";
+const galleryRenderMode = query.get("quality") === "gallery";
 const TARGET_FRAME_RATE = 240;
 const TARGET_FRAME_MS = 1000 / TARGET_FRAME_RATE;
 const title = document.querySelector("[data-world-title]");
@@ -91,7 +92,18 @@ const map = new HexMap({
     coastalWaveDistortion: 0.5,
     coastCurvature: 0.5,
     landBlendCurvature: 0.5,
-    ...(fastRenderMode ? {
+    ...(galleryRenderMode ? {
+        maxPixelRatio: 1,
+        antialias: false,
+        skyVisible: false,
+        treesPerTile: 4,
+        grassEnabled: false,
+        grassDensity: 0,
+        renderDistance: 1_000,
+        lodNearDistance: 450,
+        lodFarDistance: 850,
+        vegetationRenderDistance: 900
+    } : fastRenderMode ? {
         maxPixelRatio: 1,
         antialias: false,
         terrainShaderQuality: "fast",

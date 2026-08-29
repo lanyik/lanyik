@@ -889,7 +889,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 4;
+var WORLD_GENERATOR_VERSION = 5;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -986,6 +986,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     patchMinimum: 0.22,
     ridgePenalty: 0.72,
     roughnessPenalty: 0.18,
+    placementThreshold: 0.24,
+    placementJitter: 0.08,
     placementSalt: 668265263,
     palmTemperature: 0.67,
     piniaTemperature: 0.4
@@ -1174,6 +1176,8 @@ function assertWorldStyleProfile(value) {
   unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
   unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
   unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
+  unitInterval("vegetation.placementThreshold", profile.vegetation.placementThreshold);
+  unitInterval("vegetation.placementJitter", profile.vegetation.placementJitter);
   unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
   unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
   positive("vegetation.densityScale", profile.vegetation.densityScale);
@@ -1182,6 +1186,9 @@ function assertWorldStyleProfile(value) {
   }
   if (profile.vegetation.neutralDensity > profile.vegetation.maximumDensity) {
     throw new RangeError("vegetation neutral density must not exceed maximum density");
+  }
+  if (profile.vegetation.placementThreshold <= profile.vegetation.placementJitter * 0.5 || profile.vegetation.placementThreshold > profile.vegetation.maximumDensity + profile.vegetation.placementJitter * 0.5) {
+    throw new RangeError("vegetation placement threshold must reject zero density and intersect the density range");
   }
   if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
     throw new RangeError("vegetation temperature thresholds must be ordered");
@@ -1514,7 +1521,8 @@ function resolveTile(numericSeed, profile, x, y, sampleAt) {
     modifiers.push("lake");
   } else {
     if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-    if (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) < sample.vegetationDensity) {
+    const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
+    if (forest) {
       modifiers.push("wood");
       tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
     }

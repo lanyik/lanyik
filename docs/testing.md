@@ -13,6 +13,7 @@ when it changes the defects the suite can detect.
 | Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
+| World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
@@ -49,6 +50,21 @@ $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
 soak on its scheduled job.
+
+Changes to generator classification, modifiers, vegetation placement, climate
+or surface semantics additionally run:
+
+```powershell
+npm run review:world-style
+```
+
+The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
+infinite seeds at positive and negative windows, pressure seeds and minimum
+dimensions. The gallery pass uses `quality=gallery`: full terrain materials and
+trees remain enabled, while grass, sky and antialiasing are disabled and tree
+instance density is reduced so all four fixed views remain practical under CI
+software rendering. Per-sample JSON and images are artifacts; topology,
+connectivity and broad composition ranges are the stable gates.
 
 ## Meaning of the 500-iteration soak
 

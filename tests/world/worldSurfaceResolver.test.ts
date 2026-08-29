@@ -25,7 +25,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v4 outputs", () => {
+    test("preserves the frozen generator v5 outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v4-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
         });
@@ -48,9 +48,9 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("lake") ? 4 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("44464d15");
-        expect(checksum(toroidal.tiles)).toBe("70c9b162");
-        expect(checksum(encoded)).toBe("dd7b10a6");
+        expect(checksum(infinite.tiles)).toBe("ae84e215");
+        expect(checksum(toroidal.tiles)).toBe("cd8b9172");
+        expect(checksum(encoded)).toBe("50fc54b4");
     });
 
     test("freezes continuous relief, biome, vegetation and lake fields", () => {
@@ -118,7 +118,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("8d450b92");
+        expect(checksum(encoded)).toBe("e0291032");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -158,6 +158,10 @@ describe("WorldSurfaceResolver", () => {
         const missingField = structuredClone(WORLD_STYLE_PROFILE) as any;
         delete missingField.fields.ridge;
         expect(() => assertWorldStyleProfile(missingField)).toThrow(/ridge/);
+
+        const invalidPlacement = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidPlacement.vegetation.placementThreshold = 0.01;
+        expect(() => assertWorldStyleProfile(invalidPlacement)).toThrow(/placement threshold/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

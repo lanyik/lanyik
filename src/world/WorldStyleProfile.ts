@@ -95,6 +95,8 @@ export interface WorldStyleProfile {
         readonly patchMinimum: number;
         readonly ridgePenalty: number;
         readonly roughnessPenalty: number;
+        readonly placementThreshold: number;
+        readonly placementJitter: number;
         readonly placementSalt: number;
         readonly palmTemperature: number;
         readonly piniaTemperature: number;
@@ -129,7 +131,7 @@ const field = (
     minimumToroidalCells
 });
 
-// Generator v4 owns one frozen macro-style profile. Any semantic change to
+// Generator v5 owns one frozen macro-style profile. Any semantic change to
 // these values must move the generator version and its checksum baselines.
 export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,
@@ -218,6 +220,8 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         patchMinimum: 0.22,
         ridgePenalty: 0.72,
         roughnessPenalty: 0.18,
+        placementThreshold: 0.24,
+        placementJitter: 0.08,
         placementSalt: 0x27d4eb2f,
         palmTemperature: 0.67,
         piniaTemperature: 0.4
@@ -398,6 +402,8 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
     unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
     unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
+    unitInterval("vegetation.placementThreshold", profile.vegetation.placementThreshold);
+    unitInterval("vegetation.placementJitter", profile.vegetation.placementJitter);
     unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
     unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
     positive("vegetation.densityScale", profile.vegetation.densityScale);
@@ -408,6 +414,11 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     }
     if (profile.vegetation.neutralDensity > profile.vegetation.maximumDensity) {
         throw new RangeError("vegetation neutral density must not exceed maximum density");
+    }
+    if (profile.vegetation.placementThreshold <= profile.vegetation.placementJitter * 0.5
+        || profile.vegetation.placementThreshold
+            > profile.vegetation.maximumDensity + profile.vegetation.placementJitter * 0.5) {
+        throw new RangeError("vegetation placement threshold must reject zero density and intersect the density range");
     }
     if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
         throw new RangeError("vegetation temperature thresholds must be ordered");

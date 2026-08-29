@@ -275,7 +275,11 @@ function resolveTile(
         modifiers.push("lake");
     } else {
         if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-        if (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) < sample.vegetationDensity) {
+        const forest = sample.vegetationDensity
+            + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
+                * profile.vegetation.placementJitter
+            >= profile.vegetation.placementThreshold;
+        if (forest) {
             modifiers.push("wood");
             tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
         }
