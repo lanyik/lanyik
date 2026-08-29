@@ -113,6 +113,8 @@ describe("IndexedDbSurfaceDeltaStore", () => {
         expect(prepared.snapshot.effectiveRevision).toBe(2);
         expect(prepared.snapshot.getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(42_000);
         expect(store.snapshot().effectiveRevision).toBe(1);
+        await store.commitPrepared(prepared);
+        expect(store.snapshot()).toBe(prepared.snapshot);
         await store.close();
 
         const reopened = await IndexedDbSurfaceDeltaStore.open({
@@ -121,8 +123,8 @@ describe("IndexedDbSurfaceDeltaStore", () => {
             databaseName: name,
             maxPendingCommitBytes: 1024 * 1024
         });
-        expect(reopened.snapshot().effectiveRevision).toBe(1);
-        expect(reopened.snapshot().getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(40_000);
+        expect(reopened.snapshot().effectiveRevision).toBe(2);
+        expect(reopened.snapshot().getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(42_000);
         await reopened.close();
     });
 

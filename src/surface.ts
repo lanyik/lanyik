@@ -399,6 +399,7 @@ export type {
 export {
     INDEXED_DB_SURFACE_DELTA_FORMAT_VERSION,
     indexedDbSurfaceDeltaCommitBytes,
+    indexedDbPreparedSurfaceDeltaCommitBytes,
     SurfaceDeltaSessionConflictError,
     SurfaceDeltaCommitBackpressureError,
     SurfaceDeltaSaveBarrierError,

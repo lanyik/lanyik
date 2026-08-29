@@ -82,6 +82,39 @@ describe("MemorySurfaceDeltaStore", () => {
         expect(store.snapshot()).toBe(before);
         payload.macroHeight[0] = 1;
         expect(prepared.snapshot.getSemanticDelta(-1, 2)?.macroHeight[0]).toBe(41_000);
+        await expect(store.commitPrepared(prepared)).resolves.toBe(prepared.commit);
+        expect(store.snapshot()).toBe(prepared.snapshot);
+        await expect(store.commitPrepared(prepared)).rejects.toThrow(/already consumed/);
+    });
+
+    test("rejects a prepared candidate after its exact before snapshot becomes stale", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("stale-preview");
+        const worldIdentity = serializeWorldDescriptorV2(descriptor);
+        const store = new MemorySurfaceDeltaStore(descriptor, baseIndex([]));
+        const stale = await store.preview({
+            worldIdentity,
+            semanticMutations: [{
+                operation: "upsert",
+                key: { chunkX: 0, chunkY: 0 },
+                expectedRevision: 0,
+                payload: heightPayload()
+            }],
+            hydrologyMutations: []
+        });
+        await store.commit({
+            worldIdentity,
+            semanticMutations: [{
+                operation: "upsert",
+                key: { chunkX: 1, chunkY: 0 },
+                expectedRevision: 0,
+                payload: heightPayload(0, 42_000)
+            }],
+            hydrologyMutations: []
+        });
+
+        await expect(store.commitPrepared(stale)).rejects.toThrow(/no longer follows/);
+        expect(store.snapshot().effectiveRevision).toBe(1);
+        expect(store.snapshot().getSemanticDelta(0, 0)).toBeUndefined();
     });
 
     test("commits semantic and hydrology mutations under one immutable revision", async () => {

@@ -166,6 +166,61 @@ export function indexedDbSurfaceDeltaCommitBytes(
     return bytes;
 }
 
+export function indexedDbPreparedSurfaceDeltaCommitBytes(
+    descriptor: WorldDescriptorV2,
+    prepared: Readonly<PreparedSurfaceDeltaCommit>
+): number {
+    const worldIdentity = serializeWorldDescriptorV2(descriptor);
+    if (!prepared || typeof prepared !== "object"
+        || prepared.before.worldIdentity !== worldIdentity
+        || prepared.commit.worldIdentity !== worldIdentity
+        || prepared.snapshot.worldIdentity !== worldIdentity) {
+        throw new TypeError("durable prepared surface delta byte accounting requires one matching world");
+    }
+    const residentInput: SurfaceDeltaTransactionInput = {
+        worldIdentity,
+        semanticMutations: prepared.commit.semanticChanges.map(change => change.operation === "upsert" ? {
+            operation: "upsert" as const,
+            key: change.delta.key,
+            expectedRevision: change.expectedRevision,
+            payload: change.delta
+        } : {
+            operation: "delete" as const,
+            key: change.key,
+            expectedRevision: change.expectedRevision
+        }),
+        hydrologyMutations: prepared.commit.hydrologyChanges.map(change => {
+            const delta = change.delta;
+            return delta.operation === "upsert" ? {
+                operation: "upsert" as const,
+                featureId: delta.featureId,
+                featureKind: delta.featureKind,
+                expectedRevision: change.expectedRevision,
+                feature: delta.feature
+            } : {
+                operation: "delete" as const,
+                featureId: delta.featureId,
+                featureKind: delta.featureKind,
+                expectedRevision: change.expectedRevision
+            };
+        })
+    };
+    let bytes = surfaceDeltaTransactionResidentBytes(residentInput);
+    for (const change of prepared.commit.semanticChanges) {
+        if (change.operation === "upsert") {
+            bytes += sparseSemanticDeltaSerializedBytes(change.delta);
+        }
+    }
+    for (const change of prepared.commit.hydrologyChanges) {
+        const delta = change.delta;
+        bytes += hydrologyFeatureDeltaSerializedBytes(delta);
+    }
+    if (!Number.isSafeInteger(bytes)) {
+        throw new RangeError("durable prepared surface delta bytes exceed safe integers");
+    }
+    return bytes;
+}
+
 export class SurfaceDeltaSessionConflictError extends Error {
     public readonly name = "SurfaceDeltaSessionConflictError";
 
@@ -302,7 +357,50 @@ export class IndexedDbSurfaceDeltaStore extends MemorySurfaceDeltaStore {
         } catch (reason) {
             return Promise.reject(asError(reason));
         }
-        return this.tail.then(() => this.prepareCommit(snapshot, true));
+        return this.tail.then(() => this.registerPreparedPreview(this.prepareCommit(snapshot, true)));
+    }
+
+    public override commitPrepared(
+        prepared: Readonly<PreparedSurfaceDeltaCommit>
+    ): Promise<SurfaceDeltaCommit> {
+        if (this.closing || this.closed) {
+            return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+        }
+        let bytes: number;
+        try {
+            this.assertPreparedPreview(prepared);
+            bytes = indexedDbPreparedSurfaceDeltaCommitBytes(this.descriptor, prepared);
+        } catch (reason) {
+            return Promise.reject(asError(reason));
+        }
+        if (bytes > this.maxPendingCommitBytes - this.pendingCommitBytes) {
+            return Promise.reject(new SurfaceDeltaCommitBackpressureError(
+                bytes,
+                this.pendingCommitBytes,
+                this.maxPendingCommitBytes
+            ));
+        }
+        if (!Number.isSafeInteger(this.nextSequence)) {
+            return Promise.reject(new RangeError("surface delta commit sequence space is exhausted"));
+        }
+        this.consumePreparedPreview(prepared);
+        const sequence = this.nextSequence;
+        this.nextSequence += 1;
+        this.lastSubmittedSequence = sequence;
+        this.pendingCommits += 1;
+        this.pendingCommitBytes += bytes;
+
+        const operation = this.tail.then(() => this.persistPreparedCommit(prepared));
+        this.tail = operation.then(() => undefined, () => undefined);
+        void operation.then(() => {
+            this.pendingCommits -= 1;
+            this.pendingCommitBytes -= bytes;
+        }, reason => {
+            this.pendingCommits -= 1;
+            this.pendingCommitBytes -= bytes;
+            this.barrierFailures.push({ sequence, reason: asError(reason) });
+        });
+        return operation;
     }
 
     public override async flush(): Promise<void> {
@@ -351,6 +449,18 @@ export class IndexedDbSurfaceDeltaStore extends MemorySurfaceDeltaStore {
         input: Readonly<SurfaceDeltaTransactionInput>
     ): Promise<SurfaceDeltaCommit> {
         const prepared = this.prepareCommit(input, true);
+        return this.persistPreparedCommit(prepared);
+    }
+
+    private async persistPreparedCommit(
+        prepared: Readonly<PreparedSurfaceDeltaCommit>
+    ): Promise<SurfaceDeltaCommit> {
+        if (prepared.before !== this.current) {
+            throw new SurfaceDeltaSessionConflictError(
+                prepared.before.effectiveRevision,
+                this.current.effectiveRevision
+            );
+        }
         const database = await this.openDatabase();
         const transaction = database.transaction(
             [META_STORE, SEMANTIC_STORE, HYDROLOGY_STORE],

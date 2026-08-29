@@ -422,6 +422,7 @@ export interface SurfaceDeltaStore {
     readonly worldIdentity: string;
     snapshot(): SurfaceDeltaSnapshot;
     preview(input: Readonly<SurfaceDeltaTransactionInput>): Promise<PreparedSurfaceDeltaCommit>;
+    commitPrepared(prepared: Readonly<PreparedSurfaceDeltaCommit>): Promise<SurfaceDeltaCommit>;
     commit(input: Readonly<SurfaceDeltaTransactionInput>): Promise<SurfaceDeltaCommit>;
     flush(): Promise<void>;
 }
@@ -437,6 +438,7 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
     public readonly worldIdentity: string;
     protected readonly baseHydrology: BaseHydrologyFeatureIndex;
     protected current: SurfaceDeltaSnapshot;
+    private readonly issuedPreviews = new WeakSet<PreparedSurfaceDeltaCommit>();
 
     constructor(descriptor: WorldDescriptorV2, baseHydrology: BaseHydrologyFeatureIndex) {
         assertWorldDescriptorV2(descriptor);
@@ -461,7 +463,19 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
         input: Readonly<SurfaceDeltaTransactionInput>
     ): Promise<PreparedSurfaceDeltaCommit> {
         try {
-            return Promise.resolve(this.prepareCommit(input));
+            return Promise.resolve(this.registerPreparedPreview(this.prepareCommit(input)));
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
+    }
+
+    public commitPrepared(
+        prepared: Readonly<PreparedSurfaceDeltaCommit>
+    ): Promise<SurfaceDeltaCommit> {
+        try {
+            this.consumePreparedPreview(prepared);
+            this.publishPreparedCommit(prepared);
+            return Promise.resolve(prepared.commit);
         } catch (reason) {
             return Promise.reject(reason);
         }
@@ -538,6 +552,28 @@ export class MemorySurfaceDeltaStore implements SurfaceDeltaStore {
             throw new Error("prepared surface delta commit no longer follows the current snapshot");
         }
         this.current = prepared.snapshot;
+    }
+
+    protected assertPreparedPreview(
+        prepared: Readonly<PreparedSurfaceDeltaCommit>
+    ): asserts prepared is PreparedSurfaceDeltaCommit {
+        if (!prepared || typeof prepared !== "object" || !this.issuedPreviews.has(prepared)) {
+            throw new Error("prepared surface delta commit was not issued by this store or was already consumed");
+        }
+    }
+
+    protected consumePreparedPreview(
+        prepared: Readonly<PreparedSurfaceDeltaCommit>
+    ): asserts prepared is PreparedSurfaceDeltaCommit {
+        this.assertPreparedPreview(prepared);
+        this.issuedPreviews.delete(prepared);
+    }
+
+    protected registerPreparedPreview(
+        prepared: PreparedSurfaceDeltaCommit
+    ): PreparedSurfaceDeltaCommit {
+        this.issuedPreviews.add(prepared);
+        return prepared;
     }
 
     protected installSnapshot(

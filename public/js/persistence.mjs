@@ -2394,6 +2394,7 @@ var SurfaceDeltaSnapshot = class {
 };
 var MemorySurfaceDeltaStore = class {
   constructor(descriptor, baseHydrology) {
+    this.issuedPreviews = /* @__PURE__ */ new WeakSet();
     assertWorldDescriptorV2(descriptor);
     if (!baseHydrology || typeof baseHydrology.resolveFeature !== "function" || typeof baseHydrology.referencesTo !== "function") {
       throw new TypeError("surface delta store requires a valid base hydrology feature index");
@@ -2411,7 +2412,16 @@ var MemorySurfaceDeltaStore = class {
   }
   preview(input) {
     try {
-      return Promise.resolve(this.prepareCommit(input));
+      return Promise.resolve(this.registerPreparedPreview(this.prepareCommit(input)));
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+  }
+  commitPrepared(prepared) {
+    try {
+      this.consumePreparedPreview(prepared);
+      this.publishPreparedCommit(prepared);
+      return Promise.resolve(prepared.commit);
     } catch (reason) {
       return Promise.reject(reason);
     }
@@ -2475,6 +2485,19 @@ var MemorySurfaceDeltaStore = class {
       throw new Error("prepared surface delta commit no longer follows the current snapshot");
     }
     this.current = prepared.snapshot;
+  }
+  assertPreparedPreview(prepared) {
+    if (!prepared || typeof prepared !== "object" || !this.issuedPreviews.has(prepared)) {
+      throw new Error("prepared surface delta commit was not issued by this store or was already consumed");
+    }
+  }
+  consumePreparedPreview(prepared) {
+    this.assertPreparedPreview(prepared);
+    this.issuedPreviews.delete(prepared);
+  }
+  registerPreparedPreview(prepared) {
+    this.issuedPreviews.add(prepared);
+    return prepared;
   }
   installSnapshot(effectiveRevision, semanticStates, hydrologyDeltas) {
     assertRevision("surface delta snapshot revision", effectiveRevision);
@@ -2843,6 +2866,54 @@ function indexedDbSurfaceDeltaCommitBytes(descriptor, input) {
   }
   return bytes;
 }
+function indexedDbPreparedSurfaceDeltaCommitBytes(descriptor, prepared) {
+  const worldIdentity = serializeWorldDescriptorV2(descriptor);
+  if (!prepared || typeof prepared !== "object" || prepared.before.worldIdentity !== worldIdentity || prepared.commit.worldIdentity !== worldIdentity || prepared.snapshot.worldIdentity !== worldIdentity) {
+    throw new TypeError("durable prepared surface delta byte accounting requires one matching world");
+  }
+  const residentInput = {
+    worldIdentity,
+    semanticMutations: prepared.commit.semanticChanges.map((change) => change.operation === "upsert" ? {
+      operation: "upsert",
+      key: change.delta.key,
+      expectedRevision: change.expectedRevision,
+      payload: change.delta
+    } : {
+      operation: "delete",
+      key: change.key,
+      expectedRevision: change.expectedRevision
+    }),
+    hydrologyMutations: prepared.commit.hydrologyChanges.map((change) => {
+      const delta = change.delta;
+      return delta.operation === "upsert" ? {
+        operation: "upsert",
+        featureId: delta.featureId,
+        featureKind: delta.featureKind,
+        expectedRevision: change.expectedRevision,
+        feature: delta.feature
+      } : {
+        operation: "delete",
+        featureId: delta.featureId,
+        featureKind: delta.featureKind,
+        expectedRevision: change.expectedRevision
+      };
+    })
+  };
+  let bytes = surfaceDeltaTransactionResidentBytes(residentInput);
+  for (const change of prepared.commit.semanticChanges) {
+    if (change.operation === "upsert") {
+      bytes += sparseSemanticDeltaSerializedBytes(change.delta);
+    }
+  }
+  for (const change of prepared.commit.hydrologyChanges) {
+    const delta = change.delta;
+    bytes += hydrologyFeatureDeltaSerializedBytes(delta);
+  }
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("durable prepared surface delta bytes exceed safe integers");
+  }
+  return bytes;
+}
 var SurfaceDeltaSessionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super(`durable surface delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
@@ -2957,7 +3028,46 @@ var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends Memor
     } catch (reason) {
       return Promise.reject(asError(reason));
     }
-    return this.tail.then(() => this.prepareCommit(snapshot, true));
+    return this.tail.then(() => this.registerPreparedPreview(this.prepareCommit(snapshot, true)));
+  }
+  commitPrepared(prepared) {
+    if (this.closing || this.closed) {
+      return Promise.reject(new Error("IndexedDbSurfaceDeltaStore has been closed"));
+    }
+    let bytes;
+    try {
+      this.assertPreparedPreview(prepared);
+      bytes = indexedDbPreparedSurfaceDeltaCommitBytes(this.descriptor, prepared);
+    } catch (reason) {
+      return Promise.reject(asError(reason));
+    }
+    if (bytes > this.maxPendingCommitBytes - this.pendingCommitBytes) {
+      return Promise.reject(new SurfaceDeltaCommitBackpressureError(
+        bytes,
+        this.pendingCommitBytes,
+        this.maxPendingCommitBytes
+      ));
+    }
+    if (!Number.isSafeInteger(this.nextSequence)) {
+      return Promise.reject(new RangeError("surface delta commit sequence space is exhausted"));
+    }
+    this.consumePreparedPreview(prepared);
+    const sequence = this.nextSequence;
+    this.nextSequence += 1;
+    this.lastSubmittedSequence = sequence;
+    this.pendingCommits += 1;
+    this.pendingCommitBytes += bytes;
+    const operation = this.tail.then(() => this.persistPreparedCommit(prepared));
+    this.tail = operation.then(() => void 0, () => void 0);
+    void operation.then(() => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+    }, (reason) => {
+      this.pendingCommits -= 1;
+      this.pendingCommitBytes -= bytes;
+      this.barrierFailures.push({ sequence, reason: asError(reason) });
+    });
+    return operation;
   }
   async flush() {
     const targetSequence = this.lastSubmittedSequence;
@@ -3000,6 +3110,15 @@ var IndexedDbSurfaceDeltaStore = class _IndexedDbSurfaceDeltaStore extends Memor
   }
   async persistCommit(input) {
     const prepared = this.prepareCommit(input, true);
+    return this.persistPreparedCommit(prepared);
+  }
+  async persistPreparedCommit(prepared) {
+    if (prepared.before !== this.current) {
+      throw new SurfaceDeltaSessionConflictError(
+        prepared.before.effectiveRevision,
+        this.current.effectiveRevision
+      );
+    }
     const database = await this.openDatabase();
     const transaction = database.transaction(
       [META_STORE2, SEMANTIC_STORE, HYDROLOGY_STORE],
@@ -4603,6 +4722,7 @@ export {
   createSimulationGenerationParticipant,
   createWorldChunkCacheKey,
   createWorldDeltaGenerationParticipant,
+  indexedDbPreparedSurfaceDeltaCommitBytes,
   indexedDbSurfaceDeltaCommitBytes,
   normalizeWorldChunkDelta
 };
