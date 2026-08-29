@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**完整设计稿、待评审、尚未实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**评审修订稿、待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -11,48 +11,46 @@
 ~~~text
 WorldDescriptor v2
         │
-        ├── BaseSemanticChunk 32×32 ── SparseSemanticDelta
-        │                                      │
-        └── HydrologyRegion 128×128 ── SparseHydrologyDelta
-                           │          │
-                           └────┬─────┘
-                                ▼
-                       EffectiveWorldView
-                     唯一的运行时语义查询入口
-                                │
-                                ▼
-                     SurfaceCompilationService
-                       Worker 中确定性编译
-                                │
-                                ▼
-                   CompiledSurfaceChunk 16×16
-                  CPU 量化表面场 + GPU 纹理层槽位
-                     ┌──────────┼───────────┐
-                     ▼          ▼           ▼
-                  Ground      Water     Vegetation
-                                │
-                           Dynamic Fog
-                         独立的高频状态场
+        ├── BaseSemanticChunk 32×32 ── SparseSemanticDelta ─────────────┐
+        │
+        └── MacroDrainageGraph
+                  └── HydrologyRegion 128×128 ── HydrologyFeatureDelta ─┤
+                                                                       ▼
+                                  EffectiveWorldView
+                                唯一的运行时语义查询入口
+                                           │
+                                           ▼
+                                SurfaceCompilationService
+                                  Worker 中确定性编译
+                                           │
+                                           ▼
+                              CompiledSurfaceChunk 16×16
+                             CPU 量化表面场 + GPU 纹理层槽位
+                                ┌──────────┼───────────┐
+                                ▼          ▼           ▼
+                             Ground      Water     Vegetation
+
+DynamicFogStore ── 独立高频状态场 ── FogLayer
 ~~~
 
-固定数值基底如下：
+数值基底分为“世界格式”和“可重建编译配置”，两者不能混为一体：
 
-| 层级 | 固定尺寸 | 数量关系 | 主要职责 |
-|---|---:|---:|---|
-| 表面编译/渲染块 | 16×16 格 | 最小空间工作单元 | 剔除、LOD、局部重编译、GPU 表面场层 |
-| 权威语义/source chunk | 32×32 格 | 2×2 个渲染块 | Worker 生成、SoA 数据、稀疏地形增量、导航摘要 |
-| 标准模拟块 | 64×64 格 | 2×2 个语义块 | 默认实体驻留和后台模拟分区；不参与渲染驻留 |
-| 水文区域 | 128×128 格 | 4×4 个语义块、8×8 个渲染块 | 河网、湖盆、河口、跨区边界门和水体身份 |
-| 近景表面场核心 | 64×64 样本 | 每格 4×4 样本 | 高度、材质、岸线距离、水深和流向 |
+| 层级 | v2 默认尺寸 | 契约归属 | 主要职责 |
+|---|---:|---|---|
+| 权威语义/source chunk | 32×32 格 | `WORLD_CHUNK_FORMAT_VERSION` | Worker 生成、SoA 数据、稀疏地形增量、导航摘要 |
+| 水文区域 | 128×128 格 | `HYDROLOGY_REGION_FORMAT_VERSION` | 河网切片、湖盆、河口、跨区边界门和水体身份 |
+| 表面编译/渲染块 | 16×16 格 | `SURFACE_COMPILE_PROFILE_VERSION` | 剔除、LOD、局部重编译、GPU 表面场层 |
+| 近景表面场核心 | 64×64 texel | `SURFACE_COMPILE_PROFILE_VERSION` | 每个逻辑坐标间隔四个 texel，高度、材质、岸线、水深和流向 |
+| 标准模拟块 | 64×64 格 | 应用模拟格式 | 默认实体驻留和后台模拟分区；不进入世界表面格式 |
 
-表面场每边增加一个采样 texel 的 gutter，GPU 层尺寸为 66×66。编译器输入使用至少两格语义 halo；输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
+当前生产候选固定为 `SurfaceCompileProfile v1 = { renderChunkSize: 16, samplesPerTileInterval: 4, gutterTexels: 1, influenceRadiusTiles: 2, textureLayerSize: 66, pageLayers: 128 }`。64×64 核心每边增加一个采样 texel 的 gutter，得到 66×66 GPU 层。编译器输入使用两格语义 halo；岸线距离和所有邻域核在两格处饱和，因而不会形成无限脏区。输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
 
-这些尺寸是格式契约，不再作为普通运行参数暴露。特别是：
+32 与 128 是存档和生成格式；16、4 与 66 是可丢弃表面编译器的版本化常量。它们都不作为普通运行参数暴露，但后者可以在不改变 world identity 或存档的情况下随新的 compile profile 升级。特别是：
 
 - 128×128 只负责低频宏观水文，不直接成为渲染或编辑重建单元。
-- 单格编辑最多使相交的 16×16 渲染块及固定 halo 邻块变脏。
+- 单格编辑最多使相交的 16×16 渲染块及两格影响半径相交的邻块变脏。
 - 32×32 source chunk 不再沿用当前基于正方形 `loadRadius` 的整圈加载；需求集合按区块 AABB、预测走廊和字节预算精确计算。
-- 导航直接复用 32×32 语义边界；模拟默认 64×64，但其驻留仍由游戏活动锚点决定，与镜头无关。
+- 导航直接复用 32×32 语义边界；模拟默认 64×64，但尺寸与驻留策略由应用模拟层拥有，与镜头及表面编译器无关。
 
 ## 2. 为什么替换当前结构
 
@@ -79,7 +77,7 @@ v2 继承 v1 的确定性和风格目标，但不承诺相同种子继续生成�
 4. 主线程只挂载、上传和调度，不重复运行生成器或大范围表面解析。
 5. 单格或局部编辑只重编译固定小范围，并通过版本令牌拒绝过时 Worker 结果。
 6. CPU 与 GPU 对宏观高度、水位、岸线和格子归属使用同一量化与插值契约。
-7. 16/32/64/128 各层完全对齐，负坐标、环绕世界、浮动原点和 LOD 边界无缝。
+7. 当前 16/32/128 各层完全对齐，负坐标、环绕世界、浮动原点和 LOD 边界无缝；模拟分块不参与这一渲染不变量。
 8. 静态世界、无限程序世界和环绕程序世界通过相同 `WorldSource` 语义接口进入编译器。
 9. 所有缓存都有字节预算，所有派生数据都可丢弃并确定性重建。
 10. WebGL2 继续作为唯一生产后端，编译结果不直接依赖 Three.js 对象。
@@ -92,7 +90,7 @@ v2 继承 v1 的确定性和风格目标，但不承诺相同种子继续生成�
 - 不把 128×128 水文区域整块上传为地形纹理或整块重建。
 - 不在 v2 同时迁移 WebGPU。
 - 不保留 v1 packed chunk、12×12 terrain path 或自由字符串 modifier 的运行时兼容层。
-- 不让调用方任意选择 12、24、32、96、128 等 chunkSize 组合。
+- 不让调用方任意拼装 chunkSize、采样密度或纹理页参数；新的编译配置必须作为整体 profile 经过验证和版本化。
 
 ## 4. 坐标、拓扑与分块契约
 
@@ -114,7 +112,7 @@ localY = tileY - chunkY * chunkSize;
 ### 4.2 拓扑
 
 - 无限世界允许任意安全整数坐标。
-- 程序化环绕世界的宽和高必须是 128 的正整数倍，最小为 256；这同时满足六边格横向偶数周期和水文边界闭合。
+- 程序化环绕世界的宽和高必须是 32 的正整数倍，最小为 32；这保证 semantic/render chunk 完整对齐，并自然满足六边格横向偶数周期。宽高不必是 128 的倍数，末端水文 region 使用显式 valid bounds；穿过 topology seam 的排水边生成可连接到同区或另一末端区的 canonical port。环绕水文闭合由完整 `MacroDrainageGraph` 保证，而不是靠 region 尺寸偶然对齐。
 - 静态有限世界可以不是 128 的倍数，最外层语义块和水文区使用显式有效 bounds，不读取 bounds 外数据。
 - 环绕世界在分块、随机采样和 feature ID 生成前先规范化坐标；相对距离使用最短环绕距离。
 
@@ -126,7 +124,7 @@ localY = tileY - chunkY * chunkSize;
 HydrologyRegion 128
 └── 4×4 SemanticChunk 32
     └── 2×2 RenderChunk 16
-        └── 64×64 core surface samples
+        └── 64×64 core surface texels
 ~~~
 
 一个渲染块跨越水文边界时，编译器按空间索引读取相交 feature；由于 128 是 16 的整数倍，正常块不会跨水文边界，只有 halo 可能读取相邻区域。
@@ -143,12 +141,12 @@ interface BaseSemanticChunk {
     readonly revision: number;
     readonly validBounds: LocalTileBounds;
 
-    readonly terrainClass: Uint8Array;
+    readonly substrateClass: Uint8Array;
     readonly macroHeight: Uint16Array;
     readonly biomeWeights: Uint8Array;
     readonly climate: Uint8Array;
     readonly vegetationDensity: Uint8Array;
-    readonly vegetationKind: Uint8Array;
+    readonly vegetationProfile: Uint8Array;
 }
 ~~~
 
@@ -158,20 +156,22 @@ interface BaseSemanticChunk {
 
 | 字段 | 布局 | 语义 |
 |---|---|---|
-| terrainClass | 1× `Uint8`/格 | 基础陆地类别与不可通行语义，不编码河流曲线 |
+| substrateClass | 1× `Uint8`/格 | 基础地质/地表基底枚举；不编码水体、坡度或通行性 |
 | macroHeight | 1× `Uint16`/格 | 归一化、量化的权威宏观地表高度 |
 | biomeWeights | 4× `Uint8`/格 | 四个材质/生态权重，解码后归一化 |
 | climate | 2× `Uint8`/格 | 温度与湿度，供植被和后续玩法查询 |
 | vegetationDensity | 1× `Uint8`/格 | 区域植被密度，不是实例列表 |
-| vegetationKind | 1× `Uint8`/格 | 冻结枚举或物种表索引 |
+| vegetationProfile | 1× `Uint8`/格 | descriptor 冻结的生态组合索引，可按权重产生多个物种 |
 
-海洋不通过一个独立 mesh modifier 表示。低于冻结海平面的宏观地表形成基础海域；湖盆与河流来自水文区域。按格派生出的 `ocean/lake/river` 结果属于查询缓存，不与水文 feature 形成第二份权威。
+权威字段只保存不能从其他权威字段唯一推出的基础事实。坡度、湿岸、材质输出、水深、`ocean/lake/river` 分类和默认通行性均为派生结果，不回写 semantic chunk。若应用需要人为禁止通行，使用独立、显式的 navigation override section；它不能伪装成 `substrateClass`，也不能改变渲染水体身份。
+
+海洋不通过一个独立 mesh modifier 表示。低于冻结海平面的有效宏观地表形成基础海域；湖盆与河流来自水文区域。按格派生出的水体结果属于查询缓存，不与水文 feature 形成第二份权威。
 
 所有数组长度、枚举范围、权重和量化值在发布到 Store 前一次性校验。对象式 `getTile()` 仅作为按需只读视图存在，不在生成、编译、导航或渲染热路径保存大量对象。
 
 ### 5.2 生成与量化
 
-`WorldSurfaceResolver` 保留纯生成规则职责，但输出一次量化写入 `BaseSemanticChunk`。主线程不再为了渲染重新调用 resolver。
+`WorldSurfaceResolver` 保留纯生成规则职责，但输出一次量化写入 `BaseSemanticChunk`。主线程不再为了渲染重新调用 resolver。`substrateClass`、biome profile 和 vegetation profile 的索引表由 descriptor/schema version 冻结；调整索引含义必须升级生成器或 chunk format，不能仅替换资源文件后继续解释旧索引。
 
 量化规则由生成器版本和 chunk format 共同冻结：
 
@@ -184,7 +184,7 @@ interface BaseSemanticChunk {
 
 ### 5.3 静态世界
 
-`StaticWorldSource` 在加载边界把 `MapInfo` 编译为相同的 32×32 SoA chunk。静态来源可以没有程序种子，但必须提供确定的基础高度、水体和植被解释。进入 `EffectiveWorldView` 后，渲染层不区分静态与程序世界。
+`StaticWorldSource` 在加载边界把 `MapInfo` 编译为相同的 32×32 SoA chunk，并把静态河流、湖泊和河口编译成相同的基础 hydrology feature/region。静态来源可以没有程序种子，但必须提供确定的基础高度、水体和植被解释；它不能把静态湖泊重新塞进 `substrateClass`。进入 `EffectiveWorldView` 后，渲染层不区分静态与程序世界。
 
 ## 6. 水文区域与水体权威
 
@@ -193,20 +193,41 @@ interface BaseSemanticChunk {
 水体权威固定为：
 
 ~~~text
-海平面 + 宏观高度                    HydrologyRegion features
-        │                         河流 / 湖盆 / 河口 / 连通关系
-        └──────────────┬─────────────────────┘
+海平面 + 有效宏观高度         MacroDrainageGraph
+        │                    全局有向排水骨架
+        │                           │
+        │                  HydrologyRegion 基础切片
+        │                           │
+        │                  HydrologyFeatureDelta
+        └──────────────┬────────────┘
+                       ▼
+             EffectiveHydrologyWindow
                        ▼
               DerivedHydrologyRaster
-           coverage / kind / depth / flow
-                       │
+       coverage / kind / level / flow / body index
                        ▼
                CompiledSurfaceField
 ~~~
 
-禁止同时持久化“河流 spline”和可编辑的逐格河流占用、下游方向、流量两份权威。逐格结果只能是可丢弃查询缓存或编译产物。
+`MacroDrainageGraph` 决定生成世界中的下游关系、汇流、终点和稳定 ID；`HydrologyRegion` 只是它按 128×128 空间范围裁出的基础格式。用户编辑的完整河流或湖泊由 `HydrologyFeatureDelta` 覆盖。禁止同时持久化可编辑 spline 和逐格河流占用、下游方向、流量两份权威；逐格结果只能是可丢弃查询缓存或编译产物。
 
-### 6.2 HydrologyRegion
+基础排水图只读取 descriptor 与不可变 `BaseSemanticChunk.macroHeight`，不因运行时高度 delta 自动重生成。有效高度只参与当前海岸 coverage、水深和地形/显式水文冲突校验；需要改道时必须走第 13 节定义的 coupled edit 或显式 rebake。
+
+### 6.2 MacroDrainageGraph
+
+边界端口不能自行决定全局河网。生成器先在低分辨率宏观水文格上建立确定性的有向排水图，再把图转换为湖盆、河流和河口 feature。每个排水节点至少具有稳定 node ID、量化位置、下游 node、终点 water-body ID、`drainageRank` 和 `dischargeClass`。
+
+冻结不变量如下：
+
+- 每条下游边都使非负整数 `drainageRank` 严格下降，因此有向图不可能成环，任一路径都在有限步内到达终点。
+- 终点只能是基础海域或显式湖盆；局部最低点若不通海，必须生成稳定湖盆，不能留下无类型死点。
+- 汇流出口的 `dischargeClass` 不小于任一入口；宽度剖面由该等级和稳定局部参数派生。
+- 图的节点、边、终点和流量与区域请求顺序、当前已加载邻区和 Worker 数量无关。
+- boundary port 由排水边与 region 边界的交点产生；端口是图的序列化切口，不是通过边键随机创造河流的来源。
+
+有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。无限世界使用确定性的分层流域 resolver；任一 128×128 region 只能依赖冻结的有限宏观窗口，并仍必须满足上述 rank 与终点不变量。若实现无法为无限模式给出有限依赖窗口和终止证明，该模式不能发布为 v2 水文源。
+
+### 6.3 HydrologyRegion
 
 每个 128×128 区域保存有界的矢量水体特征：
 
@@ -218,6 +239,7 @@ interface HydrologyRegion {
     readonly rivers: readonly RiverFeatureSegment[];
     readonly lakes: readonly LakeFeature[];
     readonly mouths: readonly RiverMouthFeature[];
+    readonly bodies: readonly HydrologyBodyRef[];
 }
 
 interface RiverFeatureSegment {
@@ -225,21 +247,37 @@ interface RiverFeatureSegment {
     readonly segmentId: HydrologySegmentId;
     readonly controlPoints: Int16Array;
     readonly widthProfile: Uint8Array;
+    readonly levelProfile: Uint16Array;
     readonly dischargeClass: number;
     readonly entry: RiverEndpoint;
     readonly exit: RiverEndpoint;
 }
+
+interface HydrologyBodyRef {
+    readonly bodyId: HydrologyBodyId;
+    readonly kind: "ocean" | "lake" | "river";
+    readonly profileIndex: number;
+}
 ~~~
 
-控制点相对区域原点量化。同一条河跨区时共享稳定 `riverId`，各段使用独立 `segmentId` 并通过 boundary port 连接；不把一条无限长河复制到所有经过区域。
+控制点相对区域原点量化。同一条河跨区时共享稳定 `riverId`，各段使用独立 `segmentId` 并通过 boundary port 连接；不把一条长河复制到所有经过区域。基础 region 只能由 `MacroDrainageGraph` 裁剪产生，不能根据当前邻区内容二次猜测连接。
 
-### 6.3 跨区域确定性
+### 6.4 水体身份
 
-相邻区域的公共边只由规范化边键决定。边键的唯一拥有者生成 boundary port；两侧根据同一 descriptor、生成器版本和边键得到完全相同的端点、宽度等级、流量等级和连接 ID。
+- **海洋**：所有由冻结海平面形成的基础海域使用保留的 `OCEAN_BODY_ID`。v2 不对无限世界执行依赖加载范围的海洋连通块编号；若以后玩法必须区分多个海盆，需要升级水文格式。
+- **湖泊**：每个湖盆拥有稳定 body ID、水位和 profile；跨 region 的湖泊在各切片中引用同一 ID。
+- **河流**：稳定 `riverId` 同时是河流水体 ID；同一河流的各 segment 不产生新的 body ID。
+- **河口**：显式记录河流 body 与目标海洋/湖泊 body，覆盖混合区根据确定规则从河流身份切换到目标身份。
 
-区域内部河段使用固定宏观高度采样和端口约束生成，不读取“当前已经加载的邻区”。汇流只允许流量增加，河口必须连接海域、湖泊或下一段有效端口。发现闭环、孤立出口、重复 feature ID 或边界不匹配时生成失败，不用局部伪河或断头贴图降级。
+`DerivedHydrologyRaster` 使用紧凑的局部 body index，配套只读 body palette 映射到稳定 ID、水位和 profile。CPU 查询返回稳定 ID；GPU 只读取 kind/profile 等着色索引，不上传或比较完整 feature ID。
 
-### 6.4 海洋、湖泊和河流
+### 6.5 跨区域确定性
+
+相邻区域对公共边使用同一个规范化边键定位由排水图产生的 crossing。边键的唯一拥有者序列化 boundary port；两侧必须得到完全相同的端点、方向、宽度等级、流量等级、连接 ID 和 body ID。
+
+区域内部河段从固定宏观排水边和端口约束重建，不读取“当前已经加载的邻区”。汇流只允许流量增加，河口必须连接海域、湖泊或下一段有效端口。发现 rank 不下降、孤立出口、重复 feature ID 或边界不匹配时生成失败，不用局部伪河或断头贴图降级。
+
+### 6.6 海洋、湖泊和河流
 
 - **海洋**：由冻结海平面与连续宏观高度场形成，可跨任意数量区域；海岸不是逐格 polygon。
 - **湖泊**：由水文区域的盆地 feature 给出连续边界、水位和稳定 water-body ID；地面仍在湖面下连续存在。
@@ -248,7 +286,7 @@ interface RiverFeatureSegment {
 
 这不是完整水文模拟，但必须保证长河、汇流、入海和跨区连续。
 
-### 6.5 空间索引与预算
+### 6.7 空间索引与预算
 
 每个区域在加载后构建可丢弃的紧凑只读空间索引；索引不进入权威格式。查询 16×16 渲染块时只返回与块 bounds 加固定 halo 相交的 feature，不扫描区域全部河流。
 
@@ -264,11 +302,11 @@ interface RiverFeatureSegment {
 BaseSemanticChunk
   + SparseSemanticDelta
   + HydrologyRegion
-  + SparseHydrologyDelta
+  + HydrologyFeatureDelta
   = EffectiveWorldView
 ~~~
 
-`EffectiveWorldView` 不复制整个世界。无修改 chunk 直接引用基础 SoA；存在修改时通过紧凑覆盖表和版本化快照生成编译输入。
+`EffectiveWorldView` 不复制整个世界。无修改 chunk 直接引用基础 SoA；存在修改时通过紧凑覆盖表、feature 空间索引和版本化快照生成编译输入。每个快照具有唯一 `effectiveRevision`，所有查询缓存和编译结果都必须声明它们对应的依赖令牌。
 
 渲染、导航、贴地、植被放置和公开查询都从该视图读取，不允许直接绕过它读取生成器或 delta store。
 
@@ -276,20 +314,22 @@ BaseSemanticChunk
 
 语义增量按 32×32 chunk 保存：
 
-- 高度与地形类别；
+- 高度与 substrate 类别；
 - 材质/biome 权重；
-- 植被密度与种类；
+- 植被密度与 profile；
 - 与应用有关、但不属于 surface compiler 的可选格子 section。
 
-水文增量按 128×128 region 保存：
+水文编辑按稳定 feature ID 保存完整记录，而不是把一条河的多个区域切片当成多份权威：
 
 - 新增、修改和删除湖盆；
 - 新增、修改和删除河流 feature；
 - 水位、宽度剖面、河口和连通关系修改。
 
-河流编辑导致的逐格 coverage 不写回 semantic delta。
+修改生成河流时，delta 以稳定 river ID 覆盖或 tombstone 全部基础 segments。完整河流记录必须包含 source、outlet body/river、控制点、宽度、level profile、流向和 discharge class；事务在 Effective Hydrology Graph 上验证无环、level 不逆升和 outlet 合法。feature 与 region 的相交表、裁剪 segment 和逐格 coverage 都是可重建索引，不写回 semantic delta，也不成为第二份权威。
 
-调用方提交的是世界坐标中的完整河流或湖泊，不手工维护区域分段。事务层负责裁剪 feature、生成稳定 segment ID 并收集所有受影响 region。Hydrology delta store 必须提供带各区 expected revision 的多区域原子 CAS：任一 revision 冲突时整条 feature 修改都不落盘，不能留下半条新河和半条旧河。不具备该原子契约的 Store 不能用于水文编辑。
+调用方提交世界坐标中的完整河流或湖泊，不手工维护区域分段。`WorldDeltaStore` 原子提交一个包含 semantic 与 hydrology mutations 的 revisioned transaction record；Store 可以使用原生事务，也可以原子追加单个 commit record 后异步物化 chunk/region 索引。读取方只观察已提交 revision，不能看到半条新河和半条旧河。单个 feature 修改使用 expected feature revision CAS；跨多个 feature 的事务以整个 commit 的 expected revision set 校验，任一冲突则整体失败。
+
+commit record 是原子可见性边界，不要求永久保留完整操作历史。Store 在 save barrier 下把已提交 semantic mutations 折叠进 chunk delta、把 hydrology mutations 折叠进 feature record/tombstone；只有新快照和索引持久化成功后才能回收旧 commit。统计和预算必须包含待压缩 commit 字节，避免长期编辑使日志无界增长。
 
 ### 7.3 只读查询
 
@@ -297,11 +337,20 @@ BaseSemanticChunk
 
 ~~~ts
 interface EffectiveTileView {
-    readonly terrain: TerrainKind;
+    readonly substrate: SubstrateKind;
     readonly height: number;
     readonly biomeWeights: readonly [number, number, number, number];
     readonly vegetation: VegetationView;
+    readonly navigation: NavigationSemantics;
     readonly water?: WaterQueryResult;
+}
+
+interface WaterQueryResult {
+    readonly bodyId: HydrologyBodyId;
+    readonly kind: "ocean" | "lake" | "river";
+    readonly level: number;
+    readonly depth: number;
+    readonly flow: ReadonlyVec2;
 }
 ~~~
 
@@ -316,29 +365,78 @@ interface EffectiveTileView {
 ~~~ts
 interface SurfaceCompileRequest {
     readonly key: RenderChunkKey;
-    readonly semanticRevisionVector: Uint32Array;
-    readonly hydrologyRevisionVector: Uint32Array;
-    readonly compilerRevision: number;
+    readonly dependencyKey: SurfaceDependencyKey;
+    readonly requestToken: SurfaceRequestToken;
     readonly effectiveWindow: TransferableEffectiveWindow;
+}
+
+interface SurfaceCompileResult {
+    readonly requestToken: SurfaceRequestToken;
+    readonly chunk: CompiledSurfaceChunk;
 }
 
 interface CompiledSurfaceChunk {
     readonly key: RenderChunkKey;
-    readonly revisionToken: bigint;
+    readonly dependencyKey: SurfaceDependencyKey;
     readonly bounds: CompiledSurfaceBounds;
     readonly field: CompiledSurfaceField;
+    readonly waterBodies: CompiledWaterBodyPalette;
     readonly waterGeometry?: CompiledWaterGeometry;
     readonly vegetationSeeds: CompiledVegetationSeeds;
 }
+
+interface ResidentSurfaceLease {
+    readonly requestToken: SurfaceRequestToken;
+    readonly chunk: CompiledSurfaceChunk;
+}
 ~~~
 
-请求快照包含 16×16 核心区、两格语义 halo 和相交水文 feature。所有 ArrayBuffer 转移给 Worker；主线程不重新解析同一窗口。
+`SurfaceDependencyKey` 是可跨任务和同 world session 缓存复用的内容身份，精确包含 world identity、render key、compile profile/compiler revision，以及按规范顺序排列的 semantic chunk、hydrology region 和 hydrology feature key/revision。内容 hash 只能加速查找，不能代替完整结构化依赖作正确性判断。
+
+`SurfaceRequestToken` 是 service 为一次挂载需求签发的 `{ sessionEpoch, renderChunkGeneration }` 不透明令牌，只用于拒绝迟到 Worker、上传和挂载结果，不进入内容缓存键。Worker 结果必须同时满足“request token 仍是该 render chunk 当前令牌”和“compiled dependency key 等于当前依赖”；任一不匹配都丢弃。
+
+compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
+
+请求快照包含 16×16 核心区、两格语义 halo 和相交水文 feature。`TransferableEffectiveWindow` 拥有从池中取得的独立传输 buffer；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。Worker 返回后 buffer 回池。首次装载同一 32×32 semantic chunk 下的四个 render chunks 时，调度器可以合并快照构建和任务投递，但四个编译结果仍拥有独立 token、缓存和失效范围。
 
 地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；编译块只提供表面场、真实 bounds 和可选的混合水面 geometry。`CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
 
-### 8.2 64×64 核心表面场
+### 8.2 SurfaceLatticeSpec
 
-近景核心每格采样 4×4。采样位置由逻辑世界坐标和冻结格内格点定义，不按 mesh 局部 AABB 临时均分，因此相邻块、不同 LOD 和独立编译都命中同一世界采样点。
+表面场不把每个 hex 单独切成私有小纹理，而是在当前偶列偏移六边格上定义连续、全局定相的逻辑表面坐标。令 `h = hexSize`，逻辑 tile 中心为整数 `(x, y)`：
+
+~~~ts
+columnStagger(column) = positiveModulo(column, 2) === 0 ? 0.5 : 0.0
+
+k = floor(u)
+t = u - k
+stagger(u) = lerp(columnStagger(k), columnStagger(k + 1), t)
+
+surfaceToWorld(u, v) = {
+    x: 1.5 * h * u,
+    z: sqrt(3) * h * (v + stagger(u))
+}
+
+worldToSurface(x, z) = {
+    u: x / (1.5 * h),
+    v: z / (sqrt(3) * h) - stagger(x / (1.5 * h))
+}
+~~~
+
+因此 `surfaceToWorld(tileX, tileY)` 与当前 `getHexCenter(tileX, tileY, h)` 完全一致，同时 `(u,v)` 在列之间连续。所有 `floor` 和 parity 都使用数学负坐标语义，不使用截断除法。
+
+对 render chunk `(cx, cy)`，令 `x0 = 16 * cx`、`y0 = 16 * cy`、`S = 4`。核心 texel `(i,j)`，其中 `0 <= i,j < 64`，采样于：
+
+~~~ts
+u = x0 - 0.5 + (i + 0.5) / S
+v = y0 - 0.5 + (j + 0.5) / S
+~~~
+
+gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物理层为 66×66。相邻块在公共边两侧拥有相同的两个 texel 中心，手动插值公共边时得到逐位相同的输入；不需要额外保存第 65 个“边界顶点”。render chunk 的几何核心域是半开区间 `[x0 - 0.5, x0 + 15.5) × [y0 - 0.5, y0 + 15.5)`，最外侧绘制边界由唯一 owner 规则闭合。
+
+高度、水位、材质、SDF 和 flow 都先在 `(u,v)` 中定位相邻 texel，再用共享函数手动插值。网格、CPU 查询、轮廓提取和 shader 不得各自重写 `surfaceToWorld`、texel phase、边界 owner 或三角对角线规则。`SurfaceLatticeSpec` 必须提供正坐标、负坐标、chunk 公共边和环绕接缝的冻结测试向量。
+
+### 8.3 逻辑字段
 
 逻辑字段布局：
 
@@ -350,21 +448,24 @@ interface CompiledSurfaceChunk {
 | waterDepth | binary16 bits in `Uint16` | `R16F` | 深浅色、透明度和玩法查询 |
 | shorelineDistance | binary16 bits in `Uint16` | `R16F` | 陆水过渡、泡沫、湿岸 |
 | flow | 2× `Int8` | `RG8_SNORM` | 河流与局部波纹方向 |
-| waterCoverage/kind | 2× `Uint8` | `RG8` | 水面覆盖率与 ocean/lake/river 分类 |
+| waterCoverage/kind/profile | 3× `Uint8` | 物理打包 | 水面覆盖率、分类与着色 profile |
+| waterBodyIndex | 1× `Uint8` | 不直接上传 | 映射到 chunk-local body palette，0 表示无水 |
 
 浮点字段的 CPU 数组保存 IEEE 754 binary16 原始位，CPU 通过共享解码器读取，GPU 原样上传为 half-float texel。Shader 对参与宏观几何和查询一致性的字段使用 `texelFetch` 后手动插值，不依赖厂商纹理过滤舍入或可选的浮点线性过滤扩展。
 
-物理纹理可以在不改变逻辑字段的前提下合并通道，但合并方案由 `SURFACE_COMPILER_REVISION` 锁定。按上述布局估算，一个含 gutter 的静态表面场约 70 KiB CPU 数据和同量级 GPU 数据，具体以实际内部格式为准。
+`shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 
-动态战争迷雾不进入该静态表面层。雾使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传约 70 KiB 静态数据。它与可见 surface chunk 共用 slot 页号和 layer 号，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
+每个 compiled chunk 的 body palette 最多包含 255 个相交水体；超过上限是 feature 预算或编译错误，不能合并 ID。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。按上述逻辑布局，一个含 gutter 的静态表面场低于 80 KiB CPU 数据并处于同量级 GPU 数据，验收以实际内部格式和驱动分配为准。
 
-### 8.3 连续岸线与地形
+动态战争迷雾不进入该静态表面层。雾使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 共用 slot 页号和 layer 号，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
+
+### 8.4 连续岸线与地形
 
 编译顺序固定为：
 
 1. 从量化宏观高度重建连续地面基底。
 2. 应用有效高度编辑，并在编辑边缘使用确定性 falloff。
-3. 栅格化海平面、湖盆和河流 feature 得到水体 coverage 与 water-body ID。
+3. 栅格化海平面、湖盆和河流 feature，得到 coverage、kind、profile 与局部 body index。
 4. 计算带符号岸线距离、独立水位和水深。
 5. 根据坡度、气候、湿岸距离和 biome 得到材质权重。
 6. 选择共享地面 topology，生成必要的水面 coverage mesh 和植被确定性种子。
@@ -372,22 +473,27 @@ interface CompiledSurfaceChunk {
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 
-### 8.4 CPU/GPU 一致性
+`shorelineDistance` 在 `SURFACE_INFLUENCE_RADIUS_TILES = 2` 处饱和。坡度核、湿岸、植被岸边衰减和水面 coverage 轮廓只能读取该半径内输入；需要查询宽河时，空间索引按 feature 自身宽度再加两格扩张 bounds。任何新增编译核若需要更大半径，必须升级 compile profile 并同步扩大 halo 和脏区传播，不能隐式越界读取。
+
+### 8.5 CPU/GPU 一致性与查询有效性
 
 CPU 查询和 GPU 顶点位移共享：
 
 - 相同量化值与解码常量；
 - 相同逻辑采样坐标；
-- 相同三角划分和双线性/重心插值约定；
+- 相同 texel-center 双线性采样；
+- 相同 canonical near-grid 三角划分和重心插值约定；
 - 相同岸线 coverage 阈值。
 
-CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
+canonical near-grid 顶点先从 field 双线性取样，三角内部再使用冻结对角线的重心插值；CPU 贴地使用同一顺序。中、远 LOD 可以近似区块内部形状，但边界仍读取 canonical 边界点，玩法查询不随当前视觉 LOD 改变。
+
+查询服务只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须改从最新 `EffectiveWorldView` 运行同一个 surface query kernel；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
 
 ## 9. GPU 表面场池
 
 ### 9.1 分页 DataArrayTexture
 
-每个 resident render chunk 占用一组相同页号和 layer 号。纹理池使用懒分配页：
+每个 resident render chunk 占用一组相同页号和 layer 号。纹理池使用懒分配页；以下数值属于 `SurfaceCompileProfile v1`，不是 world format：
 
 - 每页固定 128 layers，低于 WebGL2 保证的 256 层上限。
 - 高度/水体、材质、流向/coverage 分别使用同层索引的 `DataArrayTexture`。
@@ -413,9 +519,9 @@ WebGL context 恢复时优先从 resident `CompiledSurfaceChunk` 重新创建纹
 
 ### 10.1 几何
 
-每个 16×16 渲染块使用一张焊接的六边格对齐三角晶格，不再为每个 hex 提交 subdivision 3 的独立实例。每档 LOD 的平面 `BufferGeometry` 全局共享，chunk 只提供变换、纹理 layer 和编译 bounds。
+每个 16×16 渲染块使用一张在 `SurfaceLatticeSpec (u,v)` 上焊接的三角晶格，不再为每个 hex 提交 subdivision 3 的独立实例。每档 LOD 的平面 `BufferGeometry` 全局共享；chunk 只提供逻辑起点、变换、纹理 layer 和编译 bounds。共享几何通过 `surfaceToWorld` 放置，分析式六边格仍由逻辑 tile ownership 决定，不要求地面三角形逐个沿 hex 边界切开。
 
-- 顶点只保存局部平面坐标和表面场采样坐标。
+- 顶点只保存局部 `(u,v)` 和表面场采样坐标。
 - 顶点 shader 从 groundHeight 读取宏观高度。
 - 格线、格子 ID 和选择边界由逻辑世界坐标解析，不依赖逐 hex geometry。
 - 材质混合、湿岸和坡面法线来自表面场。
@@ -423,13 +529,13 @@ WebGL context 恢复时优先从 resident `CompiledSurfaceChunk` 重新创建纹
 
 ### 10.2 LOD 边界
 
-近、中、远 LOD 只降低区块内部采样密度，所有 chunk 外边界保留冻结的最高边界采样点。每个 LOD 使用过渡三角带连接高分辨率边缘与低分辨率内部。
+近、中、远 LOD 只降低区块内部采样密度，所有 chunk 外边界保留 canonical near-grid 的冻结边界点。每个 LOD 使用过渡三角带连接高分辨率边缘与低分辨率内部。
 
 LOD 切换继续使用 chunk 级迟滞。相邻块即使处于不同 LOD，也必须共享完全相同的边界顶点位置和高度，不依赖 skirt 隐藏错误。skirt 只允许用于观察范围外的保守遮挡，不作为地形裂缝修复方案。
 
 ### 10.3 剔除与驻留
 
-16×16 块继续是 frustum、水平距离和 LOD 单元。相比 12×12，它在相同面积下减少约 44% 的调度对象和 draw batch；视锥边缘的额外提交由精确 AABB 和保守高度 bounds 控制。
+16×16 块是 `SurfaceCompileProfile v1` 的 frustum、水平距离和 LOD 单元，并与一个 32×32 semantic chunk 精确组成 2×2。它不是从旧渲染块尺寸按比例推导的结论；实际 draw submission、视锥边缘额外提交和编辑上传由验收测量，边缘保守性通过精确 AABB 与编译高度 bounds 控制。
 
 source chunk 驻留不再使用 Chebyshev 正方形半径直接生成整圈坐标。调度器执行：
 
@@ -453,6 +559,8 @@ source chunk 驻留不再使用 Chebyshev 正方形半径直接生成整圈坐�
 - chunk 边界上的轮廓交点使用全局量化采样位置，独立生成也完全一致。
 
 水面几何只决定覆盖与基础水位；颜色、波纹、泡沫和反射从同一表面场读取。
+
+“全水 patch / coverage mesh / sweep mesh”的选择阈值由 compile profile 冻结，并只在 Worker 编译时根据量化输入决定；它不能随帧率、镜头或加载顺序切换。相同 dependency key 必须产生逐字节相同的 geometry kind 和索引缓冲。
 
 ### 11.2 深浅与色泽
 
@@ -491,22 +599,26 @@ finalWaterColor =
 
 ~~~ts
 interface LightingState {
+    readonly uniformRevision: number;
     readonly sunDirection: Vec3;
-    readonly sunColor: LinearRgb;
-    readonly skyIrradiance: LinearRgb;
-    readonly groundIrradiance: LinearRgb;
-    readonly environmentMap: EnvironmentHandle;
+    readonly sunRadiance: LinearRgb;
+    readonly skyDiffuseIrradiance: LinearRgb;
+    readonly groundDiffuseIrradiance: LinearRgb;
+    readonly specularEnvironment: EnvironmentHandle;
+    readonly environmentRevision: number;
     readonly exposure: number;
 }
 ~~~
 
-地面、水、树木、草和建筑读取同一太阳方向、线性色彩空间、环境光和曝光。输出统一经过 sRGB 编码与同一 tone mapping，不允许每层用独立经验乘数补亮。
+地面、水、树木、草和建筑读取同一太阳方向、线性色彩空间、漫反射天空/地面辐照、镜面环境和曝光。输出统一经过同一 tone mapping 与 sRGB 编码，不允许每层用独立经验乘数补亮。Three.js PBR 适配器负责把该状态映射为方向光、间接漫反射和 PMREM；自定义 shader 使用相同分量。适配器必须用参考材质校准一次，不能把 Hemisphere、LightProbe 和 environment map 的漫反射贡献无条件叠加而形成双重环境光。
 
-水面使用环境图或解析天空近似产生 Fresnel 反射；树木和 glTF 模型使用同一环境照明与太阳阴影。没有环境贴图时由冻结的解析天空生成环境资源，而不是让植被退回近黑的仅直射光结果。
+水面使用镜面环境或解析天空近似产生 Fresnel 反射；树木和 glTF 模型使用同一环境照明与太阳阴影。没有外部环境贴图时由冻结的解析天空生成 PMREM 资源，而不是让植被退回近黑的仅直射光结果。
+
+太阳方向、颜色和曝光属于快速 uniform 更新，不触发表面重编译。天空参数改变后，PMREM 在独立预算中异步重建并双缓冲切换；旧环境在新资源就绪前保持有效，不允许每帧同步生成。阴影资源由独立 `ShadowState` 拥有，质量、级联和更新频率是渲染策略，不进入 `LightingState` 或 world identity。
 
 ### 12.2 植被生成
 
-权威语义只保存密度和种类。`SurfaceFieldCompiler` 根据 world seed、逻辑坐标、密度、坡度、水岸距离和稳定 salt 输出确定性 placement seeds：
+权威语义只保存密度和 vegetation profile。`SurfaceFieldCompiler` 根据 world seed、逻辑坐标、profile 内物种权重、密度、坡度、水岸距离和稳定 salt 输出确定性 placement seeds：
 
 - 不在陡坡、深水和河道中放置树木。
 - 岸边密度连续衰减，不按格突然清空。
@@ -523,11 +635,20 @@ VegetationLayer 可以继续按模型与 LOD 使用 instancing；地面改成合
 
 ~~~ts
 const changeSet = await world.edit(transaction => {
-    transaction.raiseTerrain(area, { delta: 0.08, falloff: "smooth" });
+    transaction.raiseTerrain(area, {
+        delta: 0.08,
+        falloff: "smooth",
+        waterPolicy: "reject"
+    });
     transaction.paintMaterial(area, weights);
-    transaction.paintVegetation(area, { density: 0.6, kind: "oak" });
+    transaction.paintVegetation(area, { density: 0.6, profile: "temperate-oak-mix" });
     transaction.upsertLake(lakeId, polygon, { level: 0.12 });
-    transaction.upsertRiver(riverId, controlPoints, { width: 0.3 });
+    transaction.upsertRiver(riverId, controlPoints, {
+        width: 0.3,
+        dischargeClass: 2,
+        outlet: { bodyId: OCEAN_BODY_ID },
+        levelMode: "fit-downhill"
+    });
 });
 
 map.renderStyle.update({
@@ -538,7 +659,21 @@ map.renderStyle.update({
 
 生成器宏观配置如大陆尺度、基础海平面和水文生成参数不属于运行时 edit；修改它们创建新的 world descriptor 和 world identity。
 
-### 13.2 ChangeSet
+便利参数如固定宽度或 `levelMode: "fit-downhill"` 只存在于事务输入。事务校验阶段必须把它们解析成完整、量化的权威 feature record 后再提交；重载存档不能重新运行一次拟合并得到不同河流。
+
+### 13.2 地形与水文冲突策略
+
+海洋 coverage 由有效高度和冻结海平面派生，因此抬高或降低海岸地形可以局部改变海岸线，不修改 `MacroDrainageGraph`。显式河流、湖泊和河口不能由普通高度操作静默改道。所有相交操作必须在提交前选择并验证一种策略：
+
+- `reject`：默认策略。若新地面会堵断河道、超过河流水位减最小水深、破坏湖岸闭合或产生未声明溢流，整个事务失败。
+- `preserve-channel`：事务层在写入前把请求转换为确定的最终高度覆盖，保持冻结的河床最小水深与湖岸约束；返回结果包含实际应用 bounds，不能只在 shader 中临时压低地面。
+- `coupled`：同一事务必须同时提交足以恢复合法连通性的河流、湖盆、水位或河口 feature 修改；最终状态整体校验，不能先落地形再等待第二次编辑。
+
+大范围重新选源、改道和重算汇水属于显式异步 authoring 操作 `rebakeHydrology(area)`。它输出可审查的 feature mutations 后再作为普通原子事务提交，不在一次实时抬地操作中隐式重跑 generator。任何策略都不得产生负水深、逆向 level profile、断头 segment 或只在渲染缓存中存在的修补数据。
+
+冲突校验覆盖操作 bounds 加 `SURFACE_INFLUENCE_RADIUS_TILES`，并在 canonical SurfaceLattice texel/轮廓交点上检查连续地面和水位，不能只检查 tile 中心。`preserve-channel` 生成的最终 semantic overrides 必须再次通过同一校验后才能提交。
+
+### 13.3 ChangeSet
 
 热路径不使用 `Set<string>` 表达变化域。域使用 bitmask，bounds 在事务提交时按 chunk 聚合：
 
@@ -557,6 +692,7 @@ interface WorldChangeSet {
     readonly transactionId: bigint;
     readonly domains: number;
     readonly semanticChunks: readonly DirtySemanticChunk[];
+    readonly hydrologyFeatures: readonly DirtyHydrologyFeature[];
     readonly hydrologyRegions: readonly DirtyHydrologyRegion[];
     readonly renderChunks: readonly DirtyRenderChunk[];
 }
@@ -566,20 +702,20 @@ interface WorldChangeSet {
 
 | 变化 | 权威写入 | 派生失效 |
 |---|---|---|
-| 高度 | semantic delta | 表面场、地面、水深、植被、贴地、导航 |
+| 高度 | semantic delta | 表面场、地面、海洋 coverage、岸线、水深、植被、贴地、导航 |
 | 材质 | semantic delta | 材质场、地面 |
-| 水文 | hydrology delta | 水文 raster、岸线、水深、地面湿岸、水面、植被、导航 |
+| 水文 | hydrology feature delta | 水文 raster、岸线、水深、地面湿岸、水面、植被、导航 |
 | 植被 | semantic delta | 植被 seeds 与实例 |
 | 雾 | dynamic fog store | 仅雾纹理层 |
 | 光照/水风格 | render style uniform | 不重编译任何 chunk |
 
-### 13.3 原子性与并发
+### 13.4 原子性、并发与查询
 
 事务先校验全部操作，再以一个 revision 提交权威增量。任一操作非法则整体不生效。
 
-提交后受影响 render chunk 获得新的 revision token，并进入 Worker 编译队列。旧结果即使晚到也不能覆盖新结果。多个连续编辑合并为每块最新快照，取消尚未开始的旧任务；已经执行的任务允许结束但结果会因 token 失效被丢弃。
+提交后受影响 render chunk 立即获得新的 `SurfaceRequestToken` 和 dependency key，并进入 Worker 编译队列。旧结果即使晚到也不能覆盖新结果。多个连续编辑合并为每块最新快照，取消尚未开始的旧任务；已经执行的任务允许结束但结果会因 token 失效被丢弃。
 
-主线程不维护另一套“先画出来再等权威确认”的临时地形。视觉更新可以异步晚于事务提交，但查询和存档立即读取新 revision。
+主线程不维护另一套“先画出来再等权威确认”的临时地形。视觉更新可以异步晚于事务提交，但查询和存档立即读取新 revision。查询发现 request token 过期或 dependency key 不匹配时必须走最新 Effective Snapshot 的共享 CPU kernel；旧 GPU 表现不能反向成为查询权威。
 
 ## 14. 渲染层、所有权与依赖
 
@@ -613,12 +749,13 @@ WorldRenderSession
 
 ### 15.1 工作类型
 
-Worker 池至少支持两个明确任务：
+Worker 池至少支持三个明确任务：
 
 1. `generateSemanticChunk`：生成 32×32 BaseSemanticChunk。
-2. `compileSurfaceChunk`：将 effective window 编译为 16×16 CompiledSurfaceChunk。
+2. `generateHydrologyRegion`：从确定性 `MacroDrainageGraph` 裁出 128×128 HydrologyRegion。
+3. `compileSurfaceChunk`：将 effective window 编译为 16×16 CompiledSurfaceChunk。
 
-HydrologyRegion 可以由独立任务生成，但与 semantic generation 共用确定性 resolver 和统一调度器。任务协议使用 discriminated union，不用可选字段猜测任务类型。
+有限/环绕世界的低分辨率排水图准备可以是独立任务；无限 resolver 则按 region 的有限依赖窗口求值。二者与 semantic generation 共用确定性 resolver 基础和统一调度器。任务协议使用 discriminated union，不用可选字段猜测任务类型。
 
 ### 15.2 优先级
 
@@ -639,9 +776,9 @@ HydrologyRegion 可以由独立任务生成，但与 semantic generation 共用�
 |---|---|---|---|
 | semantic source | world identity + chunk key + revision | CPU 字节与 lease | 是 |
 | hydrology region | world identity + region key + revision | CPU 字节与 lease | 是 |
-| effective window | 不跨任务缓存 | 任务结束立即释放 | 是 |
-| compiled CPU | compiler revision + dependency revisions + render key | CPU 字节、可见性、编辑热度 | 是 |
-| GPU surface slot | compiled content token | GPU 字节、LOD/可见性 grace | 是 |
+| effective window buffer | profile + capacity class | 任务结束归还 buffer pool | 是 |
+| compiled CPU | exact SurfaceDependencyKey | CPU 字节、可见性、编辑热度 | 是 |
+| GPU surface slot | session + compiled dependency key | GPU 字节、LOD/可见性 grace | 是 |
 | dynamic fog | session + render key | 玩法驻留与 GPU 字节 | 从 fog store 恢复 |
 
 缓存统计必须报告真实 typed-array、geometry 和 texture 估算字节，不能只报告对象数量。
@@ -650,13 +787,13 @@ HydrologyRegion 可以由独立任务生成，但与 semantic generation 共用�
 
 ### 16.1 导航
 
-导航摘要按 32×32 semantic chunk 构建，读取 `EffectiveWorldView` 的通行语义与静态水体结果。高度或水文 change domain 会精确失效相交摘要；材质和纯视觉风格不影响导航。
+导航摘要按 32×32 semantic chunk 构建，读取 `EffectiveWorldView` 的 substrate/navigation override，并通过共享 hydrology query kernel 得到静态水体与坡度结果。导航可以持有有字节预算的 derived hydrology raster，但不能另建一套逐格水体权威。高度或水文 change domain 会精确失效相交摘要；材质和纯视觉风格不影响导航。
 
 长程导航可以持有 semantic lease，但不能为了寻路创建 GPU surface。
 
 ### 16.2 模拟
 
-标准模拟块改为 64×64，与 2×2 semantic chunk 对齐。模拟仍有独立 Store、时钟和活动锚点；64 是默认格式基底，不代表镜头加载 64×64 地形。
+标准模拟块默认使用 64×64，与 2×2 semantic chunk 对齐。模拟仍有独立 Store、格式版本、时钟和活动锚点；64 不属于 world surface format，也不代表镜头加载 64×64 地形。应用若改变模拟分区，只升级自己的模拟格式，不改变 world identity。
 
 实体跨模拟块时只迁移实体状态。需要地形判断的系统按需获取 semantic/hydrology lease，不依赖 compiled render chunk。
 
@@ -664,7 +801,7 @@ HydrologyRegion 可以由独立任务生成，但与 semantic generation 共用�
 
 射线先与 render chunk 保守 bounds 和地面/水面 mesh 相交，再把世界坐标逆映射到逻辑六边格。最终高度使用 CPU `CompiledSurfaceField` 的同一三角插值。
 
-格子选择、路线和建造预览从逻辑坐标生成，不依赖逐 hex mesh 实例 ID。CPU compiled field 未驻留时，查询服务获取 semantic window 并使用同一共享插值模块，不触发 GPU 资源创建。
+格子选择、路线和建造预览从逻辑坐标生成，不依赖逐 hex mesh 实例 ID。CPU compiled field 不存在或 token 已过期时，查询服务获取当前 Effective Snapshot 并使用同一共享 surface/hydrology kernel，不触发 GPU 资源创建，也不返回旧 resident field。
 
 ## 17. 格式、身份和失败策略
 
@@ -681,11 +818,12 @@ WORLD_DELTA_FORMAT_VERSION = 3;
 HYDROLOGY_REGION_FORMAT_VERSION = 1;
 HYDROLOGY_DELTA_FORMAT_VERSION = 1;
 SURFACE_COMPILER_REVISION = 1;
+SURFACE_COMPILE_PROFILE_VERSION = 1;
 ~~~
 
-`SURFACE_COMPILER_REVISION` 只用于可重建缓存键，不进入存档格式。`RENDER_SURFACE_FIELD_FORMAT_VERSION` 不作为公共持久化版本存在。
+`SURFACE_COMPILER_REVISION` 和 `SURFACE_COMPILE_PROFILE_VERSION` 只用于可重建缓存键，不进入 world descriptor、world identity 或存档格式。前者表示算法变化，后者表示 render chunk、采样密度、物理纹理布局、LOD topology 和页容量这一组经过验证的配置变化。`RENDER_SURFACE_FIELD_FORMAT_VERSION` 不作为公共持久化版本存在。
 
-v2 descriptor 不再保存可配置 `chunkSize`；32/128 由格式版本隐含。descriptor 显式记录 semantic chunk format 与 hydrology region format，world identity 至少包含 descriptor version、source kind、seed、generator version、这两个格式版本和拓扑尺寸。
+v2 descriptor 不再保存可配置 `chunkSize`；32/128 由格式版本隐含。descriptor 显式记录 semantic chunk format、hydrology region format、四个 biome basis 和 vegetation/substrate catalog identity。world identity 至少包含 descriptor version、source kind、seed、generator version、这两个格式版本、语义 catalog 内容哈希和拓扑尺寸；替换同名 catalog 内容不能继续复用旧 world identity。
 
 ### 17.2 存档
 
@@ -695,7 +833,7 @@ v2 descriptor 不再保存可配置 `chunkSize`；32/128 由格式版本隐含�
 
 - world descriptor；
 - sparse semantic delta；
-- sparse hydrology delta；
+- hydrology feature delta/tombstone；
 - 应用自己的实体/战役状态。
 
 BaseSemanticChunk、HydrologyRegion 和 CompiledSurfaceChunk 都可以缓存，但缓存损坏或版本不匹配时删除并重建；它们不是唯一存档副本。
@@ -706,7 +844,8 @@ BaseSemanticChunk、HydrologyRegion 和 CompiledSurfaceChunk 都可以缓存，�
 
 - 格式或生成器版本不匹配；
 - chunk 数组长度、枚举、量化范围或 bounds 非法；
-- 水文边界端口不匹配、feature ID 冲突或河流拓扑非法；
+- 排水 rank 不下降、终点非法、水文边界端口不匹配、feature/body ID 冲突或河流拓扑非法；
+- compiled body palette 超限、SurfaceLattice 测试向量不匹配或过期 request token 尝试写入；
 - WebGL2 不支持所需 array texture/GLSL 3 能力；
 - 纹理页或资源预算无法容纳最小首屏工作集；
 - Layer 依赖环、重复 owner 或过期 revision 写入。
@@ -719,6 +858,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 - 新增固定尺寸常量、坐标/索引函数和 v2 descriptor。
 - 实现 BaseSemanticChunk SoA、校验、序列化和按需只读 tile view。
+- 冻结 substrate、biome 和 vegetation profile 索引；建立“权威基础字段/派生字段/navigation override”边界测试。
 - 把生成器结果一次量化进 32×32 chunk。
 - 建立跨 chunk 边界、请求顺序、线程和负坐标确定性测试。
 
@@ -726,30 +866,33 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 ### 阶段 B：水文区域
 
-- 实现 128×128 region、稳定 feature ID、边界端口和空间索引。
+- 实现 `MacroDrainageGraph`、严格下降 drainage rank、稳定 feature/body ID 和终点校验。
+- 从排水图裁剪 128×128 region、boundary port 和空间索引，不从边键随机创造河流。
 - 生成海域、湖盆、长河、汇流和河口。
 - 实现 derived hydrology raster 查询，不持久化逐格河流权威。
-- 覆盖无限和 128 倍数环绕拓扑。
+- 覆盖无限和 32 倍数环绕拓扑，包括末端 partial hydrology region 与四角接缝。
 
-完成标志：跨任意 region 请求顺序，河流端口、宽度、水位和 ID 完全一致。
+完成标志：所有下游路径有限终止；跨任意 region 请求顺序，河流端口、宽度、水位、流量和 body ID 完全一致。
 
 ### 阶段 C：表面编译器与纹理池
 
-- 实现 effective window 和 Worker 编译协议。
-- 输出 64×64 core + gutter 的量化表面场。
-- 实现 paged DataArrayTexture、generation token、整层上传和 context restore。
+- 实现 `SurfaceLatticeSpec`、冻结测试向量、effective window 和 Worker 编译协议。
+- 输出 64×64 core、单 texel gutter 和 body palette 的量化表面场。
+- 实现 paged DataArrayTexture、`SurfaceDependencyKey`/`SurfaceRequestToken`、整层上传和 context restore。
+- 实现 request token 过期或 dependency key 不匹配时使用最新 Effective Snapshot 的共享 CPU query kernel。
 - 将动态雾拆到独立 R8 池。
 
-完成标志：CPU/GPU 宏观高度、水位和岸线采样一致，过期任务无法覆盖新 revision。
+完成标志：CPU/GPU 宏观高度、水位和岸线采样一致，权威 ArrayBuffer 不会因 Worker transfer 被 detach，过期任务无法覆盖或服务新 revision 查询。
 
-### 阶段 D：合并地面网格
+### 阶段 D：统一光照核心与合并地面网格
 
+- 建立共享 LightingState、解析天空/PMREM 环境资源、线性色彩空间和 tone mapping。
 - 实现 16×16 六边格对齐焊接网格和三档 LOD。
 - 实现固定高分辨率边界及过渡三角带。
 - 迁移地表材质、格线、选择和 fog 采样。
 - 用新 GroundLayer 替换旧 TerrainMesh land path。
 
-完成标志：相同可见面积下不再提交逐 hex 细分实例，chunk/LOD/环绕边界无裂缝。
+完成标志：相同可见面积下不再提交逐 hex 细分实例，chunk/LOD/环绕边界无裂缝；GroundLayer 已通过统一光照参考材质校准。
 
 ### 阶段 E：连续水面
 
@@ -759,10 +902,10 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 完成标志：海、湖、河具有可辨识形态，岸线平滑且全部读取同一 SDF。
 
-### 阶段 F：统一光照与植被
+### 阶段 F：植被、模型光照与阴影策略
 
-- 建立共享 LightingState、环境资源、色彩空间和 tone mapping。
-- 迁移树、草、建筑与水面光照。
+- 规范化树木材质并迁移树、草、建筑到已有 LightingState。
+- 实现 PMREM 异步更新和 ShadowState 的质量/更新预算。
 - 由 compiled field 生成植被 placement seeds 和贴地高度。
 
 完成标志：植被不再暗沉脱离环境，所有内置层对太阳、天空和曝光响应一致。
@@ -770,7 +913,8 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 ### 阶段 G：编辑、持久化和消费系统
 
 - 实现类型化 transaction、domain bitmask 和脏 bounds 聚合。
-- 升级 semantic/hydrology delta Store。
+- 实现原子 WorldDeltaStore、semantic delta 与 feature-centric hydrology delta/tombstone。
+- 实现 `reject`、`preserve-channel`、`coupled` 水文冲突策略和显式 hydrology rebake 输出。
 - 对齐导航 32、标准模拟 64、拾取和贴地查询。
 - 验证批量编辑合并、CAS、save barrier 和 stale task 拒绝。
 
@@ -792,22 +936,25 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 相同 world identity 与编辑 revision 的语义、水文和编译结果逐字节确定。
 - 任意生成/编译顺序、Worker 数量、卸载重载后结果一致。
 - 无限世界负坐标、环绕四条边和四个角不存在语义、几何、材质、水位或波相位接缝。
+- SurfaceLattice 正/负坐标、公共边和环绕测试向量在 CPU、Worker 和 shader reference evaluator 中一致。
 - 不同 LOD 相邻块边界顶点完全相同。
-- 河流没有断头边界、逆流汇流、重复 ID 或请求顺序依赖。
+- 每条 drainage edge 的 rank 严格下降，所有路径有限终止；河流没有断头边界、逆流汇流、重复 ID 或请求顺序依赖。
+- river/lake/ocean body ID 不随加载范围、region 裁剪、卸载重载或渲染 LOD 改变。
+- 事务提交后任何旧 request token 或错误 dependency key 都不能服务 CPU 查询；非法地形/水文组合整体失败且不产生部分 delta。
 - ground、水位、shore SDF 和 vegetation placement 在 CPU/GPU 契约允许误差内一致。
 
 ### 19.2 性能
 
-性能验证是实现验收，不再用于决定是否退回 12×12：
+性能验证只检查当前 `SurfaceCompileProfile v1` 是否满足目标工作集，不枚举没有结构依据的尺寸组合。16×16 来自 32×32 semantic chunk 的 2×2 对齐和局部编辑粒度；旧生产路径只允许作为迁移前回归基线，不是候选、兼容路径或 fallback：
 
 - 对 1、9、49 个可见 render chunks 分别测量全陆地、海岸、全水和密集河网。
 - 记录 Worker 生成/编译、主线程挂载、GPU frame p50/p95、draw calls、顶点调用、上传字节和 resident CPU/GPU 字节。
-- 同等可见面积下，地面 chunk/draw 数符合 16×16 理论数量，不出现隐藏逐 hex draw。
+- 同等可见面积下，地面 chunk/draw 数符合 16×16 理论数量，不出现隐藏逐 hex draw；新路径相对旧基线的收益或回归必须能由顶点调用、纹理读取、上传或 draw submission 数据解释。
 - 正常镜头移动不突破既有主线程 frame-task 预算；Worker 批量完成不会同帧全部挂载。
 - 单格编辑只上传受影响静态 surface layers；纯 fog 和 uniform 修改不得上传静态 surface layer。
 - source、hydrology、compiled CPU 与 GPU pool 均在各自字节预算内稳定淘汰，无随探索距离增长的常驻数据。
 
-如果不达标，修复数据布局、需求集合、批处理或 shader；不恢复旧 12×12 生产路径。
+如果实现缺陷导致不达标，修复数据布局、需求集合、批处理或 shader。若证据表明 16/4/66 这一整组编译配置本身无法满足目标，则在生产切换前升级 `SURFACE_COMPILE_PROFILE_VERSION` 并重新验证；world descriptor、semantic chunk 和水文存档格式保持不变，也不恢复旧 12×12 生产路径。
 
 ### 19.3 视觉
 
@@ -826,13 +973,16 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 实现期间任何模块都不得破坏以下约束：
 
-1. 权威语义只有 Base + SparseDelta；河流曲线只有 HydrologyRegion + HydrologyDelta。
+1. 基础格子语义只有 BaseSemanticChunk + SparseSemanticDelta；生成河网只有 MacroDrainageGraph/HydrologyRegion，编辑河湖只有完整 HydrologyFeatureDelta。
 2. 逐格水体 raster、surface field、mesh、纹理和植被实例全部可重建。
-3. 16/32/64/128 是固定格式层级，不是随调用方变化的调优旋钮。
-4. 128×128 永远不是渲染、单格编辑或整层 GPU 上传单元。
-5. 动态雾与静态 surface field 分离。
-6. CPU 与 GPU 共享宏观量化和插值，不要求玩法复现纯视觉细节。
-7. 内置渲染层与自定义层遵守同一依赖和生命周期模型。
-8. WebGL2 是 v2 唯一生产后端；WebGPU 仍按独立测量门槛决策。
-9. 不保留旧格式兼容、旧渲染 fallback 或永久双路径。
-10. 文档、格式常量、实现和验收测试必须在每个阶段同步更新。
+3. substrate、水体、坡度、材质输出和通行性各自只有一个明确权威或派生来源，不能用多个字段表达冲突事实。
+4. 32/128 属于世界格式；16/4/66 属于不可由调用方拆分修改的 compile profile，模拟 64 由应用拥有。
+5. 128×128 永远不是渲染、单格编辑或整层 GPU 上传单元。
+6. 排水端口来自严格无环的全局排水骨架；稳定 water-body ID 不依赖当前加载范围。
+7. 动态雾与静态 surface field 分离。
+8. CPU 与 GPU 共享 SurfaceLattice、宏观量化和插值；过期 request token 或错误 dependency key 不能服务查询。
+9. 地形编辑不能静默破坏显式河湖，水文冲突必须在原子事务中按冻结策略解决。
+10. 内置渲染层与自定义层遵守同一依赖和生命周期模型。
+11. WebGL2 是 v2 唯一生产后端；WebGPU 仍按独立测量门槛决策。
+12. 不保留旧格式兼容、旧渲染 fallback 或永久双路径。
+13. 文档、格式常量、实现和验收测试必须在每个阶段同步更新。
