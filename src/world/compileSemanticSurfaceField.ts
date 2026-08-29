@@ -5,7 +5,7 @@ import {
     surfaceFieldTexelIndex
 } from "./CompiledSurfaceField";
 import { finiteFloat16Bits } from "./HalfFloat";
-import { SURFACE_COMPILE_PROFILE } from "./SurfaceCompileProfile";
+import { SURFACE_COMPILE_PROFILE, surfaceInfluenceRadiusWorld } from "./SurfaceCompileProfile";
 import { surfaceTexelCenterAxis } from "./SurfaceLattice";
 import {
     EFFECTIVE_WINDOW_TILE_SIZE,
@@ -135,8 +135,7 @@ export function compileSemanticSurfaceField(
     };
     const saturatedShoreDistance = finiteFloat16Bits(
         "dry surface shoreline saturation",
-        SURFACE_COMPILE_PROFILE.influenceRadiusTiles
-            * Math.sqrt(3) * window.dependencyKey.metrics.hexSize
+        surfaceInfluenceRadiusWorld(window.dependencyKey.metrics.hexSize)
     );
     for (let texelX = -SURFACE_COMPILE_PROFILE.gutterTexels;
         texelX < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels;

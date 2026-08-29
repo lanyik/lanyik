@@ -6,7 +6,10 @@ import {
     surfaceFieldTexelIndex
 } from "../../src/world/CompiledSurfaceField";
 import { finiteFloat16Bits, float16BitsToFloat32 } from "../../src/world/HalfFloat";
-import { SURFACE_FIELD_CPU_BYTES } from "../../src/world/SurfaceCompileProfile";
+import {
+    SURFACE_FIELD_CPU_BYTES,
+    surfaceInfluenceRadiusWorld
+} from "../../src/world/SurfaceCompileProfile";
 import { compileSemanticSurfaceField } from "../../src/world/compileSemanticSurfaceField";
 import { createSurfaceCompilerTestWindow } from "./surfaceCompilerFixture";
 
@@ -16,6 +19,8 @@ describe("compileSemanticSurfaceField", () => {
         expect(compiled.groundHeight).toHaveLength(COMPILED_SURFACE_TEXEL_COUNT);
         expect(compiledSurfaceFieldResidentBytes(compiled)).toBe(SURFACE_FIELD_CPU_BYTES);
         expect(compiled.waterCoverage.every(value => value === 0)).toBe(true);
+        expect(float16BitsToFloat32(compiled.shorelineDistance[0]))
+            .toBeCloseTo(surfaceInfluenceRadiusWorld(2), 3);
         const center = surfaceFieldTexelIndex(2, 2);
         expect(float16BitsToFloat32(compiled.groundHeight[center])).toBeGreaterThan(0);
         const materialOffset = center * 4;

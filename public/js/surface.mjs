@@ -2449,7 +2449,7 @@ function compileSemanticSurfaceField(window) {
   };
   const saturatedShoreDistance = finiteFloat16Bits(
     "dry surface shoreline saturation",
-    SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * window.dependencyKey.metrics.hexSize
+    surfaceInfluenceRadiusWorld(window.dependencyKey.metrics.hexSize)
   );
   for (let texelX = -SURFACE_COMPILE_PROFILE.gutterTexels; texelX < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelX += 1) {
     const u = surfaceTexelCenterAxis(window.renderKey.chunkX, texelX);
