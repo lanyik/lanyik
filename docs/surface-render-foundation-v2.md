@@ -393,6 +393,8 @@ delta 绑定完整 world identity、chunk key 和正整数 revision。二进制�
 
 当前 `HydrologyFeatureDelta` 格式版本 1 的每条记录只能是一个完整 river/lake upsert 或一个带明确 feature kind 的 tombstone；`featureId` 同时是该河流或湖泊的稳定 body ID，不能再嵌套另一套 body identity。完整河流使用 q64 world-space `Float64Array`，每点坐标必须是安全整数，从而不会把无限世界截断到 Int32；2～256 个控制点配套等长的正宽度、非上升水位、discharge class、profile、显式 spring/river source 和 ocean/lake/river outlet。河线必须无零长、重复点或自交，自身不能作为 source/outlet。
 
+持久化二进制固定使用小端 `HFD2`：48 字节头部保存格式、upsert/delete、feature/source/outlet kind、无符号 64 位 revision、四段 UTF-8 字节长度、点数、discharge/profile、湖水位和精确总长度；随后依次保存 world identity、feature/source/outlet ID、带符号 64 位 q64 坐标，以及仅河流具有的 width/level profile。删除记录和湖泊的非适用字段必须规范为零，河流的湖水位字段也必须为零；source/outlet ID 不依赖枚举猜测省略，ocean 仍明确保存规范 `ocean` identity。反序列化拒绝未知 header、尾随字节、非规范零值、越出安全整数的 q64/revision、非法 UTF-8 和非规范湖多边形，并重新执行完整 feature/delta 校验；没有 structured-clone 对象格式或旧水文记录 fallback。
+
 完整湖泊使用 3～256 点的 q64 world-space 简单多边形。发布前以精确 BigInt 叉积检查退化、方向和线段相交，再规范为“字典序最小顶点开头、逆时针”唯一表示；这项 O(n²) 校验只在编辑/加载冷路径执行，不进入查询或编译热路径。region slice、boundary port 和 coverage 均从这些完整 feature 重建，不进入 delta。feature delta 绑定完整 world identity 和正整数 revision；跨 feature 的 outlet 存在性、CAS 与全图无环约束由原子事务 store 在整批候选状态上验证，而不是让单条记录猜测外部世界。
 
 调用方提交世界坐标中的完整河流或湖泊，不手工维护区域分段。`WorldDeltaStore` 原子提交一个包含 semantic 与 hydrology mutations 的 revisioned transaction record；Store 可以使用原生事务，也可以原子追加单个 commit record 后异步物化 chunk/region 索引。读取方只观察已提交 revision，不能看到半条新河和半条旧河。单个 feature 修改使用 expected feature revision CAS；跨多个 feature 的事务以整个 commit 的 expected revision set 校验，任一冲突则整体失败。

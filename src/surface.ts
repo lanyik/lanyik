@@ -340,6 +340,7 @@ export type {
 
 export {
     HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+    HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES,
     MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS,
     MAX_AUTHORED_LAKE_POLYGON_POINTS,
     authoredHydrologyPoint,
@@ -348,7 +349,10 @@ export {
     assertAuthoredLakeFeature,
     createAuthoredLakeFeature,
     assertHydrologyFeatureDelta,
-    createHydrologyFeatureDelta
+    createHydrologyFeatureDelta,
+    hydrologyFeatureDeltaSerializedBytes,
+    serializeHydrologyFeatureDelta,
+    deserializeHydrologyFeatureDelta
 } from "./world/HydrologyFeatureDelta";
 export type {
     AuthoredHydrologyFeatureKind,

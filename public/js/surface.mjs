@@ -1537,6 +1537,19 @@ var MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS = 256;
 var MAX_AUTHORED_LAKE_POLYGON_POINTS = 256;
 var MAX_AUTHORED_HYDROLOGY_ID_LENGTH = 256;
 var MAX_HYDROLOGY_FEATURE_WORLD_IDENTITY_LENGTH = 16384;
+var HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES = 48;
+var HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC = 843335240;
+var SERIALIZED_OPERATION_DELETE = 0;
+var SERIALIZED_OPERATION_UPSERT = 1;
+var SERIALIZED_FEATURE_RIVER = 1;
+var SERIALIZED_FEATURE_LAKE = 2;
+var SERIALIZED_SOURCE_NONE = 0;
+var SERIALIZED_SOURCE_SPRING = 1;
+var SERIALIZED_SOURCE_RIVER = 2;
+var SERIALIZED_OUTLET_NONE = 0;
+var SERIALIZED_OUTLET_OCEAN = 1;
+var SERIALIZED_OUTLET_LAKE = 2;
+var SERIALIZED_OUTLET_RIVER = 3;
 function assertStableId2(name, value) {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_AUTHORED_HYDROLOGY_ID_LENGTH || value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)) {
     throw new TypeError(`${name} must be a canonical stable identity`);
@@ -1890,6 +1903,248 @@ function createHydrologyFeatureDelta(input) {
   } else throw new TypeError("hydrology feature delta operation is invalid");
   assertHydrologyFeatureDelta(delta);
   return delta;
+}
+function serializedLayout(worldIdentityBytes, featureIdBytes, sourceIdBytes, outletIdBytes, pointCount, riverPayload) {
+  const worldIdentity = HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES;
+  const featureId = worldIdentity + worldIdentityBytes;
+  const sourceId = featureId + featureIdBytes;
+  const outletId = sourceId + sourceIdBytes;
+  const points = outletId + outletIdBytes;
+  const widthProfile = points + pointCount * 2 * BigInt64Array.BYTES_PER_ELEMENT;
+  const levelProfile = widthProfile + (riverPayload ? pointCount : 0);
+  const totalBytes = levelProfile + (riverPayload ? pointCount * Uint16Array.BYTES_PER_ELEMENT : 0);
+  if (!Number.isSafeInteger(totalBytes)) {
+    throw new RangeError("serialized hydrology feature delta exceeds the safe byte range");
+  }
+  return { worldIdentity, featureId, sourceId, outletId, points, widthProfile, levelProfile, totalBytes };
+}
+function encoded(value) {
+  return new TextEncoder().encode(value);
+}
+function sourceIdentity(source) {
+  return source.kind === "spring" ? source.sourceId : source.riverId;
+}
+function outletIdentity(outlet) {
+  return outlet.kind === "river" ? outlet.riverId : outlet.bodyId;
+}
+function serializedSourceKind(source) {
+  return source.kind === "spring" ? SERIALIZED_SOURCE_SPRING : SERIALIZED_SOURCE_RIVER;
+}
+function serializedOutletKind(outlet) {
+  return outlet.kind === "ocean" ? SERIALIZED_OUTLET_OCEAN : outlet.kind === "lake" ? SERIALIZED_OUTLET_LAKE : SERIALIZED_OUTLET_RIVER;
+}
+function hydrologyFeatureDeltaSerializedBytes(delta) {
+  assertHydrologyFeatureDelta(delta);
+  const worldIdentityBytes = encoded(delta.worldIdentity).byteLength;
+  const featureIdBytes = encoded(delta.featureId).byteLength;
+  const river = delta.operation === "upsert" && delta.feature.kind === "river" ? delta.feature : void 0;
+  const sourceIdBytes = river ? encoded(sourceIdentity(river.source)).byteLength : 0;
+  const outletIdBytes = river ? encoded(outletIdentity(river.outlet)).byteLength : 0;
+  const pointCount = delta.operation === "delete" ? 0 : (delta.feature.kind === "river" ? delta.feature.controlPoints : delta.feature.polygon).length / 2;
+  return serializedLayout(
+    worldIdentityBytes,
+    featureIdBytes,
+    sourceIdBytes,
+    outletIdBytes,
+    pointCount,
+    river !== void 0
+  ).totalBytes;
+}
+function serializeHydrologyFeatureDelta(delta) {
+  assertHydrologyFeatureDelta(delta);
+  const worldIdentity = encoded(delta.worldIdentity);
+  const featureId = encoded(delta.featureId);
+  const river = delta.operation === "upsert" && delta.feature.kind === "river" ? delta.feature : void 0;
+  const sourceId = river ? encoded(sourceIdentity(river.source)) : new Uint8Array(0);
+  const outletId = river ? encoded(outletIdentity(river.outlet)) : new Uint8Array(0);
+  const points = delta.operation === "delete" ? void 0 : delta.feature.kind === "river" ? delta.feature.controlPoints : delta.feature.polygon;
+  const pointCount = points ? points.length / 2 : 0;
+  const layout = serializedLayout(
+    worldIdentity.byteLength,
+    featureId.byteLength,
+    sourceId.byteLength,
+    outletId.byteLength,
+    pointCount,
+    river !== void 0
+  );
+  const buffer = new ArrayBuffer(layout.totalBytes);
+  const view = new DataView(buffer);
+  view.setUint32(0, HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC, true);
+  view.setUint16(4, HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION, true);
+  view.setUint16(6, HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES, true);
+  view.setUint8(8, delta.operation === "delete" ? SERIALIZED_OPERATION_DELETE : SERIALIZED_OPERATION_UPSERT);
+  view.setUint8(9, delta.featureKind === "river" ? SERIALIZED_FEATURE_RIVER : SERIALIZED_FEATURE_LAKE);
+  view.setUint8(10, river ? serializedSourceKind(river.source) : SERIALIZED_SOURCE_NONE);
+  view.setUint8(11, river ? serializedOutletKind(river.outlet) : SERIALIZED_OUTLET_NONE);
+  view.setBigUint64(12, BigInt(delta.revision), true);
+  view.setUint32(20, worldIdentity.byteLength, true);
+  view.setUint32(24, featureId.byteLength, true);
+  view.setUint32(28, sourceId.byteLength, true);
+  view.setUint32(32, outletId.byteLength, true);
+  view.setUint16(36, pointCount, true);
+  view.setUint8(38, river?.dischargeClass ?? 0);
+  view.setUint8(39, delta.operation === "upsert" ? delta.feature.profileIndex : 0);
+  view.setUint16(40, delta.operation === "upsert" && delta.feature.kind === "lake" ? delta.feature.level : 0, true);
+  view.setUint16(42, 0, true);
+  view.setUint32(44, layout.totalBytes, true);
+  new Uint8Array(buffer, layout.worldIdentity, worldIdentity.byteLength).set(worldIdentity);
+  new Uint8Array(buffer, layout.featureId, featureId.byteLength).set(featureId);
+  new Uint8Array(buffer, layout.sourceId, sourceId.byteLength).set(sourceId);
+  new Uint8Array(buffer, layout.outletId, outletId.byteLength).set(outletId);
+  if (points) {
+    for (let index = 0; index < points.length; index += 1) {
+      view.setBigInt64(
+        layout.points + index * BigInt64Array.BYTES_PER_ELEMENT,
+        BigInt(points[index]),
+        true
+      );
+    }
+  }
+  if (river) {
+    new Uint8Array(buffer, layout.widthProfile, pointCount).set(river.widthProfile);
+    for (let index = 0; index < pointCount; index += 1) {
+      view.setUint16(
+        layout.levelProfile + index * Uint16Array.BYTES_PER_ELEMENT,
+        river.levelProfile[index],
+        true
+      );
+    }
+  }
+  return buffer;
+}
+function decoded(name, buffer, offset, length) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      new Uint8Array(buffer, offset, length)
+    );
+  } catch {
+    throw new TypeError(`serialized hydrology ${name} is not valid UTF-8`);
+  }
+}
+function safeBigIntNumber3(name, value) {
+  const numeric = Number(value);
+  if (!Number.isSafeInteger(numeric) || BigInt(numeric) !== value) {
+    throw new RangeError(`serialized hydrology ${name} exceeds the safe integer range`);
+  }
+  return numeric;
+}
+function deserializeHydrologyFeatureDelta(buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES) {
+    throw new TypeError("serialized hydrology feature delta has an invalid byte length");
+  }
+  const view = new DataView(buffer);
+  if (view.getUint32(0, true) !== HYDROLOGY_FEATURE_DELTA_SERIALIZED_MAGIC || view.getUint16(4, true) !== HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION || view.getUint16(6, true) !== HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES || view.getUint16(42, true) !== 0 || view.getUint32(44, true) !== buffer.byteLength) {
+    throw new TypeError("serialized hydrology feature delta header is invalid or unsupported");
+  }
+  const operation = view.getUint8(8);
+  const featureKind = view.getUint8(9);
+  const sourceKind = view.getUint8(10);
+  const outletKind = view.getUint8(11);
+  const worldIdentityBytes = view.getUint32(20, true);
+  const featureIdBytes = view.getUint32(24, true);
+  const sourceIdBytes = view.getUint32(28, true);
+  const outletIdBytes = view.getUint32(32, true);
+  const pointCount = view.getUint16(36, true);
+  const dischargeClass = view.getUint8(38);
+  const profileIndex = view.getUint8(39);
+  const lakeLevel = view.getUint16(40, true);
+  const isRiverUpsert = operation === SERIALIZED_OPERATION_UPSERT && featureKind === SERIALIZED_FEATURE_RIVER;
+  const layout = serializedLayout(
+    worldIdentityBytes,
+    featureIdBytes,
+    sourceIdBytes,
+    outletIdBytes,
+    pointCount,
+    isRiverUpsert
+  );
+  if (layout.totalBytes !== buffer.byteLength || worldIdentityBytes === 0 || featureIdBytes === 0) {
+    throw new TypeError("serialized hydrology feature delta byte layout is invalid");
+  }
+  const worldIdentity = decoded("world identity", buffer, layout.worldIdentity, worldIdentityBytes);
+  const featureId = decoded("feature identity", buffer, layout.featureId, featureIdBytes);
+  const revision = safeBigIntNumber3("revision", view.getBigUint64(12, true));
+  const kind = featureKind === SERIALIZED_FEATURE_RIVER ? "river" : featureKind === SERIALIZED_FEATURE_LAKE ? "lake" : void 0;
+  if (!kind) throw new TypeError("serialized hydrology feature kind is invalid");
+  if (operation === SERIALIZED_OPERATION_DELETE) {
+    if (sourceKind !== SERIALIZED_SOURCE_NONE || outletKind !== SERIALIZED_OUTLET_NONE || sourceIdBytes !== 0 || outletIdBytes !== 0 || pointCount !== 0 || dischargeClass !== 0 || profileIndex !== 0 || lakeLevel !== 0) {
+      throw new Error("serialized hydrology tombstone contains non-canonical payload");
+    }
+    return createHydrologyFeatureDelta({
+      worldIdentity,
+      revision,
+      featureId,
+      featureKind: kind,
+      operation: "delete"
+    });
+  }
+  if (operation !== SERIALIZED_OPERATION_UPSERT) {
+    throw new TypeError("serialized hydrology feature operation is invalid");
+  }
+  const points = new Float64Array(pointCount * 2);
+  for (let index = 0; index < points.length; index += 1) {
+    points[index] = safeBigIntNumber3(
+      "q64 coordinate",
+      view.getBigInt64(layout.points + index * BigInt64Array.BYTES_PER_ELEMENT, true)
+    );
+  }
+  if (kind === "lake") {
+    if (sourceKind !== SERIALIZED_SOURCE_NONE || outletKind !== SERIALIZED_OUTLET_NONE || sourceIdBytes !== 0 || outletIdBytes !== 0 || dischargeClass !== 0) {
+      throw new Error("serialized authored lake contains non-canonical river payload");
+    }
+    const feature = {
+      kind: "lake",
+      featureId,
+      polygon: points,
+      level: lakeLevel,
+      profileIndex
+    };
+    assertAuthoredLakeFeature(feature);
+    return createHydrologyFeatureDelta({
+      worldIdentity,
+      revision,
+      featureId,
+      featureKind: kind,
+      operation: "upsert",
+      feature
+    });
+  }
+  if (lakeLevel !== 0 || sourceIdBytes === 0 || outletIdBytes === 0) {
+    throw new Error("serialized authored river header is non-canonical");
+  }
+  const sourceId = decoded("river source identity", buffer, layout.sourceId, sourceIdBytes);
+  const outletId = decoded("river outlet identity", buffer, layout.outletId, outletIdBytes);
+  const source = sourceKind === SERIALIZED_SOURCE_SPRING ? { kind: "spring", sourceId } : sourceKind === SERIALIZED_SOURCE_RIVER ? { kind: "river", riverId: sourceId } : (() => {
+    throw new TypeError("serialized authored river source kind is invalid");
+  })();
+  const outlet = outletKind === SERIALIZED_OUTLET_OCEAN ? { kind: "ocean", bodyId: outletId } : outletKind === SERIALIZED_OUTLET_LAKE ? { kind: "lake", bodyId: outletId } : outletKind === SERIALIZED_OUTLET_RIVER ? { kind: "river", riverId: outletId } : (() => {
+    throw new TypeError("serialized authored river outlet kind is invalid");
+  })();
+  const widthProfile = new Uint8Array(buffer, layout.widthProfile, pointCount).slice();
+  const levelProfile = new Uint16Array(pointCount);
+  for (let index = 0; index < pointCount; index += 1) {
+    levelProfile[index] = view.getUint16(
+      layout.levelProfile + index * Uint16Array.BYTES_PER_ELEMENT,
+      true
+    );
+  }
+  return createHydrologyFeatureDelta({
+    worldIdentity,
+    revision,
+    featureId,
+    featureKind: kind,
+    operation: "upsert",
+    feature: {
+      kind: "river",
+      featureId,
+      source,
+      outlet,
+      controlPoints: points,
+      widthProfile,
+      levelProfile,
+      dischargeClass,
+      profileIndex
+    }
+  });
 }
 
 // src/world/TransferableEffectiveWindow.ts
@@ -12425,8 +12680,8 @@ var StaticHydrologyRegionSource = class {
     }
     const dischargeByNode = this.calculateRiverDischarge(graphNodes, graphEdges);
     for (const draft of edgeDrafts.values()) {
-      const sourceIdentity = coordinateIdentity2(draft.source.x, draft.source.y);
-      const discharge = dischargeByNode.get(sourceIdentity);
+      const sourceIdentity2 = coordinateIdentity2(draft.source.x, draft.source.y);
+      const discharge = dischargeByNode.get(sourceIdentity2);
       if (discharge === void 0) throw new Error("static river edge lost its discharge source");
       const edge = Object.freeze({
         sourceNodeId: `static-node:${draft.source.x}:${draft.source.y}`,
@@ -12535,6 +12790,7 @@ export {
   HYDROLOGY_BOUNDARY_MIN_X,
   HYDROLOGY_BOUNDARY_MIN_Y,
   HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+  HYDROLOGY_FEATURE_DELTA_SERIALIZED_HEADER_BYTES,
   HYDROLOGY_FEATURE_SPATIAL_INDEX_LEAF_SIZE,
   HYDROLOGY_KIND_LAKE,
   HYDROLOGY_KIND_NONE,
@@ -12719,6 +12975,7 @@ export {
   deriveHydrologyRaster,
   derivedHydrologyRasterIndex,
   deserializeBaseSemanticChunk,
+  deserializeHydrologyFeatureDelta,
   deserializeSparseSemanticDelta,
   effectiveHydrologySuppressesBaseFeature,
   finiteFloat16Bits,
@@ -12727,6 +12984,7 @@ export {
   generateBaseSemanticChunk,
   getBaseSemanticTile,
   getEffectiveSemanticTile,
+  hydrologyFeatureDeltaSerializedBytes,
   hydrologyPortConnectionSignature,
   hydrologyRegionBoundsQ64,
   hydrologyRegionMaximumQuantizedCoordinate,
@@ -12743,6 +13001,7 @@ export {
   semanticGeneratorIdentity,
   semanticTileIndex,
   serializeBaseSemanticChunk,
+  serializeHydrologyFeatureDelta,
   serializeSparseSemanticDelta,
   serializeSurfaceDependencyKey,
   serializeWorldDescriptorV2,

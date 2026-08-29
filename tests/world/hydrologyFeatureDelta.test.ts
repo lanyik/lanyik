@@ -9,7 +9,10 @@ import {
     authoredHydrologyPoint,
     createAuthoredLakeFeature,
     createAuthoredRiverFeature,
-    createHydrologyFeatureDelta
+    createHydrologyFeatureDelta,
+    deserializeHydrologyFeatureDelta,
+    hydrologyFeatureDeltaSerializedBytes,
+    serializeHydrologyFeatureDelta
 } from "../../src/world/HydrologyFeatureDelta";
 
 function river() {
@@ -181,5 +184,110 @@ describe("HydrologyFeatureDelta", () => {
             -tile * HYDROLOGY_POINT_QUANTIZATION
         ]));
         expect(point[0]).toBeGreaterThan(0x7fff_ffff);
+    });
+
+    test("round-trips river, lake, and tombstone records through one canonical binary format", () => {
+        const largeCoordinate = Number.MAX_SAFE_INTEGER - 2_048;
+        const authoredRiver = createAuthoredRiverFeature({
+            ...river(),
+            source: { kind: "river", riverId: "river:上游" },
+            outlet: { kind: "lake", bodyId: "lake:出口" },
+            controlPoints: new Float64Array([
+                -largeCoordinate, largeCoordinate,
+                -largeCoordinate + 64, largeCoordinate - 64
+            ]),
+            widthProfile: new Uint8Array([7, 8]),
+            levelProfile: new Uint16Array([50_000, 49_000])
+        });
+        const lake = createAuthoredLakeFeature({
+            featureId: "lake:出口",
+            polygon: new Float64Array([0, 0, 64, 0, 64, 64, 0, 64]),
+            level: 49_000,
+            profileIndex: 9
+        });
+        const deltas = [
+            createHydrologyFeatureDelta({
+                worldIdentity: "世界:binary",
+                revision: Number.MAX_SAFE_INTEGER,
+                featureId: authoredRiver.featureId,
+                featureKind: "river",
+                operation: "upsert",
+                feature: authoredRiver
+            }),
+            createHydrologyFeatureDelta({
+                worldIdentity: "世界:binary",
+                revision: 3,
+                featureId: lake.featureId,
+                featureKind: "lake",
+                operation: "upsert",
+                feature: lake
+            }),
+            createHydrologyFeatureDelta({
+                worldIdentity: "世界:binary",
+                revision: 4,
+                featureId: "river:removed",
+                featureKind: "river",
+                operation: "delete"
+            })
+        ];
+        for (const delta of deltas) {
+            const first = serializeHydrologyFeatureDelta(delta);
+            expect(first.byteLength).toBe(hydrologyFeatureDeltaSerializedBytes(delta));
+            const restored = deserializeHydrologyFeatureDelta(first);
+            expect(restored).toEqual(delta);
+            expect(new Uint8Array(serializeHydrologyFeatureDelta(restored)))
+                .toEqual(new Uint8Array(first));
+        }
+    });
+
+    test("rejects trailing bytes and non-canonical header or geometry payload", () => {
+        const feature = river();
+        const delta = createHydrologyFeatureDelta({
+            worldIdentity: "world:strict-binary",
+            revision: 1,
+            featureId: feature.featureId,
+            featureKind: "river",
+            operation: "upsert",
+            feature
+        });
+        const encoded = serializeHydrologyFeatureDelta(delta);
+        const trailing = new Uint8Array(encoded.byteLength + 1);
+        trailing.set(new Uint8Array(encoded));
+        expect(() => deserializeHydrologyFeatureDelta(trailing.buffer)).toThrow(/header/);
+
+        const reserved = encoded.slice(0);
+        new DataView(reserved).setUint16(42, 1, true);
+        expect(() => deserializeHydrologyFeatureDelta(reserved)).toThrow(/header/);
+
+        const invalidOcean = encoded.slice(0);
+        new DataView(invalidOcean).setUint8(11, 2);
+        expect(() => deserializeHydrologyFeatureDelta(invalidOcean)).toThrow(/ocean/);
+
+        const lake = createHydrologyFeatureDelta({
+            worldIdentity: "world:strict-binary",
+            revision: 2,
+            featureId: "lake:strict",
+            featureKind: "lake",
+            operation: "upsert",
+            feature: createAuthoredLakeFeature({
+                featureId: "lake:strict",
+                polygon: new Float64Array([0, 0, 64, 0, 64, 64, 0, 64]),
+                level: 10,
+                profileIndex: 0
+            })
+        });
+        const nonCanonicalLake = serializeHydrologyFeatureDelta(lake);
+        const lakeView = new DataView(nonCanonicalLake);
+        const pointsOffset = 48 + lakeView.getUint32(20, true) + lakeView.getUint32(24, true);
+        const firstX = lakeView.getBigInt64(pointsOffset, true);
+        const firstY = lakeView.getBigInt64(pointsOffset + 8, true);
+        const secondX = lakeView.getBigInt64(pointsOffset + 16, true);
+        const secondY = lakeView.getBigInt64(pointsOffset + 24, true);
+        lakeView.setBigInt64(pointsOffset, secondX, true);
+        lakeView.setBigInt64(pointsOffset + 8, secondY, true);
+        lakeView.setBigInt64(pointsOffset + 16, firstX, true);
+        lakeView.setBigInt64(pointsOffset + 24, firstY, true);
+        expect(() => deserializeHydrologyFeatureDelta(nonCanonicalLake))
+            .toThrow(/minimum|counter-clockwise/);
     });
 });
