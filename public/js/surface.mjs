@@ -3846,6 +3846,337 @@ function waterBodyIndexFromField(compilation, index) {
   return bodyIndex;
 }
 
+// src/rendering/SurfaceTexturePool.ts
+import {
+  ByteType,
+  ClampToEdgeWrapping,
+  DataArrayTexture,
+  HalfFloatType,
+  NearestFilter,
+  NoColorSpace,
+  RedFormat,
+  RGBAFormat,
+  RGFormat,
+  UnsignedByteType
+} from "three";
+var SURFACE_STATIC_GPU_BYTES_PER_TEXEL = 18;
+var SURFACE_FOG_GPU_BYTES_PER_TEXEL = 1;
+var SURFACE_TEXTURE_PAGE_GPU_BYTES = COMPILED_SURFACE_TEXEL_COUNT * SURFACE_COMPILE_PROFILE.pageLayers * (SURFACE_STATIC_GPU_BYTES_PER_TEXEL + SURFACE_FOG_GPU_BYTES_PER_TEXEL);
+function positiveSafeInteger(name, value) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+}
+function assertSlotHandle(handle) {
+  if (!handle || typeof handle !== "object" || !Number.isSafeInteger(handle.pageIndex) || handle.pageIndex < 0 || !Number.isInteger(handle.layerIndex) || handle.layerIndex < 0 || handle.layerIndex >= SURFACE_COMPILE_PROFILE.pageLayers || !Number.isSafeInteger(handle.generation) || handle.generation <= 0) {
+    throw new TypeError("surface texture slot handle is invalid");
+  }
+}
+function readSurfaceArrayTextureCapabilities(source) {
+  if (!source || typeof source !== "object" || typeof source.getParameter !== "function" || typeof source.texStorage3D !== "function") {
+    throw new TypeError("surface texture pool requires a WebGL2 capability source");
+  }
+  const maxTextureSize = source.getParameter(source.MAX_TEXTURE_SIZE);
+  const maxArrayTextureLayers = source.getParameter(source.MAX_ARRAY_TEXTURE_LAYERS);
+  if (!Number.isInteger(maxTextureSize) || maxTextureSize < SURFACE_COMPILE_PROFILE.textureLayerSize || !Number.isInteger(maxArrayTextureLayers) || maxArrayTextureLayers < SURFACE_COMPILE_PROFILE.pageLayers) {
+    throw new Error("WebGL2 does not satisfy the frozen surface array-texture profile");
+  }
+  return Object.freeze({
+    maxTextureSize,
+    maxArrayTextureLayers
+  });
+}
+function configureTexture(texture, name, internalFormat) {
+  texture.name = name;
+  texture.internalFormat = internalFormat;
+  texture.colorSpace = NoColorSpace;
+  texture.magFilter = NearestFilter;
+  texture.minFilter = NearestFilter;
+  texture.wrapS = ClampToEdgeWrapping;
+  texture.wrapT = ClampToEdgeWrapping;
+  texture.wrapR = ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.unpackAlignment = 1;
+  return texture;
+}
+function createPageResources(pageIndex) {
+  const width = SURFACE_COMPILE_PROFILE.textureLayerSize;
+  const layers = SURFACE_COMPILE_PROFILE.pageLayers;
+  const texels = COMPILED_SURFACE_TEXEL_COUNT * layers;
+  const elevationData = new Uint16Array(texels * 4);
+  const materialData = new Uint8Array(texels * 4);
+  const flowData = new Int8Array(texels * 2);
+  const waterData = new Uint8Array(texels * 4);
+  const fogData = new Uint8Array(texels);
+  const elevation = configureTexture(
+    new DataArrayTexture(elevationData, width, width, layers),
+    `surface-elevation-page-${pageIndex}`,
+    "RGBA16F"
+  );
+  elevation.format = RGBAFormat;
+  elevation.type = HalfFloatType;
+  const material = configureTexture(
+    new DataArrayTexture(materialData, width, width, layers),
+    `surface-material-page-${pageIndex}`,
+    "RGBA8"
+  );
+  material.format = RGBAFormat;
+  material.type = UnsignedByteType;
+  const flow = configureTexture(
+    new DataArrayTexture(flowData, width, width, layers),
+    `surface-flow-page-${pageIndex}`,
+    "RG8_SNORM"
+  );
+  flow.format = RGFormat;
+  flow.type = ByteType;
+  const water = configureTexture(
+    new DataArrayTexture(waterData, width, width, layers),
+    `surface-water-page-${pageIndex}`,
+    "RGBA8"
+  );
+  water.format = RGBAFormat;
+  water.type = UnsignedByteType;
+  const fog = configureTexture(
+    new DataArrayTexture(fogData, width, width, layers),
+    `surface-fog-page-${pageIndex}`,
+    "R8"
+  );
+  fog.format = RedFormat;
+  fog.type = UnsignedByteType;
+  return {
+    pageIndex,
+    elevation,
+    material,
+    flow,
+    water,
+    fog,
+    elevationData,
+    materialData,
+    flowData,
+    waterData,
+    fogData
+  };
+}
+function markLayer(texture, layerIndex) {
+  texture.addLayerUpdate(layerIndex);
+  texture.needsUpdate = true;
+}
+function markAllLayerResources(resources, layerIndex) {
+  markLayer(resources.elevation, layerIndex);
+  markLayer(resources.material, layerIndex);
+  markLayer(resources.flow, layerIndex);
+  markLayer(resources.water, layerIndex);
+  markLayer(resources.fog, layerIndex);
+}
+function disposePageResources(resources) {
+  resources.elevation.dispose();
+  resources.material.dispose();
+  resources.flow.dispose();
+  resources.water.dispose();
+  resources.fog.dispose();
+}
+var SurfaceTexturePool = class {
+  constructor(capabilitySource, options) {
+    this.pages = [];
+    this.residentSlots = 0;
+    this.disposed = false;
+    readSurfaceArrayTextureCapabilities(capabilitySource);
+    if (!options || typeof options !== "object") {
+      throw new TypeError("surface texture pool options are required");
+    }
+    positiveSafeInteger("surface texture maximum page count", options.maximumPages);
+    this.maximumPages = options.maximumPages;
+    if (!Number.isSafeInteger(this.maximumPages * SURFACE_COMPILE_PROFILE.pageLayers) || !Number.isSafeInteger(this.maximumPages * SURFACE_TEXTURE_PAGE_GPU_BYTES)) {
+      throw new RangeError("surface texture pool capacity exceeds the safe integer range");
+    }
+  }
+  allocate() {
+    this.assertActive();
+    let page = this.pages.find((candidate) => candidate.residentSlots < SURFACE_COMPILE_PROFILE.pageLayers);
+    if (!page) {
+      if (this.pages.length >= this.maximumPages) {
+        throw new Error("surface texture pool exhausted its fixed page budget");
+      }
+      page = {
+        pageIndex: this.pages.length,
+        generation: new Array(SURFACE_COMPILE_PROFILE.pageLayers).fill(1),
+        allocated: new Uint8Array(SURFACE_COMPILE_PROFILE.pageLayers),
+        residentSlots: 0
+      };
+      this.pages.push(page);
+    }
+    const layerIndex = page.allocated.indexOf(0);
+    if (layerIndex < 0) throw new Error("surface texture page free-slot accounting is inconsistent");
+    page.allocated[layerIndex] = 1;
+    page.residentSlots += 1;
+    this.residentSlots += 1;
+    const resources = this.resourcesFor(page);
+    this.clearLayer(resources, layerIndex);
+    markAllLayerResources(resources, layerIndex);
+    return Object.freeze({
+      pageIndex: page.pageIndex,
+      layerIndex,
+      generation: page.generation[layerIndex]
+    });
+  }
+  release(handle) {
+    assertSlotHandle(handle);
+    if (!this.isCurrent(handle)) return false;
+    const page = this.pages[handle.pageIndex];
+    if (page.generation[handle.layerIndex] >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("surface texture slot generation space is exhausted");
+    }
+    page.allocated[handle.layerIndex] = 0;
+    page.generation[handle.layerIndex] += 1;
+    page.residentSlots -= 1;
+    this.residentSlots -= 1;
+    if (page.residentSlots === 0 && page.resources) {
+      disposePageResources(page.resources);
+      page.resources = void 0;
+    }
+    return true;
+  }
+  isCurrent(handle) {
+    assertSlotHandle(handle);
+    if (this.disposed) return false;
+    const page = this.pages[handle.pageIndex];
+    return page !== void 0 && page.allocated[handle.layerIndex] === 1 && page.generation[handle.layerIndex] === handle.generation;
+  }
+  uploadSurface(handle, field2) {
+    assertSlotHandle(handle);
+    if (!this.isCurrent(handle)) return false;
+    assertCompiledSurfaceField(field2);
+    const resources = this.resourcesFor(this.pages[handle.pageIndex]);
+    const texelOffset = handle.layerIndex * COMPILED_SURFACE_TEXEL_COUNT;
+    const size = SURFACE_COMPILE_PROFILE.textureLayerSize;
+    for (let texelX = 0; texelX < size; texelX += 1) {
+      for (let texelY = 0; texelY < size; texelY += 1) {
+        const source = texelX * size + texelY;
+        const destination = texelOffset + texelY * size + texelX;
+        const elevation = destination * 4;
+        const material = destination * 4;
+        const sourceMaterial = source * 4;
+        const packedFlow = destination * 2;
+        const sourceFlow = source * 2;
+        resources.elevationData[elevation] = field2.groundHeight[source];
+        resources.elevationData[elevation + 1] = field2.waterLevel[source];
+        resources.elevationData[elevation + 2] = field2.waterDepth[source];
+        resources.elevationData[elevation + 3] = field2.shorelineDistance[source];
+        resources.materialData[material] = field2.materialWeights[sourceMaterial];
+        resources.materialData[material + 1] = field2.materialWeights[sourceMaterial + 1];
+        resources.materialData[material + 2] = field2.materialWeights[sourceMaterial + 2];
+        resources.materialData[material + 3] = field2.materialWeights[sourceMaterial + 3];
+        resources.flowData[packedFlow] = field2.flow[sourceFlow];
+        resources.flowData[packedFlow + 1] = field2.flow[sourceFlow + 1];
+        resources.waterData[elevation] = field2.waterCoverage[source];
+        resources.waterData[elevation + 1] = field2.waterKind[source];
+        resources.waterData[elevation + 2] = field2.waterProfile[source];
+        resources.waterData[elevation + 3] = 0;
+      }
+    }
+    markLayer(resources.elevation, handle.layerIndex);
+    markLayer(resources.material, handle.layerIndex);
+    markLayer(resources.flow, handle.layerIndex);
+    markLayer(resources.water, handle.layerIndex);
+    return true;
+  }
+  uploadFog(handle, fog) {
+    assertSlotHandle(handle);
+    if (!this.isCurrent(handle)) return false;
+    if (!(fog instanceof Uint8Array) || fog.length !== COMPILED_SURFACE_TEXEL_COUNT) {
+      throw new TypeError("surface fog layer does not match the fixed physical texture layout");
+    }
+    const resources = this.resourcesFor(this.pages[handle.pageIndex]);
+    const texelOffset = handle.layerIndex * COMPILED_SURFACE_TEXEL_COUNT;
+    const size = SURFACE_COMPILE_PROFILE.textureLayerSize;
+    for (let texelX = 0; texelX < size; texelX += 1) {
+      for (let texelY = 0; texelY < size; texelY += 1) {
+        resources.fogData[texelOffset + texelY * size + texelX] = fog[texelX * size + texelY];
+      }
+    }
+    markLayer(resources.fog, handle.layerIndex);
+    return true;
+  }
+  getPageBindings(pageIndex) {
+    this.assertActive();
+    if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+      throw new RangeError("surface texture page index must be a non-negative integer");
+    }
+    const resources = this.pages[pageIndex]?.resources;
+    if (!resources) return void 0;
+    return Object.freeze({
+      pageIndex,
+      elevation: resources.elevation,
+      material: resources.material,
+      flow: resources.flow,
+      water: resources.water,
+      fog: resources.fog
+    });
+  }
+  restoreContext() {
+    this.assertActive();
+    for (const page of this.pages) {
+      if (!page.resources) continue;
+      const textures = [
+        page.resources.elevation,
+        page.resources.material,
+        page.resources.flow,
+        page.resources.water,
+        page.resources.fog
+      ];
+      for (const texture of textures) texture.clearLayerUpdates();
+      for (let layerIndex = 0; layerIndex < page.allocated.length; layerIndex += 1) {
+        if (page.allocated[layerIndex] === 1) {
+          for (const texture of textures) texture.addLayerUpdate(layerIndex);
+        }
+      }
+      for (const texture of textures) texture.needsUpdate = true;
+    }
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const page of this.pages) {
+      if (page.resources) disposePageResources(page.resources);
+      page.resources = void 0;
+      page.allocated.fill(0);
+      page.residentSlots = 0;
+    }
+    this.residentSlots = 0;
+  }
+  get stats() {
+    const allocatedPages = this.pages.reduce(
+      (count, page) => count + (page.resources ? 1 : 0),
+      0
+    );
+    return Object.freeze({
+      maximumPages: this.maximumPages,
+      pageRecords: this.pages.length,
+      allocatedPages,
+      residentSlots: this.residentSlots,
+      maximumSlots: this.maximumPages * SURFACE_COMPILE_PROFILE.pageLayers,
+      allocatedGpuBytes: allocatedPages * SURFACE_TEXTURE_PAGE_GPU_BYTES,
+      stagingBytes: allocatedPages * SURFACE_TEXTURE_PAGE_GPU_BYTES
+    });
+  }
+  resourcesFor(page) {
+    if (!page.resources) page.resources = createPageResources(page.pageIndex);
+    return page.resources;
+  }
+  clearLayer(resources, layerIndex) {
+    const texelOffset = layerIndex * COMPILED_SURFACE_TEXEL_COUNT;
+    resources.elevationData.fill(0, texelOffset * 4, (texelOffset + COMPILED_SURFACE_TEXEL_COUNT) * 4);
+    resources.materialData.fill(0, texelOffset * 4, (texelOffset + COMPILED_SURFACE_TEXEL_COUNT) * 4);
+    resources.flowData.fill(0, texelOffset * 2, (texelOffset + COMPILED_SURFACE_TEXEL_COUNT) * 2);
+    resources.waterData.fill(0, texelOffset * 4, (texelOffset + COMPILED_SURFACE_TEXEL_COUNT) * 4);
+    resources.fogData.fill(0, texelOffset, texelOffset + COMPILED_SURFACE_TEXEL_COUNT);
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("surface texture pool has been disposed");
+  }
+};
+
 // src/world/SemanticCatalogsV2.ts
 var CORE_SUBSTRATE_ENTRIES = Object.freeze(["soil", "sand", "rock"]);
 var CORE_VEGETATION_PROFILE_ENTRIES = Object.freeze([
@@ -9769,6 +10100,9 @@ export {
   SURFACE_CORE_TEXELS,
   SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
   SURFACE_DEPENDENCY_KEY_FORMAT_VERSION,
+  SURFACE_FOG_GPU_BYTES_PER_TEXEL,
+  SURFACE_STATIC_GPU_BYTES_PER_TEXEL,
+  SURFACE_TEXTURE_PAGE_GPU_BYTES,
   SURFACE_WATER_KIND_LAKE,
   SURFACE_WATER_KIND_NONE,
   SURFACE_WATER_KIND_OCEAN,
@@ -9778,6 +10112,7 @@ export {
   StaticSemanticWorldSource,
   SurfaceDeltaConflictError,
   SurfaceDeltaSnapshot,
+  SurfaceTexturePool,
   SurfaceWorkerClient,
   SurfaceWorkerPool,
   TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION,
@@ -9853,6 +10188,7 @@ export {
   macroDrainageNodeId,
   macroDrainageNodeTile,
   macroDrainageTerminalBodyId,
+  readSurfaceArrayTextureCapabilities,
   semanticBiomeWeightIndex,
   semanticCatalogLimits,
   semanticClimateIndex,

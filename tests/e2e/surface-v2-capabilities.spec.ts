@@ -60,9 +60,11 @@ test("supports the frozen v2 WebGL2 array-texture contract", async ({ page }, te
             return texture;
         };
 
-        const halfFloatLayer = new Uint16Array(width * height);
-        halfFloatLayer.fill(0x3c00);
-        const heightTexture = allocate("R16F", gl.R16F, gl.RED, gl.HALF_FLOAT, halfFloatLayer);
+        const halfFloatLayer = new Uint16Array(width * height * 4);
+        for (let index = 0; index < width * height; index += 1) {
+            halfFloatLayer[index * 4] = 0x3c00;
+        }
+        const heightTexture = allocate("RGBA16F", gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, halfFloatLayer);
         const rgbaLayer = new Uint8Array(width * height * 4);
         allocate("RGBA8", gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, rgbaLayer);
         const flowLayer = new Int8Array(width * height * 2);
@@ -140,7 +142,7 @@ test("supports the frozen v2 WebGL2 array-texture contract", async ({ page }, te
     expect(result.maxArrayTextureLayers).toBeGreaterThanOrEqual(128);
     expect(result.maxTextureSize).toBeGreaterThanOrEqual(66);
     expect(result.probes).toEqual([
-        { name: "R16F", allocationError: 0, uploadError: 0 },
+        { name: "RGBA16F", allocationError: 0, uploadError: 0 },
         { name: "RGBA8", allocationError: 0, uploadError: 0 },
         { name: "RG8_SNORM", allocationError: 0, uploadError: 0 },
         { name: "R8", allocationError: 0, uploadError: 0 }

@@ -100,6 +100,22 @@ export { compileSurfaceField } from "./world/compileSurfaceField";
 export type { SurfaceFieldCompilation } from "./world/compileSurfaceField";
 
 export {
+    SURFACE_STATIC_GPU_BYTES_PER_TEXEL,
+    SURFACE_FOG_GPU_BYTES_PER_TEXEL,
+    SURFACE_TEXTURE_PAGE_GPU_BYTES,
+    readSurfaceArrayTextureCapabilities,
+    SurfaceTexturePool
+} from "./rendering/SurfaceTexturePool";
+export type {
+    SurfaceTextureCapabilitySource,
+    SurfaceArrayTextureCapabilities,
+    SurfaceTexturePoolOptions,
+    SurfaceTextureSlotHandle,
+    SurfaceTexturePageBindings,
+    SurfaceTexturePoolStats
+} from "./rendering/SurfaceTexturePool";
+
+export {
     surfaceColumnStagger,
     surfaceStagger,
     surfaceToWorld,

@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette 及完整 `compileSurfaceField` 入口已冻结，save barrier、持久化 store、protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口及 generation-safe paged array-texture 池已冻结，save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -591,6 +591,10 @@ canonical near-grid 顶点先从 field 双线性取样，三角内部再使用�
 - 所有表面场和雾 array texture 上传显式使用 `unpackAlignment = 1`；66 像素宽的 R8 行不能依赖 WebGL 默认四字节对齐。
 - CPU slot handle 保存 `pageIndex + layerIndex + generation`，不得持有可被复用的裸 layer 引用。
 - layer 回收后 generation 增加；迟到的 Worker 或上传任务发现 generation 不匹配时直接丢弃。
+
+已落地的 `SurfaceTexturePool` 要求调用方显式提供 `maximumPages`，构造时检查 WebGL2 `texStorage3D`、至少 66 的 texture size 和至少 128 的 array layers；不满足 profile 直接失败。每页只在第一个 slot 驻留时创建，最后一个 slot 释放后立即 dispose 五张纹理；一页静态与雾 staging/GPU 预算均严格为 `66 × 66 × 128 × 19 = 10593792` bytes，统计按已分配整页而不是按已用 layer 粉饰占用。
+
+profile-v1 的静态物理打包固定为 `RGBA16F(groundHeight, waterLevel, waterDepth, shorelineDistance)`、`RGBA8(materialWeights)`、`RG8_SNORM(flow)` 和 `RGBA8(coverage, kind, profile, 0)`，合计仍为 18 bytes/texel；`waterBodyIndex` 只保留在 CPU palette 查询中。CPU field 的 X-major index 在整层打包时显式转为 WebGL 的 row-major 像素顺序，shader 仍以 `(u, v)` 对应 texture `(x, y)`，不靠交换坐标掩盖转置。fog 单独使用同 slot 的 `R8` 并执行相同映射。所有纹理为 nearest、clamp、无 mipmap、无颜色空间转换且 `unpackAlignment = 1`；上传通过 `DataArrayTexture.addLayerUpdate` 标记完整物理层。slot handle 固定为 `{ pageIndex, layerIndex, generation }`，释放递增 generation，旧 handle 的 surface/fog 上传确定性返回未接受；context restore 清空旧更新集合后只重新标记仍驻留的 layer，并且每张纹理只递增一次上传版本。单测用非对角 texel 覆盖真实水体通道与 X/Y 映射、页预算、空页回收、迟到上传和恢复集合，浏览器能力门使用实际 `RGBA16F/RGBA8/RG8_SNORM/R8` 分配、上传和 GLSL 3 `sampler2DArray` 取样。
 
 WebGL2 shader 不动态索引一组任意页面 sampler。每个纹理页拥有一套共享材质绑定，同页 chunk 共享该材质，draw 只传 `layerIndex`；`pageIndex` 由 CPU 用于选择材质和调度批次。这既符合 GLSL ES sampler 限制，也不会为每个 chunk 复制材质。
 

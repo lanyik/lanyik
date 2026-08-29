@@ -26,9 +26,8 @@ export const SURFACE_COMPILE_PROFILE: Readonly<SurfaceCompileProfile> = Object.f
 export const SURFACE_CORE_TEXELS = SURFACE_COMPILE_PROFILE.renderChunkSize
     * SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
 
-// Logical CPU field layout from the v2 contract. Physical GPU packing is
-// deliberately left to the compiler/profile revision and must not change the
-// meaning or precision of these fields.
+// Logical CPU field layout from the v2 contract. SurfaceTexturePool freezes
+// the profile-v1 physical GPU packing without changing field meaning or precision.
 export const SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL = 18;
 export const SURFACE_FIELD_CPU_BYTES = SURFACE_COMPILE_PROFILE.textureLayerSize
     * SURFACE_COMPILE_PROFILE.textureLayerSize
