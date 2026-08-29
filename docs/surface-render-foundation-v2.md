@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta` 严格 SoA/二进制格式已落地；事务 store、HydrologyFeatureDelta、EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -372,6 +372,10 @@ BaseSemanticChunk
 - 材质/biome 权重；
 - 植被密度与 profile；
 - 与应用有关、但不属于 surface compiler 的可选格子 section。
+
+当前 core `SparseSemanticDelta` 格式版本 1 使用与 BaseSemanticChunk 相同的 X-major tile index，并要求 1～1024 个索引严格递增且唯一；零条目不允许发布，空修改唯一表示为“不存在 delta”。每个条目用 bitmask 独立声明 height、substrate、四项 biome 或 `(vegetationDensity, vegetationProfile)` 覆盖，未声明字段对应的固定 SoA payload 必须全零，biome 覆盖仍须量化和为 255。core v1 不把 climate 或 application section 混入这四个位；以后增加 section 必须升级 delta 格式，而不是复用未知 bit。
+
+delta 绑定完整 world identity、chunk key 和正整数 revision。二进制使用小端 `SSD2`：40 字节固定头保存格式、两个有符号 64 位 chunk 坐标、无符号 64 位 revision、UTF-8 identity 长度、条目数和固定的每条 12 字节 SoA payload 预算，随后保存 identity 与各数组。反序列化重新验证 UTF-8、精确总长度、catalog 范围、排序、mask 和所有规范零值；不接受旧对象式 tile override 或缺字段猜测。
 
 水文编辑按稳定 feature ID 保存完整记录，而不是把一条河的多个区域切片当成多份权威：
 

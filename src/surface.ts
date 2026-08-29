@@ -74,6 +74,27 @@ export type {
 } from "./world/generateBaseSemanticChunk";
 
 export {
+    SPARSE_SEMANTIC_DELTA_FORMAT_VERSION,
+    SPARSE_SEMANTIC_DELTA_HEADER_BYTES,
+    SPARSE_SEMANTIC_DELTA_BYTES_PER_ENTRY,
+    SEMANTIC_DELTA_FIELD_HEIGHT,
+    SEMANTIC_DELTA_FIELD_SUBSTRATE,
+    SEMANTIC_DELTA_FIELD_BIOME,
+    SEMANTIC_DELTA_FIELD_VEGETATION,
+    SEMANTIC_DELTA_ALL_FIELDS,
+    assertSparseSemanticDelta,
+    createSparseSemanticDelta,
+    sparseSemanticDeltaEntryIndex,
+    sparseSemanticDeltaSerializedBytes,
+    serializeSparseSemanticDelta,
+    deserializeSparseSemanticDelta
+} from "./world/SparseSemanticDelta";
+export type {
+    SparseSemanticDelta,
+    SparseSemanticDeltaInput
+} from "./world/SparseSemanticDelta";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
