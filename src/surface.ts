@@ -118,6 +118,25 @@ export type {
     SurfaceGroundLod,
     SurfaceGroundGeometryData
 } from "./rendering/SurfaceGroundGeometry";
+
+export {
+    COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
+    MAX_COMPILED_WATER_COVERAGE_VERTICES,
+    MAX_COMPILED_WATER_COVERAGE_TRIANGLES,
+    assertCompiledWaterGeometry,
+    compileWaterGeometry,
+    compiledWaterGeometryTransferables
+} from "./world/CompiledWaterGeometry";
+export type {
+    CompiledNoWaterGeometry,
+    CompiledFullWaterPatchGeometry,
+    CompiledWaterCoverageGeometry,
+    CompiledWaterGeometry
+} from "./world/CompiledWaterGeometry";
+export {
+    createSurfaceCoverageGeometry,
+    SurfaceWaterGeometryBinding
+} from "./rendering/SurfaceWaterGeometry";
 export type {
     SurfaceTextureCapabilitySource,
     SurfaceArrayTextureCapabilities,

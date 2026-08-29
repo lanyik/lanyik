@@ -11,6 +11,8 @@ export interface SurfaceCompileProfile {
     readonly influenceRadiusTiles: number;
     readonly textureLayerSize: number;
     readonly pageLayers: number;
+    readonly waterGeometryCoverageThreshold: number;
+    readonly waterFullPatchCoverage: number;
 }
 
 export const SURFACE_COMPILE_PROFILE: Readonly<SurfaceCompileProfile> = Object.freeze({
@@ -20,7 +22,9 @@ export const SURFACE_COMPILE_PROFILE: Readonly<SurfaceCompileProfile> = Object.f
     gutterTexels: 1,
     influenceRadiusTiles: 2,
     textureLayerSize: 66,
-    pageLayers: 128
+    pageLayers: 128,
+    waterGeometryCoverageThreshold: 0,
+    waterFullPatchCoverage: 128
 });
 
 export const SURFACE_CORE_TEXELS = SURFACE_COMPILE_PROFILE.renderChunkSize
@@ -66,12 +70,20 @@ export function assertSurfaceCompileProfile(profile: Readonly<SurfaceCompileProf
     if (profile.pageLayers > 128) {
         throw new RangeError("surface texture page exceeds the profile v1 layer budget");
     }
+    if (!Number.isFinite(profile.waterGeometryCoverageThreshold)
+        || profile.waterGeometryCoverageThreshold < 0
+        || profile.waterGeometryCoverageThreshold >= 1
+        || profile.waterFullPatchCoverage !== 128) {
+        throw new RangeError("surface water geometry thresholds do not match profile v1");
+    }
     if (profile.renderChunkSize !== 16
         || profile.samplesPerTileInterval !== 4
         || profile.gutterTexels !== 1
         || profile.influenceRadiusTiles !== 2
         || profile.textureLayerSize !== 66
-        || profile.pageLayers !== 128) {
+        || profile.pageLayers !== 128
+        || profile.waterGeometryCoverageThreshold !== 0
+        || profile.waterFullPatchCoverage !== 128) {
         throw new RangeError("surface compile profile does not match the frozen profile v1");
     }
 }

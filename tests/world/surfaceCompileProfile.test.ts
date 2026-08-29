@@ -22,7 +22,9 @@ describe("SurfaceCompileProfile v1", () => {
             gutterTexels: 1,
             influenceRadiusTiles: 2,
             textureLayerSize: 66,
-            pageLayers: 128
+            pageLayers: 128,
+            waterGeometryCoverageThreshold: 0,
+            waterFullPatchCoverage: 128
         });
         expect(Object.isFrozen(SURFACE_COMPILE_PROFILE)).toBe(true);
         expect(SURFACE_CORE_TEXELS).toBe(64);
