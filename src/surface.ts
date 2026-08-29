@@ -69,6 +69,7 @@ export {
 } from "./world/TransferableEffectiveWindow";
 export type {
     TransferableHydrologyRegionSlice,
+    TransferableWorldDomain,
     TransferableEffectiveWindow,
     BuildTransferableEffectiveWindowOptions
 } from "./world/TransferableEffectiveWindow";

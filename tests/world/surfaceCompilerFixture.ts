@@ -93,6 +93,7 @@ export function createSurfaceCompilerTestWindow(
         worldIdentity: dependencyKey.worldIdentity,
         effectiveRevision: 0,
         seaLevel: options.seaLevel ?? 28_180,
+        domain: Object.freeze({ topology: "infinite" as const }),
         renderKey: dependencyKey.renderKey,
         originTileX,
         originTileY,

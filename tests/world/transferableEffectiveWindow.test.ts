@@ -223,11 +223,16 @@ describe("TransferableEffectiveWindow", () => {
         expect(EFFECTIVE_WINDOW_TILE_SIZE).toBe(20);
         expect(window.originTileX).toBe(-2);
         expect(window.originTileY).toBe(-2);
+        expect(window.domain).toEqual({ topology: "infinite" });
         expect(window.valid.every(value => value === 1)).toBe(true);
         expect(window.macroHeight[2 * EFFECTIVE_WINDOW_TILE_SIZE + 2]).toBe(50_000);
         expect(window.dependencyKey.semantic).toHaveLength(4);
         expect(window.dependencyKey.hydrologyRegions).toHaveLength(4);
         expect(window.authoredHydrology.map(delta => delta.featureId)).toEqual(["river:window"]);
+        expect(() => assertTransferableEffectiveWindow({
+            ...window,
+            domain: { topology: "finite", width: 128, height: 128 }
+        })).toThrow(/topology/);
         expect(semanticSource.activeReferences).toBe(0);
         expect(hydrologySource.activeReferences).toBe(0);
 
@@ -262,6 +267,7 @@ describe("TransferableEffectiveWindow", () => {
         expect(window.dependencyKey.semantic.map(value => value.key)).toEqual([{ chunkX: 0, chunkY: 0 }]);
         expect(window.dependencyKey.hydrologyRegions.map(value => value.key))
             .toEqual([{ regionX: 0, regionY: 0 }]);
+        expect(window.domain).toEqual({ topology: "toroidal", width: 32, height: 32 });
         expect(window.valid.every(value => value === 1)).toBe(true);
         expect(semanticSource.activeReferences).toBe(0);
         expect(hydrologySource.activeReferences).toBe(0);

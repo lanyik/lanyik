@@ -48,11 +48,17 @@ export interface TransferableHydrologyRegionSlice {
     readonly bodies: HydrologyRegion["bodies"];
 }
 
+export type TransferableWorldDomain =
+    | Readonly<{ topology: "infinite" }>
+    | Readonly<{ topology: "finite"; width: number; height: number }>
+    | Readonly<{ topology: "toroidal"; width: number; height: number }>;
+
 export interface TransferableEffectiveWindow {
     readonly formatVersion: typeof TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION;
     readonly worldIdentity: string;
     readonly effectiveRevision: number;
     readonly seaLevel: number;
+    readonly domain: TransferableWorldDomain;
     readonly renderKey: RenderChunkKey;
     readonly originTileX: number;
     readonly originTileY: number;
@@ -78,6 +84,34 @@ export interface BuildTransferableEffectiveWindowOptions {
 interface CanonicalTile {
     readonly x: number;
     readonly y: number;
+}
+
+function transferableWorldDomain(view: EffectiveWorldView): TransferableWorldDomain {
+    const descriptor = view.descriptor;
+    return descriptor.sourceKind === "procedural-infinite"
+        ? Object.freeze({ topology: "infinite" as const })
+        : Object.freeze({
+            topology: descriptor.topology,
+            width: descriptor.width,
+            height: descriptor.height
+        });
+}
+
+function assertTransferableWorldDomain(domain: Readonly<TransferableWorldDomain>): void {
+    if (!domain || typeof domain !== "object") {
+        throw new TypeError("transferable effective window domain is required");
+    }
+    if (domain.topology === "infinite") {
+        if ("width" in domain || "height" in domain) {
+            throw new TypeError("infinite transferable domain cannot carry finite bounds");
+        }
+        return;
+    }
+    if ((domain.topology !== "finite" && domain.topology !== "toroidal")
+        || !Number.isSafeInteger(domain.width) || domain.width <= 0
+        || !Number.isSafeInteger(domain.height) || domain.height <= 0) {
+        throw new TypeError("bounded transferable domain is invalid");
+    }
 }
 
 function coordinateIdentity(x: number, y: number): string {
@@ -266,6 +300,7 @@ export function assertTransferableEffectiveWindow(window: Readonly<TransferableE
         || !Number.isInteger(window.seaLevel) || window.seaLevel < 0 || window.seaLevel > 0xffff) {
         throw new TypeError("transferable effective window identity, key or revision is invalid");
     }
+    assertTransferableWorldDomain(window.domain);
     assertSurfaceDependencyKey(window.dependencyKey);
     const expectedOrigin = chunkOrigin(
         window.renderKey.chunkX,
@@ -308,6 +343,9 @@ export function assertTransferableEffectiveWindow(window: Readonly<TransferableE
     let previousRegion: TransferableHydrologyRegionSlice | undefined;
     for (let regionIndex = 0; regionIndex < window.hydrologyRegions.length; regionIndex += 1) {
         const region = window.hydrologyRegions[regionIndex];
+        if (region.topology !== window.domain.topology) {
+            throw new TypeError("effective window hydrology topology does not match its world domain");
+        }
         if (previousRegion && (previousRegion.key.regionX > region.key.regionX
             || previousRegion.key.regionX === region.key.regionX
                 && previousRegion.key.regionY >= region.key.regionY)) {
@@ -492,6 +530,7 @@ export async function buildTransferableEffectiveWindow(
             worldIdentity: options.view.worldIdentity,
             effectiveRevision: options.view.effectiveRevision,
             seaLevel: options.view.descriptor.seaLevel,
+            domain: transferableWorldDomain(options.view),
             renderKey: dependencyKey.renderKey,
             originTileX,
             originTileY,
