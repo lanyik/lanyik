@@ -11629,7 +11629,7 @@ void main() {
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-  var WORLD_WORKER_PROTOCOL_VERSION = 2;
+  var WORLD_WORKER_PROTOCOL_VERSION = 3;
   function assertChunkSize(value) {
     if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -12065,6 +12065,564 @@ void main() {
     return [...buffers];
   }
 
+  // src/world/semantic/WorldSemanticCatalog.ts
+  var SubstrateClass = /* @__PURE__ */ ((SubstrateClass3) => {
+    SubstrateClass3[SubstrateClass3["Sediment"] = 0] = "Sediment";
+    SubstrateClass3[SubstrateClass3["Soil"] = 1] = "Soil";
+    SubstrateClass3[SubstrateClass3["Sand"] = 2] = "Sand";
+    SubstrateClass3[SubstrateClass3["Rock"] = 3] = "Rock";
+    SubstrateClass3[SubstrateClass3["Permafrost"] = 4] = "Permafrost";
+    return SubstrateClass3;
+  })(SubstrateClass || {});
+  var WORLD_BIOME_BASIS = Object.freeze([
+    "temperate",
+    "dry",
+    "cold",
+    "alpine"
+  ]);
+  var WORLD_SUBSTRATE_CATALOG = Object.freeze([
+    Object.freeze({ id: "sediment", class: 0 /* Sediment */ }),
+    Object.freeze({ id: "soil", class: 1 /* Soil */ }),
+    Object.freeze({ id: "sand", class: 2 /* Sand */ }),
+    Object.freeze({ id: "rock", class: 3 /* Rock */ }),
+    Object.freeze({ id: "permafrost", class: 4 /* Permafrost */ })
+  ]);
+  var WORLD_VEGETATION_PROFILE_CATALOG = Object.freeze([
+    Object.freeze({ id: "none", species: Object.freeze([]) }),
+    Object.freeze({
+      id: "warm-palm-mix",
+      species: Object.freeze([
+        Object.freeze({ species: "palm", weight: 204 }),
+        Object.freeze({ species: "oak", weight: 51 })
+      ])
+    }),
+    Object.freeze({
+      id: "cold-pinia-mix",
+      species: Object.freeze([
+        Object.freeze({ species: "pinia", weight: 204 }),
+        Object.freeze({ species: "oak", weight: 51 })
+      ])
+    }),
+    Object.freeze({
+      id: "temperate-oak-mix",
+      species: Object.freeze([
+        Object.freeze({ species: "oak", weight: 178 }),
+        Object.freeze({ species: "pinia", weight: 51 }),
+        Object.freeze({ species: "palm", weight: 26 })
+      ])
+    })
+  ]);
+  var WORLD_SUBSTRATE_CATALOG_IDENTITY = Object.freeze({
+    id: "three-hex-map/substrate-v1",
+    contentHash: "471edc137e2d634b36a2fa7452a9b72ef204258648b681b4357e72abad4d1561"
+  });
+  var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
+    id: "three-hex-map/vegetation-v1",
+    contentHash: "aa515fb7c895c1bd600b464119a9599e4963c466fcb35281f6824ce8911283ef"
+  });
+
+  // src/world/semantic/WorldSemanticFormat.ts
+  var WORLD_SEMANTIC_CHUNK_SIZE = 32;
+  var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
+  var WORLD_SEMANTIC_CHUNK_FORMAT_VERSION = 2;
+  var WORLD_SURFACE_V2_GENERATOR_VERSION = 6;
+  var HYDROLOGY_REGION_FORMAT_VERSION = 1;
+  var BASE_SEMANTIC_CHUNK_REVISION = 0;
+  var FULL_SEMANTIC_CHUNK_BOUNDS = Object.freeze({
+    minX: 0,
+    minY: 0,
+    maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
+    maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
+  });
+  function assertSafeInteger(name, value) {
+    if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+  }
+  function assertSemanticChunkKey(value) {
+    if (!value || typeof value !== "object") throw new TypeError("semantic chunk key must be an object");
+    if (Object.getOwnPropertyNames(value).some((name) => name !== "chunkX" && name !== "chunkY")) {
+      throw new TypeError("semantic chunk key contains unknown fields");
+    }
+    assertSafeInteger("semantic chunkX", value.chunkX);
+    assertSafeInteger("semantic chunkY", value.chunkY);
+    const originX = value.chunkX * WORLD_SEMANTIC_CHUNK_SIZE;
+    const originY = value.chunkY * WORLD_SEMANTIC_CHUNK_SIZE;
+    if (originX > Number.MAX_SAFE_INTEGER || originX + WORLD_SEMANTIC_CHUNK_SIZE - 1 < Number.MIN_SAFE_INTEGER || originY > Number.MAX_SAFE_INTEGER || originY + WORLD_SEMANTIC_CHUNK_SIZE - 1 < Number.MIN_SAFE_INTEGER) {
+      throw new RangeError("semantic chunk key exceeds the safe integer tile range");
+    }
+  }
+  function assertLocalTileBounds(value) {
+    if (!value || typeof value !== "object") throw new TypeError("local tile bounds must be an object");
+    const allowed = /* @__PURE__ */ new Set(["minX", "minY", "maxXExclusive", "maxYExclusive"]);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowed.has(name))) {
+      throw new TypeError("local tile bounds contain unknown fields");
+    }
+    for (const [name, coordinate] of [
+      ["minX", value.minX],
+      ["minY", value.minY],
+      ["maxXExclusive", value.maxXExclusive],
+      ["maxYExclusive", value.maxYExclusive]
+    ]) {
+      if (!Number.isInteger(coordinate) || coordinate < 0 || coordinate > WORLD_SEMANTIC_CHUNK_SIZE) {
+        throw new RangeError(`local tile bounds ${name} must be an integer between 0 and ${WORLD_SEMANTIC_CHUNK_SIZE}`);
+      }
+    }
+    if (value.minX >= value.maxXExclusive || value.minY >= value.maxYExclusive) {
+      throw new RangeError("local tile bounds must contain at least one tile");
+    }
+  }
+  function semanticChunkCoordinate(tileCoordinate) {
+    assertSafeInteger("semantic tile coordinate", tileCoordinate);
+    return Math.floor(tileCoordinate / WORLD_SEMANTIC_CHUNK_SIZE);
+  }
+  function semanticChunkLocalIndex(localX, localY) {
+    if (!Number.isInteger(localX) || localX < 0 || localX >= WORLD_SEMANTIC_CHUNK_SIZE || !Number.isInteger(localY) || localY < 0 || localY >= WORLD_SEMANTIC_CHUNK_SIZE) {
+      throw new RangeError(`semantic local coordinates must be integers between 0 and ${WORLD_SEMANTIC_CHUNK_SIZE - 1}`);
+    }
+    return localX * WORLD_SEMANTIC_CHUNK_SIZE + localY;
+  }
+  function locateSemanticTile(tileX, tileY) {
+    assertSafeInteger("semantic tileX", tileX);
+    assertSafeInteger("semantic tileY", tileY);
+    const chunkX = semanticChunkCoordinate(tileX);
+    const chunkY = semanticChunkCoordinate(tileY);
+    const localX = tileX - chunkX * WORLD_SEMANTIC_CHUNK_SIZE;
+    const localY = tileY - chunkY * WORLD_SEMANTIC_CHUNK_SIZE;
+    return {
+      key: { chunkX, chunkY },
+      localX,
+      localY,
+      index: semanticChunkLocalIndex(localX, localY)
+    };
+  }
+  function semanticChunkOrigin(key) {
+    assertSemanticChunkKey(key);
+    return {
+      x: key.chunkX * WORLD_SEMANTIC_CHUNK_SIZE,
+      y: key.chunkY * WORLD_SEMANTIC_CHUNK_SIZE
+    };
+  }
+  function localBoundsContain(bounds, localX, localY) {
+    return localX >= bounds.minX && localX < bounds.maxXExclusive && localY >= bounds.minY && localY < bounds.maxYExclusive;
+  }
+  function positiveIntegerModulo(value, modulus) {
+    if (!Number.isSafeInteger(value)) throw new RangeError("modulo value must be a safe integer");
+    if (!Number.isSafeInteger(modulus) || modulus <= 0) {
+      throw new RangeError("modulo modulus must be a positive safe integer");
+    }
+    return value - Math.floor(value / modulus) * modulus;
+  }
+
+  // src/world/semantic/BaseSemanticChunk.ts
+  var BIOME_CHANNELS = 4;
+  var CLIMATE_CHANNELS = 2;
+  var SERIALIZED_MAGIC = 843273026;
+  var SERIALIZED_HEADER_BYTES = 40;
+  var SUBSTRATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+  var MACRO_HEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * Uint16Array.BYTES_PER_ELEMENT;
+  var BIOME_WEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * BIOME_CHANNELS;
+  var CLIMATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNELS;
+  var VEGETATION_DENSITY_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+  var VEGETATION_PROFILE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+  var BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = SUBSTRATE_BYTES + MACRO_HEIGHT_BYTES + BIOME_WEIGHT_BYTES + CLIMATE_BYTES + VEGETATION_DENSITY_BYTES + VEGETATION_PROFILE_BYTES;
+  var BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = SERIALIZED_HEADER_BYTES + BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
+  function assertArray(name, value, type, length) {
+    if (!(value instanceof type) || value.length !== length) {
+      throw new TypeError(`${name} must be a ${type.name} of length ${length}`);
+    }
+  }
+  function assertRevision(value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError("semantic chunk revision must be a non-negative safe integer");
+    }
+  }
+  function assertInvalidTileIsZero(chunk, index) {
+    const biomeOffset = index * BIOME_CHANNELS;
+    const climateOffset = index * CLIMATE_CHANNELS;
+    if (chunk.substrateClass[index] !== 0 || chunk.macroHeight[index] !== 0 || chunk.biomeWeights[biomeOffset] !== 0 || chunk.biomeWeights[biomeOffset + 1] !== 0 || chunk.biomeWeights[biomeOffset + 2] !== 0 || chunk.biomeWeights[biomeOffset + 3] !== 0 || chunk.climate[climateOffset] !== 0 || chunk.climate[climateOffset + 1] !== 0 || chunk.vegetationDensity[index] !== 0 || chunk.vegetationProfile[index] !== 0) {
+      throw new TypeError("semantic chunk data outside validBounds must be zero-filled");
+    }
+  }
+  function assertBaseSemanticChunk(value) {
+    if (!value || typeof value !== "object") throw new TypeError("base semantic chunk must be an object");
+    const chunk = value;
+    const allowedFields = /* @__PURE__ */ new Set([
+      "key",
+      "revision",
+      "validBounds",
+      "substrateClass",
+      "macroHeight",
+      "biomeWeights",
+      "climate",
+      "vegetationDensity",
+      "vegetationProfile"
+    ]);
+    if (Object.getOwnPropertyNames(chunk).some((name) => !allowedFields.has(name))) {
+      throw new TypeError("base semantic chunk contains fields outside the v2 authority format");
+    }
+    assertSemanticChunkKey(chunk.key);
+    assertRevision(chunk.revision);
+    assertLocalTileBounds(chunk.validBounds);
+    assertArray("substrateClass", chunk.substrateClass, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    assertArray("macroHeight", chunk.macroHeight, Uint16Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    assertArray("biomeWeights", chunk.biomeWeights, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT * BIOME_CHANNELS);
+    assertArray("climate", chunk.climate, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNELS);
+    assertArray("vegetationDensity", chunk.vegetationDensity, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    assertArray("vegetationProfile", chunk.vegetationProfile, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    for (let localX = 0; localX < WORLD_SEMANTIC_CHUNK_SIZE; localX += 1) {
+      for (let localY = 0; localY < WORLD_SEMANTIC_CHUNK_SIZE; localY += 1) {
+        const index = semanticChunkLocalIndex(localX, localY);
+        if (!localBoundsContain(chunk.validBounds, localX, localY)) {
+          assertInvalidTileIsZero(chunk, index);
+          continue;
+        }
+        if (chunk.substrateClass[index] >= WORLD_SUBSTRATE_CATALOG.length) {
+          throw new TypeError("semantic chunk contains an unknown substrate class");
+        }
+        if (chunk.vegetationProfile[index] >= WORLD_VEGETATION_PROFILE_CATALOG.length) {
+          throw new TypeError("semantic chunk contains an unknown vegetation profile");
+        }
+        const biomeOffset = index * BIOME_CHANNELS;
+        const weightSum = chunk.biomeWeights[biomeOffset] + chunk.biomeWeights[biomeOffset + 1] + chunk.biomeWeights[biomeOffset + 2] + chunk.biomeWeights[biomeOffset + 3];
+        if (weightSum !== 255) {
+          throw new TypeError("semantic chunk biome weights must sum to 255 for every valid tile");
+        }
+      }
+    }
+  }
+  function baseSemanticChunkTransferables(chunk) {
+    assertBaseSemanticChunk(chunk);
+    const buffers = /* @__PURE__ */ new Set();
+    for (const array of [
+      chunk.substrateClass,
+      chunk.macroHeight,
+      chunk.biomeWeights,
+      chunk.climate,
+      chunk.vegetationDensity,
+      chunk.vegetationProfile
+    ]) {
+      if (!(array.buffer instanceof ArrayBuffer)) {
+        throw new TypeError("base semantic chunk arrays must use transferable ArrayBuffer storage");
+      }
+      buffers.add(array.buffer);
+    }
+    return [...buffers];
+  }
+  var BaseSemanticChunkView = class {
+    constructor(chunk) {
+      this.chunk = chunk;
+      assertBaseSemanticChunk(chunk);
+      this.origin = semanticChunkOrigin(chunk.key);
+    }
+    getTile(localX, localY) {
+      const index = semanticChunkLocalIndex(localX, localY);
+      if (!localBoundsContain(this.chunk.validBounds, localX, localY)) {
+        throw new RangeError("semantic tile lies outside the chunk validBounds");
+      }
+      const biomeOffset = index * BIOME_CHANNELS;
+      const climateOffset = index * CLIMATE_CHANNELS;
+      return Object.freeze({
+        x: this.origin.x + localX,
+        y: this.origin.y + localY,
+        substrateClass: this.chunk.substrateClass[index],
+        macroHeight: this.chunk.macroHeight[index] / 65535,
+        biomeWeights: Object.freeze([
+          this.chunk.biomeWeights[biomeOffset] / 255,
+          this.chunk.biomeWeights[biomeOffset + 1] / 255,
+          this.chunk.biomeWeights[biomeOffset + 2] / 255,
+          this.chunk.biomeWeights[biomeOffset + 3] / 255
+        ]),
+        temperature: this.chunk.climate[climateOffset] / 255,
+        moisture: this.chunk.climate[climateOffset + 1] / 255,
+        vegetationDensity: this.chunk.vegetationDensity[index] / 255,
+        vegetationProfile: this.chunk.vegetationProfile[index]
+      });
+    }
+  };
+  function serializeBaseSemanticChunk(chunk) {
+    assertBaseSemanticChunk(chunk);
+    const buffer = new ArrayBuffer(BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES);
+    const view = new DataView(buffer);
+    view.setUint32(0, SERIALIZED_MAGIC, true);
+    view.setUint16(4, WORLD_SEMANTIC_CHUNK_FORMAT_VERSION, true);
+    view.setUint16(6, SERIALIZED_HEADER_BYTES, true);
+    view.setFloat64(8, chunk.key.chunkX, true);
+    view.setFloat64(16, chunk.key.chunkY, true);
+    view.setFloat64(24, chunk.revision, true);
+    view.setUint8(32, chunk.validBounds.minX);
+    view.setUint8(33, chunk.validBounds.minY);
+    view.setUint8(34, chunk.validBounds.maxXExclusive);
+    view.setUint8(35, chunk.validBounds.maxYExclusive);
+    view.setUint32(36, BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES, true);
+    let offset = SERIALIZED_HEADER_BYTES;
+    new Uint8Array(buffer, offset, SUBSTRATE_BYTES).set(chunk.substrateClass);
+    offset += SUBSTRATE_BYTES;
+    for (let index = 0; index < chunk.macroHeight.length; index += 1) {
+      view.setUint16(offset + index * Uint16Array.BYTES_PER_ELEMENT, chunk.macroHeight[index], true);
+    }
+    offset += MACRO_HEIGHT_BYTES;
+    new Uint8Array(buffer, offset, BIOME_WEIGHT_BYTES).set(chunk.biomeWeights);
+    offset += BIOME_WEIGHT_BYTES;
+    new Uint8Array(buffer, offset, CLIMATE_BYTES).set(chunk.climate);
+    offset += CLIMATE_BYTES;
+    new Uint8Array(buffer, offset, VEGETATION_DENSITY_BYTES).set(chunk.vegetationDensity);
+    offset += VEGETATION_DENSITY_BYTES;
+    new Uint8Array(buffer, offset, VEGETATION_PROFILE_BYTES).set(chunk.vegetationProfile);
+    return buffer;
+  }
+  function deserializeBaseSemanticChunk(buffer) {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES) {
+      throw new TypeError(`serialized base semantic chunk must contain ${BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES} bytes`);
+    }
+    const view = new DataView(buffer);
+    if (view.getUint32(0, true) !== SERIALIZED_MAGIC || view.getUint16(4, true) !== WORLD_SEMANTIC_CHUNK_FORMAT_VERSION || view.getUint16(6, true) !== SERIALIZED_HEADER_BYTES || view.getUint32(36, true) !== BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES) {
+      throw new TypeError("serialized base semantic chunk header is invalid or unsupported");
+    }
+    const key = {
+      chunkX: view.getFloat64(8, true),
+      chunkY: view.getFloat64(16, true)
+    };
+    const revision = view.getFloat64(24, true);
+    const validBounds = {
+      minX: view.getUint8(32),
+      minY: view.getUint8(33),
+      maxXExclusive: view.getUint8(34),
+      maxYExclusive: view.getUint8(35)
+    };
+    let offset = SERIALIZED_HEADER_BYTES;
+    const substrateClass = new Uint8Array(SUBSTRATE_BYTES);
+    substrateClass.set(new Uint8Array(buffer, offset, SUBSTRATE_BYTES));
+    offset += SUBSTRATE_BYTES;
+    const macroHeight = new Uint16Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    for (let index = 0; index < macroHeight.length; index += 1) {
+      macroHeight[index] = view.getUint16(offset + index * Uint16Array.BYTES_PER_ELEMENT, true);
+    }
+    offset += MACRO_HEIGHT_BYTES;
+    const biomeWeights = new Uint8Array(BIOME_WEIGHT_BYTES);
+    biomeWeights.set(new Uint8Array(buffer, offset, BIOME_WEIGHT_BYTES));
+    offset += BIOME_WEIGHT_BYTES;
+    const climate = new Uint8Array(CLIMATE_BYTES);
+    climate.set(new Uint8Array(buffer, offset, CLIMATE_BYTES));
+    offset += CLIMATE_BYTES;
+    const vegetationDensity = new Uint8Array(VEGETATION_DENSITY_BYTES);
+    vegetationDensity.set(new Uint8Array(buffer, offset, VEGETATION_DENSITY_BYTES));
+    offset += VEGETATION_DENSITY_BYTES;
+    const vegetationProfile = new Uint8Array(VEGETATION_PROFILE_BYTES);
+    vegetationProfile.set(new Uint8Array(buffer, offset, VEGETATION_PROFILE_BYTES));
+    const chunk = Object.freeze({
+      key: Object.freeze(key),
+      revision,
+      validBounds: Object.freeze(validBounds),
+      substrateClass,
+      macroHeight,
+      biomeWeights,
+      climate,
+      vegetationDensity,
+      vegetationProfile
+    });
+    assertBaseSemanticChunk(chunk);
+    return chunk;
+  }
+
+  // src/world/semantic/WorldDescriptorV2.ts
+  var WORLD_DESCRIPTOR_V2_FORMAT_VERSION = 2;
+  function assertSeed(value) {
+    if (typeof value !== "string" && typeof value !== "number") {
+      throw new TypeError("v2 procedural world seed must be a string or number");
+    }
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new RangeError("v2 numeric world seed must be finite");
+    }
+  }
+  function assertDimension3(name, value) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`v2 world ${name} must be a positive safe integer`);
+    }
+  }
+  function assertToroidalDimensions(width, height) {
+    assertDimension3("width", width);
+    assertDimension3("height", height);
+    if (width < WORLD_SEMANTIC_CHUNK_SIZE || height < WORLD_SEMANTIC_CHUNK_SIZE || positiveIntegerModulo(width, WORLD_SEMANTIC_CHUNK_SIZE) !== 0 || positiveIntegerModulo(height, WORLD_SEMANTIC_CHUNK_SIZE) !== 0) {
+      throw new RangeError(
+        `v2 toroidal world dimensions must be multiples of ${WORLD_SEMANTIC_CHUNK_SIZE} and at least ${WORLD_SEMANTIC_CHUNK_SIZE}`
+      );
+    }
+  }
+  function baseDescriptor() {
+    return {
+      descriptorVersion: WORLD_DESCRIPTOR_V2_FORMAT_VERSION,
+      semanticChunkFormatVersion: WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+      hydrologyRegionFormatVersion: HYDROLOGY_REGION_FORMAT_VERSION,
+      biomeBasis: WORLD_BIOME_BASIS,
+      substrateCatalog: WORLD_SUBSTRATE_CATALOG_IDENTITY,
+      vegetationCatalog: WORLD_VEGETATION_CATALOG_IDENTITY
+    };
+  }
+  function createWorldDescriptorV2(options) {
+    if (!options || typeof options !== "object") throw new TypeError("v2 world descriptor options are required");
+    const base = baseDescriptor();
+    if (options.sourceKind === "static") {
+      if (typeof options.sourceContentHash !== "string" || !/^[a-f0-9]{64}$/.test(options.sourceContentHash)) {
+        throw new TypeError("v2 static world sourceContentHash must be a lowercase SHA-256 hex string");
+      }
+      assertDimension3("width", options.topology.width);
+      assertDimension3("height", options.topology.height);
+      if (options.topology.kind === "toroidal") {
+        assertToroidalDimensions(options.topology.width, options.topology.height);
+      } else if (options.topology.kind !== "bounded") {
+        throw new TypeError("v2 static world topology is invalid");
+      }
+      return Object.freeze({
+        ...base,
+        sourceKind: "static",
+        sourceContentHash: options.sourceContentHash,
+        topology: options.topology.kind,
+        width: options.topology.width,
+        height: options.topology.height
+      });
+    }
+    assertSeed(options.seed);
+    const topology = options.topology ?? { kind: "infinite" };
+    if (topology.kind === "infinite") {
+      return Object.freeze({
+        ...base,
+        sourceKind: "procedural-infinite",
+        seed: String(options.seed),
+        generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+        topology: "infinite"
+      });
+    }
+    if (topology.kind !== "toroidal") throw new TypeError("v2 procedural world topology is invalid");
+    assertToroidalDimensions(topology.width, topology.height);
+    return Object.freeze({
+      ...base,
+      sourceKind: "procedural-toroidal",
+      seed: String(options.seed),
+      generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+      topology: "toroidal",
+      width: topology.width,
+      height: topology.height
+    });
+  }
+  function catalogIdentityMatches(value, expected) {
+    return Boolean(value && typeof value === "object" && Object.getOwnPropertyNames(value).sort().join(",") === "contentHash,id" && value.id === expected.id && value.contentHash === expected.contentHash);
+  }
+  function assertWorldDescriptorV2(value) {
+    if (!value || typeof value !== "object") throw new TypeError("v2 world descriptor must be an object");
+    const descriptor = value;
+    if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_V2_FORMAT_VERSION) {
+      throw new TypeError(`unsupported v2 world descriptor format ${String(descriptor.descriptorVersion)}`);
+    }
+    if (descriptor.semanticChunkFormatVersion !== WORLD_SEMANTIC_CHUNK_FORMAT_VERSION || descriptor.hydrologyRegionFormatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
+      throw new TypeError("v2 world descriptor contains unsupported semantic or hydrology formats");
+    }
+    if (!Array.isArray(descriptor.biomeBasis) || descriptor.biomeBasis.length !== WORLD_BIOME_BASIS.length || descriptor.biomeBasis.some((value2, index) => value2 !== WORLD_BIOME_BASIS[index])) {
+      throw new TypeError("v2 world descriptor biome basis does not match this build");
+    }
+    if (!catalogIdentityMatches(descriptor.substrateCatalog, WORLD_SUBSTRATE_CATALOG_IDENTITY) || !catalogIdentityMatches(descriptor.vegetationCatalog, WORLD_VEGETATION_CATALOG_IDENTITY)) {
+      throw new TypeError("v2 world descriptor semantic catalog identity does not match this build");
+    }
+    const commonFields = [
+      "descriptorVersion",
+      "sourceKind",
+      "semanticChunkFormatVersion",
+      "hydrologyRegionFormatVersion",
+      "biomeBasis",
+      "substrateCatalog",
+      "vegetationCatalog",
+      "topology"
+    ];
+    const assertFields = (variantFields) => {
+      const allowed = /* @__PURE__ */ new Set([...commonFields, ...variantFields]);
+      if (Object.getOwnPropertyNames(descriptor).some((name) => !allowed.has(name))) {
+        throw new TypeError("v2 world descriptor contains unknown or deprecated fields");
+      }
+    };
+    if (descriptor.sourceKind === "procedural-infinite") {
+      assertFields(["seed", "generatorVersion"]);
+      assertSeed(descriptor.seed);
+      if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION || descriptor.topology !== "infinite" || "width" in descriptor || "height" in descriptor) {
+        throw new TypeError("v2 infinite world descriptor is invalid");
+      }
+      return;
+    }
+    if (descriptor.sourceKind === "procedural-toroidal") {
+      assertFields(["seed", "generatorVersion", "width", "height"]);
+      assertSeed(descriptor.seed);
+      if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION || descriptor.topology !== "toroidal") {
+        throw new TypeError("v2 toroidal world descriptor is invalid");
+      }
+      assertToroidalDimensions(descriptor.width, descriptor.height);
+      return;
+    }
+    if (descriptor.sourceKind === "static") {
+      assertFields(["sourceContentHash", "width", "height"]);
+      if (typeof descriptor.sourceContentHash !== "string" || !/^[a-f0-9]{64}$/.test(descriptor.sourceContentHash) || descriptor.topology !== "bounded" && descriptor.topology !== "toroidal") {
+        throw new TypeError("v2 static world descriptor is invalid");
+      }
+      if (descriptor.topology === "toroidal") {
+        assertToroidalDimensions(descriptor.width, descriptor.height);
+      } else {
+        assertDimension3("width", descriptor.width);
+        assertDimension3("height", descriptor.height);
+      }
+      return;
+    }
+    throw new TypeError("v2 world descriptor sourceKind is invalid");
+  }
+  function serializeWorldDescriptorV2(descriptor) {
+    assertWorldDescriptorV2(descriptor);
+    const common = [
+      descriptor.descriptorVersion,
+      descriptor.sourceKind,
+      descriptor.semanticChunkFormatVersion,
+      descriptor.hydrologyRegionFormatVersion,
+      [...descriptor.biomeBasis],
+      [descriptor.substrateCatalog.id, descriptor.substrateCatalog.contentHash],
+      [descriptor.vegetationCatalog.id, descriptor.vegetationCatalog.contentHash],
+      descriptor.topology
+    ];
+    if (descriptor.sourceKind === "procedural-infinite") {
+      return JSON.stringify([...common, descriptor.seed, descriptor.generatorVersion, null, null]);
+    }
+    if (descriptor.sourceKind === "procedural-toroidal") {
+      return JSON.stringify([
+        ...common,
+        descriptor.seed,
+        descriptor.generatorVersion,
+        descriptor.width,
+        descriptor.height
+      ]);
+    }
+    return JSON.stringify([
+      ...common,
+      descriptor.sourceContentHash,
+      null,
+      descriptor.width,
+      descriptor.height
+    ]);
+  }
+  function worldDescriptorsV2Equal(first, second) {
+    return serializeWorldDescriptorV2(first) === serializeWorldDescriptorV2(second);
+  }
+  function canonicalizeSemanticChunkKey(descriptor, key) {
+    assertWorldDescriptorV2(descriptor);
+    if (!Number.isSafeInteger(key?.chunkX) || !Number.isSafeInteger(key?.chunkY)) {
+      throw new RangeError("semantic chunk key must use safe integer coordinates");
+    }
+    if (descriptor.topology !== "toroidal") {
+      assertSemanticChunkKey(key);
+      return { chunkX: key.chunkX, chunkY: key.chunkY };
+    }
+    const chunksX = descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
+    const chunksY = descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
+    const canonical = {
+      chunkX: positiveIntegerModulo(key.chunkX, chunksX),
+      chunkY: positiveIntegerModulo(key.chunkY, chunksY)
+    };
+    assertSemanticChunkKey(canonical);
+    return canonical;
+  }
+
   // src/world/WorldGeneratorClient.ts
   var WorldGeneratorClient = class {
     constructor(workerUrl, workerOptions = { type: "module" }) {
@@ -12073,12 +12631,16 @@ void main() {
       this.disposed = false;
       this.handleMessage = (event) => {
         const data = event.data;
-        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || data.generatorVersion !== WORLD_GENERATOR_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
+        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || !Number.isSafeInteger(data.generatorVersion) || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("semanticChunk" in data) && !("error" in data)) {
           this.fail(new Error("World generation worker returned an invalid message"));
           return;
         }
         const request = this.pending.get(data.id);
         if (!request) return;
+        if (data.generatorVersion !== request.expectedGeneratorVersion) {
+          this.fail(new Error("World generation worker returned an invalid message: generator identity mismatch"));
+          return;
+        }
         this.pending.delete(data.id);
         if (request.kind === "world" && "world" in data && data.world) {
           request.resolve(data.world);
@@ -12100,6 +12662,18 @@ void main() {
           try {
             assertWorldVegetationLayout(data.vegetation);
             request.resolve(data.vegetation);
+          } catch (reason) {
+            request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+          }
+          return;
+        }
+        if (request.kind === "semantic-chunk" && "semanticChunk" in data && data.semanticChunk) {
+          try {
+            assertBaseSemanticChunk(data.semanticChunk);
+            if (!request.expectedSemanticChunk || data.semanticChunk.key.chunkX !== request.expectedSemanticChunk.chunkX || data.semanticChunk.key.chunkY !== request.expectedSemanticChunk.chunkY) {
+              throw new TypeError("World generation worker returned a semantic chunk for the wrong request");
+            }
+            request.resolve(data.semanticChunk);
           } catch (reason) {
             request.reject(reason instanceof Error ? reason : new Error(String(reason)));
           }
@@ -12137,7 +12711,12 @@ void main() {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
       const id = this.nextRequestId++;
       return new Promise((resolve, reject) => {
-        this.pending.set(id, { kind: "world", resolve: (value) => resolve(value), reject });
+        this.pending.set(id, {
+          kind: "world",
+          resolve: (value) => resolve(value),
+          reject,
+          expectedGeneratorVersion: WORLD_GENERATOR_VERSION
+        });
         try {
           this.worker.postMessage({
             protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
@@ -12160,6 +12739,7 @@ void main() {
           kind: "chunk",
           resolve: (value) => resolve(value),
           reject,
+          expectedGeneratorVersion: WORLD_GENERATOR_VERSION,
           expectedChunk: {
             chunkX: options.chunkX,
             chunkY: options.chunkY,
@@ -12187,7 +12767,8 @@ void main() {
         this.pending.set(id, {
           kind: "vegetation",
           resolve: (value) => resolve(value),
-          reject
+          reject,
+          expectedGeneratorVersion: WORLD_GENERATOR_VERSION
         });
         try {
           this.worker.postMessage({
@@ -12195,6 +12776,32 @@ void main() {
             generatorVersion: WORLD_GENERATOR_VERSION,
             id,
             type: "vegetation",
+            options
+          });
+        } catch (reason) {
+          this.pending.delete(id);
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        }
+      });
+    }
+    generateSemanticChunk(options) {
+      if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+      const expectedKey = canonicalizeSemanticChunkKey(options.descriptor, options.key);
+      const id = this.nextRequestId++;
+      return new Promise((resolve, reject) => {
+        this.pending.set(id, {
+          kind: "semantic-chunk",
+          resolve: (value) => resolve(value),
+          reject,
+          expectedGeneratorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+          expectedSemanticChunk: expectedKey
+        });
+        try {
+          this.worker.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+            id,
+            type: "generateSemanticChunk",
             options
           });
         } catch (reason) {
@@ -12240,6 +12847,7 @@ void main() {
       this.completed = 0;
       this.disposed = false;
       this.averageChunkMs = 0;
+      this.averageSemanticChunkMs = 0;
       this.averageVegetationMs = 0;
       this.workerFailures = 0;
       this.clientFactoryFailures = 0;
@@ -12347,6 +12955,38 @@ void main() {
         this.dispatch();
       });
     }
+    generateSemanticChunk(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+      if (request.signal?.aborted) return Promise.reject(abortError());
+      return new Promise((resolve, reject) => {
+        const task = {
+          kind: "semantic-chunk",
+          options,
+          signal: request.signal,
+          resolve: (result) => resolve(result),
+          reject,
+          settled: false
+        };
+        if (request.signal) {
+          task.abort = () => {
+            if (task.settled) return;
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
+            this.finishTask(task, () => reject(abortError()));
+          };
+          request.signal.addEventListener("abort", task.abort, { once: true });
+        }
+        task.queueId = this.queue.enqueue(task, {
+          priority: Number.isFinite(request.priority) ? request.priority : 0,
+          lane: request.lane ?? "visible",
+          weight: request.weight ?? 1,
+          cancelled: (reason) => this.finishTask(task, () => task.reject(reason))
+        });
+        if (task.queueId === void 0 && !task.settled) {
+          this.finishTask(task, () => reject(new WorkQueueBackpressureError("Semantic chunk request was shed")));
+        }
+        this.dispatch();
+      });
+    }
     get stats() {
       const queued = this.queue.values.filter((task) => !task.settled && !task.signal?.aborted);
       const queueStats = this.queue.stats;
@@ -12357,10 +12997,13 @@ void main() {
         queued: queued.length,
         completed: this.completed,
         queuedChunks: queued.filter((task) => task.kind === "chunk").length,
+        queuedSemanticChunks: queued.filter((task) => task.kind === "semantic-chunk").length,
         queuedVegetation: queued.filter((task) => task.kind === "vegetation").length,
         busyChunkWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "chunk").length,
+        busySemanticChunkWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "semantic-chunk").length,
         busyVegetationWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "vegetation").length,
         averageChunkMs: this.averageChunkMs,
+        averageSemanticChunkMs: this.averageSemanticChunkMs,
         averageVegetationMs: this.averageVegetationMs,
         queuedWeight: queueStats.pendingWeight,
         oldestQueuedMs: queueStats.oldestTaskAgeMs,
@@ -12417,7 +13060,7 @@ void main() {
         const started = typeof performance === "undefined" ? Date.now() : performance.now();
         let pending;
         try {
-          pending = task.kind === "chunk" ? slot.client.generateChunk(task.options) : slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+          pending = task.kind === "chunk" ? slot.client.generateChunk(task.options) : task.kind === "semantic-chunk" ? slot.client.generateSemanticChunk ? slot.client.generateSemanticChunk(task.options) : Promise.reject(new Error("World generation client does not support semantic chunk tasks")) : slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
         } catch (reason) {
           pending = Promise.reject(reason);
         }
@@ -12450,7 +13093,7 @@ void main() {
       const activeWorkers = Math.max(1, Math.min(this.desiredSize, this.slots.length));
       const maximumVegetation = activeWorkers === 1 ? 1 : Math.max(1, activeWorkers - this.reservedChunkWorkers);
       const busyVegetation = this.slots.filter((candidate) => candidate.busy && candidate.taskKind === "vegetation").length;
-      const task = this.queue.take(busyVegetation >= maximumVegetation ? (candidate) => candidate.kind === "chunk" : void 0);
+      const task = this.queue.take(busyVegetation >= maximumVegetation ? (candidate) => candidate.kind !== "vegetation" : void 0);
       if (task) task.queueId = void 0;
       return task;
     }
@@ -12458,6 +13101,8 @@ void main() {
       const alpha = 0.2;
       if (kind === "chunk") {
         this.averageChunkMs = this.averageChunkMs === 0 ? durationMs : this.averageChunkMs + (durationMs - this.averageChunkMs) * alpha;
+      } else if (kind === "semantic-chunk") {
+        this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0 ? durationMs : this.averageSemanticChunkMs + (durationMs - this.averageSemanticChunkMs) * alpha;
       } else {
         this.averageVegetationMs = this.averageVegetationMs === 0 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;
       }
@@ -19852,15 +20497,182 @@ void main() {
     }
   };
 
+  // src/world/semantic/generateBaseSemanticChunk.ts
+  function clampUnit(value) {
+    if (!Number.isFinite(value)) throw new RangeError("semantic generator received a non-finite normalized value");
+    return Math.max(0, Math.min(1, value));
+  }
+  function quantizeUint8(value) {
+    return Math.floor(clampUnit(value) * 255 + 0.5);
+  }
+  function quantizeUint16(value) {
+    return Math.floor(clampUnit(value) * 65535 + 0.5);
+  }
+  function substrateFor(sample) {
+    switch (sample.baseTerrain) {
+      case "sea" /* sea */:
+      case "coastal" /* coastal */:
+        return 0 /* Sediment */;
+      case "sand" /* sand */:
+        return 2 /* Sand */;
+      case "mountain" /* mountain */:
+        return 3 /* Rock */;
+      case "tundra" /* tundra */:
+      case "snow" /* snow */:
+        return 4 /* Permafrost */;
+      case "land" /* land */:
+        return 1 /* Soil */;
+      default:
+        throw new TypeError(`semantic generator cannot map terrain ${String(sample.baseTerrain)} to substrate`);
+    }
+  }
+  function fallbackBiomeIndex(substrate) {
+    switch (substrate) {
+      case 2 /* Sand */:
+        return 1;
+      case 4 /* Permafrost */:
+        return 2;
+      case 3 /* Rock */:
+        return 3;
+      default:
+        return 0;
+    }
+  }
+  function quantizeBiomeWeights(sample, substrate) {
+    const weights = [
+      sample.biomeWeights.temperate,
+      sample.biomeWeights.dry,
+      sample.biomeWeights.cold,
+      sample.biomeWeights.alpine
+    ];
+    if (weights.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new RangeError("semantic generator received invalid biome weights");
+    }
+    const sum = weights.reduce((total, value) => total + value, 0);
+    if (sum <= 0) {
+      const fallback = [0, 0, 0, 0];
+      fallback[fallbackBiomeIndex(substrate)] = 255;
+      return fallback;
+    }
+    const scaled = weights.map((value) => value / sum * 255);
+    const quantized = scaled.map((value) => Math.floor(value));
+    let remaining = 255 - quantized.reduce((total, value) => total + value, 0);
+    const order = scaled.map((value, index) => ({ index, remainder: value - quantized[index] })).sort((first, second) => second.remainder - first.remainder || first.index - second.index);
+    for (let index = 0; index < order.length && remaining > 0; index += 1, remaining -= 1) {
+      quantized[order[index].index] += 1;
+    }
+    return quantized;
+  }
+  function vegetationProfileFor(sample, density) {
+    if (density === 0 || sample.vegetationKind === void 0) return 0;
+    switch (sample.vegetationKind) {
+      case "palm":
+        return 1;
+      case "pinia":
+        return 2;
+      case "oak":
+        return 3;
+    }
+  }
+  function assertResolverMatches(resolver, descriptor) {
+    if (!resolver || resolver.seed !== descriptor.seed || resolver.domain.topology !== descriptor.topology || descriptor.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== descriptor.width || resolver.domain.height !== descriptor.height)) {
+      throw new TypeError("world surface resolver does not match the v2 semantic chunk request");
+    }
+  }
+  function validBoundsForInfiniteChunk(origin) {
+    const minX = Math.max(0, Number.MIN_SAFE_INTEGER - origin.x);
+    const minY = Math.max(0, Number.MIN_SAFE_INTEGER - origin.y);
+    const maxXExclusive = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, Number.MAX_SAFE_INTEGER - origin.x + 1);
+    const maxYExclusive = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, Number.MAX_SAFE_INTEGER - origin.y + 1);
+    return Object.freeze({ minX, minY, maxXExclusive, maxYExclusive });
+  }
+  function requireProceduralDescriptor(value) {
+    assertWorldDescriptorV2(value);
+    if (value.sourceKind === "static") {
+      throw new TypeError("static v2 descriptors cannot be evaluated by the procedural semantic generator");
+    }
+    return value;
+  }
+  function createSemanticChunkSurfaceResolver(descriptor) {
+    const candidate = requireProceduralDescriptor(descriptor);
+    return createWorldSurfaceResolver({
+      seed: candidate.seed,
+      domain: candidate.topology === "toroidal" ? { topology: "toroidal", width: candidate.width, height: candidate.height } : { topology: "infinite" }
+    });
+  }
+  function generateBaseSemanticChunk(options) {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("base semantic chunk generation options are required");
+    }
+    return generateBaseSemanticChunkWithResolver(options, createSemanticChunkSurfaceResolver(options.descriptor));
+  }
+  function generateBaseSemanticChunkWithResolver(options, resolver) {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("base semantic chunk generation options are required");
+    }
+    const descriptor = requireProceduralDescriptor(options.descriptor);
+    const key = canonicalizeSemanticChunkKey(descriptor, options.key);
+    const origin = semanticChunkOrigin(key);
+    const validBounds = descriptor.topology === "infinite" ? validBoundsForInfiniteChunk(origin) : FULL_SEMANTIC_CHUNK_BOUNDS;
+    assertResolverMatches(resolver, descriptor);
+    const substrateClass = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    const macroHeight = new Uint16Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    const biomeWeights = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT * 4);
+    const climate = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT * 2);
+    const vegetationDensity = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    const vegetationProfile = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+    for (let localX = 0; localX < WORLD_SEMANTIC_CHUNK_SIZE; localX += 1) {
+      for (let localY = 0; localY < WORLD_SEMANTIC_CHUNK_SIZE; localY += 1) {
+        const index = semanticChunkLocalIndex(localX, localY);
+        if (!localBoundsContain(validBounds, localX, localY)) continue;
+        const sample = resolver.sampleGenerated(origin.x + localX, origin.y + localY);
+        const substrate = substrateFor(sample);
+        const weights = quantizeBiomeWeights(sample, substrate);
+        const density = quantizeUint8(sample.vegetationDensity);
+        substrateClass[index] = substrate;
+        macroHeight[index] = quantizeUint16(sample.landform.elevation);
+        const biomeOffset = index * 4;
+        biomeWeights[biomeOffset] = weights[0];
+        biomeWeights[biomeOffset + 1] = weights[1];
+        biomeWeights[biomeOffset + 2] = weights[2];
+        biomeWeights[biomeOffset + 3] = weights[3];
+        const climateOffset = index * 2;
+        climate[climateOffset] = quantizeUint8(sample.landform.temperature);
+        climate[climateOffset + 1] = quantizeUint8(sample.landform.moisture);
+        vegetationDensity[index] = density;
+        vegetationProfile[index] = vegetationProfileFor(sample, density);
+      }
+    }
+    const chunk = Object.freeze({
+      key: Object.freeze(key),
+      revision: BASE_SEMANTIC_CHUNK_REVISION,
+      validBounds,
+      substrateClass,
+      macroHeight,
+      biomeWeights,
+      climate,
+      vegetationDensity,
+      vegetationProfile
+    });
+    assertBaseSemanticChunk(chunk);
+    return chunk;
+  }
+
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
+  exports.BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
+  exports.BASE_SEMANTIC_CHUNK_REVISION = BASE_SEMANTIC_CHUNK_REVISION;
+  exports.BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES;
+  exports.BaseSemanticChunkView = BaseSemanticChunkView;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
   exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
   exports.EventEmitter = EventEmitter;
+  exports.FULL_SEMANTIC_CHUNK_BOUNDS = FULL_SEMANTIC_CHUNK_BOUNDS;
   exports.FogOfWar = FogOfWar;
   exports.FogState = FogState;
   exports.FrameTaskScheduler = FrameTaskScheduler;
   exports.GameEngine = GameEngine;
   exports.HEXPolygon = HEXPolygon;
+  exports.HYDROLOGY_REGION_FORMAT_VERSION = HYDROLOGY_REGION_FORMAT_VERSION;
   exports.HexMap = HexMap;
   exports.HexMapInteractionController = HexMapInteractionController;
   exports.HexMapRendererHost = HexMapRendererHost;
@@ -19883,16 +20695,27 @@ void main() {
   exports.RuntimeWorkCoordinator = RuntimeWorkCoordinator;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
   exports.StaticWorldSource = StaticWorldSource;
+  exports.SubstrateClass = SubstrateClass;
   exports.ToroidalWorldSource = ToroidalWorldSource;
   exports.Unit = Unit;
   exports.UnitActions = UnitActions;
+  exports.WORLD_BIOME_BASIS = WORLD_BIOME_BASIS;
   exports.WORLD_CHUNK_FORMAT_VERSION = WORLD_CHUNK_FORMAT_VERSION;
   exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
   exports.WORLD_CHUNK_SIZE = WORLD_CHUNK_SIZE;
   exports.WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
   exports.WORLD_DESCRIPTOR_FORMAT_VERSION = WORLD_DESCRIPTOR_FORMAT_VERSION;
+  exports.WORLD_DESCRIPTOR_V2_FORMAT_VERSION = WORLD_DESCRIPTOR_V2_FORMAT_VERSION;
   exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
+  exports.WORLD_SEMANTIC_CHUNK_FORMAT_VERSION = WORLD_SEMANTIC_CHUNK_FORMAT_VERSION;
+  exports.WORLD_SEMANTIC_CHUNK_SIZE = WORLD_SEMANTIC_CHUNK_SIZE;
+  exports.WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+  exports.WORLD_SUBSTRATE_CATALOG = WORLD_SUBSTRATE_CATALOG;
+  exports.WORLD_SUBSTRATE_CATALOG_IDENTITY = WORLD_SUBSTRATE_CATALOG_IDENTITY;
+  exports.WORLD_SURFACE_V2_GENERATOR_VERSION = WORLD_SURFACE_V2_GENERATOR_VERSION;
+  exports.WORLD_VEGETATION_CATALOG_IDENTITY = WORLD_VEGETATION_CATALOG_IDENTITY;
   exports.WORLD_VEGETATION_FORMAT_VERSION = WORLD_VEGETATION_FORMAT_VERSION;
+  exports.WORLD_VEGETATION_PROFILE_CATALOG = WORLD_VEGETATION_PROFILE_CATALOG;
   exports.WORLD_WORKER_PROTOCOL_VERSION = WORLD_WORKER_PROTOCOL_VERSION;
   exports.WebGlGpuTimer = WebGlGpuTimer;
   exports.WorkQueueBackpressureError = WorkQueueBackpressureError;
@@ -19902,23 +20725,34 @@ void main() {
   exports.WorldGeneratorPool = WorldGeneratorPool;
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
+  exports.assertBaseSemanticChunk = assertBaseSemanticChunk;
+  exports.assertLocalTileBounds = assertLocalTileBounds;
   exports.assertPackedWorldChunk = assertPackedWorldChunk;
+  exports.assertSemanticChunkKey = assertSemanticChunkKey;
   exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
   exports.assertWorldChunk = assertWorldChunk;
   exports.assertWorldDescriptor = assertWorldDescriptor;
+  exports.assertWorldDescriptorV2 = assertWorldDescriptorV2;
   exports.assertWorldSource = assertWorldSource;
   exports.assertWorldTileOverride = assertWorldTileOverride;
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
+  exports.baseSemanticChunkTransferables = baseSemanticChunkTransferables;
+  exports.canonicalizeSemanticChunkKey = canonicalizeSemanticChunkKey;
   exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
   exports.createLandformSampler = createLandformSampler;
+  exports.createSemanticChunkSurfaceResolver = createSemanticChunkSurfaceResolver;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
+  exports.createWorldDescriptorV2 = createWorldDescriptorV2;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
+  exports.deserializeBaseSemanticChunk = deserializeBaseSemanticChunk;
   exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;
   exports.estimateBufferGeometriesResourceBytes = estimateBufferGeometriesResourceBytes;
   exports.estimateObject3DResourceCost = estimateObject3DResourceCost;
+  exports.generateBaseSemanticChunk = generateBaseSemanticChunk;
+  exports.generateBaseSemanticChunkWithResolver = generateBaseSemanticChunkWithResolver;
   exports.generateWorld = generateWorld;
   exports.generateWorldChunk = generateWorldChunk;
   exports.generateWorldVegetation = generateWorldVegetation;
@@ -19936,15 +20770,22 @@ void main() {
   exports.isMutableWorldSource = isMutableWorldSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;
   exports.lifecycleAbortError = lifecycleAbortError;
+  exports.locateSemanticTile = locateSemanticTile;
   exports.mergeBufferUpdateRanges = mergeBufferUpdateRanges;
   exports.normalizeMapCoordinates = normalizeMapCoordinates;
   exports.normalizeResourceCost = normalizeResourceCost;
   exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
   exports.positiveModulo = positiveModulo;
   exports.sampleLandform = sampleLandform;
+  exports.semanticChunkCoordinate = semanticChunkCoordinate;
+  exports.semanticChunkLocalIndex = semanticChunkLocalIndex;
+  exports.semanticChunkOrigin = semanticChunkOrigin;
+  exports.serializeBaseSemanticChunk = serializeBaseSemanticChunk;
   exports.serializeWorldDescriptor = serializeWorldDescriptor;
+  exports.serializeWorldDescriptorV2 = serializeWorldDescriptorV2;
   exports.tagWorldChunk = tagWorldChunk;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;
+  exports.worldDescriptorsV2Equal = worldDescriptorsV2Equal;
   exports.worldTileVisualSignature = worldTileVisualSignature;
   exports.worldVegetationTransferables = worldVegetationTransferables;
 

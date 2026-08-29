@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**评审修订稿、待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**阶段 A 已完成，阶段 B–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。阶段 A 的 v2 纯数据格式和 Worker 任务已可独立使用与验收，但尚未接入生产渲染热路径。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -854,7 +854,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 ## 18. 实施阶段
 
-### 阶段 A：冻结契约与纯数据格式
+### 阶段 A：冻结契约与纯数据格式（已完成）
 
 - 新增固定尺寸常量、坐标/索引函数和 v2 descriptor。
 - 实现 BaseSemanticChunk SoA、校验、序列化和按需只读 tile view。
@@ -863,6 +863,17 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 建立跨 chunk 边界、请求顺序、线程和负坐标确定性测试。
 
 完成标志：主线程不再需要 resolver 才能读取生成地表语义。
+
+实现结果（2026-08-30）：
+
+- 新增 `src/world/semantic`，实现 v2 descriptor、固定 32×32 X-major 坐标/索引契约、`BaseSemanticChunk` SoA、严格校验、固定小端二进制序列化和按需 `BaseSemanticChunkView`。无限世界覆盖完整 safe-integer tile 域；最小安全整数所在的边界 chunk 通过显式 partial `validBounds` 排除唯一越界槽位。
+- generator v6 的阶段 A 量化规则固定为：`macroHeight = saturate(landform.elevation)` 后按 `floor(value × 65535 + 0.5)` 写入；climate 和 vegetation density 使用对应的 8 位规则；四项 biome 权重采用最大余数法并保证每个有效格严格合计 255。
+- substrate 目录固定为 sediment/soil/sand/rock/permafrost；biome basis 固定为 temperate/dry/cold/alpine；vegetation profile 目录固定为 none/warm-palm-mix/cold-pinia-mix/temperate-oak-mix。descriptor 保存两个目录规范 JSON 的 SHA-256 内容哈希，目录内容改变不能复用旧 world identity。
+- `BaseSemanticChunk` 校验拒绝未知字段，因而 water、坡度、材质输出、navigation 和其他派生事实不能混入基础权威格式；partial chunk 的 `validBounds` 外必须逐字节清零。
+- 共享 Worker 协议已升级到 v3，并新增显式 `generateSemanticChunk` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；v2 semantic 任务使用独立 generator v6 identity，不能与 v1 generator v5 响应互换。
+- 已建立 descriptor/catalog identity、负坐标、环绕规范化、SoA 长度与权重、二进制 golden、请求顺序、Worker client/pool 和真实浏览器 transferable Worker 测试，并把 49 个 32×32 semantic chunk 的 generator-v6 吞吐纳入 benchmark gate。生成结果返回后可直接由主线程的只读 view 查询，不重新运行 resolver。
+
+阶段性命名说明：在阶段 H 完整切换前，现有生产常量仍表示 v1 格式；已落地的 v2 常量使用 `WORLD_DESCRIPTOR_V2_FORMAT_VERSION`、`WORLD_SEMANTIC_CHUNK_FORMAT_VERSION` 和 `WORLD_SURFACE_V2_GENERATOR_VERSION` 避免把两种缓存/存档身份混用。切换提交会删除 v1 常量并收敛为第 17.1 节的最终名称，不保留兼容别名。
 
 ### 阶段 B：水文区域
 

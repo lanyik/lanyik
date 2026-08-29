@@ -13,19 +13,29 @@ import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "./generateVegetation";
+import {
+    assertBaseSemanticChunk,
+    BaseSemanticChunk
+} from "./semantic/BaseSemanticChunk";
+import { BaseSemanticChunkGenerationOptions } from "./semantic/generateBaseSemanticChunk";
+import {
+    WORLD_SURFACE_V2_GENERATOR_VERSION
+} from "./semantic/WorldSemanticFormat";
+import { canonicalizeSemanticChunkKey } from "./semantic/WorldDescriptorV2";
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
-    generatorVersion: typeof WORLD_GENERATOR_VERSION;
+    generatorVersion: number;
     id: number;
     world?: MapInfo;
     chunk?: PackedWorldChunk;
     vegetation?: WorldVegetationLayout;
+    semanticChunk?: BaseSemanticChunk;
 }
 
 interface WorkerFailureMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
-    generatorVersion: typeof WORLD_GENERATOR_VERSION;
+    generatorVersion: number;
     id: number;
     error: { name: string; message: string; stack?: string };
 }
@@ -33,10 +43,12 @@ interface WorkerFailureMessage {
 type WorkerResponse = WorkerSuccessMessage | WorkerFailureMessage;
 
 interface PendingRequest {
-    kind: "world" | "chunk" | "vegetation";
-    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout): void;
+    kind: "world" | "chunk" | "vegetation" | "semantic-chunk";
+    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | BaseSemanticChunk): void;
     reject(error: Error): void;
+    expectedGeneratorVersion: number;
     expectedChunk?: { chunkX: number; chunkY: number; chunkSize: number };
+    expectedSemanticChunk?: { chunkX: number; chunkY: number };
 }
 
 //Small lifecycle-safe client for the dedicated world generator worker. The
@@ -58,7 +70,12 @@ export class WorldGeneratorClient {
         if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
         const id = this.nextRequestId++;
         return new Promise<MapInfo>((resolve, reject) => {
-            this.pending.set(id, { kind: "world", resolve: value => resolve(value as MapInfo), reject });
+            this.pending.set(id, {
+                kind: "world",
+                resolve: value => resolve(value as MapInfo),
+                reject,
+                expectedGeneratorVersion: WORLD_GENERATOR_VERSION
+            });
             try {
                 this.worker.postMessage({
                     protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
@@ -82,6 +99,7 @@ export class WorldGeneratorClient {
                 kind: "chunk",
                 resolve: value => resolve(value as PackedWorldChunk),
                 reject,
+                expectedGeneratorVersion: WORLD_GENERATOR_VERSION,
                 expectedChunk: {
                     chunkX: options.chunkX,
                     chunkY: options.chunkY,
@@ -110,7 +128,8 @@ export class WorldGeneratorClient {
             this.pending.set(id, {
                 kind: "vegetation",
                 resolve: value => resolve(value as WorldVegetationLayout),
-                reject
+                reject,
+                expectedGeneratorVersion: WORLD_GENERATOR_VERSION
             });
             try {
                 this.worker.postMessage({
@@ -118,6 +137,33 @@ export class WorldGeneratorClient {
                     generatorVersion: WORLD_GENERATOR_VERSION,
                     id,
                     type: "vegetation",
+                    options
+                });
+            } catch (reason) {
+                this.pending.delete(id);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
+    public generateSemanticChunk(options: BaseSemanticChunkGenerationOptions): Promise<BaseSemanticChunk> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        const expectedKey = canonicalizeSemanticChunkKey(options.descriptor, options.key);
+        const id = this.nextRequestId++;
+        return new Promise<BaseSemanticChunk>((resolve, reject) => {
+            this.pending.set(id, {
+                kind: "semantic-chunk",
+                resolve: value => resolve(value as BaseSemanticChunk),
+                reject,
+                expectedGeneratorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                expectedSemanticChunk: expectedKey
+            });
+            try {
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                    id,
+                    type: "generateSemanticChunk",
                     options
                 });
             } catch (reason) {
@@ -142,14 +188,19 @@ export class WorldGeneratorClient {
     private handleMessage = (event: MessageEvent<WorkerResponse>): void => {
         const data = event.data;
         if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
-            || data.generatorVersion !== WORLD_GENERATOR_VERSION
+            || !Number.isSafeInteger(data.generatorVersion)
             || typeof data.id !== "number"
-            || (!("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data))) {
+            || (!("world" in data) && !("chunk" in data) && !("vegetation" in data)
+                && !("semanticChunk" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));
             return;
         }
         const request = this.pending.get(data.id);
         if (!request) return;
+        if (data.generatorVersion !== request.expectedGeneratorVersion) {
+            this.fail(new Error("World generation worker returned an invalid message: generator identity mismatch"));
+            return;
+        }
         this.pending.delete(data.id);
         if (request.kind === "world" && "world" in data && data.world) {
             request.resolve(data.world);
@@ -173,6 +224,20 @@ export class WorldGeneratorClient {
             try {
                 assertWorldVegetationLayout(data.vegetation);
                 request.resolve(data.vegetation);
+            } catch (reason) {
+                request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+            return;
+        }
+        if (request.kind === "semantic-chunk" && "semanticChunk" in data && data.semanticChunk) {
+            try {
+                assertBaseSemanticChunk(data.semanticChunk);
+                if (!request.expectedSemanticChunk
+                    || data.semanticChunk.key.chunkX !== request.expectedSemanticChunk.chunkX
+                    || data.semanticChunk.key.chunkY !== request.expectedSemanticChunk.chunkY) {
+                    throw new TypeError("World generation worker returned a semantic chunk for the wrong request");
+                }
+                request.resolve(data.semanticChunk);
             } catch (reason) {
                 request.reject(reason instanceof Error ? reason : new Error(String(reason)));
             }

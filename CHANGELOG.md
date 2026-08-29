@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 stage A primitives: a fixed 32x32 X-major
+  `BaseSemanticChunk` SoA format, strict validation, deterministic binary
+  serialization, read-only tile views, catalog-hashed v2 descriptors,
+  generator-v6 quantization, and a bounded Worker/WorkerPool semantic-chunk
+  generation path with browser-transfer coverage. Production rendering remains
+  on v1 until the later one-way cutover.
 - Internal `WorldSurfaceResolver` and `WorldSurfaceView` authorities that
   centralize versioned terrain classification, continuous relief, biome weights,
   vegetation/lake patches and sparse terrain edits while providing deterministic
@@ -73,6 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Advanced the shared world Worker protocol to v3 for the discriminated
+  `generateSemanticChunk` task. Existing production v1 tasks retain generator
+  v5 identity and cannot accept v2 semantic responses.
 - Froze world-style generation v1 on generator v5 after the normal gates,
   performance regression checks, scheduled replacement soak and fixed visual
   gallery all passed. Future gameplay consumes the surface contracts instead

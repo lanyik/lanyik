@@ -7,9 +7,12 @@ import {
     WorkQueueBackpressureError
 } from "../runtime/PriorityTaskQueue";
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
+import { BaseSemanticChunk } from "./semantic/BaseSemanticChunk";
+import { BaseSemanticChunkGenerationOptions } from "./semantic/generateBaseSemanticChunk";
 
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
+    generateSemanticChunk?(options: BaseSemanticChunkGenerationOptions): Promise<BaseSemanticChunk>;
     generateVegetation?(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout>;
     dispose(): void;
     readonly isDisposed?: boolean;
@@ -43,10 +46,13 @@ export interface WorldGeneratorPoolStats {
     queued: number;
     completed: number;
     queuedChunks: number;
+    queuedSemanticChunks: number;
     queuedVegetation: number;
     busyChunkWorkers: number;
+    busySemanticChunkWorkers: number;
     busyVegetationWorkers: number;
     averageChunkMs: number;
+    averageSemanticChunkMs: number;
     averageVegetationMs: number;
     queuedWeight: number;
     oldestQueuedMs: number;
@@ -57,11 +63,11 @@ export interface WorldGeneratorPoolStats {
 }
 
 interface QueuedTask {
-    kind: "chunk" | "vegetation";
+    kind: "chunk" | "semantic-chunk" | "vegetation";
     queueId?: number;
-    options: WorldChunkGenerationOptions | WorldVegetationGenerationOptions;
+    options: WorldChunkGenerationOptions | BaseSemanticChunkGenerationOptions | WorldVegetationGenerationOptions;
     signal?: AbortSignal;
-    resolve(result: PackedWorldChunk | WorldVegetationLayout): void;
+    resolve(result: PackedWorldChunk | BaseSemanticChunk | WorldVegetationLayout): void;
     reject(error: Error): void;
     abort?: () => void;
     settled: boolean;
@@ -99,6 +105,7 @@ export class WorldGeneratorPool {
     private readonly reservedChunkWorkers: number;
     private desiredSize: number;
     private averageChunkMs = 0;
+    private averageSemanticChunkMs = 0;
     private averageVegetationMs = 0;
     private workerFailures = 0;
     private clientFactoryFailures = 0;
@@ -221,6 +228,42 @@ export class WorldGeneratorPool {
         });
     }
 
+    public generateSemanticChunk(
+        options: BaseSemanticChunkGenerationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<BaseSemanticChunk> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        return new Promise<BaseSemanticChunk>((resolve, reject) => {
+            const task: QueuedTask = {
+                kind: "semantic-chunk",
+                options,
+                signal: request.signal,
+                resolve: result => resolve(result as BaseSemanticChunk),
+                reject,
+                settled: false
+            };
+            if (request.signal) {
+                task.abort = () => {
+                    if (task.settled) return;
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
+                };
+                request.signal.addEventListener("abort", task.abort, { once: true });
+            }
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "visible",
+                weight: request.weight ?? 1,
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError("Semantic chunk request was shed")));
+            }
+            this.dispatch();
+        });
+    }
+
     public get stats(): Readonly<WorldGeneratorPoolStats> {
         const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
         const queueStats = this.queue.stats;
@@ -231,10 +274,14 @@ export class WorldGeneratorPool {
             queued: queued.length,
             completed: this.completed,
             queuedChunks: queued.filter(task => task.kind === "chunk").length,
+            queuedSemanticChunks: queued.filter(task => task.kind === "semantic-chunk").length,
             queuedVegetation: queued.filter(task => task.kind === "vegetation").length,
             busyChunkWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "chunk").length,
+            busySemanticChunkWorkers: this.slots.filter(slot =>
+                slot.busy && slot.taskKind === "semantic-chunk").length,
             busyVegetationWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "vegetation").length,
             averageChunkMs: this.averageChunkMs,
+            averageSemanticChunkMs: this.averageSemanticChunkMs,
             averageVegetationMs: this.averageVegetationMs,
             queuedWeight: queueStats.pendingWeight,
             oldestQueuedMs: queueStats.oldestTaskAgeMs,
@@ -295,13 +342,17 @@ export class WorldGeneratorPool {
             // A custom client is allowed to fail synchronously. Preserve the
             // existing immediate dispatch contract, but normalize a throw to
             // a rejected promise so slot cleanup always runs.
-            let pending: Promise<PackedWorldChunk | WorldVegetationLayout>;
+            let pending: Promise<PackedWorldChunk | BaseSemanticChunk | WorldVegetationLayout>;
             try {
                 pending = task.kind === "chunk"
                     ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
-                    : slot.client.generateVegetation
-                        ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
-                        : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+                    : task.kind === "semantic-chunk"
+                        ? slot.client.generateSemanticChunk
+                            ? slot.client.generateSemanticChunk(task.options as BaseSemanticChunkGenerationOptions)
+                            : Promise.reject(new Error("World generation client does not support semantic chunk tasks"))
+                        : slot.client.generateVegetation
+                            ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
+                            : Promise.reject(new Error("World generation client does not support vegetation tasks"));
             } catch (reason) {
                 pending = Promise.reject(reason);
             }
@@ -339,7 +390,7 @@ export class WorldGeneratorPool {
         const busyVegetation = this.slots.filter(candidate =>
             candidate.busy && candidate.taskKind === "vegetation").length;
         const task = this.queue.take(busyVegetation >= maximumVegetation
-            ? candidate => candidate.kind === "chunk"
+            ? candidate => candidate.kind !== "vegetation"
             : undefined);
         if (task) task.queueId = undefined;
         return task;
@@ -350,6 +401,9 @@ export class WorldGeneratorPool {
         if (kind === "chunk") {
             this.averageChunkMs = this.averageChunkMs === 0
                 ? durationMs : this.averageChunkMs + (durationMs - this.averageChunkMs) * alpha;
+        } else if (kind === "semantic-chunk") {
+            this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0
+                ? durationMs : this.averageSemanticChunkMs + (durationMs - this.averageSemanticChunkMs) * alpha;
         } else {
             this.averageVegetationMs = this.averageVegetationMs === 0
                 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;

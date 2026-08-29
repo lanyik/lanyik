@@ -106,6 +106,80 @@ export type {
     CreateWorldDescriptorOptions,
     ProceduralWorldKind
 } from "./world/WorldDescriptor";
+export {
+    createWorldDescriptorV2,
+    assertWorldDescriptorV2,
+    serializeWorldDescriptorV2,
+    worldDescriptorsV2Equal,
+    canonicalizeSemanticChunkKey,
+    WORLD_DESCRIPTOR_V2_FORMAT_VERSION
+} from "./world/semantic/WorldDescriptorV2";
+export type {
+    WorldDescriptorV2,
+    ProceduralWorldDescriptorV2,
+    InfiniteWorldDescriptorV2,
+    ToroidalWorldDescriptorV2,
+    StaticWorldDescriptorV2,
+    CreateWorldDescriptorV2Options,
+    CreateProceduralWorldDescriptorV2Options,
+    CreateStaticWorldDescriptorV2Options
+} from "./world/semantic/WorldDescriptorV2";
+export {
+    SubstrateClass,
+    WORLD_BIOME_BASIS,
+    WORLD_SUBSTRATE_CATALOG,
+    WORLD_SUBSTRATE_CATALOG_IDENTITY,
+    WORLD_VEGETATION_PROFILE_CATALOG,
+    WORLD_VEGETATION_CATALOG_IDENTITY
+} from "./world/semantic/WorldSemanticCatalog";
+export type {
+    WorldBiomeBasis,
+    SemanticCatalogIdentity,
+    SubstrateCatalogEntry,
+    VegetationSpeciesWeight,
+    VegetationProfileCatalogEntry
+} from "./world/semantic/WorldSemanticCatalog";
+export {
+    WORLD_SEMANTIC_CHUNK_SIZE,
+    WORLD_SEMANTIC_CHUNK_TILE_COUNT,
+    WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+    WORLD_SURFACE_V2_GENERATOR_VERSION,
+    HYDROLOGY_REGION_FORMAT_VERSION,
+    BASE_SEMANTIC_CHUNK_REVISION,
+    FULL_SEMANTIC_CHUNK_BOUNDS,
+    assertSemanticChunkKey,
+    assertLocalTileBounds,
+    semanticChunkCoordinate,
+    semanticChunkLocalIndex,
+    locateSemanticTile,
+    semanticChunkOrigin
+} from "./world/semantic/WorldSemanticFormat";
+export type {
+    SemanticChunkKey,
+    SemanticChunkLocation,
+    LocalTileBounds
+} from "./world/semantic/WorldSemanticFormat";
+export {
+    BaseSemanticChunkView,
+    assertBaseSemanticChunk,
+    baseSemanticChunkTransferables,
+    serializeBaseSemanticChunk,
+    deserializeBaseSemanticChunk,
+    BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
+    BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES
+} from "./world/semantic/BaseSemanticChunk";
+export type {
+    BaseSemanticChunk,
+    BaseSemanticTileView
+} from "./world/semantic/BaseSemanticChunk";
+export {
+    createSemanticChunkSurfaceResolver,
+    generateBaseSemanticChunk,
+    generateBaseSemanticChunkWithResolver
+} from "./world/semantic/generateBaseSemanticChunk";
+export type {
+    BaseSemanticChunkGenerationOptions
+} from "./world/semantic/generateBaseSemanticChunk";
 export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
 export { FrameTaskScheduler } from "./rendering/FrameTaskScheduler";
 export type {

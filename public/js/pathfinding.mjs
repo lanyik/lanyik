@@ -2129,6 +2129,77 @@ var DEFAULT_WORLD_CHUNK_LOD_DISTANCES = Object.freeze({
   hysteresis: 120
 });
 
+// src/world/semantic/WorldSemanticCatalog.ts
+var WORLD_BIOME_BASIS = Object.freeze([
+  "temperate",
+  "dry",
+  "cold",
+  "alpine"
+]);
+var WORLD_SUBSTRATE_CATALOG = Object.freeze([
+  Object.freeze({ id: "sediment", class: 0 /* Sediment */ }),
+  Object.freeze({ id: "soil", class: 1 /* Soil */ }),
+  Object.freeze({ id: "sand", class: 2 /* Sand */ }),
+  Object.freeze({ id: "rock", class: 3 /* Rock */ }),
+  Object.freeze({ id: "permafrost", class: 4 /* Permafrost */ })
+]);
+var WORLD_VEGETATION_PROFILE_CATALOG = Object.freeze([
+  Object.freeze({ id: "none", species: Object.freeze([]) }),
+  Object.freeze({
+    id: "warm-palm-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "palm", weight: 204 }),
+      Object.freeze({ species: "oak", weight: 51 })
+    ])
+  }),
+  Object.freeze({
+    id: "cold-pinia-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "pinia", weight: 204 }),
+      Object.freeze({ species: "oak", weight: 51 })
+    ])
+  }),
+  Object.freeze({
+    id: "temperate-oak-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "oak", weight: 178 }),
+      Object.freeze({ species: "pinia", weight: 51 }),
+      Object.freeze({ species: "palm", weight: 26 })
+    ])
+  })
+]);
+var WORLD_SUBSTRATE_CATALOG_IDENTITY = Object.freeze({
+  id: "three-hex-map/substrate-v1",
+  contentHash: "471edc137e2d634b36a2fa7452a9b72ef204258648b681b4357e72abad4d1561"
+});
+var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
+  id: "three-hex-map/vegetation-v1",
+  contentHash: "aa515fb7c895c1bd600b464119a9599e4963c466fcb35281f6824ce8911283ef"
+});
+
+// src/world/semantic/WorldSemanticFormat.ts
+var WORLD_SEMANTIC_CHUNK_SIZE = 32;
+var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
+var FULL_SEMANTIC_CHUNK_BOUNDS = Object.freeze({
+  minX: 0,
+  minY: 0,
+  maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
+  maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
+});
+
+// src/world/semantic/BaseSemanticChunk.ts
+var BIOME_CHANNELS = 4;
+var CLIMATE_CHANNELS = 2;
+var SERIALIZED_HEADER_BYTES = 40;
+var SUBSTRATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var MACRO_HEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * Uint16Array.BYTES_PER_ELEMENT;
+var BIOME_WEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * BIOME_CHANNELS;
+var CLIMATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNELS;
+var VEGETATION_DENSITY_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var VEGETATION_PROFILE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = SUBSTRATE_BYTES + MACRO_HEIGHT_BYTES + BIOME_WEIGHT_BYTES + CLIMATE_BYTES + VEGETATION_DENSITY_BYTES + VEGETATION_PROFILE_BYTES;
+var BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = SERIALIZED_HEADER_BYTES + BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
+
 // src/world/WorldSource.ts
 function assertWorldSource(source) {
   if (!source || typeof source !== "object") throw new TypeError("world source must be an object");

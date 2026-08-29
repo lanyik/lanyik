@@ -572,6 +572,8 @@ surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
 
 v1 中，一个生成器版本唯一对应一个冻结风格配置，不增加第二套总是一起增长的风格版本。
 
+冻结之后，世界表面 v2 阶段 A 为共享 Worker 增加了独立的 `generateSemanticChunk` 任务，因此传输协议从 v2 升到 v3；v1 generator v5、packed chunk v1 和 descriptor v1 的内容及身份没有改变。新增任务使用独立的 v2 generator v6 identity，不能把两类响应互换。
+
 ### 10.3 唯一世界指纹
 
 继续使用现有规范序列化：
@@ -602,7 +604,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 
 generator v5 固定格子回归校验和分别为：无限区块 `ae84e215`、环绕区块 `cd8b9172`、有界世界 `50fc54b4`；规范量化地表校验和仍为 `7ffc9327`，森林/湖泊区域样本为 `e0291032`。一次性生成、区块生成和工作线程共享同一解析器；工作线程按完整描述符指纹复用解析器。
 
-阶段 3 升级过生成器版本与 Worker 协议；阶段 5 只升级生成器版本。PackedWorldChunk 和 descriptor 仍为 v1，Worker 协议仍为 v2；单一内部风格不增加描述符字段。
+阶段 3 升级过生成器版本与 Worker 协议；阶段 5 只升级生成器版本。在 v1 冻结点，PackedWorldChunk、descriptor 均为 v1，Worker 协议为 v2；后续 v2 阶段 A 只因新增独立任务把共享 Worker 协议推进到 v3，未改变这些 v1 payload。单一内部风格不增加描述符字段。
 
 旧生成器世界继续按严格描述符不匹配拒绝。自定义固定 worldId 的调用者必须主动迁移或清理旧地形编辑。
 

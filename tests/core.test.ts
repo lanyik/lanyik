@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
     EventEmitter,
+    createWorldDescriptorV2,
+    generateBaseSemanticChunk,
     generateWorld,
     generateWorldChunk,
     WORLD_GENERATOR_VERSION,
+    WORLD_SURFACE_V2_GENERATOR_VERSION,
     WORLD_WORKER_PROTOCOL_VERSION,
     WorldGeneratorClient
 } from "../src/index";
@@ -116,6 +119,27 @@ describe("core safeguards", () => {
             }
         });
         await expect(pending).resolves.toEqual(chunk);
+        client.dispose();
+    });
+
+    test("routes v2 semantic chunks under their own generator identity", async () => {
+        const client = new WorldGeneratorClient("worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const descriptor = createWorldDescriptorV2({ seed: "semantic-worker" });
+        const pending = client.generateSemanticChunk({ descriptor, key: { chunkX: -2, chunkY: 4 } });
+        const request = worker.messages[0] as { id: number; type: string; generatorVersion: number };
+        expect(request.type).toBe("generateSemanticChunk");
+        expect(request.generatorVersion).toBe(WORLD_SURFACE_V2_GENERATOR_VERSION);
+        const semanticChunk = generateBaseSemanticChunk({ descriptor, key: { chunkX: -2, chunkY: 4 } });
+        worker.emit("message", {
+            data: {
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                id: request.id,
+                semanticChunk
+            }
+        });
+        await expect(pending).resolves.toEqual(semanticChunk);
         client.dispose();
     });
 

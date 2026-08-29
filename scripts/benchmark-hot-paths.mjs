@@ -3,8 +3,11 @@ import {
     FogOfWar,
     Land,
     SparseWorldChunkStore,
+    BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
+    createWorldDescriptorV2,
     createWorldVegetationMapSnapshot,
     generateWorldChunk,
+    generateBaseSemanticChunk,
     generateWorldVegetation,
     getWorldChunkCorePoints,
     mergeBufferUpdateRanges,
@@ -79,6 +82,31 @@ function benchmarkToroidalWindow() {
         residentChunks: store.residentChunkCount,
         residentPayloadBytes: store.residentPayloadBytes,
         materializedColumns: Object.keys(store.map.data).length
+    };
+}
+
+function benchmarkSemanticChunkGeneration() {
+    const descriptor = createWorldDescriptorV2({ seed: "perf-semantic-v2" });
+    const started = performance.now();
+    let checksum = 0;
+    let chunks = 0;
+    for (let chunkX = -3; chunkX <= 3; chunkX += 1) {
+        for (let chunkY = -3; chunkY <= 3; chunkY += 1) {
+            const chunk = generateBaseSemanticChunk({ descriptor, key: { chunkX, chunkY } });
+            for (let index = 0; index < chunk.macroHeight.length; index += 31) {
+                checksum = (checksum + chunk.macroHeight[index]) % 0x1fffffffffffff;
+            }
+            chunks += 1;
+        }
+    }
+    const durationMs = performance.now() - started;
+    return {
+        operation: "49 semantic chunks (32x32) generator-v6",
+        durationMs: round(durationMs),
+        averageMs: round(durationMs / chunks),
+        chunks,
+        payloadBytes: chunks * BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
+        checksum
     };
 }
 
@@ -278,6 +306,7 @@ async function benchmarkSimulationRuntime() {
 const results = {
     sparseStore: benchmarkSparseStore(),
     toroidalWindow: benchmarkToroidalWindow(),
+    semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -304,6 +333,7 @@ if (process.argv.includes("--check")) {
     under("sparseStore.durationMs", results.sparseStore.durationMs, 500);
     under("sparseStore.residentPayloadBytes", results.sparseStore.residentPayloadBytes, 16 * 1024 * 1024);
     under("toroidalWindow.durationMs", results.toroidalWindow.durationMs, 750);
+    under("semanticChunkGeneration.durationMs", results.semanticChunkGeneration.durationMs, 1_500);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

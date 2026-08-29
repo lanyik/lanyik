@@ -2302,7 +2302,7 @@ function worldVegetationTransferables(layout) {
 
 // src/world/WorldDescriptor.ts
 var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-var WORLD_WORKER_PROTOCOL_VERSION = 2;
+var WORLD_WORKER_PROTOCOL_VERSION = 3;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -2389,10 +2389,524 @@ function serializeWorldDescriptor(descriptor) {
   ]);
 }
 
+// src/world/semantic/WorldSemanticCatalog.ts
+var WORLD_BIOME_BASIS = Object.freeze([
+  "temperate",
+  "dry",
+  "cold",
+  "alpine"
+]);
+var WORLD_SUBSTRATE_CATALOG = Object.freeze([
+  Object.freeze({ id: "sediment", class: 0 /* Sediment */ }),
+  Object.freeze({ id: "soil", class: 1 /* Soil */ }),
+  Object.freeze({ id: "sand", class: 2 /* Sand */ }),
+  Object.freeze({ id: "rock", class: 3 /* Rock */ }),
+  Object.freeze({ id: "permafrost", class: 4 /* Permafrost */ })
+]);
+var WORLD_VEGETATION_PROFILE_CATALOG = Object.freeze([
+  Object.freeze({ id: "none", species: Object.freeze([]) }),
+  Object.freeze({
+    id: "warm-palm-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "palm", weight: 204 }),
+      Object.freeze({ species: "oak", weight: 51 })
+    ])
+  }),
+  Object.freeze({
+    id: "cold-pinia-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "pinia", weight: 204 }),
+      Object.freeze({ species: "oak", weight: 51 })
+    ])
+  }),
+  Object.freeze({
+    id: "temperate-oak-mix",
+    species: Object.freeze([
+      Object.freeze({ species: "oak", weight: 178 }),
+      Object.freeze({ species: "pinia", weight: 51 }),
+      Object.freeze({ species: "palm", weight: 26 })
+    ])
+  })
+]);
+var WORLD_SUBSTRATE_CATALOG_IDENTITY = Object.freeze({
+  id: "three-hex-map/substrate-v1",
+  contentHash: "471edc137e2d634b36a2fa7452a9b72ef204258648b681b4357e72abad4d1561"
+});
+var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
+  id: "three-hex-map/vegetation-v1",
+  contentHash: "aa515fb7c895c1bd600b464119a9599e4963c466fcb35281f6824ce8911283ef"
+});
+
+// src/world/semantic/WorldSemanticFormat.ts
+var WORLD_SEMANTIC_CHUNK_SIZE = 32;
+var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
+var WORLD_SEMANTIC_CHUNK_FORMAT_VERSION = 2;
+var WORLD_SURFACE_V2_GENERATOR_VERSION = 6;
+var HYDROLOGY_REGION_FORMAT_VERSION = 1;
+var BASE_SEMANTIC_CHUNK_REVISION = 0;
+var FULL_SEMANTIC_CHUNK_BOUNDS = Object.freeze({
+  minX: 0,
+  minY: 0,
+  maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
+  maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
+});
+function assertSafeInteger(name, value) {
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+}
+function assertSemanticChunkKey(value) {
+  if (!value || typeof value !== "object") throw new TypeError("semantic chunk key must be an object");
+  if (Object.getOwnPropertyNames(value).some((name) => name !== "chunkX" && name !== "chunkY")) {
+    throw new TypeError("semantic chunk key contains unknown fields");
+  }
+  assertSafeInteger("semantic chunkX", value.chunkX);
+  assertSafeInteger("semantic chunkY", value.chunkY);
+  const originX = value.chunkX * WORLD_SEMANTIC_CHUNK_SIZE;
+  const originY = value.chunkY * WORLD_SEMANTIC_CHUNK_SIZE;
+  if (originX > Number.MAX_SAFE_INTEGER || originX + WORLD_SEMANTIC_CHUNK_SIZE - 1 < Number.MIN_SAFE_INTEGER || originY > Number.MAX_SAFE_INTEGER || originY + WORLD_SEMANTIC_CHUNK_SIZE - 1 < Number.MIN_SAFE_INTEGER) {
+    throw new RangeError("semantic chunk key exceeds the safe integer tile range");
+  }
+}
+function assertLocalTileBounds(value) {
+  if (!value || typeof value !== "object") throw new TypeError("local tile bounds must be an object");
+  const allowed = /* @__PURE__ */ new Set(["minX", "minY", "maxXExclusive", "maxYExclusive"]);
+  if (Object.getOwnPropertyNames(value).some((name) => !allowed.has(name))) {
+    throw new TypeError("local tile bounds contain unknown fields");
+  }
+  for (const [name, coordinate] of [
+    ["minX", value.minX],
+    ["minY", value.minY],
+    ["maxXExclusive", value.maxXExclusive],
+    ["maxYExclusive", value.maxYExclusive]
+  ]) {
+    if (!Number.isInteger(coordinate) || coordinate < 0 || coordinate > WORLD_SEMANTIC_CHUNK_SIZE) {
+      throw new RangeError(`local tile bounds ${name} must be an integer between 0 and ${WORLD_SEMANTIC_CHUNK_SIZE}`);
+    }
+  }
+  if (value.minX >= value.maxXExclusive || value.minY >= value.maxYExclusive) {
+    throw new RangeError("local tile bounds must contain at least one tile");
+  }
+}
+function semanticChunkLocalIndex(localX, localY) {
+  if (!Number.isInteger(localX) || localX < 0 || localX >= WORLD_SEMANTIC_CHUNK_SIZE || !Number.isInteger(localY) || localY < 0 || localY >= WORLD_SEMANTIC_CHUNK_SIZE) {
+    throw new RangeError(`semantic local coordinates must be integers between 0 and ${WORLD_SEMANTIC_CHUNK_SIZE - 1}`);
+  }
+  return localX * WORLD_SEMANTIC_CHUNK_SIZE + localY;
+}
+function semanticChunkOrigin(key) {
+  assertSemanticChunkKey(key);
+  return {
+    x: key.chunkX * WORLD_SEMANTIC_CHUNK_SIZE,
+    y: key.chunkY * WORLD_SEMANTIC_CHUNK_SIZE
+  };
+}
+function localBoundsContain(bounds, localX, localY) {
+  return localX >= bounds.minX && localX < bounds.maxXExclusive && localY >= bounds.minY && localY < bounds.maxYExclusive;
+}
+function positiveIntegerModulo(value, modulus) {
+  if (!Number.isSafeInteger(value)) throw new RangeError("modulo value must be a safe integer");
+  if (!Number.isSafeInteger(modulus) || modulus <= 0) {
+    throw new RangeError("modulo modulus must be a positive safe integer");
+  }
+  return value - Math.floor(value / modulus) * modulus;
+}
+
+// src/world/semantic/BaseSemanticChunk.ts
+var BIOME_CHANNELS = 4;
+var CLIMATE_CHANNELS = 2;
+var SERIALIZED_HEADER_BYTES = 40;
+var SUBSTRATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var MACRO_HEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * Uint16Array.BYTES_PER_ELEMENT;
+var BIOME_WEIGHT_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * BIOME_CHANNELS;
+var CLIMATE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNELS;
+var VEGETATION_DENSITY_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var VEGETATION_PROFILE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
+var BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = SUBSTRATE_BYTES + MACRO_HEIGHT_BYTES + BIOME_WEIGHT_BYTES + CLIMATE_BYTES + VEGETATION_DENSITY_BYTES + VEGETATION_PROFILE_BYTES;
+var BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = SERIALIZED_HEADER_BYTES + BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
+function assertArray(name, value, type, length) {
+  if (!(value instanceof type) || value.length !== length) {
+    throw new TypeError(`${name} must be a ${type.name} of length ${length}`);
+  }
+}
+function assertRevision(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError("semantic chunk revision must be a non-negative safe integer");
+  }
+}
+function assertInvalidTileIsZero(chunk, index) {
+  const biomeOffset = index * BIOME_CHANNELS;
+  const climateOffset = index * CLIMATE_CHANNELS;
+  if (chunk.substrateClass[index] !== 0 || chunk.macroHeight[index] !== 0 || chunk.biomeWeights[biomeOffset] !== 0 || chunk.biomeWeights[biomeOffset + 1] !== 0 || chunk.biomeWeights[biomeOffset + 2] !== 0 || chunk.biomeWeights[biomeOffset + 3] !== 0 || chunk.climate[climateOffset] !== 0 || chunk.climate[climateOffset + 1] !== 0 || chunk.vegetationDensity[index] !== 0 || chunk.vegetationProfile[index] !== 0) {
+    throw new TypeError("semantic chunk data outside validBounds must be zero-filled");
+  }
+}
+function assertBaseSemanticChunk(value) {
+  if (!value || typeof value !== "object") throw new TypeError("base semantic chunk must be an object");
+  const chunk = value;
+  const allowedFields = /* @__PURE__ */ new Set([
+    "key",
+    "revision",
+    "validBounds",
+    "substrateClass",
+    "macroHeight",
+    "biomeWeights",
+    "climate",
+    "vegetationDensity",
+    "vegetationProfile"
+  ]);
+  if (Object.getOwnPropertyNames(chunk).some((name) => !allowedFields.has(name))) {
+    throw new TypeError("base semantic chunk contains fields outside the v2 authority format");
+  }
+  assertSemanticChunkKey(chunk.key);
+  assertRevision(chunk.revision);
+  assertLocalTileBounds(chunk.validBounds);
+  assertArray("substrateClass", chunk.substrateClass, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  assertArray("macroHeight", chunk.macroHeight, Uint16Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  assertArray("biomeWeights", chunk.biomeWeights, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT * BIOME_CHANNELS);
+  assertArray("climate", chunk.climate, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT * CLIMATE_CHANNELS);
+  assertArray("vegetationDensity", chunk.vegetationDensity, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  assertArray("vegetationProfile", chunk.vegetationProfile, Uint8Array, WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  for (let localX = 0; localX < WORLD_SEMANTIC_CHUNK_SIZE; localX += 1) {
+    for (let localY = 0; localY < WORLD_SEMANTIC_CHUNK_SIZE; localY += 1) {
+      const index = semanticChunkLocalIndex(localX, localY);
+      if (!localBoundsContain(chunk.validBounds, localX, localY)) {
+        assertInvalidTileIsZero(chunk, index);
+        continue;
+      }
+      if (chunk.substrateClass[index] >= WORLD_SUBSTRATE_CATALOG.length) {
+        throw new TypeError("semantic chunk contains an unknown substrate class");
+      }
+      if (chunk.vegetationProfile[index] >= WORLD_VEGETATION_PROFILE_CATALOG.length) {
+        throw new TypeError("semantic chunk contains an unknown vegetation profile");
+      }
+      const biomeOffset = index * BIOME_CHANNELS;
+      const weightSum = chunk.biomeWeights[biomeOffset] + chunk.biomeWeights[biomeOffset + 1] + chunk.biomeWeights[biomeOffset + 2] + chunk.biomeWeights[biomeOffset + 3];
+      if (weightSum !== 255) {
+        throw new TypeError("semantic chunk biome weights must sum to 255 for every valid tile");
+      }
+    }
+  }
+}
+function baseSemanticChunkTransferables(chunk) {
+  assertBaseSemanticChunk(chunk);
+  const buffers = /* @__PURE__ */ new Set();
+  for (const array of [
+    chunk.substrateClass,
+    chunk.macroHeight,
+    chunk.biomeWeights,
+    chunk.climate,
+    chunk.vegetationDensity,
+    chunk.vegetationProfile
+  ]) {
+    if (!(array.buffer instanceof ArrayBuffer)) {
+      throw new TypeError("base semantic chunk arrays must use transferable ArrayBuffer storage");
+    }
+    buffers.add(array.buffer);
+  }
+  return [...buffers];
+}
+
+// src/world/semantic/WorldDescriptorV2.ts
+var WORLD_DESCRIPTOR_V2_FORMAT_VERSION = 2;
+function assertSeed(value) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new TypeError("v2 procedural world seed must be a string or number");
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new RangeError("v2 numeric world seed must be finite");
+  }
+}
+function assertDimension3(name, value) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`v2 world ${name} must be a positive safe integer`);
+  }
+}
+function assertToroidalDimensions(width, height) {
+  assertDimension3("width", width);
+  assertDimension3("height", height);
+  if (width < WORLD_SEMANTIC_CHUNK_SIZE || height < WORLD_SEMANTIC_CHUNK_SIZE || positiveIntegerModulo(width, WORLD_SEMANTIC_CHUNK_SIZE) !== 0 || positiveIntegerModulo(height, WORLD_SEMANTIC_CHUNK_SIZE) !== 0) {
+    throw new RangeError(
+      `v2 toroidal world dimensions must be multiples of ${WORLD_SEMANTIC_CHUNK_SIZE} and at least ${WORLD_SEMANTIC_CHUNK_SIZE}`
+    );
+  }
+}
+function catalogIdentityMatches(value, expected) {
+  return Boolean(value && typeof value === "object" && Object.getOwnPropertyNames(value).sort().join(",") === "contentHash,id" && value.id === expected.id && value.contentHash === expected.contentHash);
+}
+function assertWorldDescriptorV2(value) {
+  if (!value || typeof value !== "object") throw new TypeError("v2 world descriptor must be an object");
+  const descriptor = value;
+  if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_V2_FORMAT_VERSION) {
+    throw new TypeError(`unsupported v2 world descriptor format ${String(descriptor.descriptorVersion)}`);
+  }
+  if (descriptor.semanticChunkFormatVersion !== WORLD_SEMANTIC_CHUNK_FORMAT_VERSION || descriptor.hydrologyRegionFormatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
+    throw new TypeError("v2 world descriptor contains unsupported semantic or hydrology formats");
+  }
+  if (!Array.isArray(descriptor.biomeBasis) || descriptor.biomeBasis.length !== WORLD_BIOME_BASIS.length || descriptor.biomeBasis.some((value2, index) => value2 !== WORLD_BIOME_BASIS[index])) {
+    throw new TypeError("v2 world descriptor biome basis does not match this build");
+  }
+  if (!catalogIdentityMatches(descriptor.substrateCatalog, WORLD_SUBSTRATE_CATALOG_IDENTITY) || !catalogIdentityMatches(descriptor.vegetationCatalog, WORLD_VEGETATION_CATALOG_IDENTITY)) {
+    throw new TypeError("v2 world descriptor semantic catalog identity does not match this build");
+  }
+  const commonFields = [
+    "descriptorVersion",
+    "sourceKind",
+    "semanticChunkFormatVersion",
+    "hydrologyRegionFormatVersion",
+    "biomeBasis",
+    "substrateCatalog",
+    "vegetationCatalog",
+    "topology"
+  ];
+  const assertFields = (variantFields) => {
+    const allowed = /* @__PURE__ */ new Set([...commonFields, ...variantFields]);
+    if (Object.getOwnPropertyNames(descriptor).some((name) => !allowed.has(name))) {
+      throw new TypeError("v2 world descriptor contains unknown or deprecated fields");
+    }
+  };
+  if (descriptor.sourceKind === "procedural-infinite") {
+    assertFields(["seed", "generatorVersion"]);
+    assertSeed(descriptor.seed);
+    if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION || descriptor.topology !== "infinite" || "width" in descriptor || "height" in descriptor) {
+      throw new TypeError("v2 infinite world descriptor is invalid");
+    }
+    return;
+  }
+  if (descriptor.sourceKind === "procedural-toroidal") {
+    assertFields(["seed", "generatorVersion", "width", "height"]);
+    assertSeed(descriptor.seed);
+    if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION || descriptor.topology !== "toroidal") {
+      throw new TypeError("v2 toroidal world descriptor is invalid");
+    }
+    assertToroidalDimensions(descriptor.width, descriptor.height);
+    return;
+  }
+  if (descriptor.sourceKind === "static") {
+    assertFields(["sourceContentHash", "width", "height"]);
+    if (typeof descriptor.sourceContentHash !== "string" || !/^[a-f0-9]{64}$/.test(descriptor.sourceContentHash) || descriptor.topology !== "bounded" && descriptor.topology !== "toroidal") {
+      throw new TypeError("v2 static world descriptor is invalid");
+    }
+    if (descriptor.topology === "toroidal") {
+      assertToroidalDimensions(descriptor.width, descriptor.height);
+    } else {
+      assertDimension3("width", descriptor.width);
+      assertDimension3("height", descriptor.height);
+    }
+    return;
+  }
+  throw new TypeError("v2 world descriptor sourceKind is invalid");
+}
+function serializeWorldDescriptorV2(descriptor) {
+  assertWorldDescriptorV2(descriptor);
+  const common = [
+    descriptor.descriptorVersion,
+    descriptor.sourceKind,
+    descriptor.semanticChunkFormatVersion,
+    descriptor.hydrologyRegionFormatVersion,
+    [...descriptor.biomeBasis],
+    [descriptor.substrateCatalog.id, descriptor.substrateCatalog.contentHash],
+    [descriptor.vegetationCatalog.id, descriptor.vegetationCatalog.contentHash],
+    descriptor.topology
+  ];
+  if (descriptor.sourceKind === "procedural-infinite") {
+    return JSON.stringify([...common, descriptor.seed, descriptor.generatorVersion, null, null]);
+  }
+  if (descriptor.sourceKind === "procedural-toroidal") {
+    return JSON.stringify([
+      ...common,
+      descriptor.seed,
+      descriptor.generatorVersion,
+      descriptor.width,
+      descriptor.height
+    ]);
+  }
+  return JSON.stringify([
+    ...common,
+    descriptor.sourceContentHash,
+    null,
+    descriptor.width,
+    descriptor.height
+  ]);
+}
+function canonicalizeSemanticChunkKey(descriptor, key) {
+  assertWorldDescriptorV2(descriptor);
+  if (!Number.isSafeInteger(key?.chunkX) || !Number.isSafeInteger(key?.chunkY)) {
+    throw new RangeError("semantic chunk key must use safe integer coordinates");
+  }
+  if (descriptor.topology !== "toroidal") {
+    assertSemanticChunkKey(key);
+    return { chunkX: key.chunkX, chunkY: key.chunkY };
+  }
+  const chunksX = descriptor.width / WORLD_SEMANTIC_CHUNK_SIZE;
+  const chunksY = descriptor.height / WORLD_SEMANTIC_CHUNK_SIZE;
+  const canonical = {
+    chunkX: positiveIntegerModulo(key.chunkX, chunksX),
+    chunkY: positiveIntegerModulo(key.chunkY, chunksY)
+  };
+  assertSemanticChunkKey(canonical);
+  return canonical;
+}
+
+// src/world/semantic/generateBaseSemanticChunk.ts
+function clampUnit(value) {
+  if (!Number.isFinite(value)) throw new RangeError("semantic generator received a non-finite normalized value");
+  return Math.max(0, Math.min(1, value));
+}
+function quantizeUint8(value) {
+  return Math.floor(clampUnit(value) * 255 + 0.5);
+}
+function quantizeUint16(value) {
+  return Math.floor(clampUnit(value) * 65535 + 0.5);
+}
+function substrateFor(sample) {
+  switch (sample.baseTerrain) {
+    case "sea" /* sea */:
+    case "coastal" /* coastal */:
+      return 0 /* Sediment */;
+    case "sand" /* sand */:
+      return 2 /* Sand */;
+    case "mountain" /* mountain */:
+      return 3 /* Rock */;
+    case "tundra" /* tundra */:
+    case "snow" /* snow */:
+      return 4 /* Permafrost */;
+    case "land" /* land */:
+      return 1 /* Soil */;
+    default:
+      throw new TypeError(`semantic generator cannot map terrain ${String(sample.baseTerrain)} to substrate`);
+  }
+}
+function fallbackBiomeIndex(substrate) {
+  switch (substrate) {
+    case 2 /* Sand */:
+      return 1;
+    case 4 /* Permafrost */:
+      return 2;
+    case 3 /* Rock */:
+      return 3;
+    default:
+      return 0;
+  }
+}
+function quantizeBiomeWeights(sample, substrate) {
+  const weights = [
+    sample.biomeWeights.temperate,
+    sample.biomeWeights.dry,
+    sample.biomeWeights.cold,
+    sample.biomeWeights.alpine
+  ];
+  if (weights.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new RangeError("semantic generator received invalid biome weights");
+  }
+  const sum = weights.reduce((total, value) => total + value, 0);
+  if (sum <= 0) {
+    const fallback = [0, 0, 0, 0];
+    fallback[fallbackBiomeIndex(substrate)] = 255;
+    return fallback;
+  }
+  const scaled = weights.map((value) => value / sum * 255);
+  const quantized = scaled.map((value) => Math.floor(value));
+  let remaining = 255 - quantized.reduce((total, value) => total + value, 0);
+  const order = scaled.map((value, index) => ({ index, remainder: value - quantized[index] })).sort((first, second) => second.remainder - first.remainder || first.index - second.index);
+  for (let index = 0; index < order.length && remaining > 0; index += 1, remaining -= 1) {
+    quantized[order[index].index] += 1;
+  }
+  return quantized;
+}
+function vegetationProfileFor(sample, density) {
+  if (density === 0 || sample.vegetationKind === void 0) return 0;
+  switch (sample.vegetationKind) {
+    case "palm":
+      return 1;
+    case "pinia":
+      return 2;
+    case "oak":
+      return 3;
+  }
+}
+function assertResolverMatches(resolver, descriptor) {
+  if (!resolver || resolver.seed !== descriptor.seed || resolver.domain.topology !== descriptor.topology || descriptor.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== descriptor.width || resolver.domain.height !== descriptor.height)) {
+    throw new TypeError("world surface resolver does not match the v2 semantic chunk request");
+  }
+}
+function validBoundsForInfiniteChunk(origin) {
+  const minX = Math.max(0, Number.MIN_SAFE_INTEGER - origin.x);
+  const minY = Math.max(0, Number.MIN_SAFE_INTEGER - origin.y);
+  const maxXExclusive = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, Number.MAX_SAFE_INTEGER - origin.x + 1);
+  const maxYExclusive = Math.min(WORLD_SEMANTIC_CHUNK_SIZE, Number.MAX_SAFE_INTEGER - origin.y + 1);
+  return Object.freeze({ minX, minY, maxXExclusive, maxYExclusive });
+}
+function requireProceduralDescriptor(value) {
+  assertWorldDescriptorV2(value);
+  if (value.sourceKind === "static") {
+    throw new TypeError("static v2 descriptors cannot be evaluated by the procedural semantic generator");
+  }
+  return value;
+}
+function createSemanticChunkSurfaceResolver(descriptor) {
+  const candidate = requireProceduralDescriptor(descriptor);
+  return createWorldSurfaceResolver({
+    seed: candidate.seed,
+    domain: candidate.topology === "toroidal" ? { topology: "toroidal", width: candidate.width, height: candidate.height } : { topology: "infinite" }
+  });
+}
+function generateBaseSemanticChunkWithResolver(options, resolver) {
+  if (!options || typeof options !== "object") {
+    throw new TypeError("base semantic chunk generation options are required");
+  }
+  const descriptor = requireProceduralDescriptor(options.descriptor);
+  const key = canonicalizeSemanticChunkKey(descriptor, options.key);
+  const origin = semanticChunkOrigin(key);
+  const validBounds = descriptor.topology === "infinite" ? validBoundsForInfiniteChunk(origin) : FULL_SEMANTIC_CHUNK_BOUNDS;
+  assertResolverMatches(resolver, descriptor);
+  const substrateClass = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  const macroHeight = new Uint16Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  const biomeWeights = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT * 4);
+  const climate = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT * 2);
+  const vegetationDensity = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  const vegetationProfile = new Uint8Array(WORLD_SEMANTIC_CHUNK_TILE_COUNT);
+  for (let localX = 0; localX < WORLD_SEMANTIC_CHUNK_SIZE; localX += 1) {
+    for (let localY = 0; localY < WORLD_SEMANTIC_CHUNK_SIZE; localY += 1) {
+      const index = semanticChunkLocalIndex(localX, localY);
+      if (!localBoundsContain(validBounds, localX, localY)) continue;
+      const sample = resolver.sampleGenerated(origin.x + localX, origin.y + localY);
+      const substrate = substrateFor(sample);
+      const weights = quantizeBiomeWeights(sample, substrate);
+      const density = quantizeUint8(sample.vegetationDensity);
+      substrateClass[index] = substrate;
+      macroHeight[index] = quantizeUint16(sample.landform.elevation);
+      const biomeOffset = index * 4;
+      biomeWeights[biomeOffset] = weights[0];
+      biomeWeights[biomeOffset + 1] = weights[1];
+      biomeWeights[biomeOffset + 2] = weights[2];
+      biomeWeights[biomeOffset + 3] = weights[3];
+      const climateOffset = index * 2;
+      climate[climateOffset] = quantizeUint8(sample.landform.temperature);
+      climate[climateOffset + 1] = quantizeUint8(sample.landform.moisture);
+      vegetationDensity[index] = density;
+      vegetationProfile[index] = vegetationProfileFor(sample, density);
+    }
+  }
+  const chunk = Object.freeze({
+    key: Object.freeze(key),
+    revision: BASE_SEMANTIC_CHUNK_REVISION,
+    validBounds,
+    substrateClass,
+    macroHeight,
+    biomeWeights,
+    climate,
+    vegetationDensity,
+    vegetationProfile
+  });
+  assertBaseSemanticChunk(chunk);
+  return chunk;
+}
+
 // src/world/generateWorld.worker.ts
 var scope = globalThis;
 var chunkResolver;
 var chunkResolverKey;
+var semanticResolver;
+var semanticResolverKey;
 function resolverFor(options) {
   const key = serializeWorldDescriptor(createWorldDescriptor({
     seed: options.seed,
@@ -2405,13 +2919,35 @@ function resolverFor(options) {
   }
   return chunkResolver;
 }
+function semanticResolverFor(options) {
+  const key = serializeWorldDescriptorV2(options.descriptor);
+  if (!semanticResolver || semanticResolverKey !== key) {
+    semanticResolver = createSemanticChunkSurfaceResolver(options.descriptor);
+    semanticResolverKey = key;
+  }
+  return semanticResolver;
+}
+function requestGeneratorVersion(request) {
+  return request.type === "generateSemanticChunk" ? WORLD_SURFACE_V2_GENERATOR_VERSION : WORLD_GENERATOR_VERSION;
+}
 scope.addEventListener("message", (event) => {
   try {
     const request = event.data;
-    if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || request.generatorVersion !== WORLD_GENERATOR_VERSION || !Number.isSafeInteger(request.id) || !request.options || !["world", "chunk", "vegetation"].includes(request.type)) {
+    if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || !Number.isSafeInteger(request.id) || !request.options || !["world", "chunk", "vegetation", "generateSemanticChunk"].includes(request.type) || request.generatorVersion !== requestGeneratorVersion(request)) {
       throw new TypeError("World generator received an invalid request");
     }
-    if (request.type === "chunk") {
+    if (request.type === "generateSemanticChunk") {
+      const semanticChunk = generateBaseSemanticChunkWithResolver(
+        request.options,
+        semanticResolverFor(request.options)
+      );
+      scope.postMessage({
+        protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+        generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+        id: request.id,
+        semanticChunk
+      }, baseSemanticChunkTransferables(semanticChunk));
+    } else if (request.type === "chunk") {
       const chunk = generateWorldChunkWithResolver(request.options, resolverFor(request.options));
       scope.postMessage({
         protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
@@ -2439,7 +2975,7 @@ scope.addEventListener("message", (event) => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
     scope.postMessage({
       protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
-      generatorVersion: WORLD_GENERATOR_VERSION,
+      generatorVersion: event.data?.type === "generateSemanticChunk" ? WORLD_SURFACE_V2_GENERATOR_VERSION : WORLD_GENERATOR_VERSION,
       id: event.data?.id,
       error: { name: error.name, message: error.message, stack: error.stack }
     });

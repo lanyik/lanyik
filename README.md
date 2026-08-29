@@ -25,7 +25,8 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 is frozen on generator v5 with continuous relief, climate, regional forests, lakes and fixed gallery gates |
-| Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
+| Surface foundation v2 | Stage A now provides the v2 descriptor, fixed 32x32 semantic SoA format and generator-v6 Worker task; production rendering remains on v1 |
+| Next milestone | Implement v2 macro hydrology and stable cross-region water-body authority |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
