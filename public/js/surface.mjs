@@ -234,6 +234,207 @@ if (SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL !== 18 || SURFACE_FIELD_CPU_BYTES !== 
   throw new Error("compiled surface field constants do not match the frozen logical layout");
 }
 
+// src/world/WorldGrid.ts
+function assertLogicalCoordinate(name, value) {
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+}
+function chunkLocation(tileX, tileY, chunkSize) {
+  assertLogicalCoordinate("logical tile x", tileX);
+  assertLogicalCoordinate("logical tile y", tileY);
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+    throw new RangeError("chunk size must be a positive safe integer");
+  }
+  const chunkX = Math.floor(tileX / chunkSize);
+  const chunkY = Math.floor(tileY / chunkSize);
+  return {
+    chunkX,
+    chunkY,
+    localX: tileX - chunkX * chunkSize,
+    localY: tileY - chunkY * chunkSize
+  };
+}
+function hydrologyRegionLocation(tileX, tileY) {
+  return chunkLocation(tileX, tileY, HYDROLOGY_REGION_SIZE);
+}
+function chunkOrigin(chunkX, chunkY, chunkSize) {
+  assertLogicalCoordinate("chunk x", chunkX);
+  assertLogicalCoordinate("chunk y", chunkY);
+  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+    throw new RangeError("chunk size must be a positive safe integer");
+  }
+  const x = chunkX * chunkSize;
+  const y = chunkY * chunkSize;
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(x + chunkSize - 1) || !Number.isSafeInteger(y + chunkSize - 1)) {
+    throw new RangeError("chunk bounds exceed the safe logical coordinate range");
+  }
+  return { x, y };
+}
+
+// src/world/SurfaceDependencyKey.ts
+var SURFACE_DEPENDENCY_KEY_FORMAT_VERSION = 1;
+var MAX_SURFACE_DEPENDENCY_SEMANTIC_CHUNKS = 4;
+var MAX_SURFACE_DEPENDENCY_HYDROLOGY_REGIONS = 4;
+var MAX_SURFACE_DEPENDENCY_HYDROLOGY_FEATURES = 1024;
+function assertRevision(name, value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function assertFeatureId(featureId) {
+  if (typeof featureId !== "string" || featureId.length === 0 || featureId.length > 256 || featureId.trim() !== featureId || /[\u0000-\u001f\u007f]/u.test(featureId)) {
+    throw new TypeError("surface dependency hydrology feature ID is invalid");
+  }
+}
+function assertMetrics(metrics) {
+  if (!metrics || typeof metrics !== "object" || !Number.isFinite(metrics.hexSize) || metrics.hexSize <= 0 || !Number.isFinite(metrics.heightScale) || metrics.heightScale <= 0) {
+    throw new RangeError("surface compile metrics must use positive finite scales");
+  }
+}
+function assertCoordinateOrder(name, values, chunkSize, maximum, coordinate) {
+  if (!Array.isArray(values) || values.length === 0 || values.length > maximum) {
+    throw new RangeError(`${name} dependency count is outside its fixed budget`);
+  }
+  let previous;
+  for (const value of values) {
+    if (!value || typeof value !== "object") {
+      throw new TypeError(`${name} dependency is invalid`);
+    }
+    const currentCoordinate = coordinate(value);
+    chunkOrigin(currentCoordinate.x, currentCoordinate.y, chunkSize);
+    if (previous) {
+      const previousCoordinate = coordinate(previous);
+      if (previousCoordinate.x > currentCoordinate.x || previousCoordinate.x === currentCoordinate.x && previousCoordinate.y >= currentCoordinate.y) {
+        throw new Error(`${name} dependencies must use unique ascending keys`);
+      }
+    }
+    previous = value;
+  }
+}
+function assertSurfaceRequestToken(token) {
+  if (!token || typeof token !== "object") throw new TypeError("surface request token is required");
+  assertRevision("surface request session epoch", token.sessionEpoch);
+  assertRevision("surface request render chunk generation", token.renderChunkGeneration);
+}
+function createSurfaceRequestToken(sessionEpoch, renderChunkGeneration) {
+  const token = Object.freeze({ sessionEpoch, renderChunkGeneration });
+  assertSurfaceRequestToken(token);
+  return token;
+}
+function surfaceRequestTokensEqual(first, second) {
+  return first.sessionEpoch === second.sessionEpoch && first.renderChunkGeneration === second.renderChunkGeneration;
+}
+function assertSurfaceDependencyKey(key) {
+  if (!key || typeof key !== "object" || key.formatVersion !== SURFACE_DEPENDENCY_KEY_FORMAT_VERSION || key.compilerRevision !== SURFACE_COMPILER_REVISION || key.compileProfileVersion !== SURFACE_COMPILE_PROFILE_VERSION || typeof key.worldIdentity !== "string" || key.worldIdentity.length === 0 || key.worldIdentity.length > 16384) {
+    throw new TypeError("surface dependency key identity or format is invalid");
+  }
+  chunkOrigin(key.renderKey.chunkX, key.renderKey.chunkY, SURFACE_COMPILE_PROFILE.renderChunkSize);
+  assertMetrics(key.metrics);
+  assertCoordinateOrder(
+    "surface semantic",
+    key.semantic,
+    WORLD_SEMANTIC_CHUNK_SIZE,
+    MAX_SURFACE_DEPENDENCY_SEMANTIC_CHUNKS,
+    (dependency) => ({ x: dependency.key.chunkX, y: dependency.key.chunkY })
+  );
+  for (const dependency of key.semantic) {
+    assertRevision("surface semantic base revision", dependency.baseRevision);
+    assertRevision("surface semantic delta revision", dependency.deltaRevision);
+  }
+  assertCoordinateOrder(
+    "surface hydrology region",
+    key.hydrologyRegions,
+    HYDROLOGY_REGION_SIZE,
+    MAX_SURFACE_DEPENDENCY_HYDROLOGY_REGIONS,
+    (dependency) => ({ x: dependency.key.regionX, y: dependency.key.regionY })
+  );
+  for (const dependency of key.hydrologyRegions) {
+    assertRevision("surface hydrology base revision", dependency.baseRevision);
+  }
+  if (!Array.isArray(key.hydrologyFeatures) || key.hydrologyFeatures.length > MAX_SURFACE_DEPENDENCY_HYDROLOGY_FEATURES) {
+    throw new RangeError("surface hydrology feature dependency count exceeds its fixed budget");
+  }
+  let previousFeatureId;
+  for (const dependency of key.hydrologyFeatures) {
+    if (!dependency || typeof dependency !== "object") {
+      throw new TypeError("surface hydrology feature dependency is invalid");
+    }
+    assertFeatureId(dependency.featureId);
+    if (dependency.featureKind !== "river" && dependency.featureKind !== "lake") {
+      throw new TypeError("surface hydrology feature dependency kind is invalid");
+    }
+    assertRevision("surface hydrology feature revision", dependency.revision);
+    if (dependency.revision === 0) {
+      throw new RangeError("surface hydrology feature dependency must refer to a delta revision");
+    }
+    if (previousFeatureId !== void 0 && previousFeatureId >= dependency.featureId) {
+      throw new Error("surface hydrology feature dependencies must use unique ascending identities");
+    }
+    previousFeatureId = dependency.featureId;
+  }
+}
+function createSurfaceDependencyKey(input) {
+  if (!input || typeof input !== "object") throw new TypeError("surface dependency key input is required");
+  const key = Object.freeze({
+    formatVersion: SURFACE_DEPENDENCY_KEY_FORMAT_VERSION,
+    worldIdentity: input.worldIdentity,
+    renderKey: Object.freeze({ chunkX: input.renderKey.chunkX, chunkY: input.renderKey.chunkY }),
+    compilerRevision: SURFACE_COMPILER_REVISION,
+    compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+    metrics: Object.freeze({ hexSize: input.metrics.hexSize, heightScale: input.metrics.heightScale }),
+    semantic: Object.freeze(input.semantic.map((dependency) => Object.freeze({
+      key: Object.freeze({ chunkX: dependency.key.chunkX, chunkY: dependency.key.chunkY }),
+      baseRevision: dependency.baseRevision,
+      deltaRevision: dependency.deltaRevision
+    }))),
+    hydrologyRegions: Object.freeze(input.hydrologyRegions.map((dependency) => Object.freeze({
+      key: Object.freeze({
+        regionX: dependency.key.regionX,
+        regionY: dependency.key.regionY
+      }),
+      baseRevision: dependency.baseRevision
+    }))),
+    hydrologyFeatures: Object.freeze(input.hydrologyFeatures.map((dependency) => Object.freeze({
+      featureId: dependency.featureId,
+      featureKind: dependency.featureKind,
+      revision: dependency.revision
+    })))
+  });
+  assertSurfaceDependencyKey(key);
+  return key;
+}
+function serializeSurfaceDependencyKey(key) {
+  assertSurfaceDependencyKey(key);
+  return JSON.stringify([
+    key.formatVersion,
+    key.worldIdentity,
+    key.renderKey.chunkX,
+    key.renderKey.chunkY,
+    key.compilerRevision,
+    key.compileProfileVersion,
+    key.metrics.hexSize,
+    key.metrics.heightScale,
+    key.semantic.map((dependency) => [
+      dependency.key.chunkX,
+      dependency.key.chunkY,
+      dependency.baseRevision,
+      dependency.deltaRevision
+    ]),
+    key.hydrologyRegions.map((dependency) => [
+      dependency.key.regionX,
+      dependency.key.regionY,
+      dependency.baseRevision
+    ]),
+    key.hydrologyFeatures.map((dependency) => [
+      dependency.featureId,
+      dependency.featureKind,
+      dependency.revision
+    ])
+  ]);
+}
+function surfaceDependencyKeysEqual(first, second) {
+  return serializeSurfaceDependencyKey(first) === serializeSurfaceDependencyKey(second);
+}
+
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
 function getNeighborCoords(x, y, direction) {
@@ -581,42 +782,6 @@ function createCoreToroidalWorldDescriptorV2(seed, width, height) {
     width,
     height
   });
-}
-
-// src/world/WorldGrid.ts
-function assertLogicalCoordinate(name, value) {
-  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
-}
-function chunkLocation(tileX, tileY, chunkSize) {
-  assertLogicalCoordinate("logical tile x", tileX);
-  assertLogicalCoordinate("logical tile y", tileY);
-  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
-    throw new RangeError("chunk size must be a positive safe integer");
-  }
-  const chunkX = Math.floor(tileX / chunkSize);
-  const chunkY = Math.floor(tileY / chunkSize);
-  return {
-    chunkX,
-    chunkY,
-    localX: tileX - chunkX * chunkSize,
-    localY: tileY - chunkY * chunkSize
-  };
-}
-function hydrologyRegionLocation(tileX, tileY) {
-  return chunkLocation(tileX, tileY, HYDROLOGY_REGION_SIZE);
-}
-function chunkOrigin(chunkX, chunkY, chunkSize) {
-  assertLogicalCoordinate("chunk x", chunkX);
-  assertLogicalCoordinate("chunk y", chunkY);
-  if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
-    throw new RangeError("chunk size must be a positive safe integer");
-  }
-  const x = chunkX * chunkSize;
-  const y = chunkY * chunkSize;
-  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || !Number.isSafeInteger(x + chunkSize - 1) || !Number.isSafeInteger(y + chunkSize - 1)) {
-    throw new RangeError("chunk bounds exceed the safe logical coordinate range");
-  }
-  return { x, y };
 }
 
 // src/world/BaseSemanticChunk.ts
@@ -2999,12 +3164,12 @@ function semanticKeyIdentity(key) {
 function compareSemanticKeys(first, second) {
   return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
 }
-function assertRevision(name, revision) {
+function assertRevision2(name, revision) {
   if (!Number.isSafeInteger(revision) || revision < 0) {
     throw new RangeError(`${name} must be a non-negative safe integer`);
   }
 }
-function assertFeatureId(name, featureId) {
+function assertFeatureId2(name, featureId) {
   if (typeof featureId !== "string" || featureId.length === 0 || featureId.length > 256 || featureId.trim() !== featureId || /[\u0000-\u001f\u007f]/u.test(featureId)) {
     throw new TypeError(`${name} must be a canonical stable identity`);
   }
@@ -3071,7 +3236,7 @@ function assertGraphNode(node, expectedId) {
   if (!node || typeof node !== "object" || node.featureId !== expectedId) {
     throw new TypeError("base hydrology feature index returned a mismatched feature identity");
   }
-  assertFeatureId("base hydrology feature", node.featureId);
+  assertFeatureId2("base hydrology feature", node.featureId);
   if (node.kind === "lake") {
     if (!Number.isInteger(node.level) || node.level < 0 || node.level > 65535) {
       throw new RangeError("base hydrology lake level must be a uint16 value");
@@ -3084,13 +3249,13 @@ function assertGraphNode(node, expectedId) {
   if (!node.source || typeof node.source !== "object" || !node.outlet || typeof node.outlet !== "object") {
     throw new TypeError("base hydrology river source and outlet are required");
   }
-  if (node.source.kind === "spring") assertFeatureId("base hydrology spring", node.source.sourceId);
-  else if (node.source.kind === "river") assertFeatureId("base hydrology source river", node.source.riverId);
+  if (node.source.kind === "spring") assertFeatureId2("base hydrology spring", node.source.sourceId);
+  else if (node.source.kind === "river") assertFeatureId2("base hydrology source river", node.source.riverId);
   else throw new TypeError("base hydrology river source kind is invalid");
   if (node.outlet.kind === "ocean") {
     if (node.outlet.bodyId !== "ocean") throw new Error("base hydrology ocean outlet must use ocean");
-  } else if (node.outlet.kind === "lake") assertFeatureId("base hydrology outlet lake", node.outlet.bodyId);
-  else if (node.outlet.kind === "river") assertFeatureId("base hydrology outlet river", node.outlet.riverId);
+  } else if (node.outlet.kind === "lake") assertFeatureId2("base hydrology outlet lake", node.outlet.bodyId);
+  else if (node.outlet.kind === "river") assertFeatureId2("base hydrology outlet river", node.outlet.riverId);
   else throw new TypeError("base hydrology river outlet kind is invalid");
 }
 function assertCanonicalReferences(featureId, references) {
@@ -3099,7 +3264,7 @@ function assertCanonicalReferences(featureId, references) {
   }
   let previous;
   for (const reference of references) {
-    assertFeatureId("base hydrology reverse reference", reference);
+    assertFeatureId2("base hydrology reverse reference", reference);
     if (previous !== void 0 && previous >= reference) {
       throw new Error("base hydrology reverse references must use unique ascending identities");
     }
@@ -3127,7 +3292,7 @@ var SurfaceDeltaSnapshot = class {
     return this.state.semanticByKey.get(semanticKeyIdentity({ chunkX, chunkY }))?.revision ?? 0;
   }
   getHydrologyDelta(featureId) {
-    assertFeatureId("hydrology snapshot feature", featureId);
+    assertFeatureId2("hydrology snapshot feature", featureId);
     return this.state.hydrologyById.get(featureId);
   }
   getHydrologyRevision(featureId) {
@@ -3206,7 +3371,7 @@ var MemorySurfaceDeltaStore = class {
         throw new TypeError("surface semantic mutation operation is invalid");
       }
       assertCanonicalSemanticKey(this.descriptor, mutation.key);
-      assertRevision("surface semantic expected revision", mutation.expectedRevision);
+      assertRevision2("surface semantic expected revision", mutation.expectedRevision);
       const identity = semanticKeyIdentity(mutation.key);
       if (semanticKeys.has(identity)) throw new Error("surface delta transaction contains duplicate semantic chunks");
       semanticKeys.add(identity);
@@ -3216,11 +3381,11 @@ var MemorySurfaceDeltaStore = class {
       if (!mutation || typeof mutation !== "object" || mutation.operation !== "upsert" && mutation.operation !== "delete") {
         throw new TypeError("surface hydrology mutation operation is invalid");
       }
-      assertFeatureId("surface hydrology mutation", mutation.featureId);
+      assertFeatureId2("surface hydrology mutation", mutation.featureId);
       if (mutation.featureKind !== "river" && mutation.featureKind !== "lake") {
         throw new TypeError("surface hydrology mutation kind is invalid");
       }
-      assertRevision("surface hydrology expected revision", mutation.expectedRevision);
+      assertRevision2("surface hydrology expected revision", mutation.expectedRevision);
       if (featureIds.has(mutation.featureId)) {
         throw new Error("surface delta transaction contains duplicate hydrology features");
       }
@@ -7661,6 +7826,9 @@ export {
   MAX_LAKE_RADIUS_TILES,
   MAX_MACRO_DRAINAGE_GRAPH_NODES,
   MAX_SURFACE_DELTA_TRANSACTION_MUTATIONS,
+  MAX_SURFACE_DEPENDENCY_HYDROLOGY_FEATURES,
+  MAX_SURFACE_DEPENDENCY_HYDROLOGY_REGIONS,
+  MAX_SURFACE_DEPENDENCY_SEMANTIC_CHUNKS,
   MIN_INFINITE_HYDROLOGY_RESIDENT_BASINS,
   MIN_LAKE_RADIUS_TILES,
   MIN_RIVER_DISCHARGE,
@@ -7686,6 +7854,7 @@ export {
   SURFACE_COMPILE_PROFILE_VERSION,
   SURFACE_CORE_TEXELS,
   SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
+  SURFACE_DEPENDENCY_KEY_FORMAT_VERSION,
   SURFACE_WATER_KIND_LAKE,
   SURFACE_WATER_KIND_NONE,
   SURFACE_WATER_KIND_OCEAN,
@@ -7716,6 +7885,8 @@ export {
   assertMacroDrainageGraph,
   assertSemanticWorldSource,
   assertSparseSemanticDelta,
+  assertSurfaceDependencyKey,
+  assertSurfaceRequestToken,
   assertWorldDescriptorV2,
   authoredHydrologyFeatureBoundsQ64,
   authoredHydrologyPoint,
@@ -7736,6 +7907,8 @@ export {
   createHydrologyRegion,
   createProceduralHydrologyRegionGenerator,
   createSparseSemanticDelta,
+  createSurfaceDependencyKey,
+  createSurfaceRequestToken,
   createWorldDescriptorV2,
   deriveHydrologyRaster,
   derivedHydrologyRasterIndex,
@@ -7763,11 +7936,14 @@ export {
   semanticTileIndex,
   serializeBaseSemanticChunk,
   serializeSparseSemanticDelta,
+  serializeSurfaceDependencyKey,
   serializeWorldDescriptorV2,
   sparseSemanticDeltaEntryIndex,
   sparseSemanticDeltaSerializedBytes,
   surfaceColumnStagger,
+  surfaceDependencyKeysEqual,
   surfaceFieldTexelIndex,
+  surfaceRequestTokensEqual,
   surfaceStagger,
   surfaceTexelCenterAxis,
   surfaceToWorld,

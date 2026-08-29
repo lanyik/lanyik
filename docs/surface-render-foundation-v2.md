@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec 与 66×66 SoA 输出格式已冻结，save barrier、持久化 store、编译传输窗口、编译算法及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key 与 request token 已冻结，save barrier、持久化 store、编译传输窗口、编译算法及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -464,6 +464,8 @@ interface ResidentSurfaceLease {
 ~~~
 
 `SurfaceDependencyKey` 是可跨任务和同 world session 缓存复用的内容身份，精确包含 world identity、render key、compile profile/compiler revision，以及按规范顺序排列的 semantic chunk、hydrology region 和 hydrology feature key/revision。内容 hash 只能加速查找，不能代替完整结构化依赖作正确性判断。
+
+已落地的 dependency key 格式版本 1 还显式包含 `hexSize` 与 `heightScale` 两项正有限编译度量：前者决定 `surfaceToWorld` 距离、河宽和 shoreline SDF，后者把归一化 `macroHeight` 映射到玩法世界 Y；二者变化都必须导致 cache miss，不能藏在 renderer uniform 中复用旧 CPU 查询结果。一个 16×16 核心加两格 halo 最多依赖 4 个有序 semantic chunks、4 个有序 hydrology regions 和 1024 个有序 feature deltas，越界或重复直接拒绝。结构化序列化不包含 request token，因此相同内容可为新挂载 generation 复用。
 
 `SurfaceRequestToken` 是 service 为一次挂载需求签发的 `{ sessionEpoch, renderChunkGeneration }` 不透明令牌，只用于拒绝迟到 Worker、上传和挂载结果，不进入内容缓存键。Worker 结果必须同时满足“request token 仍是该 render chunk 当前令牌”和“compiled dependency key 等于当前依赖”；任一不匹配都丢弃。
 

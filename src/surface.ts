@@ -36,6 +36,30 @@ export type {
 } from "./world/CompiledSurfaceField";
 
 export {
+    SURFACE_DEPENDENCY_KEY_FORMAT_VERSION,
+    MAX_SURFACE_DEPENDENCY_SEMANTIC_CHUNKS,
+    MAX_SURFACE_DEPENDENCY_HYDROLOGY_REGIONS,
+    MAX_SURFACE_DEPENDENCY_HYDROLOGY_FEATURES,
+    assertSurfaceRequestToken,
+    createSurfaceRequestToken,
+    surfaceRequestTokensEqual,
+    assertSurfaceDependencyKey,
+    createSurfaceDependencyKey,
+    serializeSurfaceDependencyKey,
+    surfaceDependencyKeysEqual
+} from "./world/SurfaceDependencyKey";
+export type {
+    RenderChunkKey,
+    SurfaceCompileMetrics,
+    SurfaceSemanticDependency,
+    SurfaceHydrologyRegionDependency,
+    SurfaceHydrologyFeatureDependency,
+    SurfaceDependencyKey,
+    SurfaceDependencyKeyInput,
+    SurfaceRequestToken
+} from "./world/SurfaceDependencyKey";
+
+export {
     surfaceColumnStagger,
     surfaceStagger,
     surfaceToWorld,
