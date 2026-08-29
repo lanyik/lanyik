@@ -8,12 +8,15 @@ import { HydrologyRegion } from "./HydrologyRegion";
 import {
     GenerateHydrologyRegionOptions,
     GenerateSemanticChunkOptions,
+    CompileSurfaceChunkOptions,
+    SurfaceCompileResult,
     SurfaceWorkerClient
 } from "./SurfaceWorkerClient";
 
 export interface SurfaceTaskWorkerClient {
     generateSemanticChunk(options: Readonly<GenerateSemanticChunkOptions>): Promise<BaseSemanticChunk>;
     generateHydrologyRegion(options: Readonly<GenerateHydrologyRegionOptions>): Promise<HydrologyRegion>;
+    compileSurfaceChunk(options: Readonly<CompileSurfaceChunkOptions>): Promise<SurfaceCompileResult>;
     dispose(): void;
     readonly isDisposed?: boolean;
 }
@@ -50,12 +53,14 @@ export interface SurfaceWorkerPoolStats {
     readonly starvationPromotions: number;
     readonly completedSemanticChunks: number;
     readonly completedHydrologyRegions: number;
+    readonly completedSurfaceChunks: number;
     readonly averageSemanticChunkMs: number;
     readonly averageHydrologyRegionMs: number;
+    readonly averageSurfaceCompileMs: number;
 }
 
-type SurfaceTaskResult = BaseSemanticChunk | HydrologyRegion;
-type SurfaceTaskKind = "semantic" | "hydrology";
+type SurfaceTaskResult = BaseSemanticChunk | HydrologyRegion | SurfaceCompileResult;
+type SurfaceTaskKind = "semantic" | "hydrology" | "surface";
 
 interface SurfaceTask {
     readonly kind: SurfaceTaskKind;
@@ -66,6 +71,7 @@ interface SurfaceTask {
     queueId?: number;
     abort?: () => void;
     attempts: number;
+    readonly retryable: boolean;
     settled: boolean;
 }
 
@@ -97,8 +103,10 @@ export class SurfaceWorkerPool {
     private retried = 0;
     private completedSemanticChunks = 0;
     private completedHydrologyRegions = 0;
+    private completedSurfaceChunks = 0;
     private averageSemanticChunkMs = 0;
     private averageHydrologyRegionMs = 0;
+    private averageSurfaceCompileMs = 0;
     private disposed = false;
 
     constructor(workerUrl: string | URL, options: Readonly<SurfaceWorkerPoolOptions> = {}) {
@@ -150,7 +158,8 @@ export class SurfaceWorkerPool {
         return this.enqueueTask(
             "semantic",
             client => client.generateSemanticChunk(taskOptions),
-            request
+            request,
+            true
         );
     }
 
@@ -168,14 +177,40 @@ export class SurfaceWorkerPool {
         return this.enqueueTask(
             "hydrology",
             client => client.generateHydrologyRegion(taskOptions),
-            request
+            request,
+            true
+        );
+    }
+
+    public compileSurfaceChunk(
+        options: Readonly<CompileSurfaceChunkOptions>,
+        request: Readonly<SurfaceTaskRequestOptions> = {}
+    ): Promise<SurfaceCompileResult> {
+        if (!options || typeof options !== "object"
+            || !options.requestToken || !options.effectiveWindow) {
+            return Promise.reject(new TypeError("surface compile pool options are required"));
+        }
+        const taskOptions: CompileSurfaceChunkOptions = Object.freeze({
+            requestToken: options.requestToken,
+            effectiveWindow: options.effectiveWindow
+        });
+        // The effective window owns transferable buffers and is consumed by
+        // the first worker dispatch. A crashed compile must be resubmitted
+        // from a fresh EffectiveWorldView snapshot rather than retrying a
+        // detached payload.
+        return this.enqueueTask(
+            "surface",
+            client => client.compileSurfaceChunk(taskOptions),
+            request,
+            false
         );
     }
 
     private enqueueTask<T extends SurfaceTaskResult>(
         kind: SurfaceTaskKind,
         run: (client: SurfaceTaskWorkerClient) => Promise<T>,
-        request: Readonly<SurfaceTaskRequestOptions>
+        request: Readonly<SurfaceTaskRequestOptions>,
+        retryable: boolean
     ): Promise<T> {
         if (this.disposed) return Promise.reject(new Error("SurfaceWorkerPool has been disposed"));
         if (request.signal?.aborted) return Promise.reject(abortError());
@@ -187,6 +222,7 @@ export class SurfaceWorkerPool {
                 signal: request.signal,
                 reject,
                 attempts: 0,
+                retryable,
                 settled: false
             };
             if (request.signal) {
@@ -225,8 +261,10 @@ export class SurfaceWorkerPool {
             starvationPromotions: queue.starvationPromotions,
             completedSemanticChunks: this.completedSemanticChunks,
             completedHydrologyRegions: this.completedHydrologyRegions,
+            completedSurfaceChunks: this.completedSurfaceChunks,
             averageSemanticChunkMs: this.averageSemanticChunkMs,
-            averageHydrologyRegionMs: this.averageHydrologyRegionMs
+            averageHydrologyRegionMs: this.averageHydrologyRegionMs,
+            averageSurfaceCompileMs: this.averageSurfaceCompileMs
         });
     }
 
@@ -277,7 +315,8 @@ export class SurfaceWorkerPool {
             if (!task.settled) {
                 this.completed += 1;
                 if (task.kind === "semantic") this.completedSemanticChunks += 1;
-                else this.completedHydrologyRegions += 1;
+                else if (task.kind === "hydrology") this.completedHydrologyRegions += 1;
+                else this.completedSurfaceChunks += 1;
                 this.finishTask(task, () => task.resolveResult(result));
             }
             this.releaseSlot(slot);
@@ -286,7 +325,8 @@ export class SurfaceWorkerPool {
             const error = reason instanceof Error ? reason : new Error(String(reason));
             const workerFailed = slot.client.isDisposed && !this.disposed;
             if (workerFailed) this.workerFailures += 1;
-            if (!task.settled && workerFailed && task.attempts < this.maximumWorkerRetries) {
+            if (!task.settled && task.retryable && workerFailed
+                && task.attempts < this.maximumWorkerRetries) {
                 task.attempts += 1;
                 this.retried += 1;
                 try {
@@ -322,7 +362,9 @@ export class SurfaceWorkerPool {
     private createClient(): SurfaceTaskWorkerClient {
         const client = this.clientFactory();
         if (!client || typeof client.generateSemanticChunk !== "function"
-            || typeof client.generateHydrologyRegion !== "function" || typeof client.dispose !== "function") {
+            || typeof client.generateHydrologyRegion !== "function"
+            || typeof client.compileSurfaceChunk !== "function"
+            || typeof client.dispose !== "function") {
             throw new TypeError("surface worker client factory returned an invalid client");
         }
         if (client.isDisposed) {
@@ -338,9 +380,13 @@ export class SurfaceWorkerPool {
         if (kind === "semantic") {
             this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0
                 ? duration : this.averageSemanticChunkMs + (duration - this.averageSemanticChunkMs) * 0.2;
-        } else {
+        } else if (kind === "hydrology") {
             this.averageHydrologyRegionMs = this.averageHydrologyRegionMs === 0
                 ? duration : this.averageHydrologyRegionMs + (duration - this.averageHydrologyRegionMs) * 0.2;
+        } else {
+            this.averageSurfaceCompileMs = this.averageSurfaceCompileMs === 0
+                ? duration : this.averageSurfaceCompileMs
+                    + (duration - this.averageSurfaceCompileMs) * 0.2;
         }
     }
 }

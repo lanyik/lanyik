@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { BaseSemanticChunk } from "../../src/world/BaseSemanticChunk";
+import { CompiledSurfaceChunk } from "../../src/world/CompiledSurfaceChunk";
 import {
     HydrologyRegion,
     createHydrologyRegion
@@ -11,11 +12,16 @@ import {
     SurfaceWorkerPool
 } from "../../src/world/SurfaceWorkerPool";
 import {
+    CompileSurfaceChunkOptions,
     GenerateHydrologyRegionOptions,
-    GenerateSemanticChunkOptions
+    GenerateSemanticChunkOptions,
+    SurfaceCompileResult
 } from "../../src/world/SurfaceWorkerClient";
+import { createSurfaceRequestToken } from "../../src/world/SurfaceDependencyKey";
+import { compileSurfaceChunk as compileSurfaceChunkDirect } from "../../src/world/compileSurfaceChunk";
 import { generateBaseSemanticChunk } from "../../src/world/generateBaseSemanticChunk";
 import { serializeWorldDescriptorV2 } from "../../src/world/WorldDescriptorV2";
+import { createSurfaceCompilerTestWindow } from "./surfaceCompilerFixture";
 
 interface DeferredRequest {
     readonly options: Readonly<GenerateSemanticChunkOptions>;
@@ -29,9 +35,16 @@ interface DeferredHydrologyRequest {
     readonly reject: (error: Error) => void;
 }
 
+interface DeferredCompileRequest {
+    readonly options: Readonly<CompileSurfaceChunkOptions>;
+    readonly resolve: (result: SurfaceCompileResult) => void;
+    readonly reject: (error: Error) => void;
+}
+
 class DeferredClient implements SurfaceTaskWorkerClient {
     public readonly requests: DeferredRequest[] = [];
     public readonly hydrologyRequests: DeferredHydrologyRequest[] = [];
+    public readonly compileRequests: DeferredCompileRequest[] = [];
     public isDisposed = false;
 
     public generateSemanticChunk(options: Readonly<GenerateSemanticChunkOptions>): Promise<BaseSemanticChunk> {
@@ -40,6 +53,10 @@ class DeferredClient implements SurfaceTaskWorkerClient {
 
     public generateHydrologyRegion(options: Readonly<GenerateHydrologyRegionOptions>): Promise<HydrologyRegion> {
         return new Promise((resolve, reject) => this.hydrologyRequests.push({ options, resolve, reject }));
+    }
+
+    public compileSurfaceChunk(options: Readonly<CompileSurfaceChunkOptions>): Promise<SurfaceCompileResult> {
+        return new Promise((resolve, reject) => this.compileRequests.push({ options, resolve, reject }));
     }
 
     public complete(index = 0): void {
@@ -56,6 +73,11 @@ class DeferredClient implements SurfaceTaskWorkerClient {
         this.requests[index].reject(new Error("injected surface worker crash"));
     }
 
+    public crashSurface(index = 0): void {
+        this.isDisposed = true;
+        this.compileRequests[index].reject(new Error("injected surface compile worker crash"));
+    }
+
     public completeHydrology(index = 0): void {
         const request = this.hydrologyRequests[index];
         request.resolve(createHydrologyRegion({
@@ -70,6 +92,13 @@ class DeferredClient implements SurfaceTaskWorkerClient {
             mouths: [],
             bodies: []
         }));
+    }
+
+    public completeSurface(index = 0): CompiledSurfaceChunk {
+        const request = this.compileRequests[index];
+        const chunk = compileSurfaceChunkDirect(request.options.effectiveWindow);
+        request.resolve(Object.freeze({ requestToken: request.options.requestToken, chunk }));
+        return chunk;
     }
 
     public dispose(): void {
@@ -99,6 +128,49 @@ describe("v2 surface worker pool", () => {
             completedSemanticChunks: 1,
             completedHydrologyRegions: 1
         });
+        pool.dispose();
+    });
+
+    test("schedules a final surface compile as a typed non-retryable task", async () => {
+        const client = new DeferredClient();
+        const pool = new SurfaceWorkerPool("unused", { size: 1, clientFactory: () => client });
+        const requestToken = createSurfaceRequestToken(1, 4);
+        const pending = pool.compileSurfaceChunk({
+            requestToken,
+            effectiveWindow: createSurfaceCompilerTestWindow({
+                seaLevel: 0,
+                macroHeight: () => 20_000
+            })
+        });
+        expect(client.compileRequests).toHaveLength(1);
+        client.completeSurface();
+        await expect(pending).resolves.toMatchObject({
+            requestToken,
+            chunk: { key: { chunkX: 0, chunkY: 0 } }
+        });
+        expect(pool.stats).toMatchObject({ completedSurfaceChunks: 1 });
+        pool.dispose();
+    });
+
+    test("does not retry a compile after its transferred window is consumed", async () => {
+        const clients = [new DeferredClient(), new DeferredClient()];
+        let created = 0;
+        const pool = new SurfaceWorkerPool("unused", {
+            size: 1,
+            maximumWorkerRetries: 1,
+            clientFactory: () => clients[created++]
+        });
+        const pending = pool.compileSurfaceChunk({
+            requestToken: createSurfaceRequestToken(1, 1),
+            effectiveWindow: createSurfaceCompilerTestWindow({
+                seaLevel: 0,
+                macroHeight: () => 20_000
+            })
+        });
+        clients[0].crashSurface();
+        await expect(pending).rejects.toThrow(/compile worker crash/);
+        expect(created).toBe(1);
+        expect(pool.stats).toMatchObject({ workerFailures: 1, retried: 0 });
         pool.dispose();
     });
 

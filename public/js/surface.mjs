@@ -245,6 +245,36 @@ if (SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL !== 18 || SURFACE_FIELD_CPU_BYTES !== 
   throw new Error("compiled surface field constants do not match the frozen logical layout");
 }
 
+// src/world/SurfaceVisualProfile.ts
+var SURFACE_VISUAL_PROFILE_VERSION = 1;
+var SURFACE_VISUAL_PROFILE = Object.freeze({
+  version: SURFACE_VISUAL_PROFILE_VERSION,
+  groundMaximumDisplacementTiles: 0.025,
+  oceanMaximumDisplacementTiles: 0.12,
+  lakeMaximumDisplacementTiles: 0.06,
+  riverMaximumDisplacementTiles: 0.03
+});
+function assertSurfaceVisualProfile(profile) {
+  if (!profile || typeof profile !== "object" || profile.version !== SURFACE_VISUAL_PROFILE_VERSION || profile.groundMaximumDisplacementTiles !== 0.025 || profile.oceanMaximumDisplacementTiles !== 0.12 || profile.lakeMaximumDisplacementTiles !== 0.06 || profile.riverMaximumDisplacementTiles !== 0.03) {
+    throw new RangeError("surface visual profile does not match frozen profile v1");
+  }
+}
+function surfaceGroundMaximumDisplacement(hexSize) {
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("surface visual displacement requires a positive finite hex size");
+  }
+  return SURFACE_VISUAL_PROFILE.groundMaximumDisplacementTiles * hexSize;
+}
+function surfaceWaterMaximumDisplacement(waterKind, hexSize) {
+  if (!Number.isFinite(hexSize) || hexSize <= 0) {
+    throw new RangeError("surface visual displacement requires a positive finite hex size");
+  }
+  const tiles = waterKind === SURFACE_WATER_KIND_OCEAN ? SURFACE_VISUAL_PROFILE.oceanMaximumDisplacementTiles : waterKind === SURFACE_WATER_KIND_LAKE ? SURFACE_VISUAL_PROFILE.lakeMaximumDisplacementTiles : waterKind === SURFACE_WATER_KIND_RIVER ? SURFACE_VISUAL_PROFILE.riverMaximumDisplacementTiles : void 0;
+  if (tiles === void 0) throw new RangeError("surface water displacement requires a wet kind");
+  return tiles * hexSize;
+}
+assertSurfaceVisualProfile(SURFACE_VISUAL_PROFILE);
+
 // src/world/WorldGrid.ts
 function assertLogicalCoordinate(name, value) {
   if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
@@ -2311,6 +2341,40 @@ function sampleEffectiveWindowSemantic(window, u, v, heightScale, output) {
   output.biome3 = biome3 * inverseWeight;
   return true;
 }
+function sampleVegetationDensity(window, tileX, tileY, fractionX, fractionY) {
+  let validWeight = 0;
+  let density = 0;
+  for (let offsetX = 0; offsetX <= 1; offsetX += 1) {
+    const weightX = offsetX === 0 ? 1 - fractionX : fractionX;
+    for (let offsetY = 0; offsetY <= 1; offsetY += 1) {
+      const index = windowIndex(window, tileX + offsetX, tileY + offsetY);
+      if (index < 0 || window.valid[index] === 0) continue;
+      const weight = weightX * (offsetY === 0 ? 1 - fractionY : fractionY);
+      validWeight += weight;
+      density += window.vegetationDensity[index] * weight;
+    }
+  }
+  return validWeight > 0 ? density / validWeight / 255 : void 0;
+}
+function sampleEffectiveWindowVegetationDensityLocal(window, offsetU, offsetV) {
+  if (!Number.isFinite(offsetU) || !Number.isFinite(offsetV)) {
+    throw new RangeError("local effective vegetation sample coordinates are invalid");
+  }
+  const localTileX = Math.floor(offsetU);
+  const localTileY = Math.floor(offsetV);
+  const tileX = window.originTileX + localTileX;
+  const tileY = window.originTileY + localTileY;
+  if (!Number.isSafeInteger(tileX) || !Number.isSafeInteger(tileY)) {
+    throw new RangeError("local effective vegetation sample escaped the safe-integer domain");
+  }
+  return sampleVegetationDensity(
+    window,
+    tileX,
+    tileY,
+    offsetU - localTileX,
+    offsetV - localTileY
+  );
+}
 
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
@@ -4018,6 +4082,335 @@ var CompiledSurfaceSampler = class {
   }
 };
 
+// src/world/CompiledVegetationSeeds.ts
+var COMPILED_VEGETATION_SEEDS_FORMAT_VERSION = 1;
+var VEGETATION_CANDIDATE_COLUMNS_PER_TILE = 4;
+var VEGETATION_CANDIDATE_ROWS_PER_TILE = 2;
+var VEGETATION_CANDIDATES_PER_TILE = VEGETATION_CANDIDATE_COLUMNS_PER_TILE * VEGETATION_CANDIDATE_ROWS_PER_TILE;
+var MAX_COMPILED_VEGETATION_SEEDS = 16 * 16 * VEGETATION_CANDIDATES_PER_TILE;
+function assertCompiledVegetationSeeds(seeds) {
+  if (!seeds || typeof seeds !== "object" || seeds.formatVersion !== COMPILED_VEGETATION_SEEDS_FORMAT_VERSION || !Number.isInteger(seeds.count) || seeds.count < 0 || seeds.count > MAX_COMPILED_VEGETATION_SEEDS) {
+    throw new TypeError("compiled vegetation seed format or count is invalid");
+  }
+  if (!(seeds.positions instanceof Float32Array) || seeds.positions.length !== seeds.count * 3 || !(seeds.instanceIdentity instanceof Uint16Array) || seeds.instanceIdentity.length !== seeds.count || !(seeds.profileIndex instanceof Uint8Array) || seeds.profileIndex.length !== seeds.count || !(seeds.placementSeed instanceof Uint32Array) || seeds.placementSeed.length !== seeds.count) {
+    throw new TypeError("compiled vegetation seed arrays do not match their fixed layout");
+  }
+  let previousIdentity = -1;
+  for (let index = 0; index < seeds.count; index += 1) {
+    const identity = seeds.instanceIdentity[index];
+    if (identity <= previousIdentity || identity >= MAX_COMPILED_VEGETATION_SEEDS) {
+      throw new Error("compiled vegetation identities must be unique and strictly ascending");
+    }
+    previousIdentity = identity;
+    const positionOffset = index * 3;
+    if (!Number.isFinite(seeds.positions[positionOffset]) || !Number.isFinite(seeds.positions[positionOffset + 1]) || !Number.isFinite(seeds.positions[positionOffset + 2])) {
+      throw new RangeError("compiled vegetation positions must be finite");
+    }
+  }
+}
+function createCompiledVegetationSeeds(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("compiled vegetation seed input is required");
+  }
+  const seeds = Object.freeze({
+    formatVersion: COMPILED_VEGETATION_SEEDS_FORMAT_VERSION,
+    count: input.instanceIdentity.length,
+    positions: input.positions,
+    instanceIdentity: input.instanceIdentity,
+    profileIndex: input.profileIndex,
+    placementSeed: input.placementSeed
+  });
+  assertCompiledVegetationSeeds(seeds);
+  return seeds;
+}
+function compiledVegetationSeedsResidentBytes(seeds) {
+  assertCompiledVegetationSeeds(seeds);
+  return seeds.positions.byteLength + seeds.instanceIdentity.byteLength + seeds.profileIndex.byteLength + seeds.placementSeed.byteLength;
+}
+function compiledVegetationSeedsTransferables(seeds) {
+  assertCompiledVegetationSeeds(seeds);
+  const buffers = [
+    seeds.positions.buffer,
+    seeds.instanceIdentity.buffer,
+    seeds.profileIndex.buffer,
+    seeds.placementSeed.buffer
+  ];
+  if (buffers.some((buffer) => !(buffer instanceof ArrayBuffer))) {
+    throw new TypeError("compiled vegetation transfer requires owned ArrayBuffer payloads");
+  }
+  if (new Set(buffers).size !== buffers.length) {
+    throw new Error("compiled vegetation arrays must own distinct transferable buffers");
+  }
+  return Object.freeze(buffers);
+}
+
+// src/world/DeterministicHash.ts
+var UINT32_RANGE = 4294967296;
+function mixUint32(hash, word) {
+  let mixed = (hash ^ word) >>> 0;
+  mixed = Math.imul(mixed ^ mixed >>> 16, 2146121005);
+  mixed = Math.imul(mixed ^ mixed >>> 15, 2221713035);
+  return (mixed ^ mixed >>> 16) >>> 0;
+}
+function safeIntegerWords(value) {
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError("deterministic coordinate hash requires safe integers");
+  }
+  const magnitude = Math.abs(value);
+  const high = Math.floor(magnitude / UINT32_RANGE);
+  const low = magnitude - high * UINT32_RANGE;
+  return [low >>> 0, high >>> 0, value < 0 ? 1 : 0];
+}
+function hashSafeIntegerCoordinates(seed, x, y, salt = 0) {
+  if (!Number.isInteger(seed) || seed < 0 || seed > 4294967295) {
+    throw new RangeError("deterministic coordinate hash seed must be a uint32");
+  }
+  if (!Number.isInteger(salt) || salt < 0 || salt > 4294967295) {
+    throw new RangeError("deterministic coordinate hash salt must be a uint32");
+  }
+  const xWords = safeIntegerWords(x);
+  const yWords = safeIntegerWords(y);
+  let hash = mixUint32((seed ^ 2654435769) >>> 0, salt >>> 0);
+  hash = mixUint32(hash, xWords[0]);
+  hash = mixUint32(hash, xWords[1]);
+  hash = mixUint32(hash, xWords[2]);
+  hash = mixUint32(hash, yWords[0]);
+  hash = mixUint32(hash, yWords[1]);
+  return mixUint32(hash, yWords[2]);
+}
+
+// src/world/noise.ts
+var UINT32_MAX = 4294967295;
+function seedToUint32(seed) {
+  const text = String(seed);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function randomGridValue(seed, x, y) {
+  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+  hash = Math.imul(hash ^ hash >>> 15, 739982445);
+  hash = Math.imul(hash ^ hash >>> 12, 695872825);
+  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+}
+var smooth = (value) => value * value * (3 - 2 * value);
+var lerp = (from, to, amount) => from + (to - from) * amount;
+function positiveModulo3(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function valueNoise2D(seed, x, y) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smooth(x - x0);
+  const ty = smooth(y - y0);
+  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+  return lerp(top, bottom, ty);
+}
+function fractalNoise2D(seed, x, y, octaves) {
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let normalization = 0;
+  for (let octave = 0; octave < octaves; octave += 1) {
+    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+    normalization += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+  return total / normalization;
+}
+function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+  const px = Math.max(1, Math.round(periodX));
+  const py = Math.max(1, Math.round(periodY));
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smooth(x - x0);
+  const ty = smooth(y - y0);
+  const sample = (gx, gy) => randomGridValue(
+    seed,
+    positiveModulo3(gx, px),
+    positiveModulo3(gy, py)
+  );
+  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+  return lerp(top, bottom, ty);
+}
+function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+  const baseCellsX = Math.max(1, Math.round(cellsX));
+  const baseCellsY = Math.max(1, Math.round(cellsY));
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let normalization = 0;
+  for (let octave = 0; octave < octaves; octave += 1) {
+    const periodX = baseCellsX * frequency;
+    const periodY = baseCellsY * frequency;
+    total += periodicValueNoise2D(
+      seed + Math.imul(octave, 2654435769) >>> 0,
+      normalizedX * periodX,
+      normalizedY * periodY,
+      periodX,
+      periodY
+    ) * amplitude;
+    normalization += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+  return total / normalization;
+}
+function randomAt(seed, x, y, salt) {
+  return randomGridValue((seed ^ salt) >>> 0, x, y);
+}
+
+// src/world/compileVegetationSeeds.ts
+var UINT32_RANGE2 = 4294967296;
+var JITTER_X_SALT = 2135587861;
+var JITTER_Y_SALT = 2496678331;
+var ACCEPTANCE_SALT = 916318735;
+var PLACEMENT_SALT = 3518319157;
+var VEGETATION_SLOPE_FADE_START = 0.35;
+var VEGETATION_MAXIMUM_SLOPE = 0.75;
+var VEGETATION_SHORE_FADE_TILES = 1;
+var VEGETATION_SLOPE_SAMPLE_STEP = 0.25;
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+function smoothstep(minimum, maximum, value) {
+  const amount = clamp((value - minimum) / (maximum - minimum), 0, 1);
+  return amount * amount * (3 - 2 * amount);
+}
+function candidateHash(worldSeed, tileX, tileY, candidate, salt) {
+  return hashSafeIntegerCoordinates(worldSeed, tileX, tileY, salt + candidate >>> 0);
+}
+function slopeAt(sampler, localU, localV, hexSize) {
+  const minimum = -0.5;
+  const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+  const minimumU = Math.max(minimum, localU - VEGETATION_SLOPE_SAMPLE_STEP);
+  const maximumU = Math.min(maximum, localU + VEGETATION_SLOPE_SAMPLE_STEP);
+  const minimumV = Math.max(minimum, localV - VEGETATION_SLOPE_SAMPLE_STEP);
+  const maximumV = Math.min(maximum, localV + VEGETATION_SLOPE_SAMPLE_STEP);
+  const heightU = sampler.sampleGroundHeight(maximumU, localV) - sampler.sampleGroundHeight(minimumU, localV);
+  const heightV = sampler.sampleGroundHeight(localU, maximumV) - sampler.sampleGroundHeight(localU, minimumV);
+  const worldUMinimum = surfaceToWorld(minimumU, localV, hexSize);
+  const worldUMaximum = surfaceToWorld(maximumU, localV, hexSize);
+  const worldVMinimum = surfaceToWorld(localU, minimumV, hexSize);
+  const worldVMaximum = surfaceToWorld(localU, maximumV, hexSize);
+  const deltaUx = worldUMaximum.x - worldUMinimum.x;
+  const deltaUz = worldUMaximum.z - worldUMinimum.z;
+  const deltaVz = worldVMaximum.z - worldVMinimum.z;
+  if (!(deltaUx > 0) || !(deltaVz > 0)) {
+    throw new Error("vegetation slope stencil collapsed at the surface core boundary");
+  }
+  const gradientZ = heightV / deltaVz;
+  const gradientX = (heightU - gradientZ * deltaUz) / deltaUx;
+  return Math.hypot(gradientX, gradientZ);
+}
+function ownerIndex(window, tileX, tileY) {
+  const localX = tileX - window.originTileX;
+  const localY = tileY - window.originTileY;
+  if (localX < 0 || localX >= EFFECTIVE_WINDOW_TILE_SIZE || localY < 0 || localY >= EFFECTIVE_WINDOW_TILE_SIZE) {
+    throw new Error("vegetation owner tile escaped the effective window");
+  }
+  return localX * EFFECTIVE_WINDOW_TILE_SIZE + localY;
+}
+function compileVegetationSeeds(window, field2) {
+  assertTransferableEffectiveWindow(window);
+  const sampler = new CompiledSurfaceSampler(field2);
+  const surfaceSample = createCompiledSurfaceSample();
+  const chunkSize = SURFACE_COMPILE_PROFILE.renderChunkSize;
+  const origin = chunkOrigin(window.renderKey.chunkX, window.renderKey.chunkY, chunkSize);
+  const hexSize = window.dependencyKey.metrics.hexSize;
+  const localWorldOrigin = surfaceToWorld(0, 0, hexSize);
+  const worldSeed = seedToUint32(window.worldIdentity);
+  const positions = new Float32Array(MAX_COMPILED_VEGETATION_SEEDS * 3);
+  const instanceIdentity = new Uint16Array(MAX_COMPILED_VEGETATION_SEEDS);
+  const profileIndex = new Uint8Array(MAX_COMPILED_VEGETATION_SEEDS);
+  const placementSeed = new Uint32Array(MAX_COMPILED_VEGETATION_SEEDS);
+  let count = 0;
+  for (let localTileX = 0; localTileX < chunkSize; localTileX += 1) {
+    const tileX = origin.x + localTileX;
+    for (let localTileY = 0; localTileY < chunkSize; localTileY += 1) {
+      const tileY = origin.y + localTileY;
+      const semanticIndex = ownerIndex(window, tileX, tileY);
+      if (window.valid[semanticIndex] === 0) continue;
+      const tileIdentity = localTileX * chunkSize + localTileY;
+      for (let candidate = 0; candidate < VEGETATION_CANDIDATES_PER_TILE; candidate += 1) {
+        const column = candidate % VEGETATION_CANDIDATE_COLUMNS_PER_TILE;
+        const row = Math.floor(candidate / VEGETATION_CANDIDATE_COLUMNS_PER_TILE);
+        const jitterX = candidateHash(
+          worldSeed,
+          tileX,
+          tileY,
+          candidate,
+          JITTER_X_SALT
+        ) / UINT32_RANGE2;
+        const jitterY = candidateHash(
+          worldSeed,
+          tileX,
+          tileY,
+          candidate,
+          JITTER_Y_SALT
+        ) / UINT32_RANGE2;
+        const localU = localTileX - 0.5 + (column + jitterX) / VEGETATION_CANDIDATE_COLUMNS_PER_TILE;
+        const localV = localTileY - 0.5 + (row + jitterY) / VEGETATION_CANDIDATE_ROWS_PER_TILE;
+        const density = sampleEffectiveWindowVegetationDensityLocal(
+          window,
+          origin.x - window.originTileX + localU,
+          origin.y - window.originTileY + localV
+        );
+        if (density === void 0 || density <= 0) continue;
+        sampler.sampleSurface(localU, localV, surfaceSample);
+        if (surfaceSample.waterKind === SURFACE_WATER_KIND_RIVER || surfaceSample.shorelineDistance <= 0) continue;
+        const shoreFactor = clamp(
+          surfaceSample.shorelineDistance / (hexSize * VEGETATION_SHORE_FADE_TILES),
+          0,
+          1
+        );
+        const slope = slopeAt(sampler, localU, localV, hexSize);
+        const slopeFactor = 1 - smoothstep(
+          VEGETATION_SLOPE_FADE_START,
+          VEGETATION_MAXIMUM_SLOPE,
+          slope
+        );
+        const acceptance = density * shoreFactor * slopeFactor;
+        const choice = candidateHash(
+          worldSeed,
+          tileX,
+          tileY,
+          candidate,
+          ACCEPTANCE_SALT
+        ) / UINT32_RANGE2;
+        if (choice >= acceptance) continue;
+        const world = surfaceToWorld(localU, localV, hexSize);
+        const offset = count * 3;
+        positions[offset] = world.x - localWorldOrigin.x;
+        positions[offset + 1] = surfaceSample.groundHeight;
+        positions[offset + 2] = world.z - localWorldOrigin.z;
+        instanceIdentity[count] = tileIdentity * VEGETATION_CANDIDATES_PER_TILE + candidate;
+        profileIndex[count] = window.vegetationProfile[semanticIndex];
+        placementSeed[count] = candidateHash(
+          worldSeed,
+          tileX,
+          tileY,
+          candidate,
+          PLACEMENT_SALT
+        );
+        count += 1;
+      }
+    }
+  }
+  return createCompiledVegetationSeeds({
+    positions: positions.slice(0, count * 3),
+    instanceIdentity: instanceIdentity.slice(0, count),
+    profileIndex: profileIndex.slice(0, count),
+    placementSeed: placementSeed.slice(0, count)
+  });
+}
+
 // src/world/CompiledWaterGeometry.ts
 var COMPILED_WATER_GEOMETRY_FORMAT_VERSION = 1;
 var MAX_COMPILED_WATER_COVERAGE_VERTICES = 24576;
@@ -4267,14 +4660,14 @@ if (COMPILED_SURFACE_TEXEL_COUNT !== SURFACE_COMPILE_PROFILE.textureLayerSize **
 }
 
 // src/world/CompiledSurfaceBounds.ts
-var COMPILED_SURFACE_BOUNDS_FORMAT_VERSION = 1;
+var COMPILED_SURFACE_BOUNDS_FORMAT_VERSION = 2;
 function finiteOrdered(name, minimum, maximum) {
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > maximum) {
     throw new RangeError(`${name} bounds must be finite and ordered`);
   }
 }
 function assertCompiledSurfaceBounds(bounds) {
-  if (!bounds || typeof bounds !== "object" || bounds.formatVersion !== COMPILED_SURFACE_BOUNDS_FORMAT_VERSION) {
+  if (!bounds || typeof bounds !== "object" || bounds.formatVersion !== COMPILED_SURFACE_BOUNDS_FORMAT_VERSION || bounds.visualProfileVersion !== SURFACE_VISUAL_PROFILE_VERSION) {
     throw new TypeError("compiled surface bounds format is invalid");
   }
   finiteOrdered("compiled surface X", bounds.minimumX, bounds.maximumX);
@@ -4296,6 +4689,23 @@ function assertCompiledSurfaceBounds(bounds) {
   if (bounds.minimumBaseHeight !== expectedMinimum || bounds.maximumBaseHeight !== expectedMaximum) {
     throw new Error("compiled surface base height does not enclose its ground and water ranges exactly");
   }
+  if (!Number.isFinite(bounds.groundMaximumDisplacement) || bounds.groundMaximumDisplacement < 0 || !Number.isFinite(bounds.waterMaximumDisplacement) || bounds.waterMaximumDisplacement < 0) {
+    throw new RangeError("compiled surface visual displacement bounds must be non-negative and finite");
+  }
+  if (bounds.minimumWaterHeight === null && bounds.waterMaximumDisplacement !== 0) {
+    throw new Error("dry compiled surface bounds cannot reserve water displacement");
+  }
+  const expectedVisualMinimum = bounds.minimumWaterHeight === null ? bounds.minimumGroundHeight - bounds.groundMaximumDisplacement : Math.min(
+    bounds.minimumGroundHeight - bounds.groundMaximumDisplacement,
+    bounds.minimumWaterHeight - bounds.waterMaximumDisplacement
+  );
+  const expectedVisualMaximum = bounds.maximumWaterHeight === null ? bounds.maximumGroundHeight + bounds.groundMaximumDisplacement : Math.max(
+    bounds.maximumGroundHeight + bounds.groundMaximumDisplacement,
+    bounds.maximumWaterHeight + bounds.waterMaximumDisplacement
+  );
+  if (bounds.minimumVisualHeight !== expectedVisualMinimum || bounds.maximumVisualHeight !== expectedVisualMaximum) {
+    throw new Error("compiled surface visual height does not exactly enclose bounded displacement");
+  }
 }
 function compileSurfaceBounds(field2, waterGeometry, hexSize) {
   if (!Number.isFinite(hexSize) || hexSize <= 0) {
@@ -4314,6 +4724,7 @@ function compileSurfaceBounds(field2, waterGeometry, hexSize) {
   let maximumGroundHeight = Number.NEGATIVE_INFINITY;
   let minimumWaterHeight = Number.POSITIVE_INFINITY;
   let maximumWaterHeight = Number.NEGATIVE_INFINITY;
+  let waterMaximumDisplacement = 0;
   const includeWater = (localU, localV) => {
     sampler.sampleBilinear(localU, localV, sample);
     if (!(sample.waterCoverage > 0) || sample.waterBodyIndex === 0) {
@@ -4321,6 +4732,10 @@ function compileSurfaceBounds(field2, waterGeometry, hexSize) {
     }
     minimumWaterHeight = Math.min(minimumWaterHeight, sample.waterLevel);
     maximumWaterHeight = Math.max(maximumWaterHeight, sample.waterLevel);
+    waterMaximumDisplacement = Math.max(
+      waterMaximumDisplacement,
+      surfaceWaterMaximumDisplacement(sample.waterKind, hexSize)
+    );
   };
   for (let gridX = 0; gridX <= SURFACE_CORE_TEXELS; gridX += 1) {
     const localU = -0.5 + gridX / samplesPerTile;
@@ -4351,8 +4766,12 @@ function compileSurfaceBounds(field2, waterGeometry, hexSize) {
   }
   const waterMinimum = hasWater ? minimumWaterHeight : null;
   const waterMaximum = hasWater ? maximumWaterHeight : null;
+  const groundMaximumDisplacement = surfaceGroundMaximumDisplacement(hexSize);
+  const minimumBaseHeight = waterMinimum === null ? minimumGroundHeight : Math.min(minimumGroundHeight, waterMinimum);
+  const maximumBaseHeight = waterMaximum === null ? maximumGroundHeight : Math.max(maximumGroundHeight, waterMaximum);
   const bounds = Object.freeze({
     formatVersion: COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
+    visualProfileVersion: SURFACE_VISUAL_PROFILE_VERSION,
     minimumX,
     maximumX,
     minimumZ,
@@ -4361,12 +4780,968 @@ function compileSurfaceBounds(field2, waterGeometry, hexSize) {
     maximumGroundHeight,
     minimumWaterHeight: waterMinimum,
     maximumWaterHeight: waterMaximum,
-    minimumBaseHeight: waterMinimum === null ? minimumGroundHeight : Math.min(minimumGroundHeight, waterMinimum),
-    maximumBaseHeight: waterMaximum === null ? maximumGroundHeight : Math.max(maximumGroundHeight, waterMaximum)
+    minimumBaseHeight,
+    maximumBaseHeight,
+    groundMaximumDisplacement,
+    waterMaximumDisplacement,
+    minimumVisualHeight: waterMinimum === null ? minimumGroundHeight - groundMaximumDisplacement : Math.min(
+      minimumGroundHeight - groundMaximumDisplacement,
+      waterMinimum - waterMaximumDisplacement
+    ),
+    maximumVisualHeight: waterMaximum === null ? maximumGroundHeight + groundMaximumDisplacement : Math.max(
+      maximumGroundHeight + groundMaximumDisplacement,
+      waterMaximum + waterMaximumDisplacement
+    )
   });
   assertCompiledSurfaceBounds(bounds);
   return bounds;
 }
+
+// src/world/CompiledSurfaceChunk.ts
+var COMPILED_SURFACE_CHUNK_FORMAT_VERSION = 1;
+var COMPILED_SURFACE_CHUNK_BASE_RESIDENT_BYTES = 256;
+function collectTransferables(chunk) {
+  const buffers = [
+    ...compiledSurfaceFieldTransferables(chunk.field),
+    ...compiledWaterGeometryTransferables(chunk.waterGeometry),
+    ...compiledVegetationSeedsTransferables(chunk.vegetationSeeds)
+  ];
+  if (new Set(buffers).size !== buffers.length) {
+    throw new Error("compiled surface chunk component buffers must not alias");
+  }
+  return Object.freeze(buffers);
+}
+function typedArraysEqual(first, second) {
+  if (first.length !== second.length) return false;
+  for (let index = 0; index < first.length; index += 1) {
+    if (first[index] !== second[index]) return false;
+  }
+  return true;
+}
+function geometryEquals(first, second) {
+  if (first.kind !== second.kind) return false;
+  if (first.kind !== "coverage" || second.kind !== "coverage") return true;
+  return typedArraysEqual(first.positions, second.positions) && typedArraysEqual(first.surfaceFieldCoordinates, second.surfaceFieldCoordinates) && typedArraysEqual(first.indices, second.indices);
+}
+function boundsEqual(first, second) {
+  return first.formatVersion === second.formatVersion && first.visualProfileVersion === second.visualProfileVersion && first.minimumX === second.minimumX && first.maximumX === second.maximumX && first.minimumZ === second.minimumZ && first.maximumZ === second.maximumZ && first.minimumGroundHeight === second.minimumGroundHeight && first.maximumGroundHeight === second.maximumGroundHeight && first.minimumWaterHeight === second.minimumWaterHeight && first.maximumWaterHeight === second.maximumWaterHeight && first.minimumBaseHeight === second.minimumBaseHeight && first.maximumBaseHeight === second.maximumBaseHeight && first.groundMaximumDisplacement === second.groundMaximumDisplacement && first.waterMaximumDisplacement === second.waterMaximumDisplacement && first.minimumVisualHeight === second.minimumVisualHeight && first.maximumVisualHeight === second.maximumVisualHeight;
+}
+function waterKindForBody(kind) {
+  return kind === "ocean" ? SURFACE_WATER_KIND_OCEAN : kind === "lake" ? SURFACE_WATER_KIND_LAKE : SURFACE_WATER_KIND_RIVER;
+}
+function assertFieldPaletteRelationship(chunk) {
+  const used = new Uint8Array(chunk.waterBodies.entries.length);
+  for (let index = 0; index < chunk.field.waterBodyIndex.length; index += 1) {
+    const bodyIndex = chunk.field.waterBodyIndex[index];
+    if (bodyIndex === 0) continue;
+    const body = chunk.waterBodies.entries[bodyIndex - 1];
+    if (!body || chunk.field.waterKind[index] !== waterKindForBody(body.kind) || chunk.field.waterProfile[index] !== body.profileIndex) {
+      throw new Error("compiled surface field and body palette disagree");
+    }
+    used[bodyIndex - 1] = 1;
+  }
+  if (used.some((value) => value === 0)) {
+    throw new Error("compiled surface body palette contains an unused entry");
+  }
+}
+function assertVegetationRoots(chunk) {
+  const hexSize = chunk.dependencyKey.metrics.hexSize;
+  const origin = surfaceToWorld(0, 0, hexSize);
+  const sampler = new CompiledSurfaceSampler(chunk.field);
+  const maximum = SURFACE_COMPILE_PROFILE.renderChunkSize - 0.5;
+  for (let index = 0; index < chunk.vegetationSeeds.count; index += 1) {
+    const offset = index * 3;
+    const logical = worldToSurface(
+      chunk.vegetationSeeds.positions[offset] + origin.x,
+      chunk.vegetationSeeds.positions[offset + 2] + origin.z,
+      hexSize
+    );
+    if (logical.u < -0.5 || logical.u >= maximum || logical.v < -0.5 || logical.v >= maximum) {
+      throw new RangeError("compiled vegetation root is outside its half-open surface core");
+    }
+    if (chunk.vegetationSeeds.positions[offset + 1] !== Math.fround(sampler.sampleGroundHeight(logical.u, logical.v))) {
+      throw new Error("compiled vegetation root height drifted from canonical Ground");
+    }
+  }
+}
+function assertCompiledSurfaceChunkLayout(chunk) {
+  if (!chunk || typeof chunk !== "object" || chunk.formatVersion !== COMPILED_SURFACE_CHUNK_FORMAT_VERSION) {
+    throw new TypeError("compiled surface chunk format is invalid");
+  }
+  assertSurfaceDependencyKey(chunk.dependencyKey);
+  if (!chunk.key || chunk.key.chunkX !== chunk.dependencyKey.renderKey.chunkX || chunk.key.chunkY !== chunk.dependencyKey.renderKey.chunkY) {
+    throw new Error("compiled surface chunk key does not match its dependency key");
+  }
+  assertCompiledSurfaceField(chunk.field);
+  assertCompiledWaterBodyPalette(chunk.waterBodies);
+  assertCompiledWaterGeometry(chunk.waterGeometry);
+  assertCompiledVegetationSeeds(chunk.vegetationSeeds);
+  assertCompiledSurfaceBounds(chunk.bounds);
+  assertFieldPaletteRelationship(chunk);
+  assertVegetationRoots(chunk);
+  collectTransferables(chunk);
+}
+function assertCompiledSurfaceChunk(chunk) {
+  assertCompiledSurfaceChunkLayout(chunk);
+  const expectedGeometry = compileWaterGeometry(chunk.field);
+  if (!geometryEquals(chunk.waterGeometry, expectedGeometry)) {
+    throw new Error("compiled surface water geometry does not match its field");
+  }
+  const expectedBounds = compileSurfaceBounds(
+    chunk.field,
+    chunk.waterGeometry,
+    chunk.dependencyKey.metrics.hexSize
+  );
+  if (!boundsEqual(chunk.bounds, expectedBounds)) {
+    throw new Error("compiled surface bounds do not match its field and geometry");
+  }
+}
+function publishGeometry(geometry) {
+  if (geometry.kind === "none") return Object.freeze({
+    formatVersion: geometry.formatVersion,
+    kind: geometry.kind
+  });
+  if (geometry.kind === "fullPatch") return Object.freeze({
+    formatVersion: geometry.formatVersion,
+    kind: geometry.kind
+  });
+  return Object.freeze({
+    formatVersion: geometry.formatVersion,
+    kind: geometry.kind,
+    positions: geometry.positions,
+    surfaceFieldCoordinates: geometry.surfaceFieldCoordinates,
+    indices: geometry.indices
+  });
+}
+function createCompiledSurfaceChunk(input) {
+  if (!input || typeof input !== "object") throw new TypeError("compiled surface chunk input is required");
+  const dependencyKey = createSurfaceDependencyKey(input.dependencyKey);
+  const chunk = Object.freeze({
+    formatVersion: COMPILED_SURFACE_CHUNK_FORMAT_VERSION,
+    key: dependencyKey.renderKey,
+    dependencyKey,
+    bounds: Object.freeze({ ...input.bounds }),
+    field: createCompiledSurfaceField(input.field),
+    waterBodies: createCompiledWaterBodyPalette(input.waterBodies.entries),
+    waterGeometry: publishGeometry(input.waterGeometry),
+    vegetationSeeds: createCompiledVegetationSeeds(input.vegetationSeeds)
+  });
+  assertCompiledSurfaceChunk(chunk);
+  return chunk;
+}
+function compiledSurfaceChunkResidentBytes(chunk) {
+  assertCompiledSurfaceChunkLayout(chunk);
+  let bytes = COMPILED_SURFACE_CHUNK_BASE_RESIDENT_BYTES + compiledSurfaceFieldResidentBytes(chunk.field) + compiledVegetationSeedsResidentBytes(chunk.vegetationSeeds) + serializeSurfaceDependencyKey(chunk.dependencyKey).length * 2;
+  for (const buffer of compiledWaterGeometryTransferables(chunk.waterGeometry)) {
+    bytes += buffer.byteLength;
+  }
+  for (const body of chunk.waterBodies.entries) bytes += 16 + body.bodyId.length * 2;
+  if (!Number.isSafeInteger(bytes)) {
+    throw new RangeError("compiled surface resident byte accounting exceeds safe integers");
+  }
+  return bytes;
+}
+function compiledSurfaceChunkTransferables(chunk) {
+  assertCompiledSurfaceChunkLayout(chunk);
+  return collectTransferables(chunk);
+}
+
+// src/world/compileSurfaceChunk.ts
+function compileSurfaceChunk(window) {
+  assertTransferableEffectiveWindow(window);
+  const compilation = compileSurfaceField(window);
+  const waterGeometry = compileWaterGeometry(compilation.field);
+  return createCompiledSurfaceChunk({
+    dependencyKey: window.dependencyKey,
+    bounds: compileSurfaceBounds(
+      compilation.field,
+      waterGeometry,
+      window.dependencyKey.metrics.hexSize
+    ),
+    field: compilation.field,
+    waterBodies: compilation.waterBodies,
+    waterGeometry,
+    vegetationSeeds: compileVegetationSeeds(window, compilation.field)
+  });
+}
+
+// src/rendering/LightingState.ts
+import { CubeUVReflectionMapping, Texture } from "three";
+function assertRevision2(name, value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+function assertLinearRgb(name, color) {
+  if (!color || typeof color !== "object" || !Number.isFinite(color.r) || color.r < 0 || !Number.isFinite(color.g) || color.g < 0 || !Number.isFinite(color.b) || color.b < 0) {
+    throw new RangeError(`${name} must contain non-negative finite linear RGB values`);
+  }
+}
+function assertUnitDirection(direction) {
+  if (!direction || typeof direction !== "object" || !Number.isFinite(direction.x) || !Number.isFinite(direction.y) || !Number.isFinite(direction.z)) {
+    throw new RangeError("lighting sun direction must be finite");
+  }
+  const length = Math.hypot(direction.x, direction.y, direction.z);
+  if (Math.abs(length - 1) > 1e-12) {
+    throw new RangeError("lighting sun direction must be normalized");
+  }
+}
+function assertEnvironmentHandle(handle) {
+  if (!handle || typeof handle !== "object") {
+    throw new TypeError("lighting environment handle is required");
+  }
+  assertRevision2("lighting environment handle revision", handle.revision);
+  if (!(handle.texture instanceof Texture) || handle.texture.isTexture !== true || handle.texture.mapping !== CubeUVReflectionMapping) {
+    throw new TypeError("lighting environment handle must contain a prepared PMREM texture");
+  }
+}
+function createEnvironmentHandle(revision, texture) {
+  const handle = Object.freeze({ revision, texture });
+  assertEnvironmentHandle(handle);
+  return handle;
+}
+function assertLightingState(state) {
+  if (!state || typeof state !== "object") throw new TypeError("lighting state is required");
+  assertRevision2("lighting uniform revision", state.uniformRevision);
+  assertRevision2("lighting environment revision", state.environmentRevision);
+  assertUnitDirection(state.sunDirection);
+  assertLinearRgb("lighting sun radiance", state.sunRadiance);
+  assertLinearRgb("lighting sky diffuse irradiance", state.skyDiffuseIrradiance);
+  assertLinearRgb("lighting ground diffuse irradiance", state.groundDiffuseIrradiance);
+  assertEnvironmentHandle(state.specularEnvironment);
+  if (state.specularEnvironment.revision !== state.environmentRevision) {
+    throw new Error("lighting environment handle and state revisions must match");
+  }
+  if (!Number.isFinite(state.exposure) || state.exposure <= 0) {
+    throw new RangeError("lighting exposure must be positive and finite");
+  }
+}
+function frozenColor(color) {
+  return Object.freeze({ r: color.r, g: color.g, b: color.b });
+}
+function createLightingState(input) {
+  if (!input || typeof input !== "object") throw new TypeError("lighting state input is required");
+  const directionLength = Math.hypot(
+    input.sunDirection.x,
+    input.sunDirection.y,
+    input.sunDirection.z
+  );
+  if (!Number.isFinite(directionLength) || directionLength <= 0) {
+    throw new RangeError("lighting sun direction must be finite and non-zero");
+  }
+  const state = Object.freeze({
+    uniformRevision: input.uniformRevision,
+    sunDirection: Object.freeze({
+      x: input.sunDirection.x / directionLength,
+      y: input.sunDirection.y / directionLength,
+      z: input.sunDirection.z / directionLength
+    }),
+    sunRadiance: frozenColor(input.sunRadiance),
+    skyDiffuseIrradiance: frozenColor(input.skyDiffuseIrradiance),
+    groundDiffuseIrradiance: frozenColor(input.groundDiffuseIrradiance),
+    specularEnvironment: input.specularEnvironment,
+    environmentRevision: input.environmentRevision,
+    exposure: input.exposure
+  });
+  assertLightingState(state);
+  return state;
+}
+function lightingStatesEqual(first, second) {
+  return first.uniformRevision === second.uniformRevision && first.environmentRevision === second.environmentRevision && first.sunDirection.x === second.sunDirection.x && first.sunDirection.y === second.sunDirection.y && first.sunDirection.z === second.sunDirection.z && first.sunRadiance.r === second.sunRadiance.r && first.sunRadiance.g === second.sunRadiance.g && first.sunRadiance.b === second.sunRadiance.b && first.skyDiffuseIrradiance.r === second.skyDiffuseIrradiance.r && first.skyDiffuseIrradiance.g === second.skyDiffuseIrradiance.g && first.skyDiffuseIrradiance.b === second.skyDiffuseIrradiance.b && first.groundDiffuseIrradiance.r === second.groundDiffuseIrradiance.r && first.groundDiffuseIrradiance.g === second.groundDiffuseIrradiance.g && first.groundDiffuseIrradiance.b === second.groundDiffuseIrradiance.b && first.specularEnvironment.texture === second.specularEnvironment.texture && first.exposure === second.exposure;
+}
+
+// src/rendering/ThreeLightingAdapter.ts
+import {
+  Color,
+  DirectionalLight,
+  HemisphereLight,
+  Object3D,
+  Vector3
+} from "three";
+function copyStateToUniforms(state, uniforms) {
+  uniforms.sunDirection.value.set(
+    state.sunDirection.x,
+    state.sunDirection.y,
+    state.sunDirection.z
+  );
+  uniforms.sunRadiance.value.setRGB(
+    state.sunRadiance.r,
+    state.sunRadiance.g,
+    state.sunRadiance.b
+  );
+  uniforms.skyDiffuseIrradiance.value.setRGB(
+    state.skyDiffuseIrradiance.r,
+    state.skyDiffuseIrradiance.g,
+    state.skyDiffuseIrradiance.b
+  );
+  uniforms.groundDiffuseIrradiance.value.setRGB(
+    state.groundDiffuseIrradiance.r,
+    state.groundDiffuseIrradiance.g,
+    state.groundDiffuseIrradiance.b
+  );
+  uniforms.specularEnvironment.value = state.specularEnvironment.texture;
+  uniforms.exposure.value = state.exposure;
+}
+function createUniformSet(state) {
+  const uniforms = Object.freeze({
+    sunDirection: { value: new Vector3() },
+    sunRadiance: { value: new Color() },
+    skyDiffuseIrradiance: { value: new Color() },
+    groundDiffuseIrradiance: { value: new Color() },
+    specularEnvironment: { value: state.specularEnvironment.texture },
+    exposure: { value: state.exposure }
+  });
+  copyStateToUniforms(state, uniforms);
+  return uniforms;
+}
+var ThreeLightingAdapter = class {
+  constructor(renderer, scene) {
+    this.renderer = renderer;
+    this.scene = scene;
+    this.sunLight = new DirectionalLight(16777215, 1);
+    this.diffuseLight = new HemisphereLight(16777215, 0, 1);
+    this.sunTarget = new Object3D();
+    this.uniforms = /* @__PURE__ */ new Set();
+    this.disposed = false;
+    this.sunLight.name = "surface-sun-light";
+    this.diffuseLight.name = "surface-diffuse-light";
+    this.sunTarget.name = "surface-sun-target";
+    this.sunLight.target = this.sunTarget;
+    this.scene.add(this.sunLight, this.diffuseLight, this.sunTarget);
+  }
+  get state() {
+    return this.currentState;
+  }
+  apply(state) {
+    if (this.disposed) throw new Error("three lighting adapter is disposed");
+    assertLightingState(state);
+    const snapshot = createLightingState(state);
+    const current = this.currentState;
+    if (current) {
+      if (snapshot.uniformRevision < current.uniformRevision || snapshot.environmentRevision < current.environmentRevision) {
+        throw new Error("three lighting adapter rejected a stale lighting revision");
+      }
+      if (snapshot.uniformRevision === current.uniformRevision && snapshot.environmentRevision === current.environmentRevision) {
+        if (!lightingStatesEqual(snapshot, current)) {
+          throw new Error("equal lighting revisions cannot describe different state");
+        }
+        return false;
+      }
+    }
+    this.sunLight.position.set(
+      snapshot.sunDirection.x,
+      snapshot.sunDirection.y,
+      snapshot.sunDirection.z
+    );
+    this.sunLight.color.setRGB(
+      snapshot.sunRadiance.r,
+      snapshot.sunRadiance.g,
+      snapshot.sunRadiance.b
+    );
+    this.diffuseLight.color.setRGB(
+      snapshot.skyDiffuseIrradiance.r,
+      snapshot.skyDiffuseIrradiance.g,
+      snapshot.skyDiffuseIrradiance.b
+    );
+    this.diffuseLight.groundColor.setRGB(
+      snapshot.groundDiffuseIrradiance.r,
+      snapshot.groundDiffuseIrradiance.g,
+      snapshot.groundDiffuseIrradiance.b
+    );
+    this.scene.environment = snapshot.specularEnvironment.texture;
+    this.renderer.toneMappingExposure = snapshot.exposure;
+    for (const uniforms of this.uniforms) copyStateToUniforms(snapshot, uniforms);
+    this.currentState = snapshot;
+    return true;
+  }
+  createUniforms() {
+    if (this.disposed) throw new Error("three lighting adapter is disposed");
+    if (!this.currentState) {
+      throw new Error("three lighting adapter requires state before creating shader uniforms");
+    }
+    const uniforms = createUniformSet(this.currentState);
+    this.uniforms.add(uniforms);
+    return uniforms;
+  }
+  releaseUniforms(uniforms) {
+    if (!this.uniforms.delete(uniforms)) {
+      throw new Error("lighting uniform set is not owned by this adapter");
+    }
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.uniforms.clear();
+    this.scene.remove(this.sunLight, this.diffuseLight, this.sunTarget);
+    if (this.currentState && this.scene.environment === this.currentState.specularEnvironment.texture) {
+      this.scene.environment = null;
+    }
+    this.currentState = void 0;
+  }
+};
+
+// src/rendering/LightingEnvironmentManager.ts
+import {
+  CubeTexture,
+  CubeUVReflectionMapping as CubeUVReflectionMapping2,
+  PMREMGenerator,
+  Scene as Scene2,
+  Texture as Texture3
+} from "three";
+
+// node_modules/three/examples/jsm/objects/Sky.js
+import {
+  BackSide,
+  BoxGeometry,
+  Mesh,
+  ShaderMaterial,
+  UniformsUtils,
+  Vector3 as Vector32
+} from "three";
+var Sky = class _Sky extends Mesh {
+  /**
+   * Constructs a new skydome.
+   */
+  constructor() {
+    const shader = _Sky.SkyShader;
+    const material = new ShaderMaterial({
+      name: shader.name,
+      uniforms: UniformsUtils.clone(shader.uniforms),
+      vertexShader: shader.vertexShader,
+      fragmentShader: shader.fragmentShader,
+      side: BackSide,
+      depthWrite: false
+    });
+    super(new BoxGeometry(1, 1, 1), material);
+    this.isSky = true;
+  }
+};
+Sky.SkyShader = {
+  name: "SkyShader",
+  uniforms: {
+    "turbidity": { value: 2 },
+    "rayleigh": { value: 1 },
+    "mieCoefficient": { value: 5e-3 },
+    "mieDirectionalG": { value: 0.8 },
+    "sunPosition": { value: new Vector32() },
+    "up": { value: new Vector32(0, 1, 0) },
+    "cloudScale": { value: 2e-4 },
+    "cloudSpeed": { value: 1e-4 },
+    "cloudCoverage": { value: 0.4 },
+    "cloudDensity": { value: 0.4 },
+    "cloudElevation": { value: 0.5 },
+    "showSunDisc": { value: 1 },
+    "time": { value: 0 }
+  },
+  vertexShader: (
+    /* glsl */
+    `
+		uniform vec3 sunPosition;
+		uniform float rayleigh;
+		uniform float turbidity;
+		uniform float mieCoefficient;
+		uniform vec3 up;
+
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying float vSunfade;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		// constants for atmospheric scattering
+		const float e = 2.71828182845904523536028747135266249775724709369995957;
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		// wavelength of used primaries, according to preetham
+		const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );
+		// this pre-calculation replaces older TotalRayleigh(vec3 lambda) function:
+		// (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn))
+		const vec3 totalRayleigh = vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 );
+
+		// mie stuff
+		// K coefficient for the primaries
+		const float v = 4.0;
+		const vec3 K = vec3( 0.686, 0.678, 0.666 );
+		// MieConst = pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K
+		const vec3 MieConst = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+		// earth shadow hack
+		// cutoffAngle = pi / 1.95;
+		const float cutoffAngle = 1.6110731556870734;
+		const float steepness = 1.5;
+		const float EE = 1000.0;
+
+		float sunIntensity( float zenithAngleCos ) {
+			zenithAngleCos = clamp( zenithAngleCos, -1.0, 1.0 );
+			return EE * max( 0.0, 1.0 - pow( e, -( ( cutoffAngle - acos( zenithAngleCos ) ) / steepness ) ) );
+		}
+
+		vec3 totalMie( float T ) {
+			float c = ( 0.2 * T ) * 10E-18;
+			return 0.434 * c * MieConst;
+		}
+
+		void main() {
+
+			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+			vWorldPosition = worldPosition.xyz;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			gl_Position.z = gl_Position.w; // set z to camera.far
+
+			vSunDirection = normalize( sunPosition );
+
+			vSunE = sunIntensity( dot( vSunDirection, up ) );
+
+			vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
+
+			float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
+
+			// extinction (absorption + out scattering)
+			// rayleigh coefficients
+			vBetaR = totalRayleigh * rayleighCoefficient;
+
+			// mie coefficients
+			vBetaM = totalMie( turbidity ) * mieCoefficient;
+
+		}`
+  ),
+  fragmentShader: (
+    /* glsl */
+    `
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		uniform float mieDirectionalG;
+		uniform vec3 up;
+		uniform float cloudScale;
+		uniform float cloudSpeed;
+		uniform float cloudCoverage;
+		uniform float cloudDensity;
+		uniform float cloudElevation;
+		uniform float showSunDisc;
+		uniform float time;
+
+		// Cloud noise functions
+		float hash( vec2 p ) {
+			return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+		}
+
+		float noise( vec2 p ) {
+			vec2 i = floor( p );
+			vec2 f = fract( p );
+			f = f * f * ( 3.0 - 2.0 * f );
+			float a = hash( i );
+			float b = hash( i + vec2( 1.0, 0.0 ) );
+			float c = hash( i + vec2( 0.0, 1.0 ) );
+			float d = hash( i + vec2( 1.0, 1.0 ) );
+			return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+		}
+
+		float fbm( vec2 p ) {
+			float value = 0.0;
+			float amplitude = 0.5;
+			for ( int i = 0; i < 5; i ++ ) {
+				value += amplitude * noise( p );
+				p *= 2.0;
+				amplitude *= 0.5;
+			}
+			return value;
+		}
+
+		// constants for atmospheric scattering
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		const float n = 1.0003; // refractive index of air
+		const float N = 2.545E25; // number of molecules per unit volume for air at 288.15K and 1013mb (sea level -45 celsius)
+
+		// optical length at zenith for molecules
+		const float rayleighZenithLength = 8.4E3;
+		const float mieZenithLength = 1.25E3;
+		// 66 arc seconds -> degrees, and the cosine of that
+		const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+
+		// 3.0 / ( 16.0 * pi )
+		const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+		// 1.0 / ( 4.0 * pi )
+		const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+		float rayleighPhase( float cosTheta ) {
+			return THREE_OVER_SIXTEENPI * ( 1.0 + pow( cosTheta, 2.0 ) );
+		}
+
+		float hgPhase( float cosTheta, float g ) {
+			float g2 = pow( g, 2.0 );
+			float inverse = 1.0 / pow( 1.0 - 2.0 * g * cosTheta + g2, 1.5 );
+			return ONE_OVER_FOURPI * ( ( 1.0 - g2 ) * inverse );
+		}
+
+		void main() {
+
+			vec3 direction = normalize( vWorldPosition - cameraPosition );
+
+			// optical length
+			// cutoff angle at 90 to avoid singularity in next formula.
+			float zenithAngle = acos( max( 0.0, dot( up, direction ) ) );
+			float inverse = 1.0 / ( cos( zenithAngle ) + 0.15 * pow( 93.885 - ( ( zenithAngle * 180.0 ) / pi ), -1.253 ) );
+			float sR = rayleighZenithLength * inverse;
+			float sM = mieZenithLength * inverse;
+
+			// combined extinction factor
+			vec3 Fex = exp( -( vBetaR * sR + vBetaM * sM ) );
+
+			// in scattering
+			float cosTheta = dot( direction, vSunDirection );
+
+			float rPhase = rayleighPhase( cosTheta * 0.5 + 0.5 );
+			vec3 betaRTheta = vBetaR * rPhase;
+
+			float mPhase = hgPhase( cosTheta, mieDirectionalG );
+			vec3 betaMTheta = vBetaM * mPhase;
+
+			vec3 Lin = pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * ( 1.0 - Fex ), vec3( 1.5 ) );
+			Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * Fex, vec3( 1.0 / 2.0 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );
+
+			// nightsky
+			float theta = acos( direction.y ); // elevation --> y-axis, [-pi/2, pi/2]
+			float phi = atan( direction.z, direction.x ); // azimuth --> x-axis [-pi/2, pi/2]
+			vec2 uv = vec2( phi, theta ) / vec2( 2.0 * pi, pi ) + vec2( 0.5, 0.0 );
+			vec3 L0 = vec3( 0.1 ) * Fex;
+
+			// composition + solar disc
+			float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSunDisc;
+			L0 += ( vSunE * 19000.0 * Fex ) * sundisc;
+
+			vec3 texColor = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
+
+			// Clouds
+			if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
+
+				// Project to cloud plane (higher elevation = clouds appear lower/closer)
+				float elevation = mix( 1.0, 0.1, cloudElevation );
+				vec2 cloudUV = direction.xz / ( direction.y * elevation );
+				cloudUV *= cloudScale;
+				cloudUV += time * cloudSpeed;
+
+				// Multi-octave noise for fluffy clouds
+				float cloudNoise = fbm( cloudUV * 1000.0 );
+				cloudNoise += 0.5 * fbm( cloudUV * 2000.0 + 3.7 );
+				cloudNoise = cloudNoise * 0.5 + 0.5;
+
+				// Apply coverage threshold
+				float cloudMask = smoothstep( 1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cloudNoise );
+
+				// Fade clouds near horizon (adjusted by elevation)
+				float horizonFade = smoothstep( 0.0, 0.1 + 0.2 * cloudElevation, direction.y );
+				cloudMask *= horizonFade;
+
+				// Cloud lighting based on sun position
+				float sunInfluence = dot( direction, vSunDirection ) * 0.5 + 0.5;
+				float daylight = max( 0.0, vSunDirection.y * 2.0 );
+
+				// Base cloud color affected by atmosphere
+				vec3 atmosphereColor = Lin * 0.04;
+				vec3 cloudColor = mix( vec3( 0.3 ), vec3( 1.0 ), daylight );
+				cloudColor = mix( cloudColor, atmosphereColor + vec3( 1.0 ), sunInfluence * 0.5 );
+				cloudColor *= vSunE * 0.00002;
+
+				// Blend clouds with sky
+				texColor = mix( texColor, cloudColor, cloudMask * cloudDensity );
+
+			}
+
+			gl_FragColor = vec4( texColor, 1.0 );
+
+			#include <tonemapping_fragment>
+			#include <colorspace_fragment>
+
+		}`
+  )
+};
+
+// src/rendering/LightingEnvironmentManager.ts
+function assertRevision3(revision) {
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new RangeError("lighting environment revision must be a non-negative safe integer");
+  }
+}
+function assertSource(source) {
+  if (!source || typeof source !== "object") {
+    throw new TypeError("lighting environment source is required");
+  }
+  if (source.kind === "analytic-sky") {
+    const directionLength = Math.hypot(
+      source.sunDirection.x,
+      source.sunDirection.y,
+      source.sunDirection.z
+    );
+    if (!Number.isFinite(source.turbidity) || source.turbidity < 0 || source.turbidity > 20 || !Number.isFinite(source.rayleigh) || source.rayleigh < 0 || source.rayleigh > 4 || !Number.isFinite(source.mieCoefficient) || source.mieCoefficient < 0 || source.mieCoefficient > 0.1 || !Number.isFinite(source.mieDirectionalG) || source.mieDirectionalG < 0 || source.mieDirectionalG >= 1 || !Number.isFinite(directionLength) || directionLength <= 0) {
+      throw new RangeError("analytic lighting environment parameters are invalid");
+    }
+    return;
+  }
+  if (source.kind === "equirectangular") {
+    if (!(source.texture instanceof Texture3) || source.texture.isTexture !== true) {
+      throw new TypeError("equirectangular lighting environment requires a texture");
+    }
+    return;
+  }
+  if (source.kind === "cube") {
+    if (!(source.texture instanceof CubeTexture) || source.texture.isCubeTexture !== true) {
+      throw new TypeError("cube lighting environment requires a cube texture");
+    }
+    return;
+  }
+  throw new TypeError("lighting environment source kind is unsupported");
+}
+function snapshotSource(source) {
+  assertSource(source);
+  if (source.kind === "analytic-sky") {
+    return Object.freeze({
+      kind: source.kind,
+      turbidity: source.turbidity,
+      rayleigh: source.rayleigh,
+      mieCoefficient: source.mieCoefficient,
+      mieDirectionalG: source.mieDirectionalG,
+      sunDirection: Object.freeze({
+        x: source.sunDirection.x,
+        y: source.sunDirection.y,
+        z: source.sunDirection.z
+      })
+    });
+  }
+  if (source.kind === "equirectangular") {
+    return Object.freeze({ kind: source.kind, texture: source.texture });
+  }
+  return Object.freeze({ kind: source.kind, texture: source.texture });
+}
+function assertCompiledEnvironment(compiled) {
+  if (!compiled || typeof compiled !== "object" || !(compiled.texture instanceof Texture3) || compiled.texture.mapping !== CubeUVReflectionMapping2 || typeof compiled.dispose !== "function") {
+    throw new TypeError("lighting environment compiler did not return a prepared PMREM resource");
+  }
+}
+var ThreePmremEnvironmentCompiler = class {
+  constructor(renderer) {
+    this.disposed = false;
+    this.generator = new PMREMGenerator(renderer);
+  }
+  compile(source) {
+    if (this.disposed) throw new Error("PMREM environment compiler is disposed");
+    assertSource(source);
+    let target;
+    if (source.kind === "equirectangular") {
+      target = this.generator.fromEquirectangular(source.texture);
+    } else if (source.kind === "cube") {
+      target = this.generator.fromCubemap(source.texture);
+    } else {
+      const scene = new Scene2();
+      const sky = new Sky();
+      sky.scale.setScalar(50);
+      const uniforms = sky.material.uniforms;
+      uniforms.turbidity.value = source.turbidity;
+      uniforms.rayleigh.value = source.rayleigh;
+      uniforms.mieCoefficient.value = source.mieCoefficient;
+      uniforms.mieDirectionalG.value = source.mieDirectionalG;
+      const length = Math.hypot(
+        source.sunDirection.x,
+        source.sunDirection.y,
+        source.sunDirection.z
+      );
+      uniforms.sunPosition.value.set(
+        source.sunDirection.x / length,
+        source.sunDirection.y / length,
+        source.sunDirection.z / length
+      );
+      scene.add(sky);
+      try {
+        target = this.generator.fromScene(scene, 0, 0.1, 100);
+      } finally {
+        sky.geometry.dispose();
+        sky.material.dispose();
+        scene.remove(sky);
+      }
+    }
+    target.texture.mapping = CubeUVReflectionMapping2;
+    let released = false;
+    const compiled = Object.freeze({
+      texture: target.texture,
+      dispose() {
+        if (released) return;
+        released = true;
+        target.dispose();
+      }
+    });
+    assertCompiledEnvironment(compiled);
+    return compiled;
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.generator.dispose();
+  }
+};
+var LightingEnvironmentSupersededError = class extends Error {
+  constructor(revision) {
+    super(`lighting environment revision ${revision} was superseded before compilation`);
+    this.name = "LightingEnvironmentSupersededError";
+  }
+};
+var LightingEnvironmentManager = class {
+  constructor(compiler, schedule) {
+    this.compiler = compiler;
+    this.schedule = schedule;
+    this.generation = 0;
+    this.buildCount = 0;
+    this.swapCount = 0;
+    this.supersededCount = 0;
+    this.failureCount = 0;
+    this.activating = false;
+    this.disposed = false;
+    if (!compiler || typeof compiler.compile !== "function" || typeof compiler.dispose !== "function") {
+      throw new TypeError("lighting environment compiler is invalid");
+    }
+    if (typeof schedule !== "function") {
+      throw new TypeError("lighting environment task scheduler is required");
+    }
+  }
+  get current() {
+    return this.resident?.handle;
+  }
+  get stats() {
+    return {
+      currentRevision: this.resident?.handle.revision,
+      pendingRevision: this.pending?.revision,
+      builds: this.buildCount,
+      swaps: this.swapCount,
+      superseded: this.supersededCount,
+      failures: this.failureCount
+    };
+  }
+  rebuild(source, revision, activate) {
+    if (this.disposed) return Promise.reject(new Error("lighting environment manager is disposed"));
+    if (this.activating) {
+      return Promise.reject(new Error("lighting environment rebuild cannot be requested during activation"));
+    }
+    try {
+      assertRevision3(revision);
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+    let sourceSnapshot;
+    try {
+      sourceSnapshot = snapshotSource(source);
+    } catch (reason) {
+      return Promise.reject(reason);
+    }
+    if (typeof activate !== "function") {
+      return Promise.reject(new TypeError("lighting environment activator is required"));
+    }
+    const residentRevision = this.resident?.handle.revision;
+    if (residentRevision !== void 0 && revision <= residentRevision) {
+      return Promise.reject(new Error("lighting environment revisions must increase strictly"));
+    }
+    if (this.pending && revision <= this.pending.revision) {
+      return Promise.reject(new Error("lighting environment revisions must increase strictly"));
+    }
+    const generation = ++this.generation;
+    const previousPending = this.pending;
+    if (previousPending && !previousPending.settled) {
+      previousPending.settled = true;
+      this.supersededCount += 1;
+      previousPending.reject(new LightingEnvironmentSupersededError(previousPending.revision));
+    }
+    return new Promise((resolve, reject) => {
+      const pending = {
+        generation,
+        revision,
+        settled: false,
+        reject
+      };
+      this.pending = pending;
+      const run = () => {
+        if (pending.settled) return;
+        if (this.disposed || this.pending !== pending || this.generation !== generation) {
+          pending.settled = true;
+          this.supersededCount += 1;
+          reject(new LightingEnvironmentSupersededError(revision));
+          return;
+        }
+        let compiled;
+        try {
+          compiled = this.compiler.compile(sourceSnapshot);
+          this.buildCount += 1;
+          assertCompiledEnvironment(compiled);
+        } catch (reason) {
+          if (typeof compiled?.dispose === "function") {
+            compiled.dispose();
+          }
+          pending.settled = true;
+          this.pending = void 0;
+          this.failureCount += 1;
+          reject(reason);
+          return;
+        }
+        if (!compiled) {
+          pending.settled = true;
+          this.pending = void 0;
+          this.failureCount += 1;
+          reject(new Error("lighting environment compiler returned no resource"));
+          return;
+        }
+        let handle;
+        try {
+          handle = createEnvironmentHandle(revision, compiled.texture);
+          this.activating = true;
+          const result = activate(handle);
+          if (result && typeof result.then === "function") {
+            throw new TypeError("lighting environment activator must be synchronous");
+          }
+        } catch (reason) {
+          compiled.dispose();
+          pending.settled = true;
+          this.pending = void 0;
+          this.failureCount += 1;
+          reject(reason);
+          return;
+        } finally {
+          this.activating = false;
+        }
+        const previous = this.resident;
+        this.resident = Object.freeze({ handle, compiled });
+        this.pending = void 0;
+        pending.settled = true;
+        this.swapCount += 1;
+        previous?.compiled.dispose();
+        resolve(handle);
+      };
+      try {
+        this.schedule(run);
+      } catch (reason) {
+        pending.settled = true;
+        this.pending = void 0;
+        this.failureCount += 1;
+        reject(reason);
+      }
+    });
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.generation += 1;
+    if (this.pending && !this.pending.settled) {
+      this.pending.settled = true;
+      this.pending.reject(new Error("lighting environment manager was disposed"));
+    }
+    this.pending = void 0;
+    this.resident?.compiled.dispose();
+    this.resident = void 0;
+    this.compiler.dispose();
+  }
+};
 
 // src/rendering/SurfaceTexturePool.ts
 import {
@@ -5075,93 +6450,6 @@ var Land = /* @__PURE__ */ ((Land2) => {
   return Land2;
 })(Land || {});
 
-// src/world/noise.ts
-var UINT32_MAX = 4294967295;
-function seedToUint32(seed) {
-  const text = String(seed);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-function randomGridValue(seed, x, y) {
-  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-  hash = Math.imul(hash ^ hash >>> 15, 739982445);
-  hash = Math.imul(hash ^ hash >>> 12, 695872825);
-  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-}
-var smooth = (value) => value * value * (3 - 2 * value);
-var lerp = (from, to, amount) => from + (to - from) * amount;
-function positiveModulo3(value, modulus) {
-  return (value % modulus + modulus) % modulus;
-}
-function valueNoise2D(seed, x, y) {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function fractalNoise2D(seed, x, y, octaves) {
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-  const px = Math.max(1, Math.round(periodX));
-  const py = Math.max(1, Math.round(periodY));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const sample = (gx, gy) => randomGridValue(
-    seed,
-    positiveModulo3(gx, px),
-    positiveModulo3(gy, py)
-  );
-  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-  const baseCellsX = Math.max(1, Math.round(cellsX));
-  const baseCellsY = Math.max(1, Math.round(cellsY));
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    const periodX = baseCellsX * frequency;
-    const periodY = baseCellsY * frequency;
-    total += periodicValueNoise2D(
-      seed + Math.imul(octave, 2654435769) >>> 0,
-      normalizedX * periodX,
-      normalizedY * periodY,
-      periodX,
-      periodY
-    ) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function randomAt(seed, x, y, salt) {
-  return randomGridValue((seed ^ salt) >>> 0, x, y);
-}
-
 // src/world/WorldGeneratorVersion.ts
 var WORLD_GENERATOR_VERSION = 5;
 
@@ -5476,7 +6764,7 @@ assertWorldStyleProfile(WORLD_STYLE_PROFILE);
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 var clamp01 = (value) => Math.max(0, Math.min(1, value));
-var smoothstep = (edge0, edge1, value) => {
+var smoothstep2 = (edge0, edge1, value) => {
   const t = clamp01((value - edge0) / (edge1 - edge0));
   return t * t * (3 - 2 * t);
 };
@@ -5495,9 +6783,9 @@ function resolveDomain(domain) {
 }
 function composeLandformSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
   const fields = profile.fields;
-  const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
+  const landMask = smoothstep2(fields.landMaskStart, fields.landMaskEnd, continent);
   const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
-  const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent) * smoothstep(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
+  const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent) * smoothstep2(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
   const elevation = continent * fields.continentWeight + detail * fields.detailWeight + ridge * fields.ridgeWeight - valley * fields.valleyWeight + fields.elevationBias - edgeFalloff;
   const moisture = clamp01(moistureNoise * fields.moistureNoiseWeight + valley * fields.moistureValleyWeight - ridge * fields.moistureRidgeWeight);
   const temperature = clamp01(latitude === void 0 ? fields.temperatureNoiseMinimum + temperatureNoise * fields.temperatureNoiseWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight : 1 - latitude * fields.temperatureLatitudeWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight + (temperatureNoise - 0.5) * fields.temperatureLatitudeNoiseWeight);
@@ -5625,41 +6913,6 @@ function createLandformSamplerForProfile(options, profile) {
       return domain.topology === "toroidal" ? sampleToroidalLandform(numericSeed, x, y, domain, profile) : sampleOpenLandform(numericSeed, x, y, domain, profile);
     }
   };
-}
-
-// src/world/DeterministicHash.ts
-var UINT32_RANGE = 4294967296;
-function mixUint32(hash, word) {
-  let mixed = (hash ^ word) >>> 0;
-  mixed = Math.imul(mixed ^ mixed >>> 16, 2146121005);
-  mixed = Math.imul(mixed ^ mixed >>> 15, 2221713035);
-  return (mixed ^ mixed >>> 16) >>> 0;
-}
-function safeIntegerWords(value) {
-  if (!Number.isSafeInteger(value)) {
-    throw new RangeError("deterministic coordinate hash requires safe integers");
-  }
-  const magnitude = Math.abs(value);
-  const high = Math.floor(magnitude / UINT32_RANGE);
-  const low = magnitude - high * UINT32_RANGE;
-  return [low >>> 0, high >>> 0, value < 0 ? 1 : 0];
-}
-function hashSafeIntegerCoordinates(seed, x, y, salt = 0) {
-  if (!Number.isInteger(seed) || seed < 0 || seed > 4294967295) {
-    throw new RangeError("deterministic coordinate hash seed must be a uint32");
-  }
-  if (!Number.isInteger(salt) || salt < 0 || salt > 4294967295) {
-    throw new RangeError("deterministic coordinate hash salt must be a uint32");
-  }
-  const xWords = safeIntegerWords(x);
-  const yWords = safeIntegerWords(y);
-  let hash = mixUint32((seed ^ 2654435769) >>> 0, salt >>> 0);
-  hash = mixUint32(hash, xWords[0]);
-  hash = mixUint32(hash, xWords[1]);
-  hash = mixUint32(hash, xWords[2]);
-  hash = mixUint32(hash, yWords[0]);
-  hash = mixUint32(hash, yWords[1]);
-  return mixUint32(hash, yWords[2]);
 }
 
 // src/world/SemanticLandformSampler.ts
@@ -5834,7 +7087,7 @@ function createSemanticLandformSamplerForProfile(options, profile) {
 // src/world/WorldSurfaceResolver.ts
 var isWater = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
 var clamp012 = (value) => Math.max(0, Math.min(1, value));
-var smoothstep2 = (edge0, edge1, value) => {
+var smoothstep3 = (edge0, edge1, value) => {
   const t = clamp012((value - edge0) / (edge1 - edge0));
   return t * t * (3 - 2 * t);
 };
@@ -5866,7 +7119,7 @@ function generatedRelief(sample, profile) {
   if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
   const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
   const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
-  const hill = smoothstep2(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
+  const hill = smoothstep3(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
   const mountainT = Math.max(
     0,
     (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
@@ -5884,23 +7137,23 @@ function biomeWeightsFor(type, sample, profile, includeSubmergedGround = false) 
   const materialTerrain = isWater(type) ? "land" /* land */ : type;
   const terrain = profile.terrain;
   const transition = terrain.climateTransition;
-  const cold = 1 - smoothstep2(
+  const cold = 1 - smoothstep3(
     terrain.snowTemperature - transition,
     terrain.tundraTemperature + transition,
     sample.temperature
   );
-  const dry = smoothstep2(
+  const dry = smoothstep3(
     terrain.sandTemperature - transition,
     terrain.sandTemperature + transition,
     sample.temperature
-  ) * (1 - smoothstep2(
+  ) * (1 - smoothstep3(
     terrain.sandMoisture - transition,
     terrain.sandMoisture + transition,
     sample.moisture
   ));
   const alpine = clamp012(Math.max(
     materialTerrain === "mountain" /* mountain */ ? 0.7 : 0,
-    smoothstep2(
+    smoothstep3(
       terrain.mountainElevation - transition,
       terrain.mountainPeakElevation,
       sample.elevation
@@ -5931,18 +7184,18 @@ function biomeFor(type, weights) {
 function vegetationDensityFor(type, sample, profile) {
   if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
   const vegetation = profile.vegetation;
-  const moisture = smoothstep2(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
-  const cold = smoothstep2(
+  const moisture = smoothstep3(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
+  const cold = smoothstep3(
     vegetation.temperatureMinimum - vegetation.temperatureTransition,
     vegetation.temperatureMinimum + vegetation.temperatureTransition,
     sample.temperature
   );
-  const heat = 1 - smoothstep2(
+  const heat = 1 - smoothstep3(
     vegetation.temperatureMaximum - vegetation.temperatureTransition,
     vegetation.temperatureMaximum + vegetation.temperatureTransition,
     sample.temperature
   );
-  const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep2(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
+  const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep3(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
   const slope = clamp012(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
   return Math.min(
     vegetation.maximumDensity,
@@ -5952,10 +7205,10 @@ function vegetationDensityFor(type, sample, profile) {
 function lakePotentialFor(type, sample, profile) {
   if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
   const lakes = profile.lakes;
-  const elevation = smoothstep2(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep2(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
-  const moisture = smoothstep2(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
-  const valley = smoothstep2(lakes.valleyStart, lakes.valleyFull, sample.valley);
-  const patch = smoothstep2(lakes.patchStart, lakes.patchFull, sample.lakePatch);
+  const elevation = smoothstep3(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep3(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
+  const moisture = smoothstep3(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
+  const valley = smoothstep3(lakes.valleyStart, lakes.valleyFull, sample.valley);
+  const patch = smoothstep3(lakes.patchStart, lakes.patchFull, sample.lakePatch);
   return clamp012(elevation * moisture * valley * patch);
 }
 function vegetationKindFor(sample, profile) {
@@ -6233,7 +7486,7 @@ function semanticKeyIdentity(key) {
 function compareSemanticKeys(first, second) {
   return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
 }
-function assertRevision2(name, revision) {
+function assertRevision4(name, revision) {
   if (!Number.isSafeInteger(revision) || revision < 0) {
     throw new RangeError(`${name} must be a non-negative safe integer`);
   }
@@ -6440,7 +7693,7 @@ var MemorySurfaceDeltaStore = class {
         throw new TypeError("surface semantic mutation operation is invalid");
       }
       assertCanonicalSemanticKey(this.descriptor, mutation.key);
-      assertRevision2("surface semantic expected revision", mutation.expectedRevision);
+      assertRevision4("surface semantic expected revision", mutation.expectedRevision);
       const identity = semanticKeyIdentity(mutation.key);
       if (semanticKeys.has(identity)) throw new Error("surface delta transaction contains duplicate semantic chunks");
       semanticKeys.add(identity);
@@ -6454,7 +7707,7 @@ var MemorySurfaceDeltaStore = class {
       if (mutation.featureKind !== "river" && mutation.featureKind !== "lake") {
         throw new TypeError("surface hydrology mutation kind is invalid");
       }
-      assertRevision2("surface hydrology expected revision", mutation.expectedRevision);
+      assertRevision4("surface hydrology expected revision", mutation.expectedRevision);
       if (featureIds.has(mutation.featureId)) {
         throw new Error("surface delta transaction contains duplicate hydrology features");
       }
@@ -7080,6 +8333,12 @@ function assertGenerateHydrologyRegionWorkerRequest(value) {
     }
   }
 }
+function assertCompileSurfaceChunkWorkerRequest(value) {
+  assertWorkerRequestEnvelope(value, "compileSurfaceChunk");
+  const request = value;
+  assertSurfaceRequestToken(request.requestToken);
+  assertTransferableEffectiveWindow(request.effectiveWindow);
+}
 function createGenerateSemanticChunkWorkerRequest(requestId, descriptor, key) {
   const request = {
     protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
@@ -7104,6 +8363,25 @@ function createGenerateHydrologyRegionWorkerRequest(requestId, descriptor, key) 
   assertGenerateHydrologyRegionWorkerRequest(request);
   return Object.freeze(request);
 }
+function createCompileSurfaceChunkWorkerRequest(requestId, requestToken, effectiveWindow) {
+  const request = {
+    protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+    generatorVersion: WORLD_GENERATOR_VERSION_V2,
+    requestId,
+    type: "compileSurfaceChunk",
+    requestToken: createSurfaceRequestToken(
+      requestToken.sessionEpoch,
+      requestToken.renderChunkGeneration
+    ),
+    effectiveWindow
+  };
+  assertCompileSurfaceChunkWorkerRequest(request);
+  return Object.freeze(request);
+}
+function compileSurfaceChunkRequestTransferables(request) {
+  assertCompileSurfaceChunkWorkerRequest(request);
+  return transferableEffectiveWindowTransferables(request.effectiveWindow);
+}
 
 // src/world/SurfaceWorkerClient.ts
 function remoteError(response) {
@@ -7118,7 +8396,7 @@ function remoteError(response) {
 function assertResponseEnvelope(value) {
   if (!value || typeof value !== "object") throw new TypeError("surface worker response must be an object");
   const response = value;
-  if (response.protocolVersion !== SURFACE_WORKER_PROTOCOL_VERSION || response.generatorVersion !== WORLD_GENERATOR_VERSION_V2 || !Number.isSafeInteger(response.requestId) || response.requestId <= 0 || response.type !== "generateSemanticChunkResult" && response.type !== "generateHydrologyRegionResult" && response.type !== "surfaceWorkerError") {
+  if (response.protocolVersion !== SURFACE_WORKER_PROTOCOL_VERSION || response.generatorVersion !== WORLD_GENERATOR_VERSION_V2 || !Number.isSafeInteger(response.requestId) || response.requestId <= 0 || response.type !== "generateSemanticChunkResult" && response.type !== "generateHydrologyRegionResult" && response.type !== "compileSurfaceChunkResult" && response.type !== "surfaceWorkerError") {
     throw new TypeError("surface worker response envelope is invalid or unsupported");
   }
 }
@@ -7148,13 +8426,20 @@ var SurfaceWorkerClient = class {
           const chunk = this.publishChunk(response, request);
           this.pending.delete(response.requestId);
           request.resolve(chunk);
-        } else {
+        } else if (response.type === "generateHydrologyRegionResult") {
           if (request.type !== "generateHydrologyRegion") {
             throw new TypeError("surface worker hydrology result does not match its pending request type");
           }
           const region = this.publishHydrologyRegion(response, request);
           this.pending.delete(response.requestId);
           request.resolve(region);
+        } else {
+          if (request.type !== "compileSurfaceChunk") {
+            throw new TypeError("surface worker compile result does not match its pending request type");
+          }
+          const result = this.publishSurfaceChunk(response, request);
+          this.pending.delete(response.requestId);
+          request.resolve(result);
         }
       } catch (reason) {
         this.fail(reason instanceof Error ? reason : new Error(String(reason)));
@@ -7235,6 +8520,44 @@ var SurfaceWorkerClient = class {
       }
     });
   }
+  compileSurfaceChunk(options) {
+    if (this.disposed) return Promise.reject(new Error("SurfaceWorkerClient has been disposed"));
+    if (!options || typeof options !== "object") {
+      return Promise.reject(new TypeError("surface compile worker options are required"));
+    }
+    if (!Number.isSafeInteger(this.nextRequestId)) {
+      return Promise.reject(new RangeError("surface worker request id space is exhausted"));
+    }
+    const requestId = this.nextRequestId;
+    let request;
+    let transferables;
+    try {
+      request = createCompileSurfaceChunkWorkerRequest(
+        requestId,
+        options.requestToken,
+        options.effectiveWindow
+      );
+      transferables = compileSurfaceChunkRequestTransferables(request);
+    } catch (reason) {
+      return Promise.reject(reason instanceof Error ? reason : new Error(String(reason)));
+    }
+    this.nextRequestId += 1;
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, {
+        type: "compileSurfaceChunk",
+        requestToken: request.requestToken,
+        dependencyKey: options.effectiveWindow.dependencyKey,
+        resolve,
+        reject
+      });
+      try {
+        this.worker.postMessage(request, [...transferables]);
+      } catch (reason) {
+        this.pending.delete(requestId);
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      }
+    });
+  }
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -7286,6 +8609,19 @@ var SurfaceWorkerClient = class {
       bodies: region.bodies
     });
   }
+  publishSurfaceChunk(response, request) {
+    if (!surfaceRequestTokensEqual(response.requestToken, request.requestToken) || !response.chunk || !surfaceDependencyKeysEqual(response.chunk.dependencyKey, request.dependencyKey)) {
+      throw new TypeError("surface worker returned a chunk for the wrong token or dependency key");
+    }
+    const chunk = createCompiledSurfaceChunk(response.chunk);
+    return Object.freeze({
+      requestToken: createSurfaceRequestToken(
+        response.requestToken.sessionEpoch,
+        response.requestToken.renderChunkGeneration
+      ),
+      chunk
+    });
+  }
   fail(error) {
     for (const request of this.pending.values()) request.reject(error);
     this.pending.clear();
@@ -7312,8 +8648,10 @@ var SurfaceWorkerPool = class {
     this.retried = 0;
     this.completedSemanticChunks = 0;
     this.completedHydrologyRegions = 0;
+    this.completedSurfaceChunks = 0;
     this.averageSemanticChunkMs = 0;
     this.averageHydrologyRegionMs = 0;
+    this.averageSurfaceCompileMs = 0;
     this.disposed = false;
     const maxWorkers = options.maxWorkers ?? 8;
     if (!Number.isInteger(maxWorkers) || maxWorkers <= 0 || maxWorkers > 8) {
@@ -7360,7 +8698,8 @@ var SurfaceWorkerPool = class {
     return this.enqueueTask(
       "semantic",
       (client) => client.generateSemanticChunk(taskOptions),
-      request
+      request,
+      true
     );
   }
   generateHydrologyRegion(options, request = {}) {
@@ -7374,10 +8713,26 @@ var SurfaceWorkerPool = class {
     return this.enqueueTask(
       "hydrology",
       (client) => client.generateHydrologyRegion(taskOptions),
-      request
+      request,
+      true
     );
   }
-  enqueueTask(kind, run, request) {
+  compileSurfaceChunk(options, request = {}) {
+    if (!options || typeof options !== "object" || !options.requestToken || !options.effectiveWindow) {
+      return Promise.reject(new TypeError("surface compile pool options are required"));
+    }
+    const taskOptions = Object.freeze({
+      requestToken: options.requestToken,
+      effectiveWindow: options.effectiveWindow
+    });
+    return this.enqueueTask(
+      "surface",
+      (client) => client.compileSurfaceChunk(taskOptions),
+      request,
+      false
+    );
+  }
+  enqueueTask(kind, run, request, retryable) {
     if (this.disposed) return Promise.reject(new Error("SurfaceWorkerPool has been disposed"));
     if (request.signal?.aborted) return Promise.reject(abortError());
     return new Promise((resolve, reject) => {
@@ -7388,6 +8743,7 @@ var SurfaceWorkerPool = class {
         signal: request.signal,
         reject,
         attempts: 0,
+        retryable,
         settled: false
       };
       if (request.signal) {
@@ -7425,8 +8781,10 @@ var SurfaceWorkerPool = class {
       starvationPromotions: queue.starvationPromotions,
       completedSemanticChunks: this.completedSemanticChunks,
       completedHydrologyRegions: this.completedHydrologyRegions,
+      completedSurfaceChunks: this.completedSurfaceChunks,
       averageSemanticChunkMs: this.averageSemanticChunkMs,
-      averageHydrologyRegionMs: this.averageHydrologyRegionMs
+      averageHydrologyRegionMs: this.averageHydrologyRegionMs,
+      averageSurfaceCompileMs: this.averageSurfaceCompileMs
     });
   }
   dispose() {
@@ -7477,7 +8835,8 @@ var SurfaceWorkerPool = class {
       if (!task.settled) {
         this.completed += 1;
         if (task.kind === "semantic") this.completedSemanticChunks += 1;
-        else this.completedHydrologyRegions += 1;
+        else if (task.kind === "hydrology") this.completedHydrologyRegions += 1;
+        else this.completedSurfaceChunks += 1;
         this.finishTask(task, () => task.resolveResult(result));
       }
       this.releaseSlot(slot);
@@ -7486,7 +8845,7 @@ var SurfaceWorkerPool = class {
       const error = reason instanceof Error ? reason : new Error(String(reason));
       const workerFailed = slot.client.isDisposed && !this.disposed;
       if (workerFailed) this.workerFailures += 1;
-      if (!task.settled && workerFailed && task.attempts < this.maximumWorkerRetries) {
+      if (!task.settled && task.retryable && workerFailed && task.attempts < this.maximumWorkerRetries) {
         task.attempts += 1;
         this.retried += 1;
         try {
@@ -7517,7 +8876,7 @@ var SurfaceWorkerPool = class {
   }
   createClient() {
     const client = this.clientFactory();
-    if (!client || typeof client.generateSemanticChunk !== "function" || typeof client.generateHydrologyRegion !== "function" || typeof client.dispose !== "function") {
+    if (!client || typeof client.generateSemanticChunk !== "function" || typeof client.generateHydrologyRegion !== "function" || typeof client.compileSurfaceChunk !== "function" || typeof client.dispose !== "function") {
       throw new TypeError("surface worker client factory returned an invalid client");
     }
     if (client.isDisposed) {
@@ -7534,8 +8893,10 @@ var SurfaceWorkerPool = class {
     const duration = Math.max(0, finished - started);
     if (kind === "semantic") {
       this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0 ? duration : this.averageSemanticChunkMs + (duration - this.averageSemanticChunkMs) * 0.2;
-    } else {
+    } else if (kind === "hydrology") {
       this.averageHydrologyRegionMs = this.averageHydrologyRegionMs === 0 ? duration : this.averageHydrologyRegionMs + (duration - this.averageHydrologyRegionMs) * 0.2;
+    } else {
+      this.averageSurfaceCompileMs = this.averageSurfaceCompileMs === 0 ? duration : this.averageSurfaceCompileMs + (duration - this.averageSurfaceCompileMs) * 0.2;
     }
   }
 };
@@ -9987,7 +11348,7 @@ var OCEAN_BODY_REF = Object.freeze({
   kind: "ocean",
   profileIndex: OCEAN_HYDROLOGY_PROFILE
 });
-function clamp(value, minimum, maximum) {
+function clamp2(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 function compareCandidate(first, second) {
@@ -10015,7 +11376,7 @@ function closestRiverPoint(river, x, y) {
     const deltaY = endY - startY;
     const lengthSquared = deltaX * deltaX + deltaY * deltaY;
     if (lengthSquared === 0) continue;
-    const amount = clamp(((x - startX) * deltaX + (y - startY) * deltaY) / lengthSquared, 0, 1);
+    const amount = clamp2(((x - startX) * deltaX + (y - startY) * deltaY) / lengthSquared, 0, 1);
     const closestX = startX + deltaX * amount;
     const closestY = startY + deltaY * amount;
     const distanceSquared = (x - closestX) ** 2 + (y - closestY) ** 2;
@@ -10049,8 +11410,8 @@ function closestRiverPoint(river, x, y) {
 }
 function rangeFor(minimum, maximum, count) {
   return [
-    clamp(Math.floor(minimum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1),
-    clamp(Math.floor(maximum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1)
+    clamp2(Math.floor(minimum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1),
+    clamp2(Math.floor(maximum / HYDROLOGY_SPATIAL_CELL_SIZE), 0, count - 1)
   ];
 }
 var HydrologyRegionSpatialIndex = class {
@@ -10137,8 +11498,8 @@ var HydrologyRegionSpatialIndex = class {
     if (!Number.isInteger(groundHeight) || groundHeight < 0 || groundHeight > 65535 || !Number.isInteger(seaLevel) || seaLevel < 0 || seaLevel > 65535) {
       throw new RangeError("hydrology query heights must be uint16 values");
     }
-    const cellX = clamp(Math.floor(localX / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountX - 1);
-    const cellY = clamp(Math.floor(localY / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountY - 1);
+    const cellX = clamp2(Math.floor(localX / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountX - 1);
+    const cellY = clamp2(Math.floor(localY / HYDROLOGY_SPATIAL_CELL_SIZE), 0, this.cellCountY - 1);
     const bucket = this.buckets[cellX * this.cellCountY + cellY];
     let best;
     if (groundHeight < seaLevel) {
@@ -10160,7 +11521,7 @@ var HydrologyRegionSpatialIndex = class {
         localX - lake.center[0] / HYDROLOGY_POINT_QUANTIZATION,
         localY - lake.center[1] / HYDROLOGY_POINT_QUANTIZATION
       );
-      const coverage = clamp(Math.round((lake.radius / HYDROLOGY_POINT_QUANTIZATION + 0.5 - distance) * 255), 0, 255);
+      const coverage = clamp2(Math.round((lake.radius / HYDROLOGY_POINT_QUANTIZATION + 0.5 - distance) * 255), 0, 255);
       if (coverage === 0) continue;
       const body = this.bodies.get(lake.bodyId);
       if (!body) throw new Error("hydrology lake query lost its body reference");
@@ -10179,7 +11540,7 @@ var HydrologyRegionSpatialIndex = class {
     for (const riverIndex of bucket.rivers) {
       const river = this.region.rivers[riverIndex];
       const closest = closestRiverPoint(river, localX, localY);
-      const coverage = clamp(Math.round((closest.halfWidth + 0.5 - closest.distance) * 255), 0, 255);
+      const coverage = clamp2(Math.round((closest.halfWidth + 0.5 - closest.distance) * 255), 0, 255);
       if (coverage === 0) continue;
       const body = this.bodies.get(river.riverId);
       if (!body) throw new Error("hydrology river query lost its body reference");
@@ -10840,8 +12201,11 @@ export {
   BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
   BASE_SEMANTIC_CHUNK_TILE_COUNT,
   COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
+  COMPILED_SURFACE_CHUNK_BASE_RESIDENT_BYTES,
+  COMPILED_SURFACE_CHUNK_FORMAT_VERSION,
   COMPILED_SURFACE_FIELD_FORMAT_VERSION,
   COMPILED_SURFACE_TEXEL_COUNT,
+  COMPILED_VEGETATION_SEEDS_FORMAT_VERSION,
   COMPILED_WATER_BODY_PALETTE_FORMAT_VERSION,
   COMPILED_WATER_GEOMETRY_FORMAT_VERSION,
   CORE_SUBSTRATE_ENTRIES,
@@ -10881,9 +12245,12 @@ export {
   InfiniteHydrologyRegionSource,
   InfiniteSemanticWorldSource,
   LAKE_HYDROLOGY_PROFILE,
+  LightingEnvironmentManager,
+  LightingEnvironmentSupersededError,
   MACRO_DRAINAGE_NODE_STEP_TILES,
   MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS,
   MAX_AUTHORED_LAKE_POLYGON_POINTS,
+  MAX_COMPILED_VEGETATION_SEEDS,
   MAX_COMPILED_WATER_BODIES,
   MAX_COMPILED_WATER_COVERAGE_TRIANGLES,
   MAX_COMPILED_WATER_COVERAGE_VERTICES,
@@ -10934,6 +12301,8 @@ export {
   SURFACE_GROUND_LODS,
   SURFACE_STATIC_GPU_BYTES_PER_TEXEL,
   SURFACE_TEXTURE_PAGE_GPU_BYTES,
+  SURFACE_VISUAL_PROFILE,
+  SURFACE_VISUAL_PROFILE_VERSION,
   SURFACE_WATER_KIND_LAKE,
   SURFACE_WATER_KIND_NONE,
   SURFACE_WATER_KIND_OCEAN,
@@ -10949,7 +12318,12 @@ export {
   SurfaceWorkerClient,
   SurfaceWorkerPool,
   TRANSFERABLE_EFFECTIVE_WINDOW_FORMAT_VERSION,
+  ThreeLightingAdapter,
+  ThreePmremEnvironmentCompiler,
   ToroidalSemanticWorldSource,
+  VEGETATION_CANDIDATES_PER_TILE,
+  VEGETATION_CANDIDATE_COLUMNS_PER_TILE,
+  VEGETATION_CANDIDATE_ROWS_PER_TILE,
   WORLD_CHUNK_FORMAT_VERSION_V2,
   WORLD_DESCRIPTOR_FORMAT_VERSION_V2,
   WORLD_GENERATOR_VERSION_V2,
@@ -10957,23 +12331,29 @@ export {
   assertAuthoredLakeFeature,
   assertAuthoredRiverFeature,
   assertBaseSemanticChunk,
+  assertCompileSurfaceChunkWorkerRequest,
   assertCompiledSurfaceBounds,
+  assertCompiledSurfaceChunk,
   assertCompiledSurfaceField,
+  assertCompiledVegetationSeeds,
   assertCompiledWaterBodyPalette,
   assertCompiledWaterGeometry,
   assertCoreWorldSemanticsV2,
   assertDerivedHydrologyRaster,
+  assertEnvironmentHandle,
   assertGenerateHydrologyRegionWorkerRequest,
   assertGenerateSemanticChunkWorkerRequest,
   assertHydrologyFeatureDelta,
   assertHydrologyRegion,
   assertHydrologyWorldSource,
+  assertLightingState,
   assertMacroDrainageGraph,
   assertSemanticWorldSource,
   assertSparseSemanticDelta,
   assertSurfaceDependencyKey,
   assertSurfaceGroundGeometryData,
   assertSurfaceRequestToken,
+  assertSurfaceVisualProfile,
   assertTransferableEffectiveWindow,
   assertWorldDescriptorV2,
   authoredHydrologyFeatureBoundsQ64,
@@ -10984,26 +12364,38 @@ export {
   compileOceanSurfaceField,
   compileSemanticSurfaceField,
   compileSurfaceBounds,
+  compileSurfaceChunk,
+  compileSurfaceChunkRequestTransferables,
   compileSurfaceField,
+  compileVegetationSeeds,
   compileWaterGeometry,
+  compiledSurfaceChunkResidentBytes,
+  compiledSurfaceChunkTransferables,
   compiledSurfaceFieldResidentBytes,
   compiledSurfaceFieldTransferables,
+  compiledVegetationSeedsResidentBytes,
+  compiledVegetationSeedsTransferables,
   compiledWaterBodyPaletteIndex,
   compiledWaterGeometryTransferables,
   createAuthoredLakeFeature,
   createAuthoredRiverFeature,
   createBaseSemanticChunkGenerator,
+  createCompileSurfaceChunkWorkerRequest,
+  createCompiledSurfaceChunk,
   createCompiledSurfaceField,
   createCompiledSurfaceSample,
+  createCompiledVegetationSeeds,
   createCompiledWaterBodyPalette,
   createCoreInfiniteWorldDescriptorV2,
   createCoreToroidalWorldDescriptorV2,
   createEffectiveHydrologyRegion,
   createEffectiveSemanticChunk,
+  createEnvironmentHandle,
   createGenerateHydrologyRegionWorkerRequest,
   createGenerateSemanticChunkWorkerRequest,
   createHydrologyFeatureDelta,
   createHydrologyRegion,
+  createLightingState,
   createProceduralHydrologyRegionGenerator,
   createSparseSemanticDelta,
   createSurfaceCoverageGeometry,
@@ -11028,6 +12420,7 @@ export {
   hydrologyRegionMaximumQuantizedCoordinate,
   hydrologyRegionResidentBytes,
   hydrologyRiverHalfWidthTiles,
+  lightingStatesEqual,
   macroDrainageNodeId,
   macroDrainageNodeTile,
   macroDrainageTerminalBodyId,
@@ -11046,11 +12439,13 @@ export {
   surfaceColumnStagger,
   surfaceDependencyKeysEqual,
   surfaceFieldTexelIndex,
+  surfaceGroundMaximumDisplacement,
   surfaceInfluenceRadiusWorld,
   surfaceRequestTokensEqual,
   surfaceStagger,
   surfaceTexelCenterAxis,
   surfaceToWorld,
+  surfaceWaterMaximumDisplacement,
   transferableEffectiveWindowTransferables,
   worldDescriptorsV2Equal,
   worldToSurface

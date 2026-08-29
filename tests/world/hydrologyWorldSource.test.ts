@@ -31,9 +31,11 @@ const EMPTY_POOL_STATS: Readonly<SurfaceWorkerPoolStats> = Object.freeze({
     shedTasks: 0,
     starvationPromotions: 0,
     completedSemanticChunks: 0,
-    completedHydrologyRegions: 0,
-    averageSemanticChunkMs: 0,
-    averageHydrologyRegionMs: 0
+        completedHydrologyRegions: 0,
+        completedSurfaceChunks: 0,
+        averageSemanticChunkMs: 0,
+        averageHydrologyRegionMs: 0,
+        averageSurfaceCompileMs: 0
 });
 
 function emptyRegion(

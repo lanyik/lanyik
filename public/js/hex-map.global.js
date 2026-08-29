@@ -19854,6 +19854,487 @@ void main() {
       this.removeAllListeners();
     }
   };
+  function assertRevision(name, value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`${name} must be a non-negative safe integer`);
+    }
+  }
+  function assertLinearRgb(name, color) {
+    if (!color || typeof color !== "object" || !Number.isFinite(color.r) || color.r < 0 || !Number.isFinite(color.g) || color.g < 0 || !Number.isFinite(color.b) || color.b < 0) {
+      throw new RangeError(`${name} must contain non-negative finite linear RGB values`);
+    }
+  }
+  function assertUnitDirection(direction) {
+    if (!direction || typeof direction !== "object" || !Number.isFinite(direction.x) || !Number.isFinite(direction.y) || !Number.isFinite(direction.z)) {
+      throw new RangeError("lighting sun direction must be finite");
+    }
+    const length = Math.hypot(direction.x, direction.y, direction.z);
+    if (Math.abs(length - 1) > 1e-12) {
+      throw new RangeError("lighting sun direction must be normalized");
+    }
+  }
+  function assertEnvironmentHandle(handle) {
+    if (!handle || typeof handle !== "object") {
+      throw new TypeError("lighting environment handle is required");
+    }
+    assertRevision("lighting environment handle revision", handle.revision);
+    if (!(handle.texture instanceof three.Texture) || handle.texture.isTexture !== true || handle.texture.mapping !== three.CubeUVReflectionMapping) {
+      throw new TypeError("lighting environment handle must contain a prepared PMREM texture");
+    }
+  }
+  function createEnvironmentHandle(revision, texture) {
+    const handle = Object.freeze({ revision, texture });
+    assertEnvironmentHandle(handle);
+    return handle;
+  }
+  function assertLightingState(state) {
+    if (!state || typeof state !== "object") throw new TypeError("lighting state is required");
+    assertRevision("lighting uniform revision", state.uniformRevision);
+    assertRevision("lighting environment revision", state.environmentRevision);
+    assertUnitDirection(state.sunDirection);
+    assertLinearRgb("lighting sun radiance", state.sunRadiance);
+    assertLinearRgb("lighting sky diffuse irradiance", state.skyDiffuseIrradiance);
+    assertLinearRgb("lighting ground diffuse irradiance", state.groundDiffuseIrradiance);
+    assertEnvironmentHandle(state.specularEnvironment);
+    if (state.specularEnvironment.revision !== state.environmentRevision) {
+      throw new Error("lighting environment handle and state revisions must match");
+    }
+    if (!Number.isFinite(state.exposure) || state.exposure <= 0) {
+      throw new RangeError("lighting exposure must be positive and finite");
+    }
+  }
+  function frozenColor(color) {
+    return Object.freeze({ r: color.r, g: color.g, b: color.b });
+  }
+  function createLightingState(input) {
+    if (!input || typeof input !== "object") throw new TypeError("lighting state input is required");
+    const directionLength = Math.hypot(
+      input.sunDirection.x,
+      input.sunDirection.y,
+      input.sunDirection.z
+    );
+    if (!Number.isFinite(directionLength) || directionLength <= 0) {
+      throw new RangeError("lighting sun direction must be finite and non-zero");
+    }
+    const state = Object.freeze({
+      uniformRevision: input.uniformRevision,
+      sunDirection: Object.freeze({
+        x: input.sunDirection.x / directionLength,
+        y: input.sunDirection.y / directionLength,
+        z: input.sunDirection.z / directionLength
+      }),
+      sunRadiance: frozenColor(input.sunRadiance),
+      skyDiffuseIrradiance: frozenColor(input.skyDiffuseIrradiance),
+      groundDiffuseIrradiance: frozenColor(input.groundDiffuseIrradiance),
+      specularEnvironment: input.specularEnvironment,
+      environmentRevision: input.environmentRevision,
+      exposure: input.exposure
+    });
+    assertLightingState(state);
+    return state;
+  }
+  function lightingStatesEqual(first, second) {
+    return first.uniformRevision === second.uniformRevision && first.environmentRevision === second.environmentRevision && first.sunDirection.x === second.sunDirection.x && first.sunDirection.y === second.sunDirection.y && first.sunDirection.z === second.sunDirection.z && first.sunRadiance.r === second.sunRadiance.r && first.sunRadiance.g === second.sunRadiance.g && first.sunRadiance.b === second.sunRadiance.b && first.skyDiffuseIrradiance.r === second.skyDiffuseIrradiance.r && first.skyDiffuseIrradiance.g === second.skyDiffuseIrradiance.g && first.skyDiffuseIrradiance.b === second.skyDiffuseIrradiance.b && first.groundDiffuseIrradiance.r === second.groundDiffuseIrradiance.r && first.groundDiffuseIrradiance.g === second.groundDiffuseIrradiance.g && first.groundDiffuseIrradiance.b === second.groundDiffuseIrradiance.b && first.specularEnvironment.texture === second.specularEnvironment.texture && first.exposure === second.exposure;
+  }
+  function copyStateToUniforms(state, uniforms) {
+    uniforms.sunDirection.value.set(
+      state.sunDirection.x,
+      state.sunDirection.y,
+      state.sunDirection.z
+    );
+    uniforms.sunRadiance.value.setRGB(
+      state.sunRadiance.r,
+      state.sunRadiance.g,
+      state.sunRadiance.b
+    );
+    uniforms.skyDiffuseIrradiance.value.setRGB(
+      state.skyDiffuseIrradiance.r,
+      state.skyDiffuseIrradiance.g,
+      state.skyDiffuseIrradiance.b
+    );
+    uniforms.groundDiffuseIrradiance.value.setRGB(
+      state.groundDiffuseIrradiance.r,
+      state.groundDiffuseIrradiance.g,
+      state.groundDiffuseIrradiance.b
+    );
+    uniforms.specularEnvironment.value = state.specularEnvironment.texture;
+    uniforms.exposure.value = state.exposure;
+  }
+  function createUniformSet(state) {
+    const uniforms = Object.freeze({
+      sunDirection: { value: new three.Vector3() },
+      sunRadiance: { value: new three.Color() },
+      skyDiffuseIrradiance: { value: new three.Color() },
+      groundDiffuseIrradiance: { value: new three.Color() },
+      specularEnvironment: { value: state.specularEnvironment.texture },
+      exposure: { value: state.exposure }
+    });
+    copyStateToUniforms(state, uniforms);
+    return uniforms;
+  }
+  var ThreeLightingAdapter = class {
+    constructor(renderer, scene) {
+      this.renderer = renderer;
+      this.scene = scene;
+      this.sunLight = new three.DirectionalLight(16777215, 1);
+      this.diffuseLight = new three.HemisphereLight(16777215, 0, 1);
+      this.sunTarget = new three.Object3D();
+      this.uniforms = /* @__PURE__ */ new Set();
+      this.disposed = false;
+      this.sunLight.name = "surface-sun-light";
+      this.diffuseLight.name = "surface-diffuse-light";
+      this.sunTarget.name = "surface-sun-target";
+      this.sunLight.target = this.sunTarget;
+      this.scene.add(this.sunLight, this.diffuseLight, this.sunTarget);
+    }
+    get state() {
+      return this.currentState;
+    }
+    apply(state) {
+      if (this.disposed) throw new Error("three lighting adapter is disposed");
+      assertLightingState(state);
+      const snapshot = createLightingState(state);
+      const current = this.currentState;
+      if (current) {
+        if (snapshot.uniformRevision < current.uniformRevision || snapshot.environmentRevision < current.environmentRevision) {
+          throw new Error("three lighting adapter rejected a stale lighting revision");
+        }
+        if (snapshot.uniformRevision === current.uniformRevision && snapshot.environmentRevision === current.environmentRevision) {
+          if (!lightingStatesEqual(snapshot, current)) {
+            throw new Error("equal lighting revisions cannot describe different state");
+          }
+          return false;
+        }
+      }
+      this.sunLight.position.set(
+        snapshot.sunDirection.x,
+        snapshot.sunDirection.y,
+        snapshot.sunDirection.z
+      );
+      this.sunLight.color.setRGB(
+        snapshot.sunRadiance.r,
+        snapshot.sunRadiance.g,
+        snapshot.sunRadiance.b
+      );
+      this.diffuseLight.color.setRGB(
+        snapshot.skyDiffuseIrradiance.r,
+        snapshot.skyDiffuseIrradiance.g,
+        snapshot.skyDiffuseIrradiance.b
+      );
+      this.diffuseLight.groundColor.setRGB(
+        snapshot.groundDiffuseIrradiance.r,
+        snapshot.groundDiffuseIrradiance.g,
+        snapshot.groundDiffuseIrradiance.b
+      );
+      this.scene.environment = snapshot.specularEnvironment.texture;
+      this.renderer.toneMappingExposure = snapshot.exposure;
+      for (const uniforms of this.uniforms) copyStateToUniforms(snapshot, uniforms);
+      this.currentState = snapshot;
+      return true;
+    }
+    createUniforms() {
+      if (this.disposed) throw new Error("three lighting adapter is disposed");
+      if (!this.currentState) {
+        throw new Error("three lighting adapter requires state before creating shader uniforms");
+      }
+      const uniforms = createUniformSet(this.currentState);
+      this.uniforms.add(uniforms);
+      return uniforms;
+    }
+    releaseUniforms(uniforms) {
+      if (!this.uniforms.delete(uniforms)) {
+        throw new Error("lighting uniform set is not owned by this adapter");
+      }
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.uniforms.clear();
+      this.scene.remove(this.sunLight, this.diffuseLight, this.sunTarget);
+      if (this.currentState && this.scene.environment === this.currentState.specularEnvironment.texture) {
+        this.scene.environment = null;
+      }
+      this.currentState = void 0;
+    }
+  };
+  function assertRevision2(revision) {
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new RangeError("lighting environment revision must be a non-negative safe integer");
+    }
+  }
+  function assertSource(source) {
+    if (!source || typeof source !== "object") {
+      throw new TypeError("lighting environment source is required");
+    }
+    if (source.kind === "analytic-sky") {
+      const directionLength = Math.hypot(
+        source.sunDirection.x,
+        source.sunDirection.y,
+        source.sunDirection.z
+      );
+      if (!Number.isFinite(source.turbidity) || source.turbidity < 0 || source.turbidity > 20 || !Number.isFinite(source.rayleigh) || source.rayleigh < 0 || source.rayleigh > 4 || !Number.isFinite(source.mieCoefficient) || source.mieCoefficient < 0 || source.mieCoefficient > 0.1 || !Number.isFinite(source.mieDirectionalG) || source.mieDirectionalG < 0 || source.mieDirectionalG >= 1 || !Number.isFinite(directionLength) || directionLength <= 0) {
+        throw new RangeError("analytic lighting environment parameters are invalid");
+      }
+      return;
+    }
+    if (source.kind === "equirectangular") {
+      if (!(source.texture instanceof three.Texture) || source.texture.isTexture !== true) {
+        throw new TypeError("equirectangular lighting environment requires a texture");
+      }
+      return;
+    }
+    if (source.kind === "cube") {
+      if (!(source.texture instanceof three.CubeTexture) || source.texture.isCubeTexture !== true) {
+        throw new TypeError("cube lighting environment requires a cube texture");
+      }
+      return;
+    }
+    throw new TypeError("lighting environment source kind is unsupported");
+  }
+  function snapshotSource(source) {
+    assertSource(source);
+    if (source.kind === "analytic-sky") {
+      return Object.freeze({
+        kind: source.kind,
+        turbidity: source.turbidity,
+        rayleigh: source.rayleigh,
+        mieCoefficient: source.mieCoefficient,
+        mieDirectionalG: source.mieDirectionalG,
+        sunDirection: Object.freeze({
+          x: source.sunDirection.x,
+          y: source.sunDirection.y,
+          z: source.sunDirection.z
+        })
+      });
+    }
+    if (source.kind === "equirectangular") {
+      return Object.freeze({ kind: source.kind, texture: source.texture });
+    }
+    return Object.freeze({ kind: source.kind, texture: source.texture });
+  }
+  function assertCompiledEnvironment(compiled) {
+    if (!compiled || typeof compiled !== "object" || !(compiled.texture instanceof three.Texture) || compiled.texture.mapping !== three.CubeUVReflectionMapping || typeof compiled.dispose !== "function") {
+      throw new TypeError("lighting environment compiler did not return a prepared PMREM resource");
+    }
+  }
+  var ThreePmremEnvironmentCompiler = class {
+    constructor(renderer) {
+      this.disposed = false;
+      this.generator = new three.PMREMGenerator(renderer);
+    }
+    compile(source) {
+      if (this.disposed) throw new Error("PMREM environment compiler is disposed");
+      assertSource(source);
+      let target;
+      if (source.kind === "equirectangular") {
+        target = this.generator.fromEquirectangular(source.texture);
+      } else if (source.kind === "cube") {
+        target = this.generator.fromCubemap(source.texture);
+      } else {
+        const scene = new three.Scene();
+        const sky = new Sky();
+        sky.scale.setScalar(50);
+        const uniforms = sky.material.uniforms;
+        uniforms.turbidity.value = source.turbidity;
+        uniforms.rayleigh.value = source.rayleigh;
+        uniforms.mieCoefficient.value = source.mieCoefficient;
+        uniforms.mieDirectionalG.value = source.mieDirectionalG;
+        const length = Math.hypot(
+          source.sunDirection.x,
+          source.sunDirection.y,
+          source.sunDirection.z
+        );
+        uniforms.sunPosition.value.set(
+          source.sunDirection.x / length,
+          source.sunDirection.y / length,
+          source.sunDirection.z / length
+        );
+        scene.add(sky);
+        try {
+          target = this.generator.fromScene(scene, 0, 0.1, 100);
+        } finally {
+          sky.geometry.dispose();
+          sky.material.dispose();
+          scene.remove(sky);
+        }
+      }
+      target.texture.mapping = three.CubeUVReflectionMapping;
+      let released = false;
+      const compiled = Object.freeze({
+        texture: target.texture,
+        dispose() {
+          if (released) return;
+          released = true;
+          target.dispose();
+        }
+      });
+      assertCompiledEnvironment(compiled);
+      return compiled;
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.generator.dispose();
+    }
+  };
+  var LightingEnvironmentSupersededError = class extends Error {
+    constructor(revision) {
+      super(`lighting environment revision ${revision} was superseded before compilation`);
+      this.name = "LightingEnvironmentSupersededError";
+    }
+  };
+  var LightingEnvironmentManager = class {
+    constructor(compiler, schedule) {
+      this.compiler = compiler;
+      this.schedule = schedule;
+      this.generation = 0;
+      this.buildCount = 0;
+      this.swapCount = 0;
+      this.supersededCount = 0;
+      this.failureCount = 0;
+      this.activating = false;
+      this.disposed = false;
+      if (!compiler || typeof compiler.compile !== "function" || typeof compiler.dispose !== "function") {
+        throw new TypeError("lighting environment compiler is invalid");
+      }
+      if (typeof schedule !== "function") {
+        throw new TypeError("lighting environment task scheduler is required");
+      }
+    }
+    get current() {
+      return this.resident?.handle;
+    }
+    get stats() {
+      return {
+        currentRevision: this.resident?.handle.revision,
+        pendingRevision: this.pending?.revision,
+        builds: this.buildCount,
+        swaps: this.swapCount,
+        superseded: this.supersededCount,
+        failures: this.failureCount
+      };
+    }
+    rebuild(source, revision, activate) {
+      if (this.disposed) return Promise.reject(new Error("lighting environment manager is disposed"));
+      if (this.activating) {
+        return Promise.reject(new Error("lighting environment rebuild cannot be requested during activation"));
+      }
+      try {
+        assertRevision2(revision);
+      } catch (reason) {
+        return Promise.reject(reason);
+      }
+      let sourceSnapshot;
+      try {
+        sourceSnapshot = snapshotSource(source);
+      } catch (reason) {
+        return Promise.reject(reason);
+      }
+      if (typeof activate !== "function") {
+        return Promise.reject(new TypeError("lighting environment activator is required"));
+      }
+      const residentRevision = this.resident?.handle.revision;
+      if (residentRevision !== void 0 && revision <= residentRevision) {
+        return Promise.reject(new Error("lighting environment revisions must increase strictly"));
+      }
+      if (this.pending && revision <= this.pending.revision) {
+        return Promise.reject(new Error("lighting environment revisions must increase strictly"));
+      }
+      const generation = ++this.generation;
+      const previousPending = this.pending;
+      if (previousPending && !previousPending.settled) {
+        previousPending.settled = true;
+        this.supersededCount += 1;
+        previousPending.reject(new LightingEnvironmentSupersededError(previousPending.revision));
+      }
+      return new Promise((resolve, reject) => {
+        const pending = {
+          generation,
+          revision,
+          settled: false,
+          reject
+        };
+        this.pending = pending;
+        const run = () => {
+          if (pending.settled) return;
+          if (this.disposed || this.pending !== pending || this.generation !== generation) {
+            pending.settled = true;
+            this.supersededCount += 1;
+            reject(new LightingEnvironmentSupersededError(revision));
+            return;
+          }
+          let compiled;
+          try {
+            compiled = this.compiler.compile(sourceSnapshot);
+            this.buildCount += 1;
+            assertCompiledEnvironment(compiled);
+          } catch (reason) {
+            if (typeof compiled?.dispose === "function") {
+              compiled.dispose();
+            }
+            pending.settled = true;
+            this.pending = void 0;
+            this.failureCount += 1;
+            reject(reason);
+            return;
+          }
+          if (!compiled) {
+            pending.settled = true;
+            this.pending = void 0;
+            this.failureCount += 1;
+            reject(new Error("lighting environment compiler returned no resource"));
+            return;
+          }
+          let handle;
+          try {
+            handle = createEnvironmentHandle(revision, compiled.texture);
+            this.activating = true;
+            const result = activate(handle);
+            if (result && typeof result.then === "function") {
+              throw new TypeError("lighting environment activator must be synchronous");
+            }
+          } catch (reason) {
+            compiled.dispose();
+            pending.settled = true;
+            this.pending = void 0;
+            this.failureCount += 1;
+            reject(reason);
+            return;
+          } finally {
+            this.activating = false;
+          }
+          const previous = this.resident;
+          this.resident = Object.freeze({ handle, compiled });
+          this.pending = void 0;
+          pending.settled = true;
+          this.swapCount += 1;
+          previous?.compiled.dispose();
+          resolve(handle);
+        };
+        try {
+          this.schedule(run);
+        } catch (reason) {
+          pending.settled = true;
+          this.pending = void 0;
+          this.failureCount += 1;
+          reject(reason);
+        }
+      });
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.generation += 1;
+      if (this.pending && !this.pending.settled) {
+        this.pending.settled = true;
+        this.pending.reject(new Error("lighting environment manager was disposed"));
+      }
+      this.pending = void 0;
+      this.resident?.compiled.dispose();
+      this.resident = void 0;
+      this.compiler.dispose();
+    }
+  };
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
@@ -19874,6 +20355,8 @@ void main() {
   exports.LandPriority = LandPriority;
   exports.LifecycleDrainTimeoutError = LifecycleDrainTimeoutError;
   exports.LifecycleScope = LifecycleScope;
+  exports.LightingEnvironmentManager = LightingEnvironmentManager;
+  exports.LightingEnvironmentSupersededError = LightingEnvironmentSupersededError;
   exports.MAX_WORLD_GENERATION_CHUNK_SIZE = MAX_WORLD_GENERATION_CHUNK_SIZE;
   exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
   exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
@@ -19886,6 +20369,8 @@ void main() {
   exports.RuntimeWorkCoordinator = RuntimeWorkCoordinator;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
   exports.StaticWorldSource = StaticWorldSource;
+  exports.ThreeLightingAdapter = ThreeLightingAdapter;
+  exports.ThreePmremEnvironmentCompiler = ThreePmremEnvironmentCompiler;
   exports.ToroidalWorldSource = ToroidalWorldSource;
   exports.Unit = Unit;
   exports.UnitActions = UnitActions;
@@ -19905,6 +20390,8 @@ void main() {
   exports.WorldGeneratorPool = WorldGeneratorPool;
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
+  exports.assertEnvironmentHandle = assertEnvironmentHandle;
+  exports.assertLightingState = assertLightingState;
   exports.assertPackedWorldChunk = assertPackedWorldChunk;
   exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
   exports.assertWorldChunk = assertWorldChunk;
@@ -19914,7 +20401,9 @@ void main() {
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
   exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
+  exports.createEnvironmentHandle = createEnvironmentHandle;
   exports.createLandformSampler = createLandformSampler;
+  exports.createLightingState = createLightingState;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
@@ -19939,6 +20428,7 @@ void main() {
   exports.isMutableWorldSource = isMutableWorldSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;
   exports.lifecycleAbortError = lifecycleAbortError;
+  exports.lightingStatesEqual = lightingStatesEqual;
   exports.mergeBufferUpdateRanges = mergeBufferUpdateRanges;
   exports.normalizeMapCoordinates = normalizeMapCoordinates;
   exports.normalizeResourceCost = normalizeResourceCost;

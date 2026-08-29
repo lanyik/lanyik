@@ -127,6 +127,19 @@ export type {
     CompiledVegetationSeedsInput
 } from "./world/CompiledVegetationSeeds";
 export { compileVegetationSeeds } from "./world/compileVegetationSeeds";
+export {
+    COMPILED_SURFACE_CHUNK_FORMAT_VERSION,
+    COMPILED_SURFACE_CHUNK_BASE_RESIDENT_BYTES,
+    assertCompiledSurfaceChunk,
+    createCompiledSurfaceChunk,
+    compiledSurfaceChunkResidentBytes,
+    compiledSurfaceChunkTransferables
+} from "./world/CompiledSurfaceChunk";
+export type {
+    CompiledSurfaceChunk,
+    CompiledSurfaceChunkInput
+} from "./world/CompiledSurfaceChunk";
+export { compileSurfaceChunk } from "./world/compileSurfaceChunk";
 
 export {
     assertEnvironmentHandle,
@@ -392,8 +405,11 @@ export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
+    createCompileSurfaceChunkWorkerRequest,
     assertGenerateSemanticChunkWorkerRequest,
-    assertGenerateHydrologyRegionWorkerRequest
+    assertGenerateHydrologyRegionWorkerRequest,
+    assertCompileSurfaceChunkWorkerRequest,
+    compileSurfaceChunkRequestTransferables
 } from "./world/SurfaceWorkerProtocol";
 export type {
     SurfaceWorkerRequest,
@@ -401,12 +417,16 @@ export type {
     GenerateSemanticChunkWorkerRequest,
     GenerateSemanticChunkWorkerResult,
     GenerateHydrologyRegionWorkerRequest,
-    GenerateHydrologyRegionWorkerResult
+    GenerateHydrologyRegionWorkerResult,
+    CompileSurfaceChunkWorkerRequest,
+    CompileSurfaceChunkWorkerResult
 } from "./world/SurfaceWorkerProtocol";
 export { SurfaceWorkerClient } from "./world/SurfaceWorkerClient";
 export type {
     GenerateSemanticChunkOptions,
-    GenerateHydrologyRegionOptions
+    GenerateHydrologyRegionOptions,
+    CompileSurfaceChunkOptions,
+    SurfaceCompileResult
 } from "./world/SurfaceWorkerClient";
 export { SurfaceWorkerPool } from "./world/SurfaceWorkerPool";
 export type {

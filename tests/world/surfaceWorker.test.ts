@@ -8,25 +8,31 @@ import {
     HydrologyRegion,
     createHydrologyRegion
 } from "../../src/world/HydrologyRegion";
+import { compiledSurfaceChunkTransferables } from "../../src/world/CompiledSurfaceChunk";
 import {
     CORE_WORLD_SEMANTICS_V2,
     createCoreInfiniteWorldDescriptorV2,
     createCoreToroidalWorldDescriptorV2
 } from "../../src/world/SemanticCatalogsV2";
 import { SurfaceWorkerClient } from "../../src/world/SurfaceWorkerClient";
+import { createSurfaceRequestToken } from "../../src/world/SurfaceDependencyKey";
 import {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateHydrologyRegionWorkerRequest,
     createGenerateSemanticChunkWorkerRequest,
+    createCompileSurfaceChunkWorkerRequest,
+    compileSurfaceChunkRequestTransferables,
     hydrologyRegionTransferables,
     semanticChunkTransferables
 } from "../../src/world/SurfaceWorkerProtocol";
+import { compileSurfaceChunk } from "../../src/world/compileSurfaceChunk";
 import { generateBaseSemanticChunk } from "../../src/world/generateBaseSemanticChunk";
 import {
     WORLD_GENERATOR_VERSION_V2,
     createWorldDescriptorV2,
     serializeWorldDescriptorV2
 } from "../../src/world/WorldDescriptorV2";
+import { createSurfaceCompilerTestWindow } from "./surfaceCompilerFixture";
 
 function emptyInfiniteRegion(seed: string, regionX: number, regionY: number): HydrologyRegion {
     const descriptor = createCoreInfiniteWorldDescriptorV2(seed);
@@ -64,8 +70,8 @@ class FakeWorker {
         this.listeners.get(type)?.delete(listener);
     }
 
-    postMessage(message: unknown): void {
-        this.messages.push(message);
+    postMessage(message: unknown, transfer: Transferable[] = []): void {
+        this.messages.push(structuredClone(message, { transfer }));
     }
 
     terminate(): void {
@@ -162,6 +168,28 @@ describe("v2 surface worker protocol", () => {
         expect(cloned.lakes[0].center).toEqual(new Int16Array([64, 64]));
     });
 
+    test("uses a tokened compile request and transfers only the owned effective window", () => {
+        const window = createSurfaceCompilerTestWindow({
+            seaLevel: 0,
+            macroHeight: () => 20_000
+        });
+        const request = createCompileSurfaceChunkWorkerRequest(
+            11,
+            createSurfaceRequestToken(3, 7),
+            window
+        );
+        const transfer = compileSurfaceChunkRequestTransferables(request);
+        expect(request).toMatchObject({
+            protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+            type: "compileSurfaceChunk",
+            requestToken: { sessionEpoch: 3, renderChunkGeneration: 7 }
+        });
+        expect(transfer).toHaveLength(7);
+        const cloned = structuredClone(request, { transfer: [...transfer] });
+        expect(window.valid.byteLength).toBe(0);
+        expect(cloned.effectiveWindow.valid.byteLength).toBeGreaterThan(0);
+    });
+
     test("validates and republishes a worker result before exposing it", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("worker-client");
         const client = new SurfaceWorkerClient("surface.worker.mjs");
@@ -236,6 +264,61 @@ describe("v2 surface worker protocol", () => {
             region: emptyInfiniteRegion("worker-hydrology-corruption", 1, 0)
         } });
         await expect(pending).rejects.toThrow(/wrong request or world contract/);
+        expect(client.isDisposed).toBe(true);
+        expect(worker.terminated).toBe(true);
+    });
+
+    test("validates and republishes a final compiled chunk with its exact token", async () => {
+        const client = new SurfaceWorkerClient("surface.worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const effectiveWindow = createSurfaceCompilerTestWindow({
+            seaLevel: 0,
+            macroHeight: () => 20_000,
+            vegetationDensity: () => 64
+        });
+        const requestToken = createSurfaceRequestToken(4, 9);
+        const pending = client.compileSurfaceChunk({ requestToken, effectiveWindow });
+        const request = worker.messages[0] as ReturnType<typeof createCompileSurfaceChunkWorkerRequest>;
+        expect(request.type).toBe("compileSurfaceChunk");
+        expect(effectiveWindow.valid.byteLength).toBe(0);
+        const chunk = compileSurfaceChunk(request.effectiveWindow);
+        expect(compiledSurfaceChunkTransferables(chunk)).toHaveLength(14);
+        worker.emit("message", { data: {
+            protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION_V2,
+            requestId: request.requestId,
+            type: "compileSurfaceChunkResult",
+            requestToken,
+            chunk
+        } });
+        const result = await pending;
+        expect(result.requestToken).toEqual(requestToken);
+        expect(result.chunk.key).toEqual({ chunkX: 0, chunkY: 0 });
+        expect(Object.isFrozen(result.chunk)).toBe(true);
+        client.dispose();
+    });
+
+    test("terminates on a mismatched compiled-surface request token", async () => {
+        const client = new SurfaceWorkerClient("surface.worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const requestToken = createSurfaceRequestToken(2, 5);
+        const pending = client.compileSurfaceChunk({
+            requestToken,
+            effectiveWindow: createSurfaceCompilerTestWindow({
+                seaLevel: 0,
+                macroHeight: () => 20_000
+            })
+        });
+        const request = worker.messages[0] as ReturnType<typeof createCompileSurfaceChunkWorkerRequest>;
+        worker.emit("message", { data: {
+            protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION_V2,
+            requestId: request.requestId,
+            type: "compileSurfaceChunkResult",
+            requestToken: createSurfaceRequestToken(2, 6),
+            chunk: compileSurfaceChunk(request.effectiveWindow)
+        } });
+        await expect(pending).rejects.toThrow(/wrong token/);
         expect(client.isDisposed).toBe(true);
         expect(worker.terminated).toBe(true);
     });

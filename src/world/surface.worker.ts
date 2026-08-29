@@ -9,12 +9,15 @@ import {
 import {
     SURFACE_WORKER_PROTOCOL_VERSION,
     SurfaceWorkerRequest,
+    assertCompileSurfaceChunkWorkerRequest,
     assertGenerateHydrologyRegionWorkerRequest,
     assertGenerateSemanticChunkWorkerRequest,
     hydrologyRegionTransferables,
     semanticChunkTransferables,
     serializeSurfaceWorkerError
 } from "./SurfaceWorkerProtocol";
+import { compiledSurfaceChunkTransferables } from "./CompiledSurfaceChunk";
+import { compileSurfaceChunk } from "./compileSurfaceChunk";
 import {
     WORLD_GENERATOR_VERSION_V2,
     serializeWorldDescriptorV2
@@ -31,9 +34,11 @@ interface WorkerWorldContext {
     hydrologyGenerator?: ProceduralHydrologyRegionGenerator;
 }
 
+type GenerationWorkerRequest = Exclude<SurfaceWorkerRequest, { readonly type: "compileSurfaceChunk" }>;
+
 let worldContext: WorkerWorldContext | undefined;
 
-function contextFor(request: SurfaceWorkerRequest): WorkerWorldContext {
+function contextFor(request: GenerationWorkerRequest): WorkerWorldContext {
     const identity = serializeWorldDescriptorV2(request.descriptor);
     if (!worldContext || worldContext.identity !== identity) {
         worldContext = {
@@ -44,7 +49,7 @@ function contextFor(request: SurfaceWorkerRequest): WorkerWorldContext {
     return worldContext;
 }
 
-function hydrologyGeneratorFor(request: SurfaceWorkerRequest): ProceduralHydrologyRegionGenerator {
+function hydrologyGeneratorFor(request: GenerationWorkerRequest): ProceduralHydrologyRegionGenerator {
     const context = contextFor(request);
     if (!context.hydrologyGenerator) {
         context.hydrologyGenerator = createProceduralHydrologyRegionGenerator({
@@ -63,12 +68,24 @@ function recoverRequestId(value: unknown): number | null {
 function recoverRequestType(value: unknown): SurfaceWorkerRequest["type"] | null {
     if (!value || typeof value !== "object") return null;
     const type = (value as { type?: unknown }).type;
-    return type === "generateSemanticChunk" || type === "generateHydrologyRegion" ? type : null;
+    return type === "generateSemanticChunk" || type === "generateHydrologyRegion"
+        || type === "compileSurfaceChunk" ? type : null;
 }
 
 async function handleRequest(value: unknown): Promise<void> {
     try {
-        if ((value as { type?: unknown } | null)?.type === "generateHydrologyRegion") {
+        if ((value as { type?: unknown } | null)?.type === "compileSurfaceChunk") {
+            assertCompileSurfaceChunkWorkerRequest(value);
+            const chunk = compileSurfaceChunk(value.effectiveWindow);
+            scope.postMessage({
+                protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION_V2,
+                requestId: value.requestId,
+                type: "compileSurfaceChunkResult",
+                requestToken: value.requestToken,
+                chunk
+            }, [...compiledSurfaceChunkTransferables(chunk)]);
+        } else if ((value as { type?: unknown } | null)?.type === "generateHydrologyRegion") {
             assertGenerateHydrologyRegionWorkerRequest(value);
             const region = await hydrologyGeneratorFor(value).generate(value.key.regionX, value.key.regionY);
             scope.postMessage({

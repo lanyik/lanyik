@@ -6,11 +6,22 @@ import {
     HydrologyRegion,
     HydrologyRegionKey
 } from "./HydrologyRegion";
+import { CompiledSurfaceChunk } from "./CompiledSurfaceChunk";
+import {
+    SurfaceRequestToken,
+    assertSurfaceRequestToken,
+    createSurfaceRequestToken
+} from "./SurfaceDependencyKey";
 import {
     HYDROLOGY_REGION_SIZE,
     WORLD_SEMANTIC_CHUNK_SIZE
 } from "./SurfaceCompileProfile";
 import { chunkOrigin } from "./WorldGrid";
+import {
+    TransferableEffectiveWindow,
+    assertTransferableEffectiveWindow,
+    transferableEffectiveWindowTransferables
+} from "./TransferableEffectiveWindow";
 import {
     InfiniteWorldDescriptorV2,
     ToroidalWorldDescriptorV2,
@@ -41,8 +52,18 @@ export interface GenerateHydrologyRegionWorkerRequest {
     readonly key: HydrologyRegionKey;
 }
 
+export interface CompileSurfaceChunkWorkerRequest {
+    readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION_V2;
+    readonly requestId: number;
+    readonly type: "compileSurfaceChunk";
+    readonly requestToken: SurfaceRequestToken;
+    readonly effectiveWindow: TransferableEffectiveWindow;
+}
+
 export type SurfaceWorkerRequest = GenerateSemanticChunkWorkerRequest
-    | GenerateHydrologyRegionWorkerRequest;
+    | GenerateHydrologyRegionWorkerRequest
+    | CompileSurfaceChunkWorkerRequest;
 
 export interface GenerateSemanticChunkWorkerResult {
     readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
@@ -60,6 +81,15 @@ export interface GenerateHydrologyRegionWorkerResult {
     readonly region: HydrologyRegion;
 }
 
+export interface CompileSurfaceChunkWorkerResult {
+    readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION_V2;
+    readonly requestId: number;
+    readonly type: "compileSurfaceChunkResult";
+    readonly requestToken: SurfaceRequestToken;
+    readonly chunk: CompiledSurfaceChunk;
+}
+
 export interface SurfaceWorkerFailure {
     readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
     readonly generatorVersion: typeof WORLD_GENERATOR_VERSION_V2;
@@ -75,6 +105,7 @@ export interface SurfaceWorkerFailure {
 
 export type SurfaceWorkerResponse = GenerateSemanticChunkWorkerResult
     | GenerateHydrologyRegionWorkerResult
+    | CompileSurfaceChunkWorkerResult
     | SurfaceWorkerFailure;
 
 function assertWorkerRequestEnvelope(value: unknown, expectedType: SurfaceWorkerRequest["type"]): void {
@@ -129,6 +160,15 @@ export function assertGenerateHydrologyRegionWorkerRequest(
     }
 }
 
+export function assertCompileSurfaceChunkWorkerRequest(
+    value: unknown
+): asserts value is CompileSurfaceChunkWorkerRequest {
+    assertWorkerRequestEnvelope(value, "compileSurfaceChunk");
+    const request = value as Partial<CompileSurfaceChunkWorkerRequest>;
+    assertSurfaceRequestToken(request.requestToken as SurfaceRequestToken);
+    assertTransferableEffectiveWindow(request.effectiveWindow as TransferableEffectiveWindow);
+}
+
 export function createGenerateSemanticChunkWorkerRequest(
     requestId: number,
     descriptor: WorldDescriptorV2,
@@ -161,6 +201,33 @@ export function createGenerateHydrologyRegionWorkerRequest(
     };
     assertGenerateHydrologyRegionWorkerRequest(request);
     return Object.freeze(request);
+}
+
+export function createCompileSurfaceChunkWorkerRequest(
+    requestId: number,
+    requestToken: Readonly<SurfaceRequestToken>,
+    effectiveWindow: Readonly<TransferableEffectiveWindow>
+): CompileSurfaceChunkWorkerRequest {
+    const request = {
+        protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+        generatorVersion: WORLD_GENERATOR_VERSION_V2,
+        requestId,
+        type: "compileSurfaceChunk" as const,
+        requestToken: createSurfaceRequestToken(
+            requestToken.sessionEpoch,
+            requestToken.renderChunkGeneration
+        ),
+        effectiveWindow
+    };
+    assertCompileSurfaceChunkWorkerRequest(request);
+    return Object.freeze(request);
+}
+
+export function compileSurfaceChunkRequestTransferables(
+    request: Readonly<CompileSurfaceChunkWorkerRequest>
+): readonly ArrayBuffer[] {
+    assertCompileSurfaceChunkWorkerRequest(request);
+    return transferableEffectiveWindowTransferables(request.effectiveWindow);
 }
 
 function transferableBuffer(buffer: ArrayBufferLike, name: string): ArrayBuffer {

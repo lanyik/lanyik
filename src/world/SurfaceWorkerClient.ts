@@ -11,14 +11,29 @@ import {
     createHydrologyRegion
 } from "./HydrologyRegion";
 import {
+    CompiledSurfaceChunk,
+    createCompiledSurfaceChunk
+} from "./CompiledSurfaceChunk";
+import {
+    SurfaceDependencyKey,
+    SurfaceRequestToken,
+    createSurfaceRequestToken,
+    surfaceDependencyKeysEqual,
+    surfaceRequestTokensEqual
+} from "./SurfaceDependencyKey";
+import {
     GenerateHydrologyRegionWorkerResult,
     GenerateSemanticChunkWorkerResult,
+    CompileSurfaceChunkWorkerResult,
     SURFACE_WORKER_PROTOCOL_VERSION,
     SurfaceWorkerFailure,
     SurfaceWorkerResponse,
+    compileSurfaceChunkRequestTransferables,
+    createCompileSurfaceChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
     createGenerateSemanticChunkWorkerRequest
 } from "./SurfaceWorkerProtocol";
+import { TransferableEffectiveWindow } from "./TransferableEffectiveWindow";
 import { HYDROLOGY_REGION_SIZE } from "./SurfaceCompileProfile";
 import {
     WORLD_GENERATOR_VERSION_V2,
@@ -34,6 +49,16 @@ export interface GenerateSemanticChunkOptions {
 export interface GenerateHydrologyRegionOptions {
     readonly descriptor: WorldDescriptorV2;
     readonly key: HydrologyRegionKey;
+}
+
+export interface CompileSurfaceChunkOptions {
+    readonly requestToken: SurfaceRequestToken;
+    readonly effectiveWindow: TransferableEffectiveWindow;
+}
+
+export interface SurfaceCompileResult {
+    readonly requestToken: SurfaceRequestToken;
+    readonly chunk: CompiledSurfaceChunk;
 }
 
 interface PendingSemanticRequest {
@@ -52,7 +77,15 @@ interface PendingHydrologyRequest {
     readonly reject: (error: Error) => void;
 }
 
-type PendingSurfaceRequest = PendingSemanticRequest | PendingHydrologyRequest;
+interface PendingCompileRequest {
+    readonly type: "compileSurfaceChunk";
+    readonly requestToken: SurfaceRequestToken;
+    readonly dependencyKey: SurfaceDependencyKey;
+    readonly resolve: (result: SurfaceCompileResult) => void;
+    readonly reject: (error: Error) => void;
+}
+
+type PendingSurfaceRequest = PendingSemanticRequest | PendingHydrologyRequest | PendingCompileRequest;
 
 function remoteError(response: SurfaceWorkerFailure): Error {
     if (!response.error || typeof response.error.name !== "string"
@@ -73,6 +106,7 @@ function assertResponseEnvelope(value: unknown): asserts value is SurfaceWorkerR
         || !Number.isSafeInteger(response.requestId) || (response.requestId as number) <= 0
         || (response.type !== "generateSemanticChunkResult"
             && response.type !== "generateHydrologyRegionResult"
+            && response.type !== "compileSurfaceChunkResult"
             && response.type !== "surfaceWorkerError")) {
         throw new TypeError("surface worker response envelope is invalid or unsupported");
     }
@@ -157,6 +191,45 @@ export class SurfaceWorkerClient {
         });
     }
 
+    public compileSurfaceChunk(options: Readonly<CompileSurfaceChunkOptions>): Promise<SurfaceCompileResult> {
+        if (this.disposed) return Promise.reject(new Error("SurfaceWorkerClient has been disposed"));
+        if (!options || typeof options !== "object") {
+            return Promise.reject(new TypeError("surface compile worker options are required"));
+        }
+        if (!Number.isSafeInteger(this.nextRequestId)) {
+            return Promise.reject(new RangeError("surface worker request id space is exhausted"));
+        }
+        const requestId = this.nextRequestId;
+        let request;
+        let transferables: readonly ArrayBuffer[];
+        try {
+            request = createCompileSurfaceChunkWorkerRequest(
+                requestId,
+                options.requestToken,
+                options.effectiveWindow
+            );
+            transferables = compileSurfaceChunkRequestTransferables(request);
+        } catch (reason) {
+            return Promise.reject(reason instanceof Error ? reason : new Error(String(reason)));
+        }
+        this.nextRequestId += 1;
+        return new Promise<SurfaceCompileResult>((resolve, reject) => {
+            this.pending.set(requestId, {
+                type: "compileSurfaceChunk",
+                requestToken: request.requestToken,
+                dependencyKey: options.effectiveWindow.dependencyKey,
+                resolve,
+                reject
+            });
+            try {
+                this.worker.postMessage(request, [...transferables]);
+            } catch (reason) {
+                this.pending.delete(requestId);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -194,13 +267,20 @@ export class SurfaceWorkerClient {
                 const chunk = this.publishChunk(response, request);
                 this.pending.delete(response.requestId);
                 request.resolve(chunk);
-            } else {
+            } else if (response.type === "generateHydrologyRegionResult") {
                 if (request.type !== "generateHydrologyRegion") {
                     throw new TypeError("surface worker hydrology result does not match its pending request type");
                 }
                 const region = this.publishHydrologyRegion(response, request);
                 this.pending.delete(response.requestId);
                 request.resolve(region);
+            } else {
+                if (request.type !== "compileSurfaceChunk") {
+                    throw new TypeError("surface worker compile result does not match its pending request type");
+                }
+                const result = this.publishSurfaceChunk(response, request);
+                this.pending.delete(response.requestId);
+                request.resolve(result);
             }
         } catch (reason) {
             this.fail(reason instanceof Error ? reason : new Error(String(reason)));
@@ -261,6 +341,25 @@ export class SurfaceWorkerClient {
             lakes: region.lakes,
             mouths: region.mouths,
             bodies: region.bodies
+        });
+    }
+
+    private publishSurfaceChunk(
+        response: CompileSurfaceChunkWorkerResult,
+        request: PendingCompileRequest
+    ): SurfaceCompileResult {
+        if (!surfaceRequestTokensEqual(response.requestToken, request.requestToken)
+            || !response.chunk
+            || !surfaceDependencyKeysEqual(response.chunk.dependencyKey, request.dependencyKey)) {
+            throw new TypeError("surface worker returned a chunk for the wrong token or dependency key");
+        }
+        const chunk = createCompiledSurfaceChunk(response.chunk);
+        return Object.freeze({
+            requestToken: createSurfaceRequestToken(
+                response.requestToken.sessionEpoch,
+                response.requestToken.renderChunkGeneration
+            ),
+            chunk
         });
     }
 

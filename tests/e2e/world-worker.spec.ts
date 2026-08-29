@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, Page, test } from "@playwright/test";
 import { WORLD_GENERATOR_VERSION } from "../../src/world/WorldGeneratorVersion";
 import { WORLD_WORKER_PROTOCOL_VERSION } from "../../src/world/WorldDescriptor";
 import { createCoreInfiniteWorldDescriptorV2 } from "../../src/world/SemanticCatalogsV2";
 import { SURFACE_WORKER_PROTOCOL_VERSION } from "../../src/world/SurfaceWorkerProtocol";
 import { WORLD_GENERATOR_VERSION_V2 } from "../../src/world/WorldDescriptorV2";
+import { createSurfaceCompilerTestWindow } from "../world/surfaceCompilerFixture";
 
 interface WorkerProbe {
     kind: "message" | "error" | "messageerror" | "timeout";
@@ -13,6 +14,13 @@ interface WorkerProbe {
     column?: number;
     stack?: string;
     chunkLength?: number;
+}
+
+async function installSurfacePeerImportMap(page: Page): Promise<void> {
+    await page.addScriptTag({
+        type: "importmap",
+        content: JSON.stringify({ imports: { three: "/js/vendor/three.module.js" } })
+    });
 }
 
 test("world worker generates a transferable chunk in a real browser", async ({ page }) => {
@@ -108,8 +116,73 @@ test("surface worker transfers one validated protocol-3 semantic chunk", async (
     });
 });
 
+test("surface worker compiles and transfers one final surface chunk in a real browser", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await installSurfacePeerImportMap(page);
+    const fixture = createSurfaceCompilerTestWindow({
+        seaLevel: 0,
+        macroHeight: () => 20_000,
+        vegetationDensity: () => 96,
+        vegetationProfile: () => 2
+    });
+    const windowData = {
+        ...fixture,
+        valid: [...fixture.valid],
+        substrateClass: [...fixture.substrateClass],
+        macroHeight: [...fixture.macroHeight],
+        biomeWeights: [...fixture.biomeWeights],
+        climate: [...fixture.climate],
+        vegetationDensity: [...fixture.vegetationDensity],
+        vegetationProfile: [...fixture.vegetationProfile]
+    };
+    const result = await page.evaluate(async data => {
+        const surfaceUrl = "/js/surface.mjs";
+        const surface = await import(surfaceUrl) as typeof import("../../src/surface");
+        const effectiveWindow = {
+            ...data,
+            valid: new Uint8Array(data.valid),
+            substrateClass: new Uint8Array(data.substrateClass),
+            macroHeight: new Uint16Array(data.macroHeight),
+            biomeWeights: new Uint8Array(data.biomeWeights),
+            climate: new Uint8Array(data.climate),
+            vegetationDensity: new Uint8Array(data.vegetationDensity),
+            vegetationProfile: new Uint8Array(data.vegetationProfile)
+        } as unknown as import("../../src/world/TransferableEffectiveWindow").TransferableEffectiveWindow;
+        const client = new surface.SurfaceWorkerClient(
+            new URL("/js/surface.worker.mjs", window.location.href)
+        );
+        const compiled = await client.compileSurfaceChunk({
+            requestToken: surface.createSurfaceRequestToken(2, 3),
+            effectiveWindow
+        });
+        const output = {
+            requestToken: compiled.requestToken,
+            key: compiled.chunk.key,
+            fieldLength: compiled.chunk.field.groundHeight.length,
+            geometryKind: compiled.chunk.waterGeometry.kind,
+            boundsFormat: compiled.chunk.bounds.formatVersion,
+            vegetationCount: compiled.chunk.vegetationSeeds.count,
+            inputDetached: effectiveWindow.valid.byteLength === 0,
+            outputBuffers: surface.compiledSurfaceChunkTransferables(compiled.chunk).length
+        };
+        client.dispose();
+        return output;
+    }, windowData);
+    expect(result).toMatchObject({
+        requestToken: { sessionEpoch: 2, renderChunkGeneration: 3 },
+        key: { chunkX: 0, chunkY: 0 },
+        fieldLength: 66 * 66,
+        geometryKind: "none",
+        boundsFormat: 2,
+        inputDetached: true,
+        outputBuffers: 14
+    });
+    expect(result.vegetationCount).toBeGreaterThan(0);
+});
+
 test("surface entry loads an infinite semantic source through the real worker", async ({ page }) => {
     await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await installSurfacePeerImportMap(page);
     const result = await page.evaluate(async () => {
         const surfaceUrl = "/js/surface.mjs";
         const surface = await import(surfaceUrl) as typeof import("../../src/surface");
@@ -141,6 +214,7 @@ test("surface entry loads an infinite semantic source through the real worker", 
 
 test("surface entry loads and republishes infinite hydrology through the real worker", async ({ page }) => {
     await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await installSurfacePeerImportMap(page);
     const result = await page.evaluate(async () => {
         const surfaceUrl = "/js/surface.mjs";
         const surface = await import(surfaceUrl) as typeof import("../../src/surface");
@@ -175,6 +249,7 @@ test("surface entry loads and republishes infinite hydrology through the real wo
 
 test("surface worker retains one toroidal graph and returns partial edge bounds", async ({ page }) => {
     await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await installSurfacePeerImportMap(page);
     const result = await page.evaluate(async () => {
         const surfaceUrl = "/js/surface.mjs";
         const surface = await import(surfaceUrl) as typeof import("../../src/surface");
