@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。水文 Worker 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -215,6 +215,8 @@ catalog hash 分别绑定规范 JSON `{version:1,entries:[...]}`；biome basis h
 静态 descriptor 的 `sourceContentHash` 是上游资源加载器对完整静态语义内容计算的身份，adapter 不用 MapInfo 对象地址或伪 seed 替代它。相同 descriptor 与输入在请求顺序之外逐字节一致。
 
 `StaticHydrologyRegionSource` 在构造时完整校验并快照水文图，之后不再读取调用方 `MapInfo`。湖泊只能标在无 hill 的普通 land 上；六边相邻的 lake 格组成一个稳定 body，每个格产生半径 1 格、共享水位 `33792` 的连续切片。河流也只能使用这种水下地面，并且每个 river 格必须显式携带 `(riverIndex, riverTileIndex)`：同一 river 的索引从 0 连续、按索引相邻，只有共同声明同一格的河链才允许汇流。适配器把共享格合并为单一有向无环图，每个唯一河格贡献一单位来水后按拓扑累加 discharge；分叉出口、环、断索引、非相邻段、孤立出口以及同时邻接多个不同终点水体都确定性失败。河流只可终止到海洋、一个 lake body 或另一条显式共享且继续下游的河链，不根据邻近 river modifier 猜测连接。
+
+静态和程序水文运行时都实现同一个 `HydrologyWorldSource` 租约接口。静态 source 自身不创建 Worker，从构造时冻结的有序图按需重建 region；程序 source 经 Worker 生成。两者都使用默认 16 MiB 的 region 驻留字节预算 LRU，只淘汰 lease 为零的派生 region，并提供规范 key、`loadRegion/releaseRegion` 和一致的 resident/leased/in-flight 统计；后续 `EffectiveWorldView` 不读取生成器类型。
 
 ## 6. 水文区域与水体权威
 
@@ -808,15 +810,17 @@ Worker 池至少支持三个明确任务：
 2. `generateHydrologyRegion`：从确定性 `MacroDrainageGraph` 裁出 128×128 HydrologyRegion。
 3. `compileSurfaceChunk`：将 effective window 编译为 16×16 CompiledSurfaceChunk。
 
-当前已落地的独立 `surface.worker` bundle 使用最终 protocol version 3 和 generator version 6；请求固定包含 `requestId + type + descriptor + key`，成功与失败响应分别使用 `generateSemanticChunkResult` 和 `surfaceWorkerError` 判别项，不用可选 payload 猜测响应类型。语义任务转移六个 SoA payload buffer；主线程收到后按 descriptor catalog 重新完整校验并重新发布冻结 chunk，错误 key、错误版本、未知 request ID 或损坏数组会终止该 Worker client，而不是继续使用可疑结果。每个 Worker 以完整规范 descriptor identity 复用一个无状态 generator/resolver，切换 identity 时整体替换，避免逐 chunk 重建 resolver 或跨世界污染缓存。
+当前已落地的独立 `surface.worker` bundle 使用最终 protocol version 3 和 generator version 6；请求固定包含 `requestId + type + descriptor + key`，语义、水文成功响应分别使用 `generateSemanticChunkResult`、`generateHydrologyRegionResult`，失败统一使用带原请求 type 的 `surfaceWorkerError`，不用可选 payload 猜测响应类型。语义任务转移六个 SoA payload buffer，水文任务一次转移全部 port/river/lake/mouth typed-array buffer；主线程按 descriptor、world identity、topology、规范 key、partial valid bounds 和完整格式不变量重新发布结果。错误 key、错误版本、未知 request ID、响应类型错配或损坏数组会终止该 Worker client，而不是继续使用可疑结果。
+
+每个 Worker 以完整规范 descriptor identity 复用一个 world context；semantic 与 hydrology 各自从同一冻结 descriptor 建立无可注入替代实现的 generator，切换 identity 时整体替换，避免跨世界污染缓存。无限水文 context 保留 9～64 个 canonical basin 的有界 LRU；环绕水文 context 只构建一次完整 `MacroDrainageGraph` 和终点水位索引。`ProceduralHydrologyWorldSource` 固定拥有一个专属 affinity Worker，避免相同环绕世界在池中复制多份全图，也保证相邻无限 region 命中同一 basin cache。默认 region cache 为 16 MiB；驻留估算包含非零 region/object 固定成本、规范字符串 payload 和实际 typed-array 字节，因此即使全为空 region 也不能随探索距离无限增长。
 
 `InfiniteSemanticWorldSource`、`ToroidalSemanticWorldSource` 与 `StaticSemanticWorldSource` 实现同一个无 `MapInfo` 运行时视图的接口，并通过独立 `./surface` 包入口暴露。程序 source 使用两层 number-keyed Map 保存坐标，不在热路径拼字符串；同 key 并发请求合并，只有最后一个等待者取消才中止底层任务。默认 32 MiB CPU cache 按实际 typed-array 字节计费，只 LRU 淘汰 lease 计数为零的 chunk；超预算但仍被租用的数据显式留在 resident 统计中，不伪装成已经释放。环绕 source 只加载规范 key，负/越界输入先由 `resolveChunk` 映射；无限 source 对整个安全整数 chunk bounds 生效。
 
-`SurfaceWorkerPool` 每个 Worker 同时只执行一个任务，使用统一 visible/prefetch/background 优先级、权重背压和 starvation aging；Worker 进程失败默认最多重试一次，确定性生成错误不重试。任务取消、重试、cache hit/miss、resident/leased 字节和 Worker 占用均有独立统计。
+`SurfaceWorkerPool` 每个 Worker 同时只执行一个任务，语义与水文进入同一个 typed task queue，使用统一 visible/prefetch/background 优先级、权重背压和 starvation aging；Worker 进程失败默认最多重试一次，确定性生成错误不重试。统计分别记录已完成 semantic/hydrology 数和各自平均耗时；任务取消、重试、cache hit/miss、resident/leased 字节和 Worker 占用保持独立。
 
-该 bundle 是尚未接入生产渲染器的 v2 构建入口，不是运行时 fallback；当前生产 `world-generator.worker` 在最终切换前仍服务 v1。后续 `generateHydrologyRegion` 和 `compileSurfaceChunk` 必须扩展同一个 protocol-3 discriminated union，不能另加可选字段协议或按异常回退旧 Worker。
+该 bundle 是尚未接入生产渲染器的 v2 构建入口，不是运行时 fallback；当前生产 `world-generator.worker` 在最终切换前仍服务 v1。后续 `compileSurfaceChunk` 必须继续扩展同一个 protocol-3 discriminated union，不能另加可选字段协议或按异常回退旧 Worker。
 
-有限/环绕世界的低分辨率排水图准备可以是独立任务；无限 resolver 则按 region 的有限依赖窗口求值。二者与 semantic generation 共用确定性 resolver 基础和统一调度器。任务协议使用 discriminated union，不用可选字段猜测任务类型。
+环绕世界的低分辨率排水图在 affinity Worker 的 world context 初始化期间准备一次；无限 resolver 按 region 的有限依赖窗口求值。二者与 semantic generation 共用确定性 resolver 基础和统一调度器。任务协议使用 discriminated union，不用可选字段猜测任务类型。
 
 ### 15.2 优先级
 

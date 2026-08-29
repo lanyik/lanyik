@@ -1,13 +1,21 @@
 import { describe, expect, test } from "vitest";
 
 import { BaseSemanticChunk } from "../../src/world/BaseSemanticChunk";
+import {
+    HydrologyRegion,
+    createHydrologyRegion
+} from "../../src/world/HydrologyRegion";
 import { createCoreInfiniteWorldDescriptorV2 } from "../../src/world/SemanticCatalogsV2";
 import {
-    SemanticChunkWorkerClient,
+    SurfaceTaskWorkerClient,
     SurfaceWorkerPool
 } from "../../src/world/SurfaceWorkerPool";
-import { GenerateSemanticChunkOptions } from "../../src/world/SurfaceWorkerClient";
+import {
+    GenerateHydrologyRegionOptions,
+    GenerateSemanticChunkOptions
+} from "../../src/world/SurfaceWorkerClient";
 import { generateBaseSemanticChunk } from "../../src/world/generateBaseSemanticChunk";
+import { serializeWorldDescriptorV2 } from "../../src/world/WorldDescriptorV2";
 
 interface DeferredRequest {
     readonly options: Readonly<GenerateSemanticChunkOptions>;
@@ -15,12 +23,23 @@ interface DeferredRequest {
     readonly reject: (error: Error) => void;
 }
 
-class DeferredClient implements SemanticChunkWorkerClient {
+interface DeferredHydrologyRequest {
+    readonly options: Readonly<GenerateHydrologyRegionOptions>;
+    readonly resolve: (region: HydrologyRegion) => void;
+    readonly reject: (error: Error) => void;
+}
+
+class DeferredClient implements SurfaceTaskWorkerClient {
     public readonly requests: DeferredRequest[] = [];
+    public readonly hydrologyRequests: DeferredHydrologyRequest[] = [];
     public isDisposed = false;
 
     public generateSemanticChunk(options: Readonly<GenerateSemanticChunkOptions>): Promise<BaseSemanticChunk> {
         return new Promise((resolve, reject) => this.requests.push({ options, resolve, reject }));
+    }
+
+    public generateHydrologyRegion(options: Readonly<GenerateHydrologyRegionOptions>): Promise<HydrologyRegion> {
+        return new Promise((resolve, reject) => this.hydrologyRequests.push({ options, resolve, reject }));
     }
 
     public complete(index = 0): void {
@@ -37,12 +56,52 @@ class DeferredClient implements SemanticChunkWorkerClient {
         this.requests[index].reject(new Error("injected surface worker crash"));
     }
 
+    public completeHydrology(index = 0): void {
+        const request = this.hydrologyRequests[index];
+        request.resolve(createHydrologyRegion({
+            worldIdentity: serializeWorldDescriptorV2(request.options.descriptor),
+            topology: request.options.descriptor.topology,
+            key: request.options.key,
+            revision: 0,
+            validBounds: { minX: 0, minY: 0, maxXExclusive: 128, maxYExclusive: 128 },
+            boundaryPorts: [],
+            rivers: [],
+            lakes: [],
+            mouths: [],
+            bodies: []
+        }));
+    }
+
     public dispose(): void {
         this.isDisposed = true;
     }
 }
 
 describe("v2 surface worker pool", () => {
+    test("schedules semantic and hydrology work through one typed queue", async () => {
+        const descriptor = createCoreInfiniteWorldDescriptorV2("pool-task-union");
+        const client = new DeferredClient();
+        const pool = new SurfaceWorkerPool("unused", { size: 1, clientFactory: () => client });
+        const semantic = pool.generateSemanticChunk({ descriptor, key: { chunkX: 0, chunkY: 0 } });
+        const hydrology = pool.generateHydrologyRegion(
+            { descriptor, key: { regionX: 0, regionY: 0 } },
+            { priority: 1 }
+        );
+        expect(client.hydrologyRequests).toHaveLength(0);
+        client.complete();
+        await semantic;
+        await Promise.resolve();
+        expect(client.hydrologyRequests).toHaveLength(1);
+        client.completeHydrology();
+        await expect(hydrology).resolves.toMatchObject({ key: { regionX: 0, regionY: 0 } });
+        expect(pool.stats).toMatchObject({
+            completed: 2,
+            completedSemanticChunks: 1,
+            completedHydrologyRegions: 1
+        });
+        pool.dispose();
+    });
+
     test("runs one task per worker and dispatches queued work by priority", async () => {
         const descriptor = createCoreInfiniteWorldDescriptorV2("pool-priority");
         const client = new DeferredClient();
@@ -109,4 +168,3 @@ describe("v2 surface worker pool", () => {
         pool.dispose();
     });
 });
-

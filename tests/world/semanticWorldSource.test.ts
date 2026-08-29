@@ -36,7 +36,10 @@ const EMPTY_POOL_STATS: Readonly<SurfaceWorkerPoolStats> = Object.freeze({
     oldestQueuedMs: 0,
     shedTasks: 0,
     starvationPromotions: 0,
-    averageSemanticChunkMs: 0
+    completedSemanticChunks: 0,
+    completedHydrologyRegions: 0,
+    averageSemanticChunkMs: 0,
+    averageHydrologyRegionMs: 0
 });
 
 class LocalSemanticPool implements SemanticChunkPool {

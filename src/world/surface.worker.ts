@@ -3,9 +3,15 @@ import {
     createBaseSemanticChunkGenerator
 } from "./generateBaseSemanticChunk";
 import {
+    ProceduralHydrologyRegionGenerator,
+    createProceduralHydrologyRegionGenerator
+} from "./ProceduralHydrologyRegionGenerator";
+import {
     SURFACE_WORKER_PROTOCOL_VERSION,
     SurfaceWorkerRequest,
+    assertGenerateHydrologyRegionWorkerRequest,
     assertGenerateSemanticChunkWorkerRequest,
+    hydrologyRegionTransferables,
     semanticChunkTransferables,
     serializeSurfaceWorkerError
 } from "./SurfaceWorkerProtocol";
@@ -19,14 +25,33 @@ const scope = globalThis as unknown as {
     postMessage(message: unknown, transfer?: Transferable[]): void;
 };
 
-let semanticGenerator: BaseSemanticChunkGenerator | undefined;
+interface WorkerWorldContext {
+    readonly identity: string;
+    readonly semanticGenerator: BaseSemanticChunkGenerator;
+    hydrologyGenerator?: ProceduralHydrologyRegionGenerator;
+}
 
-function generatorFor(request: SurfaceWorkerRequest): BaseSemanticChunkGenerator {
+let worldContext: WorkerWorldContext | undefined;
+
+function contextFor(request: SurfaceWorkerRequest): WorkerWorldContext {
     const identity = serializeWorldDescriptorV2(request.descriptor);
-    if (!semanticGenerator || semanticGenerator.identity !== identity) {
-        semanticGenerator = createBaseSemanticChunkGenerator(request.descriptor);
+    if (!worldContext || worldContext.identity !== identity) {
+        worldContext = {
+            identity,
+            semanticGenerator: createBaseSemanticChunkGenerator(request.descriptor)
+        };
     }
-    return semanticGenerator;
+    return worldContext;
+}
+
+function hydrologyGeneratorFor(request: SurfaceWorkerRequest): ProceduralHydrologyRegionGenerator {
+    const context = contextFor(request);
+    if (!context.hydrologyGenerator) {
+        context.hydrologyGenerator = createProceduralHydrologyRegionGenerator({
+            descriptor: request.descriptor
+        });
+    }
+    return context.hydrologyGenerator;
 }
 
 function recoverRequestId(value: unknown): number | null {
@@ -37,29 +62,45 @@ function recoverRequestId(value: unknown): number | null {
 
 function recoverRequestType(value: unknown): SurfaceWorkerRequest["type"] | null {
     if (!value || typeof value !== "object") return null;
-    return (value as { type?: unknown }).type === "generateSemanticChunk" ? "generateSemanticChunk" : null;
+    const type = (value as { type?: unknown }).type;
+    return type === "generateSemanticChunk" || type === "generateHydrologyRegion" ? type : null;
 }
 
-scope.addEventListener("message", event => {
+async function handleRequest(value: unknown): Promise<void> {
     try {
-        assertGenerateSemanticChunkWorkerRequest(event.data);
-        const request = event.data;
-        const chunk = generatorFor(request).generate(request.key.chunkX, request.key.chunkY);
-        scope.postMessage({
-            protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
-            generatorVersion: WORLD_GENERATOR_VERSION_V2,
-            requestId: request.requestId,
-            type: "generateSemanticChunkResult",
-            chunk
-        }, semanticChunkTransferables(chunk));
+        if ((value as { type?: unknown } | null)?.type === "generateHydrologyRegion") {
+            assertGenerateHydrologyRegionWorkerRequest(value);
+            const region = await hydrologyGeneratorFor(value).generate(value.key.regionX, value.key.regionY);
+            scope.postMessage({
+                protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION_V2,
+                requestId: value.requestId,
+                type: "generateHydrologyRegionResult",
+                region
+            }, hydrologyRegionTransferables(region));
+        } else {
+            assertGenerateSemanticChunkWorkerRequest(value);
+            const chunk = contextFor(value).semanticGenerator.generate(value.key.chunkX, value.key.chunkY);
+            scope.postMessage({
+                protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION_V2,
+                requestId: value.requestId,
+                type: "generateSemanticChunkResult",
+                chunk
+            }, semanticChunkTransferables(chunk));
+        }
     } catch (reason) {
         scope.postMessage({
             protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
             generatorVersion: WORLD_GENERATOR_VERSION_V2,
-            requestId: recoverRequestId(event.data),
+            requestId: recoverRequestId(value),
             type: "surfaceWorkerError",
-            requestType: recoverRequestType(event.data),
+            requestType: recoverRequestType(value),
             error: serializeSurfaceWorkerError(reason)
         });
     }
+}
+
+scope.addEventListener("message", event => {
+    void handleRequest(event.data);
 });

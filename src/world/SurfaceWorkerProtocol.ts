@@ -2,7 +2,14 @@ import {
     BaseSemanticChunk,
     SemanticChunkKey
 } from "./BaseSemanticChunk";
-import { WORLD_SEMANTIC_CHUNK_SIZE } from "./SurfaceCompileProfile";
+import {
+    HydrologyRegion,
+    HydrologyRegionKey
+} from "./HydrologyRegion";
+import {
+    HYDROLOGY_REGION_SIZE,
+    WORLD_SEMANTIC_CHUNK_SIZE
+} from "./SurfaceCompileProfile";
 import { chunkOrigin } from "./WorldGrid";
 import {
     InfiniteWorldDescriptorV2,
@@ -25,7 +32,17 @@ export interface GenerateSemanticChunkWorkerRequest {
     readonly key: SemanticChunkKey;
 }
 
-export type SurfaceWorkerRequest = GenerateSemanticChunkWorkerRequest;
+export interface GenerateHydrologyRegionWorkerRequest {
+    readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION_V2;
+    readonly requestId: number;
+    readonly type: "generateHydrologyRegion";
+    readonly descriptor: ProceduralWorldDescriptorV2;
+    readonly key: HydrologyRegionKey;
+}
+
+export type SurfaceWorkerRequest = GenerateSemanticChunkWorkerRequest
+    | GenerateHydrologyRegionWorkerRequest;
 
 export interface GenerateSemanticChunkWorkerResult {
     readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
@@ -33,6 +50,14 @@ export interface GenerateSemanticChunkWorkerResult {
     readonly requestId: number;
     readonly type: "generateSemanticChunkResult";
     readonly chunk: BaseSemanticChunk;
+}
+
+export interface GenerateHydrologyRegionWorkerResult {
+    readonly protocolVersion: typeof SURFACE_WORKER_PROTOCOL_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION_V2;
+    readonly requestId: number;
+    readonly type: "generateHydrologyRegionResult";
+    readonly region: HydrologyRegion;
 }
 
 export interface SurfaceWorkerFailure {
@@ -48,29 +73,60 @@ export interface SurfaceWorkerFailure {
     };
 }
 
-export type SurfaceWorkerResponse = GenerateSemanticChunkWorkerResult | SurfaceWorkerFailure;
+export type SurfaceWorkerResponse = GenerateSemanticChunkWorkerResult
+    | GenerateHydrologyRegionWorkerResult
+    | SurfaceWorkerFailure;
+
+function assertWorkerRequestEnvelope(value: unknown, expectedType: SurfaceWorkerRequest["type"]): void {
+    if (!value || typeof value !== "object") throw new TypeError("surface worker request must be an object");
+    const request = value as Partial<SurfaceWorkerRequest>;
+    if (request.protocolVersion !== SURFACE_WORKER_PROTOCOL_VERSION
+        || request.generatorVersion !== WORLD_GENERATOR_VERSION_V2
+        || !Number.isSafeInteger(request.requestId) || (request.requestId as number) <= 0
+        || request.type !== expectedType) {
+        throw new TypeError("surface worker request envelope is invalid or unsupported");
+    }
+}
+
+function assertProceduralDescriptor(descriptor: unknown, taskType: SurfaceWorkerRequest["type"]): asserts descriptor is ProceduralWorldDescriptorV2 {
+    assertWorldDescriptorV2(descriptor);
+    if (descriptor.sourceKind === "static") {
+        throw new TypeError(`${taskType} requires a procedural world descriptor`);
+    }
+}
 
 export function assertGenerateSemanticChunkWorkerRequest(
     value: unknown
 ): asserts value is GenerateSemanticChunkWorkerRequest {
-    if (!value || typeof value !== "object") throw new TypeError("surface worker request must be an object");
+    assertWorkerRequestEnvelope(value, "generateSemanticChunk");
     const request = value as Partial<GenerateSemanticChunkWorkerRequest>;
-    if (request.protocolVersion !== SURFACE_WORKER_PROTOCOL_VERSION
-        || request.generatorVersion !== WORLD_GENERATOR_VERSION_V2
-        || !Number.isSafeInteger(request.requestId) || (request.requestId as number) <= 0
-        || request.type !== "generateSemanticChunk") {
-        throw new TypeError("surface worker request envelope is invalid or unsupported");
-    }
-    const descriptor = request.descriptor as WorldDescriptorV2;
-    assertWorldDescriptorV2(descriptor);
-    if (descriptor.sourceKind === "static") {
-        throw new TypeError("generateSemanticChunk requires a procedural world descriptor");
-    }
+    assertProceduralDescriptor(request.descriptor, "generateSemanticChunk");
     if (!request.key || !Number.isSafeInteger(request.key.chunkX)
         || !Number.isSafeInteger(request.key.chunkY)) {
         throw new RangeError("surface worker semantic chunk key must use safe integers");
     }
     chunkOrigin(request.key.chunkX, request.key.chunkY, WORLD_SEMANTIC_CHUNK_SIZE);
+}
+
+export function assertGenerateHydrologyRegionWorkerRequest(
+    value: unknown
+): asserts value is GenerateHydrologyRegionWorkerRequest {
+    assertWorkerRequestEnvelope(value, "generateHydrologyRegion");
+    const request = value as Partial<GenerateHydrologyRegionWorkerRequest>;
+    assertProceduralDescriptor(request.descriptor, "generateHydrologyRegion");
+    if (!request.key || !Number.isSafeInteger(request.key.regionX)
+        || !Number.isSafeInteger(request.key.regionY)) {
+        throw new RangeError("surface worker hydrology region key must use safe integers");
+    }
+    chunkOrigin(request.key.regionX, request.key.regionY, HYDROLOGY_REGION_SIZE);
+    if (request.descriptor.sourceKind === "procedural-toroidal") {
+        const regionCountX = Math.ceil(request.descriptor.width / HYDROLOGY_REGION_SIZE);
+        const regionCountY = Math.ceil(request.descriptor.height / HYDROLOGY_REGION_SIZE);
+        if (request.key.regionX < 0 || request.key.regionX >= regionCountX
+            || request.key.regionY < 0 || request.key.regionY >= regionCountY) {
+            throw new RangeError("surface worker toroidal hydrology key must be canonical and in-domain");
+        }
+    }
 }
 
 export function createGenerateSemanticChunkWorkerRequest(
@@ -90,6 +146,30 @@ export function createGenerateSemanticChunkWorkerRequest(
     return Object.freeze(request);
 }
 
+export function createGenerateHydrologyRegionWorkerRequest(
+    requestId: number,
+    descriptor: WorldDescriptorV2,
+    key: Readonly<HydrologyRegionKey>
+): GenerateHydrologyRegionWorkerRequest {
+    const request = {
+        protocolVersion: SURFACE_WORKER_PROTOCOL_VERSION,
+        generatorVersion: WORLD_GENERATOR_VERSION_V2,
+        requestId,
+        type: "generateHydrologyRegion" as const,
+        descriptor,
+        key: Object.freeze({ regionX: key.regionX, regionY: key.regionY })
+    };
+    assertGenerateHydrologyRegionWorkerRequest(request);
+    return Object.freeze(request);
+}
+
+function transferableBuffer(buffer: ArrayBufferLike, name: string): ArrayBuffer {
+    if (!(buffer instanceof ArrayBuffer)) {
+        throw new TypeError(`surface worker ${name} must own a transferable ArrayBuffer`);
+    }
+    return buffer;
+}
+
 export function semanticChunkTransferables(chunk: Readonly<BaseSemanticChunk>): Transferable[] {
     const buffers = [
         chunk.substrateClass.buffer,
@@ -101,11 +181,27 @@ export function semanticChunkTransferables(chunk: Readonly<BaseSemanticChunk>): 
     ];
     const unique = new Set<ArrayBuffer>();
     for (const buffer of buffers) {
-        if (!(buffer instanceof ArrayBuffer)) {
-            throw new TypeError("surface worker semantic arrays must own transferable ArrayBuffers");
-        }
-        unique.add(buffer);
+        unique.add(transferableBuffer(buffer, "semantic array"));
     }
+    return [...unique];
+}
+
+export function hydrologyRegionTransferables(region: Readonly<HydrologyRegion>): Transferable[] {
+    const unique = new Set<ArrayBuffer>();
+    const add = (buffer: ArrayBufferLike): void => {
+        unique.add(transferableBuffer(buffer, "hydrology array"));
+    };
+    for (const port of region.boundaryPorts) {
+        add(port.point.buffer);
+        add(port.flowDirection.buffer);
+    }
+    for (const river of region.rivers) {
+        add(river.controlPoints.buffer);
+        add(river.widthProfile.buffer);
+        add(river.levelProfile.buffer);
+    }
+    for (const lake of region.lakes) add(lake.center.buffer);
+    for (const mouth of region.mouths) add(mouth.point.buffer);
     return [...unique];
 }
 

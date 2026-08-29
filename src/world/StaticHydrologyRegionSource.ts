@@ -5,13 +5,23 @@ import { MapInfo, RiverSegment, TileInfo } from "../interfaces";
 import { CoordinatePairMap } from "./CoordinatePairMap";
 import { HydrologyRegion, HydrologyRegionKey } from "./HydrologyRegion";
 import {
+    DEFAULT_HYDROLOGY_REGION_CACHE_BYTES,
+    HYDROLOGY_REGION_BASE_RESIDENT_BYTES,
+    HydrologyWorldSource,
+    HydrologyWorldSourceStats,
+    hydrologyRegionResidentBytes
+} from "./HydrologyWorldSource";
+import {
     HydrologyDrainageEdgeInput,
     HydrologyLakeSliceInput,
     HydrologyRegionAssembler,
     canonicalHydrologyPoint
 } from "./HydrologyRegionAssembler";
 import { macroDrainageDischargeClass } from "./MacroDrainageGraph";
-import { HYDROLOGY_REGION_SIZE } from "./SurfaceCompileProfile";
+import {
+    HYDROLOGY_REGION_SIZE
+} from "./SurfaceCompileProfile";
+import { SurfaceTaskRequestOptions } from "./SurfaceWorkerPool";
 import {
     STATIC_PLAIN_HEIGHT,
     assertStaticMapDescriptor,
@@ -37,6 +47,17 @@ interface RiverChain {
 interface StaticRiverEdge extends HydrologyDrainageEdgeInput {}
 
 interface StaticLakeSlice extends HydrologyLakeSliceInput {}
+
+interface StaticRegionCacheEntry {
+    readonly region: HydrologyRegion;
+    readonly bytes: number;
+    references: number;
+    lastUsed: number;
+}
+
+export interface StaticHydrologyRegionSourceOptions {
+    readonly cacheMaxBytes?: number;
+}
 
 interface StaticRiverEdgeDraft {
     readonly source: TileCoordinate;
@@ -96,7 +117,16 @@ function addBucketValue<T>(buckets: CoordinatePairMap<T[]>, regionX: number, reg
     else buckets.set(regionX, regionY, [value]);
 }
 
-export class StaticHydrologyRegionSource {
+function abortError(): Error {
+    if (typeof DOMException !== "undefined") {
+        return new DOMException("static hydrology region request was aborted", "AbortError");
+    }
+    const error = new Error("static hydrology region request was aborted");
+    error.name = "AbortError";
+    return error;
+}
+
+export class StaticHydrologyRegionSource implements HydrologyWorldSource {
     public readonly descriptor: StaticWorldDescriptorV2;
     public readonly worldIdentity: string;
     public readonly regionCountX: number;
@@ -104,11 +134,27 @@ export class StaticHydrologyRegionSource {
     private readonly riverEdges = new CoordinatePairMap<StaticRiverEdge[]>();
     private readonly lakeSlices = new CoordinatePairMap<StaticLakeSlice[]>();
     private readonly oceanRegions = new CoordinatePairMap<true>();
+    private readonly regions = new CoordinatePairMap<StaticRegionCacheEntry>();
+    private readonly cacheMaxBytes: number;
+    private residentBytes = 0;
+    private cacheClock = 0;
+    private cacheHits = 0;
+    private cacheMisses = 0;
+    private disposed = false;
 
-    constructor(map: MapInfo, descriptor: StaticWorldDescriptorV2) {
+    constructor(
+        map: MapInfo,
+        descriptor: StaticWorldDescriptorV2,
+        options: Readonly<StaticHydrologyRegionSourceOptions> = {}
+    ) {
         assertStaticMapDescriptor(map, descriptor);
         this.descriptor = descriptor;
         this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+        this.cacheMaxBytes = options.cacheMaxBytes ?? DEFAULT_HYDROLOGY_REGION_CACHE_BYTES;
+        const minimumCacheBytes = HYDROLOGY_REGION_BASE_RESIDENT_BYTES + this.worldIdentity.length * 2;
+        if (!Number.isSafeInteger(this.cacheMaxBytes) || this.cacheMaxBytes < minimumCacheBytes) {
+            throw new RangeError("static hydrology cache must hold at least one empty region");
+        }
         this.regionCountX = Math.ceil(descriptor.width / HYDROLOGY_REGION_SIZE);
         this.regionCountY = Math.ceil(descriptor.height / HYDROLOGY_REGION_SIZE);
         this.compile(map);
@@ -122,8 +168,123 @@ export class StaticHydrologyRegionSource {
     }
 
     public buildRegion(regionX: number, regionY: number): HydrologyRegion {
+        if (this.disposed) throw new Error("static hydrology source has been disposed");
         const key = this.resolveRegion(regionX, regionY);
         if (!key) throw new RangeError("static hydrology region key is outside the finite world");
+        const entry = this.regionFor(key);
+        this.evictUnleased();
+        return entry.region;
+    }
+
+    public regionDistance(regionX: number, regionY: number, centerRegionX: number, centerRegionY: number): number {
+        const first = this.resolveRegion(regionX, regionY);
+        const second = this.resolveRegion(centerRegionX, centerRegionY);
+        return first && second
+            ? Math.hypot(first.regionX - second.regionX, first.regionY - second.regionY)
+            : Number.POSITIVE_INFINITY;
+    }
+
+    public loadRegion(
+        regionX: number,
+        regionY: number,
+        request: Readonly<SurfaceTaskRequestOptions> = {}
+    ): Promise<HydrologyRegion> {
+        if (this.disposed) return Promise.reject(new Error("static hydrology source has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        const key = this.resolveRegion(regionX, regionY);
+        if (!key) return Promise.reject(new RangeError("static hydrology region key is outside the finite world"));
+        const entry = this.regionFor(key);
+        entry.references += 1;
+        this.touch(entry);
+        this.evictUnleased();
+        return Promise.resolve(entry.region);
+    }
+
+    public releaseRegion(region: Readonly<HydrologyRegion>): void {
+        const entry = this.regions.get(region.key.regionX, region.key.regionY);
+        if (!entry || entry.region !== region || entry.references <= 0) {
+            throw new Error("static hydrology region release does not match an active source lease");
+        }
+        entry.references -= 1;
+        this.touch(entry);
+        this.evictUnleased();
+    }
+
+    public hasRegion(regionX: number, regionY: number): boolean {
+        return this.regions.has(regionX, regionY);
+    }
+
+    public get stats(): Readonly<HydrologyWorldSourceStats> {
+        let leasedRegions = 0;
+        for (const entry of this.regions.values()) {
+            if (entry.references > 0) leasedRegions += 1;
+        }
+        return Object.freeze({
+            residentRegions: this.regions.size,
+            residentBytes: this.residentBytes,
+            leasedRegions,
+            inFlightRegions: 0,
+            cacheHits: this.cacheHits,
+            cacheMisses: this.cacheMisses,
+            workers: 0,
+            busyWorkers: 0,
+            queuedWorkerTasks: 0
+        });
+    }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.regions.clear();
+        this.residentBytes = 0;
+    }
+
+    private regionFor(key: Readonly<HydrologyRegionKey>): StaticRegionCacheEntry {
+        const cached = this.regions.get(key.regionX, key.regionY);
+        if (cached) {
+            this.cacheHits += 1;
+            this.touch(cached);
+            return cached;
+        }
+        this.cacheMisses += 1;
+        const region = this.assembleRegion(key);
+        const entry: StaticRegionCacheEntry = {
+            region,
+            bytes: hydrologyRegionResidentBytes(region),
+            references: 0,
+            lastUsed: 0
+        };
+        this.touch(entry);
+        this.regions.set(key.regionX, key.regionY, entry);
+        this.residentBytes += entry.bytes;
+        return entry;
+    }
+
+    private touch(entry: StaticRegionCacheEntry): void {
+        if (this.cacheClock >= Number.MAX_SAFE_INTEGER) {
+            const entries = [...this.regions.values()].sort((first, second) => first.lastUsed - second.lastUsed);
+            for (let index = 0; index < entries.length; index += 1) entries[index].lastUsed = index + 1;
+            this.cacheClock = entries.length;
+        }
+        this.cacheClock += 1;
+        entry.lastUsed = this.cacheClock;
+    }
+
+    private evictUnleased(): void {
+        while (this.residentBytes > this.cacheMaxBytes) {
+            let candidate: StaticRegionCacheEntry | undefined;
+            for (const entry of this.regions.values()) {
+                if (entry.references === 0 && (!candidate || entry.lastUsed < candidate.lastUsed)) candidate = entry;
+            }
+            if (!candidate) return;
+            this.regions.delete(candidate.region.key.regionX, candidate.region.key.regionY);
+            this.residentBytes -= candidate.bytes;
+        }
+    }
+
+    private assembleRegion(key: Readonly<HydrologyRegionKey>): HydrologyRegion {
+        const regionX = key.regionX;
+        const regionY = key.regionY;
         const origin = chunkOrigin(regionX, regionY, HYDROLOGY_REGION_SIZE);
         const assembler = new HydrologyRegionAssembler({
             worldIdentity: this.worldIdentity,

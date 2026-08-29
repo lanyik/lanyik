@@ -4,13 +4,16 @@ import {
     WorkQueueBackpressureError
 } from "../runtime/PriorityTaskQueue";
 import { BaseSemanticChunk } from "./BaseSemanticChunk";
+import { HydrologyRegion } from "./HydrologyRegion";
 import {
+    GenerateHydrologyRegionOptions,
     GenerateSemanticChunkOptions,
     SurfaceWorkerClient
 } from "./SurfaceWorkerClient";
 
-export interface SemanticChunkWorkerClient {
+export interface SurfaceTaskWorkerClient {
     generateSemanticChunk(options: Readonly<GenerateSemanticChunkOptions>): Promise<BaseSemanticChunk>;
+    generateHydrologyRegion(options: Readonly<GenerateHydrologyRegionOptions>): Promise<HydrologyRegion>;
     dispose(): void;
     readonly isDisposed?: boolean;
 }
@@ -26,7 +29,7 @@ export interface SurfaceWorkerPoolOptions {
     readonly size?: number;
     readonly maxWorkers?: number;
     readonly workerOptions?: WorkerOptions;
-    readonly clientFactory?: () => SemanticChunkWorkerClient;
+    readonly clientFactory?: () => SurfaceTaskWorkerClient;
     readonly maxQueuedTasks?: number;
     readonly maxQueuedWeight?: number;
     readonly starvationMs?: number;
@@ -45,13 +48,20 @@ export interface SurfaceWorkerPoolStats {
     readonly oldestQueuedMs: number;
     readonly shedTasks: number;
     readonly starvationPromotions: number;
+    readonly completedSemanticChunks: number;
+    readonly completedHydrologyRegions: number;
     readonly averageSemanticChunkMs: number;
+    readonly averageHydrologyRegionMs: number;
 }
 
-interface SemanticTask {
-    readonly options: GenerateSemanticChunkOptions;
+type SurfaceTaskResult = BaseSemanticChunk | HydrologyRegion;
+type SurfaceTaskKind = "semantic" | "hydrology";
+
+interface SurfaceTask {
+    readonly kind: SurfaceTaskKind;
+    readonly run: (client: SurfaceTaskWorkerClient) => Promise<SurfaceTaskResult>;
+    readonly resolveResult: (result: SurfaceTaskResult) => void;
     readonly signal?: AbortSignal;
-    readonly resolve: (chunk: BaseSemanticChunk) => void;
     readonly reject: (error: Error) => void;
     queueId?: number;
     abort?: () => void;
@@ -60,9 +70,9 @@ interface SemanticTask {
 }
 
 interface WorkerSlot {
-    client: SemanticChunkWorkerClient;
+    client: SurfaceTaskWorkerClient;
     busy: boolean;
-    task?: SemanticTask;
+    task?: SurfaceTask;
 }
 
 function abortError(): Error {
@@ -79,13 +89,16 @@ function defaultPoolSize(maxWorkers: number): number {
 
 export class SurfaceWorkerPool {
     private readonly slots: WorkerSlot[] = [];
-    private readonly clientFactory: () => SemanticChunkWorkerClient;
-    private readonly queue: PriorityTaskQueue<SemanticTask>;
+    private readonly clientFactory: () => SurfaceTaskWorkerClient;
+    private readonly queue: PriorityTaskQueue<SurfaceTask>;
     private readonly maximumWorkerRetries: number;
     private completed = 0;
     private workerFailures = 0;
     private retried = 0;
+    private completedSemanticChunks = 0;
+    private completedHydrologyRegions = 0;
     private averageSemanticChunkMs = 0;
+    private averageHydrologyRegionMs = 0;
     private disposed = false;
 
     constructor(workerUrl: string | URL, options: Readonly<SurfaceWorkerPoolOptions> = {}) {
@@ -104,7 +117,7 @@ export class SurfaceWorkerPool {
         }
         this.clientFactory = options.clientFactory
             ?? (() => new SurfaceWorkerClient(workerUrl, options.workerOptions ?? { type: "module" }));
-        this.queue = new PriorityTaskQueue<SemanticTask>({
+        this.queue = new PriorityTaskQueue<SurfaceTask>({
             maxPendingTasks: options.maxQueuedTasks ?? 512,
             maxPendingWeight: options.maxQueuedWeight ?? 512,
             starvationMs: options.starvationMs,
@@ -127,13 +140,51 @@ export class SurfaceWorkerPool {
         options: Readonly<GenerateSemanticChunkOptions>,
         request: Readonly<SurfaceTaskRequestOptions> = {}
     ): Promise<BaseSemanticChunk> {
+        if (!options || typeof options !== "object" || !options.key) {
+            return Promise.reject(new TypeError("semantic chunk pool options are required"));
+        }
+        const taskOptions: GenerateSemanticChunkOptions = Object.freeze({
+            descriptor: options.descriptor,
+            key: Object.freeze({ chunkX: options.key.chunkX, chunkY: options.key.chunkY })
+        });
+        return this.enqueueTask(
+            "semantic",
+            client => client.generateSemanticChunk(taskOptions),
+            request
+        );
+    }
+
+    public generateHydrologyRegion(
+        options: Readonly<GenerateHydrologyRegionOptions>,
+        request: Readonly<SurfaceTaskRequestOptions> = {}
+    ): Promise<HydrologyRegion> {
+        if (!options || typeof options !== "object" || !options.key) {
+            return Promise.reject(new TypeError("hydrology region pool options are required"));
+        }
+        const taskOptions: GenerateHydrologyRegionOptions = Object.freeze({
+            descriptor: options.descriptor,
+            key: Object.freeze({ regionX: options.key.regionX, regionY: options.key.regionY })
+        });
+        return this.enqueueTask(
+            "hydrology",
+            client => client.generateHydrologyRegion(taskOptions),
+            request
+        );
+    }
+
+    private enqueueTask<T extends SurfaceTaskResult>(
+        kind: SurfaceTaskKind,
+        run: (client: SurfaceTaskWorkerClient) => Promise<T>,
+        request: Readonly<SurfaceTaskRequestOptions>
+    ): Promise<T> {
         if (this.disposed) return Promise.reject(new Error("SurfaceWorkerPool has been disposed"));
         if (request.signal?.aborted) return Promise.reject(abortError());
-        return new Promise<BaseSemanticChunk>((resolve, reject) => {
-            const task: SemanticTask = {
-                options,
+        return new Promise<T>((resolve, reject) => {
+            const task: SurfaceTask = {
+                kind,
+                run,
+                resolveResult: result => resolve(result as T),
                 signal: request.signal,
-                resolve,
                 reject,
                 attempts: 0,
                 settled: false
@@ -172,7 +223,10 @@ export class SurfaceWorkerPool {
             oldestQueuedMs: queue.oldestTaskAgeMs,
             shedTasks: queue.shedTasks,
             starvationPromotions: queue.starvationPromotions,
-            averageSemanticChunkMs: this.averageSemanticChunkMs
+            completedSemanticChunks: this.completedSemanticChunks,
+            completedHydrologyRegions: this.completedHydrologyRegions,
+            averageSemanticChunkMs: this.averageSemanticChunkMs,
+            averageHydrologyRegionMs: this.averageHydrologyRegionMs
         });
     }
 
@@ -210,23 +264,25 @@ export class SurfaceWorkerPool {
         }
     }
 
-    private execute(slot: WorkerSlot, task: SemanticTask): void {
+    private execute(slot: WorkerSlot, task: SurfaceTask): void {
         const started = typeof performance === "undefined" ? Date.now() : performance.now();
-        let pending: Promise<BaseSemanticChunk>;
+        let pending: Promise<SurfaceTaskResult>;
         try {
-            pending = slot.client.generateSemanticChunk(task.options);
+            pending = task.run(slot.client);
         } catch (reason) {
             pending = Promise.reject(reason);
         }
-        void pending.then(chunk => {
-            this.recordDuration(started);
+        void pending.then(result => {
+            this.recordDuration(task.kind, started);
             if (!task.settled) {
                 this.completed += 1;
-                this.finishTask(task, () => task.resolve(chunk));
+                if (task.kind === "semantic") this.completedSemanticChunks += 1;
+                else this.completedHydrologyRegions += 1;
+                this.finishTask(task, () => task.resolveResult(result));
             }
             this.releaseSlot(slot);
         }, reason => {
-            this.recordDuration(started);
+            this.recordDuration(task.kind, started);
             const error = reason instanceof Error ? reason : new Error(String(reason));
             const workerFailed = slot.client.isDisposed && !this.disposed;
             if (workerFailed) this.workerFailures += 1;
@@ -256,16 +312,17 @@ export class SurfaceWorkerPool {
         this.dispatch();
     }
 
-    private finishTask(task: SemanticTask, settle: () => void): void {
+    private finishTask(task: SurfaceTask, settle: () => void): void {
         if (task.settled) return;
         task.settled = true;
         if (task.signal && task.abort) task.signal.removeEventListener("abort", task.abort);
         settle();
     }
 
-    private createClient(): SemanticChunkWorkerClient {
+    private createClient(): SurfaceTaskWorkerClient {
         const client = this.clientFactory();
-        if (!client || typeof client.generateSemanticChunk !== "function" || typeof client.dispose !== "function") {
+        if (!client || typeof client.generateSemanticChunk !== "function"
+            || typeof client.generateHydrologyRegion !== "function" || typeof client.dispose !== "function") {
             throw new TypeError("surface worker client factory returned an invalid client");
         }
         if (client.isDisposed) {
@@ -275,10 +332,15 @@ export class SurfaceWorkerPool {
         return client;
     }
 
-    private recordDuration(started: number): void {
+    private recordDuration(kind: SurfaceTaskKind, started: number): void {
         const finished = typeof performance === "undefined" ? Date.now() : performance.now();
         const duration = Math.max(0, finished - started);
-        this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0
-            ? duration : this.averageSemanticChunkMs + (duration - this.averageSemanticChunkMs) * 0.2;
+        if (kind === "semantic") {
+            this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0
+                ? duration : this.averageSemanticChunkMs + (duration - this.averageSemanticChunkMs) * 0.2;
+        } else {
+            this.averageHydrologyRegionMs = this.averageHydrologyRegionMs === 0
+                ? duration : this.averageHydrologyRegionMs + (duration - this.averageHydrologyRegionMs) * 0.2;
+        }
     }
 }

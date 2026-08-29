@@ -13,6 +13,7 @@ import {
     HYDROLOGY_KIND_RIVER,
     HydrologyRegionSpatialIndex
 } from "../../src/world/HydrologyRegionSpatialIndex";
+import { assertHydrologyWorldSource } from "../../src/world/HydrologyWorldSource";
 import {
     CORE_WORLD_SEMANTICS_V2
 } from "../../src/world/SemanticCatalogsV2";
@@ -173,5 +174,43 @@ describe("StaticHydrologyRegionSource", () => {
         ambiguous.data[2][3] = { type: Land.land, modifiers: ["lake"] };
         expect(() => new StaticHydrologyRegionSource(ambiguous, descriptor(8, 8)))
             .toThrow(/ambiguous terminal water bodies/);
+    });
+
+    test("implements the leased hydrology world-source contract without workers", async () => {
+        const map = plainMap(8, 8);
+        const source = new StaticHydrologyRegionSource(map, descriptor(8, 8));
+        assertHydrologyWorldSource(source);
+        const region = await source.loadRegion(0, 0);
+        expect(source.stats).toMatchObject({
+            residentRegions: 1,
+            leasedRegions: 1,
+            workers: 0,
+            cacheMisses: 1
+        });
+        expect(await source.loadRegion(0, 0)).toBe(region);
+        source.releaseRegion(region);
+        source.releaseRegion(region);
+        expect(source.stats).toMatchObject({ leasedRegions: 0, cacheHits: 1 });
+        source.dispose();
+        await expect(source.loadRegion(0, 0)).rejects.toThrow(/disposed/);
+    });
+
+    test("evicts unleased derived regions under the same byte-budget contract", () => {
+        const map = plainMap(256, 1);
+        const worldDescriptor = descriptor(256, 1);
+        const probe = new StaticHydrologyRegionSource(map, worldDescriptor);
+        probe.buildRegion(0, 0);
+        const oneRegionBytes = probe.stats.residentBytes;
+        probe.dispose();
+
+        const source = new StaticHydrologyRegionSource(map, worldDescriptor, {
+            cacheMaxBytes: oneRegionBytes
+        });
+        source.buildRegion(0, 0);
+        source.buildRegion(1, 0);
+        expect(source.hasRegion(0, 0)).toBe(false);
+        expect(source.hasRegion(1, 0)).toBe(true);
+        expect(source.stats.residentBytes).toBe(oneRegionBytes);
+        source.dispose();
     });
 });

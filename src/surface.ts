@@ -76,22 +76,29 @@ export type {
 export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
-    assertGenerateSemanticChunkWorkerRequest
+    createGenerateHydrologyRegionWorkerRequest,
+    assertGenerateSemanticChunkWorkerRequest,
+    assertGenerateHydrologyRegionWorkerRequest
 } from "./world/SurfaceWorkerProtocol";
 export type {
     SurfaceWorkerRequest,
     SurfaceWorkerResponse,
     GenerateSemanticChunkWorkerRequest,
-    GenerateSemanticChunkWorkerResult
+    GenerateSemanticChunkWorkerResult,
+    GenerateHydrologyRegionWorkerRequest,
+    GenerateHydrologyRegionWorkerResult
 } from "./world/SurfaceWorkerProtocol";
 export { SurfaceWorkerClient } from "./world/SurfaceWorkerClient";
-export type { GenerateSemanticChunkOptions } from "./world/SurfaceWorkerClient";
+export type {
+    GenerateSemanticChunkOptions,
+    GenerateHydrologyRegionOptions
+} from "./world/SurfaceWorkerClient";
 export { SurfaceWorkerPool } from "./world/SurfaceWorkerPool";
 export type {
     SurfaceWorkerPoolOptions,
     SurfaceWorkerPoolStats,
     SurfaceTaskRequestOptions,
-    SemanticChunkWorkerClient
+    SurfaceTaskWorkerClient
 } from "./world/SurfaceWorkerPool";
 
 export {
@@ -183,6 +190,30 @@ export type {
 } from "./world/InfiniteHydrologyRegionSource";
 
 export {
+    createProceduralHydrologyRegionGenerator
+} from "./world/ProceduralHydrologyRegionGenerator";
+export type {
+    ProceduralHydrologyDescriptorV2,
+    ProceduralHydrologyRegionGenerator,
+    CreateProceduralHydrologyRegionGeneratorOptions
+} from "./world/ProceduralHydrologyRegionGenerator";
+
+export {
+    DEFAULT_HYDROLOGY_REGION_CACHE_BYTES,
+    HYDROLOGY_REGION_BASE_RESIDENT_BYTES,
+    hydrologyRegionResidentBytes,
+    assertHydrologyWorldSource,
+    ProceduralHydrologyWorldSource
+} from "./world/HydrologyWorldSource";
+export type {
+    ProceduralHydrologyWorldDescriptorV2,
+    HydrologyWorldSource,
+    HydrologyRegionPool,
+    ProceduralHydrologyWorldSourceOptions,
+    HydrologyWorldSourceStats
+} from "./world/HydrologyWorldSource";
+
+export {
     HYDROLOGY_SPATIAL_CELL_SIZE,
     HYDROLOGY_RIVER_BASE_HALF_WIDTH_TILES,
     HYDROLOGY_RIVER_WIDTH_CLASS_STEP_TILES,
@@ -216,3 +247,4 @@ export {
     STATIC_LAKE_TILE_RADIUS,
     StaticHydrologyRegionSource
 } from "./world/StaticHydrologyRegionSource";
+export type { StaticHydrologyRegionSourceOptions } from "./world/StaticHydrologyRegionSource";

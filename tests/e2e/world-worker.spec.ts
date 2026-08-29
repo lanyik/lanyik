@@ -139,6 +139,75 @@ test("surface entry loads an infinite semantic source through the real worker", 
     expect(result.released).toMatchObject({ residentChunks: 1, leasedChunks: 0 });
 });
 
+test("surface entry loads and republishes infinite hydrology through the real worker", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    const result = await page.evaluate(async () => {
+        const surfaceUrl = "/js/surface.mjs";
+        const surface = await import(surfaceUrl) as typeof import("../../src/surface");
+        const descriptor = surface.createCoreInfiniteWorldDescriptorV2("hydrology-source-probe");
+        const source = new surface.ProceduralHydrologyWorldSource({
+            descriptor,
+            workerUrl: new URL("/js/surface.worker.mjs", window.location.href)
+        });
+        const region = await source.loadRegion(0, 0);
+        surface.assertHydrologyRegion(region);
+        const loaded = {
+            key: region.key,
+            topology: region.topology,
+            validBounds: region.validBounds,
+            featureCount: region.rivers.length + region.lakes.length + region.mouths.length,
+            stats: source.stats
+        };
+        source.releaseRegion(region);
+        const released = source.stats;
+        source.dispose();
+        return { loaded, released };
+    });
+    expect(result.loaded).toMatchObject({
+        key: { regionX: 0, regionY: 0 },
+        topology: "infinite",
+        validBounds: { maxXExclusive: 128, maxYExclusive: 128 },
+        stats: { residentRegions: 1, leasedRegions: 1, workers: 1 }
+    });
+    expect(result.loaded.featureCount).toBeGreaterThan(0);
+    expect(result.released).toMatchObject({ residentRegions: 1, leasedRegions: 0 });
+});
+
+test("surface worker retains one toroidal graph and returns partial edge bounds", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    const result = await page.evaluate(async () => {
+        const surfaceUrl = "/js/surface.mjs";
+        const surface = await import(surfaceUrl) as typeof import("../../src/surface");
+        const descriptor = surface.createCoreToroidalWorldDescriptorV2(
+            "hydrology-torus-probe",
+            160,
+            96
+        );
+        const source = new surface.ProceduralHydrologyWorldSource({
+            descriptor,
+            workerUrl: new URL("/js/surface.worker.mjs", window.location.href)
+        });
+        const first = await source.loadRegion(1, 0);
+        source.releaseRegion(first);
+        const repeated = await source.loadRegion(1, 0);
+        const output = {
+            key: repeated.key,
+            topology: repeated.topology,
+            validBounds: repeated.validBounds,
+            stats: source.stats
+        };
+        source.releaseRegion(repeated);
+        source.dispose();
+        return output;
+    });
+    expect(result).toMatchObject({
+        key: { regionX: 1, regionY: 0 },
+        topology: "toroidal",
+        validBounds: { maxXExclusive: 32, maxYExclusive: 96 },
+        stats: { residentRegions: 1, leasedRegions: 1, cacheHits: 1, workers: 1 }
+    });
+});
+
 test("worker pool replaces a real crashed Worker and serves the next request", async ({ page }) => {
     await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => Boolean((window as unknown as { HexMap?: unknown }).HexMap));
