@@ -104,6 +104,22 @@ export {
 } from "./world/CompiledSurfaceSampler";
 export type { MutableCompiledSurfaceSample } from "./world/CompiledSurfaceSampler";
 export {
+    COMPILED_VEGETATION_SEEDS_FORMAT_VERSION,
+    VEGETATION_CANDIDATE_COLUMNS_PER_TILE,
+    VEGETATION_CANDIDATE_ROWS_PER_TILE,
+    VEGETATION_CANDIDATES_PER_TILE,
+    MAX_COMPILED_VEGETATION_SEEDS,
+    assertCompiledVegetationSeeds,
+    createCompiledVegetationSeeds,
+    compiledVegetationSeedsResidentBytes,
+    compiledVegetationSeedsTransferables
+} from "./world/CompiledVegetationSeeds";
+export type {
+    CompiledVegetationSeeds,
+    CompiledVegetationSeedsInput
+} from "./world/CompiledVegetationSeeds";
+export { compileVegetationSeeds } from "./world/compileVegetationSeeds";
+export {
     COMPILED_SURFACE_BOUNDS_FORMAT_VERSION,
     assertCompiledSurfaceBounds,
     compileSurfaceBounds

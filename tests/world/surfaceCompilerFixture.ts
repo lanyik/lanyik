@@ -11,12 +11,17 @@ import {
 export const SURFACE_COMPILER_TEST_WORLD_IDENTITY = "world:surface-compiler-test";
 
 interface SurfaceCompilerTestWindowOptions {
+    readonly worldIdentity?: string;
     readonly renderChunkX?: number;
     readonly renderChunkY?: number;
     readonly seaLevel?: number;
     readonly domain?: TransferableWorldDomain;
     readonly tileIsValid?: (tileX: number, tileY: number) => boolean;
     readonly macroHeight?: (tileX: number, tileY: number) => number;
+    readonly vegetationDensity?: (tileX: number, tileY: number) => number;
+    readonly vegetationProfile?: (tileX: number, tileY: number) => number;
+    readonly hexSize?: number;
+    readonly heightScale?: number;
     readonly hydrologyRegions?: readonly TransferableHydrologyRegionSlice[];
     readonly authoredHydrology?: readonly HydrologyFeatureUpsertDelta[];
 }
@@ -84,6 +89,14 @@ export function createSurfaceCompilerTestWindow(
             const first = ((tileX + tileY) & 1) === 0 ? 200 : 50;
             biomeWeights[index * 4] = first;
             biomeWeights[index * 4 + 1] = 255 - first;
+            const density = options.vegetationDensity?.(tileX, tileY) ?? 0;
+            const profile = options.vegetationProfile?.(tileX, tileY) ?? 0;
+            if (!Number.isInteger(density) || density < 0 || density > 0xff
+                || !Number.isInteger(profile) || profile < 0 || profile > 0xff) {
+                throw new RangeError("test surface vegetation values must be uint8 values");
+            }
+            vegetationDensity[index] = density;
+            vegetationProfile[index] = profile;
         }
     }
     const semantic = axisKeys(originTileX, 32).flatMap(chunkX =>
@@ -119,9 +132,9 @@ export function createSurfaceCompilerTestWindow(
         0
     );
     const dependencyKey = createSurfaceDependencyKey({
-        worldIdentity: SURFACE_COMPILER_TEST_WORLD_IDENTITY,
+        worldIdentity: options.worldIdentity ?? SURFACE_COMPILER_TEST_WORLD_IDENTITY,
         renderKey: { chunkX: renderChunkX, chunkY: renderChunkY },
-        metrics: { hexSize: 2, heightScale: 10 },
+        metrics: { hexSize: options.hexSize ?? 2, heightScale: options.heightScale ?? 10 },
         semantic,
         hydrologyRegions: hydrologyRegions.map(region => ({ key: region.key, baseRevision: 0 })),
         hydrologyFeatures: [...featureDependencies.values()]
