@@ -551,7 +551,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 当前已落地的 `compileSemanticSurfaceField` 只实现并明确命名为上述第 1 步的连续语义地面核，不冒充完整水文编译器。它按全局 `surfaceTexelCenterAxis` 对四个 tile center 做双线性采样，finite 边缘忽略 valid mask 外的规范零值并重新归一化；宏观 `uint16` 高度通过 dependency key 的 `heightScale` 转为世界 Y 后量化为 binary16。四项 descriptor biome basis 暂作为冻结的四个 material basis 输入，插值后用最大余数法恢复严格和 255；后续坡度、substrate 与湿岸调制只能在保持该守恒量的前提下加入。循环复用固定 scratch，不在 4356 texel 热循环中创建临时对象。正坐标、负坐标和相邻块两列共享 texel 已锁定逐位测试。
 
-已落地的 `compileOceanSurfaceField` 在上述地面核之上完成海洋子阶段。它只读取 transfer window 中 descriptor 冻结的 uint16 海平面，以 20×20 tile-center 宏观高度运行确定性 marching-squares 轮廓；四交点 saddle 由 cell-center 高度与左下角状态唯一消歧。轮廓先经 `surfaceToWorld` 转到世界 XZ，再计算 texel 到线段的真实欧氏最短距离并在两格影响半径饱和；coverage 使用固定一个 texel 宽的线性抗锯齿带。判湿、水位和水深统一使用最终 binary16 精度，陆侧少量 coverage 被限制到 127，水侧被限制到至少 128。全陆块不创建 palette entry，全海块直接得到饱和负 SDF 与 255 coverage；海岸跨相邻 chunk 的两列共享字段已逐位锁定。该函数仍不处理显式湖泊、河流和河口，完整编译入口将在这些 feature 合并后发布。
+已落地的 `compileOceanSurfaceField` 在上述地面核之上完成海洋子阶段。它只读取 transfer window 中 descriptor 冻结的 uint16 海平面，以 20×20 tile-center 宏观高度运行确定性 marching-squares 轮廓；四交点 saddle 由 cell-center 高度与左下角状态唯一消歧。无水体策略的共享 `SurfaceContours` 核把轮廓经 `surfaceToWorld` 转到世界 XZ，以保守 surface bounds 只访问两格影响范围内的 texel，再计算真实欧氏点线最短距离并饱和；coverage 使用固定一个 texel 宽的线性抗锯齿带。判湿、水位和水深统一使用最终 binary16 精度，陆侧少量 coverage 被限制到 127，水侧被限制到至少 128。全陆块不创建 palette entry，全海块直接得到饱和负 SDF 与 255 coverage；海岸跨相邻 chunk 的两列共享字段已逐位锁定。该函数仍不处理显式湖泊、河流和河口，完整编译入口将在这些 feature 合并后发布。
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 

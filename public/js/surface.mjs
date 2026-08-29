@@ -2513,29 +2513,33 @@ function compiledWaterBodyPaletteIndex(palette, bodyId) {
   return 0;
 }
 
-// src/world/compileOceanSurfaceField.ts
-function interpolateCrossing(firstU, firstV, firstHeight, secondU, secondV, secondHeight, seaLevel, hexSize) {
-  const amount = (seaLevel - firstHeight) / (secondHeight - firstHeight);
+// src/world/SurfaceContours.ts
+function interpolateCrossing(firstU, firstV, firstHeight, secondU, secondV, secondHeight, threshold, hexSize) {
+  const amount = (threshold - firstHeight) / (secondHeight - firstHeight);
   return surfaceToWorld(
     firstU + (secondU - firstU) * amount,
     firstV + (secondV - firstV) * amount,
     hexSize
   );
 }
-function addContourSegments(segments, crossings, bottomLeftWet, centerWet) {
+function addContourSegments(segments, crossings, bottomLeftInside, centerInside) {
   const present = crossings.flatMap((point, edge) => point ? [{ point, edge }] : []);
   if (present.length === 2) {
     segments.push({ start: present[0].point, end: present[1].point });
     return;
   }
   if (present.length !== 4) return;
-  const pairA = bottomLeftWet === centerWet;
+  const pairA = bottomLeftInside === centerInside;
   const pairs = pairA ? [[0, 1], [2, 3]] : [[0, 3], [1, 2]];
   for (const [first, second] of pairs) {
-    segments.push({ start: crossings[first], end: crossings[second] });
+    segments.push({
+      start: crossings[first],
+      end: crossings[second]
+    });
   }
 }
-function oceanContours(window, hexSize) {
+function surfaceHeightContours(window, threshold, hexSize) {
+  if (!Number.isFinite(threshold)) throw new RangeError("surface contour threshold must be finite");
   const segments = [];
   for (let localX = 0; localX < EFFECTIVE_WINDOW_TILE_SIZE - 1; localX += 1) {
     const tileX = window.originTileX + localX;
@@ -2552,10 +2556,10 @@ function oceanContours(window, hexSize) {
         window.macroHeight[topRight],
         window.macroHeight[bottomRight]
       ];
-      const wet = heights.map((height) => height < window.seaLevel);
-      if (wet.every((value) => value === wet[0])) continue;
+      const inside = heights.map((height) => height < threshold);
+      if (inside.every((value) => value === inside[0])) continue;
       const crossings = [void 0, void 0, void 0, void 0];
-      if (wet[0] !== wet[1]) {
+      if (inside[0] !== inside[1]) {
         crossings[0] = interpolateCrossing(
           tileX,
           tileY,
@@ -2563,11 +2567,11 @@ function oceanContours(window, hexSize) {
           tileX,
           tileY + 1,
           heights[1],
-          window.seaLevel,
+          threshold,
           hexSize
         );
       }
-      if (wet[1] !== wet[2]) {
+      if (inside[1] !== inside[2]) {
         crossings[1] = interpolateCrossing(
           tileX,
           tileY + 1,
@@ -2575,11 +2579,11 @@ function oceanContours(window, hexSize) {
           tileX + 1,
           tileY + 1,
           heights[2],
-          window.seaLevel,
+          threshold,
           hexSize
         );
       }
-      if (wet[2] !== wet[3]) {
+      if (inside[2] !== inside[3]) {
         crossings[2] = interpolateCrossing(
           tileX + 1,
           tileY + 1,
@@ -2587,11 +2591,11 @@ function oceanContours(window, hexSize) {
           tileX + 1,
           tileY,
           heights[3],
-          window.seaLevel,
+          threshold,
           hexSize
         );
       }
-      if (wet[3] !== wet[0]) {
+      if (inside[3] !== inside[0]) {
         crossings[3] = interpolateCrossing(
           tileX + 1,
           tileY,
@@ -2599,15 +2603,15 @@ function oceanContours(window, hexSize) {
           tileX,
           tileY,
           heights[0],
-          window.seaLevel,
+          threshold,
           hexSize
         );
       }
       addContourSegments(
         segments,
         crossings,
-        wet[0],
-        (heights[0] + heights[1] + heights[2] + heights[3]) / 4 < window.seaLevel
+        inside[0],
+        (heights[0] + heights[1] + heights[2] + heights[3]) / 4 < threshold
       );
     }
   }
@@ -2630,7 +2634,10 @@ function pointSegmentDistance(x, z, segment) {
 function surfaceAxisToTexel(axis, renderChunkCoordinate) {
   return (axis - renderChunkCoordinate * SURFACE_COMPILE_PROFILE.renderChunkSize + 0.5) * SURFACE_COMPILE_PROFILE.samplesPerTileInterval - 0.5;
 }
-function oceanShorelineDistances(window, contours, hexSize, saturation) {
+function surfaceContourDistances(window, contours, hexSize, saturation) {
+  if (!Array.isArray(contours) || !Number.isFinite(saturation) || saturation <= 0) {
+    throw new RangeError("surface contour distance input is invalid");
+  }
   const distances = new Float64Array(COMPILED_SURFACE_TEXEL_COUNT);
   distances.fill(saturation);
   if (contours.length === 0) return distances;
@@ -2677,10 +2684,15 @@ function oceanShorelineDistances(window, contours, hexSize, saturation) {
   }
   return distances;
 }
-function quantizeCoverage(signedDistance, antialiasRadius) {
+function quantizeSurfaceCoverage(signedDistance, antialiasRadius) {
+  if (!Number.isFinite(signedDistance) || !Number.isFinite(antialiasRadius) || antialiasRadius <= 0) {
+    throw new RangeError("surface coverage distance input is invalid");
+  }
   const coverage = Math.max(0, Math.min(1, 0.5 - signedDistance / (antialiasRadius * 2)));
   return Math.floor(coverage * 255 + 0.5);
 }
+
+// src/world/compileOceanSurfaceField.ts
 function compileOceanSurfaceField(window) {
   assertTransferableEffectiveWindow(window);
   const semantic = compileSemanticSurfaceField(window);
@@ -2701,8 +2713,8 @@ function compileOceanSurfaceField(window) {
   const quantizedSeaWorldLevel = float16BitsToFloat32(seaLevelBits);
   const saturation = SURFACE_COMPILE_PROFILE.influenceRadiusTiles * Math.sqrt(3) * hexSize;
   const antialiasRadius = 0.5 * Math.min(1.5 * hexSize, Math.sqrt(3) * hexSize) / SURFACE_COMPILE_PROFILE.samplesPerTileInterval;
-  const contours = oceanContours(window, hexSize);
-  const contourDistances = oceanShorelineDistances(window, contours, hexSize, saturation);
+  const contours = surfaceHeightContours(window, window.seaLevel, hexSize);
+  const contourDistances = surfaceContourDistances(window, contours, hexSize, saturation);
   let hasOceanCoverage = false;
   for (let texelX = -SURFACE_COMPILE_PROFILE.gutterTexels; texelX < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelX += 1) {
     for (let texelY = -SURFACE_COMPILE_PROFILE.gutterTexels; texelY < SURFACE_COMPILE_PROFILE.textureLayerSize - SURFACE_COMPILE_PROFILE.gutterTexels; texelY += 1) {
@@ -2715,7 +2727,7 @@ function compileOceanSurfaceField(window) {
         "compiled ocean shoreline distance",
         Math.max(-saturation, Math.min(saturation, signedDistance))
       );
-      const rawCoverage = quantizeCoverage(signedDistance, antialiasRadius);
+      const rawCoverage = quantizeSurfaceCoverage(signedDistance, antialiasRadius);
       const coverage = wet ? Math.max(128, rawCoverage) : Math.min(127, rawCoverage);
       if (coverage === 0) continue;
       hasOceanCoverage = true;
