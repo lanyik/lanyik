@@ -13,6 +13,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
 | World-style generation v1 | Frozen on 2026-08-29; generator v5, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
+| Surface/render foundation v2 | Complete design under review; not implemented, current runtime remains on v1 | [surface-render-foundation-v2.md](./surface-render-foundation-v2.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 
 ## Architecture and contracts
@@ -52,6 +53,9 @@ plans. Start with the root [README](../README.md) for setup and public API usage
   chunk-level CPU culling remain the production path.
 - [World-style generation v1](./world-style-generation-v1.md): implemented
   terrain generation, surface authority, rendering contracts and freeze gates.
+- [Surface/render foundation v2](./surface-render-foundation-v2.md): proposed
+  16/32/64/128 data hierarchy, semantic chunks, regional hydrology, compiled
+  surface fields, merged terrain and replacement stages; not implemented yet.
 
 When updating documentation, keep current behavior in the README or the owning
 architecture document, release deltas in the changelog, and future work in an
