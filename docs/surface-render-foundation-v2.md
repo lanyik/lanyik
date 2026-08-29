@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta` 严格 SoA/二进制格式已落地；事务 store、HydrologyFeatureDelta、EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta` 严格 SoA/二进制格式及 `EffectiveSemanticChunk` 只读合并内核已落地；事务 store、HydrologyFeatureDelta、完整 EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -361,6 +361,8 @@ BaseSemanticChunk
 ~~~
 
 `EffectiveWorldView` 不复制整个世界。无修改 chunk 直接引用基础 SoA；存在修改时通过紧凑覆盖表、feature 空间索引和版本化快照生成编译输入。每个快照具有唯一 `effectiveRevision`，所有查询缓存和编译结果都必须声明它们对应的依赖令牌。
+
+已落地的 `EffectiveSemanticChunk` 是该规则的语义合并内核：快照持有原始 `BaseSemanticChunk` 和可选 `SparseSemanticDelta` 的只读引用，不物化第二份 32×32 数组；单格读取只对严格排序的 delta tile index 做一次二分查找，再按 bitmask 合并全部字段。创建快照时一次性验证 descriptor identity、chunk key、partial valid bounds 和 `deltaRevision <= effectiveRevision`，climate 继续直接来自基础语义。结构化 tile 对象仅由便利查询按需产生。
 
 渲染、导航、贴地、植被放置和公开查询都从该视图读取，不允许直接绕过它读取生成器或 delta store。
 

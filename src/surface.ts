@@ -95,6 +95,15 @@ export type {
 } from "./world/SparseSemanticDelta";
 
 export {
+    createEffectiveSemanticChunk,
+    getEffectiveSemanticTile
+} from "./world/EffectiveSemanticChunk";
+export type {
+    EffectiveSemanticChunk,
+    CreateEffectiveSemanticChunkOptions
+} from "./world/EffectiveSemanticChunk";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,
