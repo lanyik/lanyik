@@ -104,6 +104,31 @@ export type {
 } from "./world/EffectiveSemanticChunk";
 
 export {
+    HYDROLOGY_FEATURE_DELTA_FORMAT_VERSION,
+    MAX_AUTHORED_HYDROLOGY_CONTROL_POINTS,
+    MAX_AUTHORED_LAKE_POLYGON_POINTS,
+    authoredHydrologyPoint,
+    assertAuthoredRiverFeature,
+    createAuthoredRiverFeature,
+    assertAuthoredLakeFeature,
+    createAuthoredLakeFeature,
+    assertHydrologyFeatureDelta,
+    createHydrologyFeatureDelta
+} from "./world/HydrologyFeatureDelta";
+export type {
+    AuthoredHydrologyFeatureKind,
+    AuthoredRiverSource,
+    AuthoredRiverOutlet,
+    AuthoredRiverFeature,
+    AuthoredLakeFeature,
+    AuthoredHydrologyFeature,
+    HydrologyFeatureUpsertDelta,
+    HydrologyFeatureDeleteDelta,
+    HydrologyFeatureDelta,
+    HydrologyFeatureDeltaInput
+} from "./world/HydrologyFeatureDelta";
+
+export {
     SURFACE_WORKER_PROTOCOL_VERSION,
     createGenerateSemanticChunkWorkerRequest,
     createGenerateHydrologyRegionWorkerRequest,

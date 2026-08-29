@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta` 严格 SoA/二进制格式及 `EffectiveSemanticChunk` 只读合并内核已落地；事务 store、HydrologyFeatureDelta、完整 EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 前置的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式及 `EffectiveSemanticChunk` 只读合并内核已落地；事务 store、完整 EffectiveWorldView 及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -386,6 +386,10 @@ delta 绑定完整 world identity、chunk key 和正整数 revision。二进制�
 - 水位、宽度剖面、河口和连通关系修改。
 
 修改生成河流时，delta 以稳定 river ID 覆盖或 tombstone 全部基础 segments。完整河流记录必须包含 source、outlet body/river、控制点、宽度、level profile、流向和 discharge class；事务在 Effective Hydrology Graph 上验证无环、level 不逆升和 outlet 合法。feature 与 region 的相交表、裁剪 segment 和逐格 coverage 都是可重建索引，不写回 semantic delta，也不成为第二份权威。
+
+当前 `HydrologyFeatureDelta` 格式版本 1 的每条记录只能是一个完整 river/lake upsert 或一个带明确 feature kind 的 tombstone；`featureId` 同时是该河流或湖泊的稳定 body ID，不能再嵌套另一套 body identity。完整河流使用 q64 world-space `Float64Array`，每点坐标必须是安全整数，从而不会把无限世界截断到 Int32；2～256 个控制点配套等长的正宽度、非上升水位、discharge class、profile、显式 spring/river source 和 ocean/lake/river outlet。河线必须无零长、重复点或自交，自身不能作为 source/outlet。
+
+完整湖泊使用 3～256 点的 q64 world-space 简单多边形。发布前以精确 BigInt 叉积检查退化、方向和线段相交，再规范为“字典序最小顶点开头、逆时针”唯一表示；这项 O(n²) 校验只在编辑/加载冷路径执行，不进入查询或编译热路径。region slice、boundary port 和 coverage 均从这些完整 feature 重建，不进入 delta。feature delta 绑定完整 world identity 和正整数 revision；跨 feature 的 outlet 存在性、CAS 与全图无环约束由原子事务 store 在整批候选状态上验证，而不是让单条记录猜测外部世界。
 
 调用方提交世界坐标中的完整河流或湖泊，不手工维护区域分段。`WorldDeltaStore` 原子提交一个包含 semantic 与 hydrology mutations 的 revisioned transaction record；Store 可以使用原生事务，也可以原子追加单个 commit record 后异步物化 chunk/region 索引。读取方只观察已提交 revision，不能看到半条新河和半条旧河。单个 feature 修改使用 expected feature revision CAS；跨多个 feature 的事务以整个 commit 的 expected revision set 校验，任一冲突则整体失败。
 
