@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。固定 compile profile、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、SurfaceLattice CPU 契约、WebGL2 array-texture 能力门、无限水文有限依赖分区和纯数据 priority-flood 排水树已落地；其余 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -105,7 +105,7 @@ localX = tileX - chunkX * chunkSize;
 localY = tileY - chunkY * chunkSize;
 ~~~
 
-不得用 JavaScript `%`、位运算或截断除法替代上述规则，因为它们对负坐标或超过 32 位的坐标不等价。分块键使用两个安全整数，不在热路径拼接字符串。
+不得用 JavaScript `%`、位运算或截断除法替代上述规则，因为它们对负坐标或超过 32 位的坐标不等价。语义、水文和渲染调用方必须复用同一组 `WorldGrid` 拆分函数；分块键使用两个安全整数，不在热路径拼接字符串。坐标随机散列分别混合安全整数的符号、低 32 位和高位，不得沿用会先把坐标截成 32 位的 v1 noise hash。
 
 逻辑坐标决定生成、编辑、随机相位和缓存身份；浮动原点只影响场景对象的局部变换，不进入任何语义或编译结果。
 
@@ -828,7 +828,7 @@ SURFACE_COMPILE_PROFILE_VERSION = 1;
 
 `SURFACE_COMPILER_REVISION` 和 `SURFACE_COMPILE_PROFILE_VERSION` 只用于可重建缓存键，不进入 world descriptor、world identity 或存档格式。前者表示算法变化，后者表示 render chunk、采样密度、物理纹理布局、LOD topology 和页容量这一组经过验证的配置变化。`RENDER_SURFACE_FIELD_FORMAT_VERSION` 不作为公共持久化版本存在。
 
-v2 descriptor 不再保存可配置 `chunkSize`；32/128 由格式版本隐含。descriptor 显式记录 semantic chunk format、hydrology region format、四个 biome basis 和 vegetation/substrate catalog identity。world identity 至少包含 descriptor version、source kind、seed、generator version、这两个格式版本、语义 catalog 内容哈希和拓扑尺寸；替换同名 catalog 内容不能继续复用旧 world identity。
+v2 descriptor 不再保存可配置 `chunkSize`；32/128 由格式版本隐含。descriptor 显式记录 semantic chunk format、hydrology region format、量化海平面、四个 biome basis 和 vegetation/substrate catalog identity。所有内容身份使用 `sha256:` 加 64 位小写十六进制的规范字符串。程序世界 identity 包含规范化 seed；静态世界没有伪造 seed，而是记录其完整源语义的 `sourceContentHash`。world identity 至少包含 descriptor version、source kind、程序 seed 或静态源内容哈希、generator version、这两个格式版本、语义 catalog 内容哈希和拓扑尺寸；替换同名 catalog 内容不能继续复用旧 world identity。
 
 ### 17.2 存档
 
