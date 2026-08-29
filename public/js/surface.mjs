@@ -49,6 +49,191 @@ function assertSurfaceCompileProfile(profile) {
 }
 assertSurfaceCompileProfile(SURFACE_COMPILE_PROFILE);
 
+// src/world/HalfFloat.ts
+var FLOAT32 = new Float32Array(1);
+var UINT32 = new Uint32Array(FLOAT32.buffer);
+var HALF_FLOAT_POSITIVE_INFINITY = 31744;
+var HALF_FLOAT_CANONICAL_NAN = 32256;
+var HALF_FLOAT_MAX_FINITE = 65504;
+function roundToNearestEven(value, remainder, halfway) {
+  return remainder > halfway || remainder === halfway && (value & 1) !== 0 ? value + 1 : value;
+}
+function float32ToFloat16Bits(value) {
+  FLOAT32[0] = value;
+  const bits = UINT32[0];
+  const sign = bits >>> 16 & 32768;
+  const exponent = bits >>> 23 & 255;
+  const mantissa = bits & 8388607;
+  if (exponent === 255) {
+    return mantissa === 0 ? sign | HALF_FLOAT_POSITIVE_INFINITY : sign | HALF_FLOAT_CANONICAL_NAN;
+  }
+  let halfExponent = exponent - 127 + 15;
+  if (halfExponent >= 31) return sign | HALF_FLOAT_POSITIVE_INFINITY;
+  if (halfExponent <= 0) {
+    if (halfExponent < -10) return sign;
+    const significand = mantissa | 8388608;
+    const shift = 14 - halfExponent;
+    let halfMantissa2 = significand >>> shift;
+    const remainderMask = 2 ** shift - 1;
+    halfMantissa2 = roundToNearestEven(
+      halfMantissa2,
+      significand & remainderMask,
+      2 ** (shift - 1)
+    );
+    return sign | halfMantissa2;
+  }
+  let halfMantissa = mantissa >>> 13;
+  halfMantissa = roundToNearestEven(halfMantissa, mantissa & 8191, 4096);
+  if (halfMantissa === 1024) {
+    halfMantissa = 0;
+    halfExponent += 1;
+    if (halfExponent >= 31) return sign | HALF_FLOAT_POSITIVE_INFINITY;
+  }
+  return sign | halfExponent << 10 | halfMantissa;
+}
+function float16BitsToFloat32(bits) {
+  if (!Number.isInteger(bits) || bits < 0 || bits > 65535) {
+    throw new RangeError("binary16 bits must be a uint16 value");
+  }
+  const sign = (bits & 32768) !== 0 ? -1 : 1;
+  const exponent = bits >>> 10 & 31;
+  const mantissa = bits & 1023;
+  if (exponent === 31) return mantissa === 0 ? sign * Number.POSITIVE_INFINITY : Number.NaN;
+  if (exponent === 0) {
+    if (mantissa === 0) return sign < 0 ? -0 : 0;
+    return sign * 2 ** -14 * (mantissa / 1024);
+  }
+  return sign * 2 ** (exponent - 15) * (1 + mantissa / 1024);
+}
+function finiteFloat16Bits(name, value) {
+  if (!Number.isFinite(value) || Math.abs(value) > HALF_FLOAT_MAX_FINITE) {
+    throw new RangeError(`${name} must be finite and representable as binary16`);
+  }
+  const bits = float32ToFloat16Bits(value);
+  if (!Number.isFinite(float16BitsToFloat32(bits))) {
+    throw new RangeError(`${name} rounded outside finite binary16`);
+  }
+  return bits;
+}
+
+// src/world/CompiledSurfaceField.ts
+var SURFACE_COMPILER_REVISION = 1;
+var COMPILED_SURFACE_FIELD_FORMAT_VERSION = 1;
+var COMPILED_SURFACE_TEXEL_COUNT = SURFACE_COMPILE_PROFILE.textureLayerSize * SURFACE_COMPILE_PROFILE.textureLayerSize;
+var SURFACE_WATER_KIND_NONE = 0;
+var SURFACE_WATER_KIND_OCEAN = 1;
+var SURFACE_WATER_KIND_LAKE = 2;
+var SURFACE_WATER_KIND_RIVER = 3;
+function assertArrayLayout(field2) {
+  const length = COMPILED_SURFACE_TEXEL_COUNT;
+  if (!(field2.groundHeight instanceof Uint16Array) || field2.groundHeight.length !== length || !(field2.materialWeights instanceof Uint8Array) || field2.materialWeights.length !== length * 4 || !(field2.waterLevel instanceof Uint16Array) || field2.waterLevel.length !== length || !(field2.waterDepth instanceof Uint16Array) || field2.waterDepth.length !== length || !(field2.shorelineDistance instanceof Uint16Array) || field2.shorelineDistance.length !== length || !(field2.flow instanceof Int8Array) || field2.flow.length !== length * 2 || !(field2.waterCoverage instanceof Uint8Array) || field2.waterCoverage.length !== length || !(field2.waterKind instanceof Uint8Array) || field2.waterKind.length !== length || !(field2.waterProfile instanceof Uint8Array) || field2.waterProfile.length !== length || !(field2.waterBodyIndex instanceof Uint8Array) || field2.waterBodyIndex.length !== length) {
+    throw new TypeError("compiled surface field arrays do not match the frozen profile layout");
+  }
+}
+function surfaceFieldTexelIndex(texelX, texelY) {
+  const gutter = SURFACE_COMPILE_PROFILE.gutterTexels;
+  const maximum = SURFACE_COMPILE_PROFILE.textureLayerSize - gutter - 1;
+  if (!Number.isInteger(texelX) || texelX < -gutter || texelX > maximum || !Number.isInteger(texelY) || texelY < -gutter || texelY > maximum) {
+    throw new RangeError("surface field texel coordinate is outside its physical layer");
+  }
+  return (texelX + gutter) * SURFACE_COMPILE_PROFILE.textureLayerSize + texelY + gutter;
+}
+function assertCompiledSurfaceField(field2) {
+  if (!field2 || typeof field2 !== "object" || field2.formatVersion !== COMPILED_SURFACE_FIELD_FORMAT_VERSION || field2.compilerRevision !== SURFACE_COMPILER_REVISION) {
+    throw new TypeError("compiled surface field format or compiler revision is unsupported");
+  }
+  assertArrayLayout(field2);
+  for (let index = 0; index < COMPILED_SURFACE_TEXEL_COUNT; index += 1) {
+    const materialOffset = index * 4;
+    const materialSum = field2.materialWeights[materialOffset] + field2.materialWeights[materialOffset + 1] + field2.materialWeights[materialOffset + 2] + field2.materialWeights[materialOffset + 3];
+    if (materialSum !== 255) {
+      throw new RangeError("compiled surface material weights must sum to 255");
+    }
+    const groundHeight = float16BitsToFloat32(field2.groundHeight[index]);
+    const waterLevel = float16BitsToFloat32(field2.waterLevel[index]);
+    const waterDepth = float16BitsToFloat32(field2.waterDepth[index]);
+    const shorelineDistance = float16BitsToFloat32(field2.shorelineDistance[index]);
+    if (!Number.isFinite(groundHeight) || !Number.isFinite(waterLevel) || !Number.isFinite(waterDepth) || !Number.isFinite(shorelineDistance)) {
+      throw new RangeError("compiled surface binary16 fields must be finite");
+    }
+    const flowOffset = index * 2;
+    if (field2.flow[flowOffset] === -128 || field2.flow[flowOffset + 1] === -128) {
+      throw new RangeError("compiled surface SNORM flow cannot use the asymmetric -128 code");
+    }
+    if (field2.waterCoverage[index] === 0) {
+      if (field2.waterKind[index] !== SURFACE_WATER_KIND_NONE || field2.waterProfile[index] !== 0 || field2.waterBodyIndex[index] !== 0 || field2.waterLevel[index] !== 0 || field2.waterDepth[index] !== 0 || field2.flow[flowOffset] !== 0 || field2.flow[flowOffset + 1] !== 0) {
+        throw new Error("dry surface texels must use canonical zero water payload");
+      }
+      continue;
+    }
+    if (field2.waterKind[index] < SURFACE_WATER_KIND_OCEAN || field2.waterKind[index] > SURFACE_WATER_KIND_RIVER || field2.waterBodyIndex[index] === 0) {
+      throw new RangeError("wet surface texels require a valid water kind and body palette index");
+    }
+    if (waterDepth < 0 || waterLevel < groundHeight) {
+      throw new Error("wet surface texels cannot contain negative depth or water below ground");
+    }
+    if (field2.waterDepth[index] !== finiteFloat16Bits(
+      "compiled surface water depth",
+      Math.max(0, waterLevel - groundHeight)
+    )) {
+      throw new Error("compiled surface water depth must equal its quantized level minus ground");
+    }
+    if (field2.waterKind[index] === SURFACE_WATER_KIND_RIVER && field2.flow[flowOffset] === 0 && field2.flow[flowOffset + 1] === 0) {
+      throw new Error("river surface texels require a non-zero flow direction");
+    }
+  }
+  if (compiledSurfaceFieldResidentBytes(field2) !== SURFACE_FIELD_CPU_BYTES) {
+    throw new Error("compiled surface field byte size drifted from its compile profile");
+  }
+}
+function createCompiledSurfaceField(input) {
+  if (!input || typeof input !== "object") throw new TypeError("compiled surface field input is required");
+  const field2 = Object.freeze({
+    formatVersion: COMPILED_SURFACE_FIELD_FORMAT_VERSION,
+    compilerRevision: SURFACE_COMPILER_REVISION,
+    groundHeight: input.groundHeight,
+    materialWeights: input.materialWeights,
+    waterLevel: input.waterLevel,
+    waterDepth: input.waterDepth,
+    shorelineDistance: input.shorelineDistance,
+    flow: input.flow,
+    waterCoverage: input.waterCoverage,
+    waterKind: input.waterKind,
+    waterProfile: input.waterProfile,
+    waterBodyIndex: input.waterBodyIndex
+  });
+  assertCompiledSurfaceField(field2);
+  return field2;
+}
+function compiledSurfaceFieldResidentBytes(field2) {
+  return field2.groundHeight.byteLength + field2.materialWeights.byteLength + field2.waterLevel.byteLength + field2.waterDepth.byteLength + field2.shorelineDistance.byteLength + field2.flow.byteLength + field2.waterCoverage.byteLength + field2.waterKind.byteLength + field2.waterProfile.byteLength + field2.waterBodyIndex.byteLength;
+}
+function compiledSurfaceFieldTransferables(field2) {
+  assertCompiledSurfaceField(field2);
+  const buffers = [
+    field2.groundHeight.buffer,
+    field2.materialWeights.buffer,
+    field2.waterLevel.buffer,
+    field2.waterDepth.buffer,
+    field2.shorelineDistance.buffer,
+    field2.flow.buffer,
+    field2.waterCoverage.buffer,
+    field2.waterKind.buffer,
+    field2.waterProfile.buffer,
+    field2.waterBodyIndex.buffer
+  ];
+  if (buffers.some((buffer) => !(buffer instanceof ArrayBuffer))) {
+    throw new TypeError("compiled surface field transfer requires owned ArrayBuffer payloads");
+  }
+  if (new Set(buffers).size !== buffers.length) {
+    throw new Error("compiled surface field arrays must own distinct transferable buffers");
+  }
+  return Object.freeze(buffers);
+}
+if (SURFACE_FIELD_LOGICAL_BYTES_PER_TEXEL !== 18 || SURFACE_FIELD_CPU_BYTES !== COMPILED_SURFACE_TEXEL_COUNT * 18) {
+  throw new Error("compiled surface field constants do not match the frozen logical layout");
+}
+
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
 function getNeighborCoords(x, y, direction) {
@@ -7424,6 +7609,8 @@ var StaticHydrologyRegionSource = class {
 export {
   BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES,
   BASE_SEMANTIC_CHUNK_TILE_COUNT,
+  COMPILED_SURFACE_FIELD_FORMAT_VERSION,
+  COMPILED_SURFACE_TEXEL_COUNT,
   CORE_SUBSTRATE_ENTRIES,
   CORE_VEGETATION_PROFILE_ENTRIES,
   CORE_WORLD_SEMANTICS_V2,
@@ -7431,6 +7618,9 @@ export {
   DEFAULT_INFINITE_HYDROLOGY_RESIDENT_BASINS,
   DEFAULT_SEMANTIC_CHUNK_CACHE_BYTES,
   EffectiveWorldView,
+  HALF_FLOAT_CANONICAL_NAN,
+  HALF_FLOAT_MAX_FINITE,
+  HALF_FLOAT_POSITIVE_INFINITY,
   HYDROLOGY_BOUNDARY_MAX_X,
   HYDROLOGY_BOUNDARY_MAX_Y,
   HYDROLOGY_BOUNDARY_MIN_X,
@@ -7491,10 +7681,15 @@ export {
   STATIC_EXPLICIT_WATER_LEVEL,
   STATIC_EXPLICIT_WATER_LEVEL_OFFSET,
   STATIC_LAKE_TILE_RADIUS,
+  SURFACE_COMPILER_REVISION,
   SURFACE_COMPILE_PROFILE,
   SURFACE_COMPILE_PROFILE_VERSION,
   SURFACE_CORE_TEXELS,
   SURFACE_DELTA_TRANSACTION_FORMAT_VERSION,
+  SURFACE_WATER_KIND_LAKE,
+  SURFACE_WATER_KIND_NONE,
+  SURFACE_WATER_KIND_OCEAN,
+  SURFACE_WATER_KIND_RIVER,
   SURFACE_WORKER_PROTOCOL_VERSION,
   StaticHydrologyRegionSource,
   StaticSemanticWorldSource,
@@ -7510,6 +7705,7 @@ export {
   assertAuthoredLakeFeature,
   assertAuthoredRiverFeature,
   assertBaseSemanticChunk,
+  assertCompiledSurfaceField,
   assertCoreWorldSemanticsV2,
   assertDerivedHydrologyRaster,
   assertGenerateHydrologyRegionWorkerRequest,
@@ -7524,9 +7720,12 @@ export {
   authoredHydrologyFeatureBoundsQ64,
   authoredHydrologyPoint,
   buildMacroDrainageGraph,
+  compiledSurfaceFieldResidentBytes,
+  compiledSurfaceFieldTransferables,
   createAuthoredLakeFeature,
   createAuthoredRiverFeature,
   createBaseSemanticChunkGenerator,
+  createCompiledSurfaceField,
   createCoreInfiniteWorldDescriptorV2,
   createCoreToroidalWorldDescriptorV2,
   createEffectiveHydrologyRegion,
@@ -7543,6 +7742,9 @@ export {
   deserializeBaseSemanticChunk,
   deserializeSparseSemanticDelta,
   effectiveHydrologySuppressesBaseFeature,
+  finiteFloat16Bits,
+  float16BitsToFloat32,
+  float32ToFloat16Bits,
   generateBaseSemanticChunk,
   getBaseSemanticTile,
   getEffectiveSemanticTile,
@@ -7565,6 +7767,7 @@ export {
   sparseSemanticDeltaEntryIndex,
   sparseSemanticDeltaSerializedBytes,
   surfaceColumnStagger,
+  surfaceFieldTexelIndex,
   surfaceStagger,
   surfaceTexelCenterAxis,
   surfaceToWorld,

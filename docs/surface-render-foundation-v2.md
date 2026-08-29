@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；save barrier、持久化 store、编译传输窗口及其后的 v2 数据与渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec 与 66×66 SoA 输出格式已冻结，save barrier、持久化 store、编译传输窗口、编译算法及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -524,6 +524,8 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 | waterBodyIndex | 1× `Uint8` | 不直接上传 | 映射到 chunk-local body palette，0 表示无水 |
 
 浮点字段的 CPU 数组保存 IEEE 754 binary16 原始位，CPU 通过共享解码器读取，GPU 原样上传为 half-float texel。Shader 对参与宏观几何和查询一致性的字段使用 `texelFetch` 后手动插值，不依赖厂商纹理过滤舍入或可选的浮点线性过滤扩展。
+
+已落地的 `CompiledSurfaceField` 格式版本 1 与 `SURFACE_COMPILER_REVISION = 1` 固定为 66×66 X-major SoA：十个数组拥有互不别名的独立 transferable `ArrayBuffer`，合计严格为 78408 bytes，也就是 18 bytes/texel。共享 binary16 codec 使用 IEEE 754 round-to-nearest-even、规范 NaN 和有符号零；发布字段拒绝 NaN/Infinity、材质权重和不为 255、SNORM `-128`、dry texel 非零水体 payload、wet texel 缺 body/kind、河流零 flow，以及不等于“量化 waterLevel - 量化 groundHeight”的 waterDepth。错误数据不会靠 shader clamp 掩盖。
 
 `shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 

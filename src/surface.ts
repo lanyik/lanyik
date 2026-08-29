@@ -8,6 +8,34 @@ export {
 export type { SurfaceCompileProfile } from "./world/SurfaceCompileProfile";
 
 export {
+    HALF_FLOAT_POSITIVE_INFINITY,
+    HALF_FLOAT_CANONICAL_NAN,
+    HALF_FLOAT_MAX_FINITE,
+    float32ToFloat16Bits,
+    float16BitsToFloat32,
+    finiteFloat16Bits
+} from "./world/HalfFloat";
+
+export {
+    SURFACE_COMPILER_REVISION,
+    COMPILED_SURFACE_FIELD_FORMAT_VERSION,
+    COMPILED_SURFACE_TEXEL_COUNT,
+    SURFACE_WATER_KIND_NONE,
+    SURFACE_WATER_KIND_OCEAN,
+    SURFACE_WATER_KIND_LAKE,
+    SURFACE_WATER_KIND_RIVER,
+    surfaceFieldTexelIndex,
+    assertCompiledSurfaceField,
+    createCompiledSurfaceField,
+    compiledSurfaceFieldResidentBytes,
+    compiledSurfaceFieldTransferables
+} from "./world/CompiledSurfaceField";
+export type {
+    CompiledSurfaceField,
+    CompiledSurfaceFieldInput
+} from "./world/CompiledSurfaceField";
+
+export {
     surfaceColumnStagger,
     surfaceStagger,
     surfaceToWorld,
