@@ -98,6 +98,11 @@ export {
 export type { LakeSurfaceCompilation } from "./world/compileLakeSurfaceField";
 export { compileSurfaceField } from "./world/compileSurfaceField";
 export type { SurfaceFieldCompilation } from "./world/compileSurfaceField";
+export {
+    createCompiledSurfaceSample,
+    CompiledSurfaceSampler
+} from "./world/CompiledSurfaceSampler";
+export type { MutableCompiledSurfaceSample } from "./world/CompiledSurfaceSampler";
 
 export {
     SURFACE_STATIC_GPU_BYTES_PER_TEXEL,

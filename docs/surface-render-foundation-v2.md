@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、generation-safe paged array-texture 池、三档共享 Ground topology 及 no-water/full-patch/coverage 水面几何已冻结，窄河 sweep、save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
+状态：**分阶段实施中**。阶段 A 的固定 compile profile、世界坐标拆分、WorldDescriptor v2 身份、冻结语义 catalog、BaseSemanticChunk SoA/二进制格式、程序/静态语义块量化、安全整数噪声格、protocol-3 `generateSemanticChunk` Worker 链和三种统一 SemanticWorldSource 已落地；阶段 B 已落地有限/环绕世界完整 `MacroDrainageGraph`、有界 `HydrologyRegion` 格式、有限/环绕局部裁切源、无限 basin 缓存求值源、静态显式水文适配、protocol-3 `generateHydrologyRegion` Worker 链及可丢弃的空间索引/derived raster query，此外 SurfaceLattice CPU 契约、WebGL2 array-texture 能力门和纯数据 priority-flood 排水树已落地。阶段 C 的 `SparseSemanticDelta`、`HydrologyFeatureDelta` 权威格式、authoring feature 空间索引、原子内存事务/CAS 快照、`EffectiveSemanticChunk` 及统一租约式 `EffectiveWorldView` 已落地；SurfaceField 的 binary16 codec、66×66 SoA 输出格式、结构化 dependency key、request token、独立所有权编译传输窗口、连续语义地面核、海洋/湖泊/河流/河口 coverage 与岸线 SDF 核、chunk-local 水体 palette、完整 `compileSurfaceField` 入口、无分配 CPU sampler、generation-safe paged array-texture 池、三档共享 Ground topology 及 no-water/full-patch/coverage 水面几何已冻结，窄河 sweep、save barrier、持久化 store、最终 `CompiledSurfaceChunk`/protocol-3 表面编译 Worker 及其后的 v2 渲染链路尚未切换。本文描述下一代世界表面与渲染基建的目标结构；当前生产实现仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -576,6 +576,10 @@ CPU 查询和 GPU 顶点位移共享：
 - 相同岸线 coverage 阈值。
 
 canonical near-grid 顶点先从 field 双线性取样，三角内部再使用冻结对角线的重心插值；CPU 贴地使用同一顺序。中、远 LOD 可以近似区块内部形状，但边界仍读取 canonical 边界点，玩法查询不随当前视觉 LOD 改变。
+
+已落地的 `CompiledSurfaceSampler` 在构造时完整验证一次 published field，采样热路径要求调用方传入可复用的固定 output scratch，不创建临时对象或数组。输入是 chunk-local core closure `[-0.5, 15.5]²`；它用与 geometry 相同的 gutter/半 texel phase 和 X-major index，对 binary16、material、coverage 与 SDF 执行显式四 tap 双线性。ground 查询再先取 65×65 canonical 顶点值，最后按 near topology 的固定左下到右上对角线做三角重心插值；不让当前视觉 LOD 改变玩法高度。
+
+dry texel 的 water payload 规范为零，因此水位、深度和 flow 不与 dry 零值直接混插。采样器先用 `bilinearWeight × coverage` 选最大贡献 body，同分取更小 X-major texel index；随后只对该 body 的非零 coverage taps 归一化 waterLevel/depth/flow，flow 最后恢复单位方向。这样 shoreline 不会把水面拉向 Y=0，重叠 body 也不会把两套水位平均成不存在的第三套水面。合成字段、固定三角线两侧、竞争 body、最小 coverage、越界和相邻 chunk 公共边均有冻结测试；shader reference evaluator 后续必须逐项复用这些顺序和 tie-break。
 
 查询服务只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须改从最新 `EffectiveWorldView` 运行同一个 surface query kernel；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
 
