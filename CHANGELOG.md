@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Froze world-style generation v1 on generator v5 after the normal gates,
+  performance regression checks, scheduled replacement soak and fixed visual
+  gallery all passed. Future gameplay consumes the surface contracts instead
+  of extending generator or `HexMap` domain state.
+- Deferred automatic river generation after the fixed world gallery found no
+  recurring hydrology-shaped visual defect. Existing manual river rendering,
+  editing and persistence remain; no local pseudo-network or regional hydrology
+  state is added to generator v5.
 - Upgraded procedural generation to generator v5 after the fixed gallery
   reproduced peppered forests. Wood placement now uses a continuous regional
   density threshold with bounded deterministic edge jitter; generator checksums

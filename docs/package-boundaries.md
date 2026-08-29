@@ -7,8 +7,8 @@ entry. Recoverable checkpoint infrastructure is also available from the
 [foundation-infrastructure.md](./foundation-infrastructure.md) for ownership
 and recovery contracts, and
 [foundation-v1-freeze.md](./foundation-v1-freeze.md) for the versioning rules
-and final freeze gate. The next versioned terrain-content layer is designed in
-[world-style-generation-v1.md](./world-style-generation-v1.md). The test layers
+and final freeze gate. The versioned terrain-content layer is implemented and
+frozen in [world-style-generation-v1.md](./world-style-generation-v1.md). The test layers
 and their execution policy are defined in [testing.md](./testing.md).
 
 `ResourceBudgetLedger` is the low-level owner API. Applications extending a

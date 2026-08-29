@@ -24,7 +24,8 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| Next milestone | World-style generation v1 is designed but not implemented |
+| World style | Generation v1 is frozen on generator v5 with continuous relief, climate, regional forests, lakes and fixed gallery gates |
+| Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -252,8 +253,8 @@ frozen contracts, focused subsystem guides, decisions and future designs.
 
 Current deliberate boundaries:
 
-- [World-style generation v1](docs/world-style-generation-v1.md) is a design,
-  not implemented behavior.
+- [World-style generation v1](docs/world-style-generation-v1.md) is implemented
+  and frozen; automatic river generation remains deliberately deferred.
 - WebGPU and GPU culling remain deferred until real draw-submission or overdraw
   measurements justify a prototype.
 - Multiplayer reconciliation, cloud saves, server authority and a complete

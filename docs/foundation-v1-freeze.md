@@ -114,9 +114,9 @@ After the gate passes, infrastructure changes require a demonstrated contract
 defect or an explicitly scoped infrastructure v2 (for example WebGPU,
 multiplayer synchronization, cloud saves, or a new supported browser family).
 Terrain content, gameplay data, and tuning parameters may continue to evolve
-through the versioned interfaces. The proposed next world-generation/content
-step is specified in [world-style-generation-v1.md](./world-style-generation-v1.md);
-it deliberately consumes the frozen streaming and render ownership contracts
+through the versioned interfaces. World-style generation v1 is implemented and
+frozen in [world-style-generation-v1.md](./world-style-generation-v1.md); it
+deliberately consumes the frozen streaming and render ownership contracts
 instead of reopening them. `AssetRegistry` is intentionally deferred
 until the first real unit/building assets define its actual lookup and lifetime
 requirements; it must build on the existing resource accounts.
