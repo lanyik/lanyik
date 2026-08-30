@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { ShaderMaterial } from "three";
 
 import { SurfacePresentationLayer } from "../../src/rendering/SurfacePresentationLayer";
 import { LightingStateController } from "../../src/rendering/LightingState";
@@ -36,6 +37,7 @@ function compiledChunk(
         vegetation?: boolean;
         riverWidth?: number;
         effectiveRevision?: number;
+        partialBounds?: boolean;
     }>
 ): CompiledSurfaceChunk {
     const count = SURFACE_EFFECTIVE_WINDOW_SIZE ** 2;
@@ -73,7 +75,9 @@ function compiledChunk(
                 })
             ])
         }),
-        validBounds: Object.freeze({ minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 }),
+        validBounds: options.partialBounds
+            ? Object.freeze({ minX: 0, minY: 0, maxXExclusive: 8, maxYExclusive: 16 })
+            : Object.freeze({ minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 }),
         substrateClass: new Uint8Array(count).fill(1),
         macroHeight: new Uint16Array(count).fill(options.height),
         biomeWeights,
@@ -110,6 +114,37 @@ function createLease(chunk: CompiledSurfaceChunk): ResidentSurfaceLease {
 }
 
 describe("v2 surface presentation layer", () => {
+    test("clips only partial finite-world chunks and leaves complete shared edges raster-owned", () => {
+        const surface = new SurfaceTexturePool({ gpuBudgetBytes: SURFACE_GPU_PAGE_BYTES });
+        const lighting = new LightingStateController();
+        const layer = new SurfacePresentationLayer({ surfaceTexturePool: surface, lighting });
+        const completeLease = createLease(compiledChunk(
+            { chunkX: 0, chunkY: 0 },
+            { height: 0 }
+        ));
+        const partialLease = createLease(compiledChunk(
+            { chunkX: 1, chunkY: 0 },
+            { height: 0, partialBounds: true }
+        ));
+        const complete = layer.mount(completeLease, 0);
+        const partial = layer.mount(partialLease, 0);
+        const completeGroundMaterial = complete.ground.mesh.material as ShaderMaterial;
+        const completeWaterMaterial = complete.water.mesh?.material as ShaderMaterial;
+        (complete.ground.mesh.onBeforeRender as unknown as () => void)();
+        expect(completeGroundMaterial.uniforms.uClipValidBounds.value).toBe(false);
+        (complete.water.mesh?.onBeforeRender as unknown as () => void)();
+        expect(completeWaterMaterial.uniforms.uClipValidBounds.value).toBe(false);
+        (partial.ground.mesh.onBeforeRender as unknown as () => void)();
+        expect(completeGroundMaterial.uniforms.uClipValidBounds.value).toBe(true);
+        (partial.water.mesh?.onBeforeRender as unknown as () => void)();
+        expect(completeWaterMaterial.uniforms.uClipValidBounds.value).toBe(true);
+        expect(completeGroundMaterial.fragmentShader).toContain("if (uClipValidBounds &&");
+        expect(completeWaterMaterial.fragmentShader).toContain("if (uClipValidBounds &&");
+        layer.dispose();
+        surface.dispose();
+        lighting.dispose();
+    });
+
     test("mounts full, coverage and sweep water with stable compiled vegetation", () => {
         const surface = new SurfaceTexturePool({ gpuBudgetBytes: SURFACE_GPU_PAGE_BYTES });
         const fog = new SurfaceFogTexturePool({

@@ -93,7 +93,7 @@ const checkpoint = await map.runtime.store.saveBarrier(
 | `three-hex-map/pathfinding` | `SemanticNavigationIndex` |
 | `three-hex-map/simulation` | 与相机无关的 64×64 模拟运行时 |
 
-当前权威版本为 descriptor 2、semantic chunk 2、hydrology region 3、generator 9、surface compiler 3、Worker protocol 5、delta 3。
+当前权威版本为 descriptor 2、semantic chunk 2、hydrology region 3、generator 9、surface compiler 4、Worker protocol 5、delta 3。
 
 ## 开发门禁
 

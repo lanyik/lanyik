@@ -2602,7 +2602,7 @@ var SURFACE_WATER_COVERAGE_THRESHOLD = 128;
 var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
 var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
 var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
-var SURFACE_COMPILER_REVISION = 3;
+var SURFACE_COMPILER_REVISION = 4;
 var SURFACE_COMPILE_PROFILE_VERSION = 1;
 var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
   renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -3507,8 +3507,6 @@ function riverCandidate(x, z, river) {
       level: (river.levelProfile[index / 2] + (river.levelProfile[index / 2 + 1] - river.levelProfile[index / 2]) * amount) / 65535,
       flowX: dx / length,
       flowY: dz / length,
-      centerX: nearestX,
-      centerZ: nearestZ,
       halfWidth
     };
   }
@@ -3560,26 +3558,11 @@ function surfaceLakeCandidate(x, z, lake) {
 function candidateWins(candidate, current) {
   return !current || candidate.coverage > current.coverage || candidate.coverage === current.coverage && (candidate.rank > current.rank || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
 }
-function sampleMacroGroundAtWorld(window, worldX, worldZ) {
-  const local = worldToSurface(worldX, worldZ);
-  return sampleWindowChannel(window.macroHeight, local.u, local.v, 1, 0) / 65535;
-}
-function deriveRiverSurfaceLevel(window, localGround, candidate) {
-  const centerX = candidate.centerX;
-  const centerZ = candidate.centerZ;
-  const halfWidth = candidate.halfWidth;
-  const normalX = -candidate.flowY;
-  const normalZ = candidate.flowX;
-  const terrainCeiling = Math.min(
-    localGround,
-    sampleMacroGroundAtWorld(window, centerX, centerZ),
-    sampleMacroGroundAtWorld(window, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
-    sampleMacroGroundAtWorld(window, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
-  );
+function deriveRiverSurfaceLevel(localGround, candidate) {
   return clamp2(
     candidate.level,
-    Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
-    Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+    Math.max(0, localGround - RIVER_MAX_INCISE),
+    Math.max(0, localGround - RIVER_SURFACE_INSET)
   );
 }
 function fieldGradient(ground, worldX, worldZ, physicalX, physicalY, size) {
@@ -3795,7 +3778,7 @@ function compileSurfaceChunk(window) {
       if (!best) continue;
       let level = best.level;
       if (best.kind === 3 /* River */) {
-        level = deriveRiverSurfaceLevel(window, ground[index], best);
+        level = deriveRiverSurfaceLevel(ground[index], best);
         workRiverBedDepth[index] = RIVER_MIN_BED_DEPTH + clamp2(best.halfWidth / 4, 0, 1) * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);
       }
       workCoverage[index] = best.coverage;

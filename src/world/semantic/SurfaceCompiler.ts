@@ -26,8 +26,7 @@ import {
     surfaceFieldTexelCoordinate,
     surfaceLatticeIndex,
     surfaceLatticeTexelLocalCoordinate,
-    surfaceToWorld,
-    worldToSurface
+    surfaceToWorld
 } from "./SurfaceLattice";
 import { decodeFloat16, encodeFloat16 } from "./SurfaceHalfFloat";
 import {
@@ -120,8 +119,6 @@ interface WaterCandidateBase {
 
 interface RiverWaterCandidate extends WaterCandidateBase {
     readonly kind: HydrologyWaterKind.River;
-    readonly centerX: number;
-    readonly centerZ: number;
     readonly halfWidth: number;
 }
 
@@ -263,8 +260,6 @@ function riverCandidate(x: number, z: number, river: PreparedRiver): WaterCandid
                 + (river.levelProfile[index / 2 + 1] - river.levelProfile[index / 2]) * amount) / 65535,
             flowX: dx / length,
             flowY: dz / length,
-            centerX: nearestX,
-            centerZ: nearestZ,
             halfWidth
         };
     }
@@ -329,35 +324,14 @@ function candidateWins(candidate: WaterCandidate, current: WaterCandidate | unde
             || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
 }
 
-function sampleMacroGroundAtWorld(
-    window: TransferableEffectiveWindow,
-    worldX: number,
-    worldZ: number
-): number {
-    const local = worldToSurface(worldX, worldZ);
-    return sampleWindowChannel(window.macroHeight, local.u, local.v, 1, 0) / 65535;
-}
-
 function deriveRiverSurfaceLevel(
-    window: TransferableEffectiveWindow,
     localGround: number,
     candidate: RiverWaterCandidate
 ): number {
-    const centerX = candidate.centerX;
-    const centerZ = candidate.centerZ;
-    const halfWidth = candidate.halfWidth;
-    const normalX = -candidate.flowY;
-    const normalZ = candidate.flowX;
-    const terrainCeiling = Math.min(
-        localGround,
-        sampleMacroGroundAtWorld(window, centerX, centerZ),
-        sampleMacroGroundAtWorld(window, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
-        sampleMacroGroundAtWorld(window, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
-    );
     return clamp(
         candidate.level,
-        Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
-        Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+        Math.max(0, localGround - RIVER_MAX_INCISE),
+        Math.max(0, localGround - RIVER_SURFACE_INSET)
     );
 }
 
@@ -621,7 +595,7 @@ export function compileSurfaceChunk(window: TransferableEffectiveWindow): Compil
             if (!best) continue;
             let level = best.level;
             if (best.kind === HydrologyWaterKind.River) {
-                level = deriveRiverSurfaceLevel(window, ground[index], best);
+                level = deriveRiverSurfaceLevel(ground[index], best);
                 workRiverBedDepth[index] = RIVER_MIN_BED_DEPTH
                     + clamp(best.halfWidth / 4, 0, 1)
                         * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);

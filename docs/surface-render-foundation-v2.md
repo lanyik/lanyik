@@ -39,7 +39,7 @@ Dynamic fog authority ── SurfaceFogTexturePool R8 ── GroundLayer
 | `HYDROLOGY_REGION_FORMAT_VERSION` | 3 | 128×128 矢量水文切片 |
 | `WORLD_GENERATOR_VERSION` | 9 | 程序化语义和水文生成 |
 | `WORLD_WORKER_PROTOCOL_VERSION` | 5 | 语义、水文和表面编译消息 |
-| `SURFACE_COMPILER_REVISION` | 3 | field、水面 geometry、植被 seed |
+| `SURFACE_COMPILER_REVISION` | 4 | field、水面 geometry、植被 seed |
 | `SURFACE_COMPILE_PROFILE_VERSION` | 1 | 16/4/1/2/66/128 profile |
 | `WORLD_DELTA_FORMAT_VERSION` | 3 | semantic + hydrology 原子存档 |
 | `WORLD_SEMANTIC_NAVIGATION_FORMAT_VERSION` | 3 | 32×32 导航摘要 |
@@ -160,7 +160,7 @@ Memory 和 IndexedDB 实现共享契约；IndexedDB 的 read/CAS/write 位于同
 2. 应用有效高度编辑；
 3. 栅格化海洋、湖泊和河流；
 4. 计算 water coverage、kind、profile、body palette；
-5. 以河道中心与两岸地形约束 river level，限制切深并派生连续河床；
+5. 每个 lattice 点只以该点的全局一致地形约束 river level，限制切深并派生连续河床；宽河不能读取 2-tile window 外再被各块分别钳制的河心/对岸样本；
 6. 计算 water depth、shoreline SDF、flow 和连续材质权重；
 7. 量化 66×66 field 和 bounds；
 8. 编译 full/coverage/sweep 水面 geometry；
@@ -196,9 +196,9 @@ CPU 查询与 shader 共享 lattice、texel-center 双线性采样、binary16 �
 
 动态雾使用独立 16×16 R8 `SurfaceFogTexturePool`，与 surface slot generation 绑定但独立记账和上传。
 
-地面使用三张全局共享、焊接的 LOD 0/1/2 geometry。内部步长分别为 1/2/4 个 4×采样间隔；四条边始终保留 canonical 64 段边界，通过过渡带连接粗内部，不用 skirt 掩盖相邻 LOD 裂缝。地面法线在 ownership 边界使用 field gutter 做对称中心差分，相邻 chunk 读取相同的全局采样点。
+地面使用三张全局共享、焊接的 LOD 0/1/2 geometry。内部步长分别为 1/2/4 个 4×采样间隔；四条边始终保留 canonical 64 段边界，通过按粗网格间隔局部三角化的过渡带连接粗内部，不用 skirt 掩盖相邻 LOD 裂缝，也不允许整条边生成超长 sliver triangle。地面法线在 ownership 边界使用 field gutter 做对称中心差分，相邻 chunk 读取相同的全局采样点。
 
-独立 mesh 即使边界顶点数学上相同，经过各自 model transform 后仍可能产生亚像素 raster gap。Ground 与 Water 因此只把最外圈渲染位置向外扩展 `1/64` tile，权威 `surfaceUv`、field 采样、查询和编译结果保持不变；相邻 draw 的微型 overlap 覆盖浮点缝隙，有效边界仍由原始 UV 的半开区间判定。这是表现层的确定性接缝规则，不是几何 skirt，也不改变世界语义。
+Ground 与 Water 的完整 16×16 chunk 使用完全相同的 canonical 边界顶点，并交由 GPU 的共享边 raster ownership 决定覆盖，fragment shader 不再对完整块执行半开区间 `discard`。只有有限世界的残缺边界块启用 `validBounds` 裁剪。这样既不会误杀共享边像素，也不需要会产生重叠和 Z-fighting 的 overlap/skirt。
 
 水面模式：
 

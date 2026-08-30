@@ -29,4 +29,4 @@ $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 
 本地完整收口可以先用较小但非零的 soak 次数验证流程；正式冻结或发布使用 500 次。
 
-测试必须等待可观察状态或受控 Promise，不用定时器猜测竞态。E2E 中能力探测只能决定是否 skip；一旦能力存在，必须真实执行传输、绘制、context restore 或资源替换并验证结果。接缝测试同时验证 canonical UV、gutter 法线采样和 render-only overlap，并分别隐藏水面、地面、植被输出隔离截图。视觉验收保留图片作为 CI artifact，不把跨 GPU 不稳定的像素图作为仓库内 golden。
+测试必须等待可观察状态或受控 Promise，不用定时器猜测竞态。E2E 中能力探测只能决定是否 skip；一旦能力存在，必须真实执行传输、绘制、context restore 或资源替换并验证结果。接缝测试同时验证 canonical UV、gutter 法线采样、完整块无边界裁剪、残缺块精确裁剪，以及 LOD 过渡三角形的最大跨度；并分别隐藏水面、地面、植被输出隔离截图。视觉验收保留图片作为 CI artifact，不把跨 GPU 不稳定的像素图作为仓库内 golden。

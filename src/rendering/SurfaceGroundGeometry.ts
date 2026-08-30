@@ -16,34 +16,23 @@ import { surfaceToWorld } from "../world/semantic/SurfaceLattice";
 export const SURFACE_GROUND_LOD_GRID_STEPS = Object.freeze([1, 2, 4] as const);
 export const SURFACE_GROUND_BOUNDARY_INTERVALS =
     SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
-export const SURFACE_SEAM_GUARD_TILES =
-    1 / (SURFACE_SAMPLES_PER_TILE_INTERVAL * SURFACE_RENDER_CHUNK_SIZE);
-
-function guardedSurfaceCoordinate(value: number): number {
-    if (value === -0.5) return value - SURFACE_SEAM_GUARD_TILES;
-    if (value === SURFACE_RENDER_CHUNK_SIZE - 0.5) {
-        return value + SURFACE_SEAM_GUARD_TILES;
-    }
-    return value;
-}
-
-export function createGuardedSurfaceCoordinates(
+export function createCanonicalSurfaceCoordinates(
     source: ArrayLike<number>
 ): Float32Array {
     if (source.length < 2 || source.length % 2 !== 0) {
         throw new TypeError("surface coordinates must contain uv pairs");
     }
-    const guarded = new Float32Array(source.length);
+    const result = new Float32Array(source.length);
     for (let index = 0; index < source.length; index += 2) {
         const u = Number(source[index]);
         const v = Number(source[index + 1]);
         if (!Number.isFinite(u) || !Number.isFinite(v)) {
             throw new RangeError("surface coordinates must be finite");
         }
-        guarded[index] = guardedSurfaceCoordinate(u);
-        guarded[index + 1] = guardedSurfaceCoordinate(v);
+        result[index] = u;
+        result[index + 1] = v;
     }
-    return guarded;
+    return result;
 }
 
 export interface SurfaceGroundGeometryInfo {
@@ -90,11 +79,7 @@ function vertex(builder: GeometryBuilder, point: GridPoint, hexSize: number): nu
     if (existing !== undefined) return existing;
     const u = -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL;
     const v = -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL;
-    const world = surfaceToWorld(
-        guardedSurfaceCoordinate(u),
-        guardedSurfaceCoordinate(v),
-        hexSize
-    );
+    const world = surfaceToWorld(u, v, hexSize);
     const index = builder.positions.length / 3;
     builder.positions.push(world.x, 0, world.z);
     builder.surfaceCoordinates.push(u, v);
@@ -276,25 +261,67 @@ function addTransitionGrid(builder: GeometryBuilder, step: 2 | 4, hexSize: numbe
         for (let y = step; y < innerMaximum; y += step) addQuad(builder, x, y, step, hexSize);
     }
 
-    const sides = [
+    // Stitch one coarse interval at a time. Triangulating an entire side as a
+    // single collinear polygon creates legal but extremely long sliver
+    // triangles whose interpolated height can cut across the whole chunk.
+    for (let offset = step; offset < innerMaximum; offset += step) {
+        stitchSide(builder,
+            sidePoints({ x: offset, y: 0 }, { x: offset + step, y: 0 }, 1),
+            sidePoints({ x: offset, y: step }, { x: offset + step, y: step }, step),
+            hexSize);
+        stitchSide(builder,
+            sidePoints({ x: maximum, y: offset }, { x: maximum, y: offset + step }, 1),
+            sidePoints({ x: innerMaximum, y: offset }, { x: innerMaximum, y: offset + step }, step),
+            hexSize);
+        stitchSide(builder,
+            sidePoints({ x: maximum - offset, y: maximum }, { x: maximum - offset - step, y: maximum }, 1),
+            sidePoints(
+                { x: maximum - offset, y: innerMaximum },
+                { x: maximum - offset - step, y: innerMaximum },
+                step
+            ),
+            hexSize);
+        stitchSide(builder,
+            sidePoints({ x: 0, y: maximum - offset }, { x: 0, y: maximum - offset - step }, 1),
+            sidePoints(
+                { x: step, y: maximum - offset },
+                { x: step, y: maximum - offset - step },
+                step
+            ),
+            hexSize);
+    }
+
+    const cornerBoundaryChains = [
         [
-            sidePoints({ x: 0, y: 0 }, { x: maximum, y: 0 }, 1),
-            sidePoints({ x: step, y: step }, { x: innerMaximum, y: step }, step)
+            ...sidePoints({ x: step, y: 0 }, { x: 0, y: 0 }, 1),
+            ...sidePoints({ x: 0, y: 1 }, { x: 0, y: step }, 1)
         ],
         [
-            sidePoints({ x: maximum, y: 0 }, { x: maximum, y: maximum }, 1),
-            sidePoints({ x: innerMaximum, y: step }, { x: innerMaximum, y: innerMaximum }, step)
+            ...sidePoints({ x: maximum - step, y: 0 }, { x: maximum, y: 0 }, 1),
+            ...sidePoints({ x: maximum, y: 1 }, { x: maximum, y: step }, 1)
         ],
         [
-            sidePoints({ x: maximum, y: maximum }, { x: 0, y: maximum }, 1),
-            sidePoints({ x: innerMaximum, y: innerMaximum }, { x: step, y: innerMaximum }, step)
+            ...sidePoints({ x: maximum, y: maximum - step }, { x: maximum, y: maximum }, 1),
+            ...sidePoints({ x: maximum - 1, y: maximum }, { x: innerMaximum, y: maximum }, 1)
         ],
         [
-            sidePoints({ x: 0, y: maximum }, { x: 0, y: 0 }, 1),
-            sidePoints({ x: step, y: innerMaximum }, { x: step, y: step }, step)
+            ...sidePoints({ x: step, y: maximum }, { x: 0, y: maximum }, 1),
+            ...sidePoints({ x: 0, y: maximum - 1 }, { x: 0, y: innerMaximum }, 1)
         ]
     ] as const;
-    for (const [outer, inner] of sides) stitchSide(builder, outer, inner, hexSize);
+    const innerCorners = [
+        { x: step, y: step },
+        { x: innerMaximum, y: step },
+        { x: innerMaximum, y: innerMaximum },
+        { x: step, y: innerMaximum }
+    ] as const;
+    for (let corner = 0; corner < cornerBoundaryChains.length; corner += 1) {
+        const boundary = cornerBoundaryChains[corner];
+        const inner = innerCorners[corner];
+        for (let index = 0; index < boundary.length - 1; index += 1) {
+            addTriangle(builder, inner, boundary[index], boundary[index + 1], hexSize);
+        }
+    }
 }
 
 export function createSurfaceGroundGeometry(

@@ -38,7 +38,7 @@ Worker 返回后，服务重新校验完整 dependency key 和 token。旧编辑
 
 同一 texture page 内的 Ground/Water chunk 共享 `ShaderMaterial`，但 array layer、有效边界和水面 phase 是逐 draw 状态。每次 `onBeforeRender` 更新这些值后必须设置 `uniformsNeedUpdate`，确保连续使用同一材质的 chunk 不会误采样前一块的 GPU slot。多块 WebGL2 E2E 会强制绘制全部已挂载块，并逐 draw 核对实际 layer 集合与已分配 slot 集合。
 
-chunk 外圈 position 使用 `1/64` tile 的 render-only overlap guard，`surfaceUv` 和权威 field 采样不偏移；它负责消除独立 mesh 变换后的亚像素漏缝。地面边界法线通过一格 field gutter 做相同全局位置的中心差分。世界坐标材质细节、六边格、岸线、波浪、泡沫、天空和距离雾必须跨 chunk 连续，不能以 chunk-local 随机相位重新开始。
+完整 chunk 的 Ground/Water position 和 `surfaceUv` 都停在同一 canonical 边界，fragment shader 不做 `validBounds` 裁剪；只有有限世界的残缺边界块启用裁剪。三档 LOD 的过渡带按每个粗网格间隔局部缝合，禁止跨整块的超长三角形。地面边界法线通过一格 field gutter 做相同全局位置的中心差分。世界坐标材质细节、六边格、岸线、波浪、泡沫、天空和距离雾必须跨 chunk 连续，不能以 chunk-local 随机相位重新开始。
 
 依赖图固定保证 Ground 在 Water 之前、Water 在 Vegetation 之前，拆除顺序相反。地面与水体读取同一高度、水位、岸线 SDF、flow 和 body profile，并共享同一解析六边格规则；植被实例来自 compiled seed，而不是主线程重新解释语义。
 

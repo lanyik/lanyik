@@ -33,7 +33,7 @@ import {
     type LightingUniformBinding
 } from "./LightingState";
 import {
-    createGuardedSurfaceCoordinates,
+    createCanonicalSurfaceCoordinates,
     SurfaceGroundGeometryPool
 } from "./SurfaceGroundGeometry";
 import {
@@ -238,6 +238,7 @@ void main() {
 const WATER_FRAGMENT_SHADER = /* glsl */`
 uniform sampler2DArray uSurfaceWater;
 uniform float uLayer;
+uniform bool uClipValidBounds;
 uniform vec4 uValidBounds;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
@@ -291,8 +292,8 @@ void main() {
     float animationTime = uTime * uWaveSpeed;
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
-    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
-        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+    if (uClipValidBounds && (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y)) discard;
     ivec2 categoricalCoordinate = ivec2(clamp(
         floor(surfaceWaterFieldCoordinate(vSurfaceUv) + vec2(0.5)),
         vec2(0.0),
@@ -378,12 +379,12 @@ function createCompiledWaterGeometry(
     heightScale: number
 ): BufferGeometry {
     const vertexCount = source.surfaceUv.length / 2;
-    const guardedSurfaceUv = createGuardedSurfaceCoordinates(source.surfaceUv);
+    const canonicalSurfaceUv = createCanonicalSurfaceCoordinates(source.surfaceUv);
     const positions = new Float32Array(vertexCount * 3);
     for (let index = 0; index < vertexCount; index += 1) {
         const coordinate = surfaceToWorld(
-            guardedSurfaceUv[index * 2],
-            guardedSurfaceUv[index * 2 + 1],
+            canonicalSurfaceUv[index * 2],
+            canonicalSurfaceUv[index * 2 + 1],
             hexSize
         );
         positions[index * 3] = coordinate.x;
@@ -392,7 +393,7 @@ function createCompiledWaterGeometry(
     const geometry = new BufferGeometry();
     geometry.name = "surface-water-compiled";
     geometry.setAttribute("position", new BufferAttribute(positions, 3));
-    geometry.setAttribute("surfaceUv", new BufferAttribute(source.surfaceUv, 2));
+    geometry.setAttribute("surfaceUv", new BufferAttribute(canonicalSurfaceUv, 2));
     geometry.setIndex(new BufferAttribute(source.indices, 1));
     geometry.computeBoundingBox();
     const bounds = geometry.boundingBox ?? new Box3();
@@ -402,7 +403,7 @@ function createCompiledWaterGeometry(
     );
     geometry.boundingBox.getBoundingSphere(geometry.boundingSphere = new Sphere());
     geometry.userData.surfaceWaterByteLength = positions.byteLength
-        + source.surfaceUv.byteLength + source.indices.byteLength;
+        + canonicalSurfaceUv.byteLength + source.indices.byteLength;
     return geometry;
 }
 
@@ -619,6 +620,7 @@ export class WaterLayer {
                 uWaveSpeed: new Uniform(this.style.waterWaveSpeed),
                 uFoamOpacity: new Uniform(this.style.coastalWaveOpacity),
                 uChunkSurfacePhase: new Uniform(new Vector2()),
+                uClipValidBounds: new Uniform(false),
                 uValidBounds: new Uniform(new Vector4(0, 0, 16, 16)),
                 uGridColor: new Uniform(new Color(0x1c3132)),
                 uGridWidth: new Uniform(0.032),
@@ -664,6 +666,9 @@ export class WaterLayer {
                 % SURFACE_VISUAL_PHASE_PERIOD
         );
         const bounds = chunk.bounds.validTiles;
+        material.uniforms.uClipValidBounds.value = bounds.minX !== 0 || bounds.minY !== 0
+            || bounds.maxXExclusive !== SURFACE_RENDER_CHUNK_SIZE
+            || bounds.maxYExclusive !== SURFACE_RENDER_CHUNK_SIZE;
         (material.uniforms.uValidBounds.value as Vector4).set(
             bounds.minX,
             bounds.minY,

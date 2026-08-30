@@ -27,11 +27,11 @@ import {
     SurfaceFogTexturePool
 } from "../../src/rendering/SurfaceFogTexturePool";
 import {
-    createGuardedSurfaceCoordinates,
+    createCanonicalSurfaceCoordinates,
     createSurfaceGroundGeometry,
     getSurfaceGroundGeometryInfo,
     SURFACE_GROUND_BOUNDARY_INTERVALS,
-    SURFACE_SEAM_GUARD_TILES,
+    SURFACE_GROUND_LOD_GRID_STEPS,
     SurfaceGroundGeometryPool
 } from "../../src/rendering/SurfaceGroundGeometry";
 import {
@@ -116,11 +116,13 @@ function topologyMetrics(geometry: ReturnType<typeof createSurfaceGroundGeometry
     area: number;
     boundaryEdges: number;
     maximumEdgeUse: number;
+    maximumEdgeLength: number;
 }> {
     const coordinates = surfaceCoordinates(geometry);
     const indices = geometry.getIndex()!.array;
     const edges = new Map<string, number>();
     let area = 0;
+    let maximumEdgeLength = 0;
     for (let offset = 0; offset < indices.length; offset += 3) {
         const a = Number(indices[offset]);
         const b = Number(indices[offset + 1]);
@@ -137,35 +139,40 @@ function topologyMetrics(geometry: ReturnType<typeof createSurfaceGroundGeometry
         for (const [first, second] of [[a, b], [b, c], [c, a]]) {
             const edge = first < second ? `${first},${second}` : `${second},${first}`;
             edges.set(edge, (edges.get(edge) ?? 0) + 1);
+            maximumEdgeLength = Math.max(maximumEdgeLength, Math.hypot(
+                coordinates[first * 2] - coordinates[second * 2],
+                coordinates[first * 2 + 1] - coordinates[second * 2 + 1]
+            ));
         }
     }
     return {
         area,
         boundaryEdges: [...edges.values()].filter(count => count === 1).length,
-        maximumEdgeUse: Math.max(...edges.values())
+        maximumEdgeUse: Math.max(...edges.values()),
+        maximumEdgeLength
     };
 }
 
 describe("v2 shared ground geometry", () => {
-    test("gives adjacent surface meshes an overlap guard instead of a raster gap", () => {
-        const guarded = createGuardedSurfaceCoordinates(new Float32Array([
+    test("keeps adjacent surface meshes on one exact canonical boundary", () => {
+        const canonical = createCanonicalSurfaceCoordinates(new Float32Array([
             -0.5, -0.5,
             7.25, 8.5,
             15.5, 15.5
         ]));
-        expect(SURFACE_SEAM_GUARD_TILES).toBe(1 / 64);
-        expect([...guarded]).toEqual([
-            -0.515625, -0.515625,
+        expect([...canonical]).toEqual([
+            -0.5, -0.5,
             7.25, 8.5,
-            15.515625, 15.515625
+            15.5, 15.5
         ]);
-        expect(guarded[4]).toBeGreaterThan(16 + guarded[0]);
+        expect(canonical[4]).toBe(16 + canonical[0]);
 
-        const geometry = createSurfaceGroundGeometry(2);
+        const geometry = createSurfaceGroundGeometry(2, 1, 8);
         const positions = geometry.getAttribute("position").array as Float32Array;
         const xCoordinates = Array.from({ length: positions.length / 3 }, (_, index) => positions[index * 3]);
-        expect(Math.min(...xCoordinates)).toBeCloseTo(1.5 * -0.515625, 6);
-        expect(Math.max(...xCoordinates)).toBeCloseTo(1.5 * 15.515625, 6);
+        expect(Math.min(...xCoordinates)).toBeCloseTo(1.5 * -0.5, 6);
+        expect(Math.max(...xCoordinates)).toBeCloseTo(1.5 * 15.5, 6);
+        expect(geometry.getAttribute("seamApron")).toBeUndefined();
         geometry.dispose();
     });
 
@@ -201,11 +208,16 @@ describe("v2 shared ground geometry", () => {
         expect(infos[1].vertexCount).toBeGreaterThan(infos[2].vertexCount);
         expect(infos[0].triangleCount).toBeGreaterThan(infos[1].triangleCount);
         expect(infos[1].triangleCount).toBeGreaterThan(infos[2].triangleCount);
-        for (const geometry of geometries) {
+        for (let lod = 0; lod < geometries.length; lod += 1) {
+            const geometry = geometries[lod];
             const metrics = topologyMetrics(geometry);
             expect(metrics.area).toBeCloseTo(16 * 16, 10);
             expect(metrics.boundaryEdges).toBe(SURFACE_GROUND_BOUNDARY_INTERVALS * 4);
             expect(metrics.maximumEdgeUse).toBe(2);
+            expect(metrics.maximumEdgeLength).toBeLessThanOrEqual(
+                Math.SQRT2 * SURFACE_GROUND_LOD_GRID_STEPS[lod]
+                    / 4 + Number.EPSILON
+            );
             geometry.dispose();
         }
     });

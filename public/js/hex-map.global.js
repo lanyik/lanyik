@@ -1227,7 +1227,7 @@
   var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
   var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
   var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
-  var SURFACE_COMPILER_REVISION = 3;
+  var SURFACE_COMPILER_REVISION = 4;
   var SURFACE_COMPILE_PROFILE_VERSION = 1;
   var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
     renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -5762,8 +5762,6 @@
         level: (river.levelProfile[index2 / 2] + (river.levelProfile[index2 / 2 + 1] - river.levelProfile[index2 / 2]) * amount) / 65535,
         flowX: dx / length,
         flowY: dz / length,
-        centerX: nearestX,
-        centerZ: nearestZ,
         halfWidth
       };
     }
@@ -5815,26 +5813,11 @@
   function candidateWins(candidate, current) {
     return !current || candidate.coverage > current.coverage || candidate.coverage === current.coverage && (candidate.rank > current.rank || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
   }
-  function sampleMacroGroundAtWorld(window2, worldX, worldZ) {
-    const local = worldToSurface(worldX, worldZ);
-    return sampleWindowChannel(window2.macroHeight, local.u, local.v, 1, 0) / 65535;
-  }
-  function deriveRiverSurfaceLevel(window2, localGround, candidate) {
-    const centerX = candidate.centerX;
-    const centerZ = candidate.centerZ;
-    const halfWidth = candidate.halfWidth;
-    const normalX = -candidate.flowY;
-    const normalZ = candidate.flowX;
-    const terrainCeiling = Math.min(
-      localGround,
-      sampleMacroGroundAtWorld(window2, centerX, centerZ),
-      sampleMacroGroundAtWorld(window2, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
-      sampleMacroGroundAtWorld(window2, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
-    );
+  function deriveRiverSurfaceLevel(localGround, candidate) {
     return clamp2(
       candidate.level,
-      Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
-      Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+      Math.max(0, localGround - RIVER_MAX_INCISE),
+      Math.max(0, localGround - RIVER_SURFACE_INSET)
     );
   }
   function fieldGradient(ground, worldX, worldZ, physicalX, physicalY, size) {
@@ -6050,7 +6033,7 @@
         if (!best) continue;
         let level = best.level;
         if (best.kind === 3 /* River */) {
-          level = deriveRiverSurfaceLevel(window2, ground[index2], best);
+          level = deriveRiverSurfaceLevel(ground[index2], best);
           workRiverBedDepth[index2] = RIVER_MIN_BED_DEPTH + clamp2(best.halfWidth / 4, 0, 1) * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);
         }
         workCoverage[index2] = best.coverage;
@@ -7101,29 +7084,21 @@
   };
   var SURFACE_GROUND_LOD_GRID_STEPS = Object.freeze([1, 2, 4]);
   var SURFACE_GROUND_BOUNDARY_INTERVALS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
-  var SURFACE_SEAM_GUARD_TILES = 1 / (SURFACE_SAMPLES_PER_TILE_INTERVAL * SURFACE_RENDER_CHUNK_SIZE);
-  function guardedSurfaceCoordinate(value) {
-    if (value === -0.5) return value - SURFACE_SEAM_GUARD_TILES;
-    if (value === SURFACE_RENDER_CHUNK_SIZE - 0.5) {
-      return value + SURFACE_SEAM_GUARD_TILES;
-    }
-    return value;
-  }
-  function createGuardedSurfaceCoordinates(source) {
+  function createCanonicalSurfaceCoordinates(source) {
     if (source.length < 2 || source.length % 2 !== 0) {
       throw new TypeError("surface coordinates must contain uv pairs");
     }
-    const guarded = new Float32Array(source.length);
+    const result = new Float32Array(source.length);
     for (let index2 = 0; index2 < source.length; index2 += 2) {
       const u = Number(source[index2]);
       const v = Number(source[index2 + 1]);
       if (!Number.isFinite(u) || !Number.isFinite(v)) {
         throw new RangeError("surface coordinates must be finite");
       }
-      guarded[index2] = guardedSurfaceCoordinate(u);
-      guarded[index2 + 1] = guardedSurfaceCoordinate(v);
+      result[index2] = u;
+      result[index2 + 1] = v;
     }
-    return guarded;
+    return result;
   }
   function pointKey(point) {
     return `${point.x},${point.y}`;
@@ -7139,11 +7114,7 @@
     if (existing !== void 0) return existing;
     const u = -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL;
     const v = -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL;
-    const world = surfaceToWorld(
-      guardedSurfaceCoordinate(u),
-      guardedSurfaceCoordinate(v),
-      hexSize
-    );
+    const world = surfaceToWorld(u, v, hexSize);
     const index2 = builder.positions.length / 3;
     builder.positions.push(world.x, 0, world.z);
     builder.surfaceCoordinates.push(u, v);
@@ -7279,25 +7250,71 @@
     for (let x = step; x < innerMaximum; x += step) {
       for (let y = step; y < innerMaximum; y += step) addQuad(builder, x, y, step, hexSize);
     }
-    const sides = [
+    for (let offset = step; offset < innerMaximum; offset += step) {
+      stitchSide(
+        builder,
+        sidePoints({ x: offset, y: 0 }, { x: offset + step, y: 0 }, 1),
+        sidePoints({ x: offset, y: step }, { x: offset + step, y: step }, step),
+        hexSize
+      );
+      stitchSide(
+        builder,
+        sidePoints({ x: maximum, y: offset }, { x: maximum, y: offset + step }, 1),
+        sidePoints({ x: innerMaximum, y: offset }, { x: innerMaximum, y: offset + step }, step),
+        hexSize
+      );
+      stitchSide(
+        builder,
+        sidePoints({ x: maximum - offset, y: maximum }, { x: maximum - offset - step, y: maximum }, 1),
+        sidePoints(
+          { x: maximum - offset, y: innerMaximum },
+          { x: maximum - offset - step, y: innerMaximum },
+          step
+        ),
+        hexSize
+      );
+      stitchSide(
+        builder,
+        sidePoints({ x: 0, y: maximum - offset }, { x: 0, y: maximum - offset - step }, 1),
+        sidePoints(
+          { x: step, y: maximum - offset },
+          { x: step, y: maximum - offset - step },
+          step
+        ),
+        hexSize
+      );
+    }
+    const cornerBoundaryChains = [
       [
-        sidePoints({ x: 0, y: 0 }, { x: maximum, y: 0 }, 1),
-        sidePoints({ x: step, y: step }, { x: innerMaximum, y: step }, step)
+        ...sidePoints({ x: step, y: 0 }, { x: 0, y: 0 }, 1),
+        ...sidePoints({ x: 0, y: 1 }, { x: 0, y: step }, 1)
       ],
       [
-        sidePoints({ x: maximum, y: 0 }, { x: maximum, y: maximum }, 1),
-        sidePoints({ x: innerMaximum, y: step }, { x: innerMaximum, y: innerMaximum }, step)
+        ...sidePoints({ x: maximum - step, y: 0 }, { x: maximum, y: 0 }, 1),
+        ...sidePoints({ x: maximum, y: 1 }, { x: maximum, y: step }, 1)
       ],
       [
-        sidePoints({ x: maximum, y: maximum }, { x: 0, y: maximum }, 1),
-        sidePoints({ x: innerMaximum, y: innerMaximum }, { x: step, y: innerMaximum }, step)
+        ...sidePoints({ x: maximum, y: maximum - step }, { x: maximum, y: maximum }, 1),
+        ...sidePoints({ x: maximum - 1, y: maximum }, { x: innerMaximum, y: maximum }, 1)
       ],
       [
-        sidePoints({ x: 0, y: maximum }, { x: 0, y: 0 }, 1),
-        sidePoints({ x: step, y: innerMaximum }, { x: step, y: step }, step)
+        ...sidePoints({ x: step, y: maximum }, { x: 0, y: maximum }, 1),
+        ...sidePoints({ x: 0, y: maximum - 1 }, { x: 0, y: innerMaximum }, 1)
       ]
     ];
-    for (const [outer, inner] of sides) stitchSide(builder, outer, inner, hexSize);
+    const innerCorners = [
+      { x: step, y: step },
+      { x: innerMaximum, y: step },
+      { x: innerMaximum, y: innerMaximum },
+      { x: step, y: innerMaximum }
+    ];
+    for (let corner = 0; corner < cornerBoundaryChains.length; corner += 1) {
+      const boundary = cornerBoundaryChains[corner];
+      const inner = innerCorners[corner];
+      for (let index2 = 0; index2 < boundary.length - 1; index2 += 1) {
+        addTriangle(builder, inner, boundary[index2], boundary[index2 + 1], hexSize);
+      }
+    }
   }
   function createSurfaceGroundGeometry(lod, hexSize = 1, heightScale = 1) {
     assertLod(lod);
@@ -7584,6 +7601,7 @@ uniform sampler2DArray uSurfaceMaterial;
 uniform sampler2DArray uFogTexture;
 uniform float uLayer;
 uniform bool uFogEnabled;
+uniform bool uClipValidBounds;
 uniform vec4 uValidBounds;
 uniform vec3 uMaterialPalette[4];
 uniform float uHexSize;
@@ -7658,8 +7676,8 @@ float surfaceVisualNoise(vec2 point, float period) {
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
-    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
-        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+    if (uClipValidBounds && (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y)) discard;
 
     vec4 weights = sampleSurfaceMaterial(vSurfaceUv);
     float weightSum = max(dot(weights, vec4(1.0)), 0.0001);
@@ -7980,6 +7998,7 @@ void main() {
           uHexSize: new three.Uniform(this.hexSize),
           uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
           uFogEnabled: new three.Uniform(false),
+          uClipValidBounds: new three.Uniform(false),
           uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
           uMaterialPalette: new three.Uniform(this.palette),
           uGridColor: new three.Uniform(new three.Color(3353124)),
@@ -8020,6 +8039,7 @@ void main() {
         (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD
       );
       const bounds = chunk.lease.chunk.bounds.validTiles;
+      material.uniforms.uClipValidBounds.value = bounds.minX !== 0 || bounds.minY !== 0 || bounds.maxXExclusive !== SURFACE_RENDER_CHUNK_SIZE || bounds.maxYExclusive !== SURFACE_RENDER_CHUNK_SIZE;
       material.uniforms.uValidBounds.value.set(
         bounds.minX,
         bounds.minY,
@@ -8768,6 +8788,7 @@ void main() {
     `
 uniform sampler2DArray uSurfaceWater;
 uniform float uLayer;
+uniform bool uClipValidBounds;
 uniform vec4 uValidBounds;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
@@ -8821,8 +8842,8 @@ void main() {
     float animationTime = uTime * uWaveSpeed;
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
-    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
-        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+    if (uClipValidBounds && (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y)) discard;
     ivec2 categoricalCoordinate = ivec2(clamp(
         floor(surfaceWaterFieldCoordinate(vSurfaceUv) + vec2(0.5)),
         vec2(0.0),
@@ -8902,12 +8923,12 @@ void main() {
   }
   function createCompiledWaterGeometry(source, hexSize, heightScale) {
     const vertexCount = source.surfaceUv.length / 2;
-    const guardedSurfaceUv = createGuardedSurfaceCoordinates(source.surfaceUv);
+    const canonicalSurfaceUv = createCanonicalSurfaceCoordinates(source.surfaceUv);
     const positions = new Float32Array(vertexCount * 3);
     for (let index2 = 0; index2 < vertexCount; index2 += 1) {
       const coordinate = surfaceToWorld(
-        guardedSurfaceUv[index2 * 2],
-        guardedSurfaceUv[index2 * 2 + 1],
+        canonicalSurfaceUv[index2 * 2],
+        canonicalSurfaceUv[index2 * 2 + 1],
         hexSize
       );
       positions[index2 * 3] = coordinate.x;
@@ -8916,7 +8937,7 @@ void main() {
     const geometry = new three.BufferGeometry();
     geometry.name = "surface-water-compiled";
     geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
-    geometry.setAttribute("surfaceUv", new three.BufferAttribute(source.surfaceUv, 2));
+    geometry.setAttribute("surfaceUv", new three.BufferAttribute(canonicalSurfaceUv, 2));
     geometry.setIndex(new three.BufferAttribute(source.indices, 1));
     geometry.computeBoundingBox();
     const bounds = geometry.boundingBox ?? new three.Box3();
@@ -8925,7 +8946,7 @@ void main() {
       new three.Vector3(bounds.max.x, heightScale * 1.02, bounds.max.z)
     );
     geometry.boundingBox.getBoundingSphere(geometry.boundingSphere = new three.Sphere());
-    geometry.userData.surfaceWaterByteLength = positions.byteLength + source.surfaceUv.byteLength + source.indices.byteLength;
+    geometry.userData.surfaceWaterByteLength = positions.byteLength + canonicalSurfaceUv.byteLength + source.indices.byteLength;
     return geometry;
   }
   function freezeMount3(chunk) {
@@ -9118,6 +9139,7 @@ void main() {
           uWaveSpeed: new three.Uniform(this.style.waterWaveSpeed),
           uFoamOpacity: new three.Uniform(this.style.coastalWaveOpacity),
           uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
+          uClipValidBounds: new three.Uniform(false),
           uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
           uGridColor: new three.Uniform(new three.Color(1847602)),
           uGridWidth: new three.Uniform(0.032),
@@ -9156,6 +9178,7 @@ void main() {
         (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD
       );
       const bounds = chunk.bounds.validTiles;
+      material.uniforms.uClipValidBounds.value = bounds.minX !== 0 || bounds.minY !== 0 || bounds.maxXExclusive !== SURFACE_RENDER_CHUNK_SIZE || bounds.maxYExclusive !== SURFACE_RENDER_CHUNK_SIZE;
       material.uniforms.uValidBounds.value.set(
         bounds.minX,
         bounds.minY,

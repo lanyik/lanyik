@@ -214,7 +214,7 @@ function riverLayer(
     });
 }
 
-describe("CPU surface compiler revision 2", () => {
+describe("CPU surface compiler revision 4", () => {
     test("freezes the complete compile profile and binary16 contract", () => {
         expect(SURFACE_COMPILE_PROFILE_V1).toEqual({
             renderChunkSize: 16,
@@ -511,6 +511,55 @@ describe("CPU surface compiler revision 2", () => {
                     .toEqual(east.field.materialWeights.slice(eastIndex * 4, eastIndex * 4 + 4));
             }
         }
+    });
+
+    test("keeps a wide diagonal river byte-identical beyond the effective-window halo", () => {
+        const descriptor = createWorldDescriptorV2({ seed: "surface-wide-diagonal-river" });
+        const riverId = createStableHydrologyId("river", ["surface-wide-diagonal-river"]);
+        const hydrology = createEffectiveDeltaSnapshot({
+            descriptor,
+            effectiveRevision: 1,
+            hydrologyFeatures: [{
+                kind: "river",
+                featureId: riverId,
+                revision: 1,
+                source: { kind: "source" },
+                outlet: { kind: "body", featureId: OCEAN_BODY_ID },
+                controlPoints: new Float64Array([62, 64, 96, 98]),
+                widthProfile: new Uint8Array([192, 192]),
+                levelProfile: new Uint16Array([65_000, 64_000]),
+                dischargeClass: 7
+            }],
+            hydrologyRegionFeatures: [{
+                key: { regionX: 0, regionY: 0 },
+                featureIds: [riverId]
+            }]
+        });
+        const height = (x: number, y: number) => 30_000 + x * 120 + y * 80;
+        const westKey = { chunkX: 4, chunkY: 4 };
+        const eastKey = { chunkX: 5, chunkY: 4 };
+        const west = compileSurfaceChunk(createTransferableEffectiveWindow(
+            captureFor(descriptor, westKey, height, hydrology).snapshot,
+            westKey
+        ));
+        const east = compileSurfaceChunk(createTransferableEffectiveWindow(
+            captureFor(descriptor, eastKey, height, hydrology).snapshot,
+            eastKey
+        ));
+        let wetOverlapTexels = 0;
+        for (let y = 0; y < SURFACE_FIELD_TEXTURE_SIZE; y += 1) {
+            for (const [westX, eastX] of [[64, 0], [65, 1]] as const) {
+                const westIndex = surfaceLatticeIndex(westX, y);
+                const eastIndex = surfaceLatticeIndex(eastX, y);
+                if (west.field.waterCoverage[westIndex] > 0) wetOverlapTexels += 1;
+                expect(west.field.groundHeight[westIndex]).toBe(east.field.groundHeight[eastIndex]);
+                expect(west.field.waterLevel[westIndex]).toBe(east.field.waterLevel[eastIndex]);
+                expect(west.field.waterDepth[westIndex]).toBe(east.field.waterDepth[eastIndex]);
+                expect(west.field.waterCoverage[westIndex]).toBe(east.field.waterCoverage[eastIndex]);
+                expect(west.field.shorelineDistance[westIndex]).toBe(east.field.shorelineDistance[eastIndex]);
+            }
+        }
+        expect(wetOverlapTexels).toBeGreaterThan(0);
     });
 
     test("uses the two-tile working halo for an off-chunk shoreline", () => {

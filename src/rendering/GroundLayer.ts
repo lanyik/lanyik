@@ -208,6 +208,7 @@ uniform sampler2DArray uSurfaceMaterial;
 uniform sampler2DArray uFogTexture;
 uniform float uLayer;
 uniform bool uFogEnabled;
+uniform bool uClipValidBounds;
 uniform vec4 uValidBounds;
 uniform vec3 uMaterialPalette[4];
 uniform float uHexSize;
@@ -282,8 +283,8 @@ float surfaceVisualNoise(vec2 point, float period) {
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
-    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
-        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+    if (uClipValidBounds && (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y)) discard;
 
     vec4 weights = sampleSurfaceMaterial(vSurfaceUv);
     float weightSum = max(dot(weights, vec4(1.0)), 0.0001);
@@ -638,6 +639,7 @@ export class GroundLayer {
                 uHexSize: new Uniform(this.hexSize),
                 uChunkSurfacePhase: new Uniform(new Vector2()),
                 uFogEnabled: new Uniform(false),
+                uClipValidBounds: new Uniform(false),
                 uValidBounds: new Uniform(new Vector4(0, 0, 16, 16)),
                 uMaterialPalette: new Uniform(this.palette),
                 uGridColor: new Uniform(new Color(0x332a24)),
@@ -682,6 +684,9 @@ export class GroundLayer {
                 % SURFACE_VISUAL_PHASE_PERIOD
         );
         const bounds = chunk.lease.chunk.bounds.validTiles;
+        material.uniforms.uClipValidBounds.value = bounds.minX !== 0 || bounds.minY !== 0
+            || bounds.maxXExclusive !== SURFACE_RENDER_CHUNK_SIZE
+            || bounds.maxYExclusive !== SURFACE_RENDER_CHUNK_SIZE;
         (material.uniforms.uValidBounds.value as Vector4).set(
             bounds.minX,
             bounds.minY,
