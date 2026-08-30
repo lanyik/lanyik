@@ -7,9 +7,9 @@ import {
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 export const WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-// Protocol v4 adds the staged v2 hydrology-region task. Existing v1 request
-// variants remain the active production path until the v2 render cutover.
-export const WORLD_WORKER_PROTOCOL_VERSION = 4;
+// Protocol v5 adds v2 surface compilation with compiler/profile identity.
+// Existing v1 request variants remain active until the v2 render cutover.
+export const WORLD_WORKER_PROTOCOL_VERSION = 5;
 
 export type ProceduralWorldKind = "procedural-infinite" | "procedural-toroidal";
 

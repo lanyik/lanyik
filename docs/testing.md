@@ -27,6 +27,12 @@ uploads for all four physical formats, samples the same layer through GLSL 3,
 compares the pixel to the CPU field, and repeats after a real WebGL context
 loss/restore cycle. Object-shape assertions alone do not satisfy this contract.
 
+The v2 surface Worker browser test transfers a complete effective window,
+verifies that the sending buffers detach, validates the compiled payload, and
+requires the Worker to transfer every input buffer back. Service contract tests
+separately control coalescing, cancellation, stale tokens, cache leases and byte
+budget exhaustion without timers.
+
 Use controlled promises for race tests so each interleaving is explicit and
 deterministic. Avoid timers as synchronization, random stress without a fixed
 seed, and assertions against private implementation shape when the same result

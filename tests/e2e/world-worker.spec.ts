@@ -3,6 +3,11 @@ import { WORLD_GENERATOR_VERSION } from "../../src/world/WorldGeneratorVersion";
 import { WORLD_WORKER_PROTOCOL_VERSION } from "../../src/world/WorldDescriptor";
 import { createWorldDescriptorV2 } from "../../src/world/semantic/WorldDescriptorV2";
 import { WORLD_SURFACE_V2_GENERATOR_VERSION } from "../../src/world/semantic/WorldSemanticFormat";
+import {
+    SURFACE_COMPILE_PROFILE_VERSION,
+    SURFACE_COMPILER_REVISION,
+    SURFACE_EFFECTIVE_WINDOW_SIZE
+} from "../../src/world/semantic/SurfaceCompileProfile";
 
 interface WorkerProbe {
     kind: "message" | "error" | "messageerror" | "timeout";
@@ -168,6 +173,100 @@ test("world worker generates a transferable v2 hydrology region in a real browse
     expect(result.firstControlPoints).toBe(4);
     expect(result.transferableBuffers).toBe(result.riverCount! * 3);
     expect(result.message).toBeUndefined();
+});
+
+test("world worker compiles a transferred v2 surface window and returns its buffers", async ({ page }) => {
+    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    const result = await page.evaluate(
+        ({ protocolVersion, compilerRevision, compileProfileVersion, windowSize }) => new Promise<{
+            kind: WorkerProbe["kind"];
+            detached?: boolean;
+            chunkBytes?: number;
+            checksum?: string;
+            reclaimedBuffers?: number;
+            reclaimedBytes?: number;
+            message?: string;
+        }>(resolve => {
+            const count = windowSize * windowSize;
+            const biomeWeights = new Uint8Array(count * 4);
+            for (let index = 0; index < count; index += 1) biomeWeights[index * 4] = 255;
+            const effectiveWindow = {
+                worldIdentity: "surface-worker-browser-probe",
+                effectiveRevision: 0,
+                key: { chunkX: -2, chunkY: 3 },
+                dependencyKey: {
+                    worldIdentity: "surface-worker-browser-probe",
+                    renderKey: { chunkX: -2, chunkY: 3 },
+                    compilerRevision,
+                    compileProfileVersion,
+                    semanticChunks: [],
+                    hydrologyRegions: []
+                },
+                validBounds: { minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 },
+                substrateClass: new Uint8Array(count).fill(1),
+                macroHeight: new Uint16Array(count).fill(50_000),
+                biomeWeights,
+                climate: new Uint8Array(count * 2).fill(127),
+                vegetationDensity: new Uint8Array(count),
+                vegetationProfile: new Uint8Array(count),
+                rivers: [],
+                lakes: []
+            };
+            const inputBuffers = [
+                effectiveWindow.substrateClass.buffer,
+                effectiveWindow.macroHeight.buffer,
+                effectiveWindow.biomeWeights.buffer,
+                effectiveWindow.climate.buffer,
+                effectiveWindow.vegetationDensity.buffer,
+                effectiveWindow.vegetationProfile.buffer
+            ];
+            const worker = new Worker("/js/world-generator.worker.mjs", { type: "module" });
+            const finish = (value: Parameters<typeof resolve>[0]): void => {
+                worker.terminate();
+                resolve(value);
+            };
+            worker.addEventListener("message", event => {
+                const chunk = event.data?.surfaceChunk;
+                const reclaimed = event.data?.reclaimedWindowBuffers as ArrayBuffer[] | undefined;
+                finish({
+                    kind: "message",
+                    detached: inputBuffers.every(buffer => buffer.byteLength === 0),
+                    chunkBytes: chunk?.byteLength,
+                    checksum: chunk?.contentChecksum,
+                    reclaimedBuffers: reclaimed?.length,
+                    reclaimedBytes: reclaimed?.reduce((total, buffer) => total + buffer.byteLength, 0),
+                    message: event.data?.error?.message
+                });
+            }, { once: true });
+            worker.addEventListener("error", event => finish({ kind: "error", message: event.message }), { once: true });
+            worker.addEventListener("messageerror", () => finish({ kind: "messageerror" }), { once: true });
+            worker.postMessage({
+                id: 1,
+                protocolVersion,
+                compilerRevision,
+                compileProfileVersion,
+                type: "compileSurfaceChunk",
+                effectiveWindow
+            }, inputBuffers);
+            setTimeout(() => finish({ kind: "timeout" }), 10_000);
+        }),
+        {
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            compilerRevision: SURFACE_COMPILER_REVISION,
+            compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+            windowSize: SURFACE_EFFECTIVE_WINDOW_SIZE
+        }
+    );
+
+    expect(result).toMatchObject({
+        kind: "message",
+        detached: true,
+        chunkBytes: 78_408,
+        reclaimedBuffers: 6,
+        reclaimedBytes: 4_400,
+        message: undefined
+    });
+    expect(result.checksum).toMatch(/^[a-f0-9]{8}$/);
 });
 
 test("worker pool replaces a real crashed Worker and serves the next request", async ({ page }) => {

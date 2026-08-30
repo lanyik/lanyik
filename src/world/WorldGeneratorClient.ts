@@ -27,35 +27,102 @@ import {
 } from "./semantic/WorldDescriptorV2";
 import { assertHydrologyRegion, HydrologyRegion } from "./semantic/HydrologyRegion";
 import { HydrologyRegionGenerationOptions } from "./semantic/generateHydrologyRegion";
+import {
+    assertTransferableEffectiveWindow,
+    effectiveSurfaceWindowTransferables,
+    TransferableEffectiveWindow
+} from "./semantic/EffectiveSurfaceWindow";
+import {
+    assertCompiledSurfaceChunk,
+    CompiledSurfaceChunk
+} from "./semantic/SurfaceCompiler";
+import {
+    cloneSurfaceDependencyKey,
+    SurfaceDependencyKey,
+    surfaceDependencyKeysEqual
+} from "./semantic/SurfaceDependency";
+import {
+    SURFACE_COMPILE_PROFILE_VERSION,
+    SURFACE_COMPILER_REVISION
+} from "./semantic/SurfaceCompileProfile";
+
+export interface SurfaceWorkerCompilation {
+    readonly chunk: CompiledSurfaceChunk;
+    readonly reclaimedWindowBuffers: readonly ArrayBuffer[];
+}
+
+export class SurfaceWorkerCompilationError extends Error {
+    constructor(
+        message: string,
+        public readonly reclaimedWindowBuffers: readonly ArrayBuffer[]
+    ) {
+        super(message);
+        this.name = "SurfaceWorkerCompilationError";
+    }
+}
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
-    generatorVersion: number;
+    generatorVersion?: number;
     id: number;
     world?: MapInfo;
     chunk?: PackedWorldChunk;
     vegetation?: WorldVegetationLayout;
     semanticChunk?: BaseSemanticChunk;
     hydrologyRegion?: HydrologyRegion;
+    compilerRevision?: number;
+    compileProfileVersion?: number;
+    type?: "compileSurfaceChunk";
+    surfaceChunk?: CompiledSurfaceChunk;
+    reclaimedWindowBuffers?: readonly ArrayBuffer[];
 }
 
-interface WorkerFailureMessage {
+interface GeneratorWorkerFailureMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
     generatorVersion: number;
     id: number;
     error: { name: string; message: string; stack?: string };
 }
 
-type WorkerResponse = WorkerSuccessMessage | WorkerFailureMessage;
+interface SurfaceWorkerFailureMessage {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    compilerRevision: number;
+    compileProfileVersion: number;
+    id: number;
+    type: "compileSurfaceChunkError";
+    reclaimedWindowBuffers: readonly ArrayBuffer[];
+    error: { name: string; message: string; stack?: string };
+}
+
+type WorkerResponse = WorkerSuccessMessage | GeneratorWorkerFailureMessage | SurfaceWorkerFailureMessage;
 
 interface PendingRequest {
-    kind: "world" | "chunk" | "vegetation" | "semantic-chunk" | "hydrology-region";
-    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | BaseSemanticChunk | HydrologyRegion): void;
+    kind: "world" | "chunk" | "vegetation" | "semantic-chunk" | "hydrology-region"
+        | "surface-chunk";
+    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | BaseSemanticChunk
+        | HydrologyRegion | SurfaceWorkerCompilation): void;
     reject(error: Error): void;
-    expectedGeneratorVersion: number;
+    expectedGeneratorVersion?: number;
+    expectedCompilerRevision?: number;
+    expectedCompileProfileVersion?: number;
     expectedChunk?: { chunkX: number; chunkY: number; chunkSize: number };
     expectedSemanticChunk?: { chunkX: number; chunkY: number };
     expectedHydrologyRegion?: { regionX: number; regionY: number };
+    expectedSurfaceDependency?: SurfaceDependencyKey;
+    expectedWindowBufferByteLengths?: readonly number[];
+}
+
+function assertReclaimedWindowBuffers(
+    value: readonly ArrayBuffer[] | undefined,
+    expectedByteLengths: readonly number[] | undefined
+): readonly ArrayBuffer[] {
+    if (!Array.isArray(value) || !expectedByteLengths || value.length !== expectedByteLengths.length
+        || value.some((buffer, index) => !(buffer instanceof ArrayBuffer)
+            || buffer.byteLength !== expectedByteLengths[index])
+        || new Set(value).size !== value.length) {
+        throw new TypeError("World generation worker returned invalid reclaimed surface window buffers");
+    }
+    return Object.freeze([...value]);
 }
 
 //Small lifecycle-safe client for the dedicated world generator worker. The
@@ -207,6 +274,38 @@ export class WorldGeneratorClient {
         });
     }
 
+    public compileSurfaceChunk(effectiveWindow: TransferableEffectiveWindow): Promise<SurfaceWorkerCompilation> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        assertTransferableEffectiveWindow(effectiveWindow);
+        const transferables = effectiveSurfaceWindowTransferables(effectiveWindow);
+        const expectedWindowBufferByteLengths = Object.freeze(transferables.map(buffer => buffer.byteLength));
+        const id = this.nextRequestId++;
+        return new Promise<SurfaceWorkerCompilation>((resolve, reject) => {
+            this.pending.set(id, {
+                kind: "surface-chunk",
+                resolve: value => resolve(value as SurfaceWorkerCompilation),
+                reject,
+                expectedCompilerRevision: SURFACE_COMPILER_REVISION,
+                expectedCompileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+                expectedSurfaceDependency: cloneSurfaceDependencyKey(effectiveWindow.dependencyKey),
+                expectedWindowBufferByteLengths
+            });
+            try {
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    compilerRevision: SURFACE_COMPILER_REVISION,
+                    compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+                    id,
+                    type: "compileSurfaceChunk",
+                    effectiveWindow
+                }, [...transferables]);
+            } catch (reason) {
+                this.pending.delete(id);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -222,18 +321,30 @@ export class WorldGeneratorClient {
     private handleMessage = (event: MessageEvent<WorkerResponse>): void => {
         const data = event.data;
         if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
-            || !Number.isSafeInteger(data.generatorVersion)
-            || typeof data.id !== "number"
+            || !Number.isSafeInteger(data.id)
             || (!("world" in data) && !("chunk" in data) && !("vegetation" in data)
-                && !("semanticChunk" in data) && !("hydrologyRegion" in data) && !("error" in data))) {
+                && !("semanticChunk" in data) && !("hydrologyRegion" in data)
+                && !("surfaceChunk" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));
             return;
         }
         const request = this.pending.get(data.id);
         if (!request) return;
-        if (data.generatorVersion !== request.expectedGeneratorVersion) {
-            this.fail(new Error("World generation worker returned an invalid message: generator identity mismatch"));
-            return;
+        if (request.kind === "surface-chunk") {
+            if (!("compilerRevision" in data) || !("compileProfileVersion" in data)
+                || data.compilerRevision !== request.expectedCompilerRevision
+                || data.compileProfileVersion !== request.expectedCompileProfileVersion
+                || ("error" in data && data.type !== "compileSurfaceChunkError")
+                || (!("error" in data) && data.type !== "compileSurfaceChunk")) {
+                this.fail(new Error("World generation worker returned an invalid message: compiler identity mismatch"));
+                return;
+            }
+        } else {
+            if (!("generatorVersion" in data) || !Number.isSafeInteger(data.generatorVersion)
+                || data.generatorVersion !== request.expectedGeneratorVersion) {
+                this.fail(new Error("World generation worker returned an invalid message: generator identity mismatch"));
+                return;
+            }
         }
         this.pending.delete(data.id);
         if (request.kind === "world" && "world" in data && data.world) {
@@ -291,6 +402,30 @@ export class WorldGeneratorClient {
             }
             return;
         }
+        if (request.kind === "surface-chunk" && "surfaceChunk" in data && data.surfaceChunk
+            && data.type === "compileSurfaceChunk") {
+            try {
+                assertCompiledSurfaceChunk(data.surfaceChunk);
+                if (!request.expectedSurfaceDependency
+                    || !surfaceDependencyKeysEqual(
+                        data.surfaceChunk.dependencyKey,
+                        request.expectedSurfaceDependency
+                    )) {
+                    throw new TypeError("World generation worker returned a surface chunk for the wrong request");
+                }
+                const reclaimedWindowBuffers = assertReclaimedWindowBuffers(
+                    data.reclaimedWindowBuffers,
+                    request.expectedWindowBufferByteLengths
+                );
+                request.resolve(Object.freeze({
+                    chunk: data.surfaceChunk,
+                    reclaimedWindowBuffers
+                }));
+            } catch (reason) {
+                request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+            return;
+        }
         if (!("error" in data)) {
             request.reject(new Error(`World generation worker returned the wrong response type for ${request.kind}`));
             return;
@@ -302,7 +437,21 @@ export class WorldGeneratorClient {
             this.fail(error);
             return;
         }
-        const error = new Error(remote.message);
+        let error: Error;
+        try {
+            error = request.kind === "surface-chunk"
+                ? new SurfaceWorkerCompilationError(
+                    remote.message,
+                    assertReclaimedWindowBuffers(
+                        "reclaimedWindowBuffers" in data ? data.reclaimedWindowBuffers : undefined,
+                        request.expectedWindowBufferByteLengths
+                    )
+                )
+                : new Error(remote.message);
+        } catch (reason) {
+            request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            return;
+        }
         error.name = remote.name;
         if (remote.stack) error.stack = remote.stack;
         request.reject(error);

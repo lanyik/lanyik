@@ -1,21 +1,29 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
     EventEmitter,
+    compileSurfaceChunk,
     createWorldDescriptorV2,
+    effectiveSurfaceWindowTransferables,
     generateBaseSemanticChunk,
     generateWorld,
     generateWorldChunk,
     WORLD_GENERATOR_VERSION,
     WORLD_SURFACE_V2_GENERATOR_VERSION,
     WORLD_WORKER_PROTOCOL_VERSION,
+    SURFACE_COMPILE_PROFILE_VERSION,
+    SURFACE_COMPILER_REVISION,
+    SURFACE_EFFECTIVE_WINDOW_SIZE,
+    SurfaceWorkerCompilationError,
     WorldGeneratorClient
 } from "../src/index";
+import type { TransferableEffectiveWindow } from "../src/world/semantic/EffectiveSurfaceWindow";
 import { setOptions } from "../src/helpers/setoptions";
 
 class FakeWorker {
     static instances: FakeWorker[] = [];
     readonly listeners = new Map<string, Set<(event: any) => void>>();
     readonly messages: unknown[] = [];
+    readonly transfers: Transferable[][] = [];
     terminated = false;
     postError: Error | undefined;
 
@@ -33,9 +41,10 @@ class FakeWorker {
         this.listeners.get(type)?.delete(listener);
     }
 
-    postMessage(message: unknown): void {
+    postMessage(message: unknown, transfer: Transferable[] = []): void {
         if (this.postError) throw this.postError;
         this.messages.push(message);
+        this.transfers.push(transfer);
     }
 
     terminate(): void {
@@ -45,6 +54,34 @@ class FakeWorker {
     emit(type: string, event: unknown): void {
         for (const listener of this.listeners.get(type) ?? []) listener(event);
     }
+}
+
+function flatSurfaceWindow(): TransferableEffectiveWindow {
+    const count = SURFACE_EFFECTIVE_WINDOW_SIZE * SURFACE_EFFECTIVE_WINDOW_SIZE;
+    const biomeWeights = new Uint8Array(count * 4);
+    for (let index = 0; index < count; index += 1) biomeWeights[index * 4] = 255;
+    return {
+        worldIdentity: "worker-surface-compile",
+        effectiveRevision: 0,
+        key: { chunkX: -2, chunkY: 3 },
+        dependencyKey: {
+            worldIdentity: "worker-surface-compile",
+            renderKey: { chunkX: -2, chunkY: 3 },
+            compilerRevision: SURFACE_COMPILER_REVISION,
+            compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+            semanticChunks: [],
+            hydrologyRegions: []
+        },
+        validBounds: { minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 },
+        substrateClass: new Uint8Array(count).fill(1),
+        macroHeight: new Uint16Array(count).fill(50_000),
+        biomeWeights,
+        climate: new Uint8Array(count * 2).fill(127),
+        vegetationDensity: new Uint8Array(count),
+        vegetationProfile: new Uint8Array(count),
+        rivers: [],
+        lakes: []
+    };
 }
 
 describe("core safeguards", () => {
@@ -140,6 +177,68 @@ describe("core safeguards", () => {
             }
         });
         await expect(pending).resolves.toEqual(semanticChunk);
+        client.dispose();
+    });
+
+    test("transfers v2 surface windows under compiler identity and reclaims their buffers", async () => {
+        const client = new WorldGeneratorClient("worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const effectiveWindow = flatSurfaceWindow();
+        const reclaimedWindowBuffers = effectiveSurfaceWindowTransferables(effectiveWindow);
+        const pending = client.compileSurfaceChunk(effectiveWindow);
+        const request = worker.messages[0] as {
+            id: number;
+            type: string;
+            compilerRevision: number;
+            compileProfileVersion: number;
+        };
+        expect(request).toMatchObject({
+            type: "compileSurfaceChunk",
+            compilerRevision: SURFACE_COMPILER_REVISION,
+            compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION
+        });
+        expect(worker.transfers[0]).toEqual(reclaimedWindowBuffers);
+        const surfaceChunk = compileSurfaceChunk(effectiveWindow);
+        worker.emit("message", {
+            data: {
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                compilerRevision: SURFACE_COMPILER_REVISION,
+                compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+                id: request.id,
+                type: "compileSurfaceChunk",
+                surfaceChunk,
+                reclaimedWindowBuffers
+            }
+        });
+        await expect(pending).resolves.toMatchObject({ chunk: surfaceChunk, reclaimedWindowBuffers });
+        client.dispose();
+    });
+
+    test("preserves reclaimed surface buffers on a remote compiler failure", async () => {
+        const client = new WorldGeneratorClient("worker.mjs");
+        const worker = FakeWorker.instances[0];
+        const effectiveWindow = flatSurfaceWindow();
+        const reclaimedWindowBuffers = effectiveSurfaceWindowTransferables(effectiveWindow);
+        const pending = client.compileSurfaceChunk(effectiveWindow);
+        const request = worker.messages[0] as { id: number };
+        worker.emit("message", {
+            data: {
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                compilerRevision: SURFACE_COMPILER_REVISION,
+                compileProfileVersion: SURFACE_COMPILE_PROFILE_VERSION,
+                id: request.id,
+                type: "compileSurfaceChunkError",
+                reclaimedWindowBuffers,
+                error: { name: "RangeError", message: "injected compiler failure" }
+            }
+        });
+        const error = await pending.catch(reason => reason as SurfaceWorkerCompilationError);
+        expect(error).toBeInstanceOf(SurfaceWorkerCompilationError);
+        expect(error).toMatchObject({
+            name: "RangeError",
+            message: "injected compiler failure",
+            reclaimedWindowBuffers
+        });
         client.dispose();
     });
 

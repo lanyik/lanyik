@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 Worker compilation service with a protocol-v5
+  `compileSurfaceChunk` task, two-way transferable window buffers, observable
+  bounded scheduling, exact-dependency request coalescing, a byte-budgeted CPU
+  LRU cache, reference-counted leases, and stale-token rejection.
 - Surface/render foundation v2 GPU surface field pool with a fixed four-texture
   paged layout, full-layer packing, strict GPU budget and generational slot
   ownership, exact CPU/GPU accounting, and real WebGL2 upload, sampling and
@@ -89,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Advanced the shared world Worker protocol to v5 for surface compilation.
+  Compile requests use compiler/profile identity independently from generator
+  identity; existing v1 generation payloads remain unchanged.
 - Advanced the shared world Worker protocol to v4 for the discriminated
   `generateSemanticChunk` and `generateHydrologyRegion` tasks. Existing
   production v1 tasks retain generator v5 identity and cannot accept v2

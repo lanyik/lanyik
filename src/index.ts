@@ -91,7 +91,11 @@ export type {
     LandformSamplerOptions
 } from "./world/LandformSampler";
 export type { WorldSurfaceAnchor } from "./world/WorldSurfaceView";
-export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
+export {
+    SurfaceWorkerCompilationError,
+    WorldGeneratorClient
+} from "./world/WorldGeneratorClient";
+export type { SurfaceWorkerCompilation } from "./world/WorldGeneratorClient";
 export {
     createWorldDescriptor,
     assertWorldDescriptor,
@@ -375,7 +379,9 @@ export type {
     SurfaceWindowValidBounds,
     SurfaceWindowRiver,
     SurfaceWindowLake,
-    TransferableEffectiveWindow
+    TransferableEffectiveWindow,
+    SurfaceWindowBufferAllocator,
+    CreateTransferableEffectiveWindowOptions
 } from "./world/semantic/EffectiveSurfaceWindow";
 export {
     compileSurfaceChunk,
@@ -390,6 +396,23 @@ export type {
     CompiledSurfaceChunk,
     CompiledSurfaceSample
 } from "./world/semantic/SurfaceCompiler";
+export {
+    SurfaceCompilationService,
+    SurfaceWindowBufferPool
+} from "./world/semantic/SurfaceCompilationService";
+export type {
+    SurfaceCompilationWorkerRequestOptions,
+    SurfaceCompilationWorker,
+    SurfaceCompilationServiceOptions,
+    SurfaceCompilationRequestOptions,
+    ResidentSurfaceLease,
+    ReadySurfaceCompilation,
+    StaleSurfaceCompilation,
+    SurfaceCompilationOutcome,
+    SurfaceCompilationRequest,
+    SurfaceWindowBufferPoolStats,
+    SurfaceCompilationServiceStats
+} from "./world/semantic/SurfaceCompilationService";
 export {
     SURFACE_VALUES_TEXTURE_CHANNELS,
     SURFACE_MATERIAL_TEXTURE_CHANNELS,

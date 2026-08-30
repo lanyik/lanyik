@@ -2181,6 +2181,7 @@ var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
 var WORLD_SEMANTIC_CHUNK_SIZE = 32;
 var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
 var HYDROLOGY_REGION_SIZE = 128;
+var HYDROLOGY_COORDINATE_SCALE = 16;
 var HYDROLOGY_MACRO_CELL_SIZE = 16;
 var HYDROLOGY_INFINITE_BASIN_SIZE = 2048;
 var HYDROLOGY_MACRO_CELLS_PER_INFINITE_BASIN = HYDROLOGY_INFINITE_BASIN_SIZE / HYDROLOGY_MACRO_CELL_SIZE;
@@ -2221,6 +2222,67 @@ function quantizeMacroHeight(value) {
 
 // src/world/semantic/MacroDrainageGraph.ts
 var HYDROLOGY_SEA_LEVEL = quantizeMacroHeight(LANDFORM_SEA_LEVEL);
+
+// src/world/semantic/SparseSemanticDelta.ts
+var ALL_SEMANTIC_OVERRIDE_FIELDS = 1 /* Substrate */ | 2 /* MacroHeight */ | 4 /* BiomeWeights */ | 8 /* VegetationDensity */ | 16 /* VegetationProfile */;
+
+// src/world/semantic/SurfaceCompileProfile.ts
+var SURFACE_RENDER_CHUNK_SIZE = 16;
+var SURFACE_SAMPLES_PER_TILE_INTERVAL = 4;
+var SURFACE_FIELD_CORE_SIZE = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+var SURFACE_FIELD_GUTTER_TEXELS = 1;
+var SURFACE_FIELD_TEXTURE_SIZE = SURFACE_FIELD_CORE_SIZE + SURFACE_FIELD_GUTTER_TEXELS * 2;
+var SURFACE_FIELD_TEXEL_COUNT = SURFACE_FIELD_TEXTURE_SIZE * SURFACE_FIELD_TEXTURE_SIZE;
+var SURFACE_INFLUENCE_RADIUS_TILES = 2;
+var SURFACE_EFFECTIVE_WINDOW_SIZE = SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES * 2;
+var SURFACE_TEXTURE_PAGE_LAYERS = 128;
+var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
+  renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
+  samplesPerTileInterval: SURFACE_SAMPLES_PER_TILE_INTERVAL,
+  gutterTexels: SURFACE_FIELD_GUTTER_TEXELS,
+  influenceRadiusTiles: SURFACE_INFLUENCE_RADIUS_TILES,
+  textureLayerSize: SURFACE_FIELD_TEXTURE_SIZE,
+  pageLayers: SURFACE_TEXTURE_PAGE_LAYERS
+});
+
+// src/world/semantic/SurfaceLattice.ts
+function surfaceLatticeTexelLocalCoordinate(physicalX, physicalY) {
+  if (!Number.isInteger(physicalX) || physicalX < 0 || physicalX >= SURFACE_FIELD_TEXTURE_SIZE || !Number.isInteger(physicalY) || physicalY < 0 || physicalY >= SURFACE_FIELD_TEXTURE_SIZE) {
+    throw new RangeError("surface lattice physical texel lies outside the field layer");
+  }
+  return Object.freeze({
+    u: -0.5 + (physicalX - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+    v: -0.5 + (physicalY - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL
+  });
+}
+var SURFACE_LATTICE_TEST_VECTORS = Object.freeze([
+  Object.freeze({ u: 0, v: 0, x: 0, z: Math.sqrt(3) / 2 }),
+  Object.freeze({ u: 1, v: 0, x: 1.5, z: 0 }),
+  Object.freeze({ u: -1, v: 0, x: -1.5, z: 0 }),
+  Object.freeze({ u: -2, v: -3, x: -3, z: -2.5 * Math.sqrt(3) })
+]);
+
+// src/world/semantic/EffectiveSurfaceWindow.ts
+var HYDROLOGY_MAX_HALF_WIDTH_TILES = 255 / (HYDROLOGY_COORDINATE_SCALE * 2);
+var HYDROLOGY_REQUIREMENT_RADIUS_TILES = Math.ceil(
+  HYDROLOGY_MAX_HALF_WIDTH_TILES + SURFACE_INFLUENCE_RADIUS_TILES
+);
+var FIELD_MIN = surfaceLatticeTexelLocalCoordinate(0, 0).u;
+var FIELD_MAX = surfaceLatticeTexelLocalCoordinate(
+  SURFACE_FIELD_TEXTURE_SIZE - 1,
+  SURFACE_FIELD_TEXTURE_SIZE - 1
+).u;
+
+// src/world/semantic/SurfaceCompiler.ts
+var SQRT_THREE = Math.sqrt(3);
+var TEXEL_ANTIALIAS_DISTANCE = SQRT_THREE / SURFACE_SAMPLES_PER_TILE_INTERVAL / 2;
+var SHORE_DISTANCE_LIMIT = SURFACE_INFLUENCE_RADIUS_TILES;
+var SHORE_SEARCH_TEXELS = Math.ceil(
+  SHORE_DISTANCE_LIMIT / (1.5 / SURFACE_SAMPLES_PER_TILE_INTERVAL)
+) + 2;
+var SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
+var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
+var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
 
 // src/world/WorldSource.ts
 function assertWorldSource(source) {

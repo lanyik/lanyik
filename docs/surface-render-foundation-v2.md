@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**阶段 A、B、阶段 C 前置、阶段 C1 CPU 表面编译器和阶段 C2 GPU 表面场池已完成；阶段 C3–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键、请求令牌、effective window、CPU 量化表面场和独立 GPU 纹理池可使用与验收，但尚未接入生产渲染热路径。
+状态：**阶段 A、B、阶段 C 前置、阶段 C1 CPU 表面编译器、阶段 C2 GPU 表面场池和阶段 C3 Worker 编译服务已完成；阶段 C4–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键、请求令牌、effective window、CPU 量化表面场、GPU 纹理池和 Worker 编译缓存/lease 可使用与验收，但尚未接入生产渲染热路径。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -401,7 +401,12 @@ interface CompiledSurfaceChunk {
 
 interface ResidentSurfaceLease {
     readonly requestToken: SurfaceRequestToken;
+    readonly effectiveRevision: number;
+    readonly dependencyKey: SurfaceDependencyKey;
     readonly chunk: CompiledSurfaceChunk;
+    readonly released: boolean;
+    isCurrent(): boolean;
+    release(): boolean;
 }
 ~~~
 
@@ -413,9 +418,9 @@ interface ResidentSurfaceLease {
 
 tracker 在一个 `sessionEpoch` 内使用全局严格递增的 `renderChunkGeneration`，只为当前活动 render key 保留 token。release 后重新挂载不会把 generation 重置为 1，因而不存在同 session ABA；新世界 session 必须使用新 epoch。结果接收同时校验 canonical render key、world identity、当前 token 和结构化 dependency key。缓存命中或旧 revision 的任务若局部依赖仍相同，可以用当前 token/effective revision 创建新 lease；不能把旧 token 本身带入 lease。
 
-compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
+当前 `SurfaceCompilationService.request(snapshot, renderKey)` 同步返回含 key、request token、结果 Promise 和 cancel 的请求句柄。结果是显式的 `ready + lease` 或 `stale` discriminated union；Worker/预算/协议错误才 reject。compiled CPU cache 命中时不修改缓存对象，而是先比较完整 dependency key，再用当前 request token 和 effective revision 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。cache 只按精确 typed-array 字节预算淘汰无 lease 的 LRU 项；预算被活动 lease 占满时直接拒绝新结果，不暗中驱逐仍在使用的字段。
 
-请求快照包含 16×16 核心区、两格语义 halo 和按 feature 宽度再加两格影响半径筛选的相交水文 feature。当前 `createTransferableEffectiveWindow` 严格要求调用方提供精确的 semantic chunk/hydrology region 集合，生成 20×20 X-major semantic SoA，并复制所有 typed arrays；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。河流和湖泊在窗口内按最短环绕位移展开，base/delta/tombstone 先合成为最终记录。阶段 C3 的 Worker service 负责 buffer 池回收，以及同一 32×32 semantic chunk 下四个 render chunk 的快照/投递合并；四个编译结果仍拥有独立 token、缓存和失效范围。
+请求快照包含 16×16 核心区、两格语义 halo 和按 feature 宽度再加两格影响半径筛选的相交水文 feature。当前 `createTransferableEffectiveWindow` 严格要求调用方提供精确的 semantic chunk/hydrology region 集合，生成 20×20 X-major semantic SoA，并复制所有 typed arrays；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。河流和湖泊在窗口内按最短环绕位移展开，base/delta/tombstone 先合成为最终记录。`SurfaceCompilationService` 可从有显式 retained-byte 预算的 exact-size buffer pool 构建这些副本；Worker 无论成功还是可恢复失败都会把输入 ArrayBuffer 转回主线程。`requestBatch` 接受一次捕获的共享并集快照，并在提交前为每个 render chunk 派生精确依赖子快照；相同 dependency 的并发请求共享一个 Worker job，但不同 render chunk 始终拥有独立 token、缓存键和失效范围。
 
 当前 CPU 结果固定包含 canonical key、结构化 dependency key、effective revision、有效/高程/水位 bounds、十个量化字段、chunk-local body palette、精确 CPU 字节数与确定性 checksum。地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；阶段 C2/E/F 分别补齐纹理槽位与水面 geometry、植被 seeds，不在 CPU 字段阶段放置不可兑现的占位对象。最终 `CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
 
@@ -475,7 +480,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 每个 compiled chunk 的 body palette 最多包含 255 个在 66×66 输出层实际出现的水体；超过上限是 feature 预算或编译错误，不能合并 ID。palette 只保存稳定 `bodyId + kind`，`waterProfile` 必须逐 texel 保存，因为同一 river body 的 discharge/profile 可以沿汇流向下游变化。物理纹理在不改变逻辑字段的前提下按第 9 节固定合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。当前十个 X-major typed arrays 对 4,356 texel 固定占用 78,408 字节；binary16 使用共享、ties-to-even 的 IEEE 754 编解码器。单个 GPU layer 固定占用 74,052 字节。
 
-动态战争迷雾不进入该静态表面层。阶段 C3 将使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 建立显式 slot 关联，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
+动态战争迷雾不进入该静态表面层。阶段 C4 将使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 建立显式 slot 关联，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
 
 ### 8.4 连续岸线与地形
 
@@ -506,7 +511,7 @@ CPU 查询和 GPU 顶点位移共享：
 
 当前 `sampleCompiledSurfaceChunk` 已实现 texel-center 双线性 CPU 查询，对 ground、material、water、shore、flow、profile 和 body palette 使用同一坐标核，并拒绝查询当前 chunk 有效域以外的位置。canonical near-grid 顶点的冻结对角线/重心插值和 shader reference evaluator 随阶段 D 接入；中、远 LOD 可以近似区块内部形状，但边界仍读取 canonical 边界点，玩法查询不随当前视觉 LOD 改变。
 
-阶段 C3 的查询 service 只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须从最新 effective window 运行同一个 `compileSurfaceChunk`/`sampleCompiledSurfaceChunk` 核；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
+阶段 C4 的查询 service 只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须从最新 effective window 运行同一个 `compileSurfaceChunk`/`sampleCompiledSurfaceChunk` 核；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
 
 ## 9. GPU 表面场池
 
@@ -526,7 +531,7 @@ WebGL2 shader 不动态索引一组任意页面 sampler。每个纹理页拥有�
 
 Three.js 当前的 array texture 更新接口按 layer 标脏，不承诺任意子矩形更新。因此 `upload` 总是把 X-major CPU 字段转置并完整写入目标 layer，重复覆盖同一 slot 只保留一个待上传 layer 标记。WebGL context 丢失时池拒绝分配、上传和绑定并清空失效标记；恢复后仅把仍活动且已有内容的 layer 重新标脏。真实 WebGL2 验收会逐格式上传、同层采样、读回并执行一次 context loss/restore，不能只检查 Three.js 对象字段。
 
-本阶段的池只拥有静态 surface 字段。动态雾尚未实现，也没有被伪装成 `SurfaceTexturePool` 的占位纹理；其独立高频存储与 slot 关联由阶段 C3 实现。
+本阶段的池只拥有静态 surface 字段。动态雾尚未实现，也没有被伪装成 `SurfaceTexturePool` 的占位纹理；其独立高频存储与 slot 关联由阶段 C4 实现。
 
 ### 9.2 GLSL 契约
 
@@ -836,7 +841,7 @@ Worker 池至少支持三个明确任务：
 WORLD_GENERATOR_VERSION = 7;
 WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
 WORLD_CHUNK_FORMAT_VERSION = 2;
-WORLD_WORKER_PROTOCOL_VERSION = 4;
+WORLD_WORKER_PROTOCOL_VERSION = 5;
 WORLD_DELTA_FORMAT_VERSION = 3;
 HYDROLOGY_REGION_FORMAT_VERSION = 1;
 HYDROLOGY_DELTA_FORMAT_VERSION = 1;
@@ -893,7 +898,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 当前 generator v7 沿用阶段 A 冻结的量化规则：`macroHeight = saturate(landform.elevation)` 后按 `floor(value × 65535 + 0.5)` 写入；climate 和 vegetation density 使用对应的 8 位规则；四项 biome 权重采用最大余数法并保证每个有效格严格合计 255。
 - substrate 目录固定为 sediment/soil/sand/rock/permafrost；biome basis 固定为 temperate/dry/cold/alpine；vegetation profile 目录固定为 none/warm-palm-mix/cold-pinia-mix/temperate-oak-mix。descriptor 保存两个目录规范 JSON 的 SHA-256 内容哈希，目录内容改变不能复用旧 world identity。
 - `BaseSemanticChunk` 校验拒绝未知字段，因而 water、坡度、材质输出、navigation 和其他派生事实不能混入基础权威格式；partial chunk 的 `validBounds` 外必须逐字节清零。
-- 共享 Worker 协议在阶段 B 后为 v4，包含显式 `generateSemanticChunk` 与 `generateHydrologyRegion` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；两个 v2 任务当前使用独立 generator v7 identity，不能与 v1 generator v5 或早期 v2 响应互换。
+- 共享 Worker 协议在阶段 C3 后为 v5：除 `generateSemanticChunk` 与 `generateHydrologyRegion` 外，新增以 compiler/profile identity 校验的 `compileSurfaceChunk`，而不把 generator version 冒充编译器版本。v1 的 world/chunk/vegetation payload 和 generator v5 identity 未改变；两个 v2 生成任务仍使用独立 generator v7 identity。
 - 已建立 descriptor/catalog identity、负坐标、环绕规范化、SoA 长度与权重、二进制 golden、请求顺序、Worker client/pool 和真实浏览器 transferable Worker 测试，并把 49 个 32×32 semantic chunk 的 generator-v7 吞吐纳入 benchmark gate。生成结果返回后可直接由主线程的只读 view 查询，不重新运行 resolver。
 
 阶段性命名说明：在阶段 H 完整切换前，现有生产常量仍表示 v1 格式；已落地的 v2 常量使用 `WORLD_DESCRIPTOR_V2_FORMAT_VERSION`、`WORLD_SEMANTIC_CHUNK_FORMAT_VERSION` 和 `WORLD_SURFACE_V2_GENERATOR_VERSION` 避免把两种缓存/存档身份混用。切换提交会删除 v1 常量并收敛为第 17.1 节的最终名称，不保留兼容别名。
@@ -968,13 +973,30 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 打包 benchmark 覆盖同一 66×66 layer 连续 100 次完整更新，代表性基线约 82 ms（约 0.82 ms/次），待上传层标记保持为 1。
 - 浏览器验收真实创建并采样四张 `sampler2DArray`，逐通道对比 CPU 字段；context loss/restore 后只重传活动层并保持相同结果。
 
-### 阶段 C3：Worker 编译服务、查询接入与动态雾
+### 阶段 C3 / 第 6 步：Worker 表面编译服务（已完成）
 
-- 实现 `compileSurfaceChunk` Worker discriminated-union 协议、任务调度、buffer 回池和迟到结果拒绝。
-- 实现 CPU cache/lease，并把 request token/dependency 校验接入查询 service；过期时从最新 effective snapshot 同步运行共享 CPU kernel。
+- 将共享 Worker 协议升级到 v5，新增独立 compiler/profile identity 的 `compileSurfaceChunk` discriminated request/response。
+- 把 effective window 和 compiled field 分别作为 transferable 输入/输出；Worker 将输入 buffer 转回主线程 exact-size buffer pool。
+- 把 surface compilation 接入有界优先级 WorkerPool lane，公开排队、忙碌和滑动平均耗时统计。
+- 实现按完整 `SurfaceDependencyKey` 查找的 compiled CPU LRU cache、严格字节预算和引用计数 lease。
+- 实现同 dependency 并发合并、request token supersede/release、取消和迟到结果 `stale` 拒绝。
+
+完成标志：权威 typed arrays 不会被 detach；真实浏览器 Worker 会转移并归还 window buffer；相同依赖只编译一次，旧 token 不能获得当前 lease，活动 lease 不会被预算淘汰。
+
+实现结果（2026-08-30）：
+
+- `WorldGeneratorClient` 和 `WorldGeneratorPool` 支持 `compileSurfaceChunk`，编译队列拥有独立 queued/busy/average 指标；协议错误、compiler/profile 错配和错误 dependency 结果在进入 cache 前拒绝。
+- `SurfaceCompilationService` 从 `EffectiveWorldSnapshot` 原子构造请求，同 render key 后发 token 立即取代前者；同 dependency 的 in-flight job 合并，结果只为仍满足 token 和结构化依赖的请求签发 lease。
+- compiled cache 以 78,408 字节字段 payload 精确记账，只淘汰无 lease 的 LRU 项；预算被活动 lease 占满时确定性报错，不做无界暂存。
+- `SurfaceWindowBufferPool` 按精确 byteLength 复用输入 ArrayBuffer，并以显式 retained-byte 预算限制空闲常驻；cache hit 未投递的 window buffer 立即回池。
+- 定向验收覆盖 cache hit 新 token、并发合并、supersede stale、取消、固定预算和 buffer 复用；真实 Chromium Worker 验证主线程输入 detach、78,408 字节结果回传和六个语义输入 buffer 归还。
+
+### 阶段 C4：查询接入与动态雾
+
+- 把 request token/dependency 校验接入查询 service；过期时从最新 effective snapshot 同步运行共享 CPU kernel。
 - 将动态雾拆到独立 R8 池，并显式关联 surface slot 生命周期。
 
-完成标志：过期任务无法覆盖或服务新 revision 查询；Worker 编译、缓存 lease、查询有效性和动态雾更新通过定向及浏览器验收。
+完成标志：过期 field 无法服务新 revision 查询；同步查询和动态雾更新通过定向及浏览器验收。
 
 ### 阶段 D：统一光照核心与合并地面网格
 

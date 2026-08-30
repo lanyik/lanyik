@@ -83,6 +83,15 @@ export interface TransferableEffectiveWindow {
     readonly lakes: readonly SurfaceWindowLake[];
 }
 
+export interface SurfaceWindowBufferAllocator {
+    acquire(byteLength: number): ArrayBuffer;
+    release(buffers: readonly ArrayBuffer[]): void;
+}
+
+export interface CreateTransferableEffectiveWindowOptions {
+    readonly bufferAllocator?: SurfaceWindowBufferAllocator;
+}
+
 const HYDROLOGY_MAX_HALF_WIDTH_TILES = 255 / (HYDROLOGY_COORDINATE_SCALE * 2);
 const HYDROLOGY_REQUIREMENT_RADIUS_TILES = Math.ceil(
     HYDROLOGY_MAX_HALF_WIDTH_TILES + SURFACE_INFLUENCE_RADIUS_TILES
@@ -218,18 +227,91 @@ function validCoreBounds(descriptor: WorldDescriptorV2, key: RenderChunkKey): Su
     });
 }
 
-function copySemanticWindow(snapshot: EffectiveWorldSnapshot, key: RenderChunkKey): Pick<
+function acquireBuffer(
+    byteLength: number,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): ArrayBuffer {
+    const buffer = allocator?.acquire(byteLength) ?? new ArrayBuffer(byteLength);
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== byteLength) {
+        throw new TypeError("surface window buffer allocator returned an invalid buffer");
+    }
+    acquired.push(buffer);
+    return buffer;
+}
+
+function uint8Array(
+    length: number,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Uint8Array {
+    return new Uint8Array(acquireBuffer(length, allocator, acquired));
+}
+
+function uint16Array(
+    length: number,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Uint16Array {
+    return new Uint16Array(acquireBuffer(length * Uint16Array.BYTES_PER_ELEMENT, allocator, acquired));
+}
+
+function float64Array(
+    length: number,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Float64Array {
+    return new Float64Array(acquireBuffer(length * Float64Array.BYTES_PER_ELEMENT, allocator, acquired));
+}
+
+function copyUint8Array(
+    source: Uint8Array,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Uint8Array {
+    const result = uint8Array(source.length, allocator, acquired);
+    result.set(source);
+    return result;
+}
+
+function copyUint16Array(
+    source: Uint16Array,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Uint16Array {
+    const result = uint16Array(source.length, allocator, acquired);
+    result.set(source);
+    return result;
+}
+
+function releaseUnusedArray(
+    value: ArrayBufferView,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): void {
+    if (!(value.buffer instanceof ArrayBuffer)) return;
+    const index = acquired.lastIndexOf(value.buffer);
+    if (index >= 0) acquired.splice(index, 1);
+    allocator?.release([value.buffer]);
+}
+
+function copySemanticWindow(
+    snapshot: EffectiveWorldSnapshot,
+    key: RenderChunkKey,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
+): Pick<
     TransferableEffectiveWindow,
     "substrateClass" | "macroHeight" | "biomeWeights" | "climate"
     | "vegetationDensity" | "vegetationProfile"
 > {
     const tileCount = SURFACE_EFFECTIVE_WINDOW_SIZE * SURFACE_EFFECTIVE_WINDOW_SIZE;
-    const substrateClass = new Uint8Array(tileCount);
-    const macroHeight = new Uint16Array(tileCount);
-    const biomeWeights = new Uint8Array(tileCount * 4);
-    const climate = new Uint8Array(tileCount * 2);
-    const vegetationDensity = new Uint8Array(tileCount);
-    const vegetationProfile = new Uint8Array(tileCount);
+    const substrateClass = uint8Array(tileCount, allocator, acquired);
+    const macroHeight = uint16Array(tileCount, allocator, acquired);
+    const biomeWeights = uint8Array(tileCount * 4, allocator, acquired);
+    const climate = uint8Array(tileCount * 2, allocator, acquired);
+    const vegetationDensity = uint8Array(tileCount, allocator, acquired);
+    const vegetationProfile = uint8Array(tileCount, allocator, acquired);
     const origin = renderOrigin(key);
     for (let windowX = 0; windowX < SURFACE_EFFECTIVE_WINDOW_SIZE; windowX += 1) {
         const tileX = canonicalReadCoordinate(
@@ -278,7 +360,9 @@ function localizePointsIfRelevant(
     rawPoints: ArrayLike<number>,
     origin: Readonly<{ x: number; y: number }>,
     expansion: number,
-    sourceOrigin?: Readonly<{ x: number; y: number }>
+    sourceOrigin: Readonly<{ x: number; y: number }> | undefined,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
 ): Float64Array | undefined {
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
@@ -307,7 +391,7 @@ function localizePointsIfRelevant(
     if (maxX + expansion < FIELD_MIN || minX - expansion > FIELD_MAX
         || maxY + expansion < FIELD_MIN || minY - expansion > FIELD_MAX) return undefined;
 
-    const result = new Float64Array(rawPoints.length);
+    const result = float64Array(rawPoints.length, allocator, acquired);
     previousX = origin.x + SURFACE_RENDER_CHUNK_SIZE / 2;
     previousY = origin.y + SURFACE_RENDER_CHUNK_SIZE / 2;
     for (let index = 0; index < rawPoints.length; index += 2) {
@@ -341,7 +425,9 @@ function maximumSurfaceFeatureWidth(values: Uint8Array): number {
 
 function collectHydrology(
     snapshot: EffectiveWorldSnapshot,
-    key: RenderChunkKey
+    key: RenderChunkKey,
+    allocator: SurfaceWindowBufferAllocator | undefined,
+    acquired: ArrayBuffer[]
 ): Readonly<{
     rivers: readonly SurfaceWindowRiver[];
     lakes: readonly SurfaceWindowLake[];
@@ -368,12 +454,15 @@ function collectHydrology(
                 segment.controlPoints,
                 origin,
                 expansion,
-                regionOrigin
+                regionOrigin,
+                allocator,
+                acquired
             );
             if (!points) continue;
             const suppressor = deltaById.get(segment.riverId);
             if (suppressor) {
                 dependencyFeatureIds.add(suppressor.featureId);
+                releaseUnusedArray(points, allocator, acquired);
                 continue;
             }
             rivers.push(Object.freeze({
@@ -383,8 +472,8 @@ function collectHydrology(
                 revision: 0,
                 profileIndex: bodyProfiles.get(segment.riverId) ?? segment.dischargeClass,
                 controlPoints: points,
-                widthProfile: segment.widthProfile.slice(),
-                levelProfile: segment.levelProfile.slice()
+                widthProfile: copyUint8Array(segment.widthProfile, allocator, acquired),
+                levelProfile: copyUint16Array(segment.levelProfile, allocator, acquired)
             }));
         }
         for (const lake of region.base.lakes) {
@@ -393,12 +482,15 @@ function collectHydrology(
                 lake.boundaryPoints,
                 origin,
                 SURFACE_INFLUENCE_RADIUS_TILES,
-                regionOrigin
+                regionOrigin,
+                allocator,
+                acquired
             );
             if (!points) continue;
             const suppressor = deltaById.get(lake.bodyId);
             if (suppressor) {
                 dependencyFeatureIds.add(suppressor.featureId);
+                releaseUnusedArray(points, allocator, acquired);
                 continue;
             }
             lakes.push(Object.freeze({
@@ -424,7 +516,10 @@ function collectHydrology(
             snapshot.descriptor,
             sourcePoints,
             origin,
-            expansion
+            expansion,
+            undefined,
+            allocator,
+            acquired
         );
         if (!points) continue;
         dependencyFeatureIds.add(delta.featureId);
@@ -436,8 +531,8 @@ function collectHydrology(
                 revision: delta.revision,
                 profileIndex: Math.min(255, delta.dischargeClass),
                 controlPoints: points,
-                widthProfile: delta.widthProfile.slice(),
-                levelProfile: delta.levelProfile.slice()
+                widthProfile: copyUint8Array(delta.widthProfile, allocator, acquired),
+                levelProfile: copyUint16Array(delta.levelProfile, allocator, acquired)
             }));
         } else {
             lakes.push(Object.freeze({
@@ -598,29 +693,43 @@ export function assertTransferableEffectiveWindow(
 
 export function createTransferableEffectiveWindow(
     snapshot: EffectiveWorldSnapshot,
-    renderKey: RenderChunkKey
+    renderKey: RenderChunkKey,
+    options: CreateTransferableEffectiveWindowOptions = {}
 ): TransferableEffectiveWindow {
-    const key = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
-    assertExactDependencies(snapshot, key);
-    const semantic = copySemanticWindow(snapshot, key);
-    const hydrology = collectHydrology(snapshot, key);
-    const binding = createSurfaceDependencyBinding(snapshot, key, {
-        hydrologyFeatureIds: hydrology.dependencyFeatureIds
-    });
-    const window: TransferableEffectiveWindow = Object.freeze({
-        worldIdentity: snapshot.worldIdentity,
-        effectiveRevision: snapshot.effectiveRevision,
-        key,
-        dependencyKey: binding.dependencyKey,
-        validBounds: validCoreBounds(snapshot.descriptor, key),
-        ...semantic,
-        rivers: hydrology.rivers,
-        lakes: hydrology.lakes
-    });
-    // The descriptor is intentionally not transferred; identity and the canonical key
-    // freeze all topology-sensitive preparation before the Worker boundary.
-    assertWindowWithoutDescriptor(window);
-    return window;
+    if (!options || typeof options !== "object"
+        || Object.getOwnPropertyNames(options).some(name => name !== "bufferAllocator")
+        || options.bufferAllocator !== undefined
+        && (typeof options.bufferAllocator.acquire !== "function"
+            || typeof options.bufferAllocator.release !== "function")) {
+        throw new TypeError("effective surface window options are invalid");
+    }
+    const acquired: ArrayBuffer[] = [];
+    try {
+        const key = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
+        assertExactDependencies(snapshot, key);
+        const semantic = copySemanticWindow(snapshot, key, options.bufferAllocator, acquired);
+        const hydrology = collectHydrology(snapshot, key, options.bufferAllocator, acquired);
+        const binding = createSurfaceDependencyBinding(snapshot, key, {
+            hydrologyFeatureIds: hydrology.dependencyFeatureIds
+        });
+        const window: TransferableEffectiveWindow = Object.freeze({
+            worldIdentity: snapshot.worldIdentity,
+            effectiveRevision: snapshot.effectiveRevision,
+            key,
+            dependencyKey: binding.dependencyKey,
+            validBounds: validCoreBounds(snapshot.descriptor, key),
+            ...semantic,
+            rivers: hydrology.rivers,
+            lakes: hydrology.lakes
+        });
+        // The descriptor is intentionally not transferred; identity and the canonical key
+        // freeze all topology-sensitive preparation before the Worker boundary.
+        assertWindowWithoutDescriptor(window);
+        return window;
+    } catch (reason) {
+        if (acquired.length > 0) options.bufferAllocator?.release(acquired);
+        throw reason;
+    }
 }
 
 function assertWindowWithoutDescriptor(window: TransferableEffectiveWindow): void {

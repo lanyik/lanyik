@@ -1,6 +1,9 @@
 import { PackedWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
 import { WorldVegetationGenerationOptions, WorldVegetationLayout } from "./generateVegetation";
-import { WorldGeneratorClient } from "./WorldGeneratorClient";
+import {
+    SurfaceWorkerCompilation,
+    WorldGeneratorClient
+} from "./WorldGeneratorClient";
 import {
     PriorityTaskQueue,
     WorkLane,
@@ -11,11 +14,13 @@ import { BaseSemanticChunk } from "./semantic/BaseSemanticChunk";
 import { BaseSemanticChunkGenerationOptions } from "./semantic/generateBaseSemanticChunk";
 import { HydrologyRegion } from "./semantic/HydrologyRegion";
 import { HydrologyRegionGenerationOptions } from "./semantic/generateHydrologyRegion";
+import { TransferableEffectiveWindow } from "./semantic/EffectiveSurfaceWindow";
 
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
     generateSemanticChunk?(options: BaseSemanticChunkGenerationOptions): Promise<BaseSemanticChunk>;
     generateHydrologyRegion?(options: HydrologyRegionGenerationOptions): Promise<HydrologyRegion>;
+    compileSurfaceChunk?(effectiveWindow: TransferableEffectiveWindow): Promise<SurfaceWorkerCompilation>;
     generateVegetation?(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout>;
     dispose(): void;
     readonly isDisposed?: boolean;
@@ -51,14 +56,17 @@ export interface WorldGeneratorPoolStats {
     queuedChunks: number;
     queuedSemanticChunks: number;
     queuedHydrologyRegions: number;
+    queuedSurfaceChunks: number;
     queuedVegetation: number;
     busyChunkWorkers: number;
     busySemanticChunkWorkers: number;
     busyHydrologyRegionWorkers: number;
+    busySurfaceChunkWorkers: number;
     busyVegetationWorkers: number;
     averageChunkMs: number;
     averageSemanticChunkMs: number;
     averageHydrologyRegionMs: number;
+    averageSurfaceChunkMs: number;
     averageVegetationMs: number;
     queuedWeight: number;
     oldestQueuedMs: number;
@@ -69,12 +77,13 @@ export interface WorldGeneratorPoolStats {
 }
 
 interface QueuedTask {
-    kind: "chunk" | "semantic-chunk" | "hydrology-region" | "vegetation";
+    kind: "chunk" | "semantic-chunk" | "hydrology-region" | "surface-chunk" | "vegetation";
     queueId?: number;
     options: WorldChunkGenerationOptions | BaseSemanticChunkGenerationOptions
-        | HydrologyRegionGenerationOptions | WorldVegetationGenerationOptions;
+        | HydrologyRegionGenerationOptions | TransferableEffectiveWindow | WorldVegetationGenerationOptions;
     signal?: AbortSignal;
-    resolve(result: PackedWorldChunk | BaseSemanticChunk | HydrologyRegion | WorldVegetationLayout): void;
+    resolve(result: PackedWorldChunk | BaseSemanticChunk | HydrologyRegion
+        | SurfaceWorkerCompilation | WorldVegetationLayout): void;
     reject(error: Error): void;
     abort?: () => void;
     settled: boolean;
@@ -114,6 +123,7 @@ export class WorldGeneratorPool {
     private averageChunkMs = 0;
     private averageSemanticChunkMs = 0;
     private averageHydrologyRegionMs = 0;
+    private averageSurfaceChunkMs = 0;
     private averageVegetationMs = 0;
     private workerFailures = 0;
     private clientFactoryFailures = 0;
@@ -308,6 +318,44 @@ export class WorldGeneratorPool {
         });
     }
 
+    public compileSurfaceChunk(
+        effectiveWindow: TransferableEffectiveWindow,
+        request: ChunkRequestOptions = {}
+    ): Promise<SurfaceWorkerCompilation> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        return new Promise<SurfaceWorkerCompilation>((resolve, reject) => {
+            const task: QueuedTask = {
+                kind: "surface-chunk",
+                options: effectiveWindow,
+                signal: request.signal,
+                resolve: result => resolve(result as SurfaceWorkerCompilation),
+                reject,
+                settled: false
+            };
+            if (request.signal) {
+                task.abort = () => {
+                    if (task.settled) return;
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
+                };
+                request.signal.addEventListener("abort", task.abort, { once: true });
+            }
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "visible",
+                weight: request.weight ?? 2,
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError(
+                    "Surface compilation request was shed"
+                )));
+            }
+            this.dispatch();
+        });
+    }
+
     public get stats(): Readonly<WorldGeneratorPoolStats> {
         const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
         const queueStats = this.queue.stats;
@@ -320,16 +368,20 @@ export class WorldGeneratorPool {
             queuedChunks: queued.filter(task => task.kind === "chunk").length,
             queuedSemanticChunks: queued.filter(task => task.kind === "semantic-chunk").length,
             queuedHydrologyRegions: queued.filter(task => task.kind === "hydrology-region").length,
+            queuedSurfaceChunks: queued.filter(task => task.kind === "surface-chunk").length,
             queuedVegetation: queued.filter(task => task.kind === "vegetation").length,
             busyChunkWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "chunk").length,
             busySemanticChunkWorkers: this.slots.filter(slot =>
                 slot.busy && slot.taskKind === "semantic-chunk").length,
             busyHydrologyRegionWorkers: this.slots.filter(slot =>
                 slot.busy && slot.taskKind === "hydrology-region").length,
+            busySurfaceChunkWorkers: this.slots.filter(slot =>
+                slot.busy && slot.taskKind === "surface-chunk").length,
             busyVegetationWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "vegetation").length,
             averageChunkMs: this.averageChunkMs,
             averageSemanticChunkMs: this.averageSemanticChunkMs,
             averageHydrologyRegionMs: this.averageHydrologyRegionMs,
+            averageSurfaceChunkMs: this.averageSurfaceChunkMs,
             averageVegetationMs: this.averageVegetationMs,
             queuedWeight: queueStats.pendingWeight,
             oldestQueuedMs: queueStats.oldestTaskAgeMs,
@@ -390,7 +442,8 @@ export class WorldGeneratorPool {
             // A custom client is allowed to fail synchronously. Preserve the
             // existing immediate dispatch contract, but normalize a throw to
             // a rejected promise so slot cleanup always runs.
-            let pending: Promise<PackedWorldChunk | BaseSemanticChunk | HydrologyRegion | WorldVegetationLayout>;
+            let pending: Promise<PackedWorldChunk | BaseSemanticChunk | HydrologyRegion
+                | SurfaceWorkerCompilation | WorldVegetationLayout>;
             try {
                 pending = task.kind === "chunk"
                     ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
@@ -402,6 +455,12 @@ export class WorldGeneratorPool {
                             ? slot.client.generateHydrologyRegion
                                 ? slot.client.generateHydrologyRegion(task.options as HydrologyRegionGenerationOptions)
                                 : Promise.reject(new Error("World generation client does not support hydrology region tasks"))
+                            : task.kind === "surface-chunk"
+                                ? slot.client.compileSurfaceChunk
+                                    ? slot.client.compileSurfaceChunk(task.options as TransferableEffectiveWindow)
+                                    : Promise.reject(new Error(
+                                        "World generation client does not support surface compilation tasks"
+                                    ))
                             : slot.client.generateVegetation
                                 ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
                                 : Promise.reject(new Error("World generation client does not support vegetation tasks"));
@@ -459,6 +518,9 @@ export class WorldGeneratorPool {
         } else if (kind === "hydrology-region") {
             this.averageHydrologyRegionMs = this.averageHydrologyRegionMs === 0
                 ? durationMs : this.averageHydrologyRegionMs + (durationMs - this.averageHydrologyRegionMs) * alpha;
+        } else if (kind === "surface-chunk") {
+            this.averageSurfaceChunkMs = this.averageSurfaceChunkMs === 0
+                ? durationMs : this.averageSurfaceChunkMs + (durationMs - this.averageSurfaceChunkMs) * alpha;
         } else {
             this.averageVegetationMs = this.averageVegetationMs === 0
                 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;
