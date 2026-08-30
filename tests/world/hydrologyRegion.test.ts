@@ -15,6 +15,8 @@ import {
     HydrologyRegionSpatialIndex,
     HydrologyWaterKind,
     HYDROLOGY_COORDINATE_SCALE,
+    HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS,
+    HYDROLOGY_REGION_SIZE,
     hydrologyRegionCoordinate,
     locateSemanticTile,
     OCEAN_BODY_ID,
@@ -53,6 +55,25 @@ function regionSnapshot(region: HydrologyRegion): unknown {
         mouths: region.mouths,
         bodies: region.bodies
     };
+}
+
+function longestVisibleDrainagePath(graph: ReturnType<typeof buildMacroDrainageGraph>) {
+    const nodeById = new Map(graph.nodes.map(node => [node.nodeId, node]));
+    const edgeByUpstream = new Map(graph.edges.map(edge => [edge.upstreamNodeId, edge]));
+    let longest: Array<(typeof graph.edges)[number]> = [];
+    for (const start of graph.nodes) {
+        const path: Array<(typeof graph.edges)[number]> = [];
+        let node = start;
+        while (true) {
+            const edge = edgeByUpstream.get(node.nodeId);
+            if (!edge || edge.dischargeClass < HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS) break;
+            path.push(edge);
+            node = nodeById.get(edge.downstreamNodeId)!;
+            if (path.length > graph.nodes.length) throw new Error("drainage path did not terminate");
+        }
+        if (path.length > longest.length) longest = path;
+    }
+    return longest;
 }
 
 describe("surface foundation v2 hydrology", () => {
@@ -98,6 +119,20 @@ describe("surface foundation v2 hydrology", () => {
         const corrupt = corruptNodes.find(node => node.downstreamNodeId)!;
         corrupt.drainageRank = nodes.get(corrupt.downstreamNodeId!)!.drainageRank;
         expect(() => assertMacroDrainageGraph({ ...first, nodes: corruptNodes })).toThrow(/rank/);
+    });
+
+    test("keeps an all-ocean graph minimal while preserving its explicit ocean terminal", () => {
+        const graph = buildMacroDrainageGraph({
+            descriptor: staticDescriptor("c"),
+            macroHeightSource: { sampleMacroHeight: () => 0 }
+        });
+        expect(() => assertMacroDrainageGraph(graph)).not.toThrow();
+        expect(graph.nodes).toHaveLength(1);
+        expect(graph.edges).toHaveLength(0);
+        expect(graph.terminals).toEqual([expect.objectContaining({
+            kind: "ocean",
+            bodyId: OCEAN_BODY_ID
+        })]);
     });
 
     test("clips one graph into request-order-independent regions with matching ports", () => {
@@ -168,7 +203,114 @@ describe("surface foundation v2 hydrology", () => {
             connections.set(port.connectionId, (connections.get(port.connectionId) ?? 0) + 1);
         }
         expect(connections.size).toBeGreaterThan(0);
-        expect(new Set(connections.values())).toEqual(new Set([2]));
+        expect([...connections.values()].every(count => count === 1 || count === 2)).toBe(true);
+        expect([...connections.values()]).toContain(2);
+    });
+
+    test("generates long rivers, explicit lakes, confluences, and ocean mouths from procedural terrain", () => {
+        const samples = [
+            { seed: "hydrology-order", basin: { basinX: 0, basinY: 0 } },
+            { seed: "hydrology-worker", basin: { basinX: -1, basinY: 1 } },
+            { seed: "gallery-infinite-0", basin: { basinX: 1, basinY: -1 } }
+        ] as const;
+        for (const sample of samples) {
+            const graph = buildMacroDrainageGraph({
+                descriptor: createWorldDescriptorV2({ seed: sample.seed }),
+                basin: sample.basin
+            });
+            expect(() => assertMacroDrainageGraph(graph)).not.toThrow();
+            const nodeById = new Map(graph.nodes.map(node => [node.nodeId, node]));
+            const terminalByNodeId = new Map(graph.terminals.map(terminal => [terminal.nodeId, terminal]));
+            const visibleEdges = graph.edges.filter(edge =>
+                edge.dischargeClass >= HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS
+            );
+            const visibleIncoming = new Map<string, number>();
+            for (const edge of visibleEdges) {
+                visibleIncoming.set(
+                    edge.downstreamNodeId,
+                    (visibleIncoming.get(edge.downstreamNodeId) ?? 0) + 1
+                );
+            }
+            expect(graph.terminals.some(terminal => terminal.kind === "lake")).toBe(true);
+            expect(visibleEdges.some(edge =>
+                terminalByNodeId.get(edge.downstreamNodeId)?.kind === "lake"
+            )).toBe(true);
+            expect(visibleEdges.some(edge =>
+                terminalByNodeId.get(edge.downstreamNodeId)?.kind === "ocean"
+            )).toBe(true);
+            expect(visibleEdges.some(edge =>
+                (visibleIncoming.get(edge.upstreamNodeId) ?? 0) >= 2
+            )).toBe(true);
+
+            const longest = longestVisibleDrainagePath(graph);
+            const crossedRegions = new Set<string>();
+            for (const edge of longest) {
+                for (const nodeId of [edge.upstreamNodeId, edge.downstreamNodeId]) {
+                    const node = nodeById.get(nodeId)!;
+                    crossedRegions.add(
+                        `${Math.floor(node.x / HYDROLOGY_REGION_SIZE)},${Math.floor(node.y / HYDROLOGY_REGION_SIZE)}`
+                    );
+                }
+            }
+            expect(longest.length).toBeGreaterThanOrEqual(64);
+            expect(crossedRegions.size).toBeGreaterThanOrEqual(4);
+            const terminalNode = nodeById.get(longest[longest.length - 1].downstreamNodeId)!;
+            expect(terminalNode.downstreamNodeId).toBeUndefined();
+        }
+    });
+
+    test("clips a procedural long river across regions without losing segments or port pairs", () => {
+        const descriptor = createWorldDescriptorV2({ seed: "hydrology-order" });
+        const graph = buildMacroDrainageGraph({ descriptor, basin: { basinX: 0, basinY: 0 } });
+        const nodeById = new Map(graph.nodes.map(node => [node.nodeId, node]));
+        const path = longestVisibleDrainagePath(graph);
+        const pathEdgeIds = new Set(path.map(edge => edge.edgeId));
+        const keys = new Map<string, { regionX: number; regionY: number }>();
+        for (const edge of path) {
+            for (const nodeId of [edge.upstreamNodeId, edge.downstreamNodeId]) {
+                const node = nodeById.get(nodeId)!;
+                const key = {
+                    regionX: Math.floor(node.x / HYDROLOGY_REGION_SIZE),
+                    regionY: Math.floor(node.y / HYDROLOGY_REGION_SIZE)
+                };
+                keys.set(`${key.regionX},${key.regionY}`, key);
+            }
+        }
+
+        const generator = new HydrologyRegionGenerator(descriptor);
+        const regions = [...keys.values()].map(key => generator.generate(key));
+        const serializedEdgeIds = new Set(regions.flatMap(region => region.rivers.map(river => river.edgeId)));
+        for (const edge of path) expect(serializedEdgeIds.has(edge.edgeId)).toBe(true);
+
+        const pathPorts = new Map<string, number>();
+        for (const region of regions) for (const port of region.boundaryPorts) {
+            if (!pathEdgeIds.has(port.edgeId)) continue;
+            pathPorts.set(port.connectionId, (pathPorts.get(port.connectionId) ?? 0) + 1);
+        }
+        expect(pathPorts.size).toBeGreaterThanOrEqual(3);
+        expect(new Set(pathPorts.values())).toEqual(new Set([2]));
+
+        const lakeTerminal = graph.terminals.find(terminal => terminal.kind === "lake")!;
+        const lakeNode = nodeById.get(lakeTerminal.nodeId)!;
+        const lakeRegion = generator.generate({
+            regionX: Math.floor(lakeNode.x / HYDROLOGY_REGION_SIZE),
+            regionY: Math.floor(lakeNode.y / HYDROLOGY_REGION_SIZE)
+        });
+        expect(lakeRegion.lakes.some(lake => lake.bodyId === lakeTerminal.bodyId)).toBe(true);
+
+        const terminalByNodeId = new Map(graph.terminals.map(terminal => [terminal.nodeId, terminal]));
+        const mouthEdge = graph.edges.find(edge =>
+            edge.dischargeClass >= HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS
+            && terminalByNodeId.get(edge.downstreamNodeId)?.kind === "ocean"
+        )!;
+        const mouthNode = nodeById.get(mouthEdge.downstreamNodeId)!;
+        const mouthRegion = generator.generate({
+            regionX: Math.floor(mouthNode.x / HYDROLOGY_REGION_SIZE),
+            regionY: Math.floor(mouthNode.y / HYDROLOGY_REGION_SIZE)
+        });
+        expect(mouthRegion.mouths.some(mouth =>
+            mouth.riverId === mouthEdge.riverId && mouth.targetBodyId === OCEAN_BODY_ID
+        )).toBe(true);
     });
 
     test("handles partial toroidal regions and matches a four-corner seam", () => {

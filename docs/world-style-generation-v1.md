@@ -572,7 +572,7 @@ surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
 
 v1 中，一个生成器版本唯一对应一个冻结风格配置，不增加第二套总是一起增长的风格版本。
 
-冻结之后，世界表面 v2 阶段 A、B 为共享 Worker 增加了独立的 `generateSemanticChunk` 和 `generateHydrologyRegion` 任务，因此传输协议从 v2 依次升到 v4；v1 generator v5、packed chunk v1 和 descriptor v1 的内容及身份没有改变。新增任务使用独立的 v2 generator v6 identity，不能把两类响应互换。
+冻结之后，世界表面 v2 阶段 A、B 为共享 Worker 增加了独立的 `generateSemanticChunk` 和 `generateHydrologyRegion` 任务，因此传输协议从 v2 依次升到 v4；v1 generator v5、packed chunk v1 和 descriptor v1 的内容及身份没有改变。新增任务当前使用独立的 v2 generator v7 identity；v7 冻结了补全后的程序化水文流域规则，不能与 v1 generator v5 或早期 v2 响应互换。
 
 ### 10.3 唯一世界指纹
 

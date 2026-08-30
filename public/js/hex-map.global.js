@@ -12125,14 +12125,14 @@ void main() {
   var WORLD_SEMANTIC_CHUNK_SIZE = 32;
   var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
   var WORLD_SEMANTIC_CHUNK_FORMAT_VERSION = 2;
-  var WORLD_SURFACE_V2_GENERATOR_VERSION = 6;
+  var WORLD_SURFACE_V2_GENERATOR_VERSION = 7;
   var HYDROLOGY_REGION_FORMAT_VERSION = 1;
   var BASE_SEMANTIC_CHUNK_REVISION = 0;
   var HYDROLOGY_REGION_SIZE = 128;
   var HYDROLOGY_REGION_REVISION = 0;
   var HYDROLOGY_COORDINATE_SCALE = 16;
   var HYDROLOGY_MACRO_CELL_SIZE = 16;
-  var HYDROLOGY_INFINITE_BASIN_SIZE = 512;
+  var HYDROLOGY_INFINITE_BASIN_SIZE = 2048;
   var HYDROLOGY_MACRO_CELLS_PER_INFINITE_BASIN = HYDROLOGY_INFINITE_BASIN_SIZE / HYDROLOGY_MACRO_CELL_SIZE;
   var FULL_SEMANTIC_CHUNK_BOUNDS = Object.freeze({
     minX: 0,
@@ -12866,6 +12866,8 @@ void main() {
   var HYDROLOGY_MAX_DISCHARGE_CLASS = 15;
   var HYDROLOGY_MAX_MACRO_NODES = 16384;
   var HYDROLOGY_SEA_LEVEL = quantizeMacroHeight(LANDFORM_SEA_LEVEL);
+  var HYDROLOGY_MIN_EXPLICIT_LAKE_COMPONENT_NODES = 128;
+  var HYDROLOGY_MIN_EXPLICIT_LAKE_DISTANCE = 8;
   var DrainageMinHeap = class _DrainageMinHeap {
     constructor() {
       this.entries = [];
@@ -13001,21 +13003,139 @@ void main() {
     }
     return [...result];
   }
+  function buildNeighborTable(nodes, columns, rows, wrapX, wrapY) {
+    return nodes.map((node) => neighborIndices(node, columns, rows, wrapX, wrapY));
+  }
+  function lowerNodeFirst(nodes, first, second) {
+    return nodes[first].macroHeight - nodes[second].macroHeight || first - second;
+  }
+  function selectExplicitLake(component, componentId, componentByNode, outletIngressIndex, nodes, neighbors, distances) {
+    if (component.length < HYDROLOGY_MIN_EXPLICIT_LAKE_COMPONENT_NODES) return void 0;
+    const queue = [];
+    distances[outletIngressIndex] = 0;
+    queue.push(outletIngressIndex);
+    let maximumDistance = 0;
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const index = queue[cursor];
+      const distance = distances[index];
+      maximumDistance = Math.max(maximumDistance, distance);
+      for (const candidateIndex of neighbors[index]) {
+        if (componentByNode[candidateIndex] !== componentId || distances[candidateIndex] >= 0) continue;
+        distances[candidateIndex] = distance + 1;
+        queue.push(candidateIndex);
+      }
+    }
+    if (maximumDistance < HYDROLOGY_MIN_EXPLICIT_LAKE_DISTANCE) {
+      for (const index of component) distances[index] = -1;
+      return void 0;
+    }
+    const minimumDistance = Math.max(
+      HYDROLOGY_MIN_EXPLICIT_LAKE_DISTANCE,
+      Math.ceil(maximumDistance * 2 / 3)
+    );
+    let selected;
+    let selectedIsLocalMinimum = false;
+    for (const index of component) {
+      if (distances[index] < minimumDistance) continue;
+      const isLocalMinimum = neighbors[index].every(
+        (candidateIndex) => componentByNode[candidateIndex] !== componentId || nodes[candidateIndex].macroHeight >= nodes[index].macroHeight
+      );
+      if (selected === void 0 || isLocalMinimum && !selectedIsLocalMinimum || isLocalMinimum === selectedIsLocalMinimum && (nodes[index].macroHeight < nodes[selected].macroHeight || nodes[index].macroHeight === nodes[selected].macroHeight && (distances[index] > distances[selected] || distances[index] === distances[selected] && index < selected))) {
+        selected = index;
+        selectedIsLocalMinimum = isLocalMinimum;
+      }
+    }
+    for (const index of component) distances[index] = -1;
+    return selected;
+  }
+  function selectDrainageRoots(nodes, neighbors) {
+    var _a;
+    const componentByNode = new Int32Array(nodes.length);
+    componentByNode.fill(-1);
+    const components = [];
+    for (let start = 0; start < nodes.length; start += 1) {
+      if (nodes[start].macroHeight < HYDROLOGY_SEA_LEVEL || componentByNode[start] >= 0) continue;
+      const componentId = components.length;
+      const component = [start];
+      componentByNode[start] = componentId;
+      for (let cursor = 0; cursor < component.length; cursor += 1) {
+        const index = component[cursor];
+        for (const candidateIndex of neighbors[index]) {
+          if (nodes[candidateIndex].macroHeight < HYDROLOGY_SEA_LEVEL || componentByNode[candidateIndex] >= 0) continue;
+          componentByNode[candidateIndex] = componentId;
+          component.push(candidateIndex);
+        }
+      }
+      components.push(component);
+    }
+    const roots = /* @__PURE__ */ new Set();
+    const distances = new Int32Array(nodes.length);
+    distances.fill(-1);
+    for (let componentId = 0; componentId < components.length; componentId += 1) {
+      const component = components[componentId];
+      const outletCandidates = /* @__PURE__ */ new Set();
+      for (const index of component) {
+        nodes[index].included = true;
+        for (const candidateIndex of neighbors[index]) {
+          if (nodes[candidateIndex].macroHeight < HYDROLOGY_SEA_LEVEL) {
+            outletCandidates.add(candidateIndex);
+          }
+        }
+      }
+      if (outletCandidates.size === 0) {
+        roots.add([...component].sort((first, second) => lowerNodeFirst(nodes, first, second))[0]);
+        continue;
+      }
+      const outletIndex = [...outletCandidates].sort((first, second) => lowerNodeFirst(nodes, first, second))[0];
+      const outletIngressIndex = neighbors[outletIndex].filter((index) => componentByNode[index] === componentId).sort((first, second) => lowerNodeFirst(nodes, first, second))[0];
+      if (outletIngressIndex === void 0) {
+        throw new Error("selected hydrology outlet does not touch its land component");
+      }
+      roots.add(outletIndex);
+      nodes[outletIndex].included = true;
+      ((_a = nodes[outletIndex]).outletIngressIndices ?? (_a.outletIngressIndices = /* @__PURE__ */ new Set())).add(outletIngressIndex);
+      const lakeIndex = selectExplicitLake(
+        component,
+        componentId,
+        componentByNode,
+        outletIngressIndex,
+        nodes,
+        neighbors,
+        distances
+      );
+      if (lakeIndex !== void 0) roots.add(lakeIndex);
+    }
+    if (roots.size === 0) {
+      const oceanIndex = nodes.map((_, index) => index).sort((first, second) => lowerNodeFirst(nodes, first, second))[0];
+      roots.add(oceanIndex);
+      nodes[oceanIndex].included = true;
+    }
+    return roots;
+  }
   function assignDrainage(nodes, columns, rows, wrapX, wrapY) {
+    const neighbors = buildNeighborTable(nodes, columns, rows, wrapX, wrapY);
+    const seedIndices = selectDrainageRoots(nodes, neighbors);
     const queue = new DrainageMinHeap();
-    let seedIndices = nodes.map((node, index) => ({ node, index })).filter((candidate) => candidate.node.macroHeight < HYDROLOGY_SEA_LEVEL).map((candidate) => candidate.index);
-    if (seedIndices.length === 0) {
-      seedIndices = [nodes.map((_, index) => index).sort((first, second) => nodes[first].macroHeight - nodes[second].macroHeight || first - second)[0]];
+    let settled = 0;
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      if (node.macroHeight >= HYDROLOGY_SEA_LEVEL || seedIndices.has(index)) continue;
+      node.drainageLevel = HYDROLOGY_SEA_LEVEL;
+      node.distanceToTerminal = 0;
+      node.terminalIndex = index;
+      node.drainageRank = 0;
+      node.settled = true;
+      settled += 1;
     }
     for (const index of seedIndices) {
       const node = nodes[index];
+      node.isDrainageRoot = true;
       node.drainageLevel = node.macroHeight < HYDROLOGY_SEA_LEVEL ? HYDROLOGY_SEA_LEVEL : node.macroHeight;
       node.distanceToTerminal = 0;
       node.terminalIndex = index;
       node.drainageRank = 0;
       queue.push({ nodeIndex: index, drainageLevel: node.drainageLevel, distance: 0 });
     }
-    let settled = 0;
     while (settled < nodes.length) {
       const entry = queue.pop();
       if (!entry) throw new Error("macro drainage priority flood did not reach every node");
@@ -13023,9 +13143,10 @@ void main() {
       if (node.settled || node.drainageLevel !== entry.drainageLevel || node.distanceToTerminal !== entry.distance) continue;
       node.settled = true;
       settled += 1;
-      for (const candidateIndex of neighborIndices(node, columns, rows, wrapX, wrapY)) {
+      const candidateIndices = node.outletIngressIndices ?? neighbors[entry.nodeIndex];
+      for (const candidateIndex of candidateIndices) {
         const candidate = nodes[candidateIndex];
-        if (candidate.settled || candidate.macroHeight < HYDROLOGY_SEA_LEVEL) continue;
+        if (candidate.settled || candidate.isDrainageRoot || candidate.macroHeight < HYDROLOGY_SEA_LEVEL) continue;
         const candidateLevel = Math.max(candidate.macroHeight, node.drainageLevel);
         const candidateDistance = node.distanceToTerminal + 1;
         const priorParent = candidate.downstreamIndex;
@@ -13041,9 +13162,10 @@ void main() {
     }
   }
   function freezeGraph(graphId, dimensions, nodes) {
+    const includedIndices = nodes.map((_, index) => index).filter((index) => nodes[index].included);
     const terminals = [];
     const terminalByIndex = /* @__PURE__ */ new Map();
-    for (let index = 0; index < nodes.length; index += 1) {
+    for (const index of includedIndices) {
       const node = nodes[index];
       if (node.downstreamIndex !== void 0) continue;
       const kind = node.macroHeight < HYDROLOGY_SEA_LEVEL ? "ocean" : "lake";
@@ -13056,17 +13178,19 @@ void main() {
       terminalByIndex.set(index, terminal);
       terminals.push(terminal);
     }
-    const byRankDescending = nodes.map((_, index) => index).sort((first, second) => nodes[second].drainageRank - nodes[first].drainageRank || first - second);
+    const byRankDescending = [...includedIndices].sort((first, second) => nodes[second].drainageRank - nodes[first].drainageRank || first - second);
     for (const index of byRankDescending) {
       const node = nodes[index];
       if (node.downstreamIndex !== void 0) {
         nodes[node.downstreamIndex].accumulatedFlow += node.accumulatedFlow;
       }
     }
-    const frozenNodes = nodes.map((node) => {
+    const frozenNodeByIndex = /* @__PURE__ */ new Map();
+    const frozenNodes = includedIndices.map((index) => {
+      const node = nodes[index];
       const terminal = terminalByIndex.get(node.terminalIndex);
       if (!terminal) throw new Error("macro drainage node resolved an unknown terminal");
-      return Object.freeze({
+      const frozen = Object.freeze({
         nodeId: node.nodeId,
         x: node.x,
         y: node.y,
@@ -13081,13 +13205,16 @@ void main() {
         ),
         accumulatedFlow: node.accumulatedFlow
       });
+      frozenNodeByIndex.set(index, frozen);
+      return frozen;
     });
     const edges = [];
-    for (let index = 0; index < frozenNodes.length; index += 1) {
-      const upstream = frozenNodes[index];
+    for (const index of includedIndices) {
+      const upstream = frozenNodeByIndex.get(index);
       const downstreamIndex = nodes[index].downstreamIndex;
       if (downstreamIndex === void 0) continue;
-      const downstream = frozenNodes[downstreamIndex];
+      const downstream = frozenNodeByIndex.get(downstreamIndex);
+      if (!downstream) throw new Error("macro drainage edge resolved an excluded downstream node");
       const terminalIndex = nodes[index].terminalIndex;
       edges.push(Object.freeze({
         edgeId: createStableHydrologyId("drainage-edge", [graphId, upstream.nodeId, downstream.nodeId]),

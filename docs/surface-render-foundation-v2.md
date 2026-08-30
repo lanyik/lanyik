@@ -225,7 +225,9 @@ interface BaseSemanticChunk {
 - 图的节点、边、终点和流量与区域请求顺序、当前已加载邻区和 Worker 数量无关。
 - boundary port 由排水边与 region 边界的交点产生；端口是图的序列化切口，不是通过边键随机创造河流的来源。
 
-有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。当前格式使用 16 格宏观间隔，完整有限图最多 16384 个节点；超过该上限确定性失败，不能静默降低采样密度。无限世界按从逻辑原点对齐的 512×512 有限流域分解，每个流域固定为 32×32、最多 1024 个宏观节点。一个 128×128 region 只依赖其所属的一个流域；海面节点和无海流域的稳定最低节点初始化 priority-flood，其他节点只连接到已经确定的下游父节点。父子 `drainageRank` 相差至少一，故路径最多经过 1023 条边并必然到达海洋或显式湖盆。流域之间没有隐式递归依赖，也不会读取已加载邻区。
+有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。当前格式使用 16 格宏观间隔，完整有限图最多采样 16384 个节点；超过该上限确定性失败，不能静默降低采样密度。无限世界按从逻辑原点对齐的 2048×2048 有限流域分解，每个流域固定采样 128×128、最多 16384 个宏观位置。一个 128×128 region 只依赖其所属的一个流域。
+
+每个陆地连通分量只选择一个按量化高度和规范节点序确定的海岸出口参与 priority-flood；其他海面样本仍由冻结海平面形成基础海域，但既不传播局部排水，也不进入公开排水图。没有海岸出口的分量使用稳定最低点建立显式湖盆；足够大且到出口有足够图距离的分量还会在远端局部低点建立显式内陆湖盆。海岸出口只通过一个规范陆地入口传播，因而一个分量不会在同一出口产生多条末端河口边。所有其他陆地节点只连接到已经确定的下游父节点；父子 `drainageRank` 相差至少一，故路径最多经过 16383 条边并必然到达选定海洋出口或显式湖盆。被动海面样本不会占用序列化节点、边和终点预算；流域之间没有隐式递归依赖，也不会读取已加载邻区。
 
 ### 6.3 HydrologyRegion
 
@@ -812,10 +814,10 @@ Worker 池至少支持三个明确任务：
 完整切换时升级：
 
 ~~~ts
-WORLD_GENERATOR_VERSION = 6;
+WORLD_GENERATOR_VERSION = 7;
 WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
 WORLD_CHUNK_FORMAT_VERSION = 2;
-WORLD_WORKER_PROTOCOL_VERSION = 3;
+WORLD_WORKER_PROTOCOL_VERSION = 4;
 WORLD_DELTA_FORMAT_VERSION = 3;
 HYDROLOGY_REGION_FORMAT_VERSION = 1;
 HYDROLOGY_DELTA_FORMAT_VERSION = 1;
@@ -869,11 +871,11 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 实现结果（2026-08-30）：
 
 - 新增 `src/world/semantic`，实现 v2 descriptor、固定 32×32 X-major 坐标/索引契约、`BaseSemanticChunk` SoA、严格校验、固定小端二进制序列化和按需 `BaseSemanticChunkView`。无限世界覆盖完整 safe-integer tile 域；最小安全整数所在的边界 chunk 通过显式 partial `validBounds` 排除唯一越界槽位。
-- generator v6 的阶段 A 量化规则固定为：`macroHeight = saturate(landform.elevation)` 后按 `floor(value × 65535 + 0.5)` 写入；climate 和 vegetation density 使用对应的 8 位规则；四项 biome 权重采用最大余数法并保证每个有效格严格合计 255。
+- 当前 generator v7 沿用阶段 A 冻结的量化规则：`macroHeight = saturate(landform.elevation)` 后按 `floor(value × 65535 + 0.5)` 写入；climate 和 vegetation density 使用对应的 8 位规则；四项 biome 权重采用最大余数法并保证每个有效格严格合计 255。
 - substrate 目录固定为 sediment/soil/sand/rock/permafrost；biome basis 固定为 temperate/dry/cold/alpine；vegetation profile 目录固定为 none/warm-palm-mix/cold-pinia-mix/temperate-oak-mix。descriptor 保存两个目录规范 JSON 的 SHA-256 内容哈希，目录内容改变不能复用旧 world identity。
 - `BaseSemanticChunk` 校验拒绝未知字段，因而 water、坡度、材质输出、navigation 和其他派生事实不能混入基础权威格式；partial chunk 的 `validBounds` 外必须逐字节清零。
-- 共享 Worker 协议在阶段 B 后为 v4，包含显式 `generateSemanticChunk` 与 `generateHydrologyRegion` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；两个 v2 任务使用独立 generator v6 identity，不能与 v1 generator v5 响应互换。
-- 已建立 descriptor/catalog identity、负坐标、环绕规范化、SoA 长度与权重、二进制 golden、请求顺序、Worker client/pool 和真实浏览器 transferable Worker 测试，并把 49 个 32×32 semantic chunk 的 generator-v6 吞吐纳入 benchmark gate。生成结果返回后可直接由主线程的只读 view 查询，不重新运行 resolver。
+- 共享 Worker 协议在阶段 B 后为 v4，包含显式 `generateSemanticChunk` 与 `generateHydrologyRegion` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；两个 v2 任务当前使用独立 generator v7 identity，不能与 v1 generator v5 或早期 v2 响应互换。
+- 已建立 descriptor/catalog identity、负坐标、环绕规范化、SoA 长度与权重、二进制 golden、请求顺序、Worker client/pool 和真实浏览器 transferable Worker 测试，并把 49 个 32×32 semantic chunk 的 generator-v7 吞吐纳入 benchmark gate。生成结果返回后可直接由主线程的只读 view 查询，不重新运行 resolver。
 
 阶段性命名说明：在阶段 H 完整切换前，现有生产常量仍表示 v1 格式；已落地的 v2 常量使用 `WORLD_DESCRIPTOR_V2_FORMAT_VERSION`、`WORLD_SEMANTIC_CHUNK_FORMAT_VERSION` 和 `WORLD_SURFACE_V2_GENERATOR_VERSION` 避免把两种缓存/存档身份混用。切换提交会删除 v1 常量并收敛为第 17.1 节的最终名称，不保留兼容别名。
 
@@ -889,13 +891,13 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 实现结果（2026-08-30）：
 
-- 新增 `MacroDrainageGraph`。确定性的多源 priority-flood 从全部海面节点出发；无海图使用稳定的最低节点建立显式湖盆。每个非终点节点只有一个下游父节点，保存严格下降的 `drainageRank`、非逆升的量化 `drainageLevel`、累积流量和只增不减的 `dischargeClass`。图校验会拒绝 rank、终点、流量、body identity 或边集合不一致。
-- 无限世界使用从原点对齐的 512×512 有限流域和 16 格宏观采样，单次 region 请求最多依赖 1024 个节点；有限/环绕世界先构建完整低分辨率图，冻结上限为 16384 个节点。无限 safe-integer 最小边界 region 使用 partial `validBounds`；环绕尺寸仍只要求 32 的倍数，不要求 128 的倍数。
+- 新增 `MacroDrainageGraph`。确定性的多源 priority-flood 从每个陆地分量的规范海岸出口和显式湖盆出发，不再让密集局部海面样本全部传播排水。无海分量使用稳定最低点；足够大的临海分量使用远离出口的稳定局部低点补充内陆湖盆。每个非终点节点只有一个下游父节点，保存严格下降的 `drainageRank`、非逆升的量化 `drainageLevel`、累积流量和只增不减的 `dischargeClass`。图校验会拒绝 rank、终点、流量、body identity 或边集合不一致。
+- 无限世界使用从原点对齐的 2048×2048 有限流域和 16 格宏观采样，单次 region 请求最多采样 16384 个宏观位置；不参与排水的海面样本不会进入公开图。有限/环绕世界先构建完整低分辨率图，冻结采样上限同为 16384。无限 safe-integer 最小边界 region 使用 partial `validBounds`；环绕尺寸仍只要求 32 的倍数，不要求 128 的倍数。
 - `HydrologyRegion` 固定为 128×128，控制点以区域原点为基准按每格 16 单位量化到 `Int16Array`；宽度/水位剖面分别使用 `Uint8Array`/`Uint16Array`。region 保存河段、湖盆、河口、body palette 和图边裁切产生的 boundary ports，不保存逐格河流占用。feature、segment、port、connection 和 body ID 均由 descriptor/图节点/裁切位置稳定派生。
 - 环绕图边先按最短拓扑位移展开，再裁到 canonical region；末端 partial region、同 region 自连接、四条边和四角交点共享同一个 connection contract。`assertMatchingHydrologyPorts` 要求两侧 edge/river/body、宽度、水位、discharge 和 flow vector 完全相同且流入/流出相反。
 - 加载后的 `HydrologyRegionSpatialIndex` 使用 16×16 格 bin 和紧凑 offset/entry typed arrays；它是可丢弃索引。`deriveHydrologyRaster` 通过复用查询数组输出 X-major coverage/kind/level/flow/body-index typed arrays；海洋来自冻结海平面与调用方提供的宏观高度，逐格结果不回写 region。
 - Worker 协议升级到 v4，新增 `generateHydrologyRegion`，返回的河流/湖泊 typed arrays 通过 transferable 交付；`WorldGeneratorClient` 和有界 `WorldGeneratorPool` 提供独立 hydrology lane、队列/忙碌数和滑动平均耗时。
-- 验收覆盖图终止、损坏 rank 拒绝、静态湖盆、长河/汇流/河口、任意 region 请求顺序、双侧端口、负坐标、safe-integer 边界、160×160 环绕 partial region 与四角接缝、派生海/湖/河 raster、空间索引、WorkerPool 和真实浏览器 transferable Worker。benchmark gate 覆盖一个 512×512 流域裁成 16 个 region 及一个 128×128 raster；当前代表性基线约为 27 ms 和 8 ms。
+- 验收覆盖图终止、损坏 rank 拒绝、静态湖盆、最小全海图，以及三组正负流域程序化语料中的显式湖盆、长河、汇流和海洋河口；最长可见链硬门槛为 64 条宏观边且至少跨 4 个 region。另有真实程序化长河逐边裁切、双侧端口配对、任意 region 请求顺序、负坐标、safe-integer 边界、160×160 环绕 partial region 与四角接缝、派生海/湖/河 raster、空间索引、WorkerPool 和真实浏览器 transferable Worker 验收。benchmark gate 覆盖一个 2048×2048 流域支持的 16-region 工作集及一个 128×128 raster；当前代表性基线约为 280 ms 和 8 ms。
 
 ### 阶段 C：表面编译器与纹理池
 

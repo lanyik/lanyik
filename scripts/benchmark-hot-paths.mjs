@@ -105,7 +105,7 @@ function benchmarkSemanticChunkGeneration() {
     }
     const durationMs = performance.now() - started;
     return {
-        operation: "49 semantic chunks (32x32) generator-v6",
+        operation: "49 semantic chunks (32x32) generator-v7",
         durationMs: round(durationMs),
         averageMs: round(durationMs / chunks),
         chunks,
@@ -134,7 +134,7 @@ function benchmarkHydrologyRegions() {
     });
     const rasterMs = performance.now() - rasterStarted;
     return {
-        operation: "one 512x512 infinite drainage basin -> 16 regions + one 128x128 derived raster",
+        operation: "one 2048x2048 infinite drainage basin -> 16-region working set + one 128x128 derived raster",
         generationMs: round(generationMs),
         rasterMs: round(rasterMs),
         regions: regions.length,
