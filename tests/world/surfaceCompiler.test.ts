@@ -216,7 +216,8 @@ describe("CPU surface compiler v1", () => {
             samplesPerTileInterval: 4,
             gutterTexels: 1,
             influenceRadiusTiles: 2,
-            textureLayerSize: 66
+            textureLayerSize: 66,
+            pageLayers: 128
         });
         expect(SURFACE_FIELD_CORE_SIZE).toBe(64);
         expect(SURFACE_FIELD_TEXTURE_SIZE).toBe(66);

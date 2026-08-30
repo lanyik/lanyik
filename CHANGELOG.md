@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 GPU surface field pool with a fixed four-texture
+  paged layout, full-layer packing, strict GPU budget and generational slot
+  ownership, exact CPU/GPU accounting, and real WebGL2 upload, sampling and
+  context-restore acceptance coverage. Production rendering remains on v1.
 - Surface/render foundation v2 stage B hydrology: terminating macro drainage
   graphs with stable graph/feature/body identities, 128x128 vector regions,
   graph-derived boundary ports, lake and mouth features, partial/toroidal

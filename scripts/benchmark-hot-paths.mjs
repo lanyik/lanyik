@@ -16,6 +16,8 @@ import {
     compileSurfaceChunk,
     surfaceHydrologyRegionRequirements,
     surfaceSemanticChunkRequirements,
+    SURFACE_GPU_PAGE_BYTES,
+    SurfaceTexturePool,
     SurfaceRequestTracker,
     createWorldVegetationMapSnapshot,
     generateWorldChunk,
@@ -223,16 +225,40 @@ function benchmarkSurfaceCompilation() {
     }
     const compileMs = performance.now() - started;
     return {
-        operation: "cross-region 20x20 effective window x250 + 66x66 CPU surface compile x25",
-        windowMs: round(windowMs),
-        averageWindowMicros: round(windowMs * 1_000 / windowIterations),
-        compileMs: round(compileMs),
-        averageCompileMs: round(compileMs / compileIterations),
-        outputBytes: chunk.byteLength,
-        inputRivers: window.rivers.length,
-        inputLakes: window.lakes.length,
-        waterBodies: chunk.waterBodies.length,
-        checksum
+        metrics: {
+            operation: "cross-region 20x20 effective window x250 + 66x66 CPU surface compile x25",
+            windowMs: round(windowMs),
+            averageWindowMicros: round(windowMs * 1_000 / windowIterations),
+            compileMs: round(compileMs),
+            averageCompileMs: round(compileMs / compileIterations),
+            outputBytes: chunk.byteLength,
+            inputRivers: window.rivers.length,
+            inputLakes: window.lakes.length,
+            waterBodies: chunk.waterBodies.length,
+            checksum
+        },
+        chunk
+    };
+}
+
+function benchmarkSurfaceTexturePacking(chunk) {
+    const pool = new SurfaceTexturePool({ gpuBudgetBytes: SURFACE_GPU_PAGE_BYTES });
+    const slot = pool.allocate(chunk.key);
+    const iterations = 100;
+    const started = performance.now();
+    for (let index = 0; index < iterations; index += 1) pool.upload(slot, chunk);
+    const durationMs = performance.now() - started;
+    const stats = pool.stats;
+    pool.dispose();
+    return {
+        operation: "66x66 compiled surface -> four same-layer DataArrayTexture backing stores x100",
+        durationMs: round(durationMs),
+        averageMicros: round(durationMs * 1_000 / iterations),
+        iterations,
+        layerBytes: stats.pendingUploadBytes,
+        pageBytes: stats.gpuBytes,
+        pendingLayerUploads: stats.pendingLayerUploads,
+        logicalUploadBytes: stats.logicalUploadBytes
     };
 }
 
@@ -429,13 +455,15 @@ async function benchmarkSimulationRuntime() {
     };
 }
 
+const surfaceCompilation = benchmarkSurfaceCompilation();
 const results = {
     sparseStore: benchmarkSparseStore(),
     toroidalWindow: benchmarkToroidalWindow(),
     semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
     hydrologyRegions: benchmarkHydrologyRegions(),
     effectiveSnapshots: benchmarkEffectiveSnapshots(),
-    surfaceCompilation: benchmarkSurfaceCompilation(),
+    surfaceCompilation: surfaceCompilation.metrics,
+    surfaceTexturePacking: benchmarkSurfaceTexturePacking(surfaceCompilation.chunk),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -468,6 +496,7 @@ if (process.argv.includes("--check")) {
     under("effectiveSnapshots.durationMs", results.effectiveSnapshots.durationMs, 750);
     under("surfaceCompilation.windowMs", results.surfaceCompilation.windowMs, 750);
     under("surfaceCompilation.compileMs", results.surfaceCompilation.compileMs, 750);
+    under("surfaceTexturePacking.durationMs", results.surfaceTexturePacking.durationMs, 750);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

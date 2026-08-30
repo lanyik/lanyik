@@ -340,6 +340,7 @@ export {
     SURFACE_EFFECTIVE_WINDOW_SIZE,
     SURFACE_MAX_WATER_BODY_COUNT,
     SURFACE_CANONICAL_HEX_SIZE,
+    SURFACE_TEXTURE_PAGE_LAYERS,
     SURFACE_COMPILE_PROFILE_V1
 } from "./world/semantic/SurfaceCompileProfile";
 export {
@@ -389,6 +390,24 @@ export type {
     CompiledSurfaceChunk,
     CompiledSurfaceSample
 } from "./world/semantic/SurfaceCompiler";
+export {
+    SURFACE_VALUES_TEXTURE_CHANNELS,
+    SURFACE_MATERIAL_TEXTURE_CHANNELS,
+    SURFACE_FLOW_TEXTURE_CHANNELS,
+    SURFACE_WATER_TEXTURE_CHANNELS,
+    SURFACE_GPU_BYTES_PER_TEXEL,
+    SURFACE_GPU_LAYER_BYTES,
+    SURFACE_GPU_PAGE_BYTES,
+    SURFACE_TEXTURE_FORMAT_V1,
+    SurfaceTexturePool
+} from "./rendering/SurfaceTexturePool";
+export type {
+    SurfaceTexturePoolState,
+    SurfaceTexturePoolOptions,
+    SurfaceTextureSlotHandle,
+    SurfaceTextureBinding,
+    SurfaceTexturePoolStats
+} from "./rendering/SurfaceTexturePool";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";
