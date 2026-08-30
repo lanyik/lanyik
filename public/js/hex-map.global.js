@@ -12066,13 +12066,13 @@ void main() {
   }
 
   // src/world/semantic/WorldSemanticCatalog.ts
-  var SubstrateClass = /* @__PURE__ */ ((SubstrateClass3) => {
-    SubstrateClass3[SubstrateClass3["Sediment"] = 0] = "Sediment";
-    SubstrateClass3[SubstrateClass3["Soil"] = 1] = "Soil";
-    SubstrateClass3[SubstrateClass3["Sand"] = 2] = "Sand";
-    SubstrateClass3[SubstrateClass3["Rock"] = 3] = "Rock";
-    SubstrateClass3[SubstrateClass3["Permafrost"] = 4] = "Permafrost";
-    return SubstrateClass3;
+  var SubstrateClass = /* @__PURE__ */ ((SubstrateClass4) => {
+    SubstrateClass4[SubstrateClass4["Sediment"] = 0] = "Sediment";
+    SubstrateClass4[SubstrateClass4["Soil"] = 1] = "Soil";
+    SubstrateClass4[SubstrateClass4["Sand"] = 2] = "Sand";
+    SubstrateClass4[SubstrateClass4["Rock"] = 3] = "Rock";
+    SubstrateClass4[SubstrateClass4["Permafrost"] = 4] = "Permafrost";
+    return SubstrateClass4;
   })(SubstrateClass || {});
   var WORLD_BIOME_BASIS = Object.freeze([
     "temperate",
@@ -12369,33 +12369,37 @@ void main() {
     constructor(chunk) {
       this.chunk = chunk;
       assertBaseSemanticChunk(chunk);
-      this.origin = semanticChunkOrigin(chunk.key);
     }
     getTile(localX, localY) {
-      const index = semanticChunkLocalIndex(localX, localY);
-      if (!localBoundsContain(this.chunk.validBounds, localX, localY)) {
-        throw new RangeError("semantic tile lies outside the chunk validBounds");
-      }
-      const biomeOffset = index * BIOME_CHANNELS;
-      const climateOffset = index * CLIMATE_CHANNELS;
-      return Object.freeze({
-        x: this.origin.x + localX,
-        y: this.origin.y + localY,
-        substrateClass: this.chunk.substrateClass[index],
-        macroHeight: this.chunk.macroHeight[index] / 65535,
-        biomeWeights: Object.freeze([
-          this.chunk.biomeWeights[biomeOffset] / 255,
-          this.chunk.biomeWeights[biomeOffset + 1] / 255,
-          this.chunk.biomeWeights[biomeOffset + 2] / 255,
-          this.chunk.biomeWeights[biomeOffset + 3] / 255
-        ]),
-        temperature: this.chunk.climate[climateOffset] / 255,
-        moisture: this.chunk.climate[climateOffset + 1] / 255,
-        vegetationDensity: this.chunk.vegetationDensity[index] / 255,
-        vegetationProfile: this.chunk.vegetationProfile[index]
-      });
+      return readValidatedBaseSemanticTile(this.chunk, localX, localY);
     }
   };
+  function readValidatedBaseSemanticTile(chunk, localX, localY) {
+    const index = semanticChunkLocalIndex(localX, localY);
+    if (!localBoundsContain(chunk.validBounds, localX, localY)) {
+      throw new RangeError("semantic tile lies outside the chunk validBounds");
+    }
+    const biomeOffset = index * BIOME_CHANNELS;
+    const climateOffset = index * CLIMATE_CHANNELS;
+    const originX = chunk.key.chunkX * WORLD_SEMANTIC_CHUNK_SIZE;
+    const originY = chunk.key.chunkY * WORLD_SEMANTIC_CHUNK_SIZE;
+    return Object.freeze({
+      x: originX + localX,
+      y: originY + localY,
+      substrateClass: chunk.substrateClass[index],
+      macroHeight: chunk.macroHeight[index] / 65535,
+      biomeWeights: Object.freeze([
+        chunk.biomeWeights[biomeOffset] / 255,
+        chunk.biomeWeights[biomeOffset + 1] / 255,
+        chunk.biomeWeights[biomeOffset + 2] / 255,
+        chunk.biomeWeights[biomeOffset + 3] / 255
+      ]),
+      temperature: chunk.climate[climateOffset] / 255,
+      moisture: chunk.climate[climateOffset + 1] / 255,
+      vegetationDensity: chunk.vegetationDensity[index] / 255,
+      vegetationProfile: chunk.vegetationProfile[index]
+    });
+  }
   function serializeBaseSemanticChunk(chunk) {
     assertBaseSemanticChunk(chunk);
     const buffer = new ArrayBuffer(BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES);
@@ -22200,6 +22204,1022 @@ void main() {
     ];
   }
 
+  // src/world/semantic/SparseSemanticDelta.ts
+  var SemanticOverrideField = /* @__PURE__ */ ((SemanticOverrideField2) => {
+    SemanticOverrideField2[SemanticOverrideField2["Substrate"] = 1] = "Substrate";
+    SemanticOverrideField2[SemanticOverrideField2["MacroHeight"] = 2] = "MacroHeight";
+    SemanticOverrideField2[SemanticOverrideField2["BiomeWeights"] = 4] = "BiomeWeights";
+    SemanticOverrideField2[SemanticOverrideField2["VegetationDensity"] = 8] = "VegetationDensity";
+    SemanticOverrideField2[SemanticOverrideField2["VegetationProfile"] = 16] = "VegetationProfile";
+    return SemanticOverrideField2;
+  })(SemanticOverrideField || {});
+  function assertPositiveRevision(name, value) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`${name} must be a positive safe integer`);
+    }
+  }
+  function assertUint82(name, value) {
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new RangeError(`${name} must be a Uint8 value`);
+    }
+  }
+  function assertUint162(name, value) {
+    if (!Number.isInteger(value) || value < 0 || value > 65535) {
+      throw new RangeError(`${name} must be a Uint16 value`);
+    }
+  }
+  function assertBiomeWeights(value) {
+    if (!Array.isArray(value) || value.length !== 4) {
+      throw new TypeError("semantic biomeWeights must contain exactly four values");
+    }
+    for (const weight of value) assertUint82("semantic biome weight", weight);
+    if (value[0] + value[1] + value[2] + value[3] !== 255) {
+      throw new RangeError("semantic biomeWeights must sum to 255");
+    }
+  }
+  function assertTileOverride(value) {
+    if (!value || typeof value !== "object") throw new TypeError("semantic tile override must be an object");
+    const allowedFields = /* @__PURE__ */ new Set([
+      "localX",
+      "localY",
+      "substrateClass",
+      "macroHeight",
+      "biomeWeights",
+      "vegetationDensity",
+      "vegetationProfile"
+    ]);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowedFields.has(name))) {
+      throw new TypeError("semantic tile override contains unknown fields");
+    }
+    const index = semanticChunkLocalIndex(value.localX, value.localY);
+    let mask = 0;
+    if (value.substrateClass !== void 0) {
+      if (!Number.isInteger(value.substrateClass) || value.substrateClass < 0 || value.substrateClass >= WORLD_SUBSTRATE_CATALOG.length) {
+        throw new RangeError("semantic substrate override is not in the frozen catalog");
+      }
+      mask |= 1 /* Substrate */;
+    }
+    if (value.macroHeight !== void 0) {
+      assertUint162("semantic macroHeight override", value.macroHeight);
+      mask |= 2 /* MacroHeight */;
+    }
+    if (value.biomeWeights !== void 0) {
+      assertBiomeWeights(value.biomeWeights);
+      mask |= 4 /* BiomeWeights */;
+    }
+    if (value.vegetationDensity !== void 0) {
+      assertUint82("semantic vegetationDensity override", value.vegetationDensity);
+      mask |= 8 /* VegetationDensity */;
+    }
+    if (value.vegetationProfile !== void 0) {
+      if (!Number.isInteger(value.vegetationProfile) || value.vegetationProfile < 0 || value.vegetationProfile >= WORLD_VEGETATION_PROFILE_CATALOG.length) {
+        throw new RangeError("semantic vegetationProfile override is not in the frozen catalog");
+      }
+      mask |= 16 /* VegetationProfile */;
+    }
+    if (mask === 0) throw new TypeError("semantic tile override must replace at least one authority field");
+    return { index, mask };
+  }
+  function createSparseSemanticDelta(options) {
+    if (!options || typeof options !== "object") throw new TypeError("sparse semantic delta options are required");
+    assertSemanticChunkKey(options.key);
+    assertPositiveRevision("semantic delta revision", options.revision);
+    if (!Array.isArray(options.overrides) || options.overrides.length === 0 || options.overrides.length > WORLD_SEMANTIC_CHUNK_TILE_COUNT) {
+      throw new RangeError("sparse semantic delta must contain between 1 and 1024 tile overrides");
+    }
+    const sorted = options.overrides.map((override) => ({
+      override,
+      ...assertTileOverride(override)
+    })).sort((first, second) => first.index - second.index);
+    for (let index = 1; index < sorted.length; index += 1) {
+      if (sorted[index - 1].index === sorted[index].index) {
+        throw new TypeError("sparse semantic delta contains duplicate tile coordinates");
+      }
+    }
+    const count = sorted.length;
+    const indices = new Uint16Array(count);
+    const masks = new Uint8Array(count);
+    const substrateClass = new Uint8Array(count);
+    const macroHeight = new Uint16Array(count);
+    const biomeWeights = new Uint8Array(count * 4);
+    const vegetationDensity = new Uint8Array(count);
+    const vegetationProfile = new Uint8Array(count);
+    for (let offset = 0; offset < count; offset += 1) {
+      const { override, index, mask } = sorted[offset];
+      indices[offset] = index;
+      masks[offset] = mask;
+      if (mask & 1 /* Substrate */) substrateClass[offset] = override.substrateClass;
+      if (mask & 2 /* MacroHeight */) macroHeight[offset] = override.macroHeight;
+      if (mask & 4 /* BiomeWeights */) {
+        biomeWeights.set(override.biomeWeights, offset * 4);
+      }
+      if (mask & 8 /* VegetationDensity */) {
+        vegetationDensity[offset] = override.vegetationDensity;
+      }
+      if (mask & 16 /* VegetationProfile */) {
+        vegetationProfile[offset] = override.vegetationProfile;
+      }
+    }
+    const delta = Object.freeze({
+      key: Object.freeze({ ...options.key }),
+      revision: options.revision,
+      indices,
+      masks,
+      substrateClass,
+      macroHeight,
+      biomeWeights,
+      vegetationDensity,
+      vegetationProfile
+    });
+    assertSparseSemanticDelta(delta);
+    return delta;
+  }
+  function assertSparseSemanticDelta(value) {
+    if (!value || typeof value !== "object") throw new TypeError("sparse semantic delta must be an object");
+    const delta = value;
+    const allowedFields = /* @__PURE__ */ new Set([
+      "key",
+      "revision",
+      "indices",
+      "masks",
+      "substrateClass",
+      "macroHeight",
+      "biomeWeights",
+      "vegetationDensity",
+      "vegetationProfile"
+    ]);
+    if (Object.getOwnPropertyNames(delta).some((name) => !allowedFields.has(name))) {
+      throw new TypeError("sparse semantic delta contains unknown fields");
+    }
+    assertSemanticChunkKey(delta.key);
+    assertPositiveRevision("semantic delta revision", delta.revision);
+    if (!(delta.indices instanceof Uint16Array) || delta.indices.length === 0 || delta.indices.length > WORLD_SEMANTIC_CHUNK_TILE_COUNT) {
+      throw new TypeError("semantic delta indices must be a non-empty Uint16Array");
+    }
+    const count = delta.indices.length;
+    if (!(delta.masks instanceof Uint8Array) || delta.masks.length !== count || !(delta.substrateClass instanceof Uint8Array) || delta.substrateClass.length !== count || !(delta.macroHeight instanceof Uint16Array) || delta.macroHeight.length !== count || !(delta.biomeWeights instanceof Uint8Array) || delta.biomeWeights.length !== count * 4 || !(delta.vegetationDensity instanceof Uint8Array) || delta.vegetationDensity.length !== count || !(delta.vegetationProfile instanceof Uint8Array) || delta.vegetationProfile.length !== count) {
+      throw new TypeError("semantic delta column lengths are inconsistent");
+    }
+    for (let offset = 0; offset < count; offset += 1) {
+      const index = delta.indices[offset];
+      const mask = delta.masks[offset];
+      if (index >= WORLD_SEMANTIC_CHUNK_TILE_COUNT || offset > 0 && index <= delta.indices[offset - 1] || mask === 0 || (mask & -32) !== 0) {
+        throw new TypeError("semantic delta indices or masks are not canonical");
+      }
+      if (mask & 1 /* Substrate */) {
+        if (delta.substrateClass[offset] >= WORLD_SUBSTRATE_CATALOG.length) {
+          throw new RangeError("semantic delta substrate class is not in the frozen catalog");
+        }
+      } else if (delta.substrateClass[offset] !== 0) {
+        throw new TypeError("unused semantic substrate columns must be zero");
+      }
+      if (!(mask & 2 /* MacroHeight */) && delta.macroHeight[offset] !== 0) {
+        throw new TypeError("unused semantic height columns must be zero");
+      }
+      const biomeOffset = offset * 4;
+      if (mask & 4 /* BiomeWeights */) {
+        assertBiomeWeights(Array.from(delta.biomeWeights.subarray(biomeOffset, biomeOffset + 4)));
+      } else if (delta.biomeWeights[biomeOffset] !== 0 || delta.biomeWeights[biomeOffset + 1] !== 0 || delta.biomeWeights[biomeOffset + 2] !== 0 || delta.biomeWeights[biomeOffset + 3] !== 0) {
+        throw new TypeError("unused semantic biome columns must be zero");
+      }
+      if (!(mask & 8 /* VegetationDensity */) && delta.vegetationDensity[offset] !== 0) {
+        throw new TypeError("unused semantic vegetation density columns must be zero");
+      }
+      if (mask & 16 /* VegetationProfile */) {
+        if (delta.vegetationProfile[offset] >= WORLD_VEGETATION_PROFILE_CATALOG.length) {
+          throw new RangeError("semantic delta vegetation profile is not in the frozen catalog");
+        }
+      } else if (delta.vegetationProfile[offset] !== 0) {
+        throw new TypeError("unused semantic vegetation profile columns must be zero");
+      }
+    }
+  }
+  function cloneSparseSemanticDelta(delta) {
+    assertSparseSemanticDelta(delta);
+    const clone2 = Object.freeze({
+      key: Object.freeze({ ...delta.key }),
+      revision: delta.revision,
+      indices: delta.indices.slice(),
+      masks: delta.masks.slice(),
+      substrateClass: delta.substrateClass.slice(),
+      macroHeight: delta.macroHeight.slice(),
+      biomeWeights: delta.biomeWeights.slice(),
+      vegetationDensity: delta.vegetationDensity.slice(),
+      vegetationProfile: delta.vegetationProfile.slice()
+    });
+    assertSparseSemanticDelta(clone2);
+    return clone2;
+  }
+  function sparseSemanticDeltaOverrideOffset(delta, tileIndex) {
+    if (!(delta?.indices instanceof Uint16Array)) {
+      throw new TypeError("semantic delta lookup requires canonical Uint16 indices");
+    }
+    if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= WORLD_SEMANTIC_CHUNK_TILE_COUNT) {
+      throw new RangeError("semantic delta lookup index is outside the chunk");
+    }
+    let low = 0;
+    let high = delta.indices.length - 1;
+    while (low <= high) {
+      const middle = low + high >>> 1;
+      const candidate = delta.indices[middle];
+      if (candidate === tileIndex) return middle;
+      if (candidate < tileIndex) low = middle + 1;
+      else high = middle - 1;
+    }
+    return -1;
+  }
+  function sparseSemanticDeltaByteLength(delta) {
+    assertSparseSemanticDelta(delta);
+    return delta.indices.byteLength + delta.masks.byteLength + delta.substrateClass.byteLength + delta.macroHeight.byteLength + delta.biomeWeights.byteLength + delta.vegetationDensity.byteLength + delta.vegetationProfile.byteLength;
+  }
+
+  // src/world/semantic/HydrologyFeatureDelta.ts
+  var GENERATED_ID_PATTERN = /^[a-z][a-z0-9-]*:[a-f0-9]{32}$/;
+  function assertFeatureId(name, value) {
+    if (typeof value !== "string" || !GENERATED_ID_PATTERN.test(value) || value === OCEAN_BODY_ID) {
+      throw new TypeError(`${name} must be a non-ocean stable hydrology feature ID`);
+    }
+  }
+  function assertConnectionId(name, value) {
+    if (typeof value !== "string" || value !== OCEAN_BODY_ID && !GENERATED_ID_PATTERN.test(value)) {
+      throw new TypeError(`${name} must be a stable hydrology feature or ocean ID`);
+    }
+  }
+  function assertPositiveRevision2(value) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError("hydrology feature revision must be a positive safe integer");
+    }
+  }
+  function assertUint83(name, value) {
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new RangeError(`${name} must be a Uint8 value`);
+    }
+  }
+  function assertUint163(name, value) {
+    if (!Number.isInteger(value) || value < 0 || value > 65535) {
+      throw new RangeError(`${name} must be a Uint16 value`);
+    }
+  }
+  function assertConnection(value, ownerId) {
+    if (!value || value.kind !== "body" && value.kind !== "river" || Object.getOwnPropertyNames(value).some((name) => name !== "kind" && name !== "featureId")) {
+      throw new TypeError("hydrology feature connection is invalid");
+    }
+    assertConnectionId("hydrology connection featureId", value.featureId);
+    if (value.featureId === ownerId) throw new TypeError("hydrology feature cannot connect to itself");
+    if (value.kind === "river" && value.featureId === OCEAN_BODY_ID) {
+      throw new TypeError("the reserved ocean ID cannot be used as a river connection");
+    }
+  }
+  function assertSource(value, ownerId) {
+    if (!value || typeof value !== "object") throw new TypeError("hydrology river source is invalid");
+    if (value.kind === "source") {
+      if (Object.getOwnPropertyNames(value).some((name) => name !== "kind")) {
+        throw new TypeError("hydrology spring source contains unknown fields");
+      }
+      return;
+    }
+    assertConnection(value, ownerId);
+  }
+  function assertWorldPoints(name, value, minimumPoints) {
+    if (!(value instanceof Float64Array) || value.length < minimumPoints * 2 || value.length % 2 !== 0) {
+      throw new TypeError(`${name} must contain at least ${minimumPoints} coordinate pairs`);
+    }
+    for (const coordinate of value) {
+      if (!Number.isFinite(coordinate) || !Number.isSafeInteger(coordinate * HYDROLOGY_COORDINATE_SCALE)) {
+        throw new RangeError(`${name} coordinates must be exact 1/${HYDROLOGY_COORDINATE_SCALE}-tile values`);
+      }
+    }
+  }
+  function assertRiver(value) {
+    const allowedFields = /* @__PURE__ */ new Set([
+      "kind",
+      "featureId",
+      "revision",
+      "source",
+      "outlet",
+      "controlPoints",
+      "widthProfile",
+      "levelProfile",
+      "dischargeClass"
+    ]);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowedFields.has(name))) {
+      throw new TypeError("hydrology river delta contains unknown fields");
+    }
+    assertSource(value.source, value.featureId);
+    assertConnection(value.outlet, value.featureId);
+    assertWorldPoints("hydrology river controlPoints", value.controlPoints, 2);
+    const pointCount = value.controlPoints.length / 2;
+    if (!(value.widthProfile instanceof Uint8Array) || value.widthProfile.length !== pointCount || !(value.levelProfile instanceof Uint16Array) || value.levelProfile.length !== pointCount) {
+      throw new TypeError("hydrology river profiles must contain one value per control point");
+    }
+    for (const width of value.widthProfile) {
+      assertUint83("hydrology river width", width);
+      if (width === 0) throw new RangeError("hydrology river width must remain positive");
+    }
+    for (let index = 0; index < value.levelProfile.length; index += 1) {
+      assertUint163("hydrology river level", value.levelProfile[index]);
+      if (index > 0 && value.levelProfile[index] > value.levelProfile[index - 1]) {
+        throw new TypeError("hydrology river level profile must not rise downstream");
+      }
+    }
+    if (!Number.isInteger(value.dischargeClass) || value.dischargeClass < 0 || value.dischargeClass > HYDROLOGY_MAX_DISCHARGE_CLASS) {
+      throw new RangeError("hydrology river dischargeClass is invalid");
+    }
+  }
+  function assertLake(value) {
+    const allowedFields = /* @__PURE__ */ new Set([
+      "kind",
+      "featureId",
+      "revision",
+      "boundaryPoints",
+      "level",
+      "profileIndex"
+    ]);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowedFields.has(name))) {
+      throw new TypeError("hydrology lake delta contains unknown fields");
+    }
+    assertWorldPoints("hydrology lake boundaryPoints", value.boundaryPoints, 3);
+    assertUint163("hydrology lake level", value.level);
+    assertUint83("hydrology lake profileIndex", value.profileIndex);
+  }
+  function assertTombstone(value) {
+    if (value.targetKind !== "river" && value.targetKind !== "lake" || Object.getOwnPropertyNames(value).some((name) => name !== "kind" && name !== "featureId" && name !== "revision" && name !== "targetKind")) {
+      throw new TypeError("hydrology feature tombstone is invalid");
+    }
+  }
+  function assertHydrologyFeatureDelta(value) {
+    if (!value || typeof value !== "object") throw new TypeError("hydrology feature delta must be an object");
+    const delta = value;
+    assertFeatureId("hydrology delta featureId", delta.featureId);
+    assertPositiveRevision2(delta.revision);
+    if (delta.kind === "river") assertRiver(delta);
+    else if (delta.kind === "lake") assertLake(delta);
+    else if (delta.kind === "tombstone") assertTombstone(delta);
+    else throw new TypeError("hydrology feature delta kind is invalid");
+  }
+  function cloneConnection(connection) {
+    return Object.freeze({ kind: connection.kind, featureId: connection.featureId });
+  }
+  function cloneSource(source) {
+    return source.kind === "source" ? Object.freeze({ kind: "source" }) : cloneConnection(source);
+  }
+  function cloneHydrologyFeatureDelta(delta) {
+    assertHydrologyFeatureDelta(delta);
+    let clone2;
+    if (delta.kind === "river") {
+      clone2 = Object.freeze({
+        kind: "river",
+        featureId: delta.featureId,
+        revision: delta.revision,
+        source: cloneSource(delta.source),
+        outlet: cloneConnection(delta.outlet),
+        controlPoints: delta.controlPoints.slice(),
+        widthProfile: delta.widthProfile.slice(),
+        levelProfile: delta.levelProfile.slice(),
+        dischargeClass: delta.dischargeClass
+      });
+    } else if (delta.kind === "lake") {
+      clone2 = Object.freeze({
+        kind: "lake",
+        featureId: delta.featureId,
+        revision: delta.revision,
+        boundaryPoints: delta.boundaryPoints.slice(),
+        level: delta.level,
+        profileIndex: delta.profileIndex
+      });
+    } else {
+      clone2 = Object.freeze({
+        kind: "tombstone",
+        featureId: delta.featureId,
+        revision: delta.revision,
+        targetKind: delta.targetKind
+      });
+    }
+    assertHydrologyFeatureDelta(clone2);
+    return clone2;
+  }
+  function hydrologyFeatureBounds(feature) {
+    assertHydrologyFeatureDelta(feature);
+    if (feature.kind !== "river" && feature.kind !== "lake") {
+      throw new TypeError("hydrology tombstones do not have spatial bounds");
+    }
+    const points = feature.kind === "river" ? feature.controlPoints : feature.boundaryPoints;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < points.length; index += 2) {
+      minX = Math.min(minX, points[index]);
+      minY = Math.min(minY, points[index + 1]);
+      maxX = Math.max(maxX, points[index]);
+      maxY = Math.max(maxY, points[index + 1]);
+    }
+    return Object.freeze({ minX, minY, maxX, maxY });
+  }
+
+  // src/world/semantic/EffectiveWorldView.ts
+  var validatedBaseSemanticChunks = /* @__PURE__ */ new WeakSet();
+  var validatedSparseSemanticDeltas = /* @__PURE__ */ new WeakSet();
+  var validatedHydrologyRegions = /* @__PURE__ */ new WeakSet();
+  var validatedHydrologyFeatureDeltas = /* @__PURE__ */ new WeakSet();
+  function semanticKey(key) {
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  function hydrologyKey(key) {
+    return `${key.regionX},${key.regionY}`;
+  }
+  function assertBaseSemanticChunkOnce(value) {
+    if (validatedBaseSemanticChunks.has(value)) return;
+    assertBaseSemanticChunk(value);
+    validatedBaseSemanticChunks.add(value);
+  }
+  function assertSparseSemanticDeltaOnce(value) {
+    if (validatedSparseSemanticDeltas.has(value)) return;
+    assertSparseSemanticDelta(value);
+    validatedSparseSemanticDeltas.add(value);
+  }
+  function assertHydrologyRegionOnce(value) {
+    if (validatedHydrologyRegions.has(value)) return;
+    assertHydrologyRegion(value);
+    validatedHydrologyRegions.add(value);
+  }
+  function assertHydrologyFeatureDeltaOnce(value) {
+    if (validatedHydrologyFeatureDeltas.has(value)) return;
+    assertHydrologyFeatureDelta(value);
+    validatedHydrologyFeatureDeltas.add(value);
+  }
+  function compareSemanticKeys(first, second) {
+    return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
+  }
+  function compareHydrologyKeys(first, second) {
+    return first.regionX - second.regionX || first.regionY - second.regionY;
+  }
+  function assertEffectiveRevision(value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError("effective revision must be a non-negative safe integer");
+    }
+  }
+  function canonicalSemanticKey(descriptor, key) {
+    const canonical = canonicalizeSemanticChunkKey(descriptor, key);
+    if (canonical.chunkX !== key.chunkX || canonical.chunkY !== key.chunkY) {
+      throw new TypeError("effective semantic dependencies must use canonical chunk keys");
+    }
+    return Object.freeze(canonical);
+  }
+  function canonicalHydrologyKey(descriptor, key) {
+    const canonical = canonicalizeHydrologyRegionKey(descriptor, key);
+    if (canonical.regionX !== key.regionX || canonical.regionY !== key.regionY) {
+      throw new TypeError("effective hydrology dependencies must use canonical region keys");
+    }
+    return Object.freeze(canonical);
+  }
+  function normalizeSemanticDeltas(descriptor, effectiveRevision, values) {
+    if (!Array.isArray(values)) throw new TypeError("effective semantic deltas must be an array");
+    const result = values.map((value) => {
+      assertSparseSemanticDelta(value);
+      canonicalSemanticKey(descriptor, value.key);
+      if (value.revision > effectiveRevision) {
+        throw new RangeError("semantic delta revision cannot exceed the effective revision");
+      }
+      return cloneSparseSemanticDelta(value);
+    }).sort((first, second) => compareSemanticKeys(first.key, second.key));
+    for (let index = 1; index < result.length; index += 1) {
+      if (semanticKey(result[index - 1].key) === semanticKey(result[index].key)) {
+        throw new TypeError("effective delta snapshot contains duplicate semantic chunks");
+      }
+    }
+    return Object.freeze(result);
+  }
+  function normalizeHydrologyFeatures(effectiveRevision, values) {
+    if (!Array.isArray(values)) throw new TypeError("effective hydrology features must be an array");
+    const result = values.map((value) => {
+      assertHydrologyFeatureDelta(value);
+      if (value.revision > effectiveRevision) {
+        throw new RangeError("hydrology feature revision cannot exceed the effective revision");
+      }
+      return cloneHydrologyFeatureDelta(value);
+    }).sort((first, second) => first.featureId.localeCompare(second.featureId));
+    for (let index = 1; index < result.length; index += 1) {
+      if (result[index - 1].featureId === result[index].featureId) {
+        throw new TypeError("effective delta snapshot contains duplicate hydrology features");
+      }
+    }
+    return Object.freeze(result);
+  }
+  function normalizeHydrologyRegionFeatures(descriptor, values, featureById) {
+    if (!Array.isArray(values)) throw new TypeError("hydrology region feature indices must be an array");
+    const referenced = /* @__PURE__ */ new Set();
+    const result = values.map((value) => {
+      if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).some((name) => name !== "key" && name !== "featureIds") || !Array.isArray(value.featureIds) || value.featureIds.length === 0) {
+        throw new TypeError("hydrology region feature index is invalid");
+      }
+      const key = canonicalHydrologyKey(descriptor, value.key);
+      const featureIds = [...value.featureIds].sort((first, second) => first.localeCompare(second));
+      for (let index = 0; index < featureIds.length; index += 1) {
+        const featureId = featureIds[index];
+        if (!featureById.has(featureId)) {
+          throw new TypeError("hydrology region index references an unknown feature delta");
+        }
+        if (index > 0 && featureId === featureIds[index - 1]) {
+          throw new TypeError("hydrology region index contains a duplicate feature ID");
+        }
+        referenced.add(featureId);
+      }
+      return Object.freeze({ key, featureIds: Object.freeze(featureIds) });
+    }).sort((first, second) => compareHydrologyKeys(first.key, second.key));
+    for (let index = 1; index < result.length; index += 1) {
+      if (hydrologyKey(result[index - 1].key) === hydrologyKey(result[index].key)) {
+        throw new TypeError("effective delta snapshot contains duplicate hydrology region indices");
+      }
+    }
+    if (referenced.size !== featureById.size) {
+      throw new TypeError("every hydrology feature delta must be indexed by at least one region");
+    }
+    return Object.freeze(result);
+  }
+  function createEffectiveDeltaSnapshot(options) {
+    if (!options || typeof options !== "object") throw new TypeError("effective delta snapshot options are required");
+    const worldIdentity = serializeWorldDescriptorV2(options.descriptor);
+    assertEffectiveRevision(options.effectiveRevision);
+    const semanticDeltas = normalizeSemanticDeltas(
+      options.descriptor,
+      options.effectiveRevision,
+      options.semanticDeltas ?? []
+    );
+    const hydrologyFeatures = normalizeHydrologyFeatures(
+      options.effectiveRevision,
+      options.hydrologyFeatures ?? []
+    );
+    const featureById = new Map(hydrologyFeatures.map((feature) => [feature.featureId, feature]));
+    const hydrologyRegionFeatures = normalizeHydrologyRegionFeatures(
+      options.descriptor,
+      options.hydrologyRegionFeatures ?? [],
+      featureById
+    );
+    if (options.effectiveRevision === 0 && (semanticDeltas.length > 0 || hydrologyFeatures.length > 0 || hydrologyRegionFeatures.length > 0)) {
+      throw new TypeError("effective revision zero is reserved for an empty delta snapshot");
+    }
+    return Object.freeze({
+      worldIdentity,
+      effectiveRevision: options.effectiveRevision,
+      semanticDeltas,
+      hydrologyFeatures,
+      hydrologyRegionFeatures
+    });
+  }
+  function normalizeEffectiveDeltaSnapshot(descriptor, value) {
+    if (!value || typeof value !== "object") throw new TypeError("effective delta snapshot must be an object");
+    const allowedFields = /* @__PURE__ */ new Set([
+      "worldIdentity",
+      "effectiveRevision",
+      "semanticDeltas",
+      "hydrologyFeatures",
+      "hydrologyRegionFeatures"
+    ]);
+    const expectedIdentity = serializeWorldDescriptorV2(descriptor);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowedFields.has(name)) || value.worldIdentity !== expectedIdentity) {
+      throw new TypeError("effective delta snapshot belongs to a different or invalid world identity");
+    }
+    return createEffectiveDeltaSnapshot({
+      descriptor,
+      effectiveRevision: value.effectiveRevision,
+      semanticDeltas: value.semanticDeltas,
+      hydrologyFeatures: value.hydrologyFeatures,
+      hydrologyRegionFeatures: value.hydrologyRegionFeatures
+    });
+  }
+  function createPublishedEffectiveState(snapshot) {
+    return Object.freeze({
+      snapshot,
+      semanticDeltaByKey: new Map(snapshot.semanticDeltas.map((delta) => [semanticKey(delta.key), delta])),
+      hydrologyFeatureById: new Map(snapshot.hydrologyFeatures.map((feature) => [feature.featureId, feature])),
+      hydrologyRegionIndexByKey: new Map(snapshot.hydrologyRegionFeatures.map((index) => [hydrologyKey(index.key), index]))
+    });
+  }
+  var EffectiveSemanticChunkSnapshot = class {
+    constructor(base, delta) {
+      this.base = base;
+      this.delta = delta;
+      assertBaseSemanticChunkOnce(base);
+      if (delta) {
+        assertSparseSemanticDeltaOnce(delta);
+        if (semanticKey(base.key) !== semanticKey(delta.key)) {
+          throw new TypeError("semantic base chunk and delta keys do not match");
+        }
+        for (const index of delta.indices) {
+          const localX = Math.floor(index / WORLD_SEMANTIC_CHUNK_SIZE);
+          const localY = index % WORLD_SEMANTIC_CHUNK_SIZE;
+          if (!localBoundsContain(base.validBounds, localX, localY)) {
+            throw new RangeError("semantic delta overrides a tile outside base validBounds");
+          }
+        }
+      }
+      Object.freeze(this);
+    }
+    getTile(localX, localY) {
+      const base = readValidatedBaseSemanticTile(this.base, localX, localY);
+      if (!this.delta) return base;
+      const tileIndex = semanticChunkLocalIndex(localX, localY);
+      const offset = sparseSemanticDeltaOverrideOffset(this.delta, tileIndex);
+      if (offset < 0) return base;
+      const mask = this.delta.masks[offset];
+      const biomeOffset = offset * 4;
+      return Object.freeze({
+        ...base,
+        substrateClass: mask & 1 /* Substrate */ ? this.delta.substrateClass[offset] : base.substrateClass,
+        macroHeight: mask & 2 /* MacroHeight */ ? this.delta.macroHeight[offset] / 65535 : base.macroHeight,
+        biomeWeights: mask & 4 /* BiomeWeights */ ? Object.freeze([
+          this.delta.biomeWeights[biomeOffset] / 255,
+          this.delta.biomeWeights[biomeOffset + 1] / 255,
+          this.delta.biomeWeights[biomeOffset + 2] / 255,
+          this.delta.biomeWeights[biomeOffset + 3] / 255
+        ]) : base.biomeWeights,
+        vegetationDensity: mask & 8 /* VegetationDensity */ ? this.delta.vegetationDensity[offset] / 255 : base.vegetationDensity,
+        vegetationProfile: mask & 16 /* VegetationProfile */ ? this.delta.vegetationProfile[offset] : base.vegetationProfile
+      });
+    }
+  };
+  var EffectiveHydrologyRegionSnapshot = class {
+    constructor(base, featureDeltas) {
+      this.base = base;
+      assertHydrologyRegionOnce(base);
+      for (const feature of featureDeltas) assertHydrologyFeatureDeltaOnce(feature);
+      this.featureDeltas = Object.freeze([...featureDeltas]);
+      Object.freeze(this);
+    }
+    suppressesBaseRiver(riverId) {
+      return this.featureDeltas.some((feature) => feature.featureId === riverId && (feature.kind === "river" || feature.kind === "tombstone" && feature.targetKind === "river"));
+    }
+    suppressesBaseLake(bodyId) {
+      return this.featureDeltas.some((feature) => feature.featureId === bodyId && (feature.kind === "lake" || feature.kind === "tombstone" && feature.targetKind === "lake"));
+    }
+  };
+  var EffectiveWorldSnapshot = class {
+    constructor(descriptor, worldIdentity, effectiveRevision, semanticChunks, hydrologyRegions) {
+      this.descriptor = descriptor;
+      this.worldIdentity = worldIdentity;
+      this.effectiveRevision = effectiveRevision;
+      this.semanticChunks = semanticChunks;
+      this.hydrologyRegions = hydrologyRegions;
+      this.semanticByKey = new Map(semanticChunks.map((chunk) => [semanticKey(chunk.base.key), chunk]));
+      this.hydrologyByKey = new Map(hydrologyRegions.map((region) => [hydrologyKey(region.base.key), region]));
+      Object.freeze(this);
+    }
+    getSemanticChunk(key) {
+      const canonical = canonicalizeSemanticChunkKey(this.descriptor, key);
+      const chunk = this.semanticByKey.get(semanticKey(canonical));
+      if (!chunk) throw new RangeError("effective snapshot does not contain the requested semantic chunk");
+      return chunk;
+    }
+    getHydrologyRegion(key) {
+      const canonical = canonicalizeHydrologyRegionKey(this.descriptor, key);
+      const region = this.hydrologyByKey.get(hydrologyKey(canonical));
+      if (!region) throw new RangeError("effective snapshot does not contain the requested hydrology region");
+      return region;
+    }
+    getTile(tileX, tileY) {
+      const location = locateSemanticTile(tileX, tileY);
+      return this.getSemanticChunk(location.key).getTile(location.localX, location.localY);
+    }
+  };
+  var EffectiveWorldView = class {
+    constructor(descriptor, initialDeltaSnapshot) {
+      this.descriptor = descriptor;
+      this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+      const snapshot = initialDeltaSnapshot ? normalizeEffectiveDeltaSnapshot(descriptor, initialDeltaSnapshot) : createEffectiveDeltaSnapshot({ descriptor, effectiveRevision: 0 });
+      this.publishedState = createPublishedEffectiveState(snapshot);
+    }
+    get effectiveRevision() {
+      return this.publishedState.snapshot.effectiveRevision;
+    }
+    publishDeltaSnapshot(next, expectedRevision) {
+      assertEffectiveRevision(expectedRevision);
+      if (next?.worldIdentity !== this.worldIdentity) {
+        throw new TypeError("cannot publish an effective delta snapshot from another world identity");
+      }
+      if (expectedRevision !== this.publishedState.snapshot.effectiveRevision) {
+        throw new RangeError(
+          `effective snapshot conflict: expected ${expectedRevision}, received ${this.publishedState.snapshot.effectiveRevision}`
+        );
+      }
+      if (next.effectiveRevision !== expectedRevision + 1) {
+        throw new RangeError("effective snapshot revision must advance exactly once");
+      }
+      const normalized = normalizeEffectiveDeltaSnapshot(this.descriptor, next);
+      this.publishedState = createPublishedEffectiveState(normalized);
+    }
+    capture(options) {
+      if (!options || typeof options !== "object") throw new TypeError("effective snapshot capture options are required");
+      if (Object.getOwnPropertyNames(options).some((name) => name !== "semanticChunks" && name !== "hydrologyRegions")) {
+        throw new TypeError("effective snapshot capture contains unknown dependency fields");
+      }
+      const state = this.publishedState;
+      const deltaSnapshot = state.snapshot;
+      if (options.semanticChunks !== void 0 && !Array.isArray(options.semanticChunks) || options.hydrologyRegions !== void 0 && !Array.isArray(options.hydrologyRegions)) {
+        throw new TypeError("effective snapshot dependencies must be arrays");
+      }
+      const semanticChunks = (options.semanticChunks ?? []).map((base) => {
+        canonicalSemanticKey(this.descriptor, base.key);
+        return new EffectiveSemanticChunkSnapshot(
+          base,
+          state.semanticDeltaByKey.get(semanticKey(base.key))
+        );
+      }).sort((first, second) => compareSemanticKeys(first.base.key, second.base.key));
+      for (let index = 1; index < semanticChunks.length; index += 1) {
+        if (semanticKey(semanticChunks[index - 1].base.key) === semanticKey(semanticChunks[index].base.key)) {
+          throw new TypeError("effective snapshot capture contains duplicate semantic chunks");
+        }
+      }
+      const hydrologyRegions = (options.hydrologyRegions ?? []).map((base) => {
+        canonicalHydrologyKey(this.descriptor, base.key);
+        const index = state.hydrologyRegionIndexByKey.get(hydrologyKey(base.key));
+        const features = index?.featureIds.map((featureId) => state.hydrologyFeatureById.get(featureId)) ?? [];
+        return new EffectiveHydrologyRegionSnapshot(base, features);
+      }).sort((first, second) => compareHydrologyKeys(first.base.key, second.base.key));
+      for (let index = 1; index < hydrologyRegions.length; index += 1) {
+        if (hydrologyKey(hydrologyRegions[index - 1].base.key) === hydrologyKey(hydrologyRegions[index].base.key)) {
+          throw new TypeError("effective snapshot capture contains duplicate hydrology regions");
+        }
+      }
+      return new EffectiveWorldSnapshot(
+        this.descriptor,
+        this.worldIdentity,
+        deltaSnapshot.effectiveRevision,
+        Object.freeze(semanticChunks),
+        Object.freeze(hydrologyRegions)
+      );
+    }
+  };
+
+  // src/world/semantic/SurfaceDependency.ts
+  var SURFACE_RENDER_CHUNK_SIZE = 16;
+  var SURFACE_COMPILER_REVISION = 1;
+  var SURFACE_COMPILE_PROFILE_VERSION = 1;
+  function assertNonNegativeRevision(name, value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`${name} must be a non-negative safe integer`);
+    }
+  }
+  function assertPositiveVersion(name, value) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(`${name} must be a positive safe integer`);
+    }
+  }
+  function assertRenderChunkKey(value) {
+    if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).some((name) => name !== "chunkX" && name !== "chunkY") || !Number.isSafeInteger(value.chunkX) || !Number.isSafeInteger(value.chunkY)) {
+      throw new TypeError("render chunk key must contain safe integer coordinates");
+    }
+    const originX = value.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+    const originY = value.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+    const endX = originX + SURFACE_RENDER_CHUNK_SIZE - 1;
+    const endY = originY + SURFACE_RENDER_CHUNK_SIZE - 1;
+    if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(endX) || !Number.isSafeInteger(endY)) {
+      throw new RangeError("render chunk key exceeds the safe integer tile range");
+    }
+  }
+  function canonicalizeRenderChunkKey(descriptor, key) {
+    serializeWorldDescriptorV2(descriptor);
+    assertRenderChunkKey(key);
+    if (descriptor.topology === "toroidal") {
+      return Object.freeze({
+        chunkX: positiveIntegerModulo(key.chunkX, descriptor.width / SURFACE_RENDER_CHUNK_SIZE),
+        chunkY: positiveIntegerModulo(key.chunkY, descriptor.height / SURFACE_RENDER_CHUNK_SIZE)
+      });
+    }
+    if (descriptor.topology === "bounded") {
+      const originX = key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const originY = key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      if (originX < 0 || originY < 0 || originX >= descriptor.width || originY >= descriptor.height) {
+        throw new RangeError("render chunk key lies outside the bounded world");
+      }
+    }
+    return Object.freeze({ chunkX: key.chunkX, chunkY: key.chunkY });
+  }
+  function assertCanonicalSemanticDependencies(values) {
+    if (!Array.isArray(values)) throw new TypeError("surface semantic dependencies must be an array");
+    for (let index = 0; index < values.length; index += 1) {
+      const dependency = values[index];
+      if (!dependency || typeof dependency !== "object" || Object.getOwnPropertyNames(dependency).some((name) => name !== "key" && name !== "baseRevision" && name !== "deltaRevision")) {
+        throw new TypeError("surface semantic dependency is invalid");
+      }
+      assertSemanticChunkKey(dependency.key);
+      assertNonNegativeRevision("semantic base revision", dependency.baseRevision);
+      assertNonNegativeRevision("semantic delta revision", dependency.deltaRevision);
+      if (index > 0) {
+        const previous = values[index - 1].key;
+        if (previous.chunkX > dependency.key.chunkX || previous.chunkX === dependency.key.chunkX && previous.chunkY >= dependency.key.chunkY) {
+          throw new TypeError("surface semantic dependencies must be strictly ordered");
+        }
+      }
+    }
+  }
+  function assertCanonicalHydrologyDependencies(values) {
+    if (!Array.isArray(values)) throw new TypeError("surface hydrology dependencies must be an array");
+    for (let index = 0; index < values.length; index += 1) {
+      const dependency = values[index];
+      if (!dependency || typeof dependency !== "object" || Object.getOwnPropertyNames(dependency).some((name) => name !== "key" && name !== "baseRevision" && name !== "features")) {
+        throw new TypeError("surface hydrology dependency is invalid");
+      }
+      assertHydrologyRegionKey(dependency.key);
+      assertNonNegativeRevision("hydrology base revision", dependency.baseRevision);
+      if (!Array.isArray(dependency.features)) {
+        throw new TypeError("surface hydrology feature dependencies must be an array");
+      }
+      for (let featureIndex = 0; featureIndex < dependency.features.length; featureIndex += 1) {
+        const feature = dependency.features[featureIndex];
+        if (!feature || typeof feature.featureId !== "string" || Object.getOwnPropertyNames(feature).some((name) => name !== "featureId" && name !== "revision")) {
+          throw new TypeError("surface hydrology feature dependency is invalid");
+        }
+        assertPositiveVersion("hydrology feature revision", feature.revision);
+        if (featureIndex > 0 && dependency.features[featureIndex - 1].featureId.localeCompare(feature.featureId) >= 0) {
+          throw new TypeError("surface hydrology feature dependencies must be strictly ordered");
+        }
+      }
+      if (index > 0) {
+        const previous = values[index - 1].key;
+        if (previous.regionX > dependency.key.regionX || previous.regionX === dependency.key.regionX && previous.regionY >= dependency.key.regionY) {
+          throw new TypeError("surface hydrology dependencies must be strictly ordered");
+        }
+      }
+    }
+  }
+  function assertSurfaceDependencyKey(value) {
+    if (!value || typeof value !== "object") throw new TypeError("surface dependency key must be an object");
+    const key = value;
+    const allowedFields = /* @__PURE__ */ new Set([
+      "worldIdentity",
+      "renderKey",
+      "compilerRevision",
+      "compileProfileVersion",
+      "semanticChunks",
+      "hydrologyRegions"
+    ]);
+    if (Object.getOwnPropertyNames(key).some((name) => !allowedFields.has(name)) || typeof key.worldIdentity !== "string" || key.worldIdentity.length === 0) {
+      throw new TypeError("surface dependency key header is invalid");
+    }
+    assertRenderChunkKey(key.renderKey);
+    assertPositiveVersion("surface compiler revision", key.compilerRevision);
+    assertPositiveVersion("surface compile profile version", key.compileProfileVersion);
+    assertCanonicalSemanticDependencies(key.semanticChunks);
+    assertCanonicalHydrologyDependencies(key.hydrologyRegions);
+  }
+  function createSurfaceDependencyBinding(snapshot, renderKey, options = {}) {
+    const canonicalRenderKey = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
+    const compilerRevision = options.compilerRevision ?? SURFACE_COMPILER_REVISION;
+    const compileProfileVersion = options.compileProfileVersion ?? SURFACE_COMPILE_PROFILE_VERSION;
+    assertPositiveVersion("surface compiler revision", compilerRevision);
+    assertPositiveVersion("surface compile profile version", compileProfileVersion);
+    if (snapshot.worldIdentity !== serializeWorldDescriptorV2(snapshot.descriptor)) {
+      throw new TypeError("effective snapshot world identity is inconsistent with its descriptor");
+    }
+    const semanticChunks = Object.freeze(snapshot.semanticChunks.map((chunk) => Object.freeze({
+      key: Object.freeze(canonicalizeSemanticChunkKey(snapshot.descriptor, chunk.base.key)),
+      baseRevision: chunk.base.revision,
+      deltaRevision: chunk.delta?.revision ?? 0
+    })));
+    const hydrologyRegions = Object.freeze(snapshot.hydrologyRegions.map((region) => Object.freeze({
+      key: Object.freeze(canonicalizeHydrologyRegionKey(snapshot.descriptor, region.base.key)),
+      baseRevision: region.base.revision,
+      features: Object.freeze(region.featureDeltas.map((feature) => Object.freeze({
+        featureId: feature.featureId,
+        revision: feature.revision
+      })))
+    })));
+    const dependencyKey = Object.freeze({
+      worldIdentity: snapshot.worldIdentity,
+      renderKey: canonicalRenderKey,
+      compilerRevision,
+      compileProfileVersion,
+      semanticChunks,
+      hydrologyRegions
+    });
+    assertSurfaceDependencyKey(dependencyKey);
+    return Object.freeze({
+      effectiveRevision: snapshot.effectiveRevision,
+      dependencyKey
+    });
+  }
+  function surfaceDependencyKeysEqual(first, second) {
+    assertSurfaceDependencyKey(first);
+    assertSurfaceDependencyKey(second);
+    if (first === second) return true;
+    if (first.worldIdentity !== second.worldIdentity || first.renderKey.chunkX !== second.renderKey.chunkX || first.renderKey.chunkY !== second.renderKey.chunkY || first.compilerRevision !== second.compilerRevision || first.compileProfileVersion !== second.compileProfileVersion || first.semanticChunks.length !== second.semanticChunks.length || first.hydrologyRegions.length !== second.hydrologyRegions.length) return false;
+    for (let index = 0; index < first.semanticChunks.length; index += 1) {
+      const left = first.semanticChunks[index];
+      const right = second.semanticChunks[index];
+      if (left.key.chunkX !== right.key.chunkX || left.key.chunkY !== right.key.chunkY || left.baseRevision !== right.baseRevision || left.deltaRevision !== right.deltaRevision) return false;
+    }
+    for (let index = 0; index < first.hydrologyRegions.length; index += 1) {
+      const left = first.hydrologyRegions[index];
+      const right = second.hydrologyRegions[index];
+      if (left.key.regionX !== right.key.regionX || left.key.regionY !== right.key.regionY || left.baseRevision !== right.baseRevision || left.features.length !== right.features.length) return false;
+      for (let featureIndex = 0; featureIndex < left.features.length; featureIndex += 1) {
+        if (left.features[featureIndex].featureId !== right.features[featureIndex].featureId || left.features[featureIndex].revision !== right.features[featureIndex].revision) return false;
+      }
+    }
+    return true;
+  }
+  function serializeSurfaceDependencyKey(key) {
+    assertSurfaceDependencyKey(key);
+    return JSON.stringify([
+      key.worldIdentity,
+      [key.renderKey.chunkX, key.renderKey.chunkY],
+      key.compilerRevision,
+      key.compileProfileVersion,
+      key.semanticChunks.map((dependency) => [
+        dependency.key.chunkX,
+        dependency.key.chunkY,
+        dependency.baseRevision,
+        dependency.deltaRevision
+      ]),
+      key.hydrologyRegions.map((dependency) => [
+        dependency.key.regionX,
+        dependency.key.regionY,
+        dependency.baseRevision,
+        dependency.features.map((feature) => [feature.featureId, feature.revision])
+      ])
+    ]);
+  }
+  function assertSurfaceRequestToken(value) {
+    if (!value || typeof value !== "object") throw new TypeError("surface request token must be an object");
+    const token = value;
+    if (Object.getOwnPropertyNames(token).some((name) => name !== "sessionEpoch" && name !== "renderChunkGeneration")) {
+      throw new TypeError("surface request token contains unknown fields");
+    }
+    assertPositiveVersion("surface request sessionEpoch", token.sessionEpoch);
+    assertPositiveVersion("surface request renderChunkGeneration", token.renderChunkGeneration);
+  }
+  function renderKeyString(key) {
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  var SurfaceRequestTracker = class {
+    constructor(descriptor, sessionEpoch) {
+      this.descriptor = descriptor;
+      this.sessionEpoch = sessionEpoch;
+      this.currentByRenderKey = /* @__PURE__ */ new Map();
+      this.nextGeneration = 0;
+      this.disposed = false;
+      this.worldIdentity = serializeWorldDescriptorV2(descriptor);
+      assertPositiveVersion("surface request sessionEpoch", sessionEpoch);
+    }
+    get activeRequestCount() {
+      return this.currentByRenderKey.size;
+    }
+    issue(renderKey) {
+      if (this.disposed) throw new Error("surface request tracker has been disposed");
+      const canonical = canonicalizeRenderChunkKey(this.descriptor, renderKey);
+      if (this.nextGeneration >= Number.MAX_SAFE_INTEGER) {
+        throw new RangeError("surface request generation space is exhausted");
+      }
+      this.nextGeneration += 1;
+      const token = Object.freeze({
+        sessionEpoch: this.sessionEpoch,
+        renderChunkGeneration: this.nextGeneration
+      });
+      this.currentByRenderKey.set(renderKeyString(canonical), token);
+      return token;
+    }
+    issueRequest(snapshot, renderKey, options = {}) {
+      if (snapshot.worldIdentity !== this.worldIdentity) {
+        throw new TypeError("cannot issue a surface request for another world identity");
+      }
+      const binding = createSurfaceDependencyBinding(snapshot, renderKey, options);
+      return Object.freeze({
+        ...binding,
+        requestToken: this.issue(renderKey)
+      });
+    }
+    current(renderKey) {
+      if (this.disposed) return void 0;
+      const canonical = canonicalizeRenderChunkKey(this.descriptor, renderKey);
+      return this.currentByRenderKey.get(renderKeyString(canonical));
+    }
+    isCurrent(renderKey, token) {
+      assertSurfaceRequestToken(token);
+      const current = this.current(renderKey);
+      return current !== void 0 && current.sessionEpoch === token.sessionEpoch && current.renderChunkGeneration === token.renderChunkGeneration;
+    }
+    canAccept(renderKey, result, currentBinding) {
+      assertSurfaceRequestToken(result.requestToken);
+      assertNonNegativeRevision("surface result effective revision", result.effectiveRevision);
+      assertNonNegativeRevision("current effective revision", currentBinding.effectiveRevision);
+      assertSurfaceDependencyKey(result.dependencyKey);
+      assertSurfaceDependencyKey(currentBinding.dependencyKey);
+      const canonical = canonicalizeRenderChunkKey(this.descriptor, renderKey);
+      if (result.dependencyKey.renderKey.chunkX !== canonical.chunkX || result.dependencyKey.renderKey.chunkY !== canonical.chunkY || currentBinding.dependencyKey.renderKey.chunkX !== canonical.chunkX || currentBinding.dependencyKey.renderKey.chunkY !== canonical.chunkY || result.dependencyKey.worldIdentity !== this.worldIdentity || currentBinding.dependencyKey.worldIdentity !== this.worldIdentity || result.effectiveRevision > currentBinding.effectiveRevision) return false;
+      return this.isCurrent(canonical, result.requestToken) && surfaceDependencyKeysEqual(result.dependencyKey, currentBinding.dependencyKey);
+    }
+    release(renderKey, token) {
+      if (!this.isCurrent(renderKey, token)) return false;
+      const canonical = canonicalizeRenderChunkKey(this.descriptor, renderKey);
+      return this.currentByRenderKey.delete(renderKeyString(canonical));
+    }
+    dispose() {
+      this.disposed = true;
+      this.currentByRenderKey.clear();
+    }
+  };
+
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
   exports.BASE_SEMANTIC_CHUNK_REVISION = BASE_SEMANTIC_CHUNK_REVISION;
@@ -22207,6 +23227,7 @@ void main() {
   exports.BaseSemanticChunkView = BaseSemanticChunkView;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
   exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
+  exports.EffectiveWorldView = EffectiveWorldView;
   exports.EventEmitter = EventEmitter;
   exports.FULL_HYDROLOGY_REGION_BOUNDS = FULL_HYDROLOGY_REGION_BOUNDS;
   exports.FULL_SEMANTIC_CHUNK_BOUNDS = FULL_SEMANTIC_CHUNK_BOUNDS;
@@ -22257,9 +23278,14 @@ void main() {
   exports.RenderWorldController = RenderWorldController;
   exports.ResourceBudgetLedger = ResourceBudgetLedger;
   exports.RuntimeWorkCoordinator = RuntimeWorkCoordinator;
+  exports.SURFACE_COMPILER_REVISION = SURFACE_COMPILER_REVISION;
+  exports.SURFACE_COMPILE_PROFILE_VERSION = SURFACE_COMPILE_PROFILE_VERSION;
+  exports.SURFACE_RENDER_CHUNK_SIZE = SURFACE_RENDER_CHUNK_SIZE;
+  exports.SemanticOverrideField = SemanticOverrideField;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
   exports.StaticWorldSource = StaticWorldSource;
   exports.SubstrateClass = SubstrateClass;
+  exports.SurfaceRequestTracker = SurfaceRequestTracker;
   exports.ToroidalWorldSource = ToroidalWorldSource;
   exports.Unit = Unit;
   exports.UnitActions = UnitActions;
@@ -22290,6 +23316,7 @@ void main() {
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
   exports.assertBaseSemanticChunk = assertBaseSemanticChunk;
+  exports.assertHydrologyFeatureDelta = assertHydrologyFeatureDelta;
   exports.assertHydrologyRegion = assertHydrologyRegion;
   exports.assertHydrologyRegionKey = assertHydrologyRegionKey;
   exports.assertHydrologyRegionLocalBounds = assertHydrologyRegionLocalBounds;
@@ -22298,7 +23325,10 @@ void main() {
   exports.assertMatchingHydrologyPorts = assertMatchingHydrologyPorts;
   exports.assertPackedWorldChunk = assertPackedWorldChunk;
   exports.assertSemanticChunkKey = assertSemanticChunkKey;
+  exports.assertSparseSemanticDelta = assertSparseSemanticDelta;
   exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
+  exports.assertSurfaceDependencyKey = assertSurfaceDependencyKey;
+  exports.assertSurfaceRequestToken = assertSurfaceRequestToken;
   exports.assertWorldChunk = assertWorldChunk;
   exports.assertWorldDescriptor = assertWorldDescriptor;
   exports.assertWorldDescriptorV2 = assertWorldDescriptorV2;
@@ -22308,13 +23338,19 @@ void main() {
   exports.baseSemanticChunkTransferables = baseSemanticChunkTransferables;
   exports.buildMacroDrainageGraph = buildMacroDrainageGraph;
   exports.canonicalizeHydrologyRegionKey = canonicalizeHydrologyRegionKey;
+  exports.canonicalizeRenderChunkKey = canonicalizeRenderChunkKey;
   exports.canonicalizeSemanticChunkKey = canonicalizeSemanticChunkKey;
   exports.clearWorldChunkCache = clearWorldChunkCache;
+  exports.cloneHydrologyFeatureDelta = cloneHydrologyFeatureDelta;
+  exports.cloneSparseSemanticDelta = cloneSparseSemanticDelta;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
+  exports.createEffectiveDeltaSnapshot = createEffectiveDeltaSnapshot;
   exports.createLandformSampler = createLandformSampler;
   exports.createProceduralMacroHeightSource = createProceduralMacroHeightSource;
   exports.createSemanticChunkSurfaceResolver = createSemanticChunkSurfaceResolver;
+  exports.createSparseSemanticDelta = createSparseSemanticDelta;
   exports.createStableHydrologyId = createStableHydrologyId;
+  exports.createSurfaceDependencyBinding = createSurfaceDependencyBinding;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldDescriptorV2 = createWorldDescriptorV2;
@@ -22343,6 +23379,7 @@ void main() {
   exports.getWorldChunkMetadata = getWorldChunkMetadata;
   exports.getWorldSourceTile = getWorldSourceTile;
   exports.groupTilesByWorldChunk = groupTilesByWorldChunk;
+  exports.hydrologyFeatureBounds = hydrologyFeatureBounds;
   exports.hydrologyRegionCoordinate = hydrologyRegionCoordinate;
   exports.hydrologyRegionOrigin = hydrologyRegionOrigin;
   exports.hydrologyRegionTransferables = hydrologyRegionTransferables;
@@ -22362,8 +23399,12 @@ void main() {
   exports.semanticChunkLocalIndex = semanticChunkLocalIndex;
   exports.semanticChunkOrigin = semanticChunkOrigin;
   exports.serializeBaseSemanticChunk = serializeBaseSemanticChunk;
+  exports.serializeSurfaceDependencyKey = serializeSurfaceDependencyKey;
   exports.serializeWorldDescriptor = serializeWorldDescriptor;
   exports.serializeWorldDescriptorV2 = serializeWorldDescriptorV2;
+  exports.sparseSemanticDeltaByteLength = sparseSemanticDeltaByteLength;
+  exports.sparseSemanticDeltaOverrideOffset = sparseSemanticDeltaOverrideOffset;
+  exports.surfaceDependencyKeysEqual = surfaceDependencyKeysEqual;
   exports.tagWorldChunk = tagWorldChunk;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;
   exports.worldDescriptorsV2Equal = worldDescriptorsV2Equal;

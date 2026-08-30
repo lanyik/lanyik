@@ -9,7 +9,6 @@ import {
     LocalTileBounds,
     localBoundsContain,
     semanticChunkLocalIndex,
-    semanticChunkOrigin,
     SemanticChunkKey,
     WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
     WORLD_SEMANTIC_CHUNK_SIZE,
@@ -155,37 +154,44 @@ export function baseSemanticChunkTransferables(chunk: BaseSemanticChunk): Transf
 }
 
 export class BaseSemanticChunkView {
-    private readonly origin: Readonly<{ x: number; y: number }>;
-
     constructor(public readonly chunk: BaseSemanticChunk) {
         assertBaseSemanticChunk(chunk);
-        this.origin = semanticChunkOrigin(chunk.key);
     }
 
     public getTile(localX: number, localY: number): Readonly<BaseSemanticTileView> {
-        const index = semanticChunkLocalIndex(localX, localY);
-        if (!localBoundsContain(this.chunk.validBounds, localX, localY)) {
-            throw new RangeError("semantic tile lies outside the chunk validBounds");
-        }
-        const biomeOffset = index * BIOME_CHANNELS;
-        const climateOffset = index * CLIMATE_CHANNELS;
-        return Object.freeze({
-            x: this.origin.x + localX,
-            y: this.origin.y + localY,
-            substrateClass: this.chunk.substrateClass[index] as SubstrateClass,
-            macroHeight: this.chunk.macroHeight[index] / 65535,
-            biomeWeights: Object.freeze([
-                this.chunk.biomeWeights[biomeOffset] / 255,
-                this.chunk.biomeWeights[biomeOffset + 1] / 255,
-                this.chunk.biomeWeights[biomeOffset + 2] / 255,
-                this.chunk.biomeWeights[biomeOffset + 3] / 255
-            ] as [number, number, number, number]),
-            temperature: this.chunk.climate[climateOffset] / 255,
-            moisture: this.chunk.climate[climateOffset + 1] / 255,
-            vegetationDensity: this.chunk.vegetationDensity[index] / 255,
-            vegetationProfile: this.chunk.vegetationProfile[index]
-        });
+        return readValidatedBaseSemanticTile(this.chunk, localX, localY);
     }
+}
+
+export function readValidatedBaseSemanticTile(
+    chunk: BaseSemanticChunk,
+    localX: number,
+    localY: number
+): Readonly<BaseSemanticTileView> {
+    const index = semanticChunkLocalIndex(localX, localY);
+    if (!localBoundsContain(chunk.validBounds, localX, localY)) {
+        throw new RangeError("semantic tile lies outside the chunk validBounds");
+    }
+    const biomeOffset = index * BIOME_CHANNELS;
+    const climateOffset = index * CLIMATE_CHANNELS;
+    const originX = chunk.key.chunkX * WORLD_SEMANTIC_CHUNK_SIZE;
+    const originY = chunk.key.chunkY * WORLD_SEMANTIC_CHUNK_SIZE;
+    return Object.freeze({
+        x: originX + localX,
+        y: originY + localY,
+        substrateClass: chunk.substrateClass[index] as SubstrateClass,
+        macroHeight: chunk.macroHeight[index] / 65535,
+        biomeWeights: Object.freeze([
+            chunk.biomeWeights[biomeOffset] / 255,
+            chunk.biomeWeights[biomeOffset + 1] / 255,
+            chunk.biomeWeights[biomeOffset + 2] / 255,
+            chunk.biomeWeights[biomeOffset + 3] / 255
+        ] as [number, number, number, number]),
+        temperature: chunk.climate[climateOffset] / 255,
+        moisture: chunk.climate[climateOffset + 1] / 255,
+        vegetationDensity: chunk.vegetationDensity[index] / 255,
+        vegetationProfile: chunk.vegetationProfile[index]
+    });
 }
 
 export function serializeBaseSemanticChunk(chunk: BaseSemanticChunk): ArrayBuffer {

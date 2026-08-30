@@ -4,11 +4,15 @@ import {
     Land,
     SparseWorldChunkStore,
     BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
+    createEffectiveDeltaSnapshot,
+    createSparseSemanticDelta,
     createWorldDescriptorV2,
     deriveHydrologyRaster,
     HydrologyRegionGenerator,
     HydrologyRegionSpatialIndex,
     hydrologyRegionVectorBytes,
+    EffectiveWorldView,
+    SurfaceRequestTracker,
     createWorldVegetationMapSnapshot,
     generateWorldChunk,
     generateBaseSemanticChunk,
@@ -143,6 +147,49 @@ function benchmarkHydrologyRegions() {
         vectorBytes: regions.reduce((sum, region) => sum + hydrologyRegionVectorBytes(region), 0),
         spatialIndexBytes: spatialIndex.byteLength,
         wetTiles: raster.kind.reduce((sum, kind) => sum + (kind === 0 ? 0 : 1), 0)
+    };
+}
+
+function benchmarkEffectiveSnapshots() {
+    const descriptor = createWorldDescriptorV2({ seed: "effective-snapshot-benchmark" });
+    const semanticChunks = [
+        { chunkX: 0, chunkY: 0 },
+        { chunkX: 0, chunkY: 1 },
+        { chunkX: 1, chunkY: 0 },
+        { chunkX: 1, chunkY: 1 }
+    ].map(key => generateBaseSemanticChunk({ descriptor, key }));
+    const hydrologyRegion = new HydrologyRegionGenerator(descriptor).generate({ regionX: 0, regionY: 0 });
+    const delta = createSparseSemanticDelta({
+        key: { chunkX: 0, chunkY: 0 },
+        revision: 1,
+        overrides: [{ localX: 8, localY: 8, macroHeight: 40_000 }]
+    });
+    const view = new EffectiveWorldView(descriptor, createEffectiveDeltaSnapshot({
+        descriptor,
+        effectiveRevision: 1,
+        semanticDeltas: [delta]
+    }));
+    const tracker = new SurfaceRequestTracker(descriptor, 1);
+    const iterations = 5_000;
+    let checksum = 0;
+    const started = performance.now();
+    for (let index = 0; index < iterations; index += 1) {
+        const snapshot = view.capture({ semanticChunks, hydrologyRegions: [hydrologyRegion] });
+        const request = tracker.issueRequest(snapshot, { chunkX: 0, chunkY: 0 });
+        if (!tracker.canAccept({ chunkX: 0, chunkY: 0 }, request, request)) {
+            throw new Error("current effective snapshot request was rejected");
+        }
+        checksum = (checksum + Math.round(snapshot.getTile(8, 8).macroHeight * 65_535)
+            + request.requestToken.renderChunkGeneration) >>> 0;
+    }
+    const durationMs = performance.now() - started;
+    tracker.dispose();
+    return {
+        operation: "four semantic chunks + one hydrology region effective snapshot/request x5000",
+        durationMs: round(durationMs),
+        averageMicros: round(durationMs * 1_000 / iterations),
+        iterations,
+        checksum
     };
 }
 
@@ -344,6 +391,7 @@ const results = {
     toroidalWindow: benchmarkToroidalWindow(),
     semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
     hydrologyRegions: benchmarkHydrologyRegions(),
+    effectiveSnapshots: benchmarkEffectiveSnapshots(),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -373,6 +421,7 @@ if (process.argv.includes("--check")) {
     under("semanticChunkGeneration.durationMs", results.semanticChunkGeneration.durationMs, 1_500);
     under("hydrologyRegions.generationMs", results.hydrologyRegions.generationMs, 1_500);
     under("hydrologyRegions.rasterMs", results.hydrologyRegions.rasterMs, 750);
+    under("effectiveSnapshots.durationMs", results.effectiveSnapshots.durationMs, 750);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

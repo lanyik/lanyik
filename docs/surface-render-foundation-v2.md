@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**阶段 A、B 已完成，阶段 C–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。阶段 A、B 的 v2 语义/水文格式、派生查询和 Worker 任务已可独立使用与验收，但尚未接入生产渲染热路径。
+状态：**阶段 A、B 与阶段 C 前置的生效快照/版本正确性已完成，完整阶段 C–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键和请求令牌可独立使用与验收，但尚未接入生产渲染热路径。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -335,6 +335,16 @@ BaseSemanticChunk
 
 commit record 是原子可见性边界，不要求永久保留完整操作历史。Store 在 save barrier 下把已提交 semantic mutations 折叠进 chunk delta、把 hydrology mutations 折叠进 feature record/tombstone；只有新快照和索引持久化成功后才能回收旧 commit。统计和预算必须包含待压缩 commit 字节，避免长期编辑使日志无界增长。
 
+当前已实现的读模型把持久化事务与运行时发布边界分开：
+
+- `SparseSemanticDelta` 使用严格递增的 X-major `Uint16` tile index、逐项 field mask 和紧凑 SoA 列。未被 mask 使用的槽位必须为零；biome 权重仍严格合计 255。它只覆盖 substrate、macro height、biome 权重和 vegetation density/profile，冻结 climate 继续直接读取 base chunk。
+- `HydrologyFeatureDelta` 是完整 river/lake record 或 feature tombstone。河流保存世界坐标控制点、source、outlet、宽度/水位剖面和 discharge；湖泊保存完整边界、水位和 profile。完整 record 只在快照中保存一次，`HydrologyRegionFeatureIndex` 只保存相交 feature ID，是可重建索引而非第二份 feature 权威。
+- `EffectiveDeltaSnapshot` 是某个 world identity 下一个完整、不可变的已提交增量层。创建边界复制 delta typed arrays、规范排序 chunk/feature/region index，并要求局部 revision 不超过 `effectiveRevision`；revision 0 只允许空层。
+- `EffectiveWorldView.publishDeltaSnapshot(next, expectedRevision)` 先做 world identity 与 CAS 校验，再要求 revision 恰好加一，最后用一次指针替换同时发布 snapshot 和预构建查找表。捕获方只读取一次该指针，因此不会观察到新旧 semantic/hydrology 各一半；旧 `EffectiveWorldSnapshot` 继续稳定引用旧增量对象。
+- `capture()` 只组合调用方提供的 base chunk/region，不扫描或复制整个基础世界；无修改 chunk 直接引用原 `BaseSemanticChunk` SoA。partial chunk 外的 override、非 canonical 环绕 key、重复依赖和未被任何 region index 引用的 hydrology feature 都确定性失败。
+
+本阶段不实现 `WorldDeltaStore` v3、编辑事务、feature 拓扑 CAS 或持久化压缩；这些仍属于阶段 G。现有 v1 `WorldDeltaStore`/`WorldSurfaceView` 使用旧 chunk 和 tile override 契约，不能作为 v2 生效视图的兼容层或 fallback。
+
 ### 7.3 只读查询
 
 公共便利 API 可以返回结构化对象：
@@ -398,6 +408,10 @@ interface ResidentSurfaceLease {
 `SurfaceDependencyKey` 是可跨任务和同 world session 缓存复用的内容身份，精确包含 world identity、render key、compile profile/compiler revision，以及按规范顺序排列的 semantic chunk、hydrology region 和 hydrology feature key/revision。内容 hash 只能加速查找，不能代替完整结构化依赖作正确性判断。
 
 `SurfaceRequestToken` 是 service 为一次挂载需求签发的 `{ sessionEpoch, renderChunkGeneration }` 不透明令牌，只用于拒绝迟到 Worker、上传和挂载结果，不进入内容缓存键。Worker 结果必须同时满足“request token 仍是该 render chunk 当前令牌”和“compiled dependency key 等于当前依赖”；任一不匹配都丢弃。
+
+当前已实现 `SurfaceDependencyKey`、`SurfaceDependencyBinding` 和 `SurfaceRequestTracker`。依赖键保存完整规范 world identity、canonical 16×16 render key、compiler/profile 版本、排序后的 semantic base/delta revision，以及 hydrology base 和相交 feature revision；序列化字符串只用于缓存查找，命中后仍执行结构化逐项比较。`effectiveRevision` 保存在 binding/lease 而不进入内容键：无关区域提交可以提升全局 revision，同时继续复用局部输入逐项相同的编译内容；相关依赖变化一定改变内容键。
+
+tracker 在一个 `sessionEpoch` 内使用全局严格递增的 `renderChunkGeneration`，只为当前活动 render key 保留 token。release 后重新挂载不会把 generation 重置为 1，因而不存在同 session ABA；新世界 session 必须使用新 epoch。结果接收同时校验 canonical render key、world identity、当前 token 和结构化 dependency key。缓存命中或旧 revision 的任务若局部依赖仍相同，可以用当前 token/effective revision 创建新 lease；不能把旧 token 本身带入 lease。
 
 compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
 
@@ -898,6 +912,23 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 加载后的 `HydrologyRegionSpatialIndex` 使用 16×16 格 bin 和紧凑 offset/entry typed arrays；它是可丢弃索引。`deriveHydrologyRaster` 通过复用查询数组输出 X-major coverage/kind/level/flow/body-index typed arrays；海洋来自冻结海平面与调用方提供的宏观高度，逐格结果不回写 region。
 - Worker 协议升级到 v4，新增 `generateHydrologyRegion`，返回的河流/湖泊 typed arrays 通过 transferable 交付；`WorldGeneratorClient` 和有界 `WorldGeneratorPool` 提供独立 hydrology lane、队列/忙碌数和滑动平均耗时。
 - 验收覆盖图终止、损坏 rank 拒绝、静态湖盆、最小全海图，以及三组正负流域程序化语料中的显式湖盆、长河、汇流和海洋河口；最长可见链硬门槛为 64 条宏观边且至少跨 4 个 region。另有真实程序化长河逐边裁切、双侧端口配对、任意 region 请求顺序、负坐标、safe-integer 边界、160×160 环绕 partial region 与四角接缝、派生海/湖/河 raster、空间索引、WorkerPool 和真实浏览器 transferable Worker 验收。benchmark gate 覆盖一个 2048×2048 流域支持的 16-region 工作集及一个 128×128 raster；当前代表性基线约为 280 ms 和 8 ms。
+
+### 阶段 C 前置：生效快照与版本正确性（已完成）
+
+- 实现规范化 `SparseSemanticDelta`、完整 `HydrologyFeatureDelta`/tombstone 和派生 region-feature index。
+- 实现 `EffectiveDeltaSnapshot`、`EffectiveWorldView` 原子发布和有界 `EffectiveWorldSnapshot` 捕获。
+- 实现局部精确 `SurfaceDependencyKey`、携带 `effectiveRevision` 的 binding 和跨 session/request generation 的 token tracker。
+- 验证 partial chunk、环绕 alias、world identity、revision CAS/严格递增、旧快照隔离、无关编辑缓存复用、相关编辑失效、release/remount ABA 与旧 session 拒绝。
+
+完成标志：读取方不会观察半提交增量；旧快照不会随新 revision 改变；只有当前 token 且依赖逐项相同的结果可被接收，同时无关世界区域编辑不造成全局编译缓存失效。
+
+实现结果（2026-08-30）：
+
+- `EffectiveWorldView` 发布一个同时含完整 delta layer 和预构建查找表的不可变 state，提交热路径只做一次 state 指针替换；捕获成本与请求提供的 chunk/region 数量相关，不与整个基础世界大小相关。
+- semantic override 使用最多 1024 项的紧凑 SoA 和二分读取；hydrology record 使用 feature-centric 全局记录，region 只引用稳定 ID。创建和发布边界复制 typed arrays，Worker transfer 不能借用这些权威 buffer。
+- `SurfaceDependencyKey` 不使用 hash 代替正确性比较，也不把全局 `effectiveRevision` 混入局部内容键。`SurfaceRequestTracker` 使用 session epoch 加会话内全局单调 generation，活动表可在卸载时删除且不会发生 generation ABA。
+- 本前置阶段只新增运行时 read model 与可重建缓存身份，不改变 generator 输出或持久化格式：generator 保持 v7、semantic chunk 保持 v2、hydrology region 保持 v1；`SURFACE_COMPILER_REVISION` 与 `SURFACE_COMPILE_PROFILE_VERSION` 首次冻结为 1。
+- 定向验收覆盖规范编码、增量越过 partial bounds、完整河湖 record、region tombstone 覆盖、任意依赖输入顺序、跨 world 错配、revision 跳号/冲突、相关与无关编辑、旧请求/旧 session/release 后结果。benchmark gate 覆盖四个 semantic chunk 加一个 hydrology region 的 snapshot、查询、依赖构建和 token 校验 5000 次；首次验证后的代表性基线约 185 ms，即每次约 37 µs。
 
 ### 阶段 C：表面编译器与纹理池
 

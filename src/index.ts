@@ -265,6 +265,69 @@ export type {
     DerivedHydrologyRaster,
     DerivedHydrologyRasterOptions
 } from "./world/semantic/DerivedHydrologyRaster";
+export {
+    SemanticOverrideField,
+    createSparseSemanticDelta,
+    assertSparseSemanticDelta,
+    cloneSparseSemanticDelta,
+    sparseSemanticDeltaOverrideOffset,
+    sparseSemanticDeltaByteLength
+} from "./world/semantic/SparseSemanticDelta";
+export type {
+    SparseSemanticTileOverride,
+    SparseSemanticDelta,
+    CreateSparseSemanticDeltaOptions
+} from "./world/semantic/SparseSemanticDelta";
+export {
+    assertHydrologyFeatureDelta,
+    cloneHydrologyFeatureDelta,
+    hydrologyFeatureBounds
+} from "./world/semantic/HydrologyFeatureDelta";
+export type {
+    HydrologyFeatureConnection,
+    HydrologyRiverSource,
+    HydrologyRiverFeatureDelta,
+    HydrologyLakeFeatureDelta,
+    HydrologyFeatureTombstone,
+    HydrologyFeatureDelta,
+    HydrologyFeatureBounds
+} from "./world/semantic/HydrologyFeatureDelta";
+export {
+    createEffectiveDeltaSnapshot,
+    EffectiveWorldView
+} from "./world/semantic/EffectiveWorldView";
+export type {
+    HydrologyRegionFeatureIndex,
+    EffectiveDeltaSnapshot,
+    CreateEffectiveDeltaSnapshotOptions,
+    CaptureEffectiveWorldSnapshotOptions,
+    EffectiveSemanticTileView,
+    EffectiveSemanticChunkSnapshot,
+    EffectiveHydrologyRegionSnapshot,
+    EffectiveWorldSnapshot
+} from "./world/semantic/EffectiveWorldView";
+export {
+    SURFACE_RENDER_CHUNK_SIZE,
+    SURFACE_COMPILER_REVISION,
+    SURFACE_COMPILE_PROFILE_VERSION,
+    canonicalizeRenderChunkKey,
+    assertSurfaceDependencyKey,
+    createSurfaceDependencyBinding,
+    surfaceDependencyKeysEqual,
+    serializeSurfaceDependencyKey,
+    assertSurfaceRequestToken,
+    SurfaceRequestTracker
+} from "./world/semantic/SurfaceDependency";
+export type {
+    RenderChunkKey,
+    SurfaceSemanticDependency,
+    SurfaceHydrologyFeatureDependency,
+    SurfaceHydrologyDependency,
+    SurfaceDependencyKey,
+    SurfaceDependencyBinding,
+    SurfaceRequestToken,
+    SurfaceRequestIdentity
+} from "./world/semantic/SurfaceDependency";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";
