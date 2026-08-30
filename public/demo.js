@@ -14,6 +14,7 @@ const map = new api.HexMap({
     heightScale: 24,
     antialias: !fast,
     maxPixelRatio: fast ? 1 : 2,
+    skyVisible: !fast,
     farPlane: 20_000
 });
 

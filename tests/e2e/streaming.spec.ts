@@ -83,8 +83,8 @@ async function observeSurfaceLayerDraws(page: Page): Promise<Readonly<{
                 const layerLocation = gl.getUniformLocation(program, "uLayer");
                 if (layerLocation) {
                     const layer = gl.getUniform(program, layerLocation) as number;
-                    const phaseLocation = gl.getUniformLocation(program, "uChunkSurfacePhase");
-                    (phaseLocation ? water : ground).add(layer);
+                    const flowTextureLocation = gl.getUniformLocation(program, "uSurfaceFlow");
+                    (flowTextureLocation ? water : ground).add(layer);
                 }
             }
             originalDrawElements.apply(gl, args);

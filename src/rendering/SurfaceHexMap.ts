@@ -1,11 +1,15 @@
 import {
+    Color,
+    Fog,
     Object3D,
     PerspectiveCamera,
     Scene,
     Vector3,
-    WebGLRenderer
+    WebGLRenderer,
+    type ColorRepresentation
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Sky } from "three/examples/jsm/objects/Sky.js";
 
 import { EventEmitter } from "../EventEmitter";
 import { WorldPoint } from "../world/WorldPoint";
@@ -30,6 +34,8 @@ export interface HexMapOptions {
     readonly fieldOfView?: number;
     readonly nearPlane?: number;
     readonly farPlane?: number;
+    readonly backgroundColor?: ColorRepresentation;
+    readonly skyVisible?: boolean;
 }
 
 export interface WorldLoadOptions {
@@ -64,6 +70,30 @@ function assertPositive(name: string, value: number): void {
     if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be finite and positive`);
 }
 
+function createSurfaceSky(visible: boolean): Sky | undefined {
+    if (!visible) return undefined;
+    const sky = new Sky();
+    sky.name = "surface-atmospheric-sky";
+    sky.scale.setScalar(450_000);
+    sky.frustumCulled = false;
+    const uniforms = sky.material.uniforms;
+    uniforms.turbidity.value = 4;
+    uniforms.rayleigh.value = 1.7;
+    uniforms.mieCoefficient.value = 0.002;
+    uniforms.mieDirectionalG.value = 0.76;
+    const elevation = 24 * Math.PI / 180;
+    const azimuth = 205 * Math.PI / 180;
+    uniforms.sunPosition.value.setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
+    return sky;
+}
+
+function disposeSurfaceSky(sky: Sky | undefined): void {
+    if (!sky) return;
+    sky.removeFromParent();
+    sky.geometry.dispose();
+    sky.material.dispose();
+}
+
 function canonicalTile(source: WorldAuthoritySource, point: WorldPoint): WorldPoint {
     if (!Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y)) {
         throw new RangeError("world load initialTile must use safe integers");
@@ -90,6 +120,9 @@ export class HexMap extends EventEmitter {
     public readonly hexSize: number;
     public readonly heightScale: number;
     private activeScene = new Scene();
+    private activeSky: Sky | undefined;
+    private readonly backgroundColor: Color;
+    private readonly skyVisible: boolean;
     private runtimeValue: WorldSurfaceRuntime | undefined;
     private loadOptions: WorldLoadOptions | undefined;
     private resizeObserver: ResizeObserver | undefined;
@@ -106,6 +139,8 @@ export class HexMap extends EventEmitter {
         this.canvas = resolveCanvas(options.element);
         this.hexSize = options.hexSize ?? 1;
         this.heightScale = options.heightScale ?? 80;
+        this.backgroundColor = new Color(options.backgroundColor ?? 0x9fc9e2);
+        this.skyVisible = options.skyVisible ?? true;
         const maxPixelRatio = options.maxPixelRatio ?? 2;
         assertPositive("hexSize", this.hexSize);
         assertPositive("heightScale", this.heightScale);
@@ -118,15 +153,16 @@ export class HexMap extends EventEmitter {
         }
         this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, maxPixelRatio));
         this.camera = new PerspectiveCamera(
-            options.fieldOfView ?? 45,
+            options.fieldOfView ?? 60,
             1,
             options.nearPlane ?? 0.1,
             options.farPlane ?? 100_000
         );
-        this.camera.position.set(18 * this.hexSize, 24 * this.hexSize, 18 * this.hexSize);
+        this.camera.position.set(18 * this.hexSize, 10.5 * this.hexSize, 20 * this.hexSize);
         this.controls = new OrbitControls(this.camera, this.canvas);
         this.controls.enableDamping = true;
         this.controls.target.set(0, 0, 0);
+        this.activeSky = this.configureScene(this.activeScene);
         this.resize();
         if (typeof ResizeObserver !== "undefined") {
             this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -148,6 +184,7 @@ export class HexMap extends EventEmitter {
         const revision = ++this.loadRevision;
         this.stateValue = "loading";
         const scene = new Scene();
+        const sky = this.configureScene(scene, options.prefetchRadiusTiles);
         let runtime: WorldSurfaceRuntime | undefined;
         try {
             runtime = await WorldSurfaceRuntime.create({
@@ -172,19 +209,24 @@ export class HexMap extends EventEmitter {
             }));
             if (revision !== this.loadRevision || this.isDisposed()) {
                 runtime.dispose();
+                disposeSurfaceSky(sky);
                 return;
             }
             const oldRuntime = this.runtimeValue;
+            const oldSky = this.activeSky;
             this.runtimeValue = runtime;
             this.loadOptions = options;
             this.activeScene = scene;
+            this.activeSky = sky;
             this.demandSignature = "";
             await this.setCameraTargetTile(initial.x, initial.y);
             oldRuntime?.dispose();
+            disposeSurfaceSky(oldSky);
             this.stateValue = "ready";
             this.emit("load", undefined);
         } catch (reason) {
             runtime?.dispose();
+            disposeSurfaceSky(sky);
             if (revision === this.loadRevision && !this.isDisposed()) this.stateValue = "ready";
             throw reason;
         }
@@ -235,6 +277,8 @@ export class HexMap extends EventEmitter {
         this.canvas.removeEventListener("webglcontextrestored", this.contextRestored);
         this.runtimeValue?.dispose();
         this.runtimeValue = undefined;
+        disposeSurfaceSky(this.activeSky);
+        this.activeSky = undefined;
         this.controls.dispose();
         this.renderer.dispose();
         this.removeAllListeners();
@@ -255,6 +299,7 @@ export class HexMap extends EventEmitter {
 
     private readonly contextRestored = (): void => {
         if (this.runtimeValue?.session.stats.state === "lost") this.runtimeValue.session.handleContextRestored();
+        if (this.activeSky) this.activeSky.material.needsUpdate = true;
     };
 
     private readonly animate = (): void => {
@@ -295,6 +340,18 @@ export class HexMap extends EventEmitter {
         this.assertReady();
         if (!this.runtimeValue) throw new Error("HexMap requires a loaded world");
         return this.runtimeValue;
+    }
+
+    private configureScene(scene: Scene, prefetchRadiusTiles?: number): Sky | undefined {
+        scene.background = this.backgroundColor.clone();
+        if (prefetchRadiusTiles !== undefined) {
+            assertPositive("prefetchRadiusTiles", prefetchRadiusTiles);
+            const fogFar = prefetchRadiusTiles * this.hexSize * 1.35;
+            scene.fog = new Fog(this.backgroundColor, fogFar * 0.64, fogFar);
+        }
+        const sky = createSurfaceSky(this.skyVisible);
+        if (sky) scene.add(sky);
+        return sky;
     }
 
     private assertReady(): void {

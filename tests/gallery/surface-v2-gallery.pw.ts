@@ -8,9 +8,9 @@ interface SurfaceGalleryView {
 }
 
 const SURFACE_GALLERY_VIEWS: readonly SurfaceGalleryView[] = Object.freeze([
-    Object.freeze({ id: "near", lod: 0, time: 2.5, distance: 22 }),
-    Object.freeze({ id: "middle", lod: 1, time: 5, distance: 29 }),
-    Object.freeze({ id: "far", lod: 2, time: 8, distance: 37 })
+    Object.freeze({ id: "near", lod: 0, time: 2.5, distance: 40 }),
+    Object.freeze({ id: "middle", lod: 1, time: 5, distance: 50 }),
+    Object.freeze({ id: "far", lod: 2, time: 8, distance: 62 })
 ]);
 
 async function mountFixedSurface(page: Page): Promise<void> {
@@ -32,57 +32,14 @@ async function mountFixedSurface(page: Page): Promise<void> {
         const count = api.SURFACE_EFFECTIVE_WINDOW_SIZE ** 2;
         const biomeWeights = new Uint8Array(count * 4);
         for (let index = 0; index < count; index += 1) biomeWeights[index * 4] = 255;
-        const key = { chunkX: 0, chunkY: 0 };
+        const keys = [
+            { chunkX: 0, chunkY: 0 },
+            { chunkX: 1, chunkY: 0 },
+            { chunkX: 0, chunkY: 1 },
+            { chunkX: 1, chunkY: 1 }
+        ];
         const lakeId = api.createStableHydrologyId("lake", ["surface-v2-fixed-gallery"]);
-        const dependencyKey = {
-            worldIdentity: "surface-v2-fixed-gallery",
-            renderKey: key,
-            compilerRevision: api.SURFACE_COMPILER_REVISION,
-            compileProfileVersion: api.SURFACE_COMPILE_PROFILE_VERSION,
-            semanticChunks: [],
-            hydrologyRegions: [{
-                key: { regionX: 0, regionY: 0 },
-                baseRevision: 0,
-                features: [{ featureId: lakeId, revision: 1 }]
-            }]
-        };
-        const chunk = api.compileSurfaceChunk({
-            worldIdentity: "surface-v2-fixed-gallery",
-            effectiveRevision: 1,
-            key,
-            dependencyKey,
-            validBounds: { minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 },
-            substrateClass: new Uint8Array(count).fill(1),
-            macroHeight: new Uint16Array(count).fill(32_000),
-            biomeWeights,
-            climate: new Uint8Array(count * 2).fill(150),
-            vegetationDensity: new Uint8Array(count).fill(255),
-            vegetationProfile: new Uint8Array(count).fill(3),
-            rivers: [],
-            lakes: [{
-                kind: "lake",
-                featureKey: lakeId,
-                bodyId: lakeId,
-                revision: 1,
-                profileIndex: 3,
-                boundaryPoints: new Float64Array([3, 3, 12, 3, 12, 12, 3, 12]),
-                level: 45_000
-            }]
-        });
-        let released = false;
-        const lease = Object.freeze({
-            requestToken: Object.freeze({ sessionEpoch: 1, renderChunkGeneration: 1 }),
-            effectiveRevision: 1,
-            dependencyKey,
-            chunk,
-            get released() { return released; },
-            isCurrent: () => !released,
-            release: () => {
-                if (released) return false;
-                released = true;
-                return true;
-            }
-        });
+        const releases = keys.map(() => false);
         document.body.replaceChildren();
         document.body.style.cssText = "margin:0;background:#0b1017;overflow:hidden";
         const canvas = document.createElement("canvas");
@@ -102,15 +59,73 @@ async function mountFixedSurface(page: Page): Promise<void> {
             lighting,
             heightScale: 8
         });
-        presentation.mount(lease, 0);
+        for (let index = 0; index < keys.length; index += 1) {
+            const key = keys[index];
+            const dependencyKey = {
+                worldIdentity: "surface-v2-fixed-gallery",
+                renderKey: key,
+                compilerRevision: api.SURFACE_COMPILER_REVISION,
+                compileProfileVersion: api.SURFACE_COMPILE_PROFILE_VERSION,
+                semanticChunks: [],
+                hydrologyRegions: [{
+                    key: { regionX: 0, regionY: 0 },
+                    baseRevision: 0,
+                    features: [{ featureId: lakeId, revision: 1 }]
+                }]
+            };
+            const originX = key.chunkX * 16;
+            const originY = key.chunkY * 16;
+            const chunk = api.compileSurfaceChunk({
+                worldIdentity: "surface-v2-fixed-gallery",
+                effectiveRevision: 1,
+                key,
+                dependencyKey,
+                validBounds: { minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 },
+                substrateClass: new Uint8Array(count).fill(1),
+                macroHeight: new Uint16Array(count).fill(32_000),
+                biomeWeights,
+                climate: new Uint8Array(count * 2).fill(150),
+                vegetationDensity: new Uint8Array(count).fill(255),
+                vegetationProfile: new Uint8Array(count).fill(3),
+                rivers: [],
+                lakes: [{
+                    kind: "lake",
+                    featureKey: lakeId,
+                    bodyId: lakeId,
+                    revision: 1,
+                    profileIndex: 3,
+                    boundaryPoints: new Float64Array([
+                        2 - originX, 2 - originY,
+                        29 - originX, 2 - originY,
+                        29 - originX, 29 - originY,
+                        2 - originX, 29 - originY
+                    ]),
+                    level: 45_000
+                }]
+            });
+            const lease = Object.freeze({
+                requestToken: Object.freeze({ sessionEpoch: 1, renderChunkGeneration: 1 }),
+                effectiveRevision: 1,
+                dependencyKey,
+                chunk,
+                get released() { return releases[index]; },
+                isCurrent: () => !releases[index],
+                release: () => {
+                    if (releases[index]) return false;
+                    releases[index] = true;
+                    return true;
+                }
+            });
+            presentation.mount(lease, ([0, 1, 2, 1] as const)[index]);
+        }
         const scene = new three.Scene();
         scene.background = new three.Color(0x0b1017);
         const sceneLighting = lighting.bindScene(scene);
         scene.add(presentation.root);
-        const center = api.surfaceToWorld(7.5, 7.5);
-        const camera = new three.PerspectiveCamera(42, 4 / 3, 0.1, 120);
+        const center = api.surfaceToWorld(15.5, 15.5);
+        const camera = new three.PerspectiveCamera(42, 4 / 3, 0.1, 180);
         const state = {
-            key,
+            keys,
             center,
             renderer,
             rendererLighting,
@@ -120,7 +135,7 @@ async function mountFixedSurface(page: Page): Promise<void> {
             camera,
             surface,
             lighting,
-            released: () => released
+            released: () => releases.every(Boolean)
         };
         (window as unknown as { surfaceV2Gallery: typeof state }).surfaceV2Gallery = state;
     });
@@ -129,7 +144,9 @@ async function mountFixedSurface(page: Page): Promise<void> {
 async function setView(page: Page, view: SurfaceGalleryView): Promise<void> {
     await page.evaluate(view => {
         const state = (window as unknown as { surfaceV2Gallery: any }).surfaceV2Gallery;
-        state.presentation.setLod(state.key, view.lod);
+        for (let index = 0; index < state.keys.length; index += 1) {
+            state.presentation.setLod(state.keys[index], ((view.lod + index) % 3) as 0 | 1 | 2);
+        }
         state.presentation.setTime(view.time);
         state.camera.position.set(
             state.center.x + view.distance * 0.62,
@@ -181,8 +198,8 @@ test("surface v2 fixed-seed water and vegetation views", async ({ page }, testIn
     expect(errors, errors.join("\n")).toEqual([]);
     expect(stats).toMatchObject({
         result: {
-            mountedChunks: 1,
-            water: { coverageMeshes: 1 },
+            mountedChunks: 4,
+            water: { coverageMeshes: 4 },
             vegetation: { candidateCount: expect.any(Number) }
         },
         released: true

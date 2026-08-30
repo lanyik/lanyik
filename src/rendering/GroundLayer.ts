@@ -15,6 +15,7 @@ import {
 import type { WorldChunkLod } from "./WorldChunkLod";
 import type { ResidentSurfaceLease } from "../world/semantic/SurfaceCompilationService";
 import {
+    SURFACE_FIELD_GUTTER_TEXELS,
     SURFACE_RENDER_CHUNK_SIZE,
     SURFACE_SAMPLES_PER_TILE_INTERVAL
 } from "../world/semantic/SurfaceCompileProfile";
@@ -41,12 +42,19 @@ import {
     type SurfaceTextureBinding,
     type SurfaceTextureSlotHandle
 } from "./SurfaceTexturePool";
+import {
+    SURFACE_VISUAL_GRID_GLSL,
+    SURFACE_VISUAL_PHASE_PERIOD
+} from "./SurfaceVisualShader";
+
+export const SURFACE_GROUND_NORMAL_SAMPLE_OFFSET =
+    SURFACE_FIELD_GUTTER_TEXELS / (SURFACE_SAMPLES_PER_TILE_INTERVAL * 2);
 
 export const SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE = Object.freeze([
-    0x587548,
-    0xb39764,
-    0x9caeb5,
-    0x77746f
+    0x5f8d3e,
+    0xd2ad68,
+    0xaebbc0,
+    0x696762
 ] as const);
 
 export interface GroundLayerOptions {
@@ -106,9 +114,16 @@ in vec2 surfaceUv;
 uniform sampler2DArray uSurfaceValues;
 uniform float uLayer;
 uniform float uHeightScale;
+uniform float uHexSize;
+uniform vec2 uChunkSurfacePhase;
 
 out vec2 vSurfaceUv;
+out vec2 vLogicalWorldXZ;
 out vec3 vWorldNormal;
+out float vGroundHeight;
+out float vShoreDistance;
+
+#include <fog_pars_vertex>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
@@ -153,10 +168,14 @@ vec4 sampleSurfaceValues(vec2 localSurface) {
 }
 
 void main() {
-    float groundHeight = sampleSurfaceValues(surfaceUv).r * uHeightScale;
-    float delta = 1.0 / SURFACE_SAMPLES_PER_TILE;
-    vec2 lower = max(surfaceUv - vec2(delta), vec2(-0.5));
-    vec2 upper = min(surfaceUv + vec2(delta), vec2(15.5));
+    vec4 surfaceValues = sampleSurfaceValues(surfaceUv);
+    float groundHeight = surfaceValues.r * uHeightScale;
+    // One physical gutter texel on either side supports a symmetric central
+    // difference at the ownership boundary. Adjacent chunks therefore sample
+    // the exact same two global positions and publish identical normals.
+    float delta = ${SURFACE_GROUND_NORMAL_SAMPLE_OFFSET.toFixed(4)};
+    vec2 lower = surfaceUv - vec2(delta);
+    vec2 upper = surfaceUv + vec2(delta);
     float leftHeight = sampleSurfaceValues(vec2(lower.x, surfaceUv.y)).r * uHeightScale;
     float rightHeight = sampleSurfaceValues(vec2(upper.x, surfaceUv.y)).r * uHeightScale;
     float topHeight = sampleSurfaceValues(vec2(surfaceUv.x, lower.y)).r * uHeightScale;
@@ -169,8 +188,13 @@ void main() {
     vec3 tangentV = vec3(bottomWorld.x - topWorld.x, bottomHeight - topHeight, bottomWorld.y - topWorld.y);
     vWorldNormal = normalize(mat3(modelMatrix) * normalize(cross(tangentV, tangentU)));
     vSurfaceUv = surfaceUv;
+    vLogicalWorldXZ = surfaceWorld(uChunkSurfacePhase + surfaceUv) * uHexSize;
+    vGroundHeight = surfaceValues.r;
+    vShoreDistance = surfaceValues.a;
     vec3 displaced = vec3(position.x, groundHeight, position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `;
 
@@ -181,15 +205,24 @@ uniform float uLayer;
 uniform bool uFogEnabled;
 uniform vec4 uValidBounds;
 uniform vec3 uMaterialPalette[4];
+uniform float uHexSize;
+uniform vec3 uGridColor;
+uniform float uGridWidth;
+uniform float uGridOpacity;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 
 in vec2 vSurfaceUv;
+in vec2 vLogicalWorldXZ;
 in vec3 vWorldNormal;
+in float vGroundHeight;
+in float vShoreDistance;
 out vec4 groundOutputColor;
 #define gl_FragColor groundOutputColor
+
+#include <fog_pars_fragment>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
@@ -216,6 +249,30 @@ vec4 sampleSurfaceMaterial(vec2 localSurface) {
     return mix(top, bottom, amount.y);
 }
 
+${SURFACE_VISUAL_GRID_GLSL}
+
+float surfaceVisualHash(vec2 point, float period) {
+    vec2 wrapped = mod(mod(point, period) + period, period);
+    return fract(sin(dot(wrapped, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float surfaceVisualNoise(vec2 point, float period) {
+    vec2 cell = floor(point);
+    vec2 amount = fract(point);
+    vec2 smoothAmount = amount * amount * (3.0 - 2.0 * amount);
+    float first = mix(
+        surfaceVisualHash(cell, period),
+        surfaceVisualHash(cell + vec2(1.0, 0.0), period),
+        smoothAmount.x
+    );
+    float second = mix(
+        surfaceVisualHash(cell + vec2(0.0, 1.0), period),
+        surfaceVisualHash(cell + vec2(1.0, 1.0), period),
+        smoothAmount.x
+    );
+    return mix(first, second, smoothAmount.y);
+}
+
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
@@ -228,6 +285,39 @@ void main() {
         + uMaterialPalette[1] * weights.g
         + uMaterialPalette[2] * weights.b
         + uMaterialPalette[3] * weights.a) / weightSum;
+    vec2 visualSurface = vec2(
+        vLogicalWorldXZ.x / max(uHexSize * 1.5, 0.0001),
+        vLogicalWorldXZ.y / max(uHexSize * 1.7320508075688772, 0.0001)
+    );
+    float broadDetail = surfaceVisualNoise(
+        vec2(visualSurface.x + visualSurface.y, visualSurface.y - visualSurface.x) * 0.5,
+        ${Math.round(SURFACE_VISUAL_PHASE_PERIOD / 2).toFixed(1)}
+    );
+    float fineDetail = surfaceVisualNoise(
+        vec2(visualSurface.x * 2.0 + visualSurface.y, visualSurface.y * 2.0 - visualSurface.x),
+        ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)}
+    );
+    vec2 grainCoordinate = vec2(
+        visualSurface.x * 3.0 + visualSurface.y,
+        visualSurface.y * 3.0 - visualSurface.x
+    ) * 4.0;
+    float grain = surfaceVisualHash(floor(grainCoordinate), ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)});
+    float pixelSpan = max(length(dFdx(visualSurface)), length(dFdy(visualSurface)));
+    float grainVisibility = 1.0 - smoothstep(0.035, 0.16, pixelSpan);
+    float materialDetail = mix(0.82, 1.16, broadDetail) * mix(0.92, 1.08, fineDetail)
+        * mix(1.0, mix(0.82, 1.18, grain), grainVisibility);
+    vec4 normalizedWeights = weights / weightSum;
+    vec3 climateTint = normalizedWeights.r * vec3(0.96, 1.05, 0.94)
+        + normalizedWeights.g * vec3(1.12, 1.02, 0.84)
+        + normalizedWeights.b * vec3(0.91, 0.98, 1.08)
+        + normalizedWeights.a * vec3(0.88, 0.90, 0.92);
+    albedo *= materialDetail * climateTint;
+    float shoreBand = (1.0 - smoothstep(0.04, 0.75, max(vShoreDistance, 0.0)))
+        * step(0.0, vShoreDistance);
+    albedo = mix(albedo, vec3(0.66, 0.57, 0.36) * mix(0.9, 1.1, fineDetail), shoreBand * 0.34);
+    float snow = normalizedWeights.a * smoothstep(0.72, 0.94, vGroundHeight)
+        * smoothstep(0.38, 0.72, broadDetail);
+    albedo = mix(albedo, vec3(0.9, 0.93, 0.95), snow * 0.7);
     vec3 normal = normalize(vWorldNormal);
     float sunAmount = max(dot(normal, normalize(uSunDirection)), 0.0);
     float skyAmount = normal.y * 0.5 + 0.5;
@@ -240,9 +330,12 @@ void main() {
         float visibility = texelFetch(uFogTexture, ivec3(fogCoordinate, int(uLayer)), 0).r;
         linearColor = mix(vec3(0.018, 0.022, 0.027), linearColor, visibility);
     }
+    float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
+    linearColor = mix(linearColor, uGridColor, grid * uGridOpacity);
     gl_FragColor = vec4(linearColor, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `;
 
@@ -525,18 +618,27 @@ export class GroundLayer {
                 uFogTexture: new Uniform<Texture | null>(null),
                 uLayer: new Uniform(0),
                 uHeightScale: new Uniform(this.heightScale),
+                uHexSize: new Uniform(this.hexSize),
+                uChunkSurfacePhase: new Uniform(new Vector2()),
                 uFogEnabled: new Uniform(false),
                 uValidBounds: new Uniform(new Vector4(0, 0, 16, 16)),
                 uMaterialPalette: new Uniform(this.palette),
+                uGridColor: new Uniform(new Color(0x332a24)),
+                uGridWidth: new Uniform(0.032),
+                uGridOpacity: new Uniform(0.46),
                 uSunDirection: lighting.sunDirection,
                 uSunRadiance: lighting.sunRadiance,
                 uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+                fogColor: new Uniform(new Color()),
+                fogNear: new Uniform(1),
+                fogFar: new Uniform(1_000)
             },
             side: DoubleSide,
             depthWrite: true,
             depthTest: true,
             transparent: false,
+            fog: true,
             toneMapped: true
         });
         page = Object.freeze({ material, lighting });
@@ -553,6 +655,14 @@ export class GroundLayer {
         chunk.mesh.visible = true;
         material.uniforms.uLayer.value = chunk.slot.layerIndex;
         material.uniforms.uFogEnabled.value = chunk.hasFog;
+        const originX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+        const originY = chunk.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+        (material.uniforms.uChunkSurfacePhase.value as Vector2).set(
+            (originX % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD)
+                % SURFACE_VISUAL_PHASE_PERIOD,
+            (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD)
+                % SURFACE_VISUAL_PHASE_PERIOD
+        );
         const bounds = chunk.lease.chunk.bounds.validTiles;
         (material.uniforms.uValidBounds.value as Vector4).set(
             bounds.minX,

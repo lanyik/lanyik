@@ -1,7 +1,10 @@
 import {
     BufferAttribute,
     BufferGeometry,
+    Color,
     ConeGeometry,
+    CylinderGeometry,
+    DodecahedronGeometry,
     DoubleSide,
     DynamicDrawUsage,
     GLSL3,
@@ -83,18 +86,23 @@ interface VegetationMaterial {
 }
 
 const VEGETATION_COLORS = Object.freeze({
-    [CompiledVegetationSpecies.Grass]: Object.freeze([0.18, 0.42, 0.13] as const),
-    [CompiledVegetationSpecies.Palm]: Object.freeze([0.24, 0.48, 0.16] as const),
-    [CompiledVegetationSpecies.Pinia]: Object.freeze([0.11, 0.31, 0.16] as const),
-    [CompiledVegetationSpecies.Oak]: Object.freeze([0.18, 0.38, 0.12] as const)
+    [CompiledVegetationSpecies.Grass]: Object.freeze([0.86, 1.0, 0.78] as const),
+    [CompiledVegetationSpecies.Palm]: Object.freeze([1.0, 0.98, 0.8] as const),
+    [CompiledVegetationSpecies.Pinia]: Object.freeze([0.8, 0.95, 0.85] as const),
+    [CompiledVegetationSpecies.Oak]: Object.freeze([0.92, 1.0, 0.82] as const)
 });
 
 const VEGETATION_VERTEX_SHADER = /* glsl */`
+in vec3 color;
+
 uniform float uTime;
 uniform bool uGrass;
 
 out vec3 vWorldNormal;
+out vec3 vVertexColor;
 out float vHeight;
+
+#include <fog_pars_vertex>
 
 void main() {
     vec3 localPosition = position;
@@ -104,8 +112,11 @@ void main() {
     vec4 instancePosition = instanceMatrix * vec4(localPosition, 1.0);
     vec4 worldPosition = modelMatrix * instancePosition;
     vWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
+    vVertexColor = color;
     vHeight = clamp(position.y, 0.0, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+    vec4 mvPosition = viewMatrix * worldPosition;
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `;
 
@@ -117,9 +128,12 @@ uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 
 in vec3 vWorldNormal;
+in vec3 vVertexColor;
 in float vHeight;
 out vec4 vegetationOutputColor;
 #define gl_FragColor vegetationOutputColor
+
+#include <fog_pars_fragment>
 
 void main() {
     vec3 normal = normalize(vWorldNormal);
@@ -128,10 +142,11 @@ void main() {
     vec3 irradiance = uSunRadiance * sunAmount
         + uSkyDiffuseIrradiance * skyAmount
         + uGroundDiffuseIrradiance * (1.0 - skyAmount);
-    vec3 albedo = uAlbedo * mix(0.82, 1.08, vHeight);
+    vec3 albedo = uAlbedo * vVertexColor * mix(0.82, 1.08, vHeight);
     gl_FragColor = vec4(albedo * irradiance, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `;
 
@@ -152,28 +167,101 @@ function createGrassGeometry(): BufferGeometry {
     const geometry = new BufferGeometry();
     geometry.name = "surface-vegetation-grass";
     geometry.setAttribute("position", new BufferAttribute(new Float32Array([
-        -0.5, 0, 0, 0.5, 0, 0, 0.34, 1, 0, -0.34, 1, 0
+        -0.5, 0, 0, 0.5, 0, 0, 0.34, 1, 0, -0.34, 1, 0,
+        0, 0, -0.5, 0, 0, 0.5, 0, 1, 0.34, 0, 1, -0.34
     ]), 3));
     geometry.setAttribute("normal", new BufferAttribute(new Float32Array([
-        0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1
+        0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+        1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0
     ]), 3));
-    geometry.setIndex(new BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1));
+    geometry.setAttribute("color", new BufferAttribute(new Float32Array([
+        0.11, 0.3, 0.06, 0.11, 0.3, 0.06, 0.31, 0.62, 0.13, 0.31, 0.62, 0.13,
+        0.11, 0.3, 0.06, 0.11, 0.3, 0.06, 0.31, 0.62, 0.13, 0.31, 0.62, 0.13
+    ]), 3));
+    geometry.setIndex(new BufferAttribute(new Uint16Array([
+        0, 1, 2, 0, 2, 3,
+        4, 5, 6, 4, 6, 7
+    ]), 1));
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     return geometry;
 }
 
+function colorGeometry(geometry: BufferGeometry, color: readonly [number, number, number]): BufferGeometry {
+    const count = geometry.getAttribute("position").count;
+    const values = new Float32Array(count * 3);
+    for (let index = 0; index < count; index += 1) values.set(color, index * 3);
+    geometry.setAttribute("color", new BufferAttribute(values, 3));
+    return geometry;
+}
+
+function mergeVegetationGeometry(
+    name: string,
+    parts: readonly BufferGeometry[]
+): BufferGeometry {
+    const mergeParts = parts.map(part => part.index ? part.toNonIndexed() : part);
+    try {
+        const attributeNames = ["position", "normal", "color"] as const;
+        const vertexCount = mergeParts.reduce((total, part) => {
+            const position = part.getAttribute("position");
+            if (!position || position.itemSize !== 3) {
+                throw new TypeError(`${name} vegetation part has invalid positions`);
+            }
+            return total + position.count;
+        }, 0);
+        const geometry = new BufferGeometry();
+        for (const attributeName of attributeNames) {
+            const values = new Float32Array(vertexCount * 3);
+            let offset = 0;
+            for (const part of mergeParts) {
+                const attribute = part.getAttribute(attributeName);
+                if (!attribute || attribute.itemSize !== 3
+                    || attribute.count !== part.getAttribute("position").count) {
+                    geometry.dispose();
+                    throw new TypeError(`${name} vegetation part has invalid ${attributeName}`);
+                }
+                for (let index = 0; index < attribute.count; index += 1) {
+                    values[offset++] = attribute.getX(index);
+                    values[offset++] = attribute.getY(index);
+                    values[offset++] = attribute.getZ(index);
+                }
+            }
+            geometry.setAttribute(attributeName, new BufferAttribute(values, 3));
+        }
+        geometry.name = name;
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+        return geometry;
+    } finally {
+        for (const part of new Set([...parts, ...mergeParts])) part.dispose();
+    }
+}
+
 function createSpeciesGeometry(species: CompiledVegetationSpecies): BufferGeometry {
     if (species === CompiledVegetationSpecies.Grass) return createGrassGeometry();
-    const geometry = species === CompiledVegetationSpecies.Palm
-        ? new ConeGeometry(0.48, 1.8, 7, 1)
-        : species === CompiledVegetationSpecies.Pinia
-            ? new ConeGeometry(0.58, 1.55, 7, 2)
-            : new ConeGeometry(0.68, 1.35, 8, 2);
-    geometry.translate(0, species === CompiledVegetationSpecies.Palm ? 0.9
-        : species === CompiledVegetationSpecies.Pinia ? 0.775 : 0.675, 0);
-    geometry.name = `surface-vegetation-species-${species}`;
-    return geometry;
+    const trunkHeight = species === CompiledVegetationSpecies.Palm ? 1.45 : 0.78;
+    const trunk = colorGeometry(
+        new CylinderGeometry(0.11, 0.16, trunkHeight, 6, 1),
+        [0.3, 0.17, 0.07]
+    );
+    trunk.translate(0, trunkHeight * 0.5, 0);
+    if (species === CompiledVegetationSpecies.Palm) {
+        const crown = colorGeometry(new ConeGeometry(0.82, 0.42, 7, 1), [0.2, 0.52, 0.12]);
+        crown.rotateX(Math.PI);
+        crown.translate(0, 1.56, 0);
+        return mergeVegetationGeometry("surface-vegetation-palm", [trunk, crown]);
+    }
+    if (species === CompiledVegetationSpecies.Pinia) {
+        const lower = colorGeometry(new ConeGeometry(0.68, 1.15, 7, 1), [0.08, 0.31, 0.13]);
+        lower.translate(0, 0.96, 0);
+        const upper = colorGeometry(new ConeGeometry(0.48, 0.92, 7, 1), [0.11, 0.4, 0.16]);
+        upper.translate(0, 1.46, 0);
+        return mergeVegetationGeometry("surface-vegetation-pinia", [trunk, lower, upper]);
+    }
+    const crown = colorGeometry(new DodecahedronGeometry(0.72, 0), [0.19, 0.46, 0.11]);
+    crown.scale(1, 0.82, 1);
+    crown.translate(0, 1.16, 0);
+    return mergeVegetationGeometry("surface-vegetation-oak", [trunk, crown]);
 }
 
 function geometryByteLength(geometry: BufferGeometry): number {
@@ -431,12 +519,16 @@ export class VegetationLayer {
                 uSunDirection: lighting.sunDirection,
                 uSunRadiance: lighting.sunRadiance,
                 uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+                fogColor: new Uniform(new Color()),
+                fogNear: new Uniform(1),
+                fogFar: new Uniform(1_000)
             },
             side: DoubleSide,
             depthWrite: true,
             depthTest: true,
             transparent: false,
+            fog: true,
             toneMapped: true
         });
         value = Object.freeze({ material, lighting });
@@ -465,7 +557,7 @@ export class VegetationLayer {
                 );
                 const randomScale = chunk.seeds.scale[seedIndex] / 255;
                 const baseScale = value.species === CompiledVegetationSpecies.Grass
-                    ? this.hexSize * 0.34 : this.hexSize * 0.62;
+                    ? this.hexSize * 0.34 : this.hexSize * 0.86;
                 this.scale.setScalar(baseScale * randomScale);
                 this.matrix.compose(this.position, this.rotation, this.scale);
                 value.mesh.setMatrixAt(outputIndex, this.matrix);

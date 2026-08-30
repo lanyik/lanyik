@@ -12,7 +12,10 @@ import type {
     RenderChunkKey,
     SurfaceRequestToken
 } from "../../src/world/semantic/SurfaceDependency";
-import { GroundLayer } from "../../src/rendering/GroundLayer";
+import {
+    GroundLayer,
+    SURFACE_GROUND_NORMAL_SAMPLE_OFFSET
+} from "../../src/rendering/GroundLayer";
 import {
     createLightingState,
     DEFAULT_LIGHTING_STATE,
@@ -24,9 +27,11 @@ import {
     SurfaceFogTexturePool
 } from "../../src/rendering/SurfaceFogTexturePool";
 import {
+    createGuardedSurfaceCoordinates,
     createSurfaceGroundGeometry,
     getSurfaceGroundGeometryInfo,
     SURFACE_GROUND_BOUNDARY_INTERVALS,
+    SURFACE_SEAM_GUARD_TILES,
     SurfaceGroundGeometryPool
 } from "../../src/rendering/SurfaceGroundGeometry";
 import {
@@ -142,6 +147,44 @@ function topologyMetrics(geometry: ReturnType<typeof createSurfaceGroundGeometry
 }
 
 describe("v2 shared ground geometry", () => {
+    test("gives adjacent surface meshes an overlap guard instead of a raster gap", () => {
+        const guarded = createGuardedSurfaceCoordinates(new Float32Array([
+            -0.5, -0.5,
+            7.25, 8.5,
+            15.5, 15.5
+        ]));
+        expect(SURFACE_SEAM_GUARD_TILES).toBe(1 / 64);
+        expect([...guarded]).toEqual([
+            -0.515625, -0.515625,
+            7.25, 8.5,
+            15.515625, 15.515625
+        ]);
+        expect(guarded[4]).toBeGreaterThan(16 + guarded[0]);
+
+        const geometry = createSurfaceGroundGeometry(2);
+        const positions = geometry.getAttribute("position").array as Float32Array;
+        const xCoordinates = Array.from({ length: positions.length / 3 }, (_, index) => positions[index * 3]);
+        expect(Math.min(...xCoordinates)).toBeCloseTo(1.5 * -0.515625, 6);
+        expect(Math.max(...xCoordinates)).toBeCloseTo(1.5 * 15.515625, 6);
+        geometry.dispose();
+    });
+
+    test("uses the field gutter for identical central-difference normals across chunk edges", () => {
+        const leftBoundary = 15.5;
+        const rightBoundary = -0.5;
+        const chunkOffset = 16;
+        const leftSamples = [
+            leftBoundary - SURFACE_GROUND_NORMAL_SAMPLE_OFFSET,
+            leftBoundary + SURFACE_GROUND_NORMAL_SAMPLE_OFFSET
+        ];
+        const rightSamples = [
+            chunkOffset + rightBoundary - SURFACE_GROUND_NORMAL_SAMPLE_OFFSET,
+            chunkOffset + rightBoundary + SURFACE_GROUND_NORMAL_SAMPLE_OFFSET
+        ];
+        expect(SURFACE_GROUND_NORMAL_SAMPLE_OFFSET).toBe(0.125);
+        expect(leftSamples).toEqual(rightSamples);
+    });
+
     test("keeps every canonical boundary vertex identical across all three LODs", () => {
         const geometries = [0, 1, 2].map(lod => createSurfaceGroundGeometry(lod as 0 | 1 | 2));
         const boundaries = geometries.map(boundaryCoordinates);

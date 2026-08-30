@@ -16,6 +16,35 @@ import { surfaceToWorld } from "../world/semantic/SurfaceLattice";
 export const SURFACE_GROUND_LOD_GRID_STEPS = Object.freeze([1, 2, 4] as const);
 export const SURFACE_GROUND_BOUNDARY_INTERVALS =
     SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+export const SURFACE_SEAM_GUARD_TILES =
+    1 / (SURFACE_SAMPLES_PER_TILE_INTERVAL * SURFACE_RENDER_CHUNK_SIZE);
+
+function guardedSurfaceCoordinate(value: number): number {
+    if (value === -0.5) return value - SURFACE_SEAM_GUARD_TILES;
+    if (value === SURFACE_RENDER_CHUNK_SIZE - 0.5) {
+        return value + SURFACE_SEAM_GUARD_TILES;
+    }
+    return value;
+}
+
+export function createGuardedSurfaceCoordinates(
+    source: ArrayLike<number>
+): Float32Array {
+    if (source.length < 2 || source.length % 2 !== 0) {
+        throw new TypeError("surface coordinates must contain uv pairs");
+    }
+    const guarded = new Float32Array(source.length);
+    for (let index = 0; index < source.length; index += 2) {
+        const u = Number(source[index]);
+        const v = Number(source[index + 1]);
+        if (!Number.isFinite(u) || !Number.isFinite(v)) {
+            throw new RangeError("surface coordinates must be finite");
+        }
+        guarded[index] = guardedSurfaceCoordinate(u);
+        guarded[index + 1] = guardedSurfaceCoordinate(v);
+    }
+    return guarded;
+}
 
 export interface SurfaceGroundGeometryInfo {
     readonly lod: WorldChunkLod;
@@ -61,7 +90,11 @@ function vertex(builder: GeometryBuilder, point: GridPoint, hexSize: number): nu
     if (existing !== undefined) return existing;
     const u = -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL;
     const v = -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL;
-    const world = surfaceToWorld(u, v, hexSize);
+    const world = surfaceToWorld(
+        guardedSurfaceCoordinate(u),
+        guardedSurfaceCoordinate(v),
+        hexSize
+    );
     const index = builder.positions.length / 3;
     builder.positions.push(world.x, 0, world.z);
     builder.surfaceCoordinates.push(u, v);

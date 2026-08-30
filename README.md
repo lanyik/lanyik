@@ -64,6 +64,8 @@ await map.loadWorld({
 });
 ```
 
+`HexMap` enables the atmospheric sky, prefetch-radius distance fog, and a light-blue background by default. Set `skyVisible: false` to omit the sky shader or use `backgroundColor` to override the background and fog color. Ground, water, and vegetation still consume only v2 compiled fields.
+
 `HexMap.loadWorld()` replaces a complete render session atomically. The source, effective delta snapshot, compiler requests, CPU leases, GPU slots, render layers, queries, and picking service all use the same descriptor and exact revision.
 
 The Worker file is a package export, but its final public URL is application/bundler-specific. Deploy that export as a separate module asset; do not inline it into the main-thread bundle.

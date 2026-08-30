@@ -41,6 +41,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- 恢复 v2 唯一生产渲染路径的天空/距离雾、世界坐标地表细节、统一六边格、沙岸、水面深浅层次/浪带/泡沫和分层植被表现；Ground/Water 外圈增加不改变权威 UV 的微型 overlap guard，并用 gutter 对称法线采样消除多 chunk 亚像素漏缝与光照接缝。
 - Ground/Water 共享页材质现在会在每个 chunk draw 前上传 texture layer、有效边界和水面 phase，修复多块世界误采样单一 GPU slot 造成的规则断崖与接缝。
 - 旧 revision 的 Worker、query、picking、navigation、simulation 和 GPU 结果无法再发布到新世界。
 - authority transferable 不会因 Worker transfer detach；buffer pool、GPU slot generation 和 context

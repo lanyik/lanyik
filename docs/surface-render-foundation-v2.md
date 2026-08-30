@@ -194,7 +194,9 @@ CPU 查询与 shader 共享 lattice、texel-center 双线性采样、binary16 �
 
 动态雾使用独立 16×16 R8 `SurfaceFogTexturePool`，与 surface slot generation 绑定但独立记账和上传。
 
-地面使用三张全局共享、焊接的 LOD 0/1/2 geometry。内部步长分别为 1/2/4 个 4×采样间隔；四条边始终保留 canonical 64 段边界，通过过渡带连接粗内部，不用 skirt 掩盖相邻 LOD 裂缝。
+地面使用三张全局共享、焊接的 LOD 0/1/2 geometry。内部步长分别为 1/2/4 个 4×采样间隔；四条边始终保留 canonical 64 段边界，通过过渡带连接粗内部，不用 skirt 掩盖相邻 LOD 裂缝。地面法线在 ownership 边界使用 field gutter 做对称中心差分，相邻 chunk 读取相同的全局采样点。
+
+独立 mesh 即使边界顶点数学上相同，经过各自 model transform 后仍可能产生亚像素 raster gap。Ground 与 Water 因此只把最外圈渲染位置向外扩展 `1/64` tile，权威 `surfaceUv`、field 采样、查询和编译结果保持不变；相邻 draw 的微型 overlap 覆盖浮点缝隙，有效边界仍由原始 UV 的半开区间判定。这是表现层的确定性接缝规则，不是几何 skirt，也不改变世界语义。
 
 水面模式：
 
@@ -203,7 +205,7 @@ CPU 查询与 shader 共享 lattice、texel-center 双线性采样、binary16 �
 - 湖泊/宽河：coverage contour mesh；
 - 纯窄河：显式 sweep mesh。
 
-Ground、Water、Vegetation 共享一个 `LightingStateController` 和 Scene binding。水体颜色、波形、flow、shoreline 与 body profile 来自 compiled field；植被只消费 compiled seeds，并按 LOD 取稳定嵌套子集。
+Ground、Water、Vegetation 共享一个 `LightingStateController` 和 Scene binding。地面材质细节、六边格、沙岸、天空与距离雾都使用连续世界坐标；水体颜色、波形、flow、shoreline、泡沫、镜面/Fresnel 与 body profile 来自 compiled field；植被只消费 compiled seeds，并按 LOD 取稳定嵌套子集。Ground 与 Water 使用同一六边格解析函数，避免岸线两侧网格错位。
 
 ## 11. 依赖驱动的生产会话
 

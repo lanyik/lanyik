@@ -913,6 +913,270 @@
       document2.removeEventListener("keyup", this._interceptControlUp, { passive: true, capture: true });
     }
   }
+  var Sky = class _Sky extends three.Mesh {
+    /**
+     * Constructs a new skydome.
+     */
+    constructor() {
+      const shader = _Sky.SkyShader;
+      const material = new three.ShaderMaterial({
+        name: shader.name,
+        uniforms: three.UniformsUtils.clone(shader.uniforms),
+        vertexShader: shader.vertexShader,
+        fragmentShader: shader.fragmentShader,
+        side: three.BackSide,
+        depthWrite: false
+      });
+      super(new three.BoxGeometry(1, 1, 1), material);
+      this.isSky = true;
+    }
+  };
+  Sky.SkyShader = {
+    name: "SkyShader",
+    uniforms: {
+      "turbidity": { value: 2 },
+      "rayleigh": { value: 1 },
+      "mieCoefficient": { value: 5e-3 },
+      "mieDirectionalG": { value: 0.8 },
+      "sunPosition": { value: new three.Vector3() },
+      "up": { value: new three.Vector3(0, 1, 0) },
+      "cloudScale": { value: 2e-4 },
+      "cloudSpeed": { value: 1e-4 },
+      "cloudCoverage": { value: 0.4 },
+      "cloudDensity": { value: 0.4 },
+      "cloudElevation": { value: 0.5 },
+      "showSunDisc": { value: 1 },
+      "time": { value: 0 }
+    },
+    vertexShader: (
+      /* glsl */
+      `
+		uniform vec3 sunPosition;
+		uniform float rayleigh;
+		uniform float turbidity;
+		uniform float mieCoefficient;
+		uniform vec3 up;
+
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying float vSunfade;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		// constants for atmospheric scattering
+		const float e = 2.71828182845904523536028747135266249775724709369995957;
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		// wavelength of used primaries, according to preetham
+		const vec3 lambda = vec3( 680E-9, 550E-9, 450E-9 );
+		// this pre-calculation replaces older TotalRayleigh(vec3 lambda) function:
+		// (8.0 * pow(pi, 3.0) * pow(pow(n, 2.0) - 1.0, 2.0) * (6.0 + 3.0 * pn)) / (3.0 * N * pow(lambda, vec3(4.0)) * (6.0 - 7.0 * pn))
+		const vec3 totalRayleigh = vec3( 5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5 );
+
+		// mie stuff
+		// K coefficient for the primaries
+		const float v = 4.0;
+		const vec3 K = vec3( 0.686, 0.678, 0.666 );
+		// MieConst = pi * pow( ( 2.0 * pi ) / lambda, vec3( v - 2.0 ) ) * K
+		const vec3 MieConst = vec3( 1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14 );
+
+		// earth shadow hack
+		// cutoffAngle = pi / 1.95;
+		const float cutoffAngle = 1.6110731556870734;
+		const float steepness = 1.5;
+		const float EE = 1000.0;
+
+		float sunIntensity( float zenithAngleCos ) {
+			zenithAngleCos = clamp( zenithAngleCos, -1.0, 1.0 );
+			return EE * max( 0.0, 1.0 - pow( e, -( ( cutoffAngle - acos( zenithAngleCos ) ) / steepness ) ) );
+		}
+
+		vec3 totalMie( float T ) {
+			float c = ( 0.2 * T ) * 10E-18;
+			return 0.434 * c * MieConst;
+		}
+
+		void main() {
+
+			vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+			vWorldPosition = worldPosition.xyz;
+
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			gl_Position.z = gl_Position.w; // set z to camera.far
+
+			vSunDirection = normalize( sunPosition );
+
+			vSunE = sunIntensity( dot( vSunDirection, up ) );
+
+			vSunfade = 1.0 - clamp( 1.0 - exp( ( sunPosition.y / 450000.0 ) ), 0.0, 1.0 );
+
+			float rayleighCoefficient = rayleigh - ( 1.0 * ( 1.0 - vSunfade ) );
+
+			// extinction (absorption + out scattering)
+			// rayleigh coefficients
+			vBetaR = totalRayleigh * rayleighCoefficient;
+
+			// mie coefficients
+			vBetaM = totalMie( turbidity ) * mieCoefficient;
+
+		}`
+    ),
+    fragmentShader: (
+      /* glsl */
+      `
+		varying vec3 vWorldPosition;
+		varying vec3 vSunDirection;
+		varying vec3 vBetaR;
+		varying vec3 vBetaM;
+		varying float vSunE;
+
+		uniform float mieDirectionalG;
+		uniform vec3 up;
+		uniform float cloudScale;
+		uniform float cloudSpeed;
+		uniform float cloudCoverage;
+		uniform float cloudDensity;
+		uniform float cloudElevation;
+		uniform float showSunDisc;
+		uniform float time;
+
+		// Cloud noise functions
+		float hash( vec2 p ) {
+			return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453123 );
+		}
+
+		float noise( vec2 p ) {
+			vec2 i = floor( p );
+			vec2 f = fract( p );
+			f = f * f * ( 3.0 - 2.0 * f );
+			float a = hash( i );
+			float b = hash( i + vec2( 1.0, 0.0 ) );
+			float c = hash( i + vec2( 0.0, 1.0 ) );
+			float d = hash( i + vec2( 1.0, 1.0 ) );
+			return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+		}
+
+		float fbm( vec2 p ) {
+			float value = 0.0;
+			float amplitude = 0.5;
+			for ( int i = 0; i < 5; i ++ ) {
+				value += amplitude * noise( p );
+				p *= 2.0;
+				amplitude *= 0.5;
+			}
+			return value;
+		}
+
+		// constants for atmospheric scattering
+		const float pi = 3.141592653589793238462643383279502884197169;
+
+		const float n = 1.0003; // refractive index of air
+		const float N = 2.545E25; // number of molecules per unit volume for air at 288.15K and 1013mb (sea level -45 celsius)
+
+		// optical length at zenith for molecules
+		const float rayleighZenithLength = 8.4E3;
+		const float mieZenithLength = 1.25E3;
+		// 66 arc seconds -> degrees, and the cosine of that
+		const float sunAngularDiameterCos = 0.999956676946448443553574619906976478926848692873900859324;
+
+		// 3.0 / ( 16.0 * pi )
+		const float THREE_OVER_SIXTEENPI = 0.05968310365946075;
+		// 1.0 / ( 4.0 * pi )
+		const float ONE_OVER_FOURPI = 0.07957747154594767;
+
+		float rayleighPhase( float cosTheta ) {
+			return THREE_OVER_SIXTEENPI * ( 1.0 + pow( cosTheta, 2.0 ) );
+		}
+
+		float hgPhase( float cosTheta, float g ) {
+			float g2 = pow( g, 2.0 );
+			float inverse = 1.0 / pow( 1.0 - 2.0 * g * cosTheta + g2, 1.5 );
+			return ONE_OVER_FOURPI * ( ( 1.0 - g2 ) * inverse );
+		}
+
+		void main() {
+
+			vec3 direction = normalize( vWorldPosition - cameraPosition );
+
+			// optical length
+			// cutoff angle at 90 to avoid singularity in next formula.
+			float zenithAngle = acos( max( 0.0, dot( up, direction ) ) );
+			float inverse = 1.0 / ( cos( zenithAngle ) + 0.15 * pow( 93.885 - ( ( zenithAngle * 180.0 ) / pi ), -1.253 ) );
+			float sR = rayleighZenithLength * inverse;
+			float sM = mieZenithLength * inverse;
+
+			// combined extinction factor
+			vec3 Fex = exp( -( vBetaR * sR + vBetaM * sM ) );
+
+			// in scattering
+			float cosTheta = dot( direction, vSunDirection );
+
+			float rPhase = rayleighPhase( cosTheta * 0.5 + 0.5 );
+			vec3 betaRTheta = vBetaR * rPhase;
+
+			float mPhase = hgPhase( cosTheta, mieDirectionalG );
+			vec3 betaMTheta = vBetaM * mPhase;
+
+			vec3 Lin = pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * ( 1.0 - Fex ), vec3( 1.5 ) );
+			Lin *= mix( vec3( 1.0 ), pow( vSunE * ( ( betaRTheta + betaMTheta ) / ( vBetaR + vBetaM ) ) * Fex, vec3( 1.0 / 2.0 ) ), clamp( pow( 1.0 - dot( up, vSunDirection ), 5.0 ), 0.0, 1.0 ) );
+
+			// nightsky
+			float theta = acos( direction.y ); // elevation --> y-axis, [-pi/2, pi/2]
+			float phi = atan( direction.z, direction.x ); // azimuth --> x-axis [-pi/2, pi/2]
+			vec2 uv = vec2( phi, theta ) / vec2( 2.0 * pi, pi ) + vec2( 0.5, 0.0 );
+			vec3 L0 = vec3( 0.1 ) * Fex;
+
+			// composition + solar disc
+			float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSunDisc;
+			L0 += ( vSunE * 19000.0 * Fex ) * sundisc;
+
+			vec3 texColor = ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 );
+
+			// Clouds
+			if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
+
+				// Project to cloud plane (higher elevation = clouds appear lower/closer)
+				float elevation = mix( 1.0, 0.1, cloudElevation );
+				vec2 cloudUV = direction.xz / ( direction.y * elevation );
+				cloudUV *= cloudScale;
+				cloudUV += time * cloudSpeed;
+
+				// Multi-octave noise for fluffy clouds
+				float cloudNoise = fbm( cloudUV * 1000.0 );
+				cloudNoise += 0.5 * fbm( cloudUV * 2000.0 + 3.7 );
+				cloudNoise = cloudNoise * 0.5 + 0.5;
+
+				// Apply coverage threshold
+				float cloudMask = smoothstep( 1.0 - cloudCoverage, 1.0 - cloudCoverage + 0.3, cloudNoise );
+
+				// Fade clouds near horizon (adjusted by elevation)
+				float horizonFade = smoothstep( 0.0, 0.1 + 0.2 * cloudElevation, direction.y );
+				cloudMask *= horizonFade;
+
+				// Cloud lighting based on sun position
+				float sunInfluence = dot( direction, vSunDirection ) * 0.5 + 0.5;
+				float daylight = max( 0.0, vSunDirection.y * 2.0 );
+
+				// Base cloud color affected by atmosphere
+				vec3 atmosphereColor = Lin * 0.04;
+				vec3 cloudColor = mix( vec3( 0.3 ), vec3( 1.0 ), daylight );
+				cloudColor = mix( cloudColor, atmosphereColor + vec3( 1.0 ), sunInfluence * 0.5 );
+				cloudColor *= vSunE * 0.00002;
+
+				// Blend clouds with sky
+				texColor = mix( texColor, cloudColor, cloudMask * cloudDensity );
+
+			}
+
+			gl_FragColor = vec4( texColor, 1.0 );
+
+			#include <tonemapping_fragment>
+			#include <colorspace_fragment>
+
+		}`
+    )
+  };
 
   // src/EventEmitter.ts
   var EventEmitter = class {
@@ -6796,6 +7060,30 @@
   };
   var SURFACE_GROUND_LOD_GRID_STEPS = Object.freeze([1, 2, 4]);
   var SURFACE_GROUND_BOUNDARY_INTERVALS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+  var SURFACE_SEAM_GUARD_TILES = 1 / (SURFACE_SAMPLES_PER_TILE_INTERVAL * SURFACE_RENDER_CHUNK_SIZE);
+  function guardedSurfaceCoordinate(value) {
+    if (value === -0.5) return value - SURFACE_SEAM_GUARD_TILES;
+    if (value === SURFACE_RENDER_CHUNK_SIZE - 0.5) {
+      return value + SURFACE_SEAM_GUARD_TILES;
+    }
+    return value;
+  }
+  function createGuardedSurfaceCoordinates(source) {
+    if (source.length < 2 || source.length % 2 !== 0) {
+      throw new TypeError("surface coordinates must contain uv pairs");
+    }
+    const guarded = new Float32Array(source.length);
+    for (let index2 = 0; index2 < source.length; index2 += 2) {
+      const u = Number(source[index2]);
+      const v = Number(source[index2 + 1]);
+      if (!Number.isFinite(u) || !Number.isFinite(v)) {
+        throw new RangeError("surface coordinates must be finite");
+      }
+      guarded[index2] = guardedSurfaceCoordinate(u);
+      guarded[index2 + 1] = guardedSurfaceCoordinate(v);
+    }
+    return guarded;
+  }
   function pointKey(point) {
     return `${point.x},${point.y}`;
   }
@@ -6810,7 +7098,11 @@
     if (existing !== void 0) return existing;
     const u = -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL;
     const v = -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL;
-    const world = surfaceToWorld(u, v, hexSize);
+    const world = surfaceToWorld(
+      guardedSurfaceCoordinate(u),
+      guardedSurfaceCoordinate(v),
+      hexSize
+    );
     const index2 = builder.positions.length / 3;
     builder.positions.push(world.x, 0, world.z);
     builder.surfaceCoordinates.push(u, v);
@@ -7062,12 +7354,55 @@
     }
   };
 
+  // src/rendering/SurfaceVisualShader.ts
+  var SURFACE_VISUAL_PHASE_PERIOD = 192;
+  var SURFACE_VISUAL_GRID_GLSL = (
+    /* glsl */
+    `
+vec2 surfaceRoundedAxial(vec2 worldPosition) {
+    float q = worldPosition.x / 1.5;
+    float r = worldPosition.y / 1.7320508075688772 - 0.5 - q * 0.5;
+    vec3 cube = vec3(q, -q - r, r);
+    vec3 rounded = floor(cube + vec3(0.5));
+    vec3 difference = abs(rounded - cube);
+    if (difference.x > difference.y && difference.x > difference.z) {
+        rounded.x = -rounded.y - rounded.z;
+    } else if (difference.y > difference.z) {
+        rounded.y = -rounded.x - rounded.z;
+    } else {
+        rounded.z = -rounded.x - rounded.y;
+    }
+    return vec2(rounded.x, rounded.z);
+}
+
+float surfaceHexBorderDistance(vec2 worldPosition) {
+    vec2 axial = surfaceRoundedAxial(worldPosition);
+    vec2 center = vec2(
+        axial.x * 1.5,
+        1.7320508075688772 * (axial.y + axial.x * 0.5 + 0.5)
+    );
+    vec2 local = abs(worldPosition - center);
+    return max(0.0, min(
+        0.8660254037844386 - local.y,
+        0.8660254037844386 - (0.8660254037844386 * local.x + 0.5 * local.y)
+    ));
+}
+
+float surfaceHexGridCoverage(vec2 worldPosition, float width) {
+    float distanceToBorder = surfaceHexBorderDistance(worldPosition);
+    float antialiasWidth = max(fwidth(distanceToBorder), 0.0005);
+    return 1.0 - smoothstep(width, width + antialiasWidth, distanceToBorder);
+}
+`
+  );
+
   // src/rendering/GroundLayer.ts
+  var SURFACE_GROUND_NORMAL_SAMPLE_OFFSET = SURFACE_FIELD_GUTTER_TEXELS / (SURFACE_SAMPLES_PER_TILE_INTERVAL * 2);
   var SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE = Object.freeze([
-    5797192,
-    11769700,
-    10268341,
-    7828591
+    6262078,
+    13806952,
+    11451328,
+    6907746
   ]);
   var GROUND_VERTEX_SHADER = (
     /* glsl */
@@ -7077,9 +7412,16 @@ in vec2 surfaceUv;
 uniform sampler2DArray uSurfaceValues;
 uniform float uLayer;
 uniform float uHeightScale;
+uniform float uHexSize;
+uniform vec2 uChunkSurfacePhase;
 
 out vec2 vSurfaceUv;
+out vec2 vLogicalWorldXZ;
 out vec3 vWorldNormal;
+out float vGroundHeight;
+out float vShoreDistance;
+
+#include <fog_pars_vertex>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
@@ -7124,10 +7466,14 @@ vec4 sampleSurfaceValues(vec2 localSurface) {
 }
 
 void main() {
-    float groundHeight = sampleSurfaceValues(surfaceUv).r * uHeightScale;
-    float delta = 1.0 / SURFACE_SAMPLES_PER_TILE;
-    vec2 lower = max(surfaceUv - vec2(delta), vec2(-0.5));
-    vec2 upper = min(surfaceUv + vec2(delta), vec2(15.5));
+    vec4 surfaceValues = sampleSurfaceValues(surfaceUv);
+    float groundHeight = surfaceValues.r * uHeightScale;
+    // One physical gutter texel on either side supports a symmetric central
+    // difference at the ownership boundary. Adjacent chunks therefore sample
+    // the exact same two global positions and publish identical normals.
+    float delta = ${SURFACE_GROUND_NORMAL_SAMPLE_OFFSET.toFixed(4)};
+    vec2 lower = surfaceUv - vec2(delta);
+    vec2 upper = surfaceUv + vec2(delta);
     float leftHeight = sampleSurfaceValues(vec2(lower.x, surfaceUv.y)).r * uHeightScale;
     float rightHeight = sampleSurfaceValues(vec2(upper.x, surfaceUv.y)).r * uHeightScale;
     float topHeight = sampleSurfaceValues(vec2(surfaceUv.x, lower.y)).r * uHeightScale;
@@ -7140,8 +7486,13 @@ void main() {
     vec3 tangentV = vec3(bottomWorld.x - topWorld.x, bottomHeight - topHeight, bottomWorld.y - topWorld.y);
     vWorldNormal = normalize(mat3(modelMatrix) * normalize(cross(tangentV, tangentU)));
     vSurfaceUv = surfaceUv;
+    vLogicalWorldXZ = surfaceWorld(uChunkSurfacePhase + surfaceUv) * uHexSize;
+    vGroundHeight = surfaceValues.r;
+    vShoreDistance = surfaceValues.a;
     vec3 displaced = vec3(position.x, groundHeight, position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `
   );
@@ -7154,15 +7505,24 @@ uniform float uLayer;
 uniform bool uFogEnabled;
 uniform vec4 uValidBounds;
 uniform vec3 uMaterialPalette[4];
+uniform float uHexSize;
+uniform vec3 uGridColor;
+uniform float uGridWidth;
+uniform float uGridOpacity;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 
 in vec2 vSurfaceUv;
+in vec2 vLogicalWorldXZ;
 in vec3 vWorldNormal;
+in float vGroundHeight;
+in float vShoreDistance;
 out vec4 groundOutputColor;
 #define gl_FragColor groundOutputColor
+
+#include <fog_pars_fragment>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
@@ -7189,6 +7549,30 @@ vec4 sampleSurfaceMaterial(vec2 localSurface) {
     return mix(top, bottom, amount.y);
 }
 
+${SURFACE_VISUAL_GRID_GLSL}
+
+float surfaceVisualHash(vec2 point, float period) {
+    vec2 wrapped = mod(mod(point, period) + period, period);
+    return fract(sin(dot(wrapped, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float surfaceVisualNoise(vec2 point, float period) {
+    vec2 cell = floor(point);
+    vec2 amount = fract(point);
+    vec2 smoothAmount = amount * amount * (3.0 - 2.0 * amount);
+    float first = mix(
+        surfaceVisualHash(cell, period),
+        surfaceVisualHash(cell + vec2(1.0, 0.0), period),
+        smoothAmount.x
+    );
+    float second = mix(
+        surfaceVisualHash(cell + vec2(0.0, 1.0), period),
+        surfaceVisualHash(cell + vec2(1.0, 1.0), period),
+        smoothAmount.x
+    );
+    return mix(first, second, smoothAmount.y);
+}
+
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
@@ -7201,6 +7585,39 @@ void main() {
         + uMaterialPalette[1] * weights.g
         + uMaterialPalette[2] * weights.b
         + uMaterialPalette[3] * weights.a) / weightSum;
+    vec2 visualSurface = vec2(
+        vLogicalWorldXZ.x / max(uHexSize * 1.5, 0.0001),
+        vLogicalWorldXZ.y / max(uHexSize * 1.7320508075688772, 0.0001)
+    );
+    float broadDetail = surfaceVisualNoise(
+        vec2(visualSurface.x + visualSurface.y, visualSurface.y - visualSurface.x) * 0.5,
+        ${Math.round(SURFACE_VISUAL_PHASE_PERIOD / 2).toFixed(1)}
+    );
+    float fineDetail = surfaceVisualNoise(
+        vec2(visualSurface.x * 2.0 + visualSurface.y, visualSurface.y * 2.0 - visualSurface.x),
+        ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)}
+    );
+    vec2 grainCoordinate = vec2(
+        visualSurface.x * 3.0 + visualSurface.y,
+        visualSurface.y * 3.0 - visualSurface.x
+    ) * 4.0;
+    float grain = surfaceVisualHash(floor(grainCoordinate), ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)});
+    float pixelSpan = max(length(dFdx(visualSurface)), length(dFdy(visualSurface)));
+    float grainVisibility = 1.0 - smoothstep(0.035, 0.16, pixelSpan);
+    float materialDetail = mix(0.82, 1.16, broadDetail) * mix(0.92, 1.08, fineDetail)
+        * mix(1.0, mix(0.82, 1.18, grain), grainVisibility);
+    vec4 normalizedWeights = weights / weightSum;
+    vec3 climateTint = normalizedWeights.r * vec3(0.96, 1.05, 0.94)
+        + normalizedWeights.g * vec3(1.12, 1.02, 0.84)
+        + normalizedWeights.b * vec3(0.91, 0.98, 1.08)
+        + normalizedWeights.a * vec3(0.88, 0.90, 0.92);
+    albedo *= materialDetail * climateTint;
+    float shoreBand = (1.0 - smoothstep(0.04, 0.75, max(vShoreDistance, 0.0)))
+        * step(0.0, vShoreDistance);
+    albedo = mix(albedo, vec3(0.66, 0.57, 0.36) * mix(0.9, 1.1, fineDetail), shoreBand * 0.34);
+    float snow = normalizedWeights.a * smoothstep(0.72, 0.94, vGroundHeight)
+        * smoothstep(0.38, 0.72, broadDetail);
+    albedo = mix(albedo, vec3(0.9, 0.93, 0.95), snow * 0.7);
     vec3 normal = normalize(vWorldNormal);
     float sunAmount = max(dot(normal, normalize(uSunDirection)), 0.0);
     float skyAmount = normal.y * 0.5 + 0.5;
@@ -7213,9 +7630,12 @@ void main() {
         float visibility = texelFetch(uFogTexture, ivec3(fogCoordinate, int(uLayer)), 0).r;
         linearColor = mix(vec3(0.018, 0.022, 0.027), linearColor, visibility);
     }
+    float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
+    linearColor = mix(linearColor, uGridColor, grid * uGridOpacity);
     gl_FragColor = vec4(linearColor, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `
   );
@@ -7465,18 +7885,27 @@ void main() {
           uFogTexture: new three.Uniform(null),
           uLayer: new three.Uniform(0),
           uHeightScale: new three.Uniform(this.heightScale),
+          uHexSize: new three.Uniform(this.hexSize),
+          uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
           uFogEnabled: new three.Uniform(false),
           uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
           uMaterialPalette: new three.Uniform(this.palette),
+          uGridColor: new three.Uniform(new three.Color(3353124)),
+          uGridWidth: new three.Uniform(0.032),
+          uGridOpacity: new three.Uniform(0.46),
           uSunDirection: lighting.sunDirection,
           uSunRadiance: lighting.sunRadiance,
           uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+          fogColor: new three.Uniform(new three.Color()),
+          fogNear: new three.Uniform(1),
+          fogFar: new three.Uniform(1e3)
         },
         side: three.DoubleSide,
         depthWrite: true,
         depthTest: true,
         transparent: false,
+        fog: true,
         toneMapped: true
       });
       page = Object.freeze({ material, lighting });
@@ -7491,6 +7920,12 @@ void main() {
       chunk.mesh.visible = true;
       material.uniforms.uLayer.value = chunk.slot.layerIndex;
       material.uniforms.uFogEnabled.value = chunk.hasFog;
+      const originX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const originY = chunk.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      material.uniforms.uChunkSurfacePhase.value.set(
+        (originX % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD,
+        (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD
+      );
       const bounds = chunk.lease.chunk.bounds.validTiles;
       material.uniforms.uValidBounds.value.set(
         bounds.minX,
@@ -7525,19 +7960,24 @@ void main() {
     }
   };
   var VEGETATION_COLORS = Object.freeze({
-    [0 /* Grass */]: Object.freeze([0.18, 0.42, 0.13]),
-    [1 /* Palm */]: Object.freeze([0.24, 0.48, 0.16]),
-    [2 /* Pinia */]: Object.freeze([0.11, 0.31, 0.16]),
-    [3 /* Oak */]: Object.freeze([0.18, 0.38, 0.12])
+    [0 /* Grass */]: Object.freeze([0.86, 1, 0.78]),
+    [1 /* Palm */]: Object.freeze([1, 0.98, 0.8]),
+    [2 /* Pinia */]: Object.freeze([0.8, 0.95, 0.85]),
+    [3 /* Oak */]: Object.freeze([0.92, 1, 0.82])
   });
   var VEGETATION_VERTEX_SHADER = (
     /* glsl */
     `
+in vec3 color;
+
 uniform float uTime;
 uniform bool uGrass;
 
 out vec3 vWorldNormal;
+out vec3 vVertexColor;
 out float vHeight;
+
+#include <fog_pars_vertex>
 
 void main() {
     vec3 localPosition = position;
@@ -7547,8 +7987,11 @@ void main() {
     vec4 instancePosition = instanceMatrix * vec4(localPosition, 1.0);
     vec4 worldPosition = modelMatrix * instancePosition;
     vWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
+    vVertexColor = color;
     vHeight = clamp(position.y, 0.0, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+    vec4 mvPosition = viewMatrix * worldPosition;
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `
   );
@@ -7562,9 +8005,12 @@ uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 
 in vec3 vWorldNormal;
+in vec3 vVertexColor;
 in float vHeight;
 out vec4 vegetationOutputColor;
 #define gl_FragColor vegetationOutputColor
+
+#include <fog_pars_fragment>
 
 void main() {
     vec3 normal = normalize(vWorldNormal);
@@ -7573,10 +8019,11 @@ void main() {
     vec3 irradiance = uSunRadiance * sunAmount
         + uSkyDiffuseIrradiance * skyAmount
         + uGroundDiffuseIrradiance * (1.0 - skyAmount);
-    vec3 albedo = uAlbedo * mix(0.82, 1.08, vHeight);
+    vec3 albedo = uAlbedo * vVertexColor * mix(0.82, 1.08, vHeight);
     gl_FragColor = vec4(albedo * irradiance, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `
   );
@@ -7606,7 +8053,19 @@ void main() {
       0,
       -0.34,
       1,
-      0
+      0,
+      0,
+      0,
+      -0.5,
+      0,
+      0,
+      0.5,
+      0,
+      1,
+      0.34,
+      0,
+      1,
+      -0.34
     ]), 3));
     geometry.setAttribute("normal", new three.BufferAttribute(new Float32Array([
       0,
@@ -7620,19 +8079,133 @@ void main() {
       1,
       0,
       0,
-      1
+      1,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0
     ]), 3));
-    geometry.setIndex(new three.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1));
+    geometry.setAttribute("color", new three.BufferAttribute(new Float32Array([
+      0.11,
+      0.3,
+      0.06,
+      0.11,
+      0.3,
+      0.06,
+      0.31,
+      0.62,
+      0.13,
+      0.31,
+      0.62,
+      0.13,
+      0.11,
+      0.3,
+      0.06,
+      0.11,
+      0.3,
+      0.06,
+      0.31,
+      0.62,
+      0.13,
+      0.31,
+      0.62,
+      0.13
+    ]), 3));
+    geometry.setIndex(new three.BufferAttribute(new Uint16Array([
+      0,
+      1,
+      2,
+      0,
+      2,
+      3,
+      4,
+      5,
+      6,
+      4,
+      6,
+      7
+    ]), 1));
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     return geometry;
   }
+  function colorGeometry(geometry, color) {
+    const count = geometry.getAttribute("position").count;
+    const values = new Float32Array(count * 3);
+    for (let index2 = 0; index2 < count; index2 += 1) values.set(color, index2 * 3);
+    geometry.setAttribute("color", new three.BufferAttribute(values, 3));
+    return geometry;
+  }
+  function mergeVegetationGeometry(name, parts) {
+    const mergeParts = parts.map((part) => part.index ? part.toNonIndexed() : part);
+    try {
+      const attributeNames = ["position", "normal", "color"];
+      const vertexCount = mergeParts.reduce((total, part) => {
+        const position = part.getAttribute("position");
+        if (!position || position.itemSize !== 3) {
+          throw new TypeError(`${name} vegetation part has invalid positions`);
+        }
+        return total + position.count;
+      }, 0);
+      const geometry = new three.BufferGeometry();
+      for (const attributeName of attributeNames) {
+        const values = new Float32Array(vertexCount * 3);
+        let offset = 0;
+        for (const part of mergeParts) {
+          const attribute = part.getAttribute(attributeName);
+          if (!attribute || attribute.itemSize !== 3 || attribute.count !== part.getAttribute("position").count) {
+            geometry.dispose();
+            throw new TypeError(`${name} vegetation part has invalid ${attributeName}`);
+          }
+          for (let index2 = 0; index2 < attribute.count; index2 += 1) {
+            values[offset++] = attribute.getX(index2);
+            values[offset++] = attribute.getY(index2);
+            values[offset++] = attribute.getZ(index2);
+          }
+        }
+        geometry.setAttribute(attributeName, new three.BufferAttribute(values, 3));
+      }
+      geometry.name = name;
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      return geometry;
+    } finally {
+      for (const part of /* @__PURE__ */ new Set([...parts, ...mergeParts])) part.dispose();
+    }
+  }
   function createSpeciesGeometry(species) {
     if (species === 0 /* Grass */) return createGrassGeometry();
-    const geometry = species === 1 /* Palm */ ? new three.ConeGeometry(0.48, 1.8, 7, 1) : species === 2 /* Pinia */ ? new three.ConeGeometry(0.58, 1.55, 7, 2) : new three.ConeGeometry(0.68, 1.35, 8, 2);
-    geometry.translate(0, species === 1 /* Palm */ ? 0.9 : species === 2 /* Pinia */ ? 0.775 : 0.675, 0);
-    geometry.name = `surface-vegetation-species-${species}`;
-    return geometry;
+    const trunkHeight = species === 1 /* Palm */ ? 1.45 : 0.78;
+    const trunk = colorGeometry(
+      new three.CylinderGeometry(0.11, 0.16, trunkHeight, 6, 1),
+      [0.3, 0.17, 0.07]
+    );
+    trunk.translate(0, trunkHeight * 0.5, 0);
+    if (species === 1 /* Palm */) {
+      const crown2 = colorGeometry(new three.ConeGeometry(0.82, 0.42, 7, 1), [0.2, 0.52, 0.12]);
+      crown2.rotateX(Math.PI);
+      crown2.translate(0, 1.56, 0);
+      return mergeVegetationGeometry("surface-vegetation-palm", [trunk, crown2]);
+    }
+    if (species === 2 /* Pinia */) {
+      const lower = colorGeometry(new three.ConeGeometry(0.68, 1.15, 7, 1), [0.08, 0.31, 0.13]);
+      lower.translate(0, 0.96, 0);
+      const upper = colorGeometry(new three.ConeGeometry(0.48, 0.92, 7, 1), [0.11, 0.4, 0.16]);
+      upper.translate(0, 1.46, 0);
+      return mergeVegetationGeometry("surface-vegetation-pinia", [trunk, lower, upper]);
+    }
+    const crown = colorGeometry(new three.DodecahedronGeometry(0.72, 0), [0.19, 0.46, 0.11]);
+    crown.scale(1, 0.82, 1);
+    crown.translate(0, 1.16, 0);
+    return mergeVegetationGeometry("surface-vegetation-oak", [trunk, crown]);
   }
   function geometryByteLength(geometry) {
     let total = geometry.getIndex()?.array.byteLength ?? 0;
@@ -7861,12 +8434,16 @@ void main() {
           uSunDirection: lighting.sunDirection,
           uSunRadiance: lighting.sunRadiance,
           uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+          fogColor: new three.Uniform(new three.Color()),
+          fogNear: new three.Uniform(1),
+          fogFar: new three.Uniform(1e3)
         },
         side: three.DoubleSide,
         depthWrite: true,
         depthTest: true,
         transparent: false,
+        fog: true,
         toneMapped: true
       });
       value = Object.freeze({ material, lighting });
@@ -7891,7 +8468,7 @@ void main() {
             chunk.seeds.rotation[seedIndex] / 65535 * Math.PI * 2
           );
           const randomScale = chunk.seeds.scale[seedIndex] / 255;
-          const baseScale = value.species === 0 /* Grass */ ? this.hexSize * 0.34 : this.hexSize * 0.62;
+          const baseScale = value.species === 0 /* Grass */ ? this.hexSize * 0.34 : this.hexSize * 0.86;
           this.scale.setScalar(baseScale * randomScale);
           this.matrix.compose(this.position, this.rotation, this.scale);
           value.mesh.setMatrixAt(outputIndex, this.matrix);
@@ -7942,6 +8519,7 @@ uniform sampler2DArray uSurfaceFlow;
 uniform sampler2DArray uSurfaceWater;
 uniform float uLayer;
 uniform float uHeightScale;
+uniform float uHexSize;
 uniform float uTime;
 uniform vec2 uChunkSurfacePhase;
 
@@ -7949,13 +8527,32 @@ out vec2 vSurfaceUv;
 out vec2 vFlow;
 out float vDepth;
 out float vShoreDistance;
-flat out float vWaterKind;
-flat out float vWaterProfile;
 out vec3 vWaterWorldPosition;
+out vec2 vLogicalWorldXZ;
+out vec2 vVisualSurface;
+
+#include <fog_pars_vertex>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
 const float TWO_PI = 6.283185307179586;
+const float SQRT_THREE = 1.7320508075688772;
+
+float surfaceStagger(float u) {
+    float column = floor(u);
+    float amount = u - column;
+    float parity = mod(mod(column, 2.0) + 2.0, 2.0);
+    float first = parity < 0.5 ? 0.5 : 0.0;
+    float second = 0.5 - first;
+    return mix(first, second, amount);
+}
+
+vec2 surfaceWorld(vec2 localSurface) {
+    return vec2(
+        1.5 * localSurface.x,
+        SQRT_THREE * (localSurface.y + surfaceStagger(localSurface.x))
+    );
+}
 
 vec2 surfaceFieldCoordinate(vec2 localSurface) {
     return (localSurface + vec2(0.5)) * SURFACE_SAMPLES_PER_TILE + vec2(0.5);
@@ -8011,61 +8608,136 @@ void main() {
     vFlow = flow;
     vDepth = values.b;
     vShoreDistance = values.a;
-    vWaterKind = waterKind;
-    vWaterProfile = waterProfile;
+    vLogicalWorldXZ = surfaceWorld(globalSurface) * uHexSize;
+    vVisualSurface = globalSurface;
     vec3 displaced = vec3(position.x, values.g * uHeightScale + wave * uHeightScale, position.z);
     vWaterWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `
   );
   var WATER_FRAGMENT_SHADER = (
     /* glsl */
     `
+uniform sampler2DArray uSurfaceWater;
+uniform float uLayer;
 uniform vec4 uValidBounds;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 uniform float uTime;
+uniform float uHexSize;
+uniform vec3 uGridColor;
+uniform float uGridWidth;
+uniform float uGridOpacity;
 
 in vec2 vSurfaceUv;
 in vec2 vFlow;
 in float vDepth;
 in float vShoreDistance;
-flat in float vWaterKind;
-flat in float vWaterProfile;
 in vec3 vWaterWorldPosition;
+in vec2 vLogicalWorldXZ;
+in vec2 vVisualSurface;
 out vec4 waterOutputColor;
 #define gl_FragColor waterOutputColor
+
+#include <fog_pars_fragment>
+
+${SURFACE_VISUAL_GRID_GLSL}
+
+float surfaceWaterHash(vec2 point) {
+    vec2 wrapped = mod(mod(point, ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)})
+        + ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)}, ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)});
+    return fract(sin(dot(wrapped, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float surfaceWaterNoise(vec2 point) {
+    vec2 cell = floor(point);
+    vec2 amount = fract(point);
+    vec2 smoothAmount = amount * amount * (3.0 - 2.0 * amount);
+    return mix(
+        mix(surfaceWaterHash(cell), surfaceWaterHash(cell + vec2(1.0, 0.0)), smoothAmount.x),
+        mix(surfaceWaterHash(cell + vec2(0.0, 1.0)), surfaceWaterHash(cell + vec2(1.0)), smoothAmount.x),
+        smoothAmount.y
+    );
+}
+
+vec2 surfaceWaterFieldCoordinate(vec2 localSurface) {
+    return (localSurface + vec2(0.5)) * ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)} + vec2(0.5);
+}
 
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
     if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
         || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
-    float depthAmount = smoothstep(0.015, 0.34, vDepth);
-    vec3 shallow = vWaterKind > 2.5 ? vec3(0.08, 0.38, 0.46)
-        : vWaterKind > 1.5 ? vec3(0.10, 0.42, 0.38) : vec3(0.13, 0.43, 0.46);
-    vec3 deep = vWaterKind > 2.5 ? vec3(0.012, 0.075, 0.16)
-        : vWaterKind > 1.5 ? vec3(0.018, 0.12, 0.14) : vec3(0.025, 0.15, 0.17);
-    vec3 flowNormal = normalize(vec3(-vFlow.y * 0.06, 1.0, vFlow.x * 0.06));
+    ivec2 categoricalCoordinate = ivec2(clamp(
+        floor(surfaceWaterFieldCoordinate(vSurfaceUv) + vec2(0.5)),
+        vec2(0.0),
+        vec2(65.0)
+    ));
+    vec3 waterClass = texelFetch(
+        uSurfaceWater,
+        ivec3(categoricalCoordinate, int(uLayer)),
+        0
+    ).rgb * 255.0;
+    float waterKind = waterClass.g;
+    float waterProfile = waterClass.b;
+    float depthAmount = smoothstep(0.008, 0.11, vDepth);
+    vec3 shallow = waterKind > 2.5 ? vec3(0.045, 0.30, 0.34)
+        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.08, 0.34, 0.37);
+    vec3 deep = waterKind > 2.5 ? vec3(0.004, 0.028, 0.09)
+        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
+    float oceanAmount = step(2.5, waterKind);
+    float lakeAmount = step(1.5, waterKind) - oceanAmount;
+    float waveStrength = oceanAmount * 0.15 + lakeAmount * 0.065
+        + (1.0 - oceanAmount - lakeAmount) * 0.04;
+    float waveX = cos(vVisualSurface.x * 0.41 + uTime * 1.35)
+        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - uTime * 0.86);
+    float waveY = sin(vVisualSurface.y * 0.37 - uTime * 1.08)
+        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + uTime * 0.72);
+    vec3 flowNormal = normalize(vec3(
+        -waveX * waveStrength - vFlow.y * 0.09,
+        1.0,
+        -waveY * waveStrength + vFlow.x * 0.09
+    ));
     vec3 viewDirection = normalize(cameraPosition - vWaterWorldPosition);
     float fresnel = pow(1.0 - max(dot(flowNormal, viewDirection), 0.0), 5.0);
-    float sunAmount = pow(max(dot(flowNormal, normalize(uSunDirection)), 0.0), 48.0);
-    float foam = (1.0 - smoothstep(0.03, 0.22, -vShoreDistance))
-        * (0.72 + 0.28 * sin(uTime * 2.0 + vSurfaceUv.x * 5.0 + vSurfaceUv.y * 3.0));
+    vec3 halfDirection = normalize(viewDirection + normalize(uSunDirection));
+    float sunAmount = pow(max(dot(flowNormal, halfDirection), 0.0), 64.0);
+    float shoreDepth = max(-vShoreDistance, 0.0);
+    float shoreMask = 1.0 - smoothstep(0.035, 0.32, shoreDepth);
+    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, uTime * 0.18));
+    float foamBand = smoothstep(0.64, 0.94,
+        sin(shoreDepth * 34.0 - uTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
+    float foam = shoreMask * max(
+        1.0 - smoothstep(0.0, 0.055, shoreDepth),
+        foamBand * 0.72
+    );
     vec3 environment = uSkyDiffuseIrradiance * (0.24 + fresnel * 0.76)
         + uGroundDiffuseIrradiance * 0.08;
-    float profileTint = vWaterProfile / 255.0;
+    float profileTint = waterProfile / 255.0;
     vec3 bodyColor = mix(shallow, deep, depthAmount)
         * mix(vec3(0.94, 1.0, 1.04), vec3(1.04, 0.98, 0.92), profileTint);
-    vec3 linearColor = bodyColor * environment
-        + uSunRadiance * sunAmount * 0.34
-        + vec3(0.72, 0.86, 0.88) * foam * 0.42;
-    gl_FragColor = vec4(linearColor, 0.86);
+    float rippleLight = mix(0.9, 1.1, surfaceWaterNoise(
+        vec2(vVisualSurface.x + vVisualSurface.y, vVisualSurface.y - vVisualSurface.x)
+            + vec2(uTime * 0.22, -uTime * 0.16)
+    ));
+    vec3 linearColor = bodyColor * (vec3(0.42) + environment * 0.78) * rippleLight
+        + uSunRadiance * sunAmount * 0.72
+        + vec3(0.82, 0.92, 0.9) * foam * 0.68;
+    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY));
+    linearColor += vec3(0.12, 0.22, 0.3) * waveCrest * (0.25 + oceanAmount * 0.75);
+    linearColor = mix(linearColor, uSkyDiffuseIrradiance * 1.05, fresnel * 0.26);
+    float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
+    linearColor = mix(linearColor, uGridColor, grid * uGridOpacity);
+    gl_FragColor = vec4(linearColor, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `
   );
@@ -8080,11 +8752,12 @@ void main() {
   }
   function createCompiledWaterGeometry(source, hexSize, heightScale) {
     const vertexCount = source.surfaceUv.length / 2;
+    const guardedSurfaceUv = createGuardedSurfaceCoordinates(source.surfaceUv);
     const positions = new Float32Array(vertexCount * 3);
     for (let index2 = 0; index2 < vertexCount; index2 += 1) {
       const coordinate = surfaceToWorld(
-        source.surfaceUv[index2 * 2],
-        source.surfaceUv[index2 * 2 + 1],
+        guardedSurfaceUv[index2 * 2],
+        guardedSurfaceUv[index2 * 2 + 1],
         hexSize
       );
       positions[index2 * 3] = coordinate.x;
@@ -8276,18 +8949,26 @@ void main() {
           uSurfaceWater: new three.Uniform(binding.waterTexture),
           uLayer: new three.Uniform(0),
           uHeightScale: new three.Uniform(this.heightScale),
+          uHexSize: new three.Uniform(this.hexSize),
           uTime: new three.Uniform(0),
           uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
           uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
+          uGridColor: new three.Uniform(new three.Color(1847602)),
+          uGridWidth: new three.Uniform(0.032),
+          uGridOpacity: new three.Uniform(0.52),
           uSunDirection: lighting.sunDirection,
           uSunRadiance: lighting.sunRadiance,
           uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+          fogColor: new three.Uniform(new three.Color()),
+          fogNear: new three.Uniform(1),
+          fogFar: new three.Uniform(1e3)
         },
         side: three.DoubleSide,
-        transparent: true,
-        depthWrite: false,
+        transparent: false,
+        depthWrite: true,
         depthTest: true,
+        fog: true,
         toneMapped: true
       });
       page = Object.freeze({ material, lighting });
@@ -8302,12 +8983,11 @@ void main() {
       mounted.mesh.visible = true;
       material.uniforms.uLayer.value = mounted.slot.layerIndex;
       material.uniforms.uTime.value = this.time;
-      const phasePeriod = 192;
       const originX = mounted.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
       const originY = mounted.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
       material.uniforms.uChunkSurfacePhase.value.set(
-        (originX % phasePeriod + phasePeriod) % phasePeriod,
-        (originY % phasePeriod + phasePeriod) % phasePeriod
+        (originX % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD,
+        (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD) % SURFACE_VISUAL_PHASE_PERIOD
       );
       const bounds = chunk.bounds.validTiles;
       material.uniforms.uValidBounds.value.set(
@@ -12268,6 +12948,28 @@ void main() {
   function assertPositive(name, value) {
     if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be finite and positive`);
   }
+  function createSurfaceSky(visible) {
+    if (!visible) return void 0;
+    const sky = new Sky();
+    sky.name = "surface-atmospheric-sky";
+    sky.scale.setScalar(45e4);
+    sky.frustumCulled = false;
+    const uniforms = sky.material.uniforms;
+    uniforms.turbidity.value = 4;
+    uniforms.rayleigh.value = 1.7;
+    uniforms.mieCoefficient.value = 2e-3;
+    uniforms.mieDirectionalG.value = 0.76;
+    const elevation = 24 * Math.PI / 180;
+    const azimuth = 205 * Math.PI / 180;
+    uniforms.sunPosition.value.setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
+    return sky;
+  }
+  function disposeSurfaceSky(sky) {
+    if (!sky) return;
+    sky.removeFromParent();
+    sky.geometry.dispose();
+    sky.material.dispose();
+  }
   function canonicalTile2(source, point) {
     if (!Number.isSafeInteger(point.x) || !Number.isSafeInteger(point.y)) {
       throw new RangeError("world load initialTile must use safe integers");
@@ -12307,6 +13009,7 @@ void main() {
       };
       this.contextRestored = () => {
         if (this.runtimeValue?.session.stats.state === "lost") this.runtimeValue.session.handleContextRestored();
+        if (this.activeSky) this.activeSky.material.needsUpdate = true;
       };
       this.animate = () => {
         if (this.stateValue === "disposed") return;
@@ -12323,6 +13026,8 @@ void main() {
       this.canvas = resolveCanvas(options.element);
       this.hexSize = options.hexSize ?? 1;
       this.heightScale = options.heightScale ?? 80;
+      this.backgroundColor = new three.Color(options.backgroundColor ?? 10471906);
+      this.skyVisible = options.skyVisible ?? true;
       const maxPixelRatio = options.maxPixelRatio ?? 2;
       assertPositive("hexSize", this.hexSize);
       assertPositive("heightScale", this.heightScale);
@@ -12335,15 +13040,16 @@ void main() {
       }
       this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, maxPixelRatio));
       this.camera = new three.PerspectiveCamera(
-        options.fieldOfView ?? 45,
+        options.fieldOfView ?? 60,
         1,
         options.nearPlane ?? 0.1,
         options.farPlane ?? 1e5
       );
-      this.camera.position.set(18 * this.hexSize, 24 * this.hexSize, 18 * this.hexSize);
+      this.camera.position.set(18 * this.hexSize, 10.5 * this.hexSize, 20 * this.hexSize);
       this.controls = new OrbitControls(this.camera, this.canvas);
       this.controls.enableDamping = true;
       this.controls.target.set(0, 0, 0);
+      this.activeSky = this.configureScene(this.activeScene);
       this.resize();
       if (typeof ResizeObserver !== "undefined") {
         this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -12364,6 +13070,7 @@ void main() {
       const revision = ++this.loadRevision;
       this.stateValue = "loading";
       const scene = new three.Scene();
+      const sky = this.configureScene(scene, options.prefetchRadiusTiles);
       let runtime;
       try {
         runtime = await WorldSurfaceRuntime.create({
@@ -12388,19 +13095,24 @@ void main() {
         }));
         if (revision !== this.loadRevision || this.isDisposed()) {
           runtime.dispose();
+          disposeSurfaceSky(sky);
           return;
         }
         const oldRuntime = this.runtimeValue;
+        const oldSky = this.activeSky;
         this.runtimeValue = runtime;
         this.loadOptions = options;
         this.activeScene = scene;
+        this.activeSky = sky;
         this.demandSignature = "";
         await this.setCameraTargetTile(initial.x, initial.y);
         oldRuntime?.dispose();
+        disposeSurfaceSky(oldSky);
         this.stateValue = "ready";
         this.emit("load", void 0);
       } catch (reason) {
         runtime?.dispose();
+        disposeSurfaceSky(sky);
         if (revision === this.loadRevision && !this.isDisposed()) this.stateValue = "ready";
         throw reason;
       }
@@ -12458,6 +13170,8 @@ void main() {
       this.canvas.removeEventListener("webglcontextrestored", this.contextRestored);
       this.runtimeValue?.dispose();
       this.runtimeValue = void 0;
+      disposeSurfaceSky(this.activeSky);
+      this.activeSky = void 0;
       this.controls.dispose();
       this.renderer.dispose();
       this.removeAllListeners();
@@ -12487,6 +13201,17 @@ void main() {
       this.assertReady();
       if (!this.runtimeValue) throw new Error("HexMap requires a loaded world");
       return this.runtimeValue;
+    }
+    configureScene(scene, prefetchRadiusTiles) {
+      scene.background = this.backgroundColor.clone();
+      if (prefetchRadiusTiles !== void 0) {
+        assertPositive("prefetchRadiusTiles", prefetchRadiusTiles);
+        const fogFar = prefetchRadiusTiles * this.hexSize * 1.35;
+        scene.fog = new three.Fog(this.backgroundColor, fogFar * 0.64, fogFar);
+      }
+      const sky = createSurfaceSky(this.skyVisible);
+      if (sky) scene.add(sky);
+      return sky;
     }
     assertReady() {
       if (this.stateValue === "disposed") throw new Error("HexMap has been disposed");

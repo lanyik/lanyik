@@ -2,6 +2,7 @@ import {
     Box3,
     BufferAttribute,
     BufferGeometry,
+    Color,
     DoubleSide,
     GLSL3,
     Group,
@@ -31,12 +32,19 @@ import {
     LightingStateController,
     type LightingUniformBinding
 } from "./LightingState";
-import { SurfaceGroundGeometryPool } from "./SurfaceGroundGeometry";
+import {
+    createGuardedSurfaceCoordinates,
+    SurfaceGroundGeometryPool
+} from "./SurfaceGroundGeometry";
 import {
     SurfaceTexturePool,
     type SurfaceTextureBinding,
     type SurfaceTextureSlotHandle
 } from "./SurfaceTexturePool";
+import {
+    SURFACE_VISUAL_GRID_GLSL,
+    SURFACE_VISUAL_PHASE_PERIOD
+} from "./SurfaceVisualShader";
 
 export interface WaterLayerOptions {
     readonly surfaceTexturePool: SurfaceTexturePool;
@@ -88,6 +96,7 @@ uniform sampler2DArray uSurfaceFlow;
 uniform sampler2DArray uSurfaceWater;
 uniform float uLayer;
 uniform float uHeightScale;
+uniform float uHexSize;
 uniform float uTime;
 uniform vec2 uChunkSurfacePhase;
 
@@ -95,13 +104,32 @@ out vec2 vSurfaceUv;
 out vec2 vFlow;
 out float vDepth;
 out float vShoreDistance;
-flat out float vWaterKind;
-flat out float vWaterProfile;
 out vec3 vWaterWorldPosition;
+out vec2 vLogicalWorldXZ;
+out vec2 vVisualSurface;
+
+#include <fog_pars_vertex>
 
 const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
 const float SURFACE_FIELD_MAX_TEXEL = 65.0;
 const float TWO_PI = 6.283185307179586;
+const float SQRT_THREE = 1.7320508075688772;
+
+float surfaceStagger(float u) {
+    float column = floor(u);
+    float amount = u - column;
+    float parity = mod(mod(column, 2.0) + 2.0, 2.0);
+    float first = parity < 0.5 ? 0.5 : 0.0;
+    float second = 0.5 - first;
+    return mix(first, second, amount);
+}
+
+vec2 surfaceWorld(vec2 localSurface) {
+    return vec2(
+        1.5 * localSurface.x,
+        SQRT_THREE * (localSurface.y + surfaceStagger(localSurface.x))
+    );
+}
 
 vec2 surfaceFieldCoordinate(vec2 localSurface) {
     return (localSurface + vec2(0.5)) * SURFACE_SAMPLES_PER_TILE + vec2(0.5);
@@ -157,59 +185,134 @@ void main() {
     vFlow = flow;
     vDepth = values.b;
     vShoreDistance = values.a;
-    vWaterKind = waterKind;
-    vWaterProfile = waterProfile;
+    vLogicalWorldXZ = surfaceWorld(globalSurface) * uHexSize;
+    vVisualSurface = globalSurface;
     vec3 displaced = vec3(position.x, values.g * uHeightScale + wave * uHeightScale, position.z);
     vWaterWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
 }
 `;
 
 const WATER_FRAGMENT_SHADER = /* glsl */`
+uniform sampler2DArray uSurfaceWater;
+uniform float uLayer;
 uniform vec4 uValidBounds;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 uniform float uTime;
+uniform float uHexSize;
+uniform vec3 uGridColor;
+uniform float uGridWidth;
+uniform float uGridOpacity;
 
 in vec2 vSurfaceUv;
 in vec2 vFlow;
 in float vDepth;
 in float vShoreDistance;
-flat in float vWaterKind;
-flat in float vWaterProfile;
 in vec3 vWaterWorldPosition;
+in vec2 vLogicalWorldXZ;
+in vec2 vVisualSurface;
 out vec4 waterOutputColor;
 #define gl_FragColor waterOutputColor
+
+#include <fog_pars_fragment>
+
+${SURFACE_VISUAL_GRID_GLSL}
+
+float surfaceWaterHash(vec2 point) {
+    vec2 wrapped = mod(mod(point, ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)})
+        + ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)}, ${SURFACE_VISUAL_PHASE_PERIOD.toFixed(1)});
+    return fract(sin(dot(wrapped, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float surfaceWaterNoise(vec2 point) {
+    vec2 cell = floor(point);
+    vec2 amount = fract(point);
+    vec2 smoothAmount = amount * amount * (3.0 - 2.0 * amount);
+    return mix(
+        mix(surfaceWaterHash(cell), surfaceWaterHash(cell + vec2(1.0, 0.0)), smoothAmount.x),
+        mix(surfaceWaterHash(cell + vec2(0.0, 1.0)), surfaceWaterHash(cell + vec2(1.0)), smoothAmount.x),
+        smoothAmount.y
+    );
+}
+
+vec2 surfaceWaterFieldCoordinate(vec2 localSurface) {
+    return (localSurface + vec2(0.5)) * ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)} + vec2(0.5);
+}
 
 void main() {
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
     if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
         || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
-    float depthAmount = smoothstep(0.015, 0.34, vDepth);
-    vec3 shallow = vWaterKind > 2.5 ? vec3(0.08, 0.38, 0.46)
-        : vWaterKind > 1.5 ? vec3(0.10, 0.42, 0.38) : vec3(0.13, 0.43, 0.46);
-    vec3 deep = vWaterKind > 2.5 ? vec3(0.012, 0.075, 0.16)
-        : vWaterKind > 1.5 ? vec3(0.018, 0.12, 0.14) : vec3(0.025, 0.15, 0.17);
-    vec3 flowNormal = normalize(vec3(-vFlow.y * 0.06, 1.0, vFlow.x * 0.06));
+    ivec2 categoricalCoordinate = ivec2(clamp(
+        floor(surfaceWaterFieldCoordinate(vSurfaceUv) + vec2(0.5)),
+        vec2(0.0),
+        vec2(65.0)
+    ));
+    vec3 waterClass = texelFetch(
+        uSurfaceWater,
+        ivec3(categoricalCoordinate, int(uLayer)),
+        0
+    ).rgb * 255.0;
+    float waterKind = waterClass.g;
+    float waterProfile = waterClass.b;
+    float depthAmount = smoothstep(0.008, 0.11, vDepth);
+    vec3 shallow = waterKind > 2.5 ? vec3(0.045, 0.30, 0.34)
+        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.08, 0.34, 0.37);
+    vec3 deep = waterKind > 2.5 ? vec3(0.004, 0.028, 0.09)
+        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
+    float oceanAmount = step(2.5, waterKind);
+    float lakeAmount = step(1.5, waterKind) - oceanAmount;
+    float waveStrength = oceanAmount * 0.15 + lakeAmount * 0.065
+        + (1.0 - oceanAmount - lakeAmount) * 0.04;
+    float waveX = cos(vVisualSurface.x * 0.41 + uTime * 1.35)
+        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - uTime * 0.86);
+    float waveY = sin(vVisualSurface.y * 0.37 - uTime * 1.08)
+        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + uTime * 0.72);
+    vec3 flowNormal = normalize(vec3(
+        -waveX * waveStrength - vFlow.y * 0.09,
+        1.0,
+        -waveY * waveStrength + vFlow.x * 0.09
+    ));
     vec3 viewDirection = normalize(cameraPosition - vWaterWorldPosition);
     float fresnel = pow(1.0 - max(dot(flowNormal, viewDirection), 0.0), 5.0);
-    float sunAmount = pow(max(dot(flowNormal, normalize(uSunDirection)), 0.0), 48.0);
-    float foam = (1.0 - smoothstep(0.03, 0.22, -vShoreDistance))
-        * (0.72 + 0.28 * sin(uTime * 2.0 + vSurfaceUv.x * 5.0 + vSurfaceUv.y * 3.0));
+    vec3 halfDirection = normalize(viewDirection + normalize(uSunDirection));
+    float sunAmount = pow(max(dot(flowNormal, halfDirection), 0.0), 64.0);
+    float shoreDepth = max(-vShoreDistance, 0.0);
+    float shoreMask = 1.0 - smoothstep(0.035, 0.32, shoreDepth);
+    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, uTime * 0.18));
+    float foamBand = smoothstep(0.64, 0.94,
+        sin(shoreDepth * 34.0 - uTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
+    float foam = shoreMask * max(
+        1.0 - smoothstep(0.0, 0.055, shoreDepth),
+        foamBand * 0.72
+    );
     vec3 environment = uSkyDiffuseIrradiance * (0.24 + fresnel * 0.76)
         + uGroundDiffuseIrradiance * 0.08;
-    float profileTint = vWaterProfile / 255.0;
+    float profileTint = waterProfile / 255.0;
     vec3 bodyColor = mix(shallow, deep, depthAmount)
         * mix(vec3(0.94, 1.0, 1.04), vec3(1.04, 0.98, 0.92), profileTint);
-    vec3 linearColor = bodyColor * environment
-        + uSunRadiance * sunAmount * 0.34
-        + vec3(0.72, 0.86, 0.88) * foam * 0.42;
-    gl_FragColor = vec4(linearColor, 0.86);
+    float rippleLight = mix(0.9, 1.1, surfaceWaterNoise(
+        vec2(vVisualSurface.x + vVisualSurface.y, vVisualSurface.y - vVisualSurface.x)
+            + vec2(uTime * 0.22, -uTime * 0.16)
+    ));
+    vec3 linearColor = bodyColor * (vec3(0.42) + environment * 0.78) * rippleLight
+        + uSunRadiance * sunAmount * 0.72
+        + vec3(0.82, 0.92, 0.9) * foam * 0.68;
+    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY));
+    linearColor += vec3(0.12, 0.22, 0.3) * waveCrest * (0.25 + oceanAmount * 0.75);
+    linearColor = mix(linearColor, uSkyDiffuseIrradiance * 1.05, fresnel * 0.26);
+    float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
+    linearColor = mix(linearColor, uGridColor, grid * uGridOpacity);
+    gl_FragColor = vec4(linearColor, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    #include <fog_fragment>
 }
 `;
 
@@ -230,11 +333,12 @@ function createCompiledWaterGeometry(
     heightScale: number
 ): BufferGeometry {
     const vertexCount = source.surfaceUv.length / 2;
+    const guardedSurfaceUv = createGuardedSurfaceCoordinates(source.surfaceUv);
     const positions = new Float32Array(vertexCount * 3);
     for (let index = 0; index < vertexCount; index += 1) {
         const coordinate = surfaceToWorld(
-            source.surfaceUv[index * 2],
-            source.surfaceUv[index * 2 + 1],
+            guardedSurfaceUv[index * 2],
+            guardedSurfaceUv[index * 2 + 1],
             hexSize
         );
         positions[index * 3] = coordinate.x;
@@ -450,18 +554,26 @@ export class WaterLayer {
                 uSurfaceWater: new Uniform(binding.waterTexture),
                 uLayer: new Uniform(0),
                 uHeightScale: new Uniform(this.heightScale),
+                uHexSize: new Uniform(this.hexSize),
                 uTime: new Uniform(0),
                 uChunkSurfacePhase: new Uniform(new Vector2()),
                 uValidBounds: new Uniform(new Vector4(0, 0, 16, 16)),
+                uGridColor: new Uniform(new Color(0x1c3132)),
+                uGridWidth: new Uniform(0.032),
+                uGridOpacity: new Uniform(0.52),
                 uSunDirection: lighting.sunDirection,
                 uSunRadiance: lighting.sunRadiance,
                 uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
-                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+                uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance,
+                fogColor: new Uniform(new Color()),
+                fogNear: new Uniform(1),
+                fogFar: new Uniform(1_000)
             },
             side: DoubleSide,
-            transparent: true,
-            depthWrite: false,
+            transparent: false,
+            depthWrite: true,
             depthTest: true,
+            fog: true,
             toneMapped: true
         });
         page = Object.freeze({ material, lighting });
@@ -481,12 +593,13 @@ export class WaterLayer {
         mounted.mesh.visible = true;
         material.uniforms.uLayer.value = mounted.slot.layerIndex;
         material.uniforms.uTime.value = this.time;
-        const phasePeriod = 192;
         const originX = mounted.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
         const originY = mounted.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
         (material.uniforms.uChunkSurfacePhase.value as Vector2).set(
-            (originX % phasePeriod + phasePeriod) % phasePeriod,
-            (originY % phasePeriod + phasePeriod) % phasePeriod
+            (originX % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD)
+                % SURFACE_VISUAL_PHASE_PERIOD,
+            (originY % SURFACE_VISUAL_PHASE_PERIOD + SURFACE_VISUAL_PHASE_PERIOD)
+                % SURFACE_VISUAL_PHASE_PERIOD
         );
         const bounds = chunk.bounds.validTiles;
         (material.uniforms.uValidBounds.value as Vector4).set(
