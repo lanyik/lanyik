@@ -7396,6 +7396,44 @@ float surfaceHexGridCoverage(vec2 worldPosition, float width) {
 `
   );
 
+  // src/rendering/SurfacePresentationStyle.ts
+  var DEFAULT_SURFACE_PRESENTATION_STYLE = Object.freeze({
+    gridVisible: true,
+    terrainDetailStrength: 1,
+    waterWaveAmplitude: 1,
+    waterWaveSpeed: 1,
+    coastalWaveOpacity: 1,
+    treesVisible: true,
+    grassVisible: true,
+    grassWindStrength: 1
+  });
+  var STYLE_FIELDS = Object.freeze(Object.keys(DEFAULT_SURFACE_PRESENTATION_STYLE));
+  function assertUnitInterval(name, value) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new RangeError(`${name} must be finite and between 0 and 1`);
+    }
+  }
+  function assertRange(name, value, maximum) {
+    if (!Number.isFinite(value) || value < 0 || value > maximum) {
+      throw new RangeError(`${name} must be finite and between 0 and ${maximum}`);
+    }
+  }
+  function createSurfacePresentationStyle(values = {}) {
+    if (!values || typeof values !== "object" || Array.isArray(values) || Object.getOwnPropertyNames(values).some((name) => !STYLE_FIELDS.includes(name))) {
+      throw new TypeError("surface presentation style is invalid");
+    }
+    const style = { ...DEFAULT_SURFACE_PRESENTATION_STYLE, ...values };
+    if (typeof style.gridVisible !== "boolean" || typeof style.treesVisible !== "boolean" || typeof style.grassVisible !== "boolean") {
+      throw new TypeError("surface presentation visibility values must be booleans");
+    }
+    assertRange("terrainDetailStrength", style.terrainDetailStrength, 2);
+    assertRange("waterWaveAmplitude", style.waterWaveAmplitude, 4);
+    assertRange("waterWaveSpeed", style.waterWaveSpeed, 4);
+    assertUnitInterval("coastalWaveOpacity", style.coastalWaveOpacity);
+    assertRange("grassWindStrength", style.grassWindStrength, 6);
+    return Object.freeze(style);
+  }
+
   // src/rendering/GroundLayer.ts
   var SURFACE_GROUND_NORMAL_SAMPLE_OFFSET = SURFACE_FIELD_GUTTER_TEXELS / (SURFACE_SAMPLES_PER_TILE_INTERVAL * 2);
   var SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE = Object.freeze([
@@ -7509,6 +7547,7 @@ uniform float uHexSize;
 uniform vec3 uGridColor;
 uniform float uGridWidth;
 uniform float uGridOpacity;
+uniform float uDetailStrength;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
@@ -7611,7 +7650,7 @@ void main() {
         + normalizedWeights.g * vec3(1.12, 1.02, 0.84)
         + normalizedWeights.b * vec3(0.91, 0.98, 1.08)
         + normalizedWeights.a * vec3(0.88, 0.90, 0.92);
-    albedo *= materialDetail * climateTint;
+    albedo *= mix(vec3(1.0), materialDetail * climateTint, uDetailStrength);
     float shoreBand = (1.0 - smoothstep(0.04, 0.75, max(vShoreDistance, 0.0)))
         * step(0.0, vShoreDistance);
     albedo = mix(albedo, vec3(0.66, 0.57, 0.36) * mix(0.9, 1.1, fineDetail), shoreBand * 0.34);
@@ -7675,6 +7714,7 @@ void main() {
       this.root = new three.Group();
       this.chunks = /* @__PURE__ */ new Map();
       this.materials = /* @__PURE__ */ new Map();
+      this.style = DEFAULT_SURFACE_PRESENTATION_STYLE;
       this.floatingOriginX = 0;
       this.floatingOriginZ = 0;
       this.stateValue = "ready";
@@ -7718,6 +7758,15 @@ void main() {
     }
     get state() {
       return this.stateValue;
+    }
+    setStyle(style) {
+      this.assertNotDisposed();
+      const validated = createSurfacePresentationStyle(style);
+      this.style = validated;
+      for (const page of this.materials.values()) {
+        page.material.uniforms.uGridOpacity.value = validated.gridVisible ? 0.46 : 0;
+        page.material.uniforms.uDetailStrength.value = validated.terrainDetailStrength;
+      }
     }
     mount(lease, lod) {
       this.assertReady();
@@ -7892,7 +7941,8 @@ void main() {
           uMaterialPalette: new three.Uniform(this.palette),
           uGridColor: new three.Uniform(new three.Color(3353124)),
           uGridWidth: new three.Uniform(0.032),
-          uGridOpacity: new three.Uniform(0.46),
+          uGridOpacity: new three.Uniform(this.style.gridVisible ? 0.46 : 0),
+          uDetailStrength: new three.Uniform(this.style.terrainDetailStrength),
           uSunDirection: lighting.sunDirection,
           uSunRadiance: lighting.sunRadiance,
           uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
@@ -7971,6 +8021,7 @@ void main() {
 in vec3 color;
 
 uniform float uTime;
+uniform float uWindStrength;
 uniform bool uGrass;
 
 out vec3 vWorldNormal;
@@ -7982,7 +8033,8 @@ out float vHeight;
 void main() {
     vec3 localPosition = position;
     if (uGrass) {
-        localPosition.x += sin(uTime * 1.7 + position.y * 4.0) * position.y * 0.035;
+        localPosition.x += sin(uTime * 1.7 + position.y * 4.0)
+            * position.y * 0.035 * uWindStrength;
     }
     vec4 instancePosition = instanceMatrix * vec4(localPosition, 1.0);
     vec4 worldPosition = modelMatrix * instancePosition;
@@ -8243,6 +8295,7 @@ void main() {
       this.floatingOriginX = 0;
       this.floatingOriginZ = 0;
       this.time = 0;
+      this.style = DEFAULT_SURFACE_PRESENTATION_STYLE;
       this.stateValue = "ready";
       if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
         "surfaceTexturePool",
@@ -8334,6 +8387,18 @@ void main() {
       }
       this.time = seconds;
       for (const value of this.materials.values()) value.material.uniforms.uTime.value = seconds;
+    }
+    setStyle(style) {
+      this.assertNotDisposed();
+      const validated = createSurfacePresentationStyle(style);
+      const visibilityChanged = validated.grassVisible !== this.style.grassVisible || validated.treesVisible !== this.style.treesVisible;
+      this.style = validated;
+      for (const value of this.materials.values()) {
+        value.material.uniforms.uWindStrength.value = validated.grassWindStrength;
+      }
+      if (visibilityChanged) {
+        for (const chunk of this.chunks.values()) this.updateInstances(chunk);
+      }
     }
     setFloatingOrigin(worldX, worldZ) {
       this.assertNotDisposed();
@@ -8429,6 +8494,7 @@ void main() {
         fragmentShader: VEGETATION_FRAGMENT_SHADER,
         uniforms: {
           uTime: new three.Uniform(this.time),
+          uWindStrength: new three.Uniform(this.style.grassWindStrength),
           uGrass: new three.Uniform(species === 0 /* Grass */),
           uAlbedo: new three.Uniform(new three.Vector3(...VEGETATION_COLORS[species])),
           uSunDirection: lighting.sunDirection,
@@ -8454,6 +8520,7 @@ void main() {
       for (const value of chunk.species) {
         let outputIndex = 0;
         for (const seedIndex of value.seedIndices) {
+          if (value.species === 0 /* Grass */ ? !this.style.grassVisible : !this.style.treesVisible) continue;
           if (!retainedAtLod(value.species, chunk.seeds.randomKey[seedIndex], chunk.lod)) continue;
           const localU = chunk.seeds.surfaceCoordinates[seedIndex * 2] / SURFACE_VEGETATION_COORDINATE_SCALE;
           const localV = chunk.seeds.surfaceCoordinates[seedIndex * 2 + 1] / SURFACE_VEGETATION_COORDINATE_SCALE;
@@ -8521,6 +8588,8 @@ uniform float uLayer;
 uniform float uHeightScale;
 uniform float uHexSize;
 uniform float uTime;
+uniform float uWaveAmplitude;
+uniform float uWaveSpeed;
 uniform vec2 uChunkSurfacePhase;
 
 out vec2 vSurfaceUv;
@@ -8591,19 +8660,21 @@ void main() {
     ).rgb * 255.0;
     float waterKind = waterClass.g;
     float waterProfile = waterClass.b;
+    float animationTime = uTime * uWaveSpeed;
     vec2 globalSurface = uChunkSurfacePhase + surfaceUv;
     float profilePhase = waterProfile / 255.0;
-    float oceanWave = sin(globalSurface.x * TWO_PI / 64.0 + uTime * 1.1)
-        * cos(globalSurface.y * TWO_PI / 96.0 - uTime * 0.83) * 0.012;
+    float oceanWave = sin(globalSurface.x * TWO_PI / 64.0 + animationTime * 1.1)
+        * cos(globalSurface.y * TWO_PI / 96.0 - animationTime * 0.83) * 0.012;
     float lakeWave = sin((globalSurface.x + globalSurface.y) * TWO_PI / 48.0
-        + uTime * 0.65) * 0.004;
-    float riverX = sin(globalSurface.x * TWO_PI / 32.0 - uTime * sign(flow.x) * 1.8);
-    float riverY = sin(globalSurface.y * TWO_PI / 32.0 - uTime * sign(flow.y) * 1.8);
+        + animationTime * 0.65) * 0.004;
+    float riverX = sin(globalSurface.x * TWO_PI / 32.0 - animationTime * sign(flow.x) * 1.8);
+    float riverY = sin(globalSurface.y * TWO_PI / 32.0 - animationTime * sign(flow.y) * 1.8);
     float flowWeight = max(abs(flow.x) + abs(flow.y), 0.0001);
     float riverWave = (riverX * abs(flow.x) + riverY * abs(flow.y)) / flowWeight * 0.003;
     float wave = waterKind > 2.5 ? oceanWave : waterKind > 1.5 ? lakeWave : riverWave;
     wave *= mix(0.85, 1.15, profilePhase);
     wave *= smoothstep(0.0, 0.12, values.b) * smoothstep(0.02, 0.35, -values.a);
+    wave *= uWaveAmplitude;
     vSurfaceUv = surfaceUv;
     vFlow = flow;
     vDepth = values.b;
@@ -8629,6 +8700,9 @@ uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 uniform float uTime;
+uniform float uWaveAmplitude;
+uniform float uWaveSpeed;
+uniform float uFoamOpacity;
 uniform float uHexSize;
 uniform vec3 uGridColor;
 uniform float uGridWidth;
@@ -8670,6 +8744,7 @@ vec2 surfaceWaterFieldCoordinate(vec2 localSurface) {
 }
 
 void main() {
+    float animationTime = uTime * uWaveSpeed;
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
     if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
@@ -8693,12 +8768,12 @@ void main() {
         : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
     float oceanAmount = step(2.5, waterKind);
     float lakeAmount = step(1.5, waterKind) - oceanAmount;
-    float waveStrength = oceanAmount * 0.15 + lakeAmount * 0.065
-        + (1.0 - oceanAmount - lakeAmount) * 0.04;
-    float waveX = cos(vVisualSurface.x * 0.41 + uTime * 1.35)
-        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - uTime * 0.86);
-    float waveY = sin(vVisualSurface.y * 0.37 - uTime * 1.08)
-        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + uTime * 0.72);
+    float waveStrength = (oceanAmount * 0.15 + lakeAmount * 0.065
+        + (1.0 - oceanAmount - lakeAmount) * 0.04) * uWaveAmplitude;
+    float waveX = cos(vVisualSurface.x * 0.41 + animationTime * 1.35)
+        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - animationTime * 0.86);
+    float waveY = sin(vVisualSurface.y * 0.37 - animationTime * 1.08)
+        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + animationTime * 0.72);
     vec3 flowNormal = normalize(vec3(
         -waveX * waveStrength - vFlow.y * 0.09,
         1.0,
@@ -8710,9 +8785,9 @@ void main() {
     float sunAmount = pow(max(dot(flowNormal, halfDirection), 0.0), 64.0);
     float shoreDepth = max(-vShoreDistance, 0.0);
     float shoreMask = 1.0 - smoothstep(0.035, 0.32, shoreDepth);
-    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, uTime * 0.18));
+    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, animationTime * 0.18));
     float foamBand = smoothstep(0.64, 0.94,
-        sin(shoreDepth * 34.0 - uTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
+        sin(shoreDepth * 34.0 - animationTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
     float foam = shoreMask * max(
         1.0 - smoothstep(0.0, 0.055, shoreDepth),
         foamBand * 0.72
@@ -8724,12 +8799,12 @@ void main() {
         * mix(vec3(0.94, 1.0, 1.04), vec3(1.04, 0.98, 0.92), profileTint);
     float rippleLight = mix(0.9, 1.1, surfaceWaterNoise(
         vec2(vVisualSurface.x + vVisualSurface.y, vVisualSurface.y - vVisualSurface.x)
-            + vec2(uTime * 0.22, -uTime * 0.16)
+            + vec2(animationTime * 0.22, -animationTime * 0.16)
     ));
     vec3 linearColor = bodyColor * (vec3(0.42) + environment * 0.78) * rippleLight
         + uSunRadiance * sunAmount * 0.72
-        + vec3(0.82, 0.92, 0.9) * foam * 0.68;
-    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY));
+        + vec3(0.82, 0.92, 0.9) * foam * 0.68 * uFoamOpacity;
+    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY) * uWaveAmplitude);
     linearColor += vec3(0.12, 0.22, 0.3) * waveCrest * (0.25 + oceanAmount * 0.75);
     linearColor = mix(linearColor, uSkyDiffuseIrradiance * 1.05, fresnel * 0.26);
     float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
@@ -8792,6 +8867,7 @@ void main() {
       this.root = new three.Group();
       this.chunks = /* @__PURE__ */ new Map();
       this.materials = /* @__PURE__ */ new Map();
+      this.style = DEFAULT_SURFACE_PRESENTATION_STYLE;
       this.floatingOriginX = 0;
       this.floatingOriginZ = 0;
       this.time = 0;
@@ -8814,6 +8890,18 @@ void main() {
       this.lighting = options.lighting;
       this.geometryPool = options.geometryPool;
       this.root.name = "surface-water-layer-v2";
+    }
+    setStyle(style) {
+      this.assertNotDisposed();
+      const validated = createSurfacePresentationStyle(style);
+      this.style = validated;
+      for (const page of this.materials.values()) {
+        const uniforms = page.material.uniforms;
+        uniforms.uGridOpacity.value = validated.gridVisible ? 0.52 : 0;
+        uniforms.uWaveAmplitude.value = validated.waterWaveAmplitude;
+        uniforms.uWaveSpeed.value = validated.waterWaveSpeed;
+        uniforms.uFoamOpacity.value = validated.coastalWaveOpacity;
+      }
     }
     mount(chunk, ground) {
       this.assertReady();
@@ -8951,11 +9039,14 @@ void main() {
           uHeightScale: new three.Uniform(this.heightScale),
           uHexSize: new three.Uniform(this.hexSize),
           uTime: new three.Uniform(0),
+          uWaveAmplitude: new three.Uniform(this.style.waterWaveAmplitude),
+          uWaveSpeed: new three.Uniform(this.style.waterWaveSpeed),
+          uFoamOpacity: new three.Uniform(this.style.coastalWaveOpacity),
           uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
           uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
           uGridColor: new three.Uniform(new three.Color(1847602)),
           uGridWidth: new three.Uniform(0.032),
-          uGridOpacity: new three.Uniform(0.52),
+          uGridOpacity: new three.Uniform(this.style.gridVisible ? 0.52 : 0),
           uSunDirection: lighting.sunDirection,
           uSunRadiance: lighting.sunRadiance,
           uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
@@ -9039,6 +9130,7 @@ void main() {
     constructor(options) {
       this.root = new three.Group();
       this.mounts = /* @__PURE__ */ new Map();
+      this.styleValue = DEFAULT_SURFACE_PRESENTATION_STYLE;
       this.stateValue = "ready";
       if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
         "surfaceTexturePool",
@@ -9135,6 +9227,21 @@ void main() {
       this.assertReady();
       this.water.setTime(seconds);
       this.vegetation.setTime(seconds);
+    }
+    setStyle(values) {
+      this.assertNotDisposed();
+      if (!values || typeof values !== "object" || Array.isArray(values)) {
+        throw new TypeError("surface presentation style update is invalid");
+      }
+      const style = createSurfacePresentationStyle({ ...this.styleValue, ...values });
+      this.ground.setStyle(style);
+      this.water.setStyle(style);
+      this.vegetation.setStyle(style);
+      this.styleValue = style;
+      return style;
+    }
+    get style() {
+      return this.styleValue;
     }
     setFloatingOrigin(worldX, worldZ) {
       this.assertNotDisposed();
@@ -12936,6 +13043,162 @@ void main() {
       this.picking.setFloatingOrigin(worldX, worldZ);
     }
   };
+  function asError2(reason) {
+    return reason instanceof Error ? reason : new Error(String(reason));
+  }
+  var SurfaceHexMapInteractionController = class {
+    constructor(options) {
+      this.options = options;
+      this.movementKeys = /* @__PURE__ */ new Set();
+      this.pickGeneration = 0;
+      this.disposed = false;
+      this.onContextMenu = (event) => event.preventDefault();
+      this.onKeyDown = (event) => {
+        if (!this.isMovementKey(event.code)) return;
+        this.movementKeys.add(event.code);
+        event.preventDefault();
+      };
+      this.onKeyUp = (event) => {
+        if (!this.isMovementKey(event.code)) return;
+        this.movementKeys.delete(event.code);
+        event.preventDefault();
+      };
+      this.clearMovementKeys = () => {
+        this.movementKeys.clear();
+      };
+      this.onMouseDown = (event) => {
+        this.options.canvas.focus({ preventScroll: true });
+        this.mouseDownAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : void 0;
+      };
+      this.onPointerMove = (event) => {
+        if (!this.contains(event.clientX, event.clientY)) {
+          this.clearHover();
+          return;
+        }
+        this.pendingHover = { x: event.clientX, y: event.clientY };
+        if (this.hoverFrame !== void 0) return;
+        this.hoverFrame = requestAnimationFrame(() => {
+          this.hoverFrame = void 0;
+          const point = this.pendingHover;
+          this.pendingHover = void 0;
+          if (point) void this.publishHover(point);
+        });
+      };
+      this.onMouseUp = (event) => {
+        if (event.button !== 0) return;
+        const downAt = this.mouseDownAt;
+        this.mouseDownAt = void 0;
+        if (!downAt || Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 4) return;
+        void this.publishClick({ x: event.clientX, y: event.clientY });
+      };
+      if (!options || !(options.canvas instanceof HTMLCanvasElement) || !Number.isFinite(options.hexSize) || options.hexSize <= 0 || !Number.isFinite(options.heightScale) || options.heightScale <= 0) {
+        throw new TypeError("surface interaction options are invalid");
+      }
+      this.addedCanvasTabIndex = !options.canvas.hasAttribute("tabindex");
+      if (this.addedCanvasTabIndex) options.canvas.tabIndex = 0;
+      options.canvas.addEventListener("keydown", this.onKeyDown);
+      options.canvas.addEventListener("keyup", this.onKeyUp);
+      options.canvas.addEventListener("blur", this.clearMovementKeys);
+      options.canvas.addEventListener("mousedown", this.onMouseDown);
+      options.canvas.addEventListener("contextmenu", this.onContextMenu);
+      window.addEventListener("blur", this.clearMovementKeys);
+      window.addEventListener("pointermove", this.onPointerMove);
+      window.addEventListener("mouseup", this.onMouseUp);
+    }
+    update(dtSeconds) {
+      if (this.disposed || dtSeconds <= 0 || this.movementKeys.size === 0) return;
+      const forwardAmount = Number(this.movementKeys.has("KeyW")) - Number(this.movementKeys.has("KeyS"));
+      const rightAmount = Number(this.movementKeys.has("KeyD")) - Number(this.movementKeys.has("KeyA"));
+      if (forwardAmount === 0 && rightAmount === 0) return;
+      const { camera, controls, hexSize } = this.options;
+      const forward = controls.target.clone().sub(camera.position);
+      forward.y = 0;
+      if (forward.lengthSq() < 1e-4) forward.set(0, 0, -1);
+      else forward.normalize();
+      const right = new three.Vector3(-forward.z, 0, forward.x);
+      const movement = forward.multiplyScalar(forwardAmount).addScaledVector(right, rightAmount);
+      if (movement.lengthSq() > 1) movement.normalize();
+      const viewDistance = camera.position.distanceTo(controls.target);
+      const speed = Math.min(hexSize * 120, Math.max(hexSize * 8, viewDistance * 0.9));
+      movement.multiplyScalar(speed * dtSeconds);
+      camera.position.add(movement);
+      controls.target.add(movement);
+    }
+    reset() {
+      this.pickGeneration += 1;
+      this.mouseDownAt = void 0;
+      this.pendingHover = void 0;
+      this.hovered = void 0;
+      this.movementKeys.clear();
+      this.options.pointer.visible = false;
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      const { canvas } = this.options;
+      canvas.removeEventListener("keydown", this.onKeyDown);
+      canvas.removeEventListener("keyup", this.onKeyUp);
+      canvas.removeEventListener("blur", this.clearMovementKeys);
+      canvas.removeEventListener("mousedown", this.onMouseDown);
+      canvas.removeEventListener("contextmenu", this.onContextMenu);
+      window.removeEventListener("blur", this.clearMovementKeys);
+      window.removeEventListener("pointermove", this.onPointerMove);
+      window.removeEventListener("mouseup", this.onMouseUp);
+      if (this.hoverFrame !== void 0) cancelAnimationFrame(this.hoverFrame);
+      if (this.addedCanvasTabIndex && canvas.getAttribute("tabindex") === "0") {
+        canvas.removeAttribute("tabindex");
+      }
+      this.reset();
+    }
+    async publishHover(point) {
+      const generation = ++this.pickGeneration;
+      try {
+        const result = await this.options.pick(point.x, point.y);
+        if (this.disposed || generation !== this.pickGeneration) return;
+        if (!result) {
+          this.clearHover();
+          return;
+        }
+        this.positionPointer(result);
+        if (this.hovered?.x === result.x && this.hovered.y === result.y) return;
+        this.hovered = Object.freeze({ x: result.x, y: result.y });
+        this.options.hover(result);
+      } catch (reason) {
+        if (!this.disposed && generation === this.pickGeneration) this.options.error(asError2(reason));
+      }
+    }
+    async publishClick(point) {
+      try {
+        const result = await this.options.pick(point.x, point.y);
+        if (this.disposed || !result) return;
+        this.positionPointer(result);
+        this.options.click(result);
+      } catch (reason) {
+        if (!this.disposed) this.options.error(asError2(reason));
+      }
+    }
+    positionPointer(result) {
+      const center = surfaceToWorld(result.x, result.y, this.options.hexSize);
+      this.options.pointer.position.set(
+        center.x,
+        result.height * this.options.heightScale + this.options.hexSize * 0.08,
+        center.z
+      );
+      this.options.pointer.visible = true;
+    }
+    clearHover() {
+      this.pickGeneration += 1;
+      this.hovered = void 0;
+      this.options.pointer.visible = false;
+    }
+    contains(clientX, clientY) {
+      const rect = this.options.canvas.getBoundingClientRect();
+      return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    }
+    isMovementKey(code) {
+      return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD";
+    }
+  };
 
   // src/rendering/SurfaceHexMap.ts
   function resolveCanvas(value) {
@@ -12995,6 +13258,7 @@ void main() {
       this.renderedFrames = 0;
       this.demandUpdates = 0;
       this.demandSignature = "";
+      this.lastAnimationTime = performance.now();
       this.stateValue = "ready";
       this.resize = () => {
         const width = Math.max(1, this.canvas.clientWidth || this.canvas.width || 1);
@@ -13014,6 +13278,10 @@ void main() {
       this.animate = () => {
         if (this.stateValue === "disposed") return;
         this.animationFrame = requestAnimationFrame(this.animate);
+        const now = performance.now();
+        const dtSeconds = Math.min(0.1, Math.max(0, (now - this.lastAnimationTime) / 1e3));
+        this.lastAnimationTime = now;
+        this.interaction.update(dtSeconds);
         this.controls.update();
         this.updateDemand();
         if (this.runtimeValue?.session.stats.state === "ready") {
@@ -13028,6 +13296,7 @@ void main() {
       this.heightScale = options.heightScale ?? 80;
       this.backgroundColor = new three.Color(options.backgroundColor ?? 10471906);
       this.skyVisible = options.skyVisible ?? true;
+      this.presentationStyleValue = createSurfacePresentationStyle(options.presentationStyle);
       const maxPixelRatio = options.maxPixelRatio ?? 2;
       assertPositive("hexSize", this.hexSize);
       assertPositive("heightScale", this.heightScale);
@@ -13048,7 +13317,36 @@ void main() {
       this.camera.position.set(18 * this.hexSize, 10.5 * this.hexSize, 20 * this.hexSize);
       this.controls = new OrbitControls(this.camera, this.canvas);
       this.controls.enableDamping = true;
+      this.controls.screenSpacePanning = false;
+      this.controls.minDistance = this.hexSize * 3;
+      this.controls.maxDistance = this.hexSize * 80;
+      this.controls.mouseButtons = { LEFT: null, MIDDLE: three.MOUSE.DOLLY, RIGHT: three.MOUSE.ROTATE };
+      this.controls.touches = { ONE: three.TOUCH.PAN, TWO: three.TOUCH.DOLLY_ROTATE };
       this.controls.target.set(0, 0, 0);
+      this.pointer = new three.Mesh(
+        new three.RingGeometry(this.hexSize * 0.82, this.hexSize * 0.94, 6, 1),
+        new three.MeshBasicMaterial({ color: 15986898, depthTest: true, depthWrite: false })
+      );
+      this.pointer.name = "surface-tile-pointer-v2";
+      this.pointer.rotation.x = -Math.PI / 2;
+      this.pointer.renderOrder = 10;
+      this.pointer.visible = false;
+      this.activeScene.add(this.pointer);
+      this.interaction = new SurfaceHexMapInteractionController({
+        canvas: this.canvas,
+        camera: this.camera,
+        controls: this.controls,
+        pointer: this.pointer,
+        hexSize: this.hexSize,
+        heightScale: this.heightScale,
+        pick: async (clientX, clientY) => {
+          if (this.stateValue !== "ready" || !this.runtimeValue) return void 0;
+          return this.runtimeValue.picking.pickScreen(clientX, clientY, this.canvas, this.camera);
+        },
+        hover: (result) => this.emit("hover", result),
+        click: (result) => this.emit("click", result),
+        error: (error) => this.emit("error", error)
+      });
       this.activeSky = this.configureScene(this.activeScene);
       this.resize();
       if (typeof ResizeObserver !== "undefined") {
@@ -13084,6 +13382,7 @@ void main() {
           heightScale: this.heightScale,
           error: (error) => this.emit("error", error)
         });
+        runtime.presentation.setStyle(this.presentationStyleValue);
         await runtime.session.updateDemand(planWorldRenderDemand({
           descriptor: options.source.descriptor,
           centerX: initial.x,
@@ -13104,6 +13403,8 @@ void main() {
         this.loadOptions = options;
         this.activeScene = scene;
         this.activeSky = sky;
+        this.interaction.reset();
+        scene.add(this.pointer);
         this.demandSignature = "";
         await this.setCameraTargetTile(initial.x, initial.y);
         oldRuntime?.dispose();
@@ -13131,6 +13432,22 @@ void main() {
       this.camera.position.copy(this.controls.target).add(offset);
       this.controls.update();
       this.updateDemand();
+    }
+    setPresentationStyle(values) {
+      this.assertReady();
+      if (!values || typeof values !== "object" || Array.isArray(values)) {
+        throw new TypeError("HexMap presentation style update is invalid");
+      }
+      const style = createSurfacePresentationStyle({ ...this.presentationStyleValue, ...values });
+      this.runtimeValue?.presentation.setStyle(style);
+      this.presentationStyleValue = style;
+      return style;
+    }
+    get presentationStyle() {
+      return this.presentationStyleValue;
+    }
+    getCameraTarget() {
+      return this.controls.target.clone();
     }
     add(object) {
       this.activeScene.add(object);
@@ -13168,11 +13485,14 @@ void main() {
       window.removeEventListener("resize", this.resize);
       this.canvas.removeEventListener("webglcontextlost", this.contextLost);
       this.canvas.removeEventListener("webglcontextrestored", this.contextRestored);
+      this.interaction.dispose();
       this.runtimeValue?.dispose();
       this.runtimeValue = void 0;
       disposeSurfaceSky(this.activeSky);
       this.activeSky = void 0;
       this.controls.dispose();
+      this.pointer.geometry.dispose();
+      this.pointer.material.dispose();
       this.renderer.dispose();
       this.removeAllListeners();
     }
@@ -14100,7 +14420,7 @@ void main() {
   var WORLD_WORKER_PROTOCOL_VERSION = 5;
 
   // src/world/WorldSurfaceWorkerClient.ts
-  function asError2(reason) {
+  function asError3(reason) {
     return reason instanceof Error ? reason : new Error(String(reason));
   }
   function reclaimedBuffers(value, byteLengths) {
@@ -14128,7 +14448,7 @@ void main() {
           this.pending.delete(data.id);
         } catch (reason) {
           this.pending.delete(data.id);
-          pending.reject(asError2(reason));
+          pending.reject(asError3(reason));
         }
       };
       this.handleWorkerError = (event) => {
@@ -14199,7 +14519,7 @@ void main() {
           this.worker.postMessage({ ...message, id }, [...transferables]);
         } catch (reason) {
           this.pending.delete(id);
-          reject(asError2(reason));
+          reject(asError3(reason));
         }
       });
     }
@@ -14977,7 +15297,7 @@ void main() {
     error.name = "AbortError";
     return error;
   }
-  function asError3(reason) {
+  function asError4(reason) {
     return reason instanceof Error ? reason : new Error(String(reason));
   }
   var WorldSurfaceWorkerPool = class {
@@ -15125,9 +15445,9 @@ void main() {
           this.dispatch();
           return;
         } catch (restartReason) {
-          this.rejectTask(task, asError3(restartReason));
+          this.rejectTask(task, asError4(restartReason));
         }
-      } else this.rejectTask(task, asError3(reason));
+      } else this.rejectTask(task, asError4(reason));
       this.dispatch();
     }
     rejectTask(task, error) {
@@ -15145,6 +15465,7 @@ void main() {
   exports.BaseSemanticChunkView = BaseSemanticChunkView;
   exports.CompiledVegetationSpecies = CompiledVegetationSpecies;
   exports.DEFAULT_LIGHTING_STATE = DEFAULT_LIGHTING_STATE;
+  exports.DEFAULT_SURFACE_PRESENTATION_STYLE = DEFAULT_SURFACE_PRESENTATION_STYLE;
   exports.DependencyDrivenRenderGraph = DependencyDrivenRenderGraph;
   exports.EffectiveWorldView = EffectiveWorldView;
   exports.EventEmitter = EventEmitter;
@@ -15294,6 +15615,7 @@ void main() {
   exports.createStableHydrologyId = createStableHydrologyId;
   exports.createSurfaceDependencyBinding = createSurfaceDependencyBinding;
   exports.createSurfaceGroundGeometry = createSurfaceGroundGeometry;
+  exports.createSurfacePresentationStyle = createSurfacePresentationStyle;
   exports.createTransferableEffectiveWindow = createTransferableEffectiveWindow;
   exports.createWorldChangeSet = createWorldChangeSet;
   exports.createWorldDescriptorV2 = createWorldDescriptorV2;

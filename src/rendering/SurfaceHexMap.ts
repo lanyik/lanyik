@@ -1,9 +1,14 @@
 import {
     Color,
     Fog,
+    MOUSE,
+    Mesh,
+    MeshBasicMaterial,
     Object3D,
     PerspectiveCamera,
+    RingGeometry,
     Scene,
+    TOUCH,
     Vector3,
     WebGLRenderer,
     type ColorRepresentation
@@ -24,6 +29,11 @@ import {
     WorldSurfaceRuntime,
     WorldSurfaceRuntimeBudgets
 } from "./WorldSurfaceRuntime";
+import {
+    createSurfacePresentationStyle,
+    type SurfacePresentationStyle
+} from "./SurfacePresentationStyle";
+import { SurfaceHexMapInteractionController } from "./SurfaceHexMapInteractionController";
 
 export interface HexMapOptions {
     readonly element: string | HTMLCanvasElement;
@@ -36,6 +46,7 @@ export interface HexMapOptions {
     readonly farPlane?: number;
     readonly backgroundColor?: ColorRepresentation;
     readonly skyVisible?: boolean;
+    readonly presentationStyle?: Partial<SurfacePresentationStyle>;
 }
 
 export interface WorldLoadOptions {
@@ -121,8 +132,11 @@ export class HexMap extends EventEmitter {
     public readonly heightScale: number;
     private activeScene = new Scene();
     private activeSky: Sky | undefined;
+    private readonly pointer: Mesh<RingGeometry, MeshBasicMaterial>;
+    private readonly interaction: SurfaceHexMapInteractionController;
     private readonly backgroundColor: Color;
     private readonly skyVisible: boolean;
+    private presentationStyleValue: Readonly<SurfacePresentationStyle>;
     private runtimeValue: WorldSurfaceRuntime | undefined;
     private loadOptions: WorldLoadOptions | undefined;
     private resizeObserver: ResizeObserver | undefined;
@@ -131,6 +145,7 @@ export class HexMap extends EventEmitter {
     private renderedFrames = 0;
     private demandUpdates = 0;
     private demandSignature = "";
+    private lastAnimationTime = performance.now();
     private stateValue: "ready" | "loading" | "disposed" = "ready";
 
     constructor(options: HexMapOptions) {
@@ -141,6 +156,7 @@ export class HexMap extends EventEmitter {
         this.heightScale = options.heightScale ?? 80;
         this.backgroundColor = new Color(options.backgroundColor ?? 0x9fc9e2);
         this.skyVisible = options.skyVisible ?? true;
+        this.presentationStyleValue = createSurfacePresentationStyle(options.presentationStyle);
         const maxPixelRatio = options.maxPixelRatio ?? 2;
         assertPositive("hexSize", this.hexSize);
         assertPositive("heightScale", this.heightScale);
@@ -161,7 +177,36 @@ export class HexMap extends EventEmitter {
         this.camera.position.set(18 * this.hexSize, 10.5 * this.hexSize, 20 * this.hexSize);
         this.controls = new OrbitControls(this.camera, this.canvas);
         this.controls.enableDamping = true;
+        this.controls.screenSpacePanning = false;
+        this.controls.minDistance = this.hexSize * 3;
+        this.controls.maxDistance = this.hexSize * 80;
+        this.controls.mouseButtons = { LEFT: null, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
+        this.controls.touches = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE };
         this.controls.target.set(0, 0, 0);
+        this.pointer = new Mesh(
+            new RingGeometry(this.hexSize * 0.82, this.hexSize * 0.94, 6, 1),
+            new MeshBasicMaterial({ color: 0xf3f0d2, depthTest: true, depthWrite: false })
+        );
+        this.pointer.name = "surface-tile-pointer-v2";
+        this.pointer.rotation.x = -Math.PI / 2;
+        this.pointer.renderOrder = 10;
+        this.pointer.visible = false;
+        this.activeScene.add(this.pointer);
+        this.interaction = new SurfaceHexMapInteractionController({
+            canvas: this.canvas,
+            camera: this.camera,
+            controls: this.controls,
+            pointer: this.pointer,
+            hexSize: this.hexSize,
+            heightScale: this.heightScale,
+            pick: async (clientX, clientY) => {
+                if (this.stateValue !== "ready" || !this.runtimeValue) return undefined;
+                return this.runtimeValue.picking.pickScreen(clientX, clientY, this.canvas, this.camera);
+            },
+            hover: result => this.emit("hover", result),
+            click: result => this.emit("click", result),
+            error: error => this.emit("error", error)
+        });
         this.activeSky = this.configureScene(this.activeScene);
         this.resize();
         if (typeof ResizeObserver !== "undefined") {
@@ -198,6 +243,7 @@ export class HexMap extends EventEmitter {
                 heightScale: this.heightScale,
                 error: error => this.emit("error", error)
             });
+            runtime.presentation.setStyle(this.presentationStyleValue);
             await runtime.session.updateDemand(planWorldRenderDemand({
                 descriptor: options.source.descriptor,
                 centerX: initial.x,
@@ -218,6 +264,8 @@ export class HexMap extends EventEmitter {
             this.loadOptions = options;
             this.activeScene = scene;
             this.activeSky = sky;
+            this.interaction.reset();
+            scene.add(this.pointer);
             this.demandSignature = "";
             await this.setCameraTargetTile(initial.x, initial.y);
             oldRuntime?.dispose();
@@ -249,6 +297,20 @@ export class HexMap extends EventEmitter {
         this.updateDemand();
     }
 
+    public setPresentationStyle(values: Partial<SurfacePresentationStyle>): Readonly<SurfacePresentationStyle> {
+        this.assertReady();
+        if (!values || typeof values !== "object" || Array.isArray(values)) {
+            throw new TypeError("HexMap presentation style update is invalid");
+        }
+        const style = createSurfacePresentationStyle({ ...this.presentationStyleValue, ...values });
+        this.runtimeValue?.presentation.setStyle(style);
+        this.presentationStyleValue = style;
+        return style;
+    }
+
+    public get presentationStyle(): Readonly<SurfacePresentationStyle> { return this.presentationStyleValue; }
+    public getCameraTarget(): Vector3 { return this.controls.target.clone(); }
+
     public add(object: Object3D): void { this.activeScene.add(object); }
     public remove(object: Object3D): void { this.activeScene.remove(object); }
     public getScene(): Scene { return this.activeScene; }
@@ -275,11 +337,14 @@ export class HexMap extends EventEmitter {
         window.removeEventListener("resize", this.resize);
         this.canvas.removeEventListener("webglcontextlost", this.contextLost);
         this.canvas.removeEventListener("webglcontextrestored", this.contextRestored);
+        this.interaction.dispose();
         this.runtimeValue?.dispose();
         this.runtimeValue = undefined;
         disposeSurfaceSky(this.activeSky);
         this.activeSky = undefined;
         this.controls.dispose();
+        this.pointer.geometry.dispose();
+        this.pointer.material.dispose();
         this.renderer.dispose();
         this.removeAllListeners();
     }
@@ -305,6 +370,10 @@ export class HexMap extends EventEmitter {
     private readonly animate = (): void => {
         if (this.stateValue === "disposed") return;
         this.animationFrame = requestAnimationFrame(this.animate);
+        const now = performance.now();
+        const dtSeconds = Math.min(0.1, Math.max(0, (now - this.lastAnimationTime) / 1_000));
+        this.lastAnimationTime = now;
+        this.interaction.update(dtSeconds);
         this.controls.update();
         this.updateDemand();
         if (this.runtimeValue?.session.stats.state === "ready") {

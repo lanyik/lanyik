@@ -11,7 +11,9 @@ const copies = [
     ["dist/world-generator.worker.mjs", "public/js/world-generator.worker.mjs"],
     ["dist/world-generator.worker.mjs.map", "public/js/world-generator.worker.mjs.map"],
     ["node_modules/three/build/three.module.js", "public/js/vendor/three.module.js"],
-    ["node_modules/three/build/three.core.js", "public/js/vendor/three.core.js"]
+    ["node_modules/three/build/three.core.js", "public/js/vendor/three.core.js"],
+    ["node_modules/dat.gui/build/dat.gui.module.js", "public/js/vendor/dat.gui.module.js"],
+    ["node_modules/dat.gui/build/dat.gui.css", "public/js/vendor/dat.gui.css"]
 ];
 
 fs.mkdirSync(path.join(root, "public/js/vendor"), { recursive: true });

@@ -25,6 +25,11 @@ import {
     type WaterChunkMount,
     type WaterLayerStats
 } from "./WaterLayer";
+import {
+    createSurfacePresentationStyle,
+    DEFAULT_SURFACE_PRESENTATION_STYLE,
+    type SurfacePresentationStyle
+} from "./SurfacePresentationStyle";
 
 export interface SurfacePresentationLayerOptions {
     readonly surfaceTexturePool: SurfaceTexturePool;
@@ -72,6 +77,7 @@ export class SurfacePresentationLayer {
     public readonly vegetation: VegetationLayer;
     private readonly geometryPool: SurfaceGroundGeometryPool;
     private readonly mounts = new Map<string, PartialSurfacePresentationMount>();
+    private styleValue: Readonly<SurfacePresentationStyle> = DEFAULT_SURFACE_PRESENTATION_STYLE;
     private stateValue: "ready" | "lost" | "disposed" = "ready";
 
     constructor(options: SurfacePresentationLayerOptions) {
@@ -178,6 +184,21 @@ export class SurfacePresentationLayer {
         this.water.setTime(seconds);
         this.vegetation.setTime(seconds);
     }
+
+    public setStyle(values: Partial<SurfacePresentationStyle>): Readonly<SurfacePresentationStyle> {
+        this.assertNotDisposed();
+        if (!values || typeof values !== "object" || Array.isArray(values)) {
+            throw new TypeError("surface presentation style update is invalid");
+        }
+        const style = createSurfacePresentationStyle({ ...this.styleValue, ...values });
+        this.ground.setStyle(style);
+        this.water.setStyle(style);
+        this.vegetation.setStyle(style);
+        this.styleValue = style;
+        return style;
+    }
+
+    public get style(): Readonly<SurfacePresentationStyle> { return this.styleValue; }
 
     public setFloatingOrigin(worldX: number, worldZ: number): void {
         this.assertNotDisposed();

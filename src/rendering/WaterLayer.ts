@@ -45,6 +45,11 @@ import {
     SURFACE_VISUAL_GRID_GLSL,
     SURFACE_VISUAL_PHASE_PERIOD
 } from "./SurfaceVisualShader";
+import {
+    createSurfacePresentationStyle,
+    DEFAULT_SURFACE_PRESENTATION_STYLE,
+    type SurfacePresentationStyle
+} from "./SurfacePresentationStyle";
 
 export interface WaterLayerOptions {
     readonly surfaceTexturePool: SurfaceTexturePool;
@@ -98,6 +103,8 @@ uniform float uLayer;
 uniform float uHeightScale;
 uniform float uHexSize;
 uniform float uTime;
+uniform float uWaveAmplitude;
+uniform float uWaveSpeed;
 uniform vec2 uChunkSurfacePhase;
 
 out vec2 vSurfaceUv;
@@ -168,19 +175,21 @@ void main() {
     ).rgb * 255.0;
     float waterKind = waterClass.g;
     float waterProfile = waterClass.b;
+    float animationTime = uTime * uWaveSpeed;
     vec2 globalSurface = uChunkSurfacePhase + surfaceUv;
     float profilePhase = waterProfile / 255.0;
-    float oceanWave = sin(globalSurface.x * TWO_PI / 64.0 + uTime * 1.1)
-        * cos(globalSurface.y * TWO_PI / 96.0 - uTime * 0.83) * 0.012;
+    float oceanWave = sin(globalSurface.x * TWO_PI / 64.0 + animationTime * 1.1)
+        * cos(globalSurface.y * TWO_PI / 96.0 - animationTime * 0.83) * 0.012;
     float lakeWave = sin((globalSurface.x + globalSurface.y) * TWO_PI / 48.0
-        + uTime * 0.65) * 0.004;
-    float riverX = sin(globalSurface.x * TWO_PI / 32.0 - uTime * sign(flow.x) * 1.8);
-    float riverY = sin(globalSurface.y * TWO_PI / 32.0 - uTime * sign(flow.y) * 1.8);
+        + animationTime * 0.65) * 0.004;
+    float riverX = sin(globalSurface.x * TWO_PI / 32.0 - animationTime * sign(flow.x) * 1.8);
+    float riverY = sin(globalSurface.y * TWO_PI / 32.0 - animationTime * sign(flow.y) * 1.8);
     float flowWeight = max(abs(flow.x) + abs(flow.y), 0.0001);
     float riverWave = (riverX * abs(flow.x) + riverY * abs(flow.y)) / flowWeight * 0.003;
     float wave = waterKind > 2.5 ? oceanWave : waterKind > 1.5 ? lakeWave : riverWave;
     wave *= mix(0.85, 1.15, profilePhase);
     wave *= smoothstep(0.0, 0.12, values.b) * smoothstep(0.02, 0.35, -values.a);
+    wave *= uWaveAmplitude;
     vSurfaceUv = surfaceUv;
     vFlow = flow;
     vDepth = values.b;
@@ -204,6 +213,9 @@ uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
 uniform vec3 uGroundDiffuseIrradiance;
 uniform float uTime;
+uniform float uWaveAmplitude;
+uniform float uWaveSpeed;
+uniform float uFoamOpacity;
 uniform float uHexSize;
 uniform vec3 uGridColor;
 uniform float uGridWidth;
@@ -245,6 +257,7 @@ vec2 surfaceWaterFieldCoordinate(vec2 localSurface) {
 }
 
 void main() {
+    float animationTime = uTime * uWaveSpeed;
     vec2 minimum = uValidBounds.xy - vec2(0.5);
     vec2 maximum = uValidBounds.zw - vec2(0.5);
     if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
@@ -268,12 +281,12 @@ void main() {
         : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
     float oceanAmount = step(2.5, waterKind);
     float lakeAmount = step(1.5, waterKind) - oceanAmount;
-    float waveStrength = oceanAmount * 0.15 + lakeAmount * 0.065
-        + (1.0 - oceanAmount - lakeAmount) * 0.04;
-    float waveX = cos(vVisualSurface.x * 0.41 + uTime * 1.35)
-        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - uTime * 0.86);
-    float waveY = sin(vVisualSurface.y * 0.37 - uTime * 1.08)
-        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + uTime * 0.72);
+    float waveStrength = (oceanAmount * 0.15 + lakeAmount * 0.065
+        + (1.0 - oceanAmount - lakeAmount) * 0.04) * uWaveAmplitude;
+    float waveX = cos(vVisualSurface.x * 0.41 + animationTime * 1.35)
+        + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - animationTime * 0.86);
+    float waveY = sin(vVisualSurface.y * 0.37 - animationTime * 1.08)
+        + 0.5 * sin((vVisualSurface.y - vVisualSurface.x) * 0.81 + animationTime * 0.72);
     vec3 flowNormal = normalize(vec3(
         -waveX * waveStrength - vFlow.y * 0.09,
         1.0,
@@ -285,9 +298,9 @@ void main() {
     float sunAmount = pow(max(dot(flowNormal, halfDirection), 0.0), 64.0);
     float shoreDepth = max(-vShoreDistance, 0.0);
     float shoreMask = 1.0 - smoothstep(0.035, 0.32, shoreDepth);
-    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, uTime * 0.18));
+    float foamNoise = surfaceWaterNoise(vVisualSurface * 2.0 - vec2(0.0, animationTime * 0.18));
     float foamBand = smoothstep(0.64, 0.94,
-        sin(shoreDepth * 34.0 - uTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
+        sin(shoreDepth * 34.0 - animationTime * 2.1 + foamNoise * 2.4) * 0.5 + 0.5);
     float foam = shoreMask * max(
         1.0 - smoothstep(0.0, 0.055, shoreDepth),
         foamBand * 0.72
@@ -299,12 +312,12 @@ void main() {
         * mix(vec3(0.94, 1.0, 1.04), vec3(1.04, 0.98, 0.92), profileTint);
     float rippleLight = mix(0.9, 1.1, surfaceWaterNoise(
         vec2(vVisualSurface.x + vVisualSurface.y, vVisualSurface.y - vVisualSurface.x)
-            + vec2(uTime * 0.22, -uTime * 0.16)
+            + vec2(animationTime * 0.22, -animationTime * 0.16)
     ));
     vec3 linearColor = bodyColor * (vec3(0.42) + environment * 0.78) * rippleLight
         + uSunRadiance * sunAmount * 0.72
-        + vec3(0.82, 0.92, 0.9) * foam * 0.68;
-    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY));
+        + vec3(0.82, 0.92, 0.9) * foam * 0.68 * uFoamOpacity;
+    float waveCrest = smoothstep(0.72, 1.65, abs(waveX + waveY) * uWaveAmplitude);
     linearColor += vec3(0.12, 0.22, 0.3) * waveCrest * (0.25 + oceanAmount * 0.75);
     linearColor = mix(linearColor, uSkyDiffuseIrradiance * 1.05, fresnel * 0.26);
     float grid = surfaceHexGridCoverage(vLogicalWorldXZ / uHexSize, uGridWidth);
@@ -380,6 +393,7 @@ export class WaterLayer {
     private readonly heightScale: number;
     private readonly chunks = new Map<string, MutableWaterChunk>();
     private readonly materials = new Map<number, WaterMaterialPage>();
+    private style: Readonly<SurfacePresentationStyle> = DEFAULT_SURFACE_PRESENTATION_STYLE;
     private floatingOriginX = 0;
     private floatingOriginZ = 0;
     private time = 0;
@@ -408,6 +422,19 @@ export class WaterLayer {
         this.lighting = options.lighting;
         this.geometryPool = options.geometryPool;
         this.root.name = "surface-water-layer-v2";
+    }
+
+    public setStyle(style: Readonly<SurfacePresentationStyle>): void {
+        this.assertNotDisposed();
+        const validated = createSurfacePresentationStyle(style);
+        this.style = validated;
+        for (const page of this.materials.values()) {
+            const uniforms = page.material.uniforms;
+            uniforms.uGridOpacity.value = validated.gridVisible ? 0.52 : 0;
+            uniforms.uWaveAmplitude.value = validated.waterWaveAmplitude;
+            uniforms.uWaveSpeed.value = validated.waterWaveSpeed;
+            uniforms.uFoamOpacity.value = validated.coastalWaveOpacity;
+        }
     }
 
     public mount(chunk: CompiledSurfaceChunk, ground: GroundChunkMount): WaterChunkMount {
@@ -556,11 +583,14 @@ export class WaterLayer {
                 uHeightScale: new Uniform(this.heightScale),
                 uHexSize: new Uniform(this.hexSize),
                 uTime: new Uniform(0),
+                uWaveAmplitude: new Uniform(this.style.waterWaveAmplitude),
+                uWaveSpeed: new Uniform(this.style.waterWaveSpeed),
+                uFoamOpacity: new Uniform(this.style.coastalWaveOpacity),
                 uChunkSurfacePhase: new Uniform(new Vector2()),
                 uValidBounds: new Uniform(new Vector4(0, 0, 16, 16)),
                 uGridColor: new Uniform(new Color(0x1c3132)),
                 uGridWidth: new Uniform(0.032),
-                uGridOpacity: new Uniform(0.52),
+                uGridOpacity: new Uniform(this.style.gridVisible ? 0.52 : 0),
                 uSunDirection: lighting.sunDirection,
                 uSunRadiance: lighting.sunRadiance,
                 uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,

@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- v1 风格的 demo 控制面板、性能监控与操作语义重新接入唯一 v2 runtime；WASD、左键拾取、右键环绕、滚轮缩放，以及网格/地表细节/水波/浪花/植被实时控制均不依赖旧渲染链路。
 - 完整的 surface/render foundation v2：descriptor v2、32×32 typed semantic authority、128×128
   hydrology regions、effective snapshots、revision/token 正确性、CPU surface compiler、分页 GPU fields、
   16×16 三档 LOD 地面、连续水体、稳定植被和统一 lighting。

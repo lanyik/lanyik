@@ -38,6 +38,11 @@ import {
     type LightingUniformBinding
 } from "./LightingState";
 import { SurfaceTexturePool } from "./SurfaceTexturePool";
+import {
+    createSurfacePresentationStyle,
+    DEFAULT_SURFACE_PRESENTATION_STYLE,
+    type SurfacePresentationStyle
+} from "./SurfacePresentationStyle";
 
 export interface VegetationLayerOptions {
     readonly surfaceTexturePool: SurfaceTexturePool;
@@ -96,6 +101,7 @@ const VEGETATION_VERTEX_SHADER = /* glsl */`
 in vec3 color;
 
 uniform float uTime;
+uniform float uWindStrength;
 uniform bool uGrass;
 
 out vec3 vWorldNormal;
@@ -107,7 +113,8 @@ out float vHeight;
 void main() {
     vec3 localPosition = position;
     if (uGrass) {
-        localPosition.x += sin(uTime * 1.7 + position.y * 4.0) * position.y * 0.035;
+        localPosition.x += sin(uTime * 1.7 + position.y * 4.0)
+            * position.y * 0.035 * uWindStrength;
     }
     vec4 instancePosition = instanceMatrix * vec4(localPosition, 1.0);
     vec4 worldPosition = modelMatrix * instancePosition;
@@ -311,6 +318,7 @@ export class VegetationLayer {
     private floatingOriginX = 0;
     private floatingOriginZ = 0;
     private time = 0;
+    private style: Readonly<SurfacePresentationStyle> = DEFAULT_SURFACE_PRESENTATION_STYLE;
     private stateValue: "ready" | "lost" | "disposed" = "ready";
 
     constructor(options: VegetationLayerOptions) {
@@ -411,6 +419,20 @@ export class VegetationLayer {
         }
         this.time = seconds;
         for (const value of this.materials.values()) value.material.uniforms.uTime.value = seconds;
+    }
+
+    public setStyle(style: Readonly<SurfacePresentationStyle>): void {
+        this.assertNotDisposed();
+        const validated = createSurfacePresentationStyle(style);
+        const visibilityChanged = validated.grassVisible !== this.style.grassVisible
+            || validated.treesVisible !== this.style.treesVisible;
+        this.style = validated;
+        for (const value of this.materials.values()) {
+            value.material.uniforms.uWindStrength.value = validated.grassWindStrength;
+        }
+        if (visibilityChanged) {
+            for (const chunk of this.chunks.values()) this.updateInstances(chunk);
+        }
     }
 
     public setFloatingOrigin(worldX: number, worldZ: number): void {
@@ -514,6 +536,7 @@ export class VegetationLayer {
             fragmentShader: VEGETATION_FRAGMENT_SHADER,
             uniforms: {
                 uTime: new Uniform(this.time),
+                uWindStrength: new Uniform(this.style.grassWindStrength),
                 uGrass: new Uniform(species === CompiledVegetationSpecies.Grass),
                 uAlbedo: new Uniform(new Vector3(...VEGETATION_COLORS[species])),
                 uSunDirection: lighting.sunDirection,
@@ -540,6 +563,8 @@ export class VegetationLayer {
         for (const value of chunk.species) {
             let outputIndex = 0;
             for (const seedIndex of value.seedIndices) {
+                if (value.species === CompiledVegetationSpecies.Grass
+                    ? !this.style.grassVisible : !this.style.treesVisible) continue;
                 if (!retainedAtLod(value.species, chunk.seeds.randomKey[seedIndex], chunk.lod)) continue;
                 const localU = chunk.seeds.surfaceCoordinates[seedIndex * 2]
                     / SURFACE_VEGETATION_COORDINATE_SCALE;

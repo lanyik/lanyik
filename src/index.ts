@@ -548,6 +548,11 @@ export type {
     SurfacePresentationLayerStats
 } from "./rendering/SurfacePresentationLayer";
 export {
+    createSurfacePresentationStyle,
+    DEFAULT_SURFACE_PRESENTATION_STYLE
+} from "./rendering/SurfacePresentationStyle";
+export type { SurfacePresentationStyle } from "./rendering/SurfacePresentationStyle";
+export {
     DependencyDrivenRenderGraph,
     WorldRenderDependencyError
 } from "./rendering/DependencyDrivenRenderGraph";

@@ -46,6 +46,11 @@ import {
     SURFACE_VISUAL_GRID_GLSL,
     SURFACE_VISUAL_PHASE_PERIOD
 } from "./SurfaceVisualShader";
+import {
+    createSurfacePresentationStyle,
+    DEFAULT_SURFACE_PRESENTATION_STYLE,
+    type SurfacePresentationStyle
+} from "./SurfacePresentationStyle";
 
 export const SURFACE_GROUND_NORMAL_SAMPLE_OFFSET =
     SURFACE_FIELD_GUTTER_TEXELS / (SURFACE_SAMPLES_PER_TILE_INTERVAL * 2);
@@ -209,6 +214,7 @@ uniform float uHexSize;
 uniform vec3 uGridColor;
 uniform float uGridWidth;
 uniform float uGridOpacity;
+uniform float uDetailStrength;
 uniform vec3 uSunDirection;
 uniform vec3 uSunRadiance;
 uniform vec3 uSkyDiffuseIrradiance;
@@ -311,7 +317,7 @@ void main() {
         + normalizedWeights.g * vec3(1.12, 1.02, 0.84)
         + normalizedWeights.b * vec3(0.91, 0.98, 1.08)
         + normalizedWeights.a * vec3(0.88, 0.90, 0.92);
-    albedo *= materialDetail * climateTint;
+    albedo *= mix(vec3(1.0), materialDetail * climateTint, uDetailStrength);
     float shoreBand = (1.0 - smoothstep(0.04, 0.75, max(vShoreDistance, 0.0)))
         * step(0.0, vShoreDistance);
     albedo = mix(albedo, vec3(0.66, 0.57, 0.36) * mix(0.9, 1.1, fineDetail), shoreBand * 0.34);
@@ -391,6 +397,7 @@ export class GroundLayer {
     private readonly palette: readonly Color[];
     private readonly chunks = new Map<string, MutableGroundChunk>();
     private readonly materials = new Map<number, GroundMaterialPage>();
+    private style: Readonly<SurfacePresentationStyle> = DEFAULT_SURFACE_PRESENTATION_STYLE;
     private floatingOriginX = 0;
     private floatingOriginZ = 0;
     private stateValue: "ready" | "lost" | "disposed" = "ready";
@@ -441,6 +448,16 @@ export class GroundLayer {
     }
 
     public get state(): "ready" | "lost" | "disposed" { return this.stateValue; }
+
+    public setStyle(style: Readonly<SurfacePresentationStyle>): void {
+        this.assertNotDisposed();
+        const validated = createSurfacePresentationStyle(style);
+        this.style = validated;
+        for (const page of this.materials.values()) {
+            page.material.uniforms.uGridOpacity.value = validated.gridVisible ? 0.46 : 0;
+            page.material.uniforms.uDetailStrength.value = validated.terrainDetailStrength;
+        }
+    }
 
     public mount(lease: ResidentSurfaceLease, lod: WorldChunkLod): GroundChunkMount {
         this.assertReady();
@@ -625,7 +642,8 @@ export class GroundLayer {
                 uMaterialPalette: new Uniform(this.palette),
                 uGridColor: new Uniform(new Color(0x332a24)),
                 uGridWidth: new Uniform(0.032),
-                uGridOpacity: new Uniform(0.46),
+                uGridOpacity: new Uniform(this.style.gridVisible ? 0.46 : 0),
+                uDetailStrength: new Uniform(this.style.terrainDetailStrength),
                 uSunDirection: lighting.sunDirection,
                 uSunRadiance: lighting.sunRadiance,
                 uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,

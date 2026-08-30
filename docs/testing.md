@@ -5,7 +5,7 @@
 | 层级 | 覆盖 |
 |---|---|
 | 单元/契约 | 格式 golden、负坐标、排水终止、CAS、事务策略、dependency key、stale token、预算、逆序释放 |
-| 浏览器 E2E | 真实 module Worker transfer/crash replacement、WebGL2 field upload、逐 draw layer、Ground/Water/Vegetation、context restore、唯一生产 demo |
+| 浏览器 E2E | 真实 module Worker transfer/crash replacement、WebGL2 field upload、逐 draw layer、Ground/Water/Vegetation、context restore、唯一生产 demo，以及 v1 操作壳到 v2 runtime 的面板/拾取/WASD/右键环绕映射 |
 | Soak | 重复原子替换世界，检查 demand、CPU/GPU budget、WebGL 资源和 JS heap |
 | Benchmark | 49 个语义块、16-region 水文、effective snapshot、20×20 window、66×66 compile/upload、1/9/49 presentation、delta CAS、模拟 tick |
 | 视觉图库 | 固定 compiled lake/shore/vegetation 的 near/middle/far 截图，以及至少 4 个相邻 chunk、混合 LOD 的地面/水面接缝隔离图 |

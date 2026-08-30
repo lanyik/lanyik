@@ -81,6 +81,7 @@
     "@rollup/plugin-commonjs": "^29.0.3",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/three": "^0.185.0",
+    "dat.gui": "^0.7.9",
     "fake-indexeddb": "^6.2.5",
     "http-server": "^14.1.1",
     "rollup": "^4.62.2",

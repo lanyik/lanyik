@@ -227,6 +227,8 @@ Ground -> Water -> Vegetation -> dynamic fog
 
 公开 `HexMap` 构造 WebGL2 renderer、camera 和 controls。`loadWorld()` 在新 Scene 中创建完整 `WorldSurfaceRuntime`，等待初始精确 demand 挂载后才替换 active Scene；过期 load 会释放自己的 runtime，不能覆盖较新的世界。
 
+浏览器操作保持既有编辑器习惯：WASD 沿相机水平朝向平移，左键只做选择，右键拖拽环绕，滚轮缩放；hover/click 都通过 `SurfacePickingService` 查询当前 effective revision，并用异步 generation 拒绝过期 hover。`SurfacePresentationStyle` 是唯一实时视觉调参入口，网格、地表细节、水波、浪花和植被可见性/风力只更新已驻留材质或稳定实例，不回写 authority，也不触发第二条渲染路径。
+
 一个 runtime 唯一拥有：source、store/editor、repository、compiler、query、picking、texture pools、lighting、presentation 和 render session。dispose 按依赖顺序清空 Scene 与 GPU/CPU 资源。WebGL context lost 时停止 session time 更新和需求发布；restore 后从当前 CPU backing 恢复 texture/fog/geometry，不创建旧渲染器。
 
 ## 13. 确定性失败边界

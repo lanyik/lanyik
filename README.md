@@ -68,6 +68,8 @@ await map.loadWorld({
 
 `HexMap.loadWorld()` replaces a complete render session atomically. The source, effective delta snapshot, compiler requests, CPU leases, GPU slots, render layers, queries, and picking service all use the same descriptor and exact revision.
 
+The bundled demo keeps the established v1 operator shell: the right-side `dat.GUI` control panel, top-left performance monitor, WASD camera translation, left-click selection, right-drag orbit, and wheel zoom. Those controls are adapters over the single v2 runtime; they do not restore the removed renderer or world-source path. Live presentation controls are applied through `map.setPresentationStyle()`, which updates ground/water shader uniforms and deterministic vegetation instances without recompiling authority data.
+
 The Worker file is a package export, but its final public URL is application/bundler-specific. Deploy that export as a separate module asset; do not inline it into the main-thread bundle.
 
 ## Editing and saves
