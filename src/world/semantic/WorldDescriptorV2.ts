@@ -7,7 +7,10 @@ import {
 } from "./WorldSemanticCatalog";
 import {
     HYDROLOGY_REGION_FORMAT_VERSION,
+    HYDROLOGY_REGION_SIZE,
+    assertHydrologyRegionKey,
     assertSemanticChunkKey,
+    HydrologyRegionKey,
     positiveIntegerModulo,
     SemanticChunkKey,
     WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
@@ -301,5 +304,27 @@ export function canonicalizeSemanticChunkKey(
         chunkY: positiveIntegerModulo(key.chunkY, chunksY)
     };
     assertSemanticChunkKey(canonical);
+    return canonical;
+}
+
+export function canonicalizeHydrologyRegionKey(
+    descriptor: WorldDescriptorV2,
+    key: HydrologyRegionKey
+): HydrologyRegionKey {
+    assertWorldDescriptorV2(descriptor);
+    if (!Number.isSafeInteger(key?.regionX) || !Number.isSafeInteger(key?.regionY)) {
+        throw new RangeError("hydrology region key must use safe integer coordinates");
+    }
+    if (descriptor.topology !== "toroidal") {
+        assertHydrologyRegionKey(key);
+        return { regionX: key.regionX, regionY: key.regionY };
+    }
+    const regionsX = Math.ceil(descriptor.width / HYDROLOGY_REGION_SIZE);
+    const regionsY = Math.ceil(descriptor.height / HYDROLOGY_REGION_SIZE);
+    const canonical = {
+        regionX: positiveIntegerModulo(key.regionX, regionsX),
+        regionY: positiveIntegerModulo(key.regionY, regionsY)
+    };
+    assertHydrologyRegionKey(canonical);
     return canonical;
 }

@@ -5,6 +5,10 @@ import {
     SparseWorldChunkStore,
     BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
     createWorldDescriptorV2,
+    deriveHydrologyRaster,
+    HydrologyRegionGenerator,
+    HydrologyRegionSpatialIndex,
+    hydrologyRegionVectorBytes,
     createWorldVegetationMapSnapshot,
     generateWorldChunk,
     generateBaseSemanticChunk,
@@ -107,6 +111,38 @@ function benchmarkSemanticChunkGeneration() {
         chunks,
         payloadBytes: chunks * BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
         checksum
+    };
+}
+
+function benchmarkHydrologyRegions() {
+    const descriptor = createWorldDescriptorV2({ seed: "hydrology-order" });
+    const generator = new HydrologyRegionGenerator(descriptor);
+    const regions = [];
+    const started = performance.now();
+    for (let regionX = 0; regionX < 4; regionX += 1) {
+        for (let regionY = 0; regionY < 4; regionY += 1) {
+            regions.push(generator.generate({ regionX, regionY }));
+        }
+    }
+    const generationMs = performance.now() - started;
+    const queryRegion = regions.reduce((best, region) => region.rivers.length > best.rivers.length ? region : best);
+    const spatialIndex = new HydrologyRegionSpatialIndex(queryRegion);
+    const rasterStarted = performance.now();
+    const raster = deriveHydrologyRaster(queryRegion, {
+        macroHeight: new Uint16Array(128 * 128).fill(65_535),
+        spatialIndex
+    });
+    const rasterMs = performance.now() - rasterStarted;
+    return {
+        operation: "one 512x512 infinite drainage basin -> 16 regions + one 128x128 derived raster",
+        generationMs: round(generationMs),
+        rasterMs: round(rasterMs),
+        regions: regions.length,
+        rivers: regions.reduce((sum, region) => sum + region.rivers.length, 0),
+        ports: regions.reduce((sum, region) => sum + region.boundaryPorts.length, 0),
+        vectorBytes: regions.reduce((sum, region) => sum + hydrologyRegionVectorBytes(region), 0),
+        spatialIndexBytes: spatialIndex.byteLength,
+        wetTiles: raster.kind.reduce((sum, kind) => sum + (kind === 0 ? 0 : 1), 0)
     };
 }
 
@@ -307,6 +343,7 @@ const results = {
     sparseStore: benchmarkSparseStore(),
     toroidalWindow: benchmarkToroidalWindow(),
     semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
+    hydrologyRegions: benchmarkHydrologyRegions(),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -334,6 +371,8 @@ if (process.argv.includes("--check")) {
     under("sparseStore.residentPayloadBytes", results.sparseStore.residentPayloadBytes, 16 * 1024 * 1024);
     under("toroidalWindow.durationMs", results.toroidalWindow.durationMs, 750);
     under("semanticChunkGeneration.durationMs", results.semanticChunkGeneration.durationMs, 1_500);
+    under("hydrologyRegions.generationMs", results.hydrologyRegions.generationMs, 1_500);
+    under("hydrologyRegions.rasterMs", results.hydrologyRegions.rasterMs, 750);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

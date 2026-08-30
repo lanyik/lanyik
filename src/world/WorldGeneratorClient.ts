@@ -21,7 +21,12 @@ import { BaseSemanticChunkGenerationOptions } from "./semantic/generateBaseSeman
 import {
     WORLD_SURFACE_V2_GENERATOR_VERSION
 } from "./semantic/WorldSemanticFormat";
-import { canonicalizeSemanticChunkKey } from "./semantic/WorldDescriptorV2";
+import {
+    canonicalizeHydrologyRegionKey,
+    canonicalizeSemanticChunkKey
+} from "./semantic/WorldDescriptorV2";
+import { assertHydrologyRegion, HydrologyRegion } from "./semantic/HydrologyRegion";
+import { HydrologyRegionGenerationOptions } from "./semantic/generateHydrologyRegion";
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -31,6 +36,7 @@ interface WorkerSuccessMessage {
     chunk?: PackedWorldChunk;
     vegetation?: WorldVegetationLayout;
     semanticChunk?: BaseSemanticChunk;
+    hydrologyRegion?: HydrologyRegion;
 }
 
 interface WorkerFailureMessage {
@@ -43,12 +49,13 @@ interface WorkerFailureMessage {
 type WorkerResponse = WorkerSuccessMessage | WorkerFailureMessage;
 
 interface PendingRequest {
-    kind: "world" | "chunk" | "vegetation" | "semantic-chunk";
-    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | BaseSemanticChunk): void;
+    kind: "world" | "chunk" | "vegetation" | "semantic-chunk" | "hydrology-region";
+    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | BaseSemanticChunk | HydrologyRegion): void;
     reject(error: Error): void;
     expectedGeneratorVersion: number;
     expectedChunk?: { chunkX: number; chunkY: number; chunkSize: number };
     expectedSemanticChunk?: { chunkX: number; chunkY: number };
+    expectedHydrologyRegion?: { regionX: number; regionY: number };
 }
 
 //Small lifecycle-safe client for the dedicated world generator worker. The
@@ -173,6 +180,33 @@ export class WorldGeneratorClient {
         });
     }
 
+    public generateHydrologyRegion(options: HydrologyRegionGenerationOptions): Promise<HydrologyRegion> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        const expectedKey = canonicalizeHydrologyRegionKey(options.descriptor, options.key);
+        const id = this.nextRequestId++;
+        return new Promise<HydrologyRegion>((resolve, reject) => {
+            this.pending.set(id, {
+                kind: "hydrology-region",
+                resolve: value => resolve(value as HydrologyRegion),
+                reject,
+                expectedGeneratorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                expectedHydrologyRegion: expectedKey
+            });
+            try {
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                    id,
+                    type: "generateHydrologyRegion",
+                    options
+                });
+            } catch (reason) {
+                this.pending.delete(id);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -191,7 +225,7 @@ export class WorldGeneratorClient {
             || !Number.isSafeInteger(data.generatorVersion)
             || typeof data.id !== "number"
             || (!("world" in data) && !("chunk" in data) && !("vegetation" in data)
-                && !("semanticChunk" in data) && !("error" in data))) {
+                && !("semanticChunk" in data) && !("hydrologyRegion" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));
             return;
         }
@@ -238,6 +272,20 @@ export class WorldGeneratorClient {
                     throw new TypeError("World generation worker returned a semantic chunk for the wrong request");
                 }
                 request.resolve(data.semanticChunk);
+            } catch (reason) {
+                request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+            return;
+        }
+        if (request.kind === "hydrology-region" && "hydrologyRegion" in data && data.hydrologyRegion) {
+            try {
+                assertHydrologyRegion(data.hydrologyRegion);
+                if (!request.expectedHydrologyRegion
+                    || data.hydrologyRegion.key.regionX !== request.expectedHydrologyRegion.regionX
+                    || data.hydrologyRegion.key.regionY !== request.expectedHydrologyRegion.regionY) {
+                    throw new TypeError("World generation worker returned a hydrology region for the wrong request");
+                }
+                request.resolve(data.hydrologyRegion);
             } catch (reason) {
                 request.reject(reason instanceof Error ? reason : new Error(String(reason)));
             }

@@ -9,10 +9,13 @@ import {
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 import { BaseSemanticChunk } from "./semantic/BaseSemanticChunk";
 import { BaseSemanticChunkGenerationOptions } from "./semantic/generateBaseSemanticChunk";
+import { HydrologyRegion } from "./semantic/HydrologyRegion";
+import { HydrologyRegionGenerationOptions } from "./semantic/generateHydrologyRegion";
 
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
     generateSemanticChunk?(options: BaseSemanticChunkGenerationOptions): Promise<BaseSemanticChunk>;
+    generateHydrologyRegion?(options: HydrologyRegionGenerationOptions): Promise<HydrologyRegion>;
     generateVegetation?(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout>;
     dispose(): void;
     readonly isDisposed?: boolean;
@@ -47,12 +50,15 @@ export interface WorldGeneratorPoolStats {
     completed: number;
     queuedChunks: number;
     queuedSemanticChunks: number;
+    queuedHydrologyRegions: number;
     queuedVegetation: number;
     busyChunkWorkers: number;
     busySemanticChunkWorkers: number;
+    busyHydrologyRegionWorkers: number;
     busyVegetationWorkers: number;
     averageChunkMs: number;
     averageSemanticChunkMs: number;
+    averageHydrologyRegionMs: number;
     averageVegetationMs: number;
     queuedWeight: number;
     oldestQueuedMs: number;
@@ -63,11 +69,12 @@ export interface WorldGeneratorPoolStats {
 }
 
 interface QueuedTask {
-    kind: "chunk" | "semantic-chunk" | "vegetation";
+    kind: "chunk" | "semantic-chunk" | "hydrology-region" | "vegetation";
     queueId?: number;
-    options: WorldChunkGenerationOptions | BaseSemanticChunkGenerationOptions | WorldVegetationGenerationOptions;
+    options: WorldChunkGenerationOptions | BaseSemanticChunkGenerationOptions
+        | HydrologyRegionGenerationOptions | WorldVegetationGenerationOptions;
     signal?: AbortSignal;
-    resolve(result: PackedWorldChunk | BaseSemanticChunk | WorldVegetationLayout): void;
+    resolve(result: PackedWorldChunk | BaseSemanticChunk | HydrologyRegion | WorldVegetationLayout): void;
     reject(error: Error): void;
     abort?: () => void;
     settled: boolean;
@@ -106,6 +113,7 @@ export class WorldGeneratorPool {
     private desiredSize: number;
     private averageChunkMs = 0;
     private averageSemanticChunkMs = 0;
+    private averageHydrologyRegionMs = 0;
     private averageVegetationMs = 0;
     private workerFailures = 0;
     private clientFactoryFailures = 0;
@@ -264,6 +272,42 @@ export class WorldGeneratorPool {
         });
     }
 
+    public generateHydrologyRegion(
+        options: HydrologyRegionGenerationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<HydrologyRegion> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        return new Promise<HydrologyRegion>((resolve, reject) => {
+            const task: QueuedTask = {
+                kind: "hydrology-region",
+                options,
+                signal: request.signal,
+                resolve: result => resolve(result as HydrologyRegion),
+                reject,
+                settled: false
+            };
+            if (request.signal) {
+                task.abort = () => {
+                    if (task.settled) return;
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
+                };
+                request.signal.addEventListener("abort", task.abort, { once: true });
+            }
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "visible",
+                weight: request.weight ?? 2,
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError("Hydrology region request was shed")));
+            }
+            this.dispatch();
+        });
+    }
+
     public get stats(): Readonly<WorldGeneratorPoolStats> {
         const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
         const queueStats = this.queue.stats;
@@ -275,13 +319,17 @@ export class WorldGeneratorPool {
             completed: this.completed,
             queuedChunks: queued.filter(task => task.kind === "chunk").length,
             queuedSemanticChunks: queued.filter(task => task.kind === "semantic-chunk").length,
+            queuedHydrologyRegions: queued.filter(task => task.kind === "hydrology-region").length,
             queuedVegetation: queued.filter(task => task.kind === "vegetation").length,
             busyChunkWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "chunk").length,
             busySemanticChunkWorkers: this.slots.filter(slot =>
                 slot.busy && slot.taskKind === "semantic-chunk").length,
+            busyHydrologyRegionWorkers: this.slots.filter(slot =>
+                slot.busy && slot.taskKind === "hydrology-region").length,
             busyVegetationWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "vegetation").length,
             averageChunkMs: this.averageChunkMs,
             averageSemanticChunkMs: this.averageSemanticChunkMs,
+            averageHydrologyRegionMs: this.averageHydrologyRegionMs,
             averageVegetationMs: this.averageVegetationMs,
             queuedWeight: queueStats.pendingWeight,
             oldestQueuedMs: queueStats.oldestTaskAgeMs,
@@ -342,7 +390,7 @@ export class WorldGeneratorPool {
             // A custom client is allowed to fail synchronously. Preserve the
             // existing immediate dispatch contract, but normalize a throw to
             // a rejected promise so slot cleanup always runs.
-            let pending: Promise<PackedWorldChunk | BaseSemanticChunk | WorldVegetationLayout>;
+            let pending: Promise<PackedWorldChunk | BaseSemanticChunk | HydrologyRegion | WorldVegetationLayout>;
             try {
                 pending = task.kind === "chunk"
                     ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
@@ -350,9 +398,13 @@ export class WorldGeneratorPool {
                         ? slot.client.generateSemanticChunk
                             ? slot.client.generateSemanticChunk(task.options as BaseSemanticChunkGenerationOptions)
                             : Promise.reject(new Error("World generation client does not support semantic chunk tasks"))
-                        : slot.client.generateVegetation
-                            ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
-                            : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+                        : task.kind === "hydrology-region"
+                            ? slot.client.generateHydrologyRegion
+                                ? slot.client.generateHydrologyRegion(task.options as HydrologyRegionGenerationOptions)
+                                : Promise.reject(new Error("World generation client does not support hydrology region tasks"))
+                            : slot.client.generateVegetation
+                                ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
+                                : Promise.reject(new Error("World generation client does not support vegetation tasks"));
             } catch (reason) {
                 pending = Promise.reject(reason);
             }
@@ -404,6 +456,9 @@ export class WorldGeneratorPool {
         } else if (kind === "semantic-chunk") {
             this.averageSemanticChunkMs = this.averageSemanticChunkMs === 0
                 ? durationMs : this.averageSemanticChunkMs + (durationMs - this.averageSemanticChunkMs) * alpha;
+        } else if (kind === "hydrology-region") {
+            this.averageHydrologyRegionMs = this.averageHydrologyRegionMs === 0
+                ? durationMs : this.averageHydrologyRegionMs + (durationMs - this.averageHydrologyRegionMs) * alpha;
         } else {
             this.averageVegetationMs = this.averageVegetationMs === 0
                 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;

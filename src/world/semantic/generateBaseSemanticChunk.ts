@@ -42,7 +42,7 @@ function quantizeUint8(value: number): number {
     return Math.floor(clampUnit(value) * 255 + 0.5);
 }
 
-function quantizeUint16(value: number): number {
+export function quantizeMacroHeight(value: number): number {
     return Math.floor(clampUnit(value) * 65535 + 0.5);
 }
 
@@ -195,7 +195,7 @@ export function generateBaseSemanticChunkWithResolver(
             // Generator v6 freezes normalized landform elevation as the shared
             // macro surface. Values outside the normalized domain saturate at
             // the format boundary before any consumer observes them.
-            macroHeight[index] = quantizeUint16(sample.landform.elevation);
+            macroHeight[index] = quantizeMacroHeight(sample.landform.elevation);
             const biomeOffset = index * 4;
             biomeWeights[biomeOffset] = weights[0];
             biomeWeights[biomeOffset + 1] = weights[1];

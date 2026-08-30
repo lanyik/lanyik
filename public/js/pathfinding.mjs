@@ -2180,11 +2180,21 @@ var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
 // src/world/semantic/WorldSemanticFormat.ts
 var WORLD_SEMANTIC_CHUNK_SIZE = 32;
 var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
+var HYDROLOGY_REGION_SIZE = 128;
+var HYDROLOGY_MACRO_CELL_SIZE = 16;
+var HYDROLOGY_INFINITE_BASIN_SIZE = 512;
+var HYDROLOGY_MACRO_CELLS_PER_INFINITE_BASIN = HYDROLOGY_INFINITE_BASIN_SIZE / HYDROLOGY_MACRO_CELL_SIZE;
 var FULL_SEMANTIC_CHUNK_BOUNDS = Object.freeze({
   minX: 0,
   minY: 0,
   maxXExclusive: WORLD_SEMANTIC_CHUNK_SIZE,
   maxYExclusive: WORLD_SEMANTIC_CHUNK_SIZE
+});
+var FULL_HYDROLOGY_REGION_BOUNDS = Object.freeze({
+  minX: 0,
+  minY: 0,
+  maxXExclusive: HYDROLOGY_REGION_SIZE,
+  maxYExclusive: HYDROLOGY_REGION_SIZE
 });
 
 // src/world/semantic/BaseSemanticChunk.ts
@@ -2199,6 +2209,18 @@ var VEGETATION_DENSITY_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
 var VEGETATION_PROFILE_BYTES = WORLD_SEMANTIC_CHUNK_TILE_COUNT;
 var BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = SUBSTRATE_BYTES + MACRO_HEIGHT_BYTES + BIOME_WEIGHT_BYTES + CLIMATE_BYTES + VEGETATION_DENSITY_BYTES + VEGETATION_PROFILE_BYTES;
 var BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = SERIALIZED_HEADER_BYTES + BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
+
+// src/world/semantic/generateBaseSemanticChunk.ts
+function clampUnit(value) {
+  if (!Number.isFinite(value)) throw new RangeError("semantic generator received a non-finite normalized value");
+  return Math.max(0, Math.min(1, value));
+}
+function quantizeMacroHeight(value) {
+  return Math.floor(clampUnit(value) * 65535 + 0.5);
+}
+
+// src/world/semantic/MacroDrainageGraph.ts
+var HYDROLOGY_SEA_LEVEL = quantizeMacroHeight(LANDFORM_SEA_LEVEL);
 
 // src/world/WorldSource.ts
 function assertWorldSource(source) {

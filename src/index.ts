@@ -112,6 +112,7 @@ export {
     serializeWorldDescriptorV2,
     worldDescriptorsV2Equal,
     canonicalizeSemanticChunkKey,
+    canonicalizeHydrologyRegionKey,
     WORLD_DESCRIPTOR_V2_FORMAT_VERSION
 } from "./world/semantic/WorldDescriptorV2";
 export type {
@@ -145,19 +146,32 @@ export {
     WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
     WORLD_SURFACE_V2_GENERATOR_VERSION,
     HYDROLOGY_REGION_FORMAT_VERSION,
+    HYDROLOGY_REGION_SIZE,
+    HYDROLOGY_REGION_REVISION,
+    HYDROLOGY_COORDINATE_SCALE,
+    HYDROLOGY_MACRO_CELL_SIZE,
+    HYDROLOGY_INFINITE_BASIN_SIZE,
+    HYDROLOGY_MACRO_CELLS_PER_INFINITE_BASIN,
     BASE_SEMANTIC_CHUNK_REVISION,
     FULL_SEMANTIC_CHUNK_BOUNDS,
+    FULL_HYDROLOGY_REGION_BOUNDS,
     assertSemanticChunkKey,
     assertLocalTileBounds,
+    assertHydrologyRegionKey,
+    assertHydrologyRegionLocalBounds,
     semanticChunkCoordinate,
+    hydrologyRegionCoordinate,
     semanticChunkLocalIndex,
     locateSemanticTile,
-    semanticChunkOrigin
+    semanticChunkOrigin,
+    hydrologyRegionOrigin
 } from "./world/semantic/WorldSemanticFormat";
 export type {
     SemanticChunkKey,
     SemanticChunkLocation,
-    LocalTileBounds
+    LocalTileBounds,
+    HydrologyRegionKey,
+    HydrologyRegionLocalBounds
 } from "./world/semantic/WorldSemanticFormat";
 export {
     BaseSemanticChunkView,
@@ -175,8 +189,82 @@ export type {
 export {
     createSemanticChunkSurfaceResolver,
     generateBaseSemanticChunk,
-    generateBaseSemanticChunkWithResolver
+    generateBaseSemanticChunkWithResolver,
+    quantizeMacroHeight
 } from "./world/semantic/generateBaseSemanticChunk";
+export {
+    OCEAN_BODY_ID,
+    HYDROLOGY_SEA_LEVEL,
+    HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS,
+    HYDROLOGY_MAX_DISCHARGE_CLASS,
+    HYDROLOGY_MAX_MACRO_NODES,
+    createStableHydrologyId,
+    createProceduralMacroHeightSource,
+    buildMacroDrainageGraph,
+    assertMacroDrainageGraph
+} from "./world/semantic/MacroDrainageGraph";
+export type {
+    HydrologyBodyId,
+    HydrologyFeatureId,
+    HydrologyNodeId,
+    HydrologyEdgeId,
+    InfiniteDrainageBasinKey,
+    MacroHeightSource,
+    MacroDrainageTerminal,
+    MacroDrainageNode,
+    MacroDrainageEdge,
+    MacroDrainageGraph,
+    BuildMacroDrainageGraphOptions
+} from "./world/semantic/MacroDrainageGraph";
+export {
+    HYDROLOGY_MAX_REGION_RIVERS,
+    HYDROLOGY_MAX_REGION_PORTS,
+    HYDROLOGY_MAX_REGION_LAKES,
+    HYDROLOGY_MAX_REGION_MOUTHS,
+    HYDROLOGY_MAX_REGION_BODIES,
+    HYDROLOGY_MAX_REGION_CONTROL_POINTS,
+    assertHydrologyRegion,
+    assertMatchingHydrologyPorts,
+    hydrologyRegionTransferables,
+    hydrologyRegionVectorBytes
+} from "./world/semantic/HydrologyRegion";
+export type {
+    HydrologySegmentId,
+    HydrologyPortId,
+    HydrologyConnectionId,
+    RiverEndpoint,
+    HydrologyPort,
+    RiverFeatureSegment,
+    LakeFeature,
+    RiverMouthFeature,
+    HydrologyBodyRef,
+    HydrologyRegion
+} from "./world/semantic/HydrologyRegion";
+export {
+    HydrologyRegionGenerator,
+    generateHydrologyRegion
+} from "./world/semantic/generateHydrologyRegion";
+export type {
+    HydrologyRegionGenerationOptions,
+    HydrologyRegionGeneratorOptions
+} from "./world/semantic/generateHydrologyRegion";
+export {
+    HYDROLOGY_SPATIAL_BIN_SIZE,
+    HydrologyRegionSpatialIndex
+} from "./world/semantic/HydrologySpatialIndex";
+export type {
+    HydrologyIndexedFeature,
+    HydrologyQueryBounds
+} from "./world/semantic/HydrologySpatialIndex";
+export {
+    HydrologyWaterKind,
+    deriveHydrologyRaster,
+    derivedHydrologyRasterTransferables
+} from "./world/semantic/DerivedHydrologyRaster";
+export type {
+    DerivedHydrologyRaster,
+    DerivedHydrologyRasterOptions
+} from "./world/semantic/DerivedHydrologyRaster";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";

@@ -13,7 +13,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
 | World-style generation v1 | Frozen on 2026-08-29; generator v5, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| Surface/render foundation v2 | Stage A pure semantic data format and Worker task implemented; stages B–H and the production cutover remain | [surface-render-foundation-v2.md](./surface-render-foundation-v2.md) |
+| Surface/render foundation v2 | Stages A–B semantic and hydrology authority implemented; stages C–H and the production cutover remain | [surface-render-foundation-v2.md](./surface-render-foundation-v2.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 
 ## Architecture and contracts
@@ -56,9 +56,10 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 - [Surface/render foundation v2](./surface-render-foundation-v2.md): staged
   32/128 authority formats, versioned 16/4 surface compile profile, global
   drainage graph, semantic chunks, compiled fields, merged terrain and
-  replacement stages. Stage A implements the v2 descriptor, 32x32 semantic
-  SoA format, deterministic quantization and Worker generation; production
-  rendering remains on v1 until the later one-way cutover.
+  replacement stages. Stages A–B implement the v2 descriptor, 32x32 semantic
+  SoA, deterministic macro drainage, 128x128 vector hydrology regions, derived
+  raster queries and Worker generation; production rendering remains on v1
+  until the later one-way cutover.
 
 When updating documentation, keep current behavior in the README or the owning
 architecture document, release deltas in the changelog, and future work in an

@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**阶段 A 已完成，阶段 B–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。阶段 A 的 v2 纯数据格式和 Worker 任务已可独立使用与验收，但尚未接入生产渲染热路径。
+状态：**阶段 A、B 已完成，阶段 C–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。阶段 A、B 的 v2 语义/水文格式、派生查询和 Worker 任务已可独立使用与验收，但尚未接入生产渲染热路径。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -211,7 +211,7 @@ interface BaseSemanticChunk {
 
 `MacroDrainageGraph` 决定生成世界中的下游关系、汇流、终点和稳定 ID；`HydrologyRegion` 只是它按 128×128 空间范围裁出的基础格式。用户编辑的完整河流或湖泊由 `HydrologyFeatureDelta` 覆盖。禁止同时持久化可编辑 spline 和逐格河流占用、下游方向、流量两份权威；逐格结果只能是可丢弃查询缓存或编译产物。
 
-基础排水图只读取 descriptor 与不可变 `BaseSemanticChunk.macroHeight`，不因运行时高度 delta 自动重生成。有效高度只参与当前海岸 coverage、水深和地形/显式水文冲突校验；需要改道时必须走第 13 节定义的 coupled edit 或显式 rebake。
+基础排水图只读取 descriptor 与不可变 `BaseSemanticChunk.macroHeight` 量化域，不因运行时高度 delta 自动重生成。程序化 Worker 允许在生成 base chunk 之前融合执行同一个 `quantizeMacroHeight` 原语，避免仅为低分辨率排水点物化其他 SoA 通道；融合采样值必须与对应 `BaseSemanticChunk.macroHeight` 逐值相同，不能成为第二套高度算法。静态来源必须显式提供不可变的宏观高度源。有效高度只参与当前海岸 coverage、水深和地形/显式水文冲突校验；需要改道时必须走第 13 节定义的 coupled edit 或显式 rebake。
 
 ### 6.2 MacroDrainageGraph
 
@@ -225,7 +225,7 @@ interface BaseSemanticChunk {
 - 图的节点、边、终点和流量与区域请求顺序、当前已加载邻区和 Worker 数量无关。
 - boundary port 由排水边与 region 边界的交点产生；端口是图的序列化切口，不是通过边键随机创造河流的来源。
 
-有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。无限世界使用确定性的分层流域 resolver；任一 128×128 region 只能依赖冻结的有限宏观窗口，并仍必须满足上述 rank 与终点不变量。若实现无法为无限模式给出有限依赖窗口和终止证明，该模式不能发布为 v2 水文源。
+有限和环绕世界在低分辨率上生成完整排水图后再分区，成本与渲染分辨率无关。当前格式使用 16 格宏观间隔，完整有限图最多 16384 个节点；超过该上限确定性失败，不能静默降低采样密度。无限世界按从逻辑原点对齐的 512×512 有限流域分解，每个流域固定为 32×32、最多 1024 个宏观节点。一个 128×128 region 只依赖其所属的一个流域；海面节点和无海流域的稳定最低节点初始化 priority-flood，其他节点只连接到已经确定的下游父节点。父子 `drainageRank` 相差至少一，故路径最多经过 1023 条边并必然到达海洋或显式湖盆。流域之间没有隐式递归依赖，也不会读取已加载邻区。
 
 ### 6.3 HydrologyRegion
 
@@ -235,6 +235,7 @@ interface BaseSemanticChunk {
 interface HydrologyRegion {
     readonly key: HydrologyRegionKey;
     readonly revision: number;
+    readonly validBounds: HydrologyRegionLocalBounds;
     readonly boundaryPorts: readonly HydrologyPort[];
     readonly rivers: readonly RiverFeatureSegment[];
     readonly lakes: readonly LakeFeature[];
@@ -245,6 +246,7 @@ interface HydrologyRegion {
 interface RiverFeatureSegment {
     readonly riverId: HydrologyFeatureId;
     readonly segmentId: HydrologySegmentId;
+    readonly edgeId: HydrologyEdgeId;
     readonly controlPoints: Int16Array;
     readonly widthProfile: Uint8Array;
     readonly levelProfile: Uint16Array;
@@ -870,12 +872,12 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - generator v6 的阶段 A 量化规则固定为：`macroHeight = saturate(landform.elevation)` 后按 `floor(value × 65535 + 0.5)` 写入；climate 和 vegetation density 使用对应的 8 位规则；四项 biome 权重采用最大余数法并保证每个有效格严格合计 255。
 - substrate 目录固定为 sediment/soil/sand/rock/permafrost；biome basis 固定为 temperate/dry/cold/alpine；vegetation profile 目录固定为 none/warm-palm-mix/cold-pinia-mix/temperate-oak-mix。descriptor 保存两个目录规范 JSON 的 SHA-256 内容哈希，目录内容改变不能复用旧 world identity。
 - `BaseSemanticChunk` 校验拒绝未知字段，因而 water、坡度、材质输出、navigation 和其他派生事实不能混入基础权威格式；partial chunk 的 `validBounds` 外必须逐字节清零。
-- 共享 Worker 协议已升级到 v3，并新增显式 `generateSemanticChunk` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；v2 semantic 任务使用独立 generator v6 identity，不能与 v1 generator v5 响应互换。
+- 共享 Worker 协议在阶段 B 后为 v4，包含显式 `generateSemanticChunk` 与 `generateHydrologyRegion` 任务。v1 的 world/chunk/vegetation 任务在生产切换前仍是当前生产任务；两个 v2 任务使用独立 generator v6 identity，不能与 v1 generator v5 响应互换。
 - 已建立 descriptor/catalog identity、负坐标、环绕规范化、SoA 长度与权重、二进制 golden、请求顺序、Worker client/pool 和真实浏览器 transferable Worker 测试，并把 49 个 32×32 semantic chunk 的 generator-v6 吞吐纳入 benchmark gate。生成结果返回后可直接由主线程的只读 view 查询，不重新运行 resolver。
 
 阶段性命名说明：在阶段 H 完整切换前，现有生产常量仍表示 v1 格式；已落地的 v2 常量使用 `WORLD_DESCRIPTOR_V2_FORMAT_VERSION`、`WORLD_SEMANTIC_CHUNK_FORMAT_VERSION` 和 `WORLD_SURFACE_V2_GENERATOR_VERSION` 避免把两种缓存/存档身份混用。切换提交会删除 v1 常量并收敛为第 17.1 节的最终名称，不保留兼容别名。
 
-### 阶段 B：水文区域
+### 阶段 B：水文区域（已完成）
 
 - 实现 `MacroDrainageGraph`、严格下降 drainage rank、稳定 feature/body ID 和终点校验。
 - 从排水图裁剪 128×128 region、boundary port 和空间索引，不从边键随机创造河流。
@@ -884,6 +886,16 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 覆盖无限和 32 倍数环绕拓扑，包括末端 partial hydrology region 与四角接缝。
 
 完成标志：所有下游路径有限终止；跨任意 region 请求顺序，河流端口、宽度、水位、流量和 body ID 完全一致。
+
+实现结果（2026-08-30）：
+
+- 新增 `MacroDrainageGraph`。确定性的多源 priority-flood 从全部海面节点出发；无海图使用稳定的最低节点建立显式湖盆。每个非终点节点只有一个下游父节点，保存严格下降的 `drainageRank`、非逆升的量化 `drainageLevel`、累积流量和只增不减的 `dischargeClass`。图校验会拒绝 rank、终点、流量、body identity 或边集合不一致。
+- 无限世界使用从原点对齐的 512×512 有限流域和 16 格宏观采样，单次 region 请求最多依赖 1024 个节点；有限/环绕世界先构建完整低分辨率图，冻结上限为 16384 个节点。无限 safe-integer 最小边界 region 使用 partial `validBounds`；环绕尺寸仍只要求 32 的倍数，不要求 128 的倍数。
+- `HydrologyRegion` 固定为 128×128，控制点以区域原点为基准按每格 16 单位量化到 `Int16Array`；宽度/水位剖面分别使用 `Uint8Array`/`Uint16Array`。region 保存河段、湖盆、河口、body palette 和图边裁切产生的 boundary ports，不保存逐格河流占用。feature、segment、port、connection 和 body ID 均由 descriptor/图节点/裁切位置稳定派生。
+- 环绕图边先按最短拓扑位移展开，再裁到 canonical region；末端 partial region、同 region 自连接、四条边和四角交点共享同一个 connection contract。`assertMatchingHydrologyPorts` 要求两侧 edge/river/body、宽度、水位、discharge 和 flow vector 完全相同且流入/流出相反。
+- 加载后的 `HydrologyRegionSpatialIndex` 使用 16×16 格 bin 和紧凑 offset/entry typed arrays；它是可丢弃索引。`deriveHydrologyRaster` 通过复用查询数组输出 X-major coverage/kind/level/flow/body-index typed arrays；海洋来自冻结海平面与调用方提供的宏观高度，逐格结果不回写 region。
+- Worker 协议升级到 v4，新增 `generateHydrologyRegion`，返回的河流/湖泊 typed arrays 通过 transferable 交付；`WorldGeneratorClient` 和有界 `WorldGeneratorPool` 提供独立 hydrology lane、队列/忙碌数和滑动平均耗时。
+- 验收覆盖图终止、损坏 rank 拒绝、静态湖盆、长河/汇流/河口、任意 region 请求顺序、双侧端口、负坐标、safe-integer 边界、160×160 环绕 partial region 与四角接缝、派生海/湖/河 raster、空间索引、WorkerPool 和真实浏览器 transferable Worker。benchmark gate 覆盖一个 512×512 流域裁成 16 个 region 及一个 128×128 raster；当前代表性基线约为 27 ms 和 8 ms。
 
 ### 阶段 C：表面编译器与纹理池
 

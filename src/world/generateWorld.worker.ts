@@ -29,6 +29,14 @@ import { WORLD_SURFACE_V2_GENERATOR_VERSION } from "./semantic/WorldSemanticForm
 import {
     serializeWorldDescriptorV2
 } from "./semantic/WorldDescriptorV2";
+import {
+    HydrologyRegion,
+    hydrologyRegionTransferables
+} from "./semantic/HydrologyRegion";
+import {
+    HydrologyRegionGenerationOptions,
+    HydrologyRegionGenerator
+} from "./semantic/generateHydrologyRegion";
 
 interface GenerateWorldRequest {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -62,8 +70,16 @@ interface GenerateSemanticChunkRequest {
     options: BaseSemanticChunkGenerationOptions;
 }
 
+interface GenerateHydrologyRegionRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    generatorVersion: typeof WORLD_SURFACE_V2_GENERATOR_VERSION;
+    id: number;
+    type: "generateHydrologyRegion";
+    options: HydrologyRegionGenerationOptions;
+}
+
 type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest
-    | GenerateVegetationRequest | GenerateSemanticChunkRequest;
+    | GenerateVegetationRequest | GenerateSemanticChunkRequest | GenerateHydrologyRegionRequest;
 
 const scope = globalThis as unknown as {
     addEventListener(type: "message", listener: (event: MessageEvent<GenerateRequest>) => void): void;
@@ -74,6 +90,8 @@ let chunkResolver: WorldSurfaceResolver | undefined;
 let chunkResolverKey: string | undefined;
 let semanticResolver: WorldSurfaceResolver | undefined;
 let semanticResolverKey: string | undefined;
+let hydrologyGenerator: HydrologyRegionGenerator | undefined;
+let hydrologyGeneratorKey: string | undefined;
 
 function resolverFor(options: WorldChunkGenerationOptions): WorldSurfaceResolver {
     const key = serializeWorldDescriptor(createWorldDescriptor({
@@ -97,8 +115,17 @@ function semanticResolverFor(options: BaseSemanticChunkGenerationOptions): World
     return semanticResolver;
 }
 
+function hydrologyGeneratorFor(options: HydrologyRegionGenerationOptions): HydrologyRegionGenerator {
+    const key = serializeWorldDescriptorV2(options.descriptor);
+    if (!hydrologyGenerator || hydrologyGeneratorKey !== key) {
+        hydrologyGenerator = new HydrologyRegionGenerator(options.descriptor);
+        hydrologyGeneratorKey = key;
+    }
+    return hydrologyGenerator;
+}
+
 function requestGeneratorVersion(request: GenerateRequest): number {
-    return request.type === "generateSemanticChunk"
+    return request.type === "generateSemanticChunk" || request.type === "generateHydrologyRegion"
         ? WORLD_SURFACE_V2_GENERATOR_VERSION
         : WORLD_GENERATOR_VERSION;
 }
@@ -108,11 +135,19 @@ scope.addEventListener("message", event => {
         const request = event.data;
         if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
             || !Number.isSafeInteger(request.id) || !request.options
-            || !["world", "chunk", "vegetation", "generateSemanticChunk"].includes(request.type)
+            || !["world", "chunk", "vegetation", "generateSemanticChunk", "generateHydrologyRegion"].includes(request.type)
             || request.generatorVersion !== requestGeneratorVersion(request)) {
             throw new TypeError("World generator received an invalid request");
         }
-        if (request.type === "generateSemanticChunk") {
+        if (request.type === "generateHydrologyRegion") {
+            const hydrologyRegion: HydrologyRegion = hydrologyGeneratorFor(request.options).generate(request.options.key);
+            scope.postMessage({
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+                id: request.id,
+                hydrologyRegion
+            }, hydrologyRegionTransferables(hydrologyRegion));
+        } else if (request.type === "generateSemanticChunk") {
             const semanticChunk: BaseSemanticChunk = generateBaseSemanticChunkWithResolver(
                 request.options,
                 semanticResolverFor(request.options)
@@ -152,6 +187,7 @@ scope.addEventListener("message", event => {
         scope.postMessage({
             protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
             generatorVersion: event.data?.type === "generateSemanticChunk"
+                || event.data?.type === "generateHydrologyRegion"
                 ? WORLD_SURFACE_V2_GENERATOR_VERSION
                 : WORLD_GENERATOR_VERSION,
             id: event.data?.id,

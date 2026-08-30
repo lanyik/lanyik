@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 stage B hydrology: terminating macro drainage
+  graphs with stable graph/feature/body identities, 128x128 vector regions,
+  graph-derived boundary ports, lake and mouth features, partial/toroidal
+  four-corner clipping, disposable spatial indexes and derived water rasters.
+  Hydrology generation is available through the direct API, Worker client and
+  bounded WorkerPool lane; production rendering remains on v1 until cutover.
 - Surface/render foundation v2 stage A primitives: a fixed 32x32 X-major
   `BaseSemanticChunk` SoA format, strict validation, deterministic binary
   serialization, read-only tile views, catalog-hashed v2 descriptors,
@@ -79,9 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Advanced the shared world Worker protocol to v3 for the discriminated
-  `generateSemanticChunk` task. Existing production v1 tasks retain generator
-  v5 identity and cannot accept v2 semantic responses.
+- Advanced the shared world Worker protocol to v4 for the discriminated
+  `generateSemanticChunk` and `generateHydrologyRegion` tasks. Existing
+  production v1 tasks retain generator v5 identity and cannot accept v2
+  semantic or hydrology responses.
 - Froze world-style generation v1 on generator v5 after the normal gates,
   performance regression checks, scheduled replacement soak and fixed visual
   gallery all passed. Future gameplay consumes the surface contracts instead
