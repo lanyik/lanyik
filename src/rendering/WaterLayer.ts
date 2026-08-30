@@ -495,6 +495,10 @@ export class WaterLayer {
             bounds.maxXExclusive,
             bounds.maxYExclusive
         );
+        // Water chunks share one material per texture page, while layer and
+        // phase are draw-local. Force Three.js to publish the values changed in
+        // onBeforeRender even when two adjacent chunks use the same material.
+        material.uniformsNeedUpdate = true;
     }
 
     private positionChunk(chunk: MutableWaterChunk): void {

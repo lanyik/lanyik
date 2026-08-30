@@ -7498,6 +7498,7 @@ void main() {
         bounds.maxXExclusive,
         bounds.maxYExclusive
       );
+      material.uniformsNeedUpdate = true;
     }
     positionChunk(chunk) {
       const surfaceX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
@@ -8315,6 +8316,7 @@ void main() {
         bounds.maxXExclusive,
         bounds.maxYExclusive
       );
+      material.uniformsNeedUpdate = true;
     }
     positionChunk(chunk) {
       if (!chunk.mesh) return;

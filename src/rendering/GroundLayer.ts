@@ -560,6 +560,11 @@ export class GroundLayer {
             bounds.maxXExclusive,
             bounds.maxYExclusive
         );
+        // Every chunk on a texture page shares one ShaderMaterial. Three.js
+        // skips ShaderMaterial uniform uploads for consecutive draws using the
+        // same material unless this flag is raised after onBeforeRender mutates
+        // the per-draw layer/bounds values.
+        material.uniformsNeedUpdate = true;
     }
 
     private positionChunk(chunk: MutableGroundChunk): void {

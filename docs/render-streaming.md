@@ -36,6 +36,8 @@ Worker 返回后，服务重新校验完整 dependency key 和 token。旧编辑
 
 一个 render chunk 在四张 `DataArrayTexture` 中使用相同 page/layer/generation。静态 field 整层上传；动态雾使用独立 16×16 R8 pool。slot generation 拒绝迟到上传和迟到释放，context restore 从 CPU backing store 重建当前页。
 
+同一 texture page 内的 Ground/Water chunk 共享 `ShaderMaterial`，但 array layer、有效边界和水面 phase 是逐 draw 状态。每次 `onBeforeRender` 更新这些值后必须设置 `uniformsNeedUpdate`，确保连续使用同一材质的 chunk 不会误采样前一块的 GPU slot。多块 WebGL2 E2E 会强制绘制全部已挂载块，并逐 draw 核对实际 layer 集合与已分配 slot 集合。
+
 依赖图固定保证 Ground 在 Water 之前、Water 在 Vegetation 之前，拆除顺序相反。地面与水体读取同一高度、水位、岸线 SDF、flow 和 body profile；植被实例来自 compiled seed，而不是主线程重新解释语义。
 
 ## 编辑传播

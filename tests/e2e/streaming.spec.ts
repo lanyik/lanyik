@@ -42,6 +42,69 @@ async function waitForWorld(page: Page): Promise<void> {
     }, undefined, { timeout: 90_000 });
 }
 
+async function observeSurfaceLayerDraws(page: Page): Promise<Readonly<{
+    ground: readonly number[];
+    expectedGround: readonly number[];
+    water: readonly number[];
+    expectedWater: readonly number[];
+}>> {
+    return page.evaluate(async () => {
+        const browser = window as unknown as {
+            hexWorld: {
+                renderer: { getContext(): WebGL2RenderingContext };
+                runtime: {
+                    presentation: {
+                        ground: { chunks: Map<string, { slot: { layerIndex: number }; mesh: { frustumCulled: boolean } }> };
+                        water: { chunks: Map<string, { slot: { layerIndex: number }; mesh?: { frustumCulled: boolean } }> };
+                    };
+                };
+            };
+        };
+        const presentation = browser.hexWorld.runtime.presentation;
+        const groundChunks = [...presentation.ground.chunks.values()];
+        const waterChunks = [...presentation.water.chunks.values()].filter(chunk => chunk.mesh);
+        const meshes = [
+            ...groundChunks.map(chunk => chunk.mesh),
+            ...waterChunks.map(chunk => chunk.mesh!)
+        ];
+        const previousCulling = meshes.map(mesh => mesh.frustumCulled);
+        for (const mesh of meshes) mesh.frustumCulled = false;
+
+        const gl = browser.hexWorld.renderer.getContext();
+        const mutableGl = gl as WebGL2RenderingContext & {
+            drawElements: WebGL2RenderingContext["drawElements"];
+        };
+        const originalDrawElements = mutableGl.drawElements;
+        const ground = new Set<number>();
+        const water = new Set<number>();
+        mutableGl.drawElements = function (...args): void {
+            const program = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
+            if (program) {
+                const layerLocation = gl.getUniformLocation(program, "uLayer");
+                if (layerLocation) {
+                    const layer = gl.getUniform(program, layerLocation) as number;
+                    const phaseLocation = gl.getUniformLocation(program, "uChunkSurfacePhase");
+                    (phaseLocation ? water : ground).add(layer);
+                }
+            }
+            originalDrawElements.apply(gl, args);
+        };
+        try {
+            await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        } finally {
+            mutableGl.drawElements = originalDrawElements;
+            meshes.forEach((mesh, index) => { mesh.frustumCulled = previousCulling[index]; });
+        }
+        const sorted = (values: Iterable<number>) => [...new Set(values)].sort((first, second) => first - second);
+        return {
+            ground: sorted(ground),
+            expectedGround: sorted(groundChunks.map(chunk => chunk.slot.layerIndex)),
+            water: sorted(water),
+            expectedWater: sorted(waterChunks.map(chunk => chunk.slot.layerIndex))
+        };
+    });
+}
+
 const runtimeErrors = new WeakMap<Page, string[]>();
 
 test.beforeEach(async ({ page }) => {
@@ -62,8 +125,9 @@ test.afterEach(async ({ page }) => {
 
 test("runs only the dependency-driven 16x16 surface path inside all byte budgets", async ({ page }, testInfo) => {
     const sample = await diagnostics(page);
+    const layers = await observeSurfaceLayerDraws(page);
     await testInfo.attach("surface-v2-budget.json", {
-        body: JSON.stringify(sample, null, 2),
+        body: JSON.stringify({ sample, layers }, null, 2),
         contentType: "application/json"
     });
     expect(sample.renderSession!.demandedChunks).toBeLessThanOrEqual(25);
@@ -75,6 +139,10 @@ test("runs only the dependency-driven 16x16 surface path inside all byte budgets
     expect(sample.compilation!.cacheBytes).toBeLessThanOrEqual(sample.compilation!.cacheBudgetBytes);
     expect(sample.surfaceTextures!.gpuBytes).toBeLessThanOrEqual(sample.surfaceTextures!.gpuBudgetBytes);
     expect(sample.rendererPixelRatio).toBeLessThanOrEqual(1);
+    expect(layers.expectedGround.length).toBeGreaterThan(1);
+    expect(layers.ground).toEqual(layers.expectedGround);
+    expect(layers.expectedWater.length).toBeGreaterThan(1);
+    expect(layers.water).toEqual(layers.expectedWater);
 });
 
 test("replaces exact demand across long distances without growing residency", async ({ page }, testInfo) => {

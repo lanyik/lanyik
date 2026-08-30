@@ -41,6 +41,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- Ground/Water 共享页材质现在会在每个 chunk draw 前上传 texture layer、有效边界和水面 phase，修复多块世界误采样单一 GPU slot 造成的规则断崖与接缝。
 - 旧 revision 的 Worker、query、picking、navigation、simulation 和 GPU 结果无法再发布到新世界。
 - authority transferable 不会因 Worker transfer detach；buffer pool、GPU slot generation 和 context
   restore 均保持确定所有权。
