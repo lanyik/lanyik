@@ -25,8 +25,8 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 is frozen on generator v5 with continuous relief, climate, regional forests, lakes and fixed gallery gates |
-| Surface foundation v2 | Original steps 1–5 are implemented: v2 authority/hydrology/effective snapshots, CPU/Worker compilation, paged static fields, independent R8 fog, shared three-LOD ground geometry, LightingState and an internal GroundLayer slice; continuous water/vegetation, editing and production cutover remain |
-| Next milestone | Complete v2 continuous water and compiled-field vegetation on the shared LightingState |
+| Surface foundation v2 | Original steps 1–6 are implemented: v2 authority/hydrology/effective snapshots, CPU/Worker compilation, paged fields and fog, three-LOD ground, continuous full/coverage/sweep water, compiled stable vegetation, shared lighting and an atomic presentation layer; editing and production cutover remain |
+| Next milestone | Implement original step 7: editing, persistence and consumer-system integration |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.

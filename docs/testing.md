@@ -13,8 +13,8 @@ when it changes the defects the suite can detect.
 | Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
-| World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
-| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, 66x66 CPU surface compilation, full-layer GPU backing-store packing, and 1/9/49 GroundLayer mounts with dynamic fog | `scripts/benchmark-hot-paths.mjs` |
+| World-style review | Fixed topology-aware metrics plus legacy-world and v2 surface near/middle/far/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
+| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, 66x66 CPU surface/presentation compilation, full-layer GPU backing-store packing, and 1/9/49 Ground/Water/Vegetation mounts with dynamic fog | `scripts/benchmark-hot-paths.mjs` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
 only for browser-owned behavior such as module Workers, WebGL context recovery,
@@ -33,6 +33,13 @@ rendered pixel without touching the static field, switches LOD, and renders the
 same result after context loss/restore. Unit contracts additionally require all
 three LODs to expose the same canonical outer boundary and a welded manifold
 transition strip with exact area and edge ownership.
+
+The v2 presentation browser test draws a fixed lake shoreline and compiled
+vegetation through the real Ground/Water/Vegetation shaders, exercises nested
+LOD retention, wave time, floating-origin movement and a complete context
+loss/restore cycle, and requires a `MeshStandardMaterial` probe to remain lit by
+the shared Scene binding. The gallery emits fixed-seed near/middle/far PNG artifacts;
+statistics alone are not accepted for step 6 visual review.
 
 The v2 surface Worker browser test transfers a complete effective window,
 verifies that the sending buffers detach, validates the compiled payload, and
@@ -78,11 +85,13 @@ npm run review:world-style
 
 The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
 infinite seeds at positive and negative windows, pressure seeds and minimum
-dimensions. The gallery pass uses `quality=gallery`: full terrain materials and
-trees remain enabled, while grass, sky and antialiasing are disabled and tree
-instance density is reduced so all four fixed views remain practical under CI
-software rendering. Per-sample JSON and images are artifacts; topology,
-connectivity and broad composition ranges are the stable gates.
+dimensions. The legacy gallery uses `quality=gallery`: full terrain materials
+and trees remain enabled, while grass, sky and antialiasing are disabled and
+tree instance density is reduced so the topology corpus remains practical
+under CI software rendering. The separate v2 surface gallery keeps its compiled
+grass, trees and water enabled at all three LODs. Per-sample JSON and images are
+artifacts; topology, connectivity, broad composition and error-free rendering
+are the stable gates.
 
 ## Meaning of the 500-iteration soak
 

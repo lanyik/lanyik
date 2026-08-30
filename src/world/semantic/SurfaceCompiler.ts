@@ -17,6 +17,7 @@ import {
     SURFACE_FIELD_GUTTER_TEXELS,
     SURFACE_FIELD_TEXTURE_SIZE,
     SURFACE_INFLUENCE_RADIUS_TILES,
+    SURFACE_MAX_VEGETATION_SEEDS,
     SURFACE_MAX_WATER_BODY_COUNT,
     SURFACE_RENDER_CHUNK_SIZE,
     SURFACE_SAMPLES_PER_TILE_INTERVAL
@@ -34,6 +35,16 @@ import {
     RenderChunkKey,
     SurfaceDependencyKey
 } from "./SurfaceDependency";
+import {
+    CompiledVegetationSpecies,
+    compileVegetationSeeds,
+    compileWaterGeometry,
+    surfacePresentationTransferables,
+    vegetationSeedsByteLength,
+    waterGeometryByteLength,
+    type CompiledVegetationSeeds,
+    type CompiledWaterGeometry
+} from "./SurfacePresentationCompiler";
 
 export interface CompiledWaterBodyRef {
     readonly bodyId: string;
@@ -69,6 +80,8 @@ export interface CompiledSurfaceChunk {
     readonly bounds: CompiledSurfaceBounds;
     readonly field: CompiledSurfaceField;
     readonly waterBodies: readonly CompiledWaterBodyRef[];
+    readonly waterGeometry: CompiledWaterGeometry;
+    readonly vegetationSeeds: CompiledVegetationSeeds;
     readonly byteLength: number;
     readonly contentChecksum: string;
 }
@@ -451,7 +464,23 @@ function updateChecksum(hash: number, values: ArrayBufferView): number {
     return hash;
 }
 
-function surfaceChecksum(field: CompiledSurfaceField, bodies: readonly CompiledWaterBodyRef[]): string {
+function updateChecksumText(hash: number, value: string): number {
+    for (const character of value) {
+        const code = character.charCodeAt(0);
+        hash ^= code & 0xff;
+        hash = Math.imul(hash, 0x01000193);
+        hash ^= code >>> 8;
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash;
+}
+
+function surfaceChecksum(
+    field: CompiledSurfaceField,
+    bodies: readonly CompiledWaterBodyRef[],
+    waterGeometry: CompiledWaterGeometry,
+    vegetationSeeds: CompiledVegetationSeeds
+): string {
     let hash = 0x811c9dc5;
     for (const values of [
         field.groundHeight,
@@ -466,14 +495,28 @@ function surfaceChecksum(field: CompiledSurfaceField, bodies: readonly CompiledW
         field.waterBodyIndex
     ]) hash = updateChecksum(hash, values);
     for (const body of bodies) {
-        for (const character of `${body.bodyId}\0${body.kind}\0`) {
-            const code = character.charCodeAt(0);
-            hash ^= code & 0xff;
-            hash = Math.imul(hash, 0x01000193);
-            hash ^= code >>> 8;
-            hash = Math.imul(hash, 0x01000193);
+        hash = updateChecksumText(hash, `${body.bodyId}\0${body.kind}\0`);
+    }
+    hash = updateChecksumText(hash, `${waterGeometry.kind}\0`);
+    if (waterGeometry.kind === "coverage" || waterGeometry.kind === "sweep") {
+        hash = updateChecksum(hash, waterGeometry.mesh.surfaceUv);
+        hash = updateChecksum(hash, waterGeometry.mesh.indices);
+    }
+    if (waterGeometry.kind === "sweep") {
+        for (const featureKey of waterGeometry.featureKeys) {
+            hash = updateChecksumText(hash, `${featureKey}\0`);
         }
     }
+    for (const values of [
+        vegetationSeeds.tileIndex,
+        vegetationSeeds.candidateIndex,
+        vegetationSeeds.randomKey,
+        vegetationSeeds.surfaceCoordinates,
+        vegetationSeeds.groundHeight,
+        vegetationSeeds.species,
+        vegetationSeeds.scale,
+        vegetationSeeds.rotation
+    ]) hash = updateChecksum(hash, values);
     return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
@@ -620,7 +663,11 @@ export function compileSurfaceChunk(window: TransferableEffectiveWindow): Compil
         minWaterLevel: hasWater ? minWaterLevel : 0,
         maxWaterLevel: hasWater ? maxWaterLevel : 0
     });
-    const byteLength = fieldByteLength(field);
+    const waterGeometry = compileWaterGeometry(window, field, waterBodies);
+    const vegetationSeeds = compileVegetationSeeds(window, field);
+    const byteLength = fieldByteLength(field)
+        + waterGeometryByteLength(waterGeometry)
+        + vegetationSeedsByteLength(vegetationSeeds);
     const dependencyKey = cloneSurfaceDependencyKey(window.dependencyKey);
     const chunk: CompiledSurfaceChunk = Object.freeze({
         key: Object.freeze({ ...window.key }),
@@ -629,8 +676,10 @@ export function compileSurfaceChunk(window: TransferableEffectiveWindow): Compil
         bounds,
         field,
         waterBodies,
+        waterGeometry,
+        vegetationSeeds,
         byteLength,
-        contentChecksum: surfaceChecksum(field, waterBodies)
+        contentChecksum: surfaceChecksum(field, waterBodies, waterGeometry, vegetationSeeds)
     });
     assertCompiledSurfaceChunk(chunk);
     validatedCompiledChunks.add(chunk);
@@ -686,12 +735,113 @@ function assertBounds(bounds: CompiledSurfaceBounds): void {
     }
 }
 
+function assertWaterMesh(mesh: import("./SurfacePresentationCompiler").CompiledWaterMesh): void {
+    if (!mesh || typeof mesh !== "object"
+        || Object.getOwnPropertyNames(mesh).some(name => name !== "surfaceUv" && name !== "indices")
+        || !(mesh.surfaceUv instanceof Float32Array) || mesh.surfaceUv.length < 6
+        || mesh.surfaceUv.length % 2 !== 0
+        || !(mesh.indices instanceof Uint16Array) || mesh.indices.length < 3
+        || mesh.indices.length % 3 !== 0) {
+        throw new TypeError("compiled water mesh layout is invalid");
+    }
+    const vertexCount = mesh.surfaceUv.length / 2;
+    for (const coordinate of mesh.surfaceUv) {
+        if (!Number.isFinite(coordinate)) throw new TypeError("compiled water mesh coordinates must be finite");
+    }
+    for (let index = 0; index < mesh.indices.length; index += 3) {
+        const first = mesh.indices[index];
+        const second = mesh.indices[index + 1];
+        const third = mesh.indices[index + 2];
+        if (first >= vertexCount || second >= vertexCount || third >= vertexCount
+            || first === second || second === third || first === third) {
+            throw new TypeError("compiled water mesh indices are invalid");
+        }
+        const ax = mesh.surfaceUv[first * 2];
+        const ay = mesh.surfaceUv[first * 2 + 1];
+        const bx = mesh.surfaceUv[second * 2];
+        const by = mesh.surfaceUv[second * 2 + 1];
+        const cx = mesh.surfaceUv[third * 2];
+        const cy = mesh.surfaceUv[third * 2 + 1];
+        if (Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) <= 1e-9) {
+            throw new TypeError("compiled water mesh contains a degenerate logical triangle");
+        }
+    }
+}
+
+function assertWaterGeometry(value: CompiledWaterGeometry): void {
+    if (!value || typeof value !== "object") throw new TypeError("compiled water geometry is invalid");
+    if (value.kind === "none" || value.kind === "full") {
+        if (Object.getOwnPropertyNames(value).some(name => name !== "kind")) {
+            throw new TypeError("shared compiled water geometry contains unknown fields");
+        }
+        return;
+    }
+    if (value.kind !== "coverage" && value.kind !== "sweep") {
+        throw new TypeError("compiled water geometry kind is invalid");
+    }
+    const allowed = value.kind === "coverage" ? new Set(["kind", "mesh"])
+        : new Set(["kind", "mesh", "featureKeys"]);
+    if (Object.getOwnPropertyNames(value).some(name => !allowed.has(name))) {
+        throw new TypeError("compiled water geometry contains unknown fields");
+    }
+    assertWaterMesh(value.mesh);
+    if (value.kind === "sweep") {
+        if (!Array.isArray(value.featureKeys) || value.featureKeys.length === 0
+            || value.featureKeys.some((key, index) => typeof key !== "string" || key.length === 0
+                || index > 0 && value.featureKeys[index - 1].localeCompare(key) >= 0)) {
+            throw new TypeError("compiled water sweep feature keys are invalid");
+        }
+    }
+}
+
+function assertVegetationSeeds(value: CompiledVegetationSeeds): void {
+    if (!value || typeof value !== "object"
+        || Object.getOwnPropertyNames(value).some(name => ![
+            "tileIndex", "candidateIndex", "randomKey", "surfaceCoordinates",
+            "groundHeight", "species", "scale", "rotation"
+        ].includes(name))
+        || !(value.tileIndex instanceof Uint16Array)
+        || !(value.candidateIndex instanceof Uint8Array)
+        || !(value.randomKey instanceof Uint32Array)
+        || !(value.surfaceCoordinates instanceof Int16Array)
+        || !(value.groundHeight instanceof Uint16Array)
+        || !(value.species instanceof Uint8Array)
+        || !(value.scale instanceof Uint8Array)
+        || !(value.rotation instanceof Uint16Array)) {
+        throw new TypeError("compiled vegetation seed layout is invalid");
+    }
+    const count = value.tileIndex.length;
+    if (count > SURFACE_MAX_VEGETATION_SEEDS
+        || value.candidateIndex.length !== count
+        || value.randomKey.length !== count
+        || value.surfaceCoordinates.length !== count * 2
+        || value.groundHeight.length !== count
+        || value.species.length !== count
+        || value.scale.length !== count
+        || value.rotation.length !== count) {
+        throw new TypeError("compiled vegetation seed columns have inconsistent lengths");
+    }
+    let previousIdentity = -1;
+    for (let index = 0; index < count; index += 1) {
+        const identity = value.tileIndex[index] * 10 + value.candidateIndex[index];
+        const species = value.species[index];
+        if (value.tileIndex[index] >= SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE
+            || value.candidateIndex[index] >= 10 || identity <= previousIdentity
+            || species < CompiledVegetationSpecies.Grass || species > CompiledVegetationSpecies.Oak
+            || (value.candidateIndex[index] < 8) !== (species === CompiledVegetationSpecies.Grass)
+            || value.scale[index] < 160) {
+            throw new TypeError("compiled vegetation seed values are invalid");
+        }
+        previousIdentity = identity;
+    }
+}
+
 export function assertCompiledSurfaceChunk(value: unknown): asserts value is CompiledSurfaceChunk {
     if (!value || typeof value !== "object") throw new TypeError("compiled surface chunk must be an object");
     const chunk = value as CompiledSurfaceChunk;
     if (Object.getOwnPropertyNames(chunk).some(name => ![
         "key", "dependencyKey", "effectiveRevision", "bounds", "field",
-        "waterBodies", "byteLength", "contentChecksum"
+        "waterBodies", "waterGeometry", "vegetationSeeds", "byteLength", "contentChecksum"
     ].includes(name))) throw new TypeError("compiled surface chunk contains unknown fields");
     assertSurfaceDependencyKey(chunk.dependencyKey);
     if (chunk.key.chunkX !== chunk.dependencyKey.renderKey.chunkX
@@ -722,6 +872,8 @@ export function assertCompiledSurfaceChunk(value: unknown): asserts value is Com
             throw new TypeError("compiled surface body palette must be strictly ordered");
         }
     }
+    assertWaterGeometry(chunk.waterGeometry);
+    assertVegetationSeeds(chunk.vegetationSeeds);
     let minGroundHeight = Number.POSITIVE_INFINITY;
     let maxGroundHeight = Number.NEGATIVE_INFINITY;
     let minWaterLevel = Number.POSITIVE_INFINITY;
@@ -778,7 +930,14 @@ export function assertCompiledSurfaceChunk(value: unknown): asserts value is Com
         throw new TypeError("compiled surface bounds do not match the field payload");
     }
     if (chunk.byteLength !== fieldByteLength(chunk.field)
-        || chunk.contentChecksum !== surfaceChecksum(chunk.field, chunk.waterBodies)) {
+        + waterGeometryByteLength(chunk.waterGeometry)
+        + vegetationSeedsByteLength(chunk.vegetationSeeds)
+        || chunk.contentChecksum !== surfaceChecksum(
+            chunk.field,
+            chunk.waterBodies,
+            chunk.waterGeometry,
+            chunk.vegetationSeeds
+        )) {
         throw new TypeError("compiled surface chunk byte length or checksum is invalid");
     }
 }
@@ -894,7 +1053,7 @@ export function sampleCompiledSurfaceChunk(
     });
 }
 
-export function compiledSurfaceFieldTransferables(
+export function compiledSurfaceChunkTransferables(
     chunk: CompiledSurfaceChunk
 ): readonly ArrayBuffer[] {
     assertCompiledSurfaceChunkOnce(chunk);
@@ -908,10 +1067,11 @@ export function compiledSurfaceFieldTransferables(
         chunk.field.waterCoverage.buffer,
         chunk.field.waterKind.buffer,
         chunk.field.waterProfile.buffer,
-        chunk.field.waterBodyIndex.buffer
+        chunk.field.waterBodyIndex.buffer,
+        ...surfacePresentationTransferables(chunk.waterGeometry, chunk.vegetationSeeds)
     ];
     if (candidates.some(buffer => !(buffer instanceof ArrayBuffer))) {
-        throw new TypeError("compiled surface field buffers must be transferable ArrayBuffers");
+        throw new TypeError("compiled surface chunk buffers must be transferable ArrayBuffers");
     }
     const buffers = candidates as ArrayBuffer[];
     if (new Set(buffers).size !== buffers.length) {

@@ -13843,7 +13843,11 @@ void main() {
   var SURFACE_MAX_WATER_BODY_COUNT = 255;
   var SURFACE_CANONICAL_HEX_SIZE = 1;
   var SURFACE_TEXTURE_PAGE_LAYERS = 128;
-  var SURFACE_COMPILER_REVISION = 1;
+  var SURFACE_WATER_COVERAGE_THRESHOLD = 128;
+  var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
+  var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
+  var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
+  var SURFACE_COMPILER_REVISION = 2;
   var SURFACE_COMPILE_PROFILE_VERSION = 1;
   var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
     renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -13851,7 +13855,11 @@ void main() {
     gutterTexels: SURFACE_FIELD_GUTTER_TEXELS,
     influenceRadiusTiles: SURFACE_INFLUENCE_RADIUS_TILES,
     textureLayerSize: SURFACE_FIELD_TEXTURE_SIZE,
-    pageLayers: SURFACE_TEXTURE_PAGE_LAYERS
+    pageLayers: SURFACE_TEXTURE_PAGE_LAYERS,
+    waterCoverageThreshold: SURFACE_WATER_COVERAGE_THRESHOLD,
+    narrowRiverMaximumWidthQuantized: SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED,
+    vegetationCoordinateScale: SURFACE_VEGETATION_COORDINATE_SCALE,
+    maximumVegetationSeeds: SURFACE_MAX_VEGETATION_SEEDS
   });
 
   // src/world/semantic/SurfaceDependency.ts
@@ -15081,6 +15089,396 @@ void main() {
     return decodeFloat16(encodeFloat16(value));
   }
 
+  // src/world/semantic/SurfacePresentationCompiler.ts
+  var CompiledVegetationSpecies = /* @__PURE__ */ ((CompiledVegetationSpecies2) => {
+    CompiledVegetationSpecies2[CompiledVegetationSpecies2["Grass"] = 0] = "Grass";
+    CompiledVegetationSpecies2[CompiledVegetationSpecies2["Palm"] = 1] = "Palm";
+    CompiledVegetationSpecies2[CompiledVegetationSpecies2["Pinia"] = 2] = "Pinia";
+    CompiledVegetationSpecies2[CompiledVegetationSpecies2["Oak"] = 3] = "Oak";
+    return CompiledVegetationSpecies2;
+  })(CompiledVegetationSpecies || {});
+  var WATER_INTERSECTION_SCALE = 65536;
+  var UINT32_SCALE = 4294967296;
+  function clamp2(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+  }
+  function fieldSampleIndices(localU, localV) {
+    const coordinate = surfaceFieldTexelCoordinate(localU, localV);
+    const x0 = clamp2(Math.floor(coordinate.u), 0, SURFACE_FIELD_TEXTURE_SIZE - 2);
+    const y0 = clamp2(Math.floor(coordinate.v), 0, SURFACE_FIELD_TEXTURE_SIZE - 2);
+    return {
+      indices: [
+        surfaceLatticeIndex(x0, y0),
+        surfaceLatticeIndex(x0 + 1, y0),
+        surfaceLatticeIndex(x0, y0 + 1),
+        surfaceLatticeIndex(x0 + 1, y0 + 1)
+      ],
+      amountX: clamp2(coordinate.u - x0, 0, 1),
+      amountY: clamp2(coordinate.v - y0, 0, 1)
+    };
+  }
+  function bilinear(values, amountX, amountY) {
+    const top = values[0] + (values[1] - values[0]) * amountX;
+    const bottom = values[2] + (values[3] - values[2]) * amountX;
+    return top + (bottom - top) * amountY;
+  }
+  function sampleField(field2, channel, localU, localV) {
+    const sample = fieldSampleIndices(localU, localV);
+    const values = sample.indices.map((index) => channel === "coverage" ? field2.waterCoverage[index] : decodeFloat16(channel === "ground" ? field2.groundHeight[index] : field2.shorelineDistance[index]));
+    return bilinear(values, sample.amountX, sample.amountY);
+  }
+  function quantizedWaterVertex(builder, x, y) {
+    const quantizedX = Math.round(x * WATER_INTERSECTION_SCALE);
+    const quantizedY = Math.round(y * WATER_INTERSECTION_SCALE);
+    const key = `${quantizedX},${quantizedY}`;
+    const existing = builder.vertexByKey.get(key);
+    if (existing !== void 0) return existing;
+    const index = builder.coordinates.length / 2;
+    builder.coordinates.push(
+      -0.5 + quantizedX / (WATER_INTERSECTION_SCALE * SURFACE_SAMPLES_PER_TILE_INTERVAL),
+      -0.5 + quantizedY / (WATER_INTERSECTION_SCALE * SURFACE_SAMPLES_PER_TILE_INTERVAL)
+    );
+    builder.vertexByKey.set(key, index);
+    return index;
+  }
+  function waterIntersection(first, second) {
+    const difference = second.coverage - first.coverage;
+    const amount = difference === 0 ? 0.5 : clamp2((SURFACE_WATER_COVERAGE_THRESHOLD - first.coverage) / difference, 0, 1);
+    return {
+      x: first.x + (second.x - first.x) * amount,
+      y: first.y + (second.y - first.y) * amount,
+      coverage: SURFACE_WATER_COVERAGE_THRESHOLD
+    };
+  }
+  function clipTriangleToWater(corners) {
+    const output = [];
+    for (let index = 0; index < corners.length; index += 1) {
+      const current = corners[index];
+      const next = corners[(index + 1) % corners.length];
+      const currentInside = current.coverage >= SURFACE_WATER_COVERAGE_THRESHOLD;
+      const nextInside = next.coverage >= SURFACE_WATER_COVERAGE_THRESHOLD;
+      if (currentInside) output.push(current);
+      if (currentInside !== nextInside) output.push(waterIntersection(current, next));
+    }
+    return output;
+  }
+  function addWaterPolygon(builder, polygon) {
+    if (polygon.length < 3) return;
+    const first = quantizedWaterVertex(builder, polygon[0].x, polygon[0].y);
+    for (let index = 1; index < polygon.length - 1; index += 1) {
+      const second = quantizedWaterVertex(builder, polygon[index].x, polygon[index].y);
+      const third = quantizedWaterVertex(builder, polygon[index + 1].x, polygon[index + 1].y);
+      if (first !== second && second !== third && first !== third) {
+        builder.indices.push(first, second, third);
+      }
+    }
+  }
+  function coverageAtGridPoint(field2, x, y) {
+    return sampleField(
+      field2,
+      "coverage",
+      -0.5 + x / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+      -0.5 + y / SURFACE_SAMPLES_PER_TILE_INTERVAL
+    );
+  }
+  function compileCoverageMesh(field2) {
+    const builder = { coordinates: [], indices: [], vertexByKey: /* @__PURE__ */ new Map() };
+    const intervals = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+    const row = Array.from({ length: intervals + 1 }, () => 0);
+    const nextRow = Array.from({ length: intervals + 1 }, () => 0);
+    for (let y = 0; y <= intervals; y += 1) row[y] = coverageAtGridPoint(field2, 0, y);
+    for (let x = 0; x < intervals; x += 1) {
+      for (let y = 0; y <= intervals; y += 1) nextRow[y] = coverageAtGridPoint(field2, x + 1, y);
+      for (let y = 0; y < intervals; y += 1) {
+        const topLeft = { x, y, coverage: row[y] };
+        const bottomLeft = { x, y: y + 1, coverage: row[y + 1] };
+        const topRight = { x: x + 1, y, coverage: nextRow[y] };
+        const bottomRight = { x: x + 1, y: y + 1, coverage: nextRow[y + 1] };
+        addWaterPolygon(builder, clipTriangleToWater([topLeft, bottomLeft, bottomRight]));
+        addWaterPolygon(builder, clipTriangleToWater([topLeft, bottomRight, topRight]));
+      }
+      for (let y = 0; y <= intervals; y += 1) row[y] = nextRow[y];
+    }
+    if (builder.coordinates.length / 2 > 65535) {
+      throw new RangeError("compiled water coverage mesh exceeds Uint16 vertex addressing");
+    }
+    return Object.freeze({
+      surfaceUv: new Float32Array(builder.coordinates),
+      indices: new Uint16Array(builder.indices)
+    });
+  }
+  function maximumRiverWidth(river) {
+    let maximum = 0;
+    for (const width of river.widthProfile) maximum = Math.max(maximum, width);
+    return maximum;
+  }
+  function riverPointWidth(river, index) {
+    return river.widthProfile[index] / HYDROLOGY_COORDINATE_SCALE * Math.sqrt(3) / 2;
+  }
+  function compileSweepMesh(rivers) {
+    const builder = { coordinates: [], indices: [], vertexByKey: /* @__PURE__ */ new Map() };
+    const featureKeys = [];
+    for (const river of rivers) {
+      if (maximumRiverWidth(river) > SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED) continue;
+      featureKeys.push(river.featureKey);
+      const pointCount = river.controlPoints.length / 2;
+      const left = [];
+      const right = [];
+      for (let index = 0; index < pointCount; index += 1) {
+        const current = surfaceToWorld(
+          river.controlPoints[index * 2],
+          river.controlPoints[index * 2 + 1]
+        );
+        const previous = surfaceToWorld(
+          river.controlPoints[Math.max(0, index - 1) * 2],
+          river.controlPoints[Math.max(0, index - 1) * 2 + 1]
+        );
+        const next = surfaceToWorld(
+          river.controlPoints[Math.min(pointCount - 1, index + 1) * 2],
+          river.controlPoints[Math.min(pointCount - 1, index + 1) * 2 + 1]
+        );
+        let tangentX = next.x - previous.x;
+        let tangentZ = next.z - previous.z;
+        const length = Math.hypot(tangentX, tangentZ);
+        if (!(length > 0)) throw new TypeError("narrow river sweep contains a zero-length join");
+        tangentX /= length;
+        tangentZ /= length;
+        const halfWidth = riverPointWidth(river, index);
+        const leftSurface = worldToSurface(
+          current.x - tangentZ * halfWidth,
+          current.z + tangentX * halfWidth
+        );
+        const rightSurface = worldToSurface(
+          current.x + tangentZ * halfWidth,
+          current.z - tangentX * halfWidth
+        );
+        left.push(quantizedWaterVertex(
+          builder,
+          (leftSurface.u + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL,
+          (leftSurface.v + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL
+        ));
+        right.push(quantizedWaterVertex(
+          builder,
+          (rightSurface.u + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL,
+          (rightSurface.v + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL
+        ));
+      }
+      for (let index = 0; index < pointCount - 1; index += 1) {
+        if (left[index] === right[index] || left[index + 1] === right[index + 1]) continue;
+        builder.indices.push(
+          left[index],
+          right[index],
+          right[index + 1],
+          left[index],
+          right[index + 1],
+          left[index + 1]
+        );
+      }
+    }
+    if (builder.coordinates.length / 2 > 65535) {
+      throw new RangeError("compiled narrow river sweep exceeds Uint16 vertex addressing");
+    }
+    return Object.freeze({
+      mesh: Object.freeze({
+        surfaceUv: new Float32Array(builder.coordinates),
+        indices: new Uint16Array(builder.indices)
+      }),
+      featureKeys: Object.freeze(featureKeys)
+    });
+  }
+  function coreCoverageState(field2) {
+    const intervals = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+    let any = false;
+    let full = true;
+    for (let x = 0; x <= intervals; x += 1) {
+      for (let y = 0; y <= intervals; y += 1) {
+        const coverage = coverageAtGridPoint(field2, x, y);
+        if (coverage >= SURFACE_WATER_COVERAGE_THRESHOLD) any = true;
+        else full = false;
+      }
+    }
+    return { any, full };
+  }
+  function compileWaterGeometry(window2, field2, waterBodies) {
+    const state = coreCoverageState(field2);
+    if (!state.any) return Object.freeze({ kind: "none" });
+    if (state.full) return Object.freeze({ kind: "full" });
+    const riverByBody = /* @__PURE__ */ new Map();
+    for (const river of window2.rivers) {
+      const values = riverByBody.get(river.bodyId) ?? [];
+      values.push(river);
+      riverByBody.set(river.bodyId, values);
+    }
+    const narrowOnly = waterBodies.length > 0 && waterBodies.every((body) => {
+      const rivers = riverByBody.get(body.bodyId);
+      return body.kind === "river" && rivers?.length && rivers.every((river) => maximumRiverWidth(river) <= SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED);
+    });
+    if (narrowOnly && window2.rivers.length === 1) {
+      const sweep = compileSweepMesh(window2.rivers);
+      if (sweep.mesh.indices.length === 0) {
+        throw new TypeError("narrow-river surface field produced no sweep geometry");
+      }
+      return Object.freeze({ kind: "sweep", ...sweep });
+    }
+    const mesh = compileCoverageMesh(field2);
+    if (mesh.indices.length === 0) {
+      throw new TypeError("wet surface field produced no coverage geometry");
+    }
+    return Object.freeze({ kind: "coverage", mesh });
+  }
+  function hashString(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+  function mixHash(seed, value) {
+    let mixed = (seed ^ value) >>> 0;
+    mixed = Math.imul(mixed ^ mixed >>> 16, 2146121005);
+    mixed = Math.imul(mixed ^ mixed >>> 15, 2221713035);
+    return (mixed ^ mixed >>> 16) >>> 0;
+  }
+  function mixSafeCoordinate(seed, coordinate) {
+    const magnitude = Math.abs(coordinate);
+    const low = magnitude % UINT32_SCALE;
+    const high = Math.floor(magnitude / UINT32_SCALE);
+    let hash = mixHash(seed, low);
+    hash = mixHash(hash, high);
+    return mixHash(hash, coordinate < 0 ? 4294967295 : 0);
+  }
+  function candidateHash(worldHash, globalX, globalY, candidate) {
+    let hash = mixSafeCoordinate(worldHash, globalX);
+    hash = mixSafeCoordinate(hash, globalY);
+    return mixHash(hash, candidate);
+  }
+  function unitRandom(value) {
+    return value / UINT32_SCALE;
+  }
+  function speciesForProfile(weights, random) {
+    let cursor = Math.floor(random * 255);
+    for (const value of weights) {
+      if (cursor < value.weight) {
+        return value.species === "palm" ? 1 /* Palm */ : value.species === "pinia" ? 2 /* Pinia */ : 3 /* Oak */;
+      }
+      cursor -= value.weight;
+    }
+    return 3 /* Oak */;
+  }
+  function pushSeed(output, field2, window2, tileX, tileY, candidateIndex, tree, worldHash) {
+    const globalX = window2.key.chunkX * SURFACE_RENDER_CHUNK_SIZE + tileX;
+    const globalY = window2.key.chunkY * SURFACE_RENDER_CHUNK_SIZE + tileY;
+    if (!Number.isSafeInteger(globalX) || !Number.isSafeInteger(globalY)) {
+      throw new RangeError("vegetation candidate world coordinates must be safe integers");
+    }
+    const randomKey = candidateHash(worldHash, globalX, globalY, candidateIndex);
+    const randomX = mixHash(randomKey, 2738958700);
+    const randomY = mixHash(randomKey, 3355524772);
+    const localU = tileX + (unitRandom(randomX) - 0.5) * 0.84;
+    const localV = tileY + (unitRandom(randomY) - 0.5) * 0.84;
+    const coverage = sampleField(field2, "coverage", localU, localV) / 255;
+    if (coverage > 0.125) return;
+    const groundHeight = sampleField(field2, "ground", localU, localV);
+    const groundU = sampleField(field2, "ground", localU + 0.25, localV) - sampleField(field2, "ground", localU - 0.25, localV);
+    const groundV = sampleField(field2, "ground", localU, localV + 0.25) - sampleField(field2, "ground", localU, localV - 0.25);
+    const slope = Math.hypot(groundU, groundV) * 2;
+    if (slope > (tree ? 0.18 : 0.35)) return;
+    const shore = sampleField(field2, "shore", localU, localV);
+    const shoreFactor = clamp2((shore + 0.1) / 0.9, 0, 1);
+    const semanticIndex = (tileX + SURFACE_INFLUENCE_RADIUS_TILES) * SURFACE_EFFECTIVE_WINDOW_SIZE + tileY + SURFACE_INFLUENCE_RADIUS_TILES;
+    const density = window2.vegetationDensity[semanticIndex] / 255;
+    const acceptance = density * shoreFactor * (tree ? 0.42 : 1);
+    if (unitRandom(mixHash(randomKey, 2911926141)) >= acceptance) return;
+    const profileIndex = window2.vegetationProfile[semanticIndex];
+    const profile = WORLD_VEGETATION_PROFILE_CATALOG[profileIndex];
+    if (!profile || profile.species.length === 0) return;
+    output.push({
+      tileIndex: tileX * SURFACE_RENDER_CHUNK_SIZE + tileY,
+      candidateIndex,
+      randomKey,
+      localU,
+      localV,
+      groundHeight,
+      species: tree ? speciesForProfile(profile.species, unitRandom(mixHash(randomKey, 2654435769))) : 0 /* Grass */,
+      scale: 160 + (mixHash(randomKey, 1013904242) & 95),
+      rotation: mixHash(randomKey, 3668340011) & 65535
+    });
+  }
+  function compileVegetationSeeds(window2, field2) {
+    const records = [];
+    const worldHash = hashString(window2.worldIdentity);
+    for (let tileX = window2.validBounds.minX; tileX < window2.validBounds.maxXExclusive; tileX += 1) {
+      for (let tileY = window2.validBounds.minY; tileY < window2.validBounds.maxYExclusive; tileY += 1) {
+        for (let candidate = 0; candidate < 8; candidate += 1) {
+          pushSeed(records, field2, window2, tileX, tileY, candidate, false, worldHash);
+        }
+        for (let candidate = 8; candidate < 10; candidate += 1) {
+          pushSeed(records, field2, window2, tileX, tileY, candidate, true, worldHash);
+        }
+      }
+    }
+    if (records.length > SURFACE_MAX_VEGETATION_SEEDS) {
+      throw new RangeError("compiled surface exceeds the vegetation seed budget");
+    }
+    records.sort((first, second) => first.tileIndex - second.tileIndex || first.candidateIndex - second.candidateIndex);
+    const count = records.length;
+    const tileIndex = new Uint16Array(count);
+    const candidateIndex = new Uint8Array(count);
+    const randomKey = new Uint32Array(count);
+    const surfaceCoordinates = new Int16Array(count * 2);
+    const groundHeight = new Uint16Array(count);
+    const species = new Uint8Array(count);
+    const scale = new Uint8Array(count);
+    const rotation = new Uint16Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const record = records[index];
+      tileIndex[index] = record.tileIndex;
+      candidateIndex[index] = record.candidateIndex;
+      randomKey[index] = record.randomKey;
+      surfaceCoordinates[index * 2] = Math.round(record.localU * SURFACE_VEGETATION_COORDINATE_SCALE);
+      surfaceCoordinates[index * 2 + 1] = Math.round(record.localV * SURFACE_VEGETATION_COORDINATE_SCALE);
+      groundHeight[index] = Math.max(0, Math.min(65535, Math.round(record.groundHeight * 65535)));
+      species[index] = record.species;
+      scale[index] = record.scale;
+      rotation[index] = record.rotation;
+    }
+    return Object.freeze({
+      tileIndex,
+      candidateIndex,
+      randomKey,
+      surfaceCoordinates,
+      groundHeight,
+      species,
+      scale,
+      rotation
+    });
+  }
+  function waterGeometryByteLength(value) {
+    return value.kind === "coverage" || value.kind === "sweep" ? value.mesh.surfaceUv.byteLength + value.mesh.indices.byteLength : 0;
+  }
+  function vegetationSeedsByteLength(value) {
+    return value.tileIndex.byteLength + value.candidateIndex.byteLength + value.randomKey.byteLength + value.surfaceCoordinates.byteLength + value.groundHeight.byteLength + value.species.byteLength + value.scale.byteLength + value.rotation.byteLength;
+  }
+  function surfacePresentationTransferables(waterGeometry, vegetationSeeds) {
+    const result = [];
+    if (waterGeometry.kind === "coverage" || waterGeometry.kind === "sweep") {
+      result.push(waterGeometry.mesh.surfaceUv.buffer);
+      result.push(waterGeometry.mesh.indices.buffer);
+    }
+    result.push(
+      vegetationSeeds.tileIndex.buffer,
+      vegetationSeeds.candidateIndex.buffer,
+      vegetationSeeds.randomKey.buffer,
+      vegetationSeeds.surfaceCoordinates.buffer,
+      vegetationSeeds.groundHeight.buffer,
+      vegetationSeeds.species.buffer,
+      vegetationSeeds.scale.buffer,
+      vegetationSeeds.rotation.buffer
+    );
+    return Object.freeze(result);
+  }
+
   // src/world/semantic/SurfaceCompiler.ts
   var SQRT_THREE = Math.sqrt(3);
   var TEXEL_ANTIALIAS_DISTANCE = SQRT_THREE / SURFACE_SAMPLES_PER_TILE_INTERVAL / 2;
@@ -15092,7 +15490,7 @@ void main() {
   var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
   var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
   var validatedCompiledChunks = /* @__PURE__ */ new WeakSet();
-  function clamp2(value, minimum, maximum) {
+  function clamp3(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
   }
   function windowIndex(x, y) {
@@ -15108,12 +15506,12 @@ void main() {
     };
   }
   function sampleWindowChannel(values, localU, localV, channels, channel) {
-    const sampleU = clamp2(
+    const sampleU = clamp3(
       localU,
       -SURFACE_INFLUENCE_RADIUS_TILES,
       SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
     );
-    const sampleV = clamp2(
+    const sampleV = clamp3(
       localV,
       -SURFACE_INFLUENCE_RADIUS_TILES,
       SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
@@ -15164,7 +15562,7 @@ void main() {
     return values.map((value) => Object.freeze({ ...value, worldPoints: preparePoints(value.boundaryPoints) }));
   }
   function coverageForSignedDistance(signedDistance) {
-    return clamp2(Math.floor((0.5 + signedDistance / (TEXEL_ANTIALIAS_DISTANCE * 2)) * 255 + 0.5), 0, 255);
+    return clamp3(Math.floor((0.5 + signedDistance / (TEXEL_ANTIALIAS_DISTANCE * 2)) * 255 + 0.5), 0, 255);
   }
   function riverCandidate(x, z, river) {
     let best;
@@ -15176,7 +15574,7 @@ void main() {
       const dz = river.worldPoints[index + 3] - startZ;
       const lengthSquared = dx * dx + dz * dz;
       if (lengthSquared === 0) continue;
-      const amount = clamp2(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+      const amount = clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
       const nearestX = startX + dx * amount;
       const nearestZ = startZ + dz * amount;
       const distance = Math.hypot(x - nearestX, z - nearestZ);
@@ -15219,7 +15617,7 @@ void main() {
       const dx = points[current] - startX;
       const dz = points[current + 1] - startZ;
       const lengthSquared = dx * dx + dz * dz;
-      const amount = lengthSquared === 0 ? 0 : clamp2(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+      const amount = lengthSquared === 0 ? 0 : clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
       const offsetX = x - (startX + dx * amount);
       const offsetZ = z - (startZ + dz * amount);
       bestSquared = Math.min(bestSquared, offsetX * offsetX + offsetZ * offsetZ);
@@ -15343,8 +15741,8 @@ void main() {
     else if (substrate === 2 /* Sand */) values[1] += 0.45;
     else if (substrate === 3 /* Rock */) values[3] += 0.5;
     else if (substrate === 4 /* Permafrost */) values[2] += 0.5;
-    const steepness = clamp2(slope * 8, 0, 1);
-    const shoreInfluence = clamp2(1 - Math.abs(shoreDistance) / SHORE_DISTANCE_LIMIT, 0, 1);
+    const steepness = clamp3(slope * 8, 0, 1);
+    const shoreInfluence = clamp3(1 - Math.abs(shoreDistance) / SHORE_DISTANCE_LIMIT, 0, 1);
     values[3] += steepness * 0.6;
     values[1] += shoreInfluence * 0.25;
     values[0] += climateMoisture * (1 - steepness) * 0.12;
@@ -15362,7 +15760,17 @@ void main() {
     }
     return hash;
   }
-  function surfaceChecksum(field2, bodies) {
+  function updateChecksumText(hash, value) {
+    for (const character of value) {
+      const code = character.charCodeAt(0);
+      hash ^= code & 255;
+      hash = Math.imul(hash, 16777619);
+      hash ^= code >>> 8;
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash;
+  }
+  function surfaceChecksum(field2, bodies, waterGeometry, vegetationSeeds) {
     let hash = 2166136261;
     for (const values of [
       field2.groundHeight,
@@ -15377,14 +15785,28 @@ void main() {
       field2.waterBodyIndex
     ]) hash = updateChecksum(hash, values);
     for (const body of bodies) {
-      for (const character of `${body.bodyId}\0${body.kind}\0`) {
-        const code = character.charCodeAt(0);
-        hash ^= code & 255;
-        hash = Math.imul(hash, 16777619);
-        hash ^= code >>> 8;
-        hash = Math.imul(hash, 16777619);
+      hash = updateChecksumText(hash, `${body.bodyId}\0${body.kind}\0`);
+    }
+    hash = updateChecksumText(hash, `${waterGeometry.kind}\0`);
+    if (waterGeometry.kind === "coverage" || waterGeometry.kind === "sweep") {
+      hash = updateChecksum(hash, waterGeometry.mesh.surfaceUv);
+      hash = updateChecksum(hash, waterGeometry.mesh.indices);
+    }
+    if (waterGeometry.kind === "sweep") {
+      for (const featureKey of waterGeometry.featureKeys) {
+        hash = updateChecksumText(hash, `${featureKey}\0`);
       }
     }
+    for (const values of [
+      vegetationSeeds.tileIndex,
+      vegetationSeeds.candidateIndex,
+      vegetationSeeds.randomKey,
+      vegetationSeeds.surfaceCoordinates,
+      vegetationSeeds.groundHeight,
+      vegetationSeeds.species,
+      vegetationSeeds.scale,
+      vegetationSeeds.rotation
+    ]) hash = updateChecksum(hash, values);
     return (hash >>> 0).toString(16).padStart(8, "0");
   }
   function compileSurfaceChunk(window2) {
@@ -15503,8 +15925,8 @@ void main() {
           const depth = Math.max(0, level - ground[workIndex]) * workCoverage[workIndex] / 255;
           field2.waterLevel[index] = encodeFloat16(level);
           field2.waterDepth[index] = encodeFloat16(depth);
-          field2.flow[index * 2] = Math.round(clamp2(workFlow[workIndex * 2], -1, 1) * 127);
-          field2.flow[index * 2 + 1] = Math.round(clamp2(workFlow[workIndex * 2 + 1], -1, 1) * 127);
+          field2.flow[index * 2] = Math.round(clamp3(workFlow[workIndex * 2], -1, 1) * 127);
+          field2.flow[index * 2 + 1] = Math.round(clamp3(workFlow[workIndex * 2 + 1], -1, 1) * 127);
           field2.waterBodyIndex[index] = paletteById.get(workBodyIds[workIndex]);
         }
         minGroundHeight = Math.min(minGroundHeight, decodeFloat16(field2.groundHeight[index]));
@@ -15525,7 +15947,9 @@ void main() {
       minWaterLevel: hasWater ? minWaterLevel : 0,
       maxWaterLevel: hasWater ? maxWaterLevel : 0
     });
-    const byteLength = fieldByteLength(field2);
+    const waterGeometry = compileWaterGeometry(window2, field2, waterBodies);
+    const vegetationSeeds = compileVegetationSeeds(window2, field2);
+    const byteLength = fieldByteLength(field2) + waterGeometryByteLength(waterGeometry) + vegetationSeedsByteLength(vegetationSeeds);
     const dependencyKey = cloneSurfaceDependencyKey(window2.dependencyKey);
     const chunk = Object.freeze({
       key: Object.freeze({ ...window2.key }),
@@ -15534,8 +15958,10 @@ void main() {
       bounds,
       field: field2,
       waterBodies,
+      waterGeometry,
+      vegetationSeeds,
       byteLength,
-      contentChecksum: surfaceChecksum(field2, waterBodies)
+      contentChecksum: surfaceChecksum(field2, waterBodies, waterGeometry, vegetationSeeds)
     });
     assertCompiledSurfaceChunk(chunk);
     validatedCompiledChunks.add(chunk);
@@ -15569,6 +15995,81 @@ void main() {
       throw new TypeError("compiled surface bounds are invalid");
     }
   }
+  function assertWaterMesh(mesh) {
+    if (!mesh || typeof mesh !== "object" || Object.getOwnPropertyNames(mesh).some((name) => name !== "surfaceUv" && name !== "indices") || !(mesh.surfaceUv instanceof Float32Array) || mesh.surfaceUv.length < 6 || mesh.surfaceUv.length % 2 !== 0 || !(mesh.indices instanceof Uint16Array) || mesh.indices.length < 3 || mesh.indices.length % 3 !== 0) {
+      throw new TypeError("compiled water mesh layout is invalid");
+    }
+    const vertexCount = mesh.surfaceUv.length / 2;
+    for (const coordinate of mesh.surfaceUv) {
+      if (!Number.isFinite(coordinate)) throw new TypeError("compiled water mesh coordinates must be finite");
+    }
+    for (let index = 0; index < mesh.indices.length; index += 3) {
+      const first = mesh.indices[index];
+      const second = mesh.indices[index + 1];
+      const third = mesh.indices[index + 2];
+      if (first >= vertexCount || second >= vertexCount || third >= vertexCount || first === second || second === third || first === third) {
+        throw new TypeError("compiled water mesh indices are invalid");
+      }
+      const ax = mesh.surfaceUv[first * 2];
+      const ay = mesh.surfaceUv[first * 2 + 1];
+      const bx = mesh.surfaceUv[second * 2];
+      const by = mesh.surfaceUv[second * 2 + 1];
+      const cx = mesh.surfaceUv[third * 2];
+      const cy = mesh.surfaceUv[third * 2 + 1];
+      if (Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) <= 1e-9) {
+        throw new TypeError("compiled water mesh contains a degenerate logical triangle");
+      }
+    }
+  }
+  function assertWaterGeometry(value) {
+    if (!value || typeof value !== "object") throw new TypeError("compiled water geometry is invalid");
+    if (value.kind === "none" || value.kind === "full") {
+      if (Object.getOwnPropertyNames(value).some((name) => name !== "kind")) {
+        throw new TypeError("shared compiled water geometry contains unknown fields");
+      }
+      return;
+    }
+    if (value.kind !== "coverage" && value.kind !== "sweep") {
+      throw new TypeError("compiled water geometry kind is invalid");
+    }
+    const allowed = value.kind === "coverage" ? /* @__PURE__ */ new Set(["kind", "mesh"]) : /* @__PURE__ */ new Set(["kind", "mesh", "featureKeys"]);
+    if (Object.getOwnPropertyNames(value).some((name) => !allowed.has(name))) {
+      throw new TypeError("compiled water geometry contains unknown fields");
+    }
+    assertWaterMesh(value.mesh);
+    if (value.kind === "sweep") {
+      if (!Array.isArray(value.featureKeys) || value.featureKeys.length === 0 || value.featureKeys.some((key, index) => typeof key !== "string" || key.length === 0 || index > 0 && value.featureKeys[index - 1].localeCompare(key) >= 0)) {
+        throw new TypeError("compiled water sweep feature keys are invalid");
+      }
+    }
+  }
+  function assertVegetationSeeds(value) {
+    if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).some((name) => ![
+      "tileIndex",
+      "candidateIndex",
+      "randomKey",
+      "surfaceCoordinates",
+      "groundHeight",
+      "species",
+      "scale",
+      "rotation"
+    ].includes(name)) || !(value.tileIndex instanceof Uint16Array) || !(value.candidateIndex instanceof Uint8Array) || !(value.randomKey instanceof Uint32Array) || !(value.surfaceCoordinates instanceof Int16Array) || !(value.groundHeight instanceof Uint16Array) || !(value.species instanceof Uint8Array) || !(value.scale instanceof Uint8Array) || !(value.rotation instanceof Uint16Array)) {
+      throw new TypeError("compiled vegetation seed layout is invalid");
+    }
+    const count = value.tileIndex.length;
+    if (count > SURFACE_MAX_VEGETATION_SEEDS || value.candidateIndex.length !== count || value.randomKey.length !== count || value.surfaceCoordinates.length !== count * 2 || value.groundHeight.length !== count || value.species.length !== count || value.scale.length !== count || value.rotation.length !== count) {
+      throw new TypeError("compiled vegetation seed columns have inconsistent lengths");
+    }
+    let previousIdentity = -1;
+    for (let index = 0; index < count; index += 1) {
+      const identity = value.tileIndex[index] * 10 + value.candidateIndex[index];
+      const species = value.species[index];
+      if (value.tileIndex[index] >= SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE || value.candidateIndex[index] >= 10 || identity <= previousIdentity || species < 0 /* Grass */ || species > 3 /* Oak */ || value.candidateIndex[index] < 8 !== (species === 0 /* Grass */) || value.scale[index] < 160) {
+        throw new TypeError("compiled vegetation seed values are invalid");
+      }
+      previousIdentity = identity;
+    }
+  }
   function assertCompiledSurfaceChunk(value) {
     if (!value || typeof value !== "object") throw new TypeError("compiled surface chunk must be an object");
     const chunk = value;
@@ -15579,6 +16080,8 @@ void main() {
       "bounds",
       "field",
       "waterBodies",
+      "waterGeometry",
+      "vegetationSeeds",
       "byteLength",
       "contentChecksum"
     ].includes(name))) throw new TypeError("compiled surface chunk contains unknown fields");
@@ -15603,6 +16106,8 @@ void main() {
         throw new TypeError("compiled surface body palette must be strictly ordered");
       }
     }
+    assertWaterGeometry(chunk.waterGeometry);
+    assertVegetationSeeds(chunk.vegetationSeeds);
     let minGroundHeight = Number.POSITIVE_INFINITY;
     let maxGroundHeight = Number.NEGATIVE_INFINITY;
     let minWaterLevel = Number.POSITIVE_INFINITY;
@@ -15641,7 +16146,12 @@ void main() {
     if (chunk.bounds.minGroundHeight !== minGroundHeight || chunk.bounds.maxGroundHeight !== maxGroundHeight || chunk.bounds.hasWater !== hasWater || chunk.bounds.minWaterLevel !== (hasWater ? minWaterLevel : 0) || chunk.bounds.maxWaterLevel !== (hasWater ? maxWaterLevel : 0)) {
       throw new TypeError("compiled surface bounds do not match the field payload");
     }
-    if (chunk.byteLength !== fieldByteLength(chunk.field) || chunk.contentChecksum !== surfaceChecksum(chunk.field, chunk.waterBodies)) {
+    if (chunk.byteLength !== fieldByteLength(chunk.field) + waterGeometryByteLength(chunk.waterGeometry) + vegetationSeedsByteLength(chunk.vegetationSeeds) || chunk.contentChecksum !== surfaceChecksum(
+      chunk.field,
+      chunk.waterBodies,
+      chunk.waterGeometry,
+      chunk.vegetationSeeds
+    )) {
       throw new TypeError("compiled surface chunk byte length or checksum is invalid");
     }
   }
@@ -15650,7 +16160,7 @@ void main() {
     assertCompiledSurfaceChunk(value);
     validatedCompiledChunks.add(value);
   }
-  function bilinear(values, amountX, amountY) {
+  function bilinear2(values, amountX, amountY) {
     const top = values[0] + (values[1] - values[0]) * amountX;
     const bottom = values[2] + (values[3] - values[2]) * amountX;
     return top + (bottom - top) * amountY;
@@ -15680,17 +16190,17 @@ void main() {
       (1 - amountX) * amountY,
       amountX * amountY
     ];
-    const groundHeight = bilinear(
+    const groundHeight = bilinear2(
       indices.map((index) => decodeFloat16(chunk.field.groundHeight[index])),
       amountX,
       amountY
     );
-    const shorelineDistance = bilinear(
+    const shorelineDistance = bilinear2(
       indices.map((index) => decodeFloat16(chunk.field.shorelineDistance[index])),
       amountX,
       amountY
     );
-    const waterCoverage = bilinear(
+    const waterCoverage = bilinear2(
       indices.map((index) => chunk.field.waterCoverage[index] / 255),
       amountX,
       amountY
@@ -15724,7 +16234,7 @@ void main() {
     }
     const selectedIndex = selected >= 0 ? indices[selected] : indices[0];
     const bodyIndex = selectedWeight > 0 ? chunk.field.waterBodyIndex[selectedIndex] : 0;
-    const material = [0, 1, 2, 3].map((channel) => bilinear(
+    const material = [0, 1, 2, 3].map((channel) => bilinear2(
       indices.map((index) => chunk.field.materialWeights[index * 4 + channel] / 255),
       amountX,
       amountY
@@ -15742,7 +16252,7 @@ void main() {
       waterBody: bodyIndex > 0 ? chunk.waterBodies[bodyIndex - 1] : void 0
     });
   }
-  function compiledSurfaceFieldTransferables(chunk) {
+  function compiledSurfaceChunkTransferables(chunk) {
     assertCompiledSurfaceChunkOnce(chunk);
     const candidates = [
       chunk.field.groundHeight.buffer,
@@ -15754,10 +16264,11 @@ void main() {
       chunk.field.waterCoverage.buffer,
       chunk.field.waterKind.buffer,
       chunk.field.waterProfile.buffer,
-      chunk.field.waterBodyIndex.buffer
+      chunk.field.waterBodyIndex.buffer,
+      ...surfacePresentationTransferables(chunk.waterGeometry, chunk.vegetationSeeds)
     ];
     if (candidates.some((buffer) => !(buffer instanceof ArrayBuffer))) {
-      throw new TypeError("compiled surface field buffers must be transferable ArrayBuffers");
+      throw new TypeError("compiled surface chunk buffers must be transferable ArrayBuffers");
     }
     const buffers = candidates;
     if (new Set(buffers).size !== buffers.length) {
@@ -20073,7 +20584,7 @@ void main() {
   }
 
   // src/world/WorldSurfaceView.ts
-  var clamp3 = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+  var clamp4 = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
   var CORNER_DIRECTIONS = [
     ["NE", "SE"],
     ["SE", "S"],
@@ -20252,17 +20763,17 @@ void main() {
       } else if (tile?.type === "mountain" /* mountain */) {
         contribution = {
           shoreline: false,
-          relief: sample ? clamp3(sample.relief, profile.relief.mountainMinimum, profile.relief.mountainMaximum) : profile.relief.staticMountain
+          relief: sample ? clamp4(sample.relief, profile.relief.mountainMinimum, profile.relief.mountainMaximum) : profile.relief.staticMountain
         };
       } else if (tile?.modifiers?.includes("hill")) {
         contribution = {
           shoreline: false,
-          relief: sample ? clamp3(sample.relief, profile.relief.hillMinimum, profile.relief.hillMaximum) : profile.relief.staticHill
+          relief: sample ? clamp4(sample.relief, profile.relief.hillMinimum, profile.relief.hillMaximum) : profile.relief.staticHill
         };
       } else {
         contribution = {
           shoreline: false,
-          relief: sample ? clamp3(sample.relief, profile.relief.plainMinimum, profile.relief.plainMaximum) : 0
+          relief: sample ? clamp4(sample.relief, profile.relief.plainMinimum, profile.relief.plainMaximum) : 0
         };
       }
       this.contributions.set(key, contribution);
@@ -20284,7 +20795,7 @@ void main() {
         const generatedWood = this.resolveGeneratedTile(x, y)?.modifiers?.includes("wood") === true;
         density = generatedWood ? sample?.vegetationDensity ?? profile.vegetation.neutralDensity : Math.max(sample?.vegetationDensity ?? 0, profile.vegetation.neutralDensity);
       }
-      density = clamp3(density, 0, 1);
+      density = clamp4(density, 0, 1);
       this.vegetation.set(key, density);
       return density;
     }
@@ -24878,7 +25389,7 @@ void main() {
       });
       this.latestEffectiveRevision = snapshot.effectiveRevision;
       const key = effectiveWindow.key;
-      const keyString2 = renderKeyString2(key);
+      const keyString5 = renderKeyString2(key);
       const serializedKey = serializeSurfaceDependencyKey(effectiveWindow.dependencyKey);
       const binding = Object.freeze({
         effectiveRevision: effectiveWindow.effectiveRevision,
@@ -24908,15 +25419,15 @@ void main() {
         job.subscribers.add(requestToken.renderChunkGeneration);
         entryPromise = job.promise;
       }
-      const previous = this.activeByRenderKey.get(keyString2);
+      const previous = this.activeByRenderKey.get(keyString5);
       if (previous?.job) this.removeJobSubscriber(previous.job, previous.requestToken);
       const active = { key, requestToken, binding, job };
-      this.activeByRenderKey.set(keyString2, active);
+      this.activeByRenderKey.set(keyString5, active);
       let leaseValue;
       const result = entryPromise.then((entry) => {
         job?.subscribers.delete(requestToken.renderChunkGeneration);
         active.job = void 0;
-        if (!this.isCurrentActive(keyString2, requestToken, binding, entry.chunk)) {
+        if (!this.isCurrentActive(keyString5, requestToken, binding, entry.chunk)) {
           this.staleResultCount += 1;
           return Object.freeze({ status: "stale", requestToken });
         }
@@ -24927,17 +25438,17 @@ void main() {
         job?.subscribers.delete(requestToken.renderChunkGeneration);
         active.job = void 0;
         if (this.disposed) throw new Error("surface compilation service is disposed");
-        const current = this.activeByRenderKey.get(keyString2);
+        const current = this.activeByRenderKey.get(keyString5);
         if (!current || !tokensEqual(current.requestToken, requestToken)) {
           this.staleResultCount += 1;
           return Object.freeze({ status: "stale", requestToken });
         }
-        this.activeByRenderKey.delete(keyString2);
+        this.activeByRenderKey.delete(keyString5);
         this.requestTracker.release(key, requestToken);
         throw reason;
       });
       const abort = options.signal ? () => {
-        if (!leaseValue && this.cancelPending(keyString2, active)) {
+        if (!leaseValue && this.cancelPending(keyString5, active)) {
           this.cancelledRequestCount += 1;
         } else if (leaseValue?.release()) {
           this.cancelledRequestCount += 1;
@@ -24954,7 +25465,7 @@ void main() {
         result,
         cancel: () => {
           if (leaseValue) return leaseValue.release();
-          const cancelled = this.cancelPending(keyString2, active);
+          const cancelled = this.cancelPending(keyString5, active);
           if (cancelled) this.cancelledRequestCount += 1;
           return cancelled;
         }
@@ -25140,10 +25651,10 @@ void main() {
         entry.leases -= 1;
         this.activeLeaseCount -= 1;
         this.liveLeaseReleasers.delete(releaseInternal);
-        const keyString2 = renderKeyString2(active.key);
-        const current = this.activeByRenderKey.get(keyString2);
+        const keyString5 = renderKeyString2(active.key);
+        const current = this.activeByRenderKey.get(keyString5);
         if (current && tokensEqual(current.requestToken, active.requestToken)) {
-          this.activeByRenderKey.delete(keyString2);
+          this.activeByRenderKey.delete(keyString5);
           this.requestTracker.release(active.key, active.requestToken);
         }
       };
@@ -25165,8 +25676,8 @@ void main() {
       this.liveLeaseReleasers.add(releaseInternal);
       return lease;
     }
-    isCurrentActive(keyString2, requestToken, binding, chunk) {
-      const current = this.activeByRenderKey.get(keyString2);
+    isCurrentActive(keyString5, requestToken, binding, chunk) {
+      const current = this.activeByRenderKey.get(keyString5);
       if (!current || !tokensEqual(current.requestToken, requestToken)) return false;
       return this.requestTracker.canAccept(current.key, {
         requestToken,
@@ -25174,10 +25685,10 @@ void main() {
         dependencyKey: chunk.dependencyKey
       }, binding);
     }
-    cancelPending(keyString2, active) {
-      const current = this.activeByRenderKey.get(keyString2);
+    cancelPending(keyString5, active) {
+      const current = this.activeByRenderKey.get(keyString5);
       if (!current || !tokensEqual(current.requestToken, active.requestToken)) return false;
-      this.activeByRenderKey.delete(keyString2);
+      this.activeByRenderKey.delete(keyString5);
       this.requestTracker.release(active.key, active.requestToken);
       if (active.job) this.removeJobSubscriber(active.job, active.requestToken);
       return true;
@@ -25393,8 +25904,8 @@ void main() {
     allocate(key) {
       this.assertReady("allocate");
       assertRenderKey(key);
-      const keyString2 = renderKeyString3(key);
-      if (this.activeByRenderKey.has(keyString2)) {
+      const keyString5 = renderKeyString3(key);
+      if (this.activeByRenderKey.has(keyString5)) {
         throw new TypeError("render chunk already owns a surface texture slot");
       }
       let page;
@@ -25425,7 +25936,7 @@ void main() {
       slot.handle = handle;
       slot.key = Object.freeze({ ...key });
       slot.uploaded = false;
-      this.activeByRenderKey.set(keyString2, handle);
+      this.activeByRenderKey.set(keyString5, handle);
       return handle;
     }
     upload(handle, chunk) {
@@ -26169,6 +26680,7 @@ void main() {
     constructor(initial = DEFAULT_LIGHTING_STATE) {
       this.uniformBindings = /* @__PURE__ */ new Set();
       this.rendererBindings = /* @__PURE__ */ new Set();
+      this.sceneBindings = /* @__PURE__ */ new Set();
       this.disposed = false;
       this.current = createLightingState(initial);
     }
@@ -26196,6 +26708,7 @@ void main() {
       this.current = next;
       for (const binding of this.uniformBindings) this.updateUniformBinding(binding.publicBinding, next);
       for (const binding of this.rendererBindings) this.updateRenderer(binding.publicBinding.renderer, next);
+      for (const binding of this.sceneBindings) this.updateSceneBinding(binding.publicBinding, next);
       return next;
     }
     bindUniforms() {
@@ -26248,13 +26761,52 @@ void main() {
       this.rendererBindings.add(mutable);
       return mutable.publicBinding;
     }
+    bindScene(scene) {
+      this.assertReady();
+      if (!(scene instanceof three.Scene)) throw new TypeError("lighting scene is invalid");
+      if ([...this.sceneBindings].some((binding) => binding.publicBinding.scene === scene)) {
+        throw new TypeError("lighting scene already has a shared environment binding");
+      }
+      const sunLight = new three.DirectionalLight(16777215, 1);
+      sunLight.name = "surface-v2-sun";
+      const hemisphereLight = new three.HemisphereLight(16777215, 16777215, 1);
+      hemisphereLight.name = "surface-v2-environment-diffuse";
+      const mutable = {};
+      const publicBinding = {
+        scene,
+        sunLight,
+        hemisphereLight,
+        get released() {
+          return mutable.released;
+        },
+        release: () => {
+          if (mutable.released) return false;
+          mutable.released = true;
+          this.sceneBindings.delete(mutable);
+          scene.remove(sunLight, hemisphereLight);
+          if (scene.environment === this.current.specularEnvironment.texture) {
+            scene.environment = mutable.previousEnvironment;
+          }
+          return true;
+        }
+      };
+      mutable.publicBinding = Object.freeze(publicBinding);
+      mutable.previousEnvironment = scene.environment;
+      mutable.released = false;
+      this.updateSceneBinding(mutable.publicBinding, this.current);
+      scene.add(sunLight, hemisphereLight);
+      this.sceneBindings.add(mutable);
+      return mutable.publicBinding;
+    }
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
       for (const binding of this.uniformBindings) binding.released = true;
       for (const binding of this.rendererBindings) binding.released = true;
+      for (const binding of [...this.sceneBindings]) binding.publicBinding.release();
       this.uniformBindings.clear();
       this.rendererBindings.clear();
+      this.sceneBindings.clear();
     }
     get stats() {
       return Object.freeze({
@@ -26262,7 +26814,8 @@ void main() {
         uniformRevision: this.current.uniformRevision,
         environmentRevision: this.current.environmentRevision,
         uniformBindings: this.uniformBindings.size,
-        rendererBindings: this.rendererBindings.size
+        rendererBindings: this.rendererBindings.size,
+        sceneBindings: this.sceneBindings.size
       });
     }
     updateUniformBinding(binding, state) {
@@ -26279,6 +26832,19 @@ void main() {
       renderer.toneMapping = three.ACESFilmicToneMapping;
       renderer.toneMappingExposure = state.exposure;
       renderer.outputColorSpace = three.SRGBColorSpace;
+    }
+    updateSceneBinding(binding, state) {
+      copyColor(binding.sunLight.color, state.sunRadiance);
+      binding.sunLight.intensity = 1;
+      binding.sunLight.position.set(
+        state.sunDirection.x * 100,
+        state.sunDirection.y * 100,
+        state.sunDirection.z * 100
+      );
+      copyColor(binding.hemisphereLight.color, state.skyDiffuseIrradiance);
+      copyColor(binding.hemisphereLight.groundColor, state.groundDiffuseIrradiance);
+      binding.hemisphereLight.intensity = 1;
+      binding.scene.environment = state.specularEnvironment.texture;
     }
     assertReady() {
       if (this.disposed) throw new TypeError("lighting state controller is disposed");
@@ -26483,10 +27049,11 @@ void main() {
         "surfaceTexturePool",
         "fogTexturePool",
         "lighting",
+        "geometryPool",
         "hexSize",
         "heightScale",
         "materialPalette"
-      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || options.fogTexturePool !== void 0 && !(options.fogTexturePool instanceof SurfaceFogTexturePool) || !(options.lighting instanceof LightingStateController)) {
+      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || options.fogTexturePool !== void 0 && !(options.fogTexturePool instanceof SurfaceFogTexturePool) || options.geometryPool !== void 0 && !(options.geometryPool instanceof SurfaceGroundGeometryPool) || !(options.lighting instanceof LightingStateController)) {
         throw new TypeError("GroundLayer options are invalid");
       }
       if (options.surfaceTexturePool.state !== "ready" || options.fogTexturePool?.state === "disposed" || options.fogTexturePool?.state === "lost" || options.lighting.stats.state !== "ready") {
@@ -26494,6 +27061,9 @@ void main() {
       }
       if (options.fogTexturePool && !options.fogTexturePool.isCompanionOf(options.surfaceTexturePool)) {
         throw new TypeError("GroundLayer fog pool must accompany its surface texture pool");
+      }
+      if (options.geometryPool?.stats.state === "disposed") {
+        throw new TypeError("GroundLayer geometry pool must be ready");
       }
       this.hexSize = options.hexSize ?? 1;
       this.heightScale = options.heightScale ?? 1;
@@ -26508,7 +27078,8 @@ void main() {
       this.surfaceTexturePool = options.surfaceTexturePool;
       this.fogTexturePool = options.fogTexturePool;
       this.lighting = options.lighting;
-      this.geometryPool = new SurfaceGroundGeometryPool(this.hexSize, this.heightScale);
+      this.geometryPool = options.geometryPool ?? new SurfaceGroundGeometryPool(this.hexSize, this.heightScale);
+      this.ownsGeometryPool = options.geometryPool === void 0;
       this.root.name = "surface-ground-layer-v2";
       this.root.matrixAutoUpdate = true;
     }
@@ -26641,7 +27212,7 @@ void main() {
         page.material.dispose();
       }
       this.materials.clear();
-      this.geometryPool.dispose();
+      if (this.ownsGeometryPool) this.geometryPool.dispose();
       this.root.removeFromParent();
       this.stateValue = "disposed";
     }
@@ -26739,6 +27310,971 @@ void main() {
       if (this.stateValue === "disposed") throw new TypeError("GroundLayer is disposed");
     }
   };
+  var WATER_VERTEX_SHADER2 = (
+    /* glsl */
+    `
+in vec2 surfaceUv;
+
+uniform sampler2DArray uSurfaceValues;
+uniform sampler2DArray uSurfaceFlow;
+uniform sampler2DArray uSurfaceWater;
+uniform float uLayer;
+uniform float uHeightScale;
+uniform float uTime;
+uniform vec2 uChunkSurfacePhase;
+
+out vec2 vSurfaceUv;
+out vec2 vFlow;
+out float vDepth;
+out float vShoreDistance;
+flat out float vWaterKind;
+flat out float vWaterProfile;
+out vec3 vWaterWorldPosition;
+
+const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
+const float SURFACE_FIELD_MAX_TEXEL = 65.0;
+const float TWO_PI = 6.283185307179586;
+
+vec2 surfaceFieldCoordinate(vec2 localSurface) {
+    return (localSurface + vec2(0.5)) * SURFACE_SAMPLES_PER_TILE + vec2(0.5);
+}
+
+vec4 sampleBilinear(sampler2DArray source, vec2 localSurface) {
+    vec2 coordinate = clamp(surfaceFieldCoordinate(localSurface), vec2(0.0), vec2(SURFACE_FIELD_MAX_TEXEL));
+    ivec2 first = ivec2(floor(coordinate));
+    ivec2 second = min(first + ivec2(1), ivec2(65));
+    vec2 amount = coordinate - vec2(first);
+    vec4 top = mix(
+        texelFetch(source, ivec3(first.x, first.y, int(uLayer)), 0),
+        texelFetch(source, ivec3(second.x, first.y, int(uLayer)), 0),
+        amount.x
+    );
+    vec4 bottom = mix(
+        texelFetch(source, ivec3(first.x, second.y, int(uLayer)), 0),
+        texelFetch(source, ivec3(second.x, second.y, int(uLayer)), 0),
+        amount.x
+    );
+    return mix(top, bottom, amount.y);
+}
+
+void main() {
+    vec4 values = sampleBilinear(uSurfaceValues, surfaceUv);
+    vec2 flow = sampleBilinear(uSurfaceFlow, surfaceUv).rg;
+    ivec2 categoricalCoordinate = ivec2(clamp(
+        floor(surfaceFieldCoordinate(surfaceUv) + vec2(0.5)),
+        vec2(0.0),
+        vec2(SURFACE_FIELD_MAX_TEXEL)
+    ));
+    vec3 waterClass = texelFetch(
+        uSurfaceWater,
+        ivec3(categoricalCoordinate, int(uLayer)),
+        0
+    ).rgb * 255.0;
+    float waterKind = waterClass.g;
+    float waterProfile = waterClass.b;
+    vec2 globalSurface = uChunkSurfacePhase + surfaceUv;
+    float profilePhase = waterProfile / 255.0;
+    float oceanWave = sin(globalSurface.x * TWO_PI / 64.0 + uTime * 1.1)
+        * cos(globalSurface.y * TWO_PI / 96.0 - uTime * 0.83) * 0.012;
+    float lakeWave = sin((globalSurface.x + globalSurface.y) * TWO_PI / 48.0
+        + uTime * 0.65) * 0.004;
+    float riverX = sin(globalSurface.x * TWO_PI / 32.0 - uTime * sign(flow.x) * 1.8);
+    float riverY = sin(globalSurface.y * TWO_PI / 32.0 - uTime * sign(flow.y) * 1.8);
+    float flowWeight = max(abs(flow.x) + abs(flow.y), 0.0001);
+    float riverWave = (riverX * abs(flow.x) + riverY * abs(flow.y)) / flowWeight * 0.003;
+    float wave = waterKind > 2.5 ? oceanWave : waterKind > 1.5 ? lakeWave : riverWave;
+    wave *= mix(0.85, 1.15, profilePhase);
+    wave *= smoothstep(0.0, 0.12, values.b) * smoothstep(0.02, 0.35, -values.a);
+    vSurfaceUv = surfaceUv;
+    vFlow = flow;
+    vDepth = values.b;
+    vShoreDistance = values.a;
+    vWaterKind = waterKind;
+    vWaterProfile = waterProfile;
+    vec3 displaced = vec3(position.x, values.g * uHeightScale + wave * uHeightScale, position.z);
+    vWaterWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+}
+`
+  );
+  var WATER_FRAGMENT_SHADER2 = (
+    /* glsl */
+    `
+uniform vec4 uValidBounds;
+uniform vec3 uSunDirection;
+uniform vec3 uSunRadiance;
+uniform vec3 uSkyDiffuseIrradiance;
+uniform vec3 uGroundDiffuseIrradiance;
+uniform float uTime;
+
+in vec2 vSurfaceUv;
+in vec2 vFlow;
+in float vDepth;
+in float vShoreDistance;
+flat in float vWaterKind;
+flat in float vWaterProfile;
+in vec3 vWaterWorldPosition;
+out vec4 waterOutputColor;
+#define gl_FragColor waterOutputColor
+
+void main() {
+    vec2 minimum = uValidBounds.xy - vec2(0.5);
+    vec2 maximum = uValidBounds.zw - vec2(0.5);
+    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+    float depthAmount = smoothstep(0.015, 0.34, vDepth);
+    vec3 shallow = vWaterKind > 2.5 ? vec3(0.08, 0.38, 0.46)
+        : vWaterKind > 1.5 ? vec3(0.10, 0.42, 0.38) : vec3(0.13, 0.43, 0.46);
+    vec3 deep = vWaterKind > 2.5 ? vec3(0.012, 0.075, 0.16)
+        : vWaterKind > 1.5 ? vec3(0.018, 0.12, 0.14) : vec3(0.025, 0.15, 0.17);
+    vec3 flowNormal = normalize(vec3(-vFlow.y * 0.06, 1.0, vFlow.x * 0.06));
+    vec3 viewDirection = normalize(cameraPosition - vWaterWorldPosition);
+    float fresnel = pow(1.0 - max(dot(flowNormal, viewDirection), 0.0), 5.0);
+    float sunAmount = pow(max(dot(flowNormal, normalize(uSunDirection)), 0.0), 48.0);
+    float foam = (1.0 - smoothstep(0.03, 0.22, -vShoreDistance))
+        * (0.72 + 0.28 * sin(uTime * 2.0 + vSurfaceUv.x * 5.0 + vSurfaceUv.y * 3.0));
+    vec3 environment = uSkyDiffuseIrradiance * (0.24 + fresnel * 0.76)
+        + uGroundDiffuseIrradiance * 0.08;
+    float profileTint = vWaterProfile / 255.0;
+    vec3 bodyColor = mix(shallow, deep, depthAmount)
+        * mix(vec3(0.94, 1.0, 1.04), vec3(1.04, 0.98, 0.92), profileTint);
+    vec3 linearColor = bodyColor * environment
+        + uSunRadiance * sunAmount * 0.34
+        + vec3(0.72, 0.86, 0.88) * foam * 0.42;
+    gl_FragColor = vec4(linearColor, 0.86);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+}
+`
+  );
+  function keyString2(key) {
+    if (!key || !Number.isSafeInteger(key.chunkX) || !Number.isSafeInteger(key.chunkY)) {
+      throw new TypeError("WaterLayer render chunk key is invalid");
+    }
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  function assertLod3(lod) {
+    if (lod !== 0 && lod !== 1 && lod !== 2) throw new RangeError("water chunk LOD must be 0, 1 or 2");
+  }
+  function createCompiledWaterGeometry(source, hexSize, heightScale) {
+    const vertexCount = source.surfaceUv.length / 2;
+    const positions = new Float32Array(vertexCount * 3);
+    for (let index = 0; index < vertexCount; index += 1) {
+      const coordinate = surfaceToWorld(
+        source.surfaceUv[index * 2],
+        source.surfaceUv[index * 2 + 1],
+        hexSize
+      );
+      positions[index * 3] = coordinate.x;
+      positions[index * 3 + 2] = coordinate.z;
+    }
+    const geometry = new three.BufferGeometry();
+    geometry.name = "surface-water-compiled";
+    geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
+    geometry.setAttribute("surfaceUv", new three.BufferAttribute(source.surfaceUv, 2));
+    geometry.setIndex(new three.BufferAttribute(source.indices, 1));
+    geometry.computeBoundingBox();
+    const bounds = geometry.boundingBox ?? new three.Box3();
+    geometry.boundingBox = new three.Box3(
+      new three.Vector3(bounds.min.x, -heightScale * 0.02, bounds.min.z),
+      new three.Vector3(bounds.max.x, heightScale * 1.02, bounds.max.z)
+    );
+    geometry.boundingBox.getBoundingSphere(geometry.boundingSphere = new three.Sphere());
+    geometry.userData.surfaceWaterByteLength = positions.byteLength + source.surfaceUv.byteLength + source.indices.byteLength;
+    return geometry;
+  }
+  function freezeMount2(chunk) {
+    return Object.freeze({
+      key: chunk.key,
+      kind: chunk.kind,
+      mesh: chunk.mesh,
+      slot: chunk.slot,
+      lod: chunk.lod
+    });
+  }
+  var WaterLayer = class {
+    constructor(options) {
+      this.root = new three.Group();
+      this.chunks = /* @__PURE__ */ new Map();
+      this.materials = /* @__PURE__ */ new Map();
+      this.floatingOriginX = 0;
+      this.floatingOriginZ = 0;
+      this.time = 0;
+      this.stateValue = "ready";
+      if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
+        "surfaceTexturePool",
+        "lighting",
+        "geometryPool",
+        "hexSize",
+        "heightScale"
+      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || !(options.lighting instanceof LightingStateController) || !(options.geometryPool instanceof SurfaceGroundGeometryPool) || options.surfaceTexturePool.state !== "ready" || options.lighting.stats.state !== "ready" || options.geometryPool.stats.state !== "ready") {
+        throw new TypeError("WaterLayer options are invalid or not ready");
+      }
+      this.hexSize = options.hexSize ?? 1;
+      this.heightScale = options.heightScale ?? 1;
+      if (!Number.isFinite(this.hexSize) || this.hexSize <= 0 || !Number.isFinite(this.heightScale) || this.heightScale <= 0) {
+        throw new RangeError("WaterLayer scales must be finite and positive");
+      }
+      this.surfaceTexturePool = options.surfaceTexturePool;
+      this.lighting = options.lighting;
+      this.geometryPool = options.geometryPool;
+      this.root.name = "surface-water-layer-v2";
+    }
+    mount(chunk, ground) {
+      this.assertReady();
+      assertCompiledSurfaceChunk(chunk);
+      assertLod3(ground.lod);
+      if (chunk.key.chunkX !== ground.key.chunkX || chunk.key.chunkY !== ground.key.chunkY || !this.surfaceTexturePool.isCurrent(ground.slot)) {
+        throw new TypeError("WaterLayer requires the current matching ground mount");
+      }
+      const serialized = keyString2(chunk.key);
+      const binding = this.surfaceTexturePool.getBinding(ground.slot);
+      let geometry;
+      let ownsGeometry = false;
+      if (chunk.waterGeometry.kind === "full") geometry = this.geometryPool.get(ground.lod);
+      else if (chunk.waterGeometry.kind === "coverage" || chunk.waterGeometry.kind === "sweep") {
+        geometry = createCompiledWaterGeometry(chunk.waterGeometry.mesh, this.hexSize, this.heightScale);
+        ownsGeometry = true;
+      }
+      const materialPage = geometry ? this.materialForBinding(binding) : void 0;
+      const mesh = geometry && materialPage ? new three.Mesh(geometry, materialPage.material) : null;
+      const mounted = {
+        key: Object.freeze({ ...chunk.key }),
+        keyString: serialized,
+        slot: ground.slot,
+        kind: chunk.waterGeometry.kind,
+        mesh,
+        ownsGeometry,
+        lod: ground.lod
+      };
+      if (mesh && materialPage) {
+        mesh.name = `surface-water-${chunk.waterGeometry.kind}-${serialized}`;
+        mesh.renderOrder = 1;
+        mesh.onBeforeRender = () => this.prepareDraw(mounted, chunk, materialPage.material);
+        this.positionChunk(mounted);
+      }
+      const previous = this.chunks.get(serialized);
+      if (previous) this.removeChunk(previous);
+      this.chunks.set(serialized, mounted);
+      if (mesh) this.root.add(mesh);
+      return freezeMount2(mounted);
+    }
+    setLod(key, lod) {
+      this.assertReady();
+      assertLod3(lod);
+      const chunk = this.chunks.get(keyString2(key));
+      if (!chunk || chunk.lod === lod) return false;
+      chunk.lod = lod;
+      if (chunk.kind === "full" && chunk.mesh) chunk.mesh.geometry = this.geometryPool.get(lod);
+      return true;
+    }
+    setTime(seconds) {
+      this.assertReady();
+      if (!Number.isFinite(seconds) || seconds < 0) throw new RangeError("water time must be finite and non-negative");
+      this.time = seconds;
+    }
+    setFloatingOrigin(worldX, worldZ) {
+      this.assertNotDisposed();
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        throw new RangeError("WaterLayer floating origin must be finite");
+      }
+      this.floatingOriginX = worldX;
+      this.floatingOriginZ = worldZ;
+      for (const chunk of this.chunks.values()) this.positionChunk(chunk);
+    }
+    unmount(key) {
+      this.assertNotDisposed();
+      const serialized = keyString2(key);
+      const chunk = this.chunks.get(serialized);
+      if (!chunk) return false;
+      this.chunks.delete(serialized);
+      this.removeChunk(chunk);
+      return true;
+    }
+    handleContextLost() {
+      this.assertNotDisposed();
+      this.stateValue = "lost";
+    }
+    handleContextRestored() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "lost") throw new TypeError("WaterLayer context can only restore from lost");
+      for (const page of this.materials.values()) page.material.needsUpdate = true;
+      this.stateValue = "ready";
+    }
+    dispose() {
+      if (this.stateValue === "disposed") return;
+      for (const chunk of this.chunks.values()) this.removeChunk(chunk);
+      this.chunks.clear();
+      for (const page of this.materials.values()) {
+        page.lighting.release();
+        page.material.dispose();
+      }
+      this.materials.clear();
+      this.root.removeFromParent();
+      this.stateValue = "disposed";
+    }
+    get stats() {
+      let visibleMeshes = 0;
+      let fullPatches = 0;
+      let coverageMeshes = 0;
+      let sweepMeshes = 0;
+      let uniqueGeometryBytes = 0;
+      for (const chunk of this.chunks.values()) {
+        if (chunk.mesh) visibleMeshes += 1;
+        if (chunk.kind === "full") fullPatches += 1;
+        if (chunk.kind === "coverage") coverageMeshes += 1;
+        if (chunk.kind === "sweep") sweepMeshes += 1;
+        if (chunk.ownsGeometry && chunk.mesh) {
+          uniqueGeometryBytes += Number(chunk.mesh.geometry.userData.surfaceWaterByteLength ?? 0);
+        }
+      }
+      return Object.freeze({
+        state: this.stateValue,
+        mountedChunks: this.chunks.size,
+        visibleMeshes,
+        fullPatches,
+        coverageMeshes,
+        sweepMeshes,
+        uniqueGeometryBytes,
+        materialPages: this.materials.size
+      });
+    }
+    materialForBinding(binding) {
+      let page = this.materials.get(binding.slot.pageIndex);
+      if (page) return page;
+      const lighting = this.lighting.bindUniforms();
+      const material = new three.ShaderMaterial({
+        name: `surface-water-page-${binding.slot.pageIndex}`,
+        glslVersion: three.GLSL3,
+        vertexShader: WATER_VERTEX_SHADER2,
+        fragmentShader: WATER_FRAGMENT_SHADER2,
+        uniforms: {
+          uSurfaceValues: new three.Uniform(binding.valuesTexture),
+          uSurfaceFlow: new three.Uniform(binding.flowTexture),
+          uSurfaceWater: new three.Uniform(binding.waterTexture),
+          uLayer: new three.Uniform(0),
+          uHeightScale: new three.Uniform(this.heightScale),
+          uTime: new three.Uniform(0),
+          uChunkSurfacePhase: new three.Uniform(new three.Vector2()),
+          uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
+          uSunDirection: lighting.sunDirection,
+          uSunRadiance: lighting.sunRadiance,
+          uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+        },
+        side: three.DoubleSide,
+        transparent: true,
+        depthWrite: false,
+        depthTest: true,
+        toneMapped: true
+      });
+      page = Object.freeze({ material, lighting });
+      this.materials.set(binding.slot.pageIndex, page);
+      return page;
+    }
+    prepareDraw(mounted, chunk, material) {
+      if (!this.surfaceTexturePool.isCurrent(mounted.slot) || !mounted.mesh) {
+        if (mounted.mesh) mounted.mesh.visible = false;
+        return;
+      }
+      mounted.mesh.visible = true;
+      material.uniforms.uLayer.value = mounted.slot.layerIndex;
+      material.uniforms.uTime.value = this.time;
+      const phasePeriod = 192;
+      const originX = mounted.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const originY = mounted.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      material.uniforms.uChunkSurfacePhase.value.set(
+        (originX % phasePeriod + phasePeriod) % phasePeriod,
+        (originY % phasePeriod + phasePeriod) % phasePeriod
+      );
+      const bounds = chunk.bounds.validTiles;
+      material.uniforms.uValidBounds.value.set(
+        bounds.minX,
+        bounds.minY,
+        bounds.maxXExclusive,
+        bounds.maxYExclusive
+      );
+    }
+    positionChunk(chunk) {
+      if (!chunk.mesh) return;
+      const surfaceX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const surfaceY = chunk.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      if (!Number.isSafeInteger(surfaceX) || !Number.isSafeInteger(surfaceY)) {
+        throw new RangeError("WaterLayer render origin exceeds the safe integer domain");
+      }
+      chunk.mesh.position.set(
+        1.5 * this.hexSize * surfaceX - this.floatingOriginX,
+        0,
+        Math.sqrt(3) * this.hexSize * surfaceY - this.floatingOriginZ
+      );
+      chunk.mesh.updateMatrix();
+      chunk.mesh.updateMatrixWorld();
+    }
+    removeChunk(chunk) {
+      if (!chunk.mesh) return;
+      this.root.remove(chunk.mesh);
+      chunk.mesh.onBeforeRender = () => void 0;
+      if (chunk.ownsGeometry) chunk.mesh.geometry.dispose();
+    }
+    assertReady() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "ready") throw new TypeError("WaterLayer cannot mutate while context is lost");
+    }
+    assertNotDisposed() {
+      if (this.stateValue === "disposed") throw new TypeError("WaterLayer is disposed");
+    }
+  };
+  var VEGETATION_COLORS = Object.freeze({
+    [0 /* Grass */]: Object.freeze([0.18, 0.42, 0.13]),
+    [1 /* Palm */]: Object.freeze([0.24, 0.48, 0.16]),
+    [2 /* Pinia */]: Object.freeze([0.11, 0.31, 0.16]),
+    [3 /* Oak */]: Object.freeze([0.18, 0.38, 0.12])
+  });
+  var VEGETATION_VERTEX_SHADER = (
+    /* glsl */
+    `
+uniform float uTime;
+uniform bool uGrass;
+
+out vec3 vWorldNormal;
+out float vHeight;
+
+void main() {
+    vec3 localPosition = position;
+    if (uGrass) {
+        localPosition.x += sin(uTime * 1.7 + position.y * 4.0) * position.y * 0.035;
+    }
+    vec4 instancePosition = instanceMatrix * vec4(localPosition, 1.0);
+    vec4 worldPosition = modelMatrix * instancePosition;
+    vWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
+    vHeight = clamp(position.y, 0.0, 1.0);
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+`
+  );
+  var VEGETATION_FRAGMENT_SHADER = (
+    /* glsl */
+    `
+uniform vec3 uAlbedo;
+uniform vec3 uSunDirection;
+uniform vec3 uSunRadiance;
+uniform vec3 uSkyDiffuseIrradiance;
+uniform vec3 uGroundDiffuseIrradiance;
+
+in vec3 vWorldNormal;
+in float vHeight;
+out vec4 vegetationOutputColor;
+#define gl_FragColor vegetationOutputColor
+
+void main() {
+    vec3 normal = normalize(vWorldNormal);
+    float sunAmount = max(dot(normal, normalize(uSunDirection)), 0.0);
+    float skyAmount = normal.y * 0.5 + 0.5;
+    vec3 irradiance = uSunRadiance * sunAmount
+        + uSkyDiffuseIrradiance * skyAmount
+        + uGroundDiffuseIrradiance * (1.0 - skyAmount);
+    vec3 albedo = uAlbedo * mix(0.82, 1.08, vHeight);
+    gl_FragColor = vec4(albedo * irradiance, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+}
+`
+  );
+  function keyString3(key) {
+    if (!key || !Number.isSafeInteger(key.chunkX) || !Number.isSafeInteger(key.chunkY)) {
+      throw new TypeError("VegetationLayer render chunk key is invalid");
+    }
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  function assertLod4(lod) {
+    if (lod !== 0 && lod !== 1 && lod !== 2) {
+      throw new RangeError("vegetation chunk LOD must be 0, 1 or 2");
+    }
+  }
+  function createGrassGeometry() {
+    const geometry = new three.BufferGeometry();
+    geometry.name = "surface-vegetation-grass";
+    geometry.setAttribute("position", new three.BufferAttribute(new Float32Array([
+      -0.5,
+      0,
+      0,
+      0.5,
+      0,
+      0,
+      0.34,
+      1,
+      0,
+      -0.34,
+      1,
+      0
+    ]), 3));
+    geometry.setAttribute("normal", new three.BufferAttribute(new Float32Array([
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1
+    ]), 3));
+    geometry.setIndex(new three.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1));
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+  function createSpeciesGeometry(species) {
+    if (species === 0 /* Grass */) return createGrassGeometry();
+    const geometry = species === 1 /* Palm */ ? new three.ConeGeometry(0.48, 1.8, 7, 1) : species === 2 /* Pinia */ ? new three.ConeGeometry(0.58, 1.55, 7, 2) : new three.ConeGeometry(0.68, 1.35, 8, 2);
+    geometry.translate(0, species === 1 /* Palm */ ? 0.9 : species === 2 /* Pinia */ ? 0.775 : 0.675, 0);
+    geometry.name = `surface-vegetation-species-${species}`;
+    return geometry;
+  }
+  function geometryByteLength(geometry) {
+    let total = geometry.getIndex()?.array.byteLength ?? 0;
+    for (const attribute of Object.values(geometry.attributes)) total += attribute.array.byteLength;
+    return total;
+  }
+  function retainedAtLod(species, randomKey, lod) {
+    if (lod === 0) return true;
+    if (species === 0 /* Grass */) return lod === 1 && (randomKey & 1) === 0;
+    return lod === 1 || (randomKey & 1) === 0;
+  }
+  function visibleInstanceCount(chunk) {
+    return chunk.species.reduce((sum, value) => sum + value.mesh.count, 0);
+  }
+  function freezeMount3(chunk) {
+    return Object.freeze({
+      key: chunk.key,
+      group: chunk.group,
+      lod: chunk.lod,
+      candidateCount: chunk.seeds.tileIndex.length,
+      visibleInstanceCount: visibleInstanceCount(chunk)
+    });
+  }
+  var VegetationLayer = class {
+    constructor(options) {
+      this.root = new three.Group();
+      this.chunks = /* @__PURE__ */ new Map();
+      this.geometries = /* @__PURE__ */ new Map();
+      this.materials = /* @__PURE__ */ new Map();
+      this.position = new three.Vector3();
+      this.rotation = new three.Quaternion();
+      this.scale = new three.Vector3();
+      this.matrix = new three.Matrix4();
+      this.up = new three.Vector3(0, 1, 0);
+      this.floatingOriginX = 0;
+      this.floatingOriginZ = 0;
+      this.time = 0;
+      this.stateValue = "ready";
+      if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
+        "surfaceTexturePool",
+        "lighting",
+        "hexSize",
+        "heightScale"
+      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || !(options.lighting instanceof LightingStateController) || options.surfaceTexturePool.state !== "ready" || options.lighting.stats.state !== "ready") {
+        throw new TypeError("VegetationLayer options are invalid or not ready");
+      }
+      this.hexSize = options.hexSize ?? 1;
+      this.heightScale = options.heightScale ?? 1;
+      if (!Number.isFinite(this.hexSize) || this.hexSize <= 0 || !Number.isFinite(this.heightScale) || this.heightScale <= 0) {
+        throw new RangeError("VegetationLayer scales must be finite and positive");
+      }
+      this.surfaceTexturePool = options.surfaceTexturePool;
+      this.lighting = options.lighting;
+      this.root.name = "surface-vegetation-layer-v2";
+    }
+    mount(chunk, ground) {
+      this.assertReady();
+      assertCompiledSurfaceChunk(chunk);
+      assertLod4(ground.lod);
+      if (chunk.key.chunkX !== ground.key.chunkX || chunk.key.chunkY !== ground.key.chunkY || !this.surfaceTexturePool.isCurrent(ground.slot)) {
+        throw new TypeError("VegetationLayer requires the current matching ground mount");
+      }
+      const serialized = keyString3(chunk.key);
+      const group = new three.Group();
+      group.name = `surface-vegetation-${serialized}`;
+      const bySpecies = /* @__PURE__ */ new Map();
+      for (let index = 0; index < chunk.vegetationSeeds.species.length; index += 1) {
+        const species = chunk.vegetationSeeds.species[index];
+        const indices = bySpecies.get(species) ?? [];
+        indices.push(index);
+        bySpecies.set(species, indices);
+      }
+      const speciesInstances = [];
+      for (const species of [
+        0 /* Grass */,
+        1 /* Palm */,
+        2 /* Pinia */,
+        3 /* Oak */
+      ]) {
+        const indices = bySpecies.get(species);
+        if (!indices?.length) continue;
+        const mesh = new three.InstancedMesh(
+          this.geometryForSpecies(species),
+          this.materialForSpecies(species).material,
+          indices.length
+        );
+        mesh.name = `surface-vegetation-species-${species}-${serialized}`;
+        mesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
+        mesh.renderOrder = 2;
+        group.add(mesh);
+        speciesInstances.push(Object.freeze({
+          species,
+          mesh,
+          seedIndices: Object.freeze(indices)
+        }));
+      }
+      const mounted = {
+        key: Object.freeze({ ...chunk.key }),
+        keyString: serialized,
+        group,
+        seeds: chunk.vegetationSeeds,
+        species: Object.freeze(speciesInstances),
+        lod: ground.lod
+      };
+      this.updateInstances(mounted);
+      this.positionChunk(mounted);
+      const previous = this.chunks.get(serialized);
+      if (previous) this.removeChunk(previous);
+      this.chunks.set(serialized, mounted);
+      this.root.add(group);
+      return freezeMount3(mounted);
+    }
+    setLod(key, lod) {
+      this.assertReady();
+      assertLod4(lod);
+      const chunk = this.chunks.get(keyString3(key));
+      if (!chunk || chunk.lod === lod) return false;
+      chunk.lod = lod;
+      this.updateInstances(chunk);
+      return true;
+    }
+    setTime(seconds) {
+      this.assertReady();
+      if (!Number.isFinite(seconds) || seconds < 0) {
+        throw new RangeError("vegetation time must be finite and non-negative");
+      }
+      this.time = seconds;
+      for (const value of this.materials.values()) value.material.uniforms.uTime.value = seconds;
+    }
+    setFloatingOrigin(worldX, worldZ) {
+      this.assertNotDisposed();
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        throw new RangeError("VegetationLayer floating origin must be finite");
+      }
+      this.floatingOriginX = worldX;
+      this.floatingOriginZ = worldZ;
+      for (const chunk of this.chunks.values()) this.positionChunk(chunk);
+    }
+    unmount(key) {
+      this.assertNotDisposed();
+      const serialized = keyString3(key);
+      const chunk = this.chunks.get(serialized);
+      if (!chunk) return false;
+      this.chunks.delete(serialized);
+      this.removeChunk(chunk);
+      return true;
+    }
+    handleContextLost() {
+      this.assertNotDisposed();
+      this.stateValue = "lost";
+    }
+    handleContextRestored() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "lost") {
+        throw new TypeError("VegetationLayer context can only restore from lost");
+      }
+      for (const material of this.materials.values()) material.material.needsUpdate = true;
+      for (const chunk of this.chunks.values()) {
+        for (const species of chunk.species) species.mesh.instanceMatrix.needsUpdate = true;
+      }
+      this.stateValue = "ready";
+    }
+    dispose() {
+      if (this.stateValue === "disposed") return;
+      for (const chunk of this.chunks.values()) this.removeChunk(chunk);
+      this.chunks.clear();
+      for (const value of this.materials.values()) {
+        value.lighting.release();
+        value.material.dispose();
+      }
+      for (const geometry of this.geometries.values()) geometry.dispose();
+      this.materials.clear();
+      this.geometries.clear();
+      this.root.removeFromParent();
+      this.stateValue = "disposed";
+    }
+    get stats() {
+      let candidateCount = 0;
+      let visible = 0;
+      let grass = 0;
+      let trees = 0;
+      let meshes = 0;
+      for (const chunk of this.chunks.values()) {
+        candidateCount += chunk.seeds.tileIndex.length;
+        for (const species of chunk.species) {
+          meshes += 1;
+          visible += species.mesh.count;
+          if (species.species === 0 /* Grass */) grass += species.mesh.count;
+          else trees += species.mesh.count;
+        }
+      }
+      let bytes = 0;
+      for (const geometry of this.geometries.values()) bytes += geometryByteLength(geometry);
+      return Object.freeze({
+        state: this.stateValue,
+        mountedChunks: this.chunks.size,
+        instancedMeshes: meshes,
+        candidateCount,
+        visibleInstanceCount: visible,
+        grassInstances: grass,
+        treeInstances: trees,
+        geometryBytes: bytes
+      });
+    }
+    geometryForSpecies(species) {
+      let geometry = this.geometries.get(species);
+      if (!geometry) {
+        geometry = createSpeciesGeometry(species);
+        this.geometries.set(species, geometry);
+      }
+      return geometry;
+    }
+    materialForSpecies(species) {
+      let value = this.materials.get(species);
+      if (value) return value;
+      const lighting = this.lighting.bindUniforms();
+      const material = new three.ShaderMaterial({
+        name: `surface-vegetation-material-${species}`,
+        glslVersion: three.GLSL3,
+        vertexShader: VEGETATION_VERTEX_SHADER,
+        fragmentShader: VEGETATION_FRAGMENT_SHADER,
+        uniforms: {
+          uTime: new three.Uniform(this.time),
+          uGrass: new three.Uniform(species === 0 /* Grass */),
+          uAlbedo: new three.Uniform(new three.Vector3(...VEGETATION_COLORS[species])),
+          uSunDirection: lighting.sunDirection,
+          uSunRadiance: lighting.sunRadiance,
+          uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+        },
+        side: three.DoubleSide,
+        depthWrite: true,
+        depthTest: true,
+        transparent: false,
+        toneMapped: true
+      });
+      value = Object.freeze({ material, lighting });
+      this.materials.set(species, value);
+      return value;
+    }
+    updateInstances(chunk) {
+      for (const value of chunk.species) {
+        let outputIndex = 0;
+        for (const seedIndex of value.seedIndices) {
+          if (!retainedAtLod(value.species, chunk.seeds.randomKey[seedIndex], chunk.lod)) continue;
+          const localU = chunk.seeds.surfaceCoordinates[seedIndex * 2] / SURFACE_VEGETATION_COORDINATE_SCALE;
+          const localV = chunk.seeds.surfaceCoordinates[seedIndex * 2 + 1] / SURFACE_VEGETATION_COORDINATE_SCALE;
+          const world = surfaceToWorld(localU, localV, this.hexSize);
+          this.position.set(
+            world.x,
+            chunk.seeds.groundHeight[seedIndex] / 65535 * this.heightScale,
+            world.z
+          );
+          this.rotation.setFromAxisAngle(
+            this.up,
+            chunk.seeds.rotation[seedIndex] / 65535 * Math.PI * 2
+          );
+          const randomScale = chunk.seeds.scale[seedIndex] / 255;
+          const baseScale = value.species === 0 /* Grass */ ? this.hexSize * 0.34 : this.hexSize * 0.62;
+          this.scale.setScalar(baseScale * randomScale);
+          this.matrix.compose(this.position, this.rotation, this.scale);
+          value.mesh.setMatrixAt(outputIndex, this.matrix);
+          outputIndex += 1;
+        }
+        value.mesh.count = outputIndex;
+        value.mesh.instanceMatrix.needsUpdate = true;
+        value.mesh.computeBoundingBox();
+        value.mesh.computeBoundingSphere();
+      }
+    }
+    positionChunk(chunk) {
+      const surfaceX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const surfaceY = chunk.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      if (!Number.isSafeInteger(surfaceX) || !Number.isSafeInteger(surfaceY)) {
+        throw new RangeError("VegetationLayer render origin exceeds the safe integer domain");
+      }
+      chunk.group.position.set(
+        1.5 * this.hexSize * surfaceX - this.floatingOriginX,
+        0,
+        Math.sqrt(3) * this.hexSize * surfaceY - this.floatingOriginZ
+      );
+      chunk.group.updateMatrix();
+      chunk.group.updateMatrixWorld();
+    }
+    removeChunk(chunk) {
+      this.root.remove(chunk.group);
+      for (const species of chunk.species) species.mesh.dispose();
+      chunk.group.clear();
+    }
+    assertReady() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "ready") {
+        throw new TypeError("VegetationLayer cannot mutate while context is lost");
+      }
+    }
+    assertNotDisposed() {
+      if (this.stateValue === "disposed") throw new TypeError("VegetationLayer is disposed");
+    }
+  };
+  function keyString4(key) {
+    if (!key || !Number.isSafeInteger(key.chunkX) || !Number.isSafeInteger(key.chunkY)) {
+      throw new TypeError("SurfacePresentationLayer render chunk key is invalid");
+    }
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  var SurfacePresentationLayer = class {
+    constructor(options) {
+      this.root = new three.Group();
+      this.mountedKeys = /* @__PURE__ */ new Map();
+      this.stateValue = "ready";
+      if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
+        "surfaceTexturePool",
+        "fogTexturePool",
+        "lighting",
+        "hexSize",
+        "heightScale"
+      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || options.fogTexturePool !== void 0 && !(options.fogTexturePool instanceof SurfaceFogTexturePool) || !(options.lighting instanceof LightingStateController)) {
+        throw new TypeError("SurfacePresentationLayer options are invalid");
+      }
+      const hexSize = options.hexSize ?? 1;
+      const heightScale = options.heightScale ?? 1;
+      this.geometryPool = new SurfaceGroundGeometryPool(hexSize, heightScale);
+      this.ground = new GroundLayer({ ...options, geometryPool: this.geometryPool });
+      this.water = new WaterLayer({
+        surfaceTexturePool: options.surfaceTexturePool,
+        lighting: options.lighting,
+        geometryPool: this.geometryPool,
+        hexSize,
+        heightScale
+      });
+      this.vegetation = new VegetationLayer({
+        surfaceTexturePool: options.surfaceTexturePool,
+        lighting: options.lighting,
+        hexSize,
+        heightScale
+      });
+      this.root.name = "surface-presentation-layer-v2";
+      this.root.add(this.ground.root, this.water.root, this.vegetation.root);
+    }
+    mount(lease, lod) {
+      this.assertReady();
+      const key = lease.chunk.key;
+      const serialized = keyString4(key);
+      let ground;
+      try {
+        ground = this.ground.mount(lease, lod);
+        const water = this.water.mount(lease.chunk, ground);
+        const vegetation = this.vegetation.mount(lease.chunk, ground);
+        this.mountedKeys.set(serialized, Object.freeze({ ...key }));
+        return Object.freeze({ key: Object.freeze({ ...key }), ground, water, vegetation });
+      } catch (reason) {
+        if (ground) {
+          this.vegetation.unmount(key);
+          this.water.unmount(key);
+          this.ground.unmount(key);
+          this.mountedKeys.delete(serialized);
+        }
+        throw reason;
+      }
+    }
+    setLod(key, lod) {
+      this.assertReady();
+      const serialized = keyString4(key);
+      if (!this.mountedKeys.has(serialized)) return false;
+      const groundChanged = this.ground.setLod(key, lod);
+      const waterChanged = this.water.setLod(key, lod);
+      const vegetationChanged = this.vegetation.setLod(key, lod);
+      return groundChanged || waterChanged || vegetationChanged;
+    }
+    setTime(seconds) {
+      this.assertReady();
+      this.water.setTime(seconds);
+      this.vegetation.setTime(seconds);
+    }
+    setFloatingOrigin(worldX, worldZ) {
+      this.assertNotDisposed();
+      this.ground.setFloatingOrigin(worldX, worldZ);
+      this.water.setFloatingOrigin(worldX, worldZ);
+      this.vegetation.setFloatingOrigin(worldX, worldZ);
+    }
+    uploadFog(key, fog) {
+      this.assertReady();
+      return this.ground.uploadFog(key, fog);
+    }
+    unmount(key) {
+      this.assertNotDisposed();
+      const serialized = keyString4(key);
+      if (!this.mountedKeys.delete(serialized)) return false;
+      this.vegetation.unmount(key);
+      this.water.unmount(key);
+      return this.ground.unmount(key);
+    }
+    handleContextLost() {
+      this.assertNotDisposed();
+      if (this.stateValue === "lost") return;
+      this.water.handleContextLost();
+      this.vegetation.handleContextLost();
+      this.ground.handleContextLost();
+      this.stateValue = "lost";
+    }
+    handleContextRestored() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "lost") {
+        throw new TypeError("SurfacePresentationLayer context can only restore from lost");
+      }
+      this.ground.handleContextRestored();
+      this.water.handleContextRestored();
+      this.vegetation.handleContextRestored();
+      this.stateValue = "ready";
+    }
+    dispose() {
+      if (this.stateValue === "disposed") return;
+      for (const key of [...this.mountedKeys.values()]) this.unmount(key);
+      this.vegetation.dispose();
+      this.water.dispose();
+      this.ground.dispose();
+      this.geometryPool.dispose();
+      this.root.removeFromParent();
+      this.stateValue = "disposed";
+    }
+    get stats() {
+      return Object.freeze({
+        state: this.stateValue,
+        mountedChunks: this.mountedKeys.size,
+        ground: this.ground.stats,
+        water: this.water.stats,
+        vegetation: this.vegetation.stats,
+        sharedGeometry: this.geometryPool.stats
+      });
+    }
+    assertReady() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "ready") {
+        throw new TypeError("SurfacePresentationLayer cannot mutate while context is lost");
+      }
+    }
+    assertNotDisposed() {
+      if (this.stateValue === "disposed") {
+        throw new TypeError("SurfacePresentationLayer is disposed");
+      }
+    }
+  };
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
@@ -26746,6 +28282,7 @@ void main() {
   exports.BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES;
   exports.BaseSemanticChunkView = BaseSemanticChunkView;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
+  exports.CompiledVegetationSpecies = CompiledVegetationSpecies;
   exports.DEFAULT_LIGHTING_STATE = DEFAULT_LIGHTING_STATE;
   exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
   exports.EffectiveWorldView = EffectiveWorldView;
@@ -26823,12 +28360,16 @@ void main() {
   exports.SURFACE_INFLUENCE_RADIUS_TILES = SURFACE_INFLUENCE_RADIUS_TILES;
   exports.SURFACE_LATTICE_TEST_VECTORS = SURFACE_LATTICE_TEST_VECTORS;
   exports.SURFACE_MATERIAL_TEXTURE_CHANNELS = SURFACE_MATERIAL_TEXTURE_CHANNELS;
+  exports.SURFACE_MAX_VEGETATION_SEEDS = SURFACE_MAX_VEGETATION_SEEDS;
   exports.SURFACE_MAX_WATER_BODY_COUNT = SURFACE_MAX_WATER_BODY_COUNT;
+  exports.SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED;
   exports.SURFACE_RENDER_CHUNK_SIZE = SURFACE_RENDER_CHUNK_SIZE;
   exports.SURFACE_SAMPLES_PER_TILE_INTERVAL = SURFACE_SAMPLES_PER_TILE_INTERVAL;
   exports.SURFACE_TEXTURE_FORMAT_V1 = SURFACE_TEXTURE_FORMAT_V1;
   exports.SURFACE_TEXTURE_PAGE_LAYERS = SURFACE_TEXTURE_PAGE_LAYERS;
   exports.SURFACE_VALUES_TEXTURE_CHANNELS = SURFACE_VALUES_TEXTURE_CHANNELS;
+  exports.SURFACE_VEGETATION_COORDINATE_SCALE = SURFACE_VEGETATION_COORDINATE_SCALE;
+  exports.SURFACE_WATER_COVERAGE_THRESHOLD = SURFACE_WATER_COVERAGE_THRESHOLD;
   exports.SURFACE_WATER_TEXTURE_CHANNELS = SURFACE_WATER_TEXTURE_CHANNELS;
   exports.SemanticOverrideField = SemanticOverrideField;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
@@ -26837,6 +28378,7 @@ void main() {
   exports.SurfaceCompilationService = SurfaceCompilationService;
   exports.SurfaceFogTexturePool = SurfaceFogTexturePool;
   exports.SurfaceGroundGeometryPool = SurfaceGroundGeometryPool;
+  exports.SurfacePresentationLayer = SurfacePresentationLayer;
   exports.SurfaceRequestTracker = SurfaceRequestTracker;
   exports.SurfaceTexturePool = SurfaceTexturePool;
   exports.SurfaceWindowBufferPool = SurfaceWindowBufferPool;
@@ -26844,6 +28386,7 @@ void main() {
   exports.ToroidalWorldSource = ToroidalWorldSource;
   exports.Unit = Unit;
   exports.UnitActions = UnitActions;
+  exports.VegetationLayer = VegetationLayer;
   exports.WORLD_BIOME_BASIS = WORLD_BIOME_BASIS;
   exports.WORLD_CHUNK_FORMAT_VERSION = WORLD_CHUNK_FORMAT_VERSION;
   exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
@@ -26862,6 +28405,7 @@ void main() {
   exports.WORLD_VEGETATION_FORMAT_VERSION = WORLD_VEGETATION_FORMAT_VERSION;
   exports.WORLD_VEGETATION_PROFILE_CATALOG = WORLD_VEGETATION_PROFILE_CATALOG;
   exports.WORLD_WORKER_PROTOCOL_VERSION = WORLD_WORKER_PROTOCOL_VERSION;
+  exports.WaterLayer = WaterLayer;
   exports.WebGlGpuTimer = WebGlGpuTimer;
   exports.WorkQueueBackpressureError = WorkQueueBackpressureError;
   exports.WorldChunkMountQueue = WorldChunkMountQueue;
@@ -26903,7 +28447,9 @@ void main() {
   exports.cloneSurfaceDependencyKey = cloneSurfaceDependencyKey;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
   exports.compileSurfaceChunk = compileSurfaceChunk;
-  exports.compiledSurfaceFieldTransferables = compiledSurfaceFieldTransferables;
+  exports.compileVegetationSeeds = compileVegetationSeeds;
+  exports.compileWaterGeometry = compileWaterGeometry;
+  exports.compiledSurfaceChunkTransferables = compiledSurfaceChunkTransferables;
   exports.createEffectiveDeltaSnapshot = createEffectiveDeltaSnapshot;
   exports.createLandformSampler = createLandformSampler;
   exports.createLightingState = createLightingState;
@@ -26981,10 +28527,13 @@ void main() {
   exports.surfaceLatticeTexelLocalCoordinate = surfaceLatticeTexelLocalCoordinate;
   exports.surfaceLatticeTexelWorldCoordinate = surfaceLatticeTexelWorldCoordinate;
   exports.surfacePointOwnerRenderChunk = surfacePointOwnerRenderChunk;
+  exports.surfacePresentationTransferables = surfacePresentationTransferables;
   exports.surfaceSemanticChunkRequirements = surfaceSemanticChunkRequirements;
   exports.surfaceStagger = surfaceStagger;
   exports.surfaceToWorld = surfaceToWorld;
   exports.tagWorldChunk = tagWorldChunk;
+  exports.vegetationSeedsByteLength = vegetationSeedsByteLength;
+  exports.waterGeometryByteLength = waterGeometryByteLength;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;
   exports.worldDescriptorsV2Equal = worldDescriptorsV2Equal;
   exports.worldTileVisualSignature = worldTileVisualSignature;

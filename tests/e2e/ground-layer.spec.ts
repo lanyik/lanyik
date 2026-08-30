@@ -45,7 +45,7 @@ test("renders and restores the v2 GroundLayer with an independent R8 fog layer",
         const dependencyKey = {
             worldIdentity: "ground-layer-gpu-probe",
             renderKey: key,
-            compilerRevision: 1,
+            compilerRevision: api.SURFACE_COMPILER_REVISION,
             compileProfileVersion: 1,
             semanticChunks: [],
             hydrologyRegions: []

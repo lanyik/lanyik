@@ -43,7 +43,7 @@ import {
 } from "./semantic/EffectiveSurfaceWindow";
 import {
     compileSurfaceChunk,
-    compiledSurfaceFieldTransferables
+    compiledSurfaceChunkTransferables
 } from "./semantic/SurfaceCompiler";
 import {
     SURFACE_COMPILE_PROFILE_VERSION,
@@ -178,7 +178,7 @@ scope.addEventListener("message", event => {
                 surfaceChunk,
                 reclaimedWindowBuffers
             }, [
-                ...compiledSurfaceFieldTransferables(surfaceChunk),
+                ...compiledSurfaceChunkTransferables(surfaceChunk),
                 ...reclaimedWindowBuffers
             ]);
         } else {

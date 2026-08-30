@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**原始实施清单第 1–5 步已完成；第 6 步“连续水体与植被”和第 7 步“编辑、持久化和消费系统”待实施**。对应阶段 A、B、C 前置、C1–C3，以及第 5 步要求的独立动态雾池、共享三档 LOD 地面晶格、`LightingState` 和内部 `GroundLayer` 垂直切片均已落地。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准，v2 切换只在阶段 H 一次完成，不增加第二套生产开关。
+状态：**原始实施清单第 1–6 步已完成；第 7 步“编辑、持久化和消费系统”待实施**。对应阶段 A、B、C 前置、C1–C3、D、E、F，以及独立动态雾池、共享三档 LOD 地面晶格、连续水面、编译植被、统一 `LightingState` 和内部 `SurfacePresentationLayer` 垂直切片均已落地。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准，v2 切换只在阶段 H 一次完成，不增加第二套生产开关。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -395,7 +395,7 @@ interface CompiledSurfaceChunk {
     readonly bounds: CompiledSurfaceBounds;
     readonly field: CompiledSurfaceField;
     readonly waterBodies: CompiledWaterBodyPalette;
-    readonly waterGeometry?: CompiledWaterGeometry;
+    readonly waterGeometry: CompiledWaterGeometry;
     readonly vegetationSeeds: CompiledVegetationSeeds;
 }
 
@@ -422,7 +422,7 @@ tracker 在一个 `sessionEpoch` 内使用全局严格递增的 `renderChunkGene
 
 请求快照包含 16×16 核心区、两格语义 halo 和按 feature 宽度再加两格影响半径筛选的相交水文 feature。当前 `createTransferableEffectiveWindow` 严格要求调用方提供精确的 semantic chunk/hydrology region 集合，生成 20×20 X-major semantic SoA，并复制所有 typed arrays；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。河流和湖泊在窗口内按最短环绕位移展开，base/delta/tombstone 先合成为最终记录。`SurfaceCompilationService` 可从有显式 retained-byte 预算的 exact-size buffer pool 构建这些副本；Worker 无论成功还是可恢复失败都会把输入 ArrayBuffer 转回主线程。`requestBatch` 接受一次捕获的共享并集快照，并在提交前为每个 render chunk 派生精确依赖子快照；相同 dependency 的并发请求共享一个 Worker job，但不同 render chunk 始终拥有独立 token、缓存键和失效范围。
 
-当前 CPU 结果固定包含 canonical key、结构化 dependency key、effective revision、有效/高程/水位 bounds、十个量化字段、chunk-local body palette、精确 CPU 字节数与确定性 checksum。地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；阶段 C2/E/F 分别补齐纹理槽位与水面 geometry、植被 seeds，不在 CPU 字段阶段放置不可兑现的占位对象。最终 `CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
+当前 CPU 结果固定包含 canonical key、结构化 dependency key、effective revision、有效/高程/水位 bounds、十个量化字段、chunk-local body palette、`CompiledWaterGeometry`、`CompiledVegetationSeeds`、精确 typed-array 字节数与确定性 checksum。地面 topology 不属于逐块编译结果；近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享。`CompiledWaterGeometry` 使用 `none | full | coverage | sweep` discriminated union：全水块复用共享 patch，coverage 与 sweep 才携带逐块顶点/索引。植被以 `(render key, tileIndex, candidateIndex)` 作为稳定身份并使用 SoA 列保存坐标、高度、物种、缩放和旋转。所有这些派生 buffer 都在 Worker 内一次生成并进入同一 checksum、缓存记账和 transferable 列表。
 
 ### 8.2 SurfaceLatticeSpec
 
@@ -478,7 +478,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 `shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 
-每个 compiled chunk 的 body palette 最多包含 255 个在 66×66 输出层实际出现的水体；超过上限是 feature 预算或编译错误，不能合并 ID。palette 只保存稳定 `bodyId + kind`，`waterProfile` 必须逐 texel 保存，因为同一 river body 的 discharge/profile 可以沿汇流向下游变化。物理纹理在不改变逻辑字段的前提下按第 9 节固定合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。当前十个 X-major typed arrays 对 4,356 texel 固定占用 78,408 字节；binary16 使用共享、ties-to-even 的 IEEE 754 编解码器。单个 GPU layer 固定占用 74,052 字节。
+每个 compiled chunk 的 body palette 最多包含 255 个在 66×66 输出层实际出现的水体；超过上限是 feature 预算或编译错误，不能合并 ID。palette 只保存稳定 `bodyId + kind`，`waterProfile` 必须逐 texel 保存，因为同一 river body 的 discharge/profile 可以沿汇流向下游变化。物理纹理在不改变逻辑字段的前提下按第 9 节固定合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。十个 X-major field arrays 对 4,356 texel 固定占用 78,408 字节；完整 compiled chunk 再按实际 coverage/sweep geometry 和 vegetation seed SoA 字节精确记账，因此总 `byteLength` 是确定但可变的。binary16 使用共享、ties-to-even 的 IEEE 754 编解码器。单个 GPU layer 固定占用 74,052 字节。
 
 动态战争迷雾不进入该静态表面层。当前 `SurfaceFogTexturePool` 使用独立的 16×16 `R8` array texture，每格一个 texel；一层 256 字节，一页 128 层、32,768 字节，并拥有独立预算、CPU backing store、标脏、代际校验和 context restore 状态。fog layer 复用 `SurfaceTextureSlotHandle` 的 pool/page/layer/generation 作为显式关联，但不占用静态 surface 的 66×66 layer；`GroundLayer` 总是先释放 fog companion 再释放 surface slot。直接操作两个池的低层调用方必须遵守相同顺序，也可用 `pruneReleasedSurfaceSlots()` 清理已释放的 surface 代际。权威 fog state 仍由 fog store 保存，GPU layer 只可重建。
 
@@ -491,9 +491,12 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 3. 栅格化海平面、湖盆和河流 feature，得到 coverage、kind、profile 与局部 body index。
 4. 计算带符号岸线距离、独立水位和水深。
 5. 根据坡度、气候、湿岸距离和 biome 得到材质权重。
-6. 量化 CPU 字段，并计算保守 bounds、精确字节数和确定性 checksum。
+6. 量化 CPU 字段并计算保守 bounds。
+7. 根据核心 coverage 判定 `none/full`，对湖泊和宽河编译固定对角线 coverage mesh，对量化宽度不超过 24 的纯窄河窗口编译显式 sweep mesh。
+8. 从 world identity、全局 tile 坐标和固定 candidate index 生成植被 seeds，并用水体、坡度、连续岸线 SDF、密度和 profile 做确定性筛选。
+9. 对 field、body palette、水面 geometry 和植被 SoA 共同计算精确字节数与确定性 checksum。
 
-水面 coverage mesh 和植被确定性种子分别属于后续水面/植被阶段，不参与当前 CPU 字段编译器的缓存身份。
+水面 geometry 和植被种子是可重建的编译产物，不是权威世界数据；它们从 compiler revision 2 起参与 compiled cache identity 和 Worker transferable 输出。16/4/66 纹理 profile 仍为 v1，没有因派生 presentation buffer 改变。
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 
@@ -535,7 +538,7 @@ Three.js 当前的 array texture 更新接口按 layer 标脏，不承诺任意�
 
 ### 9.2 GLSL 契约
 
-新的地面与水面材质使用 WebGL2/GLSL 3 和 `sampler2DArray`。不保留 RawShaderMaterial GLSL 1 版本。当前内部 `GroundLayer` 已使用 `values/material` 数组纹理和独立 fog array 完成真实 WebGL2 垂直切片；`flow/water` 由第 6 步的连续水面消费。该内部切片尚未注册为 `HexMap` 生产 Layer，阶段 H 才会一次替换旧路径。
+新的地面与水面材质使用 WebGL2/GLSL 3 和 `sampler2DArray`。不保留 RawShaderMaterial GLSL 1 版本。当前内部 `GroundLayer` 使用 `values/material` 数组纹理和独立 fog array；`WaterLayer` 使用同 slot 的 `values/flow/water`，两者已经过真实 WebGL2 垂直切片验收。该内部组合尚未注册为 `HexMap` 生产 Layer，阶段 H 才会一次替换旧路径。
 
 Shader 通过世界逻辑坐标计算 field UV，通过页/层索引采样；浮动原点只参与最终模型矩阵。所有纹理访问必须限制在 layer gutter 内，不跨 array layer 过滤。
 
@@ -583,9 +586,9 @@ source chunk 驻留不再使用 Chebyshev 正方形半径直接生成整圈坐�
 
 不对每个区块提交一张大透明平面再大面积 `discard`：
 
-- 核心区和 halo 全部为水时，使用完整规则水面 patch。
+- 核心绘制域的 canonical 边界采样全部为水时，使用完整规则水面 patch；66×66 gutter 只服务跨块插值，不扩大该块的绘制域。
 - 海岸、湖泊和宽河使用 coverage field 提取的确定性轮廓网格。
-- 窄河使用样条扫掠带，并在汇流、河口和湖岸处与 coverage mesh 焊接。
+- 只有单一纯窄河窗口使用控制点扫掠带；汇流、跨 segment 接合、河口、湖岸和混合水体统一使用 coverage mesh，避免在主线程做不确定的几何焊接。
 - chunk 边界上的轮廓交点使用全局量化采样位置，独立生成也完全一致。
 
 水面几何只决定覆盖与基础水位；颜色、波纹、泡沫和反射从同一表面场读取。
@@ -640,13 +643,13 @@ interface LightingState {
 }
 ~~~
 
-地面、水、树木、草和建筑读取同一太阳方向、线性色彩空间、漫反射天空/地面辐照、镜面环境和曝光。输出统一经过同一 tone mapping 与 sRGB 编码，不允许每层用独立经验乘数补亮。Three.js PBR 适配器负责把该状态映射为方向光、间接漫反射和 PMREM；自定义 shader 使用相同分量。适配器必须用参考材质校准一次，不能把 Hemisphere、LightProbe 和 environment map 的漫反射贡献无条件叠加而形成双重环境光。
+地面、水、树木、草和建筑读取同一太阳方向、线性色彩空间、漫反射天空/地面辐照、镜面环境和曝光。输出统一经过同一 tone mapping 与 sRGB 编码，不允许每层用独立经验乘数补亮。Three.js PBR 适配器负责把该状态映射为一个方向光、一个 Hemisphere 间接漫反射路径和 `scene.environment`；自定义 shader 使用相同分量。同一 Scene 只能有一个该 binding，不能把 Hemisphere、LightProbe 和 environment map 的漫反射贡献无条件叠加而形成双重环境光。
 
-水面使用镜面环境或解析天空近似产生 Fresnel 反射；树木和 glTF 模型使用同一环境照明与太阳阴影。没有外部环境贴图时由冻结的解析天空生成 PMREM 资源，而不是让植被退回近黑的仅直射光结果。
+水面使用共享天空辐照的解析近似产生 Fresnel 反射；树木、草和 Three.js PBR/glTF 模型通过同一 Scene binding 使用太阳、天空/地面漫反射与外部环境贴图。没有外部环境贴图时 Hemisphere 路径仍提供冻结的解析天空/地面辐照，不让植被退回近黑的仅直射光结果。
 
-太阳方向、颜色和曝光属于快速 uniform 更新，不触发表面重编译。天空参数改变后，PMREM 在独立预算中异步重建并双缓冲切换；旧环境在新资源就绪前保持有效，不允许每帧同步生成。阴影资源由独立 `ShadowState` 拥有，质量、级联和更新频率是渲染策略，不进入 `LightingState` 或 world identity。
+太阳方向、颜色和曝光属于快速 uniform 更新，不触发表面重编译。外部环境纹理的加载、PMREM 生成和双缓冲由资源系统拥有，只有完整的新 handle 才能随递增的 `environmentRevision` 发布；`LightingStateController` 不拥有或隐式销毁纹理。阴影质量、级联和更新频率仍是生产切换层的渲染策略，不进入 `LightingState` 或 world identity。
 
-当前 `LightingStateController` 已实现不可变快照、归一化太阳方向、严格 `uniformRevision + 1` CAS、单调 `environmentRevision`、共享 shader uniform binding，以及将 renderer 固定到 ACES tone mapping、统一 exposure 和 sRGB 输出的 binding。相同 environment revision 不允许偷换环境 handle。解析天空 PMREM 的异步双缓冲拥有者、`ShadowState` 以及树木/模型 PBR 适配属于第 6 步；controller 不拥有或隐式销毁外部环境纹理。
+当前 `LightingStateController` 已实现不可变快照、归一化太阳方向、严格 `uniformRevision + 1` CAS、单调 `environmentRevision`、共享 shader uniform binding、Three.js Scene binding，以及将 renderer 固定到 ACES tone mapping、统一 exposure 和 sRGB 输出的 binding。相同 environment revision 不允许偷换环境 handle；Scene release 会移除控制器创建的两盏光并恢复调用方原有 environment。外部 PMREM producer 和生产阴影策略不属于该 controller。
 
 ### 12.2 植被生成
 
@@ -657,7 +660,7 @@ interface LightingState {
 - 树根高度由 CPU compiled field 插值。
 - LOD 只改变实例保留率和模型，不改变稳定实例身份。
 
-VegetationLayer 可以继续按模型与 LOD 使用 instancing；地面改成合并网格不要求把树木合成静态 geometry。
+当前 `VegetationLayer` 按 grass/palm/pinia/oak 共享 geometry/material 并使用 instancing。LOD0 保留全部已接受 seed，LOD1 对草做稳定二分筛选且保留树，LOD2 移除草并对树做同一 hash 的嵌套二分筛选；切换 LOD 不重新随机或移动保留实例。根部高度直接解码 compiled seed，主线程不再重复运行 placement resolver。
 
 ## 13. 编辑事务与脏区传播
 
@@ -849,7 +852,7 @@ WORLD_WORKER_PROTOCOL_VERSION = 5;
 WORLD_DELTA_FORMAT_VERSION = 3;
 HYDROLOGY_REGION_FORMAT_VERSION = 1;
 HYDROLOGY_DELTA_FORMAT_VERSION = 1;
-SURFACE_COMPILER_REVISION = 1;
+SURFACE_COMPILER_REVISION = 2;
 SURFACE_COMPILE_PROFILE_VERSION = 1;
 ~~~
 
@@ -955,7 +958,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 实现结果（2026-08-30）：
 
-- `SurfaceCompileProfile v1` 冻结为 16/4/1/2/66，`SURFACE_COMPILER_REVISION = 1`。固定输出为 4,356 texel、78,408 字节，water body palette 上限 255。
+- `SurfaceCompileProfile v1` 冻结为 16/4/1/2/66，water body palette 上限 255；第 6 步加入 presentation 编译后 `SURFACE_COMPILER_REVISION = 2`。field 仍固定为 4,356 texel、78,408 字节，完整 chunk 总字节数按水面 geometry 和植被 SoA 实际大小确定。
 - effective window 只捕获精确 semantic/hydrology 依赖，过滤同 region 内不相交 feature；delta replacement/tombstone 仍保留使 base feature 消失所需的依赖。所有 resident SoA 与 feature typed arrays 均被复制后再作为 transferable 暴露。
 - SDF 在 82×82 临时栅格上计算后裁剪，解决输出 gutter 外岸线对边缘 texel 的影响；水体 palette 只统计最终 66×66 内实际出现的 body。
 - 定向验收覆盖全陆地、全海洋、连续高度/湖泊/河流、相邻块字节一致、外部岸线影响、语义高度增量、无关 feature 过滤、真实跨 region 水文、负坐标、环绕 seam、safe-integer partial、损坏输入/输出和逐 texel 查询。benchmark gate 的真实跨 region 基线为 window 250 次约 139 ms（约 0.56 ms/次），编译 25 次约 324 ms（约 12.97 ms/次）。
@@ -980,7 +983,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 ### 阶段 C3：Worker 表面编译服务（已完成，归入原始第 4 步的 CPU 编译链路）
 
 - 将共享 Worker 协议升级到 v5，新增独立 compiler/profile identity 的 `compileSurfaceChunk` discriminated request/response。
-- 把 effective window 和 compiled field 分别作为 transferable 输入/输出；Worker 将输入 buffer 转回主线程 exact-size buffer pool。
+- 把 effective window 和完整 compiled chunk（field、水面 geometry、植被 SoA）分别作为 transferable 输入/输出；Worker 将输入 buffer 转回主线程 exact-size buffer pool。
 - 把 surface compilation 接入有界优先级 WorkerPool lane，公开排队、忙碌和滑动平均耗时统计。
 - 实现按完整 `SurfaceDependencyKey` 查找的 compiled CPU LRU cache、严格字节预算和引用计数 lease。
 - 实现同 dependency 并发合并、request token supersede/release、取消和迟到结果 `stale` 拒绝。
@@ -991,9 +994,9 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 - `WorldGeneratorClient` 和 `WorldGeneratorPool` 支持 `compileSurfaceChunk`，编译队列拥有独立 queued/busy/average 指标；协议错误、compiler/profile 错配和错误 dependency 结果在进入 cache 前拒绝。
 - `SurfaceCompilationService` 从 `EffectiveWorldSnapshot` 原子构造请求，同 render key 后发 token 立即取代前者；同 dependency 的 in-flight job 合并，结果只为仍满足 token 和结构化依赖的请求签发 lease。
-- compiled cache 以 78,408 字节字段 payload 精确记账，只淘汰无 lease 的 LRU 项；预算被活动 lease 占满时确定性报错，不做无界暂存。
+- compiled cache 以完整 chunk 的实际 `byteLength` 精确记账（固定 78,408 字节 field 加可变 presentation buffers），只淘汰无 lease 的 LRU 项；预算被活动 lease 占满时确定性报错，不做无界暂存。
 - `SurfaceWindowBufferPool` 按精确 byteLength 复用输入 ArrayBuffer，并以显式 retained-byte 预算限制空闲常驻；cache hit 未投递的 window buffer 立即回池。
-- 定向验收覆盖 cache hit 新 token、并发合并、supersede stale、取消、固定预算和 buffer 复用；真实 Chromium Worker 验证主线程输入 detach、78,408 字节结果回传和六个语义输入 buffer 归还。
+- 定向验收覆盖 cache hit 新 token、并发合并、supersede stale、取消、实际字节预算和 buffer 复用；真实 Chromium Worker 验证主线程输入 detach、完整 field/presentation buffer 回传和六个语义输入 buffer 归还。
 
 ### 阶段 C4：查询接入与动态雾
 
@@ -1018,9 +1021,9 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - `SurfaceGroundGeometryPool` 实现 1/2/4 内部步长的三档共享晶格，三档都保留逐 1/4 tile 的 canonical 外边界，并用双空间非退化的焊接过渡带连接粗内部；每个 LOD 只创建一份 vertex/index buffer。
 - `LightingStateController` 原子发布统一太阳、天空/地面漫反射、环境 handle 与曝光；`GroundLayer` 按纹理页共享一个 GLSL 3 material，按 draw 写入 layer/valid bounds，持有 compiled lease，并在 revision 替换时复用 slot 后再释放旧 lease。
 - 真实 Chromium 验收完成地面高度位移、材质场、动态雾明暗切换、LOD 切换和 context loss/restore。1/9/49 块 benchmark 同时执行静态整层打包、fog 上传、lease/mesh 挂载；当前代表性结果约 17/27/85 ms，49 块共用三张几何、一个静态 page 和一个 32 KiB fog page。
-- 该切片保持内部状态：不向 `HexMap` 增加 v1/v2 运行时选择，旧 `TerrainMesh` 只在阶段 H 一次删除。阶段 D 中解析天空 PMREM、完整参考材质校准和阴影资源与第 6 步统一完成。
+- 该切片保持内部状态：不向 `HexMap` 增加 v1/v2 运行时选择，旧 `TerrainMesh` 只在阶段 H 一次删除。第 6 步已补齐共享 Scene 光照 binding、水面和植被参考 shader；外部环境资源加载与生产阴影策略随阶段 H 的唯一生产路径接入，不由 `LightingStateController` 隐式拥有。
 
-### 阶段 E：连续水面（原始第 6 步）
+### 阶段 E：连续水面（原始第 6 步，已完成）
 
 - 实现海洋 patch、湖岸/宽河 coverage mesh 和窄河 sweep mesh。
 - 实现连续水深色、环境反射、分层波浪和 flow 驱动河流。
@@ -1028,13 +1031,26 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 完成标志：海、湖、河具有可辨识形态，岸线平滑且全部读取同一 SDF。
 
-### 阶段 F：植被、模型光照与阴影策略（原始第 6 步）
+实现结果（2026-08-30）：
 
-- 规范化树木材质并迁移树、草、建筑到已有 LightingState。
-- 实现 PMREM 异步更新和 ShadowState 的质量/更新预算。
+- compiler revision 2 在 Worker 内输出 `none | full | coverage | sweep`。全水核心块不保存重复 geometry，直接复用与 Ground 相同 LOD patch；湖泊、海岸和宽河用固定对角线三角裁剪 coverage，交点以每个采样 interval 的 1/65,536 量化并焊接；量化宽度不超过 24 的纯河流块保存按稳定 feature key 排序的 sweep。
+- `WaterLayer` 与 Ground 读取同一个 surface slot：水面基准高度、水深、岸线 SDF、flow、kind 和 profile 都来自编译纹理。海洋、湖泊和河流使用不同但有界的世界坐标波形；冻结的 192-tile 公共周期让 shader 只接收 safe-integer origin 的小模数，在负坐标和极远坐标仍保持相位连续。profile 改变色调/强度，flow 决定河流方向；深浅色、岸边泡沫、太阳高光和解析 Fresnel 使用共享 LightingState。
+- `SurfacePresentationLayer` 以一个 Ground-owned `ResidentSurfaceLease` 原子组合 Ground/Water/Vegetation。三层替换复用同一静态 slot；卸载先移除 vegetation/water companion，再由 Ground 释放 fog、surface slot 和唯一 lease。context restore 先恢复纹理权威，再恢复水面/植被材质。
+- 定向测试覆盖 dry/full/coverage/sweep、窄河逐字节确定性、共享全水 geometry、独有轮廓释放和完整 transferable 字节核算。真实 WebGL2 验收执行波浪时间、LOD、浮动原点及 context loss/restore，且无 GL 或 shader 错误。
+
+### 阶段 F：植被与模型光照（原始第 6 步，已完成）
+
+- 规范化树木/草材质并把 Three.js PBR 模型接到已有 LightingState Scene binding。
 - 由 compiled field 生成植被 placement seeds 和贴地高度。
 
 完成标志：植被不再暗沉脱离环境，所有内置层对太阳、天空和曝光响应一致。
+
+实现结果（2026-08-30）：
+
+- compiler 对每个有效 tile 固定尝试 8 个 grass 与 2 个 tree candidate；hash 只依赖 world identity、safe-integer 全局 tile 坐标和 candidate index。水覆盖、坡度、连续 shoreline SDF、量化 density 与 vegetation profile 共同筛选，最多输出 2,560 项 SoA；根部高度从同一 compiled ground field 插值得到。
+- `VegetationLayer` 按 grass/palm/pinia/oak 使用共享 geometry/material 和稳定 instancing。LOD 保留集合严格嵌套，实例的坐标、高度、物种、旋转和缩放不随请求顺序、时间或 LOD 重算。
+- `LightingStateController.bindScene` 只创建一条 DirectionalLight + HemisphereLight + `scene.environment` 路径，拒绝同 Scene 重复 binding，并在 release 时恢复原 environment；Ground、Water 和 Vegetation 自定义 shader 使用同一组太阳/天空/地面 uniform，renderer 统一 ACES、exposure 和 sRGB。
+- 固定 seed 的 v2 gallery 输出 near/middle/far 三张真实水面与植被 PNG；交互浏览器验收同时检查可见像素、LOD 实例减少、时间/浮动原点画面变化、`MeshStandardMaterial` 模型照明、lease 释放和 context restore。1/9/49 benchmark 已升级为挂载完整 Ground/Water/Vegetation presentation，而不是只测 Ground；本轮代表性结果约为 26/55/211 ms，49 块仍共用一个静态纹理 page 和一个 fog page。
 
 ### 阶段 G：编辑、持久化和消费系统（原始第 7 步）
 

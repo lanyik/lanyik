@@ -4081,7 +4081,11 @@ var SURFACE_EFFECTIVE_WINDOW_SIZE = SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENC
 var SURFACE_MAX_WATER_BODY_COUNT = 255;
 var SURFACE_CANONICAL_HEX_SIZE = 1;
 var SURFACE_TEXTURE_PAGE_LAYERS = 128;
-var SURFACE_COMPILER_REVISION = 1;
+var SURFACE_WATER_COVERAGE_THRESHOLD = 128;
+var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
+var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
+var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
+var SURFACE_COMPILER_REVISION = 2;
 var SURFACE_COMPILE_PROFILE_VERSION = 1;
 var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
   renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -4089,7 +4093,11 @@ var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
   gutterTexels: SURFACE_FIELD_GUTTER_TEXELS,
   influenceRadiusTiles: SURFACE_INFLUENCE_RADIUS_TILES,
   textureLayerSize: SURFACE_FIELD_TEXTURE_SIZE,
-  pageLayers: SURFACE_TEXTURE_PAGE_LAYERS
+  pageLayers: SURFACE_TEXTURE_PAGE_LAYERS,
+  waterCoverageThreshold: SURFACE_WATER_COVERAGE_THRESHOLD,
+  narrowRiverMaximumWidthQuantized: SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED,
+  vegetationCoordinateScale: SURFACE_VEGETATION_COORDINATE_SCALE,
+  maximumVegetationSeeds: SURFACE_MAX_VEGETATION_SEEDS
 });
 
 // src/world/semantic/SurfaceDependency.ts
@@ -4239,6 +4247,16 @@ function surfaceToWorld(u, v, hexSize = SURFACE_CANONICAL_HEX_SIZE) {
     z: Math.sqrt(3) * hexSize * (v + surfaceStagger(u))
   });
 }
+function worldToSurface(x, z, hexSize = SURFACE_CANONICAL_HEX_SIZE) {
+  assertFiniteCoordinate("surface world x", x);
+  assertFiniteCoordinate("surface world z", z);
+  assertHexSize(hexSize);
+  const u = x / (1.5 * hexSize);
+  return Object.freeze({
+    u,
+    v: z / (Math.sqrt(3) * hexSize) - surfaceStagger(u)
+  });
+}
 function surfaceLatticeTexelLocalCoordinate(physicalX, physicalY) {
   if (!Number.isInteger(physicalX) || physicalX < 0 || physicalX >= SURFACE_FIELD_TEXTURE_SIZE || !Number.isInteger(physicalY) || physicalY < 0 || physicalY >= SURFACE_FIELD_TEXTURE_SIZE) {
     throw new RangeError("surface lattice physical texel lies outside the field layer");
@@ -4246,6 +4264,14 @@ function surfaceLatticeTexelLocalCoordinate(physicalX, physicalY) {
   return Object.freeze({
     u: -0.5 + (physicalX - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL,
     v: -0.5 + (physicalY - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL
+  });
+}
+function surfaceFieldTexelCoordinate(localU, localV) {
+  assertFiniteCoordinate("surface localU", localU);
+  assertFiniteCoordinate("surface localV", localV);
+  return Object.freeze({
+    u: (localU + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL - 0.5 + SURFACE_FIELD_GUTTER_TEXELS,
+    v: (localV + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL - 0.5 + SURFACE_FIELD_GUTTER_TEXELS
   });
 }
 function surfaceLatticeIndex(physicalX, physicalY) {
@@ -4463,6 +4489,389 @@ function decodeFloat16(bits) {
   return sign * (1 + fraction / 1024) * 2 ** (exponent - 15);
 }
 
+// src/world/semantic/SurfacePresentationCompiler.ts
+var WATER_INTERSECTION_SCALE = 65536;
+var UINT32_SCALE = 4294967296;
+function clamp2(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+function fieldSampleIndices(localU, localV) {
+  const coordinate = surfaceFieldTexelCoordinate(localU, localV);
+  const x0 = clamp2(Math.floor(coordinate.u), 0, SURFACE_FIELD_TEXTURE_SIZE - 2);
+  const y0 = clamp2(Math.floor(coordinate.v), 0, SURFACE_FIELD_TEXTURE_SIZE - 2);
+  return {
+    indices: [
+      surfaceLatticeIndex(x0, y0),
+      surfaceLatticeIndex(x0 + 1, y0),
+      surfaceLatticeIndex(x0, y0 + 1),
+      surfaceLatticeIndex(x0 + 1, y0 + 1)
+    ],
+    amountX: clamp2(coordinate.u - x0, 0, 1),
+    amountY: clamp2(coordinate.v - y0, 0, 1)
+  };
+}
+function bilinear(values, amountX, amountY) {
+  const top = values[0] + (values[1] - values[0]) * amountX;
+  const bottom = values[2] + (values[3] - values[2]) * amountX;
+  return top + (bottom - top) * amountY;
+}
+function sampleField(field2, channel, localU, localV) {
+  const sample = fieldSampleIndices(localU, localV);
+  const values = sample.indices.map((index) => channel === "coverage" ? field2.waterCoverage[index] : decodeFloat16(channel === "ground" ? field2.groundHeight[index] : field2.shorelineDistance[index]));
+  return bilinear(values, sample.amountX, sample.amountY);
+}
+function quantizedWaterVertex(builder, x, y) {
+  const quantizedX = Math.round(x * WATER_INTERSECTION_SCALE);
+  const quantizedY = Math.round(y * WATER_INTERSECTION_SCALE);
+  const key = `${quantizedX},${quantizedY}`;
+  const existing = builder.vertexByKey.get(key);
+  if (existing !== void 0) return existing;
+  const index = builder.coordinates.length / 2;
+  builder.coordinates.push(
+    -0.5 + quantizedX / (WATER_INTERSECTION_SCALE * SURFACE_SAMPLES_PER_TILE_INTERVAL),
+    -0.5 + quantizedY / (WATER_INTERSECTION_SCALE * SURFACE_SAMPLES_PER_TILE_INTERVAL)
+  );
+  builder.vertexByKey.set(key, index);
+  return index;
+}
+function waterIntersection(first, second) {
+  const difference = second.coverage - first.coverage;
+  const amount = difference === 0 ? 0.5 : clamp2((SURFACE_WATER_COVERAGE_THRESHOLD - first.coverage) / difference, 0, 1);
+  return {
+    x: first.x + (second.x - first.x) * amount,
+    y: first.y + (second.y - first.y) * amount,
+    coverage: SURFACE_WATER_COVERAGE_THRESHOLD
+  };
+}
+function clipTriangleToWater(corners) {
+  const output = [];
+  for (let index = 0; index < corners.length; index += 1) {
+    const current = corners[index];
+    const next = corners[(index + 1) % corners.length];
+    const currentInside = current.coverage >= SURFACE_WATER_COVERAGE_THRESHOLD;
+    const nextInside = next.coverage >= SURFACE_WATER_COVERAGE_THRESHOLD;
+    if (currentInside) output.push(current);
+    if (currentInside !== nextInside) output.push(waterIntersection(current, next));
+  }
+  return output;
+}
+function addWaterPolygon(builder, polygon) {
+  if (polygon.length < 3) return;
+  const first = quantizedWaterVertex(builder, polygon[0].x, polygon[0].y);
+  for (let index = 1; index < polygon.length - 1; index += 1) {
+    const second = quantizedWaterVertex(builder, polygon[index].x, polygon[index].y);
+    const third = quantizedWaterVertex(builder, polygon[index + 1].x, polygon[index + 1].y);
+    if (first !== second && second !== third && first !== third) {
+      builder.indices.push(first, second, third);
+    }
+  }
+}
+function coverageAtGridPoint(field2, x, y) {
+  return sampleField(
+    field2,
+    "coverage",
+    -0.5 + x / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+    -0.5 + y / SURFACE_SAMPLES_PER_TILE_INTERVAL
+  );
+}
+function compileCoverageMesh(field2) {
+  const builder = { coordinates: [], indices: [], vertexByKey: /* @__PURE__ */ new Map() };
+  const intervals = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+  const row = Array.from({ length: intervals + 1 }, () => 0);
+  const nextRow = Array.from({ length: intervals + 1 }, () => 0);
+  for (let y = 0; y <= intervals; y += 1) row[y] = coverageAtGridPoint(field2, 0, y);
+  for (let x = 0; x < intervals; x += 1) {
+    for (let y = 0; y <= intervals; y += 1) nextRow[y] = coverageAtGridPoint(field2, x + 1, y);
+    for (let y = 0; y < intervals; y += 1) {
+      const topLeft = { x, y, coverage: row[y] };
+      const bottomLeft = { x, y: y + 1, coverage: row[y + 1] };
+      const topRight = { x: x + 1, y, coverage: nextRow[y] };
+      const bottomRight = { x: x + 1, y: y + 1, coverage: nextRow[y + 1] };
+      addWaterPolygon(builder, clipTriangleToWater([topLeft, bottomLeft, bottomRight]));
+      addWaterPolygon(builder, clipTriangleToWater([topLeft, bottomRight, topRight]));
+    }
+    for (let y = 0; y <= intervals; y += 1) row[y] = nextRow[y];
+  }
+  if (builder.coordinates.length / 2 > 65535) {
+    throw new RangeError("compiled water coverage mesh exceeds Uint16 vertex addressing");
+  }
+  return Object.freeze({
+    surfaceUv: new Float32Array(builder.coordinates),
+    indices: new Uint16Array(builder.indices)
+  });
+}
+function maximumRiverWidth(river) {
+  let maximum = 0;
+  for (const width of river.widthProfile) maximum = Math.max(maximum, width);
+  return maximum;
+}
+function riverPointWidth(river, index) {
+  return river.widthProfile[index] / HYDROLOGY_COORDINATE_SCALE * Math.sqrt(3) / 2;
+}
+function compileSweepMesh(rivers) {
+  const builder = { coordinates: [], indices: [], vertexByKey: /* @__PURE__ */ new Map() };
+  const featureKeys = [];
+  for (const river of rivers) {
+    if (maximumRiverWidth(river) > SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED) continue;
+    featureKeys.push(river.featureKey);
+    const pointCount = river.controlPoints.length / 2;
+    const left = [];
+    const right = [];
+    for (let index = 0; index < pointCount; index += 1) {
+      const current = surfaceToWorld(
+        river.controlPoints[index * 2],
+        river.controlPoints[index * 2 + 1]
+      );
+      const previous = surfaceToWorld(
+        river.controlPoints[Math.max(0, index - 1) * 2],
+        river.controlPoints[Math.max(0, index - 1) * 2 + 1]
+      );
+      const next = surfaceToWorld(
+        river.controlPoints[Math.min(pointCount - 1, index + 1) * 2],
+        river.controlPoints[Math.min(pointCount - 1, index + 1) * 2 + 1]
+      );
+      let tangentX = next.x - previous.x;
+      let tangentZ = next.z - previous.z;
+      const length = Math.hypot(tangentX, tangentZ);
+      if (!(length > 0)) throw new TypeError("narrow river sweep contains a zero-length join");
+      tangentX /= length;
+      tangentZ /= length;
+      const halfWidth = riverPointWidth(river, index);
+      const leftSurface = worldToSurface(
+        current.x - tangentZ * halfWidth,
+        current.z + tangentX * halfWidth
+      );
+      const rightSurface = worldToSurface(
+        current.x + tangentZ * halfWidth,
+        current.z - tangentX * halfWidth
+      );
+      left.push(quantizedWaterVertex(
+        builder,
+        (leftSurface.u + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL,
+        (leftSurface.v + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL
+      ));
+      right.push(quantizedWaterVertex(
+        builder,
+        (rightSurface.u + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL,
+        (rightSurface.v + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL
+      ));
+    }
+    for (let index = 0; index < pointCount - 1; index += 1) {
+      if (left[index] === right[index] || left[index + 1] === right[index + 1]) continue;
+      builder.indices.push(
+        left[index],
+        right[index],
+        right[index + 1],
+        left[index],
+        right[index + 1],
+        left[index + 1]
+      );
+    }
+  }
+  if (builder.coordinates.length / 2 > 65535) {
+    throw new RangeError("compiled narrow river sweep exceeds Uint16 vertex addressing");
+  }
+  return Object.freeze({
+    mesh: Object.freeze({
+      surfaceUv: new Float32Array(builder.coordinates),
+      indices: new Uint16Array(builder.indices)
+    }),
+    featureKeys: Object.freeze(featureKeys)
+  });
+}
+function coreCoverageState(field2) {
+  const intervals = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+  let any = false;
+  let full = true;
+  for (let x = 0; x <= intervals; x += 1) {
+    for (let y = 0; y <= intervals; y += 1) {
+      const coverage = coverageAtGridPoint(field2, x, y);
+      if (coverage >= SURFACE_WATER_COVERAGE_THRESHOLD) any = true;
+      else full = false;
+    }
+  }
+  return { any, full };
+}
+function compileWaterGeometry(window, field2, waterBodies) {
+  const state = coreCoverageState(field2);
+  if (!state.any) return Object.freeze({ kind: "none" });
+  if (state.full) return Object.freeze({ kind: "full" });
+  const riverByBody = /* @__PURE__ */ new Map();
+  for (const river of window.rivers) {
+    const values = riverByBody.get(river.bodyId) ?? [];
+    values.push(river);
+    riverByBody.set(river.bodyId, values);
+  }
+  const narrowOnly = waterBodies.length > 0 && waterBodies.every((body) => {
+    const rivers = riverByBody.get(body.bodyId);
+    return body.kind === "river" && rivers?.length && rivers.every((river) => maximumRiverWidth(river) <= SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED);
+  });
+  if (narrowOnly && window.rivers.length === 1) {
+    const sweep = compileSweepMesh(window.rivers);
+    if (sweep.mesh.indices.length === 0) {
+      throw new TypeError("narrow-river surface field produced no sweep geometry");
+    }
+    return Object.freeze({ kind: "sweep", ...sweep });
+  }
+  const mesh = compileCoverageMesh(field2);
+  if (mesh.indices.length === 0) {
+    throw new TypeError("wet surface field produced no coverage geometry");
+  }
+  return Object.freeze({ kind: "coverage", mesh });
+}
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function mixHash(seed, value) {
+  let mixed = (seed ^ value) >>> 0;
+  mixed = Math.imul(mixed ^ mixed >>> 16, 2146121005);
+  mixed = Math.imul(mixed ^ mixed >>> 15, 2221713035);
+  return (mixed ^ mixed >>> 16) >>> 0;
+}
+function mixSafeCoordinate(seed, coordinate) {
+  const magnitude = Math.abs(coordinate);
+  const low = magnitude % UINT32_SCALE;
+  const high = Math.floor(magnitude / UINT32_SCALE);
+  let hash = mixHash(seed, low);
+  hash = mixHash(hash, high);
+  return mixHash(hash, coordinate < 0 ? 4294967295 : 0);
+}
+function candidateHash(worldHash, globalX, globalY, candidate) {
+  let hash = mixSafeCoordinate(worldHash, globalX);
+  hash = mixSafeCoordinate(hash, globalY);
+  return mixHash(hash, candidate);
+}
+function unitRandom(value) {
+  return value / UINT32_SCALE;
+}
+function speciesForProfile(weights, random) {
+  let cursor = Math.floor(random * 255);
+  for (const value of weights) {
+    if (cursor < value.weight) {
+      return value.species === "palm" ? 1 /* Palm */ : value.species === "pinia" ? 2 /* Pinia */ : 3 /* Oak */;
+    }
+    cursor -= value.weight;
+  }
+  return 3 /* Oak */;
+}
+function pushSeed(output, field2, window, tileX, tileY, candidateIndex, tree, worldHash) {
+  const globalX = window.key.chunkX * SURFACE_RENDER_CHUNK_SIZE + tileX;
+  const globalY = window.key.chunkY * SURFACE_RENDER_CHUNK_SIZE + tileY;
+  if (!Number.isSafeInteger(globalX) || !Number.isSafeInteger(globalY)) {
+    throw new RangeError("vegetation candidate world coordinates must be safe integers");
+  }
+  const randomKey = candidateHash(worldHash, globalX, globalY, candidateIndex);
+  const randomX = mixHash(randomKey, 2738958700);
+  const randomY = mixHash(randomKey, 3355524772);
+  const localU = tileX + (unitRandom(randomX) - 0.5) * 0.84;
+  const localV = tileY + (unitRandom(randomY) - 0.5) * 0.84;
+  const coverage = sampleField(field2, "coverage", localU, localV) / 255;
+  if (coverage > 0.125) return;
+  const groundHeight = sampleField(field2, "ground", localU, localV);
+  const groundU = sampleField(field2, "ground", localU + 0.25, localV) - sampleField(field2, "ground", localU - 0.25, localV);
+  const groundV = sampleField(field2, "ground", localU, localV + 0.25) - sampleField(field2, "ground", localU, localV - 0.25);
+  const slope = Math.hypot(groundU, groundV) * 2;
+  if (slope > (tree ? 0.18 : 0.35)) return;
+  const shore = sampleField(field2, "shore", localU, localV);
+  const shoreFactor = clamp2((shore + 0.1) / 0.9, 0, 1);
+  const semanticIndex = (tileX + SURFACE_INFLUENCE_RADIUS_TILES) * SURFACE_EFFECTIVE_WINDOW_SIZE + tileY + SURFACE_INFLUENCE_RADIUS_TILES;
+  const density = window.vegetationDensity[semanticIndex] / 255;
+  const acceptance = density * shoreFactor * (tree ? 0.42 : 1);
+  if (unitRandom(mixHash(randomKey, 2911926141)) >= acceptance) return;
+  const profileIndex = window.vegetationProfile[semanticIndex];
+  const profile = WORLD_VEGETATION_PROFILE_CATALOG[profileIndex];
+  if (!profile || profile.species.length === 0) return;
+  output.push({
+    tileIndex: tileX * SURFACE_RENDER_CHUNK_SIZE + tileY,
+    candidateIndex,
+    randomKey,
+    localU,
+    localV,
+    groundHeight,
+    species: tree ? speciesForProfile(profile.species, unitRandom(mixHash(randomKey, 2654435769))) : 0 /* Grass */,
+    scale: 160 + (mixHash(randomKey, 1013904242) & 95),
+    rotation: mixHash(randomKey, 3668340011) & 65535
+  });
+}
+function compileVegetationSeeds(window, field2) {
+  const records = [];
+  const worldHash = hashString(window.worldIdentity);
+  for (let tileX = window.validBounds.minX; tileX < window.validBounds.maxXExclusive; tileX += 1) {
+    for (let tileY = window.validBounds.minY; tileY < window.validBounds.maxYExclusive; tileY += 1) {
+      for (let candidate = 0; candidate < 8; candidate += 1) {
+        pushSeed(records, field2, window, tileX, tileY, candidate, false, worldHash);
+      }
+      for (let candidate = 8; candidate < 10; candidate += 1) {
+        pushSeed(records, field2, window, tileX, tileY, candidate, true, worldHash);
+      }
+    }
+  }
+  if (records.length > SURFACE_MAX_VEGETATION_SEEDS) {
+    throw new RangeError("compiled surface exceeds the vegetation seed budget");
+  }
+  records.sort((first, second) => first.tileIndex - second.tileIndex || first.candidateIndex - second.candidateIndex);
+  const count = records.length;
+  const tileIndex = new Uint16Array(count);
+  const candidateIndex = new Uint8Array(count);
+  const randomKey = new Uint32Array(count);
+  const surfaceCoordinates = new Int16Array(count * 2);
+  const groundHeight = new Uint16Array(count);
+  const species = new Uint8Array(count);
+  const scale = new Uint8Array(count);
+  const rotation = new Uint16Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const record = records[index];
+    tileIndex[index] = record.tileIndex;
+    candidateIndex[index] = record.candidateIndex;
+    randomKey[index] = record.randomKey;
+    surfaceCoordinates[index * 2] = Math.round(record.localU * SURFACE_VEGETATION_COORDINATE_SCALE);
+    surfaceCoordinates[index * 2 + 1] = Math.round(record.localV * SURFACE_VEGETATION_COORDINATE_SCALE);
+    groundHeight[index] = Math.max(0, Math.min(65535, Math.round(record.groundHeight * 65535)));
+    species[index] = record.species;
+    scale[index] = record.scale;
+    rotation[index] = record.rotation;
+  }
+  return Object.freeze({
+    tileIndex,
+    candidateIndex,
+    randomKey,
+    surfaceCoordinates,
+    groundHeight,
+    species,
+    scale,
+    rotation
+  });
+}
+function waterGeometryByteLength(value) {
+  return value.kind === "coverage" || value.kind === "sweep" ? value.mesh.surfaceUv.byteLength + value.mesh.indices.byteLength : 0;
+}
+function vegetationSeedsByteLength(value) {
+  return value.tileIndex.byteLength + value.candidateIndex.byteLength + value.randomKey.byteLength + value.surfaceCoordinates.byteLength + value.groundHeight.byteLength + value.species.byteLength + value.scale.byteLength + value.rotation.byteLength;
+}
+function surfacePresentationTransferables(waterGeometry, vegetationSeeds) {
+  const result = [];
+  if (waterGeometry.kind === "coverage" || waterGeometry.kind === "sweep") {
+    result.push(waterGeometry.mesh.surfaceUv.buffer);
+    result.push(waterGeometry.mesh.indices.buffer);
+  }
+  result.push(
+    vegetationSeeds.tileIndex.buffer,
+    vegetationSeeds.candidateIndex.buffer,
+    vegetationSeeds.randomKey.buffer,
+    vegetationSeeds.surfaceCoordinates.buffer,
+    vegetationSeeds.groundHeight.buffer,
+    vegetationSeeds.species.buffer,
+    vegetationSeeds.scale.buffer,
+    vegetationSeeds.rotation.buffer
+  );
+  return Object.freeze(result);
+}
+
 // src/world/semantic/SurfaceCompiler.ts
 var SQRT_THREE = Math.sqrt(3);
 var TEXEL_ANTIALIAS_DISTANCE = SQRT_THREE / SURFACE_SAMPLES_PER_TILE_INTERVAL / 2;
@@ -4474,7 +4883,7 @@ var SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
 var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
 var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
 var validatedCompiledChunks = /* @__PURE__ */ new WeakSet();
-function clamp2(value, minimum, maximum) {
+function clamp3(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 function windowIndex(x, y) {
@@ -4490,12 +4899,12 @@ function workLocalCoordinate(x, y) {
   };
 }
 function sampleWindowChannel(values, localU, localV, channels, channel) {
-  const sampleU = clamp2(
+  const sampleU = clamp3(
     localU,
     -SURFACE_INFLUENCE_RADIUS_TILES,
     SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
   );
-  const sampleV = clamp2(
+  const sampleV = clamp3(
     localV,
     -SURFACE_INFLUENCE_RADIUS_TILES,
     SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
@@ -4546,7 +4955,7 @@ function prepareLakes(values) {
   return values.map((value) => Object.freeze({ ...value, worldPoints: preparePoints(value.boundaryPoints) }));
 }
 function coverageForSignedDistance(signedDistance) {
-  return clamp2(Math.floor((0.5 + signedDistance / (TEXEL_ANTIALIAS_DISTANCE * 2)) * 255 + 0.5), 0, 255);
+  return clamp3(Math.floor((0.5 + signedDistance / (TEXEL_ANTIALIAS_DISTANCE * 2)) * 255 + 0.5), 0, 255);
 }
 function riverCandidate(x, z, river) {
   let best;
@@ -4558,7 +4967,7 @@ function riverCandidate(x, z, river) {
     const dz = river.worldPoints[index + 3] - startZ;
     const lengthSquared = dx * dx + dz * dz;
     if (lengthSquared === 0) continue;
-    const amount = clamp2(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+    const amount = clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
     const nearestX = startX + dx * amount;
     const nearestZ = startZ + dz * amount;
     const distance = Math.hypot(x - nearestX, z - nearestZ);
@@ -4601,7 +5010,7 @@ function polygonDistance(x, z, points) {
     const dx = points[current] - startX;
     const dz = points[current + 1] - startZ;
     const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0 ? 0 : clamp2(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+    const amount = lengthSquared === 0 ? 0 : clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
     const offsetX = x - (startX + dx * amount);
     const offsetZ = z - (startZ + dz * amount);
     bestSquared = Math.min(bestSquared, offsetX * offsetX + offsetZ * offsetZ);
@@ -4725,8 +5134,8 @@ function materialWeights(window, localU, localV, slope, shoreDistance) {
   else if (substrate === 2 /* Sand */) values[1] += 0.45;
   else if (substrate === 3 /* Rock */) values[3] += 0.5;
   else if (substrate === 4 /* Permafrost */) values[2] += 0.5;
-  const steepness = clamp2(slope * 8, 0, 1);
-  const shoreInfluence = clamp2(1 - Math.abs(shoreDistance) / SHORE_DISTANCE_LIMIT, 0, 1);
+  const steepness = clamp3(slope * 8, 0, 1);
+  const shoreInfluence = clamp3(1 - Math.abs(shoreDistance) / SHORE_DISTANCE_LIMIT, 0, 1);
   values[3] += steepness * 0.6;
   values[1] += shoreInfluence * 0.25;
   values[0] += climateMoisture * (1 - steepness) * 0.12;
@@ -4744,7 +5153,17 @@ function updateChecksum(hash, values) {
   }
   return hash;
 }
-function surfaceChecksum(field2, bodies) {
+function updateChecksumText(hash, value) {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    hash ^= code & 255;
+    hash = Math.imul(hash, 16777619);
+    hash ^= code >>> 8;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash;
+}
+function surfaceChecksum(field2, bodies, waterGeometry, vegetationSeeds) {
   let hash = 2166136261;
   for (const values of [
     field2.groundHeight,
@@ -4759,14 +5178,28 @@ function surfaceChecksum(field2, bodies) {
     field2.waterBodyIndex
   ]) hash = updateChecksum(hash, values);
   for (const body of bodies) {
-    for (const character of `${body.bodyId}\0${body.kind}\0`) {
-      const code = character.charCodeAt(0);
-      hash ^= code & 255;
-      hash = Math.imul(hash, 16777619);
-      hash ^= code >>> 8;
-      hash = Math.imul(hash, 16777619);
+    hash = updateChecksumText(hash, `${body.bodyId}\0${body.kind}\0`);
+  }
+  hash = updateChecksumText(hash, `${waterGeometry.kind}\0`);
+  if (waterGeometry.kind === "coverage" || waterGeometry.kind === "sweep") {
+    hash = updateChecksum(hash, waterGeometry.mesh.surfaceUv);
+    hash = updateChecksum(hash, waterGeometry.mesh.indices);
+  }
+  if (waterGeometry.kind === "sweep") {
+    for (const featureKey of waterGeometry.featureKeys) {
+      hash = updateChecksumText(hash, `${featureKey}\0`);
     }
   }
+  for (const values of [
+    vegetationSeeds.tileIndex,
+    vegetationSeeds.candidateIndex,
+    vegetationSeeds.randomKey,
+    vegetationSeeds.surfaceCoordinates,
+    vegetationSeeds.groundHeight,
+    vegetationSeeds.species,
+    vegetationSeeds.scale,
+    vegetationSeeds.rotation
+  ]) hash = updateChecksum(hash, values);
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 function compileSurfaceChunk(window) {
@@ -4885,8 +5318,8 @@ function compileSurfaceChunk(window) {
         const depth = Math.max(0, level - ground[workIndex]) * workCoverage[workIndex] / 255;
         field2.waterLevel[index] = encodeFloat16(level);
         field2.waterDepth[index] = encodeFloat16(depth);
-        field2.flow[index * 2] = Math.round(clamp2(workFlow[workIndex * 2], -1, 1) * 127);
-        field2.flow[index * 2 + 1] = Math.round(clamp2(workFlow[workIndex * 2 + 1], -1, 1) * 127);
+        field2.flow[index * 2] = Math.round(clamp3(workFlow[workIndex * 2], -1, 1) * 127);
+        field2.flow[index * 2 + 1] = Math.round(clamp3(workFlow[workIndex * 2 + 1], -1, 1) * 127);
         field2.waterBodyIndex[index] = paletteById.get(workBodyIds[workIndex]);
       }
       minGroundHeight = Math.min(minGroundHeight, decodeFloat16(field2.groundHeight[index]));
@@ -4907,7 +5340,9 @@ function compileSurfaceChunk(window) {
     minWaterLevel: hasWater ? minWaterLevel : 0,
     maxWaterLevel: hasWater ? maxWaterLevel : 0
   });
-  const byteLength = fieldByteLength(field2);
+  const waterGeometry = compileWaterGeometry(window, field2, waterBodies);
+  const vegetationSeeds = compileVegetationSeeds(window, field2);
+  const byteLength = fieldByteLength(field2) + waterGeometryByteLength(waterGeometry) + vegetationSeedsByteLength(vegetationSeeds);
   const dependencyKey = cloneSurfaceDependencyKey(window.dependencyKey);
   const chunk = Object.freeze({
     key: Object.freeze({ ...window.key }),
@@ -4916,8 +5351,10 @@ function compileSurfaceChunk(window) {
     bounds,
     field: field2,
     waterBodies,
+    waterGeometry,
+    vegetationSeeds,
     byteLength,
-    contentChecksum: surfaceChecksum(field2, waterBodies)
+    contentChecksum: surfaceChecksum(field2, waterBodies, waterGeometry, vegetationSeeds)
   });
   assertCompiledSurfaceChunk(chunk);
   validatedCompiledChunks.add(chunk);
@@ -4951,6 +5388,81 @@ function assertBounds(bounds) {
     throw new TypeError("compiled surface bounds are invalid");
   }
 }
+function assertWaterMesh(mesh) {
+  if (!mesh || typeof mesh !== "object" || Object.getOwnPropertyNames(mesh).some((name) => name !== "surfaceUv" && name !== "indices") || !(mesh.surfaceUv instanceof Float32Array) || mesh.surfaceUv.length < 6 || mesh.surfaceUv.length % 2 !== 0 || !(mesh.indices instanceof Uint16Array) || mesh.indices.length < 3 || mesh.indices.length % 3 !== 0) {
+    throw new TypeError("compiled water mesh layout is invalid");
+  }
+  const vertexCount = mesh.surfaceUv.length / 2;
+  for (const coordinate of mesh.surfaceUv) {
+    if (!Number.isFinite(coordinate)) throw new TypeError("compiled water mesh coordinates must be finite");
+  }
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const first = mesh.indices[index];
+    const second = mesh.indices[index + 1];
+    const third = mesh.indices[index + 2];
+    if (first >= vertexCount || second >= vertexCount || third >= vertexCount || first === second || second === third || first === third) {
+      throw new TypeError("compiled water mesh indices are invalid");
+    }
+    const ax = mesh.surfaceUv[first * 2];
+    const ay = mesh.surfaceUv[first * 2 + 1];
+    const bx = mesh.surfaceUv[second * 2];
+    const by = mesh.surfaceUv[second * 2 + 1];
+    const cx = mesh.surfaceUv[third * 2];
+    const cy = mesh.surfaceUv[third * 2 + 1];
+    if (Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) <= 1e-9) {
+      throw new TypeError("compiled water mesh contains a degenerate logical triangle");
+    }
+  }
+}
+function assertWaterGeometry(value) {
+  if (!value || typeof value !== "object") throw new TypeError("compiled water geometry is invalid");
+  if (value.kind === "none" || value.kind === "full") {
+    if (Object.getOwnPropertyNames(value).some((name) => name !== "kind")) {
+      throw new TypeError("shared compiled water geometry contains unknown fields");
+    }
+    return;
+  }
+  if (value.kind !== "coverage" && value.kind !== "sweep") {
+    throw new TypeError("compiled water geometry kind is invalid");
+  }
+  const allowed = value.kind === "coverage" ? /* @__PURE__ */ new Set(["kind", "mesh"]) : /* @__PURE__ */ new Set(["kind", "mesh", "featureKeys"]);
+  if (Object.getOwnPropertyNames(value).some((name) => !allowed.has(name))) {
+    throw new TypeError("compiled water geometry contains unknown fields");
+  }
+  assertWaterMesh(value.mesh);
+  if (value.kind === "sweep") {
+    if (!Array.isArray(value.featureKeys) || value.featureKeys.length === 0 || value.featureKeys.some((key, index) => typeof key !== "string" || key.length === 0 || index > 0 && value.featureKeys[index - 1].localeCompare(key) >= 0)) {
+      throw new TypeError("compiled water sweep feature keys are invalid");
+    }
+  }
+}
+function assertVegetationSeeds(value) {
+  if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).some((name) => ![
+    "tileIndex",
+    "candidateIndex",
+    "randomKey",
+    "surfaceCoordinates",
+    "groundHeight",
+    "species",
+    "scale",
+    "rotation"
+  ].includes(name)) || !(value.tileIndex instanceof Uint16Array) || !(value.candidateIndex instanceof Uint8Array) || !(value.randomKey instanceof Uint32Array) || !(value.surfaceCoordinates instanceof Int16Array) || !(value.groundHeight instanceof Uint16Array) || !(value.species instanceof Uint8Array) || !(value.scale instanceof Uint8Array) || !(value.rotation instanceof Uint16Array)) {
+    throw new TypeError("compiled vegetation seed layout is invalid");
+  }
+  const count = value.tileIndex.length;
+  if (count > SURFACE_MAX_VEGETATION_SEEDS || value.candidateIndex.length !== count || value.randomKey.length !== count || value.surfaceCoordinates.length !== count * 2 || value.groundHeight.length !== count || value.species.length !== count || value.scale.length !== count || value.rotation.length !== count) {
+    throw new TypeError("compiled vegetation seed columns have inconsistent lengths");
+  }
+  let previousIdentity = -1;
+  for (let index = 0; index < count; index += 1) {
+    const identity = value.tileIndex[index] * 10 + value.candidateIndex[index];
+    const species = value.species[index];
+    if (value.tileIndex[index] >= SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE || value.candidateIndex[index] >= 10 || identity <= previousIdentity || species < 0 /* Grass */ || species > 3 /* Oak */ || value.candidateIndex[index] < 8 !== (species === 0 /* Grass */) || value.scale[index] < 160) {
+      throw new TypeError("compiled vegetation seed values are invalid");
+    }
+    previousIdentity = identity;
+  }
+}
 function assertCompiledSurfaceChunk(value) {
   if (!value || typeof value !== "object") throw new TypeError("compiled surface chunk must be an object");
   const chunk = value;
@@ -4961,6 +5473,8 @@ function assertCompiledSurfaceChunk(value) {
     "bounds",
     "field",
     "waterBodies",
+    "waterGeometry",
+    "vegetationSeeds",
     "byteLength",
     "contentChecksum"
   ].includes(name))) throw new TypeError("compiled surface chunk contains unknown fields");
@@ -4985,6 +5499,8 @@ function assertCompiledSurfaceChunk(value) {
       throw new TypeError("compiled surface body palette must be strictly ordered");
     }
   }
+  assertWaterGeometry(chunk.waterGeometry);
+  assertVegetationSeeds(chunk.vegetationSeeds);
   let minGroundHeight = Number.POSITIVE_INFINITY;
   let maxGroundHeight = Number.NEGATIVE_INFINITY;
   let minWaterLevel = Number.POSITIVE_INFINITY;
@@ -5023,7 +5539,12 @@ function assertCompiledSurfaceChunk(value) {
   if (chunk.bounds.minGroundHeight !== minGroundHeight || chunk.bounds.maxGroundHeight !== maxGroundHeight || chunk.bounds.hasWater !== hasWater || chunk.bounds.minWaterLevel !== (hasWater ? minWaterLevel : 0) || chunk.bounds.maxWaterLevel !== (hasWater ? maxWaterLevel : 0)) {
     throw new TypeError("compiled surface bounds do not match the field payload");
   }
-  if (chunk.byteLength !== fieldByteLength(chunk.field) || chunk.contentChecksum !== surfaceChecksum(chunk.field, chunk.waterBodies)) {
+  if (chunk.byteLength !== fieldByteLength(chunk.field) + waterGeometryByteLength(chunk.waterGeometry) + vegetationSeedsByteLength(chunk.vegetationSeeds) || chunk.contentChecksum !== surfaceChecksum(
+    chunk.field,
+    chunk.waterBodies,
+    chunk.waterGeometry,
+    chunk.vegetationSeeds
+  )) {
     throw new TypeError("compiled surface chunk byte length or checksum is invalid");
   }
 }
@@ -5032,7 +5553,7 @@ function assertCompiledSurfaceChunkOnce(value) {
   assertCompiledSurfaceChunk(value);
   validatedCompiledChunks.add(value);
 }
-function compiledSurfaceFieldTransferables(chunk) {
+function compiledSurfaceChunkTransferables(chunk) {
   assertCompiledSurfaceChunkOnce(chunk);
   const candidates = [
     chunk.field.groundHeight.buffer,
@@ -5044,10 +5565,11 @@ function compiledSurfaceFieldTransferables(chunk) {
     chunk.field.waterCoverage.buffer,
     chunk.field.waterKind.buffer,
     chunk.field.waterProfile.buffer,
-    chunk.field.waterBodyIndex.buffer
+    chunk.field.waterBodyIndex.buffer,
+    ...surfacePresentationTransferables(chunk.waterGeometry, chunk.vegetationSeeds)
   ];
   if (candidates.some((buffer) => !(buffer instanceof ArrayBuffer))) {
-    throw new TypeError("compiled surface field buffers must be transferable ArrayBuffers");
+    throw new TypeError("compiled surface chunk buffers must be transferable ArrayBuffers");
   }
   const buffers = candidates;
   if (new Set(buffers).size !== buffers.length) {
@@ -5123,7 +5645,7 @@ scope.addEventListener("message", (event) => {
         surfaceChunk,
         reclaimedWindowBuffers
       }, [
-        ...compiledSurfaceFieldTransferables(surfaceChunk),
+        ...compiledSurfaceChunkTransferables(surfaceChunk),
         ...reclaimedWindowBuffers
       ]);
     } else {

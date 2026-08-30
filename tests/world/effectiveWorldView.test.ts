@@ -20,6 +20,7 @@ import {
     sparseSemanticDeltaByteLength,
     SubstrateClass,
     SurfaceRequestTracker,
+    SURFACE_COMPILER_REVISION,
     surfaceDependencyKeysEqual
 } from "../../src/index";
 
@@ -238,7 +239,7 @@ describe("surface foundation v2 effective snapshots", () => {
             createSurfaceDependencyBinding(
                 view.capture({ semanticChunks: chunks, hydrologyRegions: regions }),
                 { chunkX: 0, chunkY: 0 },
-                { compilerRevision: 2 }
+                { compilerRevision: SURFACE_COMPILER_REVISION + 1 }
             ).dependencyKey
         )).toBe(false);
     });

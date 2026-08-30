@@ -27,7 +27,7 @@ import type {
 import type { SurfaceWorkerCompilation } from "../../src/world/WorldGeneratorClient";
 import type { WorldChunkGenerationOptions } from "../../src/world/generateWorldChunk";
 
-const COMPILED_SURFACE_BYTES = 78_408;
+const TEST_COMPILED_SURFACE_CACHE_BUDGET = 512 * 1024;
 
 function emptyHydrologyRegion(
     key: Readonly<{ regionX: number; regionY: number }>
@@ -169,7 +169,7 @@ describe("surface compilation service", () => {
             descriptor,
             sessionEpoch: 1,
             worker,
-            cpuCacheBudgetBytes: COMPILED_SURFACE_BYTES * 2,
+            cpuCacheBudgetBytes: TEST_COMPILED_SURFACE_CACHE_BUDGET,
             retainedWindowBufferBudgetBytes: 64 * 1024
         });
         const key = { chunkX: 0, chunkY: 0 };
@@ -186,7 +186,7 @@ describe("surface compilation service", () => {
         expect(service.stats).toMatchObject({
             activeLeases: 2,
             cacheEntries: 1,
-            cacheBytes: COMPILED_SURFACE_BYTES,
+            cacheBytes: second.lease.chunk.byteLength,
             cacheHits: 1,
             cacheMisses: 1,
             workerCompilations: 1,
@@ -230,7 +230,7 @@ describe("surface compilation service", () => {
             descriptor,
             sessionEpoch: 5,
             worker,
-            cpuCacheBudgetBytes: COMPILED_SURFACE_BYTES * 2,
+            cpuCacheBudgetBytes: TEST_COMPILED_SURFACE_CACHE_BUDGET,
             retainedWindowBufferBudgetBytes: 64 * 1024
         });
         const keys = [{ chunkX: 0, chunkY: 0 }, { chunkX: 1, chunkY: 0 }];
@@ -249,25 +249,33 @@ describe("surface compilation service", () => {
     test("never evicts a leased compiled field to hide CPU cache exhaustion", async () => {
         const { descriptor, snapshotFor } = fixture();
         const worker = new ImmediateSurfaceWorker();
+        const firstKey = { chunkX: 0, chunkY: 0 };
+        const secondKey = { chunkX: 1, chunkY: 0 };
+        const firstSnapshot = snapshotFor(firstKey);
+        const secondSnapshot = snapshotFor(secondKey);
+        const firstBytes = compileSurfaceChunk(
+            createTransferableEffectiveWindow(firstSnapshot, firstKey)
+        ).byteLength;
+        const secondBytes = compileSurfaceChunk(
+            createTransferableEffectiveWindow(secondSnapshot, secondKey)
+        ).byteLength;
         const service = new SurfaceCompilationService({
             descriptor,
             sessionEpoch: 2,
             worker,
-            cpuCacheBudgetBytes: COMPILED_SURFACE_BYTES,
+            cpuCacheBudgetBytes: Math.max(firstBytes, secondBytes),
             retainedWindowBufferBudgetBytes: 64 * 1024
         });
-        const firstKey = { chunkX: 0, chunkY: 0 };
-        const secondKey = { chunkX: 1, chunkY: 0 };
-        const first = await service.request(snapshotFor(firstKey), firstKey).result;
+        const first = await service.request(firstSnapshot, firstKey).result;
         if (first.status !== "ready") throw new Error("unreachable");
-        await expect(service.request(snapshotFor(secondKey), secondKey).result)
+        await expect(service.request(secondSnapshot, secondKey).result)
             .rejects.toThrow(/budget is exhausted by active leases/);
         expect(first.lease.release()).toBe(true);
-        const second = await service.request(snapshotFor(secondKey), secondKey).result;
+        const second = await service.request(secondSnapshot, secondKey).result;
         expect(second.status).toBe("ready");
         expect(service.stats).toMatchObject({
             cacheEntries: 1,
-            cacheBytes: COMPILED_SURFACE_BYTES,
+            cacheBytes: secondBytes,
             cacheEvictions: 1,
             workerCompilations: 3
         });
@@ -282,7 +290,7 @@ describe("surface compilation service", () => {
             descriptor,
             sessionEpoch: 3,
             worker,
-            cpuCacheBudgetBytes: COMPILED_SURFACE_BYTES * 2,
+            cpuCacheBudgetBytes: TEST_COMPILED_SURFACE_CACHE_BUDGET,
             retainedWindowBufferBudgetBytes: 64 * 1024
         });
         const key = { chunkX: 0, chunkY: 0 };
@@ -314,7 +322,7 @@ describe("surface compilation service", () => {
             descriptor,
             sessionEpoch: 4,
             worker,
-            cpuCacheBudgetBytes: COMPILED_SURFACE_BYTES,
+            cpuCacheBudgetBytes: TEST_COMPILED_SURFACE_CACHE_BUDGET,
             retainedWindowBufferBudgetBytes: 64 * 1024
         });
         const key = { chunkX: 0, chunkY: 0 };

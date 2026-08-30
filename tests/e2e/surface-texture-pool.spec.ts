@@ -57,7 +57,7 @@ test("uploads and restores a paged v2 surface field in real WebGL2", async ({ pa
             dependencyKey: {
                 worldIdentity: "surface-texture-gpu-probe",
                 renderKey: key,
-                compilerRevision: 1,
+                compilerRevision: api.SURFACE_COMPILER_REVISION,
                 compileProfileVersion: 1,
                 semanticChunks: [],
                 hydrologyRegions: []

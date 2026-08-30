@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 original step 6: compiler-revision-2 water
+  geometry (`none`, shared full patch, coverage contour or narrow-river sweep)
+  and deterministic vegetation SoA seeds; shared-field Water/Vegetation layers;
+  one Ground/Water/Vegetation presentation owner; river/lake/ocean depth,
+  shoreline, flow and profile shading; nested stable vegetation LODs; and a
+  scene lighting binding for built-in and PBR model consumers. Real WebGL2
+  interaction/context recovery and fixed-seed near/middle/far gallery artifacts
+  are now required gates. The 1/9/49 benchmark mounts the complete presentation.
 - Surface/render foundation v2 original step 5 vertical slice: an independent
   byte-budgeted R8 fog pool tied to surface slot generations, three shared
   welded ground LODs with canonical high-resolution boundaries, immutable CAS

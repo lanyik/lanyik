@@ -1,6 +1,9 @@
 import {
     ACESFilmicToneMapping,
     Color,
+    DirectionalLight,
+    HemisphereLight,
+    Scene,
     SRGBColorSpace,
     Texture,
     Uniform,
@@ -51,12 +54,21 @@ export interface LightingRendererBinding {
     release(): boolean;
 }
 
+export interface LightingSceneBinding {
+    readonly scene: Scene;
+    readonly sunLight: DirectionalLight;
+    readonly hemisphereLight: HemisphereLight;
+    readonly released: boolean;
+    release(): boolean;
+}
+
 export interface LightingStateControllerStats {
     readonly state: "ready" | "disposed";
     readonly uniformRevision: number;
     readonly environmentRevision: number;
     readonly uniformBindings: number;
     readonly rendererBindings: number;
+    readonly sceneBindings: number;
 }
 
 interface MutableLightingUniformBinding {
@@ -66,6 +78,12 @@ interface MutableLightingUniformBinding {
 
 interface MutableLightingRendererBinding {
     publicBinding: LightingRendererBinding;
+    released: boolean;
+}
+
+interface MutableLightingSceneBinding {
+    publicBinding: LightingSceneBinding;
+    previousEnvironment: Texture | null;
     released: boolean;
 }
 
@@ -162,6 +180,7 @@ export class LightingStateController {
     private current: LightingState;
     private readonly uniformBindings = new Set<MutableLightingUniformBinding>();
     private readonly rendererBindings = new Set<MutableLightingRendererBinding>();
+    private readonly sceneBindings = new Set<MutableLightingSceneBinding>();
     private disposed = false;
 
     constructor(initial: LightingState = DEFAULT_LIGHTING_STATE) {
@@ -193,6 +212,7 @@ export class LightingStateController {
         this.current = next;
         for (const binding of this.uniformBindings) this.updateUniformBinding(binding.publicBinding, next);
         for (const binding of this.rendererBindings) this.updateRenderer(binding.publicBinding.renderer, next);
+        for (const binding of this.sceneBindings) this.updateSceneBinding(binding.publicBinding, next);
         return next;
     }
 
@@ -244,13 +264,51 @@ export class LightingStateController {
         return mutable.publicBinding;
     }
 
+    public bindScene(scene: Scene): LightingSceneBinding {
+        this.assertReady();
+        if (!(scene instanceof Scene)) throw new TypeError("lighting scene is invalid");
+        if ([...this.sceneBindings].some(binding => binding.publicBinding.scene === scene)) {
+            throw new TypeError("lighting scene already has a shared environment binding");
+        }
+        const sunLight = new DirectionalLight(0xffffff, 1);
+        sunLight.name = "surface-v2-sun";
+        const hemisphereLight = new HemisphereLight(0xffffff, 0xffffff, 1);
+        hemisphereLight.name = "surface-v2-environment-diffuse";
+        const mutable = {} as MutableLightingSceneBinding;
+        const publicBinding: LightingSceneBinding = {
+            scene,
+            sunLight,
+            hemisphereLight,
+            get released() { return mutable.released; },
+            release: () => {
+                if (mutable.released) return false;
+                mutable.released = true;
+                this.sceneBindings.delete(mutable);
+                scene.remove(sunLight, hemisphereLight);
+                if (scene.environment === this.current.specularEnvironment.texture) {
+                    scene.environment = mutable.previousEnvironment;
+                }
+                return true;
+            }
+        };
+        mutable.publicBinding = Object.freeze(publicBinding);
+        mutable.previousEnvironment = scene.environment;
+        mutable.released = false;
+        this.updateSceneBinding(mutable.publicBinding, this.current);
+        scene.add(sunLight, hemisphereLight);
+        this.sceneBindings.add(mutable);
+        return mutable.publicBinding;
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
         for (const binding of this.uniformBindings) binding.released = true;
         for (const binding of this.rendererBindings) binding.released = true;
+        for (const binding of [...this.sceneBindings]) binding.publicBinding.release();
         this.uniformBindings.clear();
         this.rendererBindings.clear();
+        this.sceneBindings.clear();
     }
 
     public get stats(): Readonly<LightingStateControllerStats> {
@@ -259,7 +317,8 @@ export class LightingStateController {
             uniformRevision: this.current.uniformRevision,
             environmentRevision: this.current.environmentRevision,
             uniformBindings: this.uniformBindings.size,
-            rendererBindings: this.rendererBindings.size
+            rendererBindings: this.rendererBindings.size,
+            sceneBindings: this.sceneBindings.size
         });
     }
 
@@ -278,6 +337,20 @@ export class LightingStateController {
         renderer.toneMapping = ACESFilmicToneMapping;
         renderer.toneMappingExposure = state.exposure;
         renderer.outputColorSpace = SRGBColorSpace;
+    }
+
+    private updateSceneBinding(binding: LightingSceneBinding, state: LightingState): void {
+        copyColor(binding.sunLight.color, state.sunRadiance);
+        binding.sunLight.intensity = 1;
+        binding.sunLight.position.set(
+            state.sunDirection.x * 100,
+            state.sunDirection.y * 100,
+            state.sunDirection.z * 100
+        );
+        copyColor(binding.hemisphereLight.color, state.skyDiffuseIrradiance);
+        copyColor(binding.hemisphereLight.groundColor, state.groundDiffuseIrradiance);
+        binding.hemisphereLight.intensity = 1;
+        binding.scene.environment = state.specularEnvironment.texture;
     }
 
     private assertReady(): void {

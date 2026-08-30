@@ -345,6 +345,10 @@ export {
     SURFACE_MAX_WATER_BODY_COUNT,
     SURFACE_CANONICAL_HEX_SIZE,
     SURFACE_TEXTURE_PAGE_LAYERS,
+    SURFACE_WATER_COVERAGE_THRESHOLD,
+    SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED,
+    SURFACE_VEGETATION_COORDINATE_SCALE,
+    SURFACE_MAX_VEGETATION_SEEDS,
     SURFACE_COMPILE_PROFILE_V1
 } from "./world/semantic/SurfaceCompileProfile";
 export {
@@ -387,7 +391,7 @@ export {
     compileSurfaceChunk,
     assertCompiledSurfaceChunk,
     sampleCompiledSurfaceChunk,
-    compiledSurfaceFieldTransferables
+    compiledSurfaceChunkTransferables
 } from "./world/semantic/SurfaceCompiler";
 export type {
     CompiledWaterBodyRef,
@@ -396,6 +400,19 @@ export type {
     CompiledSurfaceChunk,
     CompiledSurfaceSample
 } from "./world/semantic/SurfaceCompiler";
+export {
+    CompiledVegetationSpecies,
+    compileWaterGeometry,
+    compileVegetationSeeds,
+    waterGeometryByteLength,
+    vegetationSeedsByteLength,
+    surfacePresentationTransferables
+} from "./world/semantic/SurfacePresentationCompiler";
+export type {
+    CompiledWaterMesh,
+    CompiledWaterGeometry,
+    CompiledVegetationSeeds
+} from "./world/semantic/SurfacePresentationCompiler";
 export {
     SurfaceCompilationService,
     SurfaceWindowBufferPool
@@ -465,6 +482,7 @@ export type {
     LightingState,
     LightingUniformBinding,
     LightingRendererBinding,
+    LightingSceneBinding,
     LightingStateControllerStats
 } from "./rendering/LightingState";
 export {
@@ -476,6 +494,24 @@ export type {
     GroundChunkMount,
     GroundLayerStats
 } from "./rendering/GroundLayer";
+export { WaterLayer } from "./rendering/WaterLayer";
+export type {
+    WaterLayerOptions,
+    WaterChunkMount,
+    WaterLayerStats
+} from "./rendering/WaterLayer";
+export { VegetationLayer } from "./rendering/VegetationLayer";
+export type {
+    VegetationLayerOptions,
+    VegetationChunkMount,
+    VegetationLayerStats
+} from "./rendering/VegetationLayer";
+export { SurfacePresentationLayer } from "./rendering/SurfacePresentationLayer";
+export type {
+    SurfacePresentationLayerOptions,
+    SurfacePresentationChunkMount,
+    SurfacePresentationLayerStats
+} from "./rendering/SurfacePresentationLayer";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";

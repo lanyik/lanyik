@@ -53,6 +53,7 @@ export interface GroundLayerOptions {
     readonly surfaceTexturePool: SurfaceTexturePool;
     readonly fogTexturePool?: SurfaceFogTexturePool;
     readonly lighting: LightingStateController;
+    readonly geometryPool?: SurfaceGroundGeometryPool;
     readonly hexSize?: number;
     readonly heightScale?: number;
     readonly materialPalette?: readonly [
@@ -291,6 +292,7 @@ export class GroundLayer {
     private readonly fogTexturePool: SurfaceFogTexturePool | undefined;
     private readonly lighting: LightingStateController;
     private readonly geometryPool: SurfaceGroundGeometryPool;
+    private readonly ownsGeometryPool: boolean;
     private readonly heightScale: number;
     private readonly hexSize: number;
     private readonly palette: readonly Color[];
@@ -303,10 +305,12 @@ export class GroundLayer {
     constructor(options: GroundLayerOptions) {
         if (!options || typeof options !== "object"
             || Object.getOwnPropertyNames(options).some(name => ![
-                "surfaceTexturePool", "fogTexturePool", "lighting", "hexSize", "heightScale", "materialPalette"
+                "surfaceTexturePool", "fogTexturePool", "lighting", "geometryPool",
+                "hexSize", "heightScale", "materialPalette"
             ].includes(name))
             || !(options.surfaceTexturePool instanceof SurfaceTexturePool)
             || options.fogTexturePool !== undefined && !(options.fogTexturePool instanceof SurfaceFogTexturePool)
+            || options.geometryPool !== undefined && !(options.geometryPool instanceof SurfaceGroundGeometryPool)
             || !(options.lighting instanceof LightingStateController)) {
             throw new TypeError("GroundLayer options are invalid");
         }
@@ -318,6 +322,9 @@ export class GroundLayer {
         }
         if (options.fogTexturePool && !options.fogTexturePool.isCompanionOf(options.surfaceTexturePool)) {
             throw new TypeError("GroundLayer fog pool must accompany its surface texture pool");
+        }
+        if (options.geometryPool?.stats.state === "disposed") {
+            throw new TypeError("GroundLayer geometry pool must be ready");
         }
         this.hexSize = options.hexSize ?? 1;
         this.heightScale = options.heightScale ?? 1;
@@ -333,7 +340,9 @@ export class GroundLayer {
         this.surfaceTexturePool = options.surfaceTexturePool;
         this.fogTexturePool = options.fogTexturePool;
         this.lighting = options.lighting;
-        this.geometryPool = new SurfaceGroundGeometryPool(this.hexSize, this.heightScale);
+        this.geometryPool = options.geometryPool
+            ?? new SurfaceGroundGeometryPool(this.hexSize, this.heightScale);
+        this.ownsGeometryPool = options.geometryPool === undefined;
         this.root.name = "surface-ground-layer-v2";
         this.root.matrixAutoUpdate = true;
     }
@@ -474,7 +483,7 @@ export class GroundLayer {
             page.material.dispose();
         }
         this.materials.clear();
-        this.geometryPool.dispose();
+        if (this.ownsGeometryPool) this.geometryPool.dispose();
         this.root.removeFromParent();
         this.stateValue = "disposed";
     }

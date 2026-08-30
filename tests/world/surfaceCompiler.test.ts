@@ -6,6 +6,7 @@ import {
     BaseSemanticChunk,
     canonicalizeRenderChunkKey,
     compileSurfaceChunk,
+    compiledSurfaceChunkTransferables,
     createEffectiveDeltaSnapshot,
     createSparseSemanticDelta,
     createStableHydrologyId,
@@ -174,7 +175,11 @@ function compileFlat(
     return { descriptor, key, window, chunk: compileSurfaceChunk(window), ...capture };
 }
 
-function riverLayer(descriptor: WorldDescriptorV2, includeFarLake = false): EffectiveDeltaSnapshot {
+function riverLayer(
+    descriptor: WorldDescriptorV2,
+    includeFarLake = false,
+    quantizedWidth = 32
+): EffectiveDeltaSnapshot {
     const riverId = createStableHydrologyId("river", ["surface-compiler"]);
     const river: HydrologyFeatureDelta = {
         kind: "river",
@@ -183,7 +188,7 @@ function riverLayer(descriptor: WorldDescriptorV2, includeFarLake = false): Effe
         source: { kind: "source" },
         outlet: { kind: "body", featureId: OCEAN_BODY_ID },
         controlPoints: new Float64Array([62, 72, 82, 72]),
-        widthProfile: new Uint8Array([32, 32]),
+        widthProfile: new Uint8Array([quantizedWidth, quantizedWidth]),
         levelProfile: new Uint16Array([45_000, 44_000]),
         dischargeClass: 4
     };
@@ -209,7 +214,7 @@ function riverLayer(descriptor: WorldDescriptorV2, includeFarLake = false): Effe
     });
 }
 
-describe("CPU surface compiler v1", () => {
+describe("CPU surface compiler revision 2", () => {
     test("freezes the complete compile profile and binary16 contract", () => {
         expect(SURFACE_COMPILE_PROFILE_V1).toEqual({
             renderChunkSize: 16,
@@ -217,7 +222,11 @@ describe("CPU surface compiler v1", () => {
             gutterTexels: 1,
             influenceRadiusTiles: 2,
             textureLayerSize: 66,
-            pageLayers: 128
+            pageLayers: 128,
+            waterCoverageThreshold: 128,
+            narrowRiverMaximumWidthQuantized: 24,
+            vegetationCoordinateScale: 1024,
+            maximumVegetationSeeds: 2560
         });
         expect(SURFACE_FIELD_CORE_SIZE).toBe(64);
         expect(SURFACE_FIELD_TEXTURE_SIZE).toBe(66);
@@ -292,6 +301,8 @@ describe("CPU surface compiler v1", () => {
         expect(() => assertCompiledSurfaceChunk(chunk)).not.toThrow();
         expect(chunk.field.groundHeight).toHaveLength(SURFACE_FIELD_TEXEL_COUNT);
         expect(chunk.byteLength).toBe(SURFACE_FIELD_TEXEL_COUNT * 18);
+        expect(chunk.waterGeometry).toEqual({ kind: "none" });
+        expect(chunk.vegetationSeeds.tileIndex).toHaveLength(0);
         expect(new Set(chunk.field.waterCoverage)).toEqual(new Set([0]));
         expect(chunk.waterBodies).toEqual([]);
         expect(decodeFloat16(chunk.field.shorelineDistance[0])).toBeGreaterThan(0);
@@ -314,6 +325,8 @@ describe("CPU surface compiler v1", () => {
             bodyId: OCEAN_BODY_ID,
             kind: "ocean"
         }]);
+        expect(chunk.waterGeometry).toEqual({ kind: "full" });
+        expect(chunk.vegetationSeeds.tileIndex).toHaveLength(0);
         expect(decodeFloat16(chunk.field.shorelineDistance[0])).toBeLessThan(0);
         const sample = sampleCompiledSurfaceChunk(chunk, 8, 8);
         expect(sample.waterCoverage).toBe(1);
@@ -336,8 +349,29 @@ describe("CPU surface compiler v1", () => {
         expect(sample.waterBody?.kind).toBe("river");
         expect(sample.flow[0]).toBeGreaterThan(0.99);
         expect(Math.abs(sample.flow[1])).toBeLessThan(0.01);
+        expect(chunk.waterGeometry.kind).toBe("coverage");
         expect(chunk.field.shorelineDistance.some(bits => decodeFloat16(bits) < 0)).toBe(true);
         expect(chunk.field.shorelineDistance.some(bits => decodeFloat16(bits) > 0)).toBe(true);
+    });
+
+    test("emits an explicit deterministic sweep for a narrow river", () => {
+        const descriptor = createWorldDescriptorV2({ seed: "surface-narrow-river" });
+        const key = { chunkX: 4, chunkY: 4 };
+        const capture = captureFor(descriptor, key, () => 32_000, riverLayer(descriptor, false, 16));
+        const first = compileSurfaceChunk(createTransferableEffectiveWindow(capture.snapshot, key));
+        const second = compileSurfaceChunk(createTransferableEffectiveWindow(capture.snapshot, key));
+        expect(first.waterGeometry.kind).toBe("sweep");
+        if (first.waterGeometry.kind !== "sweep" || second.waterGeometry.kind !== "sweep") {
+            throw new Error("unreachable");
+        }
+        expect(first.waterGeometry.featureKeys).toEqual([
+            createStableHydrologyId("river", ["surface-compiler"])
+        ]);
+        expect(first.waterGeometry.mesh.surfaceUv.length).toBeGreaterThanOrEqual(8);
+        expect(first.waterGeometry.mesh.indices.length).toBeGreaterThanOrEqual(6);
+        expect(second.waterGeometry.mesh.surfaceUv).toEqual(first.waterGeometry.mesh.surfaceUv);
+        expect(second.waterGeometry.mesh.indices).toEqual(first.waterGeometry.mesh.indices);
+        expect(second.contentChecksum).toBe(first.contentChecksum);
     });
 
     test("rasterizes an edited lake without deleting its continuous ground", () => {
@@ -369,6 +403,46 @@ describe("CPU surface compiler v1", () => {
         expect(wet.groundHeight).toBeCloseTo(dry.groundHeight, 4);
         expect(wet.waterDepth).toBeGreaterThan(0);
         expect(dry.waterCoverage).toBe(0);
+        expect(chunk.waterGeometry.kind).toBe("coverage");
+    });
+
+    test("compiles stable vegetation identities and accounts every transferable byte", () => {
+        const result = compileFlat(60_000);
+        result.window.vegetationDensity.fill(255);
+        result.window.vegetationProfile.fill(3);
+        const first = compileSurfaceChunk(result.window);
+        const second = compileSurfaceChunk(result.window);
+        const seeds = first.vegetationSeeds;
+        expect(seeds.tileIndex.length).toBeGreaterThan(0);
+        expect(seeds.candidateIndex.some(candidate => candidate < 8)).toBe(true);
+        expect(seeds.candidateIndex.some(candidate => candidate >= 8)).toBe(true);
+        expect(second.vegetationSeeds.tileIndex).toEqual(seeds.tileIndex);
+        expect(second.vegetationSeeds.candidateIndex).toEqual(seeds.candidateIndex);
+        expect(second.vegetationSeeds.randomKey).toEqual(seeds.randomKey);
+        expect(second.vegetationSeeds.surfaceCoordinates).toEqual(seeds.surfaceCoordinates);
+        expect(second.contentChecksum).toBe(first.contentChecksum);
+        const transferables = compiledSurfaceChunkTransferables(first);
+        expect(new Set(transferables).size).toBe(transferables.length);
+        expect(transferables.reduce((sum, buffer) => sum + buffer.byteLength, 0)).toBe(first.byteLength);
+    });
+
+    test("mixes every safe-integer coordinate bit into infinite-world vegetation identities", () => {
+        const descriptor = createWorldDescriptorV2({ seed: "surface-vegetation-wide-coordinate" });
+        const nearKey = { chunkX: 0, chunkY: 0 };
+        const farKey = { chunkX: 2 ** 28, chunkY: 0 };
+        const compileVegetated = (key: RenderChunkKey) => {
+            const capture = captureFor(descriptor, key, () => 60_000);
+            const window = createTransferableEffectiveWindow(capture.snapshot, key);
+            window.vegetationDensity.fill(255);
+            window.vegetationProfile.fill(3);
+            return compileSurfaceChunk(window).vegetationSeeds;
+        };
+        const near = compileVegetated(nearKey);
+        const far = compileVegetated(farKey);
+        expect(near.tileIndex.length).toBeGreaterThan(0);
+        expect(far.tileIndex.length).toBeGreaterThan(0);
+        expect(far.randomKey).not.toEqual(near.randomKey);
+        expect(far.surfaceCoordinates).not.toEqual(near.surfaceCoordinates);
     });
 
     test("is byte deterministic and queries exact lattice texel centers", () => {

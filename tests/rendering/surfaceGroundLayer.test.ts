@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { Texture } from "three";
+import { Scene, Texture } from "three";
 
 import type { ResidentSurfaceLease } from "../../src/world/semantic/SurfaceCompilationService";
 import type { TransferableEffectiveWindow } from "../../src/world/semantic/EffectiveSurfaceWindow";
+import { SURFACE_COMPILER_REVISION } from "../../src/world/semantic/SurfaceCompileProfile";
 import {
     compileSurfaceChunk,
     type CompiledSurfaceChunk
@@ -49,7 +50,7 @@ function compiledFlatChunk(
         dependencyKey: Object.freeze({
             worldIdentity: "surface-ground-layer-test",
             renderKey: Object.freeze({ ...key }),
-            compilerRevision: 1,
+            compilerRevision: SURFACE_COMPILER_REVISION,
             compileProfileVersion: 1,
             semanticChunks: Object.freeze([]),
             hydrologyRegions: Object.freeze([])
@@ -212,6 +213,30 @@ describe("v2 lighting state", () => {
         expect(first.release()).toBe(false);
         controller.dispose();
         expect(second.released).toBe(true);
+    });
+
+    test("binds one shared environment path for PBR models and restores scene ownership", () => {
+        const previous = new Texture();
+        const environment = new Texture();
+        const scene = new Scene();
+        scene.environment = previous;
+        const controller = new LightingStateController(createLightingState({
+            ...DEFAULT_LIGHTING_STATE,
+            specularEnvironment: { identity: "scene-environment", texture: environment },
+            environmentRevision: 1
+        }));
+        const binding = controller.bindScene(scene);
+        expect(scene.environment).toBe(environment);
+        expect(scene.children).toEqual(expect.arrayContaining([
+            binding.sunLight,
+            binding.hemisphereLight
+        ]));
+        expect(() => controller.bindScene(scene)).toThrow(/already has/);
+        expect(binding.sunLight.position.length()).toBeCloseTo(100, 10);
+        expect(binding.release()).toBe(true);
+        expect(scene.environment).toBe(previous);
+        expect(scene.children).not.toContain(binding.sunLight);
+        controller.dispose();
     });
 });
 

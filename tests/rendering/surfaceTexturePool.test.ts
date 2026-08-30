@@ -12,6 +12,7 @@ import {
 import {
     SURFACE_FIELD_TEXEL_COUNT,
     SURFACE_FIELD_TEXTURE_SIZE,
+    SURFACE_COMPILER_REVISION,
     SURFACE_TEXTURE_PAGE_LAYERS
 } from "../../src/world/semantic/SurfaceCompileProfile";
 import {
@@ -43,7 +44,7 @@ function compiledFlatChunk(key: RenderChunkKey, height = 50_000): CompiledSurfac
         dependencyKey: Object.freeze({
             worldIdentity: "surface-texture-pool-test",
             renderKey: Object.freeze({ ...key }),
-            compilerRevision: 1,
+            compilerRevision: SURFACE_COMPILER_REVISION,
             compileProfileVersion: 1,
             semanticChunks: Object.freeze([]),
             hydrologyRegions: Object.freeze([])
