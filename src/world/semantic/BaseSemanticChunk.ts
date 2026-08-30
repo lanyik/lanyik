@@ -10,7 +10,7 @@ import {
     localBoundsContain,
     semanticChunkLocalIndex,
     SemanticChunkKey,
-    WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+    WORLD_CHUNK_FORMAT_VERSION,
     WORLD_SEMANTIC_CHUNK_SIZE,
     WORLD_SEMANTIC_CHUNK_TILE_COUNT
 } from "./WorldSemanticFormat";
@@ -199,7 +199,7 @@ export function serializeBaseSemanticChunk(chunk: BaseSemanticChunk): ArrayBuffe
     const buffer = new ArrayBuffer(BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES);
     const view = new DataView(buffer);
     view.setUint32(0, SERIALIZED_MAGIC, true);
-    view.setUint16(4, WORLD_SEMANTIC_CHUNK_FORMAT_VERSION, true);
+    view.setUint16(4, WORLD_CHUNK_FORMAT_VERSION, true);
     view.setUint16(6, SERIALIZED_HEADER_BYTES, true);
     view.setFloat64(8, chunk.key.chunkX, true);
     view.setFloat64(16, chunk.key.chunkY, true);
@@ -233,7 +233,7 @@ export function deserializeBaseSemanticChunk(buffer: ArrayBuffer): BaseSemanticC
     }
     const view = new DataView(buffer);
     if (view.getUint32(0, true) !== SERIALIZED_MAGIC
-        || view.getUint16(4, true) !== WORLD_SEMANTIC_CHUNK_FORMAT_VERSION
+        || view.getUint16(4, true) !== WORLD_CHUNK_FORMAT_VERSION
         || view.getUint16(6, true) !== SERIALIZED_HEADER_BYTES
         || view.getUint32(36, true) !== BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES) {
         throw new TypeError("serialized base semantic chunk header is invalid or unsupported");

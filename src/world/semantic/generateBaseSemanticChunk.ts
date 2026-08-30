@@ -1,4 +1,3 @@
-import { Land } from "../../enums";
 import {
     createWorldSurfaceResolver,
     WorldSurfaceResolver,
@@ -48,17 +47,17 @@ export function quantizeMacroHeight(value: number): number {
 
 function substrateFor(sample: Readonly<WorldSurfaceSample>): SubstrateClass {
     switch (sample.baseTerrain) {
-        case Land.sea:
-        case Land.coastal:
+        case "sea":
+        case "coastal":
             return SubstrateClass.Sediment;
-        case Land.sand:
+        case "sand":
             return SubstrateClass.Sand;
-        case Land.mountain:
+        case "mountain":
             return SubstrateClass.Rock;
-        case Land.tundra:
-        case Land.snow:
+        case "tundra":
+        case "snow":
             return SubstrateClass.Permafrost;
-        case Land.land:
+        case "land":
             return SubstrateClass.Soil;
         default:
             throw new TypeError(`semantic generator cannot map terrain ${String(sample.baseTerrain)} to substrate`);

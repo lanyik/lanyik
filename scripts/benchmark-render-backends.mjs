@@ -7,7 +7,7 @@ import {
 } from "three";
 
 const CASES = [10_000, 50_000, 100_000];
-const TILES_PER_RENDER_CHUNK = 12;
+const TILES_PER_RENDER_CHUNK = 16;
 const INSTANCE_SPACING = 4;
 const ITERATIONS = 80;
 let sink = 0;

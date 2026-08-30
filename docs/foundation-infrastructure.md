@@ -1,103 +1,52 @@
-# Runtime foundation architecture
+# 运行时基础设施
 
-当前运行时基础设施把“世界渲染能跑”提升为“可替换、可恢复、资源有界、可验收”。核心原则不是让所有子系统使用同一个执行循环，而是让它们共享同一组所有权、世代、预算、取消与验收语义。冻结边界见 [foundation-v1-freeze.md](./foundation-v1-freeze.md)，测试分层与执行策略见 [testing.md](./testing.md)。
+当前运行时只维护 surface/render foundation v2 生产链路。权威架构见
+[surface-render-foundation-v2.md](./surface-render-foundation-v2.md)，本文件记录跨世界表面、
+存档和模拟共用的基础设施契约。
 
-## 1. 生命周期与故障恢复
+## 生命周期和发布门
 
-`LifecycleScope` 是一次可替换异步会话的所有权边界。每个 scope 有唯一 generation、单一 `AbortSignal`、在途任务集合和晚到发布闸门。
+`LifecycleScope` 为一次异步会话提供 generation、统一取消信号、在途任务 drain 和晚到结果拒绝。
+拥有 scope 的系统必须在销毁时先停止新请求，再取消和等待在途工作，最后释放资源。旧 generation
+的结果不得发布到新世界。
 
-- `close()` 先同步广播取消，再等待已登记任务 drain。通用 scope 可选择等待上限；render-world 默认最多等待 15 秒，超时任务会被隔离并通过 `detachedTasks` / `drainTimedOut` 上报，不能让 `disposeAsync()` 永久挂起。
-- `publish()` 只允许 active generation 对外发布；旧世界结果会被拒绝并计数。
-- `RenderWorldController` 用一个 scope 同时拥有 source、residency 和 streamer。
-- `WorldStreamer.settled` 等待销毁时仍在途的请求完成取消和 lease 释放。
-- `HexMap.disposeAsync()` 提供真正可等待的销毁边界；同步 `dispose()` 仍保持兼容。
-- render-layer host 暴露当前世界的 `AbortSignal`；atlas fetch、Worker、植被准备和编辑刷新都受同一世代闸门约束。
+世界表面使用更严格的 request token：descriptor、effective revision、compiler profile、render chunk
+和 session epoch 必须全部相同才允许挂载。`WorldRenderSession` 在需求移除、编辑失效、世界替换和
+WebGL context loss 时都会使旧 token 失效。
 
-世界切换的顺序固定为：关闭旧 scope → 取消 streamer/Worker 请求 → 反向卸载渲染层 → 释放 source → 等待旧会话 drain。清理回调不经过发布闸门，因为旧资源即使在 closing 状态也必须被释放。
+## 调度和预算
 
-## 2. 统一持久化边界
+`PriorityTaskQueue` 提供 `critical`、`interactive`、`visible`、`prefetch` 和 `background` 五条 lane，
+并用任务数量、权重、取消和 starvation promotion 控制背压。`RuntimeWorkCoordinator` 只聚合各执行域
+的可观测状态，不改变确定性 FIFO 模拟语义。
 
-`CheckpointCoordinator` 在独立 IndexedDB/存储之间建立应用级 checkpoint 协议。它不声称浏览器能提供跨数据库事务，而是用 CAS journal 和幂等提交获得崩溃后可恢复的一致结果。
+世界表面不使用“区块数”代替内存成本。`WorldSurfaceRuntimeBudgets` 必须显式提供七类字节预算：
 
-```text
-preparing -> committing -> committed
-     |             |
-     | crash       | crash
-     v             v
- abort old      replay unfinished commits
- session        from durable tokens
-```
+- semantic authority；
+- hydrology authority；
+- compiled CPU cache；
+- retained transferable windows；
+- mounted compiled working set；
+- surface GPU array textures；
+- dynamic fog GPU textures。
 
-硬约束：
+预算不能容纳一个物理 texture page 时初始化直接失败；不会切换到另一条兼容或降级路径。
 
-- participant 的 `prepare()` 只能返回不可变快照或已持久化的 staging token，不能提前公开新状态。
-- 所有 required participant 均 prepared 后，journal 才进入 committing，形成提交点。
-- `commit()` 必须幂等；每个成功 participant 都单独写入 journal。
-- 新进程会续做 committing；旧进程未完成的 preparing 若缺 token，则安全标为 aborted。
-- required participant 在 prepare 阶段失败或超时时，会先持久化 aborted 意图；即使仍在同一进程，下一次 checkpoint 也必须回滚旧 staging 并开启新 generation，不能把两个时间点的 token 拼成一个存档。
-- journal 使用 revision CAS，两个页面/进程不能静默覆盖同一 world generation。
-- participant token 带版本；恢复时必须显式迁移，不兼容版本会停止恢复。
-- prepare 使用外部 staging 时应实现幂等 `rollback()`；废弃世代先持久化 aborted 意图，再逐 participant 清理，崩溃后可续做。
-- 单次参与者操作有超时和独立取消信号；可重建 cache 可设为 optional，失败只形成 degraded checkpoint。
+## 存档边界
 
-`createFlushCheckpointParticipant()` 是旧式串行 store 的兼容桥。它提供幂等 forward recovery，但严格的 point-in-time 存档应直接实现 prepare/commit，并在 token 中保存快照或 staging 引用。Campaign 已统一通过 coordinator 保存 simulation、terrain delta 和可重建 world cache；模拟先于地形提交，领域层的前哨站重放仍作为额外的业务一致性保护。
+`GenerationCheckpointCoordinator` 是跨参与者的存档提交点。当前 generation checkpoint format 为 v2，
+participant 包括 `WorldDeltaStore` v3 和 `WorldSimulationRuntime` 快照。流程为不可变 staging、读回校验、
+manifest CAS 发布；崩溃前后只能看到旧 generation 或完整新 generation，不能混合。
 
-协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包；这让存档协议可以独立演进，也避免只使用地图渲染的应用承担 IndexedDB/journal 代码体积。
+`CheckpointCoordinator` 保留给需要 journal prepare/commit 协议的独立参与者。两套 coordinator 都要求
+幂等提交、显式版本和确定性失败；不提供旧格式 fallback。
 
-## 3. 真实资源预算
+## 模块边界
 
-`ResourceBudgetLedger` 以实际字节而不是区块数量做 admission/accounting：
+- `WorldSurfaceRuntime` 拥有 authority repository、editor、compiler service、query/picking、GPU pools、
+  presentation 和 render session。
+- `HexMap` 只负责浏览器 renderer、camera/controls、世界原子替换和 camera-driven demand。
+- `WorldSimulationRuntime` 不依赖 Three.js 或相机驻留状态。
+- `GenerationCheckpointCoordinator` 位于 `three-hex-map/persistence`，不会进入只需要渲染的入口。
 
-- 硬维度：`cpuBytes`、`gpuBytes`。
-- 诊断维度：`geometryBytes`、`textureBytes`、`modelBytes`。
-- BufferGeometry 分开计算 CPU backing store 与 Three.js 实际 attribute/index upload；interleaved buffer 只上传一次，不同 BufferAttribute 即使共享 ArrayBuffer 也按独立 GPU buffer 计费。
-- Object3D 估算会遍历 geometry、material、shader uniforms、纹理面与 mip 层；自定义渲染层可用 `resourceCost` 覆盖共享模型/纹理的保守估值。
-
-`WorldChunkScheduler` 同时保留逻辑区块上限和字节上限。非可见驻留只要超过任一字节预算就立即按 LRU 淘汰，不等待 grace frame。当前帧必需的 visible working set 被标为 pinned；若它自身大于预算，不会错误销毁正在绘制的对象，而是通过 `cpuBudgetExceededBytes` / `gpuBudgetExceededBytes` 暴露不可避免的压力，交给自适应 LOD/密度降级。默认上限为 CPU 384 MiB、GPU 256 MiB，可通过 `cpuChunkCacheBytes` / `gpuChunkCacheBytes` 配置。
-
-`HexMap.resourceBudget` 只暴露不可变诊断视图；后续单位、建筑和特效系统通过 `HexMap.createResourceAccount(label)` 获取隔离账户。账户返回可更新、可释放的 reservation handle，同名局部 key 不会跨账户冲突；账户或地图销毁时，其全部 reservation 会统一失效和回收。未通过 admission 的非关键资源必须降级或延后，不能调用内部 `forceReserve()` 绕开硬预算。
-
-区块账户使用内部命名空间，不能覆盖同名的单位/建筑 reservation。可见 working set 的不可避免超额会直接输入自适应控制器，持续超额将降低 LOD 距离、植被密度和分辨率，而不只停留在诊断数字。
-
-## 4. 调度与背压
-
-`PriorityTaskQueue` 统一五类 lane：`critical`、`interactive`、`visible`、`prefetch`、`background`。每个任务同时有 priority、weight、AbortSignal 和入队时间。
-
-- 超过任务数或总 weight 时，先丢弃最低重要性的工作。
-- 单个任务若已超过整条队列的 weight 上限，会在修改队列前直接拒绝，不能先淘汰其他任务再自我失败。
-- keyed work 自动合并，只保留最新版本。
-- 等待超过 starvation window 后逐级晋升，background 最终不会饿死。
-- starvation 只影响执行选择，不影响背压淘汰；暂停很久的后台任务不会因此挤掉刚到的 critical 工作。
-- 帧挂载和 Worker pool 已使用同一实现；Worker 仍保留 terrain capacity reservation。
-- simulation 保持严格 FIFO，避免优先级重排破坏确定性，但有独立的有界操作上限。
-
-`RuntimeWorkCoordinator` 是联邦调度面：frame、worker、streaming、simulation 保留不同执行器，同时向一个聚合统计面报告 backlog、weight、busy、最老任务、shed 和 starvation。销毁 coordinator 会取消其管理的排队任务；世界切换时旧 worker/streaming domain 会注销，统计本身不会泄漏。
-
-`WebGlGpuTimer` 使用 `EXT_disjoint_timer_query_webgl2` 异步查询真实 GPU elapsed time。查询只在后续帧 poll，不调用 `finish()`，disjoint 样本会丢弃，并限制最多四个 outstanding query。统计同时包含样本年龄、查询上限和饱和帧；扩展可用但查询长期堵满时，自适应控制器会把它视为明确的 GPU 落后信号，而不是因拿不到新样本而失明。
-
-## 5. 模块边界
-
-- `HexMapRendererHost`：WebGLRenderer、Scene、Camera、lights、Sky、GPU timer 和 context-bound dispose。
-- `HexMapInteractionController`：DOM 输入监听、焦点所有权、WASD 移动和解析式 tile picking。
-- `WorldChunkMountQueue`：连接流式驻留与帧挂载，并对因背压拒绝的可见挂载做有界重试。
-- `RenderWorldController`：一次世界渲染会话的 source/residency/streamer/lifecycle。
-- `WorldEditingFacade`：编辑校验、坐标 canonicalization、source mutation 和 visual dirty set。
-- `HexMapOptions`：默认值派生、运行时校验及世界加载配置契约。
-- `HexMap`：保留公开兼容 API和跨边界编排，不再定义上述子系统的内部协议。
-
-自定义 render layer 仍通过 `WorldRenderLayer` 接口接入；应在 activation 中报告额外纹理/模型成本，并让所有异步工作绑定当前 render-world lifecycle。
-
-## 6. 稳定性验收
-
-硬指标已进入自动化：
-
-- 同 seed/chunk 输入产生同 checksum，且不依赖请求顺序。
-- checkpoint 中途故障后重启，最终状态等于最后提交 generation。
-- checkpoint prepare 失败后，同进程重试也会回滚旧 token 并从全新 generation 捕获。
-- 固定种子的资源/队列 churn 中 admission 始终有界。
-- 超重任务、后台 starvation、资源账户销毁、GPU query 饱和和不响应取消的生命周期均有独立回归测试。
-- E2E 连续快速替换世界时，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
-- 定时 CI 运行可配置的长时间浏览器 soak（默认 500 个世界世代），混合稳态替换和取消突发，并持续采样生命周期、调度域、WebGL 资源和强制 GC 后的 JS heap 上界。
-- benchmark gate 对生成、植被、GPU range 合并、导航摘要和模拟 tick 设置宽松但强制的回归上限。
-
-完整命令和各层适用范围统一维护在 [testing.md](./testing.md)，不在架构文档中重复容易漂移的测试数量或命令清单。
+验收命令和层级见 [testing.md](./testing.md)。

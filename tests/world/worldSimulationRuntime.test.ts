@@ -8,6 +8,8 @@ import {
     SimulationEntity,
     WorldSimulationRuntime
 } from "../../src/simulation/WorldSimulationRuntime";
+import { createWorldChangeSet, WorldChangeDomain } from "../../src/world/semantic/WorldChangeSet";
+import { createWorldDescriptorV2 } from "../../src/world/semantic/WorldDescriptorV2";
 import { deferred } from "../helpers/deferred";
 
 interface State { ticks: number }
@@ -333,6 +335,31 @@ describe("IndexedDbSimulationChunkStore", () => {
         await runtime.advance(1);
         await runtime.flush();
         expect(await store.listChunks()).toEqual([{ x: 1, y: 0 }]);
+        runtime.dispose();
+    });
+
+    test("delivers exact 64x64 change-set chunks to terrain-aware systems without render residency", () => {
+        const runtime = new WorldSimulationRuntime<State>();
+        const received: bigint[] = [];
+        runtime.registerSystem({
+            id: "terrain-aware",
+            update: () => undefined,
+            worldChanged: changeSet => {
+                received.push(changeSet.transactionId);
+                expect(changeSet.simulationChunks).toEqual([
+                    { chunkX: 1, chunkY: -1 },
+                    { chunkX: 1, chunkY: 0 }
+                ]);
+            }
+        });
+        const changeSet = createWorldChangeSet({
+            descriptor: createWorldDescriptorV2({ seed: "simulation-change" }),
+            transactionId: 9n,
+            revision: 1,
+            semanticChanges: [{ x: 70, y: -2, domains: WorldChangeDomain.Height }]
+        });
+        runtime.applyWorldChangeSet(changeSet);
+        expect(received).toEqual([9n]);
         runtime.dispose();
     });
 });

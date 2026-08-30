@@ -2,15 +2,8 @@
 //Library entry point. `three` is a peerDependency (see package.json/tsup.config.ts) -
 //consumers must have their own copy of three.js installed/loaded.
 //----------------------------------------------------------------------------------
-export { HexMap } from "./HexMap";
-export type { HexMapOptions, WorldLoadOptions } from "./HexMap";
-export type { LandformDebugMode } from "./objects/TerrainMesh";
-
-export { GameEngine } from "./gameengine";
-export type { GameEngineOptions } from "./gameengine";
-
-export { Unit } from "./objects/Unit";
-export { PathFinder } from "./helpers/pathfinder";
+export { HexMap } from "./rendering/SurfaceHexMap";
+export type { HexMapOptions, WorldLoadOptions, HexMapStats } from "./rendering/SurfaceHexMap";
 export { EventEmitter } from "./EventEmitter";
 export type { Listener } from "./EventEmitter";
 export { LifecycleDrainTimeoutError, LifecycleScope, lifecycleAbortError } from "./runtime/LifecycleScope";
@@ -48,68 +41,15 @@ export type {
     WorkDomainTelemetry
 } from "./runtime/RuntimeWorkCoordinator";
 
-export { FogOfWar, FogState } from "./objects/FogOfWar";
-export type { FogViewer, FogChange } from "./objects/FogOfWar";
+export type { WorldPoint } from "./world/WorldPoint";
 
-export { Land, UnitActions, LandColor, LandPriority } from "./enums";
-export type { HexMapEventName } from "./enums";
-
-export type {
-    Point,
-    TileInfo,
-    CityInfo,
-    RiverSegment,
-    MapInfo,
-    MapInfoData,
-    UnitPlacement,
-    UnitInfo,
-    UnitList
-} from "./interfaces";
-
-export { getHexCenter, HEXPolygon } from "./helpers/helpers";
-export { getNeighborCoords, getNeighbors, NEIGHBOR_DIRECTIONS } from "./helpers/neighbors";
-export type { NeighborDirection, Neighbor } from "./helpers/neighbors";
-
-export {
-    positiveModulo,
-    normalizeMapCoordinates,
-    getMapTile,
-    getMapNeighbors
-} from "./helpers/topology";
-
-export { generateWorld, MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./world/generateWorld";
-export type { WorldGenerationOptions, WorldTopology } from "./world/generateWorld";
-export {
-    createLandformSampler,
-    sampleLandform,
-    LANDFORM_SEA_LEVEL
-} from "./world/LandformSampler";
-export type {
-    LandformDomain,
-    LandformSample,
-    LandformSampler,
-    LandformSamplerOptions
-} from "./world/LandformSampler";
-export type { WorldSurfaceAnchor } from "./world/WorldSurfaceView";
 export {
     SurfaceWorkerCompilationError,
-    WorldGeneratorClient
-} from "./world/WorldGeneratorClient";
-export type { SurfaceWorkerCompilation } from "./world/WorldGeneratorClient";
-export {
-    createWorldDescriptor,
-    assertWorldDescriptor,
-    assertSupportedWorldGeneratorVersion,
-    serializeWorldDescriptor,
-    worldDescriptorsEqual,
-    WORLD_DESCRIPTOR_FORMAT_VERSION,
-    WORLD_WORKER_PROTOCOL_VERSION
-} from "./world/WorldDescriptor";
-export type {
-    WorldDescriptor,
-    CreateWorldDescriptorOptions,
-    ProceduralWorldKind
-} from "./world/WorldDescriptor";
+} from "./world/semantic/SurfaceWorkerProtocol";
+export type { SurfaceWorkerCompilation } from "./world/semantic/SurfaceWorkerProtocol";
+export { WorldSurfaceWorkerClient } from "./world/WorldSurfaceWorkerClient";
+export { WORLD_WORKER_PROTOCOL_VERSION } from "./world/WorldWorkerProtocol";
+export { WORLD_GENERATOR_VERSION } from "./world/WorldGeneratorVersion";
 export {
     createWorldDescriptorV2,
     assertWorldDescriptorV2,
@@ -117,7 +57,7 @@ export {
     worldDescriptorsV2Equal,
     canonicalizeSemanticChunkKey,
     canonicalizeHydrologyRegionKey,
-    WORLD_DESCRIPTOR_V2_FORMAT_VERSION
+    WORLD_DESCRIPTOR_FORMAT_VERSION
 } from "./world/semantic/WorldDescriptorV2";
 export type {
     WorldDescriptorV2,
@@ -147,8 +87,7 @@ export type {
 export {
     WORLD_SEMANTIC_CHUNK_SIZE,
     WORLD_SEMANTIC_CHUNK_TILE_COUNT,
-    WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
-    WORLD_SURFACE_V2_GENERATOR_VERSION,
+    WORLD_CHUNK_FORMAT_VERSION,
     HYDROLOGY_REGION_FORMAT_VERSION,
     HYDROLOGY_REGION_SIZE,
     HYDROLOGY_REGION_REVISION,
@@ -417,6 +356,102 @@ export {
     SurfaceCompilationService,
     SurfaceWindowBufferPool
 } from "./world/semantic/SurfaceCompilationService";
+export {
+    WorldChangeDomain,
+    createWorldChangeSet
+} from "./world/semantic/WorldChangeSet";
+export type {
+    TileBounds,
+    DirtySemanticChunk,
+    DirtyHydrologyFeature,
+    DirtyHydrologyRegion,
+    DirtyRenderChunk,
+    DirtyNavigationChunk,
+    DirtySimulationChunk,
+    WorldChangeSet,
+    SemanticChangePoint,
+    HydrologyFeatureChange
+} from "./world/semantic/WorldChangeSet";
+export {
+    WORLD_DELTA_FORMAT_VERSION,
+    WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
+    WorldDeltaRevisionConflictError,
+    MemoryWorldDeltaStore,
+    IndexedDbWorldDeltaStore
+} from "./world/WorldDeltaStore";
+export type {
+    SemanticAuthorityMutation,
+    HydrologyFeatureInput,
+    HydrologyFeatureUpsertMutation,
+    HydrologyFeatureDeleteMutation,
+    HydrologyAuthorityMutation,
+    WorldDeltaCommitRequest,
+    WorldDeltaCommitRecord,
+    WorldDeltaCommitResult,
+    WorldDeltaCheckpoint,
+    WorldDeltaStoreStats,
+    WorldDeltaStore,
+    IndexedDbWorldDeltaStoreOptions
+} from "./world/WorldDeltaStore";
+export { WorldEditTransaction, WorldEditor } from "./world/WorldEditing";
+export type {
+    WorldEditWaterPolicy,
+    WorldEditFalloff,
+    WorldEditArea,
+    QuantizedSemanticAuthorityTile,
+    HydrologyGroundConstraint,
+    WorldEditAuthority,
+    HydrologyRebakeResult,
+    HydrologyRebaker,
+    WorldEditorOptions,
+    RaiseTerrainOptions,
+    PaintMaterialOptions,
+    PaintVegetationOptions,
+    UpsertRiverOptions,
+    UpsertLakeOptions
+} from "./world/WorldEditing";
+export {
+    ProceduralWorldAuthoritySource,
+    StaticWorldAuthoritySource,
+    WorldAuthorityRepository
+} from "./world/semantic/WorldAuthorityRepository";
+export { compileStaticWorldAuthority } from "./world/semantic/compileStaticWorldAuthority";
+export type {
+    CompiledStaticWorldAuthority,
+    StaticWorldSemanticFields
+} from "./world/semantic/compileStaticWorldAuthority";
+export type {
+    WorldAuthorityLoadOptions,
+    WorldAuthoritySource,
+    ProceduralWorldAuthoritySourceOptions,
+    StaticWorldAuthoritySourceOptions,
+    WorldAuthorityRepositoryOptions,
+    WorldAuthorityRepositoryStats,
+    WorldAuthorityLease
+} from "./world/semantic/WorldAuthorityRepository";
+export { SurfaceQueryService } from "./world/semantic/SurfaceQueryService";
+export type {
+    SurfaceQuerySnapshotProvider,
+    SurfaceQueryServiceOptions,
+    SurfaceQueryServiceStats
+} from "./world/semantic/SurfaceQueryService";
+export { SurfacePickingService } from "./world/semantic/SurfacePickingService";
+export type {
+    SurfacePickResult,
+    SurfacePickingServiceOptions
+} from "./world/semantic/SurfacePickingService";
+export {
+    WORLD_SEMANTIC_NAVIGATION_FORMAT_VERSION,
+    SemanticNavigationIndex
+} from "./world/semantic/SemanticNavigationIndex";
+export type {
+    SemanticNavigationHydrologySample,
+    SemanticNavigationAuthority,
+    SemanticNavigationPortal,
+    SemanticNavigationDependencyKey,
+    SemanticNavigationChunkSummary,
+    SemanticNavigationIndexOptions
+} from "./world/semantic/SemanticNavigationIndex";
 export type {
     SurfaceCompilationWorkerRequestOptions,
     SurfaceCompilationWorker,
@@ -512,168 +547,40 @@ export type {
     SurfacePresentationChunkMount,
     SurfacePresentationLayerStats
 } from "./rendering/SurfacePresentationLayer";
+export {
+    DependencyDrivenRenderGraph,
+    WorldRenderDependencyError
+} from "./rendering/DependencyDrivenRenderGraph";
+export type {
+    WorldRenderDependency,
+    WorldRenderLayerChunkAccess,
+    DependencyDrivenWorldRenderLayer
+} from "./rendering/DependencyDrivenRenderGraph";
+export { WorldRenderSession } from "./rendering/WorldRenderSession";
+export type {
+    WorldRenderDemand,
+    WorldRenderSessionOptions,
+    WorldRenderSessionChunkContext,
+    WorldRenderSessionStats
+} from "./rendering/WorldRenderSession";
+export { planWorldRenderDemand } from "./rendering/WorldRenderDemandPlanner";
+export type { WorldRenderDemandPlanOptions } from "./rendering/WorldRenderDemandPlanner";
+export {
+    MINIMUM_WORLD_SURFACE_RUNTIME_BUDGETS,
+    WorldSurfaceRuntime
+} from "./rendering/WorldSurfaceRuntime";
+export type {
+    WorldSurfaceRuntimeBudgets,
+    WorldSurfaceRuntimeOptions
+} from "./rendering/WorldSurfaceRuntime";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";
-export type { WorldChunkStreamingStats } from "./rendering/WorldChunkScheduler";
-export { FrameTaskScheduler } from "./rendering/FrameTaskScheduler";
+export { WorldSurfaceWorkerPool } from "./world/WorldSurfaceWorkerPool";
 export type {
-    FrameTaskSchedulerOptions,
-    FrameTaskSchedulerStats,
-    FrameTaskEnqueueOptions
-} from "./rendering/FrameTaskScheduler";
-export { WorldChunkMountQueue } from "./rendering/WorldChunkMountQueue";
-export type {
-    WorldChunkMountQueueOptions,
-    WorldChunkMountQueueStats
-} from "./rendering/WorldChunkMountQueue";
-export { mergeBufferUpdateRanges, commitBufferAttributeRanges } from "./rendering/BufferUpdateBatch";
-export type { BufferUpdateRange, GpuTileStateChange } from "./rendering/BufferUpdateBatch";
-export { AdaptiveStreamingController } from "./rendering/AdaptiveStreamingController";
-export type {
-    AdaptiveStreamingControllerOptions,
-    AdaptiveStreamingProfile,
-    AdaptiveStreamingStats,
-    AdaptiveStreamingSample
-} from "./rendering/AdaptiveStreamingController";
-export { WebGlGpuTimer } from "./rendering/WebGlGpuTimer";
-export type { WebGlGpuTimerOptions, WebGlGpuTimerStats } from "./rendering/WebGlGpuTimer";
-export { HexMapRendererHost } from "./rendering/HexMapRendererHost";
-export type {
-    HexMapRendererHostOptions,
-    WebGlContextState,
-    WebGlContextStats
-} from "./rendering/HexMapRendererHost";
-export { HexMapInteractionController } from "./rendering/HexMapInteractionController";
-export type {
-    HexMapInteractionControllerOptions,
-    HexMapInteractionStats
-} from "./rendering/HexMapInteractionController";
-export {
-    generateWorldChunk,
-    assertPackedWorldChunk,
-    assertWorldTileOverride,
-    decodeWorldChunkTile,
-    getWorldChunkCorePoints,
-    SparseWorldChunkStore,
-    DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
-    MAX_WORLD_GENERATION_CHUNK_SIZE,
-    WORLD_GENERATOR_VERSION,
-    WORLD_CHUNK_FORMAT_VERSION,
-    WORLD_CHUNK_PADDING
-} from "./world/generateWorldChunk";
-export type {
-    PackedWorldChunk,
-    WorldChunkGenerationOptions,
-    BoundedWorldChunkGeneration,
-    WorldTileOverride,
-    WorldTileOverrideChange,
-    SparseWorldChunkStoreOptions
-} from "./world/generateWorldChunk";
-export { WorldGeneratorPool } from "./world/WorldGeneratorPool";
-export type {
-    WorldGeneratorPoolOptions,
-    WorldGeneratorPoolStats,
-    ChunkRequestOptions,
-    ChunkGeneratorClient
-} from "./world/WorldGeneratorPool";
-export {
-    generateWorldVegetation,
-    createWorldVegetationMapSnapshot,
-    assertWorldVegetationLayout,
-    worldVegetationTransferables,
-    WORLD_VEGETATION_FORMAT_VERSION
-} from "./world/generateVegetation";
-export type {
-    WorldVegetationMapSnapshot,
-    WorldVegetationGenerationOptions,
-    WorldVegetationLayout,
-    WorldVegetationGrassChunkLayout,
-    WorldVegetationGrassLodLayout,
-    WorldVegetationForestChunkLayout,
-    WorldVegetationForestLodLayout
-} from "./world/generateVegetation";
-export {
-    IndexedDbWorldChunkCache,
-    createWorldChunkCacheKey,
-    clearWorldChunkCache
-} from "./world/WorldChunkCache";
-export type {
-    WorldChunkCache,
-    WorldChunkCacheStats,
-    WorldChunkCacheKeyOptions,
-    IndexedDbWorldChunkCacheOptions
-} from "./world/WorldChunkCache";
-export {
-    StaticWorldSource,
-    ToroidalWorldSource,
-    ProceduralWorldSource,
-    assertWorldSource,
-    assertWorldChunk,
-    isMutableWorldSource,
-    isWorldVegetationSource,
-    packedChunkFromWorldChunk,
-    getWorldSourceTile,
-    WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
-} from "./world/WorldSource";
-export type {
-    WorldSource,
-    WorldChunkRevision,
-    MutableWorldSource,
-    WorldVegetationSource,
-    WorldVegetationPreparationOptions,
-    WorldBounds,
-    WorldChunk,
-    WorldSourceStats,
-    StaticWorldSourceOptions,
-    ToroidalWorldSourceOptions,
-    ToroidalWorldSourceDependencies,
-    ProceduralWorldSourceOptions,
-    ProceduralWorldSourceDependencies,
-    WorldDeltaCheckpoint
-} from "./world/WorldSource";
-export { WorldStreamer } from "./world/WorldStreamer";
-export { WorldEditingFacade, worldTileVisualSignature } from "./world/WorldEditingFacade";
-export type {
-    WorldEditingFacadeOptions,
-    WorldEditResult,
-    WorldEditingStats
-} from "./world/WorldEditingFacade";
-export {
-    ChunkResidencyCoordinator,
-    getChunkResidencyCoordinator
-} from "./world/ChunkResidencyCoordinator";
-export type {
-    ChunkLeaseOwner,
-    ChunkLeaseOptions,
-    WorldChunkLease,
-    ChunkResidencyStats
-} from "./world/ChunkResidencyCoordinator";
-export type {
-    WorldStreamerOptions,
-    WorldStreamerHandlers,
-    WorldStreamingStats
-} from "./world/WorldStreamer";
-export { WorldRenderLayerRegistry } from "./rendering/WorldRenderLayer";
-export type {
-    WorldRenderLayer,
-    WorldRenderLayerHost,
-    WorldRenderChunkContext,
-    WorldRenderTileRefreshContext
-} from "./rendering/WorldRenderLayer";
-export { RenderWorldController } from "./rendering/RenderWorldController";
-export type { RenderWorldStreamingOptions } from "./rendering/RenderWorldController";
-export {
-    tagWorldChunk,
-    getWorldChunkMetadata,
-    getWorldChunkBounds,
-    groupTilesByWorldChunk,
-    WORLD_CHUNK_SIZE
-} from "./helpers/chunks";
-export type {
-    WorldChunkKind,
-    BuiltinWorldChunkKind,
-    WorldChunkLod,
-    WorldChunkMetadata,
-    WorldChunkBounds
-} from "./helpers/chunks";
+    WorldSurfaceWorker,
+    WorldSurfaceWorkerRequestOptions,
+    WorldSurfaceWorkerPoolOptions,
+    WorldSurfaceWorkerPoolStats
+} from "./world/WorldSurfaceWorkerPool";
+export type { WorldChunkLod } from "./rendering/WorldChunkLod";

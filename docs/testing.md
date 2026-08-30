@@ -1,60 +1,16 @@
-# Test strategy
+# 测试与验收
 
-The test suite protects observable contracts and failure boundaries. Test
-counts are not an acceptance target: adding or removing a case is useful only
-when it changes the defects the suite can detect.
+## 分层
 
-## Test layers
+| 层级 | 覆盖 |
+|---|---|
+| 单元/契约 | 格式 golden、负坐标、排水终止、CAS、事务策略、dependency key、stale token、预算、逆序释放 |
+| 浏览器 E2E | 真实 module Worker transfer/crash replacement、WebGL2 field upload、Ground/Water/Vegetation、context restore、唯一生产 demo |
+| Soak | 重复原子替换世界，检查 demand、CPU/GPU budget、WebGL 资源和 JS heap |
+| Benchmark | 49 个语义块、16-region 水文、effective snapshot、20×20 window、66×66 compile/upload、1/9/49 presentation、delta CAS、模拟 tick |
+| 视觉图库 | 固定 compiled lake/shore/vegetation 的 near/middle/far 截图 |
 
-| Layer | Purpose | Typical location |
-|---|---|---|
-| Contract tests | Deterministic algorithms, validation, state transitions and public API results | `tests/world`, `tests/runtime`, `tests/rendering`, `tests/persistence` |
-| Fault/interleaving tests | Crashes, cancellation, paused asynchronous operations and competing writers | Tests beside the owning contract |
-| Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
-| Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
-| Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
-| World-style review | Fixed topology-aware metrics plus legacy-world and v2 surface near/middle/far/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
-| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, 66x66 CPU surface/presentation compilation, full-layer GPU backing-store packing, and 1/9/49 Ground/Water/Vegetation mounts with dynamic fog | `scripts/benchmark-hot-paths.mjs` |
-
-Prefer the lowest layer that can observe the contract. Escalate to browser E2E
-only for browser-owned behavior such as module Workers, WebGL context recovery,
-focus/input routing, or the assembled demo. Capability reporting by itself is
-not an acceptance test; a feature test must perform the operation and verify
-the resulting state.
-
-The v2 surface texture pool browser test performs real `DataArrayTexture`
-uploads for all four physical formats, samples the same layer through GLSL 3,
-compares the pixel to the CPU field, and repeats after a real WebGL context
-loss/restore cycle. Object-shape assertions alone do not satisfy this contract.
-
-The v2 GroundLayer browser test compiles and draws the real shared ground
-geometry/material, verifies that a separate 16x16 R8 fog upload changes the
-rendered pixel without touching the static field, switches LOD, and renders the
-same result after context loss/restore. Unit contracts additionally require all
-three LODs to expose the same canonical outer boundary and a welded manifold
-transition strip with exact area and edge ownership.
-
-The v2 presentation browser test draws a fixed lake shoreline and compiled
-vegetation through the real Ground/Water/Vegetation shaders, exercises nested
-LOD retention, wave time, floating-origin movement and a complete context
-loss/restore cycle, and requires a `MeshStandardMaterial` probe to remain lit by
-the shared Scene binding. The gallery emits fixed-seed near/middle/far PNG artifacts;
-statistics alone are not accepted for step 6 visual review.
-
-The v2 surface Worker browser test transfers a complete effective window,
-verifies that the sending buffers detach, validates the compiled payload, and
-requires the Worker to transfer every input buffer back. Service contract tests
-separately control coalescing, cancellation, stale tokens, cache leases and byte
-budget exhaustion without timers.
-
-Use controlled promises for race tests so each interleaving is explicit and
-deterministic. Avoid timers as synchronization, random stress without a fixed
-seed, and assertions against private implementation shape when the same result
-is visible through a public contract.
-
-## Required gates
-
-For an ordinary change, run:
+## 普通门禁
 
 ```powershell
 npm test
@@ -63,60 +19,14 @@ npm run build
 npm run test:e2e
 ```
 
-`npm run test:e2e` skips the opt-in soak unless
-`FOUNDATION_SOAK_ITERATIONS` is positive. Changes to lifecycle ownership,
-world replacement, Worker recovery, WebGL recovery, scheduling, residency, or
-resource accounting must additionally run:
+## 基建/发布门禁
 
 ```powershell
+npm run benchmark:check
+npm run review:world-style
 $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
 
-A release or infrastructure freeze also runs `npm run benchmark:check`. CI
-runs the normal gates for pushes and pull requests and enables the 500-iteration
-soak on its scheduled job.
+本地完整收口可以先用较小但非零的 soak 次数验证流程；正式冻结或发布使用 500 次。
 
-Changes to generator classification, modifiers, vegetation placement, climate
-or surface semantics additionally run:
-
-```powershell
-npm run review:world-style
-```
-
-The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
-infinite seeds at positive and negative windows, pressure seeds and minimum
-dimensions. The legacy gallery uses `quality=gallery`: full terrain materials
-and trees remain enabled, while grass, sky and antialiasing are disabled and
-tree instance density is reduced so the topology corpus remains practical
-under CI software rendering. The separate v2 surface gallery keeps its compiled
-grass, trees and water enabled at all three LODs. Per-sample JSON and images are
-artifacts; topology, connectivity, broad composition and error-free rendering
-are the stable gates.
-
-## Meaning of the 500-iteration soak
-
-One iteration is one call to `HexMap.loadWorld()` with a new procedural source;
-it is not a simulation turn or a generated terrain tile. Every twenty-fifth
-iteration starts three competing loads to exercise cancellation and stale
-publication, with the last load required to win.
-
-The test waits for the winning world to settle and samples lifecycle work,
-shared work domains, resident chunks, WebGL resources, pending GPU queries, and
-JavaScript heap use. All values must remain within fixed bounds, and final
-disposal must leave no queued work or resource-budget reservations. Five
-hundred iterations are a freeze/release confidence gate, not a replacement for
-the deterministic tests that identify a specific failing interleaving.
-
-## Keeping the suite focused
-
-A test should normally be removed or merged when all of the following hold:
-
-- another test exercises the same observable contract through an equal or more
-  realistic path;
-- it does not cover a distinct failure point, version rule, or boundary value;
-- deleting it does not make a regression materially harder to diagnose.
-
-Keep tests that look similar when they isolate different commit points,
-ownership transitions, protocol versions, or resource types. Do not record an
-exact suite count in contracts or release documentation; counts change as
-coverage becomes more precise.
+测试必须等待可观察状态或受控 Promise，不用定时器猜测竞态。E2E 中能力探测只能决定是否 skip；一旦能力存在，必须真实执行传输、绘制、context restore 或资源替换并验证结果。视觉验收保留图片作为 CI artifact，不把跨 GPU 不稳定的像素图作为仓库内 golden。

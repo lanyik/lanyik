@@ -20,10 +20,9 @@ import {
     hydrologyRegionCoordinate,
     locateSemanticTile,
     OCEAN_BODY_ID,
-    WorldGeneratorPool
+    WorldSurfaceWorkerPool
 } from "../../src/index";
-import { generateWorldChunk } from "../../src/world/generateWorldChunk";
-import type { ChunkGeneratorClient } from "../../src/world/WorldGeneratorPool";
+import type { WorldSurfaceWorker } from "../../src/world/WorldSurfaceWorkerPool";
 
 function staticDescriptor(hash = "a") {
     return createWorldDescriptorV2({
@@ -392,20 +391,22 @@ describe("surface foundation v2 hydrology", () => {
         expect(minimumRegion.validBounds.minX).toBe(1);
         expect(() => assertHydrologyRegion(minimumRegion)).not.toThrow();
         const generateHydrology = vi.fn(async options => generateHydrologyRegion(options));
-        const client: ChunkGeneratorClient = {
-            generateChunk: async options => generateWorldChunk(options),
+        const client: WorldSurfaceWorker = {
+            generateSemanticChunk: async () => { throw new Error("unexpected semantic request"); },
             generateHydrologyRegion: generateHydrology,
-            dispose: vi.fn()
+            compileSurfaceChunk: async () => { throw new Error("unexpected surface request"); },
+            dispose: vi.fn(),
+            isDisposed: false
         };
-        const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });
+        const pool = new WorldSurfaceWorkerPool("unused", { size: 1, clientFactory: () => client });
         const region = await pool.generateHydrologyRegion({ descriptor, key: { regionX: -2, regionY: 3 } });
         await new Promise<void>(resolve => queueMicrotask(resolve));
         expect(regionSnapshot(region)).toEqual(regionSnapshot(direct));
         expect(generateHydrology).toHaveBeenCalledOnce();
         expect(pool.stats).toMatchObject({
-            completed: 1,
+            completedTasks: 1,
             queuedHydrologyRegions: 0,
-            busyHydrologyRegionWorkers: 0
+            busyWorkers: 0
         });
         pool.dispose();
     });

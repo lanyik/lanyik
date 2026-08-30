@@ -7,7 +7,6 @@ import {
     effectiveSurfaceWindowTransferables,
     EffectiveWorldView,
     generateBaseSemanticChunk,
-    generateWorldChunk,
     HydrologyRegion,
     OCEAN_BODY_ID,
     SurfaceCompilationService,
@@ -16,7 +15,7 @@ import {
     surfaceHydrologyRegionRequirements,
     surfaceSemanticChunkRequirements,
     TransferableEffectiveWindow,
-    WorldGeneratorPool,
+    WorldSurfaceWorkerPool,
     WORLD_WORKER_PROTOCOL_VERSION
 } from "../../src/index";
 import type { EffectiveWorldSnapshot } from "../../src/world/semantic/EffectiveWorldView";
@@ -24,8 +23,7 @@ import type { RenderChunkKey } from "../../src/world/semantic/SurfaceDependency"
 import type {
     SurfaceCompilationWorkerRequestOptions
 } from "../../src/world/semantic/SurfaceCompilationService";
-import type { SurfaceWorkerCompilation } from "../../src/world/WorldGeneratorClient";
-import type { WorldChunkGenerationOptions } from "../../src/world/generateWorldChunk";
+import type { SurfaceWorkerCompilation } from "../../src/world/semantic/SurfaceWorkerProtocol";
 
 const TEST_COMPILED_SURFACE_CACHE_BUDGET = 512 * 1024;
 
@@ -93,11 +91,10 @@ class ImmediateSurfaceWorker implements SurfaceCompilationWorker {
 
 class ImmediateMixedWorker extends ImmediateSurfaceWorker {
     public disposed = false;
-    public readonly isDisposed = false;
+    public get isDisposed(): boolean { return this.disposed; }
 
-    public generateChunk(options: WorldChunkGenerationOptions) {
-        return Promise.resolve(generateWorldChunk(options));
-    }
+    public async generateSemanticChunk(): Promise<never> { throw new Error("unexpected semantic request"); }
+    public async generateHydrologyRegion(): Promise<never> { throw new Error("unexpected hydrology request"); }
 
     public dispose(): void {
         this.disposed = true;
@@ -202,7 +199,7 @@ describe("surface compilation service", () => {
     test("schedules surface compilation as an observable bounded worker-pool lane", async () => {
         const { snapshotFor } = fixture();
         const client = new ImmediateMixedWorker();
-        const pool = new WorldGeneratorPool("unused", {
+        const pool = new WorldSurfaceWorkerPool("unused", {
             size: 1,
             clientFactory: () => client
         });
@@ -215,10 +212,8 @@ describe("surface compilation service", () => {
         expect(pool.stats).toMatchObject({
             busyWorkers: 0,
             queuedSurfaceChunks: 0,
-            busySurfaceChunkWorkers: 0,
-            completed: 1
+            completedTasks: 1
         });
-        expect(pool.stats.averageSurfaceChunkMs).toBeGreaterThanOrEqual(0);
         pool.dispose();
         expect(client.disposed).toBe(true);
     });

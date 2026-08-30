@@ -2,17 +2,12 @@ import {
     WorldSimulationCheckpoint,
     WorldSimulationRuntime
 } from "../simulation/WorldSimulationRuntime";
-import { WorldDeltaCheckpoint } from "../world/WorldSource";
 import { GenerationCheckpointParticipant } from "./GenerationCheckpointCoordinator";
-
-export interface WorldDeltaCheckpointSource {
-    createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint>;
-    restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void>;
-}
-
-export interface WorldDeltaGenerationParticipantOptions {
-    afterRestore?(snapshot: WorldDeltaCheckpoint): Promise<void> | void;
-}
+import {
+    WorldDeltaCheckpoint,
+    WorldDeltaStore
+} from "../world/WorldDeltaStore";
+import { WorldDescriptorV2 } from "../world/semantic/WorldDescriptorV2";
 
 export function createSimulationGenerationParticipant<State>(
     runtime: WorldSimulationRuntime<State>
@@ -31,21 +26,17 @@ export function createSimulationGenerationParticipant<State>(
 }
 
 export function createWorldDeltaGenerationParticipant(
-    source: WorldDeltaCheckpointSource,
-    options: WorldDeltaGenerationParticipantOptions = {}
+    descriptor: WorldDescriptorV2,
+    store: WorldDeltaStore
 ): GenerationCheckpointParticipant<WorldDeltaCheckpoint> {
-    if (!source || typeof source.createDeltaCheckpointSnapshot !== "function"
-        || typeof source.restoreDeltaCheckpointSnapshot !== "function") {
-        throw new TypeError("world source does not support generation checkpoints");
+    if (!store || typeof store.saveBarrier !== "function" || typeof store.restoreBarrier !== "function") {
+        throw new TypeError("world delta store does not support checkpoint barriers");
     }
     return {
-        id: "terrain-deltas",
-        version: 1,
+        id: "world-delta-v3",
+        version: 3,
         required: true,
-        capture: () => source.createDeltaCheckpointSnapshot(),
-        restore: async (_context, snapshot) => {
-            await source.restoreDeltaCheckpointSnapshot(snapshot);
-            await options.afterRestore?.(snapshot);
-        }
+        capture: () => store.saveBarrier(descriptor),
+        restore: (_context, snapshot) => store.restoreBarrier(descriptor, snapshot)
     };
 }

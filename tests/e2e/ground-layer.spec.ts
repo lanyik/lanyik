@@ -19,7 +19,7 @@ test("renders and restores the v2 GroundLayer with an independent R8 fog layer",
     page.on("console", message => {
         if (message.type() === "error") consoleErrors.push(message.text());
     });
-    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await page.goto("/test-host.html", { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
         const threeModulePath = "/js/vendor/three.module.js";
         const three = await import(threeModulePath) as typeof import("three");

@@ -26,7 +26,7 @@ interface SurfaceTextureGpuProbe {
 test("uploads and restores a paged v2 surface field in real WebGL2", async ({ page }) => {
     const pageErrors: string[] = [];
     page.on("pageerror", error => pageErrors.push(error.message));
-    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await page.goto("/test-host.html", { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
         const threeModulePath = "/js/vendor/three.module.js";
         const three = await import(threeModulePath) as typeof import("three");

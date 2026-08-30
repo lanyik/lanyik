@@ -1,245 +1,110 @@
 # three-hex-map
 
-[English](README.md) | 简体中文
+这是一个基于 WebGL2 的六边形世界渲染器，当前生产实现只有一条版本化地表权威链：32×32 语义 SoA、128×128 矢量水文区域、16×16 渲染块、确定性 CPU 编译、分页 GPU field、连续水体、编译植被，以及按精确依赖驱动的驻留系统。
 
-一个基于 [three.js](https://threejs.org/) 的浏览器端 3D 六边形世界渲染器与
-流式世界运行时。项目使用实例化渲染和自定义 Shader 表现《文明》风格地形，
-同时通过明确的运行时边界组织世界生成、持久化、寻路和模拟。
+旧 packed tile、12×12 `TerrainMesh`、字符串水体 modifier 和粗粒度刷新运行时已经删除；旧格式存档不自动迁移。
 
-本仓库是 [lanyik/lanyik](https://github.com/lanyik/lanyik) 定制分支，源自
-[gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map)。
-
-[更新日志](CHANGELOG.md) · [文档索引](docs/README.md)
-
-![程序化六边形世界](public/main.png)
-
-## 项目现况
-
-| 范围 | 当前状态 |
-|---|---|
-| 包版本 | 元数据仍为 `0.5.0`；当前分支还包含更新日志中 **Unreleased** 下的未发布改动 |
-| 渲染 | 生产路径为 WebGL2，包含实例化地形、水面和植被、源区块流送、12x12 渲染块和三档 LOD |
-| 世界运行时 | 有界静态地图、有限环形流式地图、确定性无限世界和自定义 `WorldSource` 共用 `HexMap.loadWorld()` 入口 |
-| 玩法服务 | 稀疏世界增量、可恢复世代存档、分层寻路和与镜头无关的模拟已通过可选子路径提供 |
-| 演示 | 有限环形世界、无限世界和持久化战役共用一个页面，模式选择会跨刷新保存 |
-| 基础设施 | v1 已冻结；生命周期、所有权、调度、持久化和资源预算合同已有自动化验证 |
-| 世界风格 | 生成 v1 已冻结在 generator v5，包含连续起伏、气候、区域森林、湖泊和固定图库验收 |
-| 世界表面基建 v2 | 阶段 A–B 已实现 v2 descriptor、固定 32x32 语义 SoA、有限终止的宏观排水、128x128 矢量水文区域和 generator-v6 Worker 任务；生产渲染仍使用 v1 |
-| 下一阶段 | 实现 v2 表面编译器、共享采样格和分页纹理池 |
-
-开发环境要求 Node.js 20 或更高版本；作为库使用时，应用需要提供
-`^0.185.0` 的 `three` peer dependency。
-
-## 当前已经具备的能力
-
-- 有界、环形和无限拓扑共用确定性地貌场，包括高度、大陆度、山脊、山谷、
-  粗糙度、湿度和温度。
-- 地形、水面、草地和 glTF 森林按区块流送，支持距离/视锥剔除、稳定 LOD、
-  有界 CPU/GPU 驻留和浮动原点。
-- 四向周期地图支持跨接缝渲染、选择、邻居查询、迷雾和最短路径移动。
-- 河流、湖泊、海岸、连续山体、地表纹理去重复、大气天空、城市、单位和战争迷雾。
-- Worker 地形/植被生成、可选 IndexedDB 基础区块缓存，以及稀疏持久化格子覆盖。
-- 按世代取消异步工作、WebGL 上下文恢复、资源计费、队列背压和可观测生命周期释放。
-- 可选 `GameEngine`、跨未加载区块的分层寻路、后台世界模拟，以及持久化战役集成切片。
-- 中英文演示界面、实时视觉控制和帧、Worker、缓存、驻留状态诊断。
-
-## 运行演示
+## 安装
 
 ```bash
-git clone https://github.com/lanyik/lanyik.git three-hex-map
-cd three-hex-map
-npm ci
-npm start
+npm install three-hex-map three
 ```
 
-打开 <http://127.0.0.1:3000>。控制面板提供三种世界模式：
+`three` 是 peer dependency，运行环境必须支持 WebGL2。
 
-| 模式 | 用途 |
-|---|---|
-| 有限环形世界 | 由种子和宽高定义，通过 Worker 流送，不需要物化完整地图 |
-| 无限世界 | 没有逻辑边界，只保留镜头附近的驻留窗口 |
-| 持久化战役 | 在无限流送上组合 IndexedDB 增量、世代存档、分层寻路和镜头外军队模拟 |
-
-模式选择会跨刷新保存。旧的 `?infinite`、`?campaign`、坐标参数和
-`?autostart` 仍用于自动化测试和旧书签。
-
-先点击画布，再用 **WASD** 移动；左键选择格子，按住右键拖动旋转镜头，
-滚轮缩放。有限/无限模式默认只是世界查看器，只有“持久化战役”会启动集成场景。
-
-## 作为库使用
-
-当前仓库状态领先于 `0.5.0` 发布元数据；需要未发布 API 时，应使用仓库检出
-或 workspace 依赖。应用还需要提供一份兼容的 `three`。
-
-### 静态或应用自有地图
+## 程序化世界
 
 ```ts
-import { HexMap, StaticWorldSource } from "three-hex-map";
+import {
+  HexMap,
+  ProceduralWorldAuthoritySource,
+  WorldSurfaceWorkerPool,
+  createWorldDescriptorV2,
+  SURFACE_GPU_PAGE_BYTES,
+  SURFACE_FOG_PAGE_BYTES
+} from "three-hex-map";
 
-const map = new HexMap({
-    element: "#world",
-    size: 40,
-    texturesBaseUrl: "/hex-assets/textures/"
+// 把包的 `three-hex-map/world-generator.worker` 导出发布到这个 URL；
+// 也可以使用构建器自己的 Worker URL 导入约定。
+const workerUrl = new URL("/world-generator.worker.mjs", window.location.origin);
+const pool = new WorldSurfaceWorkerPool(workerUrl, { size: 3 });
+const descriptor = createWorldDescriptorV2({
+  seed: "campaign-01",
+  topology: { kind: "infinite" }
 });
+const source = new ProceduralWorldAuthoritySource({ descriptor, pool, ownsPool: true });
 
+const map = new HexMap({ element: "#world", hexSize: 2, heightScale: 24 });
 await map.loadWorld({
-    source: new StaticWorldSource(mapData)
-});
-
-map.on("click", ({ x, y, tile }) => console.log(x, y, tile));
-
-// 永久移除画布时：
-await map.disposeAsync();
-```
-
-`await map.load(mapData)` 仍是有限 `StaticWorldSource` 的兼容包装。
-`loadWorld()` 是所有数据源的推荐入口；地图被替换或销毁前，该会话拥有传入的数据源。
-
-### 流式程序化世界
-
-```ts
-import { HexMap, ProceduralWorldSource } from "three-hex-map";
-
-const map = new HexMap({ element: "#world", texturesBaseUrl: "/hex-assets/textures/" });
-const source = new ProceduralWorldSource({
-    seed: "endless-continent",
-    workerUrl: "/hex-assets/world-generator.worker.mjs",
-    workerCount: 4,
-    chunkSize: 24,
-    cache: true,
-    deltaStore: true
-});
-
-await map.loadWorld({
-    source,
-    initialTile: { x: 0, y: 0 },
-    loadRadius: 2,
-    retentionRadius: 3,
-    frameBudgetMs: 3,
-    maxMountsPerFrame: 2
-});
-
-await map.setTileOverride(12, -4, {
-    city: { name: "Outpost", model: "Assets/models/monument" }
-});
-await source.flushDeltas();
-```
-
-包通过 `three-hex-map/world-generator.worker` 导出
-`dist/world-generator.worker.mjs`。需要让构建或资源流水线发布这个模块，
-再把公开 URL 传给数据源。源区块默认大小为 24，可接受 1–128 的整数；
-渲染器会独立把驻留内容分成固定的 12x12 渲染块。
-
-需要有限周期边界时使用 `ToroidalWorldSource`。其宽度必须为偶数，宽高范围为
-8–512。HTTP、编辑器、IndexedDB 或服务器权威数据可以直接实现 `WorldSource`。
-
-### 包入口
-
-| 导入路径 | 职责 |
-|---|---|
-| `three-hex-map` | `HexMap`、`GameEngine`、世界数据源、流送、运行时所有权和核心工具 |
-| `three-hex-map/persistence` | 基础区块缓存、稀疏世界增量和可恢复存档 |
-| `three-hex-map/pathfinding` | 带版本的导航摘要和分层寻路 |
-| `three-hex-map/simulation` | 与镜头无关的区块模拟、快照存储和军队行军 |
-| `three-hex-map/world-generator.worker` | 程序化数据源使用的浏览器模块 Worker |
-
-## 地图数据与编辑
-
-`StaticWorldSource` 和 `GameEngine.init()` 接收 `MapInfo` 对象。完整样例见
-[public/gameInfo/map.json](public/gameInfo/map.json)。
-
-```jsonc
-{
-  "w": 40,
-  "h": 34,
-  "wrapX": true,
-  "wrapY": true,
-  "data": {
-    "0": {
-      "0": {
-        "type": "land",
-        "modifiers": ["wood", "river"],
-        "treeModel": "Assets/models/oak",
-        "city": { "name": "Rome", "model": "Assets/models/monument" }
-      }
-    }
+  source,
+  worker: pool,
+  initialTile: { x: 0, y: 0 },
+  visibleRadiusTiles: 24,
+  prefetchRadiusTiles: 40,
+  lod1DistanceTiles: 12,
+  lod2DistanceTiles: 28,
+  budgets: {
+    semanticAuthorityBytes: 4 * 1024 * 1024,
+    hydrologyAuthorityBytes: 24 * 1024 * 1024,
+    compiledCpuBytes: 32 * 1024 * 1024,
+    retainedWindowBytes: 4 * 1024 * 1024,
+    compiledWorkingSetBytes: 32 * 1024 * 1024,
+    surfaceGpuBytes: SURFACE_GPU_PAGE_BYTES,
+    fogGpuBytes: SURFACE_FOG_PAGE_BYTES
   }
-}
+});
 ```
 
-内置地形值为 `sea`、`coastal`、`land`、`sand`、`tundra` 和 `snow`；
-内置修饰符包括 `hill`、`wood`、`river` 和 `lake`，自定义图层仍可使用其他字符串。
+`HexMap.loadWorld()` 原子替换整套渲染会话。source、生效 delta 快照、编译请求、CPU lease、GPU slot、渲染层、查询和拾取使用同一个 descriptor 与精确 revision。
 
-可变程序化数据源保持基础生成地形不可变，只保存稀疏坐标覆盖。应通过
-`HexMap` 的 `setTileOverride()`、`setTileOverrides()` 和
-`clearTileOverride()` 修改数据，使驻留画面同步刷新。
+Worker 是独立包导出，但最终公开 URL 由应用或构建器决定；应把它作为单独 module asset 发布，不要内联进主线程 bundle。
 
-构造和世界加载配置统一定义在
-[src/HexMapOptions.ts](src/HexMapOptions.ts)。演示控制面板最适合查看实时 Shader、
-水面、植被、LOD、缓存和自适应流送参数。
+## 编辑与存档
 
-## 可选游戏循环
-
-`GameEngine` 继续提供单位选择、移动和单位视野驱动的战争迷雾：
+`map.edit()` 创建类型化事务。地形编辑必须明确选择 `reject`、`preserve-channel` 或 `coupled` 水文策略。
 
 ```ts
-import { GameEngine } from "three-hex-map";
+await map.edit(transaction => {
+  transaction.raiseTerrain(
+    { kind: "rectangle", minX: 8, minY: 8, maxX: 12, maxY: 12 },
+    { delta: 0.03, falloff: "smooth", waterPolicy: "preserve-channel" }
+  );
+});
 
-const game = new GameEngine({ element: "#world", fogOfWar: true });
-await game.init(mapData, unitsData);
-game.on("end_move", event => console.log("arrived", event));
-
-// 稍后：
-game.dispose();
+const checkpoint = await map.runtime.store.saveBarrier(
+  map.runtime.source.descriptor
+);
 ```
 
-它是兼容玩法层，不是一套完整的《文明》规则。新的大型世界玩法应把权威状态放在
-持久化、寻路和模拟服务中，而不是让状态依赖镜头附近的渲染驻留。
+`WorldDeltaStore` v3 在一个世界 CAS revision 下原子提交语义与水文变更；水文 feature 还有独立 CAS revision。提交生成的 `WorldChangeSet` 精确失效渲染、导航和模拟块，过期 Worker 结果不能发布。浏览器持久化可从 `three-hex-map/persistence` 使用 `IndexedDbWorldDeltaStore`。
 
-## 开发与验证
+## 静态世界
 
-| 命令 | 作用 |
+`compileStaticWorldAuthority()` 只接受 X-major typed SoA、显式 SHA-256 内容身份和完整 typed hydrology regions；不会解释地形名称、modifier 字符串或隐式水体。
+
+## 包边界
+
+| 入口 | 职责 |
 |---|---|
-| `npm run build:lib` | 在 `dist/` 生成 ESM、CJS、全局包和类型声明 |
-| `npm run build` | 构建库，并把可运行演示资源复制到 `public/` |
-| `npm run server` | 不重新构建，直接在 3000 端口提供 `public/` |
-| `npm start` | 构建后启动演示服务器 |
-| `npm test` | 运行确定性的 Vitest 合同与稳定性测试 |
-| `npm run typecheck` | 仅执行 TypeScript 检查，不输出文件 |
-| `npm run test:e2e` | 构建并运行 Chromium 集成测试；普通运行跳过可选 soak |
-| `npm run test:soak` | 按 `FOUNDATION_SOAK_ITERATIONS` 运行替换/资源 soak |
-| `npm run benchmark:check` | 构建并执行热路径回归阈值检查 |
-| `npm run check:generated` | 重建并验证 `public/js` 中提交的生成物 |
+| `three-hex-map` | 权威格式、Worker pool、编译、渲染、编辑、查询、拾取 |
+| `three-hex-map/persistence` | DeltaStore v3 与 generation checkpoint |
+| `three-hex-map/pathfinding` | `SemanticNavigationIndex` |
+| `three-hex-map/simulation` | 与相机无关的 64×64 模拟运行时 |
 
-普通改动应通过：
+当前权威版本为 descriptor 2、semantic chunk 2、generator 7、Worker protocol 5、delta 3。
 
-```bash
+## 开发门禁
+
+```powershell
 npm test
 npm run typecheck
 npm run build
 npm run test:e2e
+npm run benchmark:check
+npm run review:world-style
+$env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
 
-涉及生命周期、Worker、WebGL 恢复、调度、驻留或资源计费的改动还必须运行
-500 次 soak。准确策略和 CI 行为见 [docs/testing.md](docs/testing.md)。
+详见 [v2 架构](docs/surface-render-foundation-v2.md)、[渲染与流式加载](docs/render-streaming.md) 和 [测试策略](docs/testing.md)。
 
-## 文档与路线
-
-[文档索引](docs/README.md) 已按当前架构、冻结合同、专项说明、技术决策和未来设计分类。
-
-当前有意保留的边界：
-
-- [世界风格生成 v1](docs/world-style-generation-v1.md) 仍是设计稿，不是已实现行为。
-- WebGPU 和 GPU culling 暂缓，直到实际 draw submission 或 overdraw 数据证明需要原型。
-- 多人冲突合并、云存档、服务器权威状态以及完整经济/战斗规则属于应用层工作，
-  不是当前库能力。
-
-## 致谢与许可证
-
-- 原始项目：[gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map)。
-- 灵感来源：[threejs-hex-map](https://github.com/Bunkerbewohner/threejs-hex-map)。
-- 旧版局部寻路源自 weixiaofan 的
-  [hexpath](https://github.com/weixiaofan/hexpath)，后续已针对 TypeScript、
-  地形限制和环形地图重构。
-
-项目采用 [Mozilla Public License 2.0](LICENSE)。
+许可证：MPL-2.0。

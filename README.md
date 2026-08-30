@@ -1,273 +1,121 @@
 # three-hex-map
 
-English | [简体中文](README.zh-CN.md)
+A WebGL2 hex-world renderer built around one versioned surface-authority pipeline. The current production path uses 32×32 semantic SoA chunks, 128×128 vector hydrology regions, 16×16 render chunks, a deterministic CPU compiler, paged GPU fields, continuous water, compiled vegetation, and exact dependency-driven residency.
 
-A browser-first 3D hex-world renderer and streamed-world runtime built on
-[three.js](https://threejs.org/). It renders Civilization-style terrain with
-instancing and custom shaders, while keeping world generation, persistence,
-pathfinding and simulation behind explicit runtime boundaries.
+The old packed-tile, 12×12 `TerrainMesh`, string-water-modifier, and coarse-refresh runtimes have been removed. Existing saves using those formats are not migrated.
 
-This repository is the customized [lanyik/lanyik](https://github.com/lanyik/lanyik)
-fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
-
-[Changelog](CHANGELOG.md) · [Documentation index](docs/README.md)
-
-![Procedural hex world](public/main.png)
-
-## Project status
-
-| Area | Current state |
-|---|---|
-| Package | Metadata remains at `0.5.0`; the current branch also contains the work listed under **Unreleased** |
-| Rendering | Production path is WebGL2 with instanced terrain, water and vegetation, source-chunk streaming, 12x12 render chunks and three LOD levels |
-| World runtime | Bounded static maps, streamed toroidal maps, deterministic infinite worlds and custom `WorldSource` implementations use one `HexMap.loadWorld()` entry |
-| Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
-| Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
-| Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generation v1 is frozen on generator v5 with continuous relief, climate, regional forests, lakes and fixed gallery gates |
-| Surface foundation v2 | Original steps 1–6 are implemented: v2 authority/hydrology/effective snapshots, CPU/Worker compilation, paged fields and fog, three-LOD ground, continuous full/coverage/sweep water, compiled stable vegetation, shared lighting and an atomic presentation layer; editing and production cutover remain |
-| Next milestone | Implement original step 7: editing, persistence and consumer-system integration |
-
-Runtime requirements are Node.js 20 or newer for development and `three`
-`^0.185.0` as a peer dependency for library consumers.
-
-## What works today
-
-- Deterministic landforms across bounded, toroidal and infinite topologies,
-  including elevation, continentalness, ridges, valleys, roughness, moisture
-  and temperature.
-- Chunk-streamed terrain, water, grass and glTF forests with frustum/distance
-  culling, stable LOD, bounded CPU/GPU residency and floating-origin rebasing.
-- Periodic four-way wrapped maps with seam-aware rendering, picking, neighbors,
-  fog and shortest-path movement.
-- Rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
-  atmospheric sky, cities, units and fog of war.
-- Worker-based terrain and vegetation generation, optional IndexedDB base-chunk
-  caching and sparse persistent tile overrides.
-- Generation-scoped cancellation, WebGL context recovery, resource accounting,
-  queue backpressure and observable lifecycle drain.
-- Optional `GameEngine`, long-distance hierarchical routing, background world
-  simulation and a persistent campaign integration slice.
-- English and Simplified Chinese demo UI, live visual controls and runtime
-  diagnostics for frame, Worker, cache and residency state.
-
-## Run the demo
+## Install
 
 ```bash
-git clone https://github.com/lanyik/lanyik.git three-hex-map
-cd three-hex-map
-npm ci
-npm start
+npm install three-hex-map three
 ```
 
-Open <http://127.0.0.1:3000>. The control panel exposes three modes:
+`three` is a peer dependency. The runtime requires WebGL2.
 
-| Mode | Purpose |
-|---|---|
-| Finite toroidal | A seed plus width/height, streamed through Workers without materializing the complete map |
-| Infinite world | An unbounded procedural source with a camera-centered resident window |
-| Persistent campaign | Infinite streaming plus IndexedDB deltas, generation checkpoints, hierarchical routing and off-camera army simulation |
-
-The selected mode survives reloads. Legacy `?infinite`, `?campaign`, coordinate
-and `?autostart` query flags remain available for automation and old bookmarks.
-
-Click the canvas before using **WASD**. Left-click selects a tile, right-drag
-orbits the camera and the wheel zooms. The default finite/infinite modes are
-world viewers; only Persistent campaign starts the integration scenario.
-
-## Use as a library
-
-The current repository state is ahead of the `0.5.0` release metadata, so use a
-repository checkout/workspace dependency when you need unreleased APIs. The
-package expects the application to provide its own compatible `three` copy.
-
-### Static or application-owned map
+## Procedural world
 
 ```ts
-import { HexMap, StaticWorldSource } from "three-hex-map";
+import {
+  HexMap,
+  ProceduralWorldAuthoritySource,
+  WorldSurfaceWorkerPool,
+  createWorldDescriptorV2,
+  SURFACE_GPU_PAGE_BYTES,
+  SURFACE_FOG_PAGE_BYTES
+} from "three-hex-map";
+
+// Publish the package's `three-hex-map/world-generator.worker` export at this URL.
+// A bundler may instead provide its own Worker URL import convention.
+const workerUrl = new URL("/world-generator.worker.mjs", window.location.origin);
+const pool = new WorldSurfaceWorkerPool(workerUrl, { size: 3 });
+const descriptor = createWorldDescriptorV2({
+  seed: "campaign-01",
+  topology: { kind: "infinite" }
+});
+const source = new ProceduralWorldAuthoritySource({
+  descriptor,
+  pool,
+  ownsPool: true
+});
 
 const map = new HexMap({
-    element: "#world",
-    size: 40,
-    texturesBaseUrl: "/hex-assets/textures/"
+  element: "#world",
+  hexSize: 2,
+  heightScale: 24
 });
 
 await map.loadWorld({
-    source: new StaticWorldSource(mapData)
+  source,
+  worker: pool,
+  initialTile: { x: 0, y: 0 },
+  visibleRadiusTiles: 24,
+  prefetchRadiusTiles: 40,
+  lod1DistanceTiles: 12,
+  lod2DistanceTiles: 28,
+  budgets: {
+    semanticAuthorityBytes: 4 * 1024 * 1024,
+    hydrologyAuthorityBytes: 24 * 1024 * 1024,
+    compiledCpuBytes: 32 * 1024 * 1024,
+    retainedWindowBytes: 4 * 1024 * 1024,
+    compiledWorkingSetBytes: 32 * 1024 * 1024,
+    surfaceGpuBytes: SURFACE_GPU_PAGE_BYTES,
+    fogGpuBytes: SURFACE_FOG_PAGE_BYTES
+  }
 });
-
-map.on("click", ({ x, y, tile }) => console.log(x, y, tile));
-
-// When the canvas is permanently removed:
-await map.disposeAsync();
 ```
 
-`await map.load(mapData)` remains a compatibility wrapper for finite
-`StaticWorldSource` maps. `loadWorld()` is the preferred entry for every source
-type and owns that source until the world is replaced or the map is disposed.
+`HexMap.loadWorld()` replaces a complete render session atomically. The source, effective delta snapshot, compiler requests, CPU leases, GPU slots, render layers, queries, and picking service all use the same descriptor and exact revision.
 
-### Streamed procedural world
+The Worker file is a package export, but its final public URL is application/bundler-specific. Deploy that export as a separate module asset; do not inline it into the main-thread bundle.
+
+## Editing and saves
+
+`map.edit()` builds a typed transaction. Terrain edits select an explicit water policy: `reject`, `preserve-channel`, or `coupled`.
 
 ```ts
-import { HexMap, ProceduralWorldSource } from "three-hex-map";
-
-const map = new HexMap({ element: "#world", texturesBaseUrl: "/hex-assets/textures/" });
-const source = new ProceduralWorldSource({
-    seed: "endless-continent",
-    workerUrl: "/hex-assets/world-generator.worker.mjs",
-    workerCount: 4,
-    chunkSize: 24,
-    cache: true,
-    deltaStore: true
+await map.edit(transaction => {
+  transaction.raiseTerrain(
+    { kind: "rectangle", minX: 8, minY: 8, maxX: 12, maxY: 12 },
+    { delta: 0.03, falloff: "smooth", waterPolicy: "preserve-channel" }
+  );
 });
 
-await map.loadWorld({
-    source,
-    initialTile: { x: 0, y: 0 },
-    loadRadius: 2,
-    retentionRadius: 3,
-    frameBudgetMs: 3,
-    maxMountsPerFrame: 2
-});
-
-await map.setTileOverride(12, -4, {
-    city: { name: "Outpost", model: "Assets/models/monument" }
-});
-await source.flushDeltas();
+const checkpoint = await map.runtime.store.saveBarrier(
+  map.runtime.source.descriptor
+);
 ```
 
-The package ships `dist/world-generator.worker.mjs` through the
-`three-hex-map/world-generator.worker` export. Configure your bundler or asset
-pipeline to emit that module and pass its public URL to the source. Source
-chunks default to 24 tiles and accept integer sizes from 1 to 128; the renderer
-independently batches resident content into fixed 12x12 render chunks.
+`WorldDeltaStore` format 3 commits semantic and hydrology mutations under one world CAS revision. Hydrology features also carry feature-level CAS revisions. A committed `WorldChangeSet` precisely invalidates render, navigation, and simulation chunks; stale Worker results cannot publish.
 
-Use `ToroidalWorldSource` when the same Worker/cache model needs finite periodic
-bounds. It accepts even widths and dimensions from 8 to 512. Implement
-`WorldSource` directly for HTTP, editor, IndexedDB or server-authoritative data.
+For durable browser storage, pass `IndexedDbWorldDeltaStore` from `three-hex-map/persistence` into `loadWorld()`.
 
-Generated relief uses an 80-world-unit `mountainHeight` display scale by
-default. The browser demo keeps rendering on `requestAnimationFrame`, records a
-240 FPS performance target, and disables automatic quality migration so FPS
-comparisons use a fixed workload. The observable ceiling is still the
-browser/display refresh rate rather than a library-side frame lock.
+## Static world input
 
-### Package entry points
+`compileStaticWorldAuthority()` accepts only typed, X-major SoA fields plus an explicit SHA-256 content identity and typed hydrology regions. It does not parse terrain names, modifier strings, or implicit water data.
+
+## Package boundaries
 
 | Import | Responsibility |
 |---|---|
-| `three-hex-map` | `HexMap`, `GameEngine`, world sources, streaming, runtime ownership and core helpers |
-| `three-hex-map/persistence` | Base-chunk caches, sparse world deltas and recoverable checkpoints |
-| `three-hex-map/pathfinding` | Versioned navigation summaries and hierarchical routing |
-| `three-hex-map/simulation` | Camera-independent chunk simulation, snapshot stores and army marching |
-| `three-hex-map/world-generator.worker` | Browser module Worker used by procedural sources |
+| `three-hex-map` | Authority formats, Worker pool, compiler, renderer, editor, queries, picking |
+| `three-hex-map/persistence` | Delta-store v3 and generation checkpoints |
+| `three-hex-map/pathfinding` | `SemanticNavigationIndex` |
+| `three-hex-map/simulation` | Camera-independent 64×64 simulation runtime |
 
-## Map data and editing
+Canonical identities are currently descriptor format 2, semantic chunk format 2, generator 7, Worker protocol 5, and delta format 3.
 
-`StaticWorldSource` and `GameEngine.init()` accept a `MapInfo` object. A complete
-sample is available at [public/gameInfo/map.json](public/gameInfo/map.json).
+## Development gates
 
-```jsonc
-{
-  "w": 40,
-  "h": 34,
-  "wrapX": true,
-  "wrapY": true,
-  "data": {
-    "0": {
-      "0": {
-        "type": "land",
-        "modifiers": ["wood", "river"],
-        "treeModel": "Assets/models/oak",
-        "city": { "name": "Rome", "model": "Assets/models/monument" }
-      }
-    }
-  }
-}
-```
-
-Supported built-in terrain values are `sea`, `coastal`, `land`, `sand`,
-`tundra` and `snow`. Built-in modifiers include `hill`, `wood`, `river` and
-`lake`; modifier strings remain extensible for custom layers.
-
-Mutable procedural sources keep generated terrain immutable and store only
-sparse coordinate overrides. Use `setTileOverride()`, `setTileOverrides()` and
-`clearTileOverride()` on `HexMap` so resident visuals refresh with the data.
-
-All constructor and world-load options are defined in
-[src/HexMapOptions.ts](src/HexMapOptions.ts). The demo is the easiest place to
-inspect live shader, water, vegetation, LOD, cache and adaptive-streaming
-controls.
-
-## Optional game loop
-
-`GameEngine` remains available for unit selection, movement and unit-driven fog
-of war:
-
-```ts
-import { GameEngine } from "three-hex-map";
-
-const game = new GameEngine({ element: "#world", fogOfWar: true });
-await game.init(mapData, unitsData);
-game.on("end_move", event => console.log("arrived", event));
-
-// Later:
-game.dispose();
-```
-
-It is a compatibility gameplay layer, not a complete Civilization ruleset. New
-large-world gameplay should keep authoritative state in the persistence,
-pathfinding and simulation services instead of tying it to camera residency.
-
-## Development and verification
-
-| Command | Purpose |
-|---|---|
-| `npm run build:lib` | Build ESM, CJS, global bundle and declarations into `dist/` |
-| `npm run build` | Build the library and copy the runnable demo assets into `public/` |
-| `npm run server` | Serve `public/` on port 3000 without rebuilding |
-| `npm start` | Build, then serve the demo |
-| `npm test` | Run deterministic Vitest contract and stability tests |
-| `npm run typecheck` | Run TypeScript without emitting files |
-| `npm run test:e2e` | Build and run Chromium integration tests; normal runs skip the opt-in soak |
-| `npm run test:soak` | Run the replacement/resource soak with `FOUNDATION_SOAK_ITERATIONS` configured |
-| `npm run benchmark:check` | Build and enforce hot-path regression thresholds |
-| `npm run check:generated` | Rebuild and verify committed files under `public/js` |
-
-An ordinary change should pass:
-
-```bash
+```powershell
 npm test
 npm run typecheck
 npm run build
 npm run test:e2e
+npm run benchmark:check
+npm run review:world-style
+$env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
 
-Lifecycle, Worker, WebGL recovery, scheduling, residency or resource-accounting
-changes also require the 500-iteration soak. See
-[docs/testing.md](docs/testing.md) for the exact policy and CI behavior.
+See [the v2 architecture](docs/surface-render-foundation-v2.md), [rendering and streaming](docs/render-streaming.md), and [test strategy](docs/testing.md).
 
-## Documentation and roadmap
-
-The [documentation index](docs/README.md) separates current architecture,
-frozen contracts, focused subsystem guides, decisions and future designs.
-
-Current deliberate boundaries:
-
-- [World-style generation v1](docs/world-style-generation-v1.md) is implemented
-  and frozen; automatic river generation remains deliberately deferred.
-- WebGPU and GPU culling remain deferred until real draw-submission or overdraw
-  measurements justify a prototype.
-- Multiplayer reconciliation, cloud saves, server authority and a complete
-  economy/combat ruleset are application-level work, not current library
-  features.
-
-## Credits and license
-
-- Original project: [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
-- Inspired by [threejs-hex-map](https://github.com/Bunkerbewohner/threejs-hex-map).
-- The legacy local pathfinder was based on
-  [hexpath](https://github.com/weixiaofan/hexpath) by weixiaofan and was later
-  reworked for TypeScript, terrain restrictions and wrapped maps.
-
-Licensed under the [Mozilla Public License 2.0](LICENSE).
+License: MPL-2.0.

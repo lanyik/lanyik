@@ -12,10 +12,10 @@ import {
     IndexedDbGenerationCheckpointStore,
     MemoryGenerationCheckpointStore
 } from "../../src/persistence/GenerationCheckpointCoordinator";
-import { createWorldDescriptor } from "../../src/world/WorldDescriptor";
+import { createWorldDescriptorV2 } from "../../src/world/semantic/WorldDescriptorV2";
 import { deferred } from "../helpers/deferred";
 
-const descriptor = createWorldDescriptor({ seed: "strict-save", chunkSize: 24 });
+const descriptor = createWorldDescriptorV2({ seed: "strict-save" });
 
 describe("GenerationCheckpointCoordinator", () => {
     test("publishes one atomic manifest and retains a complete previous generation", async () => {
@@ -59,7 +59,6 @@ describe("GenerationCheckpointCoordinator", () => {
     });
 
     test("checksums supported structured snapshots and rejects ambiguous object graphs", () => {
-        // Existing JSON-like snapshots keep their v1 checksum representation.
         expect(checksumCheckpointSnapshot({ x: 1 })).toBe("8c5c1250");
         expect(checksumCheckpointSnapshot({ b: 2, a: 1 }))
             .toBe(checksumCheckpointSnapshot({ a: 1, b: 2 }));
@@ -77,51 +76,6 @@ describe("GenerationCheckpointCoordinator", () => {
         expect(() => checksumCheckpointSnapshot(cyclic)).toThrow(/cyclic/);
         expect(() => checksumCheckpointSnapshot(new (class Snapshot { value = 1; })()))
             .toThrow(/unsupported Snapshot/);
-    });
-
-    test("recovers an already-published structured snapshot with its legacy v1 checksum", async () => {
-        const snapshot = new Map([["value", 7]]);
-        const stage: GenerationCheckpointStageRecord = {
-            key: "legacy-stage",
-            worldId: "legacy-checksum",
-            generation: 1,
-            saveId: "legacy-save",
-            participantId: "state",
-            participantVersion: 1,
-            createdAt: 1,
-            checksum: "5246234b",
-            snapshot
-        };
-        const manifest: GenerationCheckpointManifest = {
-            formatVersion: GENERATION_CHECKPOINT_FORMAT_VERSION,
-            worldId: "legacy-checksum",
-            revision: 1,
-            generation: 1,
-            saveId: "legacy-save",
-            descriptor,
-            committedAt: 1,
-            participants: [{
-                id: "state", version: 1, required: true, state: "staged",
-                stageKey: stage.key, checksum: stage.checksum
-            }]
-        };
-        const store = {
-            loadManifest: async () => structuredClone(manifest),
-            putStage: async () => undefined,
-            loadStage: async () => structuredClone(stage),
-            compareAndSetManifest: async () => undefined,
-            listStages: async () => [structuredClone(stage)],
-            deleteStages: async () => undefined,
-            dispose() {}
-        } satisfies GenerationCheckpointStore;
-        const restore = vi.fn();
-        const coordinator = new GenerationCheckpointCoordinator({
-            worldId: "legacy-checksum", descriptor, store,
-            participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
-        });
-
-        await coordinator.recover();
-        expect(restore).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }), snapshot);
     });
 
     test("never publishes a stage reclaimed between verification and manifest CAS", async () => {
@@ -247,7 +201,7 @@ describe("GenerationCheckpointCoordinator", () => {
         }).checkpoint();
         const wrong = new GenerationCheckpointCoordinator({
             worldId: "descriptor",
-            descriptor: createWorldDescriptor({ seed: "different", chunkSize: 24 }),
+            descriptor: createWorldDescriptorV2({ seed: "different" }),
             store,
             participants: [participant]
         });

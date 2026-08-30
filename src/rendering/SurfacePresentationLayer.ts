@@ -1,6 +1,6 @@
 import { Group } from "three";
 
-import type { WorldChunkLod } from "../helpers/chunks";
+import type { WorldChunkLod } from "./WorldChunkLod";
 import type { ResidentSurfaceLease } from "../world/semantic/SurfaceCompilationService";
 import type { RenderChunkKey } from "../world/semantic/SurfaceDependency";
 import {
@@ -50,6 +50,14 @@ export interface SurfacePresentationLayerStats {
     readonly sharedGeometry: SurfaceGroundGeometryPoolStats;
 }
 
+interface PartialSurfacePresentationMount {
+    readonly key: RenderChunkKey;
+    readonly lease: ResidentSurfaceLease;
+    readonly ground: GroundChunkMount;
+    water?: WaterChunkMount;
+    vegetation?: VegetationChunkMount;
+}
+
 function keyString(key: RenderChunkKey): string {
     if (!key || !Number.isSafeInteger(key.chunkX) || !Number.isSafeInteger(key.chunkY)) {
         throw new TypeError("SurfacePresentationLayer render chunk key is invalid");
@@ -63,7 +71,7 @@ export class SurfacePresentationLayer {
     public readonly water: WaterLayer;
     public readonly vegetation: VegetationLayer;
     private readonly geometryPool: SurfaceGroundGeometryPool;
-    private readonly mountedKeys = new Map<string, Readonly<RenderChunkKey>>();
+    private readonly mounts = new Map<string, PartialSurfacePresentationMount>();
     private stateValue: "ready" | "lost" | "disposed" = "ready";
 
     constructor(options: SurfacePresentationLayerOptions) {
@@ -107,26 +115,61 @@ export class SurfacePresentationLayer {
             ground = this.ground.mount(lease, lod);
             const water = this.water.mount(lease.chunk, ground);
             const vegetation = this.vegetation.mount(lease.chunk, ground);
-            this.mountedKeys.set(serialized, Object.freeze({ ...key }));
+            this.mounts.set(serialized, {
+                key: Object.freeze({ ...key }),
+                lease,
+                ground,
+                water,
+                vegetation
+            });
             return Object.freeze({ key: Object.freeze({ ...key }), ground, water, vegetation });
         } catch (reason) {
             if (ground) {
                 this.vegetation.unmount(key);
                 this.water.unmount(key);
                 this.ground.unmount(key);
-                this.mountedKeys.delete(serialized);
+                this.mounts.delete(serialized);
             }
             throw reason;
         }
     }
 
+    public mountGround(lease: ResidentSurfaceLease, lod: WorldChunkLod): GroundChunkMount {
+        this.assertReady();
+        const key = lease.chunk.key;
+        const serialized = keyString(key);
+        if (this.mounts.has(serialized)) throw new Error("surface presentation chunk is already mounted");
+        const ground = this.ground.mount(lease, lod);
+        this.mounts.set(serialized, { key: Object.freeze({ ...key }), lease, ground });
+        return ground;
+    }
+
+    public mountWater(key: RenderChunkKey): WaterChunkMount {
+        this.assertReady();
+        const mount = this.mounts.get(keyString(key));
+        if (!mount) throw new Error("water requires a mounted ground dependency");
+        if (mount.water) throw new Error("surface water chunk is already mounted");
+        mount.water = this.water.mount(mount.lease.chunk, mount.ground);
+        return mount.water;
+    }
+
+    public mountVegetation(key: RenderChunkKey): VegetationChunkMount {
+        this.assertReady();
+        const mount = this.mounts.get(keyString(key));
+        if (!mount) throw new Error("vegetation requires a mounted ground dependency");
+        if (mount.vegetation) throw new Error("surface vegetation chunk is already mounted");
+        mount.vegetation = this.vegetation.mount(mount.lease.chunk, mount.ground);
+        return mount.vegetation;
+    }
+
     public setLod(key: RenderChunkKey, lod: WorldChunkLod): boolean {
         this.assertReady();
         const serialized = keyString(key);
-        if (!this.mountedKeys.has(serialized)) return false;
+        if (!this.mounts.has(serialized)) return false;
         const groundChanged = this.ground.setLod(key, lod);
-        const waterChanged = this.water.setLod(key, lod);
-        const vegetationChanged = this.vegetation.setLod(key, lod);
+        const mount = this.mounts.get(serialized)!;
+        const waterChanged = mount.water ? this.water.setLod(key, lod) : false;
+        const vegetationChanged = mount.vegetation ? this.vegetation.setLod(key, lod) : false;
         return groundChanged || waterChanged || vegetationChanged;
     }
 
@@ -151,9 +194,38 @@ export class SurfacePresentationLayer {
     public unmount(key: RenderChunkKey): boolean {
         this.assertNotDisposed();
         const serialized = keyString(key);
-        if (!this.mountedKeys.delete(serialized)) return false;
-        this.vegetation.unmount(key);
-        this.water.unmount(key);
+        const mount = this.mounts.get(serialized);
+        if (!mount) return false;
+        if (mount.vegetation) this.vegetation.unmount(key);
+        if (mount.water) this.water.unmount(key);
+        this.mounts.delete(serialized);
+        return this.ground.unmount(key);
+    }
+
+    public unmountVegetation(key: RenderChunkKey): boolean {
+        this.assertNotDisposed();
+        const mount = this.mounts.get(keyString(key));
+        if (!mount?.vegetation) return false;
+        mount.vegetation = undefined;
+        return this.vegetation.unmount(key);
+    }
+
+    public unmountWater(key: RenderChunkKey): boolean {
+        this.assertNotDisposed();
+        const mount = this.mounts.get(keyString(key));
+        if (!mount?.water) return false;
+        if (mount.vegetation) throw new Error("water cannot unmount while vegetation dependency is mounted");
+        mount.water = undefined;
+        return this.water.unmount(key);
+    }
+
+    public unmountGround(key: RenderChunkKey): boolean {
+        this.assertNotDisposed();
+        const serialized = keyString(key);
+        const mount = this.mounts.get(serialized);
+        if (!mount) return false;
+        if (mount.water || mount.vegetation) throw new Error("ground cannot unmount while dependent layers are mounted");
+        this.mounts.delete(serialized);
         return this.ground.unmount(key);
     }
 
@@ -179,7 +251,7 @@ export class SurfacePresentationLayer {
 
     public dispose(): void {
         if (this.stateValue === "disposed") return;
-        for (const key of [...this.mountedKeys.values()]) this.unmount(key);
+        for (const mount of [...this.mounts.values()]) this.unmount(mount.key);
         this.vegetation.dispose();
         this.water.dispose();
         this.ground.dispose();
@@ -191,7 +263,7 @@ export class SurfacePresentationLayer {
     public get stats(): Readonly<SurfacePresentationLayerStats> {
         return Object.freeze({
             state: this.stateValue,
-            mountedChunks: this.mountedKeys.size,
+            mountedChunks: this.mounts.size,
             ground: this.ground.stats,
             water: this.water.stats,
             vegetation: this.vegetation.stats,

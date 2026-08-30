@@ -1,108 +1,35 @@
 import {
-    AdaptiveStreamingController,
-    FogOfWar,
-    Land,
-    SparseWorldChunkStore,
     BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
     createEffectiveDeltaSnapshot,
     createSparseSemanticDelta,
     createTransferableEffectiveWindow,
     createWorldDescriptorV2,
     deriveHydrologyRaster,
+    EffectiveWorldView,
+    generateBaseSemanticChunk,
     HydrologyRegionGenerator,
     HydrologyRegionSpatialIndex,
     hydrologyRegionVectorBytes,
-    EffectiveWorldView,
+    LightingStateController,
+    MemoryWorldDeltaStore,
     compileSurfaceChunk,
     surfaceHydrologyRegionRequirements,
     surfaceSemanticChunkRequirements,
-    SURFACE_GPU_PAGE_BYTES,
-    SURFACE_FOG_PAGE_BYTES,
+    sparseSemanticDeltaByteLength,
     SURFACE_FOG_LAYER_BYTES,
-    SurfacePresentationLayer,
-    LightingStateController,
+    SURFACE_FOG_PAGE_BYTES,
+    SURFACE_GPU_PAGE_BYTES,
     SurfaceFogTexturePool,
-    SurfaceTexturePool,
+    SurfacePresentationLayer,
     SurfaceRequestTracker,
-    createWorldVegetationMapSnapshot,
-    generateWorldChunk,
-    generateBaseSemanticChunk,
-    generateWorldVegetation,
-    getWorldChunkCorePoints,
-    mergeBufferUpdateRanges,
-    worldVegetationTransferables
+    SurfaceTexturePool
 } from "../dist/hex-map.mjs";
-import { buildWorldNavigationSummary } from "../dist/pathfinding.mjs";
 import { WorldSimulationRuntime } from "../dist/simulation.mjs";
 
 const round = (value, digits = 2) => {
     const scale = 10 ** digits;
     return Math.round(value * scale) / scale;
 };
-
-function benchmarkSparseStore() {
-    const chunks = [];
-    for (let chunkX = -3; chunkX <= 3; chunkX += 1) {
-        for (let chunkY = -3; chunkY <= 3; chunkY += 1) {
-            chunks.push(generateWorldChunk({ seed: "perf", chunkX, chunkY, chunkSize: 24 }));
-        }
-    }
-
-    globalThis.gc?.();
-    const heapBefore = process.memoryUsage().heapUsed;
-    const store = new SparseWorldChunkStore();
-    const started = performance.now();
-    for (let pass = 0; pass < 25; pass += 1) {
-        for (const chunk of chunks) store.add(chunk);
-        for (const chunk of chunks) store.remove(chunk.chunkX, chunk.chunkY);
-    }
-    const durationMs = performance.now() - started;
-    globalThis.gc?.();
-
-    for (const chunk of chunks) store.add(chunk);
-    // Force representative lookups so the decoded-variant cache is measured.
-    for (let x = -72; x < 96; x += 7) store.map.tileAt?.(x, 0);
-
-    return {
-        operation: "49 chunks (24x24) add/remove x25",
-        durationMs: round(durationMs),
-        heapDeltaBytes: process.memoryUsage().heapUsed - heapBefore,
-        residentChunks: store.residentChunkCount,
-        residentPayloadBytes: store.residentPayloadBytes,
-        decodedTileVariants: store.decodedTileVariantCount,
-        materializedColumns: Object.keys(store.map.data).length
-    };
-}
-
-function benchmarkToroidalWindow() {
-    const width = 512;
-    const height = 512;
-    const chunkSize = 24;
-    const chunks = [];
-    const started = performance.now();
-    for (let chunkX = 8; chunkX < 13; chunkX += 1) {
-        for (let chunkY = 8; chunkY < 13; chunkY += 1) {
-            chunks.push(generateWorldChunk({
-                seed: "perf-toroidal",
-                chunkX,
-                chunkY,
-                chunkSize,
-                world: { width, height, topology: "toroidal" }
-            }));
-        }
-    }
-    const store = new SparseWorldChunkStore({ width, height, wrapX: true, wrapY: true });
-    for (const chunk of chunks) store.add(chunk);
-    return {
-        operation: "512x512 toroidal world, 5x5 resident chunk window",
-        durationMs: round(performance.now() - started),
-        logicalTiles: width * height,
-        residentCoreTiles: chunks.length * chunkSize * chunkSize,
-        residentChunks: store.residentChunkCount,
-        residentPayloadBytes: store.residentPayloadBytes,
-        materializedColumns: Object.keys(store.map.data).length
-    };
-}
 
 function benchmarkSemanticChunkGeneration() {
     const descriptor = createWorldDescriptorV2({ seed: "perf-semantic-v2" });
@@ -147,14 +74,12 @@ function benchmarkHydrologyRegions() {
         macroHeight: new Uint16Array(128 * 128).fill(65_535),
         spatialIndex
     });
-    const rasterMs = performance.now() - rasterStarted;
     return {
-        operation: "one 2048x2048 infinite drainage basin -> 16-region working set + one 128x128 derived raster",
+        operation: "one infinite drainage basin -> 16 regions + one derived raster",
         generationMs: round(generationMs),
-        rasterMs: round(rasterMs),
+        rasterMs: round(performance.now() - rasterStarted),
         regions: regions.length,
         rivers: regions.reduce((sum, region) => sum + region.rivers.length, 0),
-        ports: regions.reduce((sum, region) => sum + region.boundaryPorts.length, 0),
         vectorBytes: regions.reduce((sum, region) => sum + hydrologyRegionVectorBytes(region), 0),
         spatialIndexBytes: spatialIndex.byteLength,
         wetTiles: raster.kind.reduce((sum, kind) => sum + (kind === 0 ? 0 : 1), 0)
@@ -164,21 +89,16 @@ function benchmarkHydrologyRegions() {
 function benchmarkEffectiveSnapshots() {
     const descriptor = createWorldDescriptorV2({ seed: "effective-snapshot-benchmark" });
     const semanticChunks = [
-        { chunkX: 0, chunkY: 0 },
-        { chunkX: 0, chunkY: 1 },
-        { chunkX: 1, chunkY: 0 },
-        { chunkX: 1, chunkY: 1 }
+        { chunkX: 0, chunkY: 0 }, { chunkX: 0, chunkY: 1 },
+        { chunkX: 1, chunkY: 0 }, { chunkX: 1, chunkY: 1 }
     ].map(key => generateBaseSemanticChunk({ descriptor, key }));
     const hydrologyRegion = new HydrologyRegionGenerator(descriptor).generate({ regionX: 0, regionY: 0 });
     const delta = createSparseSemanticDelta({
-        key: { chunkX: 0, chunkY: 0 },
-        revision: 1,
+        key: { chunkX: 0, chunkY: 0 }, revision: 1,
         overrides: [{ localX: 8, localY: 8, macroHeight: 40_000 }]
     });
     const view = new EffectiveWorldView(descriptor, createEffectiveDeltaSnapshot({
-        descriptor,
-        effectiveRevision: 1,
-        semanticDeltas: [delta]
+        descriptor, effectiveRevision: 1, semanticDeltas: [delta]
     }));
     const tracker = new SurfaceRequestTracker(descriptor, 1);
     const iterations = 5_000;
@@ -187,19 +107,15 @@ function benchmarkEffectiveSnapshots() {
     for (let index = 0; index < iterations; index += 1) {
         const snapshot = view.capture({ semanticChunks, hydrologyRegions: [hydrologyRegion] });
         const request = tracker.issueRequest(snapshot, { chunkX: 0, chunkY: 0 });
-        if (!tracker.canAccept({ chunkX: 0, chunkY: 0 }, request, request)) {
-            throw new Error("current effective snapshot request was rejected");
-        }
         checksum = (checksum + Math.round(snapshot.getTile(8, 8).macroHeight * 65_535)
             + request.requestToken.renderChunkGeneration) >>> 0;
     }
     const durationMs = performance.now() - started;
     tracker.dispose();
     return {
-        operation: "four semantic chunks + one hydrology region effective snapshot/request x5000",
+        operation: "exact effective snapshot/request x5000",
         durationMs: round(durationMs),
         averageMicros: round(durationMs * 1_000 / iterations),
-        iterations,
         checksum
     };
 }
@@ -231,15 +147,11 @@ function benchmarkSurfaceCompilation() {
     const compileMs = performance.now() - started;
     return {
         metrics: {
-            operation: "cross-region 20x20 effective window x250 + 66x66 CPU surface compile x25",
+            operation: "20x20 effective window x250 + 66x66 CPU surface compile x25",
             windowMs: round(windowMs),
-            averageWindowMicros: round(windowMs * 1_000 / windowIterations),
             compileMs: round(compileMs),
             averageCompileMs: round(compileMs / compileIterations),
             outputBytes: chunk.byteLength,
-            inputRivers: window.rivers.length,
-            inputLakes: window.lakes.length,
-            waterBodies: chunk.waterBodies.length,
             checksum
         },
         chunk
@@ -256,13 +168,10 @@ function benchmarkSurfaceTexturePacking(chunk) {
     const stats = pool.stats;
     pool.dispose();
     return {
-        operation: "66x66 compiled surface -> four same-layer DataArrayTexture backing stores x100",
+        operation: "66x66 compiled field -> four DataArrayTexture stores x100",
         durationMs: round(durationMs),
         averageMicros: round(durationMs * 1_000 / iterations),
-        iterations,
-        layerBytes: stats.pendingUploadBytes,
         pageBytes: stats.gpuBytes,
-        pendingLayerUploads: stats.pendingLayerUploads,
         logicalUploadBytes: stats.logicalUploadBytes
     };
 }
@@ -285,19 +194,12 @@ function benchmarkSurfacePresentationProfiles(template) {
             chunk,
             get released() { return released; },
             isCurrent: () => !released,
-            release: () => {
-                if (released) return false;
-                released = true;
-                return true;
-            }
+            release: () => !released && (released = true)
         });
     };
     const run = chunkCount => {
         const surfacePool = new SurfaceTexturePool({ gpuBudgetBytes: SURFACE_GPU_PAGE_BYTES });
-        const fogPool = new SurfaceFogTexturePool({
-            surfacePool,
-            gpuBudgetBytes: SURFACE_FOG_PAGE_BYTES
-        });
+        const fogPool = new SurfaceFogTexturePool({ surfacePool, gpuBudgetBytes: SURFACE_FOG_PAGE_BYTES });
         const lighting = new LightingStateController();
         const presentation = new SurfacePresentationLayer({
             surfaceTexturePool: surfacePool,
@@ -312,10 +214,8 @@ function benchmarkSurfacePresentationProfiles(template) {
             presentation.mount(leaseFor(cloneForKey(key)), index % 3);
             presentation.uploadFog(key, fog);
         }
-        presentation.setTime(12.5);
         const durationMs = performance.now() - started;
         const stats = presentation.stats;
-        const gpuBytes = surfacePool.stats.gpuBytes + fogPool.stats.gpuBytes;
         presentation.dispose();
         fogPool.dispose();
         surfacePool.dispose();
@@ -323,230 +223,66 @@ function benchmarkSurfacePresentationProfiles(template) {
         return {
             chunks: chunkCount,
             durationMs: round(durationMs),
-            averageMs: round(durationMs / chunkCount, 3),
             sharedGeometryBytes: stats.sharedGeometry.byteLength,
             waterGeometryBytes: stats.water.uniqueGeometryBytes,
-            vegetationGeometryBytes: stats.vegetation.geometryBytes,
-            vegetationInstances: stats.vegetation.visibleInstanceCount,
-            gpuBytes
+            vegetationInstances: stats.vegetation.visibleInstanceCount
         };
     };
     return {
-        operation: "v2 Ground/Water/Vegetation mount + static field + dynamic fog",
-        profile1: run(1),
-        profile9: run(9),
-        profile49: run(49)
+        operation: "v2 Ground/Water/Vegetation mount profiles",
+        profile1: run(1), profile9: run(9), profile49: run(49)
     };
 }
 
-function benchmarkFogFrontier() {
-    const width = 512;
-    const height = 512;
-    const data = {};
-    for (let x = 0; x < width; x += 1) {
-        data[x] = {};
-        for (let y = 0; y < height; y += 1) data[x][y] = { type: Land.land };
-    }
-
-    const fog = new FogOfWar({ data, w: width, h: height });
-    let examinedCandidates = 0;
+async function benchmarkAtomicDeltaTransactions() {
+    const descriptor = createWorldDescriptorV2({ seed: "delta-transaction-benchmark" });
+    const store = new MemoryWorldDeltaStore();
+    const iterations = 250;
     const started = performance.now();
-    for (let pass = 0; pass < 20; pass += 1) {
-        fog.recompute([{ x: 256 + pass % 2, y: 256, viewRange: 3 }]);
-        examinedCandidates += fog.lastRecomputeCandidateCount;
+    for (let revision = 0; revision < iterations; revision += 1) {
+        await store.commit({
+            descriptor,
+            expectedRevision: revision,
+            semanticMutations: [{ x: revision % 32, y: Math.floor(revision / 32), macroHeight: 30_000 + revision }]
+        });
     }
-    return {
-        operation: "512x512 fog recompute x20",
-        durationMs: round(performance.now() - started),
-        examinedCandidates,
-        fullScanCandidates: width * height * 20,
-        candidateReductionPercent: round(
-            (1 - examinedCandidates / (width * height * 20)) * 100,
-            3
-        )
-    };
-}
-
-function benchmarkVegetationPreparation() {
-    const chunk = generateWorldChunk({ seed: "perf-vegetation", chunkX: 0, chunkY: 0, chunkSize: 24 });
-    const store = new SparseWorldChunkStore();
-    store.add(chunk);
-    const points = getWorldChunkCorePoints(chunk);
-    const map = createWorldVegetationMapSnapshot(store.map, points);
-    const options = {
-        map,
-        points,
-        size: 40,
-        grassDensity: 60,
-        grassBladeWidth: 1.2,
-        grassBladeHeight: 7.2,
-        grassHeightVariation: 0.4,
-        treesPerTile: 20,
-        treeScale: 1,
-        treeModel: "Assets/models/pinia",
-        riverWidth: 0.28,
-        riverBankWidth: 0.14,
-        riverCurvature: 0.5,
-        lakeShoreWidth: 0.18,
-        beachWidth: 0.35,
-        waterCornerRounding: 0.4,
-        coastCurvature: 0.5
-    };
-    const started = performance.now();
-    let layout;
-    for (let pass = 0; pass < 5; pass += 1) layout = generateWorldVegetation(options);
     const durationMs = performance.now() - started;
-    const grassInstances = layout.grass.reduce(
-        (count, prepared) => count + prepared.lods.reduce((sum, lod) => sum + lod.instanceCount, 0),
-        0
-    );
-    const treeInstances = layout.forest.reduce(
-        (count, prepared) => count + prepared.lods.reduce((sum, lod) => sum + lod.instanceCount, 0),
-        0
-    );
+    const snapshot = await store.load(descriptor);
+    store.dispose();
     return {
-        operation: "24x24 grass/tree three-LOD preparation x5",
+        operation: "WorldDeltaStore v3 atomic CAS transactions x250",
         durationMs: round(durationMs),
-        averageMs: round(durationMs / 5),
-        grassInstances,
-        treeInstances,
-        transferableBytes: worldVegetationTransferables(layout)
-            .reduce((bytes, buffer) => bytes + buffer.byteLength, 0)
-    };
-}
-
-function benchmarkGpuRangeBatching() {
-    const ranges = [];
-    for (let group = 0; group < 200; group += 1) {
-        for (let index = 0; index < 50; index += 1) {
-            ranges.push({ start: group * 80 + index, count: 1 });
-        }
-    }
-    ranges.reverse();
-    const started = performance.now();
-    let merged;
-    for (let pass = 0; pass < 100; pass += 1) merged = mergeBufferUpdateRanges(ranges);
-    const durationMs = performance.now() - started;
-    return {
-        operation: "10,000 GPU dirty ranges merge x100",
-        durationMs: round(durationMs),
-        averageMs: round(durationMs / 100, 3),
-        inputRanges: ranges.length,
-        uploadRanges: merged.length,
-        rangeReductionPercent: round((1 - merged.length / ranges.length) * 100, 2)
-    };
-}
-
-function benchmarkAdaptiveController() {
-    const adaptive = new AdaptiveStreamingController({
-        baseFrameBudgetMs: 3,
-        baseMaxTasksPerFrame: 2,
-        baseWorkerCount: 4,
-        baseLodDistances: { near: 900, far: 1650, vegetation: 1450, hysteresis: 120 }
-    });
-    const started = performance.now();
-    for (let frame = 0; frame < 100000; frame += 1) adaptive.sample(16 + (frame % 5) * 0.2);
-    const durationMs = performance.now() - started;
-    return {
-        operation: "adaptive frame sample x100,000",
-        durationMs: round(durationMs),
-        nanosecondsPerSample: round(durationMs * 1e6 / 100000),
-        transitions: adaptive.stats.transitions,
-        qualityLevel: adaptive.stats.qualityLevel
-    };
-}
-
-function benchmarkNavigationSummaries() {
-    const data = {};
-    for (let x = 0; x < 36; x += 1) {
-        data[x] = {};
-        for (let y = 0; y < 36; y += 1) data[x][y] = { type: Land.land };
-    }
-    const map = { data, w: 36, h: 36 };
-    const run = maxPortalsPerEntrance => {
-        const started = performance.now();
-        let summary;
-        for (let pass = 0; pass < 25; pass += 1) {
-            summary = buildWorldNavigationSummary(
-                map, 1, 1, 12, () => true, { maxPortalsPerEntrance }
-            );
-        }
-        return { durationMs: performance.now() - started, summary };
-    };
-    const exact = run(1000);
-    const compact = run(2);
-    return {
-        operation: "12x12 open navigation summary x25",
-        exactDurationMs: round(exact.durationMs),
-        compactDurationMs: round(compact.durationMs),
-        exactPortals: exact.summary.portals.length,
-        compactPortals: compact.summary.portals.length,
-        matrixReductionPercent: round(
-            (1 - compact.summary.costs.length ** 2 / exact.summary.costs.length ** 2) * 100,
-            2
-        )
+        averageMicros: round(durationMs * 1_000 / iterations),
+        effectiveRevision: snapshot.effectiveRevision,
+        semanticDeltaBytes: snapshot.semanticDeltas.reduce((sum, delta) => sum + sparseSemanticDeltaByteLength(delta), 0)
     };
 }
 
 async function benchmarkSimulationRuntime() {
-    const cold = new WorldSimulationRuntime({
-        chunkSize: 10,
-        activeTickIntervalSeconds: 0.1,
-        backgroundTickIntervalSeconds: 5
-    });
-    let started = performance.now();
-    for (let index = 0; index < 5000; index += 1) {
-        cold.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
-    }
-    const coldInsertMs = performance.now() - started;
-    started = performance.now();
-    await cold.advance(0.016);
-    const coldIdleAdvanceMs = performance.now() - started;
-    cold.dispose();
-
-    const dense = new WorldSimulationRuntime({
-        chunkSize: 1000,
+    const runtime = new WorldSimulationRuntime({
         activeTickIntervalSeconds: 1,
         backgroundTickIntervalSeconds: 1
     });
-    for (let index = 0; index < 100000; index += 1) {
-        dense.addEntity({
-            id: `dense-${index}`,
-            x: index % 1000,
-            y: Math.floor(index / 1000),
-            state: { value: 0 }
-        });
+    for (let index = 0; index < 100_000; index += 1) {
+        runtime.addEntity({ id: `dense-${index}`, x: index % 1000, y: Math.floor(index / 1000), state: null });
     }
-    dense.registerSystem({ id: "noop", update() {} });
-    started = performance.now();
-    await dense.advance(1);
-    const denseTickMs = performance.now() - started;
-    dense.dispose();
-    return {
-        operation: "generic simulation scale probes",
-        coldChunks: 5000,
-        coldInsertMs: round(coldInsertMs),
-        coldIdleAdvanceMs: round(coldIdleAdvanceMs),
-        denseEntities: 100000,
-        denseNoopTickMs: round(denseTickMs)
-    };
+    runtime.registerSystem({ id: "noop", update() {} });
+    const started = performance.now();
+    await runtime.advance(1);
+    const durationMs = performance.now() - started;
+    runtime.dispose();
+    return { operation: "100,000-entity simulation no-op tick", durationMs: round(durationMs) };
 }
 
 const surfaceCompilation = benchmarkSurfaceCompilation();
 const results = {
-    sparseStore: benchmarkSparseStore(),
-    toroidalWindow: benchmarkToroidalWindow(),
     semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
     hydrologyRegions: benchmarkHydrologyRegions(),
     effectiveSnapshots: benchmarkEffectiveSnapshots(),
     surfaceCompilation: surfaceCompilation.metrics,
     surfaceTexturePacking: benchmarkSurfaceTexturePacking(surfaceCompilation.chunk),
     surfacePresentationProfiles: benchmarkSurfacePresentationProfiles(surfaceCompilation.chunk),
-    fogFrontier: benchmarkFogFrontier(),
-    vegetationPreparation: benchmarkVegetationPreparation(),
-    gpuRangeBatching: benchmarkGpuRangeBatching(),
-    adaptiveController: benchmarkAdaptiveController(),
-    navigationSummaries: benchmarkNavigationSummaries(),
+    atomicDeltaTransactions: await benchmarkAtomicDeltaTransactions(),
     simulationRuntime: await benchmarkSimulationRuntime()
 };
 
@@ -558,16 +294,8 @@ if (process.argv.includes("--check")) {
     const limitScale = Number.isFinite(configuredScale) && configuredScale > 0 ? configuredScale : 1;
     const under = (name, value, limit) => {
         const scaledLimit = limit * limitScale;
-        if (!Number.isFinite(value) || value > scaledLimit) {
-            failures.push(`${name}: ${value} > ${scaledLimit}`);
-        }
+        if (!Number.isFinite(value) || value > scaledLimit) failures.push(`${name}: ${value} > ${scaledLimit}`);
     };
-    // These are gross-regression gates rather than machine-comparison scores:
-    // each limit leaves substantial shared-runner headroom but still catches
-    // accidental quadratic work and multi-order-of-magnitude slowdowns.
-    under("sparseStore.durationMs", results.sparseStore.durationMs, 500);
-    under("sparseStore.residentPayloadBytes", results.sparseStore.residentPayloadBytes, 16 * 1024 * 1024);
-    under("toroidalWindow.durationMs", results.toroidalWindow.durationMs, 750);
     under("semanticChunkGeneration.durationMs", results.semanticChunkGeneration.durationMs, 1_500);
     under("hydrologyRegions.generationMs", results.hydrologyRegions.generationMs, 1_500);
     under("hydrologyRegions.rasterMs", results.hydrologyRegions.rasterMs, 750);
@@ -575,27 +303,16 @@ if (process.argv.includes("--check")) {
     under("surfaceCompilation.windowMs", results.surfaceCompilation.windowMs, 750);
     under("surfaceCompilation.compileMs", results.surfaceCompilation.compileMs, 750);
     under("surfaceTexturePacking.durationMs", results.surfaceTexturePacking.durationMs, 750);
-    under(
-        "surfacePresentationProfiles.profile49.durationMs",
-        results.surfacePresentationProfiles.profile49.durationMs,
-        1_500
-    );
-    under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
-    under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
-    under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);
-    under("navigationSummaries.exactDurationMs", results.navigationSummaries.exactDurationMs, 2_500);
-    under("simulationRuntime.coldInsertMs", results.simulationRuntime.coldInsertMs, 500);
-    under("simulationRuntime.denseNoopTickMs", results.simulationRuntime.denseNoopTickMs, 2_000);
-    if (results.toroidalWindow.residentChunks !== 25) {
-        failures.push(`toroidalWindow.residentChunks: ${results.toroidalWindow.residentChunks} !== 25`);
-    }
-    if (results.fogFrontier.candidateReductionPercent < 99) {
-        failures.push(`fogFrontier.candidateReductionPercent: ${results.fogFrontier.candidateReductionPercent} < 99`);
+    under("surfacePresentationProfiles.profile49.durationMs", results.surfacePresentationProfiles.profile49.durationMs, 1_500);
+    under("atomicDeltaTransactions.durationMs", results.atomicDeltaTransactions.durationMs, 750);
+    under("simulationRuntime.durationMs", results.simulationRuntime.durationMs, 2_000);
+    if (results.atomicDeltaTransactions.effectiveRevision !== 250) {
+        failures.push(`atomicDeltaTransactions.effectiveRevision: ${results.atomicDeltaTransactions.effectiveRevision} !== 250`);
     }
     if (failures.length > 0) {
-        console.error(`Foundation benchmark gate failed:\n${failures.join("\n")}`);
+        console.error(`Surface v2 benchmark gate failed:\n${failures.join("\n")}`);
         process.exitCode = 1;
     } else {
-        console.log("Foundation benchmark gate passed.");
+        console.log("Surface v2 benchmark gate passed.");
     }
 }

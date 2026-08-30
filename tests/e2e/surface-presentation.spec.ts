@@ -21,7 +21,7 @@ test("renders, interacts with and restores the fixed-seed v2 water/vegetation pr
     page.on("console", message => {
         if (message.type() === "error") consoleErrors.push(message.text());
     });
-    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await page.goto("/test-host.html", { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
         const threeModulePath = "/js/vendor/three.module.js";
         const three = await import(threeModulePath) as typeof import("three");

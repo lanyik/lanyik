@@ -25,7 +25,7 @@ import {
 import {
     SurfaceWorkerCompilation,
     SurfaceWorkerCompilationError
-} from "../WorldGeneratorClient";
+} from "./SurfaceWorkerProtocol";
 import {
     serializeWorldDescriptorV2,
     WorldDescriptorV2
@@ -434,6 +434,23 @@ export class SurfaceCompilationService {
             for (const request of requests) request.cancel();
             throw reason;
         }
+    }
+
+    public invalidate(renderKeys: readonly RenderChunkKey[]): number {
+        this.assertReady();
+        if (!Array.isArray(renderKeys)) throw new TypeError("surface invalidation keys must be an array");
+        let invalidated = 0;
+        for (const renderKey of renderKeys) {
+            const canonical = canonicalizeRenderChunkKey(this.requestTracker.descriptor, renderKey);
+            const serialized = renderKeyString(canonical);
+            const active = this.activeByRenderKey.get(serialized);
+            if (!active) continue;
+            this.activeByRenderKey.delete(serialized);
+            this.requestTracker.release(active.key, active.requestToken);
+            if (active.job) this.removeJobSubscriber(active.job, active.requestToken);
+            invalidated += 1;
+        }
+        return invalidated;
     }
 
     public clearUnusedCache(): number {

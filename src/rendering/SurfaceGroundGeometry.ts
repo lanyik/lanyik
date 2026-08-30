@@ -6,7 +6,7 @@ import {
     Vector3
 } from "three";
 
-import type { WorldChunkLod } from "../helpers/chunks";
+import type { WorldChunkLod } from "./WorldChunkLod";
 import {
     SURFACE_RENDER_CHUNK_SIZE,
     SURFACE_SAMPLES_PER_TILE_INTERVAL

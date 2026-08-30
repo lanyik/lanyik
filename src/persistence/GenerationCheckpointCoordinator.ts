@@ -1,17 +1,17 @@
 import {
-    assertWorldDescriptor,
-    serializeWorldDescriptor,
-    WorldDescriptor
-} from "../world/WorldDescriptor";
+    assertWorldDescriptorV2,
+    serializeWorldDescriptorV2,
+    WorldDescriptorV2
+} from "../world/semantic/WorldDescriptorV2";
 import { CheckpointConflictError, CheckpointRecoveryError } from "./CheckpointCoordinator";
 
-export const GENERATION_CHECKPOINT_FORMAT_VERSION = 1;
+export const GENERATION_CHECKPOINT_FORMAT_VERSION = 2;
 
 export interface GenerationCheckpointContext {
     readonly worldId: string;
     readonly generation: number;
     readonly saveId: string;
-    readonly descriptor: WorldDescriptor;
+    readonly descriptor: WorldDescriptorV2;
     readonly signal: AbortSignal;
     readonly startedAt: number;
 }
@@ -42,7 +42,7 @@ export interface GenerationCheckpointParticipantRecord {
 export interface CommittedCheckpointGeneration {
     generation: number;
     saveId: string;
-    descriptor: WorldDescriptor;
+    descriptor: WorldDescriptorV2;
     committedAt: number;
     participants: GenerationCheckpointParticipantRecord[];
 }
@@ -86,7 +86,7 @@ export interface GenerationCheckpointStore {
 
 export interface GenerationCheckpointCoordinatorOptions {
     worldId: string;
-    descriptor: WorldDescriptor;
+    descriptor: WorldDescriptorV2;
     participants: readonly GenerationCheckpointParticipant[];
     store: GenerationCheckpointStore;
     operationTimeoutMs?: number;
@@ -182,33 +182,6 @@ function stableSnapshotValue(
     }
 }
 
-// v1 originally treated object types without enumerable own properties (for
-// example Map, Set, and Date) as the same empty object. Recovery accepts those
-// already-published checksums so an upgrade does not strand an existing save;
-// all newly staged snapshots use the type-aware representation above.
-function legacyStableSnapshotValue(value: unknown): unknown {
-    if (value === undefined) return ["undefined"];
-    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-    if (typeof value === "number") {
-        if (!Number.isFinite(value)) return ["number", String(value)];
-        return Object.is(value, -0) ? ["number", "-0"] : value;
-    }
-    if (typeof value === "bigint") return ["bigint", value.toString()];
-    if (value instanceof ArrayBuffer) return ["bytes", ...new Uint8Array(value)];
-    if (ArrayBuffer.isView(value)) {
-        return [
-            value.constructor.name,
-            ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-        ];
-    }
-    if (Array.isArray(value)) return value.map(legacyStableSnapshotValue);
-    if (typeof value === "object") {
-        const object = value as Record<string, unknown>;
-        return Object.keys(object).sort().map(key => [key, legacyStableSnapshotValue(object[key])]);
-    }
-    throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
-}
-
 function checksumStableValue(value: unknown): string {
     const text = JSON.stringify(value);
     let hash = 0x811c9dc5;
@@ -224,10 +197,6 @@ function checksumStableValue(value: unknown): string {
 
 export function checksumCheckpointSnapshot(snapshot: unknown): string {
     return checksumStableValue(stableSnapshotValue(snapshot));
-}
-
-function legacyChecksumCheckpointSnapshot(snapshot: unknown): string {
-    return checksumStableValue(legacyStableSnapshotValue(snapshot));
 }
 
 function cloneParticipantRecord(record: GenerationCheckpointParticipantRecord): GenerationCheckpointParticipantRecord {
@@ -271,20 +240,10 @@ function retainedStageKeys(manifest: GenerationCheckpointManifest | undefined): 
 function assertManifestStage(
     stage: GenerationCheckpointStageRecord | undefined,
     manifest: GenerationCheckpointManifest,
-    record: GenerationCheckpointParticipantRecord,
-    allowLegacyChecksum = false
+    record: GenerationCheckpointParticipantRecord
 ): asserts stage is GenerationCheckpointStageRecord {
-    let checksumMatches = false;
-    if (stage) {
-        try {
-            checksumMatches = checksumCheckpointSnapshot(stage.snapshot) === record.checksum;
-        } catch (reason) {
-            if (!allowLegacyChecksum) throw reason;
-        }
-        if (!checksumMatches && allowLegacyChecksum) {
-            checksumMatches = legacyChecksumCheckpointSnapshot(stage.snapshot) === record.checksum;
-        }
-    }
+    const checksumMatches = Boolean(stage
+        && checksumCheckpointSnapshot(stage.snapshot) === record.checksum);
     if (!stage || stage.key !== record.stageKey || stage.worldId !== manifest.worldId
         || stage.generation !== manifest.generation || stage.saveId !== manifest.saveId
         || stage.participantId !== record.id || stage.participantVersion !== record.version
@@ -318,7 +277,7 @@ function assertGeneration(value: unknown): asserts value is CommittedCheckpointG
         || !Number.isFinite(generation.committedAt)) {
         throw new TypeError("checkpoint generation metadata is invalid");
     }
-    assertWorldDescriptor(generation.descriptor);
+    assertWorldDescriptorV2(generation.descriptor);
     assertParticipantRecords(generation.participants);
 }
 
@@ -453,7 +412,7 @@ export class IndexedDbGenerationCheckpointStore implements GenerationCheckpointS
     private disposed = false;
 
     constructor(options: IndexedDbGenerationCheckpointStoreOptions = {}) {
-        this.databaseName = options.databaseName ?? "three-hex-map-generation-checkpoints-v1";
+        this.databaseName = options.databaseName ?? "three-hex-map-generation-checkpoints-v2";
         this.openTimeoutMs = options.openTimeoutMs ?? 2_000;
         if (!this.databaseName.trim()) throw new TypeError("checkpoint databaseName must be a non-empty string");
         if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
@@ -637,7 +596,7 @@ function randomSaveId(): string {
 
 export class GenerationCheckpointCoordinator {
     private readonly worldId: string;
-    private readonly descriptor: WorldDescriptor;
+    private readonly descriptor: WorldDescriptorV2;
     private readonly participants: readonly GenerationCheckpointParticipant[];
     private readonly participantById = new Map<string, GenerationCheckpointParticipant>();
     private readonly store: GenerationCheckpointStore;
@@ -658,7 +617,7 @@ export class GenerationCheckpointCoordinator {
 
     constructor(options: GenerationCheckpointCoordinatorOptions) {
         if (!options?.worldId?.trim()) throw new TypeError("checkpoint worldId must be a non-empty string");
-        assertWorldDescriptor(options.descriptor);
+        assertWorldDescriptorV2(options.descriptor);
         if (!Array.isArray(options.participants) || options.participants.length === 0) {
             throw new TypeError("checkpoint participants must be a non-empty array");
         }
@@ -862,7 +821,7 @@ export class GenerationCheckpointCoordinator {
                     continue;
                 }
                 const stage = await this.store.loadStage(record.stageKey!);
-                assertManifestStage(stage, manifest, record, true);
+                assertManifestStage(stage, manifest, record);
                 let snapshot = stage.snapshot;
                 if (record.version !== participant.version) {
                     if (record.version > participant.version || !participant.migrate) {
@@ -927,8 +886,8 @@ export class GenerationCheckpointCoordinator {
         return reclaimed;
     }
 
-    private assertDescriptor(descriptor: WorldDescriptor): void {
-        if (serializeWorldDescriptor(descriptor) !== serializeWorldDescriptor(this.descriptor)) {
+    private assertDescriptor(descriptor: WorldDescriptorV2): void {
+        if (serializeWorldDescriptorV2(descriptor) !== serializeWorldDescriptorV2(this.descriptor)) {
             throw new CheckpointRecoveryError("checkpoint world descriptor does not match the requested world");
         }
     }

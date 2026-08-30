@@ -1,339 +1,762 @@
 import {
-    assertWorldTileOverride,
-    cloneWorldTileOverride,
-    hasWorldTileOverride,
-    worldTileOverridesEqual,
-    WorldTileOverride
-} from "./generateWorldChunk";
+    createEffectiveDeltaSnapshot,
+    EffectiveDeltaSnapshot,
+    HydrologyRegionFeatureIndex
+} from "./semantic/EffectiveWorldView";
+import {
+    assertHydrologyFeatureDelta,
+    cloneHydrologyFeatureDelta,
+    hydrologyFeatureBounds,
+    HydrologyFeatureDelta
+} from "./semantic/HydrologyFeatureDelta";
+import { HydrologyFeatureId } from "./semantic/MacroDrainageGraph";
+import {
+    createSparseSemanticDelta,
+    SemanticOverrideField,
+    SparseSemanticDelta,
+    SparseSemanticTileOverride
+} from "./semantic/SparseSemanticDelta";
+import {
+    HYDROLOGY_REGION_SIZE,
+    locateSemanticTile,
+    semanticChunkLocalIndex,
+    SemanticChunkKey
+} from "./semantic/WorldSemanticFormat";
+import {
+    assertWorldDescriptorV2,
+    canonicalizeHydrologyRegionKey,
+    canonicalizeSemanticChunkKey,
+    serializeWorldDescriptorV2,
+    WorldDescriptorV2
+} from "./semantic/WorldDescriptorV2";
+import {
+    createWorldChangeSet,
+    HydrologyFeatureChange,
+    SemanticChangePoint,
+    WorldChangeDomain,
+    WorldChangeSet
+} from "./semantic/WorldChangeSet";
 
-export const WORLD_DELTA_FORMAT_VERSION = 2;
-const LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
+export const WORLD_DELTA_FORMAT_VERSION = 3;
+export const WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = 1;
 
-export interface WorldDeltaEntry {
-    x: number;
-    y: number;
-    override: WorldTileOverride;
+export interface SemanticAuthorityMutation {
+    readonly x: number;
+    readonly y: number;
+    readonly substrateClass?: number | null;
+    readonly macroHeight?: number | null;
+    readonly biomeWeights?: readonly [number, number, number, number] | null;
+    readonly vegetationDensity?: number | null;
+    readonly vegetationProfile?: number | null;
 }
 
-export interface WorldDeltaChange {
-    x: number;
-    y: number;
-    // null removes a persisted override; an object replaces the complete
-    // coordinate override after the caller has merged partial edits.
-    override: WorldTileOverride | null;
+export interface HydrologyFeatureUpsertMutation {
+    readonly kind: "upsert";
+    readonly expectedRevision: number;
+    readonly feature: HydrologyFeatureInput;
 }
 
-export interface WorldDeltaReadOptions {
-    chunkSize: number;
+type WithoutRevision<T> = T extends unknown ? Omit<T, "revision"> : never;
+export type HydrologyFeatureInput = WithoutRevision<HydrologyFeatureDelta>;
+
+export interface HydrologyFeatureDeleteMutation {
+    readonly kind: "delete";
+    readonly featureId: HydrologyFeatureId;
+    readonly targetKind: "river" | "lake";
+    readonly expectedRevision: number;
 }
 
-export interface WorldDeltaBatchOptions extends WorldDeltaReadOptions {
-    // 0 means that no record may exist yet.
-    expectedRevision?: number;
+export type HydrologyAuthorityMutation = HydrologyFeatureUpsertMutation | HydrologyFeatureDeleteMutation;
+
+export interface WorldDeltaCommitRequest {
+    readonly descriptor: WorldDescriptorV2;
+    readonly expectedRevision: number;
+    readonly semanticMutations?: readonly SemanticAuthorityMutation[];
+    readonly hydrologyMutations?: readonly HydrologyAuthorityMutation[];
 }
 
-export interface WorldChunkDelta {
-    version: typeof WORLD_DELTA_FORMAT_VERSION;
-    worldId: string;
-    chunkX: number;
-    chunkY: number;
-    chunkSize: number;
-    revision: number;
-    entries: readonly WorldDeltaEntry[];
+export interface WorldDeltaCommitRecord {
+    readonly formatVersion: typeof WORLD_DELTA_FORMAT_VERSION;
+    readonly worldIdentity: string;
+    readonly transactionId: bigint;
+    readonly revision: number;
+    readonly semanticMutationCount: number;
+    readonly hydrologyMutationCount: number;
+    readonly byteLength: number;
+}
+
+export interface WorldDeltaCommitResult {
+    readonly changed: boolean;
+    readonly snapshot: EffectiveDeltaSnapshot;
+    readonly commit?: WorldDeltaCommitRecord;
+    readonly changeSet?: WorldChangeSet;
+}
+
+export interface WorldDeltaCheckpoint {
+    readonly formatVersion: typeof WORLD_DELTA_FORMAT_VERSION;
+    readonly checkpointVersion: typeof WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
+    readonly worldIdentity: string;
+    readonly revision: number;
+    readonly semanticDeltas: readonly SparseSemanticDelta[];
+    readonly hydrologyFeatures: readonly HydrologyFeatureDelta[];
+    readonly hydrologyRegionFeatures: readonly HydrologyRegionFeatureIndex[];
+}
+
+export interface WorldDeltaStoreStats {
+    readonly state: "ready" | "disposed";
+    readonly worlds: number;
+    readonly commits: number;
+    readonly pendingCommitBytes: number;
+    readonly checkpoints: number;
+    readonly conflicts: number;
 }
 
 export interface WorldDeltaStore {
-    loadChunk(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        options: WorldDeltaReadOptions
-    ): Promise<WorldChunkDelta | undefined>;
-    putChunkDelta?(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        changes: readonly WorldDeltaChange[],
-        options: WorldDeltaBatchOptions
-    ): Promise<WorldChunkDelta | undefined>;
-    putTile(worldId: string, chunkX: number, chunkY: number, entry: WorldDeltaEntry, options: WorldDeltaReadOptions): void;
-    deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void;
+    load(descriptor: WorldDescriptorV2): Promise<EffectiveDeltaSnapshot>;
+    commit(request: WorldDeltaCommitRequest): Promise<WorldDeltaCommitResult>;
+    saveBarrier(descriptor: WorldDescriptorV2): Promise<WorldDeltaCheckpoint>;
+    restoreBarrier(descriptor: WorldDescriptorV2, checkpoint: WorldDeltaCheckpoint): Promise<void>;
+    subscribe(worldIdentity: string, listener: (result: WorldDeltaCommitResult) => void): () => void;
     flush(): Promise<void>;
-    listWorld?(worldId: string): Promise<readonly WorldChunkDelta[]>;
-    replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void>;
-    clear(worldId: string): Promise<void>;
+    readonly stats: Readonly<WorldDeltaStoreStats>;
     dispose(): void;
 }
 
-export class WorldDeltaConflictError extends Error {
-    public readonly name = "WorldDeltaConflictError";
+export class WorldDeltaRevisionConflictError extends Error {
+    public readonly name = "WorldDeltaRevisionConflictError";
 
     constructor(
+        public readonly scope: "world" | "hydrology-feature",
         public readonly expectedRevision: number,
-        public readonly actualRevision: number
+        public readonly actualRevision: number,
+        public readonly featureId?: HydrologyFeatureId
     ) {
-        super(`World delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
+        super(scope === "world"
+            ? `World delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`
+            : `Hydrology feature ${featureId} revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
     }
 }
 
-export interface IndexedDbWorldDeltaStoreOptions {
-    databaseName?: string;
-    openTimeoutMs?: number;
+interface MutableWorldDeltaState {
+    descriptor: WorldDescriptorV2;
+    snapshot: EffectiveDeltaSnapshot;
+    commits: WorldDeltaCommitRecord[];
+    pendingCommitBytes: number;
 }
 
-function chunkKey(worldId: string, chunkX: number, chunkY: number): string {
-    return JSON.stringify([worldId, chunkX, chunkY]);
+interface StoredWorldDeltaState {
+    readonly key: string;
+    readonly descriptor: WorldDescriptorV2;
+    readonly snapshot: EffectiveDeltaSnapshot;
+    readonly commits: readonly WorldDeltaCommitRecord[];
+    readonly pendingCommitBytes: number;
 }
 
-function assertChunkIdentity(worldId: string, chunkX: number, chunkY: number): void {
-    if (typeof worldId !== "string" || worldId.trim().length === 0) {
-        throw new TypeError("worldId must be a non-empty string");
+interface MutableSemanticTile {
+    localX: number;
+    localY: number;
+    substrateClass?: number;
+    macroHeight?: number;
+    biomeWeights?: readonly [number, number, number, number];
+    vegetationDensity?: number;
+    vegetationProfile?: number;
+}
+
+const SEMANTIC_FIELDS = [
+    "substrateClass",
+    "macroHeight",
+    "biomeWeights",
+    "vegetationDensity",
+    "vegetationProfile"
+] as const;
+
+type SemanticField = typeof SEMANTIC_FIELDS[number];
+
+function assertRevision(name: string, value: number): void {
+    if (!Number.isSafeInteger(value) || value < 0) {
+        throw new RangeError(`${name} must be a non-negative safe integer`);
     }
-    if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) {
-        throw new RangeError("world delta chunk coordinates must be safe integers");
-    }
 }
 
-function assertChunkSize(chunkSize: number): void {
-    if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
-        throw new RangeError("world delta chunkSize must be a positive safe integer");
-    }
+function semanticKey(key: SemanticChunkKey): string {
+    return `${key.chunkX},${key.chunkY}`;
 }
 
-function tileBelongsToChunk(x: number, y: number, chunkX: number, chunkY: number, chunkSize: number): boolean {
-    return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
+function cloneDescriptor<T extends WorldDescriptorV2>(descriptor: T): T {
+    assertWorldDescriptorV2(descriptor);
+    return structuredClone(descriptor) as T;
 }
 
-function assertChanges(
-    changes: readonly WorldDeltaChange[],
-    chunkX: number,
-    chunkY: number,
-    options: WorldDeltaBatchOptions
-): void {
-    assertChunkSize(options.chunkSize);
-    if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
-    if (options.expectedRevision !== undefined
-        && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
-        throw new RangeError("expectedRevision must be a non-negative safe integer");
+function semanticDomain(mutation: SemanticAuthorityMutation): number {
+    let domains = 0;
+    if (mutation.macroHeight !== undefined) domains |= WorldChangeDomain.Height | WorldChangeDomain.Navigation;
+    if (mutation.substrateClass !== undefined || mutation.biomeWeights !== undefined) domains |= WorldChangeDomain.Material;
+    if (mutation.vegetationDensity !== undefined || mutation.vegetationProfile !== undefined) {
+        domains |= WorldChangeDomain.Vegetation;
     }
-    for (const change of changes) {
-        if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
-            throw new RangeError("world delta tile coordinates must be safe integers");
+    return domains;
+}
+
+function assertSemanticMutation(value: SemanticAuthorityMutation): void {
+    if (!value || typeof value !== "object"
+        || Object.getOwnPropertyNames(value).some(name => ![
+            "x", "y", "substrateClass", "macroHeight", "biomeWeights",
+            "vegetationDensity", "vegetationProfile"
+        ].includes(name))
+        || !Number.isSafeInteger(value.x) || !Number.isSafeInteger(value.y)) {
+        throw new TypeError("semantic authority mutation is invalid");
+    }
+    if (semanticDomain(value) === 0) throw new TypeError("semantic authority mutation is empty");
+    for (const field of ["substrateClass", "vegetationDensity", "vegetationProfile"] as const) {
+        const candidate = value[field];
+        if (candidate !== undefined && candidate !== null
+            && (!Number.isInteger(candidate) || candidate < 0 || candidate > 255)) {
+            throw new RangeError(`semantic ${field} mutation must be a Uint8 value or null`);
         }
-        if (!tileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
-            throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
-        }
-        if (change.override !== null) assertWorldTileOverride(change.override);
+    }
+    if (value.macroHeight !== undefined && value.macroHeight !== null
+        && (!Number.isInteger(value.macroHeight) || value.macroHeight < 0 || value.macroHeight > 65535)) {
+        throw new RangeError("semantic macroHeight mutation must be a Uint16 value or null");
+    }
+    if (value.biomeWeights !== undefined && value.biomeWeights !== null
+        && (!Array.isArray(value.biomeWeights) || value.biomeWeights.length !== 4
+            || value.biomeWeights.some(weight => !Number.isInteger(weight) || weight < 0 || weight > 255)
+            || value.biomeWeights.reduce((sum, weight) => sum + weight, 0) !== 255)) {
+        throw new RangeError("semantic biomeWeights mutation must contain four Uint8 values summing to 255 or null");
     }
 }
 
-export function normalizeWorldChunkDelta(
-    value: unknown,
-    worldId: string,
-    chunkX: number,
-    chunkY: number,
-    options: WorldDeltaReadOptions
-): WorldChunkDelta {
-    assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChunkSize(options.chunkSize);
-    const candidate = value as Partial<WorldChunkDelta> & { version?: number; entries?: readonly WorldDeltaEntry[] };
-    if (!candidate || (candidate.version !== WORLD_DELTA_FORMAT_VERSION
-        && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION) || candidate.worldId !== worldId
-        || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY
-        || (candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize)
-        || !Number.isSafeInteger(candidate.revision) || candidate.revision! < 1 || !Array.isArray(candidate.entries)
-        || candidate.entries.some(entry => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y)
-            || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize)
-            || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
-        throw new TypeError("world chunk delta is invalid or incompatible");
+function decodeSemanticDelta(delta: SparseSemanticDelta): Map<number, MutableSemanticTile> {
+    const result = new Map<number, MutableSemanticTile>();
+    for (let offset = 0; offset < delta.indices.length; offset += 1) {
+        const index = delta.indices[offset];
+        const mask = delta.masks[offset];
+        const tile: MutableSemanticTile = {
+            localX: Math.floor(index / 32),
+            localY: index % 32
+        };
+        if (mask & SemanticOverrideField.Substrate) tile.substrateClass = delta.substrateClass[offset];
+        if (mask & SemanticOverrideField.MacroHeight) tile.macroHeight = delta.macroHeight[offset];
+        if (mask & SemanticOverrideField.BiomeWeights) {
+            const start = offset * 4;
+            tile.biomeWeights = [
+                delta.biomeWeights[start],
+                delta.biomeWeights[start + 1],
+                delta.biomeWeights[start + 2],
+                delta.biomeWeights[start + 3]
+            ];
+        }
+        if (mask & SemanticOverrideField.VegetationDensity) {
+            tile.vegetationDensity = delta.vegetationDensity[offset];
+        }
+        if (mask & SemanticOverrideField.VegetationProfile) {
+            tile.vegetationProfile = delta.vegetationProfile[offset];
+        }
+        result.set(index, tile);
     }
-    const keys = new Set<string>();
-    for (const entry of candidate.entries) {
-        assertWorldTileOverride(entry.override);
-        const key = `${entry.x},${entry.y}`;
-        if (keys.has(key)) throw new TypeError("world chunk delta contains duplicate tile coordinates");
-        keys.add(key);
+    return result;
+}
+
+function hasSemanticFields(tile: MutableSemanticTile): boolean {
+    return SEMANTIC_FIELDS.some(field => tile[field] !== undefined);
+}
+
+function applySemanticMutations(
+    descriptor: WorldDescriptorV2,
+    current: readonly SparseSemanticDelta[],
+    mutations: readonly SemanticAuthorityMutation[],
+    revision: number
+): readonly SparseSemanticDelta[] {
+    const byChunk = new Map<string, { key: SemanticChunkKey; tiles: Map<number, MutableSemanticTile> }>();
+    const touched = new Set<string>();
+    for (const delta of current) byChunk.set(semanticKey(delta.key), { key: delta.key, tiles: decodeSemanticDelta(delta) });
+    for (const mutation of mutations) {
+        if (descriptor.topology === "bounded"
+            && (mutation.x < 0 || mutation.y < 0 || mutation.x >= descriptor.width || mutation.y >= descriptor.height)) {
+            throw new RangeError("semantic authority mutation lies outside bounded topology");
+        }
+        const location = locateSemanticTile(mutation.x, mutation.y);
+        const key = canonicalizeSemanticChunkKey(descriptor, location.key);
+        const localX = descriptor.topology === "toroidal"
+            ? ((mutation.x % descriptor.width) + descriptor.width) % descriptor.width - key.chunkX * 32
+            : location.localX;
+        const localY = descriptor.topology === "toroidal"
+            ? ((mutation.y % descriptor.height) + descriptor.height) % descriptor.height - key.chunkY * 32
+            : location.localY;
+        const index = semanticChunkLocalIndex(localX, localY);
+        const bucketKey = semanticKey(key);
+        touched.add(bucketKey);
+        let bucket = byChunk.get(bucketKey);
+        if (!bucket) {
+            bucket = { key, tiles: new Map() };
+            byChunk.set(bucketKey, bucket);
+        }
+        const tile = bucket.tiles.get(index) ?? { localX, localY };
+        for (const field of SEMANTIC_FIELDS) {
+            const value = mutation[field];
+            if (value === undefined) continue;
+            if (value === null) delete tile[field];
+            else if (field === "biomeWeights") {
+                tile.biomeWeights = Object.freeze([...(value as readonly number[])]) as unknown as readonly [number, number, number, number];
+            } else (tile as Record<SemanticField, unknown>)[field] = value;
+        }
+        if (hasSemanticFields(tile)) bucket.tiles.set(index, tile);
+        else bucket.tiles.delete(index);
     }
+    const result: SparseSemanticDelta[] = [];
+    for (const bucket of byChunk.values()) {
+        if (bucket.tiles.size === 0) continue;
+        const overrides = [...bucket.tiles.values()].sort((first, second) =>
+            semanticChunkLocalIndex(first.localX, first.localY) - semanticChunkLocalIndex(second.localX, second.localY)
+        ).map(tile => ({ ...tile } satisfies SparseSemanticTileOverride));
+        const previous = current.find(delta => semanticKey(delta.key) === semanticKey(bucket.key));
+        result.push(createSparseSemanticDelta({
+            key: bucket.key,
+            revision: touched.has(semanticKey(bucket.key)) ? revision : previous!.revision,
+            overrides
+        }));
+    }
+    result.sort((first, second) => first.key.chunkX - second.key.chunkX || first.key.chunkY - second.key.chunkY);
+    return Object.freeze(result);
+}
+
+function hydrologyInputWithRevision(
+    mutation: HydrologyAuthorityMutation,
+    revision: number
+): HydrologyFeatureDelta {
+    const value: HydrologyFeatureDelta = mutation.kind === "delete"
+        ? Object.freeze({
+            kind: "tombstone",
+            featureId: mutation.featureId,
+            targetKind: mutation.targetKind,
+            revision
+        })
+        : Object.freeze({ ...mutation.feature, revision }) as HydrologyFeatureDelta;
+    assertHydrologyFeatureDelta(value);
+    return cloneHydrologyFeatureDelta(value);
+}
+
+function featureRegions(descriptor: WorldDescriptorV2, feature: HydrologyFeatureDelta): readonly string[] {
+    if (feature.kind === "tombstone") return Object.freeze([]);
+    const bounds = hydrologyFeatureBounds(feature);
+    const width = feature.kind === "river"
+        ? Math.max(...feature.widthProfile) / 16
+        : 0;
+    const minX = Math.floor((bounds.minX - width) / HYDROLOGY_REGION_SIZE);
+    const minY = Math.floor((bounds.minY - width) / HYDROLOGY_REGION_SIZE);
+    const maxX = Math.floor((bounds.maxX + width) / HYDROLOGY_REGION_SIZE);
+    const maxY = Math.floor((bounds.maxY + width) / HYDROLOGY_REGION_SIZE);
+    const result = new Set<string>();
+    for (let regionX = minX; regionX <= maxX; regionX += 1) {
+        for (let regionY = minY; regionY <= maxY; regionY += 1) {
+            if (descriptor.topology === "bounded"
+                && (regionX < 0 || regionY < 0
+                    || regionX * HYDROLOGY_REGION_SIZE >= descriptor.width
+                    || regionY * HYDROLOGY_REGION_SIZE >= descriptor.height)) continue;
+            try {
+                const key = canonicalizeHydrologyRegionKey(descriptor, { regionX, regionY });
+                result.add(`${key.regionX},${key.regionY}`);
+            } catch (reason) {
+                if (descriptor.topology !== "bounded" || !(reason instanceof RangeError)) throw reason;
+            }
+        }
+    }
+    return Object.freeze([...result].sort((first, second) => {
+        const [ax, ay] = first.split(",").map(Number);
+        const [bx, by] = second.split(",").map(Number);
+        return ax - bx || ay - by;
+    }));
+}
+
+function validateHydrologyDeltaGraph(features: ReadonlyMap<HydrologyFeatureId, HydrologyFeatureDelta>): void {
+    for (const feature of features.values()) {
+        if (feature.kind !== "river") continue;
+        for (const connection of [feature.source.kind === "source" ? undefined : feature.source, feature.outlet]) {
+            if (!connection) continue;
+            const target = features.get(connection.featureId);
+            if (!target) continue;
+            if (target.kind === "tombstone") {
+                throw new TypeError("hydrology feature connects to a tombstoned edited feature");
+            }
+            if (connection.kind === "river" && target.kind !== "river"
+                || connection.kind === "body" && target.kind !== "lake") {
+                throw new TypeError("hydrology feature connection kind does not match its edited target");
+            }
+        }
+    }
+    const complete = new Set<HydrologyFeatureId>();
+    for (const feature of features.values()) {
+        if (feature.kind !== "river" || complete.has(feature.featureId)) continue;
+        const path = new Set<HydrologyFeatureId>();
+        let current: HydrologyFeatureDelta | undefined = feature;
+        while (current?.kind === "river" && current.outlet.kind === "river") {
+            if (path.has(current.featureId)) throw new TypeError("edited hydrology river graph contains a cycle");
+            path.add(current.featureId);
+            const next = features.get(current.outlet.featureId);
+            if (!next) break;
+            current = next;
+        }
+        for (const featureId of path) complete.add(featureId);
+    }
+}
+
+function applyHydrologyMutations(
+    descriptor: WorldDescriptorV2,
+    snapshot: EffectiveDeltaSnapshot,
+    mutations: readonly HydrologyAuthorityMutation[]
+): { readonly features: readonly HydrologyFeatureDelta[]; readonly indices: readonly HydrologyRegionFeatureIndex[]; readonly changes: readonly HydrologyFeatureChange[] } {
+    const features = new Map(snapshot.hydrologyFeatures.map(feature => [feature.featureId, feature]));
+    const regionsByFeature = new Map<HydrologyFeatureId, readonly string[]>();
+    for (const index of snapshot.hydrologyRegionFeatures) {
+        const serialized = `${index.key.regionX},${index.key.regionY}`;
+        for (const featureId of index.featureIds) {
+            const list = regionsByFeature.get(featureId) ?? [];
+            regionsByFeature.set(featureId, Object.freeze([...list, serialized]));
+        }
+    }
+    const changes: HydrologyFeatureChange[] = [];
+    for (const mutation of mutations) {
+        const featureId = mutation.kind === "upsert" ? mutation.feature.featureId : mutation.featureId;
+        const previous = features.get(featureId);
+        const actualRevision = previous?.revision ?? 0;
+        if (mutation.expectedRevision !== actualRevision) {
+            throw new WorldDeltaRevisionConflictError(
+                "hydrology-feature",
+                mutation.expectedRevision,
+                actualRevision,
+                featureId
+            );
+        }
+        if (mutation.kind === "delete" && (!previous || previous.kind === "tombstone")) {
+            throw new TypeError("cannot delete a missing or already tombstoned hydrology feature");
+        }
+        const next = hydrologyInputWithRevision(mutation, actualRevision + 1);
+        features.set(featureId, next);
+        if (next.kind !== "tombstone") regionsByFeature.set(featureId, featureRegions(descriptor, next));
+        else if (!regionsByFeature.has(featureId)) {
+            throw new TypeError("cannot tombstone an unindexed hydrology feature");
+        }
+        changes.push({
+            featureId,
+            previous: previous && previous.kind !== "tombstone" ? previous : undefined,
+            next: next.kind !== "tombstone" ? next : undefined
+        });
+    }
+    validateHydrologyDeltaGraph(features);
+    const idsByRegion = new Map<string, HydrologyFeatureId[]>();
+    for (const [featureId, featureRegionsValue] of regionsByFeature) {
+        if (!features.has(featureId)) continue;
+        for (const region of featureRegionsValue) {
+            const ids = idsByRegion.get(region) ?? [];
+            ids.push(featureId);
+            idsByRegion.set(region, ids);
+        }
+    }
+    const indices = [...idsByRegion].map(([key, featureIds]) => {
+        const [regionX, regionY] = key.split(",").map(Number);
+        featureIds.sort((first, second) => first.localeCompare(second));
+        return Object.freeze({
+            key: Object.freeze({ regionX, regionY }),
+            featureIds: Object.freeze(featureIds)
+        });
+    }).sort((first, second) => first.key.regionX - second.key.regionX || first.key.regionY - second.key.regionY);
+    return Object.freeze({
+        features: Object.freeze([...features.values()].sort((first, second) => first.featureId.localeCompare(second.featureId))),
+        indices: Object.freeze(indices),
+        changes: Object.freeze(changes)
+    });
+}
+
+function assertHydrologyMutation(value: HydrologyAuthorityMutation): void {
+    if (!value || typeof value !== "object" || (value.kind !== "upsert" && value.kind !== "delete")) {
+        throw new TypeError("hydrology authority mutation is invalid");
+    }
+    assertRevision("hydrology expected revision", value.expectedRevision);
+    if (value.kind === "delete") {
+        hydrologyInputWithRevision(value, 1);
+        return;
+    }
+    hydrologyInputWithRevision(value, 1);
+}
+
+function cloneSnapshot(descriptor: WorldDescriptorV2, snapshot: EffectiveDeltaSnapshot): EffectiveDeltaSnapshot {
+    return createEffectiveDeltaSnapshot({
+        descriptor,
+        effectiveRevision: snapshot.effectiveRevision,
+        semanticDeltas: snapshot.semanticDeltas,
+        hydrologyFeatures: snapshot.hydrologyFeatures,
+        hydrologyRegionFeatures: snapshot.hydrologyRegionFeatures
+    });
+}
+
+function createEmptyState(descriptor: WorldDescriptorV2): MutableWorldDeltaState {
+    const ownedDescriptor = cloneDescriptor(descriptor);
     return {
-        version: WORLD_DELTA_FORMAT_VERSION,
-        worldId,
-        chunkX,
-        chunkY,
-        chunkSize: options.chunkSize,
-        revision: candidate.revision!,
-        entries: candidate.entries.map(entry => ({
-            x: entry.x,
-            y: entry.y,
-            override: cloneWorldTileOverride(entry.override)
-        }))
+        descriptor: ownedDescriptor,
+        snapshot: createEffectiveDeltaSnapshot({ descriptor: ownedDescriptor, effectiveRevision: 0 }),
+        commits: [],
+        pendingCommitBytes: 0
     };
 }
 
-function mergeChunkDelta(
-    current: WorldChunkDelta | undefined,
-    worldId: string,
-    chunkX: number,
-    chunkY: number,
-    changes: readonly WorldDeltaChange[],
-    options: WorldDeltaBatchOptions
-): WorldChunkDelta | undefined {
-    assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChanges(changes, chunkX, chunkY, options);
-    if (current) current = normalizeWorldChunkDelta(current, worldId, chunkX, chunkY, options);
-    const actualRevision = current?.revision ?? 0;
-    if (options.expectedRevision !== undefined && options.expectedRevision !== actualRevision) {
-        throw new WorldDeltaConflictError(options.expectedRevision, actualRevision);
+function estimateCommitBytes(
+    semanticMutations: readonly SemanticAuthorityMutation[],
+    hydrologyMutations: readonly HydrologyAuthorityMutation[]
+): number {
+    let bytes = 64 + semanticMutations.length * 32;
+    for (const mutation of hydrologyMutations) {
+        bytes += 64;
+        if (mutation.kind === "upsert") {
+            const feature = mutation.feature;
+            if (feature.kind === "river") {
+                bytes += feature.controlPoints.byteLength + feature.widthProfile.byteLength + feature.levelProfile.byteLength;
+            } else if (feature.kind === "lake") bytes += feature.boundaryPoints.byteLength;
+        }
     }
-    if (changes.length === 0) return current;
+    return bytes;
+}
 
-    const entries = new Map((current?.entries ?? []).map(entry => [
-        `${entry.x},${entry.y}`,
-        { x: entry.x, y: entry.y, override: cloneWorldTileOverride(entry.override) }
-    ]));
-    for (const change of changes) {
-        const key = `${change.x},${change.y}`;
-        if (change.override === null || !hasWorldTileOverride(change.override)) entries.delete(key);
-        else entries.set(key, { x: change.x, y: change.y, override: cloneWorldTileOverride(change.override) });
+function applyCommit(state: MutableWorldDeltaState, request: WorldDeltaCommitRequest): WorldDeltaCommitResult {
+    assertWorldDescriptorV2(request.descriptor);
+    if (serializeWorldDescriptorV2(request.descriptor) !== serializeWorldDescriptorV2(state.descriptor)) {
+        throw new TypeError("world delta commit descriptor does not match its store state");
     }
-    const currentEntries = new Map((current?.entries ?? []).map(entry => [`${entry.x},${entry.y}`, entry.override]));
-    const changed = entries.size !== currentEntries.size || [...entries].some(([key, entry]) =>
-        !worldTileOverridesEqual(entry.override, currentEntries.get(key)));
-    if (!changed) return current;
+    assertRevision("expected world revision", request.expectedRevision);
+    if (request.expectedRevision !== state.snapshot.effectiveRevision) {
+        throw new WorldDeltaRevisionConflictError("world", request.expectedRevision, state.snapshot.effectiveRevision);
+    }
+    const semanticMutations = request.semanticMutations ?? [];
+    const hydrologyMutations = request.hydrologyMutations ?? [];
+    if (!Array.isArray(semanticMutations) || !Array.isArray(hydrologyMutations)) {
+        throw new TypeError("world delta mutations must be arrays");
+    }
+    for (const mutation of semanticMutations) assertSemanticMutation(mutation);
+    for (const mutation of hydrologyMutations) assertHydrologyMutation(mutation);
+    if (semanticMutations.length === 0 && hydrologyMutations.length === 0) {
+        return Object.freeze({ changed: false, snapshot: cloneSnapshot(state.descriptor, state.snapshot) });
+    }
+    const nextRevision = state.snapshot.effectiveRevision + 1;
+    const hydrology = applyHydrologyMutations(state.descriptor, state.snapshot, hydrologyMutations);
+    const semanticDeltas = applySemanticMutations(
+        state.descriptor,
+        state.snapshot.semanticDeltas,
+        semanticMutations,
+        nextRevision
+    );
+    const snapshot = createEffectiveDeltaSnapshot({
+        descriptor: state.descriptor,
+        effectiveRevision: nextRevision,
+        semanticDeltas,
+        hydrologyFeatures: hydrology.features,
+        hydrologyRegionFeatures: hydrology.indices
+    });
+    const transactionId = BigInt(nextRevision);
+    const semanticChanges: SemanticChangePoint[] = semanticMutations.map(mutation => ({
+        x: mutation.x,
+        y: mutation.y,
+        domains: semanticDomain(mutation)
+    }));
+    const changeSet = createWorldChangeSet({
+        descriptor: state.descriptor,
+        transactionId,
+        revision: nextRevision,
+        semanticChanges,
+        hydrologyChanges: hydrology.changes
+    });
+    const commit = Object.freeze({
+        formatVersion: WORLD_DELTA_FORMAT_VERSION,
+        worldIdentity: snapshot.worldIdentity,
+        transactionId,
+        revision: nextRevision,
+        semanticMutationCount: semanticMutations.length,
+        hydrologyMutationCount: hydrologyMutations.length,
+        byteLength: estimateCommitBytes(semanticMutations, hydrologyMutations)
+    });
+    state.snapshot = snapshot;
+    state.commits.push(commit);
+    state.pendingCommitBytes += commit.byteLength;
+    return Object.freeze({ changed: true, snapshot: cloneSnapshot(state.descriptor, snapshot), commit, changeSet });
+}
+
+function checkpointFor(state: MutableWorldDeltaState): WorldDeltaCheckpoint {
+    const snapshot = cloneSnapshot(state.descriptor, state.snapshot);
+    return Object.freeze({
+        formatVersion: WORLD_DELTA_FORMAT_VERSION,
+        checkpointVersion: WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
+        worldIdentity: snapshot.worldIdentity,
+        revision: snapshot.effectiveRevision,
+        semanticDeltas: snapshot.semanticDeltas,
+        hydrologyFeatures: snapshot.hydrologyFeatures,
+        hydrologyRegionFeatures: snapshot.hydrologyRegionFeatures
+    });
+}
+
+function stateFromCheckpoint(descriptor: WorldDescriptorV2, checkpoint: WorldDeltaCheckpoint): MutableWorldDeltaState {
+    const worldIdentity = serializeWorldDescriptorV2(descriptor);
+    if (!checkpoint || checkpoint.formatVersion !== WORLD_DELTA_FORMAT_VERSION
+        || checkpoint.checkpointVersion !== WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
+        || checkpoint.worldIdentity !== worldIdentity) {
+        throw new TypeError("world delta checkpoint is invalid or belongs to another world");
+    }
+    assertRevision("world delta checkpoint revision", checkpoint.revision);
+    const ownedDescriptor = cloneDescriptor(descriptor);
     return {
-        version: WORLD_DELTA_FORMAT_VERSION,
-        worldId,
-        chunkX,
-        chunkY,
-        chunkSize: options.chunkSize,
-        revision: actualRevision + 1,
-        entries: [...entries.values()].sort((a, b) => a.x - b.x || a.y - b.y)
+        descriptor: ownedDescriptor,
+        snapshot: createEffectiveDeltaSnapshot({
+            descriptor: ownedDescriptor,
+            effectiveRevision: checkpoint.revision,
+            semanticDeltas: checkpoint.semanticDeltas,
+            hydrologyFeatures: checkpoint.hydrologyFeatures,
+            hydrologyRegionFeatures: checkpoint.hydrologyRegionFeatures
+        }),
+        commits: [],
+        pendingCommitBytes: 0
+    };
+}
+
+function cloneState(state: Readonly<{
+    descriptor: WorldDescriptorV2;
+    snapshot: EffectiveDeltaSnapshot;
+    commits: readonly WorldDeltaCommitRecord[];
+    pendingCommitBytes: number;
+}>): MutableWorldDeltaState {
+    const descriptor = cloneDescriptor(state.descriptor);
+    return {
+        descriptor,
+        snapshot: cloneSnapshot(descriptor, state.snapshot),
+        commits: state.commits.map(commit => Object.freeze({ ...commit })),
+        pendingCommitBytes: state.pendingCommitBytes
     };
 }
 
 export class MemoryWorldDeltaStore implements WorldDeltaStore {
-    protected readonly chunks = new Map<string, WorldChunkDelta>();
+    protected readonly worlds = new Map<string, MutableWorldDeltaState>();
+    protected readonly listeners = new Map<string, Set<(result: WorldDeltaCommitResult) => void>>();
     protected disposed = false;
+    protected commitCount = 0;
+    protected checkpointCount = 0;
+    protected conflictCount = 0;
 
-    public loadChunk(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        options: WorldDeltaReadOptions
-    ): Promise<WorldChunkDelta | undefined> {
-        assertChunkIdentity(worldId, chunkX, chunkY);
-        const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
-        return Promise.resolve(delta
-            ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options))
-            : undefined);
-    }
-
-    public putChunkDelta(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        changes: readonly WorldDeltaChange[],
-        options: WorldDeltaBatchOptions
-    ): Promise<WorldChunkDelta | undefined> {
-        if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    public load(descriptor: WorldDescriptorV2): Promise<EffectiveDeltaSnapshot> {
         try {
-            const result = this.applyChunkDelta(worldId, chunkX, chunkY, changes, options);
-            return Promise.resolve(result ? this.cloneDelta(result) : undefined);
+            this.assertReady();
+            const state = this.state(descriptor);
+            return Promise.resolve(cloneSnapshot(state.descriptor, state.snapshot));
         } catch (reason) {
             return Promise.reject(reason);
         }
     }
 
-    public putTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        entry: WorldDeltaEntry,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-        this.applyChunkDelta(worldId, chunkX, chunkY, [entry], options);
+    public commit(request: WorldDeltaCommitRequest): Promise<WorldDeltaCommitResult> {
+        try {
+            this.assertReady();
+            const state = this.state(request.descriptor);
+            const result = applyCommit(state, request);
+            if (result.changed) {
+                this.commitCount += 1;
+                this.publish(result);
+            }
+            return Promise.resolve(result);
+        } catch (reason) {
+            if (reason instanceof WorldDeltaRevisionConflictError) this.conflictCount += 1;
+            return Promise.reject(reason);
+        }
     }
 
-    public deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-        this.applyChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options);
+    public saveBarrier(descriptor: WorldDescriptorV2): Promise<WorldDeltaCheckpoint> {
+        try {
+            this.assertReady();
+            const state = this.state(descriptor);
+            const checkpoint = checkpointFor(state);
+            state.commits.length = 0;
+            state.pendingCommitBytes = 0;
+            this.checkpointCount += 1;
+            return Promise.resolve(checkpoint);
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
+    }
+
+    public restoreBarrier(descriptor: WorldDescriptorV2, checkpoint: WorldDeltaCheckpoint): Promise<void> {
+        try {
+            this.assertReady();
+            const worldIdentity = serializeWorldDescriptorV2(descriptor);
+            this.worlds.set(worldIdentity, stateFromCheckpoint(descriptor, checkpoint));
+            return Promise.resolve();
+        } catch (reason) {
+            return Promise.reject(reason);
+        }
+    }
+
+    public subscribe(worldIdentity: string, listener: (result: WorldDeltaCommitResult) => void): () => void {
+        this.assertReady();
+        if (typeof worldIdentity !== "string" || worldIdentity.length === 0 || typeof listener !== "function") {
+            throw new TypeError("world delta subscription is invalid");
+        }
+        const listeners = this.listeners.get(worldIdentity) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(worldIdentity, listeners);
+        let active = true;
+        return () => {
+            if (!active) return;
+            active = false;
+            listeners.delete(listener);
+            if (listeners.size === 0) this.listeners.delete(worldIdentity);
+        };
     }
 
     public flush(): Promise<void> { return Promise.resolve(); }
 
-    public listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
-        if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-        const deltas = [...this.chunks.values()]
-            .filter(delta => delta.worldId === worldId)
-            .sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY)
-            .map(delta => this.cloneDelta(delta));
-        return Promise.resolve(deltas);
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.worlds.clear();
+        this.listeners.clear();
     }
 
-    public async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
-        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-        const replacements = new Map<string, WorldChunkDelta>();
-        for (const delta of deltas) {
-            const normalized = normalizeWorldChunkDelta(
-                delta,
-                worldId,
-                delta.chunkX,
-                delta.chunkY,
-                { chunkSize: delta.chunkSize }
-            );
-            const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
-            if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
-            replacements.set(key, normalized);
+    public get stats(): Readonly<WorldDeltaStoreStats> {
+        let pendingCommitBytes = 0;
+        for (const state of this.worlds.values()) pendingCommitBytes += state.pendingCommitBytes;
+        return Object.freeze({
+            state: this.disposed ? "disposed" : "ready",
+            worlds: this.worlds.size,
+            commits: this.commitCount,
+            pendingCommitBytes,
+            checkpoints: this.checkpointCount,
+            conflicts: this.conflictCount
+        });
+    }
+
+    protected state(descriptor: WorldDescriptorV2): MutableWorldDeltaState {
+        assertWorldDescriptorV2(descriptor);
+        const identity = serializeWorldDescriptorV2(descriptor);
+        let state = this.worlds.get(identity);
+        if (!state) {
+            state = createEmptyState(descriptor);
+            this.worlds.set(identity, state);
         }
-        await this.clear(worldId);
-        for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+        return state;
     }
 
-    public async clear(worldId: string): Promise<void> {
-        for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
+    protected assertReady(): void {
+        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
     }
 
-    public dispose(): void { this.disposed = true; }
-
-    protected cloneDelta(delta: WorldChunkDelta): WorldChunkDelta {
-        if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
-        return {
-            ...delta,
-            entries: delta.entries.map(entry => ({ ...entry, override: cloneWorldTileOverride(entry.override) }))
-        };
-    }
-
-    protected applyChunkDelta(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        changes: readonly WorldDeltaChange[],
-        options: WorldDeltaBatchOptions
-    ): WorldChunkDelta | undefined {
-        const key = chunkKey(worldId, chunkX, chunkY);
-        const result = mergeChunkDelta(this.chunks.get(key), worldId, chunkX, chunkY, changes, options);
-        if (result) this.chunks.set(key, result);
-        return result;
+    protected publish(result: WorldDeltaCommitResult): void {
+        for (const listener of this.listeners.get(result.snapshot.worldIdentity) ?? []) {
+            try { listener(result); } catch { /* committed state is never rolled back by observers */ }
+        }
     }
 }
 
-const DEFAULT_DELTA_DATABASE_NAME = "three-hex-map-world-deltas-v1";
-const DELTA_DATABASE_VERSION = 1;
-const DELTA_OBJECT_STORE = "deltas";
+export interface IndexedDbWorldDeltaStoreOptions {
+    readonly databaseName?: string;
+    readonly openTimeoutMs?: number;
+}
+
+const DEFAULT_DATABASE_NAME = "three-hex-map-world-deltas-v3";
+const DATABASE_VERSION = 1;
+const WORLD_STORE = "worlds";
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -350,105 +773,99 @@ function transactionComplete(transaction: IDBTransaction): Promise<void> {
     });
 }
 
-interface StoredWorldChunkDelta extends WorldChunkDelta { key: string }
-
-//Durable gameplay deltas intentionally use a database separate from the
-//rebuildable base-terrain cache. Writes are serialized; flush() is the save
-//barrier applications should await before ending a session.
 export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
     private readonly databaseName: string;
     private readonly openTimeoutMs: number;
     private databasePromise: Promise<IDBDatabase> | undefined;
     private pending: Promise<void> = Promise.resolve();
     private pendingError: unknown;
-    private closing = false;
 
     constructor(options: IndexedDbWorldDeltaStoreOptions = {}) {
         super();
-        this.databaseName = options.databaseName ?? DEFAULT_DELTA_DATABASE_NAME;
-        this.openTimeoutMs = options.openTimeoutMs ?? 2000;
-        if (!this.databaseName.trim()) throw new TypeError("delta databaseName must be a non-empty string");
-        if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
-            throw new RangeError("delta openTimeoutMs must be a positive finite number");
+        this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME;
+        this.openTimeoutMs = options.openTimeoutMs ?? 5_000;
+        if (!this.databaseName.trim() || !Number.isSafeInteger(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
+            throw new TypeError("IndexedDbWorldDeltaStore options are invalid");
         }
     }
 
-    public override async loadChunk(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        options: WorldDeltaReadOptions
-    ): Promise<WorldChunkDelta | undefined> {
-        if (this.disposed || this.closing) return undefined;
-        await this.flush();
-        const memory = await super.loadChunk(worldId, chunkX, chunkY, options);
-        if (memory) return memory;
-        const database = await this.open();
-        const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
-        const record = await requestResult(transaction.objectStore(DELTA_OBJECT_STORE).get(chunkKey(worldId, chunkX, chunkY))) as StoredWorldChunkDelta | undefined;
-        await transactionComplete(transaction);
-        if (!record) return undefined;
-        const delta = normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options);
-        this.chunks.set(record.key, delta);
-        return this.cloneDelta(delta);
+    public override load(descriptor: WorldDescriptorV2): Promise<EffectiveDeltaSnapshot> {
+        this.assertReady();
+        return this.enqueue(async () => {
+            const identity = serializeWorldDescriptorV2(descriptor);
+            const database = await this.open();
+            const transaction = database.transaction(WORLD_STORE, "readonly");
+            const record = await requestResult(transaction.objectStore(WORLD_STORE).get(identity)) as StoredWorldDeltaState | undefined;
+            await transactionComplete(transaction);
+            const state = record ? cloneState(record) : createEmptyState(descriptor);
+            if (serializeWorldDescriptorV2(state.descriptor) !== identity) {
+                throw new TypeError("stored world delta state has a mismatched descriptor identity");
+            }
+            this.worlds.set(identity, state);
+            return cloneSnapshot(state.descriptor, state.snapshot);
+        });
     }
 
-    public override putChunkDelta(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        changes: readonly WorldDeltaChange[],
-        options: WorldDeltaBatchOptions
-    ): Promise<WorldChunkDelta | undefined> {
-        if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+    public override commit(request: WorldDeltaCommitRequest): Promise<WorldDeltaCommitResult> {
+        this.assertReady();
         return this.enqueue(async () => {
-            const key = chunkKey(worldId, chunkX, chunkY);
+            const identity = serializeWorldDescriptorV2(request.descriptor);
             const database = await this.open();
-            const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
+            const transaction = database.transaction(WORLD_STORE, "readwrite");
             const completion = transactionComplete(transaction);
             try {
-                const store = transaction.objectStore(DELTA_OBJECT_STORE);
-                const record = await requestResult(store.get(key)) as StoredWorldChunkDelta | undefined;
-                const current = record
-                    ? normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options)
-                    : undefined;
-                const result = mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options);
-                const requiresWrite = result !== undefined && (record?.version !== WORLD_DELTA_FORMAT_VERSION
-                    || result.revision !== current?.revision);
-                if (requiresWrite) store.put({ key, ...this.cloneDelta(result) } satisfies StoredWorldChunkDelta);
+                const store = transaction.objectStore(WORLD_STORE);
+                const record = await requestResult(store.get(identity)) as StoredWorldDeltaState | undefined;
+                const state = record ? cloneState(record) : createEmptyState(request.descriptor);
+                const result = applyCommit(state, request);
+                if (result.changed) store.put({ key: identity, ...cloneState(state) } satisfies StoredWorldDeltaState);
                 await completion;
-                if (result) this.chunks.set(key, this.cloneDelta(result));
-                else this.chunks.delete(key);
-                return result ? this.cloneDelta(result) : undefined;
+                this.worlds.set(identity, state);
+                if (result.changed) {
+                    this.commitCount += 1;
+                    this.publish(result);
+                }
+                return result;
             } catch (reason) {
-                try { transaction.abort(); } catch { /* transaction already settled */ }
+                try { transaction.abort(); } catch { /* already settled */ }
                 await completion.catch(() => undefined);
+                if (reason instanceof WorldDeltaRevisionConflictError) this.conflictCount += 1;
                 throw reason;
             }
         });
     }
 
-    public override putTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        entry: WorldDeltaEntry,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        void this.putChunkDelta(worldId, chunkX, chunkY, [entry], options).catch(() => undefined);
+    public override saveBarrier(descriptor: WorldDescriptorV2): Promise<WorldDeltaCheckpoint> {
+        this.assertReady();
+        return this.enqueue(async () => {
+            const identity = serializeWorldDescriptorV2(descriptor);
+            const database = await this.open();
+            const transaction = database.transaction(WORLD_STORE, "readwrite");
+            const store = transaction.objectStore(WORLD_STORE);
+            const record = await requestResult(store.get(identity)) as StoredWorldDeltaState | undefined;
+            const state = record ? cloneState(record) : createEmptyState(descriptor);
+            const checkpoint = checkpointFor(state);
+            state.commits.length = 0;
+            state.pendingCommitBytes = 0;
+            store.put({ key: identity, ...cloneState(state) } satisfies StoredWorldDeltaState);
+            await transactionComplete(transaction);
+            this.worlds.set(identity, state);
+            this.checkpointCount += 1;
+            return checkpoint;
+        });
     }
 
-    public override deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        void this.putChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options).catch(() => undefined);
+    public override restoreBarrier(descriptor: WorldDescriptorV2, checkpoint: WorldDeltaCheckpoint): Promise<void> {
+        this.assertReady();
+        return this.enqueue(async () => {
+            const identity = serializeWorldDescriptorV2(descriptor);
+            const state = stateFromCheckpoint(descriptor, checkpoint);
+            const database = await this.open();
+            const transaction = database.transaction(WORLD_STORE, "readwrite");
+            transaction.objectStore(WORLD_STORE).put({ key: identity, ...cloneState(state) } satisfies StoredWorldDeltaState);
+            await transactionComplete(transaction);
+            this.worlds.set(identity, state);
+        });
     }
 
     public override async flush(): Promise<void> {
@@ -460,75 +877,10 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         }
     }
 
-    public override async listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        await this.flush();
-        const database = await this.open();
-        const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
-        const records = await requestResult(
-            transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
-        ) as StoredWorldChunkDelta[];
-        await transactionComplete(transaction);
-        return records.map(record => normalizeWorldChunkDelta(
-            record,
-            worldId,
-            record.chunkX,
-            record.chunkY,
-            { chunkSize: record.chunkSize }
-        )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
-    }
-
-    public override replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
-        if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-        const replacements = new Map<string, WorldChunkDelta>();
-        for (const delta of deltas) {
-            const normalized = normalizeWorldChunkDelta(
-                delta,
-                worldId,
-                delta.chunkX,
-                delta.chunkY,
-                { chunkSize: delta.chunkSize }
-            );
-            const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
-            if (replacements.has(key)) return Promise.reject(new TypeError("world delta checkpoint contains duplicate chunks"));
-            replacements.set(key, normalized);
-        }
-        return this.enqueue(async () => {
-            const database = await this.open();
-            const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-            const store = transaction.objectStore(DELTA_OBJECT_STORE);
-            const keys = await requestResult(store.index("worldId").getAllKeys(worldId));
-            for (const key of keys) store.delete(key);
-            for (const [key, delta] of replacements) {
-                store.put({ key, ...this.cloneDelta(delta) } satisfies StoredWorldChunkDelta);
-            }
-            await transactionComplete(transaction);
-            await super.clear(worldId);
-            for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
-        });
-    }
-
-    public override async clear(worldId: string): Promise<void> {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        await this.enqueue(async () => {
-            await super.clear(worldId);
-            const database = await this.open();
-            const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-            const index = transaction.objectStore(DELTA_OBJECT_STORE).index("worldId");
-            const keys = await requestResult(index.getAllKeys(worldId));
-            for (const key of keys) transaction.objectStore(DELTA_OBJECT_STORE).delete(key);
-            await transactionComplete(transaction);
-        });
-        await this.flush();
-    }
-
     public override dispose(): void {
-        if (this.disposed || this.closing) return;
-        this.closing = true;
-        void this.flush().finally(() => {
-            this.disposed = true;
-            void this.databasePromise?.then(database => database.close(), () => undefined);
-        }).catch(() => undefined);
+        if (this.disposed) return;
+        void this.flush().finally(() => this.databasePromise?.then(database => database.close(), () => undefined));
+        super.dispose();
     }
 
     private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -540,24 +892,22 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
     private open(): Promise<IDBDatabase> {
         if (typeof indexedDB === "undefined") return Promise.reject(new Error("IndexedDB is unavailable"));
         this.databasePromise ??= new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.databaseName, DELTA_DATABASE_VERSION);
+            const request = indexedDB.open(this.databaseName, DATABASE_VERSION);
             let settled = false;
             const timer = setTimeout(() => {
                 if (settled) return;
                 settled = true;
-                reject(new Error("Opening the world delta database timed out"));
+                reject(new Error("Opening the v3 world delta database timed out"));
             }, this.openTimeoutMs);
-            const finish = <T>(callback: (value: T) => void, value: T) => {
-                if (settled) return false;
+            const finish = <T>(callback: (value: T) => void, value: T): void => {
+                if (settled) return;
                 settled = true;
                 clearTimeout(timer);
                 callback(value);
-                return true;
             };
             request.addEventListener("upgradeneeded", () => {
-                if (!request.result.objectStoreNames.contains(DELTA_OBJECT_STORE)) {
-                    const store = request.result.createObjectStore(DELTA_OBJECT_STORE, { keyPath: "key" });
-                    store.createIndex("worldId", "worldId", { unique: false });
+                if (!request.result.objectStoreNames.contains(WORLD_STORE)) {
+                    request.result.createObjectStore(WORLD_STORE, { keyPath: "key" });
                 }
             });
             request.addEventListener("success", () => {

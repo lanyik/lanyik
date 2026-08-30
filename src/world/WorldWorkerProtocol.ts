@@ -1,0 +1,1 @@
+export const WORLD_WORKER_PROTOCOL_VERSION = 5;

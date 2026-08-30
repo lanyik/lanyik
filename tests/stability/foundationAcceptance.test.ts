@@ -2,16 +2,19 @@ import { describe, expect, test } from "vitest";
 
 import { PriorityTaskQueue } from "../../src/runtime/PriorityTaskQueue";
 import { ResourceBudgetLedger } from "../../src/runtime/ResourceBudget";
-import { generateWorldChunk, PackedWorldChunk } from "../../src/world/generateWorldChunk";
+import {
+    BaseSemanticChunk,
+    createWorldDescriptorV2,
+    generateBaseSemanticChunk,
+    serializeBaseSemanticChunk
+} from "../../src/index";
 
-function checksum(chunks: readonly PackedWorldChunk[]): string {
+function checksum(chunks: readonly BaseSemanticChunk[]): string {
     let hash = 0x811c9dc5;
-    const ordered = [...chunks].sort((a, b) => a.chunkX - b.chunkX || a.chunkY - b.chunkY);
+    const ordered = [...chunks].sort((a, b) => a.key.chunkX - b.key.chunkX || a.key.chunkY - b.key.chunkY);
     for (const chunk of ordered) {
-        for (const value of [chunk.chunkX, chunk.chunkY, ...chunk.tiles]) {
+        for (const value of new Uint8Array(serializeBaseSemanticChunk(chunk))) {
             hash ^= value & 0xff;
-            hash = Math.imul(hash, 0x01000193) >>> 0;
-            hash ^= value >>> 8 & 0xff;
             hash = Math.imul(hash, 0x01000193) >>> 0;
         }
     }
@@ -24,16 +27,19 @@ describe("foundation acceptance invariants", () => {
             { x: -1, y: 1 }, { x: 0, y: 0 }, { x: 2, y: -3 },
             { x: 4, y: 2 }, { x: -5, y: -2 }
         ];
-        const generate = (seed: string, points = coordinates) => points.map(point => generateWorldChunk({
-            seed, chunkX: point.x, chunkY: point.y, chunkSize: 24
-        }));
+        const generate = (seed: string, points = coordinates) => {
+            const descriptor = createWorldDescriptorV2({ seed });
+            return points.map(point => generateBaseSemanticChunk({
+                descriptor,
+                key: { chunkX: point.x, chunkY: point.y }
+            }));
+        };
         const forward = checksum(generate("foundation-checksum"));
         const reverse = checksum(generate("foundation-checksum", [...coordinates].reverse()));
         expect(reverse).toBe(forward);
         expect(checksum(generate("different-seed"))).not.toBe(forward);
         expect(forward).toMatch(/^[0-9a-f]{8}$/);
-        // Generator v5: continuous surface, climate and regional forest placement are frozen.
-        expect(forward).toBe("bce504fe");
+        expect(forward).toBe("d9953122");
     });
 
     test("admitted resources and queued work stay inside hard limits under random churn", () => {

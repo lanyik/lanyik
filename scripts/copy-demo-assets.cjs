@@ -1,8 +1,6 @@
-// Copies the built engine (dist/hex-map.global.js, a plain UMD/global bundle -
-// see rollup.config.global.mjs) and its browser-side peer dependencies
-// (three.js, dat.gui, stats.js) into public/, so public/index.html can load
-// all of them as separate <script> files with no bundler involved for the
-// demo page itself.
+// Copies the v2 browser entry, Worker, and Three.js peer dependency used by
+// public/index.html. Persistence, pathfinding, and simulation remain library
+// subpath exports; the demo does not publish duplicate browser copies.
 const fs = require("fs");
 const path = require("path");
 
@@ -12,20 +10,8 @@ const copies = [
     ["dist/hex-map.global.js.map", "public/js/hex-map.global.js.map"],
     ["dist/world-generator.worker.mjs", "public/js/world-generator.worker.mjs"],
     ["dist/world-generator.worker.mjs.map", "public/js/world-generator.worker.mjs.map"],
-    ["dist/pathfinding.mjs", "public/js/pathfinding.mjs"],
-    ["dist/pathfinding.mjs.map", "public/js/pathfinding.mjs.map"],
-    ["dist/simulation.mjs", "public/js/simulation.mjs"],
-    ["dist/simulation.mjs.map", "public/js/simulation.mjs.map"],
-    ["dist/persistence.mjs", "public/js/persistence.mjs"],
-    ["dist/persistence.mjs.map", "public/js/persistence.mjs.map"],
     ["node_modules/three/build/three.module.js", "public/js/vendor/three.module.js"],
-    ["node_modules/three/build/three.core.js", "public/js/vendor/three.core.js"],
-    ["node_modules/dat.gui/build/dat.gui.module.js", "public/js/vendor/dat.gui.module.js"],
-    ["node_modules/dat.gui/build/dat.gui.css", "public/js/vendor/dat.gui.css"],
-    // src/Stats.js (not the build/ dir) is the one that's an actual ES module
-    // (`export { Stats as default }`) - matches how three/dat.gui are loaded
-    // here, unlike build/stats.min.js which is a UMD bundle expecting a global.
-    ["node_modules/stats.js/src/Stats.js", "public/js/vendor/stats.module.js"]
+    ["node_modules/three/build/three.core.js", "public/js/vendor/three.core.js"]
 ];
 
 fs.mkdirSync(path.join(root, "public/js/vendor"), { recursive: true });

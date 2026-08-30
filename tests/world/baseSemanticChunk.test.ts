@@ -14,10 +14,9 @@ import {
     SubstrateClass,
     WORLD_SEMANTIC_CHUNK_SIZE,
     WORLD_SEMANTIC_CHUNK_TILE_COUNT,
-    WorldGeneratorPool
+    WorldSurfaceWorkerPool
 } from "../../src/index";
-import { generateWorldChunk } from "../../src/world/generateWorldChunk";
-import type { ChunkGeneratorClient } from "../../src/world/WorldGeneratorPool";
+import type { WorldSurfaceWorker } from "../../src/world/WorldSurfaceWorkerPool";
 
 function checksum(buffer: ArrayBuffer): string {
     let hash = 0x811c9dc5;
@@ -148,20 +147,22 @@ describe("BaseSemanticChunk v2", () => {
     test("runs semantic work through the bounded worker pool lane", async () => {
         const descriptor = createWorldDescriptorV2({ seed: "semantic-pool" });
         const generateSemanticChunk = vi.fn(async options => generateBaseSemanticChunk(options));
-        const client: ChunkGeneratorClient = {
-            generateChunk: async options => generateWorldChunk(options),
+        const client: WorldSurfaceWorker = {
             generateSemanticChunk,
-            dispose: vi.fn()
+            generateHydrologyRegion: async () => { throw new Error("unexpected hydrology request"); },
+            compileSurfaceChunk: async () => { throw new Error("unexpected surface request"); },
+            dispose: vi.fn(),
+            isDisposed: false
         };
-        const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });
+        const pool = new WorldSurfaceWorkerPool("unused", { size: 1, clientFactory: () => client });
         const chunk = await pool.generateSemanticChunk({ descriptor, key: { chunkX: 4, chunkY: -2 } });
         await new Promise<void>(resolve => queueMicrotask(resolve));
         expect(chunk.key).toEqual({ chunkX: 4, chunkY: -2 });
         expect(generateSemanticChunk).toHaveBeenCalledOnce();
         expect(pool.stats).toMatchObject({
-            completed: 1,
+            completedTasks: 1,
             queuedSemanticChunks: 0,
-            busySemanticChunkWorkers: 0
+            busyWorkers: 0
         });
         pool.dispose();
     });

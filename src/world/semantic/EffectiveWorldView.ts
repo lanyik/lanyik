@@ -415,6 +415,10 @@ export class EffectiveWorldView {
 
     public get effectiveRevision(): number { return this.publishedState.snapshot.effectiveRevision; }
 
+    public captureDeltaSnapshot(): EffectiveDeltaSnapshot {
+        return normalizeEffectiveDeltaSnapshot(this.descriptor, this.publishedState.snapshot);
+    }
+
     public publishDeltaSnapshot(next: EffectiveDeltaSnapshot, expectedRevision: number): void {
         assertEffectiveRevision(expectedRevision);
         if (next?.worldIdentity !== this.worldIdentity) {

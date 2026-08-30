@@ -12,7 +12,7 @@ import {
     type ColorRepresentation
 } from "three";
 
-import type { WorldChunkLod } from "../helpers/chunks";
+import type { WorldChunkLod } from "./WorldChunkLod";
 import type { ResidentSurfaceLease } from "../world/semantic/SurfaceCompilationService";
 import {
     SURFACE_RENDER_CHUNK_SIZE,

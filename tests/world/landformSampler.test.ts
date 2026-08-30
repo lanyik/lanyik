@@ -1,14 +1,15 @@
 import { describe, expect, test } from "vitest";
 
-import { Land } from "../../src/enums";
 import {
     createLandformSampler,
     sampleLandform
 } from "../../src/world/LandformSampler";
 import {
-    decodeWorldChunkTile,
-    generateWorldChunk
-} from "../../src/world/generateWorldChunk";
+    BaseSemanticChunkView,
+    createWorldDescriptorV2,
+    generateBaseSemanticChunk,
+    quantizeMacroHeight
+} from "../../src/index";
 
 describe("LandformSampler", () => {
     test("is deterministic and seed-sensitive", () => {
@@ -74,30 +75,21 @@ describe("LandformSampler", () => {
         expect(average(strong) - average(weak)).toBeGreaterThan(0.08);
     });
 
-    test("chunk classification and render relief sample the identical source seed", () => {
+    test("semantic authority quantizes the identical landform source", () => {
         const seed = "new-world";
         const sampler = createLandformSampler({ seed, domain: { topology: "infinite" } });
-        let mountains = 0;
-
-        for (let chunkX = -5; chunkX <= -3; chunkX += 1) {
-            for (let chunkY = -2; chunkY <= 0; chunkY += 1) {
-                const chunk = generateWorldChunk({ seed, chunkX, chunkY, chunkSize: 24 });
-                for (let localX = 0; localX < chunk.chunkSize; localX += 1) {
-                    for (let localY = 0; localY < chunk.chunkSize; localY += 1) {
-                        const x = chunkX * chunk.chunkSize + localX;
-                        const y = chunkY * chunk.chunkSize + localY;
-                        const sample = sampler.sample(x, y);
-                        const expectedMountain = (sample.elevation > 0.7 && sample.ridge > 0.2)
-                            || sample.elevation > 0.82;
-                        const generatedMountain = decodeWorldChunkTile(chunk, localX, localY).type
-                            === Land.mountain;
-                        expect(generatedMountain).toBe(expectedMountain);
-                        if (generatedMountain) mountains += 1;
-                    }
-                }
+        const chunk = generateBaseSemanticChunk({
+            descriptor: createWorldDescriptorV2({ seed }),
+            key: { chunkX: -4, chunkY: -1 }
+        });
+        const view = new BaseSemanticChunkView(chunk);
+        for (let localX = 0; localX < 32; localX += 1) {
+            for (let localY = 0; localY < 32; localY += 1) {
+                const tile = view.getTile(localX, localY);
+                expect(Math.round(tile.macroHeight * 65535)).toBe(
+                    quantizeMacroHeight(sampler.sample(tile.x, tile.y).elevation)
+                );
             }
         }
-
-        expect(mountains).toBeGreaterThan(20);
     });
 });

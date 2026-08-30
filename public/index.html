@@ -3,84 +3,17 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hex World</title>
+    <title>Hex World · Surface v2</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="js/vendor/dat.gui.css">
     <link rel="stylesheet" href="demo.css">
 </head>
 <body>
     <canvas class="scene__canvas" data-world-canvas></canvas>
-    <aside class="performance-panel" data-performance-panel aria-labelledby="performance-title">
-        <header class="performance-panel__header">
-            <span class="performance-panel__status" aria-hidden="true"></span>
-            <h2 id="performance-title" data-performance-title></h2>
-        </header>
-        <div class="performance-panel__metrics">
-            <div class="performance-metric">
-                <span data-performance-label="fps"></span>
-                <div><strong data-performance-value="fps">—</strong><small data-performance-unit="fps"></small></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="frameTime"></span>
-                <div><strong data-performance-value="frameTime">—</strong><small data-performance-unit="frameTime"></small></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="memory"></span>
-                <div><strong data-performance-value="memory">—</strong><small data-performance-unit="memory"></small></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="drawCalls"></span>
-                <div><strong data-performance-value="drawCalls">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="triangles"></span>
-                <div><strong data-performance-value="triangles">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="visibleChunks"></span>
-                <div><strong data-performance-value="visibleChunks">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="residentChunks"></span>
-                <div><strong data-performance-value="residentChunks">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="lod"></span>
-                <div><strong data-performance-value="lod">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="sourceChunks"></span>
-                <div><strong data-performance-value="sourceChunks">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="cache"></span>
-                <div><strong data-performance-value="cache">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="cachedChunks"></span>
-                <div><strong data-performance-value="cachedChunks">—</strong></div>
-            </div>
-            <div class="performance-metric">
-                <span data-performance-label="cacheStorage"></span>
-                <div><strong data-performance-value="cacheStorage">—</strong><small data-performance-unit="memory"></small></div>
-            </div>
-            <div class="performance-metric performance-metric--wide">
-                <span data-performance-label="backend"></span>
-                <div><strong data-performance-value="backend">—</strong></div>
-            </div>
-        </div>
-    </aside>
     <aside class="world-status" aria-live="polite">
-        <strong data-world-title></strong>
+        <strong data-world-title>Compiling world surface…</strong>
         <span data-world-detail></span>
         <small data-world-controls></small>
     </aside>
-    <aside class="campaign-panel" data-campaign-panel aria-live="polite" hidden>
-        <strong data-campaign-title></strong>
-        <span data-campaign-detail></span>
-        <small data-campaign-meta></small>
-    </aside>
-
     <script type="module">
         import * as THREE from "./js/vendor/three.module.js";
         window.THREE = THREE;

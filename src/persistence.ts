@@ -1,20 +1,21 @@
 export {
-    IndexedDbWorldChunkCache,
-    createWorldChunkCacheKey,
-    clearWorldChunkCache
-} from "./world/WorldChunkCache";
-export type {
-    WorldChunkCache,
-    WorldChunkCacheStats,
-    WorldChunkCacheKeyOptions,
-    IndexedDbWorldChunkCacheOptions
-} from "./world/WorldChunkCache";
-export {
     MemoryWorldDeltaStore,
     IndexedDbWorldDeltaStore,
-    normalizeWorldChunkDelta,
-    WorldDeltaConflictError,
-    WORLD_DELTA_FORMAT_VERSION
+    WorldDeltaRevisionConflictError,
+    WORLD_DELTA_FORMAT_VERSION,
+    WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
+} from "./world/WorldDeltaStore";
+export type {
+    SemanticAuthorityMutation,
+    HydrologyFeatureInput,
+    HydrologyAuthorityMutation,
+    WorldDeltaCommitRequest,
+    WorldDeltaCommitRecord,
+    WorldDeltaCommitResult,
+    WorldDeltaCheckpoint,
+    WorldDeltaStoreStats,
+    WorldDeltaStore,
+    IndexedDbWorldDeltaStoreOptions
 } from "./world/WorldDeltaStore";
 export {
     CheckpointCoordinator,
@@ -37,10 +38,6 @@ export {
 export {
     createSimulationGenerationParticipant,
     createWorldDeltaGenerationParticipant
-} from "./persistence/FoundationCheckpointParticipants";
-export type {
-    WorldDeltaCheckpointSource,
-    WorldDeltaGenerationParticipantOptions
 } from "./persistence/FoundationCheckpointParticipants";
 export type {
     GenerationCheckpointContext,
@@ -67,12 +64,3 @@ export type {
     IndexedDbCheckpointJournalStoreOptions,
     FlushCheckpointParticipantOptions
 } from "./persistence/CheckpointCoordinator";
-export type {
-    WorldDeltaStore,
-    WorldDeltaEntry,
-    WorldDeltaChange,
-    WorldDeltaReadOptions,
-    WorldDeltaBatchOptions,
-    WorldChunkDelta,
-    IndexedDbWorldDeltaStoreOptions
-} from "./world/WorldDeltaStore";

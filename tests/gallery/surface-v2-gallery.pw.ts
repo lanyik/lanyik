@@ -14,7 +14,7 @@ const SURFACE_GALLERY_VIEWS: readonly SurfaceGalleryView[] = Object.freeze([
 ]);
 
 async function mountFixedSurface(page: Page): Promise<void> {
-    await page.goto("/textures/land-atlas.json", { waitUntil: "domcontentloaded" });
+    await page.goto("/test-host.html", { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
         const threeModulePath = "/js/vendor/three.module.js";
         const three = await import(threeModulePath) as typeof import("three");

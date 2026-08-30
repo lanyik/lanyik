@@ -13,16 +13,16 @@ import {
     HydrologyRegionKey,
     positiveIntegerModulo,
     SemanticChunkKey,
-    WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
-    WORLD_SEMANTIC_CHUNK_SIZE,
-    WORLD_SURFACE_V2_GENERATOR_VERSION
+    WORLD_CHUNK_FORMAT_VERSION,
+    WORLD_SEMANTIC_CHUNK_SIZE
 } from "./WorldSemanticFormat";
+import { WORLD_GENERATOR_VERSION } from "../WorldGeneratorVersion";
 
-export const WORLD_DESCRIPTOR_V2_FORMAT_VERSION = 2;
+export const WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
 
 interface WorldDescriptorV2Base {
-    readonly descriptorVersion: typeof WORLD_DESCRIPTOR_V2_FORMAT_VERSION;
-    readonly semanticChunkFormatVersion: typeof WORLD_SEMANTIC_CHUNK_FORMAT_VERSION;
+    readonly descriptorVersion: typeof WORLD_DESCRIPTOR_FORMAT_VERSION;
+    readonly semanticChunkFormatVersion: typeof WORLD_CHUNK_FORMAT_VERSION;
     readonly hydrologyRegionFormatVersion: typeof HYDROLOGY_REGION_FORMAT_VERSION;
     readonly biomeBasis: readonly [WorldBiomeBasis, WorldBiomeBasis, WorldBiomeBasis, WorldBiomeBasis];
     readonly substrateCatalog: SemanticCatalogIdentity;
@@ -32,14 +32,14 @@ interface WorldDescriptorV2Base {
 export interface InfiniteWorldDescriptorV2 extends WorldDescriptorV2Base {
     readonly sourceKind: "procedural-infinite";
     readonly seed: string;
-    readonly generatorVersion: typeof WORLD_SURFACE_V2_GENERATOR_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION;
     readonly topology: "infinite";
 }
 
 export interface ToroidalWorldDescriptorV2 extends WorldDescriptorV2Base {
     readonly sourceKind: "procedural-toroidal";
     readonly seed: string;
-    readonly generatorVersion: typeof WORLD_SURFACE_V2_GENERATOR_VERSION;
+    readonly generatorVersion: typeof WORLD_GENERATOR_VERSION;
     readonly topology: "toroidal";
     readonly width: number;
     readonly height: number;
@@ -108,8 +108,8 @@ function assertToroidalDimensions(width: number, height: number): void {
 
 function baseDescriptor(): WorldDescriptorV2Base {
     return {
-        descriptorVersion: WORLD_DESCRIPTOR_V2_FORMAT_VERSION,
-        semanticChunkFormatVersion: WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+        descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
+        semanticChunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
         hydrologyRegionFormatVersion: HYDROLOGY_REGION_FORMAT_VERSION,
         biomeBasis: WORLD_BIOME_BASIS,
         substrateCatalog: WORLD_SUBSTRATE_CATALOG_IDENTITY,
@@ -153,7 +153,7 @@ export function createWorldDescriptorV2(options: CreateWorldDescriptorV2Options)
             ...base,
             sourceKind: "procedural-infinite",
             seed: String(options.seed),
-            generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
             topology: "infinite"
         });
     }
@@ -163,7 +163,7 @@ export function createWorldDescriptorV2(options: CreateWorldDescriptorV2Options)
         ...base,
         sourceKind: "procedural-toroidal",
         seed: String(options.seed),
-        generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
+        generatorVersion: WORLD_GENERATOR_VERSION,
         topology: "toroidal",
         width: topology.width,
         height: topology.height
@@ -180,10 +180,10 @@ function catalogIdentityMatches(value: unknown, expected: SemanticCatalogIdentit
 export function assertWorldDescriptorV2(value: unknown): asserts value is WorldDescriptorV2 {
     if (!value || typeof value !== "object") throw new TypeError("v2 world descriptor must be an object");
     const descriptor = value as Partial<WorldDescriptorV2>;
-    if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_V2_FORMAT_VERSION) {
+    if (descriptor.descriptorVersion !== WORLD_DESCRIPTOR_FORMAT_VERSION) {
         throw new TypeError(`unsupported v2 world descriptor format ${String(descriptor.descriptorVersion)}`);
     }
-    if (descriptor.semanticChunkFormatVersion !== WORLD_SEMANTIC_CHUNK_FORMAT_VERSION
+    if (descriptor.semanticChunkFormatVersion !== WORLD_CHUNK_FORMAT_VERSION
         || descriptor.hydrologyRegionFormatVersion !== HYDROLOGY_REGION_FORMAT_VERSION) {
         throw new TypeError("v2 world descriptor contains unsupported semantic or hydrology formats");
     }
@@ -215,7 +215,7 @@ export function assertWorldDescriptorV2(value: unknown): asserts value is WorldD
     if (descriptor.sourceKind === "procedural-infinite") {
         assertFields(["seed", "generatorVersion"]);
         assertSeed(descriptor.seed);
-        if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION
+        if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_GENERATOR_VERSION
             || descriptor.topology !== "infinite" || "width" in descriptor || "height" in descriptor) {
             throw new TypeError("v2 infinite world descriptor is invalid");
         }
@@ -224,7 +224,7 @@ export function assertWorldDescriptorV2(value: unknown): asserts value is WorldD
     if (descriptor.sourceKind === "procedural-toroidal") {
         assertFields(["seed", "generatorVersion", "width", "height"]);
         assertSeed(descriptor.seed);
-        if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_SURFACE_V2_GENERATOR_VERSION
+        if (typeof descriptor.seed !== "string" || descriptor.generatorVersion !== WORLD_GENERATOR_VERSION
             || descriptor.topology !== "toroidal") {
             throw new TypeError("v2 toroidal world descriptor is invalid");
         }

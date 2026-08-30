@@ -1,11 +1,12 @@
-import { Point } from "../interfaces";
+import { WorldPoint } from "../world/WorldPoint";
 import { WorkQueueBackpressureError } from "../runtime/PriorityTaskQueue";
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
+import type { WorldChangeSet } from "../world/semantic/WorldChangeSet";
 
 export const WORLD_SIMULATION_FORMAT_VERSION = 1;
 export const WORLD_SIMULATION_CHECKPOINT_FORMAT_VERSION = 1;
 
-export interface SimulationEntity<State = unknown> extends Point {
+export interface SimulationEntity<State = unknown> extends WorldPoint {
     id: string;
     state: State;
 }
@@ -24,7 +25,7 @@ export interface SimulationChunkStore<State = unknown> {
     load(chunkX: number, chunkY: number): Promise<SimulationChunkSnapshot<State> | undefined>;
     save(snapshot: SimulationChunkSnapshot<State>): Promise<void>;
     delete(chunkX: number, chunkY: number): Promise<void>;
-    listChunks?(): Promise<readonly Point[]>;
+    listChunks?(): Promise<readonly WorldPoint[]>;
     replaceAll?(snapshots: readonly SimulationChunkSnapshot<State>[]): Promise<void>;
     flush(): Promise<void>;
     dispose(): void;
@@ -80,7 +81,7 @@ export class MemorySimulationChunkStore<State = unknown> implements SimulationCh
         return Promise.resolve();
     }
 
-    public listChunks(): Promise<readonly Point[]> {
+    public listChunks(): Promise<readonly WorldPoint[]> {
         if (this.disposed) return Promise.resolve([]);
         return Promise.resolve([...this.snapshots.values()]
             .map(snapshot => ({ x: snapshot.chunkX, y: snapshot.chunkY }))
@@ -184,7 +185,7 @@ export class IndexedDbSimulationChunkStore<State = unknown> implements Simulatio
         });
     }
 
-    public async listChunks(): Promise<readonly Point[]> {
+    public async listChunks(): Promise<readonly WorldPoint[]> {
         if (this.disposed) return [];
         await this.flush();
         const database = await this.open();
@@ -292,7 +293,7 @@ export interface WorldSimulationRuntimeOptions<State = unknown> {
     workCoordinator?: RuntimeWorkCoordinator;
 }
 
-export interface SimulationActivityAnchor extends Point {
+export interface SimulationActivityAnchor extends WorldPoint {
     id: string;
     radiusChunks: number;
 }
@@ -322,6 +323,7 @@ export interface SimulationTickContext<State = unknown> {
 export interface SimulationSystem<State = unknown> {
     readonly id: string;
     update(context: SimulationTickContext<State>): void | Promise<void>;
+    worldChanged?(changeSet: WorldChangeSet): void;
 }
 
 export interface WorldSimulationStats {
@@ -395,7 +397,7 @@ export class WorldSimulationRuntime<State = unknown> {
     };
 
     constructor(options: WorldSimulationRuntimeOptions<State> = {}) {
-        this.chunkSize = options.chunkSize ?? 96;
+        this.chunkSize = options.chunkSize ?? 64;
         this.activeInterval = options.activeTickIntervalSeconds ?? 0.1;
         this.backgroundInterval = options.backgroundTickIntervalSeconds ?? 5;
         this.maxTicksPerAdvance = options.maxTicksPerAdvance ?? 50;
@@ -442,6 +444,16 @@ export class WorldSimulationRuntime<State = unknown> {
     public unregisterSystem(id: string): boolean {
         this.assertSynchronousMutationAllowed();
         return this.systems.delete(id);
+    }
+
+    public applyWorldChangeSet(changeSet: WorldChangeSet): void {
+        this.assertSynchronousMutationAllowed();
+        if (!changeSet || typeof changeSet !== "object" || typeof changeSet.transactionId !== "bigint"
+            || !Number.isSafeInteger(changeSet.revision) || changeSet.revision <= 0
+            || !Array.isArray(changeSet.simulationChunks)) {
+            throw new TypeError("simulation world change set is invalid");
+        }
+        for (const system of this.systems.values()) system.worldChanged?.(changeSet);
     }
 
     public setActivityAnchor(anchor: SimulationActivityAnchor): void {
@@ -877,7 +889,7 @@ export class WorldSimulationRuntime<State = unknown> {
         }
     }
 
-    private normalize(x: number, y: number): Point | undefined {
+    private normalize(x: number, y: number): WorldPoint | undefined {
         if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) return undefined;
         if (!this.bounds) return { x, y };
         const nx = this.bounds.wrapX ? positiveModulo(x, this.bounds.width) : x;

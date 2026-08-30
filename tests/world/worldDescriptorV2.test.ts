@@ -7,11 +7,11 @@ import {
     HYDROLOGY_REGION_FORMAT_VERSION,
     serializeWorldDescriptorV2,
     WORLD_BIOME_BASIS,
-    WORLD_DESCRIPTOR_V2_FORMAT_VERSION,
-    WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+    WORLD_DESCRIPTOR_FORMAT_VERSION,
+    WORLD_CHUNK_FORMAT_VERSION,
     WORLD_SUBSTRATE_CATALOG,
     WORLD_SUBSTRATE_CATALOG_IDENTITY,
-    WORLD_SURFACE_V2_GENERATOR_VERSION,
+    WORLD_GENERATOR_VERSION,
     WORLD_VEGETATION_CATALOG_IDENTITY,
     WORLD_VEGETATION_PROFILE_CATALOG,
     worldDescriptorsV2Equal
@@ -26,11 +26,11 @@ describe("WorldDescriptor v2", () => {
     test("freezes the complete infinite procedural identity", () => {
         const descriptor = createWorldDescriptorV2({ seed: 42 });
         expect(descriptor).toEqual({
-            descriptorVersion: WORLD_DESCRIPTOR_V2_FORMAT_VERSION,
+            descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
             sourceKind: "procedural-infinite",
             seed: "42",
-            generatorVersion: WORLD_SURFACE_V2_GENERATOR_VERSION,
-            semanticChunkFormatVersion: WORLD_SEMANTIC_CHUNK_FORMAT_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
+            semanticChunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
             hydrologyRegionFormatVersion: HYDROLOGY_REGION_FORMAT_VERSION,
             biomeBasis: WORLD_BIOME_BASIS,
             substrateCatalog: WORLD_SUBSTRATE_CATALOG_IDENTITY,

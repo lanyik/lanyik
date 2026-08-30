@@ -12,114 +12,73 @@ import {
     MemorySimulationChunkStore,
     WorldSimulationRuntime
 } from "../../src/simulation/WorldSimulationRuntime";
-import { generateWorldChunk } from "../../src/world/generateWorldChunk";
-import { MemoryWorldDeltaStore, WorldChunkDelta } from "../../src/world/WorldDeltaStore";
-import { WorldGeneratorPool } from "../../src/world/WorldGeneratorPool";
-import { ProceduralWorldSource } from "../../src/world/WorldSource";
-import { deferred } from "../helpers/deferred";
+import { MemoryWorldDeltaStore } from "../../src/world/WorldDeltaStore";
+import { createWorldDescriptorV2 } from "../../src/world/semantic/WorldDescriptorV2";
 
 interface State { value: string }
 
-class DeferredReplaceWorldDeltaStore extends MemoryWorldDeltaStore {
-    private readonly entered = deferred();
-    private readonly released = deferred();
-    public readonly replaceEntered = this.entered.promise;
-
-    public override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
-        this.entered.resolve();
-        await this.released.promise;
-        return super.replaceWorld(worldId, deltas);
-    }
-
-    public release(): void { this.released.resolve(); }
-}
-
 describe("foundation generation checkpoint participants", () => {
-    test("rejects terrain edits while a checkpoint restore is replacing durable deltas", async () => {
-        const deltas = new DeferredReplaceWorldDeltaStore();
-        const source = new ProceduralWorldSource({
-            seed: "restore-lock",
-            workerUrl: "unused",
-            chunkSize: 12,
-            worldId: "restore-lock"
-        }, {
-            pool: new WorldGeneratorPool("unused", {
-                size: 1,
-                clientFactory: () => ({
-                    generateChunk: options => Promise.resolve(generateWorldChunk(options)),
-                    dispose() {},
-                    get isDisposed() { return false; }
-                })
-            }),
-            deltaStore: deltas
+    test("captures and restores the atomic semantic/hydrology store at a save barrier", async () => {
+        const descriptor = createWorldDescriptorV2({ seed: "atomic-checkpoint" });
+        const store = new MemoryWorldDeltaStore();
+        await store.commit({
+            descriptor,
+            expectedRevision: 0,
+            semanticMutations: [{ x: 3, y: 4, macroHeight: 12_345 }]
         });
-        source.setTileOverride(2, 3, { unit: "committed" });
-        const snapshot = await source.createDeltaCheckpointSnapshot();
-        source.setTileOverride(2, 3, { unit: "newer-local-edit" });
-
-        const restoring = source.restoreDeltaCheckpointSnapshot(snapshot);
-        await deltas.replaceEntered;
-        expect(() => source.setTileOverride(4, 5, { unit: "must-not-disappear" }))
-            .toThrow(/being restored/);
-        await expect(source.createDeltaCheckpointSnapshot()).rejects.toThrow(/being restored/);
-        await expect(source.clearDeltas()).rejects.toThrow(/being restored/);
-        deltas.release();
-        await restoring;
-
-        expect(source.store.getTileOverride(2, 3)).toEqual({ unit: "committed" });
-        expect(source.store.getTileOverride(4, 5)).toBeUndefined();
-        source.dispose();
+        const participant = createWorldDeltaGenerationParticipant(descriptor, store);
+        const checkpoint = await participant.capture({} as never);
+        await store.commit({
+            descriptor,
+            expectedRevision: 1,
+            semanticMutations: [{ x: 3, y: 4, macroHeight: 23_456 }]
+        });
+        await participant.restore({} as never, checkpoint);
+        const restored = await store.load(descriptor);
+        expect(restored).toMatchObject({ effectiveRevision: 1 });
+        expect(restored.semanticDeltas[0].macroHeight[0]).toBe(12_345);
+        store.dispose();
     });
 
-    test("restores simulation and terrain deltas from the same manifest generation", async () => {
+    test("restores simulation and atomic world deltas from one manifest generation", async () => {
+        const descriptor = createWorldDescriptorV2({ seed: "participant-world" });
+        const worldDeltas = new MemoryWorldDeltaStore();
         const simulation = new WorldSimulationRuntime<State>({
-            chunkSize: 12,
             store: new MemorySimulationChunkStore<State>()
         });
         simulation.addEntity({ id: "army", x: 1, y: 1, state: { value: "committed" } });
-
-        const pool = new WorldGeneratorPool("unused", {
-            size: 1,
-            clientFactory: () => ({
-                generateChunk: options => Promise.resolve(generateWorldChunk(options)),
-                dispose() {},
-                get isDisposed() { return false; }
-            })
+        await worldDeltas.commit({
+            descriptor,
+            expectedRevision: 0,
+            semanticMutations: [{ x: 2, y: 3, vegetationDensity: 41 }]
         });
-        const source = new ProceduralWorldSource({
-            seed: "participant-world",
-            workerUrl: "unused",
-            chunkSize: 12,
-            worldId: "participant-world"
-        }, {
-            pool,
-            deltaStore: new MemoryWorldDeltaStore()
-        });
-        const chunk = await source.loadChunk(0, 0);
-        source.setTileOverride(2, 3, { unit: "committed" });
-
         const coordinator = new GenerationCheckpointCoordinator({
-            worldId: source.worldId,
-            descriptor: source.descriptor,
+            worldId: `v2:${descriptor.seed}`,
+            descriptor,
             store: new MemoryGenerationCheckpointStore(),
             participants: [
                 createSimulationGenerationParticipant(simulation),
-                createWorldDeltaGenerationParticipant(source)
+                createWorldDeltaGenerationParticipant(descriptor, worldDeltas)
             ],
             orphanGraceMs: 0
         });
         await coordinator.checkpoint();
 
         simulation.setEntityState("army", { value: "uncommitted" });
-        source.setTileOverride(2, 3, { unit: "uncommitted" });
+        await worldDeltas.commit({
+            descriptor,
+            expectedRevision: 1,
+            semanticMutations: [{ x: 2, y: 3, vegetationDensity: 99 }]
+        });
         await coordinator.recover();
 
         expect(simulation.getEntity("army")?.state).toEqual({ value: "committed" });
-        expect(source.store.getTileOverride(2, 3)).toEqual({ unit: "committed" });
+        const restored = await worldDeltas.load(descriptor);
+        expect(restored.effectiveRevision).toBe(1);
+        expect(restored.semanticDeltas[0].vegetationDensity[0]).toBe(41);
         expect(coordinator.stats.latestGeneration).toBe(1);
-
-        source.releaseChunk(chunk);
-        source.dispose();
+        coordinator.dispose();
         simulation.dispose();
+        worldDeltas.dispose();
     });
 });

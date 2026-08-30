@@ -1,41 +1,14 @@
-# Package boundaries
+# 包边界
 
-The runtime foundation types (`LifecycleScope`, `ResourceBudgetLedger`,
-`PriorityTaskQueue`, and `RuntimeWorkCoordinator`) are exported from the main
-entry. Recoverable checkpoint infrastructure is also available from the
-`three-hex-map/persistence` subpath. See
-[foundation-infrastructure.md](./foundation-infrastructure.md) for ownership
-and recovery contracts, and
-[foundation-v1-freeze.md](./foundation-v1-freeze.md) for the versioning rules
-and final freeze gate. The versioned terrain-content layer is implemented and
-frozen in [world-style-generation-v1.md](./world-style-generation-v1.md). The test layers
-and their execution policy are defined in [testing.md](./testing.md).
-
-`ResourceBudgetLedger` is the low-level owner API. Applications extending a
-`HexMap` should normally use `map.createResourceAccount(label)` and retain the
-returned reservation handles; `map.resourceBudget` is intentionally a frozen
-diagnostics-only view so an extension cannot clear or force the shared ledger.
-
-The renderer remains the default package entry. Optional game-runtime APIs use
-explicit subpaths:
-
-| Import | Responsibility |
+| 入口 | 责任 |
 |---|---|
-| `three-hex-map` | HexMap, rendering, world sources, streaming and core helpers |
-| `three-hex-map/persistence` | IndexedDB chunk cache, sparse world deltas and recoverable checkpoints |
-| `three-hex-map/pathfinding` | Versioned hierarchical navigation summaries and routing |
-| `three-hex-map/simulation` | Camera-independent simulation runtime and snapshot stores |
+| `three-hex-map` | v2 descriptor/semantic/hydrology 格式、Worker、编译器、渲染器、编辑器、查询与拾取 |
+| `three-hex-map/persistence` | `WorldDeltaStore` v3、checkpoint journal、generation checkpoint v2 |
+| `three-hex-map/pathfinding` | 基于生效语义快照的 `SemanticNavigationIndex` |
+| `three-hex-map/simulation` | 64×64 模拟块、活跃/后台 tick 与 checkpoint store |
 
-Each subpath has independent ESM, CommonJS and declaration outputs. The classic
-`hex-map.global.js` is built from the renderer entry and does not publish the
-pathfinding or simulation APIs. Those modules must be loaded through a module
-bundler or native ESM when needed.
+主入口的 `HexMap` 只接收 `WorldAuthoritySource` 和 `SurfaceCompilationWorker`。它不接收 MapInfo、packed chunk、旧 WorldSource 或渲染后端开关。
 
-The validation build reports the current root ESM size in the `tsup` output.
-This is a build observation rather than a fixed budget; use the `tsup` output
-from `npm run build:lib` as the current measurement. Pathfinding and simulation
-remain separate subpaths, so applications do not pull those optional runtimes
-through their dedicated imports. Persistence remains internally reachable from
-core because `ProceduralWorldSource` supports `cache: true` and
-`deltaStore: true`; removing that implementation would require a later async
-provider/factory API rather than an `exports`-only change.
+`WorldSurfaceRuntime` 持有一个世界会话的 source、delta store、editor、authority repository、compiler、query、picking、GPU pool、lighting 和 presentation。`WorldRenderSession` 释放时按依赖图逆序拆除对象；source 最终随 repository 释放。应用若把一个 `WorldSurfaceWorkerPool` 同时交给 procedural source 与 compiler，必须让 source 使用 `ownsPool: true`，从而在会话结束时唯一释放。
+
+静态世界通过 `compileStaticWorldAuthority()` 接入，只接受量化 typed SoA 和完整 typed hydrology regions。程序化世界通过 `ProceduralWorldAuthoritySource` 接入。两者从 repository 之后共享同一条生效快照、编译和渲染路径。
