@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- v1 风格控制面板新增实时“雾效强度”参数；支持完全关闭距离雾、恢复默认雾距或增强远景雾，不触发世界重编译。
 - v1 风格的 demo 控制面板、性能监控与操作语义重新接入唯一 v2 runtime；WASD、左键拾取、右键环绕、滚轮缩放，以及网格/地表细节/水波/浪花/植被实时控制均不依赖旧渲染链路。
 - 完整的 surface/render foundation v2：descriptor v2、32×32 typed semantic authority、128×128
   hydrology regions、effective snapshots、revision/token 正确性、CPU surface compiler、分页 GPU fields、
@@ -25,7 +26,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
-- descriptor format 升至 2、semantic chunk format 升至 2、hydrology region 升至 2、generator 升至 8、surface compiler 升至 3、Worker protocol 升至 5、
+- descriptor format 升至 2、semantic chunk format 升至 2、hydrology region 升至 3、generator 升至 9、surface compiler 升至 3、Worker protocol 升至 5、
   delta store 升至 3、generation checkpoint 升至 2。
 - procedural 与 static 世界都必须先编译为同一 typed authority；static 输入不再接受对象 tile、字符串
   modifier 或隐式水文。
@@ -42,6 +43,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- 程序化河网不再直接暴露 16 格宏观排水网的横、竖、斜直线；hydrology region v3 使用稳定扰动的共享汇流点和非对称曲线控制点，保持下游增宽、顺坡水位以及跨 region/环绕边界的逐字节连续性。
 - demand 切换改为保留旧覆盖直到替代 chunk 编译完成，并合并连续相机移动产生的待执行需求，消除拖动时“先卸载、后编译”造成的瞬时黑缝和缺块。
 - priority-flood 的排水高度不再直接充当河流渲染水面；河流 profile 保留下游坡降，surface compiler 以河心和两岸地形限制水位、限制切深并派生河床，湖海在汇入口优先接管水面，消除浮空和平板河带。
 - 修正 Water shader 对 `Ocean=1`、`Lake=2`、`River=3` 的反向解释；河流、湖泊和海洋现在使用各自的波形、颜色与强度。

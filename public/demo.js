@@ -56,6 +56,7 @@ const worldControls = {
     initialY: Number.parseInt(query.get("y") || "0", 10) || 0,
     gridVisible: true,
     terrainDetailStrength: 1,
+    distanceFogStrength: 1,
     waterWaveAmplitude: 1,
     waterWaveSpeed: 1,
     coastalWaveOpacity: 1,
@@ -125,6 +126,7 @@ function applyPresentationStyle() {
     map.setPresentationStyle({
         gridVisible: worldControls.gridVisible,
         terrainDetailStrength: worldControls.terrainDetailStrength,
+        distanceFogStrength: worldControls.distanceFogStrength,
         waterWaveAmplitude: worldControls.waterWaveAmplitude,
         waterWaveSpeed: worldControls.waterWaveSpeed,
         coastalWaveOpacity: worldControls.coastalWaveOpacity,
@@ -330,6 +332,8 @@ const terrainFolder = gui.addFolder("Terrain");
 const gridController = terrainFolder.add(worldControls, "gridVisible").onChange(applyPresentationStyle);
 const terrainDetailController = terrainFolder
     .add(worldControls, "terrainDetailStrength", 0, 2, 0.05).onChange(applyPresentationStyle);
+const fogStrengthController = terrainFolder
+    .add(worldControls, "distanceFogStrength", 0, 2, 0.05).onChange(applyPresentationStyle);
 const waterFolder = gui.addFolder("Water & coast");
 const waveHeightController = waterFolder
     .add(worldControls, "waterWaveAmplitude", 0, 4, 0.05).onChange(applyPresentationStyle);
@@ -354,6 +358,7 @@ const translatedControllers = [
     [generateController, "control.generate"],
     [gridController, "control.grid"],
     [terrainDetailController, "control.terrainDetail"],
+    [fogStrengthController, "control.fogStrength"],
     [waveHeightController, "control.waveHeight"],
     [waveSpeedController, "control.waveSpeed"],
     [foamController, "control.foam"],

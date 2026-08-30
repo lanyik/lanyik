@@ -1,6 +1,7 @@
 export interface SurfacePresentationStyle {
     readonly gridVisible: boolean;
     readonly terrainDetailStrength: number;
+    readonly distanceFogStrength: number;
     readonly waterWaveAmplitude: number;
     readonly waterWaveSpeed: number;
     readonly coastalWaveOpacity: number;
@@ -12,6 +13,7 @@ export interface SurfacePresentationStyle {
 export const DEFAULT_SURFACE_PRESENTATION_STYLE: Readonly<SurfacePresentationStyle> = Object.freeze({
     gridVisible: true,
     terrainDetailStrength: 1,
+    distanceFogStrength: 1,
     waterWaveAmplitude: 1,
     waterWaveSpeed: 1,
     coastalWaveOpacity: 1,
@@ -48,6 +50,7 @@ export function createSurfacePresentationStyle(
         throw new TypeError("surface presentation visibility values must be booleans");
     }
     assertRange("terrainDetailStrength", style.terrainDetailStrength, 2);
+    assertRange("distanceFogStrength", style.distanceFogStrength, 2);
     assertRange("waterWaveAmplitude", style.waterWaveAmplitude, 4);
     assertRange("waterWaveSpeed", style.waterWaveSpeed, 4);
     assertUnitInterval("coastalWaveOpacity", style.coastalWaveOpacity);

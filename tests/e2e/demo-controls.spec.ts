@@ -30,6 +30,22 @@ test("restores the v1 dashboard and interaction semantics on the v2 runtime", as
         hexWorld: { presentationStyle: { gridVisible: boolean } };
     }).hexWorld.presentationStyle.gridVisible)).toBe(false);
 
+    const fogControl = page.locator(".dg li.cr.number")
+        .filter({ hasText: /fog intensity|雾效强度/i })
+        .locator('input[type="text"]');
+    await expect(fogControl).toBeVisible();
+    await fogControl.fill("0");
+    await fogControl.press("Enter");
+    await expect.poll(() => page.evaluate(() => {
+        const browser = window as unknown as {
+            hexWorld: { presentationStyle: { distanceFogStrength: number }; getScene(): any };
+        };
+        return {
+            strength: browser.hexWorld.presentationStyle.distanceFogStrength,
+            fogDisabled: browser.hexWorld.getScene().fog === null
+        };
+    })).toEqual({ strength: 0, fogDisabled: true });
+
     const canvas = page.locator("[data-world-canvas]");
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();

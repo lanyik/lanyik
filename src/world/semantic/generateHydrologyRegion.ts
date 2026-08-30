@@ -59,6 +59,16 @@ interface ClippedLine {
     endT: number;
 }
 
+interface RiverPathPoint extends Vec2 {
+    readonly t: number;
+}
+
+interface ClippedRiverPath {
+    readonly points: readonly RiverPathPoint[];
+    readonly startT: number;
+    readonly endT: number;
+}
+
 interface RegionRect {
     minX: number;
     minY: number;
@@ -68,6 +78,150 @@ interface RegionRect {
 
 const EPSILON = 1e-9;
 const RIVER_DROP_WEIGHT_PER_MACRO_EDGE = 96;
+const RIVER_PATH_POINT_COUNT = 6;
+const RIVER_NODE_JITTER_TILES = 3;
+const RIVER_BEND_MIN_TILES = 1.5;
+const RIVER_BEND_MAX_TILES = 3.75;
+const RIVER_SOURCE_WIDTH = 6;
+
+function stableFraction(id: string, lane: number): number {
+    const separator = id.indexOf(":");
+    const hex = id.slice(separator + 1);
+    const start = lane * 8 % 24;
+    return Number.parseInt(hex.slice(start, start + 8), 16) / 0xffff_ffff;
+}
+
+function quantizedOffset(value: number): number {
+    return Math.round(value * HYDROLOGY_COORDINATE_SCALE) / HYDROLOGY_COORDINATE_SCALE;
+}
+
+function riverNodePoint(node: MacroDrainageNode): Vec2 {
+    const canRepresentX = node.x + 1 / HYDROLOGY_COORDINATE_SCALE !== node.x;
+    const canRepresentY = node.y + 1 / HYDROLOGY_COORDINATE_SCALE !== node.y;
+    return {
+        x: node.x + (canRepresentX
+            ? quantizedOffset((stableFraction(node.nodeId, 0) * 2 - 1) * RIVER_NODE_JITTER_TILES)
+            : 0),
+        y: node.y + (canRepresentY
+            ? quantizedOffset((stableFraction(node.nodeId, 1) * 2 - 1) * RIVER_NODE_JITTER_TILES)
+            : 0)
+    };
+}
+
+function riverPath(
+    edge: MacroDrainageEdge,
+    upstream: MacroDrainageNode,
+    downstream: MacroDrainageNode,
+    graph: MacroDrainageGraph,
+    nodeTangents: ReadonlyMap<string, Vec2>
+): readonly RiverPathPoint[] {
+    const start = riverNodePoint(upstream);
+    const downstreamPoint = riverNodePoint(downstream);
+    const dx = shortestDelta(downstreamPoint.x - start.x, graph.width, graph.wrapX);
+    const dy = shortestDelta(downstreamPoint.y - start.y, graph.height, graph.wrapY);
+    const length = Math.hypot(dx, dy);
+    if (!(length > EPSILON)) throw new TypeError("hydrology edge has zero-length river geometry");
+    const end = { x: start.x + dx, y: start.y + dy };
+    const chord = { x: dx / length, y: dy / length };
+    const startTangent = nodeTangents.get(upstream.nodeId) ?? chord;
+    const endTangent = nodeTangents.get(downstream.nodeId) ?? chord;
+    const handleLength = length * 0.32;
+    const firstHandle = {
+        x: startTangent.x * handleLength,
+        y: startTangent.y * handleLength
+    };
+    const secondHandle = {
+        x: dx - endTangent.x * handleLength,
+        y: dy - endTangent.y * handleLength
+    };
+    const normalX = -dy / length;
+    const normalY = dx / length;
+    const direction = stableFraction(edge.edgeId, 0) < 0.5 ? -1 : 1;
+    const bend = direction * (
+        RIVER_BEND_MIN_TILES
+        + stableFraction(edge.edgeId, 1) * (RIVER_BEND_MAX_TILES - RIVER_BEND_MIN_TILES)
+    );
+    const phase = stableFraction(edge.edgeId, 2) * Math.PI * 2;
+    const points: RiverPathPoint[] = [];
+    for (let index = 0; index < RIVER_PATH_POINT_COUNT; index += 1) {
+        const t = index / (RIVER_PATH_POINT_COUNT - 1);
+        const inverse = 1 - t;
+        const envelope = Math.sin(Math.PI * t) ** 2;
+        const offset = envelope * (
+            bend + Math.sin(Math.PI * 2 * t + phase) * Math.abs(bend) * 0.45
+        );
+        points.push(Object.freeze({
+            x: start.x + quantizedOffset(
+                3 * inverse ** 2 * t * firstHandle.x
+                + 3 * inverse * t ** 2 * secondHandle.x
+                + t ** 3 * dx
+                + normalX * offset
+            ),
+            y: start.y + quantizedOffset(
+                3 * inverse ** 2 * t * firstHandle.y
+                + 3 * inverse * t ** 2 * secondHandle.y
+                + t ** 3 * dy
+                + normalY * offset
+            ),
+            t
+        }));
+    }
+    points[0] = Object.freeze({ ...start, t: 0 });
+    points[points.length - 1] = Object.freeze({ ...end, t: 1 });
+    return Object.freeze(points);
+}
+
+function unitDirection(
+    start: Vec2,
+    end: Vec2,
+    graph: MacroDrainageGraph
+): Vec2 | undefined {
+    const dx = shortestDelta(end.x - start.x, graph.width, graph.wrapX);
+    const dy = shortestDelta(end.y - start.y, graph.height, graph.wrapY);
+    const length = Math.hypot(dx, dy);
+    return length > EPSILON ? { x: dx / length, y: dy / length } : undefined;
+}
+
+function buildRiverNodeTangents(
+    graph: MacroDrainageGraph,
+    nodeById: ReadonlyMap<string, MacroDrainageNode>,
+    edges: readonly MacroDrainageEdge[]
+): ReadonlyMap<string, Vec2> {
+    const dominantIncoming = new Map<string, MacroDrainageEdge>();
+    for (const edge of edges) {
+        const previous = dominantIncoming.get(edge.downstreamNodeId);
+        if (!previous || edge.dischargeClass > previous.dischargeClass
+            || edge.dischargeClass === previous.dischargeClass && edge.edgeId < previous.edgeId) {
+            dominantIncoming.set(edge.downstreamNodeId, edge);
+        }
+    }
+    const tangents = new Map<string, Vec2>();
+    for (const node of graph.nodes) {
+        const point = riverNodePoint(node);
+        const outgoingNode = node.downstreamNodeId === undefined
+            ? undefined : nodeById.get(node.downstreamNodeId);
+        const outgoing = outgoingNode
+            ? unitDirection(point, riverNodePoint(outgoingNode), graph)
+            : undefined;
+        const incomingEdge = dominantIncoming.get(node.nodeId);
+        const incomingNode = incomingEdge ? nodeById.get(incomingEdge.upstreamNodeId) : undefined;
+        const incoming = incomingNode
+            ? unitDirection(riverNodePoint(incomingNode), point, graph)
+            : undefined;
+        let x = (incoming?.x ?? 0) + (outgoing?.x ?? 0);
+        let y = (incoming?.y ?? 0) + (outgoing?.y ?? 0);
+        let length = Math.hypot(x, y);
+        if (length <= EPSILON) {
+            const fallback = outgoing ?? incoming;
+            if (!fallback) continue;
+            x = fallback.x;
+            y = fallback.y;
+            length = 1;
+        }
+        tangents.set(node.nodeId, Object.freeze({ x: x / length, y: y / length }));
+    }
+    return tangents;
+}
 
 function riverNodeLevel(
     node: MacroDrainageNode,
@@ -146,6 +300,51 @@ function clipLine(start: Vec2, end: Vec2, rect: RegionRect): ClippedLine | undef
     };
 }
 
+function samePoint(first: Vec2, second: Vec2): boolean {
+    return Math.abs(first.x - second.x) <= EPSILON && Math.abs(first.y - second.y) <= EPSILON;
+}
+
+function clipRiverPath(points: readonly RiverPathPoint[], rect: RegionRect): readonly ClippedRiverPath[] {
+    const result: ClippedRiverPath[] = [];
+    let current: RiverPathPoint[] = [];
+    const flush = (): void => {
+        if (current.length >= 2) {
+            result.push(Object.freeze({
+                points: Object.freeze(current),
+                startT: current[0].t,
+                endT: current[current.length - 1].t
+            }));
+        }
+        current = [];
+    };
+    for (let index = 0; index < points.length - 1; index += 1) {
+        const start = points[index];
+        const end = points[index + 1];
+        const clipped = clipLine(start, end, rect);
+        if (!clipped) {
+            flush();
+            continue;
+        }
+        const span = end.t - start.t;
+        const clippedStart = Object.freeze({
+            ...clipped.start,
+            t: start.t + span * clipped.startT
+        });
+        const clippedEnd = Object.freeze({
+            ...clipped.end,
+            t: start.t + span * clipped.endT
+        });
+        if (current.length === 0 || !samePoint(current[current.length - 1], clippedStart)) {
+            flush();
+            current.push(clippedStart);
+        }
+        if (!samePoint(current[current.length - 1], clippedEnd)) current.push(clippedEnd);
+        if (clipped.endT < 1 - EPSILON) flush();
+    }
+    flush();
+    return Object.freeze(result);
+}
+
 function shortestDelta(delta: number, period: number, wraps: boolean): number {
     if (!wraps) return delta;
     if (delta > period / 2) return delta - period;
@@ -175,6 +374,19 @@ function normalizedFlow(start: Vec2, end: Vec2): readonly [number, number] {
     const length = Math.hypot(dx, dy);
     if (length <= EPSILON) throw new TypeError("hydrology edge has zero length");
     return [Math.round(dx / length * 127), Math.round(dy / length * 127)];
+}
+
+function riverPathFlow(points: readonly RiverPathPoint[], t: number): readonly [number, number] {
+    const controlPoint = points.findIndex(point => Math.abs(point.t - t) <= EPSILON);
+    if (controlPoint >= 0) {
+        const before = points[Math.max(0, controlPoint - 1)];
+        const after = points[Math.min(points.length - 1, controlPoint + 1)];
+        return normalizedFlow(before, after);
+    }
+    for (let index = 0; index < points.length - 1; index += 1) {
+        if (t < points[index + 1].t) return normalizedFlow(points[index], points[index + 1]);
+    }
+    return normalizedFlow(points[points.length - 2], points[points.length - 1]);
 }
 
 function pointSide(point: Vec2, rect: RegionRect, flow: readonly [number, number]): HydrologyPort["side"] {
@@ -315,6 +527,7 @@ function compileRegionFromGraph(
     for (const edge of riverEdges) {
         incomingRiverEdges.set(edge.downstreamNodeId, (incomingRiverEdges.get(edge.downstreamNodeId) ?? 0) + 1);
     }
+    const riverNodeTangents = buildRiverNodeTangents(graph, nodeById, riverEdges);
     const boundaryPorts: HydrologyPort[] = [];
     const rivers: RiverFeatureSegment[] = [];
     const lakes: LakeFeature[] = [];
@@ -327,105 +540,131 @@ function compileRegionFromGraph(
         const upstream = nodeById.get(edge.upstreamNodeId);
         const downstream = nodeById.get(edge.downstreamNodeId);
         if (!upstream || !downstream) throw new Error("drainage edge references a missing node");
-        const dx = shortestDelta(downstream.x - upstream.x, graph.width, graph.wrapX);
-        const dy = shortestDelta(downstream.y - upstream.y, graph.height, graph.wrapY);
-        const unshiftedEnd = { x: upstream.x + dx, y: upstream.y + dy };
-        const flow = normalizedFlow(upstream, unshiftedEnd);
+        const basePath = riverPath(edge, upstream, downstream, graph, riverNodeTangents);
+        const terminalLevel = terminalLevelByBody.get(edge.terminalBodyId);
+        if (terminalLevel === undefined) throw new Error("drainage edge references a missing terminal body");
+        const upstreamLevel = riverNodeLevel(upstream, terminalLevel, maximumDrainageRank);
+        const downstreamLevel = riverNodeLevel(downstream, terminalLevel, maximumDrainageRank);
+        const upstreamWidth = incomingRiverEdges.has(upstream.nodeId)
+            ? riverWidth(edge.dischargeClass)
+            : RIVER_SOURCE_WIDTH;
+        const downstreamWidth = riverWidth(Math.max(edge.dischargeClass, downstream.dischargeClass));
         let piece = 0;
         for (const shift of shifts) {
-            const start = { x: upstream.x + shift.x, y: upstream.y + shift.y };
-            const end = { x: unshiftedEnd.x + shift.x, y: unshiftedEnd.y + shift.y };
-            const clipped = clipLine(start, end, rect);
-            if (!clipped) continue;
-            bodies.set(edge.riverId, freezeBody(edge.riverId, "river", Math.min(255, edge.dischargeClass)));
-            const controlPoints = new Int16Array([
-                quantizeLocal(clipped.start.x, origin.x),
-                quantizeLocal(clipped.start.y, origin.y),
-                quantizeLocal(clipped.end.x, origin.x),
-                quantizeLocal(clipped.end.y, origin.y)
-            ]);
-            const width = riverWidth(edge.dischargeClass);
-            const widthProfile = new Uint8Array([width, width]);
-            const terminalLevel = terminalLevelByBody.get(edge.terminalBodyId);
-            if (terminalLevel === undefined) throw new Error("drainage edge references a missing terminal body");
-            const upstreamLevel = riverNodeLevel(upstream, terminalLevel, maximumDrainageRank);
-            const downstreamLevel = riverNodeLevel(downstream, terminalLevel, maximumDrainageRank);
-            const levelProfile = new Uint16Array([
-                interpolateUint16(upstreamLevel, downstreamLevel, clipped.startT),
-                interpolateUint16(upstreamLevel, downstreamLevel, clipped.endT)
-            ]);
-            const makeBoundaryEndpoint = (
-                point: Vec2,
-                direction: "in" | "out",
-                level: number
-            ): RiverEndpoint => {
-                const side = pointSide(point, rect, flow);
-                const connectionId = createStableHydrologyId("river-crossing", [
-                    edge.edgeId,
-                    canonicalCrossingCoordinate(point.x, graph.width, graph.wrapX),
-                    canonicalCrossingCoordinate(point.y, graph.height, graph.wrapY)
-                ]);
-                const port = Object.freeze({
-                    portId: createStableHydrologyId("river-port", [
-                        connectionId, key.regionX, key.regionY, side, direction, piece
-                    ]),
-                    connectionId,
-                    edgeId: edge.edgeId,
-                    riverId: edge.riverId,
-                    bodyId: edge.riverId,
-                    side,
-                    x: quantizeLocal(point.x, origin.x),
-                    y: quantizeLocal(point.y, origin.y),
-                    flow: direction,
-                    flowX: flow[0],
-                    flowY: flow[1],
-                    width,
-                    level,
-                    dischargeClass: edge.dischargeClass
-                } as const);
-                boundaryPorts.push(port);
-                return Object.freeze({ kind: "boundary", connectionId });
-            };
-            const entry = clipped.startT > EPSILON
-                ? makeBoundaryEndpoint(clipped.start, "in", levelProfile[0])
-                : endpointAtNode(upstream, incomingRiverEdges, terminalNodes, edge, false);
-            const exit = clipped.endT < 1 - EPSILON
-                ? makeBoundaryEndpoint(clipped.end, "out", levelProfile[1])
-                : endpointAtNode(downstream, incomingRiverEdges, terminalNodes, edge, true);
-            const segment = Object.freeze({
-                riverId: edge.riverId,
-                segmentId: createStableHydrologyId("river-segment", [
-                    edge.edgeId, key.regionX, key.regionY, piece,
-                    controlPoints[0], controlPoints[1], controlPoints[2], controlPoints[3]
-                ]),
-                edgeId: edge.edgeId,
-                controlPoints,
-                widthProfile,
-                levelProfile,
-                dischargeClass: edge.dischargeClass,
-                entry,
-                exit
-            });
-            rivers.push(segment);
-            if (exit.kind === "mouth") {
-                const terminal = terminalByNode.get(downstream.nodeId);
-                if (!terminal) throw new Error("river mouth resolved an unknown terminal");
-                bodies.set(terminal.bodyId, freezeBody(
-                    terminal.bodyId,
-                    terminal.kind,
-                    terminal.kind === "ocean" ? 0 : 1
+            const shiftedPath = basePath.map(point => Object.freeze({
+                x: point.x + shift.x,
+                y: point.y + shift.y,
+                t: point.t
+            }));
+            for (const clipped of clipRiverPath(shiftedPath, rect)) {
+                const coordinates: number[] = [];
+                const amounts: number[] = [];
+                for (const point of clipped.points) {
+                    const x = quantizeLocal(point.x, origin.x);
+                    const y = quantizeLocal(point.y, origin.y);
+                    const last = coordinates.length - 2;
+                    if (last >= 0 && coordinates[last] === x && coordinates[last + 1] === y) continue;
+                    coordinates.push(x, y);
+                    amounts.push(point.t);
+                }
+                if (amounts.length < 2) continue;
+                bodies.set(edge.riverId, freezeBody(
+                    edge.riverId,
+                    "river",
+                    Math.min(255, edge.dischargeClass)
                 ));
-                mouths.push(Object.freeze({
-                    mouthId: exit.connectionId,
+                const controlPoints = new Int16Array(coordinates);
+                const widthProfile = new Uint8Array(amounts.map(amount => Math.round(
+                    upstreamWidth + (downstreamWidth - upstreamWidth) * amount
+                )));
+                const levelProfile = new Uint16Array(amounts.map(amount =>
+                    interpolateUint16(upstreamLevel, downstreamLevel, amount)));
+                const makeBoundaryEndpoint = (
+                    point: RiverPathPoint,
+                    direction: "in" | "out",
+                    width: number,
+                    level: number
+                ): RiverEndpoint => {
+                    const flow = riverPathFlow(basePath, point.t);
+                    const side = pointSide(point, rect, flow);
+                    const connectionId = createStableHydrologyId("river-crossing", [
+                        edge.edgeId,
+                        canonicalCrossingCoordinate(point.x, graph.width, graph.wrapX),
+                        canonicalCrossingCoordinate(point.y, graph.height, graph.wrapY)
+                    ]);
+                    const port = Object.freeze({
+                        portId: createStableHydrologyId("river-port", [
+                            connectionId, key.regionX, key.regionY, side, direction, piece
+                        ]),
+                        connectionId,
+                        edgeId: edge.edgeId,
+                        riverId: edge.riverId,
+                        bodyId: edge.riverId,
+                        side,
+                        x: quantizeLocal(point.x, origin.x),
+                        y: quantizeLocal(point.y, origin.y),
+                        flow: direction,
+                        flowX: flow[0],
+                        flowY: flow[1],
+                        width,
+                        level,
+                        dischargeClass: edge.dischargeClass
+                    } as const);
+                    boundaryPorts.push(port);
+                    return Object.freeze({ kind: "boundary", connectionId });
+                };
+                const firstPoint = clipped.points[0];
+                const lastPoint = clipped.points[clipped.points.length - 1];
+                const entry = clipped.startT > EPSILON
+                    ? makeBoundaryEndpoint(
+                        firstPoint,
+                        "in",
+                        widthProfile[0],
+                        levelProfile[0]
+                    )
+                    : endpointAtNode(upstream, incomingRiverEdges, terminalNodes, edge, false);
+                const exit = clipped.endT < 1 - EPSILON
+                    ? makeBoundaryEndpoint(
+                        lastPoint,
+                        "out",
+                        widthProfile[widthProfile.length - 1],
+                        levelProfile[levelProfile.length - 1]
+                    )
+                    : endpointAtNode(downstream, incomingRiverEdges, terminalNodes, edge, true);
+                const segment = Object.freeze({
                     riverId: edge.riverId,
-                    targetBodyId: terminal.bodyId,
-                    x: controlPoints[controlPoints.length - 2],
-                    y: controlPoints[controlPoints.length - 1],
-                    width,
-                    level: levelProfile[levelProfile.length - 1]
-                }));
+                    segmentId: createStableHydrologyId("river-segment", [
+                        edge.edgeId, key.regionX, key.regionY, piece, ...controlPoints
+                    ]),
+                    edgeId: edge.edgeId,
+                    controlPoints,
+                    widthProfile,
+                    levelProfile,
+                    dischargeClass: edge.dischargeClass,
+                    entry,
+                    exit
+                });
+                rivers.push(segment);
+                if (exit.kind === "mouth") {
+                    const terminal = terminalByNode.get(downstream.nodeId);
+                    if (!terminal) throw new Error("river mouth resolved an unknown terminal");
+                    bodies.set(terminal.bodyId, freezeBody(
+                        terminal.bodyId,
+                        terminal.kind,
+                        terminal.kind === "ocean" ? 0 : 1
+                    ));
+                    mouths.push(Object.freeze({
+                        mouthId: exit.connectionId,
+                        riverId: edge.riverId,
+                        targetBodyId: terminal.bodyId,
+                        x: controlPoints[controlPoints.length - 2],
+                        y: controlPoints[controlPoints.length - 1],
+                        width: widthProfile[widthProfile.length - 1],
+                        level: levelProfile[levelProfile.length - 1]
+                    }));
+                }
+                piece += 1;
             }
-            piece += 1;
         }
     }
 

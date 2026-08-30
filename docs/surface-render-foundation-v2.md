@@ -36,8 +36,8 @@ Dynamic fog authority ── SurfaceFogTexturePool R8 ── GroundLayer
 |---|---:|---|
 | `WORLD_DESCRIPTOR_FORMAT_VERSION` | 2 | source、拓扑和 catalog 身份 |
 | `WORLD_CHUNK_FORMAT_VERSION` | 2 | 32×32 semantic SoA |
-| `HYDROLOGY_REGION_FORMAT_VERSION` | 2 | 128×128 矢量水文切片 |
-| `WORLD_GENERATOR_VERSION` | 8 | 程序化语义和水文生成 |
+| `HYDROLOGY_REGION_FORMAT_VERSION` | 3 | 128×128 矢量水文切片 |
+| `WORLD_GENERATOR_VERSION` | 9 | 程序化语义和水文生成 |
 | `WORLD_WORKER_PROTOCOL_VERSION` | 5 | 语义、水文和表面编译消息 |
 | `SURFACE_COMPILER_REVISION` | 3 | field、水面 geometry、植被 seed |
 | `SURFACE_COMPILE_PROFILE_VERSION` | 1 | 16/4/1/2/66/128 profile |
@@ -100,9 +100,9 @@ vegetationProfile: Uint8Array;   // 1 / tile
 
 `MacroDrainageGraph` 冻结下游 rank、终点、汇流和稳定 ID。有限/环绕世界先构造完整低分辨率排水图再切 region；无限世界按原点对齐的 2048×2048 有限流域分解，每个 region 只有有限依赖。
 
-`drainageLevel` 只用于 priority-flood 路由和洼地求解，不直接作为最终可见水面。region v2 根据终点水位、drainage level 与 rank 生成单调不升的 river level profile，并为每条宏观边保留确定性的最小下游坡降；湖泊和海洋仍分别使用单一水平 body level。
+`drainageLevel` 只用于 priority-flood 路由和洼地求解，不直接作为最终可见水面。region v3 根据终点水位、drainage level 与 rank 生成单调不升的 river level profile，并为每条宏观边保留确定性的最小下游坡降；湖泊和海洋仍分别使用单一水平 body level。
 
-`HydrologyRegion` 保存河段、湖盆、河口、body palette 和裁切产生的 boundary ports，不保存逐格占用。相邻 region 的 port/connection 必须由同一图边派生并逐字节匹配。feature 空间索引和 derived raster 都是可丢弃查询产物。
+`HydrologyRegion` 保存河段、湖盆、河口、body palette 和裁切产生的 boundary ports，不保存逐格占用。region v3 不再把宏观排水图的 16 格邻接边直接作为可见河道：低于 discharge class 2 的汇水边只参与排水计算，不生成可见水面；每个汇流节点使用由稳定 ID 决定、量化到 1/16 格的共享偏移；可见河段使用主支流连续切线、三次曲线和非对称弯曲控制点，源头从窄水道渐变到按 discharge profile 计算的宽度。相邻 region 的曲线交点、宽度、水位和流向必须由同一条完整曲线裁切并逐字节匹配。feature 空间索引和 derived raster 都是可丢弃查询产物。
 
 编辑的 river/lake 使用完整 `HydrologyFeatureDelta`，包含稳定 feature/body ID、控制点、宽度/水位 profile、source/outlet 和 revision。Store 在提交前验证连接目标与河网无环性。
 
@@ -231,7 +231,7 @@ demand 变化采用两阶段发布：旧 demand 在新 authority/compiled lease 
 
 公开 `HexMap` 构造 WebGL2 renderer、camera 和 controls。`loadWorld()` 在新 Scene 中创建完整 `WorldSurfaceRuntime`，等待初始精确 demand 挂载后才替换 active Scene；过期 load 会释放自己的 runtime，不能覆盖较新的世界。
 
-浏览器操作保持既有编辑器习惯：WASD 沿相机水平朝向平移，左键只做选择，右键拖拽环绕，滚轮缩放；hover/click 都通过 `SurfacePickingService` 查询当前 effective revision，并用异步 generation 拒绝过期 hover。`SurfacePresentationStyle` 是唯一实时视觉调参入口，网格、地表细节、水波、浪花和植被可见性/风力只更新已驻留材质或稳定实例，不回写 authority，也不触发第二条渲染路径。
+浏览器操作保持既有编辑器习惯：WASD 沿相机水平朝向平移，左键只做选择，右键拖拽环绕，滚轮缩放；hover/click 都通过 `SurfacePickingService` 查询当前 effective revision，并用异步 generation 拒绝过期 hover。`SurfacePresentationStyle` 是唯一实时视觉调参入口，网格、地表细节、距离雾强度、水波、浪花和植被可见性/风力只更新当前 Scene、已驻留材质或稳定实例，不回写 authority，也不触发第二条渲染路径。距离雾强度 `0` 明确关闭 Scene fog，`1` 使用由 prefetch 半径导出的默认雾距，`(1, 2]` 按强度反比缩短雾距。
 
 一个 runtime 唯一拥有：source、store/editor、repository、compiler、query、picking、texture pools、lighting、presentation 和 render session。dispose 按依赖顺序清空 Scene 与 GPU/CPU 资源。WebGL context lost 时停止 session time 更新和需求发布；restore 后从当前 CPU backing 恢复 texture/fog/geometry，不创建旧渲染器。
 
@@ -270,7 +270,7 @@ demand 变化采用两阶段发布：旧 demand 在新 authority/compiled lease 
 
 ## 15. 原始八步完成映射
 
-1. 权威语义格式：descriptor 2、generator 8、32×32 SoA、serialization、static typed authority、Worker generation。
+1. 权威语义格式：descriptor 2、generator 9、32×32 SoA、serialization、static typed authority、Worker generation。
 2. 水文权威：MacroDrainageGraph、128×128 regions、ports、spatial index、derived raster、无限有限依赖。
 3. 生效快照：semantic/feature delta、EffectiveWorldView、effectiveRevision、dependency key、request token、change kernel。
 4. CPU 编译：lattice、20×20 window、66×66 fields、buffer pool、reference query、stale rejection。

@@ -147,7 +147,7 @@ describe("surface foundation v2 hydrology", () => {
         const forward = keys.map(key => forwardGenerator.generate(key));
         const reverse = [...keys].reverse().map(key => reverseGenerator.generate(key)).reverse();
         expect(forward.map(regionSnapshot)).toEqual(reverse.map(regionSnapshot));
-        expect(forward.some(region => region.rivers.length > 40)).toBe(true);
+        expect(forward.reduce((total, region) => total + region.rivers.length, 0)).toBeGreaterThan(20);
         const riverProfiles = forward.flatMap(region => region.rivers.map(river => river.levelProfile));
         expect(riverProfiles.some(profile => profile[0] > profile[profile.length - 1])).toBe(true);
         for (const profile of riverProfiles) {
@@ -155,6 +155,52 @@ describe("surface foundation v2 hydrology", () => {
                 expect(profile[index]).toBeLessThanOrEqual(profile[index - 1]);
             }
         }
+        const riverSegments = forward.flatMap(region => region.rivers);
+        const curvedSegments = riverSegments.filter(river => {
+            if (river.controlPoints.length < 8) return false;
+            const startX = river.controlPoints[0];
+            const startY = river.controlPoints[1];
+            const endX = river.controlPoints[river.controlPoints.length - 2];
+            const endY = river.controlPoints[river.controlPoints.length - 1];
+            for (let index = 2; index < river.controlPoints.length - 2; index += 2) {
+                const dx = river.controlPoints[index] - startX;
+                const dy = river.controlPoints[index + 1] - startY;
+                if (dx * (endY - startY) !== dy * (endX - startX)) return true;
+            }
+            return false;
+        });
+        expect(curvedSegments.length).toBeGreaterThan(riverSegments.length * 0.6);
+        const axisLocked = riverSegments.filter(river => {
+            const dx = river.controlPoints[river.controlPoints.length - 2] - river.controlPoints[0];
+            const dy = river.controlPoints[river.controlPoints.length - 1] - river.controlPoints[1];
+            return dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy);
+        });
+        expect(axisLocked.length).toBeLessThan(riverSegments.length * 0.15);
+        const visibleSources = riverSegments.filter(river => river.entry.kind === "source");
+        expect(visibleSources.length).toBeGreaterThan(0);
+        for (const source of visibleSources) {
+            expect(source.widthProfile[0]).toBeLessThan(source.widthProfile[source.widthProfile.length - 1]);
+        }
+
+        const confluences = new Map<string, string[]>();
+        for (const region of forward) for (const river of region.rivers) {
+            const originX = region.key.regionX * HYDROLOGY_REGION_SIZE;
+            const originY = region.key.regionY * HYDROLOGY_REGION_SIZE;
+            for (const [endpoint, pointIndex] of [
+                [river.entry, 0],
+                [river.exit, river.controlPoints.length - 2]
+            ] as const) {
+                if (endpoint.kind !== "confluence") continue;
+                const coordinate = `${originX + river.controlPoints[pointIndex] / HYDROLOGY_COORDINATE_SCALE},${
+                    originY + river.controlPoints[pointIndex + 1] / HYDROLOGY_COORDINATE_SCALE}`;
+                confluences.set(endpoint.connectionId, [
+                    ...(confluences.get(endpoint.connectionId) ?? []),
+                    coordinate
+                ]);
+            }
+        }
+        expect([...confluences.values()].some(values => values.length >= 3)).toBe(true);
+        for (const values of confluences.values()) expect(new Set(values).size).toBe(1);
         const lakeSlices = forward.flatMap(region => region.lakes);
         expect(lakeSlices.length).toBeGreaterThan(1);
         expect(new Set(lakeSlices.map(lake => lake.bodyId))).toHaveLength(1);
@@ -284,7 +330,26 @@ describe("surface foundation v2 hydrology", () => {
         }
 
         const generator = new HydrologyRegionGenerator(descriptor);
-        const regions = [...keys.values()].map(key => generator.generate(key));
+        const pending = [...keys.values()];
+        const generated = new Set<string>();
+        const regions: HydrologyRegion[] = [];
+        while (pending.length > 0) {
+            const key = pending.pop()!;
+            const serialized = `${key.regionX},${key.regionY}`;
+            if (generated.has(serialized)) continue;
+            generated.add(serialized);
+            const region = generator.generate(key);
+            regions.push(region);
+            for (const port of region.boundaryPorts) {
+                if (!pathEdgeIds.has(port.edgeId)) continue;
+                const neighbor = {
+                    regionX: key.regionX + (port.side === "west" ? -1 : port.side === "east" ? 1 : 0),
+                    regionY: key.regionY + (port.side === "north" ? -1 : port.side === "south" ? 1 : 0)
+                };
+                const neighborKey = `${neighbor.regionX},${neighbor.regionY}`;
+                if (!generated.has(neighborKey)) pending.push(neighbor);
+            }
+        }
         const serializedEdgeIds = new Set(regions.flatMap(region => region.rivers.map(river => river.edgeId)));
         for (const edge of path) expect(serializedEdgeIds.has(edge.edgeId)).toBe(true);
 
@@ -319,7 +384,7 @@ describe("surface foundation v2 hydrology", () => {
         )).toBe(true);
     });
 
-    test("handles partial toroidal regions and matches a four-corner seam", () => {
+    test("handles partial toroidal regions and matches curved wrapped seams", () => {
         const descriptor = createWorldDescriptorV2({
             sourceKind: "static",
             sourceContentHash: "b".repeat(64),
@@ -347,17 +412,16 @@ describe("surface foundation v2 hydrology", () => {
         for (const region of regions) for (const port of region.boundaryPorts) {
             byConnection.set(port.connectionId, [...(byConnection.get(port.connectionId) ?? []), { region, port }]);
         }
-        const corner = [...byConnection.values()].find(pair => pair.length === 2
-            && pair.every(({ region, port }) => {
-                const maxX = region.validBounds.maxXExclusive * HYDROLOGY_COORDINATE_SCALE;
-                const maxY = region.validBounds.maxYExclusive * HYDROLOGY_COORDINATE_SCALE;
-                return (port.x === 0 || port.x === maxX) && (port.y === 0 || port.y === maxY);
-            }));
-        expect(corner).toBeDefined();
-        expect(corner![0].port.connectionId).toBe(corner![1].port.connectionId);
-        expect(corner![0].port.width).toBe(corner![1].port.width);
-        expect(corner![0].port.level).toBe(corner![1].port.level);
-        expect(new Set(corner!.map(candidate => candidate.port.flow))).toEqual(new Set(["in", "out"]));
+        const wrapped = [...byConnection.values()].filter(pair => pair.length === 2);
+        expect(wrapped.length).toBeGreaterThan(0);
+        for (const pair of wrapped) {
+            expect(pair[0].port.connectionId).toBe(pair[1].port.connectionId);
+            expect(pair[0].port.width).toBe(pair[1].port.width);
+            expect(pair[0].port.level).toBe(pair[1].port.level);
+            expect(pair[0].port.flowX).toBe(pair[1].port.flowX);
+            expect(pair[0].port.flowY).toBe(pair[1].port.flowY);
+            expect(new Set(pair.map(candidate => candidate.port.flow))).toEqual(new Set(["in", "out"]));
+        }
     });
 
     test("derives disposable ocean, lake and river rasters through the spatial index", () => {

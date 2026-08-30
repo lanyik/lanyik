@@ -311,6 +311,9 @@ export class HexMap extends EventEmitter {
         const style = createSurfacePresentationStyle({ ...this.presentationStyleValue, ...values });
         this.runtimeValue?.presentation.setStyle(style);
         this.presentationStyleValue = style;
+        if (this.loadOptions) {
+            this.configureDistanceFog(this.activeScene, this.loadOptions.prefetchRadiusTiles, style.distanceFogStrength);
+        }
         return style;
     }
 
@@ -445,12 +448,20 @@ export class HexMap extends EventEmitter {
         scene.background = this.backgroundColor.clone();
         if (prefetchRadiusTiles !== undefined) {
             assertPositive("prefetchRadiusTiles", prefetchRadiusTiles);
-            const fogFar = prefetchRadiusTiles * this.hexSize * 1.35;
-            scene.fog = new Fog(this.backgroundColor, fogFar * 0.64, fogFar);
+            this.configureDistanceFog(scene, prefetchRadiusTiles, this.presentationStyleValue.distanceFogStrength);
         }
         const sky = createSurfaceSky(this.skyVisible);
         if (sky) scene.add(sky);
         return sky;
+    }
+
+    private configureDistanceFog(scene: Scene, prefetchRadiusTiles: number, strength: number): void {
+        if (strength === 0) {
+            scene.fog = null;
+            return;
+        }
+        const fogFar = prefetchRadiusTiles * this.hexSize * 1.35 / strength;
+        scene.fog = new Fog(this.backgroundColor, fogFar * 0.64, fogFar);
     }
 
     private assertReady(): void {

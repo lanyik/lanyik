@@ -59,6 +59,8 @@ await map.loadWorld({
 
 Worker 是独立包导出，但最终公开 URL 由应用或构建器决定；应把它作为单独 module asset 发布，不要内联进主线程 bundle。
 
+随附 demo 继续使用 v1 的右侧控制面板、左上性能监控和原有相机操作。实时视觉参数统一经 `map.setPresentationStyle()` 写入 v2 runtime；“雾效强度”为 `0` 时关闭距离雾，`1` 为世界加载默认值，最高 `2` 会缩短雾距。
+
 ## 编辑与存档
 
 `map.edit()` 创建类型化事务。地形编辑必须明确选择 `reject`、`preserve-channel` 或 `coupled` 水文策略。
@@ -91,7 +93,7 @@ const checkpoint = await map.runtime.store.saveBarrier(
 | `three-hex-map/pathfinding` | `SemanticNavigationIndex` |
 | `three-hex-map/simulation` | 与相机无关的 64×64 模拟运行时 |
 
-当前权威版本为 descriptor 2、semantic chunk 2、hydrology region 2、generator 8、surface compiler 3、Worker protocol 5、delta 3。
+当前权威版本为 descriptor 2、semantic chunk 2、hydrology region 3、generator 9、surface compiler 3、Worker protocol 5、delta 3。
 
 ## 开发门禁
 

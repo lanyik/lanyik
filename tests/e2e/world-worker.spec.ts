@@ -132,7 +132,8 @@ test("world worker generates a transferable v2 hydrology region in a real browse
     expect(result.key).toEqual({ regionX: 2, regionY: 3 });
     expect(result.riverCount).toBeGreaterThan(0);
     expect(result.portCount).toBeGreaterThan(0);
-    expect(result.firstControlPoints).toBe(4);
+    expect(result.firstControlPoints).toBeGreaterThanOrEqual(8);
+    expect(result.firstControlPoints! % 2).toBe(0);
     expect(result.transferableBuffers).toBe(result.riverCount! * 3);
     expect(result.message).toBeUndefined();
 });

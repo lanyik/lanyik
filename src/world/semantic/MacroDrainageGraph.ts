@@ -21,7 +21,7 @@ export type HydrologyNodeId = string;
 export type HydrologyEdgeId = string;
 
 export const OCEAN_BODY_ID: HydrologyBodyId = "hydrology:ocean:v1";
-export const HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS = 1;
+export const HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS = 2;
 export const HYDROLOGY_MAX_DISCHARGE_CLASS = 15;
 export const HYDROLOGY_MAX_MACRO_NODES = 16_384;
 export const HYDROLOGY_SEA_LEVEL = quantizeMacroHeight(LANDFORM_SEA_LEVEL);

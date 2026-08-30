@@ -47,7 +47,7 @@ function benchmarkSemanticChunkGeneration() {
     }
     const durationMs = performance.now() - started;
     return {
-        operation: "49 semantic chunks (32x32) generator-v8",
+        operation: "49 semantic chunks (32x32) generator-v9",
         durationMs: round(durationMs),
         averageMs: round(durationMs / chunks),
         chunks,
