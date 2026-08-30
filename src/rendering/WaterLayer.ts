@@ -160,8 +160,39 @@ vec4 sampleBilinear(sampler2DArray source, vec2 localSurface) {
     return mix(top, bottom, amount.y);
 }
 
+float sampleCoverageWeightedWaterLevel(vec2 localSurface, float fallbackLevel) {
+    vec2 coordinate = clamp(surfaceFieldCoordinate(localSurface), vec2(0.0), vec2(SURFACE_FIELD_MAX_TEXEL));
+    ivec2 first = ivec2(floor(coordinate));
+    ivec2 second = min(first + ivec2(1), ivec2(65));
+    vec2 amount = coordinate - vec2(first);
+    vec4 interpolation = vec4(
+        (1.0 - amount.x) * (1.0 - amount.y),
+        amount.x * (1.0 - amount.y),
+        (1.0 - amount.x) * amount.y,
+        amount.x * amount.y
+    );
+    vec4 coverage = vec4(
+        texelFetch(uSurfaceWater, ivec3(first.x, first.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(second.x, first.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(first.x, second.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(second.x, second.y, int(uLayer)), 0).r
+    );
+    vec4 level = vec4(
+        texelFetch(uSurfaceValues, ivec3(first.x, first.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(second.x, first.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(first.x, second.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(second.x, second.y, int(uLayer)), 0).g
+    );
+    vec4 coveredInterpolation = interpolation * coverage;
+    float totalCoverage = dot(coveredInterpolation, vec4(1.0));
+    return totalCoverage > 0.000001
+        ? dot(coveredInterpolation, level) / totalCoverage
+        : fallbackLevel;
+}
+
 void main() {
     vec4 values = sampleBilinear(uSurfaceValues, surfaceUv);
+    float waterLevel = sampleCoverageWeightedWaterLevel(surfaceUv, values.g);
     vec2 flow = sampleBilinear(uSurfaceFlow, surfaceUv).rg;
     ivec2 categoricalCoordinate = ivec2(clamp(
         floor(surfaceFieldCoordinate(surfaceUv) + vec2(0.5)),
@@ -186,7 +217,7 @@ void main() {
     float riverY = sin(globalSurface.y * TWO_PI / 32.0 - animationTime * sign(flow.y) * 1.8);
     float flowWeight = max(abs(flow.x) + abs(flow.y), 0.0001);
     float riverWave = (riverX * abs(flow.x) + riverY * abs(flow.y)) / flowWeight * 0.003;
-    float wave = waterKind > 2.5 ? oceanWave : waterKind > 1.5 ? lakeWave : riverWave;
+    float wave = waterKind > 2.5 ? riverWave : waterKind > 1.5 ? lakeWave : oceanWave;
     wave *= mix(0.85, 1.15, profilePhase);
     wave *= smoothstep(0.0, 0.12, values.b) * smoothstep(0.02, 0.35, -values.a);
     wave *= uWaveAmplitude;
@@ -196,7 +227,7 @@ void main() {
     vShoreDistance = values.a;
     vLogicalWorldXZ = surfaceWorld(globalSurface) * uHexSize;
     vVisualSurface = globalSurface;
-    vec3 displaced = vec3(position.x, values.g * uHeightScale + wave * uHeightScale, position.z);
+    vec3 displaced = vec3(position.x, waterLevel * uHeightScale + wave * uHeightScale, position.z);
     vWaterWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
     vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -275,14 +306,15 @@ void main() {
     float waterKind = waterClass.g;
     float waterProfile = waterClass.b;
     float depthAmount = smoothstep(0.008, 0.11, vDepth);
-    vec3 shallow = waterKind > 2.5 ? vec3(0.045, 0.30, 0.34)
-        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.08, 0.34, 0.37);
-    vec3 deep = waterKind > 2.5 ? vec3(0.004, 0.028, 0.09)
-        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
-    float oceanAmount = step(2.5, waterKind);
-    float lakeAmount = step(1.5, waterKind) - oceanAmount;
+    vec3 shallow = waterKind > 2.5 ? vec3(0.08, 0.34, 0.37)
+        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.045, 0.30, 0.34);
+    vec3 deep = waterKind > 2.5 ? vec3(0.012, 0.085, 0.12)
+        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.004, 0.028, 0.09);
+    float riverAmount = step(2.5, waterKind);
+    float lakeAmount = step(1.5, waterKind) - riverAmount;
+    float oceanAmount = 1.0 - lakeAmount - riverAmount;
     float waveStrength = (oceanAmount * 0.15 + lakeAmount * 0.065
-        + (1.0 - oceanAmount - lakeAmount) * 0.04) * uWaveAmplitude;
+        + riverAmount * 0.04) * uWaveAmplitude;
     float waveX = cos(vVisualSurface.x * 0.41 + animationTime * 1.35)
         + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - animationTime * 0.86);
     float waveY = sin(vVisualSurface.y * 0.37 - animationTime * 1.08)

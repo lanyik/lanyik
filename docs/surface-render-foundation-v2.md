@@ -36,10 +36,10 @@ Dynamic fog authority ── SurfaceFogTexturePool R8 ── GroundLayer
 |---|---:|---|
 | `WORLD_DESCRIPTOR_FORMAT_VERSION` | 2 | source、拓扑和 catalog 身份 |
 | `WORLD_CHUNK_FORMAT_VERSION` | 2 | 32×32 semantic SoA |
-| `HYDROLOGY_REGION_FORMAT_VERSION` | 1 | 128×128 矢量水文切片 |
-| `WORLD_GENERATOR_VERSION` | 7 | 程序化语义和水文生成 |
+| `HYDROLOGY_REGION_FORMAT_VERSION` | 2 | 128×128 矢量水文切片 |
+| `WORLD_GENERATOR_VERSION` | 8 | 程序化语义和水文生成 |
 | `WORLD_WORKER_PROTOCOL_VERSION` | 5 | 语义、水文和表面编译消息 |
-| `SURFACE_COMPILER_REVISION` | 2 | field、水面 geometry、植被 seed |
+| `SURFACE_COMPILER_REVISION` | 3 | field、水面 geometry、植被 seed |
 | `SURFACE_COMPILE_PROFILE_VERSION` | 1 | 16/4/1/2/66/128 profile |
 | `WORLD_DELTA_FORMAT_VERSION` | 3 | semantic + hydrology 原子存档 |
 | `WORLD_SEMANTIC_NAVIGATION_FORMAT_VERSION` | 3 | 32×32 导航摘要 |
@@ -100,6 +100,8 @@ vegetationProfile: Uint8Array;   // 1 / tile
 
 `MacroDrainageGraph` 冻结下游 rank、终点、汇流和稳定 ID。有限/环绕世界先构造完整低分辨率排水图再切 region；无限世界按原点对齐的 2048×2048 有限流域分解，每个 region 只有有限依赖。
 
+`drainageLevel` 只用于 priority-flood 路由和洼地求解，不直接作为最终可见水面。region v2 根据终点水位、drainage level 与 rank 生成单调不升的 river level profile，并为每条宏观边保留确定性的最小下游坡降；湖泊和海洋仍分别使用单一水平 body level。
+
 `HydrologyRegion` 保存河段、湖盆、河口、body palette 和裁切产生的 boundary ports，不保存逐格占用。相邻 region 的 port/connection 必须由同一图边派生并逐字节匹配。feature 空间索引和 derived raster 都是可丢弃查询产物。
 
 编辑的 river/lake 使用完整 `HydrologyFeatureDelta`，包含稳定 feature/body ID、控制点、宽度/水位 profile、source/outlet 和 revision。Store 在提交前验证连接目标与河网无环性。
@@ -158,8 +160,8 @@ Memory 和 IndexedDB 实现共享契约；IndexedDB 的 read/CAS/write 位于同
 2. 应用有效高度编辑；
 3. 栅格化海洋、湖泊和河流；
 4. 计算 water coverage、kind、profile、body palette；
-5. 计算 water level、depth、shoreline SDF 和 flow；
-6. 计算连续材质权重；
+5. 以河道中心与两岸地形约束 river level，限制切深并派生连续河床；
+6. 计算 water depth、shoreline SDF、flow 和连续材质权重；
 7. 量化 66×66 field 和 bounds；
 8. 编译 full/coverage/sweep 水面 geometry；
 9. 生成稳定 vegetation seed SoA；
@@ -219,6 +221,8 @@ Ground -> Water -> Vegetation -> dynamic fog
 
 会话同时执行七类预算：semantic authority、hydrology authority、compiled CPU cache、retained window、compiled working set、surface GPU、fog GPU。超预算时拒绝完整新增集合并回滚，而不是隐式少画或用旧路径。
 
+demand 变化采用两阶段发布：旧 demand 在新 authority/compiled lease 准备期间继续覆盖场景；新集合通过完整工作集预算检查后，在同一发布阶段卸载退休块并挂载替代块。连续相机移动只保留最新一个尚未执行的 demand，不能因逐帧排队或“先卸后编译”暴露黑色缺块。
+
 编辑提交后仅 dirty demanded chunks 取消旧 token、释放旧 lease、重新捕获 authority、编译和上传；其他块保持不动。LOD 变化只切共享 geometry/实例子集，不触发 authority 或 field 重编译。
 
 `SurfacePresentationLayer`、`SemanticNavigationIndex`、`WorldSimulationRuntime.applyWorldChangeSet()`、`SurfacePickingService` 和 `SurfaceQueryService` 都消费结构化 change/dependency 数据，不做全世界 refresh。
@@ -266,7 +270,7 @@ Ground -> Water -> Vegetation -> dynamic fog
 
 ## 15. 原始八步完成映射
 
-1. 权威语义格式：descriptor 2、generator 7、32×32 SoA、serialization、static typed authority、Worker generation。
+1. 权威语义格式：descriptor 2、generator 8、32×32 SoA、serialization、static typed authority、Worker generation。
 2. 水文权威：MacroDrainageGraph、128×128 regions、ports、spatial index、derived raster、无限有限依赖。
 3. 生效快照：semantic/feature delta、EffectiveWorldView、effectiveRevision、dependency key、request token、change kernel。
 4. CPU 编译：lattice、20×20 window、66×66 fields、buffer pool、reference query、stale rejection。

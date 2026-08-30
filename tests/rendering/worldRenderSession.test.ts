@@ -8,6 +8,8 @@ function fixture(chunkBytes = 128) {
     const descriptor = createWorldDescriptorV2({ seed: "render-session-v2" });
     const calls: string[] = [];
     let generation = 0;
+    let deferCompilation = false;
+    const pendingCompilations: Array<() => void> = [];
     const authority = {
         retain: async (key: { chunkX: number; chunkY: number }) => ({
             key,
@@ -34,10 +36,13 @@ function fixture(chunkBytes = 128) {
                     return true;
                 }
             };
+            const outcome = { status: "ready" as const, requestToken: lease.requestToken, lease };
             return {
                 key,
                 requestToken: lease.requestToken,
-                result: Promise.resolve({ status: "ready", requestToken: lease.requestToken, lease }),
+                result: deferCompilation
+                    ? new Promise(resolve => pendingCompilations.push(() => resolve(outcome)))
+                    : Promise.resolve(outcome),
                 cancel: () => lease.release()
             };
         },
@@ -74,7 +79,18 @@ function fixture(chunkBytes = 128) {
         queries: queries as never,
         compiledWorkingSetBudgetBytes: 1024
     });
-    return { session, calls, compilation, presentation, queries };
+    return {
+        session,
+        calls,
+        compilation,
+        presentation,
+        queries,
+        deferCompilation: () => { deferCompilation = true; },
+        resolveCompilations: () => {
+            for (const resolve of pendingCompilations.splice(0)) resolve();
+        },
+        pendingCompilationCount: () => pendingCompilations.length
+    };
 }
 
 describe("WorldRenderSession", () => {
@@ -102,6 +118,28 @@ describe("WorldRenderSession", () => {
             { key: { chunkX: 1, chunkY: 2 }, lod: 0 },
             { key: { chunkX: 1, chunkY: 2 }, lod: 1 }
         ])).rejects.toThrow(/duplicate canonical/);
+    });
+
+    test("keeps the previous coverage mounted until replacement chunks are compiled", async () => {
+        const fixtureValue = fixture();
+        const { session, calls } = fixtureValue;
+        await session.initialize();
+        await session.updateDemand([{ key: { chunkX: 0, chunkY: 0 }, lod: 0 }]);
+        calls.length = 0;
+        fixtureValue.deferCompilation();
+
+        const transition = session.updateDemand([{ key: { chunkX: 1, chunkY: 0 }, lod: 0 }]);
+        await vi.waitFor(() => expect(fixtureValue.pendingCompilationCount()).toBe(1));
+        expect(calls).toEqual([]);
+        expect(session.stats).toMatchObject({ mountedChunks: 1, mountedCompiledBytes: 128 });
+
+        fixtureValue.resolveCompilations();
+        await transition;
+        expect(calls).toEqual([
+            "unmount-vegetation", "unmount-water", "unmount-ground",
+            "mount-ground", "mount-water", "mount-vegetation"
+        ]);
+        expect(session.stats).toMatchObject({ demandedChunks: 1, mountedChunks: 1, mountedCompiledBytes: 128 });
     });
 
     test("fails deterministically when the exact visible working set exceeds its byte budget", async () => {

@@ -25,7 +25,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
-- descriptor format 升至 2、semantic chunk format 升至 2、generator 升至 7、Worker protocol 升至 5、
+- descriptor format 升至 2、semantic chunk format 升至 2、hydrology region 升至 2、generator 升至 8、surface compiler 升至 3、Worker protocol 升至 5、
   delta store 升至 3、generation checkpoint 升至 2。
 - procedural 与 static 世界都必须先编译为同一 typed authority；static 输入不再接受对象 tile、字符串
   modifier 或隐式水文。
@@ -42,6 +42,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- demand 切换改为保留旧覆盖直到替代 chunk 编译完成，并合并连续相机移动产生的待执行需求，消除拖动时“先卸载、后编译”造成的瞬时黑缝和缺块。
+- priority-flood 的排水高度不再直接充当河流渲染水面；河流 profile 保留下游坡降，surface compiler 以河心和两岸地形限制水位、限制切深并派生河床，湖海在汇入口优先接管水面，消除浮空和平板河带。
+- 修正 Water shader 对 `Ocean=1`、`Lake=2`、`River=3` 的反向解释；河流、湖泊和海洋现在使用各自的波形、颜色与强度。
+- 水面边界顶点改用 coverage 加权水位采样，避免与干地零水位插值后产生下坠尖刺、窄河消失或岸边竖片。
 - 恢复 v2 唯一生产渲染路径的天空/距离雾、世界坐标地表细节、统一六边格、沙岸、水面深浅层次/浪带/泡沫和分层植被表现；Ground/Water 外圈增加不改变权威 UV 的微型 overlap guard，并用 gutter 对称法线采样消除多 chunk 亚像素漏缝与光照接缝。
 - Ground/Water 共享页材质现在会在每个 chunk draw 前上传 texture layer、有效边界和水面 phase，修复多块世界误采样单一 GPU slot 造成的规则断崖与接缝。
 - 旧 revision 的 Worker、query、picking、navigation、simulation 和 GPU 结果无法再发布到新世界。

@@ -26,7 +26,8 @@ import {
     surfaceFieldTexelCoordinate,
     surfaceLatticeIndex,
     surfaceLatticeTexelLocalCoordinate,
-    surfaceToWorld
+    surfaceToWorld,
+    worldToSurface
 } from "./SurfaceLattice";
 import { decodeFloat16, encodeFloat16 } from "./SurfaceHalfFloat";
 import {
@@ -107,16 +108,28 @@ interface PreparedLake extends SurfaceWindowLake {
     readonly worldPoints: Float64Array;
 }
 
-interface WaterCandidate {
+interface WaterCandidateBase {
     readonly coverage: number;
     readonly rank: number;
-    readonly kind: HydrologyWaterKind;
     readonly bodyId: string;
     readonly profileIndex: number;
     readonly level: number;
     readonly flowX: number;
     readonly flowY: number;
 }
+
+interface RiverWaterCandidate extends WaterCandidateBase {
+    readonly kind: HydrologyWaterKind.River;
+    readonly centerX: number;
+    readonly centerZ: number;
+    readonly halfWidth: number;
+}
+
+interface StandingWaterCandidate extends WaterCandidateBase {
+    readonly kind: HydrologyWaterKind.Ocean | HydrologyWaterKind.Lake;
+}
+
+type WaterCandidate = RiverWaterCandidate | StandingWaterCandidate;
 
 const SQRT_THREE = Math.sqrt(3);
 const TEXEL_ANTIALIAS_DISTANCE = SQRT_THREE / SURFACE_SAMPLES_PER_TILE_INTERVAL / 2;
@@ -127,6 +140,10 @@ const SHORE_SEARCH_TEXELS = Math.ceil(
 const SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
 const SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
 const SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
+const RIVER_SURFACE_INSET = 128 / 65535;
+const RIVER_MAX_INCISE = 3_072 / 65535;
+const RIVER_MIN_BED_DEPTH = 384 / 65535;
+const RIVER_MAX_BED_DEPTH = 1_280 / 65535;
 const validatedCompiledChunks = new WeakSet<CompiledSurfaceChunk>();
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -245,7 +262,10 @@ function riverCandidate(x: number, z: number, river: PreparedRiver): WaterCandid
             level: (river.levelProfile[index / 2]
                 + (river.levelProfile[index / 2 + 1] - river.levelProfile[index / 2]) * amount) / 65535,
             flowX: dx / length,
-            flowY: dz / length
+            flowY: dz / length,
+            centerX: nearestX,
+            centerZ: nearestZ,
+            halfWidth
         };
     }
     return best?.coverage ? best : undefined;
@@ -293,7 +313,7 @@ function surfaceLakeCandidate(x: number, z: number, lake: PreparedLake): WaterCa
     if (coverage === 0) return undefined;
     return {
         coverage,
-        rank: 2,
+        rank: 4,
         kind: HydrologyWaterKind.Lake,
         bodyId: lake.bodyId,
         profileIndex: lake.profileIndex,
@@ -307,6 +327,38 @@ function candidateWins(candidate: WaterCandidate, current: WaterCandidate | unde
     return !current || candidate.coverage > current.coverage
         || candidate.coverage === current.coverage && (candidate.rank > current.rank
             || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
+}
+
+function sampleMacroGroundAtWorld(
+    window: TransferableEffectiveWindow,
+    worldX: number,
+    worldZ: number
+): number {
+    const local = worldToSurface(worldX, worldZ);
+    return sampleWindowChannel(window.macroHeight, local.u, local.v, 1, 0) / 65535;
+}
+
+function deriveRiverSurfaceLevel(
+    window: TransferableEffectiveWindow,
+    localGround: number,
+    candidate: RiverWaterCandidate
+): number {
+    const centerX = candidate.centerX;
+    const centerZ = candidate.centerZ;
+    const halfWidth = candidate.halfWidth;
+    const normalX = -candidate.flowY;
+    const normalZ = candidate.flowX;
+    const terrainCeiling = Math.min(
+        localGround,
+        sampleMacroGroundAtWorld(window, centerX, centerZ),
+        sampleMacroGroundAtWorld(window, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
+        sampleMacroGroundAtWorld(window, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
+    );
+    return clamp(
+        candidate.level,
+        Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
+        Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+    );
 }
 
 function fieldGradient(
@@ -342,7 +394,7 @@ function oceanCandidate(groundHeight: number, slope: number): WaterCandidate | u
     if (coverage === 0) return undefined;
     return {
         coverage,
-        rank: 1,
+        rank: 5,
         kind: HydrologyWaterKind.Ocean,
         bodyId: OCEAN_BODY_ID,
         profileIndex: 0,
@@ -547,6 +599,7 @@ export function compileSurfaceChunk(window: TransferableEffectiveWindow): Compil
     const workWaterProfile = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
     const workWaterLevel = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
     const workFlow = new Float64Array(SURFACE_WORK_TEXEL_COUNT * 2);
+    const workRiverBedDepth = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
     const workBodyIds: Array<string | undefined> = new Array(SURFACE_WORK_TEXEL_COUNT);
     for (let physicalX = 0; physicalX < SURFACE_WORK_SIZE; physicalX += 1) {
         for (let physicalY = 0; physicalY < SURFACE_WORK_SIZE; physicalY += 1) {
@@ -566,14 +619,27 @@ export function compileSurfaceChunk(window: TransferableEffectiveWindow): Compil
             );
             if (ocean && candidateWins(ocean, best)) best = ocean;
             if (!best) continue;
+            let level = best.level;
+            if (best.kind === HydrologyWaterKind.River) {
+                level = deriveRiverSurfaceLevel(window, ground[index], best);
+                workRiverBedDepth[index] = RIVER_MIN_BED_DEPTH
+                    + clamp(best.halfWidth / 4, 0, 1)
+                        * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);
+            }
             workCoverage[index] = best.coverage;
             workWaterKind[index] = best.kind;
             workWaterProfile[index] = best.profileIndex;
-            workWaterLevel[index] = best.level;
+            workWaterLevel[index] = level;
             workFlow[index * 2] = best.flowX;
             workFlow[index * 2 + 1] = best.flowY;
             workBodyIds[index] = best.bodyId;
         }
+    }
+    for (let index = 0; index < SURFACE_WORK_TEXEL_COUNT; index += 1) {
+        if (workWaterKind[index] !== HydrologyWaterKind.River || workCoverage[index] === 0) continue;
+        const channelAmount = workCoverage[index] / 255;
+        const channelGround = workWaterLevel[index] - workRiverBedDepth[index] * channelAmount;
+        ground[index] = Math.min(ground[index], channelGround);
     }
     const shore = computeShoreDistances(workCoverage, worldX, worldZ, SURFACE_WORK_SIZE);
     const bodyDefinitions = new Map<string, CompiledWaterBodyRef>();

@@ -38,7 +38,7 @@ async function mountFixedSurface(page: Page): Promise<void> {
             { chunkX: 0, chunkY: 1 },
             { chunkX: 1, chunkY: 1 }
         ];
-        const lakeId = api.createStableHydrologyId("lake", ["surface-v2-fixed-gallery"]);
+        const riverId = api.createStableHydrologyId("river", ["surface-v2-fixed-gallery"]);
         const releases = keys.map(() => false);
         document.body.replaceChildren();
         document.body.style.cssText = "margin:0;background:#0b1017;overflow:hidden";
@@ -70,11 +70,21 @@ async function mountFixedSurface(page: Page): Promise<void> {
                 hydrologyRegions: [{
                     key: { regionX: 0, regionY: 0 },
                     baseRevision: 0,
-                    features: [{ featureId: lakeId, revision: 1 }]
+                    features: [{ featureId: riverId, revision: 1 }]
                 }]
             };
             const originX = key.chunkX * 16;
             const originY = key.chunkY * 16;
+            const macroHeight = new Uint16Array(count);
+            for (let x = 0; x < api.SURFACE_EFFECTIVE_WINDOW_SIZE; x += 1) {
+                for (let y = 0; y < api.SURFACE_EFFECTIVE_WINDOW_SIZE; y += 1) {
+                    const globalX = originX + x - api.SURFACE_INFLUENCE_RADIUS_TILES;
+                    const globalY = originY + y - api.SURFACE_INFLUENCE_RADIUS_TILES;
+                    macroHeight[x * api.SURFACE_EFFECTIVE_WINDOW_SIZE + y] = Math.round(
+                        50_000 - globalX * 320 - globalY * 24
+                    );
+                }
+            }
             const chunk = api.compileSurfaceChunk({
                 worldIdentity: "surface-v2-fixed-gallery",
                 effectiveRevision: 1,
@@ -82,26 +92,27 @@ async function mountFixedSurface(page: Page): Promise<void> {
                 dependencyKey,
                 validBounds: { minX: 0, minY: 0, maxXExclusive: 16, maxYExclusive: 16 },
                 substrateClass: new Uint8Array(count).fill(1),
-                macroHeight: new Uint16Array(count).fill(32_000),
+                macroHeight,
                 biomeWeights,
                 climate: new Uint8Array(count * 2).fill(150),
                 vegetationDensity: new Uint8Array(count).fill(255),
                 vegetationProfile: new Uint8Array(count).fill(3),
-                rivers: [],
-                lakes: [{
-                    kind: "lake",
-                    featureKey: lakeId,
-                    bodyId: lakeId,
+                rivers: [{
+                    kind: "river",
+                    featureKey: riverId,
+                    bodyId: riverId,
                     revision: 1,
-                    profileIndex: 3,
-                    boundaryPoints: new Float64Array([
-                        2 - originX, 2 - originY,
-                        29 - originX, 2 - originY,
-                        29 - originX, 29 - originY,
-                        2 - originX, 29 - originY
+                    profileIndex: 2,
+                    controlPoints: new Float64Array([
+                        0 - originX, 8 - originY,
+                        12 - originX, 20 - originY,
+                        22 - originX, 10 - originY,
+                        32 - originX, 24 - originY
                     ]),
-                    level: 45_000
-                }]
+                    widthProfile: new Uint8Array([20, 20, 20, 20]),
+                    levelProfile: new Uint16Array([52_000, 44_000, 40_000, 33_000])
+                }],
+                lakes: []
             });
             const lease = Object.freeze({
                 requestToken: Object.freeze({ sessionEpoch: 1, renderChunkGeneration: 1 }),
@@ -199,7 +210,7 @@ test("surface v2 fixed-seed water and vegetation views", async ({ page }, testIn
     expect(stats).toMatchObject({
         result: {
             mountedChunks: 4,
-            water: { coverageMeshes: 4 },
+            water: { sweepMeshes: 4 },
             vegetation: { candidateCount: expect.any(Number) }
         },
         released: true

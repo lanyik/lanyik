@@ -2,7 +2,7 @@
 var WORLD_WORKER_PROTOCOL_VERSION = 5;
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 7;
+var WORLD_GENERATOR_VERSION = 8;
 
 // src/world/semantic/WorldSemanticCatalog.ts
 var WORLD_BIOME_BASIS = Object.freeze([
@@ -56,7 +56,7 @@ var WORLD_VEGETATION_CATALOG_IDENTITY = Object.freeze({
 var WORLD_SEMANTIC_CHUNK_SIZE = 32;
 var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
 var WORLD_CHUNK_FORMAT_VERSION = 2;
-var HYDROLOGY_REGION_FORMAT_VERSION = 1;
+var HYDROLOGY_REGION_FORMAT_VERSION = 2;
 var BASE_SEMANTIC_CHUNK_REVISION = 0;
 var HYDROLOGY_REGION_SIZE = 128;
 var HYDROLOGY_REGION_REVISION = 0;
@@ -2019,6 +2019,15 @@ function hydrologyRegionTransferables(region) {
 
 // src/world/semantic/generateHydrologyRegion.ts
 var EPSILON = 1e-9;
+var RIVER_DROP_WEIGHT_PER_MACRO_EDGE = 96;
+function riverNodeLevel(node, terminalLevel, maximumDrainageRank) {
+  const available = 65535 - terminalLevel;
+  if (available <= 0) return terminalLevel;
+  const scale = available / (available + maximumDrainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE);
+  return Math.min(65535, Math.max(terminalLevel, Math.round(
+    terminalLevel + (node.drainageLevel - terminalLevel + node.drainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE) * scale
+  )));
+}
 function validBoundsFor(descriptor, key) {
   const origin = hydrologyRegionOrigin(key);
   if (descriptor.topology === "infinite") {
@@ -2205,6 +2214,11 @@ function compileRegionFromGraph(graph, key, bounds) {
   };
   const nodeById = new Map(graph.nodes.map((node) => [node.nodeId, node]));
   const terminalByNode = new Map(graph.terminals.map((terminal) => [terminal.nodeId, terminal]));
+  const terminalLevelByBody = new Map(graph.terminals.map((terminal) => [terminal.bodyId, terminal.level]));
+  const maximumDrainageRank = graph.nodes.reduce(
+    (maximum, node) => Math.max(maximum, node.drainageRank),
+    0
+  );
   const terminalNodes = new Set(terminalByNode.keys());
   const riverEdges = graph.edges.filter((edge) => edge.dischargeClass >= HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS);
   const incomingRiverEdges = /* @__PURE__ */ new Map();
@@ -2241,9 +2255,13 @@ function compileRegionFromGraph(graph, key, bounds) {
       ]);
       const width = riverWidth(edge.dischargeClass);
       const widthProfile = new Uint8Array([width, width]);
+      const terminalLevel = terminalLevelByBody.get(edge.terminalBodyId);
+      if (terminalLevel === void 0) throw new Error("drainage edge references a missing terminal body");
+      const upstreamLevel = riverNodeLevel(upstream, terminalLevel, maximumDrainageRank);
+      const downstreamLevel = riverNodeLevel(downstream, terminalLevel, maximumDrainageRank);
       const levelProfile = new Uint16Array([
-        interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.startT),
-        interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.endT)
+        interpolateUint16(upstreamLevel, downstreamLevel, clipped.startT),
+        interpolateUint16(upstreamLevel, downstreamLevel, clipped.endT)
       ]);
       const makeBoundaryEndpoint = (point, direction, level) => {
         const side = pointSide(point, rect, flow);
@@ -2405,7 +2423,7 @@ var SURFACE_WATER_COVERAGE_THRESHOLD = 128;
 var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
 var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
 var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
-var SURFACE_COMPILER_REVISION = 2;
+var SURFACE_COMPILER_REVISION = 3;
 var SURFACE_COMPILE_PROFILE_VERSION = 1;
 var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
   renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -3202,6 +3220,10 @@ var SHORE_SEARCH_TEXELS = Math.ceil(
 var SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
 var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
 var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
+var RIVER_SURFACE_INSET = 128 / 65535;
+var RIVER_MAX_INCISE = 3072 / 65535;
+var RIVER_MIN_BED_DEPTH = 384 / 65535;
+var RIVER_MAX_BED_DEPTH = 1280 / 65535;
 var validatedCompiledChunks = /* @__PURE__ */ new WeakSet();
 function clamp2(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, value));
@@ -3305,7 +3327,10 @@ function riverCandidate(x, z, river) {
       profileIndex: river.profileIndex,
       level: (river.levelProfile[index / 2] + (river.levelProfile[index / 2 + 1] - river.levelProfile[index / 2]) * amount) / 65535,
       flowX: dx / length,
-      flowY: dz / length
+      flowY: dz / length,
+      centerX: nearestX,
+      centerZ: nearestZ,
+      halfWidth
     };
   }
   return best?.coverage ? best : void 0;
@@ -3344,7 +3369,7 @@ function surfaceLakeCandidate(x, z, lake) {
   if (coverage === 0) return void 0;
   return {
     coverage,
-    rank: 2,
+    rank: 4,
     kind: 2 /* Lake */,
     bodyId: lake.bodyId,
     profileIndex: lake.profileIndex,
@@ -3355,6 +3380,28 @@ function surfaceLakeCandidate(x, z, lake) {
 }
 function candidateWins(candidate, current) {
   return !current || candidate.coverage > current.coverage || candidate.coverage === current.coverage && (candidate.rank > current.rank || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
+}
+function sampleMacroGroundAtWorld(window, worldX, worldZ) {
+  const local = worldToSurface(worldX, worldZ);
+  return sampleWindowChannel(window.macroHeight, local.u, local.v, 1, 0) / 65535;
+}
+function deriveRiverSurfaceLevel(window, localGround, candidate) {
+  const centerX = candidate.centerX;
+  const centerZ = candidate.centerZ;
+  const halfWidth = candidate.halfWidth;
+  const normalX = -candidate.flowY;
+  const normalZ = candidate.flowX;
+  const terrainCeiling = Math.min(
+    localGround,
+    sampleMacroGroundAtWorld(window, centerX, centerZ),
+    sampleMacroGroundAtWorld(window, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
+    sampleMacroGroundAtWorld(window, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
+  );
+  return clamp2(
+    candidate.level,
+    Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
+    Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+  );
 }
 function fieldGradient(ground, worldX, worldZ, physicalX, physicalY, size) {
   const leftX = Math.max(0, physicalX - 1);
@@ -3381,7 +3428,7 @@ function oceanCandidate(groundHeight, slope) {
   if (coverage === 0) return void 0;
   return {
     coverage,
-    rank: 1,
+    rank: 5,
     kind: 1 /* Ocean */,
     bodyId: OCEAN_BODY_ID,
     profileIndex: 0,
@@ -3547,6 +3594,7 @@ function compileSurfaceChunk(window) {
   const workWaterProfile = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
   const workWaterLevel = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
   const workFlow = new Float64Array(SURFACE_WORK_TEXEL_COUNT * 2);
+  const workRiverBedDepth = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
   const workBodyIds = new Array(SURFACE_WORK_TEXEL_COUNT);
   for (let physicalX = 0; physicalX < SURFACE_WORK_SIZE; physicalX += 1) {
     for (let physicalY = 0; physicalY < SURFACE_WORK_SIZE; physicalY += 1) {
@@ -3566,14 +3614,25 @@ function compileSurfaceChunk(window) {
       );
       if (ocean && candidateWins(ocean, best)) best = ocean;
       if (!best) continue;
+      let level = best.level;
+      if (best.kind === 3 /* River */) {
+        level = deriveRiverSurfaceLevel(window, ground[index], best);
+        workRiverBedDepth[index] = RIVER_MIN_BED_DEPTH + clamp2(best.halfWidth / 4, 0, 1) * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);
+      }
       workCoverage[index] = best.coverage;
       workWaterKind[index] = best.kind;
       workWaterProfile[index] = best.profileIndex;
-      workWaterLevel[index] = best.level;
+      workWaterLevel[index] = level;
       workFlow[index * 2] = best.flowX;
       workFlow[index * 2 + 1] = best.flowY;
       workBodyIds[index] = best.bodyId;
     }
+  }
+  for (let index = 0; index < SURFACE_WORK_TEXEL_COUNT; index += 1) {
+    if (workWaterKind[index] !== 3 /* River */ || workCoverage[index] === 0) continue;
+    const channelAmount = workCoverage[index] / 255;
+    const channelGround = workWaterLevel[index] - workRiverBedDepth[index] * channelAmount;
+    ground[index] = Math.min(ground[index], channelGround);
   }
   const shore = computeShoreDistances(workCoverage, worldX, worldZ, SURFACE_WORK_SIZE);
   const bodyDefinitions = /* @__PURE__ */ new Map();

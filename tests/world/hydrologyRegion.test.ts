@@ -148,6 +148,13 @@ describe("surface foundation v2 hydrology", () => {
         const reverse = [...keys].reverse().map(key => reverseGenerator.generate(key)).reverse();
         expect(forward.map(regionSnapshot)).toEqual(reverse.map(regionSnapshot));
         expect(forward.some(region => region.rivers.length > 40)).toBe(true);
+        const riverProfiles = forward.flatMap(region => region.rivers.map(river => river.levelProfile));
+        expect(riverProfiles.some(profile => profile[0] > profile[profile.length - 1])).toBe(true);
+        for (const profile of riverProfiles) {
+            for (let index = 1; index < profile.length; index += 1) {
+                expect(profile[index]).toBeLessThanOrEqual(profile[index - 1]);
+            }
+        }
         const lakeSlices = forward.flatMap(region => region.lakes);
         expect(lakeSlices.length).toBeGreaterThan(1);
         expect(new Set(lakeSlices.map(lake => lake.bodyId))).toHaveLength(1);

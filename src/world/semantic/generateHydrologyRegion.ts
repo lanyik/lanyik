@@ -67,6 +67,23 @@ interface RegionRect {
 }
 
 const EPSILON = 1e-9;
+const RIVER_DROP_WEIGHT_PER_MACRO_EDGE = 96;
+
+function riverNodeLevel(
+    node: MacroDrainageNode,
+    terminalLevel: number,
+    maximumDrainageRank: number
+): number {
+    const available = 65535 - terminalLevel;
+    if (available <= 0) return terminalLevel;
+    const scale = available / (available + maximumDrainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE);
+    return Math.min(65535, Math.max(terminalLevel, Math.round(
+        terminalLevel + (
+            node.drainageLevel - terminalLevel
+            + node.drainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE
+        ) * scale
+    )));
+}
 
 function validBoundsFor(
     descriptor: WorldDescriptorV2,
@@ -287,6 +304,11 @@ function compileRegionFromGraph(
     };
     const nodeById = new Map(graph.nodes.map(node => [node.nodeId, node]));
     const terminalByNode = new Map(graph.terminals.map(terminal => [terminal.nodeId, terminal]));
+    const terminalLevelByBody = new Map(graph.terminals.map(terminal => [terminal.bodyId, terminal.level]));
+    const maximumDrainageRank = graph.nodes.reduce(
+        (maximum, node) => Math.max(maximum, node.drainageRank),
+        0
+    );
     const terminalNodes = new Set(terminalByNode.keys());
     const riverEdges = graph.edges.filter(edge => edge.dischargeClass >= HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS);
     const incomingRiverEdges = new Map<string, number>();
@@ -324,9 +346,13 @@ function compileRegionFromGraph(
             ]);
             const width = riverWidth(edge.dischargeClass);
             const widthProfile = new Uint8Array([width, width]);
+            const terminalLevel = terminalLevelByBody.get(edge.terminalBodyId);
+            if (terminalLevel === undefined) throw new Error("drainage edge references a missing terminal body");
+            const upstreamLevel = riverNodeLevel(upstream, terminalLevel, maximumDrainageRank);
+            const downstreamLevel = riverNodeLevel(downstream, terminalLevel, maximumDrainageRank);
             const levelProfile = new Uint16Array([
-                interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.startT),
-                interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.endT)
+                interpolateUint16(upstreamLevel, downstreamLevel, clipped.startT),
+                interpolateUint16(upstreamLevel, downstreamLevel, clipped.endT)
             ]);
             const makeBoundaryEndpoint = (
                 point: Vec2,

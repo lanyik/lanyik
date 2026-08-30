@@ -349,9 +349,30 @@ describe("CPU surface compiler revision 2", () => {
         expect(sample.waterBody?.kind).toBe("river");
         expect(sample.flow[0]).toBeGreaterThan(0.99);
         expect(Math.abs(sample.flow[1])).toBeLessThan(0.01);
+        expect(sample.waterLevel).toBeLessThan(32_000 / 65535);
+        expect(sample.groundHeight).toBeLessThan(sample.waterLevel);
+        expect(sample.waterDepth).toBeGreaterThan(0);
         expect(chunk.waterGeometry.kind).toBe("coverage");
         expect(chunk.field.shorelineDistance.some(bits => decodeFloat16(bits) < 0)).toBe(true);
         expect(chunk.field.shorelineDistance.some(bits => decodeFloat16(bits) > 0)).toBe(true);
+    });
+
+    test("derives a descending river surface from terrain and cuts a continuous river bed", () => {
+        const descriptor = createWorldDescriptorV2({ seed: "surface-river-slope" });
+        const key = { chunkX: 4, chunkY: 4 };
+        const originalHeight = (x: number) => 52_000 - x * 220;
+        const capture = captureFor(descriptor, key, originalHeight, riverLayer(descriptor));
+        const chunk = compileSurfaceChunk(createTransferableEffectiveWindow(capture.snapshot, key));
+        const upstream = sampleCompiledSurfaceChunk(chunk, 2, 8);
+        const downstream = sampleCompiledSurfaceChunk(chunk, 14, 8);
+        for (const [localX, sample] of [[2, upstream], [14, downstream]] as const) {
+            const authorityGround = originalHeight(key.chunkX * SURFACE_RENDER_CHUNK_SIZE + localX) / 65535;
+            expect(sample.waterKind).toBe(HydrologyWaterKind.River);
+            expect(sample.waterLevel).toBeLessThan(authorityGround);
+            expect(sample.groundHeight).toBeLessThan(sample.waterLevel);
+            expect(sample.waterDepth).toBeGreaterThan(0);
+        }
+        expect(upstream.waterLevel).toBeGreaterThan(downstream.waterLevel);
     });
 
     test("emits an explicit deterministic sweep for a narrow river", () => {
@@ -463,8 +484,9 @@ describe("CPU surface compiler revision 2", () => {
     test("produces byte-identical overlapping texels on adjacent render chunks", () => {
         const descriptor = createWorldDescriptorV2({ seed: "surface-adjacent" });
         const height = (x: number) => 45_000 + x * 10;
-        const westCapture = captureFor(descriptor, { chunkX: 4, chunkY: 4 }, height);
-        const eastCapture = captureFor(descriptor, { chunkX: 5, chunkY: 4 }, height);
+        const hydrology = riverLayer(descriptor);
+        const westCapture = captureFor(descriptor, { chunkX: 4, chunkY: 4 }, height, hydrology);
+        const eastCapture = captureFor(descriptor, { chunkX: 5, chunkY: 4 }, height, hydrology);
         const west = compileSurfaceChunk(createTransferableEffectiveWindow(
             westCapture.snapshot,
             { chunkX: 4, chunkY: 4 }
@@ -480,6 +502,11 @@ describe("CPU surface compiler revision 2", () => {
                 expect(west.field.groundHeight[westIndex]).toBe(east.field.groundHeight[eastIndex]);
                 expect(west.field.shorelineDistance[westIndex]).toBe(east.field.shorelineDistance[eastIndex]);
                 expect(west.field.waterCoverage[westIndex]).toBe(east.field.waterCoverage[eastIndex]);
+                expect(west.field.waterLevel[westIndex]).toBe(east.field.waterLevel[eastIndex]);
+                expect(west.field.waterDepth[westIndex]).toBe(east.field.waterDepth[eastIndex]);
+                expect(west.field.waterKind[westIndex]).toBe(east.field.waterKind[eastIndex]);
+                expect(west.field.flow.slice(westIndex * 2, westIndex * 2 + 2))
+                    .toEqual(east.field.flow.slice(eastIndex * 2, eastIndex * 2 + 2));
                 expect(west.field.materialWeights.slice(westIndex * 4, westIndex * 4 + 4))
                     .toEqual(east.field.materialWeights.slice(eastIndex * 4, eastIndex * 4 + 4));
             }

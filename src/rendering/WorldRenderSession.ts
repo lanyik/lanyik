@@ -115,6 +115,7 @@ export class WorldRenderSession {
     private editRefreshCount = 0;
     private staleOutcomeCount = 0;
     private failedChunkCount = 0;
+    private demandTransition: Promise<void> = Promise.resolve();
 
     constructor(options: WorldRenderSessionOptions) {
         if (!options || typeof options !== "object" || !options.authority || !options.compilation
@@ -161,31 +162,41 @@ export class WorldRenderSession {
             canonical.set(serialized, Object.freeze({ ...demand, key }));
         }
         this.demandUpdateCount += 1;
-        for (const [serialized, state] of [...this.demanded]) {
-            if (canonical.has(serialized)) continue;
-            this.releaseState(state);
-            this.demanded.delete(serialized);
-        }
+        const transition = this.demandTransition.then(() => this.applyDemand(canonical));
+        this.demandTransition = transition.catch(() => undefined);
+        return transition;
+    }
+
+    private async applyDemand(canonical: ReadonlyMap<string, WorldRenderDemand>): Promise<void> {
+        this.assertReady();
+        const retiring = [...this.demanded]
+            .filter(([serialized]) => !canonical.has(serialized))
+            .map(([, state]) => state);
+        const retained: DemandState[] = [];
+        const prepared: DemandState[] = [];
         const tasks: Promise<void>[] = [];
+        for (const [serialized, state] of [...this.demanded]) {
+            const demand = canonical.get(serialized);
+            if (!demand) continue;
+            const changedLod = state.lod !== demand.lod;
+            state.lod = demand.lod;
+            state.priority = demand.priority ?? 0;
+            state.lane = demand.lane ?? "visible";
+            if (changedLod && state.context) {
+                state.context = this.context(state, state.surfaceLease!);
+                this.graph.setLod(state.context);
+            }
+            retained.push(state);
+            if (!state.context && !state.task) {
+                state.generation = this.issueGeneration();
+                state.task = this.prepareState(state);
+                prepared.push(state);
+            }
+            if (state.task) tasks.push(state.task);
+        }
         const added: DemandState[] = [];
         for (const [serialized, demand] of canonical) {
-            const existing = this.demanded.get(serialized);
-            if (existing) {
-                const changedLod = existing.lod !== demand.lod;
-                existing.lod = demand.lod;
-                existing.priority = demand.priority ?? 0;
-                existing.lane = demand.lane ?? "visible";
-                if (changedLod && existing.context) {
-                    existing.context = this.context(existing, existing.surfaceLease!);
-                    this.graph.setLod(existing.context);
-                }
-                if (!existing.context && !existing.task) {
-                    existing.generation = this.issueGeneration();
-                    existing.task = this.loadState(existing);
-                }
-                if (existing.task) tasks.push(existing.task);
-                continue;
-            }
+            if (this.demanded.has(serialized)) continue;
             const state: DemandState = {
                 key: demand.key,
                 lod: demand.lod,
@@ -195,12 +206,39 @@ export class WorldRenderSession {
             };
             this.demanded.set(serialized, state);
             added.push(state);
-            state.task = this.loadState(state);
+            prepared.push(state);
+            state.task = this.prepareState(state);
             tasks.push(state.task);
         }
         try {
             await Promise.all(tasks);
+            const projectedBytes = retained.reduce(
+                (total, state) => total + (state.context ? state.surfaceLease!.chunk.byteLength : 0),
+                0
+            ) + prepared.reduce(
+                (total, state) => total + (!state.context && state.surfaceLease
+                    ? state.surfaceLease.chunk.byteLength : 0),
+                0
+            );
+            if (projectedBytes > this.budgetBytes) {
+                this.failedChunkCount += 1;
+                throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
+            }
+
+            // Publish the new exact demand in one microtask turn. The old coverage stays
+            // mounted for the entire authority/compilation wait, so rendering cannot
+            // observe the former load-before-replacement hole.
+            for (const state of retiring) {
+                this.releaseState(state);
+                this.demanded.delete(keyString(state.key));
+            }
+            for (const state of prepared) {
+                if (!state.context && state.surfaceLease) await this.mountPreparedState(state);
+            }
         } catch (reason) {
+            for (const state of prepared) {
+                if (!state.context) this.releaseTransient(state);
+            }
             for (const state of added) {
                 if (this.demanded.get(keyString(state.key)) !== state) continue;
                 this.releaseState(state);
@@ -241,6 +279,7 @@ export class WorldRenderSession {
     }
 
     public async getSettled(): Promise<void> {
+        await this.demandTransition;
         await Promise.all([...this.demanded.values()].map(state => state.task).filter(Boolean) as Promise<void>[]);
     }
 
@@ -322,7 +361,7 @@ export class WorldRenderSession {
         });
     }
 
-    private async loadState(state: DemandState): Promise<void> {
+    private async prepareState(state: DemandState): Promise<void> {
         const generation = state.generation;
         try {
             state.authorityLease = await this.authority.retain(state.key, {
@@ -343,23 +382,7 @@ export class WorldRenderSession {
                 this.staleOutcomeCount += 1;
                 return;
             }
-            if (this.mountedBytes + outcome.lease.chunk.byteLength > this.budgetBytes) {
-                outcome.lease.release();
-                throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
-            }
             state.surfaceLease = outcome.lease;
-            state.compiledBytesAccounted = true;
-            this.mountedBytes += outcome.lease.chunk.byteLength;
-            const context = this.context(state, outcome.lease);
-            await this.graph.mount(context);
-            if (!this.isCurrent(state, generation)) {
-                this.graph.unmount(context);
-                this.mountedBytes -= outcome.lease.chunk.byteLength;
-                state.compiledBytesAccounted = false;
-                state.surfaceLease = undefined;
-                return;
-            }
-            state.context = context;
         } catch (reason) {
             this.releaseTransient(state);
             if (this.isCurrent(state, generation)) {
@@ -370,6 +393,32 @@ export class WorldRenderSession {
         } finally {
             if (this.isCurrent(state, generation)) state.task = undefined;
         }
+    }
+
+    private async mountPreparedState(state: DemandState): Promise<void> {
+        const lease = state.surfaceLease;
+        if (!lease) throw new Error("world render demand was published without a prepared surface lease");
+        if (this.mountedBytes + lease.chunk.byteLength > this.budgetBytes) {
+            throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
+        }
+        state.compiledBytesAccounted = true;
+        this.mountedBytes += lease.chunk.byteLength;
+        const context = this.context(state, lease);
+        try {
+            await this.graph.mount(context);
+            state.context = context;
+        } catch (reason) {
+            this.mountedBytes -= lease.chunk.byteLength;
+            state.compiledBytesAccounted = false;
+            state.surfaceLease = undefined;
+            lease.release();
+            throw reason;
+        }
+    }
+
+    private async loadState(state: DemandState): Promise<void> {
+        await this.prepareState(state);
+        if (state.surfaceLease && !state.context) await this.mountPreparedState(state);
     }
 
     private context(state: DemandState, lease: ResidentSurfaceLease): WorldRenderSessionChunkContext {

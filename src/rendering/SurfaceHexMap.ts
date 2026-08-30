@@ -145,6 +145,12 @@ export class HexMap extends EventEmitter {
     private renderedFrames = 0;
     private demandUpdates = 0;
     private demandSignature = "";
+    private pendingDemand: Readonly<{
+        runtime: WorldSurfaceRuntime;
+        revision: number;
+        demands: ReturnType<typeof planWorldRenderDemand>;
+    }> | undefined;
+    private demandDrainRunning = false;
     private lastAnimationTime = performance.now();
     private stateValue: "ready" | "loading" | "disposed" = "ready";
 
@@ -266,7 +272,7 @@ export class HexMap extends EventEmitter {
             this.activeSky = sky;
             this.interaction.reset();
             scene.add(this.pointer);
-            this.demandSignature = "";
+            this.demandSignature = `${initial.x},${initial.y}`;
             await this.setCameraTargetTile(initial.x, initial.y);
             oldRuntime?.dispose();
             disposeSurfaceSky(oldSky);
@@ -340,6 +346,7 @@ export class HexMap extends EventEmitter {
         this.interaction.dispose();
         this.runtimeValue?.dispose();
         this.runtimeValue = undefined;
+        this.pendingDemand = undefined;
         disposeSurfaceSky(this.activeSky);
         this.activeSky = undefined;
         this.controls.dispose();
@@ -394,7 +401,10 @@ export class HexMap extends EventEmitter {
         if (signature === this.demandSignature) return;
         this.demandSignature = signature;
         this.demandUpdates += 1;
-        void runtime.session.updateDemand(planWorldRenderDemand({
+        this.pendingDemand = Object.freeze({
+            runtime,
+            revision: this.loadRevision,
+            demands: planWorldRenderDemand({
             descriptor: runtime.source.descriptor,
             centerX,
             centerY,
@@ -402,7 +412,27 @@ export class HexMap extends EventEmitter {
             prefetchRadiusTiles: options.prefetchRadiusTiles,
             lod1DistanceTiles: options.lod1DistanceTiles,
             lod2DistanceTiles: options.lod2DistanceTiles
-        })).catch(error => this.emit("error", error instanceof Error ? error : new Error(String(error))));
+            })
+        });
+        void this.drainDemandUpdates();
+    }
+
+    private async drainDemandUpdates(): Promise<void> {
+        if (this.demandDrainRunning) return;
+        this.demandDrainRunning = true;
+        try {
+            while (this.pendingDemand) {
+                const pending = this.pendingDemand;
+                this.pendingDemand = undefined;
+                if (pending.revision !== this.loadRevision || pending.runtime !== this.runtimeValue) continue;
+                await pending.runtime.session.updateDemand(pending.demands);
+            }
+        } catch (reason) {
+            this.emit("error", reason instanceof Error ? reason : new Error(String(reason)));
+        } finally {
+            this.demandDrainRunning = false;
+            if (this.pendingDemand && !this.isDisposed()) void this.drainDemandUpdates();
+        }
     }
 
     private requireRuntime(): WorldSurfaceRuntime {

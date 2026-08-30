@@ -1227,7 +1227,7 @@
   var SURFACE_NARROW_RIVER_MAX_WIDTH_QUANTIZED = 24;
   var SURFACE_VEGETATION_COORDINATE_SCALE = 1024;
   var SURFACE_MAX_VEGETATION_SEEDS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_RENDER_CHUNK_SIZE * 10;
-  var SURFACE_COMPILER_REVISION = 2;
+  var SURFACE_COMPILER_REVISION = 3;
   var SURFACE_COMPILE_PROFILE_VERSION = 1;
   var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
     renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
@@ -1392,7 +1392,7 @@
   var WORLD_SEMANTIC_CHUNK_SIZE = 32;
   var WORLD_SEMANTIC_CHUNK_TILE_COUNT = WORLD_SEMANTIC_CHUNK_SIZE * WORLD_SEMANTIC_CHUNK_SIZE;
   var WORLD_CHUNK_FORMAT_VERSION = 2;
-  var HYDROLOGY_REGION_FORMAT_VERSION = 1;
+  var HYDROLOGY_REGION_FORMAT_VERSION = 2;
   var BASE_SEMANTIC_CHUNK_REVISION = 0;
   var HYDROLOGY_REGION_SIZE = 128;
   var HYDROLOGY_REGION_REVISION = 0;
@@ -1537,7 +1537,7 @@
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 7;
+  var WORLD_GENERATOR_VERSION = 8;
 
   // src/world/semantic/WorldDescriptorV2.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
@@ -5654,6 +5654,10 @@
   var SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
   var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
   var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
+  var RIVER_SURFACE_INSET = 128 / 65535;
+  var RIVER_MAX_INCISE = 3072 / 65535;
+  var RIVER_MIN_BED_DEPTH = 384 / 65535;
+  var RIVER_MAX_BED_DEPTH = 1280 / 65535;
   var validatedCompiledChunks = /* @__PURE__ */ new WeakSet();
   function clamp2(value, minimum, maximum) {
     return Math.max(minimum, Math.min(maximum, value));
@@ -5757,7 +5761,10 @@
         profileIndex: river.profileIndex,
         level: (river.levelProfile[index2 / 2] + (river.levelProfile[index2 / 2 + 1] - river.levelProfile[index2 / 2]) * amount) / 65535,
         flowX: dx / length,
-        flowY: dz / length
+        flowY: dz / length,
+        centerX: nearestX,
+        centerZ: nearestZ,
+        halfWidth
       };
     }
     return best?.coverage ? best : void 0;
@@ -5796,7 +5803,7 @@
     if (coverage === 0) return void 0;
     return {
       coverage,
-      rank: 2,
+      rank: 4,
       kind: 2 /* Lake */,
       bodyId: lake.bodyId,
       profileIndex: lake.profileIndex,
@@ -5807,6 +5814,28 @@
   }
   function candidateWins(candidate, current) {
     return !current || candidate.coverage > current.coverage || candidate.coverage === current.coverage && (candidate.rank > current.rank || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
+  }
+  function sampleMacroGroundAtWorld(window2, worldX, worldZ) {
+    const local = worldToSurface(worldX, worldZ);
+    return sampleWindowChannel(window2.macroHeight, local.u, local.v, 1, 0) / 65535;
+  }
+  function deriveRiverSurfaceLevel(window2, localGround, candidate) {
+    const centerX = candidate.centerX;
+    const centerZ = candidate.centerZ;
+    const halfWidth = candidate.halfWidth;
+    const normalX = -candidate.flowY;
+    const normalZ = candidate.flowX;
+    const terrainCeiling = Math.min(
+      localGround,
+      sampleMacroGroundAtWorld(window2, centerX, centerZ),
+      sampleMacroGroundAtWorld(window2, centerX + normalX * halfWidth, centerZ + normalZ * halfWidth),
+      sampleMacroGroundAtWorld(window2, centerX - normalX * halfWidth, centerZ - normalZ * halfWidth)
+    );
+    return clamp2(
+      candidate.level,
+      Math.max(0, terrainCeiling - RIVER_MAX_INCISE),
+      Math.max(0, terrainCeiling - RIVER_SURFACE_INSET)
+    );
   }
   function fieldGradient(ground, worldX, worldZ, physicalX, physicalY, size) {
     const leftX = Math.max(0, physicalX - 1);
@@ -5833,7 +5862,7 @@
     if (coverage === 0) return void 0;
     return {
       coverage,
-      rank: 1,
+      rank: 5,
       kind: 1 /* Ocean */,
       bodyId: OCEAN_BODY_ID,
       profileIndex: 0,
@@ -5999,6 +6028,7 @@
     const workWaterProfile = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
     const workWaterLevel = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
     const workFlow = new Float64Array(SURFACE_WORK_TEXEL_COUNT * 2);
+    const workRiverBedDepth = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
     const workBodyIds = new Array(SURFACE_WORK_TEXEL_COUNT);
     for (let physicalX = 0; physicalX < SURFACE_WORK_SIZE; physicalX += 1) {
       for (let physicalY = 0; physicalY < SURFACE_WORK_SIZE; physicalY += 1) {
@@ -6018,14 +6048,25 @@
         );
         if (ocean && candidateWins(ocean, best)) best = ocean;
         if (!best) continue;
+        let level = best.level;
+        if (best.kind === 3 /* River */) {
+          level = deriveRiverSurfaceLevel(window2, ground[index2], best);
+          workRiverBedDepth[index2] = RIVER_MIN_BED_DEPTH + clamp2(best.halfWidth / 4, 0, 1) * (RIVER_MAX_BED_DEPTH - RIVER_MIN_BED_DEPTH);
+        }
         workCoverage[index2] = best.coverage;
         workWaterKind[index2] = best.kind;
         workWaterProfile[index2] = best.profileIndex;
-        workWaterLevel[index2] = best.level;
+        workWaterLevel[index2] = level;
         workFlow[index2 * 2] = best.flowX;
         workFlow[index2 * 2 + 1] = best.flowY;
         workBodyIds[index2] = best.bodyId;
       }
+    }
+    for (let index2 = 0; index2 < SURFACE_WORK_TEXEL_COUNT; index2 += 1) {
+      if (workWaterKind[index2] !== 3 /* River */ || workCoverage[index2] === 0) continue;
+      const channelAmount = workCoverage[index2] / 255;
+      const channelGround = workWaterLevel[index2] - workRiverBedDepth[index2] * channelAmount;
+      ground[index2] = Math.min(ground[index2], channelGround);
     }
     const shore = computeShoreDistances(workCoverage, worldX, worldZ, SURFACE_WORK_SIZE);
     const bodyDefinitions = /* @__PURE__ */ new Map();
@@ -8645,8 +8686,39 @@ vec4 sampleBilinear(sampler2DArray source, vec2 localSurface) {
     return mix(top, bottom, amount.y);
 }
 
+float sampleCoverageWeightedWaterLevel(vec2 localSurface, float fallbackLevel) {
+    vec2 coordinate = clamp(surfaceFieldCoordinate(localSurface), vec2(0.0), vec2(SURFACE_FIELD_MAX_TEXEL));
+    ivec2 first = ivec2(floor(coordinate));
+    ivec2 second = min(first + ivec2(1), ivec2(65));
+    vec2 amount = coordinate - vec2(first);
+    vec4 interpolation = vec4(
+        (1.0 - amount.x) * (1.0 - amount.y),
+        amount.x * (1.0 - amount.y),
+        (1.0 - amount.x) * amount.y,
+        amount.x * amount.y
+    );
+    vec4 coverage = vec4(
+        texelFetch(uSurfaceWater, ivec3(first.x, first.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(second.x, first.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(first.x, second.y, int(uLayer)), 0).r,
+        texelFetch(uSurfaceWater, ivec3(second.x, second.y, int(uLayer)), 0).r
+    );
+    vec4 level = vec4(
+        texelFetch(uSurfaceValues, ivec3(first.x, first.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(second.x, first.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(first.x, second.y, int(uLayer)), 0).g,
+        texelFetch(uSurfaceValues, ivec3(second.x, second.y, int(uLayer)), 0).g
+    );
+    vec4 coveredInterpolation = interpolation * coverage;
+    float totalCoverage = dot(coveredInterpolation, vec4(1.0));
+    return totalCoverage > 0.000001
+        ? dot(coveredInterpolation, level) / totalCoverage
+        : fallbackLevel;
+}
+
 void main() {
     vec4 values = sampleBilinear(uSurfaceValues, surfaceUv);
+    float waterLevel = sampleCoverageWeightedWaterLevel(surfaceUv, values.g);
     vec2 flow = sampleBilinear(uSurfaceFlow, surfaceUv).rg;
     ivec2 categoricalCoordinate = ivec2(clamp(
         floor(surfaceFieldCoordinate(surfaceUv) + vec2(0.5)),
@@ -8671,7 +8743,7 @@ void main() {
     float riverY = sin(globalSurface.y * TWO_PI / 32.0 - animationTime * sign(flow.y) * 1.8);
     float flowWeight = max(abs(flow.x) + abs(flow.y), 0.0001);
     float riverWave = (riverX * abs(flow.x) + riverY * abs(flow.y)) / flowWeight * 0.003;
-    float wave = waterKind > 2.5 ? oceanWave : waterKind > 1.5 ? lakeWave : riverWave;
+    float wave = waterKind > 2.5 ? riverWave : waterKind > 1.5 ? lakeWave : oceanWave;
     wave *= mix(0.85, 1.15, profilePhase);
     wave *= smoothstep(0.0, 0.12, values.b) * smoothstep(0.02, 0.35, -values.a);
     wave *= uWaveAmplitude;
@@ -8681,7 +8753,7 @@ void main() {
     vShoreDistance = values.a;
     vLogicalWorldXZ = surfaceWorld(globalSurface) * uHexSize;
     vVisualSurface = globalSurface;
-    vec3 displaced = vec3(position.x, values.g * uHeightScale + wave * uHeightScale, position.z);
+    vec3 displaced = vec3(position.x, waterLevel * uHeightScale + wave * uHeightScale, position.z);
     vWaterWorldPosition = (modelMatrix * vec4(displaced, 1.0)).xyz;
     vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -8762,14 +8834,15 @@ void main() {
     float waterKind = waterClass.g;
     float waterProfile = waterClass.b;
     float depthAmount = smoothstep(0.008, 0.11, vDepth);
-    vec3 shallow = waterKind > 2.5 ? vec3(0.045, 0.30, 0.34)
-        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.08, 0.34, 0.37);
-    vec3 deep = waterKind > 2.5 ? vec3(0.004, 0.028, 0.09)
-        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.012, 0.085, 0.12);
-    float oceanAmount = step(2.5, waterKind);
-    float lakeAmount = step(1.5, waterKind) - oceanAmount;
+    vec3 shallow = waterKind > 2.5 ? vec3(0.08, 0.34, 0.37)
+        : waterKind > 1.5 ? vec3(0.065, 0.32, 0.29) : vec3(0.045, 0.30, 0.34);
+    vec3 deep = waterKind > 2.5 ? vec3(0.012, 0.085, 0.12)
+        : waterKind > 1.5 ? vec3(0.008, 0.065, 0.095) : vec3(0.004, 0.028, 0.09);
+    float riverAmount = step(2.5, waterKind);
+    float lakeAmount = step(1.5, waterKind) - riverAmount;
+    float oceanAmount = 1.0 - lakeAmount - riverAmount;
     float waveStrength = (oceanAmount * 0.15 + lakeAmount * 0.065
-        + (1.0 - oceanAmount - lakeAmount) * 0.04) * uWaveAmplitude;
+        + riverAmount * 0.04) * uWaveAmplitude;
     float waveX = cos(vVisualSurface.x * 0.41 + animationTime * 1.35)
         + 0.55 * cos((vVisualSurface.x + vVisualSurface.y) * 0.73 - animationTime * 0.86);
     float waveY = sin(vVisualSurface.y * 0.37 - animationTime * 1.08)
@@ -9524,6 +9597,7 @@ void main() {
       this.editRefreshCount = 0;
       this.staleOutcomeCount = 0;
       this.failedChunkCount = 0;
+      this.demandTransition = Promise.resolve();
       if (!options || typeof options !== "object" || !options.authority || !options.compilation || !options.presentation || !options.queries || !Number.isSafeInteger(options.compiledWorkingSetBudgetBytes) || options.compiledWorkingSetBudgetBytes <= 0) {
         throw new TypeError("WorldRenderSession options are invalid");
       }
@@ -9563,31 +9637,38 @@ void main() {
         canonical.set(serialized, Object.freeze({ ...demand, key: key2 }));
       }
       this.demandUpdateCount += 1;
-      for (const [serialized, state] of [...this.demanded]) {
-        if (canonical.has(serialized)) continue;
-        this.releaseState(state);
-        this.demanded.delete(serialized);
-      }
+      const transition = this.demandTransition.then(() => this.applyDemand(canonical));
+      this.demandTransition = transition.catch(() => void 0);
+      return transition;
+    }
+    async applyDemand(canonical) {
+      this.assertReady();
+      const retiring = [...this.demanded].filter(([serialized]) => !canonical.has(serialized)).map(([, state]) => state);
+      const retained = [];
+      const prepared = [];
       const tasks = [];
+      for (const [serialized, state] of [...this.demanded]) {
+        const demand = canonical.get(serialized);
+        if (!demand) continue;
+        const changedLod = state.lod !== demand.lod;
+        state.lod = demand.lod;
+        state.priority = demand.priority ?? 0;
+        state.lane = demand.lane ?? "visible";
+        if (changedLod && state.context) {
+          state.context = this.context(state, state.surfaceLease);
+          this.graph.setLod(state.context);
+        }
+        retained.push(state);
+        if (!state.context && !state.task) {
+          state.generation = this.issueGeneration();
+          state.task = this.prepareState(state);
+          prepared.push(state);
+        }
+        if (state.task) tasks.push(state.task);
+      }
       const added = [];
       for (const [serialized, demand] of canonical) {
-        const existing = this.demanded.get(serialized);
-        if (existing) {
-          const changedLod = existing.lod !== demand.lod;
-          existing.lod = demand.lod;
-          existing.priority = demand.priority ?? 0;
-          existing.lane = demand.lane ?? "visible";
-          if (changedLod && existing.context) {
-            existing.context = this.context(existing, existing.surfaceLease);
-            this.graph.setLod(existing.context);
-          }
-          if (!existing.context && !existing.task) {
-            existing.generation = this.issueGeneration();
-            existing.task = this.loadState(existing);
-          }
-          if (existing.task) tasks.push(existing.task);
-          continue;
-        }
+        if (this.demanded.has(serialized)) continue;
         const state = {
           key: demand.key,
           lod: demand.lod,
@@ -9597,12 +9678,34 @@ void main() {
         };
         this.demanded.set(serialized, state);
         added.push(state);
-        state.task = this.loadState(state);
+        prepared.push(state);
+        state.task = this.prepareState(state);
         tasks.push(state.task);
       }
       try {
         await Promise.all(tasks);
+        const projectedBytes = retained.reduce(
+          (total, state) => total + (state.context ? state.surfaceLease.chunk.byteLength : 0),
+          0
+        ) + prepared.reduce(
+          (total, state) => total + (!state.context && state.surfaceLease ? state.surfaceLease.chunk.byteLength : 0),
+          0
+        );
+        if (projectedBytes > this.budgetBytes) {
+          this.failedChunkCount += 1;
+          throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
+        }
+        for (const state of retiring) {
+          this.releaseState(state);
+          this.demanded.delete(keyString5(state.key));
+        }
+        for (const state of prepared) {
+          if (!state.context && state.surfaceLease) await this.mountPreparedState(state);
+        }
       } catch (reason) {
+        for (const state of prepared) {
+          if (!state.context) this.releaseTransient(state);
+        }
         for (const state of added) {
           if (this.demanded.get(keyString5(state.key)) !== state) continue;
           this.releaseState(state);
@@ -9637,6 +9740,7 @@ void main() {
       this.stateValue = "ready";
     }
     async getSettled() {
+      await this.demandTransition;
       await Promise.all([...this.demanded.values()].map((state) => state.task).filter(Boolean));
     }
     dispose() {
@@ -9744,7 +9848,7 @@ void main() {
         dispose: () => void 0
       });
     }
-    async loadState(state) {
+    async prepareState(state) {
       const generation = state.generation;
       try {
         state.authorityLease = await this.authority.retain(state.key, {
@@ -9765,23 +9869,7 @@ void main() {
           this.staleOutcomeCount += 1;
           return;
         }
-        if (this.mountedBytes + outcome.lease.chunk.byteLength > this.budgetBytes) {
-          outcome.lease.release();
-          throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
-        }
         state.surfaceLease = outcome.lease;
-        state.compiledBytesAccounted = true;
-        this.mountedBytes += outcome.lease.chunk.byteLength;
-        const context = this.context(state, outcome.lease);
-        await this.graph.mount(context);
-        if (!this.isCurrent(state, generation)) {
-          this.graph.unmount(context);
-          this.mountedBytes -= outcome.lease.chunk.byteLength;
-          state.compiledBytesAccounted = false;
-          state.surfaceLease = void 0;
-          return;
-        }
-        state.context = context;
       } catch (reason) {
         this.releaseTransient(state);
         if (this.isCurrent(state, generation)) {
@@ -9792,6 +9880,30 @@ void main() {
       } finally {
         if (this.isCurrent(state, generation)) state.task = void 0;
       }
+    }
+    async mountPreparedState(state) {
+      const lease = state.surfaceLease;
+      if (!lease) throw new Error("world render demand was published without a prepared surface lease");
+      if (this.mountedBytes + lease.chunk.byteLength > this.budgetBytes) {
+        throw new RangeError("compiled surface working-set budget cannot admit the exact demand set");
+      }
+      state.compiledBytesAccounted = true;
+      this.mountedBytes += lease.chunk.byteLength;
+      const context = this.context(state, lease);
+      try {
+        await this.graph.mount(context);
+        state.context = context;
+      } catch (reason) {
+        this.mountedBytes -= lease.chunk.byteLength;
+        state.compiledBytesAccounted = false;
+        state.surfaceLease = void 0;
+        lease.release();
+        throw reason;
+      }
+    }
+    async loadState(state) {
+      await this.prepareState(state);
+      if (state.surfaceLease && !state.context) await this.mountPreparedState(state);
     }
     context(state, lease) {
       return Object.freeze({
@@ -13258,6 +13370,7 @@ void main() {
       this.renderedFrames = 0;
       this.demandUpdates = 0;
       this.demandSignature = "";
+      this.demandDrainRunning = false;
       this.lastAnimationTime = performance.now();
       this.stateValue = "ready";
       this.resize = () => {
@@ -13405,7 +13518,7 @@ void main() {
         this.activeSky = sky;
         this.interaction.reset();
         scene.add(this.pointer);
-        this.demandSignature = "";
+        this.demandSignature = `${initial.x},${initial.y}`;
         await this.setCameraTargetTile(initial.x, initial.y);
         oldRuntime?.dispose();
         disposeSurfaceSky(oldSky);
@@ -13488,6 +13601,7 @@ void main() {
       this.interaction.dispose();
       this.runtimeValue?.dispose();
       this.runtimeValue = void 0;
+      this.pendingDemand = void 0;
       disposeSurfaceSky(this.activeSky);
       this.activeSky = void 0;
       this.controls.dispose();
@@ -13507,15 +13621,37 @@ void main() {
       if (signature === this.demandSignature) return;
       this.demandSignature = signature;
       this.demandUpdates += 1;
-      void runtime.session.updateDemand(planWorldRenderDemand({
-        descriptor: runtime.source.descriptor,
-        centerX,
-        centerY,
-        visibleRadiusTiles: options.visibleRadiusTiles,
-        prefetchRadiusTiles: options.prefetchRadiusTiles,
-        lod1DistanceTiles: options.lod1DistanceTiles,
-        lod2DistanceTiles: options.lod2DistanceTiles
-      })).catch((error) => this.emit("error", error instanceof Error ? error : new Error(String(error))));
+      this.pendingDemand = Object.freeze({
+        runtime,
+        revision: this.loadRevision,
+        demands: planWorldRenderDemand({
+          descriptor: runtime.source.descriptor,
+          centerX,
+          centerY,
+          visibleRadiusTiles: options.visibleRadiusTiles,
+          prefetchRadiusTiles: options.prefetchRadiusTiles,
+          lod1DistanceTiles: options.lod1DistanceTiles,
+          lod2DistanceTiles: options.lod2DistanceTiles
+        })
+      });
+      void this.drainDemandUpdates();
+    }
+    async drainDemandUpdates() {
+      if (this.demandDrainRunning) return;
+      this.demandDrainRunning = true;
+      try {
+        while (this.pendingDemand) {
+          const pending = this.pendingDemand;
+          this.pendingDemand = void 0;
+          if (pending.revision !== this.loadRevision || pending.runtime !== this.runtimeValue) continue;
+          await pending.runtime.session.updateDemand(pending.demands);
+        }
+      } catch (reason) {
+        this.emit("error", reason instanceof Error ? reason : new Error(String(reason)));
+      } finally {
+        this.demandDrainRunning = false;
+        if (this.pendingDemand && !this.isDisposed()) void this.drainDemandUpdates();
+      }
     }
     requireRuntime() {
       this.assertReady();
@@ -14599,6 +14735,15 @@ void main() {
 
   // src/world/semantic/generateHydrologyRegion.ts
   var EPSILON = 1e-9;
+  var RIVER_DROP_WEIGHT_PER_MACRO_EDGE = 96;
+  function riverNodeLevel(node, terminalLevel, maximumDrainageRank) {
+    const available = 65535 - terminalLevel;
+    if (available <= 0) return terminalLevel;
+    const scale = available / (available + maximumDrainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE);
+    return Math.min(65535, Math.max(terminalLevel, Math.round(
+      terminalLevel + (node.drainageLevel - terminalLevel + node.drainageRank * RIVER_DROP_WEIGHT_PER_MACRO_EDGE) * scale
+    )));
+  }
   function validBoundsFor(descriptor, key2) {
     const origin = hydrologyRegionOrigin(key2);
     if (descriptor.topology === "infinite") {
@@ -14785,6 +14930,11 @@ void main() {
     };
     const nodeById = new Map(graph.nodes.map((node) => [node.nodeId, node]));
     const terminalByNode = new Map(graph.terminals.map((terminal) => [terminal.nodeId, terminal]));
+    const terminalLevelByBody = new Map(graph.terminals.map((terminal) => [terminal.bodyId, terminal.level]));
+    const maximumDrainageRank = graph.nodes.reduce(
+      (maximum, node) => Math.max(maximum, node.drainageRank),
+      0
+    );
     const terminalNodes = new Set(terminalByNode.keys());
     const riverEdges = graph.edges.filter((edge) => edge.dischargeClass >= HYDROLOGY_MIN_RIVER_DISCHARGE_CLASS);
     const incomingRiverEdges = /* @__PURE__ */ new Map();
@@ -14821,9 +14971,13 @@ void main() {
         ]);
         const width = riverWidth(edge.dischargeClass);
         const widthProfile = new Uint8Array([width, width]);
+        const terminalLevel = terminalLevelByBody.get(edge.terminalBodyId);
+        if (terminalLevel === void 0) throw new Error("drainage edge references a missing terminal body");
+        const upstreamLevel = riverNodeLevel(upstream, terminalLevel, maximumDrainageRank);
+        const downstreamLevel = riverNodeLevel(downstream, terminalLevel, maximumDrainageRank);
         const levelProfile = new Uint16Array([
-          interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.startT),
-          interpolateUint16(upstream.drainageLevel, downstream.drainageLevel, clipped.endT)
+          interpolateUint16(upstreamLevel, downstreamLevel, clipped.startT),
+          interpolateUint16(upstreamLevel, downstreamLevel, clipped.endT)
         ]);
         const makeBoundaryEndpoint = (point, direction, level) => {
           const side = pointSide(point, rect, flow);

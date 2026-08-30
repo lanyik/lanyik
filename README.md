@@ -106,7 +106,7 @@ For durable browser storage, pass `IndexedDbWorldDeltaStore` from `three-hex-map
 | `three-hex-map/pathfinding` | `SemanticNavigationIndex` |
 | `three-hex-map/simulation` | Camera-independent 64×64 simulation runtime |
 
-Canonical identities are currently descriptor format 2, semantic chunk format 2, generator 7, Worker protocol 5, and delta format 3.
+Canonical identities are currently descriptor format 2, semantic chunk format 2, hydrology region format 2, generator 8, surface compiler revision 3, Worker protocol 5, and delta format 3.
 
 ## Development gates
 
