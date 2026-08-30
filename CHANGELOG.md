@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Surface/render foundation v2 original step 5 vertical slice: an independent
+  byte-budgeted R8 fog pool tied to surface slot generations, three shared
+  welded ground LODs with canonical high-resolution boundaries, immutable CAS
+  `LightingState`, and an internal `GroundLayer` that owns compiled leases,
+  shares page materials, replaces revisions in place and restores real WebGL2
+  resources. The benchmark gate now measures 1/9/49 mounted chunks.
 - Surface/render foundation v2 Worker compilation service with a protocol-v5
   `compileSurfaceChunk` task, two-way transferable window buffers, observable
   bounded scheduling, exact-dependency request coalescing, a byte-budgeted CPU

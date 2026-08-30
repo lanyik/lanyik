@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**阶段 A、B、阶段 C 前置、阶段 C1 CPU 表面编译器、阶段 C2 GPU 表面场池和阶段 C3 Worker 编译服务已完成；阶段 C4–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键、请求令牌、effective window、CPU 量化表面场、GPU 纹理池和 Worker 编译缓存/lease 可使用与验收，但尚未接入生产渲染热路径。
+状态：**原始实施清单第 1–5 步已完成；第 6 步“连续水体与植被”和第 7 步“编辑、持久化和消费系统”待实施**。对应阶段 A、B、C 前置、C1–C3，以及第 5 步要求的独立动态雾池、共享三档 LOD 地面晶格、`LightingState` 和内部 `GroundLayer` 垂直切片均已落地。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准，v2 切换只在阶段 H 一次完成，不增加第二套生产开关。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -480,7 +480,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 每个 compiled chunk 的 body palette 最多包含 255 个在 66×66 输出层实际出现的水体；超过上限是 feature 预算或编译错误，不能合并 ID。palette 只保存稳定 `bodyId + kind`，`waterProfile` 必须逐 texel 保存，因为同一 river body 的 discharge/profile 可以沿汇流向下游变化。物理纹理在不改变逻辑字段的前提下按第 9 节固定合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。当前十个 X-major typed arrays 对 4,356 texel 固定占用 78,408 字节；binary16 使用共享、ties-to-even 的 IEEE 754 编解码器。单个 GPU layer 固定占用 74,052 字节。
 
-动态战争迷雾不进入该静态表面层。阶段 C4 将使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 建立显式 slot 关联，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
+动态战争迷雾不进入该静态表面层。当前 `SurfaceFogTexturePool` 使用独立的 16×16 `R8` array texture，每格一个 texel；一层 256 字节，一页 128 层、32,768 字节，并拥有独立预算、CPU backing store、标脏、代际校验和 context restore 状态。fog layer 复用 `SurfaceTextureSlotHandle` 的 pool/page/layer/generation 作为显式关联，但不占用静态 surface 的 66×66 layer；`GroundLayer` 总是先释放 fog companion 再释放 surface slot。直接操作两个池的低层调用方必须遵守相同顺序，也可用 `pruneReleasedSurfaceSlots()` 清理已释放的 surface 代际。权威 fog state 仍由 fog store 保存，GPU layer 只可重建。
 
 ### 8.4 连续岸线与地形
 
@@ -531,11 +531,11 @@ WebGL2 shader 不动态索引一组任意页面 sampler。每个纹理页拥有�
 
 Three.js 当前的 array texture 更新接口按 layer 标脏，不承诺任意子矩形更新。因此 `upload` 总是把 X-major CPU 字段转置并完整写入目标 layer，重复覆盖同一 slot 只保留一个待上传 layer 标记。WebGL context 丢失时池拒绝分配、上传和绑定并清空失效标记；恢复后仅把仍活动且已有内容的 layer 重新标脏。真实 WebGL2 验收会逐格式上传、同层采样、读回并执行一次 context loss/restore，不能只检查 Three.js 对象字段。
 
-本阶段的池只拥有静态 surface 字段。动态雾尚未实现，也没有被伪装成 `SurfaceTexturePool` 的占位纹理；其独立高频存储与 slot 关联由阶段 C4 实现。
+`SurfaceTexturePool` 只拥有静态 surface 字段。动态雾由独立 `SurfaceFogTexturePool` 实现，不是第五张 66×66 静态纹理；两者只共享代际 slot 身份，预算、上传记录和恢复状态互不混算。
 
 ### 9.2 GLSL 契约
 
-新的地面与水面材质使用 WebGL2/GLSL 3 和 `sampler2DArray`。不保留 RawShaderMaterial GLSL 1 版本。当前浏览器验收 shader 已证明四张数组纹理的物理采样契约；生产 GroundLayer/WaterLayer 材质仍属于后续阶段 D/E，不在纹理池阶段新增无消费者的 shader 模块。
+新的地面与水面材质使用 WebGL2/GLSL 3 和 `sampler2DArray`。不保留 RawShaderMaterial GLSL 1 版本。当前内部 `GroundLayer` 已使用 `values/material` 数组纹理和独立 fog array 完成真实 WebGL2 垂直切片；`flow/water` 由第 6 步的连续水面消费。该内部切片尚未注册为 `HexMap` 生产 Layer，阶段 H 才会一次替换旧路径。
 
 Shader 通过世界逻辑坐标计算 field UV，通过页/层索引采样；浮动原点只参与最终模型矩阵。所有纹理访问必须限制在 layer gutter 内，不跨 array layer 过滤。
 
@@ -554,6 +554,8 @@ WebGL context 恢复时优先从 resident `CompiledSurfaceChunk` 重新创建纹
 - 格线、格子 ID 和选择边界由逻辑世界坐标解析，不依赖逐 hex geometry。
 - 材质混合、湿岸和坡面法线来自表面场。
 - 地面 mesh 的 Y bounds 使用编译结果的真实最小/最大高度加视觉微位移上限。
+
+当前 `SurfaceGroundGeometryPool` 懒创建三张不可变共享几何。LOD 0/1/2 的内部步长分别为 1/2/4 个 4× 采样间隔；三者的四条外边都固定保留 64 段、256 个唯一 canonical 边界点。中、远档在高分辨率外环和粗内部网格之间使用按实际 `surfaceToWorld` 平面做耳切的焊接过渡带，同时要求每个三角形在世界平面和逻辑 `(u,v)` 平面都非退化。定向验收检查总逻辑面积严格为 16×16、内部边恰好被两个三角形共享、边界边恰好被一个三角形共享。
 
 ### 10.2 LOD 边界
 
@@ -643,6 +645,8 @@ interface LightingState {
 水面使用镜面环境或解析天空近似产生 Fresnel 反射；树木和 glTF 模型使用同一环境照明与太阳阴影。没有外部环境贴图时由冻结的解析天空生成 PMREM 资源，而不是让植被退回近黑的仅直射光结果。
 
 太阳方向、颜色和曝光属于快速 uniform 更新，不触发表面重编译。天空参数改变后，PMREM 在独立预算中异步重建并双缓冲切换；旧环境在新资源就绪前保持有效，不允许每帧同步生成。阴影资源由独立 `ShadowState` 拥有，质量、级联和更新频率是渲染策略，不进入 `LightingState` 或 world identity。
+
+当前 `LightingStateController` 已实现不可变快照、归一化太阳方向、严格 `uniformRevision + 1` CAS、单调 `environmentRevision`、共享 shader uniform binding，以及将 renderer 固定到 ACES tone mapping、统一 exposure 和 sRGB 输出的 binding。相同 environment revision 不允许偷换环境 handle。解析天空 PMREM 的异步双缓冲拥有者、`ShadowState` 以及树木/模型 PBR 适配属于第 6 步；controller 不拥有或隐式销毁外部环境纹理。
 
 ### 12.2 植被生成
 
@@ -973,7 +977,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 打包 benchmark 覆盖同一 66×66 layer 连续 100 次完整更新，代表性基线约 82 ms（约 0.82 ms/次），待上传层标记保持为 1。
 - 浏览器验收真实创建并采样四张 `sampler2DArray`，逐通道对比 CPU 字段；context loss/restore 后只重传活动层并保持相同结果。
 
-### 阶段 C3 / 第 6 步：Worker 表面编译服务（已完成）
+### 阶段 C3：Worker 表面编译服务（已完成，归入原始第 4 步的 CPU 编译链路）
 
 - 将共享 Worker 协议升级到 v5，新增独立 compiler/profile identity 的 `compileSurfaceChunk` discriminated request/response。
 - 把 effective window 和 compiled field 分别作为 transferable 输入/输出；Worker 将输入 buffer 转回主线程 exact-size buffer pool。
@@ -994,9 +998,9 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 ### 阶段 C4：查询接入与动态雾
 
 - 把 request token/dependency 校验接入查询 service；过期时从最新 effective snapshot 同步运行共享 CPU kernel。
-- 将动态雾拆到独立 R8 池，并显式关联 surface slot 生命周期。
+- ~~将动态雾拆到独立 R8 池，并显式关联 surface slot 生命周期。~~ 已在原始第 5 步完成。
 
-完成标志：过期 field 无法服务新 revision 查询；同步查询和动态雾更新通过定向及浏览器验收。
+剩余完成标志：过期 field 无法服务新 revision 查询；同步查询通过定向及浏览器验收。动态雾的独立上传、代际关联和 context restore 已通过验收。
 
 ### 阶段 D：统一光照核心与合并地面网格
 
@@ -1008,7 +1012,15 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 完成标志：相同可见面积下不再提交逐 hex 细分实例，chunk/LOD/环绕边界无裂缝；GroundLayer 已通过统一光照参考材质校准。
 
-### 阶段 E：连续水面
+原始第 5 步实现结果（2026-08-30）：
+
+- `SurfaceFogTexturePool` 固定为 16×16×128 `R8` page，以完整 `SurfaceTextureSlotHandle` 代际关联静态 slot；预算不足、跨池、迟到代际和 context 状态错误均明确失败，不把动态更新写进 66×66 静态层。
+- `SurfaceGroundGeometryPool` 实现 1/2/4 内部步长的三档共享晶格，三档都保留逐 1/4 tile 的 canonical 外边界，并用双空间非退化的焊接过渡带连接粗内部；每个 LOD 只创建一份 vertex/index buffer。
+- `LightingStateController` 原子发布统一太阳、天空/地面漫反射、环境 handle 与曝光；`GroundLayer` 按纹理页共享一个 GLSL 3 material，按 draw 写入 layer/valid bounds，持有 compiled lease，并在 revision 替换时复用 slot 后再释放旧 lease。
+- 真实 Chromium 验收完成地面高度位移、材质场、动态雾明暗切换、LOD 切换和 context loss/restore。1/9/49 块 benchmark 同时执行静态整层打包、fog 上传、lease/mesh 挂载；当前代表性结果约 17/27/85 ms，49 块共用三张几何、一个静态 page 和一个 32 KiB fog page。
+- 该切片保持内部状态：不向 `HexMap` 增加 v1/v2 运行时选择，旧 `TerrainMesh` 只在阶段 H 一次删除。阶段 D 中解析天空 PMREM、完整参考材质校准和阴影资源与第 6 步统一完成。
+
+### 阶段 E：连续水面（原始第 6 步）
 
 - 实现海洋 patch、湖岸/宽河 coverage mesh 和窄河 sweep mesh。
 - 实现连续水深色、环境反射、分层波浪和 flow 驱动河流。
@@ -1016,7 +1028,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 完成标志：海、湖、河具有可辨识形态，岸线平滑且全部读取同一 SDF。
 
-### 阶段 F：植被、模型光照与阴影策略
+### 阶段 F：植被、模型光照与阴影策略（原始第 6 步）
 
 - 规范化树木材质并迁移树、草、建筑到已有 LightingState。
 - 实现 PMREM 异步更新和 ShadowState 的质量/更新预算。
@@ -1024,7 +1036,7 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 
 完成标志：植被不再暗沉脱离环境，所有内置层对太阳、天空和曝光响应一致。
 
-### 阶段 G：编辑、持久化和消费系统
+### 阶段 G：编辑、持久化和消费系统（原始第 7 步）
 
 - 实现类型化 transaction、domain bitmask 和脏 bounds 聚合。
 - 实现原子 WorldDeltaStore、semantic delta 与 feature-centric hydrology delta/tombstone。

@@ -1772,13 +1772,13 @@
     const point = new three.Vector3();
     return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
   }
-  function pickTile(worldPoint, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
+  function pickTile(worldPoint2, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
     if (!Number.isFinite(size) || size <= 0) return null;
     if (mapWidth !== void 0 && (!Number.isInteger(mapWidth) || mapWidth <= 0)) return null;
     if (mapHeight !== void 0 && (!Number.isInteger(mapHeight) || mapHeight <= 0)) return null;
     if (wrapX && mapWidth === void 0 || wrapY && mapHeight === void 0) return null;
-    const approxX = worldPoint.x / (size * 1.5);
-    const approxY = worldPoint.z / (size * Math.sqrt(3));
+    const approxX = worldPoint2.x / (size * 1.5);
+    const approxY = worldPoint2.z / (size * Math.sqrt(3));
     const x0 = Math.floor(approxX);
     const y0 = Math.floor(approxY);
     let best = null;
@@ -1788,7 +1788,7 @@
         const rawX = x0 + dx;
         const rawY = y0 + dy;
         const center = getHexCenter(rawX, rawY, size);
-        const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
+        const dist = (center.x - worldPoint2.x) ** 2 + (center.y - worldPoint2.z) ** 2;
         if (dist < bestDist) {
           bestDist = dist;
           best = { x: rawX, y: rawY, worldX: center.x, worldY: center.y };
@@ -2234,12 +2234,12 @@
     }
     const positions = new Float32Array(triangles.length * 3);
     const texcoords = new Float32Array(triangles.length * 2);
-    triangles.forEach((vertex, index) => {
-      positions[index * 3] = vertex.x;
-      positions[index * 3 + 1] = vertex.y;
-      positions[index * 3 + 2] = vertex.z;
-      texcoords[index * 2] = 0.02 + 0.96 * ((vertex.x + radius) / (radius * 2));
-      texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex.z + radius) / (radius * 2));
+    triangles.forEach((vertex2, index) => {
+      positions[index * 3] = vertex2.x;
+      positions[index * 3 + 1] = vertex2.y;
+      positions[index * 3 + 2] = vertex2.z;
+      texcoords[index * 2] = 0.02 + 0.96 * ((vertex2.x + radius) / (radius * 2));
+      texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex2.z + radius) / (radius * 2));
     });
     const geometry = new three.BufferGeometry();
     geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
@@ -20323,9 +20323,9 @@ void main() {
       const nextCornerIndex = (cornerIndex + 1) % 6;
       const first = CORNER_VECTORS[cornerIndex];
       const second = CORNER_VECTORS[nextCornerIndex];
-      const determinant = first.x * second.y - first.y * second.x;
-      const firstWeight = (localX * second.y - localZ * second.x) / determinant;
-      const secondWeight = (first.x * localZ - first.y * localX) / determinant;
+      const determinant2 = first.x * second.y - first.y * second.x;
+      const firstWeight = (localX * second.y - localZ * second.x) / determinant2;
+      const secondWeight = (first.x * localZ - first.y * localX) / determinant2;
       const corners = this.getCornerReliefs(tile.x, tile.y);
       const centerRelief = corners.reduce((sum, height) => sum + height, 0) / corners.length;
       const relief = centerRelief * (1 - firstWeight - secondWeight) + corners[cornerIndex] * firstWeight + corners[nextCornerIndex] * secondWeight;
@@ -24878,7 +24878,7 @@ void main() {
       });
       this.latestEffectiveRevision = snapshot.effectiveRevision;
       const key = effectiveWindow.key;
-      const keyString = renderKeyString2(key);
+      const keyString2 = renderKeyString2(key);
       const serializedKey = serializeSurfaceDependencyKey(effectiveWindow.dependencyKey);
       const binding = Object.freeze({
         effectiveRevision: effectiveWindow.effectiveRevision,
@@ -24908,15 +24908,15 @@ void main() {
         job.subscribers.add(requestToken.renderChunkGeneration);
         entryPromise = job.promise;
       }
-      const previous = this.activeByRenderKey.get(keyString);
+      const previous = this.activeByRenderKey.get(keyString2);
       if (previous?.job) this.removeJobSubscriber(previous.job, previous.requestToken);
       const active = { key, requestToken, binding, job };
-      this.activeByRenderKey.set(keyString, active);
+      this.activeByRenderKey.set(keyString2, active);
       let leaseValue;
       const result = entryPromise.then((entry) => {
         job?.subscribers.delete(requestToken.renderChunkGeneration);
         active.job = void 0;
-        if (!this.isCurrentActive(keyString, requestToken, binding, entry.chunk)) {
+        if (!this.isCurrentActive(keyString2, requestToken, binding, entry.chunk)) {
           this.staleResultCount += 1;
           return Object.freeze({ status: "stale", requestToken });
         }
@@ -24927,17 +24927,17 @@ void main() {
         job?.subscribers.delete(requestToken.renderChunkGeneration);
         active.job = void 0;
         if (this.disposed) throw new Error("surface compilation service is disposed");
-        const current = this.activeByRenderKey.get(keyString);
+        const current = this.activeByRenderKey.get(keyString2);
         if (!current || !tokensEqual(current.requestToken, requestToken)) {
           this.staleResultCount += 1;
           return Object.freeze({ status: "stale", requestToken });
         }
-        this.activeByRenderKey.delete(keyString);
+        this.activeByRenderKey.delete(keyString2);
         this.requestTracker.release(key, requestToken);
         throw reason;
       });
       const abort = options.signal ? () => {
-        if (!leaseValue && this.cancelPending(keyString, active)) {
+        if (!leaseValue && this.cancelPending(keyString2, active)) {
           this.cancelledRequestCount += 1;
         } else if (leaseValue?.release()) {
           this.cancelledRequestCount += 1;
@@ -24954,7 +24954,7 @@ void main() {
         result,
         cancel: () => {
           if (leaseValue) return leaseValue.release();
-          const cancelled = this.cancelPending(keyString, active);
+          const cancelled = this.cancelPending(keyString2, active);
           if (cancelled) this.cancelledRequestCount += 1;
           return cancelled;
         }
@@ -25140,10 +25140,10 @@ void main() {
         entry.leases -= 1;
         this.activeLeaseCount -= 1;
         this.liveLeaseReleasers.delete(releaseInternal);
-        const keyString = renderKeyString2(active.key);
-        const current = this.activeByRenderKey.get(keyString);
+        const keyString2 = renderKeyString2(active.key);
+        const current = this.activeByRenderKey.get(keyString2);
         if (current && tokensEqual(current.requestToken, active.requestToken)) {
-          this.activeByRenderKey.delete(keyString);
+          this.activeByRenderKey.delete(keyString2);
           this.requestTracker.release(active.key, active.requestToken);
         }
       };
@@ -25165,8 +25165,8 @@ void main() {
       this.liveLeaseReleasers.add(releaseInternal);
       return lease;
     }
-    isCurrentActive(keyString, requestToken, binding, chunk) {
-      const current = this.activeByRenderKey.get(keyString);
+    isCurrentActive(keyString2, requestToken, binding, chunk) {
+      const current = this.activeByRenderKey.get(keyString2);
       if (!current || !tokensEqual(current.requestToken, requestToken)) return false;
       return this.requestTracker.canAccept(current.key, {
         requestToken,
@@ -25174,10 +25174,10 @@ void main() {
         dependencyKey: chunk.dependencyKey
       }, binding);
     }
-    cancelPending(keyString, active) {
-      const current = this.activeByRenderKey.get(keyString);
+    cancelPending(keyString2, active) {
+      const current = this.activeByRenderKey.get(keyString2);
       if (!current || !tokensEqual(current.requestToken, active.requestToken)) return false;
-      this.activeByRenderKey.delete(keyString);
+      this.activeByRenderKey.delete(keyString2);
       this.requestTracker.release(active.key, active.requestToken);
       if (active.job) this.removeJobSubscriber(active.job, active.requestToken);
       return true;
@@ -25393,8 +25393,8 @@ void main() {
     allocate(key) {
       this.assertReady("allocate");
       assertRenderKey(key);
-      const keyString = renderKeyString3(key);
-      if (this.activeByRenderKey.has(keyString)) {
+      const keyString2 = renderKeyString3(key);
+      if (this.activeByRenderKey.has(keyString2)) {
         throw new TypeError("render chunk already owns a surface texture slot");
       }
       let page;
@@ -25425,7 +25425,7 @@ void main() {
       slot.handle = handle;
       slot.key = Object.freeze({ ...key });
       slot.uploaded = false;
-      this.activeByRenderKey.set(keyString, handle);
+      this.activeByRenderKey.set(keyString2, handle);
       return handle;
     }
     upload(handle, chunk) {
@@ -25586,6 +25586,1159 @@ void main() {
       if (this.stateValue === "disposed") throw new TypeError("surface texture pool is disposed");
     }
   };
+  var SURFACE_FOG_TEXTURE_SIZE = 16;
+  var SURFACE_FOG_LAYER_BYTES = SURFACE_FOG_TEXTURE_SIZE * SURFACE_FOG_TEXTURE_SIZE;
+  var SURFACE_FOG_PAGE_BYTES = SURFACE_FOG_LAYER_BYTES * SURFACE_TEXTURE_PAGE_LAYERS;
+  function assertOptions3(options) {
+    if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => name !== "surfacePool" && name !== "gpuBudgetBytes") || !(options.surfacePool instanceof SurfaceTexturePool)) {
+      throw new TypeError("surface fog texture pool options are invalid");
+    }
+    if (!Number.isSafeInteger(options.gpuBudgetBytes) || options.gpuBudgetBytes < 0) {
+      throw new RangeError("surface fog texture pool gpuBudgetBytes must be a non-negative safe integer");
+    }
+  }
+  function assertHandle(handle) {
+    if (!handle || typeof handle !== "object" || Object.getOwnPropertyNames(handle).some((name) => ![
+      "poolId",
+      "pageIndex",
+      "layerIndex",
+      "generation"
+    ].includes(name)) || !Number.isSafeInteger(handle.poolId) || handle.poolId <= 0 || !Number.isInteger(handle.pageIndex) || handle.pageIndex < 0 || !Number.isInteger(handle.layerIndex) || handle.layerIndex < 0 || handle.layerIndex >= SURFACE_TEXTURE_PAGE_LAYERS || !Number.isSafeInteger(handle.generation) || handle.generation <= 0) {
+      throw new TypeError("surface fog texture slot handle is invalid");
+    }
+  }
+  function handlesEqual(first, second) {
+    return first.poolId === second.poolId && first.pageIndex === second.pageIndex && first.layerIndex === second.layerIndex && first.generation === second.generation;
+  }
+  function createPage2(pageIndex) {
+    const data = new Uint8Array(SURFACE_FOG_PAGE_BYTES);
+    const texture = new three.DataArrayTexture(
+      data,
+      SURFACE_FOG_TEXTURE_SIZE,
+      SURFACE_FOG_TEXTURE_SIZE,
+      SURFACE_TEXTURE_PAGE_LAYERS
+    );
+    texture.name = `surface-fog-page-${pageIndex}`;
+    texture.internalFormat = "R8";
+    texture.format = three.RedFormat;
+    texture.type = three.UnsignedByteType;
+    texture.wrapS = three.ClampToEdgeWrapping;
+    texture.wrapT = three.ClampToEdgeWrapping;
+    texture.magFilter = three.NearestFilter;
+    texture.minFilter = three.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.flipY = false;
+    texture.unpackAlignment = 1;
+    texture.colorSpace = three.NoColorSpace;
+    return {
+      pageIndex,
+      data,
+      texture,
+      layers: Array.from({ length: SURFACE_TEXTURE_PAGE_LAYERS }, () => ({ uploaded: false }))
+    };
+  }
+  function handleKey(handle) {
+    return `${handle.poolId}/${handle.pageIndex}/${handle.layerIndex}/${handle.generation}`;
+  }
+  var SurfaceFogTexturePool = class {
+    constructor(options) {
+      this.pages = [];
+      this.activeHandles = /* @__PURE__ */ new Map();
+      this.stateValue = "ready";
+      this.contextGenerationValue = 1;
+      this.contextRestoreCount = 0;
+      this.logicalUploadCount = 0;
+      this.staleUploadRejectCount = 0;
+      this.staleReleaseRejectCount = 0;
+      assertOptions3(options);
+      this.surfacePool = options.surfacePool;
+      this.gpuBudgetBytes = options.gpuBudgetBytes;
+      this.maxPages = Math.floor(this.gpuBudgetBytes / SURFACE_FOG_PAGE_BYTES);
+    }
+    get state() {
+      return this.stateValue;
+    }
+    isCompanionOf(surfacePool) {
+      return this.surfacePool === surfacePool;
+    }
+    upload(handle, fog) {
+      assertHandle(handle);
+      if (!(fog instanceof Uint8Array) || fog.length !== SURFACE_FOG_LAYER_BYTES) {
+        throw new TypeError("surface fog upload must contain one 16x16 R8 layer");
+      }
+      if (!this.surfacePool.isCurrent(handle)) {
+        this.staleUploadRejectCount += 1;
+        return false;
+      }
+      if (this.surfacePool.state !== "ready") {
+        throw new TypeError("surface fog upload requires its surface texture pool to be ready");
+      }
+      this.assertReady("upload");
+      const page = this.ensurePage(handle.pageIndex);
+      const layer = page.layers[handle.layerIndex];
+      if (layer.handle && !handlesEqual(layer.handle, handle)) {
+        if (this.surfacePool.isCurrent(layer.handle)) {
+          throw new TypeError("surface fog layer is already owned by another current slot generation");
+        }
+        this.activeHandles.delete(handleKey(layer.handle));
+      }
+      const offset = handle.layerIndex * SURFACE_FOG_LAYER_BYTES;
+      page.data.set(fog, offset);
+      layer.handle = Object.freeze({ ...handle });
+      layer.uploaded = true;
+      this.activeHandles.set(handleKey(handle), layer.handle);
+      page.texture.addLayerUpdate(handle.layerIndex);
+      page.texture.needsUpdate = true;
+      this.logicalUploadCount += 1;
+      return true;
+    }
+    getBinding(handle) {
+      assertHandle(handle);
+      this.assertReady("bind");
+      if (this.surfacePool.state !== "ready") {
+        throw new TypeError("surface fog binding requires its surface texture pool to be ready");
+      }
+      const page = this.pages[handle.pageIndex];
+      const layer = page?.layers[handle.layerIndex];
+      if (!page || !layer?.handle || !handlesEqual(layer.handle, handle) || !layer.uploaded || !this.surfacePool.isCurrent(handle)) {
+        throw new RangeError("surface fog texture slot handle is stale or has no uploaded layer");
+      }
+      return Object.freeze({ slot: handle, texture: page.texture });
+    }
+    release(handle) {
+      assertHandle(handle);
+      this.assertNotDisposed();
+      const page = this.pages[handle.pageIndex];
+      const layer = page?.layers[handle.layerIndex];
+      if (!page || !layer?.handle || !handlesEqual(layer.handle, handle)) {
+        this.staleReleaseRejectCount += 1;
+        return false;
+      }
+      page.texture.layerUpdates.delete(handle.layerIndex);
+      this.activeHandles.delete(handleKey(handle));
+      layer.handle = void 0;
+      layer.uploaded = false;
+      return true;
+    }
+    handleContextLost() {
+      this.assertNotDisposed();
+      if (this.stateValue === "lost") return;
+      this.stateValue = "lost";
+      for (const page of this.pages) page?.texture.clearLayerUpdates();
+    }
+    handleContextRestored() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "lost") {
+        throw new TypeError("surface fog texture context can only restore from the lost state");
+      }
+      if (this.surfacePool.state !== "ready") {
+        throw new TypeError("surface fog texture context restores after its surface texture pool");
+      }
+      if (this.contextGenerationValue === Number.MAX_SAFE_INTEGER) {
+        throw new RangeError("surface fog context generation space is exhausted");
+      }
+      this.stateValue = "ready";
+      this.contextGenerationValue += 1;
+      this.contextRestoreCount += 1;
+      this.pruneReleasedSurfaceSlots();
+      for (const page of this.pages) {
+        if (!page) continue;
+        let changed = false;
+        for (let index = 0; index < page.layers.length; index += 1) {
+          if (!page.layers[index].uploaded) continue;
+          page.texture.addLayerUpdate(index);
+          changed = true;
+        }
+        if (changed) page.texture.needsUpdate = true;
+      }
+    }
+    pruneReleasedSurfaceSlots() {
+      this.assertNotDisposed();
+      let released = 0;
+      for (const handle of [...this.activeHandles.values()]) {
+        if (this.surfacePool.isCurrent(handle)) continue;
+        if (this.release(handle)) released += 1;
+      }
+      return released;
+    }
+    dispose() {
+      if (this.stateValue === "disposed") return;
+      for (const page of this.pages) page?.texture.dispose();
+      this.pages.length = 0;
+      this.activeHandles.clear();
+      this.stateValue = "disposed";
+    }
+    get stats() {
+      let pageCount = 0;
+      let uploadedLayers = 0;
+      let pendingLayerUploads = 0;
+      for (const page of this.pages) {
+        if (!page) continue;
+        pageCount += 1;
+        for (let index = 0; index < page.layers.length; index += 1) {
+          if (page.layers[index].uploaded) uploadedLayers += 1;
+          if (page.texture.layerUpdates.has(index)) pendingLayerUploads += 1;
+        }
+      }
+      const residentBytes = pageCount * SURFACE_FOG_PAGE_BYTES;
+      return Object.freeze({
+        state: this.stateValue,
+        contextGeneration: this.contextGenerationValue,
+        contextRestores: this.contextRestoreCount,
+        pageCount,
+        activeLayers: this.activeHandles.size,
+        uploadedLayers,
+        cpuBytes: residentBytes,
+        gpuBytes: residentBytes,
+        gpuBudgetBytes: this.gpuBudgetBytes,
+        pendingLayerUploads,
+        logicalUploads: this.logicalUploadCount,
+        logicalUploadBytes: this.logicalUploadCount * SURFACE_FOG_LAYER_BYTES,
+        staleUploadRejects: this.staleUploadRejectCount,
+        staleReleaseRejects: this.staleReleaseRejectCount
+      });
+    }
+    ensurePage(pageIndex) {
+      let page = this.pages[pageIndex];
+      if (page) return page;
+      const pageCount = this.pages.reduce((count, candidate) => count + (candidate ? 1 : 0), 0);
+      if (pageCount >= this.maxPages) {
+        throw new RangeError("surface fog texture pool GPU page budget is exhausted");
+      }
+      page = createPage2(pageIndex);
+      this.pages[pageIndex] = page;
+      return page;
+    }
+    assertReady(operation) {
+      this.assertNotDisposed();
+      if (this.stateValue !== "ready") {
+        throw new TypeError(`surface fog texture pool cannot ${operation} while the WebGL context is lost`);
+      }
+    }
+    assertNotDisposed() {
+      if (this.stateValue === "disposed") throw new TypeError("surface fog texture pool is disposed");
+    }
+  };
+  var SURFACE_GROUND_LOD_GRID_STEPS = Object.freeze([1, 2, 4]);
+  var SURFACE_GROUND_BOUNDARY_INTERVALS = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+  function pointKey2(point) {
+    return `${point.x},${point.y}`;
+  }
+  function assertLod(lod) {
+    if (lod !== 0 && lod !== 1 && lod !== 2) {
+      throw new RangeError("surface ground LOD must be 0, 1 or 2");
+    }
+  }
+  function vertex(builder, point, hexSize) {
+    const key = pointKey2(point);
+    const existing = builder.vertexByPoint.get(key);
+    if (existing !== void 0) return existing;
+    const u = -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL;
+    const v = -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL;
+    const world = surfaceToWorld(u, v, hexSize);
+    const index = builder.positions.length / 3;
+    builder.positions.push(world.x, 0, world.z);
+    builder.surfaceCoordinates.push(u, v);
+    builder.vertexByPoint.set(key, index);
+    return index;
+  }
+  function addTriangle(builder, first, second, third, hexSize) {
+    let firstIndex = vertex(builder, first, hexSize);
+    let secondIndex = vertex(builder, second, hexSize);
+    let thirdIndex = vertex(builder, third, hexSize);
+    const ax = builder.positions[firstIndex * 3];
+    const az = builder.positions[firstIndex * 3 + 2];
+    const bx = builder.positions[secondIndex * 3];
+    const bz = builder.positions[secondIndex * 3 + 2];
+    const cx = builder.positions[thirdIndex * 3];
+    const cz = builder.positions[thirdIndex * 3 + 2];
+    const normalY = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    if (Math.abs(normalY) <= Number.EPSILON) {
+      throw new TypeError(`surface ground topology produced a degenerate triangle: ${pointKey2(first)} / ${pointKey2(second)} / ${pointKey2(third)}`);
+    }
+    if (normalY < 0) {
+      [secondIndex, thirdIndex] = [thirdIndex, secondIndex];
+    }
+    builder.indices.push(firstIndex, secondIndex, thirdIndex);
+  }
+  function worldPoint(point, hexSize) {
+    const coordinate = surfaceToWorld(
+      -0.5 + point.x / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+      -0.5 + point.y / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+      hexSize
+    );
+    return { x: coordinate.x, y: coordinate.z };
+  }
+  function determinant(first, second, third) {
+    return (second.x - first.x) * (third.y - first.y) - (second.y - first.y) * (third.x - first.x);
+  }
+  function pointInOrOnTriangle(point, first, second, third, orientation) {
+    return orientation * determinant(first, second, point) >= -1e-12 && orientation * determinant(second, third, point) >= -1e-12 && orientation * determinant(third, first, point) >= -1e-12;
+  }
+  function addQuad(builder, minX, minY, size, hexSize) {
+    const topLeft = { x: minX, y: minY };
+    const topRight = { x: minX + size, y: minY };
+    const bottomLeft = { x: minX, y: minY + size };
+    const bottomRight = { x: minX + size, y: minY + size };
+    addTriangle(builder, topLeft, bottomLeft, bottomRight, hexSize);
+    addTriangle(builder, topLeft, bottomRight, topRight, hexSize);
+  }
+  function addUniformGrid(builder, step, hexSize) {
+    for (let x = 0; x < SURFACE_GROUND_BOUNDARY_INTERVALS; x += step) {
+      for (let y = 0; y < SURFACE_GROUND_BOUNDARY_INTERVALS; y += step) {
+        addQuad(builder, x, y, step, hexSize);
+      }
+    }
+  }
+  function sidePoints(start, end, step) {
+    const distance = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+    if (distance % step !== 0) {
+      throw new TypeError("surface transition side is not aligned to its LOD step");
+    }
+    const count = distance / step;
+    const deltaX = count === 0 ? 0 : (end.x - start.x) / count;
+    const deltaY = count === 0 ? 0 : (end.y - start.y) / count;
+    return Object.freeze(Array.from({ length: count + 1 }, (_, index) => Object.freeze({
+      x: start.x + deltaX * index,
+      y: start.y + deltaY * index
+    })));
+  }
+  function stitchSide(builder, outer, inner, hexSize) {
+    const polygon = [...outer, ...inner.slice().reverse()];
+    const projected = polygon.map((point) => worldPoint(point, hexSize));
+    const logical = polygon.map((point) => ({ x: point.x, y: point.y }));
+    let signedArea = 0;
+    let logicalSignedArea = 0;
+    for (let index = 0; index < projected.length; index += 1) {
+      const next = projected[(index + 1) % projected.length];
+      const logicalNext = logical[(index + 1) % logical.length];
+      signedArea += projected[index].x * next.y - projected[index].y * next.x;
+      logicalSignedArea += logical[index].x * logicalNext.y - logical[index].y * logicalNext.x;
+    }
+    if (Math.abs(signedArea) <= Number.EPSILON) {
+      throw new TypeError("surface transition side has no area");
+    }
+    const orientation = Math.sign(signedArea);
+    const logicalOrientation = Math.sign(logicalSignedArea);
+    const remaining = polygon.map((_, index) => index);
+    while (remaining.length > 3) {
+      let clipped = false;
+      for (let cursor = 0; cursor < remaining.length; cursor += 1) {
+        const previous = remaining[(cursor + remaining.length - 1) % remaining.length];
+        const current = remaining[cursor];
+        const next = remaining[(cursor + 1) % remaining.length];
+        if (orientation * determinant(projected[previous], projected[current], projected[next]) <= 1e-12) {
+          continue;
+        }
+        if (logicalOrientation * determinant(logical[previous], logical[current], logical[next]) <= 1e-12) {
+          continue;
+        }
+        let containsPoint = false;
+        for (const candidate of remaining) {
+          if (candidate === previous || candidate === current || candidate === next) continue;
+          if (pointInOrOnTriangle(
+            projected[candidate],
+            projected[previous],
+            projected[current],
+            projected[next],
+            orientation
+          )) {
+            containsPoint = true;
+            break;
+          }
+        }
+        if (containsPoint) continue;
+        addTriangle(builder, polygon[previous], polygon[current], polygon[next], hexSize);
+        remaining.splice(cursor, 1);
+        clipped = true;
+        break;
+      }
+      if (!clipped) {
+        throw new TypeError("surface transition side cannot be triangulated without overlap");
+      }
+    }
+    addTriangle(
+      builder,
+      polygon[remaining[0]],
+      polygon[remaining[1]],
+      polygon[remaining[2]],
+      hexSize
+    );
+  }
+  function addTransitionGrid(builder, step, hexSize) {
+    const maximum = SURFACE_GROUND_BOUNDARY_INTERVALS;
+    const innerMaximum = maximum - step;
+    for (let x = step; x < innerMaximum; x += step) {
+      for (let y = step; y < innerMaximum; y += step) addQuad(builder, x, y, step, hexSize);
+    }
+    const sides = [
+      [
+        sidePoints({ x: 0, y: 0 }, { x: maximum, y: 0 }, 1),
+        sidePoints({ x: step, y: step }, { x: innerMaximum, y: step }, step)
+      ],
+      [
+        sidePoints({ x: maximum, y: 0 }, { x: maximum, y: maximum }, 1),
+        sidePoints({ x: innerMaximum, y: step }, { x: innerMaximum, y: innerMaximum }, step)
+      ],
+      [
+        sidePoints({ x: maximum, y: maximum }, { x: 0, y: maximum }, 1),
+        sidePoints({ x: innerMaximum, y: innerMaximum }, { x: step, y: innerMaximum }, step)
+      ],
+      [
+        sidePoints({ x: 0, y: maximum }, { x: 0, y: 0 }, 1),
+        sidePoints({ x: step, y: innerMaximum }, { x: step, y: step }, step)
+      ]
+    ];
+    for (const [outer, inner] of sides) stitchSide(builder, outer, inner, hexSize);
+  }
+  function createSurfaceGroundGeometry(lod, hexSize = 1, heightScale = 1) {
+    assertLod(lod);
+    if (!Number.isFinite(hexSize) || hexSize <= 0) {
+      throw new RangeError("surface ground hexSize must be finite and positive");
+    }
+    if (!Number.isFinite(heightScale) || heightScale <= 0) {
+      throw new RangeError("surface ground heightScale must be finite and positive");
+    }
+    const builder = {
+      positions: [],
+      surfaceCoordinates: [],
+      indices: [],
+      vertexByPoint: /* @__PURE__ */ new Map()
+    };
+    const step = SURFACE_GROUND_LOD_GRID_STEPS[lod];
+    if (step === 1) addUniformGrid(builder, step, hexSize);
+    else addTransitionGrid(builder, step, hexSize);
+    const geometry = new three.BufferGeometry();
+    geometry.name = `surface-ground-lod-${lod}`;
+    const position = new three.BufferAttribute(new Float32Array(builder.positions), 3);
+    geometry.setAttribute("position", position);
+    geometry.setAttribute("surfaceUv", new three.BufferAttribute(new Float32Array(builder.surfaceCoordinates), 2));
+    geometry.setIndex(new three.BufferAttribute(new Uint16Array(builder.indices), 1));
+    const horizontalBounds = new three.Box3().setFromBufferAttribute(position);
+    geometry.boundingBox = new three.Box3(
+      new three.Vector3(horizontalBounds.min.x, 0, horizontalBounds.min.z),
+      new three.Vector3(horizontalBounds.max.x, heightScale, horizontalBounds.max.z)
+    );
+    geometry.boundingBox.getBoundingSphere(geometry.boundingSphere = new three.Sphere());
+    const byteLength = geometry.getAttribute("position").array.byteLength + geometry.getAttribute("surfaceUv").array.byteLength + geometry.getIndex().array.byteLength;
+    const info = Object.freeze({
+      lod,
+      interiorGridStep: step,
+      vertexCount: builder.positions.length / 3,
+      triangleCount: builder.indices.length / 3,
+      byteLength
+    });
+    geometry.userData.surfaceGround = info;
+    return geometry;
+  }
+  function getSurfaceGroundGeometryInfo(geometry) {
+    const info = geometry?.userData?.surfaceGround;
+    if (!info || info.lod !== 0 && info.lod !== 1 && info.lod !== 2 || info.interiorGridStep !== SURFACE_GROUND_LOD_GRID_STEPS[info.lod] || !Number.isInteger(info.vertexCount) || info.vertexCount <= 0 || !Number.isInteger(info.triangleCount) || info.triangleCount <= 0 || !Number.isSafeInteger(info.byteLength) || info.byteLength <= 0) {
+      throw new TypeError("buffer geometry is not a valid surface ground geometry");
+    }
+    return info;
+  }
+  var SurfaceGroundGeometryPool = class {
+    constructor(hexSize = 1, heightScale = 1) {
+      this.hexSize = hexSize;
+      this.heightScale = heightScale;
+      this.geometries = /* @__PURE__ */ new Map();
+      this.disposed = false;
+      if (!Number.isFinite(hexSize) || hexSize <= 0) {
+        throw new RangeError("surface ground geometry pool hexSize must be finite and positive");
+      }
+      if (!Number.isFinite(heightScale) || heightScale <= 0) {
+        throw new RangeError("surface ground geometry pool heightScale must be finite and positive");
+      }
+    }
+    get(lod) {
+      if (this.disposed) throw new TypeError("surface ground geometry pool is disposed");
+      assertLod(lod);
+      let geometry = this.geometries.get(lod);
+      if (!geometry) {
+        geometry = createSurfaceGroundGeometry(lod, this.hexSize, this.heightScale);
+        this.geometries.set(lod, geometry);
+      }
+      return geometry;
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      for (const geometry of this.geometries.values()) geometry.dispose();
+      this.geometries.clear();
+    }
+    get stats() {
+      let vertexCount = 0;
+      let triangleCount = 0;
+      let byteLength = 0;
+      for (const geometry of this.geometries.values()) {
+        const info = getSurfaceGroundGeometryInfo(geometry);
+        vertexCount += info.vertexCount;
+        triangleCount += info.triangleCount;
+        byteLength += info.byteLength;
+      }
+      return Object.freeze({
+        state: this.disposed ? "disposed" : "ready",
+        geometryCount: this.geometries.size,
+        vertexCount,
+        triangleCount,
+        byteLength
+      });
+    }
+  };
+  var LIGHTING_STATE_FIELDS = /* @__PURE__ */ new Set([
+    "uniformRevision",
+    "sunDirection",
+    "sunRadiance",
+    "skyDiffuseIrradiance",
+    "groundDiffuseIrradiance",
+    "specularEnvironment",
+    "environmentRevision",
+    "exposure"
+  ]);
+  function assertExactFields(value, allowed, name) {
+    if (Object.getOwnPropertyNames(value).some((field2) => !allowed.has(field2))) {
+      throw new TypeError(`${name} contains unknown fields`);
+    }
+  }
+  function cloneVector(value, name, normalize = false) {
+    if (!value || typeof value !== "object") throw new TypeError(`${name} is invalid`);
+    assertExactFields(value, /* @__PURE__ */ new Set(["x", "y", "z"]), name);
+    if (![value.x, value.y, value.z].every(Number.isFinite)) throw new RangeError(`${name} must be finite`);
+    const length = Math.hypot(value.x, value.y, value.z);
+    if (normalize && !(length > 0)) throw new RangeError(`${name} must be non-zero`);
+    const scale = normalize ? 1 / length : 1;
+    return Object.freeze({ x: value.x * scale, y: value.y * scale, z: value.z * scale });
+  }
+  function cloneLinearRgb(value, name) {
+    if (!value || typeof value !== "object") throw new TypeError(`${name} is invalid`);
+    assertExactFields(value, /* @__PURE__ */ new Set(["r", "g", "b"]), name);
+    if (![value.r, value.g, value.b].every((channel) => Number.isFinite(channel) && channel >= 0)) {
+      throw new RangeError(`${name} channels must be finite and non-negative`);
+    }
+    return Object.freeze({ r: value.r, g: value.g, b: value.b });
+  }
+  function cloneEnvironment(value) {
+    if (!value || typeof value !== "object") throw new TypeError("lighting environment handle is invalid");
+    assertExactFields(value, /* @__PURE__ */ new Set(["identity", "texture"]), "lighting environment handle");
+    if (typeof value.identity !== "string" || value.identity.length === 0 || value.texture !== null && !(value.texture instanceof three.Texture)) {
+      throw new TypeError("lighting environment handle is invalid");
+    }
+    return Object.freeze({ identity: value.identity, texture: value.texture });
+  }
+  function createLightingState(value) {
+    if (!value || typeof value !== "object") throw new TypeError("lighting state is invalid");
+    assertExactFields(value, LIGHTING_STATE_FIELDS, "lighting state");
+    if (!Number.isSafeInteger(value.uniformRevision) || value.uniformRevision < 0 || !Number.isSafeInteger(value.environmentRevision) || value.environmentRevision < 0) {
+      throw new RangeError("lighting revisions must be non-negative safe integers");
+    }
+    if (!Number.isFinite(value.exposure) || value.exposure <= 0) {
+      throw new RangeError("lighting exposure must be finite and positive");
+    }
+    return Object.freeze({
+      uniformRevision: value.uniformRevision,
+      sunDirection: cloneVector(value.sunDirection, "lighting sunDirection", true),
+      sunRadiance: cloneLinearRgb(value.sunRadiance, "lighting sunRadiance"),
+      skyDiffuseIrradiance: cloneLinearRgb(
+        value.skyDiffuseIrradiance,
+        "lighting skyDiffuseIrradiance"
+      ),
+      groundDiffuseIrradiance: cloneLinearRgb(
+        value.groundDiffuseIrradiance,
+        "lighting groundDiffuseIrradiance"
+      ),
+      specularEnvironment: cloneEnvironment(value.specularEnvironment),
+      environmentRevision: value.environmentRevision,
+      exposure: value.exposure
+    });
+  }
+  var DEFAULT_LIGHTING_STATE = createLightingState({
+    uniformRevision: 0,
+    sunDirection: { x: 0.45, y: 0.8, z: 0.4 },
+    sunRadiance: { r: 1.9, g: 1.75, b: 1.5 },
+    skyDiffuseIrradiance: { r: 0.32, g: 0.42, b: 0.55 },
+    groundDiffuseIrradiance: { r: 0.08, g: 0.07, b: 0.055 },
+    specularEnvironment: { identity: "analytic-sky-v1", texture: null },
+    environmentRevision: 0,
+    exposure: 0.65
+  });
+  function copyColor(target, source) {
+    target.setRGB(source.r, source.g, source.b);
+  }
+  var LightingStateController = class {
+    constructor(initial = DEFAULT_LIGHTING_STATE) {
+      this.uniformBindings = /* @__PURE__ */ new Set();
+      this.rendererBindings = /* @__PURE__ */ new Set();
+      this.disposed = false;
+      this.current = createLightingState(initial);
+    }
+    get state() {
+      return this.current;
+    }
+    publish(nextValue, expectedUniformRevision) {
+      this.assertReady();
+      if (!Number.isSafeInteger(expectedUniformRevision) || expectedUniformRevision < 0) {
+        throw new RangeError("expected lighting revision must be a non-negative safe integer");
+      }
+      if (this.current.uniformRevision !== expectedUniformRevision) {
+        throw new RangeError("lighting state compare-and-swap revision conflict");
+      }
+      const next = createLightingState(nextValue);
+      if (next.uniformRevision !== expectedUniformRevision + 1) {
+        throw new RangeError("lighting uniformRevision must increase by exactly one");
+      }
+      if (next.environmentRevision < this.current.environmentRevision) {
+        throw new RangeError("lighting environmentRevision cannot decrease");
+      }
+      if (next.environmentRevision === this.current.environmentRevision && (next.specularEnvironment.identity !== this.current.specularEnvironment.identity || next.specularEnvironment.texture !== this.current.specularEnvironment.texture)) {
+        throw new TypeError("lighting environment changes require a new environmentRevision");
+      }
+      this.current = next;
+      for (const binding of this.uniformBindings) this.updateUniformBinding(binding.publicBinding, next);
+      for (const binding of this.rendererBindings) this.updateRenderer(binding.publicBinding.renderer, next);
+      return next;
+    }
+    bindUniforms() {
+      this.assertReady();
+      const sunDirection = new three.Uniform(new three.Vector3());
+      const sunRadiance = new three.Uniform(new three.Color());
+      const skyDiffuseIrradiance = new three.Uniform(new three.Color());
+      const groundDiffuseIrradiance = new three.Uniform(new three.Color());
+      const mutable = {};
+      const publicBinding = {
+        sunDirection,
+        sunRadiance,
+        skyDiffuseIrradiance,
+        groundDiffuseIrradiance,
+        get released() {
+          return mutable.released;
+        },
+        release: () => {
+          if (mutable.released) return false;
+          mutable.released = true;
+          this.uniformBindings.delete(mutable);
+          return true;
+        }
+      };
+      mutable.publicBinding = Object.freeze(publicBinding);
+      mutable.released = false;
+      this.updateUniformBinding(mutable.publicBinding, this.current);
+      this.uniformBindings.add(mutable);
+      return mutable.publicBinding;
+    }
+    bindRenderer(renderer) {
+      this.assertReady();
+      if (!renderer || typeof renderer !== "object") throw new TypeError("lighting renderer is invalid");
+      const mutable = {};
+      const publicBinding = {
+        renderer,
+        get released() {
+          return mutable.released;
+        },
+        release: () => {
+          if (mutable.released) return false;
+          mutable.released = true;
+          this.rendererBindings.delete(mutable);
+          return true;
+        }
+      };
+      mutable.publicBinding = Object.freeze(publicBinding);
+      mutable.released = false;
+      this.updateRenderer(renderer, this.current);
+      this.rendererBindings.add(mutable);
+      return mutable.publicBinding;
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      for (const binding of this.uniformBindings) binding.released = true;
+      for (const binding of this.rendererBindings) binding.released = true;
+      this.uniformBindings.clear();
+      this.rendererBindings.clear();
+    }
+    get stats() {
+      return Object.freeze({
+        state: this.disposed ? "disposed" : "ready",
+        uniformRevision: this.current.uniformRevision,
+        environmentRevision: this.current.environmentRevision,
+        uniformBindings: this.uniformBindings.size,
+        rendererBindings: this.rendererBindings.size
+      });
+    }
+    updateUniformBinding(binding, state) {
+      binding.sunDirection.value.set(
+        state.sunDirection.x,
+        state.sunDirection.y,
+        state.sunDirection.z
+      );
+      copyColor(binding.sunRadiance.value, state.sunRadiance);
+      copyColor(binding.skyDiffuseIrradiance.value, state.skyDiffuseIrradiance);
+      copyColor(binding.groundDiffuseIrradiance.value, state.groundDiffuseIrradiance);
+    }
+    updateRenderer(renderer, state) {
+      renderer.toneMapping = three.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = state.exposure;
+      renderer.outputColorSpace = three.SRGBColorSpace;
+    }
+    assertReady() {
+      if (this.disposed) throw new TypeError("lighting state controller is disposed");
+    }
+  };
+  var SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE = Object.freeze([
+    5797192,
+    11769700,
+    10268341,
+    7828591
+  ]);
+  var GROUND_VERTEX_SHADER = (
+    /* glsl */
+    `
+in vec2 surfaceUv;
+
+uniform sampler2DArray uSurfaceValues;
+uniform float uLayer;
+uniform float uHeightScale;
+
+out vec2 vSurfaceUv;
+out vec3 vWorldNormal;
+
+const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
+const float SURFACE_FIELD_MAX_TEXEL = 65.0;
+const float SQRT_THREE = 1.7320508075688772;
+
+float surfaceStagger(float u) {
+    float column = floor(u);
+    float amount = u - column;
+    float parity = mod(mod(column, 2.0) + 2.0, 2.0);
+    float first = parity < 0.5 ? 0.5 : 0.0;
+    float second = 0.5 - first;
+    return mix(first, second, amount);
+}
+
+vec2 surfaceWorld(vec2 localSurface) {
+    return vec2(
+        1.5 * localSurface.x,
+        SQRT_THREE * (localSurface.y + surfaceStagger(localSurface.x))
+    );
+}
+
+vec2 surfaceFieldCoordinate(vec2 localSurface) {
+    return (localSurface + vec2(0.5)) * SURFACE_SAMPLES_PER_TILE + vec2(0.5);
+}
+
+vec4 sampleSurfaceValues(vec2 localSurface) {
+    vec2 coordinate = clamp(surfaceFieldCoordinate(localSurface), vec2(0.0), vec2(SURFACE_FIELD_MAX_TEXEL));
+    ivec2 first = ivec2(floor(coordinate));
+    ivec2 second = min(first + ivec2(1), ivec2(65));
+    vec2 amount = coordinate - vec2(first);
+    vec4 top = mix(
+        texelFetch(uSurfaceValues, ivec3(first.x, first.y, int(uLayer)), 0),
+        texelFetch(uSurfaceValues, ivec3(second.x, first.y, int(uLayer)), 0),
+        amount.x
+    );
+    vec4 bottom = mix(
+        texelFetch(uSurfaceValues, ivec3(first.x, second.y, int(uLayer)), 0),
+        texelFetch(uSurfaceValues, ivec3(second.x, second.y, int(uLayer)), 0),
+        amount.x
+    );
+    return mix(top, bottom, amount.y);
+}
+
+void main() {
+    float groundHeight = sampleSurfaceValues(surfaceUv).r * uHeightScale;
+    float delta = 1.0 / SURFACE_SAMPLES_PER_TILE;
+    vec2 lower = max(surfaceUv - vec2(delta), vec2(-0.5));
+    vec2 upper = min(surfaceUv + vec2(delta), vec2(15.5));
+    float leftHeight = sampleSurfaceValues(vec2(lower.x, surfaceUv.y)).r * uHeightScale;
+    float rightHeight = sampleSurfaceValues(vec2(upper.x, surfaceUv.y)).r * uHeightScale;
+    float topHeight = sampleSurfaceValues(vec2(surfaceUv.x, lower.y)).r * uHeightScale;
+    float bottomHeight = sampleSurfaceValues(vec2(surfaceUv.x, upper.y)).r * uHeightScale;
+    vec2 leftWorld = surfaceWorld(vec2(lower.x, surfaceUv.y));
+    vec2 rightWorld = surfaceWorld(vec2(upper.x, surfaceUv.y));
+    vec2 topWorld = surfaceWorld(vec2(surfaceUv.x, lower.y));
+    vec2 bottomWorld = surfaceWorld(vec2(surfaceUv.x, upper.y));
+    vec3 tangentU = vec3(rightWorld.x - leftWorld.x, rightHeight - leftHeight, rightWorld.y - leftWorld.y);
+    vec3 tangentV = vec3(bottomWorld.x - topWorld.x, bottomHeight - topHeight, bottomWorld.y - topWorld.y);
+    vWorldNormal = normalize(mat3(modelMatrix) * normalize(cross(tangentV, tangentU)));
+    vSurfaceUv = surfaceUv;
+    vec3 displaced = vec3(position.x, groundHeight, position.z);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+}
+`
+  );
+  var GROUND_FRAGMENT_SHADER = (
+    /* glsl */
+    `
+uniform sampler2DArray uSurfaceMaterial;
+uniform sampler2DArray uFogTexture;
+uniform float uLayer;
+uniform bool uFogEnabled;
+uniform vec4 uValidBounds;
+uniform vec3 uMaterialPalette[4];
+uniform vec3 uSunDirection;
+uniform vec3 uSunRadiance;
+uniform vec3 uSkyDiffuseIrradiance;
+uniform vec3 uGroundDiffuseIrradiance;
+
+in vec2 vSurfaceUv;
+in vec3 vWorldNormal;
+out vec4 groundOutputColor;
+#define gl_FragColor groundOutputColor
+
+const float SURFACE_SAMPLES_PER_TILE = ${SURFACE_SAMPLES_PER_TILE_INTERVAL.toFixed(1)};
+const float SURFACE_FIELD_MAX_TEXEL = 65.0;
+
+vec2 surfaceFieldCoordinate(vec2 localSurface) {
+    return (localSurface + vec2(0.5)) * SURFACE_SAMPLES_PER_TILE + vec2(0.5);
+}
+
+vec4 sampleSurfaceMaterial(vec2 localSurface) {
+    vec2 coordinate = clamp(surfaceFieldCoordinate(localSurface), vec2(0.0), vec2(SURFACE_FIELD_MAX_TEXEL));
+    ivec2 first = ivec2(floor(coordinate));
+    ivec2 second = min(first + ivec2(1), ivec2(65));
+    vec2 amount = coordinate - vec2(first);
+    vec4 top = mix(
+        texelFetch(uSurfaceMaterial, ivec3(first.x, first.y, int(uLayer)), 0),
+        texelFetch(uSurfaceMaterial, ivec3(second.x, first.y, int(uLayer)), 0),
+        amount.x
+    );
+    vec4 bottom = mix(
+        texelFetch(uSurfaceMaterial, ivec3(first.x, second.y, int(uLayer)), 0),
+        texelFetch(uSurfaceMaterial, ivec3(second.x, second.y, int(uLayer)), 0),
+        amount.x
+    );
+    return mix(top, bottom, amount.y);
+}
+
+void main() {
+    vec2 minimum = uValidBounds.xy - vec2(0.5);
+    vec2 maximum = uValidBounds.zw - vec2(0.5);
+    if (vSurfaceUv.x < minimum.x || vSurfaceUv.y < minimum.y
+        || vSurfaceUv.x >= maximum.x || vSurfaceUv.y >= maximum.y) discard;
+
+    vec4 weights = sampleSurfaceMaterial(vSurfaceUv);
+    float weightSum = max(dot(weights, vec4(1.0)), 0.0001);
+    vec3 albedo = (uMaterialPalette[0] * weights.r
+        + uMaterialPalette[1] * weights.g
+        + uMaterialPalette[2] * weights.b
+        + uMaterialPalette[3] * weights.a) / weightSum;
+    vec3 normal = normalize(vWorldNormal);
+    float sunAmount = max(dot(normal, normalize(uSunDirection)), 0.0);
+    float skyAmount = normal.y * 0.5 + 0.5;
+    vec3 irradiance = uSunRadiance * sunAmount
+        + uSkyDiffuseIrradiance * skyAmount
+        + uGroundDiffuseIrradiance * (1.0 - skyAmount);
+    vec3 linearColor = albedo * irradiance;
+    if (uFogEnabled) {
+        ivec2 fogCoordinate = ivec2(clamp(floor(vSurfaceUv + vec2(0.5)), vec2(0.0), vec2(15.0)));
+        float visibility = texelFetch(uFogTexture, ivec3(fogCoordinate, int(uLayer)), 0).r;
+        linearColor = mix(vec3(0.018, 0.022, 0.027), linearColor, visibility);
+    }
+    gl_FragColor = vec4(linearColor, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+}
+`
+  );
+  function keyString(key) {
+    assertRenderKey2(key);
+    return `${key.chunkX},${key.chunkY}`;
+  }
+  function assertRenderKey2(key) {
+    if (!key || typeof key !== "object" || Object.getOwnPropertyNames(key).some((name) => name !== "chunkX" && name !== "chunkY") || !Number.isSafeInteger(key.chunkX) || !Number.isSafeInteger(key.chunkY)) {
+      throw new TypeError("GroundLayer render chunk key is invalid");
+    }
+  }
+  function assertLod2(lod) {
+    if (lod !== 0 && lod !== 1 && lod !== 2) throw new RangeError("ground chunk LOD must be 0, 1 or 2");
+  }
+  function assertLease(lease) {
+    if (!lease || typeof lease !== "object" || typeof lease.isCurrent !== "function" || typeof lease.release !== "function" || lease.released || !lease.isCurrent()) {
+      throw new TypeError("GroundLayer requires a current resident surface lease");
+    }
+    assertCompiledSurfaceChunk(lease.chunk);
+    assertSurfaceRequestToken(lease.requestToken);
+    if (lease.effectiveRevision !== lease.chunk.effectiveRevision || !surfaceDependencyKeysEqual(lease.dependencyKey, lease.chunk.dependencyKey)) {
+      throw new TypeError("GroundLayer lease identity does not match its compiled chunk");
+    }
+  }
+  function freezeMount(chunk) {
+    return Object.freeze({
+      key: chunk.key,
+      mesh: chunk.mesh,
+      slot: chunk.slot,
+      lod: chunk.lod,
+      effectiveRevision: chunk.lease.effectiveRevision
+    });
+  }
+  var GroundLayer = class {
+    constructor(options) {
+      this.root = new three.Group();
+      this.chunks = /* @__PURE__ */ new Map();
+      this.materials = /* @__PURE__ */ new Map();
+      this.floatingOriginX = 0;
+      this.floatingOriginZ = 0;
+      this.stateValue = "ready";
+      if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => ![
+        "surfaceTexturePool",
+        "fogTexturePool",
+        "lighting",
+        "hexSize",
+        "heightScale",
+        "materialPalette"
+      ].includes(name)) || !(options.surfaceTexturePool instanceof SurfaceTexturePool) || options.fogTexturePool !== void 0 && !(options.fogTexturePool instanceof SurfaceFogTexturePool) || !(options.lighting instanceof LightingStateController)) {
+        throw new TypeError("GroundLayer options are invalid");
+      }
+      if (options.surfaceTexturePool.state !== "ready" || options.fogTexturePool?.state === "disposed" || options.fogTexturePool?.state === "lost" || options.lighting.stats.state !== "ready") {
+        throw new TypeError("GroundLayer dependencies must be ready");
+      }
+      if (options.fogTexturePool && !options.fogTexturePool.isCompanionOf(options.surfaceTexturePool)) {
+        throw new TypeError("GroundLayer fog pool must accompany its surface texture pool");
+      }
+      this.hexSize = options.hexSize ?? 1;
+      this.heightScale = options.heightScale ?? 1;
+      if (!Number.isFinite(this.hexSize) || this.hexSize <= 0 || !Number.isFinite(this.heightScale) || this.heightScale <= 0) {
+        throw new RangeError("GroundLayer scales must be finite and positive");
+      }
+      const palette = options.materialPalette ?? SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE;
+      if (!Array.isArray(palette) || palette.length !== 4) {
+        throw new TypeError("GroundLayer material palette must contain exactly four colors");
+      }
+      this.palette = Object.freeze(palette.map((value) => new three.Color(value)));
+      this.surfaceTexturePool = options.surfaceTexturePool;
+      this.fogTexturePool = options.fogTexturePool;
+      this.lighting = options.lighting;
+      this.geometryPool = new SurfaceGroundGeometryPool(this.hexSize, this.heightScale);
+      this.root.name = "surface-ground-layer-v2";
+      this.root.matrixAutoUpdate = true;
+    }
+    get state() {
+      return this.stateValue;
+    }
+    mount(lease, lod) {
+      this.assertReady();
+      assertLease(lease);
+      assertLod2(lod);
+      const key = lease.chunk.key;
+      const serialized = keyString(key);
+      const existing = this.chunks.get(serialized);
+      if (existing) {
+        if (existing.lease === lease) throw new TypeError("surface lease is already mounted");
+        if (existing.lease.released) {
+          throw new TypeError("GroundLayer mounted lease was released outside its owner");
+        }
+        if (!this.surfaceTexturePool.upload(existing.slot, lease.chunk)) {
+          throw new RangeError("GroundLayer texture slot became stale during replacement");
+        }
+        const previous = existing.lease;
+        existing.lease = lease;
+        if (existing.lod !== lod) {
+          existing.lod = lod;
+          existing.mesh.geometry = this.geometryPool.get(lod);
+        }
+        previous.release();
+        return freezeMount(existing);
+      }
+      const slot = this.surfaceTexturePool.allocate(key);
+      try {
+        if (!this.surfaceTexturePool.upload(slot, lease.chunk)) {
+          throw new RangeError("GroundLayer texture slot became stale during initial upload");
+        }
+        const binding = this.surfaceTexturePool.getBinding(slot);
+        const material = this.materialForBinding(binding);
+        const mesh = new three.Mesh(this.geometryPool.get(lod), material.material);
+        mesh.name = `surface-ground-${serialized}`;
+        mesh.matrixAutoUpdate = true;
+        const chunk = {
+          key: Object.freeze({ ...key }),
+          keyString: serialized,
+          mesh,
+          slot,
+          lease,
+          lod,
+          hasFog: false
+        };
+        mesh.onBeforeRender = () => this.prepareDraw(chunk, material.material);
+        this.positionChunk(chunk);
+        this.chunks.set(serialized, chunk);
+        this.root.add(mesh);
+        return freezeMount(chunk);
+      } catch (reason) {
+        this.surfaceTexturePool.release(slot);
+        throw reason;
+      }
+    }
+    setLod(key, lod) {
+      this.assertReady();
+      assertLod2(lod);
+      const chunk = this.chunks.get(keyString(key));
+      if (!chunk) return false;
+      if (chunk.lod === lod) return false;
+      chunk.lod = lod;
+      chunk.mesh.geometry = this.geometryPool.get(lod);
+      return true;
+    }
+    uploadFog(key, fog) {
+      this.assertReady();
+      if (!this.fogTexturePool) throw new TypeError("GroundLayer has no dynamic fog texture pool");
+      if (!(fog instanceof Uint8Array) || fog.length !== SURFACE_FOG_LAYER_BYTES) {
+        throw new TypeError("GroundLayer fog update must contain one 16x16 R8 layer");
+      }
+      const chunk = this.chunks.get(keyString(key));
+      if (!chunk) return false;
+      if (!this.fogTexturePool.upload(chunk.slot, fog)) return false;
+      chunk.hasFog = true;
+      const fogBinding = this.fogTexturePool.getBinding(chunk.slot);
+      const material = this.materials.get(chunk.slot.pageIndex);
+      if (!material) throw new TypeError("GroundLayer material page is missing");
+      material.material.uniforms.uFogTexture.value = fogBinding.texture;
+      return true;
+    }
+    setFloatingOrigin(worldX, worldZ) {
+      this.assertNotDisposed();
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        throw new RangeError("GroundLayer floating origin must be finite");
+      }
+      this.floatingOriginX = worldX;
+      this.floatingOriginZ = worldZ;
+      for (const chunk of this.chunks.values()) this.positionChunk(chunk);
+    }
+    unmount(key) {
+      this.assertNotDisposed();
+      const serialized = keyString(key);
+      const chunk = this.chunks.get(serialized);
+      if (!chunk) return false;
+      this.chunks.delete(serialized);
+      this.root.remove(chunk.mesh);
+      chunk.mesh.onBeforeRender = () => void 0;
+      if (chunk.hasFog) this.fogTexturePool?.release(chunk.slot);
+      this.surfaceTexturePool.release(chunk.slot);
+      chunk.lease.release();
+      return true;
+    }
+    handleContextLost() {
+      this.assertNotDisposed();
+      if (this.stateValue === "lost") return;
+      this.fogTexturePool?.handleContextLost();
+      this.surfaceTexturePool.handleContextLost();
+      this.stateValue = "lost";
+    }
+    handleContextRestored() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "lost") {
+        throw new TypeError("GroundLayer context can only restore from the lost state");
+      }
+      this.surfaceTexturePool.handleContextRestored();
+      this.fogTexturePool?.handleContextRestored();
+      for (const page of this.materials.values()) page.material.needsUpdate = true;
+      this.stateValue = "ready";
+    }
+    dispose() {
+      if (this.stateValue === "disposed") return;
+      for (const key of [...this.chunks.values()].map((chunk) => chunk.key)) this.unmount(key);
+      for (const page of this.materials.values()) {
+        page.lighting.release();
+        page.material.dispose();
+      }
+      this.materials.clear();
+      this.geometryPool.dispose();
+      this.root.removeFromParent();
+      this.stateValue = "disposed";
+    }
+    get stats() {
+      const lodCounts = [0, 0, 0];
+      let foggedChunks = 0;
+      for (const chunk of this.chunks.values()) {
+        lodCounts[chunk.lod] += 1;
+        if (chunk.hasFog) foggedChunks += 1;
+      }
+      const geometry = this.geometryPool.stats;
+      return Object.freeze({
+        state: this.stateValue,
+        mountedChunks: this.chunks.size,
+        lod0Chunks: lodCounts[0],
+        lod1Chunks: lodCounts[1],
+        lod2Chunks: lodCounts[2],
+        foggedChunks,
+        materialPages: this.materials.size,
+        geometryBytes: geometry.byteLength,
+        geometryVertices: geometry.vertexCount,
+        geometryTriangles: geometry.triangleCount
+      });
+    }
+    materialForBinding(binding) {
+      let page = this.materials.get(binding.slot.pageIndex);
+      if (page) return page;
+      const lighting = this.lighting.bindUniforms();
+      const material = new three.ShaderMaterial({
+        name: `surface-ground-page-${binding.slot.pageIndex}`,
+        glslVersion: three.GLSL3,
+        vertexShader: GROUND_VERTEX_SHADER,
+        fragmentShader: GROUND_FRAGMENT_SHADER,
+        uniforms: {
+          uSurfaceValues: new three.Uniform(binding.valuesTexture),
+          uSurfaceMaterial: new three.Uniform(binding.materialTexture),
+          uFogTexture: new three.Uniform(null),
+          uLayer: new three.Uniform(0),
+          uHeightScale: new three.Uniform(this.heightScale),
+          uFogEnabled: new three.Uniform(false),
+          uValidBounds: new three.Uniform(new three.Vector4(0, 0, 16, 16)),
+          uMaterialPalette: new three.Uniform(this.palette),
+          uSunDirection: lighting.sunDirection,
+          uSunRadiance: lighting.sunRadiance,
+          uSkyDiffuseIrradiance: lighting.skyDiffuseIrradiance,
+          uGroundDiffuseIrradiance: lighting.groundDiffuseIrradiance
+        },
+        side: three.DoubleSide,
+        depthWrite: true,
+        depthTest: true,
+        transparent: false,
+        toneMapped: true
+      });
+      page = Object.freeze({ material, lighting });
+      this.materials.set(binding.slot.pageIndex, page);
+      return page;
+    }
+    prepareDraw(chunk, material) {
+      if (!this.surfaceTexturePool.isCurrent(chunk.slot) || chunk.lease.released) {
+        chunk.mesh.visible = false;
+        return;
+      }
+      chunk.mesh.visible = true;
+      material.uniforms.uLayer.value = chunk.slot.layerIndex;
+      material.uniforms.uFogEnabled.value = chunk.hasFog;
+      const bounds = chunk.lease.chunk.bounds.validTiles;
+      material.uniforms.uValidBounds.value.set(
+        bounds.minX,
+        bounds.minY,
+        bounds.maxXExclusive,
+        bounds.maxYExclusive
+      );
+    }
+    positionChunk(chunk) {
+      const surfaceX = chunk.key.chunkX * SURFACE_RENDER_CHUNK_SIZE;
+      const surfaceY = chunk.key.chunkY * SURFACE_RENDER_CHUNK_SIZE;
+      if (!Number.isSafeInteger(surfaceX) || !Number.isSafeInteger(surfaceY)) {
+        throw new RangeError("GroundLayer render origin exceeds the safe integer domain");
+      }
+      chunk.mesh.position.set(
+        1.5 * this.hexSize * surfaceX - this.floatingOriginX,
+        0,
+        Math.sqrt(3) * this.hexSize * surfaceY - this.floatingOriginZ
+      );
+      chunk.mesh.updateMatrix();
+      chunk.mesh.updateMatrixWorld();
+      const info = getSurfaceGroundGeometryInfo(chunk.mesh.geometry);
+      if (info.lod !== chunk.lod) throw new TypeError("GroundLayer mounted the wrong shared LOD geometry");
+    }
+    assertReady() {
+      this.assertNotDisposed();
+      if (this.stateValue !== "ready") throw new TypeError("GroundLayer cannot mutate while context is lost");
+    }
+    assertNotDisposed() {
+      if (this.stateValue === "disposed") throw new TypeError("GroundLayer is disposed");
+    }
+  };
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
@@ -25593,6 +26746,7 @@ void main() {
   exports.BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES = BASE_SEMANTIC_CHUNK_SERIALIZED_BYTES;
   exports.BaseSemanticChunkView = BaseSemanticChunkView;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
+  exports.DEFAULT_LIGHTING_STATE = DEFAULT_LIGHTING_STATE;
   exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
   exports.EffectiveWorldView = EffectiveWorldView;
   exports.EventEmitter = EventEmitter;
@@ -25602,6 +26756,7 @@ void main() {
   exports.FogState = FogState;
   exports.FrameTaskScheduler = FrameTaskScheduler;
   exports.GameEngine = GameEngine;
+  exports.GroundLayer = GroundLayer;
   exports.HEXPolygon = HEXPolygon;
   exports.HYDROLOGY_COORDINATE_SCALE = HYDROLOGY_COORDINATE_SCALE;
   exports.HYDROLOGY_INFINITE_BASIN_SIZE = HYDROLOGY_INFINITE_BASIN_SIZE;
@@ -25634,6 +26789,7 @@ void main() {
   exports.LandPriority = LandPriority;
   exports.LifecycleDrainTimeoutError = LifecycleDrainTimeoutError;
   exports.LifecycleScope = LifecycleScope;
+  exports.LightingStateController = LightingStateController;
   exports.MAX_WORLD_GENERATION_CHUNK_SIZE = MAX_WORLD_GENERATION_CHUNK_SIZE;
   exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
   exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
@@ -25655,9 +26811,15 @@ void main() {
   exports.SURFACE_FIELD_TEXEL_COUNT = SURFACE_FIELD_TEXEL_COUNT;
   exports.SURFACE_FIELD_TEXTURE_SIZE = SURFACE_FIELD_TEXTURE_SIZE;
   exports.SURFACE_FLOW_TEXTURE_CHANNELS = SURFACE_FLOW_TEXTURE_CHANNELS;
+  exports.SURFACE_FOG_LAYER_BYTES = SURFACE_FOG_LAYER_BYTES;
+  exports.SURFACE_FOG_PAGE_BYTES = SURFACE_FOG_PAGE_BYTES;
+  exports.SURFACE_FOG_TEXTURE_SIZE = SURFACE_FOG_TEXTURE_SIZE;
   exports.SURFACE_GPU_BYTES_PER_TEXEL = SURFACE_GPU_BYTES_PER_TEXEL;
   exports.SURFACE_GPU_LAYER_BYTES = SURFACE_GPU_LAYER_BYTES;
   exports.SURFACE_GPU_PAGE_BYTES = SURFACE_GPU_PAGE_BYTES;
+  exports.SURFACE_GROUND_BOUNDARY_INTERVALS = SURFACE_GROUND_BOUNDARY_INTERVALS;
+  exports.SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE = SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE;
+  exports.SURFACE_GROUND_LOD_GRID_STEPS = SURFACE_GROUND_LOD_GRID_STEPS;
   exports.SURFACE_INFLUENCE_RADIUS_TILES = SURFACE_INFLUENCE_RADIUS_TILES;
   exports.SURFACE_LATTICE_TEST_VECTORS = SURFACE_LATTICE_TEST_VECTORS;
   exports.SURFACE_MATERIAL_TEXTURE_CHANNELS = SURFACE_MATERIAL_TEXTURE_CHANNELS;
@@ -25673,6 +26835,8 @@ void main() {
   exports.StaticWorldSource = StaticWorldSource;
   exports.SubstrateClass = SubstrateClass;
   exports.SurfaceCompilationService = SurfaceCompilationService;
+  exports.SurfaceFogTexturePool = SurfaceFogTexturePool;
+  exports.SurfaceGroundGeometryPool = SurfaceGroundGeometryPool;
   exports.SurfaceRequestTracker = SurfaceRequestTracker;
   exports.SurfaceTexturePool = SurfaceTexturePool;
   exports.SurfaceWindowBufferPool = SurfaceWindowBufferPool;
@@ -25742,11 +26906,13 @@ void main() {
   exports.compiledSurfaceFieldTransferables = compiledSurfaceFieldTransferables;
   exports.createEffectiveDeltaSnapshot = createEffectiveDeltaSnapshot;
   exports.createLandformSampler = createLandformSampler;
+  exports.createLightingState = createLightingState;
   exports.createProceduralMacroHeightSource = createProceduralMacroHeightSource;
   exports.createSemanticChunkSurfaceResolver = createSemanticChunkSurfaceResolver;
   exports.createSparseSemanticDelta = createSparseSemanticDelta;
   exports.createStableHydrologyId = createStableHydrologyId;
   exports.createSurfaceDependencyBinding = createSurfaceDependencyBinding;
+  exports.createSurfaceGroundGeometry = createSurfaceGroundGeometry;
   exports.createTransferableEffectiveWindow = createTransferableEffectiveWindow;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
@@ -25774,6 +26940,7 @@ void main() {
   exports.getMapTile = getMapTile;
   exports.getNeighborCoords = getNeighborCoords;
   exports.getNeighbors = getNeighbors;
+  exports.getSurfaceGroundGeometryInfo = getSurfaceGroundGeometryInfo;
   exports.getWorldChunkBounds = getWorldChunkBounds;
   exports.getWorldChunkCorePoints = getWorldChunkCorePoints;
   exports.getWorldChunkMetadata = getWorldChunkMetadata;

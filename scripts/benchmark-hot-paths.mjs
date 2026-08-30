@@ -17,6 +17,11 @@ import {
     surfaceHydrologyRegionRequirements,
     surfaceSemanticChunkRequirements,
     SURFACE_GPU_PAGE_BYTES,
+    SURFACE_FOG_PAGE_BYTES,
+    SURFACE_FOG_LAYER_BYTES,
+    GroundLayer,
+    LightingStateController,
+    SurfaceFogTexturePool,
     SurfaceTexturePool,
     SurfaceRequestTracker,
     createWorldVegetationMapSnapshot,
@@ -262,6 +267,72 @@ function benchmarkSurfaceTexturePacking(chunk) {
     };
 }
 
+function benchmarkGroundLayerProfiles(template) {
+    const cloneForKey = key => Object.freeze({
+        ...template,
+        key: Object.freeze({ ...key }),
+        dependencyKey: Object.freeze({
+            ...template.dependencyKey,
+            renderKey: Object.freeze({ ...key })
+        })
+    });
+    const leaseFor = chunk => {
+        let released = false;
+        return Object.freeze({
+            requestToken: Object.freeze({ sessionEpoch: 1, renderChunkGeneration: 1 }),
+            effectiveRevision: chunk.effectiveRevision,
+            dependencyKey: chunk.dependencyKey,
+            chunk,
+            get released() { return released; },
+            isCurrent: () => !released,
+            release: () => {
+                if (released) return false;
+                released = true;
+                return true;
+            }
+        });
+    };
+    const run = chunkCount => {
+        const surfacePool = new SurfaceTexturePool({ gpuBudgetBytes: SURFACE_GPU_PAGE_BYTES });
+        const fogPool = new SurfaceFogTexturePool({
+            surfacePool,
+            gpuBudgetBytes: SURFACE_FOG_PAGE_BYTES
+        });
+        const lighting = new LightingStateController();
+        const ground = new GroundLayer({ surfaceTexturePool: surfacePool, fogTexturePool: fogPool, lighting });
+        const fog = new Uint8Array(SURFACE_FOG_LAYER_BYTES).fill(255);
+        const side = Math.ceil(Math.sqrt(chunkCount));
+        const started = performance.now();
+        for (let index = 0; index < chunkCount; index += 1) {
+            const key = { chunkX: index % side, chunkY: Math.floor(index / side) };
+            ground.mount(leaseFor(cloneForKey(key)), index % 3);
+            ground.uploadFog(key, fog);
+        }
+        const durationMs = performance.now() - started;
+        const stats = ground.stats;
+        const gpuBytes = surfacePool.stats.gpuBytes + fogPool.stats.gpuBytes;
+        ground.dispose();
+        fogPool.dispose();
+        surfacePool.dispose();
+        lighting.dispose();
+        return {
+            chunks: chunkCount,
+            durationMs: round(durationMs),
+            averageMs: round(durationMs / chunkCount, 3),
+            geometryBytes: stats.geometryBytes,
+            geometryVertices: stats.geometryVertices,
+            geometryTriangles: stats.geometryTriangles,
+            gpuBytes
+        };
+    };
+    return {
+        operation: "v2 GroundLayer mount + static field + dynamic fog",
+        profile1: run(1),
+        profile9: run(9),
+        profile49: run(49)
+    };
+}
+
 function benchmarkFogFrontier() {
     const width = 512;
     const height = 512;
@@ -464,6 +535,7 @@ const results = {
     effectiveSnapshots: benchmarkEffectiveSnapshots(),
     surfaceCompilation: surfaceCompilation.metrics,
     surfaceTexturePacking: benchmarkSurfaceTexturePacking(surfaceCompilation.chunk),
+    groundLayerProfiles: benchmarkGroundLayerProfiles(surfaceCompilation.chunk),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -497,6 +569,7 @@ if (process.argv.includes("--check")) {
     under("surfaceCompilation.windowMs", results.surfaceCompilation.windowMs, 750);
     under("surfaceCompilation.compileMs", results.surfaceCompilation.compileMs, 750);
     under("surfaceTexturePacking.durationMs", results.surfaceTexturePacking.durationMs, 750);
+    under("groundLayerProfiles.profile49.durationMs", results.groundLayerProfiles.profile49.durationMs, 1_500);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

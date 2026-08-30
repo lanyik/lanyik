@@ -14,7 +14,7 @@ when it changes the defects the suite can detect.
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
-| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, 66x66 CPU surface compilation, and full-layer GPU backing-store packing | `scripts/benchmark-hot-paths.mjs` |
+| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, 66x66 CPU surface compilation, full-layer GPU backing-store packing, and 1/9/49 GroundLayer mounts with dynamic fog | `scripts/benchmark-hot-paths.mjs` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
 only for browser-owned behavior such as module Workers, WebGL context recovery,
@@ -26,6 +26,13 @@ The v2 surface texture pool browser test performs real `DataArrayTexture`
 uploads for all four physical formats, samples the same layer through GLSL 3,
 compares the pixel to the CPU field, and repeats after a real WebGL context
 loss/restore cycle. Object-shape assertions alone do not satisfy this contract.
+
+The v2 GroundLayer browser test compiles and draws the real shared ground
+geometry/material, verifies that a separate 16x16 R8 fog upload changes the
+rendered pixel without touching the static field, switches LOD, and renders the
+same result after context loss/restore. Unit contracts additionally require all
+three LODs to expose the same canonical outer boundary and a welded manifold
+transition strip with exact area and edge ownership.
 
 The v2 surface Worker browser test transfers a complete effective window,
 verifies that the sending buffers detach, validates the compiled payload, and

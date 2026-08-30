@@ -431,6 +431,51 @@ export type {
     SurfaceTextureBinding,
     SurfaceTexturePoolStats
 } from "./rendering/SurfaceTexturePool";
+export {
+    SURFACE_FOG_TEXTURE_SIZE,
+    SURFACE_FOG_LAYER_BYTES,
+    SURFACE_FOG_PAGE_BYTES,
+    SurfaceFogTexturePool
+} from "./rendering/SurfaceFogTexturePool";
+export type {
+    SurfaceFogTexturePoolOptions,
+    SurfaceFogTextureBinding,
+    SurfaceFogTexturePoolStats
+} from "./rendering/SurfaceFogTexturePool";
+export {
+    SURFACE_GROUND_LOD_GRID_STEPS,
+    SURFACE_GROUND_BOUNDARY_INTERVALS,
+    createSurfaceGroundGeometry,
+    getSurfaceGroundGeometryInfo,
+    SurfaceGroundGeometryPool
+} from "./rendering/SurfaceGroundGeometry";
+export type {
+    SurfaceGroundGeometryInfo,
+    SurfaceGroundGeometryPoolStats
+} from "./rendering/SurfaceGroundGeometry";
+export {
+    DEFAULT_LIGHTING_STATE,
+    createLightingState,
+    LightingStateController
+} from "./rendering/LightingState";
+export type {
+    LightingVector3,
+    LinearRgb,
+    LightingEnvironmentHandle,
+    LightingState,
+    LightingUniformBinding,
+    LightingRendererBinding,
+    LightingStateControllerStats
+} from "./rendering/LightingState";
+export {
+    SURFACE_GROUND_DEFAULT_MATERIAL_PALETTE,
+    GroundLayer
+} from "./rendering/GroundLayer";
+export type {
+    GroundLayerOptions,
+    GroundChunkMount,
+    GroundLayerStats
+} from "./rendering/GroundLayer";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";
