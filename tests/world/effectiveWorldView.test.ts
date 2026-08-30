@@ -303,8 +303,12 @@ describe("surface foundation v2 effective snapshots", () => {
         expect(tracker.isCurrent({ chunkX: 3, chunkY: 3 }, token)).toBe(true);
 
         const infinite = createWorldDescriptorV2({ seed: "effective-safe-range" });
+        expect(canonicalizeRenderChunkKey(infinite, {
+            chunkX: Math.floor(Number.MIN_SAFE_INTEGER / 16),
+            chunkY: 0
+        })).toEqual({ chunkX: Math.floor(Number.MIN_SAFE_INTEGER / 16), chunkY: 0 });
         expect(() => canonicalizeRenderChunkKey(infinite, {
-            chunkX: Math.ceil(Number.MIN_SAFE_INTEGER / 16) - 1,
+            chunkX: Math.floor(Number.MIN_SAFE_INTEGER / 16) - 1,
             chunkY: 0
         })).toThrow(/safe integer tile range/);
         expect(() => canonicalizeRenderChunkKey(infinite, {

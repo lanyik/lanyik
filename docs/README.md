@@ -13,7 +13,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
 | World-style generation v1 | Frozen on 2026-08-29; generator v5, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| Surface/render foundation v2 | Stages A–B semantic and hydrology authority implemented; stages C–H and the production cutover remain | [surface-render-foundation-v2.md](./surface-render-foundation-v2.md) |
+| Surface/render foundation v2 | Stages A–B, effective snapshot/versioning, and the stage C1 CPU surface compiler implemented; Worker/GPU stages C2–H and the production cutover remain | [surface-render-foundation-v2.md](./surface-render-foundation-v2.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 
 ## Architecture and contracts

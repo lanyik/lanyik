@@ -22951,10 +22951,28 @@ void main() {
     }
   };
 
-  // src/world/semantic/SurfaceDependency.ts
+  // src/world/semantic/SurfaceCompileProfile.ts
   var SURFACE_RENDER_CHUNK_SIZE = 16;
+  var SURFACE_SAMPLES_PER_TILE_INTERVAL = 4;
+  var SURFACE_FIELD_CORE_SIZE = SURFACE_RENDER_CHUNK_SIZE * SURFACE_SAMPLES_PER_TILE_INTERVAL;
+  var SURFACE_FIELD_GUTTER_TEXELS = 1;
+  var SURFACE_FIELD_TEXTURE_SIZE = SURFACE_FIELD_CORE_SIZE + SURFACE_FIELD_GUTTER_TEXELS * 2;
+  var SURFACE_FIELD_TEXEL_COUNT = SURFACE_FIELD_TEXTURE_SIZE * SURFACE_FIELD_TEXTURE_SIZE;
+  var SURFACE_INFLUENCE_RADIUS_TILES = 2;
+  var SURFACE_EFFECTIVE_WINDOW_SIZE = SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES * 2;
+  var SURFACE_MAX_WATER_BODY_COUNT = 255;
+  var SURFACE_CANONICAL_HEX_SIZE = 1;
   var SURFACE_COMPILER_REVISION = 1;
   var SURFACE_COMPILE_PROFILE_VERSION = 1;
+  var SURFACE_COMPILE_PROFILE_V1 = Object.freeze({
+    renderChunkSize: SURFACE_RENDER_CHUNK_SIZE,
+    samplesPerTileInterval: SURFACE_SAMPLES_PER_TILE_INTERVAL,
+    gutterTexels: SURFACE_FIELD_GUTTER_TEXELS,
+    influenceRadiusTiles: SURFACE_INFLUENCE_RADIUS_TILES,
+    textureLayerSize: SURFACE_FIELD_TEXTURE_SIZE
+  });
+
+  // src/world/semantic/SurfaceDependency.ts
   function assertNonNegativeRevision(name, value) {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new RangeError(`${name} must be a non-negative safe integer`);
@@ -22973,7 +22991,7 @@ void main() {
     const originY = value.chunkY * SURFACE_RENDER_CHUNK_SIZE;
     const endX = originX + SURFACE_RENDER_CHUNK_SIZE - 1;
     const endY = originY + SURFACE_RENDER_CHUNK_SIZE - 1;
-    if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(endX) || !Number.isSafeInteger(endY)) {
+    if (originX > Number.MAX_SAFE_INTEGER || endX < Number.MIN_SAFE_INTEGER || originY > Number.MAX_SAFE_INTEGER || endY < Number.MIN_SAFE_INTEGER) {
       throw new RangeError("render chunk key exceeds the safe integer tile range");
     }
   }
@@ -23064,6 +23082,9 @@ void main() {
     assertCanonicalHydrologyDependencies(key.hydrologyRegions);
   }
   function createSurfaceDependencyBinding(snapshot, renderKey, options = {}) {
+    if (!options || typeof options !== "object" || Object.getOwnPropertyNames(options).some((name) => name !== "compilerRevision" && name !== "compileProfileVersion" && name !== "hydrologyFeatureIds") || options.hydrologyFeatureIds !== void 0 && !(options.hydrologyFeatureIds instanceof Set)) {
+      throw new TypeError("surface dependency binding options are invalid");
+    }
     const canonicalRenderKey = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
     const compilerRevision = options.compilerRevision ?? SURFACE_COMPILER_REVISION;
     const compileProfileVersion = options.compileProfileVersion ?? SURFACE_COMPILE_PROFILE_VERSION;
@@ -23080,7 +23101,7 @@ void main() {
     const hydrologyRegions = Object.freeze(snapshot.hydrologyRegions.map((region) => Object.freeze({
       key: Object.freeze(canonicalizeHydrologyRegionKey(snapshot.descriptor, region.base.key)),
       baseRevision: region.base.revision,
-      features: Object.freeze(region.featureDeltas.map((feature) => Object.freeze({
+      features: Object.freeze(region.featureDeltas.filter((feature) => !options.hydrologyFeatureIds || options.hydrologyFeatureIds.has(feature.featureId)).map((feature) => Object.freeze({
         featureId: feature.featureId,
         revision: feature.revision
       })))
@@ -23139,6 +23160,25 @@ void main() {
         dependency.features.map((feature) => [feature.featureId, feature.revision])
       ])
     ]);
+  }
+  function cloneSurfaceDependencyKey(key) {
+    assertSurfaceDependencyKey(key);
+    return Object.freeze({
+      worldIdentity: key.worldIdentity,
+      renderKey: Object.freeze({ ...key.renderKey }),
+      compilerRevision: key.compilerRevision,
+      compileProfileVersion: key.compileProfileVersion,
+      semanticChunks: Object.freeze(key.semanticChunks.map((dependency) => Object.freeze({
+        key: Object.freeze({ ...dependency.key }),
+        baseRevision: dependency.baseRevision,
+        deltaRevision: dependency.deltaRevision
+      }))),
+      hydrologyRegions: Object.freeze(key.hydrologyRegions.map((dependency) => Object.freeze({
+        key: Object.freeze({ ...dependency.key }),
+        baseRevision: dependency.baseRevision,
+        features: Object.freeze(dependency.features.map((feature) => Object.freeze({ ...feature })))
+      })))
+    });
   }
   function assertSurfaceRequestToken(value) {
     if (!value || typeof value !== "object") throw new TypeError("surface request token must be an object");
@@ -23220,6 +23260,1302 @@ void main() {
     }
   };
 
+  // src/world/semantic/SurfaceLattice.ts
+  function assertFiniteCoordinate(name, value) {
+    if (!Number.isFinite(value)) throw new RangeError(`${name} must be finite`);
+  }
+  function assertHexSize(value) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new RangeError("surface lattice hexSize must be finite and positive");
+    }
+  }
+  function surfaceColumnStagger(column) {
+    if (!Number.isSafeInteger(column)) {
+      throw new RangeError("surface lattice column must be a safe integer");
+    }
+    return column - Math.floor(column / 2) * 2 === 0 ? 0.5 : 0;
+  }
+  function surfaceStagger(u) {
+    assertFiniteCoordinate("surface u", u);
+    const column = Math.floor(u);
+    if (!Number.isSafeInteger(column)) {
+      throw new RangeError("surface lattice column exceeds the safe integer range");
+    }
+    const amount = u - column;
+    const first = surfaceColumnStagger(column);
+    if (amount === 0) return first;
+    const second = surfaceColumnStagger(column + 1);
+    return first + (second - first) * amount;
+  }
+  function surfaceToWorld(u, v, hexSize = SURFACE_CANONICAL_HEX_SIZE) {
+    assertFiniteCoordinate("surface u", u);
+    assertFiniteCoordinate("surface v", v);
+    assertHexSize(hexSize);
+    return Object.freeze({
+      x: 1.5 * hexSize * u,
+      z: Math.sqrt(3) * hexSize * (v + surfaceStagger(u))
+    });
+  }
+  function worldToSurface(x, z, hexSize = SURFACE_CANONICAL_HEX_SIZE) {
+    assertFiniteCoordinate("surface world x", x);
+    assertFiniteCoordinate("surface world z", z);
+    assertHexSize(hexSize);
+    const u = x / (1.5 * hexSize);
+    return Object.freeze({
+      u,
+      v: z / (Math.sqrt(3) * hexSize) - surfaceStagger(u)
+    });
+  }
+  function surfaceLatticeTexelLocalCoordinate(physicalX, physicalY) {
+    if (!Number.isInteger(physicalX) || physicalX < 0 || physicalX >= SURFACE_FIELD_TEXTURE_SIZE || !Number.isInteger(physicalY) || physicalY < 0 || physicalY >= SURFACE_FIELD_TEXTURE_SIZE) {
+      throw new RangeError("surface lattice physical texel lies outside the field layer");
+    }
+    return Object.freeze({
+      u: -0.5 + (physicalX - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+      v: -0.5 + (physicalY - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL
+    });
+  }
+  function surfaceLatticeTexelWorldCoordinate(physicalX, physicalY) {
+    const coordinate = surfaceLatticeTexelLocalCoordinate(physicalX, physicalY);
+    return surfaceToWorld(coordinate.u, coordinate.v);
+  }
+  function surfaceFieldTexelCoordinate(localU, localV) {
+    assertFiniteCoordinate("surface localU", localU);
+    assertFiniteCoordinate("surface localV", localV);
+    return Object.freeze({
+      u: (localU + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL - 0.5 + SURFACE_FIELD_GUTTER_TEXELS,
+      v: (localV + 0.5) * SURFACE_SAMPLES_PER_TILE_INTERVAL - 0.5 + SURFACE_FIELD_GUTTER_TEXELS
+    });
+  }
+  function surfaceLatticeIndex(physicalX, physicalY) {
+    if (!Number.isInteger(physicalX) || physicalX < 0 || physicalX >= SURFACE_FIELD_TEXTURE_SIZE || !Number.isInteger(physicalY) || physicalY < 0 || physicalY >= SURFACE_FIELD_TEXTURE_SIZE) {
+      throw new RangeError("surface lattice texel lies outside the field layer");
+    }
+    return physicalX * SURFACE_FIELD_TEXTURE_SIZE + physicalY;
+  }
+  function surfacePointOwnerRenderChunk(u, v) {
+    assertFiniteCoordinate("surface u", u);
+    assertFiniteCoordinate("surface v", v);
+    const chunkX = Math.floor((u + 0.5) / SURFACE_RENDER_CHUNK_SIZE);
+    const chunkY = Math.floor((v + 0.5) / SURFACE_RENDER_CHUNK_SIZE);
+    if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) {
+      throw new RangeError("surface owner render chunk exceeds the safe integer range");
+    }
+    return Object.freeze({ chunkX, chunkY });
+  }
+  var SURFACE_LATTICE_TEST_VECTORS = Object.freeze([
+    Object.freeze({ u: 0, v: 0, x: 0, z: Math.sqrt(3) / 2 }),
+    Object.freeze({ u: 1, v: 0, x: 1.5, z: 0 }),
+    Object.freeze({ u: -1, v: 0, x: -1.5, z: 0 }),
+    Object.freeze({ u: -2, v: -3, x: -3, z: -2.5 * Math.sqrt(3) })
+  ]);
+
+  // src/world/semantic/SurfaceHalfFloat.ts
+  function roundToNearestEven(value) {
+    const lower = Math.floor(value);
+    const fraction = value - lower;
+    if (fraction > 0.5 || fraction === 0.5 && lower % 2 !== 0) return lower + 1;
+    return lower;
+  }
+  function encodeFloat16(value) {
+    if (Number.isNaN(value)) return 32256;
+    const sign = value < 0 || Object.is(value, -0) ? 32768 : 0;
+    const magnitude = Math.abs(value);
+    if (magnitude === Number.POSITIVE_INFINITY) return sign | 31744;
+    if (magnitude === 0) return sign;
+    if (magnitude < 2 ** -14) {
+      const subnormal = roundToNearestEven(magnitude / 2 ** -24);
+      return subnormal >= 1024 ? sign | 1024 : sign | subnormal;
+    }
+    let exponent = Math.floor(Math.log2(magnitude));
+    if (exponent > 15) return sign | 31744;
+    let significand = roundToNearestEven(magnitude / 2 ** (exponent - 10));
+    if (significand === 2048) {
+      exponent += 1;
+      significand = 1024;
+      if (exponent > 15) return sign | 31744;
+    }
+    return sign | exponent + 15 << 10 | significand - 1024;
+  }
+  function decodeFloat16(bits) {
+    if (!Number.isInteger(bits) || bits < 0 || bits > 65535) {
+      throw new RangeError("binary16 bits must be a Uint16 value");
+    }
+    const sign = bits & 32768 ? -1 : 1;
+    const exponent = bits >>> 10 & 31;
+    const fraction = bits & 1023;
+    if (exponent === 0) {
+      if (fraction === 0) return sign < 0 ? -0 : 0;
+      return sign * fraction * 2 ** -24;
+    }
+    if (exponent === 31) return fraction === 0 ? sign * Number.POSITIVE_INFINITY : Number.NaN;
+    return sign * (1 + fraction / 1024) * 2 ** (exponent - 15);
+  }
+  function quantizeFloat16(value) {
+    return decodeFloat16(encodeFloat16(value));
+  }
+
+  // src/world/semantic/EffectiveSurfaceWindow.ts
+  var HYDROLOGY_MAX_HALF_WIDTH_TILES = 255 / (HYDROLOGY_COORDINATE_SCALE * 2);
+  var HYDROLOGY_REQUIREMENT_RADIUS_TILES = Math.ceil(
+    HYDROLOGY_MAX_HALF_WIDTH_TILES + SURFACE_INFLUENCE_RADIUS_TILES
+  );
+  var FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]*:[a-f0-9]{32}$/;
+  function semanticKey2(value) {
+    return `${value.chunkX},${value.chunkY}`;
+  }
+  function hydrologyKey2(value) {
+    return `${value.regionX},${value.regionY}`;
+  }
+  function compareSemanticKeys2(first, second) {
+    return first.chunkX - second.chunkX || first.chunkY - second.chunkY;
+  }
+  function compareHydrologyKeys2(first, second) {
+    return first.regionX - second.regionX || first.regionY - second.regionY;
+  }
+  function renderOrigin(key) {
+    return {
+      x: key.chunkX * SURFACE_RENDER_CHUNK_SIZE,
+      y: key.chunkY * SURFACE_RENDER_CHUNK_SIZE
+    };
+  }
+  function canonicalReadCoordinate(descriptor, coordinate, axis) {
+    if (!Number.isInteger(coordinate)) throw new RangeError("surface window tile coordinate must be an integer");
+    if (descriptor.topology === "toroidal") {
+      return positiveIntegerModulo(coordinate, axis === "x" ? descriptor.width : descriptor.height);
+    }
+    if (descriptor.topology === "bounded") {
+      const maximum = (axis === "x" ? descriptor.width : descriptor.height) - 1;
+      return Math.max(0, Math.min(maximum, coordinate));
+    }
+    return Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, coordinate));
+  }
+  function surfaceSemanticChunkRequirements(descriptor, renderKey) {
+    const key = canonicalizeRenderChunkKey(descriptor, renderKey);
+    const origin = renderOrigin(key);
+    const chunkXs = /* @__PURE__ */ new Set();
+    const chunkYs = /* @__PURE__ */ new Set();
+    for (let local = -SURFACE_INFLUENCE_RADIUS_TILES; local < SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES; local += 1) {
+      chunkXs.add(semanticChunkCoordinate(canonicalReadCoordinate(descriptor, origin.x + local, "x")));
+      chunkYs.add(semanticChunkCoordinate(canonicalReadCoordinate(descriptor, origin.y + local, "y")));
+    }
+    const result = [];
+    for (const chunkX of chunkXs) for (const chunkY of chunkYs) {
+      result.push(Object.freeze(canonicalizeSemanticChunkKey(descriptor, { chunkX, chunkY })));
+    }
+    return Object.freeze(result.sort(compareSemanticKeys2));
+  }
+  function surfaceHydrologyRegionRequirements(descriptor, renderKey) {
+    const key = canonicalizeRenderChunkKey(descriptor, renderKey);
+    const origin = renderOrigin(key);
+    const regionXs = /* @__PURE__ */ new Set();
+    const regionYs = /* @__PURE__ */ new Set();
+    for (let local = -HYDROLOGY_REQUIREMENT_RADIUS_TILES; local < SURFACE_RENDER_CHUNK_SIZE + HYDROLOGY_REQUIREMENT_RADIUS_TILES; local += 1) {
+      regionXs.add(hydrologyRegionCoordinate(canonicalReadCoordinate(descriptor, origin.x + local, "x")));
+      regionYs.add(hydrologyRegionCoordinate(canonicalReadCoordinate(descriptor, origin.y + local, "y")));
+    }
+    const result = [];
+    for (const regionX of regionXs) for (const regionY of regionYs) {
+      result.push(Object.freeze(canonicalizeHydrologyRegionKey(descriptor, { regionX, regionY })));
+    }
+    return Object.freeze(result.sort(compareHydrologyKeys2));
+  }
+  function assertExactDependencies(snapshot, key) {
+    const semantic = surfaceSemanticChunkRequirements(snapshot.descriptor, key);
+    const hydrology = surfaceHydrologyRegionRequirements(snapshot.descriptor, key);
+    if (snapshot.semanticChunks.length !== semantic.length || snapshot.semanticChunks.some((chunk, index) => semanticKey2(chunk.base.key) !== semanticKey2(semantic[index]))) {
+      throw new TypeError("effective surface window requires the exact semantic chunk dependency set");
+    }
+    if (snapshot.hydrologyRegions.length !== hydrology.length || snapshot.hydrologyRegions.some((region, index) => hydrologyKey2(region.base.key) !== hydrologyKey2(hydrology[index]))) {
+      throw new TypeError("effective surface window requires the exact hydrology region dependency set");
+    }
+  }
+  function validCoreBounds(descriptor, key) {
+    if (descriptor.topology === "toroidal") {
+      return Object.freeze({
+        minX: 0,
+        minY: 0,
+        maxXExclusive: SURFACE_RENDER_CHUNK_SIZE,
+        maxYExclusive: SURFACE_RENDER_CHUNK_SIZE
+      });
+    }
+    const origin = renderOrigin(key);
+    const validX = [];
+    const validY = [];
+    for (let local = 0; local < SURFACE_RENDER_CHUNK_SIZE; local += 1) {
+      const x = origin.x + local;
+      const y = origin.y + local;
+      if (Number.isSafeInteger(x) && (descriptor.topology !== "bounded" || x >= 0 && x < descriptor.width)) {
+        validX.push(local);
+      }
+      if (Number.isSafeInteger(y) && (descriptor.topology !== "bounded" || y >= 0 && y < descriptor.height)) {
+        validY.push(local);
+      }
+    }
+    if (validX.length === 0 || validY.length === 0) {
+      throw new RangeError("render chunk does not contain any valid world tiles");
+    }
+    return Object.freeze({
+      minX: validX[0],
+      minY: validY[0],
+      maxXExclusive: validX[validX.length - 1] + 1,
+      maxYExclusive: validY[validY.length - 1] + 1
+    });
+  }
+  function copySemanticWindow(snapshot, key) {
+    const tileCount = SURFACE_EFFECTIVE_WINDOW_SIZE * SURFACE_EFFECTIVE_WINDOW_SIZE;
+    const substrateClass = new Uint8Array(tileCount);
+    const macroHeight = new Uint16Array(tileCount);
+    const biomeWeights = new Uint8Array(tileCount * 4);
+    const climate = new Uint8Array(tileCount * 2);
+    const vegetationDensity = new Uint8Array(tileCount);
+    const vegetationProfile = new Uint8Array(tileCount);
+    const origin = renderOrigin(key);
+    for (let windowX = 0; windowX < SURFACE_EFFECTIVE_WINDOW_SIZE; windowX += 1) {
+      const tileX = canonicalReadCoordinate(
+        snapshot.descriptor,
+        origin.x + windowX - SURFACE_INFLUENCE_RADIUS_TILES,
+        "x"
+      );
+      for (let windowY = 0; windowY < SURFACE_EFFECTIVE_WINDOW_SIZE; windowY += 1) {
+        const tileY = canonicalReadCoordinate(
+          snapshot.descriptor,
+          origin.y + windowY - SURFACE_INFLUENCE_RADIUS_TILES,
+          "y"
+        );
+        const location = locateSemanticTile(tileX, tileY);
+        const chunk = snapshot.getSemanticChunk(location.key);
+        const baseIndex = semanticChunkLocalIndex(location.localX, location.localY);
+        const deltaOffset = chunk.delta ? sparseSemanticDeltaOverrideOffset(chunk.delta, baseIndex) : -1;
+        const mask = deltaOffset >= 0 ? chunk.delta.masks[deltaOffset] : 0;
+        const windowIndex2 = windowX * SURFACE_EFFECTIVE_WINDOW_SIZE + windowY;
+        substrateClass[windowIndex2] = mask & 1 /* Substrate */ ? chunk.delta.substrateClass[deltaOffset] : chunk.base.substrateClass[baseIndex];
+        macroHeight[windowIndex2] = mask & 2 /* MacroHeight */ ? chunk.delta.macroHeight[deltaOffset] : chunk.base.macroHeight[baseIndex];
+        const sourceBiomeOffset = mask & 4 /* BiomeWeights */ ? deltaOffset * 4 : baseIndex * 4;
+        const sourceBiome = mask & 4 /* BiomeWeights */ ? chunk.delta.biomeWeights : chunk.base.biomeWeights;
+        biomeWeights.set(sourceBiome.subarray(sourceBiomeOffset, sourceBiomeOffset + 4), windowIndex2 * 4);
+        climate.set(chunk.base.climate.subarray(baseIndex * 2, baseIndex * 2 + 2), windowIndex2 * 2);
+        vegetationDensity[windowIndex2] = mask & 8 /* VegetationDensity */ ? chunk.delta.vegetationDensity[deltaOffset] : chunk.base.vegetationDensity[baseIndex];
+        vegetationProfile[windowIndex2] = mask & 16 /* VegetationProfile */ ? chunk.delta.vegetationProfile[deltaOffset] : chunk.base.vegetationProfile[baseIndex];
+      }
+    }
+    return { substrateClass, macroHeight, biomeWeights, climate, vegetationDensity, vegetationProfile };
+  }
+  function nearestWrappedCoordinate(value, reference, period) {
+    return value + Math.floor((reference - value) / period + 0.5) * period;
+  }
+  function localizePointsIfRelevant(descriptor, rawPoints, origin, expansion, sourceOrigin) {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let previousX = origin.x + SURFACE_RENDER_CHUNK_SIZE / 2;
+    let previousY = origin.y + SURFACE_RENDER_CHUNK_SIZE / 2;
+    for (let index = 0; index < rawPoints.length; index += 2) {
+      let x = sourceOrigin ? sourceOrigin.x + rawPoints[index] / HYDROLOGY_COORDINATE_SCALE : rawPoints[index];
+      let y = sourceOrigin ? sourceOrigin.y + rawPoints[index + 1] / HYDROLOGY_COORDINATE_SCALE : rawPoints[index + 1];
+      if (descriptor.topology === "toroidal") {
+        x = nearestWrappedCoordinate(x, previousX, descriptor.width);
+        y = nearestWrappedCoordinate(y, previousY, descriptor.height);
+      }
+      const localX = x - origin.x;
+      const localY = y - origin.y;
+      minX = Math.min(minX, localX);
+      minY = Math.min(minY, localY);
+      maxX = Math.max(maxX, localX);
+      maxY = Math.max(maxY, localY);
+      previousX = x;
+      previousY = y;
+    }
+    if (maxX + expansion < FIELD_MIN || minX - expansion > FIELD_MAX || maxY + expansion < FIELD_MIN || minY - expansion > FIELD_MAX) return void 0;
+    const result = new Float64Array(rawPoints.length);
+    previousX = origin.x + SURFACE_RENDER_CHUNK_SIZE / 2;
+    previousY = origin.y + SURFACE_RENDER_CHUNK_SIZE / 2;
+    for (let index = 0; index < rawPoints.length; index += 2) {
+      let x = sourceOrigin ? sourceOrigin.x + rawPoints[index] / HYDROLOGY_COORDINATE_SCALE : rawPoints[index];
+      let y = sourceOrigin ? sourceOrigin.y + rawPoints[index + 1] / HYDROLOGY_COORDINATE_SCALE : rawPoints[index + 1];
+      if (descriptor.topology === "toroidal") {
+        x = nearestWrappedCoordinate(x, previousX, descriptor.width);
+        y = nearestWrappedCoordinate(y, previousY, descriptor.height);
+      }
+      result[index] = x - origin.x;
+      result[index + 1] = y - origin.y;
+      previousX = x;
+      previousY = y;
+    }
+    return result;
+  }
+  var FIELD_MIN = surfaceLatticeTexelLocalCoordinate(0, 0).u;
+  var FIELD_MAX = surfaceLatticeTexelLocalCoordinate(
+    SURFACE_FIELD_TEXTURE_SIZE - 1,
+    SURFACE_FIELD_TEXTURE_SIZE - 1
+  ).u;
+  function maximumSurfaceFeatureWidth(values) {
+    let maximum = 0;
+    for (const value of values) maximum = Math.max(maximum, value);
+    return maximum;
+  }
+  function collectHydrology(snapshot, key) {
+    const origin = renderOrigin(key);
+    const deltaById = /* @__PURE__ */ new Map();
+    for (const region of snapshot.hydrologyRegions) {
+      for (const delta of region.featureDeltas) deltaById.set(delta.featureId, delta);
+    }
+    const dependencyFeatureIds = /* @__PURE__ */ new Set();
+    const rivers = [];
+    const lakes = [];
+    for (const region of snapshot.hydrologyRegions) {
+      const bodyProfiles = new Map(region.base.bodies.map((body) => [body.bodyId, body.profileIndex]));
+      const regionOrigin = hydrologyRegionOrigin(region.base.key);
+      for (const segment of region.base.rivers) {
+        const expansion = maximumSurfaceFeatureWidth(segment.widthProfile) / (HYDROLOGY_COORDINATE_SCALE * 2) + SURFACE_INFLUENCE_RADIUS_TILES;
+        const points = localizePointsIfRelevant(
+          snapshot.descriptor,
+          segment.controlPoints,
+          origin,
+          expansion,
+          regionOrigin
+        );
+        if (!points) continue;
+        const suppressor = deltaById.get(segment.riverId);
+        if (suppressor) {
+          dependencyFeatureIds.add(suppressor.featureId);
+          continue;
+        }
+        rivers.push(Object.freeze({
+          kind: "river",
+          featureKey: segment.segmentId,
+          bodyId: segment.riverId,
+          revision: 0,
+          profileIndex: bodyProfiles.get(segment.riverId) ?? segment.dischargeClass,
+          controlPoints: points,
+          widthProfile: segment.widthProfile.slice(),
+          levelProfile: segment.levelProfile.slice()
+        }));
+      }
+      for (const lake of region.base.lakes) {
+        const points = localizePointsIfRelevant(
+          snapshot.descriptor,
+          lake.boundaryPoints,
+          origin,
+          SURFACE_INFLUENCE_RADIUS_TILES,
+          regionOrigin
+        );
+        if (!points) continue;
+        const suppressor = deltaById.get(lake.bodyId);
+        if (suppressor) {
+          dependencyFeatureIds.add(suppressor.featureId);
+          continue;
+        }
+        lakes.push(Object.freeze({
+          kind: "lake",
+          featureKey: lake.lakeId,
+          bodyId: lake.bodyId,
+          revision: 0,
+          profileIndex: lake.profileIndex,
+          boundaryPoints: points,
+          level: lake.level
+        }));
+      }
+    }
+    for (const delta of deltaById.values()) {
+      if (delta.kind === "tombstone") continue;
+      const sourcePoints = delta.kind === "river" ? delta.controlPoints : delta.boundaryPoints;
+      const expansion = delta.kind === "river" ? maximumSurfaceFeatureWidth(delta.widthProfile) / (HYDROLOGY_COORDINATE_SCALE * 2) + SURFACE_INFLUENCE_RADIUS_TILES : SURFACE_INFLUENCE_RADIUS_TILES;
+      const points = localizePointsIfRelevant(
+        snapshot.descriptor,
+        sourcePoints,
+        origin,
+        expansion
+      );
+      if (!points) continue;
+      dependencyFeatureIds.add(delta.featureId);
+      if (delta.kind === "river") {
+        rivers.push(Object.freeze({
+          kind: "river",
+          featureKey: delta.featureId,
+          bodyId: delta.featureId,
+          revision: delta.revision,
+          profileIndex: Math.min(255, delta.dischargeClass),
+          controlPoints: points,
+          widthProfile: delta.widthProfile.slice(),
+          levelProfile: delta.levelProfile.slice()
+        }));
+      } else {
+        lakes.push(Object.freeze({
+          kind: "lake",
+          featureKey: delta.featureId,
+          bodyId: delta.featureId,
+          revision: delta.revision,
+          profileIndex: delta.profileIndex,
+          boundaryPoints: points,
+          level: delta.level
+        }));
+      }
+    }
+    rivers.sort((first, second) => first.featureKey.localeCompare(second.featureKey));
+    lakes.sort((first, second) => first.featureKey.localeCompare(second.featureKey));
+    return Object.freeze({
+      rivers: Object.freeze(rivers),
+      lakes: Object.freeze(lakes),
+      dependencyFeatureIds
+    });
+  }
+  function assertValidBounds(value) {
+    if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).some((name) => name !== "minX" && name !== "minY" && name !== "maxXExclusive" && name !== "maxYExclusive") || !Number.isInteger(value.minX) || !Number.isInteger(value.minY) || !Number.isInteger(value.maxXExclusive) || !Number.isInteger(value.maxYExclusive) || value.minX < 0 || value.minY < 0 || value.maxXExclusive > SURFACE_RENDER_CHUNK_SIZE || value.maxYExclusive > SURFACE_RENDER_CHUNK_SIZE || value.minX >= value.maxXExclusive || value.minY >= value.maxYExclusive) {
+      throw new RangeError("effective surface window validBounds are invalid");
+    }
+  }
+  function assertFeatureId2(name, value) {
+    if (typeof value !== "string" || !FEATURE_ID_PATTERN.test(value) || value === OCEAN_BODY_ID) {
+      throw new TypeError(`${name} must be a stable non-ocean feature ID`);
+    }
+  }
+  function assertPoints(name, value, minimumPairs) {
+    if (!(value instanceof Float64Array) || value.length < minimumPairs * 2 || value.length % 2 !== 0) {
+      throw new TypeError(`${name} must contain the required Float64 coordinate pairs`);
+    }
+    for (const coordinate of value) {
+      if (!Number.isFinite(coordinate) || !Number.isInteger(coordinate * HYDROLOGY_COORDINATE_SCALE)) {
+        throw new RangeError(`${name} must use exact localized 1/${HYDROLOGY_COORDINATE_SCALE}-tile coordinates`);
+      }
+    }
+  }
+  function assertRiver2(value) {
+    if (!value || value.kind !== "river" || Object.getOwnPropertyNames(value).some((name) => ![
+      "kind",
+      "featureKey",
+      "bodyId",
+      "revision",
+      "profileIndex",
+      "controlPoints",
+      "widthProfile",
+      "levelProfile"
+    ].includes(name))) throw new TypeError("effective surface river is invalid");
+    assertFeatureId2("surface river featureKey", value.featureKey);
+    assertFeatureId2("surface river bodyId", value.bodyId);
+    if (!Number.isSafeInteger(value.revision) || value.revision < 0 || !Number.isInteger(value.profileIndex) || value.profileIndex < 0 || value.profileIndex > 255) {
+      throw new RangeError("effective surface river metadata is invalid");
+    }
+    assertPoints("surface river controlPoints", value.controlPoints, 2);
+    const count = value.controlPoints.length / 2;
+    if (!(value.widthProfile instanceof Uint8Array) || value.widthProfile.length !== count || value.widthProfile.some((width) => width === 0) || !(value.levelProfile instanceof Uint16Array) || value.levelProfile.length !== count) {
+      throw new TypeError("effective surface river profiles are invalid");
+    }
+    for (let index = 1; index < value.levelProfile.length; index += 1) {
+      if (value.levelProfile[index] > value.levelProfile[index - 1]) {
+        throw new TypeError("effective surface river level must not rise downstream");
+      }
+    }
+  }
+  function assertLake2(value) {
+    if (!value || value.kind !== "lake" || Object.getOwnPropertyNames(value).some((name) => ![
+      "kind",
+      "featureKey",
+      "bodyId",
+      "revision",
+      "profileIndex",
+      "boundaryPoints",
+      "level"
+    ].includes(name))) throw new TypeError("effective surface lake is invalid");
+    assertFeatureId2("surface lake featureKey", value.featureKey);
+    assertFeatureId2("surface lake bodyId", value.bodyId);
+    if (!Number.isSafeInteger(value.revision) || value.revision < 0 || !Number.isInteger(value.profileIndex) || value.profileIndex < 0 || value.profileIndex > 255 || !Number.isInteger(value.level) || value.level < 0 || value.level > 65535) {
+      throw new RangeError("effective surface lake metadata is invalid");
+    }
+    assertPoints("surface lake boundaryPoints", value.boundaryPoints, 3);
+  }
+  function assertTransferableEffectiveWindow(value) {
+    if (!value || typeof value !== "object") throw new TypeError("effective surface window must be an object");
+    const window2 = value;
+    const allowed = /* @__PURE__ */ new Set([
+      "worldIdentity",
+      "effectiveRevision",
+      "key",
+      "dependencyKey",
+      "validBounds",
+      "substrateClass",
+      "macroHeight",
+      "biomeWeights",
+      "climate",
+      "vegetationDensity",
+      "vegetationProfile",
+      "rivers",
+      "lakes"
+    ]);
+    if (Object.getOwnPropertyNames(window2).some((name) => !allowed.has(name)) || typeof window2.worldIdentity !== "string" || window2.worldIdentity.length === 0 || !Number.isSafeInteger(window2.effectiveRevision) || window2.effectiveRevision < 0 || !window2.key || Object.getOwnPropertyNames(window2.key).some((name) => name !== "chunkX" && name !== "chunkY") || !Number.isSafeInteger(window2.key.chunkX) || !Number.isSafeInteger(window2.key.chunkY) || window2.dependencyKey.worldIdentity !== window2.worldIdentity || window2.dependencyKey.renderKey.chunkX !== window2.key.chunkX || window2.dependencyKey.renderKey.chunkY !== window2.key.chunkY) {
+      throw new TypeError("effective surface window identity is invalid");
+    }
+    assertSurfaceDependencyKey(window2.dependencyKey);
+    assertValidBounds(window2.validBounds);
+    const count = SURFACE_EFFECTIVE_WINDOW_SIZE * SURFACE_EFFECTIVE_WINDOW_SIZE;
+    if (!(window2.substrateClass instanceof Uint8Array) || window2.substrateClass.length !== count || !(window2.macroHeight instanceof Uint16Array) || window2.macroHeight.length !== count || !(window2.biomeWeights instanceof Uint8Array) || window2.biomeWeights.length !== count * 4 || !(window2.climate instanceof Uint8Array) || window2.climate.length !== count * 2 || !(window2.vegetationDensity instanceof Uint8Array) || window2.vegetationDensity.length !== count || !(window2.vegetationProfile instanceof Uint8Array) || window2.vegetationProfile.length !== count || !Array.isArray(window2.rivers) || !Array.isArray(window2.lakes)) {
+      throw new TypeError("effective surface window column lengths are invalid");
+    }
+    for (let index = 0; index < count; index += 1) {
+      const biomeOffset = index * 4;
+      if (window2.substrateClass[index] >= WORLD_SUBSTRATE_CATALOG.length || window2.vegetationProfile[index] >= WORLD_VEGETATION_PROFILE_CATALOG.length || window2.biomeWeights[biomeOffset] + window2.biomeWeights[biomeOffset + 1] + window2.biomeWeights[biomeOffset + 2] + window2.biomeWeights[biomeOffset + 3] !== 255) {
+        throw new TypeError("effective surface window semantic values are invalid");
+      }
+    }
+    for (const river of window2.rivers) assertRiver2(river);
+    for (const lake of window2.lakes) assertLake2(lake);
+    const featureRevisions = new Map(window2.dependencyKey.hydrologyRegions.flatMap((region) => region.features.map((feature) => [feature.featureId, feature.revision])));
+    for (const feature of [...window2.rivers, ...window2.lakes]) {
+      if (feature.revision > 0 && featureRevisions.get(feature.bodyId) !== feature.revision) {
+        throw new TypeError("effective surface feature revision is missing from the dependency key");
+      }
+    }
+    for (let index = 1; index < window2.rivers.length; index += 1) {
+      if (window2.rivers[index - 1].featureKey.localeCompare(window2.rivers[index].featureKey) >= 0) {
+        throw new TypeError("effective surface rivers must be strictly ordered");
+      }
+    }
+    for (let index = 1; index < window2.lakes.length; index += 1) {
+      if (window2.lakes[index - 1].featureKey.localeCompare(window2.lakes[index].featureKey) >= 0) {
+        throw new TypeError("effective surface lakes must be strictly ordered");
+      }
+    }
+  }
+  function createTransferableEffectiveWindow(snapshot, renderKey) {
+    const key = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
+    assertExactDependencies(snapshot, key);
+    const semantic = copySemanticWindow(snapshot, key);
+    const hydrology = collectHydrology(snapshot, key);
+    const binding = createSurfaceDependencyBinding(snapshot, key, {
+      hydrologyFeatureIds: hydrology.dependencyFeatureIds
+    });
+    const window2 = Object.freeze({
+      worldIdentity: snapshot.worldIdentity,
+      effectiveRevision: snapshot.effectiveRevision,
+      key,
+      dependencyKey: binding.dependencyKey,
+      validBounds: validCoreBounds(snapshot.descriptor, key),
+      ...semantic,
+      rivers: hydrology.rivers,
+      lakes: hydrology.lakes
+    });
+    assertWindowWithoutDescriptor(window2);
+    return window2;
+  }
+  function assertWindowWithoutDescriptor(window2) {
+    assertValidBounds(window2.validBounds);
+    const count = SURFACE_EFFECTIVE_WINDOW_SIZE * SURFACE_EFFECTIVE_WINDOW_SIZE;
+    if (window2.substrateClass.length !== count || window2.macroHeight.length !== count || window2.biomeWeights.length !== count * 4 || window2.climate.length !== count * 2 || window2.vegetationDensity.length !== count || window2.vegetationProfile.length !== count) {
+      throw new TypeError("effective surface window has inconsistent semantic columns");
+    }
+    for (const river of window2.rivers) assertRiver2(river);
+    for (const lake of window2.lakes) assertLake2(lake);
+  }
+  function effectiveSurfaceWindowTransferables(window2) {
+    assertWindowWithoutDescriptor(window2);
+    const candidates = [
+      window2.substrateClass.buffer,
+      window2.macroHeight.buffer,
+      window2.biomeWeights.buffer,
+      window2.climate.buffer,
+      window2.vegetationDensity.buffer,
+      window2.vegetationProfile.buffer
+    ];
+    for (const river of window2.rivers) {
+      candidates.push(river.controlPoints.buffer, river.widthProfile.buffer, river.levelProfile.buffer);
+    }
+    for (const lake of window2.lakes) candidates.push(lake.boundaryPoints.buffer);
+    if (candidates.some((buffer) => !(buffer instanceof ArrayBuffer))) {
+      throw new TypeError("effective surface window buffers must be transferable ArrayBuffers");
+    }
+    const buffers = candidates;
+    if (new Set(buffers).size !== buffers.length) {
+      throw new TypeError("effective surface window must own distinct transferable buffers");
+    }
+    return Object.freeze(buffers);
+  }
+
+  // src/world/semantic/SurfaceCompiler.ts
+  var SQRT_THREE = Math.sqrt(3);
+  var TEXEL_ANTIALIAS_DISTANCE = SQRT_THREE / SURFACE_SAMPLES_PER_TILE_INTERVAL / 2;
+  var SHORE_DISTANCE_LIMIT = SURFACE_INFLUENCE_RADIUS_TILES;
+  var SHORE_SEARCH_TEXELS = Math.ceil(
+    SHORE_DISTANCE_LIMIT / (1.5 / SURFACE_SAMPLES_PER_TILE_INTERVAL)
+  ) + 2;
+  var SURFACE_WORK_MARGIN_TEXELS = SHORE_SEARCH_TEXELS;
+  var SURFACE_WORK_SIZE = SURFACE_FIELD_TEXTURE_SIZE + SURFACE_WORK_MARGIN_TEXELS * 2;
+  var SURFACE_WORK_TEXEL_COUNT = SURFACE_WORK_SIZE * SURFACE_WORK_SIZE;
+  var validatedCompiledChunks = /* @__PURE__ */ new WeakSet();
+  function clamp3(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+  }
+  function windowIndex(x, y) {
+    return x * SURFACE_EFFECTIVE_WINDOW_SIZE + y;
+  }
+  function gridIndex(x, y, size) {
+    return x * size + y;
+  }
+  function workLocalCoordinate(x, y) {
+    return {
+      u: -0.5 + (x - SURFACE_WORK_MARGIN_TEXELS - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL,
+      v: -0.5 + (y - SURFACE_WORK_MARGIN_TEXELS - SURFACE_FIELD_GUTTER_TEXELS + 0.5) / SURFACE_SAMPLES_PER_TILE_INTERVAL
+    };
+  }
+  function sampleWindowChannel(values, localU, localV, channels, channel) {
+    const sampleU = clamp3(
+      localU,
+      -SURFACE_INFLUENCE_RADIUS_TILES,
+      SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
+    );
+    const sampleV = clamp3(
+      localV,
+      -SURFACE_INFLUENCE_RADIUS_TILES,
+      SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1
+    );
+    let tileX = Math.floor(sampleU);
+    let tileY = Math.floor(sampleV);
+    let amountX = sampleU - tileX;
+    let amountY = sampleV - tileY;
+    if (tileX === SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1) {
+      tileX -= 1;
+      amountX = 1;
+    }
+    if (tileY === SURFACE_RENDER_CHUNK_SIZE + SURFACE_INFLUENCE_RADIUS_TILES - 1) {
+      tileY -= 1;
+      amountY = 1;
+    }
+    const x0 = tileX + SURFACE_INFLUENCE_RADIUS_TILES;
+    const y0 = tileY + SURFACE_INFLUENCE_RADIUS_TILES;
+    const first = values[windowIndex(x0, y0) * channels + channel];
+    const second = values[windowIndex(x0 + 1, y0) * channels + channel];
+    const third = values[windowIndex(x0, y0 + 1) * channels + channel];
+    const fourth = values[windowIndex(x0 + 1, y0 + 1) * channels + channel];
+    const top = first + (second - first) * amountX;
+    const bottom = third + (fourth - third) * amountX;
+    return top + (bottom - top) * amountY;
+  }
+  function nearestWindowIndex(localU, localV) {
+    const x = Math.floor(localU + 0.5) + SURFACE_INFLUENCE_RADIUS_TILES;
+    const y = Math.floor(localV + 0.5) + SURFACE_INFLUENCE_RADIUS_TILES;
+    if (x < 0 || y < 0 || x >= SURFACE_EFFECTIVE_WINDOW_SIZE || y >= SURFACE_EFFECTIVE_WINDOW_SIZE) {
+      throw new RangeError("surface compiler nearest semantic sample exceeds the effective halo");
+    }
+    return windowIndex(x, y);
+  }
+  function preparePoints(points) {
+    const result = new Float64Array(points.length);
+    for (let index = 0; index < points.length; index += 2) {
+      const world = surfaceToWorld(points[index], points[index + 1]);
+      result[index] = world.x;
+      result[index + 1] = world.z;
+    }
+    return result;
+  }
+  function prepareRivers(values) {
+    return values.map((value) => Object.freeze({ ...value, worldPoints: preparePoints(value.controlPoints) }));
+  }
+  function prepareLakes(values) {
+    return values.map((value) => Object.freeze({ ...value, worldPoints: preparePoints(value.boundaryPoints) }));
+  }
+  function coverageForSignedDistance(signedDistance) {
+    return clamp3(Math.floor((0.5 + signedDistance / (TEXEL_ANTIALIAS_DISTANCE * 2)) * 255 + 0.5), 0, 255);
+  }
+  function riverCandidate(x, z, river) {
+    let best;
+    let bestSignedDistance = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < river.worldPoints.length - 2; index += 2) {
+      const startX = river.worldPoints[index];
+      const startZ = river.worldPoints[index + 1];
+      const dx = river.worldPoints[index + 2] - startX;
+      const dz = river.worldPoints[index + 3] - startZ;
+      const lengthSquared = dx * dx + dz * dz;
+      if (lengthSquared === 0) continue;
+      const amount = clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+      const nearestX = startX + dx * amount;
+      const nearestZ = startZ + dz * amount;
+      const distance = Math.hypot(x - nearestX, z - nearestZ);
+      const width = river.widthProfile[index / 2] + (river.widthProfile[index / 2 + 1] - river.widthProfile[index / 2]) * amount;
+      const halfWidth = width / HYDROLOGY_COORDINATE_SCALE * SQRT_THREE / 2;
+      const signedDistance = halfWidth - distance;
+      if (signedDistance < bestSignedDistance) continue;
+      const length = Math.sqrt(lengthSquared);
+      bestSignedDistance = signedDistance;
+      best = {
+        coverage: coverageForSignedDistance(signedDistance),
+        rank: 3,
+        kind: 3 /* River */,
+        bodyId: river.bodyId,
+        profileIndex: river.profileIndex,
+        level: (river.levelProfile[index / 2] + (river.levelProfile[index / 2 + 1] - river.levelProfile[index / 2]) * amount) / 65535,
+        flowX: dx / length,
+        flowY: dz / length
+      };
+    }
+    return best?.coverage ? best : void 0;
+  }
+  function pointInPolygon4(x, z, points) {
+    let inside = false;
+    for (let current = 0, previous = points.length - 2; current < points.length; previous = current, current += 2) {
+      const currentX = points[current];
+      const currentZ = points[current + 1];
+      const previousX = points[previous];
+      const previousZ = points[previous + 1];
+      const crosses = currentZ > z !== previousZ > z && x < (previousX - currentX) * (z - currentZ) / (previousZ - currentZ) + currentX;
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  }
+  function polygonDistance(x, z, points) {
+    let bestSquared = Number.POSITIVE_INFINITY;
+    for (let current = 0, previous = points.length - 2; current < points.length; previous = current, current += 2) {
+      const startX = points[previous];
+      const startZ = points[previous + 1];
+      const dx = points[current] - startX;
+      const dz = points[current + 1] - startZ;
+      const lengthSquared = dx * dx + dz * dz;
+      const amount = lengthSquared === 0 ? 0 : clamp3(((x - startX) * dx + (z - startZ) * dz) / lengthSquared, 0, 1);
+      const offsetX = x - (startX + dx * amount);
+      const offsetZ = z - (startZ + dz * amount);
+      bestSquared = Math.min(bestSquared, offsetX * offsetX + offsetZ * offsetZ);
+    }
+    return Math.sqrt(bestSquared);
+  }
+  function surfaceLakeCandidate(x, z, lake) {
+    const distance = polygonDistance(x, z, lake.worldPoints);
+    const signedDistance = pointInPolygon4(x, z, lake.worldPoints) ? distance : -distance;
+    const coverage = coverageForSignedDistance(signedDistance);
+    if (coverage === 0) return void 0;
+    return {
+      coverage,
+      rank: 2,
+      kind: 2 /* Lake */,
+      bodyId: lake.bodyId,
+      profileIndex: lake.profileIndex,
+      level: lake.level / 65535,
+      flowX: 0,
+      flowY: 0
+    };
+  }
+  function candidateWins(candidate, current) {
+    return !current || candidate.coverage > current.coverage || candidate.coverage === current.coverage && (candidate.rank > current.rank || candidate.rank === current.rank && candidate.bodyId < current.bodyId);
+  }
+  function fieldGradient(ground, worldX, worldZ, physicalX, physicalY, size) {
+    const leftX = Math.max(0, physicalX - 1);
+    const rightX = Math.min(size - 1, physicalX + 1);
+    const topY = Math.max(0, physicalY - 1);
+    const bottomY = Math.min(size - 1, physicalY + 1);
+    const left = gridIndex(leftX, physicalY, size);
+    const right = gridIndex(rightX, physicalY, size);
+    const top = gridIndex(physicalX, topY, size);
+    const bottom = gridIndex(physicalX, bottomY, size);
+    const horizontalDistance = Math.hypot(worldX[right] - worldX[left], worldZ[right] - worldZ[left]);
+    const verticalDistance = Math.hypot(worldX[bottom] - worldX[top], worldZ[bottom] - worldZ[top]);
+    const horizontal = horizontalDistance > 0 ? (ground[right] - ground[left]) / horizontalDistance : 0;
+    const vertical = verticalDistance > 0 ? (ground[bottom] - ground[top]) / verticalDistance : 0;
+    return Math.hypot(horizontal, vertical);
+  }
+  function oceanCandidate(groundHeight, slope) {
+    const seaLevel = HYDROLOGY_SEA_LEVEL / 65535;
+    const difference = seaLevel - groundHeight;
+    let coverage;
+    if (difference === 0) coverage = 127;
+    else if (slope <= 1e-9) coverage = difference > 0 ? 255 : 0;
+    else coverage = coverageForSignedDistance(difference / slope);
+    if (coverage === 0) return void 0;
+    return {
+      coverage,
+      rank: 1,
+      kind: 1 /* Ocean */,
+      bodyId: OCEAN_BODY_ID,
+      profileIndex: 0,
+      level: seaLevel,
+      flowX: 0,
+      flowY: 0
+    };
+  }
+  function computeShoreDistances(coverage, worldX, worldZ, size) {
+    const wet = new Uint8Array(size * size);
+    const boundaryByX = Array.from(
+      { length: size },
+      () => []
+    );
+    for (let index = 0; index < wet.length; index += 1) wet[index] = coverage[index] >= 128 ? 1 : 0;
+    for (let x = 0; x < size; x += 1) {
+      for (let y = 0; y < size; y += 1) {
+        const index = gridIndex(x, y, size);
+        let boundary = false;
+        if (x > 0 && wet[gridIndex(x - 1, y, size)] !== wet[index]) boundary = true;
+        if (x + 1 < size && wet[gridIndex(x + 1, y, size)] !== wet[index]) boundary = true;
+        if (y > 0 && wet[gridIndex(x, y - 1, size)] !== wet[index]) boundary = true;
+        if (y + 1 < size && wet[gridIndex(x, y + 1, size)] !== wet[index]) boundary = true;
+        if (boundary) boundaryByX[x].push(y);
+      }
+    }
+    const result = new Float64Array(size * size);
+    for (let x = 0; x < size; x += 1) {
+      for (let y = 0; y < size; y += 1) {
+        const index = gridIndex(x, y, size);
+        let bestSquared = Number.POSITIVE_INFINITY;
+        const minX = Math.max(0, x - SHORE_SEARCH_TEXELS);
+        const maxX = Math.min(size - 1, x + SHORE_SEARCH_TEXELS);
+        for (let candidateX = minX; candidateX <= maxX; candidateX += 1) {
+          for (const candidateY of boundaryByX[candidateX]) {
+            if (Math.abs(candidateY - y) > SHORE_SEARCH_TEXELS) continue;
+            const candidateIndex = gridIndex(candidateX, candidateY, size);
+            if (wet[candidateIndex] === wet[index]) continue;
+            const dx = worldX[candidateIndex] - worldX[index];
+            const dz = worldZ[candidateIndex] - worldZ[index];
+            bestSquared = Math.min(bestSquared, dx * dx + dz * dz);
+          }
+        }
+        const distance = Number.isFinite(bestSquared) ? Math.max(0, Math.sqrt(bestSquared) - TEXEL_ANTIALIAS_DISTANCE) : SHORE_DISTANCE_LIMIT;
+        result[index] = (wet[index] ? -1 : 1) * Math.min(SHORE_DISTANCE_LIMIT, distance);
+      }
+    }
+    return result;
+  }
+  function quantizeWeights(values) {
+    const total = values.reduce((sum, value) => sum + Math.max(0, value), 0);
+    if (!(total > 0)) return [255, 0, 0, 0];
+    const scaled = values.map((value) => Math.max(0, value) / total * 255);
+    const quantized = scaled.map(Math.floor);
+    let remaining = 255 - quantized.reduce((sum, value) => sum + value, 0);
+    const order = scaled.map((value, index) => ({ index, remainder: value - quantized[index] })).sort((first, second) => second.remainder - first.remainder || first.index - second.index);
+    for (let index = 0; index < remaining; index += 1) quantized[order[index].index] += 1;
+    return quantized;
+  }
+  function materialWeights(window2, localU, localV, slope, shoreDistance) {
+    const values = [0, 1, 2, 3].map((channel) => sampleWindowChannel(window2.biomeWeights, localU, localV, 4, channel) / 255);
+    const climateTemperature = sampleWindowChannel(window2.climate, localU, localV, 2, 0) / 255;
+    const climateMoisture = sampleWindowChannel(window2.climate, localU, localV, 2, 1) / 255;
+    const substrate = window2.substrateClass[nearestWindowIndex(localU, localV)];
+    if (substrate < 0 || substrate >= WORLD_SUBSTRATE_CATALOG.length) {
+      throw new RangeError("surface compiler encountered an invalid substrate class");
+    }
+    if (substrate === 0 /* Sediment */) values[1] += 0.2;
+    else if (substrate === 1 /* Soil */) values[0] += 0.15;
+    else if (substrate === 2 /* Sand */) values[1] += 0.45;
+    else if (substrate === 3 /* Rock */) values[3] += 0.5;
+    else if (substrate === 4 /* Permafrost */) values[2] += 0.5;
+    const steepness = clamp3(slope * 8, 0, 1);
+    const shoreInfluence = clamp3(1 - Math.abs(shoreDistance) / SHORE_DISTANCE_LIMIT, 0, 1);
+    values[3] += steepness * 0.6;
+    values[1] += shoreInfluence * 0.25;
+    values[0] += climateMoisture * (1 - steepness) * 0.12;
+    values[2] += (1 - climateTemperature) * 0.12;
+    return quantizeWeights(values);
+  }
+  function fieldByteLength(field2) {
+    return field2.groundHeight.byteLength + field2.materialWeights.byteLength + field2.waterLevel.byteLength + field2.waterDepth.byteLength + field2.shorelineDistance.byteLength + field2.flow.byteLength + field2.waterCoverage.byteLength + field2.waterKind.byteLength + field2.waterProfile.byteLength + field2.waterBodyIndex.byteLength;
+  }
+  function updateChecksum(hash, values) {
+    const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+    for (const value of bytes) {
+      hash ^= value;
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash;
+  }
+  function surfaceChecksum(field2, bodies) {
+    let hash = 2166136261;
+    for (const values of [
+      field2.groundHeight,
+      field2.materialWeights,
+      field2.waterLevel,
+      field2.waterDepth,
+      field2.shorelineDistance,
+      field2.flow,
+      field2.waterCoverage,
+      field2.waterKind,
+      field2.waterProfile,
+      field2.waterBodyIndex
+    ]) hash = updateChecksum(hash, values);
+    for (const body of bodies) {
+      for (const character of `${body.bodyId}\0${body.kind}\0`) {
+        const code = character.charCodeAt(0);
+        hash ^= code & 255;
+        hash = Math.imul(hash, 16777619);
+        hash ^= code >>> 8;
+        hash = Math.imul(hash, 16777619);
+      }
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+  function compileSurfaceChunk(window2) {
+    assertTransferableEffectiveWindow(window2);
+    if (window2.dependencyKey.compilerRevision !== SURFACE_COMPILER_REVISION || window2.dependencyKey.compileProfileVersion !== SURFACE_COMPILE_PROFILE_VERSION) {
+      throw new TypeError("effective surface window uses an unsupported compiler or profile revision");
+    }
+    const rivers = prepareRivers(window2.rivers);
+    const lakes = prepareLakes(window2.lakes);
+    const ground = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
+    const worldX = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
+    const worldZ = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
+    for (let physicalX = 0; physicalX < SURFACE_WORK_SIZE; physicalX += 1) {
+      for (let physicalY = 0; physicalY < SURFACE_WORK_SIZE; physicalY += 1) {
+        const index = gridIndex(physicalX, physicalY, SURFACE_WORK_SIZE);
+        const local = workLocalCoordinate(physicalX, physicalY);
+        const world = surfaceToWorld(local.u, local.v);
+        worldX[index] = world.x;
+        worldZ[index] = world.z;
+        ground[index] = sampleWindowChannel(window2.macroHeight, local.u, local.v, 1, 0) / 65535;
+      }
+    }
+    const workCoverage = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
+    const workWaterKind = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
+    const workWaterProfile = new Uint8Array(SURFACE_WORK_TEXEL_COUNT);
+    const workWaterLevel = new Float64Array(SURFACE_WORK_TEXEL_COUNT);
+    const workFlow = new Float64Array(SURFACE_WORK_TEXEL_COUNT * 2);
+    const workBodyIds = new Array(SURFACE_WORK_TEXEL_COUNT);
+    for (let physicalX = 0; physicalX < SURFACE_WORK_SIZE; physicalX += 1) {
+      for (let physicalY = 0; physicalY < SURFACE_WORK_SIZE; physicalY += 1) {
+        const index = gridIndex(physicalX, physicalY, SURFACE_WORK_SIZE);
+        let best;
+        for (const river of rivers) {
+          const candidate = riverCandidate(worldX[index], worldZ[index], river);
+          if (candidate && candidateWins(candidate, best)) best = candidate;
+        }
+        for (const lake of lakes) {
+          const candidate = surfaceLakeCandidate(worldX[index], worldZ[index], lake);
+          if (candidate && candidateWins(candidate, best)) best = candidate;
+        }
+        const ocean = oceanCandidate(
+          ground[index],
+          fieldGradient(ground, worldX, worldZ, physicalX, physicalY, SURFACE_WORK_SIZE)
+        );
+        if (ocean && candidateWins(ocean, best)) best = ocean;
+        if (!best) continue;
+        workCoverage[index] = best.coverage;
+        workWaterKind[index] = best.kind;
+        workWaterProfile[index] = best.profileIndex;
+        workWaterLevel[index] = best.level;
+        workFlow[index * 2] = best.flowX;
+        workFlow[index * 2 + 1] = best.flowY;
+        workBodyIds[index] = best.bodyId;
+      }
+    }
+    const shore = computeShoreDistances(workCoverage, worldX, worldZ, SURFACE_WORK_SIZE);
+    const bodyDefinitions = /* @__PURE__ */ new Map();
+    for (let physicalX = 0; physicalX < SURFACE_FIELD_TEXTURE_SIZE; physicalX += 1) {
+      for (let physicalY = 0; physicalY < SURFACE_FIELD_TEXTURE_SIZE; physicalY += 1) {
+        const workIndex = gridIndex(
+          physicalX + SURFACE_WORK_MARGIN_TEXELS,
+          physicalY + SURFACE_WORK_MARGIN_TEXELS,
+          SURFACE_WORK_SIZE
+        );
+        if (workCoverage[workIndex] === 0) continue;
+        const bodyId = workBodyIds[workIndex];
+        const kind = workWaterKind[workIndex] === 3 /* River */ ? "river" : workWaterKind[workIndex] === 2 /* Lake */ ? "lake" : "ocean";
+        const previous = bodyDefinitions.get(bodyId);
+        if (previous && previous.kind !== kind) {
+          throw new TypeError("surface compiler found conflicting water body metadata");
+        }
+        bodyDefinitions.set(bodyId, Object.freeze({ bodyId, kind }));
+      }
+    }
+    const waterBodies = Object.freeze([...bodyDefinitions.values()].sort((first, second) => first.bodyId.localeCompare(second.bodyId)));
+    if (waterBodies.length > SURFACE_MAX_WATER_BODY_COUNT) {
+      throw new RangeError("compiled surface chunk exceeds the 255-body palette budget");
+    }
+    const paletteById = new Map(waterBodies.map((body, index) => [body.bodyId, index + 1]));
+    const field2 = Object.freeze({
+      groundHeight: new Uint16Array(SURFACE_FIELD_TEXEL_COUNT),
+      materialWeights: new Uint8Array(SURFACE_FIELD_TEXEL_COUNT * 4),
+      waterLevel: new Uint16Array(SURFACE_FIELD_TEXEL_COUNT),
+      waterDepth: new Uint16Array(SURFACE_FIELD_TEXEL_COUNT),
+      shorelineDistance: new Uint16Array(SURFACE_FIELD_TEXEL_COUNT),
+      flow: new Int8Array(SURFACE_FIELD_TEXEL_COUNT * 2),
+      waterCoverage: new Uint8Array(SURFACE_FIELD_TEXEL_COUNT),
+      waterKind: new Uint8Array(SURFACE_FIELD_TEXEL_COUNT),
+      waterProfile: new Uint8Array(SURFACE_FIELD_TEXEL_COUNT),
+      waterBodyIndex: new Uint8Array(SURFACE_FIELD_TEXEL_COUNT)
+    });
+    let minGroundHeight = Number.POSITIVE_INFINITY;
+    let maxGroundHeight = Number.NEGATIVE_INFINITY;
+    let minWaterLevel = Number.POSITIVE_INFINITY;
+    let maxWaterLevel = Number.NEGATIVE_INFINITY;
+    let hasWater = false;
+    for (let physicalX = 0; physicalX < SURFACE_FIELD_TEXTURE_SIZE; physicalX += 1) {
+      for (let physicalY = 0; physicalY < SURFACE_FIELD_TEXTURE_SIZE; physicalY += 1) {
+        const index = surfaceLatticeIndex(physicalX, physicalY);
+        const workX = physicalX + SURFACE_WORK_MARGIN_TEXELS;
+        const workY = physicalY + SURFACE_WORK_MARGIN_TEXELS;
+        const workIndex = gridIndex(workX, workY, SURFACE_WORK_SIZE);
+        const local = surfaceLatticeTexelLocalCoordinate(physicalX, physicalY);
+        field2.groundHeight[index] = encodeFloat16(ground[workIndex]);
+        field2.shorelineDistance[index] = encodeFloat16(shore[workIndex]);
+        field2.waterCoverage[index] = workCoverage[workIndex];
+        field2.waterKind[index] = workWaterKind[workIndex];
+        field2.waterProfile[index] = workWaterProfile[workIndex];
+        const slope = fieldGradient(ground, worldX, worldZ, workX, workY, SURFACE_WORK_SIZE);
+        field2.materialWeights.set(
+          materialWeights(window2, local.u, local.v, slope, shore[workIndex]),
+          index * 4
+        );
+        if (workCoverage[workIndex] > 0) {
+          const level = workWaterLevel[workIndex];
+          const depth = Math.max(0, level - ground[workIndex]) * workCoverage[workIndex] / 255;
+          field2.waterLevel[index] = encodeFloat16(level);
+          field2.waterDepth[index] = encodeFloat16(depth);
+          field2.flow[index * 2] = Math.round(clamp3(workFlow[workIndex * 2], -1, 1) * 127);
+          field2.flow[index * 2 + 1] = Math.round(clamp3(workFlow[workIndex * 2 + 1], -1, 1) * 127);
+          field2.waterBodyIndex[index] = paletteById.get(workBodyIds[workIndex]);
+        }
+        minGroundHeight = Math.min(minGroundHeight, decodeFloat16(field2.groundHeight[index]));
+        maxGroundHeight = Math.max(maxGroundHeight, decodeFloat16(field2.groundHeight[index]));
+        if (workCoverage[workIndex] >= 128) {
+          const level = decodeFloat16(field2.waterLevel[index]);
+          minWaterLevel = Math.min(minWaterLevel, level);
+          maxWaterLevel = Math.max(maxWaterLevel, level);
+          hasWater = true;
+        }
+      }
+    }
+    const bounds = Object.freeze({
+      validTiles: Object.freeze({ ...window2.validBounds }),
+      minGroundHeight,
+      maxGroundHeight,
+      hasWater,
+      minWaterLevel: hasWater ? minWaterLevel : 0,
+      maxWaterLevel: hasWater ? maxWaterLevel : 0
+    });
+    const byteLength = fieldByteLength(field2);
+    const dependencyKey = cloneSurfaceDependencyKey(window2.dependencyKey);
+    const chunk = Object.freeze({
+      key: Object.freeze({ ...window2.key }),
+      dependencyKey,
+      effectiveRevision: window2.effectiveRevision,
+      bounds,
+      field: field2,
+      waterBodies,
+      byteLength,
+      contentChecksum: surfaceChecksum(field2, waterBodies)
+    });
+    assertCompiledSurfaceChunk(chunk);
+    validatedCompiledChunks.add(chunk);
+    return chunk;
+  }
+  function assertField(field2) {
+    if (!field2 || typeof field2 !== "object" || Object.getOwnPropertyNames(field2).some((name) => ![
+      "groundHeight",
+      "materialWeights",
+      "waterLevel",
+      "waterDepth",
+      "shorelineDistance",
+      "flow",
+      "waterCoverage",
+      "waterKind",
+      "waterProfile",
+      "waterBodyIndex"
+    ].includes(name)) || !(field2.groundHeight instanceof Uint16Array) || field2.groundHeight.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.materialWeights instanceof Uint8Array) || field2.materialWeights.length !== SURFACE_FIELD_TEXEL_COUNT * 4 || !(field2.waterLevel instanceof Uint16Array) || field2.waterLevel.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.waterDepth instanceof Uint16Array) || field2.waterDepth.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.shorelineDistance instanceof Uint16Array) || field2.shorelineDistance.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.flow instanceof Int8Array) || field2.flow.length !== SURFACE_FIELD_TEXEL_COUNT * 2 || !(field2.waterCoverage instanceof Uint8Array) || field2.waterCoverage.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.waterKind instanceof Uint8Array) || field2.waterKind.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.waterProfile instanceof Uint8Array) || field2.waterProfile.length !== SURFACE_FIELD_TEXEL_COUNT || !(field2.waterBodyIndex instanceof Uint8Array) || field2.waterBodyIndex.length !== SURFACE_FIELD_TEXEL_COUNT) {
+      throw new TypeError("compiled surface field layout is invalid");
+    }
+  }
+  function assertBounds2(bounds) {
+    if (!bounds || typeof bounds !== "object" || Object.getOwnPropertyNames(bounds).some((name) => ![
+      "validTiles",
+      "minGroundHeight",
+      "maxGroundHeight",
+      "hasWater",
+      "minWaterLevel",
+      "maxWaterLevel"
+    ].includes(name)) || !bounds.validTiles || !Number.isFinite(bounds.minGroundHeight) || !Number.isFinite(bounds.maxGroundHeight) || bounds.minGroundHeight > bounds.maxGroundHeight || typeof bounds.hasWater !== "boolean" || !Number.isFinite(bounds.minWaterLevel) || !Number.isFinite(bounds.maxWaterLevel) || bounds.minWaterLevel > bounds.maxWaterLevel || !Number.isInteger(bounds.validTiles.minX) || !Number.isInteger(bounds.validTiles.minY) || !Number.isInteger(bounds.validTiles.maxXExclusive) || !Number.isInteger(bounds.validTiles.maxYExclusive) || bounds.validTiles.minX < 0 || bounds.validTiles.minY < 0 || bounds.validTiles.maxXExclusive > SURFACE_RENDER_CHUNK_SIZE || bounds.validTiles.maxYExclusive > SURFACE_RENDER_CHUNK_SIZE || bounds.validTiles.minX >= bounds.validTiles.maxXExclusive || bounds.validTiles.minY >= bounds.validTiles.maxYExclusive) {
+      throw new TypeError("compiled surface bounds are invalid");
+    }
+  }
+  function assertCompiledSurfaceChunk(value) {
+    if (!value || typeof value !== "object") throw new TypeError("compiled surface chunk must be an object");
+    const chunk = value;
+    if (Object.getOwnPropertyNames(chunk).some((name) => ![
+      "key",
+      "dependencyKey",
+      "effectiveRevision",
+      "bounds",
+      "field",
+      "waterBodies",
+      "byteLength",
+      "contentChecksum"
+    ].includes(name))) throw new TypeError("compiled surface chunk contains unknown fields");
+    assertSurfaceDependencyKey(chunk.dependencyKey);
+    if (chunk.key.chunkX !== chunk.dependencyKey.renderKey.chunkX || chunk.key.chunkY !== chunk.dependencyKey.renderKey.chunkY || chunk.dependencyKey.compilerRevision !== SURFACE_COMPILER_REVISION || chunk.dependencyKey.compileProfileVersion !== SURFACE_COMPILE_PROFILE_VERSION || !Number.isSafeInteger(chunk.effectiveRevision) || chunk.effectiveRevision < 0) {
+      throw new TypeError("compiled surface chunk identity is invalid");
+    }
+    assertBounds2(chunk.bounds);
+    assertField(chunk.field);
+    if (!Array.isArray(chunk.waterBodies) || chunk.waterBodies.length > SURFACE_MAX_WATER_BODY_COUNT) {
+      throw new RangeError("compiled surface body palette exceeds its frozen budget");
+    }
+    const bodyIds = /* @__PURE__ */ new Set();
+    for (const body of chunk.waterBodies) {
+      if (!body || typeof body.bodyId !== "string" || bodyIds.has(body.bodyId) || !["ocean", "lake", "river"].includes(body.kind) || body.kind === "ocean" !== (body.bodyId === OCEAN_BODY_ID) || Object.getOwnPropertyNames(body).some((name) => name !== "bodyId" && name !== "kind")) {
+        throw new TypeError("compiled surface body palette is invalid");
+      }
+      bodyIds.add(body.bodyId);
+    }
+    for (let index = 1; index < chunk.waterBodies.length; index += 1) {
+      if (chunk.waterBodies[index - 1].bodyId.localeCompare(chunk.waterBodies[index].bodyId) >= 0) {
+        throw new TypeError("compiled surface body palette must be strictly ordered");
+      }
+    }
+    let minGroundHeight = Number.POSITIVE_INFINITY;
+    let maxGroundHeight = Number.NEGATIVE_INFINITY;
+    let minWaterLevel = Number.POSITIVE_INFINITY;
+    let maxWaterLevel = Number.NEGATIVE_INFINITY;
+    let hasWater = false;
+    for (let index = 0; index < SURFACE_FIELD_TEXEL_COUNT; index += 1) {
+      const materialOffset = index * 4;
+      if (chunk.field.materialWeights[materialOffset] + chunk.field.materialWeights[materialOffset + 1] + chunk.field.materialWeights[materialOffset + 2] + chunk.field.materialWeights[materialOffset + 3] !== 255) {
+        throw new TypeError("compiled surface material weights must sum to 255");
+      }
+      const coverage = chunk.field.waterCoverage[index];
+      const kind = chunk.field.waterKind[index];
+      const bodyIndex = chunk.field.waterBodyIndex[index];
+      const groundHeight = decodeFloat16(chunk.field.groundHeight[index]);
+      const waterLevel = decodeFloat16(chunk.field.waterLevel[index]);
+      const waterDepth = decodeFloat16(chunk.field.waterDepth[index]);
+      const shoreDistance = decodeFloat16(chunk.field.shorelineDistance[index]);
+      if (coverage === 0 !== (kind === 0 /* None */ && bodyIndex === 0) || coverage > 0 && (kind < 1 /* Ocean */ || kind > 3 /* River */ || bodyIndex === 0 || bodyIndex > chunk.waterBodies.length) || coverage === 0 && (waterLevel !== 0 || waterDepth !== 0 || chunk.field.waterProfile[index] !== 0 || chunk.field.flow[index * 2] !== 0 || chunk.field.flow[index * 2 + 1] !== 0) || !Number.isFinite(groundHeight) || groundHeight < 0 || groundHeight > 1 || !Number.isFinite(waterLevel) || waterLevel < 0 || waterLevel > 1 || !Number.isFinite(waterDepth) || waterDepth < 0 || !Number.isFinite(shoreDistance) || Math.abs(shoreDistance) > SHORE_DISTANCE_LIMIT + 0.01) {
+        throw new TypeError("compiled surface field contains invalid texel data");
+      }
+      if (coverage > 0) {
+        const body = chunk.waterBodies[bodyIndex - 1];
+        const expectedKind = kind === 1 /* Ocean */ ? "ocean" : kind === 2 /* Lake */ ? "lake" : "river";
+        if (body.kind !== expectedKind) {
+          throw new TypeError("compiled surface texel disagrees with its water body palette");
+        }
+      }
+      minGroundHeight = Math.min(minGroundHeight, groundHeight);
+      maxGroundHeight = Math.max(maxGroundHeight, groundHeight);
+      if (coverage >= 128) {
+        minWaterLevel = Math.min(minWaterLevel, waterLevel);
+        maxWaterLevel = Math.max(maxWaterLevel, waterLevel);
+        hasWater = true;
+      }
+    }
+    if (chunk.bounds.minGroundHeight !== minGroundHeight || chunk.bounds.maxGroundHeight !== maxGroundHeight || chunk.bounds.hasWater !== hasWater || chunk.bounds.minWaterLevel !== (hasWater ? minWaterLevel : 0) || chunk.bounds.maxWaterLevel !== (hasWater ? maxWaterLevel : 0)) {
+      throw new TypeError("compiled surface bounds do not match the field payload");
+    }
+    if (chunk.byteLength !== fieldByteLength(chunk.field) || chunk.contentChecksum !== surfaceChecksum(chunk.field, chunk.waterBodies)) {
+      throw new TypeError("compiled surface chunk byte length or checksum is invalid");
+    }
+  }
+  function assertCompiledSurfaceChunkOnce(value) {
+    if (validatedCompiledChunks.has(value)) return;
+    assertCompiledSurfaceChunk(value);
+    validatedCompiledChunks.add(value);
+  }
+  function bilinear(values, amountX, amountY) {
+    const top = values[0] + (values[1] - values[0]) * amountX;
+    const bottom = values[2] + (values[3] - values[2]) * amountX;
+    return top + (bottom - top) * amountY;
+  }
+  function sampleCompiledSurfaceChunk(chunk, localU, localV) {
+    assertCompiledSurfaceChunkOnce(chunk);
+    if (!Number.isFinite(localU) || !Number.isFinite(localV) || localU < chunk.bounds.validTiles.minX - 0.5 || localU >= chunk.bounds.validTiles.maxXExclusive - 0.5 || localV < chunk.bounds.validTiles.minY - 0.5 || localV >= chunk.bounds.validTiles.maxYExclusive - 0.5) {
+      throw new RangeError("compiled surface query lies outside the chunk valid domain");
+    }
+    const texel = surfaceFieldTexelCoordinate(localU, localV);
+    const x0 = Math.floor(texel.u);
+    const y0 = Math.floor(texel.v);
+    const amountX = texel.u - x0;
+    const amountY = texel.v - y0;
+    if (x0 < 0 || y0 < 0 || x0 + 1 >= SURFACE_FIELD_TEXTURE_SIZE || y0 + 1 >= SURFACE_FIELD_TEXTURE_SIZE) {
+      throw new RangeError("compiled surface query exceeds the field gutter");
+    }
+    const indices = [
+      surfaceLatticeIndex(x0, y0),
+      surfaceLatticeIndex(x0 + 1, y0),
+      surfaceLatticeIndex(x0, y0 + 1),
+      surfaceLatticeIndex(x0 + 1, y0 + 1)
+    ];
+    const interpolationWeights = [
+      (1 - amountX) * (1 - amountY),
+      amountX * (1 - amountY),
+      (1 - amountX) * amountY,
+      amountX * amountY
+    ];
+    const groundHeight = bilinear(
+      indices.map((index) => decodeFloat16(chunk.field.groundHeight[index])),
+      amountX,
+      amountY
+    );
+    const shorelineDistance = bilinear(
+      indices.map((index) => decodeFloat16(chunk.field.shorelineDistance[index])),
+      amountX,
+      amountY
+    );
+    const waterCoverage = bilinear(
+      indices.map((index) => chunk.field.waterCoverage[index] / 255),
+      amountX,
+      amountY
+    );
+    let wetWeight = 0;
+    let waterLevel = 0;
+    let waterDepth = 0;
+    let flowX = 0;
+    let flowY = 0;
+    let selected = -1;
+    let selectedWeight = -1;
+    for (let index = 0; index < indices.length; index += 1) {
+      const texelIndex = indices[index];
+      const weight = interpolationWeights[index];
+      const coverageWeight = weight * chunk.field.waterCoverage[texelIndex] / 255;
+      wetWeight += coverageWeight;
+      waterLevel += decodeFloat16(chunk.field.waterLevel[texelIndex]) * coverageWeight;
+      waterDepth += decodeFloat16(chunk.field.waterDepth[texelIndex]) * weight;
+      flowX += chunk.field.flow[texelIndex * 2] / 127 * coverageWeight;
+      flowY += chunk.field.flow[texelIndex * 2 + 1] / 127 * coverageWeight;
+      if (coverageWeight > selectedWeight || coverageWeight === selectedWeight && texelIndex < (selected < 0 ? Number.POSITIVE_INFINITY : indices[selected])) {
+        selected = index;
+        selectedWeight = coverageWeight;
+      }
+    }
+    if (wetWeight > 0) waterLevel /= wetWeight;
+    const flowLength = Math.hypot(flowX, flowY);
+    if (flowLength > 0) {
+      flowX /= flowLength;
+      flowY /= flowLength;
+    }
+    const selectedIndex = selected >= 0 ? indices[selected] : indices[0];
+    const bodyIndex = selectedWeight > 0 ? chunk.field.waterBodyIndex[selectedIndex] : 0;
+    const material = [0, 1, 2, 3].map((channel) => bilinear(
+      indices.map((index) => chunk.field.materialWeights[index * 4 + channel] / 255),
+      amountX,
+      amountY
+    ));
+    return Object.freeze({
+      groundHeight,
+      materialWeights: Object.freeze(material),
+      waterLevel,
+      waterDepth,
+      shorelineDistance,
+      flow: Object.freeze([flowX, flowY]),
+      waterCoverage,
+      waterKind: bodyIndex > 0 ? chunk.field.waterKind[selectedIndex] : 0 /* None */,
+      waterProfile: bodyIndex > 0 ? chunk.field.waterProfile[selectedIndex] : 0,
+      waterBody: bodyIndex > 0 ? chunk.waterBodies[bodyIndex - 1] : void 0
+    });
+  }
+  function compiledSurfaceFieldTransferables(chunk) {
+    assertCompiledSurfaceChunkOnce(chunk);
+    const candidates = [
+      chunk.field.groundHeight.buffer,
+      chunk.field.materialWeights.buffer,
+      chunk.field.waterLevel.buffer,
+      chunk.field.waterDepth.buffer,
+      chunk.field.shorelineDistance.buffer,
+      chunk.field.flow.buffer,
+      chunk.field.waterCoverage.buffer,
+      chunk.field.waterKind.buffer,
+      chunk.field.waterProfile.buffer,
+      chunk.field.waterBodyIndex.buffer
+    ];
+    if (candidates.some((buffer) => !(buffer instanceof ArrayBuffer))) {
+      throw new TypeError("compiled surface field buffers must be transferable ArrayBuffers");
+    }
+    const buffers = candidates;
+    if (new Set(buffers).size !== buffers.length) {
+      throw new TypeError("compiled surface field must own distinct transferable buffers");
+    }
+    return Object.freeze(buffers);
+  }
+
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES = BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES;
   exports.BASE_SEMANTIC_CHUNK_REVISION = BASE_SEMANTIC_CHUNK_REVISION;
@@ -23278,9 +24614,20 @@ void main() {
   exports.RenderWorldController = RenderWorldController;
   exports.ResourceBudgetLedger = ResourceBudgetLedger;
   exports.RuntimeWorkCoordinator = RuntimeWorkCoordinator;
+  exports.SURFACE_CANONICAL_HEX_SIZE = SURFACE_CANONICAL_HEX_SIZE;
   exports.SURFACE_COMPILER_REVISION = SURFACE_COMPILER_REVISION;
+  exports.SURFACE_COMPILE_PROFILE_V1 = SURFACE_COMPILE_PROFILE_V1;
   exports.SURFACE_COMPILE_PROFILE_VERSION = SURFACE_COMPILE_PROFILE_VERSION;
+  exports.SURFACE_EFFECTIVE_WINDOW_SIZE = SURFACE_EFFECTIVE_WINDOW_SIZE;
+  exports.SURFACE_FIELD_CORE_SIZE = SURFACE_FIELD_CORE_SIZE;
+  exports.SURFACE_FIELD_GUTTER_TEXELS = SURFACE_FIELD_GUTTER_TEXELS;
+  exports.SURFACE_FIELD_TEXEL_COUNT = SURFACE_FIELD_TEXEL_COUNT;
+  exports.SURFACE_FIELD_TEXTURE_SIZE = SURFACE_FIELD_TEXTURE_SIZE;
+  exports.SURFACE_INFLUENCE_RADIUS_TILES = SURFACE_INFLUENCE_RADIUS_TILES;
+  exports.SURFACE_LATTICE_TEST_VECTORS = SURFACE_LATTICE_TEST_VECTORS;
+  exports.SURFACE_MAX_WATER_BODY_COUNT = SURFACE_MAX_WATER_BODY_COUNT;
   exports.SURFACE_RENDER_CHUNK_SIZE = SURFACE_RENDER_CHUNK_SIZE;
+  exports.SURFACE_SAMPLES_PER_TILE_INTERVAL = SURFACE_SAMPLES_PER_TILE_INTERVAL;
   exports.SemanticOverrideField = SemanticOverrideField;
   exports.SparseWorldChunkStore = SparseWorldChunkStore;
   exports.StaticWorldSource = StaticWorldSource;
@@ -23316,6 +24663,7 @@ void main() {
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
   exports.assertBaseSemanticChunk = assertBaseSemanticChunk;
+  exports.assertCompiledSurfaceChunk = assertCompiledSurfaceChunk;
   exports.assertHydrologyFeatureDelta = assertHydrologyFeatureDelta;
   exports.assertHydrologyRegion = assertHydrologyRegion;
   exports.assertHydrologyRegionKey = assertHydrologyRegionKey;
@@ -23329,6 +24677,7 @@ void main() {
   exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
   exports.assertSurfaceDependencyKey = assertSurfaceDependencyKey;
   exports.assertSurfaceRequestToken = assertSurfaceRequestToken;
+  exports.assertTransferableEffectiveWindow = assertTransferableEffectiveWindow;
   exports.assertWorldChunk = assertWorldChunk;
   exports.assertWorldDescriptor = assertWorldDescriptor;
   exports.assertWorldDescriptorV2 = assertWorldDescriptorV2;
@@ -23343,7 +24692,10 @@ void main() {
   exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.cloneHydrologyFeatureDelta = cloneHydrologyFeatureDelta;
   exports.cloneSparseSemanticDelta = cloneSparseSemanticDelta;
+  exports.cloneSurfaceDependencyKey = cloneSurfaceDependencyKey;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
+  exports.compileSurfaceChunk = compileSurfaceChunk;
+  exports.compiledSurfaceFieldTransferables = compiledSurfaceFieldTransferables;
   exports.createEffectiveDeltaSnapshot = createEffectiveDeltaSnapshot;
   exports.createLandformSampler = createLandformSampler;
   exports.createProceduralMacroHeightSource = createProceduralMacroHeightSource;
@@ -23351,14 +24703,18 @@ void main() {
   exports.createSparseSemanticDelta = createSparseSemanticDelta;
   exports.createStableHydrologyId = createStableHydrologyId;
   exports.createSurfaceDependencyBinding = createSurfaceDependencyBinding;
+  exports.createTransferableEffectiveWindow = createTransferableEffectiveWindow;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldDescriptorV2 = createWorldDescriptorV2;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
+  exports.decodeFloat16 = decodeFloat16;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
   exports.deriveHydrologyRaster = deriveHydrologyRaster;
   exports.derivedHydrologyRasterTransferables = derivedHydrologyRasterTransferables;
   exports.deserializeBaseSemanticChunk = deserializeBaseSemanticChunk;
+  exports.effectiveSurfaceWindowTransferables = effectiveSurfaceWindowTransferables;
+  exports.encodeFloat16 = encodeFloat16;
   exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;
   exports.estimateBufferGeometriesResourceBytes = estimateBufferGeometriesResourceBytes;
   exports.estimateObject3DResourceCost = estimateObject3DResourceCost;
@@ -23393,7 +24749,9 @@ void main() {
   exports.normalizeResourceCost = normalizeResourceCost;
   exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
   exports.positiveModulo = positiveModulo;
+  exports.quantizeFloat16 = quantizeFloat16;
   exports.quantizeMacroHeight = quantizeMacroHeight;
+  exports.sampleCompiledSurfaceChunk = sampleCompiledSurfaceChunk;
   exports.sampleLandform = sampleLandform;
   exports.semanticChunkCoordinate = semanticChunkCoordinate;
   exports.semanticChunkLocalIndex = semanticChunkLocalIndex;
@@ -23404,11 +24762,22 @@ void main() {
   exports.serializeWorldDescriptorV2 = serializeWorldDescriptorV2;
   exports.sparseSemanticDeltaByteLength = sparseSemanticDeltaByteLength;
   exports.sparseSemanticDeltaOverrideOffset = sparseSemanticDeltaOverrideOffset;
+  exports.surfaceColumnStagger = surfaceColumnStagger;
   exports.surfaceDependencyKeysEqual = surfaceDependencyKeysEqual;
+  exports.surfaceFieldTexelCoordinate = surfaceFieldTexelCoordinate;
+  exports.surfaceHydrologyRegionRequirements = surfaceHydrologyRegionRequirements;
+  exports.surfaceLatticeIndex = surfaceLatticeIndex;
+  exports.surfaceLatticeTexelLocalCoordinate = surfaceLatticeTexelLocalCoordinate;
+  exports.surfaceLatticeTexelWorldCoordinate = surfaceLatticeTexelWorldCoordinate;
+  exports.surfacePointOwnerRenderChunk = surfacePointOwnerRenderChunk;
+  exports.surfaceSemanticChunkRequirements = surfaceSemanticChunkRequirements;
+  exports.surfaceStagger = surfaceStagger;
+  exports.surfaceToWorld = surfaceToWorld;
   exports.tagWorldChunk = tagWorldChunk;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;
   exports.worldDescriptorsV2Equal = worldDescriptorsV2Equal;
   exports.worldTileVisualSignature = worldTileVisualSignature;
+  exports.worldToSurface = worldToSurface;
   exports.worldVegetationTransferables = worldVegetationTransferables;
 
 }));

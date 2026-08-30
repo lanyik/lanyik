@@ -12,10 +12,17 @@ import {
     SemanticChunkKey,
     HydrologyRegionKey
 } from "./WorldSemanticFormat";
+import {
+    SURFACE_COMPILE_PROFILE_VERSION,
+    SURFACE_COMPILER_REVISION,
+    SURFACE_RENDER_CHUNK_SIZE
+} from "./SurfaceCompileProfile";
 
-export const SURFACE_RENDER_CHUNK_SIZE = 16;
-export const SURFACE_COMPILER_REVISION = 1;
-export const SURFACE_COMPILE_PROFILE_VERSION = 1;
+export {
+    SURFACE_COMPILE_PROFILE_VERSION,
+    SURFACE_COMPILER_REVISION,
+    SURFACE_RENDER_CHUNK_SIZE
+} from "./SurfaceCompileProfile";
 
 export interface RenderChunkKey {
     readonly chunkX: number;
@@ -62,6 +69,12 @@ export interface SurfaceRequestIdentity extends SurfaceDependencyBinding {
     readonly requestToken: SurfaceRequestToken;
 }
 
+export interface CreateSurfaceDependencyBindingOptions {
+    readonly compilerRevision?: number;
+    readonly compileProfileVersion?: number;
+    readonly hydrologyFeatureIds?: ReadonlySet<string>;
+}
+
 function assertNonNegativeRevision(name: string, value: number): void {
     if (!Number.isSafeInteger(value) || value < 0) {
         throw new RangeError(`${name} must be a non-negative safe integer`);
@@ -84,8 +97,8 @@ function assertRenderChunkKey(value: RenderChunkKey): void {
     const originY = value.chunkY * SURFACE_RENDER_CHUNK_SIZE;
     const endX = originX + SURFACE_RENDER_CHUNK_SIZE - 1;
     const endY = originY + SURFACE_RENDER_CHUNK_SIZE - 1;
-    if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)
-        || !Number.isSafeInteger(endX) || !Number.isSafeInteger(endY)) {
+    if (originX > Number.MAX_SAFE_INTEGER || endX < Number.MIN_SAFE_INTEGER
+        || originY > Number.MAX_SAFE_INTEGER || endY < Number.MIN_SAFE_INTEGER) {
         throw new RangeError("render chunk key exceeds the safe integer tile range");
     }
 }
@@ -195,11 +208,15 @@ export function assertSurfaceDependencyKey(value: unknown): asserts value is Sur
 export function createSurfaceDependencyBinding(
     snapshot: EffectiveWorldSnapshot,
     renderKey: RenderChunkKey,
-    options: {
-        readonly compilerRevision?: number;
-        readonly compileProfileVersion?: number;
-    } = {}
+    options: CreateSurfaceDependencyBindingOptions = {}
 ): SurfaceDependencyBinding {
+    if (!options || typeof options !== "object"
+        || Object.getOwnPropertyNames(options).some(name =>
+            name !== "compilerRevision" && name !== "compileProfileVersion"
+            && name !== "hydrologyFeatureIds")
+        || options.hydrologyFeatureIds !== undefined && !(options.hydrologyFeatureIds instanceof Set)) {
+        throw new TypeError("surface dependency binding options are invalid");
+    }
     const canonicalRenderKey = canonicalizeRenderChunkKey(snapshot.descriptor, renderKey);
     const compilerRevision = options.compilerRevision ?? SURFACE_COMPILER_REVISION;
     const compileProfileVersion = options.compileProfileVersion ?? SURFACE_COMPILE_PROFILE_VERSION;
@@ -216,7 +233,10 @@ export function createSurfaceDependencyBinding(
     const hydrologyRegions = Object.freeze(snapshot.hydrologyRegions.map(region => Object.freeze({
         key: Object.freeze(canonicalizeHydrologyRegionKey(snapshot.descriptor, region.base.key)),
         baseRevision: region.base.revision,
-        features: Object.freeze(region.featureDeltas.map(feature => Object.freeze({
+        features: Object.freeze(region.featureDeltas
+            .filter(feature => !options.hydrologyFeatureIds
+                || options.hydrologyFeatureIds.has(feature.featureId))
+            .map(feature => Object.freeze({
             featureId: feature.featureId,
             revision: feature.revision
         })))
@@ -289,6 +309,26 @@ export function serializeSurfaceDependencyKey(key: SurfaceDependencyKey): string
             dependency.features.map(feature => [feature.featureId, feature.revision])
         ])
     ]);
+}
+
+export function cloneSurfaceDependencyKey(key: SurfaceDependencyKey): SurfaceDependencyKey {
+    assertSurfaceDependencyKey(key);
+    return Object.freeze({
+        worldIdentity: key.worldIdentity,
+        renderKey: Object.freeze({ ...key.renderKey }),
+        compilerRevision: key.compilerRevision,
+        compileProfileVersion: key.compileProfileVersion,
+        semanticChunks: Object.freeze(key.semanticChunks.map(dependency => Object.freeze({
+            key: Object.freeze({ ...dependency.key }),
+            baseRevision: dependency.baseRevision,
+            deltaRevision: dependency.deltaRevision
+        }))),
+        hydrologyRegions: Object.freeze(key.hydrologyRegions.map(dependency => Object.freeze({
+            key: Object.freeze({ ...dependency.key }),
+            baseRevision: dependency.baseRevision,
+            features: Object.freeze(dependency.features.map(feature => Object.freeze({ ...feature })))
+        })))
+    });
 }
 
 export function assertSurfaceRequestToken(value: unknown): asserts value is SurfaceRequestToken {

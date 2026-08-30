@@ -1,6 +1,6 @@
 # 世界表面与渲染基建 v2 设计
 
-状态：**阶段 A、B 与阶段 C 前置的生效快照/版本正确性已完成，完整阶段 C–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键和请求令牌可独立使用与验收，但尚未接入生产渲染热路径。
+状态：**阶段 A、B、阶段 C 前置，以及阶段 C1 CPU 表面编译器已完成；阶段 C2–H 待实施**。本文描述下一代世界表面与渲染基建的目标结构；当前生产渲染仍以 [世界风格生成 v1](./world-style-generation-v1.md) 和 [渲染与流式加载](./render-streaming.md) 为准。已落地的 v2 语义、水文、生效快照、精确依赖键、请求令牌、effective window 和 CPU 量化表面场可独立使用与验收，但尚未接入生产渲染热路径。
 
 实施 v2 时直接替换旧的数据和渲染热路径，不保留旧格式兼容、旧地形渲染 fallback 或两套生产实现。迁移完成并通过验收后，v1 文档转为历史记录，本文转为当前实现文档。
 
@@ -43,7 +43,7 @@ DynamicFogStore ── 独立高频状态场 ── FogLayer
 | 近景表面场核心 | 64×64 texel | `SURFACE_COMPILE_PROFILE_VERSION` | 每个逻辑坐标间隔四个 texel，高度、材质、岸线、水深和流向 |
 | 标准模拟块 | 64×64 格 | 应用模拟格式 | 默认实体驻留和后台模拟分区；不进入世界表面格式 |
 
-当前生产候选固定为 `SurfaceCompileProfile v1 = { renderChunkSize: 16, samplesPerTileInterval: 4, gutterTexels: 1, influenceRadiusTiles: 2, textureLayerSize: 66, pageLayers: 128 }`。64×64 核心每边增加一个采样 texel 的 gutter，得到 66×66 GPU 层。编译器输入使用两格语义 halo；岸线距离和所有邻域核在两格处饱和，因而不会形成无限脏区。输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
+当前已冻结的 CPU 候选为 `SurfaceCompileProfile v1 = { renderChunkSize: 16, samplesPerTileInterval: 4, gutterTexels: 1, influenceRadiusTiles: 2, textureLayerSize: 66 }`。阶段 C2 再把同一 profile 扩展为 `pageLayers: 128` 的 GPU 页契约。64×64 核心每边增加一个采样 texel 的 gutter，得到 66×66 输出层。编译器输入使用两格语义 halo；岸线距离和所有邻域核在两格处饱和，因而不会形成无限脏区。输入 halo 是临时快照，不进入权威 chunk，也不改变 chunk 归属。
 
 32 与 128 是存档和生成格式；16、4 与 66 是可丢弃表面编译器的版本化常量。它们都不作为普通运行参数暴露，但后者可以在不改变 world identity 或存档的情况下随新的 compile profile 升级。特别是：
 
@@ -409,19 +409,19 @@ interface ResidentSurfaceLease {
 
 `SurfaceRequestToken` 是 service 为一次挂载需求签发的 `{ sessionEpoch, renderChunkGeneration }` 不透明令牌，只用于拒绝迟到 Worker、上传和挂载结果，不进入内容缓存键。Worker 结果必须同时满足“request token 仍是该 render chunk 当前令牌”和“compiled dependency key 等于当前依赖”；任一不匹配都丢弃。
 
-当前已实现 `SurfaceDependencyKey`、`SurfaceDependencyBinding` 和 `SurfaceRequestTracker`。依赖键保存完整规范 world identity、canonical 16×16 render key、compiler/profile 版本、排序后的 semantic base/delta revision，以及 hydrology base 和相交 feature revision；序列化字符串只用于缓存查找，命中后仍执行结构化逐项比较。`effectiveRevision` 保存在 binding/lease 而不进入内容键：无关区域提交可以提升全局 revision，同时继续复用局部输入逐项相同的编译内容；相关依赖变化一定改变内容键。
+当前已实现 `SurfaceDependencyKey`、`SurfaceDependencyBinding`、`SurfaceRequestTracker`、`TransferableEffectiveWindow` 和纯 CPU `compileSurfaceChunk`。依赖键保存完整规范 world identity、canonical 16×16 render key、compiler/profile 版本、排序后的 semantic base/delta revision，以及 hydrology base 和实际参与该窗口的 feature revision；同 region 内不相交 feature 不进入依赖键。序列化字符串只用于缓存查找，命中后仍执行结构化逐项比较。`effectiveRevision` 保存在 binding/编译结果/lease 而不进入内容键：无关区域提交可以提升全局 revision，同时继续复用局部输入逐项相同的编译内容；相关依赖变化一定改变内容键。
 
 tracker 在一个 `sessionEpoch` 内使用全局严格递增的 `renderChunkGeneration`，只为当前活动 render key 保留 token。release 后重新挂载不会把 generation 重置为 1，因而不存在同 session ABA；新世界 session 必须使用新 epoch。结果接收同时校验 canonical render key、world identity、当前 token 和结构化 dependency key。缓存命中或旧 revision 的任务若局部依赖仍相同，可以用当前 token/effective revision 创建新 lease；不能把旧 token 本身带入 lease。
 
 compiled CPU cache 命中时不修改缓存对象，而是先比较 dependency key，再用当前 request token 创建新的 `ResidentSurfaceLease`。查询和 Layer 持有 lease，不直接把无会话 token 的缓存对象视为当前结果。
 
-请求快照包含 16×16 核心区、两格语义 halo 和相交水文 feature。`TransferableEffectiveWindow` 拥有从池中取得的独立传输 buffer；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。Worker 返回后 buffer 回池。首次装载同一 32×32 semantic chunk 下的四个 render chunks 时，调度器可以合并快照构建和任务投递，但四个编译结果仍拥有独立 token、缓存和失效范围。
+请求快照包含 16×16 核心区、两格语义 halo 和按 feature 宽度再加两格影响半径筛选的相交水文 feature。当前 `createTransferableEffectiveWindow` 严格要求调用方提供精确的 semantic chunk/hydrology region 集合，生成 20×20 X-major semantic SoA，并复制所有 typed arrays；转移它不能 detach `BaseSemanticChunk`、delta 或任何 resident 权威数组。河流和湖泊在窗口内按最短环绕位移展开，base/delta/tombstone 先合成为最终记录。阶段 C2 的 Worker service 负责 buffer 池回收，以及同一 32×32 semantic chunk 下四个 render chunk 的快照/投递合并；四个编译结果仍拥有独立 token、缓存和失效范围。
 
-地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；编译块只提供表面场、真实 bounds 和可选的混合水面 geometry。`CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
+当前 CPU 结果固定包含 canonical key、结构化 dependency key、effective revision、有效/高程/水位 bounds、十个量化字段、chunk-local body palette、精确 CPU 字节数与确定性 checksum。地面 topology 不属于逐块编译结果。近、中、远三张平面三角晶格由所有 GroundLayer chunk 共享；阶段 C2/E/F 分别补齐纹理槽位与水面 geometry、植被 seeds，不在 CPU 字段阶段放置不可兑现的占位对象。最终 `CompiledWaterGeometry` 使用 discriminated union 表示无水、共享完整水面 patch 或该块独有的轮廓 buffer，避免为全陆地和全水块保存重复顶点。
 
 ### 8.2 SurfaceLatticeSpec
 
-表面场不把每个 hex 单独切成私有小纹理，而是在当前偶列偏移六边格上定义连续、全局定相的逻辑表面坐标。令 `h = hexSize`，逻辑 tile 中心为整数 `(x, y)`：
+表面场不把每个 hex 单独切成私有小纹理，而是在当前偶列偏移六边格上定义连续、全局定相的逻辑表面坐标。CPU 编译固定在 `h = 1` 的 canonical 平面度量中运行，渲染器之后统一应用水平显示尺度；调用方不能改变编译结果的距离单位。令 `h = hexSize`，逻辑 tile 中心为整数 `(x, y)`：
 
 ~~~ts
 columnStagger(column) = positiveModulo(column, 2) === 0 ? 0.5 : 0.0
@@ -452,7 +452,7 @@ v = y0 - 0.5 + (j + 0.5) / S
 
 gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物理层为 66×66。相邻块在公共边两侧拥有相同的两个 texel 中心，手动插值公共边时得到逐位相同的输入；不需要额外保存第 65 个“边界顶点”。render chunk 的几何核心域是半开区间 `[x0 - 0.5, x0 + 15.5) × [y0 - 0.5, y0 + 15.5)`，最外侧绘制边界由唯一 owner 规则闭合。
 
-高度、水位、材质、SDF 和 flow 都先在 `(u,v)` 中定位相邻 texel，再用共享函数手动插值。网格、CPU 查询、轮廓提取和 shader 不得各自重写 `surfaceToWorld`、texel phase、边界 owner 或三角对角线规则。`SurfaceLatticeSpec` 必须提供正坐标、负坐标、chunk 公共边和环绕接缝的冻结测试向量。
+高度、水位、材质、SDF 和 flow 都先在 `(u,v)` 中定位相邻 texel，再用共享函数手动插值。网格、CPU 查询、轮廓提取和 shader 不得各自重写 `surfaceToWorld`、texel phase、边界 owner 或三角对角线规则。当前 `SurfaceLattice` 已冻结正坐标、负坐标、chunk owner 与相邻块公共边测试向量；相邻块重复保存的两列/两行 gutter 在独立编译后逐字节一致。环绕接缝先在 effective window 展开为最短 canonical 邻域，再走同一 lattice 公式。
 
 ### 8.3 逻辑字段
 
@@ -473,7 +473,7 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 
 `shorelineDistance` 的数值是经 `surfaceToWorld` 度量的带符号世界平面欧氏距离，不是 texel 数、hex 步数或 `(u,v)` 曼哈顿距离；陆侧为正、水侧为负。`flow` 解码为世界 XZ 平面的单位方向，水深与水位使用世界高度单位。这样改变 hexSize 或局部 lattice 斜率不会改变泡沫宽度和河流方向语义。
 
-每个 compiled chunk 的 body palette 最多包含 255 个相交水体；超过上限是 feature 预算或编译错误，不能合并 ID。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。按上述逻辑布局，一个含 gutter 的静态表面场低于 80 KiB CPU 数据并处于同量级 GPU 数据，验收以实际内部格式和驱动分配为准。
+每个 compiled chunk 的 body palette 最多包含 255 个在 66×66 输出层实际出现的水体；超过上限是 feature 预算或编译错误，不能合并 ID。palette 只保存稳定 `bodyId + kind`，`waterProfile` 必须逐 texel 保存，因为同一 river body 的 discharge/profile 可以沿汇流向下游变化。物理纹理可以在不改变逻辑字段的前提下合并通道，合并方案由 `SURFACE_COMPILER_REVISION + SURFACE_COMPILE_PROFILE_VERSION` 锁定。当前十个 X-major typed arrays 对 4,356 texel 固定占用 78,408 字节；binary16 使用共享、ties-to-even 的 IEEE 754 编解码器。GPU 驱动分配在阶段 C2 单独验收。
 
 动态战争迷雾不进入该静态表面层。雾使用独立的低分辨率 `R8` array texture，允许频繁小额更新而不重新上传整层静态 surface 数据。它与可见 surface chunk 共用 slot 页号和 layer 号，但拥有独立存储、标脏和上传记录；surface slot 释放时 GPU fog layer 一并释放，权威 fog state 仍由 fog store 保存。
 
@@ -486,12 +486,13 @@ gutter 使用完全相同公式，只令 `i,j` 扩展到 `[-1, 64]`，因而物�
 3. 栅格化海平面、湖盆和河流 feature，得到 coverage、kind、profile 与局部 body index。
 4. 计算带符号岸线距离、独立水位和水深。
 5. 根据坡度、气候、湿岸距离和 biome 得到材质权重。
-6. 选择共享地面 topology，生成必要的水面 coverage mesh 和植被确定性种子。
-7. 量化输出，并计算保守 bounds、字节数和内容哈希。
+6. 量化 CPU 字段，并计算保守 bounds、精确字节数和确定性 checksum。
+
+水面 coverage mesh 和植被确定性种子分别属于后续水面/植被阶段，不参与当前 CPU 字段编译器的缓存身份。
 
 湖泊不再把整格地面删除。水下地面保持连续，岸边由水体 coverage 与地面高度相交形成；湿岸、沙滩、浅水色和泡沫都读取同一 shoreline distance，因此不会出现四套不同边界。
 
-`shorelineDistance` 在 `SURFACE_INFLUENCE_RADIUS_TILES = 2` 处饱和。坡度核、湿岸、植被岸边衰减和水面 coverage 轮廓只能读取该半径内输入；需要查询宽河时，空间索引按 feature 自身宽度再加两格扩张 bounds。任何新增编译核若需要更大半径，必须升级 compile profile 并同步扩大 halo 和脏区传播，不能隐式越界读取。
+`shorelineDistance` 在 canonical 平面距离 `SURFACE_INFLUENCE_RADIUS_TILES = 2` 处饱和。为了让 66×66 输出层边缘也能看到层外岸线，编译器先在每边额外 8 texel 的 82×82 临时 work raster 上栅格化水体并计算欧氏 SDF，再裁出 66×66；该 work raster 不进入结果或缓存。坡度核、湿岸、植被岸边衰减和水面 coverage 轮廓只能读取该半径内输入；需要查询宽河时，空间索引按 feature 自身宽度再加两格扩张 bounds。任何新增编译核若需要更大半径，必须升级 compile profile 并同步扩大 halo 和脏区传播，不能隐式越界读取。
 
 ### 8.5 CPU/GPU 一致性与查询有效性
 
@@ -503,9 +504,9 @@ CPU 查询和 GPU 顶点位移共享：
 - 相同 canonical near-grid 三角划分和重心插值约定；
 - 相同岸线 coverage 阈值。
 
-canonical near-grid 顶点先从 field 双线性取样，三角内部再使用冻结对角线的重心插值；CPU 贴地使用同一顺序。中、远 LOD 可以近似区块内部形状，但边界仍读取 canonical 边界点，玩法查询不随当前视觉 LOD 改变。
+当前 `sampleCompiledSurfaceChunk` 已实现 texel-center 双线性 CPU 查询，对 ground、material、water、shore、flow、profile 和 body palette 使用同一坐标核，并拒绝查询当前 chunk 有效域以外的位置。canonical near-grid 顶点的冻结对角线/重心插值和 shader reference evaluator 随阶段 D 接入；中、远 LOD 可以近似区块内部形状，但边界仍读取 canonical 边界点，玩法查询不随当前视觉 LOD 改变。
 
-查询服务只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须改从最新 `EffectiveWorldView` 运行同一个 surface query kernel；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
+阶段 C2 的查询 service 只能使用 request token 与该 render chunk 当前令牌相等、且 dependency key 与当前 Effective Snapshot 一致的 compiled field。编辑提交后，旧 GPU mesh 可以在新结果挂载前短暂显示，但其 request token 立即失效，CPU 查询必须从最新 effective window 运行同一个 `compileSurfaceChunk`/`sampleCompiledSurfaceChunk` 核；不能因为旧 field 仍 resident 就返回旧高度或旧水体。CPU 不复现纯视觉海浪、法线细节、闪光和环境反射。玩法高度是 groundHeight 或静态 waterLevel；视觉水面位移只能在冻结的小范围内变化。
 
 ## 9. GPU 表面场池
 
@@ -930,15 +931,30 @@ Worker 崩溃可以由既有有界重试策略重启任务；重复失败向上�
 - 本前置阶段只新增运行时 read model 与可重建缓存身份，不改变 generator 输出或持久化格式：generator 保持 v7、semantic chunk 保持 v2、hydrology region 保持 v1；`SURFACE_COMPILER_REVISION` 与 `SURFACE_COMPILE_PROFILE_VERSION` 首次冻结为 1。
 - 定向验收覆盖规范编码、增量越过 partial bounds、完整河湖 record、region tombstone 覆盖、任意依赖输入顺序、跨 world 错配、revision 跳号/冲突、相关与无关编辑、旧请求/旧 session/release 后结果。benchmark gate 覆盖四个 semantic chunk 加一个 hydrology region 的 snapshot、查询、依赖构建和 token 校验 5000 次；首次验证后的代表性基线约 185 ms，即每次约 37 µs。
 
-### 阶段 C：表面编译器与纹理池
+### 阶段 C1：CPU 表面编译器（已完成）
 
-- 实现 `SurfaceLatticeSpec`、冻结测试向量、effective window 和 Worker 编译协议。
-- 输出 64×64 core、单 texel gutter 和 body palette 的量化表面场。
-- 实现 paged DataArrayTexture、`SurfaceDependencyKey`/`SurfaceRequestToken`、整层上传和 context restore。
-- 实现 request token 过期或 dependency key 不匹配时使用最新 Effective Snapshot 的共享 CPU query kernel。
+- 实现 canonical `SurfaceLattice`、冻结测试向量、binary16 codec 和精确 20×20 `TransferableEffectiveWindow`。
+- 输出 64×64 core、单 texel gutter、十个量化字段和 body palette 的 66×66 CPU 表面场。
+- 实现地面/材质连续采样，河流、湖泊、海洋 coverage，逐 texel 水位/水深/profile/flow，以及在扩张 work raster 上计算的带符号欧氏岸线距离。
+- 实现严格输入/输出校验、保守 bounds、确定性 checksum、transferable 列表和共享 CPU 查询核。
+
+完成标志：相同 effective window 的编译结果逐字节稳定；相邻块 gutter、负坐标、环绕接缝与 safe-integer partial bounds 一致；权威 ArrayBuffer 不会因传输 window/result 被 detach。
+
+实现结果（2026-08-30）：
+
+- `SurfaceCompileProfile v1` 冻结为 16/4/1/2/66，`SURFACE_COMPILER_REVISION = 1`。固定输出为 4,356 texel、78,408 字节，water body palette 上限 255。
+- effective window 只捕获精确 semantic/hydrology 依赖，过滤同 region 内不相交 feature；delta replacement/tombstone 仍保留使 base feature 消失所需的依赖。所有 resident SoA 与 feature typed arrays 均被复制后再作为 transferable 暴露。
+- SDF 在 82×82 临时栅格上计算后裁剪，解决输出 gutter 外岸线对边缘 texel 的影响；水体 palette 只统计最终 66×66 内实际出现的 body。
+- 定向验收覆盖全陆地、全海洋、连续高度/湖泊/河流、相邻块字节一致、外部岸线影响、语义高度增量、无关 feature 过滤、真实跨 region 水文、负坐标、环绕 seam、safe-integer partial、损坏输入/输出和逐 texel 查询。benchmark gate 的真实跨 region 基线为 window 250 次约 139 ms（约 0.56 ms/次），编译 25 次约 324 ms（约 12.97 ms/次）。
+
+### 阶段 C2：Worker 编译、纹理池与动态雾
+
+- 实现 `compileSurfaceChunk` Worker discriminated-union 协议、任务调度、buffer 回池和迟到结果拒绝。
+- 实现 paged DataArrayTexture、整层上传、slot generation、CPU cache/lease 和 context restore。
+- 把 request token/dependency 校验接入查询 service；过期时从最新 effective snapshot 同步运行共享 CPU kernel。
 - 将动态雾拆到独立 R8 池。
 
-完成标志：CPU/GPU 宏观高度、水位和岸线采样一致，权威 ArrayBuffer 不会因 Worker transfer 被 detach，过期任务无法覆盖或服务新 revision 查询。
+完成标志：CPU/GPU 宏观高度、水位和岸线采样一致，过期任务无法覆盖或服务新 revision 查询；纹理 slot 回收、整层上传与 WebGL context restore 通过浏览器验收。
 
 ### 阶段 D：统一光照核心与合并地面网格
 

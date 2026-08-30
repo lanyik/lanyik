@@ -14,7 +14,7 @@ when it changes the defects the suite can detect.
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
-| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, and effective snapshot/dependency/token construction | `scripts/benchmark-hot-paths.mjs` |
+| Benchmark | Reproducible hot-path regression thresholds, including v2 32x32 semantic generation, a 16-region working set backed by one 2048x2048 finite-dependency drainage basin, derived hydrology rasterization, effective snapshot/dependency/token construction, a cross-region 20x20 effective surface window, and 66x66 CPU surface compilation | `scripts/benchmark-hot-paths.mjs` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
 only for browser-owned behavior such as module Workers, WebGL context recovery,

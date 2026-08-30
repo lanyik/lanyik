@@ -6,12 +6,16 @@ import {
     BASE_SEMANTIC_CHUNK_PAYLOAD_BYTES,
     createEffectiveDeltaSnapshot,
     createSparseSemanticDelta,
+    createTransferableEffectiveWindow,
     createWorldDescriptorV2,
     deriveHydrologyRaster,
     HydrologyRegionGenerator,
     HydrologyRegionSpatialIndex,
     hydrologyRegionVectorBytes,
     EffectiveWorldView,
+    compileSurfaceChunk,
+    surfaceHydrologyRegionRequirements,
+    surfaceSemanticChunkRequirements,
     SurfaceRequestTracker,
     createWorldVegetationMapSnapshot,
     generateWorldChunk,
@@ -189,6 +193,45 @@ function benchmarkEffectiveSnapshots() {
         durationMs: round(durationMs),
         averageMicros: round(durationMs * 1_000 / iterations),
         iterations,
+        checksum
+    };
+}
+
+function benchmarkSurfaceCompilation() {
+    const descriptor = createWorldDescriptorV2({ seed: "surface-compilation-benchmark" });
+    const key = { chunkX: 7, chunkY: 4 };
+    const semanticChunks = surfaceSemanticChunkRequirements(descriptor, key)
+        .map(chunkKey => generateBaseSemanticChunk({ descriptor, key: chunkKey }));
+    const generator = new HydrologyRegionGenerator(descriptor);
+    const hydrologyRegions = surfaceHydrologyRegionRequirements(descriptor, key)
+        .map(regionKey => generator.generate(regionKey));
+    const snapshot = new EffectiveWorldView(descriptor).capture({ semanticChunks, hydrologyRegions });
+    const windowIterations = 250;
+    let window;
+    let started = performance.now();
+    for (let index = 0; index < windowIterations; index += 1) {
+        window = createTransferableEffectiveWindow(snapshot, key);
+    }
+    const windowMs = performance.now() - started;
+    const compileIterations = 25;
+    let chunk;
+    let checksum = 0;
+    started = performance.now();
+    for (let index = 0; index < compileIterations; index += 1) {
+        chunk = compileSurfaceChunk(window);
+        checksum = (checksum + Number.parseInt(chunk.contentChecksum, 16)) >>> 0;
+    }
+    const compileMs = performance.now() - started;
+    return {
+        operation: "cross-region 20x20 effective window x250 + 66x66 CPU surface compile x25",
+        windowMs: round(windowMs),
+        averageWindowMicros: round(windowMs * 1_000 / windowIterations),
+        compileMs: round(compileMs),
+        averageCompileMs: round(compileMs / compileIterations),
+        outputBytes: chunk.byteLength,
+        inputRivers: window.rivers.length,
+        inputLakes: window.lakes.length,
+        waterBodies: chunk.waterBodies.length,
         checksum
     };
 }
@@ -392,6 +435,7 @@ const results = {
     semanticChunkGeneration: benchmarkSemanticChunkGeneration(),
     hydrologyRegions: benchmarkHydrologyRegions(),
     effectiveSnapshots: benchmarkEffectiveSnapshots(),
+    surfaceCompilation: benchmarkSurfaceCompilation(),
     fogFrontier: benchmarkFogFrontier(),
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
@@ -422,6 +466,8 @@ if (process.argv.includes("--check")) {
     under("hydrologyRegions.generationMs", results.hydrologyRegions.generationMs, 1_500);
     under("hydrologyRegions.rasterMs", results.hydrologyRegions.rasterMs, 750);
     under("effectiveSnapshots.durationMs", results.effectiveSnapshots.durationMs, 750);
+    under("surfaceCompilation.windowMs", results.surfaceCompilation.windowMs, 750);
+    under("surfaceCompilation.compileMs", results.surfaceCompilation.compileMs, 750);
     under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
     under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
     under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);

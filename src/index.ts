@@ -315,6 +315,7 @@ export {
     createSurfaceDependencyBinding,
     surfaceDependencyKeysEqual,
     serializeSurfaceDependencyKey,
+    cloneSurfaceDependencyKey,
     assertSurfaceRequestToken,
     SurfaceRequestTracker
 } from "./world/semantic/SurfaceDependency";
@@ -325,9 +326,69 @@ export type {
     SurfaceHydrologyDependency,
     SurfaceDependencyKey,
     SurfaceDependencyBinding,
+    CreateSurfaceDependencyBindingOptions,
     SurfaceRequestToken,
     SurfaceRequestIdentity
 } from "./world/semantic/SurfaceDependency";
+export {
+    SURFACE_SAMPLES_PER_TILE_INTERVAL,
+    SURFACE_FIELD_CORE_SIZE,
+    SURFACE_FIELD_GUTTER_TEXELS,
+    SURFACE_FIELD_TEXTURE_SIZE,
+    SURFACE_FIELD_TEXEL_COUNT,
+    SURFACE_INFLUENCE_RADIUS_TILES,
+    SURFACE_EFFECTIVE_WINDOW_SIZE,
+    SURFACE_MAX_WATER_BODY_COUNT,
+    SURFACE_CANONICAL_HEX_SIZE,
+    SURFACE_COMPILE_PROFILE_V1
+} from "./world/semantic/SurfaceCompileProfile";
+export {
+    surfaceColumnStagger,
+    surfaceStagger,
+    surfaceToWorld,
+    worldToSurface,
+    surfaceLatticeTexelLocalCoordinate,
+    surfaceLatticeTexelWorldCoordinate,
+    surfaceFieldTexelCoordinate,
+    surfaceLatticeIndex,
+    surfacePointOwnerRenderChunk,
+    SURFACE_LATTICE_TEST_VECTORS
+} from "./world/semantic/SurfaceLattice";
+export type {
+    SurfaceCoordinate,
+    SurfaceWorldCoordinate
+} from "./world/semantic/SurfaceLattice";
+export {
+    encodeFloat16,
+    decodeFloat16,
+    quantizeFloat16
+} from "./world/semantic/SurfaceHalfFloat";
+export {
+    surfaceSemanticChunkRequirements,
+    surfaceHydrologyRegionRequirements,
+    assertTransferableEffectiveWindow,
+    createTransferableEffectiveWindow,
+    effectiveSurfaceWindowTransferables
+} from "./world/semantic/EffectiveSurfaceWindow";
+export type {
+    SurfaceWindowValidBounds,
+    SurfaceWindowRiver,
+    SurfaceWindowLake,
+    TransferableEffectiveWindow
+} from "./world/semantic/EffectiveSurfaceWindow";
+export {
+    compileSurfaceChunk,
+    assertCompiledSurfaceChunk,
+    sampleCompiledSurfaceChunk,
+    compiledSurfaceFieldTransferables
+} from "./world/semantic/SurfaceCompiler";
+export type {
+    CompiledWaterBodyRef,
+    CompiledSurfaceField,
+    CompiledSurfaceBounds,
+    CompiledSurfaceChunk,
+    CompiledSurfaceSample
+} from "./world/semantic/SurfaceCompiler";
 export type {
     BaseSemanticChunkGenerationOptions
 } from "./world/semantic/generateBaseSemanticChunk";
