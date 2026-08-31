@@ -399,11 +399,14 @@ objects added through the host are removed even when mount or unmount throws.
 
 `WorldMinimap` is a Canvas 2D consumer of `HexMap.requestWorldOverview()`; it
 does not create another Three.js camera, render target, or scene. Procedural
-sources schedule overview rasters through the existing generator pool in the
-`background` lane. Overview and vegetation share the non-critical worker
-capacity limit, so `reservedChunkWorkers` remains available for camera-near
-terrain requests. A minimap request never calls `loadChunk()` and therefore
-does not alter source, render, CPU, or GPU chunk residency.
+sources schedule visible overview pages in the `prefetch` lane and the outer
+ring in the `background` lane through the existing generator pool. At most two
+visible pages are active per minimap. Once the visible set is complete, outer
+pages are admitted singly at a fixed 100 ms cadence. Overview and vegetation
+share the non-critical worker capacity limit, so `reservedChunkWorkers` remains
+available for camera-near terrain requests. A minimap request never calls
+`loadChunk()` and therefore does not alter source, render, CPU, or GPU chunk
+residency.
 
 The overview payload is a bounded RGBA raster plus its logical tile extent.
 Pixels sample the authoritative `WorldSurfaceResolver`, so seed, topology,
@@ -413,20 +416,36 @@ owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
 Worker request/response addition is protocol v3 and transfers the pixel buffer
 instead of cloning it.
 
-The first UI policy is intentionally small:
+The minimap does not rebuild one monolithic rolling raster. Its logical view is
+split into power-of-two terrain pages sized at roughly half the current view
+span. Visible pages are requested first, one outer page ring is filled during
+background capacity, and completed pages enter a 64-entry Canvas/LRU cache.
+For the default 512×512-tile infinite view this outer ring covers roughly a
+1024×1024-tile logical buffer. Static pages are generated only when absent;
+there is no periodic resampling of unchanged terrain and no full-buffer copy
+when the viewport moves. Zoom levels use different page keys so their sampling
+density remains stable.
+When a zoom level is still missing pages, intersecting pages from an already
+cached coarser level are drawn underneath it. New pages replace that underlay
+in place, so progressive refinement does not expose empty blocks.
+
+The UI policy is:
 
 - finite worlds render their complete bounds once with preserved aspect ratio;
-- infinite worlds use a 512x512-tile rolling window, recentered in quarter-span
-  steps and cached in six bounded views;
-- the dashed ellipse shows the main render-distance footprint, while the center
-  marker shows the logical camera target;
-- a left click maps the raster coordinate back to a logical tile and calls
-  `setCameraTargetTile()`, allowing normal streaming to take over.
+- compact infinite views keep the camera marker free inside the central half of
+  the viewport; crossing that dead zone moves the logical viewport with an
+  exponential smooth follow while cached pages remain spatially fixed;
+- `M` (or a compact-map click) opens the expanded map, the wheel changes its
+  sampling level, a click selects a destination, `T` confirms teleport, and
+  `M`/`Escape` closes without teleporting;
+- the dashed ellipse shows the main render-distance footprint, the pale point
+  is the logical camera target, and the amber diamond is the pending destination.
 
 The base raster is rebuildable navigation data, not authoritative gameplay
 state. Cities, units, explored/fog state, objectives, and terrain edits remain
-separate dynamic overlay concerns; adding them must not make distant render
-chunks resident or merge simulation state into the generator payload.
+separate dynamic overlay concerns. Their eventual fixed-rate redraw must not
+invalidate static pages, make distant render chunks resident, or merge
+simulation state into the generator payload.
 
 ## Fog and unit hot paths
 

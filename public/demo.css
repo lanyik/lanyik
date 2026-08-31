@@ -173,6 +173,18 @@ body {
     display: none;
 }
 
+.minimap-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 18;
+    background: rgba(1, 7, 11, 0.58);
+    backdrop-filter: blur(3px);
+}
+
+.minimap-backdrop[hidden] {
+    display: none;
+}
+
 .minimap-panel {
     position: fixed;
     right: 16px;
@@ -186,6 +198,19 @@ body {
     border-radius: 10px;
     box-shadow: 0 12px 38px rgba(0, 0, 0, 0.34);
     backdrop-filter: blur(12px);
+}
+
+.minimap-panel.minimap-panel--expanded {
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    z-index: 19;
+    width: min(760px, calc(100vw - 40px));
+    padding: 14px;
+    transform: translate(-50%, -50%);
+    border-color: rgba(108, 235, 210, 0.5);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
 }
 
 .minimap-panel header {
@@ -218,6 +243,11 @@ body {
 
 .minimap-panel__canvas[data-state="loading"] {
     cursor: progress;
+}
+
+.minimap-panel--expanded .minimap-panel__canvas {
+    width: min(720px, calc(100vw - 80px), calc(100vh - 150px));
+    height: min(720px, calc(100vw - 80px), calc(100vh - 150px));
 }
 
 .minimap-panel small {

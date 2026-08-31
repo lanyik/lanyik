@@ -37,6 +37,8 @@ const minimapWindow = document.querySelector("[data-minimap-window]");
 const minimapTitle = document.querySelector("[data-minimap-title]");
 const minimapHint = document.querySelector("[data-minimap-hint]");
 const minimapCanvas = document.querySelector("[data-world-minimap]");
+const minimapPanel = document.querySelector("[data-minimap-panel]");
+const minimapBackdrop = document.querySelector("[data-minimap-backdrop]");
 
 function readInitialLocale() {
     try {
@@ -131,10 +133,22 @@ const minimap = new WorldMinimap({
     map,
     element: minimapCanvas,
     infiniteTileSpan: 512,
-    rasterSize: 192,
+    rasterSize: 256,
+    onExpandedChange: expanded => {
+        minimapPanel.classList.toggle("minimap-panel--expanded", expanded);
+        minimapBackdrop.hidden = !expanded;
+        minimapPanel.setAttribute("role", expanded ? "dialog" : "region");
+        if (expanded) minimapPanel.setAttribute("aria-modal", "true");
+        else minimapPanel.removeAttribute("aria-modal");
+        minimapHint.textContent = i18n.t(expanded ? "minimap.expandedHint" : "minimap.hint");
+        minimapCanvas.setAttribute("aria-label", i18n.t(
+            expanded ? "minimap.expandedLabel" : "minimap.label"
+        ));
+    },
     onError: error => console.error("World minimap failed", error)
 });
 window.worldMinimap = minimap;
+minimapBackdrop.addEventListener("click", () => minimap.setExpanded(false));
 
 function inspectRenderBackend() {
     const gl = map.renderer?.getContext();
@@ -664,8 +678,10 @@ function applyLocale(locale) {
     document.title = i18n.t("app.title");
     controlsHint.textContent = i18n.t("status.controlsHint");
     minimapTitle.textContent = i18n.t("minimap.title");
-    minimapHint.textContent = i18n.t("minimap.hint");
-    minimapCanvas.setAttribute("aria-label", i18n.t("minimap.label"));
+    minimapHint.textContent = i18n.t(minimap.isExpanded ? "minimap.expandedHint" : "minimap.hint");
+    minimapCanvas.setAttribute("aria-label", i18n.t(
+        minimap.isExpanded ? "minimap.expandedLabel" : "minimap.label"
+    ));
     if (worldModeSelect) {
         [...worldModeSelect.options].forEach(option => {
             option.textContent = i18n.t(`worldMode.${option.value}`);

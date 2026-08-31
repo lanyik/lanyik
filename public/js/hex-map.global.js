@@ -19648,8 +19648,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   // src/WorldMinimap.ts
   var DEFAULT_RASTER_SIZE = 192;
   var DEFAULT_INFINITE_TILE_SPAN = 512;
-  var DEFAULT_CACHE_ENTRIES = 6;
-  var DEFAULT_REDRAW_INTERVAL_MS = 66;
+  var DEFAULT_CACHE_ENTRIES = 64;
+  var DEFAULT_REDRAW_INTERVAL_MS = 33;
+  var MIN_OVERVIEW_TILE_SPAN = 8;
+  var MIN_INFINITE_ZOOM_FACTOR = 0.125;
+  var MAX_INFINITE_ZOOM_FACTOR = 4;
+  var PAGE_PREFETCH_RINGS = 1;
+  var MAX_ACTIVE_PAGE_REQUESTS = 2;
+  var PAGE_DEMAND_INTERVAL_MS = 50;
+  var PREFETCH_PAGE_INTERVAL_MS = 100;
+  var PAGE_RETRY_DELAY_MS = 500;
+  var FOLLOW_TIME_CONSTANT_S = 0.16;
   function asPositiveInteger(name, value, maximum) {
     if (!Number.isInteger(value) || value <= 0 || value > maximum) {
       throw new RangeError(`${name} must be an integer between 1 and ${maximum}`);
@@ -19659,33 +19668,82 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function abortError5(error) {
     return error instanceof Error && error.name === "AbortError";
   }
+  function backpressureError(error) {
+    return error instanceof Error && error.name === "WorkQueueBackpressureError";
+  }
+  function isEditableTarget(target) {
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLElement && target.isContentEditable;
+  }
+  function rangesIntersect(firstOrigin, firstSpan, secondOrigin, secondSpan) {
+    return firstOrigin < secondOrigin + secondSpan && secondOrigin < firstOrigin + firstSpan;
+  }
   var WorldMinimap = class {
     constructor(options) {
-      this.cache = /* @__PURE__ */ new Map();
+      this.pageCache = /* @__PURE__ */ new Map();
+      this.pageDemand = /* @__PURE__ */ new Map();
+      this.pendingPages = /* @__PURE__ */ new Map();
+      this.retryAfter = /* @__PURE__ */ new Map();
       this.contentRect = { x: 0, y: 0, width: 0, height: 0 };
       this.lastDrawAt = -Infinity;
-      this.lastCoverageCheckAt = -Infinity;
+      this.lastDemandCheckAt = -Infinity;
+      this.lastPrefetchStartedAt = -Infinity;
+      this.pageGeneration = 0;
+      this.expanded = false;
+      this.zoomFactor = 1;
+      this.reportedPageError = false;
       this.disposed = false;
       this.handlePointerDown = (event) => {
         event.stopPropagation();
       };
       this.handleClick = (event) => {
         event.stopPropagation();
-        if (event.button !== 0 || !this.raster || this.pending) return;
-        const canvasBounds = this.canvas.getBoundingClientRect();
-        const x = event.clientX - canvasBounds.left;
-        const y = event.clientY - canvasBounds.top;
-        const rect = this.contentRect;
-        if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) return;
-        const nx = (x - rect.x) / rect.width;
-        const ny = (y - rect.y) / rect.height;
-        const tile = {
-          x: this.raster.originX + Math.min(this.raster.tileSpanX - 1, Math.floor(nx * this.raster.tileSpanX)),
-          y: this.raster.originY + Math.min(this.raster.tileSpanY - 1, Math.floor(ny * this.raster.tileSpanY))
-        };
-        this.map.setCameraTargetTile(tile.x, tile.y);
-        this.onNavigate?.(tile);
+        if (event.button !== 0) return;
+        const tile = this.tileAt(event.clientX, event.clientY);
+        if (!tile) return;
+        if (!this.expanded) this.setExpanded(true);
+        this.setDestination(tile);
         this.render();
+      };
+      this.handleWheel = (event) => {
+        if (!this.expanded || event.deltaY === 0) return;
+        const anchor = this.tileAt(event.clientX, event.clientY);
+        if (!anchor) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const previous = this.zoomFactor;
+        this.zoomFactor *= event.deltaY < 0 ? 0.5 : 2;
+        const bounds = this.map.worldBounds;
+        if (bounds) {
+          const minimum = Math.min(1, Math.max(
+            Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
+            Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
+          ));
+          this.zoomFactor = Math.max(minimum, Math.min(1, this.zoomFactor));
+        } else {
+          const maximum = Math.min(
+            MAX_INFINITE_ZOOM_FACTOR,
+            MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
+          );
+          this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximum, this.zoomFactor));
+        }
+        if (this.zoomFactor === previous) return;
+        this.viewport = this.createViewport(anchor);
+        void this.refresh();
+      };
+      this.handleKeyDown = (event) => {
+        if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) return;
+        if (event.code === "KeyM") {
+          if (event.repeat || !this.map.getCameraTargetTile()) return;
+          event.preventDefault();
+          this.toggleExpanded();
+        } else if (event.code === "KeyT" && this.expanded) {
+          if (event.repeat) return;
+          event.preventDefault();
+          this.teleportToDestination();
+        } else if (event.code === "Escape" && this.expanded) {
+          event.preventDefault();
+          this.setExpanded(false);
+        }
       };
       this.handleWorldLoad = () => {
         this.clear();
@@ -19693,10 +19751,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       };
       this.handleFrame = (frame) => {
         const now = Number.isFinite(frame?.t) ? frame.t : performance.now();
-        if (now - this.lastCoverageCheckAt >= 250) {
-          this.lastCoverageCheckAt = now;
-          const target = this.map.getCameraTargetTile();
-          if (target && (!this.raster || !this.coversTarget(this.raster, target))) void this.refresh();
+        const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS) : 0;
+        const cameraTarget = this.map.getCameraTargetTile();
+        const moved = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
+        if (moved || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
+          this.lastDemandCheckAt = now;
+          this.rebuildPageDemand();
+          this.pumpPageRequests();
+          this.updateCanvasState();
         }
         if (now - this.lastDrawAt >= this.redrawIntervalMs) {
           this.lastDrawAt = now;
@@ -19725,114 +19787,98 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         MAX_WORLD_OVERVIEW_TILE_SPAN
       );
       if (this.infiniteTileSpan % 2 !== 0) throw new RangeError("infiniteTileSpan must be even");
-      this.cacheEntries = asPositiveInteger("cacheEntries", options.cacheEntries ?? DEFAULT_CACHE_ENTRIES, 64);
+      this.cacheEntries = asPositiveInteger("cacheEntries", options.cacheEntries ?? DEFAULT_CACHE_ENTRIES, 512);
       this.redrawIntervalMs = options.redrawIntervalMs ?? DEFAULT_REDRAW_INTERVAL_MS;
       if (!Number.isFinite(this.redrawIntervalMs) || this.redrawIntervalMs <= 0) {
         throw new RangeError("redrawIntervalMs must be positive and finite");
       }
       this.onNavigate = options.onNavigate;
+      this.onDestinationChange = options.onDestinationChange;
+      this.onExpandedChange = options.onExpandedChange;
       this.onError = options.onError;
-      this.baseCanvas = document.createElement("canvas");
-      const baseContext = this.baseCanvas.getContext("2d", { alpha: false });
-      if (!baseContext) throw new Error("WorldMinimap requires an offscreen Canvas 2D context");
-      this.baseContext = baseContext;
       this.canvas.addEventListener("pointerdown", this.handlePointerDown);
       this.canvas.addEventListener("click", this.handleClick);
+      this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
+      window.addEventListener("keydown", this.handleKeyDown);
       this.map.on("load", this.handleWorldLoad);
       this.map.on("frame", this.handleFrame);
       if (typeof ResizeObserver !== "undefined") {
         this.resizeObserver = new ResizeObserver(() => this.render());
         this.resizeObserver.observe(this.canvas);
       }
+      this.canvas.dataset.expanded = "false";
+      this.canvas.setAttribute("aria-expanded", "false");
+      this.canvas.dataset.state = "empty";
       this.render();
       void this.refresh();
     }
     get view() {
+      const extent = this.viewportExtent();
+      const pixels = extent ? this.viewPixelSize(extent) : void 0;
       return {
-        loading: Boolean(this.pending),
-        originX: this.raster?.originX,
-        originY: this.raster?.originY,
-        tileSpanX: this.raster?.tileSpanX,
-        tileSpanY: this.raster?.tileSpanY,
-        pixelWidth: this.raster?.pixelWidth,
-        pixelHeight: this.raster?.pixelHeight,
-        cachedViews: this.cache.size
+        loading: this.hasMissingVisiblePages(),
+        originX: extent?.originX,
+        originY: extent?.originY,
+        tileSpanX: extent?.tileSpanX,
+        tileSpanY: extent?.tileSpanY,
+        pixelWidth: pixels?.width,
+        pixelHeight: pixels?.height,
+        cachedPages: this.pageCache.size,
+        pendingPages: this.pendingPages.size,
+        visiblePages: this.visiblePageDemands().length,
+        expanded: this.expanded,
+        zoom: 1 / this.zoomFactor,
+        destination: this.destination ? { ...this.destination } : void 0
       };
+    }
+    get isExpanded() {
+      return this.expanded;
+    }
+    setExpanded(expanded) {
+      if (this.disposed || expanded === this.expanded) return;
+      this.expanded = expanded;
+      this.zoomFactor = 1;
+      const cameraTarget = this.map.getCameraTargetTile();
+      this.viewport = cameraTarget ? this.createViewport(cameraTarget) : void 0;
+      this.setDestination(expanded && cameraTarget ? cameraTarget : void 0);
+      this.canvas.dataset.expanded = String(expanded);
+      this.canvas.setAttribute("aria-expanded", String(expanded));
+      this.onExpandedChange?.(expanded);
+      void this.refresh();
+      this.render();
+    }
+    toggleExpanded() {
+      this.setExpanded(!this.expanded);
     }
     refresh(force = false) {
       if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
-      const target = this.map.getCameraTargetTile();
-      if (!target) {
+      const cameraTarget = this.map.getCameraTargetTile();
+      if (!cameraTarget) {
+        this.updateCanvasState();
         this.render();
         return Promise.resolve();
       }
-      const options = this.overviewOptions(target);
-      if (!options) {
-        this.render();
-        return Promise.resolve();
-      }
-      if (!force && this.raster && this.coversTarget(this.raster, target)) {
-        return Promise.resolve();
-      }
-      const key = this.cacheKey(options);
-      if (!force) {
-        const cached = this.cache.get(key);
-        if (cached) {
-          this.cache.delete(key);
-          this.cache.set(key, cached);
-          this.useRaster(cached);
-          return Promise.resolve();
-        }
-      }
-      if (!force && this.pendingKey === key && this.pending) return this.pending;
-      this.requestAbort?.abort();
-      const requestAbort = new AbortController();
-      this.requestAbort = requestAbort;
-      this.pendingKey = key;
-      this.canvas.setAttribute("aria-busy", "true");
-      this.canvas.dataset.state = "loading";
-      const pending = this.map.requestWorldOverview(options, {
-        signal: requestAbort.signal,
-        lane: "background"
-      }).then((raster) => {
-        if (this.disposed || requestAbort.signal.aborted || this.requestAbort !== requestAbort) return;
-        this.cache.set(key, raster);
-        while (this.cache.size > this.cacheEntries) {
-          const oldest = this.cache.keys().next().value;
-          if (oldest === void 0) break;
-          this.cache.delete(oldest);
-        }
-        this.useRaster(raster);
-      }).catch((reason) => {
-        if (abortError5(reason) || this.disposed || requestAbort.signal.aborted) return;
-        const error = reason instanceof Error ? reason : new Error(String(reason));
-        this.canvas.dataset.state = "error";
-        this.onError?.(error);
-      }).finally(() => {
-        if (this.requestAbort !== requestAbort) return;
-        this.requestAbort = void 0;
-        this.pendingKey = void 0;
-        this.pending = void 0;
-        this.canvas.setAttribute("aria-busy", "false");
-        if (this.canvas.dataset.state === "loading") this.canvas.dataset.state = this.raster ? "ready" : "empty";
-        this.render();
-      });
-      this.pending = pending;
+      if (force) this.resetPageData();
+      this.viewport ?? (this.viewport = this.createViewport(cameraTarget));
+      this.rebuildPageDemand();
+      this.pumpPageRequests();
+      this.updateCanvasState();
       this.render();
-      return pending;
+      return this.waitForVisiblePages(this.pageGeneration);
     }
     clear() {
       if (this.disposed) return;
-      this.requestAbort?.abort();
-      this.requestAbort = void 0;
-      this.pendingKey = void 0;
-      this.pending = void 0;
-      this.raster = void 0;
-      this.cache.clear();
-      this.baseCanvas.width = 0;
-      this.baseCanvas.height = 0;
+      this.resetPageData();
+      const wasExpanded = this.expanded;
+      this.expanded = false;
+      this.zoomFactor = 1;
+      this.viewport = void 0;
+      this.setDestination(void 0);
       this.canvas.setAttribute("aria-busy", "false");
       this.canvas.dataset.state = "empty";
+      this.canvas.dataset.expanded = "false";
+      this.canvas.setAttribute("aria-expanded", "false");
+      if (wasExpanded) this.onExpandedChange?.(false);
       this.render();
     }
     dispose() {
@@ -19842,42 +19888,102 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.resizeObserver?.disconnect();
       this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
       this.canvas.removeEventListener("click", this.handleClick);
+      this.canvas.removeEventListener("wheel", this.handleWheel);
+      window.removeEventListener("keydown", this.handleKeyDown);
       this.map.off("load", this.handleWorldLoad);
       this.map.off("frame", this.handleFrame);
     }
-    overviewOptions(target) {
+    viewSpans() {
       const bounds = this.map.worldBounds;
       if (bounds) {
-        const aspect = bounds.width / bounds.height;
-        const pixelWidth = aspect >= 1 ? this.rasterSize : Math.max(1, Math.round(this.rasterSize * aspect));
-        const pixelHeight = aspect >= 1 ? Math.max(1, Math.round(this.rasterSize / aspect)) : this.rasterSize;
+        const minimumFactor = Math.min(1, Math.max(
+          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
+          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
+        ));
+        this.zoomFactor = Math.max(minimumFactor, Math.min(1, this.zoomFactor));
         return {
-          originX: 0,
-          originY: 0,
-          tileSpanX: bounds.width,
-          tileSpanY: bounds.height,
-          pixelWidth,
-          pixelHeight
+          tileSpanX: Math.min(bounds.width, Math.max(1, Math.round(bounds.width * this.zoomFactor))),
+          tileSpanY: Math.min(bounds.height, Math.max(1, Math.round(bounds.height * this.zoomFactor)))
         };
       }
       if (this.map.worldDescriptor?.topology !== "infinite") return void 0;
-      const step = Math.max(1, Math.floor(this.infiniteTileSpan / 4));
-      const centerX = Math.round(target.x / step) * step;
-      const centerY = Math.round(target.y / step) * step;
+      const maximumFactor = Math.min(
+        MAX_INFINITE_ZOOM_FACTOR,
+        MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
+      );
+      this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximumFactor, this.zoomFactor));
+      const tileSpan = Math.max(1, Math.round(this.infiniteTileSpan * this.zoomFactor));
+      return { tileSpanX: tileSpan, tileSpanY: tileSpan };
+    }
+    createViewport(center) {
+      const spans = this.viewSpans();
+      if (!spans) throw new Error("The active world does not expose minimap bounds");
+      const viewport = { centerX: center.x + 0.5, centerY: center.y + 0.5, ...spans };
+      this.clampViewport(viewport);
+      return viewport;
+    }
+    clampViewport(viewport) {
+      const bounds = this.map.worldBounds;
+      if (!bounds) return;
+      viewport.centerX = Math.max(
+        viewport.tileSpanX / 2,
+        Math.min(bounds.width - viewport.tileSpanX / 2, viewport.centerX)
+      );
+      viewport.centerY = Math.max(
+        viewport.tileSpanY / 2,
+        Math.min(bounds.height - viewport.tileSpanY / 2, viewport.centerY)
+      );
+    }
+    viewportExtent() {
+      const viewport = this.viewport;
+      if (!viewport) return void 0;
       return {
-        originX: centerX - this.infiniteTileSpan / 2,
-        originY: centerY - this.infiniteTileSpan / 2,
-        tileSpanX: this.infiniteTileSpan,
-        tileSpanY: this.infiniteTileSpan,
-        pixelWidth: this.rasterSize,
-        pixelHeight: this.rasterSize
+        originX: viewport.centerX - viewport.tileSpanX / 2,
+        originY: viewport.centerY - viewport.tileSpanY / 2,
+        tileSpanX: viewport.tileSpanX,
+        tileSpanY: viewport.tileSpanY
       };
     }
-    coversTarget(raster, target) {
-      if (this.map.worldBounds) return true;
-      const marginX = raster.tileSpanX * 0.18;
-      const marginY = raster.tileSpanY * 0.18;
-      return target.x >= raster.originX + marginX && target.x < raster.originX + raster.tileSpanX - marginX && target.y >= raster.originY + marginY && target.y < raster.originY + raster.tileSpanY - marginY;
+    viewPixelSize(extent) {
+      const aspect = extent.tileSpanX / extent.tileSpanY;
+      return aspect >= 1 ? { width: this.rasterSize, height: Math.max(1, Math.round(this.rasterSize / aspect)) } : { width: Math.max(1, Math.round(this.rasterSize * aspect)), height: this.rasterSize };
+    }
+    pageLayout() {
+      const viewport = this.viewport;
+      if (!viewport) return void 0;
+      const maximumViewSpan = Math.max(viewport.tileSpanX, viewport.tileSpanY);
+      const targetTileSpan = Math.max(1, maximumViewSpan / 2);
+      const powerOfTwoSpan = 2 ** Math.ceil(Math.log2(targetTileSpan));
+      const tileSpan = Math.min(MAX_WORLD_OVERVIEW_TILE_SPAN, Math.max(1, powerOfTwoSpan));
+      const pixelSize = Math.min(
+        MAX_WORLD_OVERVIEW_RASTER_SIZE,
+        Math.max(16, Math.round(this.rasterSize * tileSpan / maximumViewSpan))
+      );
+      return { tileSpan, pixelSize };
+    }
+    pageOptions(pageX, pageY, layout) {
+      let originX = pageX * layout.tileSpan;
+      let originY = pageY * layout.tileSpan;
+      let tileSpanX = layout.tileSpan;
+      let tileSpanY = layout.tileSpan;
+      const bounds = this.map.worldBounds;
+      if (bounds) {
+        const endX = Math.min(bounds.width, originX + tileSpanX);
+        const endY = Math.min(bounds.height, originY + tileSpanY);
+        originX = Math.max(0, originX);
+        originY = Math.max(0, originY);
+        tileSpanX = endX - originX;
+        tileSpanY = endY - originY;
+        if (tileSpanX <= 0 || tileSpanY <= 0) return void 0;
+      }
+      return {
+        originX,
+        originY,
+        tileSpanX,
+        tileSpanY,
+        pixelWidth: Math.max(1, Math.round(layout.pixelSize * tileSpanX / layout.tileSpan)),
+        pixelHeight: Math.max(1, Math.round(layout.pixelSize * tileSpanY / layout.tileSpan))
+      };
     }
     cacheKey(options) {
       return [
@@ -19889,15 +19995,196 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         options.pixelHeight
       ].join(":");
     }
-    useRaster(raster) {
-      this.raster = raster;
-      this.baseCanvas.width = raster.pixelWidth;
-      this.baseCanvas.height = raster.pixelHeight;
-      const image = this.baseContext.createImageData(raster.pixelWidth, raster.pixelHeight);
-      image.data.set(raster.pixels);
-      this.baseContext.putImageData(image, 0, 0);
-      this.canvas.dataset.state = "ready";
-      this.render();
+    rebuildPageDemand() {
+      const extent = this.viewportExtent();
+      const layout = this.pageLayout();
+      if (!extent || !layout) {
+        this.pageDemand.clear();
+        this.cancelUndemandedPages();
+        return;
+      }
+      const epsilon = Number.EPSILON * Math.max(1, layout.tileSpan);
+      const visibleMinX = Math.floor(extent.originX / layout.tileSpan);
+      const visibleMaxX = Math.floor((extent.originX + extent.tileSpanX - epsilon) / layout.tileSpan);
+      const visibleMinY = Math.floor(extent.originY / layout.tileSpan);
+      const visibleMaxY = Math.floor((extent.originY + extent.tileSpanY - epsilon) / layout.tileSpan);
+      const next = /* @__PURE__ */ new Map();
+      for (let pageY = visibleMinY - PAGE_PREFETCH_RINGS; pageY <= visibleMaxY + PAGE_PREFETCH_RINGS; pageY += 1) {
+        for (let pageX = visibleMinX - PAGE_PREFETCH_RINGS; pageX <= visibleMaxX + PAGE_PREFETCH_RINGS; pageX += 1) {
+          const options = this.pageOptions(pageX, pageY, layout);
+          if (!options) continue;
+          const visible = pageX >= visibleMinX && pageX <= visibleMaxX && pageY >= visibleMinY && pageY <= visibleMaxY;
+          const pageCenterX = options.originX + options.tileSpanX / 2;
+          const pageCenterY = options.originY + options.tileSpanY / 2;
+          const distance = Math.hypot(
+            (pageCenterX - this.viewport.centerX) / layout.tileSpan,
+            (pageCenterY - this.viewport.centerY) / layout.tileSpan
+          );
+          const key = this.cacheKey(options);
+          next.set(key, { key, options, visible, distance });
+        }
+      }
+      this.pageDemand.clear();
+      for (const [key, demand] of next) this.pageDemand.set(key, demand);
+      for (const key of this.retryAfter.keys()) if (!next.has(key)) this.retryAfter.delete(key);
+      this.cancelUndemandedPages();
+    }
+    cancelUndemandedPages() {
+      for (const [key, pending] of this.pendingPages) {
+        const demand = this.pageDemand.get(key);
+        if (demand && (!demand.visible || pending.visible)) continue;
+        pending.abort.abort();
+        this.pendingPages.delete(key);
+      }
+    }
+    pumpPageRequests() {
+      if (this.disposed || !this.viewport) return;
+      const now = performance.now();
+      while (this.pendingPages.size < MAX_ACTIVE_PAGE_REQUESTS) {
+        const candidates = [...this.pageDemand.values()].filter((candidate) => !this.pageCache.has(candidate.key) && !this.pendingPages.has(candidate.key) && (this.retryAfter.get(candidate.key) ?? -Infinity) <= now).sort((first, second) => Number(second.visible) - Number(first.visible) || first.distance - second.distance || first.key.localeCompare(second.key));
+        if (this.hasMissingVisiblePages()) {
+          const visible = candidates.find((candidate) => candidate.visible);
+          if (!visible) break;
+          this.requestPage(visible);
+          continue;
+        }
+        const prefetch = candidates.find((candidate) => !candidate.visible);
+        if (!prefetch || [...this.pendingPages.values()].some((pending) => !pending.visible) || now - this.lastPrefetchStartedAt < PREFETCH_PAGE_INTERVAL_MS) break;
+        this.lastPrefetchStartedAt = now;
+        this.requestPage(prefetch);
+        break;
+      }
+    }
+    requestPage(demand) {
+      const generation = this.pageGeneration;
+      const abort = new AbortController();
+      let record;
+      const promise = this.map.requestWorldOverview(demand.options, {
+        signal: abort.signal,
+        lane: demand.visible ? "prefetch" : "background",
+        priority: demand.distance
+      }).then((raster) => {
+        if (this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
+        const pageCanvas = document.createElement("canvas");
+        pageCanvas.width = raster.pixelWidth;
+        pageCanvas.height = raster.pixelHeight;
+        const context = pageCanvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("WorldMinimap could not allocate a page canvas");
+        const image = context.createImageData(raster.pixelWidth, raster.pixelHeight);
+        image.data.set(raster.pixels);
+        context.putImageData(image, 0, 0);
+        this.storePage(demand.key, {
+          extent: {
+            originX: raster.originX,
+            originY: raster.originY,
+            tileSpanX: raster.tileSpanX,
+            tileSpanY: raster.tileSpanY,
+            pixelWidth: raster.pixelWidth,
+            pixelHeight: raster.pixelHeight
+          },
+          canvas: pageCanvas
+        });
+        this.retryAfter.delete(demand.key);
+      }).catch((reason) => {
+        if (abortError5(reason) || this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
+        this.retryAfter.set(demand.key, performance.now() + PAGE_RETRY_DELAY_MS);
+        if (!backpressureError(reason) && !this.reportedPageError) {
+          this.reportedPageError = true;
+          this.onError?.(reason instanceof Error ? reason : new Error(String(reason)));
+        }
+      }).finally(() => {
+        if (this.pendingPages.get(demand.key) !== record) return;
+        this.pendingPages.delete(demand.key);
+        this.updateCanvasState();
+        this.render();
+        this.pumpPageRequests();
+      });
+      record = { abort, visible: demand.visible, promise };
+      this.pendingPages.set(demand.key, record);
+    }
+    storePage(key, page) {
+      const previous = this.pageCache.get(key);
+      if (previous) previous.canvas.width = previous.canvas.height = 0;
+      this.pageCache.delete(key);
+      this.pageCache.set(key, page);
+      while (this.pageCache.size > this.cacheEntries) {
+        const evictable = [...this.pageCache.keys()].find((candidate) => !this.pageDemand.has(candidate)) ?? this.pageCache.keys().next().value;
+        if (evictable === void 0) break;
+        const evicted = this.pageCache.get(evictable);
+        if (evicted) evicted.canvas.width = evicted.canvas.height = 0;
+        this.pageCache.delete(evictable);
+      }
+    }
+    touchPage(key, page) {
+      this.pageCache.delete(key);
+      this.pageCache.set(key, page);
+    }
+    resetPageData() {
+      this.pageGeneration += 1;
+      for (const pending of this.pendingPages.values()) pending.abort.abort();
+      this.pendingPages.clear();
+      this.pageDemand.clear();
+      this.retryAfter.clear();
+      this.lastPrefetchStartedAt = -Infinity;
+      for (const page of this.pageCache.values()) page.canvas.width = page.canvas.height = 0;
+      this.pageCache.clear();
+      this.reportedPageError = false;
+    }
+    visiblePageDemands() {
+      return [...this.pageDemand.values()].filter((demand) => demand.visible);
+    }
+    hasMissingVisiblePages() {
+      const visible = this.visiblePageDemands();
+      return visible.length > 0 && visible.some((demand) => !this.pageCache.has(demand.key));
+    }
+    updateCanvasState() {
+      const visible = this.visiblePageDemands();
+      if (!this.viewport || visible.length === 0) {
+        this.canvas.dataset.state = "empty";
+        this.canvas.setAttribute("aria-busy", "false");
+        return;
+      }
+      const cached = visible.reduce((count, demand) => count + Number(this.pageCache.has(demand.key)), 0);
+      const missing = cached < visible.length;
+      this.canvas.dataset.state = missing ? cached === 0 ? "loading" : "streaming" : "ready";
+      this.canvas.setAttribute("aria-busy", String(missing));
+    }
+    waitForVisiblePages(generation) {
+      if (this.disposed || generation !== this.pageGeneration || !this.hasMissingVisiblePages()) return Promise.resolve();
+      const active = this.visiblePageDemands().map((demand) => this.pendingPages.get(demand.key)?.promise).filter((promise) => Boolean(promise));
+      if (active.length === 0) return Promise.resolve();
+      return Promise.race(active).then(() => this.waitForVisiblePages(generation));
+    }
+    updateViewportFollow(target, dtS) {
+      if (this.expanded) return false;
+      const spans = this.viewSpans();
+      if (!spans) return false;
+      if (!this.viewport || this.viewport.tileSpanX !== spans.tileSpanX || this.viewport.tileSpanY !== spans.tileSpanY) {
+        this.viewport = this.createViewport(target);
+        return true;
+      }
+      const viewport = this.viewport;
+      const targetX = target.x + 0.5;
+      const targetY = target.y + 0.5;
+      const deadHalfX = viewport.tileSpanX * 0.25;
+      const deadHalfY = viewport.tileSpanY * 0.25;
+      let desiredX = viewport.centerX;
+      let desiredY = viewport.centerY;
+      if (targetX < viewport.centerX - deadHalfX) desiredX = targetX + deadHalfX;
+      else if (targetX > viewport.centerX + deadHalfX) desiredX = targetX - deadHalfX;
+      if (targetY < viewport.centerY - deadHalfY) desiredY = targetY + deadHalfY;
+      else if (targetY > viewport.centerY + deadHalfY) desiredY = targetY - deadHalfY;
+      if (desiredX === viewport.centerX && desiredY === viewport.centerY) return false;
+      const alpha = dtS > 0 ? 1 - Math.exp(-Math.min(dtS, 0.1) / FOLLOW_TIME_CONSTANT_S) : 0;
+      if (alpha <= 0) return false;
+      const previousX = viewport.centerX;
+      const previousY = viewport.centerY;
+      viewport.centerX += (desiredX - viewport.centerX) * alpha;
+      viewport.centerY += (desiredY - viewport.centerY) * alpha;
+      if (Math.abs(desiredX - viewport.centerX) < 1e-3) viewport.centerX = desiredX;
+      if (Math.abs(desiredY - viewport.centerY) < 1e-3) viewport.centerY = desiredY;
+      this.clampViewport(viewport);
+      return viewport.centerX !== previousX || viewport.centerY !== previousY;
     }
     render() {
       if (this.disposed) return;
@@ -19916,15 +20203,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.clearRect(0, 0, width, height);
       context.fillStyle = "rgba(4, 15, 20, 0.94)";
       context.fillRect(0, 0, width, height);
+      const extent = this.viewportExtent();
       const padding = 6;
       const availableWidth = Math.max(1, width - padding * 2);
       const availableHeight = Math.max(1, height - padding * 2);
-      const rasterAspect = this.raster ? this.raster.pixelWidth / this.raster.pixelHeight : 1;
+      const aspect = extent ? extent.tileSpanX / extent.tileSpanY : 1;
       let contentWidth = availableWidth;
-      let contentHeight = contentWidth / rasterAspect;
+      let contentHeight = contentWidth / aspect;
       if (contentHeight > availableHeight) {
         contentHeight = availableHeight;
-        contentWidth = contentHeight * rasterAspect;
+        contentWidth = contentHeight * aspect;
       }
       this.contentRect = {
         x: (width - contentWidth) / 2,
@@ -19933,37 +20221,70 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         height: contentHeight
       };
       const rect = this.contentRect;
-      if (this.raster) {
-        context.imageSmoothingEnabled = true;
-        context.drawImage(this.baseCanvas, rect.x, rect.y, rect.width, rect.height);
-        this.drawCameraOverlay(context, rect, this.raster);
+      context.fillStyle = "rgba(93, 143, 139, 0.16)";
+      context.fillRect(rect.x, rect.y, rect.width, rect.height);
+      const pagesDrawn = extent ? this.drawPages(context, rect, extent) : 0;
+      if (extent) {
+        this.drawCameraOverlay(context, rect, extent);
+        this.drawDestination(context, rect, extent);
         this.drawPosition(context, rect);
-      } else {
-        context.fillStyle = "rgba(93, 143, 139, 0.16)";
-        context.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
       context.strokeStyle = "rgba(124, 235, 211, 0.42)";
       context.lineWidth = 1;
       context.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1));
-      if (this.pending) {
-        context.fillStyle = "rgba(4, 15, 20, 0.5)";
-        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+      if (pagesDrawn === 0 && this.hasMissingVisiblePages()) {
         context.fillStyle = "#9debd8";
         context.font = "600 18px system-ui, sans-serif";
         context.textAlign = "center";
         context.textBaseline = "middle";
-        context.fillText("\u2026", rect.x + rect.width / 2, rect.y + rect.height / 2);
+        context.fillText("...", rect.x + rect.width / 2, rect.y + rect.height / 2);
       }
     }
-    drawCameraOverlay(context, rect, raster) {
+    drawPages(context, rect, extent) {
+      let drawn = 0;
+      context.save();
+      context.beginPath();
+      context.rect(rect.x, rect.y, rect.width, rect.height);
+      context.clip();
+      context.imageSmoothingEnabled = true;
+      const visibleKeys = new Set(this.visiblePageDemands().map((demand) => demand.key));
+      const pages = [...this.pageCache.entries()].filter(([, page]) => rangesIntersect(
+        extent.originX,
+        extent.tileSpanX,
+        page.extent.originX,
+        page.extent.tileSpanX
+      ) && rangesIntersect(
+        extent.originY,
+        extent.tileSpanY,
+        page.extent.originY,
+        page.extent.tileSpanY
+      )).sort(([firstKey, first], [secondKey, second]) => {
+        const firstDensity = first.extent.tileSpanX / first.extent.pixelWidth;
+        const secondDensity = second.extent.tileSpanX / second.extent.pixelWidth;
+        return secondDensity - firstDensity || Number(visibleKeys.has(firstKey)) - Number(visibleKeys.has(secondKey));
+      });
+      for (const [key, page] of pages) {
+        const pageExtent = page.extent;
+        const x = rect.x + (pageExtent.originX - extent.originX) / extent.tileSpanX * rect.width;
+        const y = rect.y + (pageExtent.originY - extent.originY) / extent.tileSpanY * rect.height;
+        const pageWidth = pageExtent.tileSpanX / extent.tileSpanX * rect.width;
+        const pageHeight = pageExtent.tileSpanY / extent.tileSpanY * rect.height;
+        context.drawImage(page.canvas, x, y, pageWidth, pageHeight);
+        if (visibleKeys.has(key)) this.touchPage(key, page);
+        drawn += 1;
+      }
+      context.restore();
+      return drawn;
+    }
+    drawCameraOverlay(context, rect, extent) {
       const target = this.map.getCameraTargetTile();
       if (!target) return;
-      const x = rect.x + (target.x + 0.5 - raster.originX) / raster.tileSpanX * rect.width;
-      const y = rect.y + (target.y + 0.5 - raster.originY) / raster.tileSpanY * rect.height;
+      const x = rect.x + (target.x + 0.5 - extent.originX) / extent.tileSpanX * rect.width;
+      const y = rect.y + (target.y + 0.5 - extent.originY) / extent.tileSpanY * rect.height;
       const tileRadiusX = this.map.worldViewDistance / (this.map.size * 1.5);
       const tileRadiusY = this.map.worldViewDistance / (this.map.size * Math.sqrt(3));
-      const radiusX = Math.max(4, tileRadiusX / raster.tileSpanX * rect.width);
-      const radiusY = Math.max(4, tileRadiusY / raster.tileSpanY * rect.height);
+      const radiusX = Math.max(4, tileRadiusX / extent.tileSpanX * rect.width);
+      const radiusY = Math.max(4, tileRadiusY / extent.tileSpanY * rect.height);
       context.save();
       context.beginPath();
       context.rect(rect.x, rect.y, rect.width, rect.height);
@@ -19987,9 +20308,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.restore();
     }
     drawPosition(context, rect) {
-      const target = this.map.getCameraTargetTile();
+      const target = this.expanded && this.destination ? this.destination : this.map.getCameraTargetTile();
       if (!target) return;
-      const label = `${target.x}, ${target.y}`;
+      const label = `${this.expanded ? "T " : ""}${target.x}, ${target.y}`;
       context.font = "600 10px system-ui, sans-serif";
       const width = context.measureText(label).width + 10;
       const x = rect.x + rect.width - width - 5;
@@ -20000,6 +20321,54 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.textAlign = "center";
       context.textBaseline = "middle";
       context.fillText(label, x + width / 2, y + 7.5);
+    }
+    drawDestination(context, rect, extent) {
+      if (!this.expanded || !this.destination) return;
+      const x = rect.x + (this.destination.x + 0.5 - extent.originX) / extent.tileSpanX * rect.width;
+      const y = rect.y + (this.destination.y + 0.5 - extent.originY) / extent.tileSpanY * rect.height;
+      if (x < rect.x || x > rect.x + rect.width || y < rect.y || y > rect.y + rect.height) return;
+      context.save();
+      context.translate(x, y);
+      context.rotate(Math.PI / 4);
+      context.fillStyle = "#ffca67";
+      context.strokeStyle = "rgba(52, 27, 3, 0.9)";
+      context.lineWidth = 2;
+      context.fillRect(-5, -5, 10, 10);
+      context.strokeRect(-5, -5, 10, 10);
+      context.restore();
+    }
+    setDestination(tile) {
+      if (this.destination?.x === tile?.x && this.destination?.y === tile?.y) return;
+      this.destination = tile ? { x: tile.x, y: tile.y } : void 0;
+      this.onDestinationChange?.(this.destination ? { ...this.destination } : void 0);
+    }
+    tileAt(clientX, clientY) {
+      const extent = this.viewportExtent();
+      if (!extent) return void 0;
+      const canvasBounds = this.canvas.getBoundingClientRect();
+      const x = clientX - canvasBounds.left;
+      const y = clientY - canvasBounds.top;
+      const rect = this.contentRect;
+      if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) return void 0;
+      const nx = (x - rect.x) / rect.width;
+      const ny = (y - rect.y) / rect.height;
+      const tile = {
+        x: Math.floor(extent.originX + nx * extent.tileSpanX),
+        y: Math.floor(extent.originY + ny * extent.tileSpanY)
+      };
+      const bounds = this.map.worldBounds;
+      if (bounds) {
+        tile.x = Math.max(0, Math.min(bounds.width - 1, tile.x));
+        tile.y = Math.max(0, Math.min(bounds.height - 1, tile.y));
+      }
+      return tile;
+    }
+    teleportToDestination() {
+      if (!this.expanded || !this.destination) return;
+      const destination = { ...this.destination };
+      this.map.setCameraTargetTile(destination.x, destination.y);
+      this.onNavigate?.(destination);
+      this.setExpanded(false);
     }
   };
 
