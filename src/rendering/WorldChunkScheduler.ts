@@ -461,7 +461,7 @@ export class WorldChunkScheduler {
 
 export function createDefaultWorldChunkSchedulerOptions(): WorldChunkSchedulerOptions {
     return {
-        renderDistance: 2400,
+        renderDistance: 2850,
         lodEnabled: true,
         lodDistances: { ...DEFAULT_WORLD_CHUNK_LOD_DISTANCES },
         lodBias: 0,

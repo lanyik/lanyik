@@ -1,3 +1,5 @@
+import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
+
 export const TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
 export const TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
 
@@ -6,6 +8,8 @@ export const TERRAIN_VERTEX_SHADER = `
 // vLocal feed the river noise there, and varyings shouldn't lose precision on
 // the vertex side of the interpolation.
 precision highp float;
+
+${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -399,7 +403,9 @@ void main() {
     }
 
     vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
     // smoothstep, for lighting - see water.vertex.ts for the same idea applied

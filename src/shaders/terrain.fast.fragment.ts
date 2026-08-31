@@ -1,5 +1,9 @@
+import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
+
 export const TERRAIN_FAST_FRAGMENT_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform sampler2D map;
 uniform sampler2D fogMap;
@@ -147,6 +151,7 @@ float straightCoastField() {
 void main() {
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -192,5 +197,6 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;

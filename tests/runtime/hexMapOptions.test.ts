@@ -20,6 +20,10 @@ describe("HexMap option boundary", () => {
             grassBladeWidth: 1.5,
             grassBladeHeight: 9,
             grassWindStrength: 3.15,
+            renderDistance: 2850,
+            horizonFogStart: 2223,
+            horizonFogEnd: 2707.5,
+            horizonFogColor: 0xe8f0f2,
             worldSessionDrainTimeoutMs: 15_000,
             riverColorShallow: 0x123456,
             riverColorDeep: 0x654321
@@ -40,5 +44,23 @@ describe("HexMap option boundary", () => {
             element: "#map",
             terrainTextureRegionSize: 0
         })).toThrow(/terrainTextureRegionSize must be a positive finite number/);
+        expect(() => resolveHexMapOptions({
+            element: "#map",
+            horizonFogStart: 900,
+            horizonFogEnd: 800
+        })).toThrow(/greater than horizonFogStart/);
+        expect(() => resolveHexMapOptions({
+            element: "#map",
+            renderDistance: 1000,
+            horizonFogEnd: 1001
+        })).toThrow(/<= renderDistance/);
+    });
+
+    test("derives the opaque horizon band from a custom hard render distance", () => {
+        expect(resolveHexMapOptions({ element: "#map", renderDistance: 1000 })).toMatchObject({
+            renderDistance: 1000,
+            horizonFogStart: 780,
+            horizonFogEnd: 950
+        });
     });
 });

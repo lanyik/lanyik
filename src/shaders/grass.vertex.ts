@@ -1,5 +1,9 @@
+import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
+
 export const GRASS_VERTEX_SHADER = `
 precision mediump float;
+
+${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -61,7 +65,9 @@ void main() {
     rotated.z += bend * 0.4;
 
     vec3 worldPos = vec3(bladeOffset.x + rotated.x, groundHeight + rotated.y, bladeOffset.y + rotated.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(worldPos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     vHeightFactor = heightFactor;
     vShade = shade;

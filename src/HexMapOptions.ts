@@ -90,6 +90,12 @@ export interface HexMapOptions {
     // Streaming and LOD. Count ceilings remain compatibility safeguards;
     // byte ceilings are the authoritative inactive-resource budgets.
     renderDistance?: number;
+    /** Atmospheric blend starts at this camera-depth distance. Derived from renderDistance by default. */
+    horizonFogStart?: number;
+    /** Atmospheric blend is fully opaque before the hard render-distance cut. */
+    horizonFogEnd?: number;
+    /** Shared horizon/clear color used by terrain, vegetation and standard Three.js materials. */
+    horizonFogColor?: ColorRepresentation;
     lodEnabled?: boolean;
     lodNearDistance?: number;
     lodFarDistance?: number;
@@ -137,6 +143,8 @@ export type ResolvedHexMapOptions = Required<Omit<
     | "riverColorShallow"
     | "riverColorDeep"
     | "riverDepth"
+    | "horizonFogStart"
+    | "horizonFogEnd"
 >> & {
     element: string;
     waterDepth: number;
@@ -144,10 +152,12 @@ export type ResolvedHexMapOptions = Required<Omit<
     riverColorShallow: ColorRepresentation;
     riverColorDeep: ColorRepresentation;
     riverDepth: number;
+    horizonFogStart: number;
+    horizonFogEnd: number;
 };
 
-// Derived defaults (water depth, fog scale, river colours/depth) are resolved
-// in resolveHexMapOptions because they depend on other caller-provided values.
+// Derived defaults (water depth, fog scale, horizon band, river colours/depth)
+// are resolved in resolveHexMapOptions because they depend on caller values.
 export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     | "element"
     | "waterDepth"
@@ -155,6 +165,8 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     | "riverColorShallow"
     | "riverColorDeep"
     | "riverDepth"
+    | "horizonFogStart"
+    | "horizonFogEnd"
 >> = {
     size: 40,
     maxPixelRatio: 2,
@@ -211,7 +223,8 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     grassWindSpeed: 1.2,
     fogTexture: "war-fog.jpg",
     fogDarkenFactor: 0.45,
-    renderDistance: 2400,
+    renderDistance: 2850,
+    horizonFogColor: 0xe8f0f2,
     lodEnabled: true,
     lodNearDistance: 900,
     lodFarDistance: 1650,
@@ -229,9 +242,11 @@ export function resolveHexMapOptions(options: HexMapOptions): ResolvedHexMapOpti
     const size = options.size ?? DEFAULT_HEX_MAP_OPTIONS.size;
     const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
     const waterDepth = options.waterDepth ?? size * 0.25;
+    const renderDistance = options.renderDistance ?? DEFAULT_HEX_MAP_OPTIONS.renderDistance;
     const resolved: ResolvedHexMapOptions = {
         ...DEFAULT_HEX_MAP_OPTIONS,
         ...options,
+        renderDistance,
         waterDepth,
         fogTextureSize: options.fogTextureSize ?? size * 8,
         riverColorShallow: options.riverColorShallow
@@ -244,7 +259,9 @@ export function resolveHexMapOptions(options: HexMapOptions): ResolvedHexMapOpti
         mountainHeight: options.mountainHeight ?? DEFAULT_HEX_MAP_OPTIONS.mountainHeight,
         grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
         grassBladeHeight,
-        grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
+        grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35,
+        horizonFogStart: options.horizonFogStart ?? renderDistance * 0.78,
+        horizonFogEnd: options.horizonFogEnd ?? renderDistance * 0.95
     };
     validateHexMapOptions(resolved);
     return resolved;
@@ -270,6 +287,14 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     positive("size", options.size);
     positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
     positive("renderDistance", options.renderDistance);
+    if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
+        throw new RangeError("horizonFogStart must be a non-negative finite number");
+    }
+    if (!Number.isFinite(options.horizonFogEnd)
+        || options.horizonFogEnd <= options.horizonFogStart
+        || options.horizonFogEnd > options.renderDistance) {
+        throw new RangeError("horizonFogEnd must be finite, greater than horizonFogStart, and <= renderDistance");
+    }
     positive("maxPixelRatio", options.maxPixelRatio);
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
         throw new RangeError('terrainShaderQuality must be "full" or "fast"');

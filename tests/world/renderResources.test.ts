@@ -7,6 +7,7 @@ import {
     Matrix4,
     Mesh,
     MeshBasicMaterial,
+    RawShaderMaterial,
     Texture,
     TextureLoader
 } from "three";
@@ -32,10 +33,15 @@ import { createGrassField, GrassSharedResources } from "../../src/objects/Grass"
 import { CITY_FOG_TILE_KEY, TerrainMesh } from "../../src/objects/TerrainMesh";
 import { TERRAIN_FAST_FRAGMENT_SHADER } from "../../src/shaders/terrain.fast.fragment";
 import { TERRAIN_FRAGMENT_SHADER } from "../../src/shaders/terrain.fragment";
+import { GRASS_FRAGMENT_SHADER } from "../../src/shaders/grass.fragment";
+import { GRASS_VERTEX_SHADER } from "../../src/shaders/grass.vertex";
 import {
     TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER,
     TERRAIN_VERTEX_SHADER
 } from "../../src/shaders/terrain.vertex";
+import { WATER_FAST_FRAGMENT_SHADER } from "../../src/shaders/water.fast.fragment";
+import { WATER_FRAGMENT_SHADER } from "../../src/shaders/water.fragment";
+import { WATER_VERTEX_SHADER } from "../../src/shaders/water.vertex";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldSurfaceView } from "../../src/world/WorldSurfaceView";
 
@@ -72,6 +78,22 @@ describe("streamed render resource sharing", () => {
         expect(TERRAIN_VERTEX_SHADER).not.toContain("varying float vElevation");
     });
 
+    test("keeps every custom surface shader on the shared opaque horizon-fog path", () => {
+        for (const shader of [TERRAIN_VERTEX_SHADER, WATER_VERTEX_SHADER, GRASS_VERTEX_SHADER]) {
+            expect(shader).toContain("vHorizonFogDepth = -mvPosition.z");
+        }
+        for (const shader of [
+            TERRAIN_FRAGMENT_SHADER,
+            TERRAIN_FAST_FRAGMENT_SHADER,
+            WATER_FRAGMENT_SHADER,
+            WATER_FAST_FRAGMENT_SHADER,
+            GRASS_FRAGMENT_SHADER
+        ]) {
+            expect(shader).toContain("smoothstep(fogNear, fogFar, vHorizonFogDepth)");
+            expect(shader).toContain("gl_FragColor.rgb = applyHorizonFog(gl_FragColor.rgb)");
+        }
+    });
+
     test("computes terrain instance data once while caching three geometry LODs", async () => {
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
@@ -102,6 +124,7 @@ describe("streamed render resource sharing", () => {
         terrain.addTiles(points(12));
         const meshes = terrain.children.filter(child => getWorldChunkMetadata(child)) as Mesh[];
         const mesh = meshes[0];
+        expect((mesh.material as RawShaderMaterial).fog).toBe(true);
         const metadata = getWorldChunkMetadata(mesh)!;
         expect(metadata.bounds.minY).toBe(-2.5);
         expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.25 * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER, 10);
@@ -175,6 +198,7 @@ describe("streamed render resource sharing", () => {
         });
         const options = { size: 10, density: 4, surface };
         const resources = new GrassSharedResources(options);
+        expect(resources.material.fog).toBe(true);
         const left = createGrassField(map, options, points(0), resources)!;
         const right = createGrassField(map, options, points(12), resources)!;
         const leftMesh = left.children[0] as Mesh;

@@ -36,7 +36,8 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   including elevation, continentalness, ridges, valleys, roughness, moisture
   and temperature.
 - Chunk-streamed terrain, water, grass and glTF forests with frustum/distance
-  culling, stable LOD, bounded CPU/GPU residency and floating-origin rebasing.
+  culling, opaque horizon blending, stable LOD, bounded CPU/GPU residency and
+  floating-origin rebasing.
 - Periodic four-way wrapped maps with seam-aware rendering, picking, neighbors,
   fog and shortest-path movement.
 - Rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,

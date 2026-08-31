@@ -1,5 +1,9 @@
+import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
+
 export const WATER_FRAGMENT_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform vec4 textureAtlasMeta;
 
@@ -184,6 +188,7 @@ void main() {
     // across neighboring fogged tiles instead of restarting per hex.
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -270,5 +275,6 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;

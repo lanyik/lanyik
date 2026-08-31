@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opaque linear horizon blending shared by terrain, water, grass and standard
+  Three.js model materials. The default hard render distance now includes a
+  fully fogged outer band, hiding whole-chunk load/unload without transparent
+  sorting or changing source-retention ownership.
 - Internal `WorldSurfaceResolver` and `WorldSurfaceView` authorities that
   centralize versioned terrain classification, continuous relief, biome weights,
   vegetation/lake patches and sparse terrain edits while providing deterministic

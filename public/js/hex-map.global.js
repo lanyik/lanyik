@@ -4974,6 +4974,25 @@
     return promise;
   }
 
+  // src/shaders/horizonFog.ts
+  var HORIZON_FOG_VERTEX_VARYING = `
+varying float vHorizonFogDepth;
+`;
+  var HORIZON_FOG_FRAGMENT_HEADER = `
+uniform vec3 fogColor;
+uniform float fogNear;
+uniform float fogFar;
+varying float vHorizonFogDepth;
+
+vec3 applyHorizonFog(vec3 color) {
+    float fogFactor = smoothstep(fogNear, fogFar, vHorizonFogDepth);
+    return mix(color, fogColor, fogFactor);
+}
+`;
+  var HORIZON_FOG_FRAGMENT_APPLY = `
+    gl_FragColor.rgb = applyHorizonFog(gl_FragColor.rgb);
+`;
+
   // src/shaders/terrain.vertex.ts
   var TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
   var TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
@@ -4982,6 +5001,8 @@
 // vLocal feed the river noise there, and varyings shouldn't lose precision on
 // the vertex side of the interpolation.
 precision highp float;
+
+${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -5375,7 +5396,9 @@ void main() {
     }
 
     vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
     // smoothstep, for lighting - see water.vertex.ts for the same idea applied
@@ -5443,6 +5466,8 @@ void main() {
 // it collapses into structured streak garbage. The water shader already runs
 // highp for the same reason (its foam uses the same hash).
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
@@ -5869,6 +5894,7 @@ void main() {
     // hex - no per-tile square-texture-in-a-hex seams.
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -6069,12 +6095,15 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
 
   // src/shaders/terrain.fast.fragment.ts
   var TERRAIN_FAST_FRAGMENT_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform sampler2D map;
 uniform sampler2D fogMap;
@@ -6222,6 +6251,7 @@ float straightCoastField() {
 void main() {
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -6267,12 +6297,15 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
 
   // src/shaders/water.vertex.ts
   var WATER_VERTEX_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -6466,7 +6499,9 @@ void main() {
     float riseY = beachT * (-waterLevel * 0.5);
 
     vec3 pos = vec3(tileOffset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), tileOffset.y + position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
     vWorldPos = pos + vec3(chunkOrigin.x + worldOffset.x, 0.0, chunkOrigin.y + worldOffset.y);
@@ -6499,6 +6534,8 @@ void main() {
   // src/shaders/water.fragment.ts
   var WATER_FRAGMENT_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform vec4 textureAtlasMeta;
 
@@ -6683,6 +6720,7 @@ void main() {
     // across neighboring fogged tiles instead of restarting per hex.
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -6769,12 +6807,15 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
 
   // src/shaders/water.fast.fragment.ts
   var WATER_FAST_FRAGMENT_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform sampler2D fogMap;
 uniform float fogDarkenFactor;
@@ -6796,6 +6837,7 @@ varying vec2 vFogUV;
 void main() {
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -6810,6 +6852,7 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
 
@@ -7025,6 +7068,11 @@ void main() {
         fogMap: { value: this.fogTexture },
         fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
         fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+        // WebGLRenderer refreshes these from scene.fog for RawShaderMaterial
+        // when material.fog is enabled, matching built-in model materials.
+        fogColor: { value: new three.Color() },
+        fogNear: { value: 1 },
+        fogFar: { value: 1e3 },
         //Physical chunk copies now handle toroidal placement. Leaving the
         //shader period at zero keeps every tile attached to its canonical
         //chunk, so chunks can be independently culled and streamed.
@@ -7094,6 +7142,7 @@ void main() {
     //interpolates between those 2 fixed extremes no matter the configured width.
     buildLandLayer(tiles) {
       this.landMaterial ?? (this.landMaterial = new three.RawShaderMaterial({
+        fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
           landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
@@ -7169,6 +7218,7 @@ void main() {
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     buildWaterLayer(tiles) {
       this.waterMaterial ?? (this.waterMaterial = new three.RawShaderMaterial({
+        fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
           cameraWorldOffset: { value: new three.Vector2(0, 0) },
@@ -8463,6 +8513,8 @@ void main() {
   var GRASS_VERTEX_SHADER = `
 precision mediump float;
 
+${HORIZON_FOG_VERTEX_VARYING}
+
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 
@@ -8523,7 +8575,9 @@ void main() {
     rotated.z += bend * 0.4;
 
     vec3 worldPos = vec3(bladeOffset.x + rotated.x, groundHeight + rotated.y, bladeOffset.y + rotated.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(worldPos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     vHeightFactor = heightFactor;
     vShade = shade;
@@ -8534,6 +8588,8 @@ void main() {
   // src/shaders/grass.fragment.ts
   var GRASS_FRAGMENT_SHADER = `
 precision mediump float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform vec3 colorBase;
 uniform vec3 colorTip;
@@ -8553,6 +8609,7 @@ void main() {
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
     gl_FragColor = vec4(color, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
 
@@ -8564,6 +8621,7 @@ void main() {
       this.disposed = false;
       const bladeHeight = options.bladeHeight ?? options.size * 0.18;
       this.material = new three.RawShaderMaterial({
+        fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
           worldCenter: { value: new three.Vector2(0, 0) },
@@ -8574,7 +8632,10 @@ void main() {
           windSpeed: { value: options.windSpeed ?? 1.2 },
           colorBase: { value: new three.Color(options.colorBase ?? 3960366) },
           colorTip: { value: new three.Color(options.colorTip ?? 9424474) },
-          fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
+          fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 },
+          fogColor: { value: new three.Color() },
+          fogNear: { value: 1 },
+          fogFar: { value: 1e3 }
         },
         vertexShader: GRASS_VERTEX_SHADER,
         fragmentShader: GRASS_FRAGMENT_SHADER,
@@ -9757,7 +9818,7 @@ void main() {
   };
   function createDefaultWorldChunkSchedulerOptions() {
     return {
-      renderDistance: 2400,
+      renderDistance: 2850,
       lodEnabled: true,
       lodDistances: { ...DEFAULT_WORLD_CHUNK_LOD_DISTANCES },
       lodBias: 0,
@@ -15344,7 +15405,9 @@ void main() {
         this.options.contextRestored?.();
       };
       this.scene = new three.Scene();
-      this.scene.background = new three.Color(10471906);
+      const horizonColor = new three.Color(options.horizonFogColor);
+      this.scene.background = horizonColor;
+      this.scene.fog = new three.Fog(horizonColor, options.horizonFogStart, options.horizonFogEnd);
       this.worldRoot = new three.Group();
       this.worldRoot.name = "hex-map-world-root";
       this.scene.add(this.worldRoot);
@@ -15989,7 +16052,8 @@ void main() {
     grassWindSpeed: 1.2,
     fogTexture: "war-fog.jpg",
     fogDarkenFactor: 0.45,
-    renderDistance: 2400,
+    renderDistance: 2850,
+    horizonFogColor: 15266034,
     lodEnabled: true,
     lodNearDistance: 900,
     lodFarDistance: 1650,
@@ -16006,9 +16070,11 @@ void main() {
     const size = options.size ?? DEFAULT_HEX_MAP_OPTIONS.size;
     const grassBladeHeight = options.grassBladeHeight ?? size * 0.18;
     const waterDepth = options.waterDepth ?? size * 0.25;
+    const renderDistance = options.renderDistance ?? DEFAULT_HEX_MAP_OPTIONS.renderDistance;
     const resolved = {
       ...DEFAULT_HEX_MAP_OPTIONS,
       ...options,
+      renderDistance,
       waterDepth,
       fogTextureSize: options.fogTextureSize ?? size * 8,
       riverColorShallow: options.riverColorShallow ?? options.waterColorShallow ?? DEFAULT_HEX_MAP_OPTIONS.waterColorShallow,
@@ -16017,7 +16083,9 @@ void main() {
       mountainHeight: options.mountainHeight ?? DEFAULT_HEX_MAP_OPTIONS.mountainHeight,
       grassBladeWidth: options.grassBladeWidth ?? size * 0.03,
       grassBladeHeight,
-      grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35
+      grassWindStrength: options.grassWindStrength ?? grassBladeHeight * 0.35,
+      horizonFogStart: options.horizonFogStart ?? renderDistance * 0.78,
+      horizonFogEnd: options.horizonFogEnd ?? renderDistance * 0.95
     };
     validateHexMapOptions(resolved);
     return resolved;
@@ -16042,6 +16110,12 @@ void main() {
     positive2("size", options.size);
     positive2("terrainTextureRegionSize", options.terrainTextureRegionSize);
     positive2("renderDistance", options.renderDistance);
+    if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
+      throw new RangeError("horizonFogStart must be a non-negative finite number");
+    }
+    if (!Number.isFinite(options.horizonFogEnd) || options.horizonFogEnd <= options.horizonFogStart || options.horizonFogEnd > options.renderDistance) {
+      throw new RangeError("horizonFogEnd must be finite, greater than horizonFogStart, and <= renderDistance");
+    }
     positive2("maxPixelRatio", options.maxPixelRatio);
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
       throw new RangeError('terrainShaderQuality must be "full" or "fast"');
@@ -16519,6 +16593,9 @@ void main() {
         canvas: this.canvas,
         antialias: this.options.antialias,
         skyVisible: this.options.skyVisible,
+        horizonFogColor: this.options.horizonFogColor,
+        horizonFogStart: this.options.horizonFogStart,
+        horizonFogEnd: this.options.horizonFogEnd,
         contextLost: () => {
           this.lastFrameTime = void 0;
           this.emit("contextlost", this.rendererHost.contextStats);

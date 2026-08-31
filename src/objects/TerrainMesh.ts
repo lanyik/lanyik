@@ -526,6 +526,11 @@ export class TerrainMesh extends Group {
             fogMap: { value: this.fogTexture },
             fogDarkenFactor: { value: this.options.fogDarkenFactor ?? 0.45 },
             fogTextureSize: { value: this.options.fogTextureSize ?? size * 8 },
+            // WebGLRenderer refreshes these from scene.fog for RawShaderMaterial
+            // when material.fog is enabled, matching built-in model materials.
+            fogColor: { value: new Color() },
+            fogNear: { value: 1 },
+            fogFar: { value: 1000 },
             //Physical chunk copies now handle toroidal placement. Leaving the
             //shader period at zero keeps every tile attached to its canonical
             //chunk, so chunks can be independently culled and streamed.
@@ -602,6 +607,7 @@ export class TerrainMesh extends Group {
     //interpolates between those 2 fixed extremes no matter the configured width.
     private buildLandLayer(tiles: Point[]): void {
         this.landMaterial ??= new RawShaderMaterial({
+            fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
                 landBlendWidth: { value: this.options.landBlendWidth ?? 0.5 },
@@ -684,6 +690,7 @@ export class TerrainMesh extends Group {
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     private buildWaterLayer(tiles: Point[]): void {
         this.waterMaterial ??= new RawShaderMaterial({
+            fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
                 cameraWorldOffset: { value: new Vector2(0, 0) },

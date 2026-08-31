@@ -61,6 +61,26 @@ This is explicit chunk culling. The chunk meshes set `frustumCulled = false`
 because Three.js does not know about shader displacement and lazy empty geometry;
 the scheduler's conservative bounds include water, mountain and grass height.
 
+## Horizon blending
+
+The hard surface cutoff is hidden behind one opaque linear-atmosphere band.
+`horizonFogStart` defaults to 78% of `renderDistance`, `horizonFogEnd` to 95%,
+and the remaining 5% guarantees that a chunk is already indistinguishable from
+the horizon before the scheduler removes it. The default hard distance is 2850
+world units. `horizonFogColor` is also the scene clear color, so sky-disabled and
+context-recovery frames cannot expose a differently coloured outer edge.
+
+Three.js standard materials used by forests, cities and application layers use
+the scene's linear `Fog`. Terrain, water and grass are `RawShaderMaterial`s, so
+their shaders explicitly apply the same `fogNear`, `fogFar` and `fogColor` after
+war-fog, lighting and grid evaluation. The blend changes only opaque RGB output:
+it adds no transparent sorting, depth-write exception or alpha overdraw. War fog
+remains an independent per-tile gameplay state.
+
+Increasing the hard distance automatically participates in the existing source
+load-radius calculation. The retention margin remains lifecycle hysteresis; it
+does not need a second visual fade or a separate eagerly loaded ring.
+
 ## LOD policy
 
 | Level | Land subdivisions | Water subdivisions | Grass density | Forest density |
@@ -73,7 +93,7 @@ the scheduler's conservative bounds include water, mountain and grass height.
 the resource layer supports it for custom policies.
 
 The default thresholds are 900 and 1650 world units. Grass and forests stop at
-1450; terrain continues to the 2400 render distance. A 120-unit hysteresis band
+1450; terrain continues through the horizon band to the 2850 hard render distance. A 120-unit hysteresis band
 keeps a chunk on its current level while the camera oscillates near a threshold.
 All hex LODs retain the full-detail rim tessellation; only their inner ring is
 simplified. Displaced mountain, beach and wave edges therefore evaluate at the

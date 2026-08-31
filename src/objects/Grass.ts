@@ -100,6 +100,7 @@ export class GrassSharedResources {
     constructor(options: Omit<GrassOptions, "surface">) {
         const bladeHeight = options.bladeHeight ?? options.size * 0.18;
         this.material = new RawShaderMaterial({
+            fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
                 worldCenter: { value: new Vector2(0, 0) },
@@ -110,7 +111,10 @@ export class GrassSharedResources {
                 windSpeed: { value: options.windSpeed ?? 1.2 },
                 colorBase: { value: new Color(options.colorBase ?? 0x3c6e2e) },
                 colorTip: { value: new Color(options.colorTip ?? 0x8fce5a) },
-                fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 }
+                fogDarkenFactor: { value: options.fogDarkenFactor ?? 0.45 },
+                fogColor: { value: new Color() },
+                fogNear: { value: 1 },
+                fogFar: { value: 1000 }
             },
             vertexShader: GRASS_VERTEX_SHADER,
             fragmentShader: GRASS_FRAGMENT_SHADER,

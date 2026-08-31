@@ -1,5 +1,9 @@
+import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
+
 export const WATER_VERTEX_SHADER = `
 precision highp float;
+
+${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -193,7 +197,9 @@ void main() {
     float riseY = beachT * (-waterLevel * 0.5);
 
     vec3 pos = vec3(tileOffset.x + position.x, mix(0.0, waterLevel + waveY + riseY, fogVisible), tileOffset.y + position.z);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
     vWorldPos = pos + vec3(chunkOrigin.x + worldOffset.x, 0.0, chunkOrigin.y + worldOffset.y);

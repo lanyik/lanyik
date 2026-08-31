@@ -1,5 +1,9 @@
+import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
+
 export const GRASS_FRAGMENT_SHADER = `
 precision mediump float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform vec3 colorBase;
 uniform vec3 colorTip;
@@ -19,5 +23,6 @@ void main() {
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
     gl_FragColor = vec4(color, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;

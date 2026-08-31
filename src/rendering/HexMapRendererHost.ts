@@ -2,7 +2,9 @@ import {
     ACESFilmicToneMapping,
     AmbientLight,
     Color,
+    ColorRepresentation,
     DirectionalLight,
+    Fog,
     Group,
     PerspectiveCamera,
     Scene,
@@ -18,6 +20,9 @@ export interface HexMapRendererHostOptions {
     canvas: HTMLCanvasElement;
     antialias: boolean;
     skyVisible: boolean;
+    horizonFogColor: ColorRepresentation;
+    horizonFogStart: number;
+    horizonFogEnd: number;
     contextLost?(): void;
     contextRestored?(): void;
 }
@@ -48,7 +53,9 @@ export class HexMapRendererHost {
 
     constructor(private readonly options: HexMapRendererHostOptions) {
         this.scene = new Scene();
-        this.scene.background = new Color(0x9fc9e2);
+        const horizonColor = new Color(options.horizonFogColor);
+        this.scene.background = horizonColor;
+        this.scene.fog = new Fog(horizonColor, options.horizonFogStart, options.horizonFogEnd);
         this.worldRoot = new Group();
         this.worldRoot.name = "hex-map-world-root";
         this.scene.add(this.worldRoot);

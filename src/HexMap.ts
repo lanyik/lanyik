@@ -265,6 +265,9 @@ export class HexMap extends EventEmitter {
             canvas: this.canvas,
             antialias: this.options.antialias,
             skyVisible: this.options.skyVisible,
+            horizonFogColor: this.options.horizonFogColor,
+            horizonFogStart: this.options.horizonFogStart,
+            horizonFogEnd: this.options.horizonFogEnd,
             contextLost: () => {
                 this.lastFrameTime = undefined;
                 this.emit("contextlost", this.rendererHost.contextStats);

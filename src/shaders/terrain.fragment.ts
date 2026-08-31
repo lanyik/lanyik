@@ -1,9 +1,13 @@
+import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
+
 export const TERRAIN_FRAGMENT_SHADER = `
 // highp, not mediump: the river noise hash (hash21's fract(sin(x) * 43758...))
 // is fed world-space coordinates in the hundreds/thousands - at fp16 precision
 // it collapses into structured streak garbage. The water shader already runs
 // highp for the same reason (its foam uses the same hash).
 precision highp float;
+
+${HORIZON_FOG_FRAGMENT_HEADER}
 
 uniform sampler2D map;
 uniform vec4 textureAtlasMeta;
@@ -430,6 +434,7 @@ void main() {
     // hex - no per-tile square-texture-in-a-hex seams.
     if (vFogState < 0.5) {
         gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY}
         return;
     }
 
@@ -630,5 +635,6 @@ void main() {
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
