@@ -218,6 +218,7 @@ describe("WorldChunkScheduler", () => {
         });
 
         onlySecond = true;
+        scheduler.invalidateVisibility();
         scheduler.update(root, camera, new Vector3(), {
             enabled: metadata => metadata.id === "second",
             activate: metadata => ({ geometries: [geometries.get(metadata.id)!] }),
@@ -272,6 +273,7 @@ describe("WorldChunkScheduler", () => {
             activate: metadata => activation(metadata.id),
             release: vi.fn()
         });
+        scheduler.invalidateVisibility();
         scheduler.update(root, camera, new Vector3(), {
             enabled: metadata => metadata.id === "second",
             activate: metadata => activation(metadata.id),
@@ -284,6 +286,7 @@ describe("WorldChunkScheduler", () => {
             gpuResidentBytes: 120
         });
 
+        scheduler.invalidateVisibility();
         scheduler.update(root, camera, new Vector3(), {
             enabled: () => true,
             activate: () => undefined,
@@ -347,6 +350,42 @@ describe("WorldChunkScheduler", () => {
         });
         expect(army!.release()).toBe(true);
         expect(scheduler.stats).toMatchObject({ cpuResidentBytes: 0, gpuResidentBytes: 0 });
+    });
+
+    test("skips static visibility work until an anchor threshold or explicit invalidation", () => {
+        const root = new Object3D();
+        const chunk = new Object3D();
+        tagWorldChunk(chunk, "static", "land", {
+            minX: -10, maxX: 10, minY: -2, maxY: 20, minZ: -10, maxZ: 10
+        });
+        root.add(chunk);
+        const camera = new PerspectiveCamera(60, 1, 1, 2000);
+        camera.position.set(0, 100, 100);
+        camera.lookAt(0, 0, 0);
+        camera.updateProjectionMatrix();
+        const activate = vi.fn<WorldChunkSchedulerHooks["activate"]>(() => ({ geometries: [] }));
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500,
+            lodEnabled: true,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10,
+            cpuCacheSize: 10,
+            gpuGraceFrames: 10,
+            cpuGraceFrames: 10
+        });
+        const hooks = { enabled: () => true, activate, release: vi.fn() };
+
+        scheduler.update(root, camera, new Vector3(), hooks);
+        scheduler.update(root, camera, new Vector3(4, 0, 0), hooks);
+        expect(activate).toHaveBeenCalledOnce();
+        expect(scheduler.stats).toMatchObject({ visibilityChecks: 1, visibilitySkips: 1 });
+
+        scheduler.update(root, camera, new Vector3(6, 0, 0), hooks);
+        expect(activate).toHaveBeenCalledTimes(2);
+        scheduler.invalidateVisibility();
+        scheduler.update(root, camera, new Vector3(6, 0, 0), hooks);
+        expect(activate).toHaveBeenCalledTimes(3);
+        expect(scheduler.stats).toMatchObject({ visibilityChecks: 3, visibilitySkips: 1 });
     });
 
     test("exposes diagnostics without leaking ledger mutation methods", () => {

@@ -711,7 +711,7 @@ map.on("frame", ({ t }) => {
     minimapStatusAt = t;
     const view = minimap.view;
     const text = view.tileSpanX && view.tileSpanY
-        ? `${view.tileSpanX} × ${view.tileSpanY}`
+        ? `${Math.round(view.tileSpanX)} × ${Math.round(view.tileSpanY)}`
         : i18n.t(view.loading ? "minimap.loading" : "minimap.waiting");
     if (text !== minimapWindowText) {
         minimapWindowText = text;

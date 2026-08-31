@@ -9592,8 +9592,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     gpuBudgetBytes: 0,
     cpuBudgetExceededBytes: 0,
     gpuBudgetExceededBytes: 0,
-    resourceEvictions: 0
+    resourceEvictions: 0,
+    visibilityChecks: 0,
+    visibilitySkips: 0
   };
+  var VISIBILITY_ROTATION_THRESHOLD_RAD = Math.PI / 360;
+  var PROJECTION_EPSILON = 1e-7;
   var WorldChunkScheduler = class {
     constructor(options) {
       this.options = options;
@@ -9608,6 +9612,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.registeredObjects = 0;
       this.sceneTraversals = 0;
       this.frame = 0;
+      this.visibilityDirty = true;
+      this.visibilityChecks = 0;
+      this.visibilitySkips = 0;
+      this.hasVisibilityAnchor = false;
+      this.lastCameraPosition = new three.Vector3();
+      this.lastCameraQuaternion = new three.Quaternion();
+      this.lastTarget = new three.Vector3();
+      this.lastProjection = new three.Matrix4();
+      this.cameraPosition = new three.Vector3();
+      this.cameraQuaternion = new three.Quaternion();
       this.snapshot = { ...EMPTY_STATS };
       this.resourceEvictions = 0;
       this.validateOptions(options);
@@ -9631,6 +9645,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         cpuBytes: next.cpuCacheBytes ?? 384 * 1024 * 1024,
         gpuBytes: next.gpuCacheBytes ?? 256 * 1024 * 1024
       });
+      this.visibilityDirty = true;
       this.refreshResourceSnapshot();
     }
     clear() {
@@ -9639,6 +9654,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.frame = 0;
       this.snapshot = { ...EMPTY_STATS };
       this.registryDirty = true;
+      this.visibilityDirty = true;
+      this.hasVisibilityAnchor = false;
+      this.visibilityChecks = 0;
+      this.visibilitySkips = 0;
       this.resourceEvictions = 0;
       this.refreshResourceSnapshot();
     }
@@ -9650,6 +9669,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     invalidateScene() {
       this.registryDirty = true;
+      this.visibilityDirty = true;
+    }
+    invalidateVisibility() {
+      this.visibilityDirty = true;
     }
     //Streaming worlds can physically remove render shells before the normal
     //grace-frame eviction pass. Forget them immediately so residency stats and
@@ -9661,6 +9684,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.bindings.delete(id);
       }
       this.registryDirty = true;
+      this.visibilityDirty = true;
     }
     get stats() {
       this.refreshResourceSnapshot();
@@ -9677,8 +9701,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     update(root, camera, target, hooks) {
       this.frame += 1;
-      if (root !== this.registeredRoot || this.registryDirty) this.rebuildRegistry(root);
       camera.updateMatrixWorld();
+      camera.getWorldPosition(this.cameraPosition);
+      camera.getWorldQuaternion(this.cameraQuaternion);
+      if (!this.shouldRefreshVisibility(root, camera, target)) {
+        this.visibilitySkips += 1;
+        this.snapshot = { ...this.snapshot, visibilitySkips: this.visibilitySkips };
+        return false;
+      }
+      this.visibilityDirty = false;
+      this.captureVisibilityAnchor(camera, target);
+      this.visibilityChecks += 1;
+      if (root !== this.registeredRoot || this.registryDirty) this.rebuildRegistry(root);
       this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       this.frustum.setFromProjectionMatrix(this.projection);
       this.visibleIds.clear();
@@ -9705,7 +9739,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           const vegetation = metadata.kind === "grass" || metadata.kind === "forest";
           const bias = (this.options.lodBias ?? 0) + (vegetation ? this.options.vegetationLodBias ?? 0 : 0);
           const lod = resolvedLod === null ? null : Math.min(2, resolvedLod + bias);
-          const visible = distance <= this.options.renderDistance && lod !== null && this.frustum.intersectsBox(this.bounds);
+          const inRenderDistance = distance <= this.options.renderDistance && lod !== null;
+          if (inRenderDistance) this.bounds.expandByScalar(this.visibilityCullingPadding());
+          const visible = inRenderDistance && this.frustum.intersectsBox(this.bounds);
           object.visible = visible;
           if (!visible || lod === null) continue;
           visibleObjects += 1;
@@ -9764,8 +9800,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         gpuBudgetBytes: resourceStats.gpuLimitBytes,
         cpuBudgetExceededBytes: resourceStats.cpuExceededBytes,
         gpuBudgetExceededBytes: resourceStats.gpuExceededBytes,
-        resourceEvictions: this.resourceEvictions
+        resourceEvictions: this.resourceEvictions,
+        visibilityChecks: this.visibilityChecks,
+        visibilitySkips: this.visibilitySkips
       };
+      return true;
     }
     evictInactive(visible, hooks) {
       this.inactive.length = 0;
@@ -9856,8 +9895,43 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         gpuBudgetBytes: resources.gpuLimitBytes,
         cpuBudgetExceededBytes: resources.cpuExceededBytes,
         gpuBudgetExceededBytes: resources.gpuExceededBytes,
-        resourceEvictions: this.resourceEvictions
+        resourceEvictions: this.resourceEvictions,
+        visibilityChecks: this.visibilityChecks,
+        visibilitySkips: this.visibilitySkips
       };
+    }
+    shouldRefreshVisibility(root, camera, target) {
+      if (this.visibilityDirty || this.registryDirty || root !== this.registeredRoot || !this.hasVisibilityAnchor) {
+        return true;
+      }
+      const translationThreshold = this.visibilityTranslationThreshold();
+      if (this.lastTarget.distanceToSquared(target) >= translationThreshold * translationThreshold || this.lastCameraPosition.distanceToSquared(this.cameraPosition) >= translationThreshold * translationThreshold) {
+        return true;
+      }
+      const quaternionDot = Math.min(1, Math.abs(this.lastCameraQuaternion.dot(this.cameraQuaternion)));
+      if (quaternionDot <= Math.cos(VISIBILITY_ROTATION_THRESHOLD_RAD / 2)) return true;
+      const currentProjection = camera.projectionMatrix.elements;
+      const previousProjection = this.lastProjection.elements;
+      for (let index = 0; index < currentProjection.length; index += 1) {
+        if (Math.abs(currentProjection[index] - previousProjection[index]) > PROJECTION_EPSILON) return true;
+      }
+      return false;
+    }
+    captureVisibilityAnchor(camera, target) {
+      this.lastCameraPosition.copy(this.cameraPosition);
+      this.lastCameraQuaternion.copy(this.cameraQuaternion);
+      this.lastTarget.copy(target);
+      this.lastProjection.copy(camera.projectionMatrix);
+      this.hasVisibilityAnchor = true;
+    }
+    visibilityTranslationThreshold() {
+      return Math.max(1, Math.min(
+        this.options.lodDistances.hysteresis * 0.5,
+        this.options.renderDistance * 0.02
+      ));
+    }
+    visibilityCullingPadding() {
+      return this.visibilityTranslationThreshold() + this.options.renderDistance * Math.tan(VISIBILITY_ROTATION_THRESHOLD_RAD);
     }
     rebuildRegistry(root) {
       this.bindings.clear();
@@ -16775,6 +16849,22 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldCopyMaterials = [];
       this.worldCopyMaterialCache = /* @__PURE__ */ new Map();
       this.worldPatternOffset = new three.Vector2();
+      this.chunkSchedulerHooks = {
+        enabled: (metadata) => {
+          const layer = this.worldRenderLayers?.forKind(metadata.kind);
+          try {
+            return layer?.enabled?.(metadata) ?? (metadata.kind !== "grass" || this.options.grassEnabled);
+          } catch (reason) {
+            this.reportWorldRenderLayerErrors(
+              `world render layer "${layer?.id}" failed to evaluate visibility`,
+              [renderLayerError(reason)]
+            );
+            return false;
+          }
+        },
+        activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
+        release: (metadata) => this.releaseWorldChunk(metadata)
+      };
       this.runtimeWork = new RuntimeWorkCoordinator({
         defaultMaxPendingTasks: 512,
         defaultMaxPendingWeight: 2048,
@@ -16807,6 +16897,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.renderOrigin = new three.Vector2();
       this.logicalTargetScratch = new three.Vector3();
       this.predictedTargetScratch = new three.Vector3();
+      this.worldDemandElapsedS = 0;
       this.streamingVelocity = new three.Vector2();
       this.streamingMotionScratch = new three.Vector2();
       this.streamingAheadScratch = new three.Vector2();
@@ -16871,12 +16962,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.worldChunkMountQueue.retryOne();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
-        const grassResources = /* @__PURE__ */ new Set();
-        if (this.grass) grassResources.add(this.grass.resources);
-        for (const record of this.worldChunkLayers.values()) {
-          if (record.grass) grassResources.add(record.grass.resources);
-        }
-        for (const resources of grassResources) resources.update(dtS);
+        const primaryGrassResources = this.grass?.resources;
+        primaryGrassResources?.update(dtS);
+        if (this.streamedGrassResources !== primaryGrassResources) this.streamedGrassResources?.update(dtS);
         this.emit("frame", {
           t,
           dtS,
@@ -17376,19 +17464,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     updateWorldChunkVisibility() {
       if (!this.mapData) return;
-      this.chunkScheduler.update(this.scene, this.camera, this.controls.target, {
-        enabled: (metadata) => {
-          const layer = this.worldRenderLayers?.forKind(metadata.kind);
-          try {
-            return layer?.enabled?.(metadata) ?? (metadata.kind !== "grass" || this.options.grassEnabled);
-          } catch (reason) {
-            this.reportWorldRenderLayerErrors(`world render layer "${layer?.id}" failed to evaluate visibility`, [renderLayerError(reason)]);
-            return false;
-          }
-        },
-        activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
-        release: (metadata) => this.releaseWorldChunk(metadata)
-      });
+      this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks);
     }
     activateWorldChunk(metadata, lod, objects) {
       const registered = this.worldRenderLayers?.forKind(metadata.kind);
@@ -17567,6 +17643,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         Math.max(0, retentionRadius - loadRadius)
       );
       this.lastStreamingTarget = void 0;
+      this.worldDemandElapsedS = 0;
       this.streamingVelocity.set(0, 0);
       this.mapData = source.map;
       this.worldSurface = worldSurface;
@@ -18078,7 +18155,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           this.chunkScheduler.invalidateScene();
         },
         invalidateVisibility: () => {
-          if (isCurrent()) this.chunkScheduler.invalidateScene();
+          if (isCurrent()) this.chunkScheduler.invalidateVisibility();
         },
         requestWorldCopyRefresh: () => {
           if (isCurrent()) this.refreshWorldCopies();
@@ -18233,6 +18310,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldDemandChunkKey = void 0;
       this.worldDemandSignature = void 0;
       this.lastStreamingTarget = void 0;
+      this.worldDemandElapsedS = 0;
       this.streamingVelocity.set(0, 0);
       this.adaptiveStreamingController = void 0;
       this.appliedVegetationDensityScale = 1;
@@ -18928,6 +19006,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     updateWorldDemand(dtS) {
       if (!this.worldStreamer || !this.worldSource) return;
+      this.worldDemandElapsedS += Math.max(0, dtS);
       this.logicalTargetScratch.copy(this.controls.target);
       if (this.mapData.infinite) {
         this.logicalTargetScratch.x += this.renderOrigin.x;
@@ -18935,9 +19014,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       const currentX = this.logicalTargetScratch.x;
       const currentY = this.logicalTargetScratch.z;
-      if (this.lastStreamingTarget && dtS > 0) {
-        let dx = currentX - this.lastStreamingTarget.x;
-        let dy = currentY - this.lastStreamingTarget.y;
+      let dx = this.lastStreamingTarget ? currentX - this.lastStreamingTarget.x : 0;
+      let dy = this.lastStreamingTarget ? currentY - this.lastStreamingTarget.y : 0;
+      if (this.lastStreamingTarget) {
         if (this.mapData.wrapX && this.worldPeriodX > 0) {
           if (dx > this.worldPeriodX / 2) dx -= this.worldPeriodX;
           else if (dx < -this.worldPeriodX / 2) dx += this.worldPeriodX;
@@ -18946,12 +19025,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           if (dy > this.worldPeriodY / 2) dy -= this.worldPeriodY;
           else if (dy < -this.worldPeriodY / 2) dy += this.worldPeriodY;
         }
-        const alpha = 1 - Math.exp(-dtS / 0.25);
-        this.streamingMotionScratch.set(dx / dtS, dy / dtS);
+        const displacementSq = dx * dx + dy * dy;
+        const threshold = WORLD_CHUNK_SIZE * this.options.size * 1.5 * 0.25;
+        const movedEnough = displacementSq >= threshold * threshold;
+        const delayedMovement = displacementSq > 1e-4 && this.worldDemandElapsedS >= 0.25;
+        const velocityDecayDue = this.streamingVelocity.lengthSq() > 1 && this.worldDemandElapsedS >= 0.25;
+        if (!movedEnough && !delayedMovement && !velocityDecayDue) return;
+        const elapsedS = Math.max(this.worldDemandElapsedS, 1 / 240);
+        const alpha = 1 - Math.exp(-elapsedS / 0.25);
+        this.streamingMotionScratch.set(dx / elapsedS, dy / elapsedS);
         this.streamingVelocity.lerp(this.streamingMotionScratch, alpha);
       }
       this.lastStreamingTarget ?? (this.lastStreamingTarget = new three.Vector2());
       this.lastStreamingTarget.set(currentX, currentY);
+      this.worldDemandElapsedS = 0;
       const tile = pickTile(
         this.logicalTargetScratch,
         this.options.size,
@@ -19644,8 +19731,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       await this.settled;
     }
   };
-
-  // src/WorldMinimap.ts
   var DEFAULT_RASTER_SIZE = 192;
   var DEFAULT_INFINITE_TILE_SPAN = 512;
   var DEFAULT_CACHE_ENTRIES = 64;
@@ -19659,6 +19744,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var PREFETCH_PAGE_INTERVAL_MS = 100;
   var PAGE_RETRY_DELAY_MS = 500;
   var FOLLOW_TIME_CONSTANT_S = 0.16;
+  var ZOOM_TIME_CONSTANT_S = 0.1;
+  var WHEEL_ZOOM_SENSITIVITY = 15e-4;
   function asPositiveInteger(name, value, maximum) {
     if (!Number.isInteger(value) || value <= 0 || value > maximum) {
       throw new RangeError(`${name} must be an integer between 1 and ${maximum}`);
@@ -19683,6 +19770,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.pageDemand = /* @__PURE__ */ new Map();
       this.pendingPages = /* @__PURE__ */ new Map();
       this.retryAfter = /* @__PURE__ */ new Map();
+      this.cameraDirection = new three.Vector3();
       this.contentRect = { x: 0, y: 0, width: 0, height: 0 };
       this.lastDrawAt = -Infinity;
       this.lastDemandCheckAt = -Infinity;
@@ -19690,6 +19778,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.pageGeneration = 0;
       this.expanded = false;
       this.zoomFactor = 1;
+      this.targetZoomFactor = 1;
       this.reportedPageError = false;
       this.disposed = false;
       this.handlePointerDown = (event) => {
@@ -19706,29 +19795,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       };
       this.handleWheel = (event) => {
         if (!this.expanded || event.deltaY === 0) return;
-        const anchor = this.tileAt(event.clientX, event.clientY);
+        const anchor = this.coordinateAt(event.clientX, event.clientY);
         if (!anchor) return;
         event.preventDefault();
         event.stopPropagation();
-        const previous = this.zoomFactor;
-        this.zoomFactor *= event.deltaY < 0 ? 0.5 : 2;
-        const bounds = this.map.worldBounds;
-        if (bounds) {
-          const minimum = Math.min(1, Math.max(
-            Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
-            Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
-          ));
-          this.zoomFactor = Math.max(minimum, Math.min(1, this.zoomFactor));
-        } else {
-          const maximum = Math.min(
-            MAX_INFINITE_ZOOM_FACTOR,
-            MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
-          );
-          this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximum, this.zoomFactor));
-        }
-        if (this.zoomFactor === previous) return;
-        this.viewport = this.createViewport(anchor);
-        void this.refresh();
+        const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 100 : 1;
+        const normalizedDelta = Math.max(-240, Math.min(240, event.deltaY * deltaScale));
+        const next = this.clampZoomFactor(
+          this.targetZoomFactor * Math.exp(normalizedDelta * WHEEL_ZOOM_SENSITIVITY)
+        );
+        if (next === this.targetZoomFactor) return;
+        this.targetZoomFactor = next;
+        this.zoomAnchor = anchor;
       };
       this.handleKeyDown = (event) => {
         if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) return;
@@ -19753,8 +19831,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const now = Number.isFinite(frame?.t) ? frame.t : performance.now();
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
-        const moved = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
-        if (moved || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
+        const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
+        const zoomed = this.updateExpandedZoom(dtS);
+        if (followed || zoomed || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
           this.lastDemandCheckAt = now;
           this.rebuildPageDemand();
           this.pumpPageRequests();
@@ -19838,6 +19917,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.disposed || expanded === this.expanded) return;
       this.expanded = expanded;
       this.zoomFactor = 1;
+      this.targetZoomFactor = 1;
+      this.zoomAnchor = void 0;
       const cameraTarget = this.map.getCameraTargetTile();
       this.viewport = cameraTarget ? this.createViewport(cameraTarget) : void 0;
       this.setDestination(expanded && cameraTarget ? cameraTarget : void 0);
@@ -19872,6 +19953,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const wasExpanded = this.expanded;
       this.expanded = false;
       this.zoomFactor = 1;
+      this.targetZoomFactor = 1;
+      this.zoomAnchor = void 0;
       this.viewport = void 0;
       this.setDestination(void 0);
       this.canvas.setAttribute("aria-busy", "false");
@@ -19896,24 +19979,31 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     viewSpans() {
       const bounds = this.map.worldBounds;
       if (bounds) {
-        const minimumFactor = Math.min(1, Math.max(
-          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
-          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
-        ));
-        this.zoomFactor = Math.max(minimumFactor, Math.min(1, this.zoomFactor));
+        this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
         return {
-          tileSpanX: Math.min(bounds.width, Math.max(1, Math.round(bounds.width * this.zoomFactor))),
-          tileSpanY: Math.min(bounds.height, Math.max(1, Math.round(bounds.height * this.zoomFactor)))
+          tileSpanX: Math.min(bounds.width, Math.max(1, bounds.width * this.zoomFactor)),
+          tileSpanY: Math.min(bounds.height, Math.max(1, bounds.height * this.zoomFactor))
         };
       }
       if (this.map.worldDescriptor?.topology !== "infinite") return void 0;
-      const maximumFactor = Math.min(
+      this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
+      const tileSpan = Math.max(1, this.infiniteTileSpan * this.zoomFactor);
+      return { tileSpanX: tileSpan, tileSpanY: tileSpan };
+    }
+    clampZoomFactor(value) {
+      const bounds = this.map.worldBounds;
+      if (bounds) {
+        const minimum = Math.min(1, Math.max(
+          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
+          Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
+        ));
+        return Math.max(minimum, Math.min(1, value));
+      }
+      const maximum = Math.min(
         MAX_INFINITE_ZOOM_FACTOR,
         MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
       );
-      this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximumFactor, this.zoomFactor));
-      const tileSpan = Math.max(1, Math.round(this.infiniteTileSpan * this.zoomFactor));
-      return { tileSpanX: tileSpan, tileSpanY: tileSpan };
+      return Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximum, value));
     }
     createViewport(center) {
       const spans = this.viewSpans();
@@ -19946,7 +20036,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     viewPixelSize(extent) {
       const aspect = extent.tileSpanX / extent.tileSpanY;
-      return aspect >= 1 ? { width: this.rasterSize, height: Math.max(1, Math.round(this.rasterSize / aspect)) } : { width: Math.max(1, Math.round(this.rasterSize * aspect)), height: this.rasterSize };
+      const targetSize = this.rasterSize * (this.expanded ? 2 : 1);
+      return aspect >= 1 ? { width: targetSize, height: Math.max(1, Math.round(targetSize / aspect)) } : { width: Math.max(1, Math.round(targetSize * aspect)), height: targetSize };
     }
     pageLayout() {
       const viewport = this.viewport;
@@ -19955,10 +20046,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const targetTileSpan = Math.max(1, maximumViewSpan / 2);
       const powerOfTwoSpan = 2 ** Math.ceil(Math.log2(targetTileSpan));
       const tileSpan = Math.min(MAX_WORLD_OVERVIEW_TILE_SPAN, Math.max(1, powerOfTwoSpan));
-      const pixelSize = Math.min(
-        MAX_WORLD_OVERVIEW_RASTER_SIZE,
-        Math.max(16, Math.round(this.rasterSize * tileSpan / maximumViewSpan))
-      );
+      const pixelSize = Math.min(MAX_WORLD_OVERVIEW_RASTER_SIZE, Math.max(
+        16,
+        Math.round(this.rasterSize * (this.expanded ? 1 : 0.5))
+      ));
       return { tileSpan, pixelSize };
     }
     pageOptions(pageX, pageY, layout) {
@@ -20186,6 +20277,26 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.clampViewport(viewport);
       return viewport.centerX !== previousX || viewport.centerY !== previousY;
     }
+    updateExpandedZoom(dtS) {
+      const viewport = this.viewport;
+      if (!this.expanded || !viewport || dtS <= 0 || this.zoomFactor === this.targetZoomFactor) return false;
+      const previousFactor = this.zoomFactor;
+      const alpha = 1 - Math.exp(-Math.min(dtS, 0.1) / ZOOM_TIME_CONSTANT_S);
+      this.zoomFactor += (this.targetZoomFactor - this.zoomFactor) * alpha;
+      if (Math.abs(this.targetZoomFactor - this.zoomFactor) < 1e-4) this.zoomFactor = this.targetZoomFactor;
+      this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
+      const spans = this.viewSpans();
+      if (!spans) return false;
+      viewport.tileSpanX = spans.tileSpanX;
+      viewport.tileSpanY = spans.tileSpanY;
+      const anchor = this.zoomAnchor;
+      if (anchor) {
+        viewport.centerX = anchor.worldX - (anchor.normalizedX - 0.5) * viewport.tileSpanX;
+        viewport.centerY = anchor.worldY - (anchor.normalizedY - 0.5) * viewport.tileSpanY;
+      }
+      this.clampViewport(viewport);
+      return this.zoomFactor !== previousFactor;
+    }
     render() {
       if (this.disposed) return;
       const bounds = this.canvas.getBoundingClientRect();
@@ -20247,6 +20358,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.rect(rect.x, rect.y, rect.width, rect.height);
       context.clip();
       context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
       const visibleKeys = new Set(this.visiblePageDemands().map((demand) => demand.key));
       const pages = [...this.pageCache.entries()].filter(([, page]) => rangesIntersect(
         extent.originX,
@@ -20298,12 +20410,22 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.setLineDash([4, 3]);
       context.stroke();
       context.setLineDash([]);
+      this.map.getCamera().getWorldDirection(this.cameraDirection);
+      const horizontalLength = Math.hypot(this.cameraDirection.x, this.cameraDirection.z);
+      const heading = horizontalLength > 1e-6 ? Math.atan2(this.cameraDirection.z, this.cameraDirection.x) + Math.PI / 2 : 0;
+      context.translate(x, y);
+      context.rotate(heading);
       context.beginPath();
-      context.arc(x, y, 4, 0, Math.PI * 2);
+      context.moveTo(0, -7);
+      context.lineTo(5, 5);
+      context.lineTo(0, 3);
+      context.lineTo(-5, 5);
+      context.closePath();
       context.fillStyle = "#dffff7";
       context.fill();
       context.strokeStyle = "#123f3b";
-      context.lineWidth = 2;
+      context.lineWidth = 1.5;
+      context.lineJoin = "round";
       context.stroke();
       context.restore();
     }
@@ -20342,7 +20464,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.destination = tile ? { x: tile.x, y: tile.y } : void 0;
       this.onDestinationChange?.(this.destination ? { ...this.destination } : void 0);
     }
-    tileAt(clientX, clientY) {
+    coordinateAt(clientX, clientY) {
       const extent = this.viewportExtent();
       if (!extent) return void 0;
       const canvasBounds = this.canvas.getBoundingClientRect();
@@ -20350,11 +20472,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const y = clientY - canvasBounds.top;
       const rect = this.contentRect;
       if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) return void 0;
-      const nx = (x - rect.x) / rect.width;
-      const ny = (y - rect.y) / rect.height;
+      const normalizedX = (x - rect.x) / rect.width;
+      const normalizedY = (y - rect.y) / rect.height;
+      return {
+        worldX: extent.originX + normalizedX * extent.tileSpanX,
+        worldY: extent.originY + normalizedY * extent.tileSpanY,
+        normalizedX,
+        normalizedY
+      };
+    }
+    tileAt(clientX, clientY) {
+      const coordinate = this.coordinateAt(clientX, clientY);
+      if (!coordinate) return void 0;
       const tile = {
-        x: Math.floor(extent.originX + nx * extent.tileSpanX),
-        y: Math.floor(extent.originY + ny * extent.tileSpanY)
+        x: Math.floor(coordinate.worldX),
+        y: Math.floor(coordinate.worldY)
       };
       const bounds = this.map.worldBounds;
       if (bounds) {

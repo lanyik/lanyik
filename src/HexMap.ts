@@ -43,6 +43,7 @@ import { getWorldChunkMetadata, WORLD_CHUNK_SIZE, WorldChunkMetadata } from "./h
 import {
     createDefaultWorldChunkSchedulerOptions,
     WorldChunkScheduler,
+    WorldChunkSchedulerHooks,
     WorldChunkStreamingStats
 } from "./rendering/WorldChunkScheduler";
 import { FrameTaskScheduler, FrameTaskSchedulerStats } from "./rendering/FrameTaskScheduler";
@@ -160,6 +161,22 @@ export class HexMap extends EventEmitter {
     private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
     private chunkScheduler: WorldChunkScheduler;
+    private readonly chunkSchedulerHooks: WorldChunkSchedulerHooks = {
+        enabled: metadata => {
+            const layer = this.worldRenderLayers?.forKind(metadata.kind);
+            try {
+                return layer?.enabled?.(metadata) ?? (metadata.kind !== "grass" || this.options.grassEnabled);
+            } catch (reason) {
+                this.reportWorldRenderLayerErrors(
+                    `world render layer "${layer?.id}" failed to evaluate visibility`,
+                    [renderLayerError(reason)]
+                );
+                return false;
+            }
+        },
+        activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
+        release: metadata => this.releaseWorldChunk(metadata)
+    };
     private readonly runtimeWork = new RuntimeWorkCoordinator({
         defaultMaxPendingTasks: 512,
         defaultMaxPendingWeight: 2048,
@@ -206,6 +223,7 @@ export class HexMap extends EventEmitter {
     private logicalTargetScratch = new Vector3();
     private predictedTargetScratch = new Vector3();
     private lastStreamingTarget: Vector2 | undefined;
+    private worldDemandElapsedS = 0;
     private streamingVelocity = new Vector2();
     private streamingMotionScratch = new Vector2();
     private streamingAheadScratch = new Vector2();
@@ -839,12 +857,9 @@ export class HexMap extends EventEmitter {
         this.worldChunkMountQueue.retryOne();
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
-        const grassResources = new Set<GrassSharedResources>();
-        if (this.grass) grassResources.add(this.grass.resources);
-        for (const record of this.worldChunkLayers.values()) {
-            if (record.grass) grassResources.add(record.grass.resources);
-        }
-        for (const resources of grassResources) resources.update(dtS);
+        const primaryGrassResources = this.grass?.resources;
+        primaryGrassResources?.update(dtS);
+        if (this.streamedGrassResources !== primaryGrassResources) this.streamedGrassResources?.update(dtS);
         this.emit("frame", {
             t,
             dtS,
@@ -858,19 +873,7 @@ export class HexMap extends EventEmitter {
 
     private updateWorldChunkVisibility(): void {
         if (!this.mapData) return;
-        this.chunkScheduler.update(this.scene, this.camera, this.controls.target, {
-            enabled: metadata => {
-                const layer = this.worldRenderLayers?.forKind(metadata.kind);
-                try {
-                    return layer?.enabled?.(metadata) ?? (metadata.kind !== "grass" || this.options.grassEnabled);
-                } catch (reason) {
-                    this.reportWorldRenderLayerErrors(`world render layer "${layer?.id}" failed to evaluate visibility`, [renderLayerError(reason)]);
-                    return false;
-                }
-            },
-            activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
-            release: metadata => this.releaseWorldChunk(metadata)
-        });
+        this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks);
     }
 
     private activateWorldChunk(metadata: WorldChunkMetadata, lod: 0 | 1 | 2, objects: Object3D[]) {
@@ -1061,6 +1064,7 @@ export class HexMap extends EventEmitter {
             Math.max(0, retentionRadius - loadRadius)
         );
         this.lastStreamingTarget = undefined;
+        this.worldDemandElapsedS = 0;
         this.streamingVelocity.set(0, 0);
         this.mapData = source.map;
         this.worldSurface = worldSurface;
@@ -1661,7 +1665,7 @@ export class HexMap extends EventEmitter {
                 this.chunkScheduler.invalidateScene();
             },
             invalidateVisibility: () => {
-                if (isCurrent()) this.chunkScheduler.invalidateScene();
+                if (isCurrent()) this.chunkScheduler.invalidateVisibility();
             },
             requestWorldCopyRefresh: () => {
                 if (isCurrent()) this.refreshWorldCopies();
@@ -1847,6 +1851,7 @@ export class HexMap extends EventEmitter {
         this.worldDemandChunkKey = undefined;
         this.worldDemandSignature = undefined;
         this.lastStreamingTarget = undefined;
+        this.worldDemandElapsedS = 0;
         this.streamingVelocity.set(0, 0);
         this.adaptiveStreamingController = undefined;
         this.appliedVegetationDensityScale = 1;
@@ -2603,6 +2608,7 @@ export class HexMap extends EventEmitter {
 
     private updateWorldDemand(dtS: number): void {
         if (!this.worldStreamer || !this.worldSource) return;
+        this.worldDemandElapsedS += Math.max(0, dtS);
         this.logicalTargetScratch.copy(this.controls.target);
         if (this.mapData.infinite) {
             this.logicalTargetScratch.x += this.renderOrigin.x;
@@ -2610,9 +2616,9 @@ export class HexMap extends EventEmitter {
         }
         const currentX = this.logicalTargetScratch.x;
         const currentY = this.logicalTargetScratch.z;
-        if (this.lastStreamingTarget && dtS > 0) {
-            let dx = currentX - this.lastStreamingTarget.x;
-            let dy = currentY - this.lastStreamingTarget.y;
+        let dx = this.lastStreamingTarget ? currentX - this.lastStreamingTarget.x : 0;
+        let dy = this.lastStreamingTarget ? currentY - this.lastStreamingTarget.y : 0;
+        if (this.lastStreamingTarget) {
             if (this.mapData.wrapX && this.worldPeriodX > 0) {
                 if (dx > this.worldPeriodX / 2) dx -= this.worldPeriodX;
                 else if (dx < -this.worldPeriodX / 2) dx += this.worldPeriodX;
@@ -2621,12 +2627,20 @@ export class HexMap extends EventEmitter {
                 if (dy > this.worldPeriodY / 2) dy -= this.worldPeriodY;
                 else if (dy < -this.worldPeriodY / 2) dy += this.worldPeriodY;
             }
-            const alpha = 1 - Math.exp(-dtS / 0.25);
-            this.streamingMotionScratch.set(dx / dtS, dy / dtS);
+            const displacementSq = dx * dx + dy * dy;
+            const threshold = WORLD_CHUNK_SIZE * this.options.size * 1.5 * 0.25;
+            const movedEnough = displacementSq >= threshold * threshold;
+            const delayedMovement = displacementSq > 0.0001 && this.worldDemandElapsedS >= 0.25;
+            const velocityDecayDue = this.streamingVelocity.lengthSq() > 1 && this.worldDemandElapsedS >= 0.25;
+            if (!movedEnough && !delayedMovement && !velocityDecayDue) return;
+            const elapsedS = Math.max(this.worldDemandElapsedS, 1 / 240);
+            const alpha = 1 - Math.exp(-elapsedS / 0.25);
+            this.streamingMotionScratch.set(dx / elapsedS, dy / elapsedS);
             this.streamingVelocity.lerp(this.streamingMotionScratch, alpha);
         }
         this.lastStreamingTarget ??= new Vector2();
         this.lastStreamingTarget.set(currentX, currentY);
+        this.worldDemandElapsedS = 0;
         const tile = pickTile(
             this.logicalTargetScratch,
             this.options.size,

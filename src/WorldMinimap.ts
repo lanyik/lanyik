@@ -1,5 +1,6 @@
 import type { HexMap } from "./HexMap";
 import type { Point } from "./interfaces";
+import { Vector3 } from "three";
 import {
     MAX_WORLD_OVERVIEW_RASTER_SIZE,
     MAX_WORLD_OVERVIEW_TILE_SPAN,
@@ -56,6 +57,13 @@ interface MinimapExtent {
     tileSpanY: number;
 }
 
+interface MinimapZoomAnchor {
+    worldX: number;
+    worldY: number;
+    normalizedX: number;
+    normalizedY: number;
+}
+
 interface PageLayout {
     tileSpan: number;
     pixelSize: number;
@@ -92,6 +100,8 @@ const PAGE_DEMAND_INTERVAL_MS = 50;
 const PREFETCH_PAGE_INTERVAL_MS = 100;
 const PAGE_RETRY_DELAY_MS = 500;
 const FOLLOW_TIME_CONSTANT_S = 0.16;
+const ZOOM_TIME_CONSTANT_S = 0.1;
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 
 function asPositiveInteger(name: string, value: number, maximum: number): number {
     if (!Number.isInteger(value) || value <= 0 || value > maximum) {
@@ -140,6 +150,7 @@ export class WorldMinimap {
     private readonly pendingPages = new Map<string, PendingPage>();
     private readonly retryAfter = new Map<string, number>();
     private readonly resizeObserver: ResizeObserver | undefined;
+    private readonly cameraDirection = new Vector3();
     private contentRect: ContentRect = { x: 0, y: 0, width: 0, height: 0 };
     private lastDrawAt = -Infinity;
     private lastDemandCheckAt = -Infinity;
@@ -147,6 +158,8 @@ export class WorldMinimap {
     private pageGeneration = 0;
     private expanded = false;
     private zoomFactor = 1;
+    private targetZoomFactor = 1;
+    private zoomAnchor: MinimapZoomAnchor | undefined;
     private viewport: MinimapViewport | undefined;
     private destination: Point | undefined;
     private reportedPageError = false;
@@ -232,6 +245,8 @@ export class WorldMinimap {
         if (this.disposed || expanded === this.expanded) return;
         this.expanded = expanded;
         this.zoomFactor = 1;
+        this.targetZoomFactor = 1;
+        this.zoomAnchor = undefined;
         const cameraTarget = this.map.getCameraTargetTile();
         this.viewport = cameraTarget ? this.createViewport(cameraTarget) : undefined;
         this.setDestination(expanded && cameraTarget ? cameraTarget : undefined);
@@ -269,6 +284,8 @@ export class WorldMinimap {
         const wasExpanded = this.expanded;
         this.expanded = false;
         this.zoomFactor = 1;
+        this.targetZoomFactor = 1;
+        this.zoomAnchor = undefined;
         this.viewport = undefined;
         this.setDestination(undefined);
         this.canvas.setAttribute("aria-busy", "false");
@@ -295,24 +312,32 @@ export class WorldMinimap {
     private viewSpans(): { tileSpanX: number; tileSpanY: number } | undefined {
         const bounds = this.map.worldBounds;
         if (bounds) {
-            const minimumFactor = Math.min(1, Math.max(
-                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
-                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
-            ));
-            this.zoomFactor = Math.max(minimumFactor, Math.min(1, this.zoomFactor));
+            this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
             return {
-                tileSpanX: Math.min(bounds.width, Math.max(1, Math.round(bounds.width * this.zoomFactor))),
-                tileSpanY: Math.min(bounds.height, Math.max(1, Math.round(bounds.height * this.zoomFactor)))
+                tileSpanX: Math.min(bounds.width, Math.max(1, bounds.width * this.zoomFactor)),
+                tileSpanY: Math.min(bounds.height, Math.max(1, bounds.height * this.zoomFactor))
             };
         }
         if (this.map.worldDescriptor?.topology !== "infinite") return undefined;
-        const maximumFactor = Math.min(
+        this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
+        const tileSpan = Math.max(1, this.infiniteTileSpan * this.zoomFactor);
+        return { tileSpanX: tileSpan, tileSpanY: tileSpan };
+    }
+
+    private clampZoomFactor(value: number): number {
+        const bounds = this.map.worldBounds;
+        if (bounds) {
+            const minimum = Math.min(1, Math.max(
+                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
+                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
+            ));
+            return Math.max(minimum, Math.min(1, value));
+        }
+        const maximum = Math.min(
             MAX_INFINITE_ZOOM_FACTOR,
             MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
         );
-        this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximumFactor, this.zoomFactor));
-        const tileSpan = Math.max(1, Math.round(this.infiniteTileSpan * this.zoomFactor));
-        return { tileSpanX: tileSpan, tileSpanY: tileSpan };
+        return Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximum, value));
     }
 
     private createViewport(center: Readonly<Point>): MinimapViewport {
@@ -349,9 +374,10 @@ export class WorldMinimap {
 
     private viewPixelSize(extent: MinimapExtent): { width: number; height: number } {
         const aspect = extent.tileSpanX / extent.tileSpanY;
+        const targetSize = this.rasterSize * (this.expanded ? 2 : 1);
         return aspect >= 1
-            ? { width: this.rasterSize, height: Math.max(1, Math.round(this.rasterSize / aspect)) }
-            : { width: Math.max(1, Math.round(this.rasterSize * aspect)), height: this.rasterSize };
+            ? { width: targetSize, height: Math.max(1, Math.round(targetSize / aspect)) }
+            : { width: Math.max(1, Math.round(targetSize * aspect)), height: targetSize };
     }
 
     private pageLayout(): PageLayout | undefined {
@@ -361,10 +387,10 @@ export class WorldMinimap {
         const targetTileSpan = Math.max(1, maximumViewSpan / 2);
         const powerOfTwoSpan = 2 ** Math.ceil(Math.log2(targetTileSpan));
         const tileSpan = Math.min(MAX_WORLD_OVERVIEW_TILE_SPAN, Math.max(1, powerOfTwoSpan));
-        const pixelSize = Math.min(
-            MAX_WORLD_OVERVIEW_RASTER_SIZE,
-            Math.max(16, Math.round(this.rasterSize * tileSpan / maximumViewSpan))
-        );
+        const pixelSize = Math.min(MAX_WORLD_OVERVIEW_RASTER_SIZE, Math.max(
+            16,
+            Math.round(this.rasterSize * (this.expanded ? 1 : 0.5))
+        ));
         return { tileSpan, pixelSize };
     }
 
@@ -613,6 +639,27 @@ export class WorldMinimap {
         return viewport.centerX !== previousX || viewport.centerY !== previousY;
     }
 
+    private updateExpandedZoom(dtS: number): boolean {
+        const viewport = this.viewport;
+        if (!this.expanded || !viewport || dtS <= 0 || this.zoomFactor === this.targetZoomFactor) return false;
+        const previousFactor = this.zoomFactor;
+        const alpha = 1 - Math.exp(-Math.min(dtS, 0.1) / ZOOM_TIME_CONSTANT_S);
+        this.zoomFactor += (this.targetZoomFactor - this.zoomFactor) * alpha;
+        if (Math.abs(this.targetZoomFactor - this.zoomFactor) < 0.0001) this.zoomFactor = this.targetZoomFactor;
+        this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
+        const spans = this.viewSpans();
+        if (!spans) return false;
+        viewport.tileSpanX = spans.tileSpanX;
+        viewport.tileSpanY = spans.tileSpanY;
+        const anchor = this.zoomAnchor;
+        if (anchor) {
+            viewport.centerX = anchor.worldX - (anchor.normalizedX - 0.5) * viewport.tileSpanX;
+            viewport.centerY = anchor.worldY - (anchor.normalizedY - 0.5) * viewport.tileSpanY;
+        }
+        this.clampViewport(viewport);
+        return this.zoomFactor !== previousFactor;
+    }
+
     private render(): void {
         if (this.disposed) return;
         const bounds = this.canvas.getBoundingClientRect();
@@ -676,6 +723,7 @@ export class WorldMinimap {
         context.rect(rect.x, rect.y, rect.width, rect.height);
         context.clip();
         context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
         const visibleKeys = new Set(this.visiblePageDemands().map(demand => demand.key));
         const pages = [...this.pageCache.entries()]
             .filter(([, page]) => rangesIntersect(
@@ -735,12 +783,24 @@ export class WorldMinimap {
         context.setLineDash([4, 3]);
         context.stroke();
         context.setLineDash([]);
+        this.map.getCamera().getWorldDirection(this.cameraDirection);
+        const horizontalLength = Math.hypot(this.cameraDirection.x, this.cameraDirection.z);
+        const heading = horizontalLength > 1e-6
+            ? Math.atan2(this.cameraDirection.z, this.cameraDirection.x) + Math.PI / 2
+            : 0;
+        context.translate(x, y);
+        context.rotate(heading);
         context.beginPath();
-        context.arc(x, y, 4, 0, Math.PI * 2);
+        context.moveTo(0, -7);
+        context.lineTo(5, 5);
+        context.lineTo(0, 3);
+        context.lineTo(-5, 5);
+        context.closePath();
         context.fillStyle = "#dffff7";
         context.fill();
         context.strokeStyle = "#123f3b";
-        context.lineWidth = 2;
+        context.lineWidth = 1.5;
+        context.lineJoin = "round";
         context.stroke();
         context.restore();
     }
@@ -783,7 +843,7 @@ export class WorldMinimap {
         this.onDestinationChange?.(this.destination ? { ...this.destination } : undefined);
     }
 
-    private tileAt(clientX: number, clientY: number): Point | undefined {
+    private coordinateAt(clientX: number, clientY: number): MinimapZoomAnchor | undefined {
         const extent = this.viewportExtent();
         if (!extent) return undefined;
         const canvasBounds = this.canvas.getBoundingClientRect();
@@ -791,11 +851,22 @@ export class WorldMinimap {
         const y = clientY - canvasBounds.top;
         const rect = this.contentRect;
         if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) return undefined;
-        const nx = (x - rect.x) / rect.width;
-        const ny = (y - rect.y) / rect.height;
+        const normalizedX = (x - rect.x) / rect.width;
+        const normalizedY = (y - rect.y) / rect.height;
+        return {
+            worldX: extent.originX + normalizedX * extent.tileSpanX,
+            worldY: extent.originY + normalizedY * extent.tileSpanY,
+            normalizedX,
+            normalizedY
+        };
+    }
+
+    private tileAt(clientX: number, clientY: number): Point | undefined {
+        const coordinate = this.coordinateAt(clientX, clientY);
+        if (!coordinate) return undefined;
         const tile = {
-            x: Math.floor(extent.originX + nx * extent.tileSpanX),
-            y: Math.floor(extent.originY + ny * extent.tileSpanY)
+            x: Math.floor(coordinate.worldX),
+            y: Math.floor(coordinate.worldY)
         };
         const bounds = this.map.worldBounds;
         if (bounds) {
@@ -829,29 +900,20 @@ export class WorldMinimap {
 
     private handleWheel = (event: WheelEvent): void => {
         if (!this.expanded || event.deltaY === 0) return;
-        const anchor = this.tileAt(event.clientX, event.clientY);
+        const anchor = this.coordinateAt(event.clientX, event.clientY);
         if (!anchor) return;
         event.preventDefault();
         event.stopPropagation();
-        const previous = this.zoomFactor;
-        this.zoomFactor *= event.deltaY < 0 ? 0.5 : 2;
-        const bounds = this.map.worldBounds;
-        if (bounds) {
-            const minimum = Math.min(1, Math.max(
-                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
-                Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.height)
-            ));
-            this.zoomFactor = Math.max(minimum, Math.min(1, this.zoomFactor));
-        } else {
-            const maximum = Math.min(
-                MAX_INFINITE_ZOOM_FACTOR,
-                MAX_WORLD_OVERVIEW_TILE_SPAN * 2 / this.infiniteTileSpan
-            );
-            this.zoomFactor = Math.max(MIN_INFINITE_ZOOM_FACTOR, Math.min(maximum, this.zoomFactor));
-        }
-        if (this.zoomFactor === previous) return;
-        this.viewport = this.createViewport(anchor);
-        void this.refresh();
+        const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? 16
+            : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 100 : 1;
+        const normalizedDelta = Math.max(-240, Math.min(240, event.deltaY * deltaScale));
+        const next = this.clampZoomFactor(
+            this.targetZoomFactor * Math.exp(normalizedDelta * WHEEL_ZOOM_SENSITIVITY)
+        );
+        if (next === this.targetZoomFactor) return;
+        this.targetZoomFactor = next;
+        this.zoomAnchor = anchor;
     };
 
     private handleKeyDown = (event: KeyboardEvent): void => {
@@ -879,8 +941,9 @@ export class WorldMinimap {
         const now = Number.isFinite(frame?.t) ? frame.t as number : performance.now();
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS as number) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
-        const moved = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
-        if (moved || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
+        const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
+        const zoomed = this.updateExpandedZoom(dtS);
+        if (followed || zoomed || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
             this.lastDemandCheckAt = now;
             this.rebuildPageDemand();
             this.pumpPageRequests();

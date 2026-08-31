@@ -40,13 +40,26 @@ of clearing and recloning every image. This backpressure prevents a batch of
 completed workers from creating a long main-thread frame.
 
 The scheduler builds a flat chunk registry only when the mounted scene changes.
-Normal frames iterate that registry directly instead of traversing the Three.js
-scene graph. Grass fields share one blade geometry/material/clock per load
-session, forest fields share each prepared model geometry/material, and every
-layer caches its deterministic CPU result per LOD. Terrain chunks also share one
-immutable base hex geometry per LOD; each chunk stores only instance attributes.
-Disposing one chunk detaches those shared attributes before Three.js sends its
-WebGL-dispose notification, so sibling chunks cannot invalidate each other.
+Normal frames compare cached camera, target and projection anchors without
+iterating that registry or allocating new scheduler callbacks. Bounds,
+visibility, LOD and residency are reevaluated only after target/camera
+translation reaches the smaller of half the LOD hysteresis band and 2% of the
+render distance (with a one-world-unit floor), camera rotation reaches 0.5
+degrees, projection changes, scene membership changes, scheduler configuration
+changes, or a render layer calls `invalidateVisibility()`. Frustum tests expand
+bounds by the maximum skipped translation plus angular sweep, so thresholding
+remains conservative instead of exposing a temporarily missing strip.
+`visibilityChecks` and `visibilitySkips` expose both paths in
+`map.streamingStats`.
+
+Grass fields share one blade geometry/material/clock per load session, forest
+fields share each prepared model geometry/material, and every layer caches its
+deterministic CPU result per LOD. The render loop updates the finite-map and
+streamed grass clocks directly; it does not allocate a set or scan resident
+source chunks every frame. Terrain chunks also share one immutable base hex
+geometry per LOD; each chunk stores only instance attributes. Disposing one
+chunk detaches those shared attributes before Three.js sends its WebGL-dispose
+notification, so sibling chunks cannot invalidate each other.
 
 ## Frustum culling
 
@@ -115,6 +128,12 @@ same points on both sides of an LOD transition, preventing cracks.
 Applications can tune render distances and budgets through `HexMapOptions` and
 source residency through `loadWorld()`. `map.worldStreamingStats` reports source
 residency, queues and retries; `map.streamingStats` reports render LOD/GPU state.
+
+Source demand has its own lower-frequency anchor. Camera motion accumulates up
+to one quarter of a 12×12 render-chunk span before velocity prediction and
+source-chunk resolution run again; movement that stops below that threshold is
+flushed after 250 ms. Once both displacement and predicted velocity settle,
+static frames perform no source tile/chunk boundary lookup.
 
 ## Generation
 
@@ -423,8 +442,11 @@ background capacity, and completed pages enter a 64-entry Canvas/LRU cache.
 For the default 512×512-tile infinite view this outer ring covers roughly a
 1024×1024-tile logical buffer. Static pages are generated only when absent;
 there is no periodic resampling of unchanged terrain and no full-buffer copy
-when the viewport moves. Zoom levels use different page keys so their sampling
-density remains stable.
+when the viewport moves. Wheel input changes a continuous target scale and the
+viewport converges exponentially while preserving the world coordinate under
+the pointer. Page sampling changes only when that continuous scale crosses a
+power-of-two level; compact pages target 256 effective pixels across the view,
+while expanded pages target 512. Revisited levels reuse their existing keys.
 When a zoom level is still missing pages, intersecting pages from an already
 cached coarser level are drawn underneath it. New pages replace that underlay
 in place, so progressive refinement does not expose empty blocks.
@@ -438,8 +460,10 @@ The UI policy is:
 - `M` (or a compact-map click) opens the expanded map, the wheel changes its
   sampling level, a click selects a destination, `T` confirms teleport, and
   `M`/`Escape` closes without teleporting;
-- the dashed ellipse shows the main render-distance footprint, the pale point
-  is the logical camera target, and the amber diamond is the pending destination.
+- the dashed ellipse shows the main render-distance footprint, the pale arrow
+  is the logical camera target and horizontal view heading, and the amber
+  diamond is the pending destination. The arrow is a dynamic overlay and does
+  not invalidate cached terrain pages.
 
 The base raster is rebuildable navigation data, not authoritative gameplay
 state. Cities, units, explored/fog state, objectives, and terrain edits remain

@@ -5,6 +5,7 @@ import {
     Frustum,
     Matrix4,
     Object3D,
+    Quaternion,
     Vector3
 } from "three";
 
@@ -74,6 +75,8 @@ export interface WorldChunkStreamingStats {
     cpuBudgetExceededBytes: number;
     gpuBudgetExceededBytes: number;
     resourceEvictions: number;
+    visibilityChecks: number;
+    visibilitySkips: number;
 }
 
 interface ResidentChunk {
@@ -113,8 +116,13 @@ const EMPTY_STATS: WorldChunkStreamingStats = {
     gpuBudgetBytes: 0,
     cpuBudgetExceededBytes: 0,
     gpuBudgetExceededBytes: 0,
-    resourceEvictions: 0
+    resourceEvictions: 0,
+    visibilityChecks: 0,
+    visibilitySkips: 0
 };
+
+const VISIBILITY_ROTATION_THRESHOLD_RAD = Math.PI / 360;
+const PROJECTION_EPSILON = 1e-7;
 
 //Owns visibility, LOD selection and CPU/GPU residency. Render-layer classes
 //remain responsible for constructing their own data; this scheduler only
@@ -132,6 +140,16 @@ export class WorldChunkScheduler {
     private registeredObjects = 0;
     private sceneTraversals = 0;
     private frame = 0;
+    private visibilityDirty = true;
+    private visibilityChecks = 0;
+    private visibilitySkips = 0;
+    private hasVisibilityAnchor = false;
+    private readonly lastCameraPosition = new Vector3();
+    private readonly lastCameraQuaternion = new Quaternion();
+    private readonly lastTarget = new Vector3();
+    private readonly lastProjection = new Matrix4();
+    private readonly cameraPosition = new Vector3();
+    private readonly cameraQuaternion = new Quaternion();
     private snapshot: WorldChunkStreamingStats = { ...EMPTY_STATS };
     private readonly resources: ResourceBudgetLedger;
     private readonly resourceView: ResourceBudgetView;
@@ -158,6 +176,7 @@ export class WorldChunkScheduler {
             cpuBytes: next.cpuCacheBytes ?? 384 * 1024 * 1024,
             gpuBytes: next.gpuCacheBytes ?? 256 * 1024 * 1024
         });
+        this.visibilityDirty = true;
         this.refreshResourceSnapshot();
     }
 
@@ -167,6 +186,10 @@ export class WorldChunkScheduler {
         this.frame = 0;
         this.snapshot = { ...EMPTY_STATS };
         this.registryDirty = true;
+        this.visibilityDirty = true;
+        this.hasVisibilityAnchor = false;
+        this.visibilityChecks = 0;
+        this.visibilitySkips = 0;
         this.resourceEvictions = 0;
         this.refreshResourceSnapshot();
     }
@@ -180,6 +203,11 @@ export class WorldChunkScheduler {
 
     public invalidateScene(): void {
         this.registryDirty = true;
+        this.visibilityDirty = true;
+    }
+
+    public invalidateVisibility(): void {
+        this.visibilityDirty = true;
     }
 
     //Streaming worlds can physically remove render shells before the normal
@@ -192,6 +220,7 @@ export class WorldChunkScheduler {
             this.bindings.delete(id);
         }
         this.registryDirty = true;
+        this.visibilityDirty = true;
     }
 
     public get stats(): Readonly<WorldChunkStreamingStats> {
@@ -210,10 +239,20 @@ export class WorldChunkScheduler {
         return this.resources.createAccount(label);
     }
 
-    public update(root: Object3D, camera: Camera, target: Vector3, hooks: WorldChunkSchedulerHooks): void {
+    public update(root: Object3D, camera: Camera, target: Vector3, hooks: WorldChunkSchedulerHooks): boolean {
         this.frame += 1;
-        if (root !== this.registeredRoot || this.registryDirty) this.rebuildRegistry(root);
         camera.updateMatrixWorld();
+        camera.getWorldPosition(this.cameraPosition);
+        camera.getWorldQuaternion(this.cameraQuaternion);
+        if (!this.shouldRefreshVisibility(root, camera, target)) {
+            this.visibilitySkips += 1;
+            this.snapshot = { ...this.snapshot, visibilitySkips: this.visibilitySkips };
+            return false;
+        }
+        this.visibilityDirty = false;
+        this.captureVisibilityAnchor(camera, target);
+        this.visibilityChecks += 1;
+        if (root !== this.registeredRoot || this.registryDirty) this.rebuildRegistry(root);
         this.projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         this.frustum.setFromProjectionMatrix(this.projection);
 
@@ -253,9 +292,9 @@ export class WorldChunkScheduler {
                 const lod = resolvedLod === null
                     ? null
                     : Math.min(2, resolvedLod + bias) as WorldChunkLod;
-                const visible = distance <= this.options.renderDistance
-                    && lod !== null
-                    && this.frustum.intersectsBox(this.bounds);
+                const inRenderDistance = distance <= this.options.renderDistance && lod !== null;
+                if (inRenderDistance) this.bounds.expandByScalar(this.visibilityCullingPadding());
+                const visible = inRenderDistance && this.frustum.intersectsBox(this.bounds);
                 object.visible = visible;
                 if (!visible || lod === null) continue;
                 visibleObjects += 1;
@@ -328,8 +367,11 @@ export class WorldChunkScheduler {
             gpuBudgetBytes: resourceStats.gpuLimitBytes,
             cpuBudgetExceededBytes: resourceStats.cpuExceededBytes,
             gpuBudgetExceededBytes: resourceStats.gpuExceededBytes,
-            resourceEvictions: this.resourceEvictions
+            resourceEvictions: this.resourceEvictions,
+            visibilityChecks: this.visibilityChecks,
+            visibilitySkips: this.visibilitySkips
         };
+        return true;
     }
 
     private evictInactive(visible: ReadonlySet<string>, hooks: WorldChunkSchedulerHooks): void {
@@ -435,8 +477,49 @@ export class WorldChunkScheduler {
             gpuBudgetBytes: resources.gpuLimitBytes,
             cpuBudgetExceededBytes: resources.cpuExceededBytes,
             gpuBudgetExceededBytes: resources.gpuExceededBytes,
-            resourceEvictions: this.resourceEvictions
+            resourceEvictions: this.resourceEvictions,
+            visibilityChecks: this.visibilityChecks,
+            visibilitySkips: this.visibilitySkips
         };
+    }
+
+    private shouldRefreshVisibility(root: Object3D, camera: Camera, target: Vector3): boolean {
+        if (this.visibilityDirty || this.registryDirty || root !== this.registeredRoot || !this.hasVisibilityAnchor) {
+            return true;
+        }
+        const translationThreshold = this.visibilityTranslationThreshold();
+        if (this.lastTarget.distanceToSquared(target) >= translationThreshold * translationThreshold
+            || this.lastCameraPosition.distanceToSquared(this.cameraPosition) >= translationThreshold * translationThreshold) {
+            return true;
+        }
+        const quaternionDot = Math.min(1, Math.abs(this.lastCameraQuaternion.dot(this.cameraQuaternion)));
+        if (quaternionDot <= Math.cos(VISIBILITY_ROTATION_THRESHOLD_RAD / 2)) return true;
+        const currentProjection = camera.projectionMatrix.elements;
+        const previousProjection = this.lastProjection.elements;
+        for (let index = 0; index < currentProjection.length; index += 1) {
+            if (Math.abs(currentProjection[index] - previousProjection[index]) > PROJECTION_EPSILON) return true;
+        }
+        return false;
+    }
+
+    private captureVisibilityAnchor(camera: Camera, target: Vector3): void {
+        this.lastCameraPosition.copy(this.cameraPosition);
+        this.lastCameraQuaternion.copy(this.cameraQuaternion);
+        this.lastTarget.copy(target);
+        this.lastProjection.copy(camera.projectionMatrix);
+        this.hasVisibilityAnchor = true;
+    }
+
+    private visibilityTranslationThreshold(): number {
+        return Math.max(1, Math.min(
+            this.options.lodDistances.hysteresis * 0.5,
+            this.options.renderDistance * 0.02
+        ));
+    }
+
+    private visibilityCullingPadding(): number {
+        return this.visibilityTranslationThreshold()
+            + this.options.renderDistance * Math.tan(VISIBILITY_ROTATION_THRESHOLD_RAD);
     }
 
     private rebuildRegistry(root: Object3D): void {

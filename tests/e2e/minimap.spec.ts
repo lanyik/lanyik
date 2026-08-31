@@ -69,6 +69,11 @@ test("expanded minimap zooms, selects a target, and teleports only after T", asy
     await expect.poll(() => page.evaluate(() => (window as unknown as {
         worldMinimap: { view: MinimapView };
     }).worldMinimap.view.zoom)).toBeGreaterThan(1);
+    const continuousZoom = await page.evaluate(() => (window as unknown as {
+        worldMinimap: { view: MinimapView };
+    }).worldMinimap.view);
+    expect(continuousZoom.zoom).toBeLessThan(2);
+    expect(continuousZoom.tileSpanX! % 1).not.toBe(0);
 
     const bounds = await canvas.boundingBox();
     if (!bounds) throw new Error("minimap canvas is not visible");
