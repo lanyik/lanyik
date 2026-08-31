@@ -127,7 +127,7 @@ keeps the rest reproducible from seed plus dimensions.
 
 Eager, toroidal and infinite chunk generation now share one internal
 `WorldSurfaceResolver`. Its frozen profile is tied directly to generator version
-4. It produces continuous plain/valley/hill/mountain relief, biome weights,
+6. It produces continuous plain/valley/hill/mountain relief, biome weights,
 forest-patch density and lake-patch potential; short-lived resolver windows deduplicate one-ring samples without
 creating a world-sized cache. A worker retains one resolver while requests keep
 the same canonical descriptor fingerprint; request order does not enter the rules.
@@ -152,7 +152,23 @@ world-coordinate micro displacement bounded to ±1.5% around the CPU macro
 surface, and chunk Y bounds include the matching 1.015 multiplier. Terrain keeps
 15 vertex attribute locations: `fogState` is a packed vec4 containing fog plus
 three independent biome weights, with temperate inferred in both full and fast
-materials. The continuous biome tint adds no terrain-atlas lookup.
+materials. Both quality paths use the same climate/elevation snowline; fast mode
+reuses its existing material macro instead of sampling extra noise. The
+continuous biome tint and summit snow add no terrain-atlas lookup.
+
+Mountain height and lighting have separate continuity contracts. Heights still
+use the symmetric three-cell corner average. Lighting derives one slope from the
+same three tile-centre contributions at every shared corner, then interpolates
+those slopes over the tile fan. Adjacent instances therefore submit identical
+normals along their common edge even though their geometry is independently
+instanced or uses a different LOD. The bounded ±1.5% material displacement is
+not differentiated into the normal; doing so would restore a per-instance edge
+dependency for imperceptible micro-relief.
+
+The persistent hex grid is disabled by default in both the library and demo. It
+remains a live explicit `gridVisible` presentation option for tactical/editor
+views, while selection and hover feedback continue to show the active cell
+without drawing dark lines over every mountain edge.
 
 ## Unified world sources
 

@@ -521,16 +521,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
     }
 
-    // Mountain snow only survives on local high summits. A warped world-space
-    // snowline breaks the constant-height rings that used to outline every
-    // ridge and made the terrain read as rows of volcanic craters.
+    // Mountain snow only survives on local high summits. Cold/alpine climate
+    // lowers the line without replacing lowland tiles with white hexes. A
+    // warped world-space threshold breaks constant-height rings around ridges.
     if (vLandform.x > 0.0) {
         float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
             + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
-        float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
-        float snowT = smoothstep(snowLine, snowLine + 0.2, vLandform.x);
-        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
+        float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
+        float snowLine = 0.74 - climateDrop + (snowNoise - 0.5) * 0.18;
+        float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
+        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
     }
 
     // Rivers/lakes (see the uniform block's comment above). Drawn before

@@ -69,12 +69,16 @@ describe("streamed render resource sharing", () => {
         for (const shader of [TERRAIN_FRAGMENT_SHADER, TERRAIN_FAST_FRAGMENT_SHADER]) {
             expect(shader).toContain("vec3 terrainPattern()");
             expect(shader).toContain("vec3 applyBiomeMaterial(vec3 color)");
+            expect(shader).toContain("float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12");
             expect(shader).toContain("varying vec4 vBiomeWeights");
             expect(shader).not.toContain("varying float vElevation");
             expect(shader.match(/texture2D\(map,/g)).toHaveLength(1);
         }
         expect(TERRAIN_VERTEX_SHADER).toContain("attribute vec4 fogState");
         expect(TERRAIN_VERTEX_SHADER).toContain("varying vec4 vBiomeWeights");
+        expect(TERRAIN_VERTEX_SHADER).toContain("vec2 sharedCornerSlope(");
+        expect(TERRAIN_VERTEX_SHADER).toContain("smoothMountainSlopeAt(local)");
+        expect(TERRAIN_VERTEX_SHADER).not.toContain("mountainHeightAt(local + vec2(");
         expect(TERRAIN_VERTEX_SHADER).not.toContain("varying float vElevation");
     });
 

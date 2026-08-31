@@ -17,6 +17,7 @@ describe("HexMap option boundary", () => {
             riverDepth: 7.5,
             mountainHeight: 80,
             terrainTextureRegionSize: 2,
+            gridVisible: false,
             grassBladeWidth: 1.5,
             grassBladeHeight: 9,
             grassWindStrength: 3.15,

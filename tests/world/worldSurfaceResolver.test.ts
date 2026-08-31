@@ -25,7 +25,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v5 outputs", () => {
+    test("preserves the frozen generator v6 outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v4-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
         });
@@ -49,8 +49,27 @@ describe("WorldSurfaceResolver", () => {
             }
         }
         expect(checksum(infinite.tiles)).toBe("ae84e215");
-        expect(checksum(toroidal.tiles)).toBe("cd8b9172");
+        expect(checksum(toroidal.tiles)).toBe("c4507ca2");
         expect(checksum(encoded)).toBe("50fc54b4");
+    });
+
+    test("keeps generated permanent snow on elevated hill relief", () => {
+        const resolver = createWorldSurfaceResolver({ seed: "new-world" });
+        const terrain = WORLD_STYLE_PROFILE.terrain;
+        const minimumSnowElevation = terrain.seaLevel
+            + (terrain.hillElevation - terrain.seaLevel) * 0.45;
+        let snowTiles = 0;
+        for (let x = -64; x < 64; x += 1) {
+            for (let y = -64; y < 64; y += 1) {
+                const sample = resolver.sampleGenerated(x, y);
+                if (sample.baseTerrain !== Land.snow) continue;
+                const tile = resolver.resolveGeneratedTile(x, y);
+                snowTiles += 1;
+                expect(sample.landform.elevation).toBeGreaterThan(minimumSnowElevation);
+                expect(tile.modifiers).toContain("hill");
+            }
+        }
+        expect(snowTiles).toBeGreaterThan(0);
     });
 
     test("freezes continuous relief, biome, vegetation and lake fields", () => {

@@ -538,7 +538,7 @@ export class TerrainMesh extends Group {
             worldPeriod: { value: new Vector2(0, 0) },
             chunkOrigin: { value: new Vector2(0, 0) },
             lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
-            showGrid: { value: this.options.gridVisible === false ? 0.0 : 1.0 },
+            showGrid: { value: this.options.gridVisible === true ? 1.0 : 0.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
             gridWidth: { value: this.options.gridWidth ?? 0.04 },
             gridOpacity: { value: this.options.gridOpacity ?? 0.35 },

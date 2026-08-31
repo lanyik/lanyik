@@ -12,7 +12,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
-| World-style generation v1 | Frozen on 2026-08-29; generator v5, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
+| World-style generation v1 | Generator v6; elevated climate snow and seam-free mountain lighting, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 
 ## Architecture and contracts

@@ -75,7 +75,7 @@ const map = new HexMap({
     element: "[data-world-canvas]",
     size: 48,
     texturesBaseUrl: "textures/",
-    gridVisible: true,
+    gridVisible: false,
     gridColor: 0x42322b,
     gridWidth: 0.04,
     gridOpacity: 0.35,

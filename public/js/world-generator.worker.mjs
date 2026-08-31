@@ -809,7 +809,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 5;
+var WORLD_GENERATOR_VERSION = 6;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -1298,7 +1298,10 @@ function classifyTerrain(sample, profile) {
   const terrain = profile.terrain;
   if (sample.elevation < terrain.seaLevel) return "sea" /* sea */;
   if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
-  if (sample.temperature < terrain.snowTemperature) return "snow" /* snow */;
+  const snowColdness = terrain.snowTemperature > 0 ? clamp012((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
+  const minimumSnowElevation = terrain.seaLevel + (terrain.hillElevation - terrain.seaLevel) * 0.45;
+  const snowElevation = terrain.hillElevation - (terrain.hillElevation - minimumSnowElevation) * snowColdness;
+  if (sample.temperature < terrain.snowTemperature && sample.elevation > snowElevation) return "snow" /* snow */;
   if (sample.temperature < terrain.tundraTemperature) return "tundra" /* tundra */;
   if (sample.temperature > terrain.sandTemperature && sample.moisture < terrain.sandMoisture) return "sand" /* sand */;
   return "land" /* land */;
@@ -1427,8 +1430,14 @@ function resolveTile(numericSeed, profile, x, y, sampleAt) {
     if (touchesLand) type = "coastal" /* coastal */;
   }
   const tile = { type };
-  if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return Object.freeze(tile);
+  if (isWater(type) || type === "mountain" /* mountain */) return Object.freeze(tile);
   const modifiers = [];
+  if (type === "snow" /* snow */) {
+    modifiers.push("hill");
+    tile.modifiers = modifiers;
+    Object.freeze(modifiers);
+    return Object.freeze(tile);
+  }
   const lakes = profile.lakes;
   const isLakeCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
   const lakeCandidate = isLakeCandidate(sample, x, y);

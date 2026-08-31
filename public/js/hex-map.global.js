@@ -5161,6 +5161,63 @@ float fanTriangleRelief(vec2 p, vec2 a, vec2 b, float center, float ha, float hb
     return max(center * (1.0 - wa - wb) + ha * wa + hb * wb, 0.0);
 }
 
+// Lighting uses one slope at each shared world corner and interpolates those
+// slopes over the same fan triangles as the displaced surface. A corner slope
+// is defined only by the three tile-centre relief samples meeting there, so all
+// three tile instances calculate the exact same value. This removes the dark
+// hex outlines produced when each tile previously finite-differenced only its
+// own local fan at a shared edge. The tiny world-space detail displacement is
+// deliberately omitted from lighting; at +/-1.5% it belongs in the material
+// texture and should not reintroduce per-tile normal discontinuities.
+vec2 sharedCornerSlope(float center, float a, vec2 dirA, float b, vec2 dirB) {
+    float spacing = hexSize * 1.7320508;
+    vec2 pa = dirA * spacing;
+    vec2 pb = dirB * spacing;
+    float h0 = max(center, 0.0);
+    float ha = max(a, 0.0) - h0;
+    float hb = max(b, 0.0) - h0;
+    float det = pa.x * pb.y - pa.y * pb.x;
+    vec2 gradient = vec2(
+        (ha * pb.y - pa.y * hb) / det,
+        (pa.x * hb - ha * pb.x) / det
+    );
+    return gradient * mountainHeight;
+}
+
+vec2 fanTriangleSlope(vec2 p, vec2 a, vec2 b, vec2 center, vec2 sa, vec2 sb) {
+    vec2 q = p / hexSize;
+    float det = a.x * b.y - a.y * b.x;
+    float wa = (q.x * b.y - q.y * b.x) / det;
+    float wb = (a.x * q.y - a.y * q.x) / det;
+    return center * (1.0 - wa - wb) + sa * wa + sb * wb;
+}
+
+vec2 smoothMountainSlopeAt(vec2 p) {
+    float sourceCenter = centerMountainRelief();
+    vec2 sE  = sharedCornerSlope(sourceCenter, reliefNeighborsB.z, DIR_NE, reliefNeighborsA.x, DIR_SE);
+    vec2 sSE = sharedCornerSlope(sourceCenter, reliefNeighborsA.x, DIR_SE, reliefNeighborsA.y, DIR_S);
+    vec2 sSW = sharedCornerSlope(sourceCenter, reliefNeighborsA.y, DIR_S,  reliefNeighborsA.z, DIR_SW);
+    vec2 sW  = sharedCornerSlope(sourceCenter, reliefNeighborsA.z, DIR_SW, reliefNeighborsB.x, DIR_NW);
+    vec2 sNW = sharedCornerSlope(sourceCenter, reliefNeighborsB.x, DIR_NW, reliefNeighborsB.y, DIR_N);
+    vec2 sNE = sharedCornerSlope(sourceCenter, reliefNeighborsB.y, DIR_N,  reliefNeighborsB.z, DIR_NE);
+    vec2 centerSlope = (sE + sSE + sSW + sW + sNW + sNE) / 6.0;
+
+    const vec2 C_E  = vec2(1.0, 0.0);
+    const vec2 C_SE = vec2(0.5, 0.8660254);
+    const vec2 C_SW = vec2(-0.5, 0.8660254);
+    const vec2 C_W  = vec2(-1.0, 0.0);
+    const vec2 C_NW = vec2(-0.5, -0.8660254);
+    const vec2 C_NE = vec2(0.5, -0.8660254);
+    float angle = atan(p.y, p.x);
+    if (angle < 0.0) angle += 6.2831853;
+    if (angle < 1.0471976) return fanTriangleSlope(p, C_E,  C_SE, centerSlope, sE,  sSE);
+    if (angle < 2.0943951) return fanTriangleSlope(p, C_SE, C_SW, centerSlope, sSE, sSW);
+    if (angle < 3.1415927) return fanTriangleSlope(p, C_SW, C_W,  centerSlope, sSW, sW);
+    if (angle < 4.1887902) return fanTriangleSlope(p, C_W,  C_NW, centerSlope, sW,  sNW);
+    if (angle < 5.2359878) return fanTriangleSlope(p, C_NW, C_NE, centerSlope, sNW, sNE);
+    return fanTriangleSlope(p, C_NE, C_E, centerSlope, sNE, sE);
+}
+
 // Piecewise-linear macro elevation over the six fan triangles. A corner uses
 // the same three tile-centre samples from every touching hex, and a shared
 // edge is the same interpolation between its two corners from either side.
@@ -5385,13 +5442,9 @@ void main() {
     if (reliefInfluence > 0.001) {
         float gate = fogVisible;
         if (gate > 0.0) {
-            float eps = hexSize * 0.08;
-            float h0 = mountainHeightAt(local, logicalTileOffset);
-            float hx = mountainHeightAt(local + vec2(eps, 0.0), logicalTileOffset);
-            float hz = mountainHeightAt(local + vec2(0.0, eps), logicalTileOffset);
-            elevation = h0 * gate;
+            elevation = mountainHeightAt(local, logicalTileOffset) * gate;
             raiseY = elevation * mountainHeight;
-            mountainSlope = vec2(hx - h0, hz - h0) / eps * mountainHeight * gate;
+            mountainSlope = smoothMountainSlopeAt(local) * gate;
         }
     }
 
@@ -5981,16 +6034,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
     }
 
-    // Mountain snow only survives on local high summits. A warped world-space
-    // snowline breaks the constant-height rings that used to outline every
-    // ridge and made the terrain read as rows of volcanic craters.
+    // Mountain snow only survives on local high summits. Cold/alpine climate
+    // lowers the line without replacing lowland tiles with white hexes. A
+    // warped world-space threshold breaks constant-height rings around ridges.
     if (vLandform.x > 0.0) {
         float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
             + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
-        float snowLine = 0.78 + (snowNoise - 0.5) * 0.22;
-        float snowT = smoothstep(snowLine, snowLine + 0.2, vLandform.x);
-        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.72);
+        float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
+        float snowLine = 0.74 - climateDrop + (snowNoise - 0.5) * 0.18;
+        float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
+        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
     }
 
     // Rivers/lakes (see the uniform block's comment above). Drawn before
@@ -6258,6 +6312,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
+
+    // Reuse the fast material macro as the snowline warp. This keeps the same
+    // climate/elevation semantics as full quality without adding another noise
+    // octave or texture lookup to the reduced-cost path.
+    float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
+    float snowLine = 0.74 - climateDrop + (materialPattern.z - 0.5) * 0.18;
+    float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
+    texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
@@ -7080,7 +7142,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         worldPeriod: { value: new three.Vector2(0, 0) },
         chunkOrigin: { value: new three.Vector2(0, 0) },
         lightDir: { value: { x: 0.4, y: 1, z: 0.3 } },
-        showGrid: { value: this.options.gridVisible === false ? 0 : 1 },
+        showGrid: { value: this.options.gridVisible === true ? 1 : 0 },
         gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
         gridWidth: { value: this.options.gridWidth ?? 0.04 },
         gridOpacity: { value: this.options.gridOpacity ?? 0.35 },
@@ -10492,7 +10554,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 5;
+  var WORLD_GENERATOR_VERSION = 6;
 
   // src/world/WorldStyleProfile.ts
   var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -10987,7 +11049,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const terrain = profile.terrain;
     if (sample.elevation < terrain.seaLevel) return "sea" /* sea */;
     if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
-    if (sample.temperature < terrain.snowTemperature) return "snow" /* snow */;
+    const snowColdness = terrain.snowTemperature > 0 ? clamp012((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
+    const minimumSnowElevation = terrain.seaLevel + (terrain.hillElevation - terrain.seaLevel) * 0.45;
+    const snowElevation = terrain.hillElevation - (terrain.hillElevation - minimumSnowElevation) * snowColdness;
+    if (sample.temperature < terrain.snowTemperature && sample.elevation > snowElevation) return "snow" /* snow */;
     if (sample.temperature < terrain.tundraTemperature) return "tundra" /* tundra */;
     if (sample.temperature > terrain.sandTemperature && sample.moisture < terrain.sandMoisture) return "sand" /* sand */;
     return "land" /* land */;
@@ -11116,8 +11181,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (touchesLand) type = "coastal" /* coastal */;
     }
     const tile = { type };
-    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return Object.freeze(tile);
+    if (isWater2(type) || type === "mountain" /* mountain */) return Object.freeze(tile);
     const modifiers = [];
+    if (type === "snow" /* snow */) {
+      modifiers.push("hill");
+      tile.modifiers = modifiers;
+      Object.freeze(modifiers);
+      return Object.freeze(tile);
+    }
     const lakes = profile.lakes;
     const isLakeCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
     const lakeCandidate = isLakeCandidate(sample, x, y);
@@ -16003,7 +16074,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     terrainShaderQuality: "full",
     skyVisible: true,
     texturesBaseUrl: "textures/",
-    gridVisible: true,
+    gridVisible: false,
     gridColor: 4338219,
     gridWidth: 0.04,
     gridOpacity: 0.35,

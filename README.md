@@ -24,7 +24,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generation v1 is frozen on generator v5 with continuous relief, climate, regional forests, lakes and fixed gallery gates |
+| World style | Generation v1 is current on generator v6 with elevated climate snow, continuous relief, regional forests and lakes |
 | Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
 
 Runtime requirements are Node.js 20 or newer for development and `three`

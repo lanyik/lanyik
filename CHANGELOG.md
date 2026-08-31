@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Advanced world generation to v6: permanent snow now follows an elevated,
+  temperature-dependent snowline and generated snow retains hill relief, while
+  cold lowlands remain tundra. Mountain summit snow is climate-aware, mountain
+  lighting interpolates shared-corner slopes to remove per-hex normal seams,
+  and the persistent tactical grid is now opt-in instead of enabled by default.
 - Froze world-style generation v1 on generator v5 after the normal gates,
   performance regression checks, scheduled replacement soak and fixed visual
   gallery all passed. Future gameplay consumes the surface contracts instead

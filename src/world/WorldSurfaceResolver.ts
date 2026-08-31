@@ -73,7 +73,19 @@ function classifyTerrain(sample: LandformSample, profile: Readonly<WorldStylePro
     if (sample.elevation < terrain.seaLevel) return Land.sea;
     if ((sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge)
         || sample.elevation > terrain.mountainPeakElevation) return Land.mountain;
-    if (sample.temperature < terrain.snowTemperature) return Land.snow;
+    // Permanent snow follows a climate-dependent elevation line instead of
+    // turning every cold lowland cell white. Deep cold lowers the line towards
+    // the foothills, but never to the shoreline; mountain summits receive their
+    // finer, continuous snow cover in the terrain shader.
+    const snowColdness = terrain.snowTemperature > 0
+        ? clamp01((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature)
+        : 0;
+    const minimumSnowElevation = terrain.seaLevel
+        + (terrain.hillElevation - terrain.seaLevel) * 0.45;
+    const snowElevation = terrain.hillElevation
+        - (terrain.hillElevation - minimumSnowElevation) * snowColdness;
+    if (sample.temperature < terrain.snowTemperature
+        && sample.elevation > snowElevation) return Land.snow;
     if (sample.temperature < terrain.tundraTemperature) return Land.tundra;
     if (sample.temperature > terrain.sandTemperature && sample.moisture < terrain.sandMoisture) return Land.sand;
     return Land.land;
@@ -255,9 +267,18 @@ function resolveTile(
     }
 
     const tile: TileInfo = { type };
-    if (isWater(type) || type === Land.mountain || type === Land.snow) return Object.freeze(tile);
+    if (isWater(type) || type === Land.mountain) return Object.freeze(tile);
 
     const modifiers: string[] = [];
+    if (type === Land.snow) {
+        // Generated snow is constrained to foothills and higher, so it must
+        // retain hill relief instead of being flattened by the ordinary-land
+        // clamp.
+        modifiers.push("hill");
+        tile.modifiers = modifiers;
+        Object.freeze(modifiers);
+        return Object.freeze(tile);
+    }
     const lakes = profile.lakes;
     const isLakeCandidate = (candidate: Readonly<WorldSurfaceSample> | undefined, tileX: number, tileY: number): boolean =>
         Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential

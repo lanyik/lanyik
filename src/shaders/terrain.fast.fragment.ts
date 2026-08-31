@@ -159,6 +159,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
+    // Reuse the fast material macro as the snowline warp. This keeps the same
+    // climate/elevation semantics as full quality without adding another noise
+    // octave or texture lookup to the reduced-cost path.
+    float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
+    float snowLine = 0.74 - climateDrop + (materialPattern.z - 0.5) * 0.18;
+    float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
+    texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
+
     float coast = straightCoastField();
     if (coast > 0.0) {
         float edge = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
