@@ -76,6 +76,11 @@ and packed format. Browser E2E uses a
 real module Worker crash and verifies that the bounded pool replaces it before
 serving the next request.
 
+The data-driven overview request added after the freeze uses worker protocol
+v3. It transfers a versioned, bounded RGBA raster and does not change generated
+tile semantics, packed chunks, descriptors, checkpoints, or the generator
+version.
+
 ## Render ownership and recovery
 
 Custom `WorldRenderLayer` implementations receive a lifecycle-scoped host.

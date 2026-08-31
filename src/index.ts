@@ -4,6 +4,8 @@
 //----------------------------------------------------------------------------------
 export { HexMap } from "./HexMap";
 export type { HexMapOptions, WorldLoadOptions } from "./HexMap";
+export { WorldMinimap } from "./WorldMinimap";
+export type { WorldMinimapOptions, WorldMinimapView } from "./WorldMinimap";
 export type { LandformDebugMode } from "./objects/TerrainMesh";
 
 export { GameEngine } from "./gameengine";
@@ -185,6 +187,21 @@ export type {
     WorldVegetationForestLodLayout
 } from "./world/generateVegetation";
 export {
+    generateWorldOverviewWithResolver,
+    generateStaticWorldOverview,
+    assertWorldOverviewPreparationOptions,
+    assertWorldOverviewRaster,
+    worldOverviewTransferables,
+    WORLD_OVERVIEW_FORMAT_VERSION,
+    MAX_WORLD_OVERVIEW_RASTER_SIZE,
+    MAX_WORLD_OVERVIEW_TILE_SPAN
+} from "./world/generateWorldOverview";
+export type {
+    WorldOverviewPreparationOptions,
+    WorldOverviewGenerationOptions,
+    WorldOverviewRaster
+} from "./world/generateWorldOverview";
+export {
     IndexedDbWorldChunkCache,
     createWorldChunkCacheKey,
     clearWorldChunkCache
@@ -202,6 +219,7 @@ export {
     assertWorldSource,
     assertWorldChunk,
     isMutableWorldSource,
+    isWorldOverviewSource,
     isWorldVegetationSource,
     packedChunkFromWorldChunk,
     getWorldSourceTile,
@@ -213,6 +231,7 @@ export type {
     MutableWorldSource,
     WorldVegetationSource,
     WorldVegetationPreparationOptions,
+    WorldOverviewSource,
     WorldBounds,
     WorldChunk,
     WorldSourceStats,

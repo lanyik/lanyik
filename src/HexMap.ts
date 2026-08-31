@@ -67,12 +67,17 @@ import {
 } from "./world/generateWorldChunk";
 import {
     assertWorldSource,
+    isWorldOverviewSource,
     isWorldVegetationSource,
     StaticWorldSource,
+    WorldBounds,
     WorldChunk,
     WorldSource
 } from "./world/WorldSource";
 import { WorldVegetationLayout } from "./world/generateVegetation";
+import { WorldOverviewPreparationOptions, WorldOverviewRaster } from "./world/generateWorldOverview";
+import { ChunkRequestOptions } from "./world/WorldGeneratorPool";
+import { WorldDescriptor } from "./world/WorldDescriptor";
 import { WorldStreamer, WorldStreamingStats } from "./world/WorldStreamer";
 import {
     ChunkResidencyCoordinator,
@@ -3178,6 +3183,31 @@ export class HexMap extends EventEmitter {
         return this.options.size;
     }
 
+    public get worldViewDistance(): number {
+        return this.options.renderDistance;
+    }
+
+    public get worldDescriptor(): Readonly<WorldDescriptor> | undefined {
+        return this.worldSource?.descriptor;
+    }
+
+    public get worldBounds(): Readonly<WorldBounds> | undefined {
+        return this.worldSource?.bounds;
+    }
+
+    public requestWorldOverview(
+        options: WorldOverviewPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+        const source = this.worldSource;
+        if (!source) return Promise.reject(new Error("A world must be loaded before requesting an overview"));
+        if (!isWorldOverviewSource(source)) {
+            return Promise.reject(new Error("The active world source does not support overview generation"));
+        }
+        return source.prepareOverview(options, request);
+    }
+
     /** Current logical-world height authority; available after a world is loaded. */
     public get surface(): WorldSurfaceAnchor | undefined {
         return this.worldSurface;
@@ -3300,6 +3330,20 @@ export class HexMap extends EventEmitter {
         target.x += this.renderOrigin.x;
         target.z += this.renderOrigin.y;
         return target;
+    }
+
+    public getCameraTargetTile(): Point | undefined {
+        if (!this.mapData) return undefined;
+        const target = this.getCameraTarget(this.logicalTargetScratch);
+        const tile = pickTile(
+            target,
+            this.options.size,
+            this.mapData.infinite ? undefined : this.mapData.w,
+            this.mapData.infinite ? undefined : this.mapData.h,
+            this.mapData.wrapX ?? false,
+            this.mapData.wrapY ?? false
+        );
+        return tile ? { x: tile.x, y: tile.y } : undefined;
     }
 
     public setCameraTargetTile(x: number, y: number): void {

@@ -7,7 +7,7 @@ import {
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
 export const WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-export const WORLD_WORKER_PROTOCOL_VERSION = 2;
+export const WORLD_WORKER_PROTOCOL_VERSION = 3;
 
 export type ProceduralWorldKind = "procedural-infinite" | "procedural-toroidal";
 

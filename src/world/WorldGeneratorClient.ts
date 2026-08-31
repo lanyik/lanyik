@@ -13,6 +13,11 @@ import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "./generateVegetation";
+import {
+    assertWorldOverviewRaster,
+    WorldOverviewGenerationOptions,
+    WorldOverviewRaster
+} from "./generateWorldOverview";
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -21,6 +26,7 @@ interface WorkerSuccessMessage {
     world?: MapInfo;
     chunk?: PackedWorldChunk;
     vegetation?: WorldVegetationLayout;
+    overview?: WorldOverviewRaster;
 }
 
 interface WorkerFailureMessage {
@@ -33,10 +39,11 @@ interface WorkerFailureMessage {
 type WorkerResponse = WorkerSuccessMessage | WorkerFailureMessage;
 
 interface PendingRequest {
-    kind: "world" | "chunk" | "vegetation";
-    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout): void;
+    kind: "world" | "chunk" | "vegetation" | "overview";
+    resolve(value: MapInfo | PackedWorldChunk | WorldVegetationLayout | WorldOverviewRaster): void;
     reject(error: Error): void;
     expectedChunk?: { chunkX: number; chunkY: number; chunkSize: number };
+    expectedOverview?: WorldOverviewGenerationOptions;
 }
 
 //Small lifecycle-safe client for the dedicated world generator worker. The
@@ -127,6 +134,31 @@ export class WorldGeneratorClient {
         });
     }
 
+    public generateOverview(options: WorldOverviewGenerationOptions): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        const id = this.nextRequestId++;
+        return new Promise<WorldOverviewRaster>((resolve, reject) => {
+            this.pending.set(id, {
+                kind: "overview",
+                resolve: value => resolve(value as WorldOverviewRaster),
+                reject,
+                expectedOverview: { ...options }
+            });
+            try {
+                this.worker.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_GENERATOR_VERSION,
+                    id,
+                    type: "overview",
+                    options
+                });
+            } catch (reason) {
+                this.pending.delete(id);
+                reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+        });
+    }
+
     public dispose(): void {
         if (this.disposed) return;
         this.disposed = true;
@@ -144,7 +176,8 @@ export class WorldGeneratorClient {
         if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
             || data.generatorVersion !== WORLD_GENERATOR_VERSION
             || typeof data.id !== "number"
-            || (!("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data))) {
+            || (!("world" in data) && !("chunk" in data) && !("vegetation" in data)
+                && !("overview" in data) && !("error" in data))) {
             this.fail(new Error("World generation worker returned an invalid message"));
             return;
         }
@@ -173,6 +206,24 @@ export class WorldGeneratorClient {
             try {
                 assertWorldVegetationLayout(data.vegetation);
                 request.resolve(data.vegetation);
+            } catch (reason) {
+                request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+            }
+            return;
+        }
+        if (request.kind === "overview" && "overview" in data && data.overview) {
+            try {
+                assertWorldOverviewRaster(data.overview);
+                const expected = request.expectedOverview;
+                if (!expected || data.overview.originX !== expected.originX
+                    || data.overview.originY !== expected.originY
+                    || data.overview.tileSpanX !== expected.tileSpanX
+                    || data.overview.tileSpanY !== expected.tileSpanY
+                    || data.overview.pixelWidth !== expected.pixelWidth
+                    || data.overview.pixelHeight !== expected.pixelHeight) {
+                    throw new TypeError("World generation worker returned an overview for the wrong request");
+                }
+                request.resolve(data.overview);
             } catch (reason) {
                 request.reject(reason instanceof Error ? reason : new Error(String(reason)));
             }

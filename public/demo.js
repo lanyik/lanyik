@@ -6,6 +6,7 @@ const WORLD_MODE_STORAGE_KEY = "three-hex-world.mode";
 const WORLD_MODES = new Set(["finite", "infinite", "campaign"]);
 const {
     HexMap,
+    WorldMinimap,
     ProceduralWorldSource,
     ToroidalWorldSource,
     clearWorldChunkCache,
@@ -32,6 +33,10 @@ const performanceValues = Object.fromEntries(
     [...document.querySelectorAll("[data-performance-value]")]
         .map(element => [element.dataset.performanceValue, element])
 );
+const minimapWindow = document.querySelector("[data-minimap-window]");
+const minimapTitle = document.querySelector("[data-minimap-title]");
+const minimapHint = document.querySelector("[data-minimap-hint]");
+const minimapCanvas = document.querySelector("[data-world-minimap]");
 
 function readInitialLocale() {
     try {
@@ -121,6 +126,15 @@ const map = new HexMap({
 
 window.hexWorld = map;
 window.hexWorldI18n = i18n;
+
+const minimap = new WorldMinimap({
+    map,
+    element: minimapCanvas,
+    infiniteTileSpan: 512,
+    rasterSize: 192,
+    onError: error => console.error("World minimap failed", error)
+});
+window.worldMinimap = minimap;
 
 function inspectRenderBackend() {
     const gl = map.renderer?.getContext();
@@ -308,12 +322,14 @@ window.getWorldDiagnostics = () => ({
     worldMode: activeWorldMode ?? controls.worldMode,
     performance: { ...performanceSnapshot },
     cameraTarget: map.getCameraTarget().toArray(),
+    minimap: minimap.view,
     campaign: activeCampaign?.diagnostics
 });
 
 window.getCampaignDiagnostics = () => activeCampaign?.diagnostics ?? { ready: false };
 
 window.addEventListener("beforeunload", () => {
+    minimap.dispose();
     if (activeCampaign) void activeCampaign.dispose().finally(() => map.dispose());
     else map.dispose();
 }, { once: true });
@@ -647,6 +663,9 @@ function applyLocale(locale) {
     document.documentElement.lang = locale;
     document.title = i18n.t("app.title");
     controlsHint.textContent = i18n.t("status.controlsHint");
+    minimapTitle.textContent = i18n.t("minimap.title");
+    minimapHint.textContent = i18n.t("minimap.hint");
+    minimapCanvas.setAttribute("aria-label", i18n.t("minimap.label"));
     if (worldModeSelect) {
         [...worldModeSelect.options].forEach(option => {
             option.textContent = i18n.t(`worldMode.${option.value}`);
@@ -668,6 +687,21 @@ function applyLocale(locale) {
     renderStatus();
     renderCampaign();
 }
+
+let minimapStatusAt = -Infinity;
+let minimapWindowText = "";
+map.on("frame", ({ t }) => {
+    if (t - minimapStatusAt < 250) return;
+    minimapStatusAt = t;
+    const view = minimap.view;
+    const text = view.tileSpanX && view.tileSpanY
+        ? `${view.tileSpanX} × ${view.tileSpanY}`
+        : i18n.t(view.loading ? "minimap.loading" : "minimap.waiting");
+    if (text !== minimapWindowText) {
+        minimapWindowText = text;
+        minimapWindow.textContent = text;
+    }
+});
 
 languageController.onChange(locale => {
     const resolved = i18n.setLocale(locale);

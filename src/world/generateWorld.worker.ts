@@ -10,12 +10,18 @@ import {
     worldVegetationTransferables
 } from "./generateVegetation";
 import {
+    generateWorldOverviewWithResolver,
+    WorldOverviewGenerationOptions,
+    worldOverviewTransferables
+} from "./generateWorldOverview";
+import {
+    assertWorldDescriptor,
     createWorldDescriptor,
     serializeWorldDescriptor,
     WORLD_WORKER_PROTOCOL_VERSION
 } from "./WorldDescriptor";
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
-import { WorldSurfaceResolver } from "./WorldSurfaceResolver";
+import { createWorldSurfaceResolver, WorldSurfaceResolver } from "./WorldSurfaceResolver";
 
 interface GenerateWorldRequest {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -41,7 +47,15 @@ interface GenerateVegetationRequest {
     options: WorldVegetationGenerationOptions;
 }
 
-type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest | GenerateVegetationRequest;
+interface GenerateOverviewRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    generatorVersion: typeof WORLD_GENERATOR_VERSION;
+    id: number;
+    type: "overview";
+    options: WorldOverviewGenerationOptions;
+}
+
+type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest | GenerateVegetationRequest | GenerateOverviewRequest;
 
 const scope = globalThis as unknown as {
     addEventListener(type: "message", listener: (event: MessageEvent<GenerateRequest>) => void): void;
@@ -64,13 +78,29 @@ function resolverFor(options: WorldChunkGenerationOptions): WorldSurfaceResolver
     return chunkResolver;
 }
 
+function overviewResolverFor(options: WorldOverviewGenerationOptions): WorldSurfaceResolver {
+    assertWorldDescriptor(options.descriptor);
+    const key = serializeWorldDescriptor(options.descriptor);
+    if (!chunkResolver || chunkResolverKey !== key) {
+        const descriptor = options.descriptor;
+        chunkResolver = createWorldSurfaceResolver({
+            seed: descriptor.seed,
+            domain: descriptor.topology === "toroidal"
+                ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
+                : { topology: "infinite" }
+        });
+        chunkResolverKey = key;
+    }
+    return chunkResolver;
+}
+
 scope.addEventListener("message", event => {
     try {
         const request = event.data;
         if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
             || request.generatorVersion !== WORLD_GENERATOR_VERSION
             || !Number.isSafeInteger(request.id) || !request.options
-            || !["world", "chunk", "vegetation"].includes(request.type)) {
+            || !["world", "chunk", "vegetation", "overview"].includes(request.type)) {
             throw new TypeError("World generator received an invalid request");
         }
         if (request.type === "chunk") {
@@ -89,6 +119,14 @@ scope.addEventListener("message", event => {
                 id: request.id,
                 vegetation
             }, worldVegetationTransferables(vegetation));
+        } else if (request.type === "overview") {
+            const overview = generateWorldOverviewWithResolver(request.options, overviewResolverFor(request.options));
+            scope.postMessage({
+                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                generatorVersion: WORLD_GENERATOR_VERSION,
+                id: request.id,
+                overview
+            }, worldOverviewTransferables(overview));
         } else {
             scope.postMessage({
                 protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,

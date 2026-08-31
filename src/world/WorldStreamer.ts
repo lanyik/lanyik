@@ -41,10 +41,13 @@ export interface WorldStreamingStats {
     cacheErrors: number;
     queuedTerrainChunks: number;
     queuedVegetationChunks: number;
+    queuedOverviewTasks: number;
     busyTerrainWorkers: number;
     busyVegetationWorkers: number;
+    busyOverviewWorkers: number;
     averageTerrainTaskMs: number;
     averageVegetationTaskMs: number;
+    averageOverviewTaskMs: number;
     averageChunkLoadMs: number;
     queuedWeight: number;
     oldestQueuedMs: number;
@@ -194,10 +197,13 @@ export class WorldStreamer {
             cacheErrors: source?.cacheErrors ?? 0,
             queuedTerrainChunks: source?.queuedChunks ?? 0,
             queuedVegetationChunks: source?.queuedVegetation ?? 0,
+            queuedOverviewTasks: source?.queuedOverviews ?? 0,
             busyTerrainWorkers: source?.busyChunkWorkers ?? 0,
             busyVegetationWorkers: source?.busyVegetationWorkers ?? 0,
+            busyOverviewWorkers: source?.busyOverviewWorkers ?? 0,
             averageTerrainTaskMs: source?.averageChunkMs ?? 0,
             averageVegetationTaskMs: source?.averageVegetationMs ?? 0,
+            averageOverviewTaskMs: source?.averageOverviewMs ?? 0,
             averageChunkLoadMs: this.averageChunkLoadMs,
             queuedWeight: source?.queuedWeight ?? 0,
             oldestQueuedMs: source?.oldestQueuedMs ?? 0,

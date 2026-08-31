@@ -11761,7 +11761,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-  var WORLD_WORKER_PROTOCOL_VERSION = 2;
+  var WORLD_WORKER_PROTOCOL_VERSION = 3;
   function assertChunkSize(value) {
     if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -12197,6 +12197,168 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return [...buffers];
   }
 
+  // src/world/generateWorldOverview.ts
+  var WORLD_OVERVIEW_FORMAT_VERSION = 1;
+  var MAX_WORLD_OVERVIEW_RASTER_SIZE = 256;
+  var MAX_WORLD_OVERVIEW_TILE_SPAN = 16384;
+  var PALETTE = {
+    deepWater: [13, 48, 76],
+    shallowWater: [42, 112, 126],
+    coast: [70, 139, 137],
+    temperate: [91, 139, 73],
+    dry: [169, 148, 86],
+    cold: [126, 146, 126],
+    alpine: [113, 119, 116],
+    sand: [188, 166, 102],
+    tundra: [151, 166, 157],
+    snow: [225, 233, 235],
+    mountain: [105, 108, 109],
+    lake: [35, 105, 129]
+  };
+  var clamp013 = (value) => Math.max(0, Math.min(1, value));
+  function assertSafeExtentCoordinate(name, value) {
+    if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+  }
+  function assertWorldOverviewPreparationOptions(options) {
+    if (!options || typeof options !== "object") throw new TypeError("world overview options are required");
+    assertSafeExtentCoordinate("originX", options.originX);
+    assertSafeExtentCoordinate("originY", options.originY);
+    for (const [name, value] of [
+      ["tileSpanX", options.tileSpanX],
+      ["tileSpanY", options.tileSpanY]
+    ]) {
+      if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_TILE_SPAN) {
+        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_TILE_SPAN}`);
+      }
+    }
+    for (const [name, value] of [
+      ["pixelWidth", options.pixelWidth],
+      ["pixelHeight", options.pixelHeight]
+    ]) {
+      if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_RASTER_SIZE) {
+        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_RASTER_SIZE}`);
+      }
+    }
+    if (!Number.isSafeInteger(options.originX + options.tileSpanX - 1) || !Number.isSafeInteger(options.originY + options.tileSpanY - 1)) {
+      throw new RangeError("world overview extent exceeds safe integer coordinates");
+    }
+  }
+  function assertWorldOverviewRaster(value) {
+    if (!value || typeof value !== "object") throw new TypeError("world overview raster must be an object");
+    const raster = value;
+    if (raster.version !== WORLD_OVERVIEW_FORMAT_VERSION) {
+      throw new TypeError(`unsupported world overview format ${String(raster.version)}`);
+    }
+    assertWorldOverviewPreparationOptions(raster);
+    if (!(raster.pixels instanceof Uint8ClampedArray) || raster.pixels.length !== raster.pixelWidth * raster.pixelHeight * 4) {
+      throw new TypeError("world overview pixels are invalid");
+    }
+  }
+  function mix2(first, second, amount) {
+    const t = clamp013(amount);
+    return [
+      first[0] + (second[0] - first[0]) * t,
+      first[1] + (second[1] - first[1]) * t,
+      first[2] + (second[2] - first[2]) * t
+    ];
+  }
+  function shadeRgb(color, amount) {
+    return [color[0] * amount, color[1] * amount, color[2] * amount];
+  }
+  function writePixel(pixels, offset, color) {
+    pixels[offset] = Math.round(color[0]);
+    pixels[offset + 1] = Math.round(color[1]);
+    pixels[offset + 2] = Math.round(color[2]);
+    pixels[offset + 3] = 255;
+  }
+  function overviewTileCoordinate(origin, span, pixel, pixels) {
+    return origin + Math.min(span - 1, Math.floor((pixel + 0.5) * span / pixels));
+  }
+  function staticTileColor(tile) {
+    if (tile.modifiers?.includes("lake")) return PALETTE.lake;
+    if (tile.type === "sea" /* sea */) return PALETTE.deepWater;
+    if (tile.type === "coastal" /* coastal */) return PALETTE.coast;
+    if (tile.type === "sand" /* sand */) return PALETTE.sand;
+    if (tile.type === "tundra" /* tundra */) return PALETTE.tundra;
+    if (tile.type === "snow" /* snow */) return PALETTE.snow;
+    if (tile.type === "mountain" /* mountain */) return PALETTE.mountain;
+    return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
+  }
+  function generateWorldOverviewWithResolver(options, resolver) {
+    assertWorldOverviewPreparationOptions(options);
+    assertWorldDescriptor(options.descriptor);
+    const expectedTopology = options.descriptor.topology;
+    if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology || expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== options.descriptor.width || resolver.domain.height !== options.descriptor.height)) {
+      throw new TypeError("world overview resolver does not match its descriptor");
+    }
+    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    const terrain = resolver.profile.terrain;
+    let offset = 0;
+    for (let py = 0; py < options.pixelHeight; py += 1) {
+      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
+      for (let px = 0; px < options.pixelWidth; px += 1) {
+        const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+        const sample = resolver.sampleGenerated(tileX, tileY);
+        let color;
+        if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
+          const shoreline = clamp013(
+            1 - (terrain.seaLevel - sample.landform.elevation) / Math.max(1e-3, terrain.seaLevel * 0.42)
+          );
+          color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
+        } else if (sample.baseTerrain === "sand" /* sand */) {
+          color = PALETTE.sand;
+        } else if (sample.baseTerrain === "tundra" /* tundra */) {
+          color = PALETTE.tundra;
+        } else if (sample.baseTerrain === "snow" /* snow */) {
+          color = PALETTE.snow;
+        } else if (sample.baseTerrain === "mountain" /* mountain */) {
+          color = mix2(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
+        } else {
+          const weights = sample.biomeWeights;
+          const dryCold = mix2(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(1e-3, weights.dry + weights.cold));
+          const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
+          color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
+        }
+        const reliefShade = 0.88 + clamp013((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
+        writePixel(pixels, offset, shadeRgb(color, reliefShade));
+        offset += 4;
+      }
+    }
+    return {
+      version: WORLD_OVERVIEW_FORMAT_VERSION,
+      originX: options.originX,
+      originY: options.originY,
+      tileSpanX: options.tileSpanX,
+      tileSpanY: options.tileSpanY,
+      pixelWidth: options.pixelWidth,
+      pixelHeight: options.pixelHeight,
+      pixels
+    };
+  }
+  function generateStaticWorldOverview(map, options) {
+    assertWorldOverviewPreparationOptions(options);
+    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    let offset = 0;
+    for (let py = 0; py < options.pixelHeight; py += 1) {
+      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
+      for (let px = 0; px < options.pixelWidth; px += 1) {
+        const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+        const tile = getMapTile(map, tileX, tileY);
+        if (tile) writePixel(pixels, offset, staticTileColor(tile));
+        offset += 4;
+      }
+    }
+    return {
+      version: WORLD_OVERVIEW_FORMAT_VERSION,
+      ...options,
+      pixels
+    };
+  }
+  function worldOverviewTransferables(overview) {
+    assertWorldOverviewRaster(overview);
+    return [overview.pixels.buffer];
+  }
+
   // src/world/WorldGeneratorClient.ts
   var WorldGeneratorClient = class {
     constructor(workerUrl, workerOptions = { type: "module" }) {
@@ -12205,7 +12367,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.disposed = false;
       this.handleMessage = (event) => {
         const data = event.data;
-        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || data.generatorVersion !== WORLD_GENERATOR_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("error" in data)) {
+        if (!data || typeof data !== "object" || data.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || data.generatorVersion !== WORLD_GENERATOR_VERSION || typeof data.id !== "number" || !("world" in data) && !("chunk" in data) && !("vegetation" in data) && !("overview" in data) && !("error" in data)) {
           this.fail(new Error("World generation worker returned an invalid message"));
           return;
         }
@@ -12232,6 +12394,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           try {
             assertWorldVegetationLayout(data.vegetation);
             request.resolve(data.vegetation);
+          } catch (reason) {
+            request.reject(reason instanceof Error ? reason : new Error(String(reason)));
+          }
+          return;
+        }
+        if (request.kind === "overview" && "overview" in data && data.overview) {
+          try {
+            assertWorldOverviewRaster(data.overview);
+            const expected = request.expectedOverview;
+            if (!expected || data.overview.originX !== expected.originX || data.overview.originY !== expected.originY || data.overview.tileSpanX !== expected.tileSpanX || data.overview.tileSpanY !== expected.tileSpanY || data.overview.pixelWidth !== expected.pixelWidth || data.overview.pixelHeight !== expected.pixelHeight) {
+              throw new TypeError("World generation worker returned an overview for the wrong request");
+            }
+            request.resolve(data.overview);
           } catch (reason) {
             request.reject(reason instanceof Error ? reason : new Error(String(reason)));
           }
@@ -12335,6 +12510,30 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       });
     }
+    generateOverview(options) {
+      if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+      const id = this.nextRequestId++;
+      return new Promise((resolve, reject) => {
+        this.pending.set(id, {
+          kind: "overview",
+          resolve: (value) => resolve(value),
+          reject,
+          expectedOverview: { ...options }
+        });
+        try {
+          this.worker.postMessage({
+            protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+            generatorVersion: WORLD_GENERATOR_VERSION,
+            id,
+            type: "overview",
+            options
+          });
+        } catch (reason) {
+          this.pending.delete(id);
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        }
+      });
+    }
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
@@ -12373,6 +12572,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.disposed = false;
       this.averageChunkMs = 0;
       this.averageVegetationMs = 0;
+      this.averageOverviewMs = 0;
       this.workerFailures = 0;
       this.clientFactoryFailures = 0;
       this.maxWorkers = options.maxWorkers ?? 8;
@@ -12479,6 +12679,38 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.dispatch();
       });
     }
+    generateOverview(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+      if (request.signal?.aborted) return Promise.reject(abortError());
+      return new Promise((resolve, reject) => {
+        const task = {
+          kind: "overview",
+          options,
+          signal: request.signal,
+          resolve: (result) => resolve(result),
+          reject,
+          settled: false
+        };
+        if (request.signal) {
+          task.abort = () => {
+            if (task.settled) return;
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
+            this.finishTask(task, () => reject(abortError()));
+          };
+          request.signal.addEventListener("abort", task.abort, { once: true });
+        }
+        task.queueId = this.queue.enqueue(task, {
+          priority: Number.isFinite(request.priority) ? request.priority : 0,
+          lane: request.lane ?? "background",
+          weight: request.weight ?? Math.max(1, Math.ceil(options.pixelWidth * options.pixelHeight / 4096)),
+          cancelled: (reason) => this.finishTask(task, () => task.reject(reason))
+        });
+        if (task.queueId === void 0 && !task.settled) {
+          this.finishTask(task, () => reject(new WorkQueueBackpressureError("World overview request was shed")));
+        }
+        this.dispatch();
+      });
+    }
     get stats() {
       const queued = this.queue.values.filter((task) => !task.settled && !task.signal?.aborted);
       const queueStats = this.queue.stats;
@@ -12490,10 +12722,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         completed: this.completed,
         queuedChunks: queued.filter((task) => task.kind === "chunk").length,
         queuedVegetation: queued.filter((task) => task.kind === "vegetation").length,
+        queuedOverviews: queued.filter((task) => task.kind === "overview").length,
         busyChunkWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "chunk").length,
         busyVegetationWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "vegetation").length,
+        busyOverviewWorkers: this.slots.filter((slot) => slot.busy && slot.taskKind === "overview").length,
         averageChunkMs: this.averageChunkMs,
         averageVegetationMs: this.averageVegetationMs,
+        averageOverviewMs: this.averageOverviewMs,
         queuedWeight: queueStats.pendingWeight,
         oldestQueuedMs: queueStats.oldestTaskAgeMs,
         shedTasks: queueStats.shedTasks,
@@ -12549,7 +12784,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const started = typeof performance === "undefined" ? Date.now() : performance.now();
         let pending;
         try {
-          pending = task.kind === "chunk" ? slot.client.generateChunk(task.options) : slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+          if (task.kind === "chunk") {
+            pending = slot.client.generateChunk(task.options);
+          } else if (task.kind === "vegetation") {
+            pending = slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+          } else {
+            pending = slot.client.generateOverview ? slot.client.generateOverview(task.options) : Promise.reject(new Error("World generation client does not support overview tasks"));
+          }
         } catch (reason) {
           pending = Promise.reject(reason);
         }
@@ -12580,9 +12821,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     takeNextTask() {
       const activeWorkers = Math.max(1, Math.min(this.desiredSize, this.slots.length));
-      const maximumVegetation = activeWorkers === 1 ? 1 : Math.max(1, activeWorkers - this.reservedChunkWorkers);
-      const busyVegetation = this.slots.filter((candidate) => candidate.busy && candidate.taskKind === "vegetation").length;
-      const task = this.queue.take(busyVegetation >= maximumVegetation ? (candidate) => candidate.kind === "chunk" : void 0);
+      const maximumBackground = activeWorkers === 1 ? 1 : Math.max(1, activeWorkers - this.reservedChunkWorkers);
+      const busyBackground = this.slots.filter((candidate) => candidate.busy && candidate.taskKind !== "chunk").length;
+      const task = this.queue.take(busyBackground >= maximumBackground ? (candidate) => candidate.kind === "chunk" : void 0);
       if (task) task.queueId = void 0;
       return task;
     }
@@ -12590,8 +12831,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const alpha = 0.2;
       if (kind === "chunk") {
         this.averageChunkMs = this.averageChunkMs === 0 ? durationMs : this.averageChunkMs + (durationMs - this.averageChunkMs) * alpha;
-      } else {
+      } else if (kind === "vegetation") {
         this.averageVegetationMs = this.averageVegetationMs === 0 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;
+      } else {
+        this.averageOverviewMs = this.averageOverviewMs === 0 ? durationMs : this.averageOverviewMs + (durationMs - this.averageOverviewMs) * alpha;
       }
     }
     finishTask(task, settle) {
@@ -13350,6 +13593,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function isWorldVegetationSource(source) {
     return typeof source.prepareVegetation === "function";
   }
+  function isWorldOverviewSource(source) {
+    return typeof source.prepareOverview === "function";
+  }
   function isMutableWorldSource(source) {
     const candidate = source;
     return typeof candidate.setTileOverride === "function" && typeof candidate.clearTileOverride === "function";
@@ -13451,6 +13697,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       }
       return Promise.resolve({ chunkX, chunkY, chunkSize: this.chunkSize, coreTiles });
+    }
+    prepareOverview(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("StaticWorldSource has been disposed"));
+      if (request.signal?.aborted) return Promise.reject(abortError2());
+      return Promise.resolve().then(() => generateStaticWorldOverview(this.map, options));
     }
     releaseChunk(_chunk) {
     }
@@ -13966,6 +14217,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         map: createWorldVegetationMapSnapshot(this.map, options.points)
       }, request);
     }
+    prepareOverview(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("ToroidalWorldSource has been disposed"));
+      return this.pool.generateOverview({ ...options, descriptor: this.descriptor }, request);
+    }
     configureWorkerCount(count) {
       return this.pool.configureSize(count);
     }
@@ -14140,6 +14395,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ...options,
         map: createWorldVegetationMapSnapshot(this.map, options.points)
       }, request);
+    }
+    prepareOverview(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("ProceduralWorldSource has been disposed"));
+      return this.pool.generateOverview({ ...options, descriptor: this.descriptor }, request);
     }
     configureWorkerCount(count) {
       return this.pool.configureSize(count);
@@ -14558,10 +14817,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         cacheErrors: source?.cacheErrors ?? 0,
         queuedTerrainChunks: source?.queuedChunks ?? 0,
         queuedVegetationChunks: source?.queuedVegetation ?? 0,
+        queuedOverviewTasks: source?.queuedOverviews ?? 0,
         busyTerrainWorkers: source?.busyChunkWorkers ?? 0,
         busyVegetationWorkers: source?.busyVegetationWorkers ?? 0,
+        busyOverviewWorkers: source?.busyOverviewWorkers ?? 0,
         averageTerrainTaskMs: source?.averageChunkMs ?? 0,
         averageVegetationTaskMs: source?.averageVegetationMs ?? 0,
+        averageOverviewTaskMs: source?.averageOverviewMs ?? 0,
         averageChunkLoadMs: this.averageChunkLoadMs,
         queuedWeight: source?.queuedWeight ?? 0,
         oldestQueuedMs: source?.oldestQueuedMs ?? 0,
@@ -19178,6 +19440,24 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     get size() {
       return this.options.size;
     }
+    get worldViewDistance() {
+      return this.options.renderDistance;
+    }
+    get worldDescriptor() {
+      return this.worldSource?.descriptor;
+    }
+    get worldBounds() {
+      return this.worldSource?.bounds;
+    }
+    requestWorldOverview(options, request = {}) {
+      if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+      const source = this.worldSource;
+      if (!source) return Promise.reject(new Error("A world must be loaded before requesting an overview"));
+      if (!isWorldOverviewSource(source)) {
+        return Promise.reject(new Error("The active world source does not support overview generation"));
+      }
+      return source.prepareOverview(options, request);
+    }
     /** Current logical-world height authority; available after a world is loaded. */
     get surface() {
       return this.worldSurface;
@@ -19282,6 +19562,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       target.z += this.renderOrigin.y;
       return target;
     }
+    getCameraTargetTile() {
+      if (!this.mapData) return void 0;
+      const target = this.getCameraTarget(this.logicalTargetScratch);
+      const tile = pickTile(
+        target,
+        this.options.size,
+        this.mapData.infinite ? void 0 : this.mapData.w,
+        this.mapData.infinite ? void 0 : this.mapData.h,
+        this.mapData.wrapX ?? false,
+        this.mapData.wrapY ?? false
+      );
+      return tile ? { x: tile.x, y: tile.y } : void 0;
+    }
     setCameraTargetTile(x, y) {
       if (!this.mapData) throw new Error("A world must be loaded before moving the camera target");
       const point = normalizeMapCoordinates(this.mapData, x, y);
@@ -19349,6 +19642,364 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     async disposeAsync() {
       this.dispose();
       await this.settled;
+    }
+  };
+
+  // src/WorldMinimap.ts
+  var DEFAULT_RASTER_SIZE = 192;
+  var DEFAULT_INFINITE_TILE_SPAN = 512;
+  var DEFAULT_CACHE_ENTRIES = 6;
+  var DEFAULT_REDRAW_INTERVAL_MS = 66;
+  function asPositiveInteger(name, value, maximum) {
+    if (!Number.isInteger(value) || value <= 0 || value > maximum) {
+      throw new RangeError(`${name} must be an integer between 1 and ${maximum}`);
+    }
+    return value;
+  }
+  function abortError5(error) {
+    return error instanceof Error && error.name === "AbortError";
+  }
+  var WorldMinimap = class {
+    constructor(options) {
+      this.cache = /* @__PURE__ */ new Map();
+      this.contentRect = { x: 0, y: 0, width: 0, height: 0 };
+      this.lastDrawAt = -Infinity;
+      this.lastCoverageCheckAt = -Infinity;
+      this.disposed = false;
+      this.handlePointerDown = (event) => {
+        event.stopPropagation();
+      };
+      this.handleClick = (event) => {
+        event.stopPropagation();
+        if (event.button !== 0 || !this.raster || this.pending) return;
+        const canvasBounds = this.canvas.getBoundingClientRect();
+        const x = event.clientX - canvasBounds.left;
+        const y = event.clientY - canvasBounds.top;
+        const rect = this.contentRect;
+        if (x < rect.x || x >= rect.x + rect.width || y < rect.y || y >= rect.y + rect.height) return;
+        const nx = (x - rect.x) / rect.width;
+        const ny = (y - rect.y) / rect.height;
+        const tile = {
+          x: this.raster.originX + Math.min(this.raster.tileSpanX - 1, Math.floor(nx * this.raster.tileSpanX)),
+          y: this.raster.originY + Math.min(this.raster.tileSpanY - 1, Math.floor(ny * this.raster.tileSpanY))
+        };
+        this.map.setCameraTargetTile(tile.x, tile.y);
+        this.onNavigate?.(tile);
+        this.render();
+      };
+      this.handleWorldLoad = () => {
+        this.clear();
+        void this.refresh(true);
+      };
+      this.handleFrame = (frame) => {
+        const now = Number.isFinite(frame?.t) ? frame.t : performance.now();
+        if (now - this.lastCoverageCheckAt >= 250) {
+          this.lastCoverageCheckAt = now;
+          const target = this.map.getCameraTargetTile();
+          if (target && (!this.raster || !this.coversTarget(this.raster, target))) void this.refresh();
+        }
+        if (now - this.lastDrawAt >= this.redrawIntervalMs) {
+          this.lastDrawAt = now;
+          this.render();
+        }
+      };
+      if (!options || typeof options !== "object") throw new TypeError("world minimap options are required");
+      if (!options.map) throw new TypeError("world minimap map is required");
+      const canvas = typeof options.element === "string" ? document.querySelector(options.element) : options.element;
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("WorldMinimap element must resolve to a <canvas>");
+      }
+      const context = canvas.getContext("2d", { alpha: true });
+      if (!context) throw new Error("WorldMinimap requires a Canvas 2D context");
+      this.map = options.map;
+      this.canvas = canvas;
+      this.context = context;
+      this.rasterSize = asPositiveInteger(
+        "rasterSize",
+        options.rasterSize ?? DEFAULT_RASTER_SIZE,
+        MAX_WORLD_OVERVIEW_RASTER_SIZE
+      );
+      this.infiniteTileSpan = asPositiveInteger(
+        "infiniteTileSpan",
+        options.infiniteTileSpan ?? DEFAULT_INFINITE_TILE_SPAN,
+        MAX_WORLD_OVERVIEW_TILE_SPAN
+      );
+      if (this.infiniteTileSpan % 2 !== 0) throw new RangeError("infiniteTileSpan must be even");
+      this.cacheEntries = asPositiveInteger("cacheEntries", options.cacheEntries ?? DEFAULT_CACHE_ENTRIES, 64);
+      this.redrawIntervalMs = options.redrawIntervalMs ?? DEFAULT_REDRAW_INTERVAL_MS;
+      if (!Number.isFinite(this.redrawIntervalMs) || this.redrawIntervalMs <= 0) {
+        throw new RangeError("redrawIntervalMs must be positive and finite");
+      }
+      this.onNavigate = options.onNavigate;
+      this.onError = options.onError;
+      this.baseCanvas = document.createElement("canvas");
+      const baseContext = this.baseCanvas.getContext("2d", { alpha: false });
+      if (!baseContext) throw new Error("WorldMinimap requires an offscreen Canvas 2D context");
+      this.baseContext = baseContext;
+      this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+      this.canvas.addEventListener("click", this.handleClick);
+      this.map.on("load", this.handleWorldLoad);
+      this.map.on("frame", this.handleFrame);
+      if (typeof ResizeObserver !== "undefined") {
+        this.resizeObserver = new ResizeObserver(() => this.render());
+        this.resizeObserver.observe(this.canvas);
+      }
+      this.render();
+      void this.refresh();
+    }
+    get view() {
+      return {
+        loading: Boolean(this.pending),
+        originX: this.raster?.originX,
+        originY: this.raster?.originY,
+        tileSpanX: this.raster?.tileSpanX,
+        tileSpanY: this.raster?.tileSpanY,
+        pixelWidth: this.raster?.pixelWidth,
+        pixelHeight: this.raster?.pixelHeight,
+        cachedViews: this.cache.size
+      };
+    }
+    refresh(force = false) {
+      if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
+      const target = this.map.getCameraTargetTile();
+      if (!target) {
+        this.render();
+        return Promise.resolve();
+      }
+      const options = this.overviewOptions(target);
+      if (!options) {
+        this.render();
+        return Promise.resolve();
+      }
+      if (!force && this.raster && this.coversTarget(this.raster, target)) {
+        return Promise.resolve();
+      }
+      const key = this.cacheKey(options);
+      if (!force) {
+        const cached = this.cache.get(key);
+        if (cached) {
+          this.cache.delete(key);
+          this.cache.set(key, cached);
+          this.useRaster(cached);
+          return Promise.resolve();
+        }
+      }
+      if (!force && this.pendingKey === key && this.pending) return this.pending;
+      this.requestAbort?.abort();
+      const requestAbort = new AbortController();
+      this.requestAbort = requestAbort;
+      this.pendingKey = key;
+      this.canvas.setAttribute("aria-busy", "true");
+      this.canvas.dataset.state = "loading";
+      const pending = this.map.requestWorldOverview(options, {
+        signal: requestAbort.signal,
+        lane: "background"
+      }).then((raster) => {
+        if (this.disposed || requestAbort.signal.aborted || this.requestAbort !== requestAbort) return;
+        this.cache.set(key, raster);
+        while (this.cache.size > this.cacheEntries) {
+          const oldest = this.cache.keys().next().value;
+          if (oldest === void 0) break;
+          this.cache.delete(oldest);
+        }
+        this.useRaster(raster);
+      }).catch((reason) => {
+        if (abortError5(reason) || this.disposed || requestAbort.signal.aborted) return;
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        this.canvas.dataset.state = "error";
+        this.onError?.(error);
+      }).finally(() => {
+        if (this.requestAbort !== requestAbort) return;
+        this.requestAbort = void 0;
+        this.pendingKey = void 0;
+        this.pending = void 0;
+        this.canvas.setAttribute("aria-busy", "false");
+        if (this.canvas.dataset.state === "loading") this.canvas.dataset.state = this.raster ? "ready" : "empty";
+        this.render();
+      });
+      this.pending = pending;
+      this.render();
+      return pending;
+    }
+    clear() {
+      if (this.disposed) return;
+      this.requestAbort?.abort();
+      this.requestAbort = void 0;
+      this.pendingKey = void 0;
+      this.pending = void 0;
+      this.raster = void 0;
+      this.cache.clear();
+      this.baseCanvas.width = 0;
+      this.baseCanvas.height = 0;
+      this.canvas.setAttribute("aria-busy", "false");
+      this.canvas.dataset.state = "empty";
+      this.render();
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.clear();
+      this.disposed = true;
+      this.resizeObserver?.disconnect();
+      this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
+      this.canvas.removeEventListener("click", this.handleClick);
+      this.map.off("load", this.handleWorldLoad);
+      this.map.off("frame", this.handleFrame);
+    }
+    overviewOptions(target) {
+      const bounds = this.map.worldBounds;
+      if (bounds) {
+        const aspect = bounds.width / bounds.height;
+        const pixelWidth = aspect >= 1 ? this.rasterSize : Math.max(1, Math.round(this.rasterSize * aspect));
+        const pixelHeight = aspect >= 1 ? Math.max(1, Math.round(this.rasterSize / aspect)) : this.rasterSize;
+        return {
+          originX: 0,
+          originY: 0,
+          tileSpanX: bounds.width,
+          tileSpanY: bounds.height,
+          pixelWidth,
+          pixelHeight
+        };
+      }
+      if (this.map.worldDescriptor?.topology !== "infinite") return void 0;
+      const step = Math.max(1, Math.floor(this.infiniteTileSpan / 4));
+      const centerX = Math.round(target.x / step) * step;
+      const centerY = Math.round(target.y / step) * step;
+      return {
+        originX: centerX - this.infiniteTileSpan / 2,
+        originY: centerY - this.infiniteTileSpan / 2,
+        tileSpanX: this.infiniteTileSpan,
+        tileSpanY: this.infiniteTileSpan,
+        pixelWidth: this.rasterSize,
+        pixelHeight: this.rasterSize
+      };
+    }
+    coversTarget(raster, target) {
+      if (this.map.worldBounds) return true;
+      const marginX = raster.tileSpanX * 0.18;
+      const marginY = raster.tileSpanY * 0.18;
+      return target.x >= raster.originX + marginX && target.x < raster.originX + raster.tileSpanX - marginX && target.y >= raster.originY + marginY && target.y < raster.originY + raster.tileSpanY - marginY;
+    }
+    cacheKey(options) {
+      return [
+        options.originX,
+        options.originY,
+        options.tileSpanX,
+        options.tileSpanY,
+        options.pixelWidth,
+        options.pixelHeight
+      ].join(":");
+    }
+    useRaster(raster) {
+      this.raster = raster;
+      this.baseCanvas.width = raster.pixelWidth;
+      this.baseCanvas.height = raster.pixelHeight;
+      const image = this.baseContext.createImageData(raster.pixelWidth, raster.pixelHeight);
+      image.data.set(raster.pixels);
+      this.baseContext.putImageData(image, 0, 0);
+      this.canvas.dataset.state = "ready";
+      this.render();
+    }
+    render() {
+      if (this.disposed) return;
+      const bounds = this.canvas.getBoundingClientRect();
+      const width = Math.max(1, bounds.width || this.canvas.clientWidth || 220);
+      const height = Math.max(1, bounds.height || this.canvas.clientHeight || 220);
+      const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const bufferWidth = Math.round(width * ratio);
+      const bufferHeight = Math.round(height * ratio);
+      if (this.canvas.width !== bufferWidth || this.canvas.height !== bufferHeight) {
+        this.canvas.width = bufferWidth;
+        this.canvas.height = bufferHeight;
+      }
+      const context = this.context;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      context.fillStyle = "rgba(4, 15, 20, 0.94)";
+      context.fillRect(0, 0, width, height);
+      const padding = 6;
+      const availableWidth = Math.max(1, width - padding * 2);
+      const availableHeight = Math.max(1, height - padding * 2);
+      const rasterAspect = this.raster ? this.raster.pixelWidth / this.raster.pixelHeight : 1;
+      let contentWidth = availableWidth;
+      let contentHeight = contentWidth / rasterAspect;
+      if (contentHeight > availableHeight) {
+        contentHeight = availableHeight;
+        contentWidth = contentHeight * rasterAspect;
+      }
+      this.contentRect = {
+        x: (width - contentWidth) / 2,
+        y: (height - contentHeight) / 2,
+        width: contentWidth,
+        height: contentHeight
+      };
+      const rect = this.contentRect;
+      if (this.raster) {
+        context.imageSmoothingEnabled = true;
+        context.drawImage(this.baseCanvas, rect.x, rect.y, rect.width, rect.height);
+        this.drawCameraOverlay(context, rect, this.raster);
+        this.drawPosition(context, rect);
+      } else {
+        context.fillStyle = "rgba(93, 143, 139, 0.16)";
+        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+      }
+      context.strokeStyle = "rgba(124, 235, 211, 0.42)";
+      context.lineWidth = 1;
+      context.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1));
+      if (this.pending) {
+        context.fillStyle = "rgba(4, 15, 20, 0.5)";
+        context.fillRect(rect.x, rect.y, rect.width, rect.height);
+        context.fillStyle = "#9debd8";
+        context.font = "600 18px system-ui, sans-serif";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText("\u2026", rect.x + rect.width / 2, rect.y + rect.height / 2);
+      }
+    }
+    drawCameraOverlay(context, rect, raster) {
+      const target = this.map.getCameraTargetTile();
+      if (!target) return;
+      const x = rect.x + (target.x + 0.5 - raster.originX) / raster.tileSpanX * rect.width;
+      const y = rect.y + (target.y + 0.5 - raster.originY) / raster.tileSpanY * rect.height;
+      const tileRadiusX = this.map.worldViewDistance / (this.map.size * 1.5);
+      const tileRadiusY = this.map.worldViewDistance / (this.map.size * Math.sqrt(3));
+      const radiusX = Math.max(4, tileRadiusX / raster.tileSpanX * rect.width);
+      const radiusY = Math.max(4, tileRadiusY / raster.tileSpanY * rect.height);
+      context.save();
+      context.beginPath();
+      context.rect(rect.x, rect.y, rect.width, rect.height);
+      context.clip();
+      context.beginPath();
+      context.ellipse(x, y, radiusX, radiusY, 0, 0, Math.PI * 2);
+      context.fillStyle = "rgba(100, 240, 211, 0.09)";
+      context.fill();
+      context.strokeStyle = "rgba(129, 255, 225, 0.8)";
+      context.lineWidth = 1.5;
+      context.setLineDash([4, 3]);
+      context.stroke();
+      context.setLineDash([]);
+      context.beginPath();
+      context.arc(x, y, 4, 0, Math.PI * 2);
+      context.fillStyle = "#dffff7";
+      context.fill();
+      context.strokeStyle = "#123f3b";
+      context.lineWidth = 2;
+      context.stroke();
+      context.restore();
+    }
+    drawPosition(context, rect) {
+      const target = this.map.getCameraTargetTile();
+      if (!target) return;
+      const label = `${target.x}, ${target.y}`;
+      context.font = "600 10px system-ui, sans-serif";
+      const width = context.measureText(label).width + 10;
+      const x = rect.x + rect.width - width - 5;
+      const y = rect.y + rect.height - 20;
+      context.fillStyle = "rgba(3, 14, 18, 0.72)";
+      context.fillRect(x, y, width, 15);
+      context.fillStyle = "rgba(221, 249, 241, 0.88)";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, x + width / 2, y + 7.5);
     }
   };
 
@@ -20020,6 +20671,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.LifecycleDrainTimeoutError = LifecycleDrainTimeoutError;
   exports.LifecycleScope = LifecycleScope;
   exports.MAX_WORLD_GENERATION_CHUNK_SIZE = MAX_WORLD_GENERATION_CHUNK_SIZE;
+  exports.MAX_WORLD_OVERVIEW_RASTER_SIZE = MAX_WORLD_OVERVIEW_RASTER_SIZE;
+  exports.MAX_WORLD_OVERVIEW_TILE_SPAN = MAX_WORLD_OVERVIEW_TILE_SPAN;
   exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
   exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
   exports.NEIGHBOR_DIRECTIONS = NEIGHBOR_DIRECTIONS;
@@ -20040,6 +20693,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
   exports.WORLD_DESCRIPTOR_FORMAT_VERSION = WORLD_DESCRIPTOR_FORMAT_VERSION;
   exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
+  exports.WORLD_OVERVIEW_FORMAT_VERSION = WORLD_OVERVIEW_FORMAT_VERSION;
   exports.WORLD_VEGETATION_FORMAT_VERSION = WORLD_VEGETATION_FORMAT_VERSION;
   exports.WORLD_WORKER_PROTOCOL_VERSION = WORLD_WORKER_PROTOCOL_VERSION;
   exports.WebGlGpuTimer = WebGlGpuTimer;
@@ -20048,12 +20702,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.WorldEditingFacade = WorldEditingFacade;
   exports.WorldGeneratorClient = WorldGeneratorClient;
   exports.WorldGeneratorPool = WorldGeneratorPool;
+  exports.WorldMinimap = WorldMinimap;
   exports.WorldRenderLayerRegistry = WorldRenderLayerRegistry;
   exports.WorldStreamer = WorldStreamer;
   exports.assertPackedWorldChunk = assertPackedWorldChunk;
   exports.assertSupportedWorldGeneratorVersion = assertSupportedWorldGeneratorVersion;
   exports.assertWorldChunk = assertWorldChunk;
   exports.assertWorldDescriptor = assertWorldDescriptor;
+  exports.assertWorldOverviewPreparationOptions = assertWorldOverviewPreparationOptions;
+  exports.assertWorldOverviewRaster = assertWorldOverviewRaster;
   exports.assertWorldSource = assertWorldSource;
   exports.assertWorldTileOverride = assertWorldTileOverride;
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
@@ -20067,8 +20724,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;
   exports.estimateBufferGeometriesResourceBytes = estimateBufferGeometriesResourceBytes;
   exports.estimateObject3DResourceCost = estimateObject3DResourceCost;
+  exports.generateStaticWorldOverview = generateStaticWorldOverview;
   exports.generateWorld = generateWorld;
   exports.generateWorldChunk = generateWorldChunk;
+  exports.generateWorldOverviewWithResolver = generateWorldOverviewWithResolver;
   exports.generateWorldVegetation = generateWorldVegetation;
   exports.getChunkResidencyCoordinator = getChunkResidencyCoordinator;
   exports.getHexCenter = getHexCenter;
@@ -20082,6 +20741,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.getWorldSourceTile = getWorldSourceTile;
   exports.groupTilesByWorldChunk = groupTilesByWorldChunk;
   exports.isMutableWorldSource = isMutableWorldSource;
+  exports.isWorldOverviewSource = isWorldOverviewSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;
   exports.lifecycleAbortError = lifecycleAbortError;
   exports.mergeBufferUpdateRanges = mergeBufferUpdateRanges;
@@ -20093,6 +20753,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.serializeWorldDescriptor = serializeWorldDescriptor;
   exports.tagWorldChunk = tagWorldChunk;
   exports.worldDescriptorsEqual = worldDescriptorsEqual;
+  exports.worldOverviewTransferables = worldOverviewTransferables;
   exports.worldTileVisualSignature = worldTileVisualSignature;
   exports.worldVegetationTransferables = worldVegetationTransferables;
 

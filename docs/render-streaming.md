@@ -395,6 +395,39 @@ changes without a full chunk remount; other layers use the safe remount path.
 Lifecycle failures are aggregated after all remaining cleanup hooks have run;
 objects added through the host are removed even when mount or unmount throws.
 
+## Data-driven world overview and minimap
+
+`WorldMinimap` is a Canvas 2D consumer of `HexMap.requestWorldOverview()`; it
+does not create another Three.js camera, render target, or scene. Procedural
+sources schedule overview rasters through the existing generator pool in the
+`background` lane. Overview and vegetation share the non-critical worker
+capacity limit, so `reservedChunkWorkers` remains available for camera-near
+terrain requests. A minimap request never calls `loadChunk()` and therefore
+does not alter source, render, CPU, or GPU chunk residency.
+
+The overview payload is a bounded RGBA raster plus its logical tile extent.
+Pixels sample the authoritative `WorldSurfaceResolver`, so seed, topology,
+biome, relief, water, mountain, and climate snow stay aligned with the main
+world while omitting texture and mesh detail. Static sources rasterize their
+owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
+Worker request/response addition is protocol v3 and transfers the pixel buffer
+instead of cloning it.
+
+The first UI policy is intentionally small:
+
+- finite worlds render their complete bounds once with preserved aspect ratio;
+- infinite worlds use a 512x512-tile rolling window, recentered in quarter-span
+  steps and cached in six bounded views;
+- the dashed ellipse shows the main render-distance footprint, while the center
+  marker shows the logical camera target;
+- a left click maps the raster coordinate back to a logical tile and calls
+  `setCameraTargetTile()`, allowing normal streaming to take over.
+
+The base raster is rebuildable navigation data, not authoritative gameplay
+state. Cities, units, explored/fog state, objectives, and terrain edits remain
+separate dynamic overlay concerns; adding them must not make distant render
+chunks resident or merge simulation state into the generator payload.
+
 ## Fog and unit hot paths
 
 Fog visibility recomputation iterates only the previous and current visible

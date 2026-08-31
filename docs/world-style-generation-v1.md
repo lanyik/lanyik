@@ -605,7 +605,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 
 generator v6 固定格子回归校验和分别为：无限区块 `ae84e215`、环绕区块 `c4507ca2`、有界世界 `50fc54b4`；规范量化地表校验和仍为 `7ffc9327`，森林/湖泊区域样本为 `e0291032`。一次性生成、区块生成和工作线程共享同一解析器；工作线程按完整描述符指纹复用解析器。
 
-阶段 3 升级过生成器版本与 Worker 协议；阶段 5 和 generator v6 修订都只升级生成器版本。PackedWorldChunk 和 descriptor 仍为 v1，Worker 协议仍为 v2；单一内部风格不增加描述符字段。
+阶段 3 升级过生成器版本与 Worker 协议；阶段 5 和 generator v6 修订都只升级生成器版本。小地图概览后来增加了只读 RGBA 栅格请求，因此 Worker 协议升级为 v3；它复用同一 WorldSurfaceResolver，不改变格子生成语义。PackedWorldChunk 和 descriptor 仍为 v1；单一内部风格不增加描述符字段。
 
 旧生成器世界继续按严格描述符不匹配拒绝。自定义固定 worldId 的调用者必须主动迁移或清理旧地形编辑。
 

@@ -3,6 +3,11 @@ export const SUPPORTED_LOCALES = Object.freeze(["en", "zh-CN"]);
 export const DEFAULT_MESSAGES = Object.freeze({
     en: Object.freeze({
         "app.title": "Procedural Hex World",
+        "minimap.title": "World overview",
+        "minimap.hint": "Click to move the camera",
+        "minimap.label": "World overview; click a location to move the camera",
+        "minimap.loading": "Loading…",
+        "minimap.waiting": "Waiting",
         "panel.language": "Language",
         "panel.world": "World generation",
         "panel.terrain": "Terrain",
@@ -97,6 +102,11 @@ export const DEFAULT_MESSAGES = Object.freeze({
         "modifier.river": "River"
     }),
     "zh-CN": Object.freeze({
+        "minimap.title": "世界概览",
+        "minimap.hint": "点击位置移动镜头",
+        "minimap.label": "世界概览；点击位置可移动镜头",
+        "minimap.loading": "生成中…",
+        "minimap.waiting": "等待世界",
         "control.landformDebug": "地貌检查着色",
         "landformDebug.off": "正常显示",
         "landformDebug.elevation": "实际山体高度",

@@ -28,6 +28,11 @@ import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "./generateVegetation";
+import {
+    generateStaticWorldOverview,
+    WorldOverviewPreparationOptions,
+    WorldOverviewRaster
+} from "./generateWorldOverview";
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 import {
     createWorldDescriptor,
@@ -58,10 +63,13 @@ export interface WorldSourceStats {
     completed: number;
     queuedChunks?: number;
     queuedVegetation?: number;
+    queuedOverviews?: number;
     busyChunkWorkers?: number;
     busyVegetationWorkers?: number;
+    busyOverviewWorkers?: number;
     averageChunkMs?: number;
     averageVegetationMs?: number;
+    averageOverviewMs?: number;
     queuedWeight?: number;
     oldestQueuedMs?: number;
     shedTasks?: number;
@@ -108,6 +116,10 @@ export interface WorldSource {
         options: WorldVegetationPreparationOptions,
         request?: ChunkRequestOptions
     ): Promise<WorldVegetationLayout>;
+    prepareOverview?(
+        options: WorldOverviewPreparationOptions,
+        request?: ChunkRequestOptions
+    ): Promise<WorldOverviewRaster>;
     configureWorkerCount?(count: number): number;
     dispose(): void;
 }
@@ -123,6 +135,17 @@ export interface WorldVegetationSource extends WorldSource {
 
 export function isWorldVegetationSource(source: WorldSource): source is WorldVegetationSource {
     return typeof source.prepareVegetation === "function";
+}
+
+export interface WorldOverviewSource extends WorldSource {
+    prepareOverview(
+        options: WorldOverviewPreparationOptions,
+        request?: ChunkRequestOptions
+    ): Promise<WorldOverviewRaster>;
+}
+
+export function isWorldOverviewSource(source: WorldSource): source is WorldOverviewSource {
+    return typeof source.prepareOverview === "function";
 }
 
 export interface MutableWorldSource extends WorldSource {
@@ -300,6 +323,15 @@ export class StaticWorldSource implements WorldSource {
             }
         }
         return Promise.resolve({ chunkX, chunkY, chunkSize: this.chunkSize, coreTiles });
+    }
+
+    public prepareOverview(
+        options: WorldOverviewPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("StaticWorldSource has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        return Promise.resolve().then(() => generateStaticWorldOverview(this.map, options));
     }
 
     public releaseChunk(_chunk: WorldChunk): void {
@@ -936,6 +968,14 @@ export class ToroidalWorldSource implements MutableWorldSource {
         }, request);
     }
 
+    public prepareOverview(
+        options: WorldOverviewPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("ToroidalWorldSource has been disposed"));
+        return this.pool.generateOverview({ ...options, descriptor: this.descriptor }, request);
+    }
+
     public configureWorkerCount(count: number): number {
         return this.pool.configureSize(count);
     }
@@ -1152,6 +1192,14 @@ export class ProceduralWorldSource implements MutableWorldSource {
             ...options,
             map: createWorldVegetationMapSnapshot(this.map, options.points)
         }, request);
+    }
+
+    public prepareOverview(
+        options: WorldOverviewPreparationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("ProceduralWorldSource has been disposed"));
+        return this.pool.generateOverview({ ...options, descriptor: this.descriptor }, request);
     }
 
     public configureWorkerCount(count: number): number {

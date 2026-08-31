@@ -1,5 +1,6 @@
 import { PackedWorldChunk, WorldChunkGenerationOptions } from "./generateWorldChunk";
 import { WorldVegetationGenerationOptions, WorldVegetationLayout } from "./generateVegetation";
+import { WorldOverviewGenerationOptions, WorldOverviewRaster } from "./generateWorldOverview";
 import { WorldGeneratorClient } from "./WorldGeneratorClient";
 import {
     PriorityTaskQueue,
@@ -11,6 +12,7 @@ import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
     generateVegetation?(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout>;
+    generateOverview?(options: WorldOverviewGenerationOptions): Promise<WorldOverviewRaster>;
     dispose(): void;
     readonly isDisposed?: boolean;
 }
@@ -44,10 +46,13 @@ export interface WorldGeneratorPoolStats {
     completed: number;
     queuedChunks: number;
     queuedVegetation: number;
+    queuedOverviews: number;
     busyChunkWorkers: number;
     busyVegetationWorkers: number;
+    busyOverviewWorkers: number;
     averageChunkMs: number;
     averageVegetationMs: number;
+    averageOverviewMs: number;
     queuedWeight: number;
     oldestQueuedMs: number;
     shedTasks: number;
@@ -57,11 +62,11 @@ export interface WorldGeneratorPoolStats {
 }
 
 interface QueuedTask {
-    kind: "chunk" | "vegetation";
+    kind: "chunk" | "vegetation" | "overview";
     queueId?: number;
-    options: WorldChunkGenerationOptions | WorldVegetationGenerationOptions;
+    options: WorldChunkGenerationOptions | WorldVegetationGenerationOptions | WorldOverviewGenerationOptions;
     signal?: AbortSignal;
-    resolve(result: PackedWorldChunk | WorldVegetationLayout): void;
+    resolve(result: PackedWorldChunk | WorldVegetationLayout | WorldOverviewRaster): void;
     reject(error: Error): void;
     abort?: () => void;
     settled: boolean;
@@ -100,6 +105,7 @@ export class WorldGeneratorPool {
     private desiredSize: number;
     private averageChunkMs = 0;
     private averageVegetationMs = 0;
+    private averageOverviewMs = 0;
     private workerFailures = 0;
     private clientFactoryFailures = 0;
     private readonly coordinatorSignal: AbortSignal | undefined;
@@ -221,6 +227,42 @@ export class WorldGeneratorPool {
         });
     }
 
+    public generateOverview(
+        options: WorldOverviewGenerationOptions,
+        request: ChunkRequestOptions = {}
+    ): Promise<WorldOverviewRaster> {
+        if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
+        if (request.signal?.aborted) return Promise.reject(abortError());
+        return new Promise<WorldOverviewRaster>((resolve, reject) => {
+            const task: QueuedTask = {
+                kind: "overview",
+                options,
+                signal: request.signal,
+                resolve: result => resolve(result as WorldOverviewRaster),
+                reject,
+                settled: false
+            };
+            if (request.signal) {
+                task.abort = () => {
+                    if (task.settled) return;
+                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
+                    this.finishTask(task, () => reject(abortError()));
+                };
+                request.signal.addEventListener("abort", task.abort, { once: true });
+            }
+            task.queueId = this.queue.enqueue(task, {
+                priority: Number.isFinite(request.priority) ? request.priority as number : 0,
+                lane: request.lane ?? "background",
+                weight: request.weight ?? Math.max(1, Math.ceil(options.pixelWidth * options.pixelHeight / 4096)),
+                cancelled: reason => this.finishTask(task, () => task.reject(reason))
+            });
+            if (task.queueId === undefined && !task.settled) {
+                this.finishTask(task, () => reject(new WorkQueueBackpressureError("World overview request was shed")));
+            }
+            this.dispatch();
+        });
+    }
+
     public get stats(): Readonly<WorldGeneratorPoolStats> {
         const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
         const queueStats = this.queue.stats;
@@ -232,10 +274,13 @@ export class WorldGeneratorPool {
             completed: this.completed,
             queuedChunks: queued.filter(task => task.kind === "chunk").length,
             queuedVegetation: queued.filter(task => task.kind === "vegetation").length,
+            queuedOverviews: queued.filter(task => task.kind === "overview").length,
             busyChunkWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "chunk").length,
             busyVegetationWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "vegetation").length,
+            busyOverviewWorkers: this.slots.filter(slot => slot.busy && slot.taskKind === "overview").length,
             averageChunkMs: this.averageChunkMs,
             averageVegetationMs: this.averageVegetationMs,
+            averageOverviewMs: this.averageOverviewMs,
             queuedWeight: queueStats.pendingWeight,
             oldestQueuedMs: queueStats.oldestTaskAgeMs,
             shedTasks: queueStats.shedTasks,
@@ -295,13 +340,19 @@ export class WorldGeneratorPool {
             // A custom client is allowed to fail synchronously. Preserve the
             // existing immediate dispatch contract, but normalize a throw to
             // a rejected promise so slot cleanup always runs.
-            let pending: Promise<PackedWorldChunk | WorldVegetationLayout>;
+            let pending: Promise<PackedWorldChunk | WorldVegetationLayout | WorldOverviewRaster>;
             try {
-                pending = task.kind === "chunk"
-                    ? slot.client.generateChunk(task.options as WorldChunkGenerationOptions)
-                    : slot.client.generateVegetation
+                if (task.kind === "chunk") {
+                    pending = slot.client.generateChunk(task.options as WorldChunkGenerationOptions);
+                } else if (task.kind === "vegetation") {
+                    pending = slot.client.generateVegetation
                         ? slot.client.generateVegetation(task.options as WorldVegetationGenerationOptions)
                         : Promise.reject(new Error("World generation client does not support vegetation tasks"));
+                } else {
+                    pending = slot.client.generateOverview
+                        ? slot.client.generateOverview(task.options as WorldOverviewGenerationOptions)
+                        : Promise.reject(new Error("World generation client does not support overview tasks"));
+                }
             } catch (reason) {
                 pending = Promise.reject(reason);
             }
@@ -333,12 +384,12 @@ export class WorldGeneratorPool {
 
     private takeNextTask(): QueuedTask | undefined {
         const activeWorkers = Math.max(1, Math.min(this.desiredSize, this.slots.length));
-        const maximumVegetation = activeWorkers === 1
+        const maximumBackground = activeWorkers === 1
             ? 1
             : Math.max(1, activeWorkers - this.reservedChunkWorkers);
-        const busyVegetation = this.slots.filter(candidate =>
-            candidate.busy && candidate.taskKind === "vegetation").length;
-        const task = this.queue.take(busyVegetation >= maximumVegetation
+        const busyBackground = this.slots.filter(candidate =>
+            candidate.busy && candidate.taskKind !== "chunk").length;
+        const task = this.queue.take(busyBackground >= maximumBackground
             ? candidate => candidate.kind === "chunk"
             : undefined);
         if (task) task.queueId = undefined;
@@ -350,9 +401,12 @@ export class WorldGeneratorPool {
         if (kind === "chunk") {
             this.averageChunkMs = this.averageChunkMs === 0
                 ? durationMs : this.averageChunkMs + (durationMs - this.averageChunkMs) * alpha;
-        } else {
+        } else if (kind === "vegetation") {
             this.averageVegetationMs = this.averageVegetationMs === 0
                 ? durationMs : this.averageVegetationMs + (durationMs - this.averageVegetationMs) * alpha;
+        } else {
+            this.averageOverviewMs = this.averageOverviewMs === 0
+                ? durationMs : this.averageOverviewMs + (durationMs - this.averageOverviewMs) * alpha;
         }
     }
 
