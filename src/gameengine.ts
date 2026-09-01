@@ -8,6 +8,7 @@ import { Land } from "./enums";
 
 import { PathFinder } from "./helpers/pathfinder";
 import { EventEmitter } from "./EventEmitter";
+import type { GameEngineEventMap } from "./EventMaps";
 import { assertWrappableMap, normalizeMapCoordinates } from "./helpers/topology";
 import { forEachMapTile } from "./helpers/mapData";
 import { StaticWorldSource } from "./world/WorldSource";
@@ -34,7 +35,7 @@ export interface GameEngineOptions extends HexMapOptions {
 //library, while still giving consumers a batteries-included game loop if they want
 //it (as opposed to using bare HexMap + Unit + PathFinder directly).
 //----------------------------------------------------------------------------------
-export class GameEngine extends EventEmitter {
+export class GameEngine extends EventEmitter<GameEngineEventMap> {
 
     private _map:HexMap;
     private _mapData!:MapInfo;
@@ -64,12 +65,12 @@ export class GameEngine extends EventEmitter {
             throw new RangeError("farUnitUpdateInterval must be a positive finite number");
         }
         this._map = new HexMap(options);
-        this._map.on("click", (payload:{x:number,y:number,tile:TileInfo}) => this.cellClick(payload));
-        this._map.on("hover", (payload:{x:number,y:number,tile:TileInfo}) => this.cellHover(payload));
+        this._map.on("click", payload => this.cellClick(payload));
+        this._map.on("hover", payload => this.cellHover(payload));
         this._map.on("surfacechange", () => {
             for (const unit of this._units) unit.refreshSurface();
         });
-        this._map.on("frame", ({ dtS }:{ dtS:number }) => {
+        this._map.on("frame", ({ dtS }) => {
             const target = this._map.getCameraTarget(this.cameraTarget);
             for (const unit of this._units) {
                 unit.alignToWorldReference(target.x, target.z);

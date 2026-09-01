@@ -1608,35 +1608,50 @@
   // src/EventEmitter.ts
   var EventEmitter = class {
     constructor() {
-      this.listeners = {};
+      this.listeners = /* @__PURE__ */ new Map();
     }
     on(event, listener) {
-      var _a;
-      ((_a = this.listeners)[event] || (_a[event] = [])).push(listener);
+      const listeners = this.listeners.get(event) ?? [];
+      listeners.push(listener);
+      this.listeners.set(event, listeners);
       return this;
     }
     off(event, listener) {
-      if (!this.listeners[event]) return this;
+      const listeners = this.listeners.get(event);
+      if (!listeners) return this;
       if (!listener) {
-        delete this.listeners[event];
+        this.listeners.delete(event);
         return this;
       }
-      this.listeners[event] = this.listeners[event].filter((l) => l !== listener);
+      const erased = listener;
+      const remaining = listeners.filter((candidate) => candidate !== erased);
+      if (remaining.length === 0) this.listeners.delete(event);
+      else this.listeners.set(event, remaining);
       return this;
     }
-    emit(event, payload) {
-      const list = this.listeners[event];
-      if (!list || list.length === 0) return;
+    emit(event, ...[payload]) {
+      const list = this.listeners.get(event);
+      if (!list || list.length === 0) {
+        if (event === "error") throw unhandledEventError(payload);
+        return;
+      }
       for (const listener of list.slice()) {
         listener(payload);
       }
     }
+    listenerCount(event) {
+      return this.listeners.get(event)?.length ?? 0;
+    }
     removeAllListeners(event) {
-      if (event === void 0) this.listeners = {};
-      else delete this.listeners[event];
+      if (event === void 0) this.listeners.clear();
+      else this.listeners.delete(event);
       return this;
     }
   };
+  function unhandledEventError(payload) {
+    if (payload instanceof Error) return payload;
+    return new Error(payload === void 0 ? 'Unhandled "error" event' : `Unhandled "error" event: ${String(payload)}`);
+  }
 
   // src/helpers/helpers.ts
   function pointy_hex_corner(center, size, i) {
@@ -17040,7 +17055,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         adaptiveController,
         surface: worldSurface
       } = plan;
-      this.emit("loadstart", void 0);
+      this.emit("loadstart");
       this.stopWorldStreaming();
       const revision = ++this.loadRevision;
       const worldController = new RenderWorldController(source, this.runtimeWork, {
@@ -17116,7 +17131,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ]));
         if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
         this.updateWorldChunkVisibility();
-        this.emit("load", void 0);
+        this.emit("load");
       } catch (reason) {
         if (revision === this.loadRevision && this.worldSource === source) this.stopWorldStreaming();
         throw reason;
@@ -17705,9 +17720,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     reportWorldRenderLayerErrors(message, errors) {
       if (errors.length === 0) return;
       const error = new WorldRenderLayerLifecycleError(message, errors);
+      if (this.listenerCount("error") === 0) {
+        console.error(error);
+        return;
+      }
       try {
         this.emit("error", error);
-      } catch {
+      } catch (observerError) {
+        console.error(observerError);
       }
     }
     stopWorldStreaming() {

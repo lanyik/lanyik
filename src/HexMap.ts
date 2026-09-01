@@ -25,7 +25,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
-import { HexMapEventName } from "./enums";
+import type { HexMapEventMap } from "./EventMaps";
 import { getHexCenter } from "./helpers/helpers";
 import { pickTile } from "./helpers/picking";
 import {
@@ -131,7 +131,7 @@ const INERT_WORLD_SIGNAL = new AbortController().signal;
 //   map.on("click", ({x, y, tile}) => ...);
 //   map.on("hover", ({x, y, tile}) => ...);
 //----------------------------------------------------------------------------------
-export class HexMap extends EventEmitter {
+export class HexMap extends EventEmitter<HexMapEventMap> {
     private options: ResolvedHexMapOptions;
 
     private canvas: HTMLCanvasElement;
@@ -317,8 +317,8 @@ export class HexMap extends EventEmitter {
             logicalGround: point => { this.logicalGround(point); },
             tile: (x, y) => this.getTile(x, y),
             select: (x, y) => this.selectTile(x, y),
-            hover: (x, y, tile) => this.emit("hover" satisfies HexMapEventName, { x, y, tile }),
-            click: (x, y, tile) => this.emit("click" satisfies HexMapEventName, { x, y, tile })
+            hover: (x, y, tile) => this.emit("hover", { x, y, tile }),
+            click: (x, y, tile) => this.emit("click", { x, y, tile })
         });
         this.setupEvents();
         this.handleResize();
@@ -553,7 +553,7 @@ export class HexMap extends EventEmitter {
             || this.worldSurface !== surface || surface.revision !== surfaceRevision) return;
         this.updateWorldChunkVisibility();
         this.refreshWorldCopies();
-        this.emit("surfacechange" satisfies HexMapEventName, { revision: surfaceRevision, surface });
+        this.emit("surfacechange", { revision: surfaceRevision, surface });
     }
 
     private clearWorldCopies(): void {
@@ -962,7 +962,7 @@ export class HexMap extends EventEmitter {
         // Consumers with work scoped to the active source must invalidate it
         // before stopWorldStreaming() disposes that source and its Worker pool.
         // "load" remains the publication point for the replacement session.
-        this.emit("loadstart" satisfies HexMapEventName, undefined);
+        this.emit("loadstart");
         this.stopWorldStreaming();
         const revision = ++this.loadRevision;
         const worldController = new RenderWorldController(source, this.runtimeWork, {
@@ -1043,7 +1043,7 @@ export class HexMap extends EventEmitter {
             ]));
             if (this.disposed || revision !== this.loadRevision || this.worldStreamer !== streamer) return;
             this.updateWorldChunkVisibility();
-            this.emit("load" satisfies HexMapEventName, undefined);
+            this.emit("load");
         } catch (reason) {
             if (revision === this.loadRevision && this.worldSource === source) this.stopWorldStreaming();
             throw reason;
@@ -1744,11 +1744,18 @@ export class HexMap extends EventEmitter {
     private reportWorldRenderLayerErrors(message: string, errors: readonly Error[]): void {
         if (errors.length === 0) return;
         const error = new WorldRenderLayerLifecycleError(message, errors);
+        if (this.listenerCount("error") === 0) {
+            // Cleanup must finish even without an observer, but the aggregated
+            // failure must remain visible instead of becoming a swallowed event.
+            console.error(error);
+            return;
+        }
         try {
             this.emit("error", error);
-        } catch {
+        } catch (observerError) {
             //Error observers are external code too. Cleanup paths must remain
             //best-effort even when an observer throws while reporting a layer.
+            console.error(observerError);
         }
     }
 

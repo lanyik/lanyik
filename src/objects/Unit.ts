@@ -9,6 +9,7 @@ import { AnimationAction, AnimationClip, AnimationMixer, CurvePath, LoopOnce, Ob
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Land, UnitActions } from "../enums";
 import { EventEmitter } from "../EventEmitter";
+import type { UnitEventMap } from "../EventMaps";
 import type { WorldSurfaceAnchor } from "../world/WorldSurfaceView";
 
 //----------------------------------------------------------------------------------
@@ -25,7 +26,7 @@ import type { WorldSurfaceAnchor } from "../world/WorldSurfaceView";
 //FBX, and Blender's exporter handles it well, so there's no reason to carry a
 //second loader/format for units specifically.
 //----------------------------------------------------------------------------------
-export class Unit extends EventEmitter {
+export class Unit extends EventEmitter<UnitEventMap> {
 
     private needAnimate = false;
     private _unit!:Object3D;

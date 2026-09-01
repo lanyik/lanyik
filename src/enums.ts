@@ -1,25 +1,5 @@
 import { ColorRepresentation } from "three";
 
-//----------------------------------------------------------------------------------
-//Public HexMap events - see HexMap.on()/EventEmitter. "start_move"/"end_move" use
-//snake_case (not the camelCase of the rest) to match the exact event names requested
-//for the public API.
-//----------------------------------------------------------------------------------
-export type HexMapEventName =
-    | "loadstart"
-    | "load"
-    | "error"
-    | "frame"
-    | "contextlost"
-    | "contextrestored"
-    | "surfacechange"
-    | "click"
-    | "hover"
-    | "unitClick"
-    | "start_move"
-    | "cell_enter"
-    | "end_move";
-
 export enum Land {
     sea = "sea",
     coastal = "coastal",

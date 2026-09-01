@@ -92,6 +92,10 @@ map.on("click", ({ x, y, tile }) => console.log(x, y, tile));
 await map.disposeAsync();
 ```
 
+`HexMap`、`Unit` 和 `GameEngine` 分别暴露独立的类型化事件映射，事件名会
+自动确定 payload 类型；没有监听器的 `error` 事件会直接抛出，不会静默丢失。
+详见[事件契约](docs/event-contracts.md)。
+
 `await map.load(mapData)` 仍是有限 `StaticWorldSource` 的兼容包装。
 `loadWorld()` 是所有数据源的推荐入口；地图被替换或销毁前，该会话拥有传入的数据源。
 

@@ -104,6 +104,11 @@ map.on("click", ({ x, y, tile }) => console.log(x, y, tile));
 await map.disposeAsync();
 ```
 
+`HexMap`, `Unit` and `GameEngine` expose separate typed event maps. Event names
+select their payload type automatically; an `error` event with no listener is
+thrown instead of being silently ignored. See
+[event contracts](docs/event-contracts.md).
+
 `await map.load(mapData)` remains a compatibility wrapper for finite
 `StaticWorldSource` maps. `loadWorld()` is the preferred entry for every source
 type and owns that source until the world is replaced or the map is disposed.

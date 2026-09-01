@@ -15,6 +15,20 @@ export { Unit } from "./objects/Unit";
 export { PathFinder } from "./helpers/pathfinder";
 export { EventEmitter } from "./EventEmitter";
 export type { Listener } from "./EventEmitter";
+export type {
+    HexMapEventMap,
+    HexMapEventName,
+    HexMapFrameEvent,
+    HexMapSurfaceChangeEvent,
+    HexMapTileEvent,
+    UnitEventMap,
+    UnitEventName,
+    UnitStartMoveEvent,
+    UnitCellEnterEvent,
+    UnitEndMoveEvent,
+    GameEngineEventMap,
+    GameEngineEventName
+} from "./EventMaps";
 export { LifecycleDrainTimeoutError, LifecycleScope, lifecycleAbortError } from "./runtime/LifecycleScope";
 export type { LifecycleScopeOptions, LifecycleScopeStats, LifecycleState } from "./runtime/LifecycleScope";
 export {
@@ -54,7 +68,6 @@ export { FogOfWar, FogState } from "./objects/FogOfWar";
 export type { FogViewer, FogChange } from "./objects/FogOfWar";
 
 export { Land, UnitActions, LandColor, LandPriority } from "./enums";
-export type { HexMapEventName } from "./enums";
 
 export type {
     Point,

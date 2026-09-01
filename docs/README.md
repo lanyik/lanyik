@@ -23,6 +23,8 @@ plans. Start with the root [README](../README.md) for setup and public API usage
   new gameplay and content systems must consume rather than reopen.
 - [Package boundaries](./package-boundaries.md): main entry and optional
   `persistence`, `pathfinding` and `simulation` subpaths.
+- [Event contracts](./event-contracts.md): typed HexMap, Unit and GameEngine
+  payload maps plus synchronous dispatch and unhandled-error policy.
 - [Test strategy](./testing.md): contract tests, browser E2E, soak tests and
   benchmark gates.
 

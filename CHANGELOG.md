@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `EventEmitter` is now generic over typed payload maps; `HexMap`, `Unit` and
+  `GameEngine` expose distinct event contracts, and unobserved `error` events
+  throw instead of being silently discarded.
 - Hot-path benchmarks now use explicit warmups and five-sample medians, report
   raw ranges/spread plus the Node/V8/CPU environment, require exposed GC for the
   gate, and reject invalid benchmark environment controls.
