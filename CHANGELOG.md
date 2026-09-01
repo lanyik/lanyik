@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- World-load validation and derived session settings now live in a testable
+  `WorldLoadPlan`; `HexMap` no longer mirrors source, streamer and residency
+  references already owned by `RenderWorldController`.
 - Browser cache and delta-store implementations now live exclusively in the
   `three-hex-map/persistence` subpath. Procedural sources accept explicit store
   capabilities, own option-level stores, and keep dependency-injected stores

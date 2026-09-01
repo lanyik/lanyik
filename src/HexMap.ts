@@ -62,12 +62,10 @@ import {
     WorldRenderTileRefreshContext
 } from "./rendering/WorldRenderLayer";
 import {
-    MAX_WORLD_GENERATION_CHUNK_SIZE,
     WorldTileOverride,
     WorldTileOverrideChange
 } from "./world/generateWorldChunk";
 import {
-    assertWorldSource,
     isWorldOverviewSource,
     isWorldVegetationSource,
     StaticWorldSource,
@@ -109,8 +107,8 @@ import {
     WorldLoadOptions,
     resolveHexMapOptions
 } from "./HexMapOptions";
-import { createWorldSurfaceResolver } from "./world/WorldSurfaceResolver";
-import { createWorldSurfaceView, WorldSurfaceAnchor, WorldSurfaceView } from "./world/WorldSurfaceView";
+import { WorldSurfaceAnchor, WorldSurfaceView } from "./world/WorldSurfaceView";
+import { createWorldLoadPlan } from "./rendering/WorldLoadPlan";
 
 export type { HexMapOptions, WorldLoadOptions } from "./HexMapOptions";
 
@@ -195,10 +193,7 @@ export class HexMap extends EventEmitter {
     private disposed = false;
     private loadRevision = 0;
     private forestRevision = 0;
-    private worldSource: WorldSource | undefined;
     private worldSurface: WorldSurfaceView | undefined;
-    private worldStreamer: WorldStreamer | undefined;
-    private worldResidency: ChunkResidencyCoordinator | undefined;
     private worldController: RenderWorldController | undefined;
     private worldEditing: WorldEditingFacade | undefined;
     private readonly drainingWorldSessions = new Set<Promise<void>>();
@@ -234,6 +229,10 @@ export class HexMap extends EventEmitter {
     private adaptiveResolutionScale = 1;
     private appliedVegetationDensityScale = 1;
     private adaptiveVegetationRevision = 0;
+
+    private get worldSource(): WorldSource | undefined { return this.worldController?.source; }
+    private get worldStreamer(): WorldStreamer | undefined { return this.worldController?.streamer; }
+    private get worldResidency(): ChunkResidencyCoordinator | undefined { return this.worldController?.residency; }
 
     private lastSelected: Point | null = null;
 
@@ -943,107 +942,22 @@ export class HexMap extends EventEmitter {
             options?.source?.dispose();
             throw new Error("HexMap has been disposed");
         }
-        if (!options || typeof options !== "object" || !options.source) {
-            throw new TypeError("world load options with a source are required");
-        }
-        const source = options.source;
-        try {
-            assertWorldSource(source);
-        } catch (reason) {
-            if (typeof source.dispose === "function") source.dispose();
-            throw reason;
-        }
-        const chunkSize = source.chunkSize;
-        if (!Number.isInteger(chunkSize) || chunkSize <= 0
-            || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
-            source.dispose();
-            throw new RangeError(
-                `source.chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
-            );
-        }
-        const defaultTile = source.bounds
-            ? { x: Math.floor((source.bounds.width - 1) / 2), y: Math.floor((source.bounds.height - 1) / 2) }
-            : { x: 0, y: 0 };
-        const requestedTile = options.initialTile ?? defaultTile;
-        const initialTile = normalizeMapCoordinates(source.map, requestedTile.x, requestedTile.y);
-        if (!initialTile || !Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
-            source.dispose();
-            throw new RangeError("initialTile must identify a safe integer tile inside the world");
-        }
-        const chunkSpan = chunkSize * this.options.size * 1.5;
-        const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
-        const retentionRadius = options.retentionRadius ?? loadRadius + 1;
-        const maxResidentChunks = options.maxResidentChunks ?? (retentionRadius * 2 + 1) ** 2;
-        const maxRetries = options.maxRetries ?? 2;
-        const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
-        const frameBudgetMs = options.frameBudgetMs ?? 3;
-        const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
-        const predictionSeconds = options.predictionSeconds ?? 1.25;
-        const predictionMaxChunks = options.predictionMaxChunks ?? 1;
-        const baseWorkerCount = Math.max(1, source.stats?.configuredWorkers ?? source.stats?.workers ?? 1);
-        const integerAtLeast = (name: string, value: number, minimum: number) => {
-            if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
-        };
-        try {
-            integerAtLeast("loadRadius", loadRadius, 0);
-            integerAtLeast("retentionRadius", retentionRadius, loadRadius);
-            integerAtLeast("maxResidentChunks", maxResidentChunks, 1);
-            integerAtLeast("maxRetries", maxRetries, 0);
-            integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
-            integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
-            integerAtLeast("predictionMaxChunks", predictionMaxChunks, 0);
-            if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
-                throw new RangeError("frameBudgetMs must be a positive finite number");
-            }
-            if (!Number.isFinite(predictionSeconds) || predictionSeconds < 0) {
-                throw new RangeError("predictionSeconds must be a non-negative finite number");
-            }
-        } catch (reason) {
-            source.dispose();
-            throw reason;
-        }
-        const threshold = options.floatingOriginThreshold ?? 8192;
-        if (!Number.isFinite(threshold) || threshold <= this.options.size * chunkSize) {
-            source.dispose();
-            throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
-        }
-        let adaptiveController: AdaptiveStreamingController;
-        let worldSurface: WorldSurfaceView;
-        try {
-            adaptiveController = new AdaptiveStreamingController({
-                enabled: options.adaptiveStreaming ?? true,
-                targetFrameMs: options.targetFrameMs,
-                baseFrameBudgetMs: frameBudgetMs,
-                baseMaxTasksPerFrame: maxMountsPerFrame,
-                baseWorkerCount,
-                minimumWorkerCount: options.adaptiveMinWorkerCount ?? 1,
-                baseLodDistances: {
-                    near: this.options.lodNearDistance,
-                    far: this.options.lodFarDistance,
-                    vegetation: this.options.vegetationRenderDistance,
-                    hysteresis: this.options.chunkLodHysteresis
-                },
-                degradeFrames: options.adaptiveDegradeFrames,
-                recoverFrames: options.adaptiveRecoverFrames,
-                cooldownFrames: options.adaptiveCooldownFrames
-            });
-            const descriptor = source.descriptor;
-            const resolver = descriptor ? createWorldSurfaceResolver({
-                seed: descriptor.seed,
-                domain: descriptor.topology === "toroidal"
-                    ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
-                    : { topology: "infinite" }
-            }) : undefined;
-            worldSurface = createWorldSurfaceView({
-                map: source.map,
-                resolver,
-                tileSize: this.options.size,
-                mountainHeight: this.options.mountainHeight
-            });
-        } catch (reason) {
-            source.dispose();
-            throw reason;
-        }
+        const plan = createWorldLoadPlan(options, this.options);
+        const {
+            source,
+            chunkSize,
+            initialTile,
+            loadRadius,
+            retentionRadius,
+            maxResidentChunks,
+            maxRetries,
+            retryBaseDelayMs,
+            predictionSeconds,
+            predictionMaxChunks,
+            floatingOriginThreshold,
+            adaptiveController,
+            surface: worldSurface
+        } = plan;
 
         // Consumers with work scoped to the active source must invalidate it
         // before stopWorldStreaming() disposes that source and its Worker pool.
@@ -1055,18 +969,12 @@ export class HexMap extends EventEmitter {
             drainTimeoutMs: this.options.worldSessionDrainTimeoutMs,
             error: error => this.emit("error", error)
         });
-        const residency = worldController.residency;
         this.worldController = worldController;
-        this.worldSource = source;
-        this.worldResidency = residency;
         this.adaptiveStreamingController = adaptiveController;
         this.applyAdaptiveStreamingProfile(adaptiveController.currentProfile);
         this.worldChunkSize = chunkSize;
         this.streamingPredictionSeconds = predictionSeconds;
-        this.streamingPredictionMaxChunks = Math.min(
-            predictionMaxChunks,
-            Math.max(0, retentionRadius - loadRadius)
-        );
+        this.streamingPredictionMaxChunks = predictionMaxChunks;
         this.lastStreamingTarget = undefined;
         this.worldDemandElapsedS = 0;
         this.streamingVelocity.set(0, 0);
@@ -1074,7 +982,7 @@ export class HexMap extends EventEmitter {
         this.worldSurface = worldSurface;
         this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
         this.fogStates = new FogStateStore(source.map);
-        this.floatingOriginThreshold = threshold;
+        this.floatingOriginThreshold = floatingOriginThreshold;
         this.worldPatternOffset.set(0, 0);
         this.cleanRoutePath();
         this.interactions.reset();
@@ -1116,7 +1024,6 @@ export class HexMap extends EventEmitter {
                 maxRetries,
                 retryBaseDelayMs
             });
-            this.worldStreamer = streamer;
             const centerChunk = source.resolveChunk(
                 Math.floor(initialTile.x / chunkSize),
                 Math.floor(initialTile.y / chunkSize)
@@ -1846,9 +1753,7 @@ export class HexMap extends EventEmitter {
     }
 
     private stopWorldStreaming(): void {
-        const streamer = this.worldStreamer;
         const source = this.worldSource;
-        const residency = this.worldResidency;
         const controller = this.worldController;
         const editing = this.worldEditing;
         const errors: Error[] = [];
@@ -1881,10 +1786,6 @@ export class HexMap extends EventEmitter {
                 draining = controller.settled.finally(() => this.drainingWorldSessions.delete(draining));
                 this.drainingWorldSessions.add(draining);
             }
-            else {
-                streamer?.dispose(false);
-                residency?.dispose(false);
-            }
         } catch (reason) {
             errors.push(renderLayerError(reason));
         }
@@ -1907,10 +1808,7 @@ export class HexMap extends EventEmitter {
         } catch (reason) {
             errors.push(renderLayerError(reason));
         }
-        this.worldStreamer = undefined;
-        this.worldSource = undefined;
         this.worldSurface = undefined;
-        this.worldResidency = undefined;
         this.worldController = undefined;
         this.worldTileUpdateQueue = Promise.resolve();
         this.worldLayerRevision += 1;

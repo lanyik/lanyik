@@ -26,7 +26,8 @@ type TestableHexMap = {
 type OverrideTestableHexMap = {
     disposed: boolean;
     mapData: MapInfo;
-    worldSource: WorldSource;
+    readonly worldSource: WorldSource;
+    worldController: { source: WorldSource; streamer?: { residentChunks: readonly WorldChunk[] } };
     setTileOverride: HexMap["setTileOverride"];
     setTileOverrides: HexMap["setTileOverrides"];
     clearTileOverride: HexMap["clearTileOverride"];
@@ -38,8 +39,8 @@ type RefreshTestableHexMap = {
     disposed: boolean;
     loadRevision: number;
     mapData: MapInfo;
-    worldSource: WorldSource;
-    worldStreamer: { residentChunks: readonly WorldChunk[] };
+    readonly worldSource: WorldSource;
+    worldController: { source: WorldSource; streamer: { residentChunks: readonly WorldChunk[] } };
     worldChunkLayers: Map<string, { points: readonly Point[]; revision: number }>;
     unmountWorldChunk(chunk: WorldChunk): void;
     mountWorldChunk(chunk: WorldChunk): void;
@@ -102,7 +103,9 @@ describe("toroidal render copies", () => {
         const map = Object.create(HexMap.prototype) as OverrideTestableHexMap;
         map.disposed = false;
         map.mapData = { data: {}, w: 20, h: 17, wrapX: true, wrapY: true, tileAt: () => currentTile };
-        map.worldSource = { setTileOverride, clearTileOverride } as unknown as WorldSource;
+        map.worldController = {
+            source: { setTileOverride, clearTileOverride } as unknown as WorldSource
+        };
         map.enqueueTileRenderRefresh = refresh;
 
         await map.setTileOverride(-1, -1, { unit: "scout" });
@@ -135,9 +138,11 @@ describe("toroidal render copies", () => {
             data: {}, w: 20, h: 17, wrapX: true, wrapY: true,
             tileAt: (x, y) => tiles.get(`${x},${y}`) ?? { type: Land.land }
         };
-        map.worldSource = {
-            setTileOverride: vi.fn(), clearTileOverride: vi.fn(), setTileOverrides
-        } as unknown as WorldSource;
+        map.worldController = {
+            source: {
+                setTileOverride: vi.fn(), clearTileOverride: vi.fn(), setTileOverrides
+            } as unknown as WorldSource
+        };
         map.enqueueTileRenderRefreshes = refresh;
 
         await map.setTileOverrides([
@@ -170,8 +175,7 @@ describe("toroidal render copies", () => {
         map.disposed = false;
         map.loadRevision = 3;
         map.mapData = { data: {}, w: 1, h: 1, infinite: true };
-        map.worldSource = source;
-        map.worldStreamer = { residentChunks: chunks };
+        map.worldController = { source, streamer: { residentChunks: chunks } };
         map.worldChunkLayers = new Map([
             ["0,0", { points: [], revision: 1 }],
             ["1,0", { points: [], revision: 1 }],

@@ -10266,211 +10266,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
 
-  // src/rendering/AdaptiveStreamingController.ts
-  var QUALITY = [
-    { mount: 1, tasks: 1, workers: 1, resolution: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.75, tasks: 0.75, workers: 0.75, resolution: 0.85, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
-    { mount: 0.5, tasks: 0.5, workers: 0.5, resolution: 0.65, vegetation: 0.55, lod: 0.75, lodBias: 0, vegetationBias: 1 },
-    { mount: 0.3, tasks: 0.35, workers: 0.35, resolution: 0.25, vegetation: 0.25, lod: 0.55, lodBias: 1, vegetationBias: 1 }
-  ];
-  var pressureState = () => ({
-    level: 0,
-    average: 0,
-    overloadFrames: 0,
-    recoveryFrames: 0,
-    cooldown: 0
-  });
-  var AdaptiveStreamingController = class {
-    constructor(options) {
-      this.options = options;
-      this.averageFrameMs = 0;
-      this.mainThread = pressureState();
-      this.gpu = pressureState();
-      this.worker = pressureState();
-      this.transitions = 0;
-      this.latest = {};
-      this.enabled = options.enabled ?? true;
-      this.targetFrameMs = options.targetFrameMs ?? 1e3 / 60;
-      this.degradeFrames = options.degradeFrames ?? 18;
-      this.recoverFrames = options.recoverFrames ?? 180;
-      this.cooldownFrames = options.cooldownFrames ?? 90;
-      this.emaAlpha = options.emaAlpha ?? 0.08;
-      this.validate();
-      this.profile = this.createProfile();
-    }
-    //Returns a profile only when a quality transition occurs. Samples above
-    //250ms are normally background-tab/rAF suspension and are ignored.
-    sample(value) {
-      const legacy = typeof value === "number";
-      const sample = legacy ? { frameMs: value } : value;
-      const observedFrameMs = sample?.frameMs;
-      if (!this.enabled || !Number.isFinite(observedFrameMs) || observedFrameMs <= 0 || legacy && observedFrameMs > 250) return void 0;
-      const frameMs = legacy ? observedFrameMs : Math.min(observedFrameMs, 250);
-      this.averageFrameMs = this.averageFrameMs === 0 ? frameMs : this.averageFrameMs + (frameMs - this.averageFrameMs) * this.emaAlpha;
-      this.latest = { ...sample };
-      delete this.latest.frameMs;
-      let changed = false;
-      if (legacy) {
-        changed = this.samplePressure(this.mainThread, frameMs, this.targetFrameMs) || changed;
-        changed = this.samplePressure(this.gpu, frameMs, this.targetFrameMs) || changed;
-        changed = this.samplePressure(this.worker, frameMs, this.targetFrameMs) || changed;
-      } else {
-        const mainMeasurement = this.maximumDefined(
-          sample.cpuFrameMs,
-          sample.frameTaskMs,
-          sample.longTaskMs,
-          sample.oldestFrameTaskMs !== void 0 ? sample.oldestFrameTaskMs / 2 : void 0,
-          sample.frameTaskBacklog !== void 0 ? sample.frameTaskBacklog > this.options.baseMaxTasksPerFrame * 3 ? this.targetFrameMs * 2 : 0 : void 0,
-          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
-        );
-        if (mainMeasurement !== void 0) {
-          changed = this.samplePressure(this.mainThread, mainMeasurement, this.targetFrameMs) || changed;
-        }
-        const observableWorkIsIdle = (sample.frameTaskBacklog ?? 0) === 0 && (sample.oldestFrameTaskMs ?? 0) <= this.targetFrameMs && (sample.workerQueueDepth ?? 0) === 0 && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25 && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
-        const gpuTimerStalled = Boolean(
-          sample.gpuTimingSupported && sample.gpuTimingSaturated && (sample.gpuSampleAgeMs === void 0 || sample.gpuSampleAgeMs > this.targetFrameMs * 2)
-        );
-        const inferredRenderMs = !sample.gpuTimingSupported && observableWorkIsIdle ? frameMs : gpuTimerStalled && observableWorkIsIdle ? Math.max(frameMs, this.targetFrameMs * 2) : void 0;
-        const renderMeasurement = this.maximumDefined(
-          sample.gpuFrameMs ?? inferredRenderMs,
-          sample.gpuBudgetExceededBytes !== void 0 ? sample.gpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0,
-          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
-        );
-        if (renderMeasurement !== void 0) {
-          changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
-        }
-        if (sample.workerContentionMs !== void 0) {
-          changed = this.samplePressure(this.worker, sample.workerContentionMs, this.targetFrameMs * 0.25) || changed;
-        }
-      }
-      if (!changed) return void 0;
-      this.transitions += 1;
-      this.profile = this.createProfile();
-      return this.profile;
-    }
-    get currentProfile() {
-      return this.profile;
-    }
-    get stats() {
-      return {
-        ...this.profile,
-        enabled: this.enabled,
-        targetFrameMs: this.targetFrameMs,
-        averageFrameMs: this.averageFrameMs,
-        overloadFrames: Math.max(
-          this.mainThread.overloadFrames,
-          this.gpu.overloadFrames,
-          this.worker.overloadFrames
-        ),
-        recoveryFrames: Math.max(
-          this.mainThread.recoveryFrames,
-          this.gpu.recoveryFrames,
-          this.worker.recoveryFrames
-        ),
-        transitions: this.transitions,
-        averageCpuFrameMs: this.mainThread.average,
-        averageGpuFrameMs: this.gpu.average,
-        averageWorkerContentionMs: this.worker.average,
-        frameTaskBacklog: this.latest.frameTaskBacklog ?? 0,
-        oldestFrameTaskMs: this.latest.oldestFrameTaskMs ?? 0,
-        workerQueueDepth: this.latest.workerQueueDepth ?? 0,
-        workerBusyRatio: this.latest.workerBusyRatio ?? 0,
-        chunkLoadLatencyMs: this.latest.chunkLoadLatencyMs ?? 0,
-        chunkVisibleLatencyMs: this.latest.chunkVisibleLatencyMs ?? 0,
-        uploadBytes: this.latest.uploadBytes ?? 0,
-        drawCalls: this.latest.drawCalls ?? 0,
-        gpuTimingSupported: this.latest.gpuTimingSupported ?? false,
-        gpuTimingSaturated: this.latest.gpuTimingSaturated ?? false,
-        gpuSampleAgeMs: this.latest.gpuSampleAgeMs,
-        cpuBudgetExceededBytes: this.latest.cpuBudgetExceededBytes ?? 0,
-        gpuBudgetExceededBytes: this.latest.gpuBudgetExceededBytes ?? 0
-      };
-    }
-    createProfile() {
-      const main = QUALITY[this.mainThread.level];
-      const gpu = QUALITY[this.gpu.level];
-      const worker = QUALITY[this.worker.level];
-      const minimumWorkerCount = this.options.minimumWorkerCount ?? 1;
-      const scaleDistance = (value) => Math.max(0, value * gpu.lod);
-      return {
-        qualityLevel: Math.max(this.mainThread.level, this.gpu.level, this.worker.level),
-        mainThreadLevel: this.mainThread.level,
-        gpuLevel: this.gpu.level,
-        workerLevel: this.worker.level,
-        frameBudgetMs: Math.max(0.5, this.options.baseFrameBudgetMs * main.mount),
-        maxTasksPerFrame: Math.max(1, Math.round(this.options.baseMaxTasksPerFrame * main.tasks)),
-        workerCount: Math.max(minimumWorkerCount, Math.round(this.options.baseWorkerCount * worker.workers)),
-        resolutionScale: gpu.resolution,
-        vegetationDensityScale: gpu.vegetation,
-        lodDistanceScale: gpu.lod,
-        lodBias: gpu.lodBias,
-        vegetationLodBias: gpu.vegetationBias,
-        lodDistances: {
-          near: scaleDistance(this.options.baseLodDistances.near),
-          far: scaleDistance(this.options.baseLodDistances.far),
-          vegetation: scaleDistance(this.options.baseLodDistances.vegetation),
-          hysteresis: scaleDistance(this.options.baseLodDistances.hysteresis)
-        }
-      };
-    }
-    samplePressure(state, measurement, target) {
-      if (!Number.isFinite(measurement) || measurement < 0) return false;
-      state.average = state.average === 0 ? measurement : state.average + (measurement - state.average) * this.emaAlpha;
-      if (state.cooldown > 0) state.cooldown -= 1;
-      const overloaded = state.average > target * 1.12;
-      const recoverable = state.average < target * 1.03;
-      state.overloadFrames = overloaded ? state.overloadFrames + 1 : 0;
-      state.recoveryFrames = recoverable ? state.recoveryFrames + 1 : 0;
-      if (state.cooldown > 0) return false;
-      if (state.overloadFrames >= this.degradeFrames && state.level < QUALITY.length - 1) {
-        state.level += 1;
-        state.overloadFrames = 0;
-        state.recoveryFrames = 0;
-        state.cooldown = this.cooldownFrames;
-        return true;
-      }
-      if (state.recoveryFrames >= this.recoverFrames && state.level > 0) {
-        state.level -= 1;
-        state.overloadFrames = 0;
-        state.recoveryFrames = 0;
-        state.cooldown = this.cooldownFrames;
-        return true;
-      }
-      return false;
-    }
-    maximumDefined(...values) {
-      const defined = values.filter((value) => value !== void 0);
-      return defined.length > 0 ? Math.max(...defined) : void 0;
-    }
-    validate() {
-      const positive2 = (name, value) => {
-        if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be positive`);
-      };
-      positive2("targetFrameMs", this.targetFrameMs);
-      positive2("baseFrameBudgetMs", this.options.baseFrameBudgetMs);
-      if (!Number.isInteger(this.options.baseMaxTasksPerFrame) || this.options.baseMaxTasksPerFrame <= 0) {
-        throw new RangeError("baseMaxTasksPerFrame must be a positive integer");
-      }
-      if (!Number.isInteger(this.options.baseWorkerCount) || this.options.baseWorkerCount <= 0) {
-        throw new RangeError("baseWorkerCount must be a positive integer");
-      }
-      const minimumWorkerCount = this.options.minimumWorkerCount ?? 1;
-      if (!Number.isInteger(minimumWorkerCount) || minimumWorkerCount <= 0 || minimumWorkerCount > this.options.baseWorkerCount) {
-        throw new RangeError("minimumWorkerCount must be between 1 and baseWorkerCount");
-      }
-      for (const [name, value] of [
-        ["degradeFrames", this.degradeFrames],
-        ["recoverFrames", this.recoverFrames],
-        ["cooldownFrames", this.cooldownFrames]
-      ]) {
-        if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
-      }
-      if (!Number.isFinite(this.emaAlpha) || this.emaAlpha <= 0 || this.emaAlpha > 1) {
-        throw new RangeError("emaAlpha must be in (0, 1]");
-      }
-    }
-  };
-
   // src/rendering/WorldRenderLayer.ts
   var WorldRenderLayerLifecycleError = class extends Error {
     constructor(message, errors) {
@@ -11362,6 +11157,55 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return new FrozenWorldSurfaceResolver(options);
   }
 
+  // src/world/generateWorld.ts
+  var MIN_WORLD_SIZE = 8;
+  var MAX_WORLD_SIZE = 512;
+  function assertDimension2(name, value) {
+    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+    }
+  }
+  function cloneGeneratedTile(tile) {
+    return {
+      ...tile,
+      modifiers: tile.modifiers ? [...tile.modifiers] : void 0,
+      rivers: tile.rivers?.map((river) => ({ ...river })),
+      city: tile.city ? { ...tile.city } : void 0
+    };
+  }
+  function generateWorld({ seed, width, height, topology = "bounded" }) {
+    assertDimension2("width", width);
+    assertDimension2("height", height);
+    if (topology !== "bounded" && topology !== "toroidal") {
+      throw new RangeError('topology must be either "bounded" or "toroidal"');
+    }
+    if (topology === "toroidal" && width % 2 !== 0) {
+      throw new RangeError("toroidal worlds require an even width");
+    }
+    const data = {};
+    const toroidal = topology === "toroidal";
+    const resolver = createWorldSurfaceResolver({
+      seed,
+      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
+    });
+    const windowSize = 24;
+    for (let startX = 0; startX < width; startX += windowSize) {
+      for (let startY = 0; startY < height; startY += windowSize) {
+        const window2 = resolver.createWindow();
+        const endX = Math.min(width, startX + windowSize);
+        const endY = Math.min(height, startY + windowSize);
+        for (let x = startX; x < endX; x += 1) {
+          data[x] ?? (data[x] = {});
+          for (let y = startY; y < endY; y += 1) {
+            data[x][y] = cloneGeneratedTile(window2.resolveGeneratedTile(x, y));
+          }
+        }
+        window2.clear();
+      }
+    }
+    return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
+  }
+
   // src/world/generateWorldChunk.ts
   var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
   var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
@@ -11783,55 +11627,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.chunkSize = void 0;
     }
   };
-
-  // src/world/generateWorld.ts
-  var MIN_WORLD_SIZE = 8;
-  var MAX_WORLD_SIZE = 512;
-  function assertDimension2(name, value) {
-    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-    }
-  }
-  function cloneGeneratedTile(tile) {
-    return {
-      ...tile,
-      modifiers: tile.modifiers ? [...tile.modifiers] : void 0,
-      rivers: tile.rivers?.map((river) => ({ ...river })),
-      city: tile.city ? { ...tile.city } : void 0
-    };
-  }
-  function generateWorld({ seed, width, height, topology = "bounded" }) {
-    assertDimension2("width", width);
-    assertDimension2("height", height);
-    if (topology !== "bounded" && topology !== "toroidal") {
-      throw new RangeError('topology must be either "bounded" or "toroidal"');
-    }
-    if (topology === "toroidal" && width % 2 !== 0) {
-      throw new RangeError("toroidal worlds require an even width");
-    }
-    const data = {};
-    const toroidal = topology === "toroidal";
-    const resolver = createWorldSurfaceResolver({
-      seed,
-      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
-    });
-    const windowSize = 24;
-    for (let startX = 0; startX < width; startX += windowSize) {
-      for (let startY = 0; startY < height; startY += windowSize) {
-        const window2 = resolver.createWindow();
-        const endX = Math.min(width, startX + windowSize);
-        const endY = Math.min(height, startY + windowSize);
-        for (let x = startX; x < endX; x += 1) {
-          data[x] ?? (data[x] = {});
-          for (let y = startY; y < endY; y += 1) {
-            data[x][y] = cloneGeneratedTile(window2.resolveGeneratedTile(x, y));
-          }
-        }
-        window2.clear();
-      }
-    }
-    return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
-  }
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
@@ -15945,6 +15740,211 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   }
 
+  // src/rendering/AdaptiveStreamingController.ts
+  var QUALITY = [
+    { mount: 1, tasks: 1, workers: 1, resolution: 1, vegetation: 1, lod: 1, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.75, tasks: 0.75, workers: 0.75, resolution: 0.85, vegetation: 0.85, lod: 0.9, lodBias: 0, vegetationBias: 0 },
+    { mount: 0.5, tasks: 0.5, workers: 0.5, resolution: 0.65, vegetation: 0.55, lod: 0.75, lodBias: 0, vegetationBias: 1 },
+    { mount: 0.3, tasks: 0.35, workers: 0.35, resolution: 0.25, vegetation: 0.25, lod: 0.55, lodBias: 1, vegetationBias: 1 }
+  ];
+  var pressureState = () => ({
+    level: 0,
+    average: 0,
+    overloadFrames: 0,
+    recoveryFrames: 0,
+    cooldown: 0
+  });
+  var AdaptiveStreamingController = class {
+    constructor(options) {
+      this.options = options;
+      this.averageFrameMs = 0;
+      this.mainThread = pressureState();
+      this.gpu = pressureState();
+      this.worker = pressureState();
+      this.transitions = 0;
+      this.latest = {};
+      this.enabled = options.enabled ?? true;
+      this.targetFrameMs = options.targetFrameMs ?? 1e3 / 60;
+      this.degradeFrames = options.degradeFrames ?? 18;
+      this.recoverFrames = options.recoverFrames ?? 180;
+      this.cooldownFrames = options.cooldownFrames ?? 90;
+      this.emaAlpha = options.emaAlpha ?? 0.08;
+      this.validate();
+      this.profile = this.createProfile();
+    }
+    //Returns a profile only when a quality transition occurs. Samples above
+    //250ms are normally background-tab/rAF suspension and are ignored.
+    sample(value) {
+      const legacy = typeof value === "number";
+      const sample = legacy ? { frameMs: value } : value;
+      const observedFrameMs = sample?.frameMs;
+      if (!this.enabled || !Number.isFinite(observedFrameMs) || observedFrameMs <= 0 || legacy && observedFrameMs > 250) return void 0;
+      const frameMs = legacy ? observedFrameMs : Math.min(observedFrameMs, 250);
+      this.averageFrameMs = this.averageFrameMs === 0 ? frameMs : this.averageFrameMs + (frameMs - this.averageFrameMs) * this.emaAlpha;
+      this.latest = { ...sample };
+      delete this.latest.frameMs;
+      let changed = false;
+      if (legacy) {
+        changed = this.samplePressure(this.mainThread, frameMs, this.targetFrameMs) || changed;
+        changed = this.samplePressure(this.gpu, frameMs, this.targetFrameMs) || changed;
+        changed = this.samplePressure(this.worker, frameMs, this.targetFrameMs) || changed;
+      } else {
+        const mainMeasurement = this.maximumDefined(
+          sample.cpuFrameMs,
+          sample.frameTaskMs,
+          sample.longTaskMs,
+          sample.oldestFrameTaskMs !== void 0 ? sample.oldestFrameTaskMs / 2 : void 0,
+          sample.frameTaskBacklog !== void 0 ? sample.frameTaskBacklog > this.options.baseMaxTasksPerFrame * 3 ? this.targetFrameMs * 2 : 0 : void 0,
+          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
+        );
+        if (mainMeasurement !== void 0) {
+          changed = this.samplePressure(this.mainThread, mainMeasurement, this.targetFrameMs) || changed;
+        }
+        const observableWorkIsIdle = (sample.frameTaskBacklog ?? 0) === 0 && (sample.oldestFrameTaskMs ?? 0) <= this.targetFrameMs && (sample.workerQueueDepth ?? 0) === 0 && (sample.workerContentionMs ?? 0) <= this.targetFrameMs * 0.25 && (mainMeasurement ?? 0) <= this.targetFrameMs * 1.12;
+        const gpuTimerStalled = Boolean(
+          sample.gpuTimingSupported && sample.gpuTimingSaturated && (sample.gpuSampleAgeMs === void 0 || sample.gpuSampleAgeMs > this.targetFrameMs * 2)
+        );
+        const inferredRenderMs = !sample.gpuTimingSupported && observableWorkIsIdle ? frameMs : gpuTimerStalled && observableWorkIsIdle ? Math.max(frameMs, this.targetFrameMs * 2) : void 0;
+        const renderMeasurement = this.maximumDefined(
+          sample.gpuFrameMs ?? inferredRenderMs,
+          sample.gpuBudgetExceededBytes !== void 0 ? sample.gpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0,
+          sample.cpuBudgetExceededBytes !== void 0 ? sample.cpuBudgetExceededBytes > 0 ? this.targetFrameMs * 2 : 0 : void 0
+        );
+        if (renderMeasurement !== void 0) {
+          changed = this.samplePressure(this.gpu, renderMeasurement, this.targetFrameMs) || changed;
+        }
+        if (sample.workerContentionMs !== void 0) {
+          changed = this.samplePressure(this.worker, sample.workerContentionMs, this.targetFrameMs * 0.25) || changed;
+        }
+      }
+      if (!changed) return void 0;
+      this.transitions += 1;
+      this.profile = this.createProfile();
+      return this.profile;
+    }
+    get currentProfile() {
+      return this.profile;
+    }
+    get stats() {
+      return {
+        ...this.profile,
+        enabled: this.enabled,
+        targetFrameMs: this.targetFrameMs,
+        averageFrameMs: this.averageFrameMs,
+        overloadFrames: Math.max(
+          this.mainThread.overloadFrames,
+          this.gpu.overloadFrames,
+          this.worker.overloadFrames
+        ),
+        recoveryFrames: Math.max(
+          this.mainThread.recoveryFrames,
+          this.gpu.recoveryFrames,
+          this.worker.recoveryFrames
+        ),
+        transitions: this.transitions,
+        averageCpuFrameMs: this.mainThread.average,
+        averageGpuFrameMs: this.gpu.average,
+        averageWorkerContentionMs: this.worker.average,
+        frameTaskBacklog: this.latest.frameTaskBacklog ?? 0,
+        oldestFrameTaskMs: this.latest.oldestFrameTaskMs ?? 0,
+        workerQueueDepth: this.latest.workerQueueDepth ?? 0,
+        workerBusyRatio: this.latest.workerBusyRatio ?? 0,
+        chunkLoadLatencyMs: this.latest.chunkLoadLatencyMs ?? 0,
+        chunkVisibleLatencyMs: this.latest.chunkVisibleLatencyMs ?? 0,
+        uploadBytes: this.latest.uploadBytes ?? 0,
+        drawCalls: this.latest.drawCalls ?? 0,
+        gpuTimingSupported: this.latest.gpuTimingSupported ?? false,
+        gpuTimingSaturated: this.latest.gpuTimingSaturated ?? false,
+        gpuSampleAgeMs: this.latest.gpuSampleAgeMs,
+        cpuBudgetExceededBytes: this.latest.cpuBudgetExceededBytes ?? 0,
+        gpuBudgetExceededBytes: this.latest.gpuBudgetExceededBytes ?? 0
+      };
+    }
+    createProfile() {
+      const main = QUALITY[this.mainThread.level];
+      const gpu = QUALITY[this.gpu.level];
+      const worker = QUALITY[this.worker.level];
+      const minimumWorkerCount = this.options.minimumWorkerCount ?? 1;
+      const scaleDistance = (value) => Math.max(0, value * gpu.lod);
+      return {
+        qualityLevel: Math.max(this.mainThread.level, this.gpu.level, this.worker.level),
+        mainThreadLevel: this.mainThread.level,
+        gpuLevel: this.gpu.level,
+        workerLevel: this.worker.level,
+        frameBudgetMs: Math.max(0.5, this.options.baseFrameBudgetMs * main.mount),
+        maxTasksPerFrame: Math.max(1, Math.round(this.options.baseMaxTasksPerFrame * main.tasks)),
+        workerCount: Math.max(minimumWorkerCount, Math.round(this.options.baseWorkerCount * worker.workers)),
+        resolutionScale: gpu.resolution,
+        vegetationDensityScale: gpu.vegetation,
+        lodDistanceScale: gpu.lod,
+        lodBias: gpu.lodBias,
+        vegetationLodBias: gpu.vegetationBias,
+        lodDistances: {
+          near: scaleDistance(this.options.baseLodDistances.near),
+          far: scaleDistance(this.options.baseLodDistances.far),
+          vegetation: scaleDistance(this.options.baseLodDistances.vegetation),
+          hysteresis: scaleDistance(this.options.baseLodDistances.hysteresis)
+        }
+      };
+    }
+    samplePressure(state, measurement, target) {
+      if (!Number.isFinite(measurement) || measurement < 0) return false;
+      state.average = state.average === 0 ? measurement : state.average + (measurement - state.average) * this.emaAlpha;
+      if (state.cooldown > 0) state.cooldown -= 1;
+      const overloaded = state.average > target * 1.12;
+      const recoverable = state.average < target * 1.03;
+      state.overloadFrames = overloaded ? state.overloadFrames + 1 : 0;
+      state.recoveryFrames = recoverable ? state.recoveryFrames + 1 : 0;
+      if (state.cooldown > 0) return false;
+      if (state.overloadFrames >= this.degradeFrames && state.level < QUALITY.length - 1) {
+        state.level += 1;
+        state.overloadFrames = 0;
+        state.recoveryFrames = 0;
+        state.cooldown = this.cooldownFrames;
+        return true;
+      }
+      if (state.recoveryFrames >= this.recoverFrames && state.level > 0) {
+        state.level -= 1;
+        state.overloadFrames = 0;
+        state.recoveryFrames = 0;
+        state.cooldown = this.cooldownFrames;
+        return true;
+      }
+      return false;
+    }
+    maximumDefined(...values) {
+      const defined = values.filter((value) => value !== void 0);
+      return defined.length > 0 ? Math.max(...defined) : void 0;
+    }
+    validate() {
+      const positive2 = (name, value) => {
+        if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be positive`);
+      };
+      positive2("targetFrameMs", this.targetFrameMs);
+      positive2("baseFrameBudgetMs", this.options.baseFrameBudgetMs);
+      if (!Number.isInteger(this.options.baseMaxTasksPerFrame) || this.options.baseMaxTasksPerFrame <= 0) {
+        throw new RangeError("baseMaxTasksPerFrame must be a positive integer");
+      }
+      if (!Number.isInteger(this.options.baseWorkerCount) || this.options.baseWorkerCount <= 0) {
+        throw new RangeError("baseWorkerCount must be a positive integer");
+      }
+      const minimumWorkerCount = this.options.minimumWorkerCount ?? 1;
+      if (!Number.isInteger(minimumWorkerCount) || minimumWorkerCount <= 0 || minimumWorkerCount > this.options.baseWorkerCount) {
+        throw new RangeError("minimumWorkerCount must be between 1 and baseWorkerCount");
+      }
+      for (const [name, value] of [
+        ["degradeFrames", this.degradeFrames],
+        ["recoverFrames", this.recoverFrames],
+        ["cooldownFrames", this.cooldownFrames]
+      ]) {
+        if (!Number.isInteger(value) || value < 0) throw new RangeError(`${name} must be a non-negative integer`);
+      }
+      if (!Number.isFinite(this.emaAlpha) || this.emaAlpha <= 0 || this.emaAlpha > 1) {
+        throw new RangeError("emaAlpha must be in (0, 1]");
+      }
+    }
+  };
+
   // src/world/WorldSurfaceView.ts
   var clamp2 = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
   var CORNER_DIRECTIONS = [
@@ -16217,6 +16217,110 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return new MutableWorldSurfaceView(options);
   }
 
+  // src/rendering/WorldLoadPlan.ts
+  function createWorldLoadPlan(options, mapOptions) {
+    if (!options || typeof options !== "object" || !options.source) {
+      throw new TypeError("world load options with a source are required");
+    }
+    const source = options.source;
+    try {
+      assertWorldSource(source);
+      const chunkSize = source.chunkSize;
+      if (!Number.isInteger(chunkSize) || chunkSize <= 0 || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
+        throw new RangeError(
+          `source.chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
+        );
+      }
+      const defaultTile = source.bounds ? { x: Math.floor((source.bounds.width - 1) / 2), y: Math.floor((source.bounds.height - 1) / 2) } : { x: 0, y: 0 };
+      const requestedTile = options.initialTile ?? defaultTile;
+      const initialTile = normalizeMapCoordinates(source.map, requestedTile.x, requestedTile.y);
+      if (!initialTile || !Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
+        throw new RangeError("initialTile must identify a safe integer tile inside the world");
+      }
+      const chunkSpan = chunkSize * mapOptions.size * 1.5;
+      const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(mapOptions.renderDistance / chunkSpan));
+      const retentionRadius = options.retentionRadius ?? loadRadius + 1;
+      const maxResidentChunks = options.maxResidentChunks ?? (retentionRadius * 2 + 1) ** 2;
+      const maxRetries = options.maxRetries ?? 2;
+      const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
+      const frameBudgetMs = options.frameBudgetMs ?? 3;
+      const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
+      const predictionSeconds = options.predictionSeconds ?? 1.25;
+      const predictionMaxChunks = options.predictionMaxChunks ?? 1;
+      integerAtLeast("loadRadius", loadRadius, 0);
+      integerAtLeast("retentionRadius", retentionRadius, loadRadius);
+      integerAtLeast("maxResidentChunks", maxResidentChunks, 1);
+      integerAtLeast("maxRetries", maxRetries, 0);
+      integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
+      integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
+      integerAtLeast("predictionMaxChunks", predictionMaxChunks, 0);
+      if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
+        throw new RangeError("frameBudgetMs must be a positive finite number");
+      }
+      if (!Number.isFinite(predictionSeconds) || predictionSeconds < 0) {
+        throw new RangeError("predictionSeconds must be a non-negative finite number");
+      }
+      const floatingOriginThreshold = options.floatingOriginThreshold ?? 8192;
+      if (!Number.isFinite(floatingOriginThreshold) || floatingOriginThreshold <= mapOptions.size * chunkSize) {
+        throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
+      }
+      const baseWorkerCount = Math.max(1, source.stats?.configuredWorkers ?? source.stats?.workers ?? 1);
+      const adaptiveController = new AdaptiveStreamingController({
+        enabled: options.adaptiveStreaming ?? true,
+        targetFrameMs: options.targetFrameMs,
+        baseFrameBudgetMs: frameBudgetMs,
+        baseMaxTasksPerFrame: maxMountsPerFrame,
+        baseWorkerCount,
+        minimumWorkerCount: options.adaptiveMinWorkerCount ?? 1,
+        baseLodDistances: {
+          near: mapOptions.lodNearDistance,
+          far: mapOptions.lodFarDistance,
+          vegetation: mapOptions.vegetationRenderDistance,
+          hysteresis: mapOptions.chunkLodHysteresis
+        },
+        degradeFrames: options.adaptiveDegradeFrames,
+        recoverFrames: options.adaptiveRecoverFrames,
+        cooldownFrames: options.adaptiveCooldownFrames
+      });
+      const descriptor = source.descriptor;
+      const resolver = descriptor ? createWorldSurfaceResolver({
+        seed: descriptor.seed,
+        domain: descriptor.topology === "toroidal" ? { topology: "toroidal", width: descriptor.width, height: descriptor.height } : { topology: "infinite" }
+      }) : void 0;
+      const surface = createWorldSurfaceView({
+        map: source.map,
+        resolver,
+        tileSize: mapOptions.size,
+        mountainHeight: mapOptions.mountainHeight
+      });
+      return {
+        source,
+        chunkSize,
+        initialTile,
+        loadRadius,
+        retentionRadius,
+        maxResidentChunks,
+        maxRetries,
+        retryBaseDelayMs,
+        frameBudgetMs,
+        maxMountsPerFrame,
+        predictionSeconds,
+        predictionMaxChunks: Math.min(predictionMaxChunks, Math.max(0, retentionRadius - loadRadius)),
+        floatingOriginThreshold,
+        adaptiveController,
+        surface
+      };
+    } catch (reason) {
+      if (typeof source.dispose === "function") source.dispose();
+      throw reason;
+    }
+  }
+  function integerAtLeast(name, value, minimum) {
+    if (!Number.isInteger(value) || value < minimum) {
+      throw new RangeError(`${name} must be an integer >= ${minimum}`);
+    }
+  }
+
   // src/HexMap.ts
   function renderLayerError(reason) {
     return reason instanceof Error ? reason : new Error(String(reason));
@@ -16435,6 +16539,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.setupEvents();
       this.handleResize();
       this.animationFrameId = window.requestAnimationFrame(this.animate);
+    }
+    get worldSource() {
+      return this.worldController?.source;
+    }
+    get worldStreamer() {
+      return this.worldController?.streamer;
+    }
+    get worldResidency() {
+      return this.worldController?.residency;
     }
     installBuiltinWorldRenderLayers() {
       this.worldRenderLayers.register({
@@ -16911,102 +17024,22 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         options?.source?.dispose();
         throw new Error("HexMap has been disposed");
       }
-      if (!options || typeof options !== "object" || !options.source) {
-        throw new TypeError("world load options with a source are required");
-      }
-      const source = options.source;
-      try {
-        assertWorldSource(source);
-      } catch (reason) {
-        if (typeof source.dispose === "function") source.dispose();
-        throw reason;
-      }
-      const chunkSize = source.chunkSize;
-      if (!Number.isInteger(chunkSize) || chunkSize <= 0 || chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunkSize % WORLD_CHUNK_SIZE !== 0) {
-        source.dispose();
-        throw new RangeError(
-          `source.chunkSize must be a positive multiple of ${WORLD_CHUNK_SIZE} up to ${MAX_WORLD_GENERATION_CHUNK_SIZE}`
-        );
-      }
-      const defaultTile = source.bounds ? { x: Math.floor((source.bounds.width - 1) / 2), y: Math.floor((source.bounds.height - 1) / 2) } : { x: 0, y: 0 };
-      const requestedTile = options.initialTile ?? defaultTile;
-      const initialTile = normalizeMapCoordinates(source.map, requestedTile.x, requestedTile.y);
-      if (!initialTile || !Number.isSafeInteger(initialTile.x) || !Number.isSafeInteger(initialTile.y)) {
-        source.dispose();
-        throw new RangeError("initialTile must identify a safe integer tile inside the world");
-      }
-      const chunkSpan = chunkSize * this.options.size * 1.5;
-      const loadRadius = options.loadRadius ?? Math.max(1, Math.ceil(this.options.renderDistance / chunkSpan));
-      const retentionRadius = options.retentionRadius ?? loadRadius + 1;
-      const maxResidentChunks = options.maxResidentChunks ?? (retentionRadius * 2 + 1) ** 2;
-      const maxRetries = options.maxRetries ?? 2;
-      const retryBaseDelayMs = options.retryBaseDelayMs ?? 100;
-      const frameBudgetMs = options.frameBudgetMs ?? 3;
-      const maxMountsPerFrame = options.maxMountsPerFrame ?? 2;
-      const predictionSeconds = options.predictionSeconds ?? 1.25;
-      const predictionMaxChunks = options.predictionMaxChunks ?? 1;
-      const baseWorkerCount = Math.max(1, source.stats?.configuredWorkers ?? source.stats?.workers ?? 1);
-      const integerAtLeast = (name, value, minimum) => {
-        if (!Number.isInteger(value) || value < minimum) throw new RangeError(`${name} must be an integer >= ${minimum}`);
-      };
-      try {
-        integerAtLeast("loadRadius", loadRadius, 0);
-        integerAtLeast("retentionRadius", retentionRadius, loadRadius);
-        integerAtLeast("maxResidentChunks", maxResidentChunks, 1);
-        integerAtLeast("maxRetries", maxRetries, 0);
-        integerAtLeast("retryBaseDelayMs", retryBaseDelayMs, 0);
-        integerAtLeast("maxMountsPerFrame", maxMountsPerFrame, 1);
-        integerAtLeast("predictionMaxChunks", predictionMaxChunks, 0);
-        if (!Number.isFinite(frameBudgetMs) || frameBudgetMs <= 0) {
-          throw new RangeError("frameBudgetMs must be a positive finite number");
-        }
-        if (!Number.isFinite(predictionSeconds) || predictionSeconds < 0) {
-          throw new RangeError("predictionSeconds must be a non-negative finite number");
-        }
-      } catch (reason) {
-        source.dispose();
-        throw reason;
-      }
-      const threshold = options.floatingOriginThreshold ?? 8192;
-      if (!Number.isFinite(threshold) || threshold <= this.options.size * chunkSize) {
-        source.dispose();
-        throw new RangeError("floatingOriginThreshold must exceed one source chunk span");
-      }
-      let adaptiveController;
-      let worldSurface;
-      try {
-        adaptiveController = new AdaptiveStreamingController({
-          enabled: options.adaptiveStreaming ?? true,
-          targetFrameMs: options.targetFrameMs,
-          baseFrameBudgetMs: frameBudgetMs,
-          baseMaxTasksPerFrame: maxMountsPerFrame,
-          baseWorkerCount,
-          minimumWorkerCount: options.adaptiveMinWorkerCount ?? 1,
-          baseLodDistances: {
-            near: this.options.lodNearDistance,
-            far: this.options.lodFarDistance,
-            vegetation: this.options.vegetationRenderDistance,
-            hysteresis: this.options.chunkLodHysteresis
-          },
-          degradeFrames: options.adaptiveDegradeFrames,
-          recoverFrames: options.adaptiveRecoverFrames,
-          cooldownFrames: options.adaptiveCooldownFrames
-        });
-        const descriptor = source.descriptor;
-        const resolver = descriptor ? createWorldSurfaceResolver({
-          seed: descriptor.seed,
-          domain: descriptor.topology === "toroidal" ? { topology: "toroidal", width: descriptor.width, height: descriptor.height } : { topology: "infinite" }
-        }) : void 0;
-        worldSurface = createWorldSurfaceView({
-          map: source.map,
-          resolver,
-          tileSize: this.options.size,
-          mountainHeight: this.options.mountainHeight
-        });
-      } catch (reason) {
-        source.dispose();
-        throw reason;
-      }
+      const plan = createWorldLoadPlan(options, this.options);
+      const {
+        source,
+        chunkSize,
+        initialTile,
+        loadRadius,
+        retentionRadius,
+        maxResidentChunks,
+        maxRetries,
+        retryBaseDelayMs,
+        predictionSeconds,
+        predictionMaxChunks,
+        floatingOriginThreshold,
+        adaptiveController,
+        surface: worldSurface
+      } = plan;
       this.emit("loadstart", void 0);
       this.stopWorldStreaming();
       const revision = ++this.loadRevision;
@@ -17014,18 +17047,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         drainTimeoutMs: this.options.worldSessionDrainTimeoutMs,
         error: (error) => this.emit("error", error)
       });
-      const residency = worldController.residency;
       this.worldController = worldController;
-      this.worldSource = source;
-      this.worldResidency = residency;
       this.adaptiveStreamingController = adaptiveController;
       this.applyAdaptiveStreamingProfile(adaptiveController.currentProfile);
       this.worldChunkSize = chunkSize;
       this.streamingPredictionSeconds = predictionSeconds;
-      this.streamingPredictionMaxChunks = Math.min(
-        predictionMaxChunks,
-        Math.max(0, retentionRadius - loadRadius)
-      );
+      this.streamingPredictionMaxChunks = predictionMaxChunks;
       this.lastStreamingTarget = void 0;
       this.worldDemandElapsedS = 0;
       this.streamingVelocity.set(0, 0);
@@ -17033,7 +17060,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldSurface = worldSurface;
       this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
       this.fogStates = new FogStateStore(source.map);
-      this.floatingOriginThreshold = threshold;
+      this.floatingOriginThreshold = floatingOriginThreshold;
       this.worldPatternOffset.set(0, 0);
       this.cleanRoutePath();
       this.interactions.reset();
@@ -17071,7 +17098,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           maxRetries,
           retryBaseDelayMs
         });
-        this.worldStreamer = streamer;
         const centerChunk = source.resolveChunk(
           Math.floor(initialTile.x / chunkSize),
           Math.floor(initialTile.y / chunkSize)
@@ -17685,9 +17711,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
     }
     stopWorldStreaming() {
-      const streamer = this.worldStreamer;
       const source = this.worldSource;
-      const residency = this.worldResidency;
       const controller = this.worldController;
       const editing = this.worldEditing;
       const errors = [];
@@ -17719,9 +17743,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           let draining;
           draining = controller.settled.finally(() => this.drainingWorldSessions.delete(draining));
           this.drainingWorldSessions.add(draining);
-        } else {
-          streamer?.dispose(false);
-          residency?.dispose(false);
         }
       } catch (reason) {
         errors.push(renderLayerError(reason));
@@ -17743,10 +17764,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       } catch (reason) {
         errors.push(renderLayerError(reason));
       }
-      this.worldStreamer = void 0;
-      this.worldSource = void 0;
       this.worldSurface = void 0;
-      this.worldResidency = void 0;
       this.worldController = void 0;
       this.worldTileUpdateQueue = Promise.resolve();
       this.worldLayerRevision += 1;

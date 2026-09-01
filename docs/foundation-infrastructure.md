@@ -81,9 +81,10 @@ preparing -> committing -> committed
 - `HexMapInteractionController`：DOM 输入监听、焦点所有权、WASD 移动和解析式 tile picking。
 - `WorldChunkMountQueue`：连接流式驻留与帧挂载，并对因背压拒绝的可见挂载做有界重试。
 - `RenderWorldController`：一次世界渲染会话的 source/residency/streamer/lifecycle。
+- `WorldLoadPlan`：在替换现有会话之前，一次性校验并解析初始坐标、驻留预算、预测参数、自适应控制器和 surface view；规划失败会释放尚未发布的数据源。
 - `WorldEditingFacade`：编辑校验、坐标 canonicalization、source mutation 和 visual dirty set。
 - `HexMapOptions`：默认值派生、运行时校验及世界加载配置契约。
-- `HexMap`：保留公开兼容 API和跨边界编排，不再定义上述子系统的内部协议。
+- `HexMap`：保留公开兼容 API 和跨边界编排；source、streamer 与 residency 只从 `RenderWorldController` 读取，不再维护平行会话状态。
 
 自定义 render layer 仍通过 `WorldRenderLayer` 接口接入；应在 activation 中报告额外纹理/模型成本，并让所有异步工作绑定当前 render-world lifecycle。
 

@@ -59,8 +59,8 @@ type LayerTestMap = {
     disposed: boolean;
     options: { size: number };
     mapData: MapInfo;
-    worldSource: WorldSource;
-    worldController?: { source: WorldSource; lifecycle: LifecycleScope };
+    readonly worldSource: WorldSource;
+    worldController: { source: WorldSource; lifecycle: LifecycleScope; streamer?: { residentChunks: readonly WorldChunk[] } };
     worldRoot: Group;
     worldChunkLayers: Map<string, {
         chunk: WorldChunk; points: readonly { x: number; y: number }[]; revision: number;
@@ -92,7 +92,10 @@ describe("HexMap custom world render layers", () => {
         map.disposed = false;
         map.options = { size: 40 };
         map.mapData = { data: {}, w: 1, h: 1, infinite: true };
-        map.worldSource = { map: map.mapData } as WorldSource;
+        map.worldController = {
+            source: { map: map.mapData } as WorldSource,
+            lifecycle: new LifecycleScope("layer-test-world")
+        };
         map.worldRoot = new Group();
         map.worldChunkLayers = new Map(chunks.map(chunk => [
             `${chunk.chunkX},${chunk.chunkY}`,
@@ -342,7 +345,10 @@ describe("HexMap custom world render layers", () => {
         map.disposed = false;
         map.options = { size: 40 };
         map.mapData = { data: {}, w: 1, h: 1, infinite: true };
-        map.worldSource = { map: map.mapData } as WorldSource;
+        map.worldController = {
+            source: { map: map.mapData } as WorldSource,
+            lifecycle: new LifecycleScope("layer-test-world")
+        };
         map.worldRoot = root;
         map.worldChunkLayers = new Map([["0,0", { chunk, points: chunk.coreTiles, revision: 1 }]]);
         map.worldRenderLayers = new WorldRenderLayerRegistry();
@@ -375,7 +381,6 @@ describe("HexMap custom world render layers", () => {
         const chunk: WorldChunk = { chunkX: 0, chunkY: 0, chunkSize: 12, coreTiles: [{ x: 1, y: 1 }] };
         const map = Object.create(HexMap.prototype) as LayerTestMap & {
             loadRevision: number;
-            worldStreamer: { residentChunks: readonly WorldChunk[] };
             refreshTileOverridesRendering(
                 points: readonly { x: number; y: number }[],
                 source: WorldSource,
@@ -387,11 +392,15 @@ describe("HexMap custom world render layers", () => {
         map.options = { size: 40 };
         map.loadRevision = 2;
         map.mapData = { data: {}, w: 1, h: 1, infinite: true };
-        map.worldSource = {
+        const source = {
             map: map.mapData, chunkSize: 12,
             resolveChunk: (x: number, y: number) => ({ x, y })
         } as WorldSource;
-        map.worldStreamer = { residentChunks: [chunk] };
+        map.worldController = {
+            source,
+            lifecycle: new LifecycleScope("layer-refresh-world"),
+            streamer: { residentChunks: [chunk] }
+        };
         map.worldRoot = new Group();
         map.worldChunkLayers = new Map([["0,0", { chunk, points: chunk.coreTiles, revision: 1 }]]);
         map.worldRenderLayers = new WorldRenderLayerRegistry();
@@ -405,7 +414,7 @@ describe("HexMap custom world render layers", () => {
         map.refreshWorldCopies = vi.fn();
         map.updateWorldChunkVisibility = vi.fn();
 
-        await map.refreshTileOverridesRendering([{ x: 1, y: 1 }], map.worldSource, 2, "city");
+        await map.refreshTileOverridesRendering([{ x: 1, y: 1 }], source, 2, "city");
         expect(refreshTiles).toHaveBeenCalledOnce();
         expect(refreshTiles.mock.calls[0][0]).toMatchObject({ refreshKind: "city" });
         expect(custom.unmountChunk).not.toHaveBeenCalled();

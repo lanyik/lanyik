@@ -196,6 +196,14 @@ it again cancels outstanding work, unmounts resident layers and disposes the old
 source. It is the preferred extensible loading API; `HexMap.load(mapData)` is a
 backwards-compatible `StaticWorldSource` wrapper.
 
+Before replacing the active session, `WorldLoadPlan` resolves and validates the
+initial tile, residency/retry/frame limits, prediction cap, floating-origin
+threshold, adaptive profile and surface view as one unit. A failed plan disposes
+the unpublished source and leaves the active session untouched. After
+publication, `RenderWorldController` is the single authority for source,
+streamer and residency state; `HexMap` reads those views instead of mirroring
+three independently mutable references.
+
 For the built-in procedural source:
 
 1. `WorldStreamer` derives camera-near chunks and asks

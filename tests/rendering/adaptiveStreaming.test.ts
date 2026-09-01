@@ -34,8 +34,11 @@ describe("adaptive streaming controller", () => {
             options: { grassEnabled: boolean; grassDensity: number; treesPerTile: number };
             frameTasks: FrameTaskScheduler;
             chunkScheduler: { configure: ReturnType<typeof vi.fn>; invalidateScene: ReturnType<typeof vi.fn> };
-            worldSource: { chunkDistance(x: number, y: number, cx: number, cy: number): number; configureWorkerCount(count: number): number };
-            worldStreamer: { stats: { centerChunkX: number; centerChunkY: number } };
+            worldController: {
+                source: { chunkDistance(x: number, y: number, cx: number, cy: number): number; configureWorkerCount(count: number): number };
+                streamer: { stats: { centerChunkX: number; centerChunkY: number } };
+                lifecycle: { run<T>(operation: () => PromiseLike<T> | T): Promise<T> };
+            };
             worldChunkLayers: Map<string, {
                 chunk: { chunkX: number; chunkY: number };
                 requestedVegetationScale?: number;
@@ -54,11 +57,14 @@ describe("adaptive streaming controller", () => {
         map.options = { grassEnabled: true, grassDensity: 10, treesPerTile: 4 };
         map.frameTasks = frameTasks;
         map.chunkScheduler = { configure: vi.fn(), invalidateScene: vi.fn() };
-        map.worldSource = {
-            chunkDistance: (x, y, cx, cy) => Math.hypot(x - cx, y - cy),
-            configureWorkerCount: count => count
+        map.worldController = {
+            source: {
+                chunkDistance: (x, y, cx, cy) => Math.hypot(x - cx, y - cy),
+                configureWorkerCount: count => count
+            },
+            streamer: { stats: { centerChunkX: 0, centerChunkY: 0 } },
+            lifecycle: { run: operation => Promise.resolve(operation()) }
         };
-        map.worldStreamer = { stats: { centerChunkX: 0, centerChunkY: 0 } };
         map.worldChunkLayers = new Map([
             ["0,0", { chunk: { chunkX: 0, chunkY: 0 }, grassVegetationSignature: "10:4", forestVegetationSignature: "10:4" }],
             ["2,0", { chunk: { chunkX: 2, chunkY: 0 }, grassVegetationSignature: "10:4", forestVegetationSignature: "10:4" }]
