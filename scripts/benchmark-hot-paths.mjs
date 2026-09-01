@@ -1,3 +1,5 @@
+import os from "node:os";
+
 import {
     AdaptiveStreamingController,
     FogOfWar,
@@ -13,10 +15,82 @@ import {
 import { buildWorldNavigationSummary } from "../dist/pathfinding.mjs";
 import { WorldSimulationRuntime } from "../dist/simulation.mjs";
 
+const WARMUP_RUNS = integerEnvironment("FOUNDATION_BENCHMARK_WARMUPS", 1, 1, 5, false);
+const SAMPLE_RUNS = integerEnvironment("FOUNDATION_BENCHMARK_SAMPLES", 5, 3, 15, true);
+const CHECK_MODE = process.argv.includes("--check");
+const LIMIT_SCALE = CHECK_MODE ? positiveEnvironment("FOUNDATION_BENCHMARK_SCALE", 1) : 1;
+
 const round = (value, digits = 2) => {
     const scale = 10 ** digits;
     return Math.round(value * scale) / scale;
 };
+
+function integerEnvironment(name, fallback, minimum, maximum, requireOdd) {
+    const configured = process.env[name];
+    if (configured === undefined) return fallback;
+    const value = Number(configured);
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum || (requireOdd && value % 2 === 0)) {
+        const odd = requireOdd ? " odd" : "";
+        throw new RangeError(`${name} must be an${odd} integer between ${minimum} and ${maximum}`);
+    }
+    return value;
+}
+
+function positiveEnvironment(name, fallback) {
+    const configured = process.env[name];
+    if (configured === undefined) return fallback;
+    const value = Number(configured);
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new RangeError(`${name} must be a positive finite number`);
+    }
+    return value;
+}
+
+function summarizeTiming(samples) {
+    const sorted = [...samples].sort((left, right) => left - right);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const minimum = sorted[0];
+    const maximum = sorted.at(-1);
+    return {
+        medianMs: round(median),
+        minMs: round(minimum),
+        maxMs: round(maximum),
+        spreadPercent: round(median === 0 ? 0 : (maximum - minimum) / median * 100, 1),
+        samplesMs: samples.map(value => round(value))
+    };
+}
+
+function collectSync(measure) {
+    for (let run = 0; run < WARMUP_RUNS; run += 1) {
+        globalThis.gc?.();
+        measure();
+    }
+    const measurements = [];
+    for (let run = 0; run < SAMPLE_RUNS; run += 1) {
+        globalThis.gc?.();
+        measurements.push(measure());
+    }
+    return {
+        timing: summarizeTiming(measurements.map(measurement => measurement.durationMs)),
+        observation: measurements.at(-1)
+    };
+}
+
+async function collectAsync(measure) {
+    for (let run = 0; run < WARMUP_RUNS; run += 1) {
+        globalThis.gc?.();
+        await measure();
+    }
+    const measurements = [];
+    for (let run = 0; run < SAMPLE_RUNS; run += 1) {
+        globalThis.gc?.();
+        measurements.push(await measure());
+    }
+    return {
+        timing: summarizeTiming(measurements.map(measurement => measurement.durationMs)),
+        observation: measurements.at(-1)
+    };
+}
 
 function benchmarkSparseStore() {
     const chunks = [];
@@ -25,25 +99,26 @@ function benchmarkSparseStore() {
             chunks.push(generateWorldChunk({ seed: "perf", chunkX, chunkY, chunkSize: 24 }));
         }
     }
+    const sampled = collectSync(() => {
+        const store = new SparseWorldChunkStore();
+        const started = performance.now();
+        for (let pass = 0; pass < 25; pass += 1) {
+            for (const chunk of chunks) store.add(chunk);
+            for (const chunk of chunks) store.remove(chunk.chunkX, chunk.chunkY);
+        }
+        return { durationMs: performance.now() - started };
+    });
 
     globalThis.gc?.();
     const heapBefore = process.memoryUsage().heapUsed;
     const store = new SparseWorldChunkStore();
-    const started = performance.now();
-    for (let pass = 0; pass < 25; pass += 1) {
-        for (const chunk of chunks) store.add(chunk);
-        for (const chunk of chunks) store.remove(chunk.chunkX, chunk.chunkY);
-    }
-    const durationMs = performance.now() - started;
-    globalThis.gc?.();
-
     for (const chunk of chunks) store.add(chunk);
-    // Force representative lookups so the decoded-variant cache is measured.
     for (let x = -72; x < 96; x += 7) store.map.tileAt?.(x, 0);
+    globalThis.gc?.();
 
     return {
         operation: "49 chunks (24x24) add/remove x25",
-        durationMs: round(durationMs),
+        timing: sampled.timing,
         heapDeltaBytes: process.memoryUsage().heapUsed - heapBefore,
         residentChunks: store.residentChunkCount,
         residentPayloadBytes: store.residentPayloadBytes,
@@ -56,24 +131,28 @@ function benchmarkToroidalWindow() {
     const width = 512;
     const height = 512;
     const chunkSize = 24;
-    const chunks = [];
-    const started = performance.now();
-    for (let chunkX = 8; chunkX < 13; chunkX += 1) {
-        for (let chunkY = 8; chunkY < 13; chunkY += 1) {
-            chunks.push(generateWorldChunk({
-                seed: "perf-toroidal",
-                chunkX,
-                chunkY,
-                chunkSize,
-                world: { width, height, topology: "toroidal" }
-            }));
+    const sampled = collectSync(() => {
+        const chunks = [];
+        const started = performance.now();
+        for (let chunkX = 8; chunkX < 13; chunkX += 1) {
+            for (let chunkY = 8; chunkY < 13; chunkY += 1) {
+                chunks.push(generateWorldChunk({
+                    seed: "perf-toroidal",
+                    chunkX,
+                    chunkY,
+                    chunkSize,
+                    world: { width, height, topology: "toroidal" }
+                }));
+            }
         }
-    }
-    const store = new SparseWorldChunkStore({ width, height, wrapX: true, wrapY: true });
-    for (const chunk of chunks) store.add(chunk);
+        const store = new SparseWorldChunkStore({ width, height, wrapX: true, wrapY: true });
+        for (const chunk of chunks) store.add(chunk);
+        return { durationMs: performance.now() - started, chunks, store };
+    });
+    const { chunks, store } = sampled.observation;
     return {
         operation: "512x512 toroidal world, 5x5 resident chunk window",
-        durationMs: round(performance.now() - started),
+        timing: sampled.timing,
         logicalTiles: width * height,
         residentCoreTiles: chunks.length * chunkSize * chunkSize,
         residentChunks: store.residentChunkCount,
@@ -90,23 +169,24 @@ function benchmarkFogFrontier() {
         data[x] = {};
         for (let y = 0; y < height; y += 1) data[x][y] = { type: Land.land };
     }
-
-    const fog = new FogOfWar({ data, w: width, h: height });
-    let examinedCandidates = 0;
-    const started = performance.now();
-    for (let pass = 0; pass < 20; pass += 1) {
-        fog.recompute([{ x: 256 + pass % 2, y: 256, viewRange: 3 }]);
-        examinedCandidates += fog.lastRecomputeCandidateCount;
-    }
+    const sampled = collectSync(() => {
+        const fog = new FogOfWar({ data, w: width, h: height });
+        let examinedCandidates = 0;
+        const started = performance.now();
+        for (let pass = 0; pass < 20; pass += 1) {
+            fog.recompute([{ x: 256 + pass % 2, y: 256, viewRange: 3 }]);
+            examinedCandidates += fog.lastRecomputeCandidateCount;
+        }
+        return { durationMs: performance.now() - started, examinedCandidates };
+    });
+    const examinedCandidates = sampled.observation.examinedCandidates;
+    const fullScanCandidates = width * height * 20;
     return {
         operation: "512x512 fog recompute x20",
-        durationMs: round(performance.now() - started),
+        timing: sampled.timing,
         examinedCandidates,
-        fullScanCandidates: width * height * 20,
-        candidateReductionPercent: round(
-            (1 - examinedCandidates / (width * height * 20)) * 100,
-            3
-        )
+        fullScanCandidates,
+        candidateReductionPercent: round((1 - examinedCandidates / fullScanCandidates) * 100, 3)
     };
 }
 
@@ -135,10 +215,13 @@ function benchmarkVegetationPreparation() {
         waterCornerRounding: 0.4,
         coastCurvature: 0.5
     };
-    const started = performance.now();
-    let layout;
-    for (let pass = 0; pass < 5; pass += 1) layout = generateWorldVegetation(options);
-    const durationMs = performance.now() - started;
+    const sampled = collectSync(() => {
+        const started = performance.now();
+        let layout;
+        for (let pass = 0; pass < 5; pass += 1) layout = generateWorldVegetation(options);
+        return { durationMs: performance.now() - started, layout };
+    });
+    const layout = sampled.observation.layout;
     const grassInstances = layout.grass.reduce(
         (count, prepared) => count + prepared.lods.reduce((sum, lod) => sum + lod.instanceCount, 0),
         0
@@ -149,8 +232,8 @@ function benchmarkVegetationPreparation() {
     );
     return {
         operation: "24x24 grass/tree three-LOD preparation x5",
-        durationMs: round(durationMs),
-        averageMs: round(durationMs / 5),
+        timing: sampled.timing,
+        averageIterationMs: round(sampled.timing.medianMs / 5),
         grassInstances,
         treeInstances,
         transferableBytes: worldVegetationTransferables(layout)
@@ -166,14 +249,17 @@ function benchmarkGpuRangeBatching() {
         }
     }
     ranges.reverse();
-    const started = performance.now();
-    let merged;
-    for (let pass = 0; pass < 100; pass += 1) merged = mergeBufferUpdateRanges(ranges);
-    const durationMs = performance.now() - started;
+    const sampled = collectSync(() => {
+        const started = performance.now();
+        let merged;
+        for (let pass = 0; pass < 100; pass += 1) merged = mergeBufferUpdateRanges(ranges);
+        return { durationMs: performance.now() - started, merged };
+    });
+    const merged = sampled.observation.merged;
     return {
         operation: "10,000 GPU dirty ranges merge x100",
-        durationMs: round(durationMs),
-        averageMs: round(durationMs / 100, 3),
+        timing: sampled.timing,
+        averageIterationMs: round(sampled.timing.medianMs / 100, 3),
         inputRanges: ranges.length,
         uploadRanges: merged.length,
         rangeReductionPercent: round((1 - merged.length / ranges.length) * 100, 2)
@@ -181,21 +267,27 @@ function benchmarkGpuRangeBatching() {
 }
 
 function benchmarkAdaptiveController() {
-    const adaptive = new AdaptiveStreamingController({
-        baseFrameBudgetMs: 3,
-        baseMaxTasksPerFrame: 2,
-        baseWorkerCount: 4,
-        baseLodDistances: { near: 900, far: 1650, vegetation: 1450, hysteresis: 120 }
+    const sampled = collectSync(() => {
+        const adaptive = new AdaptiveStreamingController({
+            baseFrameBudgetMs: 3,
+            baseMaxTasksPerFrame: 2,
+            baseWorkerCount: 4,
+            baseLodDistances: { near: 900, far: 1650, vegetation: 1450, hysteresis: 120 }
+        });
+        const started = performance.now();
+        for (let frame = 0; frame < 100000; frame += 1) adaptive.sample(16 + (frame % 5) * 0.2);
+        return {
+            durationMs: performance.now() - started,
+            transitions: adaptive.stats.transitions,
+            qualityLevel: adaptive.stats.qualityLevel
+        };
     });
-    const started = performance.now();
-    for (let frame = 0; frame < 100000; frame += 1) adaptive.sample(16 + (frame % 5) * 0.2);
-    const durationMs = performance.now() - started;
     return {
         operation: "adaptive frame sample x100,000",
-        durationMs: round(durationMs),
-        nanosecondsPerSample: round(durationMs * 1e6 / 100000),
-        transitions: adaptive.stats.transitions,
-        qualityLevel: adaptive.stats.qualityLevel
+        timing: sampled.timing,
+        nanosecondsPerSample: round(sampled.timing.medianMs * 1e6 / 100000),
+        transitions: sampled.observation.transitions,
+        qualityLevel: sampled.observation.qualityLevel
     };
 }
 
@@ -206,7 +298,7 @@ function benchmarkNavigationSummaries() {
         for (let y = 0; y < 36; y += 1) data[x][y] = { type: Land.land };
     }
     const map = { data, w: 36, h: 36 };
-    const run = maxPortalsPerEntrance => {
+    const sample = maxPortalsPerEntrance => collectSync(() => {
         const started = performance.now();
         let summary;
         for (let pass = 0; pass < 25; pass += 1) {
@@ -215,67 +307,101 @@ function benchmarkNavigationSummaries() {
             );
         }
         return { durationMs: performance.now() - started, summary };
-    };
-    const exact = run(1000);
-    const compact = run(2);
+    });
+    const exact = sample(1000);
+    const compact = sample(2);
     return {
         operation: "12x12 open navigation summary x25",
-        exactDurationMs: round(exact.durationMs),
-        compactDurationMs: round(compact.durationMs),
-        exactPortals: exact.summary.portals.length,
-        compactPortals: compact.summary.portals.length,
+        exactTiming: exact.timing,
+        compactTiming: compact.timing,
+        exactPortals: exact.observation.summary.portals.length,
+        compactPortals: compact.observation.summary.portals.length,
         matrixReductionPercent: round(
-            (1 - compact.summary.costs.length ** 2 / exact.summary.costs.length ** 2) * 100,
+            (1 - compact.observation.summary.costs.length ** 2 / exact.observation.summary.costs.length ** 2) * 100,
             2
         )
     };
 }
 
 async function benchmarkSimulationRuntime() {
-    const cold = new WorldSimulationRuntime({
-        chunkSize: 10,
-        activeTickIntervalSeconds: 0.1,
-        backgroundTickIntervalSeconds: 5
-    });
-    let started = performance.now();
-    for (let index = 0; index < 5000; index += 1) {
-        cold.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
-    }
-    const coldInsertMs = performance.now() - started;
-    started = performance.now();
-    await cold.advance(0.016);
-    const coldIdleAdvanceMs = performance.now() - started;
-    cold.dispose();
-
-    const dense = new WorldSimulationRuntime({
-        chunkSize: 1000,
-        activeTickIntervalSeconds: 1,
-        backgroundTickIntervalSeconds: 1
-    });
-    for (let index = 0; index < 100000; index += 1) {
-        dense.addEntity({
-            id: `dense-${index}`,
-            x: index % 1000,
-            y: Math.floor(index / 1000),
-            state: { value: 0 }
+    const coldInsert = await collectAsync(async () => {
+        const runtime = new WorldSimulationRuntime({
+            chunkSize: 10,
+            activeTickIntervalSeconds: 0.1,
+            backgroundTickIntervalSeconds: 5
         });
-    }
-    dense.registerSystem({ id: "noop", update() {} });
-    started = performance.now();
-    await dense.advance(1);
-    const denseTickMs = performance.now() - started;
-    dense.dispose();
+        globalThis.gc?.();
+        const started = performance.now();
+        for (let index = 0; index < 5000; index += 1) {
+            runtime.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
+        }
+        const durationMs = performance.now() - started;
+        runtime.dispose();
+        return { durationMs };
+    });
+    const coldIdle = await collectAsync(async () => {
+        const runtime = new WorldSimulationRuntime({
+            chunkSize: 10,
+            activeTickIntervalSeconds: 0.1,
+            backgroundTickIntervalSeconds: 5
+        });
+        for (let index = 0; index < 5000; index += 1) {
+            runtime.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
+        }
+        globalThis.gc?.();
+        const started = performance.now();
+        await runtime.advance(0.016);
+        const durationMs = performance.now() - started;
+        runtime.dispose();
+        return { durationMs };
+    });
+    const denseTick = await collectAsync(async () => {
+        const runtime = new WorldSimulationRuntime({
+            chunkSize: 1000,
+            activeTickIntervalSeconds: 1,
+            backgroundTickIntervalSeconds: 1
+        });
+        for (let index = 0; index < 100000; index += 1) {
+            runtime.addEntity({
+                id: `dense-${index}`,
+                x: index % 1000,
+                y: Math.floor(index / 1000),
+                state: { value: 0 }
+            });
+        }
+        runtime.registerSystem({ id: "noop", update() {} });
+        globalThis.gc?.();
+        const started = performance.now();
+        await runtime.advance(1);
+        const durationMs = performance.now() - started;
+        runtime.dispose();
+        return { durationMs };
+    });
     return {
         operation: "generic simulation scale probes",
         coldChunks: 5000,
-        coldInsertMs: round(coldInsertMs),
-        coldIdleAdvanceMs: round(coldIdleAdvanceMs),
+        coldInsertTiming: coldInsert.timing,
+        coldIdleAdvanceTiming: coldIdle.timing,
         denseEntities: 100000,
-        denseNoopTickMs: round(denseTickMs)
+        denseNoopTickTiming: denseTick.timing
     };
 }
 
+const cpu = os.cpus()[0];
 const results = {
+    environment: {
+        node: process.version,
+        v8: process.versions.v8,
+        platform: process.platform,
+        arch: process.arch,
+        cpuModel: cpu?.model ?? "unknown",
+        logicalCpuCount: os.cpus().length,
+        gcExposed: typeof globalThis.gc === "function",
+        ci: process.env.CI === "true",
+        warmupRuns: WARMUP_RUNS,
+        sampleRuns: SAMPLE_RUNS,
+        limitScale: LIMIT_SCALE
+    },
     sparseStore: benchmarkSparseStore(),
     toroidalWindow: benchmarkToroidalWindow(),
     fogFrontier: benchmarkFogFrontier(),
@@ -288,28 +414,27 @@ const results = {
 
 console.log(JSON.stringify(results, null, 2));
 
-if (process.argv.includes("--check")) {
+if (CHECK_MODE) {
     const failures = [];
-    const configuredScale = Number(process.env.FOUNDATION_BENCHMARK_SCALE ?? 1);
-    const limitScale = Number.isFinite(configuredScale) && configuredScale > 0 ? configuredScale : 1;
     const under = (name, value, limit) => {
-        const scaledLimit = limit * limitScale;
+        const scaledLimit = limit * LIMIT_SCALE;
         if (!Number.isFinite(value) || value > scaledLimit) {
             failures.push(`${name}: ${value} > ${scaledLimit}`);
         }
     };
-    // These are gross-regression gates rather than machine-comparison scores:
-    // each limit leaves substantial shared-runner headroom but still catches
-    // accidental quadratic work and multi-order-of-magnitude slowdowns.
-    under("sparseStore.durationMs", results.sparseStore.durationMs, 500);
+    // Median gates reject sustained gross regressions while warmups and sample
+    // ranges expose runner noise. Limits retain shared-runner headroom and are
+    // not cross-machine performance scores.
+    if (!results.environment.gcExposed) failures.push("benchmark gate requires --expose-gc");
+    under("sparseStore.timing.medianMs", results.sparseStore.timing.medianMs, 500);
     under("sparseStore.residentPayloadBytes", results.sparseStore.residentPayloadBytes, 16 * 1024 * 1024);
-    under("toroidalWindow.durationMs", results.toroidalWindow.durationMs, 750);
-    under("vegetationPreparation.averageMs", results.vegetationPreparation.averageMs, 250);
-    under("gpuRangeBatching.durationMs", results.gpuRangeBatching.durationMs, 500);
-    under("adaptiveController.durationMs", results.adaptiveController.durationMs, 500);
-    under("navigationSummaries.exactDurationMs", results.navigationSummaries.exactDurationMs, 2_500);
-    under("simulationRuntime.coldInsertMs", results.simulationRuntime.coldInsertMs, 500);
-    under("simulationRuntime.denseNoopTickMs", results.simulationRuntime.denseNoopTickMs, 2_000);
+    under("toroidalWindow.timing.medianMs", results.toroidalWindow.timing.medianMs, 750);
+    under("vegetationPreparation.averageIterationMs", results.vegetationPreparation.averageIterationMs, 250);
+    under("gpuRangeBatching.timing.medianMs", results.gpuRangeBatching.timing.medianMs, 500);
+    under("adaptiveController.timing.medianMs", results.adaptiveController.timing.medianMs, 500);
+    under("navigationSummaries.exactTiming.medianMs", results.navigationSummaries.exactTiming.medianMs, 2_500);
+    under("simulationRuntime.coldInsertTiming.medianMs", results.simulationRuntime.coldInsertTiming.medianMs, 500);
+    under("simulationRuntime.denseNoopTickTiming.medianMs", results.simulationRuntime.denseNoopTickTiming.medianMs, 2_000);
     if (results.toroidalWindow.residentChunks !== 25) {
         failures.push(`toroidalWindow.residentChunks: ${results.toroidalWindow.residentChunks} !== 25`);
     }

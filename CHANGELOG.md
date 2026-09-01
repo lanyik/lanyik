@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Hot-path benchmarks now use explicit warmups and five-sample medians, report
+  raw ranges/spread plus the Node/V8/CPU environment, require exposed GC for the
+  gate, and reject invalid benchmark environment controls.
 - World-load validation and derived session settings now live in a testable
   `WorldLoadPlan`; `HexMap` no longer mirrors source, streamer and residency
   references already owned by `RenderWorldController`.

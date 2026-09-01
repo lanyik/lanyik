@@ -99,6 +99,6 @@ preparing -> committing -> committed
 - 超重任务、后台 starvation、资源账户销毁、GPU query 饱和和不响应取消的生命周期均有独立回归测试。
 - E2E 连续快速替换世界时，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
 - 定时 CI 运行可配置的长时间浏览器 soak（默认 500 个世界世代），混合稳态替换和取消突发，并持续采样生命周期、调度域、WebGL 资源和强制 GC 后的 JS heap 上界。
-- benchmark gate 对生成、植被、GPU range 合并、导航摘要和模拟 tick 设置宽松但强制的回归上限。
+- benchmark gate 对生成、植被、GPU range 合并、导航摘要和模拟 tick 设置宽松但强制的回归上限；每项先预热再采集五个样本，以中位数判定，并输出 Node/V8、CPU、样本范围与离散度。
 
 完整命令和各层适用范围统一维护在 [testing.md](./testing.md)，不在架构文档中重复容易漂移的测试数量或命令清单。

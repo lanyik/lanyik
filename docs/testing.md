@@ -56,6 +56,15 @@ the same outputs so IndexedDB implementations cannot drift back into the root
 bundle. The public `check:generated`, `check:package-boundaries` and
 `benchmark:check` commands remain self-contained for local use.
 
+The hot-path benchmark performs one untimed warmup followed by five timed runs
+for every case and gates the median, not a single cold sample. Its JSON records
+Node/V8, OS, architecture, CPU model, logical CPU count, GC availability, every
+sample, min/max and spread. `--check` requires `--expose-gc`. For controlled
+diagnostics, `FOUNDATION_BENCHMARK_WARMUPS` accepts 1–5 and
+`FOUNDATION_BENCHMARK_SAMPLES` accepts an odd value from 3–15;
+`FOUNDATION_BENCHMARK_SCALE` must be a positive finite threshold multiplier.
+Invalid environment values fail explicitly instead of silently using defaults.
+
 Changes to generator classification, modifiers, vegetation placement, climate
 or surface semantics additionally run:
 

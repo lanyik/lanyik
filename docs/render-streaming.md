@@ -510,7 +510,12 @@ default to `farUnitUpdateInterval` updates. Stationary wrapped units also skip
 transform writes until their nearest physical world copy changes.
 
 Run `npm run benchmark` after performance changes. It builds the library and
-measures packed chunk residency plus the 512×512 fog frontier using fixed input.
+measures packed chunk residency, 512×512 fog frontier, vegetation preparation,
+GPU range merging, adaptive sampling, navigation summaries and simulation using
+fixed input. Each case is warmed once and sampled five times; output reports the
+median, range, spread, raw samples and runtime/CPU environment. The regression
+gate evaluates medians so a one-off JIT or scheduler outlier is visible without
+deciding the result.
 
 ## Browser stress and leak checks
 
