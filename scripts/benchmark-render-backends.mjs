@@ -5,11 +5,14 @@ import {
     PerspectiveCamera,
     Vector3
 } from "three";
+import { cpus, release } from "node:os";
 
 const CASES = [10_000, 50_000, 100_000];
 const TILES_PER_RENDER_CHUNK = 12;
 const INSTANCE_SPACING = 4;
-const ITERATIONS = 80;
+const WARMUP_ITERATIONS = 10;
+const ITERATIONS_PER_SAMPLE = 80;
+const SAMPLE_RUNS = 5;
 let sink = 0;
 
 function round(value, digits = 3) {
@@ -58,10 +61,22 @@ function createFrustum() {
 }
 
 function measure(operation) {
-    for (let warmup = 0; warmup < 10; warmup += 1) sink += operation();
-    const started = performance.now();
-    for (let iteration = 0; iteration < ITERATIONS; iteration += 1) sink += operation();
-    return (performance.now() - started) / ITERATIONS;
+    for (let warmup = 0; warmup < WARMUP_ITERATIONS; warmup += 1) sink += operation();
+    const samples = [];
+    for (let sample = 0; sample < SAMPLE_RUNS; sample += 1) {
+        const started = performance.now();
+        for (let iteration = 0; iteration < ITERATIONS_PER_SAMPLE; iteration += 1) sink += operation();
+        samples.push((performance.now() - started) / ITERATIONS_PER_SAMPLE);
+    }
+    const ordered = samples.toSorted((left, right) => left - right);
+    const median = ordered[Math.floor(ordered.length / 2)];
+    return {
+        medianMs: round(median),
+        minMs: round(ordered[0]),
+        maxMs: round(ordered.at(-1)),
+        spreadMs: round(ordered.at(-1) - ordered[0]),
+        samplesMs: samples.map(value => round(value))
+    };
 }
 
 function benchmark(instanceCount) {
@@ -98,16 +113,19 @@ function benchmark(instanceCount) {
 
     const visibleChunks = chunkCull();
     const visibleInstances = instanceCullAndCompact();
-    const chunkCullMs = measure(chunkCull);
-    const instanceCullCompactMs = measure(instanceCullAndCompact);
+    const chunkCullTiming = measure(chunkCull);
+    const instanceCullCompactTiming = measure(instanceCullAndCompact);
     return {
         instanceCount,
         renderChunks,
         visibleChunks,
         visibleInstances,
-        chunkCullMs: round(chunkCullMs),
-        instanceCullCompactMs: round(instanceCullCompactMs),
-        instanceToChunkCpuRatio: round(instanceCullCompactMs / Math.max(chunkCullMs, Number.EPSILON), 1),
+        chunkCullTiming,
+        instanceCullCompactTiming,
+        instanceToChunkCpuRatio: round(
+            instanceCullCompactTiming.medianMs / Math.max(chunkCullTiming.medianMs, Number.EPSILON),
+            1
+        ),
         gpuCandidateStorageMiB: round(instanceCount * 16 / 1_048_576),
         worstCaseCompactedIndexMiB: round(instanceCount * 4 / 1_048_576)
     };
@@ -117,7 +135,10 @@ const results = CASES.map(benchmark);
 const largest = results.at(-1);
 const evaluation = {
     methodology: {
-        iterations: ITERATIONS,
+        warmupIterations: WARMUP_ITERATIONS,
+        iterationsPerSample: ITERATIONS_PER_SAMPLE,
+        sampleRuns: SAMPLE_RUNS,
+        statistic: "median",
         renderChunkTiles: `${TILES_PER_RENDER_CHUNK}x${TILES_PER_RENDER_CHUNK}`,
         chunkPath: "distance + Three.Frustum.intersectsBox per render chunk",
         instancePath: "distance + Three.Frustum.containsPoint + Uint32 visibility compaction per instance",
@@ -125,11 +146,14 @@ const evaluation = {
     },
     environment: {
         node: process.version,
+        v8: process.versions.v8,
         platform: `${process.platform}-${process.arch}`,
-        cpu: process.env.PROCESSOR_IDENTIFIER ?? "unknown"
+        osRelease: release(),
+        cpuModel: cpus()[0]?.model ?? "unknown",
+        logicalCpuCount: cpus().length
     },
     results,
-    decision: largest.chunkCullMs < 0.5
+    decision: largest.chunkCullTiming.medianMs < 0.5
         ? "Keep chunk-level WebGL culling as the default; prototype GPU culling only after measured draw-call or overdraw pressure, not instance count alone."
         : "Chunk culling exceeds its 0.5ms CPU target on this machine; profile the browser renderer before choosing a GPU-culling prototype."
 };

@@ -14,6 +14,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
 | World-style generation v1 | Generator v6; elevated climate snow and seam-free mountain lighting, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
+| Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
 
 ## Architecture and contracts
 
@@ -50,6 +51,8 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 
 ## Decisions and roadmap
 
+- [Deferred optimization gates](./optimization-gates.md): measurable triggers,
+  evidence format and approval state for intentionally postponed work.
 - [Render backend evaluation](./render-backend-evaluation.md): why WebGL2 and
   chunk-level CPU culling remain the production path.
 - [World-style generation v1](./world-style-generation-v1.md): implemented

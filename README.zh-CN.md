@@ -242,7 +242,8 @@ npm run test:e2e
 当前有意保留的边界：
 
 - [世界风格生成 v1](docs/world-style-generation-v1.md) 已实现并冻结；自动河流仍按设计延后。
-- WebGPU 和 GPU culling 暂缓，直到实际 draw submission 或 overdraw 数据证明需要原型。
+- WebGPU/GPU culling 与自动河流由[机器校验的优化门槛](docs/optimization-gates.md)管理；
+  在记录的实测数据证明需要原型之前，两者都保持延后。
 - 多人冲突合并、云存档、服务器权威状态以及完整经济/战斗规则属于应用层工作，
   不是当前库能力。
 

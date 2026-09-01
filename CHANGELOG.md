@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Deferred WebGPU/GPU-culling and automatic-river work now has a machine-checked
+  decision register with explicit triggers, structured evidence and approval
+  states; the render crossover benchmark reports five-sample median timing.
 - `EventEmitter` is now generic over typed payload maps; `HexMap`, `Unit` and
   `GameEngine` expose distinct event contracts, and unobserved `error` events
   throw instead of being silently discarded.

@@ -271,8 +271,9 @@ Current deliberate boundaries:
 
 - [World-style generation v1](docs/world-style-generation-v1.md) is implemented
   and frozen; automatic river generation remains deliberately deferred.
-- WebGPU and GPU culling remain deferred until real draw-submission or overdraw
-  measurements justify a prototype.
+- WebGPU/GPU culling and automatic rivers are governed by the
+  [machine-checked optimization gates](docs/optimization-gates.md); both remain
+  deferred until their recorded measurements justify a prototype.
 - Multiplayer reconciliation, cloud saves, server authority and a complete
   economy/combat ruleset are application-level work, not current library
   features.

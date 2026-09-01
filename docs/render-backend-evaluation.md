@@ -5,9 +5,9 @@
 Keep `WebGLRenderer` and the existing 12×12 render-chunk culling path as the
 production default. A WebGPU backend is technically viable, but it is not the
 next bottleneck to remove: at 100,000 candidate instances the current chunk
-frustum pass took 0.013ms on the evaluation machine, while exact per-instance
-CPU culling and visibility compaction took 0.932ms and removed only about 16% of
-the instances in the fixed camera view.
+frustum pass took a 0.019ms median on the evaluation machine, while exact
+per-instance CPU culling and visibility compaction took a 1.590ms median and
+removed only about 16% of the instances in the fixed camera view.
 
 GPU culling should therefore be an opt-in prototype triggered by measured draw
 submission or overdraw pressure. Instance count alone is not a sufficient
@@ -24,15 +24,18 @@ npm run benchmark:render-backends
 The fixed benchmark uses the same 12×12 render-chunk granularity as the runtime,
 Three.js `Frustum.intersectsBox()` for the current path, and
 `Frustum.containsPoint()` plus a compacted `Uint32Array` for an exact
-per-instance CPU proxy. Each timed case runs 80 iterations after warm-up.
+per-instance CPU proxy. Each timed sample runs 80 iterations after warm-up.
+The command records five timed samples and uses their median for comparisons;
+raw samples, range and host details remain in the JSON so a noisy run is
+visible instead of being mistaken for a backend signal.
 
-Measurements on Node 24.15.0, Windows x64, Intel Family 6 Model 183:
+Measurements on Node 22.16.0, V8 12.4, Windows x64, Intel Core i7-11700K:
 
 | Candidates | Render chunks | Visible instances | Chunk cull | Instance cull + compact | CPU ratio |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10,000 | 81 | 10,000 | 0.003ms | 0.102ms | 30.6× |
-| 50,000 | 361 | 50,000 | 0.011ms | 0.504ms | 46.5× |
-| 100,000 | 729 | 83,783 | 0.013ms | 0.932ms | 74.2× |
+| 10,000 | 81 | 10,000 | 0.010ms | 0.173ms | 17.3× |
+| 50,000 | 361 | 50,000 | 0.016ms | 0.886ms | 55.4× |
+| 100,000 | 729 | 83,783 | 0.019ms | 1.590ms | 83.7× |
 
 The 100,000-instance GPU candidate buffer would require about 1.526MiB for a
 position/radius record plus up to 0.381MiB for compacted indices. Those sizes are
@@ -71,6 +74,8 @@ as limited availability and requires a secure context.
 
 ## Prototype gates
 
+<!-- optimization-gate:webgpu-gpu-culling -->
+
 Start a WebGPU/GPU-culling prototype only when a representative hardware trace
 meets at least one of these conditions:
 
@@ -101,8 +106,9 @@ Use three stages so each step is independently testable:
 
 1. Port terrain, water and grass GLSL to TSL and run `WebGPURenderer` with its
    WebGL 2 backend until screenshots and the existing stress/leak suite match.
-2. Enable WebGPU as an optional backend, retain WebGL fallback, and collect GPU
-   timestamps on supported physical adapters.
+2. Enable WebGPU through an explicit prototype backend selection and collect
+   GPU timestamps on supported physical adapters. Unsupported environments fail
+   validation instead of silently switching renderers.
 3. Add storage-buffer instance data, compute visibility compaction and indirect
    draws only for the layer that crossed a gate; keep source streaming,
    floating-origin coordinates and chunk residency backend-independent.

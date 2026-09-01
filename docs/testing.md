@@ -15,6 +15,7 @@ when it changes the defects the suite can detect.
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
+| Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
 only for browser-owned behavior such as module Workers, WebGL context recovery,
@@ -34,6 +35,7 @@ For an ordinary change, run:
 ```powershell
 npm test
 npm run typecheck
+npm run check:optimization-gates
 npm run build
 npm run test:e2e
 ```
@@ -55,6 +57,11 @@ artifacts with `check:generated:built`, and benchmarks that exact output with
 the same outputs so IndexedDB implementations cannot drift back into the root
 bundle. The public `check:generated`, `check:package-boundaries` and
 `benchmark:check` commands remain self-contained for local use.
+
+`check:optimization-gates` validates the deferred-optimization register on
+every CI run. It does not substitute CI software rendering for physical GPU
+evidence: moving a gate out of `deferred` requires committed structured
+measurements and raw artifacts that satisfy the recorded trigger expression.
 
 The hot-path benchmark performs one untimed warmup followed by five timed runs
 for every case and gates the median, not a single cold sample. Its JSON records

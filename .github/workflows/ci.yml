@@ -22,6 +22,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - run: npm run check:optimization-gates
       - run: npm run build
       - run: npm run check:generated:built
       - run: npm run check:package-boundaries:built
