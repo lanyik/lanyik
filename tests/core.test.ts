@@ -99,6 +99,14 @@ describe("core safeguards", () => {
         client.dispose();
     });
 
+    test("classifies explicit worker disposal as request cancellation", async () => {
+        const client = new WorldGeneratorClient("worker.mjs");
+        const pending = client.generate({ seed: 1, width: 8, height: 8 });
+        client.dispose();
+
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    });
+
     test("routes compact chunk responses independently from full-world responses", async () => {
         const client = new WorldGeneratorClient("worker.mjs");
         const worker = FakeWorker.instances[0];

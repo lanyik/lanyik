@@ -35,6 +35,7 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
             residentChunks: number;
             pendingGpuQueries: number;
             lifecyclePending: number;
+            minimapPending: number;
             workPending: number;
             workBusy: number;
             domains: number;
@@ -44,6 +45,7 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
             streaming?: { residentChunks: number };
             gpuTiming?: { pendingQueries: number };
             worldLifecycle?: { pendingTasks: number };
+            minimap?: { pendingPages: number };
             work?: { pendingTasks: number; busyTasks: number; domains: Record<string, unknown> };
         };
         const api = window as unknown as {
@@ -56,6 +58,7 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
                 readonly resourceBudget: { stats: { reservations: number; cpuBytes: number; gpuBytes: number } };
                 disposeAsync(): Promise<void>;
             };
+            worldMinimap: { readonly view: { pendingPages: number }; dispose(): void };
             getWorldDiagnostics(): Diagnostics;
         };
         const workerUrl = new URL("./js/world-generator.worker.mjs", window.location.href);
@@ -107,6 +110,7 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
                 residentChunks: state.streaming?.residentChunks ?? 0,
                 pendingGpuQueries: state.gpuTiming?.pendingQueries ?? 0,
                 lifecyclePending: state.worldLifecycle?.pendingTasks ?? 0,
+                minimapPending: state.minimap?.pendingPages ?? 0,
                 workPending: state.work?.pendingTasks ?? 0,
                 workBusy: state.work?.busyTasks ?? 0,
                 domains: Object.keys(state.work?.domains ?? {}).length
@@ -116,13 +120,18 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
                 || sample.residentChunks > 192
                 || sample.pendingGpuQueries > 4
                 || sample.lifecyclePending > 0
-                || sample.workPending > 0
-                || sample.workBusy > 0
+                // The active world's minimap deliberately continues at most
+                // two non-critical page requests after render streaming has
+                // settled. Superseded pools are detected by the domain bound.
+                || sample.minimapPending > 2
+                || sample.workPending > 2
+                || sample.workBusy > 1
                 || sample.domains > 3) {
                 throw new Error(`foundation soak bound exceeded: ${JSON.stringify({ baseline, sample })}`);
             }
             samples.push(sample);
         }
+        api.worldMinimap.dispose();
         await api.hexWorld.disposeAsync();
         return {
             baseline,

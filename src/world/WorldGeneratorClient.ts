@@ -18,6 +18,7 @@ import {
     WorldOverviewGenerationOptions,
     WorldOverviewRaster
 } from "./generateWorldOverview";
+import { lifecycleAbortError } from "../runtime/LifecycleScope";
 
 interface WorkerSuccessMessage {
     protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
@@ -166,7 +167,7 @@ export class WorldGeneratorClient {
         this.worker.removeEventListener("error", this.handleWorkerError);
         this.worker.removeEventListener("messageerror", this.handleMessageError);
         this.worker.terminate();
-        const error = new Error("World generation worker was disposed");
+        const error = lifecycleAbortError("World generation worker was disposed");
         for (const request of this.pending.values()) request.reject(error);
         this.pending.clear();
     }

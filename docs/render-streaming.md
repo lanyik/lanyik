@@ -435,6 +435,15 @@ owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
 Worker request/response addition is protocol v3 and transfers the pixel buffer
 instead of cloning it.
 
+`HexMap` emits `loadstart` after validating the incoming source and before it
+closes the previous render-world session. `WorldMinimap` uses that boundary to
+advance its page generation, abort every old overview request, and clear pages
+before the previous Worker pool is disposed. Disposing an accepted Worker or
+pool request rejects it as `AbortError`; operational Worker/protocol failures
+remain ordinary errors. Replacement therefore cannot publish an old raster,
+retry old demand against the new source, or report expected teardown as a
+runtime failure.
+
 The minimap does not rebuild one monolithic rolling raster. Its logical view is
 split into power-of-two terrain pages sized at roughly half the current view
 span. Visible pages are requested first, one outer page ring is filled during

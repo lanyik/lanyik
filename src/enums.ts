@@ -6,6 +6,7 @@ import { ColorRepresentation } from "three";
 //for the public API.
 //----------------------------------------------------------------------------------
 export type HexMapEventName =
+    | "loadstart"
     | "load"
     | "error"
     | "frame"

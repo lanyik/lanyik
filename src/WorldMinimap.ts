@@ -204,6 +204,7 @@ export class WorldMinimap {
         this.canvas.addEventListener("click", this.handleClick);
         this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
         window.addEventListener("keydown", this.handleKeyDown);
+        this.map.on("loadstart", this.handleWorldLoadStart);
         this.map.on("load", this.handleWorldLoad);
         this.map.on("frame", this.handleFrame);
         if (typeof ResizeObserver !== "undefined") {
@@ -305,6 +306,7 @@ export class WorldMinimap {
         this.canvas.removeEventListener("click", this.handleClick);
         this.canvas.removeEventListener("wheel", this.handleWheel);
         window.removeEventListener("keydown", this.handleKeyDown);
+        this.map.off("loadstart", this.handleWorldLoadStart);
         this.map.off("load", this.handleWorldLoad);
         this.map.off("frame", this.handleFrame);
     }
@@ -932,8 +934,11 @@ export class WorldMinimap {
         }
     };
 
-    private handleWorldLoad = (): void => {
+    private handleWorldLoadStart = (): void => {
         this.clear();
+    };
+
+    private handleWorldLoad = (): void => {
         void this.refresh(true);
     };
 

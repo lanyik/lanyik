@@ -73,12 +73,16 @@ it is not a simulation turn or a generated terrain tile. Every twenty-fifth
 iteration starts three competing loads to exercise cancellation and stale
 publication, with the last load required to win.
 
-The test waits for the winning world to settle and samples lifecycle work,
-shared work domains, resident chunks, WebGL resources, pending GPU queries, and
-JavaScript heap use. All values must remain within fixed bounds, and final
-disposal must leave no queued work or resource-budget reservations. Five
-hundred iterations are a freeze/release confidence gate, not a replacement for
-the deterministic tests that identify a specific failing interleaving.
+The test waits for the winning render world to settle and samples lifecycle
+work, shared work domains, resident chunks, WebGL resources, pending GPU
+queries, and JavaScript heap use. The active world's minimap may retain its
+designed maximum of two non-critical overview requests with one configured
+Worker busy; the work-domain count must remain fixed so superseded source pools
+cannot accumulate. All other values remain within fixed bounds. Final disposal
+first releases the minimap consumer and then the map, after which no queued
+work or resource-budget reservations may remain. Five hundred iterations are a
+freeze/release confidence gate, not a replacement for the deterministic tests
+that identify a specific failing interleaving.
 
 ## Keeping the suite focused
 

@@ -8,6 +8,7 @@ import {
     WorkQueueBackpressureError
 } from "../runtime/PriorityTaskQueue";
 import { RuntimeWorkCoordinator } from "../runtime/RuntimeWorkCoordinator";
+import { lifecycleAbortError } from "../runtime/LifecycleScope";
 
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
@@ -77,13 +78,6 @@ interface WorkerSlot {
     busy: boolean;
     taskKind?: QueuedTask["kind"];
     task?: QueuedTask;
-}
-
-function abortError(): Error {
-    if (typeof DOMException !== "undefined") return new DOMException("World chunk request was aborted", "AbortError");
-    const error = new Error("World chunk request was aborted");
-    error.name = "AbortError";
-    return error;
 }
 
 function defaultPoolSize(maxWorkers: number): number {
@@ -160,7 +154,7 @@ export class WorldGeneratorPool {
         request: ChunkRequestOptions = {}
     ): Promise<PackedWorldChunk> {
         if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-        if (request.signal?.aborted) return Promise.reject(abortError());
+        if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World chunk request was aborted"));
         return new Promise<PackedWorldChunk>((resolve, reject) => {
             const task: QueuedTask = {
                 kind: "chunk",
@@ -173,8 +167,9 @@ export class WorldGeneratorPool {
             if (request.signal) {
                 task.abort = () => {
                     if (task.settled) return;
-                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
-                    this.finishTask(task, () => reject(abortError()));
+                    if (task.queueId !== undefined
+                        && this.queue.cancel(task.queueId, lifecycleAbortError("World chunk request was aborted"))) return;
+                    this.finishTask(task, () => reject(lifecycleAbortError("World chunk request was aborted")));
                 };
                 request.signal.addEventListener("abort", task.abort, { once: true });
             }
@@ -196,7 +191,7 @@ export class WorldGeneratorPool {
         request: ChunkRequestOptions = {}
     ): Promise<WorldVegetationLayout> {
         if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-        if (request.signal?.aborted) return Promise.reject(abortError());
+        if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World vegetation request was aborted"));
         return new Promise<WorldVegetationLayout>((resolve, reject) => {
             const task: QueuedTask = {
                 kind: "vegetation",
@@ -209,8 +204,9 @@ export class WorldGeneratorPool {
             if (request.signal) {
                 task.abort = () => {
                     if (task.settled) return;
-                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
-                    this.finishTask(task, () => reject(abortError()));
+                    if (task.queueId !== undefined
+                        && this.queue.cancel(task.queueId, lifecycleAbortError("World vegetation request was aborted"))) return;
+                    this.finishTask(task, () => reject(lifecycleAbortError("World vegetation request was aborted")));
                 };
                 request.signal.addEventListener("abort", task.abort, { once: true });
             }
@@ -232,7 +228,7 @@ export class WorldGeneratorPool {
         request: ChunkRequestOptions = {}
     ): Promise<WorldOverviewRaster> {
         if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-        if (request.signal?.aborted) return Promise.reject(abortError());
+        if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World overview request was aborted"));
         return new Promise<WorldOverviewRaster>((resolve, reject) => {
             const task: QueuedTask = {
                 kind: "overview",
@@ -245,8 +241,9 @@ export class WorldGeneratorPool {
             if (request.signal) {
                 task.abort = () => {
                     if (task.settled) return;
-                    if (task.queueId !== undefined && this.queue.cancel(task.queueId, abortError())) return;
-                    this.finishTask(task, () => reject(abortError()));
+                    if (task.queueId !== undefined
+                        && this.queue.cancel(task.queueId, lifecycleAbortError("World overview request was aborted"))) return;
+                    this.finishTask(task, () => reject(lifecycleAbortError("World overview request was aborted")));
                 };
                 request.signal.addEventListener("abort", task.abort, { once: true });
             }
@@ -305,7 +302,7 @@ export class WorldGeneratorPool {
         if (this.disposed) return;
         this.disposed = true;
         if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
-        const error = new Error("WorldGeneratorPool was disposed");
+        const error = lifecycleAbortError("World generator pool was disposed");
         this.queue.clear(error);
         this.workCoordinator?.releaseQueue(this.queue, false);
         for (const slot of this.slots) {

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A paged data-driven world minimap backed by versioned Worker overview rasters,
+  bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
+  zoom, camera heading and explicit destination confirmation.
 - Opaque linear horizon blending shared by terrain, water, grass and standard
   Three.js model materials. The default hard render distance now includes a
   fully fogged outer band, hiding whole-chunk load/unload without transparent
@@ -82,10 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cold lowlands remain tundra. Mountain summit snow is climate-aware, mountain
   lighting interpolates shared-corner slopes to remove per-hex normal seams,
   and the persistent tactical grid is now opt-in instead of enabled by default.
-- Froze world-style generation v1 on generator v5 after the normal gates,
+- Established the first world-style generation v1 freeze baseline on generator v5 after the normal gates,
   performance regression checks, scheduled replacement soak and fixed visual
-  gallery all passed. Future gameplay consumes the surface contracts instead
-  of extending generator or `HexMap` domain state.
+  gallery all passed. The later climate-snow correction advanced the current
+  frozen identity to generator v6. Future gameplay consumes the surface
+  contracts instead of extending generator or `HexMap` domain state.
 - Deferred automatic river generation after the fixed world gallery found no
   recurring hydrology-shaped visual defect. Existing manual river rendering,
   editing and persistence remain; no local pseudo-network or regional hydrology
@@ -149,6 +153,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- World replacement now invalidates and aborts old minimap overview pages before
+  disposing their source. Worker client and pool teardown classify accepted
+  work as `AbortError`, preventing expected cancellation from surfacing as a
+  runtime failure or retrying stale demand against the replacement world. The
+  replacement soak now distinguishes the active minimap's bounded background
+  work from leaked superseded-source domains and disposes consumers in ownership
+  order before asserting a zero-work final state.
 - City/outpost edits now refresh their terrain model and suppress only the
   affected tile's grass/tree instances in place; they no longer remount the
   surrounding streamed vegetation chunks and cause a visible scene refresh.

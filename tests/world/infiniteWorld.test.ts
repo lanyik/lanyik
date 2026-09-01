@@ -451,6 +451,23 @@ describe("world generator pool", () => {
         pool.dispose();
     });
 
+    test("classifies running and queued work as cancelled when the pool is disposed", async () => {
+        const client = new DeferredChunkClient();
+        const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });
+        const running = pool.generateChunk({ seed: 1, chunkX: 0, chunkY: 0 });
+        const queued = pool.generateChunk({ seed: 1, chunkX: 1, chunkY: 0 });
+        const outcomes = Promise.allSettled([running, queued]);
+
+        pool.dispose();
+
+        for (const outcome of await outcomes) {
+            expect(outcome).toMatchObject({
+                status: "rejected",
+                reason: { name: "AbortError" }
+            });
+        }
+    });
+
     test("shrinks busy worker pools after in-flight tasks settle and grows them again", async () => {
         const clients: DeferredChunkClient[] = [];
         const pool = new WorldGeneratorPool("unused", {

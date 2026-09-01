@@ -1045,6 +1045,10 @@ export class HexMap extends EventEmitter {
             throw reason;
         }
 
+        // Consumers with work scoped to the active source must invalidate it
+        // before stopWorldStreaming() disposes that source and its Worker pool.
+        // "load" remains the publication point for the replacement session.
+        this.emit("loadstart" satisfies HexMapEventName, undefined);
         this.stopWorldStreaming();
         const revision = ++this.loadRevision;
         const worldController = new RenderWorldController(source, this.runtimeWork, {

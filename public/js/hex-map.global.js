@@ -12433,6 +12433,187 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return [overview.pixels.buffer];
   }
 
+  // src/runtime/LifecycleScope.ts
+  var nextLifecycleGeneration = 1;
+  function lifecycleAbortError(message = "Lifecycle scope was closed") {
+    if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  }
+  var LifecycleDrainTimeoutError = class extends Error {
+    constructor(label, timeoutMs, detachedTasks) {
+      super(`${label} did not drain ${detachedTasks} task(s) within ${timeoutMs}ms`);
+      this.label = label;
+      this.timeoutMs = timeoutMs;
+      this.detachedTasks = detachedTasks;
+      this.name = "LifecycleDrainTimeoutError";
+    }
+  };
+  var LifecycleScope = class {
+    constructor(label, options = {}) {
+      this.label = label;
+      this.generation = nextLifecycleGeneration++;
+      this.controller = new AbortController();
+      this.pending = /* @__PURE__ */ new Set();
+      this.stateValue = "active";
+      this.startedTasks = 0;
+      this.completedTasks = 0;
+      this.failedTasks = 0;
+      this.cancelledTasks = 0;
+      this.detachedTasks = 0;
+      this.rejectedPublications = 0;
+      this.drainTimedOut = false;
+      if (typeof label !== "string" || label.trim().length === 0) {
+        throw new TypeError("lifecycle scope label must be a non-empty string");
+      }
+      this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
+      this.reportError = options.error;
+      this.drainTimeoutMs = options.drainTimeoutMs;
+      if (this.drainTimeoutMs !== void 0 && (!Number.isFinite(this.drainTimeoutMs) || this.drainTimeoutMs <= 0)) {
+        throw new RangeError("lifecycle drainTimeoutMs must be positive and finite");
+      }
+      this.startedAt = this.now();
+    }
+    get signal() {
+      return this.controller.signal;
+    }
+    get state() {
+      return this.stateValue;
+    }
+    get active() {
+      return this.stateValue === "active";
+    }
+    throwIfClosed() {
+      if (!this.active) throw lifecycleAbortError(`${this.label} is no longer active`);
+    }
+    track(task) {
+      if (!this.active) {
+        void Promise.resolve(task).catch(() => void 0);
+        return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
+      }
+      this.startedTasks += 1;
+      let observed;
+      observed = Promise.resolve(task).then(
+        (value) => {
+          this.completedTasks += 1;
+          return value;
+        },
+        (reason) => {
+          const error = reason instanceof Error ? reason : new Error(String(reason));
+          if (error.name === "AbortError" || this.signal.aborted) this.cancelledTasks += 1;
+          else {
+            this.failedTasks += 1;
+            try {
+              this.reportError?.(error);
+            } catch {
+            }
+          }
+          throw reason;
+        }
+      );
+      this.pending.add(observed);
+      void observed.then(
+        () => this.finish(observed),
+        () => this.finish(observed)
+      );
+      return observed;
+    }
+    run(operation) {
+      if (!this.active) return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
+      let result;
+      try {
+        result = operation(this.signal);
+      } catch (reason) {
+        result = Promise.reject(reason);
+      }
+      return this.track(Promise.resolve(result));
+    }
+    // Returns false instead of invoking an observer when the session has been
+    // superseded. Callers can release the value in onRejected when it owns a
+    // resource that otherwise needs explicit cleanup.
+    publish(value, observer, onRejected) {
+      if (!this.active) {
+        this.rejectedPublications += 1;
+        try {
+          onRejected?.(value);
+        } catch (reason) {
+          this.captureError(reason);
+        }
+        return false;
+      }
+      observer(value);
+      return true;
+    }
+    close(reason = lifecycleAbortError(`${this.label} was closed`)) {
+      if (this.stateValue === "active") {
+        this.stateValue = "closing";
+        this.controller.abort(reason);
+      }
+      if (this.pending.size === 0) this.markClosed();
+      else this.armDrainTimeout();
+      return this.settled;
+    }
+    get settled() {
+      if (this.stateValue === "closed") return Promise.resolve();
+      if (!this.settlePromise) {
+        this.settlePromise = new Promise((resolve) => {
+          this.resolveSettled = resolve;
+        });
+      }
+      return this.settlePromise;
+    }
+    get stats() {
+      return {
+        label: this.label,
+        generation: this.generation,
+        state: this.stateValue,
+        pendingTasks: this.pending.size,
+        startedTasks: this.startedTasks,
+        completedTasks: this.completedTasks,
+        failedTasks: this.failedTasks,
+        cancelledTasks: this.cancelledTasks,
+        detachedTasks: this.detachedTasks,
+        rejectedPublications: this.rejectedPublications,
+        drainTimedOut: this.drainTimedOut,
+        ageMs: Math.max(0, this.now() - this.startedAt)
+      };
+    }
+    finish(task) {
+      this.pending.delete(task);
+      if (this.stateValue === "closing" && this.pending.size === 0) this.markClosed();
+    }
+    markClosed() {
+      if (this.drainTimer !== void 0) {
+        clearTimeout(this.drainTimer);
+        this.drainTimer = void 0;
+      }
+      this.stateValue = "closed";
+      this.resolveSettled?.();
+      this.resolveSettled = void 0;
+    }
+    armDrainTimeout() {
+      if (this.drainTimeoutMs === void 0 || this.drainTimer !== void 0) return;
+      this.drainTimer = setTimeout(() => {
+        this.drainTimer = void 0;
+        if (this.stateValue !== "closing" || this.pending.size === 0) return;
+        const detached = this.pending.size;
+        this.pending.clear();
+        this.detachedTasks += detached;
+        this.drainTimedOut = true;
+        this.captureError(new LifecycleDrainTimeoutError(this.label, this.drainTimeoutMs, detached));
+        this.markClosed();
+      }, this.drainTimeoutMs);
+    }
+    captureError(reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      try {
+        this.reportError?.(error);
+      } catch {
+      }
+    }
+  };
+
   // src/world/WorldGeneratorClient.ts
   var WorldGeneratorClient = class {
     constructor(workerUrl, workerOptions = { type: "module" }) {
@@ -12615,7 +12796,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worker.removeEventListener("error", this.handleWorkerError);
       this.worker.removeEventListener("messageerror", this.handleMessageError);
       this.worker.terminate();
-      const error = new Error("World generation worker was disposed");
+      const error = lifecycleAbortError("World generation worker was disposed");
       for (const request of this.pending.values()) request.reject(error);
       this.pending.clear();
     }
@@ -12630,12 +12811,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   };
 
   // src/world/WorldGeneratorPool.ts
-  function abortError() {
-    if (typeof DOMException !== "undefined") return new DOMException("World chunk request was aborted", "AbortError");
-    const error = new Error("World chunk request was aborted");
-    error.name = "AbortError";
-    return error;
-  }
   function defaultPoolSize(maxWorkers) {
     const hardware = typeof navigator === "undefined" ? 4 : navigator.hardwareConcurrency || 4;
     return Math.max(1, Math.min(maxWorkers, hardware - 1));
@@ -12691,7 +12866,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     generateChunk(options, request = {}) {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-      if (request.signal?.aborted) return Promise.reject(abortError());
+      if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World chunk request was aborted"));
       return new Promise((resolve, reject) => {
         const task = {
           kind: "chunk",
@@ -12704,8 +12879,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (request.signal) {
           task.abort = () => {
             if (task.settled) return;
-            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
-            this.finishTask(task, () => reject(abortError()));
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, lifecycleAbortError("World chunk request was aborted"))) return;
+            this.finishTask(task, () => reject(lifecycleAbortError("World chunk request was aborted")));
           };
           request.signal.addEventListener("abort", task.abort, { once: true });
         }
@@ -12723,7 +12898,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     generateVegetation(options, request = {}) {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-      if (request.signal?.aborted) return Promise.reject(abortError());
+      if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World vegetation request was aborted"));
       return new Promise((resolve, reject) => {
         const task = {
           kind: "vegetation",
@@ -12736,8 +12911,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (request.signal) {
           task.abort = () => {
             if (task.settled) return;
-            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
-            this.finishTask(task, () => reject(abortError()));
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, lifecycleAbortError("World vegetation request was aborted"))) return;
+            this.finishTask(task, () => reject(lifecycleAbortError("World vegetation request was aborted")));
           };
           request.signal.addEventListener("abort", task.abort, { once: true });
         }
@@ -12755,7 +12930,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     generateOverview(options, request = {}) {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorPool has been disposed"));
-      if (request.signal?.aborted) return Promise.reject(abortError());
+      if (request.signal?.aborted) return Promise.reject(lifecycleAbortError("World overview request was aborted"));
       return new Promise((resolve, reject) => {
         const task = {
           kind: "overview",
@@ -12768,8 +12943,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (request.signal) {
           task.abort = () => {
             if (task.settled) return;
-            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, abortError())) return;
-            this.finishTask(task, () => reject(abortError()));
+            if (task.queueId !== void 0 && this.queue.cancel(task.queueId, lifecycleAbortError("World overview request was aborted"))) return;
+            this.finishTask(task, () => reject(lifecycleAbortError("World overview request was aborted")));
           };
           request.signal.addEventListener("abort", task.abort, { once: true });
         }
@@ -12825,7 +13000,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.disposed) return;
       this.disposed = true;
       if (this.coordinatorAbort) this.coordinatorSignal?.removeEventListener("abort", this.coordinatorAbort);
-      const error = new Error("WorldGeneratorPool was disposed");
+      const error = lifecycleAbortError("World generator pool was disposed");
       this.queue.clear(error);
       this.workCoordinator?.releaseQueue(this.queue, false);
       for (const slot of this.slots) {
@@ -13716,7 +13891,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
     }
   }
-  function abortError2() {
+  function abortError() {
     if (typeof DOMException !== "undefined") return new DOMException("World chunk request was aborted", "AbortError");
     const error = new Error("World chunk request was aborted");
     error.name = "AbortError";
@@ -13755,7 +13930,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     loadChunk(chunkX, chunkY, request = {}) {
       if (this.disposed) return Promise.reject(new Error("StaticWorldSource has been disposed"));
-      if (request.signal?.aborted) return Promise.reject(abortError2());
+      if (request.signal?.aborted) return Promise.reject(abortError());
       const resolved = this.resolveChunk(chunkX, chunkY);
       if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
         return Promise.reject(new RangeError("static world chunk coordinates are outside the canonical bounds"));
@@ -13774,7 +13949,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     prepareOverview(options, request = {}) {
       if (this.disposed) return Promise.reject(new Error("StaticWorldSource has been disposed"));
-      if (request.signal?.aborted) return Promise.reject(abortError2());
+      if (request.signal?.aborted) return Promise.reject(abortError());
       return Promise.resolve().then(() => generateStaticWorldOverview(this.map, options));
     }
     releaseChunk(_chunk) {
@@ -14276,7 +14451,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         packed = await this.pool.generateChunk(generation, request);
         if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
       }
-      if (request.signal?.aborted) throw abortError2();
+      if (request.signal?.aborted) throw abortError();
       await this.restoreChunkDelta(chunkX, chunkY);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
@@ -14455,7 +14630,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         packed = await this.pool.generateChunk(generation, request);
         if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
       }
-      if (request.signal?.aborted) throw abortError2();
+      if (request.signal?.aborted) throw abortError();
       await this.restoreChunkDelta(chunkX, chunkY);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
@@ -14566,7 +14741,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/ChunkResidencyCoordinator.ts
-  function abortError3(message) {
+  function abortError2(message) {
     if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
     const error = new Error(message);
     error.name = "AbortError";
@@ -14608,7 +14783,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       } catch (reason) {
         return Promise.reject(reason);
       }
-      if (options?.signal?.aborted) return Promise.reject(abortError3("Chunk lease request was aborted"));
+      if (options?.signal?.aborted) return Promise.reject(abortError2("Chunk lease request was aborted"));
       const resolved = this.source.resolveChunk(chunkX, chunkY);
       if (!resolved) return Promise.reject(new RangeError("chunk coordinates are outside the world bounds"));
       const key = _ChunkResidencyCoordinator.key(resolved.x, resolved.y);
@@ -14669,7 +14844,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       for (const entry of this.entries.values()) {
         entry.controller?.abort();
         for (const waiter of [...entry.waiters]) {
-          this.rejectWaiter(entry, waiter, abortError3("Chunk residency was disposed"));
+          this.rejectWaiter(entry, waiter, abortError2("Chunk residency was disposed"));
         }
         const chunk = entry.chunk;
         entry.chunk = void 0;
@@ -14702,7 +14877,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         entry.chunk = chunk;
         for (const waiter of [...entry.waiters]) {
           if (waiter.signal?.aborted) {
-            this.rejectWaiter(entry, waiter, abortError3("Chunk lease request was aborted"));
+            this.rejectWaiter(entry, waiter, abortError2("Chunk lease request was aborted"));
             continue;
           }
           this.resolveWaiter(entry, waiter, this.createLease(entry, waiter.owner));
@@ -14731,7 +14906,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     abortWaiter(entry, waiter) {
       if (waiter.settled) return;
-      this.rejectWaiter(entry, waiter, abortError3("Chunk lease request was aborted"));
+      this.rejectWaiter(entry, waiter, abortError2("Chunk lease request was aborted"));
       if (entry.waiters.size === 0 && entry.leases.size === 0 && entry.loading) entry.controller?.abort();
       this.releaseIfUnused(entry);
     }
@@ -14788,14 +14963,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw new RangeError(`${name} must be an integer >= ${minimum}`);
     }
   }
-  function abortError4(message) {
+  function abortError3(message) {
     if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
     const error = new Error(message);
     error.name = "AbortError";
     return error;
   }
   function waitForRetry(delayMs, signal) {
-    if (signal.aborted) return Promise.reject(abortError4("Chunk retry was aborted"));
+    if (signal.aborted) return Promise.reject(abortError3("Chunk retry was aborted"));
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         signal.removeEventListener("abort", abort);
@@ -14803,7 +14978,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }, delayMs);
       const abort = () => {
         clearTimeout(timeout);
-        reject(abortError4("Chunk retry was aborted"));
+        reject(abortError3("Chunk retry was aborted"));
       };
       signal.addEventListener("abort", abort, { once: true });
     });
@@ -14992,7 +15167,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const chunk = lease.chunk;
         if (this.disposed || !this.wanted.has(key)) {
           lease.release();
-          throw abortError4("Chunk is no longer wanted");
+          throw abortError3("Chunk is no longer wanted");
         }
         this.residents.set(key, lease);
         try {
@@ -15028,7 +15203,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           const chunk = lease.chunk;
           if (signal.aborted) {
             lease.release();
-            throw abortError4("Chunk load completed after cancellation");
+            throw abortError3("Chunk load completed after cancellation");
           }
           try {
             assertWorldChunk(this.source, chunk, chunkX, chunkY);
@@ -15097,187 +15272,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     static key(chunkX, chunkY) {
       return `${chunkX},${chunkY}`;
-    }
-  };
-
-  // src/runtime/LifecycleScope.ts
-  var nextLifecycleGeneration = 1;
-  function lifecycleAbortError(message = "Lifecycle scope was closed") {
-    if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
-    const error = new Error(message);
-    error.name = "AbortError";
-    return error;
-  }
-  var LifecycleDrainTimeoutError = class extends Error {
-    constructor(label, timeoutMs, detachedTasks) {
-      super(`${label} did not drain ${detachedTasks} task(s) within ${timeoutMs}ms`);
-      this.label = label;
-      this.timeoutMs = timeoutMs;
-      this.detachedTasks = detachedTasks;
-      this.name = "LifecycleDrainTimeoutError";
-    }
-  };
-  var LifecycleScope = class {
-    constructor(label, options = {}) {
-      this.label = label;
-      this.generation = nextLifecycleGeneration++;
-      this.controller = new AbortController();
-      this.pending = /* @__PURE__ */ new Set();
-      this.stateValue = "active";
-      this.startedTasks = 0;
-      this.completedTasks = 0;
-      this.failedTasks = 0;
-      this.cancelledTasks = 0;
-      this.detachedTasks = 0;
-      this.rejectedPublications = 0;
-      this.drainTimedOut = false;
-      if (typeof label !== "string" || label.trim().length === 0) {
-        throw new TypeError("lifecycle scope label must be a non-empty string");
-      }
-      this.now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
-      this.reportError = options.error;
-      this.drainTimeoutMs = options.drainTimeoutMs;
-      if (this.drainTimeoutMs !== void 0 && (!Number.isFinite(this.drainTimeoutMs) || this.drainTimeoutMs <= 0)) {
-        throw new RangeError("lifecycle drainTimeoutMs must be positive and finite");
-      }
-      this.startedAt = this.now();
-    }
-    get signal() {
-      return this.controller.signal;
-    }
-    get state() {
-      return this.stateValue;
-    }
-    get active() {
-      return this.stateValue === "active";
-    }
-    throwIfClosed() {
-      if (!this.active) throw lifecycleAbortError(`${this.label} is no longer active`);
-    }
-    track(task) {
-      if (!this.active) {
-        void Promise.resolve(task).catch(() => void 0);
-        return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
-      }
-      this.startedTasks += 1;
-      let observed;
-      observed = Promise.resolve(task).then(
-        (value) => {
-          this.completedTasks += 1;
-          return value;
-        },
-        (reason) => {
-          const error = reason instanceof Error ? reason : new Error(String(reason));
-          if (error.name === "AbortError" || this.signal.aborted) this.cancelledTasks += 1;
-          else {
-            this.failedTasks += 1;
-            try {
-              this.reportError?.(error);
-            } catch {
-            }
-          }
-          throw reason;
-        }
-      );
-      this.pending.add(observed);
-      void observed.then(
-        () => this.finish(observed),
-        () => this.finish(observed)
-      );
-      return observed;
-    }
-    run(operation) {
-      if (!this.active) return Promise.reject(lifecycleAbortError(`${this.label} is no longer active`));
-      let result;
-      try {
-        result = operation(this.signal);
-      } catch (reason) {
-        result = Promise.reject(reason);
-      }
-      return this.track(Promise.resolve(result));
-    }
-    // Returns false instead of invoking an observer when the session has been
-    // superseded. Callers can release the value in onRejected when it owns a
-    // resource that otherwise needs explicit cleanup.
-    publish(value, observer, onRejected) {
-      if (!this.active) {
-        this.rejectedPublications += 1;
-        try {
-          onRejected?.(value);
-        } catch (reason) {
-          this.captureError(reason);
-        }
-        return false;
-      }
-      observer(value);
-      return true;
-    }
-    close(reason = lifecycleAbortError(`${this.label} was closed`)) {
-      if (this.stateValue === "active") {
-        this.stateValue = "closing";
-        this.controller.abort(reason);
-      }
-      if (this.pending.size === 0) this.markClosed();
-      else this.armDrainTimeout();
-      return this.settled;
-    }
-    get settled() {
-      if (this.stateValue === "closed") return Promise.resolve();
-      if (!this.settlePromise) {
-        this.settlePromise = new Promise((resolve) => {
-          this.resolveSettled = resolve;
-        });
-      }
-      return this.settlePromise;
-    }
-    get stats() {
-      return {
-        label: this.label,
-        generation: this.generation,
-        state: this.stateValue,
-        pendingTasks: this.pending.size,
-        startedTasks: this.startedTasks,
-        completedTasks: this.completedTasks,
-        failedTasks: this.failedTasks,
-        cancelledTasks: this.cancelledTasks,
-        detachedTasks: this.detachedTasks,
-        rejectedPublications: this.rejectedPublications,
-        drainTimedOut: this.drainTimedOut,
-        ageMs: Math.max(0, this.now() - this.startedAt)
-      };
-    }
-    finish(task) {
-      this.pending.delete(task);
-      if (this.stateValue === "closing" && this.pending.size === 0) this.markClosed();
-    }
-    markClosed() {
-      if (this.drainTimer !== void 0) {
-        clearTimeout(this.drainTimer);
-        this.drainTimer = void 0;
-      }
-      this.stateValue = "closed";
-      this.resolveSettled?.();
-      this.resolveSettled = void 0;
-    }
-    armDrainTimeout() {
-      if (this.drainTimeoutMs === void 0 || this.drainTimer !== void 0) return;
-      this.drainTimer = setTimeout(() => {
-        this.drainTimer = void 0;
-        if (this.stateValue !== "closing" || this.pending.size === 0) return;
-        const detached = this.pending.size;
-        this.pending.clear();
-        this.detachedTasks += detached;
-        this.drainTimedOut = true;
-        this.captureError(new LifecycleDrainTimeoutError(this.label, this.drainTimeoutMs, detached));
-        this.markClosed();
-      }, this.drainTimeoutMs);
-    }
-    captureError(reason) {
-      const error = reason instanceof Error ? reason : new Error(String(reason));
-      try {
-        this.reportError?.(error);
-      } catch {
-      }
     }
   };
 
@@ -17624,6 +17618,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         source.dispose();
         throw reason;
       }
+      this.emit("loadstart", void 0);
       this.stopWorldStreaming();
       const revision = ++this.loadRevision;
       const worldController = new RenderWorldController(source, this.runtimeWork, {
@@ -19752,7 +19747,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     return value;
   }
-  function abortError5(error) {
+  function abortError4(error) {
     return error instanceof Error && error.name === "AbortError";
   }
   function backpressureError(error) {
@@ -19823,8 +19818,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           this.setExpanded(false);
         }
       };
-      this.handleWorldLoad = () => {
+      this.handleWorldLoadStart = () => {
         this.clear();
+      };
+      this.handleWorldLoad = () => {
         void this.refresh(true);
       };
       this.handleFrame = (frame) => {
@@ -19879,6 +19876,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.canvas.addEventListener("click", this.handleClick);
       this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
       window.addEventListener("keydown", this.handleKeyDown);
+      this.map.on("loadstart", this.handleWorldLoadStart);
       this.map.on("load", this.handleWorldLoad);
       this.map.on("frame", this.handleFrame);
       if (typeof ResizeObserver !== "undefined") {
@@ -19973,6 +19971,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.canvas.removeEventListener("click", this.handleClick);
       this.canvas.removeEventListener("wheel", this.handleWheel);
       window.removeEventListener("keydown", this.handleKeyDown);
+      this.map.off("loadstart", this.handleWorldLoadStart);
       this.map.off("load", this.handleWorldLoad);
       this.map.off("frame", this.handleFrame);
     }
@@ -20177,7 +20176,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         });
         this.retryAfter.delete(demand.key);
       }).catch((reason) => {
-        if (abortError5(reason) || this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
+        if (abortError4(reason) || this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
         this.retryAfter.set(demand.key, performance.now() + PAGE_RETRY_DELAY_MS);
         if (!backpressureError(reason) && !this.reportedPageError) {
           this.reportedPageError = true;
