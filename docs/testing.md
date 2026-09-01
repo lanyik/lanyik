@@ -49,7 +49,10 @@ $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
-soak on its scheduled job.
+soak on its scheduled job. The verify job builds once, checks committed demo
+artifacts with `check:generated:built`, and benchmarks that exact output with
+`benchmark:check:built`; the public `check:generated` and `benchmark:check`
+commands remain self-contained for local use.
 
 Changes to generator classification, modifiers, vegetation placement, climate
 or surface semantics additionally run:

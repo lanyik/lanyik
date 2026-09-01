@@ -48,10 +48,13 @@
     "review:world-style:metrics": "vitest run --config vitest.world-style.config.ts",
     "review:world-style:gallery": "playwright test --config playwright.gallery.config.ts",
     "test:watch": "vitest",
-    "benchmark": "npm run build:lib && node --expose-gc scripts/benchmark-hot-paths.mjs",
+    "benchmark": "npm run build:lib && npm run benchmark:built",
+    "benchmark:built": "node --expose-gc scripts/benchmark-hot-paths.mjs",
     "benchmark:render-backends": "node scripts/benchmark-render-backends.mjs",
-    "benchmark:check": "npm run build:lib && node --expose-gc scripts/benchmark-hot-paths.mjs --check",
-    "check:generated": "npm run build && git diff --exit-code -- public/js"
+    "benchmark:check": "npm run build:lib && npm run benchmark:check:built",
+    "benchmark:check:built": "node --expose-gc scripts/benchmark-hot-paths.mjs --check",
+    "check:generated": "npm run build && npm run check:generated:built",
+    "check:generated:built": "git diff --exit-code -- public/js"
   },
   "repository": {
     "type": "git",

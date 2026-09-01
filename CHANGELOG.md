@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI now builds the distributable once per verification job, then checks
+  generated assets and runs the performance gate against that exact output;
+  self-contained local commands still build before checking.
 - Advanced world generation to v6: permanent snow now follows an elevated,
   temperature-dependent snowline and generated snow retains hill relief, while
   cold lowlands remain tundra. Mountain summit snow is climate-aware, mountain
