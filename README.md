@@ -112,6 +112,10 @@ type and owns that source until the world is replaced or the map is disposed.
 
 ```ts
 import { HexMap, ProceduralWorldSource } from "three-hex-map";
+import {
+    IndexedDbWorldChunkCache,
+    IndexedDbWorldDeltaStore
+} from "three-hex-map/persistence";
 
 const map = new HexMap({ element: "#world", texturesBaseUrl: "/hex-assets/textures/" });
 const source = new ProceduralWorldSource({
@@ -119,8 +123,8 @@ const source = new ProceduralWorldSource({
     workerUrl: "/hex-assets/world-generator.worker.mjs",
     workerCount: 4,
     chunkSize: 24,
-    cache: true,
-    deltaStore: true
+    cache: new IndexedDbWorldChunkCache(),
+    deltaStore: new IndexedDbWorldDeltaStore()
 });
 
 await map.loadWorld({
@@ -137,6 +141,10 @@ await map.setTileOverride(12, -4, {
 });
 await source.flushDeltas();
 ```
+
+Persistence implementations live only in the optional `persistence` subpath.
+Stores passed in source options belong to that source and are disposed with it;
+constructor dependency injection is reserved for caller-owned/test resources.
 
 The package ships `dist/world-generator.worker.mjs` through the
 `three-hex-map/world-generator.worker` export. Configure your bundler or asset

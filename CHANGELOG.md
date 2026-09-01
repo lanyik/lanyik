@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Browser cache and delta-store implementations now live exclusively in the
+  `three-hex-map/persistence` subpath. Procedural sources accept explicit store
+  capabilities, own option-level stores, and keep dependency-injected stores
+  caller-owned; CI verifies that IndexedDB code cannot re-enter the root bundle.
 - CI now builds the distributable once per verification job, then checks
   generated assets and runs the performance gate against that exact output;
   self-contained local commands still build before checking.

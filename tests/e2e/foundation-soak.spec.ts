@@ -71,8 +71,6 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
                 workerUrl,
                 workerCount: 1,
                 chunkSize: 24,
-                cache: false,
-                deltaStore: false,
                 workCoordinator: api.hexWorld.workCoordinator
             }),
             initialTile: { x: iteration * 24, y: -(iteration % 31) * 12 },

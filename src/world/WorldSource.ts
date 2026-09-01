@@ -13,16 +13,14 @@ import {
 import { ChunkRequestOptions, WorldGeneratorPool, WorldGeneratorPoolStats } from "./WorldGeneratorPool";
 import {
     createWorldChunkCacheKey,
-    IndexedDbWorldChunkCache,
     WorldChunkCache,
     WorldChunkCacheStats
-} from "./WorldChunkCache";
+} from "./WorldChunkCacheContract";
 import {
-    IndexedDbWorldDeltaStore,
     normalizeWorldChunkDelta,
     WorldChunkDelta,
     WorldDeltaStore
-} from "./WorldDeltaStore";
+} from "./WorldDeltaContract";
 import {
     createWorldVegetationMapSnapshot,
     WorldVegetationGenerationOptions,
@@ -174,12 +172,10 @@ export interface ProceduralWorldSourceOptions {
     workerCount?: number;
     reservedChunkWorkers?: number;
     chunkSize?: number;
-    cache?: boolean | WorldChunkCache;
-    cacheDatabaseName?: string;
-    cacheMaxBytes?: number;
+    // Options-level persistence resources are owned and disposed by the source.
+    cache?: WorldChunkCache;
     generatorVersion?: number;
-    deltaStore?: boolean | WorldDeltaStore;
-    deltaDatabaseName?: string;
+    deltaStore?: WorldDeltaStore;
     worldId?: string;
     workCoordinator?: RuntimeWorkCoordinator;
 }
@@ -357,17 +353,13 @@ function resolveCache(
     options: ProceduralWorldSourceOptions,
     dependencies: ProceduralWorldSourceDependencies
 ): { cache: WorldChunkCache | undefined; owned: boolean } {
-    if (dependencies.cache) return { cache: dependencies.cache, owned: false };
-    if (options.cache && typeof options.cache === "object") return { cache: options.cache, owned: false };
-    if (options.cache === true) {
-        return {
-            cache: new IndexedDbWorldChunkCache({
-                databaseName: options.cacheDatabaseName,
-                maxBytes: options.cacheMaxBytes
-            }),
-            owned: true
-        };
+    if (dependencies.cache !== undefined && options.cache !== undefined) {
+        throw new TypeError("world chunk cache must be provided through options or dependencies, not both");
     }
+    const cache = dependencies.cache ?? options.cache;
+    if (cache !== undefined) assertWorldChunkCache(cache);
+    if (dependencies.cache !== undefined) return { cache, owned: false };
+    if (cache !== undefined) return { cache, owned: true };
     return { cache: undefined, owned: false };
 }
 
@@ -375,11 +367,28 @@ function resolveDeltaStore(
     options: ProceduralWorldSourceOptions,
     dependencies: ProceduralWorldSourceDependencies
 ): { store: WorldDeltaStore | undefined; owned: boolean } {
-    if (dependencies.deltaStore) return { store: dependencies.deltaStore, owned: false };
-    if (options.deltaStore === true) {
-        return { store: new IndexedDbWorldDeltaStore({ databaseName: options.deltaDatabaseName }), owned: true };
+    if (dependencies.deltaStore !== undefined && options.deltaStore !== undefined) {
+        throw new TypeError("world delta store must be provided through options or dependencies, not both");
     }
-    return { store: options.deltaStore || undefined, owned: false };
+    const store = dependencies.deltaStore ?? options.deltaStore;
+    if (store !== undefined) assertWorldDeltaStore(store);
+    if (dependencies.deltaStore !== undefined) return { store, owned: false };
+    if (store !== undefined) return { store, owned: true };
+    return { store: undefined, owned: false };
+}
+
+function assertWorldChunkCache(cache: WorldChunkCache): void {
+    if (!cache || typeof cache !== "object") throw new TypeError("world chunk cache must be an object");
+    for (const method of ["get", "put", "clear", "dispose"] as const) {
+        if (typeof cache[method] !== "function") throw new TypeError(`world chunk cache must implement ${method}()`);
+    }
+}
+
+function assertWorldDeltaStore(store: WorldDeltaStore): void {
+    if (!store || typeof store !== "object") throw new TypeError("world delta store must be an object");
+    for (const method of ["loadChunk", "putTile", "deleteTile", "flush", "clear", "dispose"] as const) {
+        if (typeof store[method] !== "function") throw new TypeError(`world delta store must implement ${method}()`);
+    }
 }
 
 function resolveWorldId(value: string | undefined, fallback: string): string {
@@ -873,9 +882,6 @@ export class ToroidalWorldSource implements MutableWorldSource {
         });
         this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
         this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
-        const resolvedDeltas = resolveDeltaStore(options, dependencies);
-        this.deltaStore = resolvedDeltas.store;
-        this.ownsDeltaStore = resolvedDeltas.owned;
         this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
         this.chunkCountX = Math.ceil(options.width / this.chunkSize);
         this.chunkCountY = Math.ceil(options.height / this.chunkSize);
@@ -884,10 +890,13 @@ export class ToroidalWorldSource implements MutableWorldSource {
             || !this.store.map.wrapX || !this.store.map.wrapY) {
             throw new TypeError("toroidal world store bounds do not match source dimensions");
         }
-        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
+        const resolvedDeltas = resolveDeltaStore(options, dependencies);
         const resolvedCache = resolveCache(options, dependencies);
+        this.deltaStore = resolvedDeltas.store;
+        this.ownsDeltaStore = resolvedDeltas.owned;
         this.cache = resolvedCache.cache;
         this.ownsCache = resolvedCache.owned;
+        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
         try {
             this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
                 size: options.workerCount,
@@ -897,6 +906,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
             });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
+            if (this.ownsDeltaStore) this.deltaStore?.dispose();
             throw error;
         }
     }
@@ -1122,14 +1132,14 @@ export class ProceduralWorldSource implements MutableWorldSource {
         });
         this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
         this.store = dependencies.store ?? new SparseWorldChunkStore();
+        this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
         const resolvedDeltas = resolveDeltaStore(options, dependencies);
+        const resolvedCache = resolveCache(options, dependencies);
         this.deltaStore = resolvedDeltas.store;
         this.ownsDeltaStore = resolvedDeltas.owned;
-        this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
-        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
-        const resolvedCache = resolveCache(options, dependencies);
         this.cache = resolvedCache.cache;
         this.ownsCache = resolvedCache.owned;
+        this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
         try {
             this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
                 size: options.workerCount,
@@ -1139,6 +1149,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
             });
         } catch (error) {
             if (this.ownsCache) this.cache?.dispose();
+            if (this.ownsDeltaStore) this.deltaStore?.dispose();
             throw error;
         }
     }

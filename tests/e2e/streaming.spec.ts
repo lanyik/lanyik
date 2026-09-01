@@ -187,8 +187,6 @@ test("rapid world-session replacement drains cancelled work and keeps resources 
                 workerUrl,
                 workerCount: 1,
                 chunkSize: 24,
-                cache: false,
-                deltaStore: false,
                 workCoordinator: api.hexWorld.workCoordinator
             });
             pending.push(api.hexWorld.loadWorld({

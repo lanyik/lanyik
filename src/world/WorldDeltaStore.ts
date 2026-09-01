@@ -2,86 +2,36 @@ import {
     assertWorldTileOverride,
     cloneWorldTileOverride,
     hasWorldTileOverride,
-    worldTileOverridesEqual,
-    WorldTileOverride
+    worldTileOverridesEqual
 } from "./generateWorldChunk";
+import {
+    assertWorldDeltaChunkIdentity,
+    assertWorldDeltaChunkSize,
+    normalizeWorldChunkDelta,
+    worldDeltaTileBelongsToChunk,
+    WorldDeltaConflictError,
+    WORLD_DELTA_FORMAT_VERSION,
+    type WorldChunkDelta,
+    type WorldDeltaBatchOptions,
+    type WorldDeltaChange,
+    type WorldDeltaEntry,
+    type WorldDeltaReadOptions,
+    type WorldDeltaStore
+} from "./WorldDeltaContract";
 
-export const WORLD_DELTA_FORMAT_VERSION = 2;
-const LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
-
-export interface WorldDeltaEntry {
-    x: number;
-    y: number;
-    override: WorldTileOverride;
-}
-
-export interface WorldDeltaChange {
-    x: number;
-    y: number;
-    // null removes a persisted override; an object replaces the complete
-    // coordinate override after the caller has merged partial edits.
-    override: WorldTileOverride | null;
-}
-
-export interface WorldDeltaReadOptions {
-    chunkSize: number;
-}
-
-export interface WorldDeltaBatchOptions extends WorldDeltaReadOptions {
-    // 0 means that no record may exist yet.
-    expectedRevision?: number;
-}
-
-export interface WorldChunkDelta {
-    version: typeof WORLD_DELTA_FORMAT_VERSION;
-    worldId: string;
-    chunkX: number;
-    chunkY: number;
-    chunkSize: number;
-    revision: number;
-    entries: readonly WorldDeltaEntry[];
-}
-
-export interface WorldDeltaStore {
-    loadChunk(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        options: WorldDeltaReadOptions
-    ): Promise<WorldChunkDelta | undefined>;
-    putChunkDelta?(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        changes: readonly WorldDeltaChange[],
-        options: WorldDeltaBatchOptions
-    ): Promise<WorldChunkDelta | undefined>;
-    putTile(worldId: string, chunkX: number, chunkY: number, entry: WorldDeltaEntry, options: WorldDeltaReadOptions): void;
-    deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void;
-    flush(): Promise<void>;
-    listWorld?(worldId: string): Promise<readonly WorldChunkDelta[]>;
-    replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void>;
-    clear(worldId: string): Promise<void>;
-    dispose(): void;
-}
-
-export class WorldDeltaConflictError extends Error {
-    public readonly name = "WorldDeltaConflictError";
-
-    constructor(
-        public readonly expectedRevision: number,
-        public readonly actualRevision: number
-    ) {
-        super(`World delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
-    }
-}
+export {
+    normalizeWorldChunkDelta,
+    WorldDeltaConflictError,
+    WORLD_DELTA_FORMAT_VERSION
+} from "./WorldDeltaContract";
+export type {
+    WorldChunkDelta,
+    WorldDeltaBatchOptions,
+    WorldDeltaChange,
+    WorldDeltaEntry,
+    WorldDeltaReadOptions,
+    WorldDeltaStore
+} from "./WorldDeltaContract";
 
 export interface IndexedDbWorldDeltaStoreOptions {
     databaseName?: string;
@@ -92,32 +42,13 @@ function chunkKey(worldId: string, chunkX: number, chunkY: number): string {
     return JSON.stringify([worldId, chunkX, chunkY]);
 }
 
-function assertChunkIdentity(worldId: string, chunkX: number, chunkY: number): void {
-    if (typeof worldId !== "string" || worldId.trim().length === 0) {
-        throw new TypeError("worldId must be a non-empty string");
-    }
-    if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) {
-        throw new RangeError("world delta chunk coordinates must be safe integers");
-    }
-}
-
-function assertChunkSize(chunkSize: number): void {
-    if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
-        throw new RangeError("world delta chunkSize must be a positive safe integer");
-    }
-}
-
-function tileBelongsToChunk(x: number, y: number, chunkX: number, chunkY: number, chunkSize: number): boolean {
-    return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
-}
-
 function assertChanges(
     changes: readonly WorldDeltaChange[],
     chunkX: number,
     chunkY: number,
     options: WorldDeltaBatchOptions
 ): void {
-    assertChunkSize(options.chunkSize);
+    assertWorldDeltaChunkSize(options.chunkSize);
     if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
     if (options.expectedRevision !== undefined
         && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
@@ -127,53 +58,11 @@ function assertChanges(
         if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
             throw new RangeError("world delta tile coordinates must be safe integers");
         }
-        if (!tileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
+        if (!worldDeltaTileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
             throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
         }
         if (change.override !== null) assertWorldTileOverride(change.override);
     }
-}
-
-export function normalizeWorldChunkDelta(
-    value: unknown,
-    worldId: string,
-    chunkX: number,
-    chunkY: number,
-    options: WorldDeltaReadOptions
-): WorldChunkDelta {
-    assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChunkSize(options.chunkSize);
-    const candidate = value as Partial<WorldChunkDelta> & { version?: number; entries?: readonly WorldDeltaEntry[] };
-    if (!candidate || (candidate.version !== WORLD_DELTA_FORMAT_VERSION
-        && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION) || candidate.worldId !== worldId
-        || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY
-        || (candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize)
-        || !Number.isSafeInteger(candidate.revision) || candidate.revision! < 1 || !Array.isArray(candidate.entries)
-        || candidate.entries.some(entry => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y)
-            || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize)
-            || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
-        throw new TypeError("world chunk delta is invalid or incompatible");
-    }
-    const keys = new Set<string>();
-    for (const entry of candidate.entries) {
-        assertWorldTileOverride(entry.override);
-        const key = `${entry.x},${entry.y}`;
-        if (keys.has(key)) throw new TypeError("world chunk delta contains duplicate tile coordinates");
-        keys.add(key);
-    }
-    return {
-        version: WORLD_DELTA_FORMAT_VERSION,
-        worldId,
-        chunkX,
-        chunkY,
-        chunkSize: options.chunkSize,
-        revision: candidate.revision!,
-        entries: candidate.entries.map(entry => ({
-            x: entry.x,
-            y: entry.y,
-            override: cloneWorldTileOverride(entry.override)
-        }))
-    };
 }
 
 function mergeChunkDelta(
@@ -184,7 +73,7 @@ function mergeChunkDelta(
     changes: readonly WorldDeltaChange[],
     options: WorldDeltaBatchOptions
 ): WorldChunkDelta | undefined {
-    assertChunkIdentity(worldId, chunkX, chunkY);
+    assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
     assertChanges(changes, chunkX, chunkY, options);
     if (current) current = normalizeWorldChunkDelta(current, worldId, chunkX, chunkY, options);
     const actualRevision = current?.revision ?? 0;
@@ -227,7 +116,7 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         chunkY: number,
         options: WorldDeltaReadOptions
     ): Promise<WorldChunkDelta | undefined> {
-        assertChunkIdentity(worldId, chunkX, chunkY);
+        assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
         const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
         return Promise.resolve(delta
             ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options))

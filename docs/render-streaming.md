@@ -228,8 +228,9 @@ reuse the same cancellation path as normal camera demand.
 
 ## Persistent procedural cache
 
-Passing `cache: true` to `ToroidalWorldSource` or `ProceduralWorldSource` enables
-an IndexedDB cache for immutable packed base chunks. Keys contain the canonical
+Pass an `IndexedDbWorldChunkCache` from `three-hex-map/persistence` through the
+`cache` option of `ToroidalWorldSource` or `ProceduralWorldSource` to enable an
+IndexedDB cache for immutable packed base chunks. Keys contain the canonical
 serialized `WorldDescriptor` fingerprint plus chunk coordinates; the same
 fingerprint is also the default `worldId` and navigation `terrainRevision`.
 Changing any world-defining input therefore creates a distinct entry, while a
@@ -247,9 +248,12 @@ source cache epoch so older in-flight worker results cannot repopulate storage,
 and deletes all stored base chunks. The demo exposes this operation as a localized, confirmed
 **Clear cached data** control; loaded terrain remains in memory until normal
 eviction or regeneration. The operation intentionally does not delete mutable
-game saves or `setTileOverride()` state. Passing `deltaStore: true` enables the
-separate `IndexedDbWorldDeltaStore`; callers can instead provide a
-`WorldDeltaStore` backed by a server or editor database. `source.flushDeltas()`
+game saves or `setTileOverride()` state. Pass a separate
+`IndexedDbWorldDeltaStore` through `deltaStore`; callers can instead provide a
+`WorldDeltaStore` backed by a server or editor database. Stores passed through
+source options are source-owned and disposed with the source. Constructor
+dependencies remain caller-owned for infrastructure integration and tests.
+`source.flushDeltas()`
 is the durable save barrier and `source.clearDeltas()` deletes only the active
 world's sparse save. `map.worldStreamingStats` exposes hit/miss/error, entry and
 byte counters for diagnostics.

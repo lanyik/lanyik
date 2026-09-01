@@ -99,6 +99,10 @@ await map.disposeAsync();
 
 ```ts
 import { HexMap, ProceduralWorldSource } from "three-hex-map";
+import {
+    IndexedDbWorldChunkCache,
+    IndexedDbWorldDeltaStore
+} from "three-hex-map/persistence";
 
 const map = new HexMap({ element: "#world", texturesBaseUrl: "/hex-assets/textures/" });
 const source = new ProceduralWorldSource({
@@ -106,8 +110,8 @@ const source = new ProceduralWorldSource({
     workerUrl: "/hex-assets/world-generator.worker.mjs",
     workerCount: 4,
     chunkSize: 24,
-    cache: true,
-    deltaStore: true
+    cache: new IndexedDbWorldChunkCache(),
+    deltaStore: new IndexedDbWorldDeltaStore()
 });
 
 await map.loadWorld({
@@ -124,6 +128,10 @@ await map.setTileOverride(12, -4, {
 });
 await source.flushDeltas();
 ```
+
+持久化实现只存在于可选的 `persistence` 子路径中。通过数据源 options
+传入的存储由该数据源持有并随之释放；构造器 dependencies 注入仅用于
+调用方持有的资源和测试替身。
 
 包通过 `three-hex-map/world-generator.worker` 导出
 `dist/world-generator.worker.mjs`。需要让构建或资源流水线发布这个模块，

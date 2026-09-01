@@ -51,8 +51,10 @@ A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
 soak on its scheduled job. The verify job builds once, checks committed demo
 artifacts with `check:generated:built`, and benchmarks that exact output with
-`benchmark:check:built`; the public `check:generated` and `benchmark:check`
-commands remain self-contained for local use.
+`benchmark:check:built`. It also runs `check:package-boundaries:built` against
+the same outputs so IndexedDB implementations cannot drift back into the root
+bundle. The public `check:generated`, `check:package-boundaries` and
+`benchmark:check` commands remain self-contained for local use.
 
 Changes to generator classification, modifiers, vegetation placement, climate
 or surface semantics additionally run:

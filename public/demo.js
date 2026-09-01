@@ -1,5 +1,10 @@
 import { GUI } from "./js/vendor/dat.gui.module.js";
 import { createI18n } from "./i18n.js";
+import {
+    IndexedDbWorldChunkCache,
+    IndexedDbWorldDeltaStore,
+    clearWorldChunkCache
+} from "./js/persistence.mjs";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const WORLD_MODE_STORAGE_KEY = "three-hex-world.mode";
@@ -9,7 +14,6 @@ const {
     WorldMinimap,
     ProceduralWorldSource,
     ToroidalWorldSource,
-    clearWorldChunkCache,
     MIN_WORLD_SIZE,
     MAX_WORLD_SIZE,
     WORLD_GENERATOR_VERSION
@@ -473,8 +477,8 @@ async function regenerate() {
                 seed: controls.seed,
                 workerUrl,
                 chunkSize: 24,
-                cache: true,
-                deltaStore: campaignMode,
+                cache: new IndexedDbWorldChunkCache(),
+                deltaStore: campaignMode ? new IndexedDbWorldDeltaStore() : undefined,
                 workCoordinator: map.workCoordinator,
                 worldId: campaignMode
                     ? `campaign-demo:${controls.seed}:terrain:g${WORLD_GENERATOR_VERSION}`
@@ -513,7 +517,7 @@ async function regenerate() {
             height: Number(controls.height),
             workerUrl,
             chunkSize: 24,
-            cache: true,
+            cache: new IndexedDbWorldChunkCache(),
             workCoordinator: map.workCoordinator
         });
         activeSource = undefined;

@@ -447,12 +447,7 @@ function serializeWorldDescriptor(descriptor) {
   ]);
 }
 
-// src/world/WorldChunkCache.ts
-var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
-var DATABASE_VERSION = 1;
-var CHUNK_STORE = "chunks";
-var META_STORE = "meta";
-var USAGE_KEY = "usage";
+// src/world/WorldChunkCacheContract.ts
 function createWorldChunkCacheKey(options) {
   if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
   assertWorldDescriptor(options.descriptor);
@@ -465,6 +460,13 @@ function createWorldChunkCacheKey(options) {
     options.chunkY
   ]);
 }
+
+// src/world/WorldChunkCache.ts
+var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
+var DATABASE_VERSION = 1;
+var CHUNK_STORE = "chunks";
+var META_STORE = "meta";
+var USAGE_KEY = "usage";
 function requestResult(request) {
   return new Promise((resolve, reject) => {
     request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -765,7 +767,7 @@ async function clearWorldChunkCache(options = {}) {
   }
 }
 
-// src/world/WorldDeltaStore.ts
+// src/world/WorldDeltaContract.ts
 var WORLD_DELTA_FORMAT_VERSION = 2;
 var LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
 var WorldDeltaConflictError = class extends Error {
@@ -776,10 +778,7 @@ var WorldDeltaConflictError = class extends Error {
     this.name = "WorldDeltaConflictError";
   }
 };
-function chunkKey(worldId, chunkX, chunkY) {
-  return JSON.stringify([worldId, chunkX, chunkY]);
-}
-function assertChunkIdentity(worldId, chunkX, chunkY) {
+function assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY) {
   if (typeof worldId !== "string" || worldId.trim().length === 0) {
     throw new TypeError("worldId must be a non-empty string");
   }
@@ -787,35 +786,19 @@ function assertChunkIdentity(worldId, chunkX, chunkY) {
     throw new RangeError("world delta chunk coordinates must be safe integers");
   }
 }
-function assertChunkSize2(chunkSize) {
+function assertWorldDeltaChunkSize(chunkSize) {
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
     throw new RangeError("world delta chunkSize must be a positive safe integer");
   }
 }
-function tileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
+function worldDeltaTileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
   return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
 }
-function assertChanges(changes, chunkX, chunkY, options) {
-  assertChunkSize2(options.chunkSize);
-  if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
-  if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
-    throw new RangeError("expectedRevision must be a non-negative safe integer");
-  }
-  for (const change of changes) {
-    if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
-      throw new RangeError("world delta tile coordinates must be safe integers");
-    }
-    if (!tileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
-      throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
-    }
-    if (change.override !== null) assertWorldTileOverride(change.override);
-  }
-}
 function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
-  assertChunkIdentity(worldId, chunkX, chunkY);
-  assertChunkSize2(options.chunkSize);
+  assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
+  assertWorldDeltaChunkSize(options.chunkSize);
   const candidate = value;
-  if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
+  if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !worldDeltaTileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
     throw new TypeError("world chunk delta is invalid or incompatible");
   }
   const keys = /* @__PURE__ */ new Set();
@@ -839,8 +822,29 @@ function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
     }))
   };
 }
+
+// src/world/WorldDeltaStore.ts
+function chunkKey(worldId, chunkX, chunkY) {
+  return JSON.stringify([worldId, chunkX, chunkY]);
+}
+function assertChanges(changes, chunkX, chunkY, options) {
+  assertWorldDeltaChunkSize(options.chunkSize);
+  if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
+  if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
+    throw new RangeError("expectedRevision must be a non-negative safe integer");
+  }
+  for (const change of changes) {
+    if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
+      throw new RangeError("world delta tile coordinates must be safe integers");
+    }
+    if (!worldDeltaTileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
+      throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
+    }
+    if (change.override !== null) assertWorldTileOverride(change.override);
+  }
+}
 function mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options) {
-  assertChunkIdentity(worldId, chunkX, chunkY);
+  assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
   assertChanges(changes, chunkX, chunkY, options);
   if (current) current = normalizeWorldChunkDelta(current, worldId, chunkX, chunkY, options);
   const actualRevision = current?.revision ?? 0;
@@ -876,7 +880,7 @@ var MemoryWorldDeltaStore = class {
     this.disposed = false;
   }
   loadChunk(worldId, chunkX, chunkY, options) {
-    assertChunkIdentity(worldId, chunkX, chunkY);
+    assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
     const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
     return Promise.resolve(delta ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options)) : void 0);
   }

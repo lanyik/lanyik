@@ -26,6 +26,10 @@ const saved = await deltas.putChunkDelta?.(
 );
 ```
 
+When `deltas` is passed through a procedural source's `deltaStore` option, the
+source takes ownership and disposes it. Direct store users, including the sample
+above, must dispose it themselves after their final `flush()`.
+
 An object replaces the complete persisted override at that coordinate; `null`
 deletes it. `ProceduralWorldSource.setTileOverrides()` and
 `ToroidalWorldSource.setTileOverrides()` group editor changes by chunk before

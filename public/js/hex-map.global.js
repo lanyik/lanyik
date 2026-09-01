@@ -1956,10 +1956,10 @@
     }
     return { minX, maxX, minY, maxY, minZ, maxZ };
   }
-  function getWorldChunkOrigin(chunkKey2, size) {
-    const [chunkX, chunkY] = chunkKey2.split(",").map(Number);
+  function getWorldChunkOrigin(chunkKey, size) {
+    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
     if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) {
-      throw new TypeError(`invalid world chunk key "${chunkKey2}"`);
+      throw new TypeError(`invalid world chunk key "${chunkKey}"`);
     }
     return getHexCenter(chunkX * WORLD_CHUNK_SIZE, chunkY * WORLD_CHUNK_SIZE, size);
   }
@@ -1973,11 +1973,11 @@
       maxZ: bounds.maxZ - origin.y
     };
   }
-  function tagWorldChunk(object, chunkKey2, kind, bounds, id = `${kind}:${chunkKey2}`) {
-    const [chunkX, chunkY] = chunkKey2.split(",").map(Number);
+  function tagWorldChunk(object, chunkKey, kind, bounds, id = `${kind}:${chunkKey}`) {
+    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
     object.userData[WORLD_CHUNK_METADATA] = {
       id,
-      key: chunkKey2,
+      key: chunkKey,
       chunkX,
       chunkY,
       kind,
@@ -7237,22 +7237,22 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         fragmentShader: this.options.shaderQuality === "fast" ? TERRAIN_FAST_FRAGMENT_SHADER : TERRAIN_FRAGMENT_SHADER
       }));
       if (tiles.length === 0) return;
-      for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-        if (this.chunkRecords.has(`land:${chunkKey2}`)) continue;
+      for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+        if (this.chunkRecords.has(`land:${chunkKey}`)) continue;
         const geometry = new three.InstancedBufferGeometry();
         const mesh = new three.Mesh(geometry, this.landMaterial);
-        const origin = getWorldChunkOrigin(chunkKey2, this.options.size);
+        const origin = getWorldChunkOrigin(chunkKey, this.options.size);
         mesh.position.set(origin.x, 0, origin.y);
         mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
           const shader = material;
           shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
           shader.uniformsNeedUpdate = true;
         };
-        mesh.name = `terrain-chunk-land-${chunkKey2}`;
+        mesh.name = `terrain-chunk-land-${chunkKey}`;
         mesh.frustumCulled = false;
         tagWorldChunk(
           mesh,
-          chunkKey2,
+          chunkKey,
           "land",
           localizeWorldChunkBounds(
             getWorldChunkBounds(
@@ -7265,7 +7265,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           )
         );
         chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-        this.chunkRecords.set(`land:${chunkKey2}`, {
+        this.chunkRecords.set(`land:${chunkKey}`, {
           mesh,
           tiles: chunkTiles,
           layer: "land",
@@ -7306,22 +7306,22 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         fragmentShader: this.options.shaderQuality === "fast" ? WATER_FAST_FRAGMENT_SHADER : WATER_FRAGMENT_SHADER
       }));
       if (tiles.length === 0) return;
-      for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-        if (this.chunkRecords.has(`water:${chunkKey2}`)) continue;
+      for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+        if (this.chunkRecords.has(`water:${chunkKey}`)) continue;
         const geometry = new three.InstancedBufferGeometry();
         const mesh = new three.Mesh(geometry, this.waterMaterial);
-        const origin = getWorldChunkOrigin(chunkKey2, this.options.size);
+        const origin = getWorldChunkOrigin(chunkKey, this.options.size);
         mesh.position.set(origin.x, 0, origin.y);
         mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
           const shader = material;
           shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
           shader.uniformsNeedUpdate = true;
         };
-        mesh.name = `terrain-chunk-water-${chunkKey2}`;
+        mesh.name = `terrain-chunk-water-${chunkKey}`;
         mesh.frustumCulled = false;
         tagWorldChunk(
           mesh,
-          chunkKey2,
+          chunkKey,
           "water",
           localizeWorldChunkBounds(
             getWorldChunkBounds(
@@ -7334,7 +7334,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           )
         );
         chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
-        this.chunkRecords.set(`water:${chunkKey2}`, {
+        this.chunkRecords.set(`water:${chunkKey}`, {
           mesh,
           tiles: chunkTiles,
           layer: "water",
@@ -7498,10 +7498,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       }
       const rebuiltIds = [];
-      for (const chunkKey2 of structuralChunkKeys) {
+      for (const chunkKey of structuralChunkKeys) {
         const allTiles = /* @__PURE__ */ new Map();
         for (const layer of ["land", "water"]) {
-          for (const point of this.chunkRecords.get(`${layer}:${chunkKey2}`)?.tiles ?? []) {
+          for (const point of this.chunkRecords.get(`${layer}:${chunkKey}`)?.tiles ?? []) {
             allTiles.set(`${point.x},${point.y}`, point);
           }
         }
@@ -7563,9 +7563,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     removeTiles(tiles, removeCities = true, cityOwner, preserveFog = false) {
       const chunkKeys = new Set(groupTilesByWorldChunk(tiles).keys());
       const removedIds = [];
-      for (const chunkKey2 of chunkKeys) {
+      for (const chunkKey of chunkKeys) {
         for (const layer of ["land", "water"]) {
-          const id = `${layer}:${chunkKey2}`;
+          const id = `${layer}:${chunkKey}`;
           const record = this.chunkRecords.get(id);
           if (!record) continue;
           this.disposeChunkGeometries(record);
@@ -8511,15 +8511,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const preparedParts = await resources.prepare(modelPath);
       if (preparedParts.length === 0) continue;
       const chunks = groupTilesByWorldChunk(tiles);
-      for (const [chunkKey2, chunkTiles] of chunks) {
+      for (const [chunkKey, chunkTiles] of chunks) {
         const totalInstances = chunkTiles.length * treesPerTile;
         const root = new three.Group();
-        const origin = getWorldChunkOrigin(chunkKey2, size);
+        const origin = getWorldChunkOrigin(chunkKey, size);
         root.position.set(origin.x, 0, origin.y);
-        root.name = `forest-chunk-${chunkKey2}-${modelIndex}`;
+        root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
         const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
           const instancedMesh = new three.InstancedMesh(geometry, material, totalInstances);
-          instancedMesh.name = `forest-${chunkKey2}-${partIndex}`;
+          instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
           instancedMesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
           instancedMesh.instanceColor = new three.InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
           instancedMesh.count = 0;
@@ -8527,10 +8527,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           root.add(instancedMesh);
           return instancedMesh;
         });
-        const id = `forest:${chunkKey2}:${modelIndex}`;
+        const id = `forest:${chunkKey}:${modelIndex}`;
         tagWorldChunk(
           root,
-          chunkKey2,
+          chunkKey,
           "forest",
           localizeWorldChunkBounds(getWorldChunkBounds(
             chunkTiles,
@@ -8541,7 +8541,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           id
         );
         chunkRecords.set(id, {
-          chunkKey: chunkKey2,
+          chunkKey,
           modelPath,
           root,
           instancedMeshes,
@@ -8833,8 +8833,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     removeTileRanges(record) {
       for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
     }
-    buildChunkGeometry(chunkKey2, chunkTiles, lod, origin) {
-      const prepared = this.preparedChunks.get(chunkKey2)?.lods.find((candidate) => candidate.lod === lod);
+    buildChunkGeometry(chunkKey, chunkTiles, lod, origin) {
+      const prepared = this.preparedChunks.get(chunkKey)?.lods.find((candidate) => candidate.lod === lod);
       if (prepared) return this.buildPreparedChunkGeometry(prepared, origin);
       const { size, surface, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
       const densityScale = [1, 0.38, 0.14][lod];
@@ -8997,21 +8997,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     };
     const resources = sharedResources ?? new GrassSharedResources(options);
     const chunks = /* @__PURE__ */ new Map();
-    for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+    for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
       const geometry = new three.InstancedBufferGeometry();
       const chunk = new three.Mesh(geometry, resources.material);
-      const origin = getWorldChunkOrigin(chunkKey2, size);
+      const origin = getWorldChunkOrigin(chunkKey, size);
       chunk.position.set(origin.x, 0, origin.y);
       chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
         const shader = currentMaterial;
         shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
         shader.uniformsNeedUpdate = true;
       };
-      chunk.name = `grass-chunk-${chunkKey2}`;
+      chunk.name = `grass-chunk-${chunkKey}`;
       chunk.frustumCulled = false;
       tagWorldChunk(
         chunk,
-        chunkKey2,
+        chunkKey,
         "grass",
         localizeWorldChunkBounds(
           getWorldChunkBounds(
@@ -9023,7 +9023,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           origin
         )
       );
-      chunks.set(`grass:${chunkKey2}`, { chunkKey: chunkKey2, mesh: chunk, tiles: chunkTiles, lodCache: /* @__PURE__ */ new Map() });
+      chunks.set(`grass:${chunkKey}`, { chunkKey, mesh: chunk, tiles: chunkTiles, lodCache: /* @__PURE__ */ new Map() });
     }
     return new GrassField(map, chunks, resources, {
       size,
@@ -12000,7 +12000,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
     }).map((point) => ({ x: point.x, y: point.y }));
   }
-  function buildGrassLod(map, chunkKey2, tiles, lod, options, waterOptions) {
+  function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
     const density = Math.max(1, Math.round(options.grassDensity * GRASS_DENSITY[lod]));
     const capacity = tiles.length * density;
     const offsets = new Float32Array(capacity * 2);
@@ -12011,7 +12011,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const shades = new Float32Array(capacity);
     const ranges = new Uint32Array(tiles.length * 2);
     const polygon = HEXPolygon({ x: 0, y: 0 }, options.size * 0.8).map((point) => [point.x, point.y]);
-    const origin = getWorldChunkOrigin(chunkKey2, options.size);
+    const origin = getWorldChunkOrigin(chunkKey, options.size);
     const heightVariation = options.grassHeightVariation ?? 0.4;
     let instance = 0;
     tiles.forEach((tile, tileIndex) => {
@@ -12072,9 +12072,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function buildGrass(map, options, waterOptions) {
     if (options.grassDensity <= 0) return [];
-    return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey2, tiles]) => ({
-      chunkKey: chunkKey2,
-      lods: LODS.map((lod) => buildGrassLod(map, chunkKey2, tiles, lod, options, waterOptions))
+    return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey, tiles]) => ({
+      chunkKey,
+      lods: LODS.map((lod) => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions))
     }));
   }
   function writeTreeMatrix(target, index, angle, scale, x, z) {
@@ -12100,11 +12100,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       1
     ], offset);
   }
-  function buildForestLod(map, chunkKey2, tiles, lod, options, polygon, treeFootprint, waterOptions, coastOptions) {
+  function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootprint, waterOptions, coastOptions) {
     const density = Math.max(1, Math.round(options.treesPerTile * FOREST_DENSITY[lod]));
     const matrices = new Float32Array(tiles.length * density * 16);
     const ranges = new Uint32Array(tiles.length * 2);
-    const origin = getWorldChunkOrigin(chunkKey2, options.size);
+    const origin = getWorldChunkOrigin(chunkKey, options.size);
     let instance = 0;
     tiles.forEach((tile, tileIndex) => {
       const center = getHexCenter(tile.x, tile.y, options.size);
@@ -12185,13 +12185,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const polygon = HEXPolygon({ x: 0, y: 0 }, options.size - treeFootprint).map((point) => [point.x, point.y]);
     const layouts = [];
     for (const [modelPath, tiles] of tilesByModel) {
-      for (const [chunkKey2, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+      for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
         layouts.push({
-          chunkKey: chunkKey2,
+          chunkKey,
           modelPath,
           lods: LODS.map((lod) => buildForestLod(
             map,
-            chunkKey2,
+            chunkKey,
             chunkTiles,
             lod,
             options,
@@ -13144,12 +13144,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
 
-  // src/world/WorldChunkCache.ts
-  var DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
-  var DATABASE_VERSION = 1;
-  var CHUNK_STORE = "chunks";
-  var META_STORE = "meta";
-  var USAGE_KEY = "usage";
+  // src/world/WorldChunkCacheContract.ts
   function createWorldChunkCacheKey(options) {
     if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
     assertWorldDescriptor(options.descriptor);
@@ -13162,307 +13157,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       options.chunkY
     ]);
   }
-  function requestResult(request) {
-    return new Promise((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
-    });
-  }
-  function transactionComplete(transaction) {
-    return new Promise((resolve, reject) => {
-      transaction.addEventListener("complete", () => resolve(), { once: true });
-      transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
-      transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
-    });
-  }
-  var IndexedDbWorldChunkCache = class {
-    constructor(options = {}) {
-      this.maintenance = Promise.resolve();
-      this.disposed = false;
-      this.snapshot = {
-        available: typeof indexedDB !== "undefined",
-        hits: 0,
-        misses: 0,
-        writes: 0,
-        errors: 0,
-        entries: 0,
-        bytes: 0
-      };
-      this.databaseName = options.databaseName ?? DEFAULT_DATABASE_NAME;
-      this.maxBytes = options.maxBytes ?? 128 * 1024 * 1024;
-      this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
-      if (typeof this.databaseName !== "string" || this.databaseName.trim().length === 0) {
-        throw new TypeError("cache databaseName must be a non-empty string");
-      }
-      if (!Number.isFinite(this.maxBytes) || this.maxBytes <= 0) {
-        throw new RangeError("cache maxBytes must be a positive finite number");
-      }
-      if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
-        throw new RangeError("cache openTimeoutMs must be a positive finite number");
-      }
-    }
-    get stats() {
-      return this.snapshot;
-    }
-    async get(key) {
-      if (this.disposed) return void 0;
-      const database = await this.open();
-      if (!database) {
-        this.snapshot.misses += 1;
-        return void 0;
-      }
-      try {
-        const transaction = database.transaction(CHUNK_STORE, "readonly");
-        const record = await requestResult(transaction.objectStore(CHUNK_STORE).get(key));
-        await transactionComplete(transaction);
-        if (!record) {
-          this.snapshot.misses += 1;
-          return void 0;
-        }
-        const chunk = {
-          version: record.version,
-          chunkX: record.chunkX,
-          chunkY: record.chunkY,
-          chunkSize: record.chunkSize,
-          padding: record.padding,
-          stride: record.stride,
-          tiles: new Uint16Array(record.tiles.slice(0))
-        };
-        assertPackedWorldChunk(chunk);
-        this.snapshot.hits += 1;
-        this.enqueueMaintenance(() => this.touch(database, record));
-        return chunk;
-      } catch {
-        this.snapshot.errors += 1;
-        this.snapshot.misses += 1;
-        this.enqueueMaintenance(() => this.deleteKey(database, key));
-        return void 0;
-      }
-    }
-    put(key, chunk) {
-      assertPackedWorldChunk(chunk);
-      if (this.disposed) return Promise.resolve(false);
-      return this.enqueueMaintenance(async () => {
-        const database = await this.open();
-        if (!database) return false;
-        try {
-          const bytes = chunk.tiles.byteLength;
-          const tiles = chunk.tiles.buffer.slice(
-            chunk.tiles.byteOffset,
-            chunk.tiles.byteOffset + chunk.tiles.byteLength
-          );
-          const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
-          const chunks = transaction.objectStore(CHUNK_STORE);
-          const meta = transaction.objectStore(META_STORE);
-          const [existing, usage] = await Promise.all([
-            requestResult(chunks.get(key)),
-            requestResult(meta.get(USAGE_KEY))
-          ]);
-          const nextUsage = {
-            key: USAGE_KEY,
-            bytes: Math.max(0, (usage?.bytes ?? 0) - (existing?.bytes ?? 0) + bytes),
-            entries: Math.max(0, (usage?.entries ?? 0) + (existing ? 0 : 1))
-          };
-          chunks.put({
-            key,
-            version: chunk.version,
-            chunkX: chunk.chunkX,
-            chunkY: chunk.chunkY,
-            chunkSize: chunk.chunkSize,
-            padding: chunk.padding,
-            stride: chunk.stride,
-            tiles,
-            bytes,
-            accessedAt: Date.now()
-          });
-          meta.put(nextUsage);
-          await transactionComplete(transaction);
-          this.snapshot.writes += 1;
-          this.snapshot.entries = nextUsage.entries;
-          this.snapshot.bytes = nextUsage.bytes;
-          await this.prune(database);
-          return true;
-        } catch {
-          this.snapshot.errors += 1;
-          return false;
-        }
-      });
-    }
-    async clear() {
-      if (this.disposed) return false;
-      return this.enqueueMaintenance(async () => {
-        const database = await this.open();
-        if (!database) return false;
-        try {
-          const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
-          transaction.objectStore(CHUNK_STORE).clear();
-          transaction.objectStore(META_STORE).put({ key: USAGE_KEY, bytes: 0, entries: 0 });
-          await transactionComplete(transaction);
-          this.snapshot.entries = 0;
-          this.snapshot.bytes = 0;
-          return true;
-        } catch {
-          this.snapshot.errors += 1;
-          return false;
-        }
-      });
-    }
-    flush() {
-      return this.maintenance.then(() => void 0);
-    }
-    dispose() {
-      if (this.disposed) return;
-      this.disposed = true;
-      void this.databasePromise?.then((database) => database?.close());
-    }
-    enqueueMaintenance(task) {
-      const result = this.maintenance.then(task, task);
-      this.maintenance = result.then(() => void 0, () => void 0);
-      return result;
-    }
-    async open() {
-      if (this.disposed || typeof indexedDB === "undefined") return void 0;
-      this.databasePromise ?? (this.databasePromise = new Promise((resolve) => {
-        const request = indexedDB.open(this.databaseName, DATABASE_VERSION);
-        let settled = false;
-        let timeout;
-        const finish = (database) => {
-          if (settled) {
-            database?.close();
-            return;
-          }
-          settled = true;
-          if (timeout !== void 0) clearTimeout(timeout);
-          resolve(database);
-        };
-        timeout = setTimeout(() => {
-          this.snapshot.available = false;
-          this.snapshot.errors += 1;
-          finish(void 0);
-        }, this.openTimeoutMs);
-        request.addEventListener("upgradeneeded", () => {
-          const database = request.result;
-          if (!database.objectStoreNames.contains(CHUNK_STORE)) {
-            const chunks = database.createObjectStore(CHUNK_STORE, { keyPath: "key" });
-            chunks.createIndex("accessedAt", "accessedAt");
-          }
-          if (!database.objectStoreNames.contains(META_STORE)) {
-            database.createObjectStore(META_STORE, { keyPath: "key" });
-          }
-        });
-        request.addEventListener("success", () => {
-          const database = request.result;
-          if (settled) {
-            database.close();
-            return;
-          }
-          database.addEventListener("versionchange", () => {
-            database.close();
-            this.databasePromise = void 0;
-          });
-          this.snapshot.available = true;
-          void this.readUsage(database);
-          finish(database);
-        }, { once: true });
-        request.addEventListener("error", () => {
-          if (settled) return;
-          this.snapshot.available = false;
-          this.snapshot.errors += 1;
-          finish(void 0);
-        }, { once: true });
-        request.addEventListener("blocked", () => {
-          if (settled) return;
-          this.snapshot.available = false;
-          this.snapshot.errors += 1;
-          finish(void 0);
-        });
-      }));
-      return this.databasePromise;
-    }
-    async readUsage(database) {
-      try {
-        const transaction = database.transaction(META_STORE, "readonly");
-        const usage = await requestResult(transaction.objectStore(META_STORE).get(USAGE_KEY));
-        await transactionComplete(transaction);
-        this.snapshot.entries = usage?.entries ?? 0;
-        this.snapshot.bytes = usage?.bytes ?? 0;
-      } catch {
-        this.snapshot.errors += 1;
-      }
-    }
-    async touch(database, record) {
-      try {
-        const transaction = database.transaction(CHUNK_STORE, "readwrite");
-        transaction.objectStore(CHUNK_STORE).put({ ...record, accessedAt: Date.now() });
-        await transactionComplete(transaction);
-      } catch {
-        this.snapshot.errors += 1;
-      }
-    }
-    async deleteKey(database, key) {
-      try {
-        const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
-        const chunks = transaction.objectStore(CHUNK_STORE);
-        const meta = transaction.objectStore(META_STORE);
-        const [existing, usage] = await Promise.all([
-          requestResult(chunks.get(key)),
-          requestResult(meta.get(USAGE_KEY))
-        ]);
-        if (existing) {
-          chunks.delete(key);
-          const next = {
-            key: USAGE_KEY,
-            bytes: Math.max(0, (usage?.bytes ?? 0) - existing.bytes),
-            entries: Math.max(0, (usage?.entries ?? 0) - 1)
-          };
-          meta.put(next);
-          this.snapshot.bytes = next.bytes;
-          this.snapshot.entries = next.entries;
-        }
-        await transactionComplete(transaction);
-      } catch {
-        this.snapshot.errors += 1;
-      }
-    }
-    async prune(database) {
-      if (this.snapshot.bytes <= this.maxBytes) return;
-      const transaction = database.transaction([CHUNK_STORE, META_STORE], "readwrite");
-      const chunks = transaction.objectStore(CHUNK_STORE);
-      const meta = transaction.objectStore(META_STORE);
-      let bytes = this.snapshot.bytes;
-      let entries = this.snapshot.entries;
-      await new Promise((resolve, reject) => {
-        const request = chunks.index("accessedAt").openCursor();
-        request.addEventListener("error", () => reject(request.error ?? new Error("cache pruning failed")), { once: true });
-        request.addEventListener("success", () => {
-          const cursor = request.result;
-          if (!cursor || bytes <= this.maxBytes) {
-            resolve();
-            return;
-          }
-          const record = cursor.value;
-          bytes = Math.max(0, bytes - record.bytes);
-          entries = Math.max(0, entries - 1);
-          cursor.delete();
-          cursor.continue();
-        });
-      });
-      meta.put({ key: USAGE_KEY, bytes, entries });
-      await transactionComplete(transaction);
-      this.snapshot.bytes = bytes;
-      this.snapshot.entries = entries;
-    }
-  };
-  async function clearWorldChunkCache(options = {}) {
-    const cache2 = new IndexedDbWorldChunkCache(options);
-    try {
-      return await cache2.clear();
-    } finally {
-      cache2.dispose();
-    }
-  }
 
-  // src/world/WorldDeltaStore.ts
+  // src/world/WorldDeltaContract.ts
   var WORLD_DELTA_FORMAT_VERSION = 2;
   var LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
   var WorldDeltaConflictError = class extends Error {
@@ -13473,10 +13169,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.name = "WorldDeltaConflictError";
     }
   };
-  function chunkKey(worldId, chunkX, chunkY) {
-    return JSON.stringify([worldId, chunkX, chunkY]);
-  }
-  function assertChunkIdentity(worldId, chunkX, chunkY) {
+  function assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY) {
     if (typeof worldId !== "string" || worldId.trim().length === 0) {
       throw new TypeError("worldId must be a non-empty string");
     }
@@ -13484,35 +13177,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw new RangeError("world delta chunk coordinates must be safe integers");
     }
   }
-  function assertChunkSize2(chunkSize) {
+  function assertWorldDeltaChunkSize(chunkSize) {
     if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
       throw new RangeError("world delta chunkSize must be a positive safe integer");
     }
   }
-  function tileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
+  function worldDeltaTileBelongsToChunk(x, y, chunkX, chunkY, chunkSize) {
     return Math.floor(x / chunkSize) === chunkX && Math.floor(y / chunkSize) === chunkY;
   }
-  function assertChanges(changes, chunkX, chunkY, options) {
-    assertChunkSize2(options.chunkSize);
-    if (!Array.isArray(changes)) throw new TypeError("world delta changes must be an array");
-    if (options.expectedRevision !== void 0 && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision < 0)) {
-      throw new RangeError("expectedRevision must be a non-negative safe integer");
-    }
-    for (const change of changes) {
-      if (!change || !Number.isSafeInteger(change.x) || !Number.isSafeInteger(change.y)) {
-        throw new RangeError("world delta tile coordinates must be safe integers");
-      }
-      if (!tileBelongsToChunk(change.x, change.y, chunkX, chunkY, options.chunkSize)) {
-        throw new RangeError("world delta tile coordinates do not belong to the declared chunk");
-      }
-      if (change.override !== null) assertWorldTileOverride(change.override);
-    }
-  }
   function normalizeWorldChunkDelta(value, worldId, chunkX, chunkY, options) {
-    assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChunkSize2(options.chunkSize);
+    assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
+    assertWorldDeltaChunkSize(options.chunkSize);
     const candidate = value;
-    if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !tileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
+    if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !worldDeltaTileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
       throw new TypeError("world chunk delta is invalid or incompatible");
     }
     const keys = /* @__PURE__ */ new Set();
@@ -13536,307 +13213,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }))
     };
   }
-  function mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options) {
-    assertChunkIdentity(worldId, chunkX, chunkY);
-    assertChanges(changes, chunkX, chunkY, options);
-    if (current) current = normalizeWorldChunkDelta(current, worldId, chunkX, chunkY, options);
-    const actualRevision = current?.revision ?? 0;
-    if (options.expectedRevision !== void 0 && options.expectedRevision !== actualRevision) {
-      throw new WorldDeltaConflictError(options.expectedRevision, actualRevision);
-    }
-    if (changes.length === 0) return current;
-    const entries = new Map((current?.entries ?? []).map((entry) => [
-      `${entry.x},${entry.y}`,
-      { x: entry.x, y: entry.y, override: cloneWorldTileOverride(entry.override) }
-    ]));
-    for (const change of changes) {
-      const key = `${change.x},${change.y}`;
-      if (change.override === null || !hasWorldTileOverride(change.override)) entries.delete(key);
-      else entries.set(key, { x: change.x, y: change.y, override: cloneWorldTileOverride(change.override) });
-    }
-    const currentEntries = new Map((current?.entries ?? []).map((entry) => [`${entry.x},${entry.y}`, entry.override]));
-    const changed = entries.size !== currentEntries.size || [...entries].some(([key, entry]) => !worldTileOverridesEqual(entry.override, currentEntries.get(key)));
-    if (!changed) return current;
-    return {
-      version: WORLD_DELTA_FORMAT_VERSION,
-      worldId,
-      chunkX,
-      chunkY,
-      chunkSize: options.chunkSize,
-      revision: actualRevision + 1,
-      entries: [...entries.values()].sort((a, b) => a.x - b.x || a.y - b.y)
-    };
-  }
-  var MemoryWorldDeltaStore = class {
-    constructor() {
-      this.chunks = /* @__PURE__ */ new Map();
-      this.disposed = false;
-    }
-    loadChunk(worldId, chunkX, chunkY, options) {
-      assertChunkIdentity(worldId, chunkX, chunkY);
-      const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
-      return Promise.resolve(delta ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options)) : void 0);
-    }
-    putChunkDelta(worldId, chunkX, chunkY, changes, options) {
-      if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-      try {
-        const result = this.applyChunkDelta(worldId, chunkX, chunkY, changes, options);
-        return Promise.resolve(result ? this.cloneDelta(result) : void 0);
-      } catch (reason) {
-        return Promise.reject(reason);
-      }
-    }
-    putTile(worldId, chunkX, chunkY, entry, options) {
-      if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-      this.applyChunkDelta(worldId, chunkX, chunkY, [entry], options);
-    }
-    deleteTile(worldId, chunkX, chunkY, x, y, options) {
-      if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-      this.applyChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options);
-    }
-    flush() {
-      return Promise.resolve();
-    }
-    listWorld(worldId) {
-      if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-      const deltas = [...this.chunks.values()].filter((delta) => delta.worldId === worldId).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY).map((delta) => this.cloneDelta(delta));
-      return Promise.resolve(deltas);
-    }
-    async replaceWorld(worldId, deltas) {
-      if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-      const replacements = /* @__PURE__ */ new Map();
-      for (const delta of deltas) {
-        const normalized = normalizeWorldChunkDelta(
-          delta,
-          worldId,
-          delta.chunkX,
-          delta.chunkY,
-          { chunkSize: delta.chunkSize }
-        );
-        const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
-        if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
-        replacements.set(key, normalized);
-      }
-      await this.clear(worldId);
-      for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
-    }
-    async clear(worldId) {
-      for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
-    }
-    dispose() {
-      this.disposed = true;
-    }
-    cloneDelta(delta) {
-      if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
-      return {
-        ...delta,
-        entries: delta.entries.map((entry) => ({ ...entry, override: cloneWorldTileOverride(entry.override) }))
-      };
-    }
-    applyChunkDelta(worldId, chunkX, chunkY, changes, options) {
-      const key = chunkKey(worldId, chunkX, chunkY);
-      const result = mergeChunkDelta(this.chunks.get(key), worldId, chunkX, chunkY, changes, options);
-      if (result) this.chunks.set(key, result);
-      return result;
-    }
-  };
-  var DEFAULT_DELTA_DATABASE_NAME = "three-hex-map-world-deltas-v1";
-  var DELTA_DATABASE_VERSION = 1;
-  var DELTA_OBJECT_STORE = "deltas";
-  function requestResult2(request) {
-    return new Promise((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed")), { once: true });
-    });
-  }
-  function transactionComplete2(transaction) {
-    return new Promise((resolve, reject) => {
-      transaction.addEventListener("complete", () => resolve(), { once: true });
-      transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
-      transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
-    });
-  }
-  var IndexedDbWorldDeltaStore = class extends MemoryWorldDeltaStore {
-    constructor(options = {}) {
-      super();
-      this.pending = Promise.resolve();
-      this.closing = false;
-      this.databaseName = options.databaseName ?? DEFAULT_DELTA_DATABASE_NAME;
-      this.openTimeoutMs = options.openTimeoutMs ?? 2e3;
-      if (!this.databaseName.trim()) throw new TypeError("delta databaseName must be a non-empty string");
-      if (!Number.isFinite(this.openTimeoutMs) || this.openTimeoutMs <= 0) {
-        throw new RangeError("delta openTimeoutMs must be a positive finite number");
-      }
-    }
-    async loadChunk(worldId, chunkX, chunkY, options) {
-      if (this.disposed || this.closing) return void 0;
-      await this.flush();
-      const memory = await super.loadChunk(worldId, chunkX, chunkY, options);
-      if (memory) return memory;
-      const database = await this.open();
-      const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
-      const record = await requestResult2(transaction.objectStore(DELTA_OBJECT_STORE).get(chunkKey(worldId, chunkX, chunkY)));
-      await transactionComplete2(transaction);
-      if (!record) return void 0;
-      const delta = normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options);
-      this.chunks.set(record.key, delta);
-      return this.cloneDelta(delta);
-    }
-    putChunkDelta(worldId, chunkX, chunkY, changes, options) {
-      if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-      return this.enqueue(async () => {
-        const key = chunkKey(worldId, chunkX, chunkY);
-        const database = await this.open();
-        const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-        const completion = transactionComplete2(transaction);
-        try {
-          const store = transaction.objectStore(DELTA_OBJECT_STORE);
-          const record = await requestResult2(store.get(key));
-          const current = record ? normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options) : void 0;
-          const result = mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options);
-          const requiresWrite = result !== void 0 && (record?.version !== WORLD_DELTA_FORMAT_VERSION || result.revision !== current?.revision);
-          if (requiresWrite) store.put({ key, ...this.cloneDelta(result) });
-          await completion;
-          if (result) this.chunks.set(key, this.cloneDelta(result));
-          else this.chunks.delete(key);
-          return result ? this.cloneDelta(result) : void 0;
-        } catch (reason) {
-          try {
-            transaction.abort();
-          } catch {
-          }
-          await completion.catch(() => void 0);
-          throw reason;
-        }
-      });
-    }
-    putTile(worldId, chunkX, chunkY, entry, options) {
-      if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-      void this.putChunkDelta(worldId, chunkX, chunkY, [entry], options).catch(() => void 0);
-    }
-    deleteTile(worldId, chunkX, chunkY, x, y, options) {
-      if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-      void this.putChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options).catch(() => void 0);
-    }
-    async flush() {
-      await this.pending;
-      if (this.pendingError !== void 0) {
-        const error = this.pendingError;
-        this.pendingError = void 0;
-        throw error;
-      }
-    }
-    async listWorld(worldId) {
-      if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-      await this.flush();
-      const database = await this.open();
-      const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
-      const records = await requestResult2(
-        transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
-      );
-      await transactionComplete2(transaction);
-      return records.map((record) => normalizeWorldChunkDelta(
-        record,
-        worldId,
-        record.chunkX,
-        record.chunkY,
-        { chunkSize: record.chunkSize }
-      )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
-    }
-    replaceWorld(worldId, deltas) {
-      if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
-      const replacements = /* @__PURE__ */ new Map();
-      for (const delta of deltas) {
-        const normalized = normalizeWorldChunkDelta(
-          delta,
-          worldId,
-          delta.chunkX,
-          delta.chunkY,
-          { chunkSize: delta.chunkSize }
-        );
-        const key = chunkKey(worldId, normalized.chunkX, normalized.chunkY);
-        if (replacements.has(key)) return Promise.reject(new TypeError("world delta checkpoint contains duplicate chunks"));
-        replacements.set(key, normalized);
-      }
-      return this.enqueue(async () => {
-        const database = await this.open();
-        const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-        const store = transaction.objectStore(DELTA_OBJECT_STORE);
-        const keys = await requestResult2(store.index("worldId").getAllKeys(worldId));
-        for (const key of keys) store.delete(key);
-        for (const [key, delta] of replacements) {
-          store.put({ key, ...this.cloneDelta(delta) });
-        }
-        await transactionComplete2(transaction);
-        await super.clear(worldId);
-        for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
-      });
-    }
-    async clear(worldId) {
-      if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-      await this.enqueue(async () => {
-        await super.clear(worldId);
-        const database = await this.open();
-        const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-        const index = transaction.objectStore(DELTA_OBJECT_STORE).index("worldId");
-        const keys = await requestResult2(index.getAllKeys(worldId));
-        for (const key of keys) transaction.objectStore(DELTA_OBJECT_STORE).delete(key);
-        await transactionComplete2(transaction);
-      });
-      await this.flush();
-    }
-    dispose() {
-      if (this.disposed || this.closing) return;
-      this.closing = true;
-      void this.flush().finally(() => {
-        this.disposed = true;
-        void this.databasePromise?.then((database) => database.close(), () => void 0);
-      }).catch(() => void 0);
-    }
-    enqueue(task) {
-      const result = this.pending.then(task, task);
-      this.pending = result.then(() => void 0, (error) => {
-        this.pendingError ?? (this.pendingError = error);
-      });
-      return result;
-    }
-    open() {
-      if (typeof indexedDB === "undefined") return Promise.reject(new Error("IndexedDB is unavailable"));
-      this.databasePromise ?? (this.databasePromise = new Promise((resolve, reject) => {
-        const request = indexedDB.open(this.databaseName, DELTA_DATABASE_VERSION);
-        let settled = false;
-        const timer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          reject(new Error("Opening the world delta database timed out"));
-        }, this.openTimeoutMs);
-        const finish = (callback, value) => {
-          if (settled) return false;
-          settled = true;
-          clearTimeout(timer);
-          callback(value);
-          return true;
-        };
-        request.addEventListener("upgradeneeded", () => {
-          if (!request.result.objectStoreNames.contains(DELTA_OBJECT_STORE)) {
-            const store = request.result.createObjectStore(DELTA_OBJECT_STORE, { keyPath: "key" });
-            store.createIndex("worldId", "worldId", { unique: false });
-          }
-        });
-        request.addEventListener("success", () => {
-          if (settled) {
-            request.result.close();
-            return;
-          }
-          request.result.addEventListener("versionchange", () => request.result.close());
-          finish(resolve, request.result);
-        }, { once: true });
-        request.addEventListener("error", () => finish(reject, request.error ?? new Error("Opening IndexedDB failed")), { once: true });
-        request.addEventListener("blocked", () => finish(reject, new Error("Opening IndexedDB was blocked")), { once: true });
-      }));
-      return this.databasePromise;
-    }
-  };
 
   // src/world/WorldSource.ts
   function isWorldVegetationSource(source) {
@@ -13966,25 +13342,36 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
   function resolveCache(options, dependencies) {
-    if (dependencies.cache) return { cache: dependencies.cache, owned: false };
-    if (options.cache && typeof options.cache === "object") return { cache: options.cache, owned: false };
-    if (options.cache === true) {
-      return {
-        cache: new IndexedDbWorldChunkCache({
-          databaseName: options.cacheDatabaseName,
-          maxBytes: options.cacheMaxBytes
-        }),
-        owned: true
-      };
+    if (dependencies.cache !== void 0 && options.cache !== void 0) {
+      throw new TypeError("world chunk cache must be provided through options or dependencies, not both");
     }
+    const cache2 = dependencies.cache ?? options.cache;
+    if (cache2 !== void 0) assertWorldChunkCache(cache2);
+    if (dependencies.cache !== void 0) return { cache: cache2, owned: false };
+    if (cache2 !== void 0) return { cache: cache2, owned: true };
     return { cache: void 0, owned: false };
   }
   function resolveDeltaStore(options, dependencies) {
-    if (dependencies.deltaStore) return { store: dependencies.deltaStore, owned: false };
-    if (options.deltaStore === true) {
-      return { store: new IndexedDbWorldDeltaStore({ databaseName: options.deltaDatabaseName }), owned: true };
+    if (dependencies.deltaStore !== void 0 && options.deltaStore !== void 0) {
+      throw new TypeError("world delta store must be provided through options or dependencies, not both");
     }
-    return { store: options.deltaStore || void 0, owned: false };
+    const store = dependencies.deltaStore ?? options.deltaStore;
+    if (store !== void 0) assertWorldDeltaStore(store);
+    if (dependencies.deltaStore !== void 0) return { store, owned: false };
+    if (store !== void 0) return { store, owned: true };
+    return { store: void 0, owned: false };
+  }
+  function assertWorldChunkCache(cache2) {
+    if (!cache2 || typeof cache2 !== "object") throw new TypeError("world chunk cache must be an object");
+    for (const method of ["get", "put", "clear", "dispose"]) {
+      if (typeof cache2[method] !== "function") throw new TypeError(`world chunk cache must implement ${method}()`);
+    }
+  }
+  function assertWorldDeltaStore(store) {
+    if (!store || typeof store !== "object") throw new TypeError("world delta store must be an object");
+    for (const method of ["loadChunk", "putTile", "deleteTile", "flush", "clear", "dispose"]) {
+      if (typeof store[method] !== "function") throw new TypeError(`world delta store must implement ${method}()`);
+    }
   }
   function resolveWorldId(value, fallback) {
     const worldId = value ?? fallback;
@@ -14387,9 +13774,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       });
       this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
       this.bounds = { width: options.width, height: options.height, wrapX: true, wrapY: true };
-      const resolvedDeltas = resolveDeltaStore(options, dependencies);
-      this.deltaStore = resolvedDeltas.store;
-      this.ownsDeltaStore = resolvedDeltas.owned;
       this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
       this.chunkCountX = Math.ceil(options.width / this.chunkSize);
       this.chunkCountY = Math.ceil(options.height / this.chunkSize);
@@ -14397,10 +13781,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.store.map.infinite || this.store.map.w !== options.width || this.store.map.h !== options.height || !this.store.map.wrapX || !this.store.map.wrapY) {
         throw new TypeError("toroidal world store bounds do not match source dimensions");
       }
-      this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
+      const resolvedDeltas = resolveDeltaStore(options, dependencies);
       const resolvedCache = resolveCache(options, dependencies);
+      this.deltaStore = resolvedDeltas.store;
+      this.ownsDeltaStore = resolvedDeltas.owned;
       this.cache = resolvedCache.cache;
       this.ownsCache = resolvedCache.owned;
+      this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
       try {
         this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
           size: options.workerCount,
@@ -14410,6 +13797,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         });
       } catch (error) {
         if (this.ownsCache) this.cache?.dispose();
+        if (this.ownsDeltaStore) this.deltaStore?.dispose();
         throw error;
       }
     }
@@ -14588,14 +13976,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       });
       this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
       this.store = dependencies.store ?? new SparseWorldChunkStore();
+      this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
       const resolvedDeltas = resolveDeltaStore(options, dependencies);
+      const resolvedCache = resolveCache(options, dependencies);
       this.deltaStore = resolvedDeltas.store;
       this.ownsDeltaStore = resolvedDeltas.owned;
-      this.worldId = resolveWorldId(options.worldId, this.worldFingerprint);
-      this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
-      const resolvedCache = resolveCache(options, dependencies);
       this.cache = resolvedCache.cache;
       this.ownsCache = resolvedCache.owned;
+      this.deltaSession = new WorldDeltaSession(this.deltaStore, this.worldId, this.chunkSize, this.store);
       try {
         this.pool = dependencies.pool ?? new WorldGeneratorPool(options.workerUrl, {
           size: options.workerCount,
@@ -14605,6 +13993,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         });
       } catch (error) {
         if (this.ownsCache) this.cache?.dispose();
+        if (this.ownsDeltaStore) this.deltaStore?.dispose();
         throw error;
       }
     }
@@ -21163,7 +20552,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.HexMap = HexMap;
   exports.HexMapInteractionController = HexMapInteractionController;
   exports.HexMapRendererHost = HexMapRendererHost;
-  exports.IndexedDbWorldChunkCache = IndexedDbWorldChunkCache;
   exports.LANDFORM_SEA_LEVEL = LANDFORM_SEA_LEVEL;
   exports.Land = Land;
   exports.LandColor = LandColor;
@@ -21191,6 +20579,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.WORLD_CHUNK_PADDING = WORLD_CHUNK_PADDING;
   exports.WORLD_CHUNK_SIZE = WORLD_CHUNK_SIZE;
   exports.WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = WORLD_DELTA_CHECKPOINT_FORMAT_VERSION;
+  exports.WORLD_DELTA_FORMAT_VERSION = WORLD_DELTA_FORMAT_VERSION;
   exports.WORLD_DESCRIPTOR_FORMAT_VERSION = WORLD_DESCRIPTOR_FORMAT_VERSION;
   exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
   exports.WORLD_OVERVIEW_FORMAT_VERSION = WORLD_OVERVIEW_FORMAT_VERSION;
@@ -21199,6 +20588,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.WebGlGpuTimer = WebGlGpuTimer;
   exports.WorkQueueBackpressureError = WorkQueueBackpressureError;
   exports.WorldChunkMountQueue = WorldChunkMountQueue;
+  exports.WorldDeltaConflictError = WorldDeltaConflictError;
   exports.WorldEditingFacade = WorldEditingFacade;
   exports.WorldGeneratorClient = WorldGeneratorClient;
   exports.WorldGeneratorPool = WorldGeneratorPool;
@@ -21214,7 +20604,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.assertWorldSource = assertWorldSource;
   exports.assertWorldTileOverride = assertWorldTileOverride;
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
-  exports.clearWorldChunkCache = clearWorldChunkCache;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
   exports.createLandformSampler = createLandformSampler;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
@@ -21247,6 +20636,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.mergeBufferUpdateRanges = mergeBufferUpdateRanges;
   exports.normalizeMapCoordinates = normalizeMapCoordinates;
   exports.normalizeResourceCost = normalizeResourceCost;
+  exports.normalizeWorldChunkDelta = normalizeWorldChunkDelta;
   exports.packedChunkFromWorldChunk = packedChunkFromWorldChunk;
   exports.positiveModulo = positiveModulo;
   exports.sampleLandform = sampleLandform;

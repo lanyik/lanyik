@@ -2,7 +2,14 @@ import {
     assertPackedWorldChunk,
     PackedWorldChunk
 } from "./generateWorldChunk";
-import { assertWorldDescriptor, serializeWorldDescriptor, WorldDescriptor } from "./WorldDescriptor";
+import type { WorldChunkCache, WorldChunkCacheStats } from "./WorldChunkCacheContract";
+
+export { createWorldChunkCacheKey } from "./WorldChunkCacheContract";
+export type {
+    WorldChunkCache,
+    WorldChunkCacheKeyOptions,
+    WorldChunkCacheStats
+} from "./WorldChunkCacheContract";
 
 const DEFAULT_DATABASE_NAME = "three-hex-map-world-cache-v1";
 const DATABASE_VERSION = 1;
@@ -29,48 +36,10 @@ interface CacheUsageRecord {
     entries: number;
 }
 
-export interface WorldChunkCacheStats {
-    available: boolean;
-    hits: number;
-    misses: number;
-    writes: number;
-    errors: number;
-    entries: number;
-    bytes: number;
-}
-
-export interface WorldChunkCache {
-    readonly stats: Readonly<WorldChunkCacheStats>;
-    get(key: string): Promise<PackedWorldChunk | undefined>;
-    put(key: string, chunk: PackedWorldChunk): Promise<boolean>;
-    clear(): Promise<boolean>;
-    flush?(): Promise<void>;
-    dispose(): void;
-}
-
 export interface IndexedDbWorldChunkCacheOptions {
     databaseName?: string;
     maxBytes?: number;
     openTimeoutMs?: number;
-}
-
-export interface WorldChunkCacheKeyOptions {
-    descriptor: WorldDescriptor;
-    chunkX: number;
-    chunkY: number;
-}
-
-export function createWorldChunkCacheKey(options: WorldChunkCacheKeyOptions): string {
-    if (!options || typeof options !== "object") throw new TypeError("world chunk cache key options are required");
-    assertWorldDescriptor(options.descriptor);
-    if (!Number.isSafeInteger(options.chunkX) || !Number.isSafeInteger(options.chunkY)) {
-        throw new RangeError("world chunk cache coordinates must be safe integers");
-    }
-    return JSON.stringify([
-        serializeWorldDescriptor(options.descriptor),
-        options.chunkX,
-        options.chunkY
-    ]);
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

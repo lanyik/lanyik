@@ -202,16 +202,26 @@ export type {
     WorldOverviewRaster
 } from "./world/generateWorldOverview";
 export {
-    IndexedDbWorldChunkCache,
-    createWorldChunkCacheKey,
-    clearWorldChunkCache
-} from "./world/WorldChunkCache";
+    createWorldChunkCacheKey
+} from "./world/WorldChunkCacheContract";
 export type {
     WorldChunkCache,
     WorldChunkCacheStats,
-    WorldChunkCacheKeyOptions,
-    IndexedDbWorldChunkCacheOptions
-} from "./world/WorldChunkCache";
+    WorldChunkCacheKeyOptions
+} from "./world/WorldChunkCacheContract";
+export {
+    normalizeWorldChunkDelta,
+    WorldDeltaConflictError,
+    WORLD_DELTA_FORMAT_VERSION
+} from "./world/WorldDeltaContract";
+export type {
+    WorldDeltaStore,
+    WorldDeltaEntry,
+    WorldDeltaChange,
+    WorldDeltaReadOptions,
+    WorldDeltaBatchOptions,
+    WorldChunkDelta
+} from "./world/WorldDeltaContract";
 export {
     StaticWorldSource,
     ToroidalWorldSource,

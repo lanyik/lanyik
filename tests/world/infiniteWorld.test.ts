@@ -723,8 +723,11 @@ describe("procedural world source", () => {
     test("restores sparse deltas after rebuilding a source", async () => {
         const deltas = new MemoryWorldDeltaStore();
         const createSource = () => new ProceduralWorldSource(
-            { seed: "saved-world", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
-            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+            { seed: "saved-world", workerUrl: "unused", chunkSize: 12 },
+            {
+                pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }),
+                deltaStore: deltas
+            }
         );
         const first = createSource();
         await first.loadChunk(0, 0);
@@ -758,16 +761,22 @@ describe("procedural world source", () => {
     test("isolates default save slots when chunk size changes", async () => {
         const deltas = new MemoryWorldDeltaStore();
         const source12 = new ProceduralWorldSource(
-            { seed: "sized-save", workerUrl: "unused", chunkSize: 12, deltaStore: deltas },
-            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+            { seed: "sized-save", workerUrl: "unused", chunkSize: 12 },
+            {
+                pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }),
+                deltaStore: deltas
+            }
         );
         await source12.loadChunk(0, 0);
         source12.setTileOverride(2, 3, { unit: "size-12" });
         source12.dispose();
 
         const source24 = new ProceduralWorldSource(
-            { seed: "sized-save", workerUrl: "unused", chunkSize: 24, deltaStore: deltas },
-            { pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }) }
+            { seed: "sized-save", workerUrl: "unused", chunkSize: 24 },
+            {
+                pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() }),
+                deltaStore: deltas
+            }
         );
         await source24.loadChunk(0, 0);
         expect(getMapTile(source24.map, 2, 3)?.unit).toBeUndefined();
@@ -877,6 +886,31 @@ describe("procedural world source", () => {
         expect(source.worldId).toBe(fingerprint);
         expect(source.getChunkRevision(3, -2)?.terrainRevision).toBe(fingerprint);
         source.dispose();
+    });
+
+    test("disposes persistence resources passed through source options", () => {
+        const cache = new MemoryChunkCache();
+        const deltas = new MemoryWorldDeltaStore();
+        const source = new ProceduralWorldSource({
+            seed: "owned-persistence",
+            workerUrl: "unused",
+            chunkSize: 12,
+            cache,
+            deltaStore: deltas
+        }, {
+            pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => new ImmediateChunkClient() })
+        });
+
+        source.dispose();
+
+        expect(cache.disposed).toBe(true);
+        expect(() => deltas.putTile(
+            source.worldId,
+            0,
+            0,
+            { x: 0, y: 0, override: { unit: "disposed" } },
+            { chunkSize: 12 }
+        )).toThrow(/disposed/);
     });
 
     test("reuses cached chunks and exposes an explicit clear operation", async () => {
