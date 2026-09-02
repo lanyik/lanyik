@@ -64,6 +64,10 @@ npm start
 
 Open <http://127.0.0.1:3000>. The control panel exposes three modes:
 
+The isolated [infinite water-curve prototype](public/infinite-water.html) is
+available at <http://127.0.0.1:3000/infinite-water.html>; it is a visual design
+scene and does not modify the current world generator.
+
 | Mode | Purpose |
 |---|---|
 | Finite toroidal | A seed plus width/height, streamed through Workers without materializing the complete map |

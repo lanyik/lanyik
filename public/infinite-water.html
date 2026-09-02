@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>无限水系曲线场</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="infinite-water.css">
+</head>
+<body>
+    <canvas data-water-field aria-label="可无限平移缩放的程序化水系曲线场"></canvas>
+
+    <header class="title-card">
+        <span>PROCEDURAL WATER FIELD</span>
+        <h1>无限水系曲线场</h1>
+        <p>世界空间先生成连续曲线与支流折线，视口只查询、裁剪和采样。</p>
+    </header>
+
+    <aside class="control-card" aria-label="曲线场控制">
+        <label class="seed-field">
+            <span>世界种子</span>
+            <span class="seed-row">
+                <input data-seed value="open-water-01" autocomplete="off" spellcheck="false">
+                <button type="button" data-apply-seed>应用</button>
+            </span>
+        </label>
+
+        <label>
+            <span><b>主河间距</b><output data-spacing-output></output></span>
+            <input data-spacing type="range" min="520" max="1280" step="20" value="820">
+        </label>
+        <label>
+            <span><b>弯曲强度</b><output data-curvature-output></output></span>
+            <input data-curvature type="range" min="20" max="100" step="1" value="68">
+        </label>
+
+        <div class="toggle-grid">
+            <label><input data-show-branches type="checkbox" checked> 支流</label>
+            <label><input data-show-samples type="checkbox"> 采样折线</label>
+            <label><input data-show-chunks type="checkbox" checked> 区块边界</label>
+            <label><input data-show-hexes type="checkbox"> 六边格</label>
+        </div>
+
+        <div class="button-row">
+            <button type="button" data-reset-view>回到原点</button>
+            <button type="button" data-random-seed>换个种子</button>
+        </div>
+    </aside>
+
+    <aside class="status-card" aria-live="polite">
+        <div><span>视口中心</span><strong data-position>0, 0</strong></div>
+        <div><span>缩放</span><strong data-zoom>1.00×</strong></div>
+        <div><span>当前曲线</span><strong data-features>0</strong></div>
+        <small>拖拽平移 · 滚轮缩放 · G 区块 · P 采样点 · H 六边格 · 0 复位</small>
+    </aside>
+
+    <script type="module" src="infinite-water.js"></script>
+</body>
+</html>
