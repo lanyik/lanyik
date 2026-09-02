@@ -6,6 +6,7 @@ interface InfiniteWaterDiagnostics {
     camera: { x: number; y: number; zoom: number };
     renderedMainCurves: number;
     renderedBranches: number;
+    directionBins: number;
     sampleSignature: string;
 }
 
@@ -48,6 +49,7 @@ test("the infinite water curve field is deterministic across distant viewport qu
     expect(Math.abs(moved.camera.x) + Math.abs(moved.camera.y)).toBeGreaterThan(4_000);
     expect(moved.camera.zoom).toBeLessThan(initial.camera.zoom);
     expect(moved.renderedMainCurves).toBeGreaterThan(0);
+    expect(moved.directionBins).toBeGreaterThanOrEqual(6);
     expect(moved.sampleSignature).toBe(initial.sampleSignature);
 
     await page.reload({ waitUntil: "domcontentloaded" });

@@ -1,6 +1,6 @@
 const canvas = document.querySelector("[data-water-field]");
 const seedInput = document.querySelector("[data-seed]");
-const spacingInput = document.querySelector("[data-spacing]");
+const densityInput = document.querySelector("[data-density]");
 const curvatureInput = document.querySelector("[data-curvature]");
 const showBranchesInput = document.querySelector("[data-show-branches]");
 const showSamplesInput = document.querySelector("[data-show-samples]");
@@ -9,7 +9,7 @@ const showHexesInput = document.querySelector("[data-show-hexes]");
 const positionOutput = document.querySelector("[data-position]");
 const zoomOutput = document.querySelector("[data-zoom]");
 const featuresOutput = document.querySelector("[data-features]");
-const spacingOutput = document.querySelector("[data-spacing-output]");
+const densityOutput = document.querySelector("[data-density-output]");
 const curvatureOutput = document.querySelector("[data-curvature-output]");
 const applySeedButton = document.querySelector("[data-apply-seed]");
 const resetViewButton = document.querySelector("[data-reset-view]");
@@ -17,7 +17,7 @@ const randomSeedButton = document.querySelector("[data-random-seed]");
 
 if (!(canvas instanceof HTMLCanvasElement)
     || !(seedInput instanceof HTMLInputElement)
-    || !(spacingInput instanceof HTMLInputElement)
+    || !(densityInput instanceof HTMLInputElement)
     || !(curvatureInput instanceof HTMLInputElement)
     || !(showBranchesInput instanceof HTMLInputElement)
     || !(showSamplesInput instanceof HTMLInputElement)
@@ -26,7 +26,7 @@ if (!(canvas instanceof HTMLCanvasElement)
     || !(positionOutput instanceof HTMLElement)
     || !(zoomOutput instanceof HTMLElement)
     || !(featuresOutput instanceof HTMLElement)
-    || !(spacingOutput instanceof HTMLOutputElement)
+    || !(densityOutput instanceof HTMLOutputElement)
     || !(curvatureOutput instanceof HTMLOutputElement)
     || !(applySeedButton instanceof HTMLButtonElement)
     || !(resetViewButton instanceof HTMLButtonElement)
@@ -40,13 +40,14 @@ if (!context) throw new Error("2D canvas is unavailable");
 const TAU = Math.PI * 2;
 const MIN_ZOOM = 0.08;
 const MAX_ZOOM = 5;
-const BRANCH_INTERVAL = 430;
+const FEATURE_CELL_SIZE = 1650;
+const MAX_CURVE_REACH = 4500;
+const MAX_BRANCH_LENGTH = 860;
 const CHUNK_SIZE = 384;
 const HEX_RADIUS = 28;
 const HEX_HEIGHT = Math.sqrt(3) * HEX_RADIUS;
 
-const query = new URLSearchParams(location.search);
-const querySeed = query.get("seed");
+const querySeed = new URLSearchParams(location.search).get("seed");
 if (querySeed) seedInput.value = querySeed;
 
 const camera = { x: 0, y: 0, zoom: 0.82 };
@@ -57,11 +58,10 @@ let pixelRatio = 1;
 let landGradient;
 let seed = seedInput.value.trim();
 let numericSeed = hashText(seed);
-let fieldAngle = angleForSeed(numericSeed);
-let fieldCosine = Math.cos(fieldAngle);
-let fieldSine = Math.sin(fieldAngle);
+let geometryDirty = true;
 let renderedMainCurves = 0;
 let renderedBranches = 0;
+let waterGeometry = { mains: [], branches: [] };
 
 function hashText(value) {
     let hash = 0x811c9dc5;
@@ -83,107 +83,148 @@ function mix32(value) {
     return mixed >>> 0;
 }
 
-function randomAt(a, b = 0, lane = 0) {
+function randomAt(x, y = 0, salt = 0) {
     const value = numericSeed
-        ^ Math.imul(a | 0, 0x9e3779b1)
-        ^ Math.imul(b | 0, 0x85ebca77)
-        ^ Math.imul(lane | 0, 0xc2b2ae3d);
+        ^ Math.imul(x | 0, 0x9e3779b1)
+        ^ Math.imul(y | 0, 0x85ebca77)
+        ^ Math.imul(salt | 0, 0xc2b2ae3d);
     return mix32(value) / 0x1_0000_0000;
+}
+
+function featureKey(cellX, cellY) {
+    return mix32(
+        numericSeed
+        ^ Math.imul(cellX | 0, 0x632be5ab)
+        ^ Math.imul(cellY | 0, 0x85157af5)
+    );
 }
 
 function smoothstep(value) {
     return value * value * (3 - 2 * value);
 }
 
-function valueNoise1d(x, lane, salt) {
+function valueNoise1d(x, key, salt) {
     const cell = Math.floor(x);
     const amount = smoothstep(x - cell);
-    const first = randomAt(cell, lane, salt) * 2 - 1;
-    const second = randomAt(cell + 1, lane, salt) * 2 - 1;
+    const first = randomAt(cell, key, salt) * 2 - 1;
+    const second = randomAt(cell + 1, key, salt) * 2 - 1;
     return first + (second - first) * amount;
 }
 
-function angleForSeed(value) {
-    return (mix32(value ^ 0x68bc21eb) / 0x1_0000_0000 * 0.72 - 0.36) * Math.PI;
-}
-
-function spacing() {
-    return Number(spacingInput.value);
+function density() {
+    return Number(densityInput.value) / 100;
 }
 
 function curvature() {
     return Number(curvatureInput.value) / 100;
 }
 
-function laneOffset(lane) {
-    return (randomAt(lane, 0, 41) * 2 - 1) * spacing() * 0.08;
-}
-
-function riverV(lane, u) {
-    const gap = spacing();
-    const amplitude = gap * (0.055 + curvature() * 0.16);
-    const broad = valueNoise1d(u / 940, lane, 101);
-    const middle = valueNoise1d(u / 390, lane, 211);
-    const detail = valueNoise1d(u / 155, lane, 307);
-    return lane * gap + laneOffset(lane)
-        + amplitude * (broad * 0.58 + middle * 0.29 + detail * 0.13);
-}
-
-function riverWidth(lane, u) {
-    const base = 18 + randomAt(lane, 0, 503) * 17;
-    const variation = valueNoise1d(u / 620, lane, 607) * 0.22;
-    return base * (1 + variation);
-}
-
-function fieldToWorld(u, v) {
-    return { x: u * fieldCosine - v * fieldSine, y: u * fieldSine + v * fieldCosine };
-}
-
-function worldToField(x, y) {
-    return { u: x * fieldCosine + y * fieldSine, v: -x * fieldSine + y * fieldCosine };
-}
-
-function riverPoint(lane, u) {
-    return fieldToWorld(u, riverV(lane, u));
-}
-
 function visibleBounds() {
     const halfWidth = width / camera.zoom / 2;
     const halfHeight = height / camera.zoom / 2;
-    const world = {
+    return {
         minX: camera.x - halfWidth,
         maxX: camera.x + halfWidth,
         minY: camera.y - halfHeight,
         maxY: camera.y + halfHeight
     };
-    const corners = [
-        worldToField(world.minX, world.minY),
-        worldToField(world.maxX, world.minY),
-        worldToField(world.maxX, world.maxY),
-        worldToField(world.minX, world.maxY)
-    ];
+}
+
+function headingAt(key, baseAngle, parameter) {
+    const bend = 0.14 + curvature() * 1.02;
+    const broad = valueNoise1d(parameter / 10.5, key, 101);
+    const middle = valueNoise1d(parameter / 4.1, key, 211);
+    const detail = valueNoise1d(parameter / 1.8, key, 307);
+    return baseAngle + bend * (broad * 0.55 + middle * 0.32 + detail * 0.13);
+}
+
+function buildMainControlLine(cellX, cellY) {
+    if (randomAt(cellX, cellY, 17) >= density()) return undefined;
+
+    const key = featureKey(cellX, cellY);
+    const origin = {
+        x: (cellX + 0.08 + randomAt(cellX, cellY, 23) * 0.84) * FEATURE_CELL_SIZE,
+        y: (cellY + 0.08 + randomAt(cellX, cellY, 29) * 0.84) * FEATURE_CELL_SIZE
+    };
+    const baseAngle = randomAt(cellX, cellY, 31) * TAU;
+    const totalLength = 2200 + randomAt(cellX, cellY, 37) * 5000;
+    const controlStep = 135 + randomAt(cellX, cellY, 41) * 65;
+    const halfSteps = Math.ceil(totalLength / (controlStep * 2));
+    const baseWidth = 13 + randomAt(cellX, cellY, 43) * 22;
+    const before = [];
+    const after = [];
+
+    const widthAt = parameter => {
+        const progress = (parameter + halfSteps) / (halfSteps * 2);
+        const growth = 0.46 + smoothstep(progress) * 0.68;
+        const variation = 1 + valueNoise1d(parameter / 5.5, key, 401) * 0.2;
+        return Math.max(3, baseWidth * growth * variation);
+    };
+
+    let current = { ...origin };
+    for (let step = 1; step <= halfSteps; step += 1) {
+        const parameter = -step + 0.5;
+        const angle = headingAt(key, baseAngle, parameter);
+        current = {
+            x: current.x - Math.cos(angle) * controlStep,
+            y: current.y - Math.sin(angle) * controlStep
+        };
+        before.push({ point: current, width: widthAt(-step) });
+    }
+
+    current = { ...origin };
+    for (let step = 1; step <= halfSteps; step += 1) {
+        const parameter = step - 0.5;
+        const angle = headingAt(key, baseAngle, parameter);
+        current = {
+            x: current.x + Math.cos(angle) * controlStep,
+            y: current.y + Math.sin(angle) * controlStep
+        };
+        after.push({ point: current, width: widthAt(step) });
+    }
+
+    const controls = before.reverse();
+    controls.push({ point: origin, width: widthAt(0) }, ...after);
+    return { cellX, cellY, key, controls };
+}
+
+function catmullRomPoint(first, second, third, fourth, amount) {
+    const squared = amount * amount;
+    const cubed = squared * amount;
     return {
-        world,
-        field: {
-            minU: Math.min(...corners.map(point => point.u)),
-            maxU: Math.max(...corners.map(point => point.u)),
-            minV: Math.min(...corners.map(point => point.v)),
-            maxV: Math.max(...corners.map(point => point.v))
-        }
+        x: 0.5 * ((2 * second.x)
+            + (-first.x + third.x) * amount
+            + (2 * first.x - 5 * second.x + 4 * third.x - fourth.x) * squared
+            + (-first.x + 3 * second.x - 3 * third.x + fourth.x) * cubed),
+        y: 0.5 * ((2 * second.y)
+            + (-first.y + third.y) * amount
+            + (2 * first.y - 5 * second.y + 4 * third.y - fourth.y) * squared
+            + (-first.y + 3 * second.y - 3 * third.y + fourth.y) * cubed)
     };
 }
 
-function sampleMainRiver(lane, minU, maxU) {
-    const step = Math.max(7, Math.min(52, 18 / camera.zoom));
-    const start = Math.floor((minU - step * 2) / step) * step;
-    const end = Math.ceil((maxU + step * 2) / step) * step;
+function sampleMainCurve(main) {
+    const subdivisions = Math.max(2, Math.min(9, Math.ceil(150 * camera.zoom / 18)));
     const points = [];
     const widths = [];
-    for (let u = start; u <= end; u += step) {
-        points.push(riverPoint(lane, u));
-        widths.push(riverWidth(lane, u));
+    for (let index = 0; index < main.controls.length - 1; index += 1) {
+        const first = main.controls[Math.max(0, index - 1)].point;
+        const second = main.controls[index].point;
+        const third = main.controls[index + 1].point;
+        const fourth = main.controls[Math.min(main.controls.length - 1, index + 2)].point;
+        for (let sample = 0; sample < subdivisions; sample += 1) {
+            const amount = sample / subdivisions;
+            points.push(catmullRomPoint(first, second, third, fourth, amount));
+            widths.push(
+                main.controls[index].width
+                + (main.controls[index + 1].width - main.controls[index].width) * smoothstep(amount)
+            );
+        }
     }
-    return { points, widths };
+    const finalControl = main.controls.at(-1);
+    points.push(finalControl.point);
+    widths.push(finalControl.width);
+    return { points, widths, branch: false };
 }
 
 function cubicPoint(points, amount) {
@@ -198,43 +239,101 @@ function cubicPoint(points, amount) {
     };
 }
 
-function branchFor(lane, branchIndex) {
-    if (randomAt(lane, branchIndex, 701) < 0.36) return undefined;
-    const gap = spacing();
-    const joinU = (branchIndex + 0.16 + randomAt(lane, branchIndex, 709) * 0.68) * BRANCH_INTERVAL;
-    const length = 210 + randomAt(lane, branchIndex, 719) * 350;
-    const sourceU = joinU - length;
-    const side = randomAt(lane, branchIndex, 727) < 0.5 ? -1 : 1;
-    const lateral = gap * (0.15 + randomAt(lane, branchIndex, 733) * 0.24) * side;
-    const sourceV = riverV(lane, sourceU) + lateral;
-    const joinV = riverV(lane, joinU);
-    const derivative = (riverV(lane, joinU + 2) - riverV(lane, joinU - 2)) / 4;
-    const handle = Math.min(125, length * 0.28);
-    const start = fieldToWorld(sourceU, sourceV);
-    const end = fieldToWorld(joinU, joinV);
-    const controls = [
-        start,
-        fieldToWorld(
-            sourceU + length * (0.25 + randomAt(lane, branchIndex, 739) * 0.12),
-            sourceV - lateral * (0.08 + randomAt(lane, branchIndex, 743) * 0.16)
-        ),
-        fieldToWorld(joinU - handle, joinV - derivative * handle),
-        end
+function buildBranch(main, branchIndex) {
+    const controls = main.controls;
+    const joinIndex = 2 + Math.floor(
+        randomAt(main.key, branchIndex, 503) * Math.max(1, controls.length - 4)
+    );
+    const join = controls[joinIndex].point;
+    const previous = controls[joinIndex - 1].point;
+    const next = controls[joinIndex + 1].point;
+    const tangentLength = Math.hypot(next.x - previous.x, next.y - previous.y) || 1;
+    const tangent = {
+        x: (next.x - previous.x) / tangentLength,
+        y: (next.y - previous.y) / tangentLength
+    };
+    const normal = { x: -tangent.y, y: tangent.x };
+    const side = randomAt(main.key, branchIndex, 509) < 0.5 ? -1 : 1;
+    const length = 280 + randomAt(main.key, branchIndex, 521) * (MAX_BRANCH_LENGTH - 280);
+    const upstream = length * (0.34 + randomAt(main.key, branchIndex, 523) * 0.28);
+    const lateral = length * (0.48 + randomAt(main.key, branchIndex, 541) * 0.38) * side;
+    const source = {
+        x: join.x - tangent.x * upstream + normal.x * lateral,
+        y: join.y - tangent.y * upstream + normal.y * lateral
+    };
+    const curveControls = [
+        source,
+        {
+            x: source.x + tangent.x * length * 0.23 - normal.x * lateral * 0.12,
+            y: source.y + tangent.y * length * 0.23 - normal.y * lateral * 0.12
+        },
+        {
+            x: join.x - tangent.x * length * 0.22,
+            y: join.y - tangent.y * length * 0.22
+        },
+        join
     ];
-    const samples = Math.max(8, Math.min(48, Math.ceil(length * camera.zoom / 18)));
+    const sampleCount = Math.max(8, Math.min(48, Math.ceil(length * camera.zoom / 18)));
     const points = [];
     const widths = [];
-    const sourceWidth = 3.2 + randomAt(lane, branchIndex, 751) * 2.8;
-    const targetWidth = Math.min(13, riverWidth(lane, joinU) * 0.43);
-    for (let index = 0; index <= samples; index += 1) {
-        const amount = index / samples;
-        points.push(cubicPoint(controls, amount));
+    const sourceWidth = 1.8 + randomAt(main.key, branchIndex, 547) * 3.2;
+    const targetWidth = Math.min(12, controls[joinIndex].width * 0.42);
+    for (let index = 0; index <= sampleCount; index += 1) {
+        const amount = index / sampleCount;
+        points.push(cubicPoint(curveControls, amount));
         widths.push(sourceWidth + (targetWidth - sourceWidth) * smoothstep(amount));
     }
-    return { points, widths };
+    return { points, widths, branch: true };
 }
 
-function drawRibbon(points, widths, expansion, color) {
+function intersectsWorld(points, bounds, margin = 40) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const point of points) {
+        minX = Math.min(minX, point.x);
+        maxX = Math.max(maxX, point.x);
+        minY = Math.min(minY, point.y);
+        maxY = Math.max(maxY, point.y);
+    }
+    return maxX >= bounds.minX - margin && minX <= bounds.maxX + margin
+        && maxY >= bounds.minY - margin && minY <= bounds.maxY + margin;
+}
+
+function rebuildWaterGeometry(bounds) {
+    const mains = [];
+    const branches = [];
+    const queryMargin = MAX_CURVE_REACH + MAX_BRANCH_LENGTH;
+    const firstCellX = Math.floor((bounds.minX - queryMargin) / FEATURE_CELL_SIZE);
+    const lastCellX = Math.floor((bounds.maxX + queryMargin) / FEATURE_CELL_SIZE);
+    const firstCellY = Math.floor((bounds.minY - queryMargin) / FEATURE_CELL_SIZE);
+    const lastCellY = Math.floor((bounds.maxY + queryMargin) / FEATURE_CELL_SIZE);
+
+    for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
+        for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
+            const main = buildMainControlLine(cellX, cellY);
+            if (!main) continue;
+            const controlPoints = main.controls.map(control => control.point);
+            if (!intersectsWorld(controlPoints, bounds, MAX_BRANCH_LENGTH)) continue;
+
+            const sampledMain = sampleMainCurve(main);
+            if (intersectsWorld(sampledMain.points, bounds, 100)) mains.push(sampledMain);
+
+            const branchCount = Math.floor(randomAt(main.key, 0, 557) * 4);
+            for (let branchIndex = 0; branchIndex < branchCount; branchIndex += 1) {
+                const branch = buildBranch(main, branchIndex);
+                if (intersectsWorld(branch.points, bounds, 60)) branches.push(branch);
+            }
+        }
+    }
+
+    waterGeometry = { mains, branches };
+    geometryDirty = false;
+}
+
+function drawRibbon(feature, expansion, color) {
+    const { points, widths } = feature;
     if (points.length < 2) return;
     const left = [];
     const right = [];
@@ -257,13 +356,23 @@ function drawRibbon(points, widths, expansion, color) {
     context.closePath();
     context.fillStyle = color;
     context.fill();
+
+    context.beginPath();
+    context.arc(points[0].x, points[0].y, widths[0] + expansion, 0, TAU);
+    if (!feature.branch) {
+        const lastIndex = points.length - 1;
+        context.moveTo(points[lastIndex].x + widths[lastIndex] + expansion, points[lastIndex].y);
+        context.arc(points[lastIndex].x, points[lastIndex].y, widths[lastIndex] + expansion, 0, TAU);
+    }
+    context.fill();
 }
 
-function drawCenterline(points, widths, time, branch) {
+function drawCenterline(feature, time) {
+    const { points, widths } = feature;
     context.beginPath();
     context.moveTo(points[0].x, points[0].y);
     for (let index = 1; index < points.length; index += 1) context.lineTo(points[index].x, points[index].y);
-    context.strokeStyle = branch ? "rgba(155, 231, 226, 0.34)" : "rgba(174, 239, 234, 0.4)";
+    context.strokeStyle = feature.branch ? "rgba(155, 231, 226, 0.34)" : "rgba(174, 239, 234, 0.4)";
     let narrowestWidth = Infinity;
     for (const widthAtPoint of widths) narrowestWidth = Math.min(narrowestWidth, widthAtPoint);
     context.lineWidth = Math.max(0.75 / camera.zoom, narrowestWidth * 0.1);
@@ -303,10 +412,10 @@ function drawLand(bounds) {
 
     setWorldTransform();
     const patchSize = 520;
-    const startX = Math.floor(bounds.world.minX / patchSize) - 1;
-    const endX = Math.ceil(bounds.world.maxX / patchSize) + 1;
-    const startY = Math.floor(bounds.world.minY / patchSize) - 1;
-    const endY = Math.ceil(bounds.world.maxY / patchSize) + 1;
+    const startX = Math.floor(bounds.minX / patchSize) - 1;
+    const endX = Math.ceil(bounds.maxX / patchSize) + 1;
+    const startY = Math.floor(bounds.minY / patchSize) - 1;
+    const endY = Math.ceil(bounds.maxY / patchSize) + 1;
     for (let x = startX; x <= endX; x += 1) {
         for (let y = startY; y <= endY; y += 1) {
             const centerX = (x + randomAt(x, y, 811)) * patchSize;
@@ -325,19 +434,19 @@ function drawLand(bounds) {
 function drawChunkGrid(bounds) {
     if (!showChunksInput.checked) return;
     setWorldTransform();
-    const startX = Math.floor(bounds.world.minX / CHUNK_SIZE) * CHUNK_SIZE;
-    const startY = Math.floor(bounds.world.minY / CHUNK_SIZE) * CHUNK_SIZE;
+    const startX = Math.floor(bounds.minX / CHUNK_SIZE) * CHUNK_SIZE;
+    const startY = Math.floor(bounds.minY / CHUNK_SIZE) * CHUNK_SIZE;
     context.strokeStyle = "rgba(180, 218, 196, 0.13)";
     context.lineWidth = 1 / camera.zoom;
     context.setLineDash([6 / camera.zoom, 7 / camera.zoom]);
     context.beginPath();
-    for (let x = startX; x <= bounds.world.maxX; x += CHUNK_SIZE) {
-        context.moveTo(x, bounds.world.minY);
-        context.lineTo(x, bounds.world.maxY);
+    for (let x = startX; x <= bounds.maxX; x += CHUNK_SIZE) {
+        context.moveTo(x, bounds.minY);
+        context.lineTo(x, bounds.maxY);
     }
-    for (let y = startY; y <= bounds.world.maxY; y += CHUNK_SIZE) {
-        context.moveTo(bounds.world.minX, y);
-        context.lineTo(bounds.world.maxX, y);
+    for (let y = startY; y <= bounds.maxY; y += CHUNK_SIZE) {
+        context.moveTo(bounds.minX, y);
+        context.lineTo(bounds.maxX, y);
     }
     context.stroke();
     context.setLineDash([]);
@@ -346,14 +455,14 @@ function drawChunkGrid(bounds) {
 function drawHexGrid(bounds) {
     if (!showHexesInput.checked || camera.zoom < 0.36) return;
     setWorldTransform();
-    const qStart = Math.floor(bounds.world.minX / (HEX_RADIUS * 1.5)) - 2;
-    const qEnd = Math.ceil(bounds.world.maxX / (HEX_RADIUS * 1.5)) + 2;
+    const qStart = Math.floor(bounds.minX / (HEX_RADIUS * 1.5)) - 2;
+    const qEnd = Math.ceil(bounds.maxX / (HEX_RADIUS * 1.5)) + 2;
     context.strokeStyle = "rgba(205, 228, 209, 0.085)";
     context.lineWidth = 0.7 / camera.zoom;
     context.beginPath();
     for (let q = qStart; q <= qEnd; q += 1) {
-        const rStart = Math.floor(bounds.world.minY / HEX_HEIGHT - q / 2) - 2;
-        const rEnd = Math.ceil(bounds.world.maxY / HEX_HEIGHT - q / 2) + 2;
+        const rStart = Math.floor(bounds.minY / HEX_HEIGHT - q / 2) - 2;
+        const rEnd = Math.ceil(bounds.maxY / HEX_HEIGHT - q / 2) + 2;
         for (let r = rStart; r <= rEnd; r += 1) {
             const centerX = q * HEX_RADIUS * 1.5;
             const centerY = (r + q / 2) * HEX_HEIGHT;
@@ -370,61 +479,25 @@ function drawHexGrid(bounds) {
     context.stroke();
 }
 
-function intersectsWorld(points, bounds, margin = 40) {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const point of points) {
-        minX = Math.min(minX, point.x);
-        maxX = Math.max(maxX, point.x);
-        minY = Math.min(minY, point.y);
-        maxY = Math.max(maxY, point.y);
-    }
-    return maxX >= bounds.minX - margin && minX <= bounds.maxX + margin
-        && maxY >= bounds.minY - margin && minY <= bounds.maxY + margin;
-}
-
 function drawWater(bounds, time) {
+    if (geometryDirty) rebuildWaterGeometry(bounds);
     setWorldTransform();
-    renderedMainCurves = 0;
-    renderedBranches = 0;
-    const gap = spacing();
-    const curvatureMargin = gap * 0.38;
-    const firstLane = Math.floor((bounds.field.minV - curvatureMargin) / gap) - 1;
-    const lastLane = Math.ceil((bounds.field.maxV + curvatureMargin) / gap) + 1;
-    const sampled = [];
-    const branches = [];
+    const features = showBranchesInput.checked
+        ? waterGeometry.mains.concat(waterGeometry.branches)
+        : waterGeometry.mains;
+    renderedMainCurves = waterGeometry.mains.length;
+    renderedBranches = showBranchesInput.checked ? waterGeometry.branches.length : 0;
 
-    for (let lane = firstLane; lane <= lastLane; lane += 1) {
-        const river = sampleMainRiver(lane, bounds.field.minU, bounds.field.maxU);
-        if (!intersectsWorld(river.points, bounds.world, 90)) continue;
-        sampled.push({ ...river, branch: false });
-        renderedMainCurves += 1;
-
-        if (!showBranchesInput.checked) continue;
-        const firstBranch = Math.floor((bounds.field.minU - 650) / BRANCH_INTERVAL) - 1;
-        const lastBranch = Math.ceil((bounds.field.maxU + 200) / BRANCH_INTERVAL) + 1;
-        for (let branchIndex = firstBranch; branchIndex <= lastBranch; branchIndex += 1) {
-            const branch = branchFor(lane, branchIndex);
-            if (!branch || !intersectsWorld(branch.points, bounds.world, 50)) continue;
-            branches.push({ ...branch, branch: true });
-            renderedBranches += 1;
-        }
-    }
-
-    const features = sampled.concat(branches);
     for (const feature of features) {
-        drawRibbon(feature.points, feature.widths, feature.branch ? 6 : 11, "rgba(39, 67, 54, 0.92)");
+        drawRibbon(feature, feature.branch ? 6 : 11, "rgba(39, 67, 54, 0.92)");
     }
     for (const feature of features) {
         drawRibbon(
-            feature.points,
-            feature.widths,
+            feature,
             0,
             feature.branch ? "rgba(36, 121, 132, 0.96)" : "rgba(32, 128, 145, 0.98)"
         );
-        drawCenterline(feature.points, feature.widths, time, feature.branch);
+        drawCenterline(feature, time);
         if (showSamplesInput.checked) drawSampleOverlay(feature.points);
     }
 }
@@ -450,14 +523,15 @@ function resize() {
         );
         landGradient.addColorStop(0, "#263a2f");
         landGradient.addColorStop(1, "#14221d");
+        geometryDirty = true;
     }
 }
 
 function updateOutputs() {
     positionOutput.textContent = `${Math.round(camera.x).toLocaleString()}, ${Math.round(camera.y).toLocaleString()}`;
     zoomOutput.textContent = `${camera.zoom.toFixed(2)}×`;
-    featuresOutput.textContent = `${renderedMainCurves} 主河 / ${renderedBranches} 支流`;
-    spacingOutput.value = `${spacing()} u`;
+    featuresOutput.textContent = `${renderedMainCurves} 主曲线 / ${renderedBranches} 支线`;
+    densityOutput.value = `${Math.round(density() * 100)}%`;
     curvatureOutput.value = `${Math.round(curvature() * 100)}%`;
 }
 
@@ -490,9 +564,7 @@ function applySeed() {
     seedInput.setCustomValidity("");
     seed = next;
     numericSeed = hashText(seed);
-    fieldAngle = angleForSeed(numericSeed);
-    fieldCosine = Math.cos(fieldAngle);
-    fieldSine = Math.sin(fieldAngle);
+    geometryDirty = true;
     const nextQuery = new URLSearchParams(location.search);
     nextQuery.set("seed", seed);
     history.replaceState(null, "", `${location.pathname}?${nextQuery}`);
@@ -502,6 +574,7 @@ function resetView() {
     camera.x = 0;
     camera.y = 0;
     camera.zoom = 0.82;
+    geometryDirty = true;
 }
 
 canvas.addEventListener("pointerdown", event => {
@@ -518,6 +591,7 @@ canvas.addEventListener("pointermove", event => {
     camera.y -= (event.clientY - pointer.y) / camera.zoom;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
+    geometryDirty = true;
 });
 
 const endDrag = event => {
@@ -535,11 +609,18 @@ canvas.addEventListener("wheel", event => {
     const after = screenToWorld(event.clientX, event.clientY);
     camera.x += before.x - after.x;
     camera.y += before.y - after.y;
+    geometryDirty = true;
 }, { passive: false });
 
 applySeedButton.addEventListener("click", applySeed);
 seedInput.addEventListener("keydown", event => {
     if (event.key === "Enter") applySeed();
+});
+densityInput.addEventListener("input", () => {
+    geometryDirty = true;
+});
+curvatureInput.addEventListener("input", () => {
+    geometryDirty = true;
 });
 resetViewButton.addEventListener("click", resetView);
 randomSeedButton.addEventListener("click", () => {
@@ -558,20 +639,30 @@ window.addEventListener("keydown", event => {
     if (event.key === "0") resetView();
 });
 
-window.getInfiniteWaterDiagnostics = () => ({
-    ready: canvas.dataset.state === "ready",
-    seed,
-    camera: { ...camera },
-    renderedMainCurves,
-    renderedBranches,
-    sampleSignature: [
-        fieldAngle,
-        riverV(-1, -1200),
-        riverV(0, 0),
-        riverV(2, 1730),
-        riverWidth(0, 0)
-    ].map(value => value.toFixed(6)).join("|")
-});
+window.getInfiniteWaterDiagnostics = () => {
+    const key = featureKey(-7, 11);
+    const directionBins = new Set(waterGeometry.mains.map(main => {
+        const start = main.points[0];
+        const end = main.points.at(-1);
+        const undirectedAngle = (Math.atan2(end.y - start.y, end.x - start.x) + Math.PI) % Math.PI;
+        return Math.floor(undirectedAngle / Math.PI * 12);
+    })).size;
+    return {
+        ready: canvas.dataset.state === "ready",
+        seed,
+        camera: { ...camera },
+        renderedMainCurves,
+        renderedBranches,
+        directionBins,
+        sampleSignature: [
+            randomAt(-7, 11, 17),
+            randomAt(-7, 11, 23),
+            headingAt(key, randomAt(-7, 11, 31) * TAU, -3),
+            density(),
+            curvature()
+        ].map(value => value.toFixed(6)).join("|")
+    };
+};
 
 const resizeObserver = new ResizeObserver(resize);
 resizeObserver.observe(canvas);

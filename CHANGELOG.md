@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- An isolated infinite water-curve prototype with deterministic world-space
-  main curves and tributaries, view-local adaptive sampling, chunk/hex/sample
-  diagnostics, and browser coverage for distant queries and seed reproducibility.
+- An isolated infinite water-curve prototype with independently seeded
+  world-space origin, direction, length and multiscale turning for every main
+  curve, deterministic tributaries, view-local adaptive sampling,
+  chunk/hex/sample diagnostics, and browser coverage for distant queries and
+  seed reproducibility.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.

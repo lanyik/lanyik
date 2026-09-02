@@ -13,25 +13,31 @@ finite drainage map first?
 
 ## Model
 
-The prototype defines water features from stable integer identities rather than
+The prototype defines water features from stable spatial identities rather than
 from chunks:
 
-- Each main river lane is an infinite function `v = riverV(lane, u)` in a
-  seed-rotated world basis. Several wavelengths of smooth deterministic noise
-  bend the lane, and another continuous field varies its width.
-- Tributaries are addressed by `(lane, branchIndex)`. Their source and junction
-  controls are deterministic, then a cubic curve is sampled into a view-local
-  polyline. The final handle follows the main river tangent so junctions do not
-  form square corners.
-- The camera bounds are transformed into the curve basis. Only intersecting
-  lane IDs, branch IDs and curve intervals are enumerated and sampled.
+- Coarse spatial cells only own candidate identities. A seed independently
+  decides whether a candidate exists, then jitters its origin anywhere inside
+  the cell. The cell axes never influence the resulting path.
+- Every accepted main curve independently chooses its direction, length, width
+  and multiscale turn field. Integrating that field in both directions produces
+  a control polyline with no shared global orientation or fixed lane spacing.
+- A Catmull-Rom curve is reconstructed from the control polyline and sampled at
+  a density selected from the current zoom. Camera zoom therefore changes only
+  tessellation, not world-space geometry.
+- Tributaries are addressed by `(curveIdentity, branchIndex)`. Their source and
+  junction controls are deterministic, and the final handle follows the main
+  curve tangent so junctions do not form square corners.
+- The camera queries only candidate cells within the strict maximum curve reach
+  and rejects non-intersecting control bounds before sampling them.
 - Chunk and hex overlays are diagnostics only. They never select control points
   or influence the water path, so crossing a chunk boundary cannot bend or
   disconnect a curve.
 
 The runtime cost is bounded by the visible world area and adaptive sample
-spacing, not by distance from the origin or total explored area. No generated
-curve state is retained when the camera moves.
+spacing, not by distance from the origin or total explored area. Only the
+current viewport geometry is retained; it is replaced when the view, seed or
+curve controls change.
 
 ## Run and inspect
 
@@ -45,7 +51,7 @@ Then open <http://127.0.0.1:3000/infinite-water.html>. A seed can also be passed
 as `?seed=value`.
 
 - Drag to move through world space and use the wheel to zoom around the pointer.
-- Adjust main-river spacing and curvature live.
+- Adjust candidate density and curvature live.
 - Toggle tributaries, chunk boundaries and the hex grid independently.
 - Enable **sample polyline** to see the actual points submitted to Canvas rather
   than the conceptual continuous curve.
