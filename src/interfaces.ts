@@ -42,6 +42,10 @@ export interface TileInfo {
     type: Land,
     modifiers?: string[],
     treeModel?: string,
+    // Optional six-bit SE/S/SW/NW/N/NE connection mask. Generated rivers set
+    // it so adjacent but unrelated courses do not visually merge; authored
+    // rivers omit it and retain the existing automatic-neighbor behavior.
+    riverEdges?: number,
     rivers?: RiverSegment[],
     unit?: string,
     city?: CityInfo

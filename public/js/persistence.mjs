@@ -10,8 +10,18 @@ var Land = /* @__PURE__ */ ((Land2) => {
   return Land2;
 })(Land || {});
 
+// src/helpers/neighbors.ts
+var NEIGHBOR_DIRECTION_BITS = Object.freeze({
+  SE: 0,
+  S: 1,
+  SW: 2,
+  NW: 3,
+  N: 4,
+  NE: 5
+});
+
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 6;
+var WORLD_GENERATOR_VERSION = 7;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -127,6 +137,29 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     minimumNeighbors: 1,
     placementScale: 0.65,
     placementSalt: 1821285621
+  }),
+  rivers: Object.freeze({
+    pageSize: 32,
+    maximumCachedPages: 16,
+    sourceCellSize: 32,
+    sourcesPerCell: 6,
+    sourceSpawnChance: 1,
+    sourceMinimumElevation: 0.46,
+    sourceMaximumElevation: 0.8,
+    sourceElevationTransition: 0.04,
+    sourceMinimumMoisture: 0.2,
+    sourceMoistureFloor: 0.6,
+    sourceValleyFloor: 0.65,
+    minimumCourseLength: 3,
+    maximumCourseLength: 96,
+    potentialContinentalWeight: 0.9,
+    potentialElevationWeight: 0.1,
+    potentialValleyWeight: 0.035,
+    potentialMoistureWeight: 0.01,
+    potentialLakeWeight: 0.02,
+    potentialJitter: 5e-4,
+    sourceSalt: 1013904242,
+    flowSalt: 1542469173
   })
 });
 var finite = (name, value) => {
@@ -163,7 +196,7 @@ function assertWorldStyleProfile(value) {
   if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
     throw new RangeError("world style profile generatorVersion is unsupported");
   }
-  if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes) {
+  if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes || !profile.rivers) {
     throw new TypeError("world style profile groups are required");
   }
   assertFiniteNumbers(profile, "");
@@ -318,6 +351,45 @@ function assertWorldStyleProfile(value) {
   if (!Number.isSafeInteger(profile.vegetation.placementSalt) || !Number.isSafeInteger(profile.lakes.placementSalt)) {
     throw new RangeError("world style placement salts must be safe integers");
   }
+  const rivers = profile.rivers;
+  for (const name of [
+    "pageSize",
+    "maximumCachedPages",
+    "sourceCellSize",
+    "sourcesPerCell",
+    "minimumCourseLength",
+    "maximumCourseLength"
+  ]) {
+    if (!Number.isInteger(rivers[name]) || rivers[name] <= 0) {
+      throw new RangeError(`rivers.${name} must be a positive integer`);
+    }
+  }
+  for (const name of [
+    "sourceElevationTransition",
+    "potentialContinentalWeight",
+    "potentialElevationWeight",
+    "potentialValleyWeight",
+    "potentialMoistureWeight",
+    "potentialLakeWeight",
+    "potentialJitter"
+  ]) positive(`rivers.${name}`, rivers[name]);
+  for (const name of [
+    "sourceSpawnChance",
+    "sourceMinimumElevation",
+    "sourceMaximumElevation",
+    "sourceMinimumMoisture",
+    "sourceMoistureFloor",
+    "sourceValleyFloor"
+  ]) unitInterval(`rivers.${name}`, rivers[name]);
+  if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
+    throw new RangeError("river source elevation range must contain both transition bands");
+  }
+  if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
+    throw new RangeError("river course length range must be ordered");
+  }
+  if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
+    throw new RangeError("river salts must be safe integers");
+  }
 }
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);
 
@@ -326,7 +398,7 @@ var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 
 // src/world/generateWorldChunk.ts
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-var WORLD_CHUNK_FORMAT_VERSION = 1;
+var WORLD_CHUNK_FORMAT_VERSION = 2;
 var WORLD_CHUNK_PADDING = 1;
 function cloneWorldTileOverride(value) {
   const copy = { ...value };
@@ -338,7 +410,7 @@ function cloneWorldTileOverride(value) {
 function worldTileOverridesEqual(first, second) {
   if (first === second) return true;
   if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
-  if (first.type !== second.type || first.treeModel !== second.treeModel || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
+  if (first.type !== second.type || first.treeModel !== second.treeModel || first.riverEdges !== second.riverEdges || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
   const firstModifiers = first.modifiers;
   const secondModifiers = second.modifiers;
   if (firstModifiers?.length !== secondModifiers?.length || firstModifiers?.some((value, index) => value !== secondModifiers?.[index])) return false;
@@ -347,7 +419,7 @@ function worldTileOverridesEqual(first, second) {
   return firstRivers?.length === secondRivers?.length && !firstRivers?.some((value, index) => value.riverIndex !== secondRivers?.[index]?.riverIndex || value.riverTileIndex !== secondRivers?.[index]?.riverTileIndex);
 }
 function hasWorldTileOverride(value) {
-  return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
+  return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.riverEdges !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
 }
 function assertWorldTileOverride(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -361,6 +433,9 @@ function assertWorldTileOverride(value) {
   }
   if (value.treeModel !== void 0 && typeof value.treeModel !== "string") {
     throw new TypeError("tile override treeModel must be a string");
+  }
+  if (value.riverEdges !== void 0 && (!Number.isInteger(value.riverEdges) || value.riverEdges < 0 || value.riverEdges > 63)) {
+    throw new RangeError("tile override riverEdges must be an integer between 0 and 63");
   }
   if (value.unit !== void 0 && typeof value.unit !== "string") {
     throw new TypeError("tile override unit must be a string");
@@ -392,6 +467,10 @@ var FLAG_WOOD = 1 << 4;
 var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
+var FLAG_RIVER = 1 << 8;
+var RIVER_EDGES_SHIFT = 9;
+var RIVER_EDGES_MASK = 63 << RIVER_EDGES_SHIFT;
+var FLAG_EXPLICIT_RIVER_EDGES = 1 << 15;
 
 // src/world/WorldDescriptor.ts
 var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;

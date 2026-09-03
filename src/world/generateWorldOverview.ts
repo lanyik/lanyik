@@ -40,7 +40,8 @@ const PALETTE = {
     tundra: [151, 166, 157] as Rgb,
     snow: [225, 233, 235] as Rgb,
     mountain: [105, 108, 109] as Rgb,
-    lake: [35, 105, 129] as Rgb
+    lake: [35, 105, 129] as Rgb,
+    river: [31, 116, 142] as Rgb
 } as const;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -116,6 +117,7 @@ function overviewTileCoordinate(origin: number, span: number, pixel: number, pix
 
 function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     if (tile.modifiers?.includes("lake")) return PALETTE.lake;
+    if (tile.modifiers?.includes("river")) return PALETTE.river;
     if (tile.type === Land.sea) return PALETTE.deepWater;
     if (tile.type === Land.coastal) return PALETTE.coast;
     if (tile.type === Land.sand) return PALETTE.sand;

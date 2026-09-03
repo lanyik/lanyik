@@ -2,10 +2,10 @@
 
 ## Status and scope
 
-`public/infinite-water.html` is an isolated visual prototype for evaluating a
-direct world-space curve approach to water generation. It does not change the
-v6 world generator, tile data, cache identity or the current decision to defer
-production automatic rivers.
+`public/infinite-water.html` remains an isolated visual prototype for evaluating
+a direct world-space curve approach to water generation. Generator v7 does not
+use its curves, feature identities, tessellation or broad-water layer. The page
+remains available only as a visual experiment in disorder and bank character.
 
 The page answers one narrower question: can an unbounded flat world query the
 same natural-looking curves at any camera position without constructing a
@@ -43,6 +43,21 @@ The runtime cost is bounded by the visible world area and adaptive sample
 spacing, not by distance from the origin or total explored area. Only the
 current viewport geometry is retained; it is replaced when the view, seed or
 curve controls change.
+
+## Separation from generator v7
+
+The prototype was explicitly rejected as the production river skeleton after
+the integration boundary was clarified. Generator v7 keeps the existing world
+and hex cells authoritative: `WorldWaterSampler` proposes source hexes and
+walks the lowest drainage potential among the six adjacent hexes. It contains
+no continuous centreline, feature curve, curve-to-grid rasterizer or
+view-dependent sampling.
+
+Only one visual lesson is shared. The terrain fragment shader uses bilinear C0
+value noise for the bank inside a selected river hex. Values agree across tile
+borders while slope can change at the noise lattice edges. This does not affect
+which hexes contain water; macro terrain, sea and lake generation retain their
+existing rules.
 
 ## Bounded broad-water field
 
@@ -93,14 +108,7 @@ verification.
 
 ## Deliberate omissions
 
-This prototype evaluates geometry, continuity, large water-body composition and
-query cost only. It does not yet assign flow direction, discharge, elevation,
-erosion, lakes, deltas, cross-river avoidance or gameplay crossings. Those are
-production integration decisions, not fallback behavior hidden inside this
-scene.
-
-Before integrating it into generator v7, the visual model should be accepted or
-rejected on its own. If accepted, the next design step is to define a single
-world-space water sampler that both chunk generation and rendering consume, then
-add explicit confluence and width contracts without making chunks own the
-network.
+The prototype's curves and sea basins are not part of generator v7. Production
+rivers use a style-scale drainage potential derived from existing generated
+surface fields; they do not claim physical discharge, erosion, deltas or
+crossing placement. Those remain separate gameplay and hydrology decisions.

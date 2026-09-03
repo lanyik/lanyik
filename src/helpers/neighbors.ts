@@ -16,6 +16,29 @@ export type NeighborDirection = "NE" | "N" | "NW" | "SW" | "S" | "SE";
 
 export const NEIGHBOR_DIRECTIONS: NeighborDirection[] = ["NE", "N", "NW", "SW", "S", "SE"];
 
+// Water-edge instance attributes use this clockwise bit order. Keeping the
+// mapping beside the authoritative neighbor geometry lets generated river
+// topology and rendering share one definition without depending on chunks.
+export const NEIGHBOR_DIRECTION_BITS: Readonly<Record<NeighborDirection, number>> = Object.freeze({
+    SE: 0,
+    S: 1,
+    SW: 2,
+    NW: 3,
+    N: 4,
+    NE: 5
+});
+
+export function oppositeNeighborDirection(direction: NeighborDirection): NeighborDirection {
+    switch (direction) {
+        case "NE": return "SW";
+        case "N": return "S";
+        case "NW": return "SE";
+        case "SW": return "NE";
+        case "S": return "N";
+        case "SE": return "NW";
+    }
+}
+
 export function getNeighborCoords(x: number, y: number, direction: NeighborDirection): Point {
     const odd = x % 2 !== 0;
     switch (direction) {

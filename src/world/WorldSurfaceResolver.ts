@@ -9,6 +9,7 @@ import {
 } from "./LandformSampler";
 import { randomAt } from "./noise";
 import { WORLD_STYLE_PROFILE, WorldStyleProfile } from "./WorldStyleProfile";
+import { createWorldWaterSampler, WorldWaterSampler } from "./WorldWaterSampler";
 
 export type WorldBiome = "ocean" | "coast" | "temperate" | "dry" | "cold" | "alpine";
 
@@ -247,13 +248,15 @@ function sampleSurface(
 }
 
 type SampleAt = (x: number, y: number) => Readonly<WorldSurfaceSample> | undefined;
+type RiverAt = (x: number, y: number) => number | undefined;
 
 function resolveTile(
     numericSeed: number,
     profile: Readonly<WorldStyleProfile>,
     x: number,
     y: number,
-    sampleAt: SampleAt
+    sampleAt: SampleAt,
+    riverAt: RiverAt
 ): Readonly<TileInfo> {
     const sample = sampleAt(x, y);
     if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
@@ -295,14 +298,24 @@ function resolveTile(
     if (lake) {
         modifiers.push("lake");
     } else {
-        if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-        const forest = sample.vegetationDensity
-            + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
-                * profile.vegetation.placementJitter
-            >= profile.vegetation.placementThreshold;
-        if (forest) {
-            modifiers.push("wood");
-            tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
+        const riverEdges = riverAt(x, y);
+        if (riverEdges !== undefined) {
+            // Generated rivers are one-cell topology chains. They replace hill
+            // and wood modifiers so relief or vegetation cannot occlude the
+            // water. The explicit edge mask keeps nearby unrelated courses
+            // visually separate.
+            modifiers.push("river");
+            tile.riverEdges = riverEdges;
+        } else {
+            if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+            const forest = sample.vegetationDensity
+                + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
+                    * profile.vegetation.placementJitter
+                >= profile.vegetation.placementThreshold;
+            if (forest) {
+                modifiers.push("wood");
+                tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
+            }
         }
     }
     if (modifiers.length > 0) {
@@ -317,6 +330,7 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
     public readonly domain: LandformDomain;
     public readonly profile: Readonly<WorldStyleProfile>;
     private readonly sampler: LandformSampler;
+    private readonly waterSampler: WorldWaterSampler;
 
     constructor(options: WorldSurfaceResolverOptions) {
         if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
@@ -324,6 +338,7 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
         this.profile = options.profile ?? WORLD_STYLE_PROFILE;
         this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
         this.domain = Object.freeze({ ...this.sampler.domain });
+        this.waterSampler = createWorldWaterSampler(this.sampler.numericSeed, this.domain, this.profile);
     }
 
     public sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample> {
@@ -343,12 +358,22 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
             (sampleX, sampleY) => {
                 const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
                 return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : undefined;
-            }
+            },
+            (riverX, riverY) => this.waterSampler.riverEdgesAt(
+                riverX,
+                riverY,
+                (sampleX, sampleY) => {
+                    const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
+                    return normalized
+                        ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y)
+                        : undefined;
+                }
+            )
         );
     }
 
     public createWindow(): WorldSurfaceResolverWindow {
-        return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed);
+        return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);
     }
 }
 
@@ -356,7 +381,11 @@ export class WorldSurfaceResolverWindow {
     private readonly samples = new Map<string, Readonly<WorldSurfaceSample>>();
     private readonly tiles = new Map<string, Readonly<TileInfo>>();
 
-    constructor(private readonly resolver: WorldSurfaceResolver, private readonly numericSeed: number) {}
+    constructor(
+        private readonly resolver: WorldSurfaceResolver,
+        private readonly numericSeed: number,
+        private readonly waterSampler: WorldWaterSampler
+    ) {}
 
     public sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample> | undefined {
         const point = normalizeCoordinates(this.resolver.domain, x, y);
@@ -381,7 +410,12 @@ export class WorldSurfaceResolverWindow {
                 this.resolver.profile,
                 point.x,
                 point.y,
-                (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+                (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY),
+                (riverX, riverY) => this.waterSampler.riverEdgesAt(
+                    riverX,
+                    riverY,
+                    (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+                )
             );
             this.tiles.set(key, tile);
         }

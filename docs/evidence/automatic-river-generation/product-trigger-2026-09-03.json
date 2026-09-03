@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "gateId": "automatic-river-generation",
   "capturedAt": "2026-09-03T13:50:06.528Z",
-  "measurementContext": "Product review requires deterministic generated waterways at arbitrary coordinates in the infinite flat world; finite manual river content cannot satisfy the requested spatial scale or cross-chunk identity.",
+  "measurementContext": "Product review requires deterministic hex-native water-network sampling at arbitrary coordinates in the existing infinite flat world; finite manual river content cannot satisfy the requested spatial scale or cross-chunk identity, and the isolated continuous-curve prototype is explicitly outside production generation.",
   "measurements": {
     "worldGenerationRequiresDeterministicInfiniteRiverNetwork": true
   },

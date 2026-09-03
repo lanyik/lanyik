@@ -31,6 +31,8 @@ describe("world style gallery metrics", () => {
             expect(metrics.forests.adjacencyRatio).toBeLessThanOrEqual(1);
             expect(metrics.lakes.singleCellRatio).toBeGreaterThanOrEqual(0);
             expect(metrics.lakes.singleCellRatio).toBeLessThanOrEqual(1);
+            expect(metrics.rivers.connectedRatio).toBeGreaterThanOrEqual(0);
+            expect(metrics.rivers.connectedRatio).toBeLessThanOrEqual(1);
         }
     );
 });

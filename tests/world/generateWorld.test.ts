@@ -10,7 +10,7 @@ import {
 } from "../../src/index";
 
 const landTypes = new Set(Object.values(Land));
-const allowedModifiers = new Set(["hill", "wood", "lake"]);
+const allowedModifiers = new Set(["hill", "wood", "lake", "river"]);
 const isWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 
 describe("generateWorld", () => {

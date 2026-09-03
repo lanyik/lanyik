@@ -25,18 +25,18 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v6 outputs", () => {
+    test("preserves the frozen generator v7 outputs", () => {
         const infinite = generateWorldChunk({
-            seed: "surface-v4-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
+            seed: "surface-v7-infinite", chunkX: -1, chunkY: 0, chunkSize: 24
         });
         const toroidal = generateWorldChunk({
-            seed: "surface-v4-toroidal",
-            chunkX: 0,
-            chunkY: 0,
+            seed: "toroidal-water",
+            chunkX: 3,
+            chunkY: 3,
             chunkSize: 24,
-            world: { topology: "toroidal", width: 48, height: 36 }
+            world: { topology: "toroidal", width: 128, height: 96 }
         });
-        const bounded = generateWorld({ seed: "surface-v4-bounded", width: 32, height: 24 });
+        const bounded = generateWorld({ seed: "gallery-a", width: 128, height: 96 });
         const encoded: number[] = [];
         const land = [Land.sea, Land.coastal, Land.land, Land.sand, Land.tundra, Land.snow, Land.mountain];
         for (let x = 0; x < bounded.w; x += 1) {
@@ -45,12 +45,13 @@ describe("WorldSurfaceResolver", () => {
                 encoded.push(land.indexOf(tile.type));
                 encoded.push((tile.modifiers?.includes("hill") ? 1 : 0)
                     | (tile.modifiers?.includes("wood") ? 2 : 0)
-                    | (tile.modifiers?.includes("lake") ? 4 : 0));
+                    | (tile.modifiers?.includes("lake") ? 4 : 0)
+                    | (tile.modifiers?.includes("river") ? 8 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("ae84e215");
-        expect(checksum(toroidal.tiles)).toBe("c4507ca2");
-        expect(checksum(encoded)).toBe("50fc54b4");
+        expect(checksum(infinite.tiles)).toBe("631f8bfa");
+        expect(checksum(toroidal.tiles)).toBe("4f1396f5");
+        expect(checksum(encoded)).toBe("00a630e7");
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -137,7 +138,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("e0291032");
+        expect(checksum(encoded)).toBe("5ede4132");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -181,6 +182,10 @@ describe("WorldSurfaceResolver", () => {
         const invalidPlacement = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidPlacement.vegetation.placementThreshold = 0.01;
         expect(() => assertWorldStyleProfile(invalidPlacement)).toThrow(/placement threshold/);
+
+        const invalidRiverSampling = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidRiverSampling.rivers.maximumCourseLength = invalidRiverSampling.rivers.minimumCourseLength;
+        expect(() => assertWorldStyleProfile(invalidRiverSampling)).toThrow(/course length/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

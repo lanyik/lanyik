@@ -24,8 +24,8 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generation v1 is current on generator v6 with elevated climate snow, continuous relief, regional forests and lakes |
-| Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
+| World style | Generator v7 adds deterministic, cross-chunk generated rivers to the continuous terrain, climate, forest and lake fields |
+| Next milestone | Use the generated water network for settlement, crossing and navigation gameplay |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -40,7 +40,7 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   floating-origin rebasing.
 - Periodic four-way wrapped maps with seam-aware rendering, picking, neighbors,
   fog and shortest-path movement.
-- Rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
+- Automatically generated and manually editable rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
   atmospheric sky, cities, units and fog of war.
 - Worker-based terrain and vegetation generation, optional IndexedDB base-chunk
   caching and sparse persistent tile overrides.
@@ -274,10 +274,10 @@ frozen contracts, focused subsystem guides, decisions and future designs.
 Current deliberate boundaries:
 
 - [World-style generation v1](docs/world-style-generation-v1.md) is implemented
-  and frozen; automatic river generation remains deliberately deferred.
-- WebGPU/GPU culling and automatic rivers are governed by the
-  [machine-checked optimization gates](docs/optimization-gates.md); both remain
-  deferred until their recorded measurements justify a prototype.
+  through generator v7, including hex-native automatic river sampling.
+- [Machine-checked optimization gates](docs/optimization-gates.md) record the
+  implemented river decision; WebGPU/GPU culling remains deferred until its
+  recorded measurements justify a prototype.
 - Multiplayer reconciliation, cloud saves, server authority and a complete
   economy/combat ruleset are application-level work, not current library
   features.

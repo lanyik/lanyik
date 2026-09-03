@@ -150,6 +150,20 @@ float valueNoise(vec2 p) {
     );
 }
 
+// C0 value noise for represented water boundaries. Bilinear interpolation
+// keeps the value continuous across lattice edges, while deliberately leaving
+// a slope discontinuity there. Macro terrain keeps the smoother valueNoise()
+// above; this rough variant is reserved for generated river banks.
+float roughValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    return mix(
+        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),
+        f.y
+    );
+}
+
 // Same channel-centerline distance as terrain.vertex.ts's riverChannelDist()
 // (and helpers/rivers.ts's CPU mirror) - see the comments there. Duplicated
 // because vertex and fragment shaders are separate string constants.
@@ -546,10 +560,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         float mask = floor(vRiverEdges + 0.5);
         float apothem = hexSize * 0.8660254;
 
-        // static two-octave world-space noise bends the waterline: the curved,
-        // "hand-drawn" banks instead of ruler-straight strips/hex-edge rims.
-        float bend = valueNoise(vWorldXZ * (2.2 / hexSize));
-        bend = 0.6 * bend + 0.4 * valueNoise(vWorldXZ * (5.0 / hexSize));
+        // Static two-octave C0 world-space noise bends the waterline. It is
+        // continuous across tile borders but intentionally not differentiable
+        // at retained lattice edges, avoiding spline-smooth tube banks.
+        float bend = roughValueNoise(vWorldXZ * (2.2 / hexSize));
+        bend = 0.6 * bend + 0.4 * roughValueNoise(vWorldXZ * (5.0 / hexSize));
         float bendOff = (bend - 0.5) * riverCurvature * 0.6;
 
         float waterT = 0.0; // 1 = water surface

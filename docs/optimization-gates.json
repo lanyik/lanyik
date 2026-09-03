@@ -42,7 +42,7 @@
     },
     {
       "id": "automatic-river-generation",
-      "state": "approved",
+      "state": "implemented",
       "ownerDocument": "docs/world-style-generation-v1.md",
       "measurementScript": "review:world-style",
       "triggerMode": "any",

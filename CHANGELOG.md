@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Approved the generator-v7 automatic-river contract: deterministic infinite
-  curve identities, continuous non-smooth sub-hex displacement,
-  topology-preserving hex traversal, periodic toroidal masks and bounded
-  page-cache ownership. Production implementation remains gated until these
-  invariants and generation budgets are verified.
+- Generator v7 hex-native automatic rivers. Stable source hexes sample the
+  existing elevation, continentalness, valley, moisture and lake-potential
+  fields, then follow a strictly descending choice among six neighbours.
+  Infinite/bounded worlds use a bounded 32x32-page LRU; toroidal worlds use one
+  canonical periodic mask. River modifiers survive packed Worker chunks,
+  carry an explicit six-edge connection mask so adjacent courses do not form
+  false loops, suppress obstructing hill/wood placement and use C0 bank noise
+  in the terrain shader without adopting the separate continuous-curve prototype.
 - An isolated infinite water-field prototype with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
   tributaries, and Poisson-spaced irregular sea basins spanning many chunks

@@ -6,7 +6,7 @@ import {
     WorldStyleGalleryMetrics
 } from "../helpers/worldStyleGallery";
 
-describe("world style v5 full gallery review", () => {
+describe("world style v7 full gallery review", () => {
     test("records the fixed corpus and rejects topology or regional-noise regressions", () => {
         const report: WorldStyleGalleryMetrics[] = WORLD_STYLE_GALLERY_SAMPLES
             .map(sample => analyzeWorldStyleGallerySample(sample));
@@ -22,7 +22,11 @@ describe("world style v5 full gallery review", () => {
                 forest: metrics.ratios.forest,
                 forestAdjacency: metrics.forests.adjacencyRatio,
                 isolatedForest: metrics.forests.isolatedRatio,
-                largestForest: metrics.forests.maximumSize
+                largestForest: metrics.forests.maximumSize,
+                river: metrics.ratios.river,
+                riverConnected: metrics.rivers.connectedRatio,
+                isolatedRiver: metrics.rivers.isolatedRatio,
+                largestRiver: metrics.rivers.maximumSize
             })))}`);
         }
 
@@ -39,6 +43,14 @@ describe("world style v5 full gallery review", () => {
             }
             if (metrics.lakes.tiles >= 16) {
                 expect(metrics.lakes.singleCellRatio, `${sample.id} single-cell lakes`).toBeLessThan(0.15);
+            }
+            if (metrics.rivers.tiles >= 16) {
+                expect(metrics.rivers.connectedRatio, `${sample.id} connected rivers`).toBeGreaterThan(0.97);
+                // A sampled window can clip a valid chain at its boundary, so
+                // water-aware adjacency is the hard per-tile invariant. Keep
+                // the river-only component diagnostic deliberately broader.
+                expect(metrics.rivers.isolatedRatio, `${sample.id} isolated rivers`).toBeLessThan(0.06);
+                expect(metrics.rivers.maximumSize, `${sample.id} river chain size`).toBeGreaterThanOrEqual(7);
             }
             const expected = sample.group === "bounded"
                 ? { water: [0.6, 0.92], mountain: [0, 0.08], forest: [0.002, 0.08] }

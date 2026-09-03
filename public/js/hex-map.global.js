@@ -1684,6 +1684,30 @@
 
   // src/helpers/neighbors.ts
   var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
+  var NEIGHBOR_DIRECTION_BITS = Object.freeze({
+    SE: 0,
+    S: 1,
+    SW: 2,
+    NW: 3,
+    N: 4,
+    NE: 5
+  });
+  function oppositeNeighborDirection(direction) {
+    switch (direction) {
+      case "NE":
+        return "SW";
+      case "N":
+        return "S";
+      case "NW":
+        return "SE";
+      case "SW":
+        return "NE";
+      case "S":
+        return "N";
+      case "SE":
+        return "NW";
+    }
+  }
   function getNeighborCoords(x, y, direction) {
     const odd = x % 2 !== 0;
     switch (direction) {
@@ -2046,6 +2070,18 @@
   function isSeaOrCoastal(tile) {
     return tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */;
   }
+  function explicitRiverEdges(tile) {
+    const edges = tile.riverEdges;
+    if (edges === void 0) return void 0;
+    if (!Number.isInteger(edges) || edges < 0 || edges > 63) {
+      throw new RangeError("tile riverEdges must be an integer between 0 and 63");
+    }
+    return edges;
+  }
+  function riverAllowsEdge(tile, direction) {
+    const edges = explicitRiverEdges(tile);
+    return edges === void 0 || (edges & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0;
+  }
   function waterEdgeValue(map, x, y) {
     const tile = getMapTile(map, x, y);
     if (isLakeTile(tile)) {
@@ -2055,17 +2091,18 @@
         const neighbor = getMapTile(map, n.x, n.y);
         if (!neighbor) return;
         if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
-        else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
+        else if (isRiverTile(neighbor) && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction))) channelMask |= 1 << bit;
       });
       return LAKE_FLAG + openMask * 64 + channelMask;
     }
-    if (isRiverTile(tile)) {
+    if (tile && isRiverTile(tile)) {
       let mask = 0;
       MASK_DIRECTIONS.forEach((direction, bit) => {
+        if (!riverAllowsEdge(tile, direction)) return;
         const n = getNeighborCoords(x, y, direction);
         const neighbor = getMapTile(map, n.x, n.y);
         if (!neighbor) return;
-        if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
+        if (isRiverTile(neighbor) && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction)) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
       });
       return mask;
     }
@@ -2073,9 +2110,10 @@
   }
   function riverSeaMouthEdgeValue(map, x, y) {
     const tile = getMapTile(map, x, y);
-    if (!isRiverTile(tile)) return 0;
+    if (!tile || !isRiverTile(tile)) return 0;
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
+      if (!riverAllowsEdge(tile, direction)) return;
       const n = getNeighborCoords(x, y, direction);
       const neighbor = getMapTile(map, n.x, n.y);
       if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
@@ -2084,9 +2122,10 @@
   }
   function riverLakeMouthEdgeValue(map, x, y) {
     const tile = getMapTile(map, x, y);
-    if (!isRiverTile(tile)) return 0;
+    if (!tile || !isRiverTile(tile)) return 0;
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
+      if (!riverAllowsEdge(tile, direction)) return;
       const n = getNeighborCoords(x, y, direction);
       const neighbor = getMapTile(map, n.x, n.y);
       if (isLakeTile(neighbor)) mask |= 1 << bit;
@@ -5678,6 +5717,20 @@ float valueNoise(vec2 p) {
     );
 }
 
+// C0 value noise for represented water boundaries. Bilinear interpolation
+// keeps the value continuous across lattice edges, while deliberately leaving
+// a slope discontinuity there. Macro terrain keeps the smoother valueNoise()
+// above; this rough variant is reserved for generated river banks.
+float roughValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    return mix(
+        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),
+        f.y
+    );
+}
+
 // Same channel-centerline distance as terrain.vertex.ts's riverChannelDist()
 // (and helpers/rivers.ts's CPU mirror) - see the comments there. Duplicated
 // because vertex and fragment shaders are separate string constants.
@@ -6074,10 +6127,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         float mask = floor(vRiverEdges + 0.5);
         float apothem = hexSize * 0.8660254;
 
-        // static two-octave world-space noise bends the waterline: the curved,
-        // "hand-drawn" banks instead of ruler-straight strips/hex-edge rims.
-        float bend = valueNoise(vWorldXZ * (2.2 / hexSize));
-        bend = 0.6 * bend + 0.4 * valueNoise(vWorldXZ * (5.0 / hexSize));
+        // Static two-octave C0 world-space noise bends the waterline. It is
+        // continuous across tile borders but intentionally not differentiable
+        // at retained lattice edges, avoiding spline-smooth tube banks.
+        float bend = roughValueNoise(vWorldXZ * (2.2 / hexSize));
+        bend = 0.6 * bend + 0.4 * roughValueNoise(vWorldXZ * (5.0 / hexSize));
         float bendOff = (bend - 0.5) * riverCurvature * 0.6;
 
         float waterT = 0.0; // 1 = water surface
@@ -10438,7 +10492,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 6;
+  var WORLD_GENERATOR_VERSION = 7;
 
   // src/world/WorldStyleProfile.ts
   var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -10554,6 +10608,29 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       minimumNeighbors: 1,
       placementScale: 0.65,
       placementSalt: 1821285621
+    }),
+    rivers: Object.freeze({
+      pageSize: 32,
+      maximumCachedPages: 16,
+      sourceCellSize: 32,
+      sourcesPerCell: 6,
+      sourceSpawnChance: 1,
+      sourceMinimumElevation: 0.46,
+      sourceMaximumElevation: 0.8,
+      sourceElevationTransition: 0.04,
+      sourceMinimumMoisture: 0.2,
+      sourceMoistureFloor: 0.6,
+      sourceValleyFloor: 0.65,
+      minimumCourseLength: 3,
+      maximumCourseLength: 96,
+      potentialContinentalWeight: 0.9,
+      potentialElevationWeight: 0.1,
+      potentialValleyWeight: 0.035,
+      potentialMoistureWeight: 0.01,
+      potentialLakeWeight: 0.02,
+      potentialJitter: 5e-4,
+      sourceSalt: 1013904242,
+      flowSalt: 1542469173
     })
   });
   var finite = (name, value) => {
@@ -10590,7 +10667,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
       throw new RangeError("world style profile generatorVersion is unsupported");
     }
-    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes) {
+    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes || !profile.rivers) {
       throw new TypeError("world style profile groups are required");
     }
     assertFiniteNumbers(profile, "");
@@ -10744,6 +10821,45 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     if (!Number.isSafeInteger(profile.vegetation.placementSalt) || !Number.isSafeInteger(profile.lakes.placementSalt)) {
       throw new RangeError("world style placement salts must be safe integers");
+    }
+    const rivers = profile.rivers;
+    for (const name of [
+      "pageSize",
+      "maximumCachedPages",
+      "sourceCellSize",
+      "sourcesPerCell",
+      "minimumCourseLength",
+      "maximumCourseLength"
+    ]) {
+      if (!Number.isInteger(rivers[name]) || rivers[name] <= 0) {
+        throw new RangeError(`rivers.${name} must be a positive integer`);
+      }
+    }
+    for (const name of [
+      "sourceElevationTransition",
+      "potentialContinentalWeight",
+      "potentialElevationWeight",
+      "potentialValleyWeight",
+      "potentialMoistureWeight",
+      "potentialLakeWeight",
+      "potentialJitter"
+    ]) positive(`rivers.${name}`, rivers[name]);
+    for (const name of [
+      "sourceSpawnChance",
+      "sourceMinimumElevation",
+      "sourceMaximumElevation",
+      "sourceMinimumMoisture",
+      "sourceMoistureFloor",
+      "sourceValleyFloor"
+    ]) unitInterval(`rivers.${name}`, rivers[name]);
+    if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
+      throw new RangeError("river source elevation range must contain both transition bands");
+    }
+    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
+      throw new RangeError("river course length range must be ordered");
+    }
+    if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
+      throw new RangeError("river salts must be safe integers");
     }
   }
   assertWorldStyleProfile(WORLD_STYLE_PROFILE);
@@ -10908,11 +11024,274 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return createLandformSampler({ seed, domain }).sample(x, y);
   }
 
-  // src/world/WorldSurfaceResolver.ts
-  var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
+  // src/world/WorldWaterSampler.ts
+  var UINT32_RANGE = 4294967296;
+  var positiveModulo3 = (value, period) => (value % period + period) % period;
   var clamp012 = (value) => Math.max(0, Math.min(1, value));
   var smoothstep2 = (edge0, edge1, value) => {
-    const t = clamp012((value - edge0) / (edge1 - edge0));
+    const amount = clamp012((value - edge0) / (edge1 - edge0));
+    return amount * amount * (3 - 2 * amount);
+  };
+  function mix32(value) {
+    let mixed = value >>> 0;
+    mixed ^= mixed >>> 16;
+    mixed = Math.imul(mixed, 2146121005);
+    mixed ^= mixed >>> 15;
+    mixed = Math.imul(mixed, 2221713035);
+    mixed ^= mixed >>> 16;
+    return mixed >>> 0;
+  }
+  function sourceKey(seed, cellX, cellY, slot, salt) {
+    return mix32(
+      seed ^ salt ^ Math.imul(cellX, 1663821227) ^ Math.imul(cellY, 2232777461) ^ Math.imul(slot, 2654435761)
+    );
+  }
+  function randomForSource(seed, key, salt) {
+    return mix32(seed ^ key ^ Math.imul(salt, 668265261)) / UINT32_RANGE;
+  }
+  function isSourceTerrain(type) {
+    return type === "land" /* land */ || type === "sand" /* sand */ || type === "tundra" /* tundra */;
+  }
+  var DeterministicWorldWaterSampler = class {
+    constructor(numericSeed, domain, profile) {
+      this.numericSeed = numericSeed;
+      this.domain = domain;
+      this.profile = profile;
+      this.pages = /* @__PURE__ */ new Map();
+    }
+    riverEdgesAt(x, y, sampleAt) {
+      if (this.domain.topology === "toroidal") {
+        const canonicalX = positiveModulo3(x, this.domain.width);
+        const canonicalY = positiveModulo3(y, this.domain.height);
+        const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
+        const value2 = mask[canonicalX * this.domain.height + canonicalY];
+        return value2 < 0 ? void 0 : value2;
+      }
+      const pageSize = this.profile.rivers.pageSize;
+      const pageX = Math.floor(x / pageSize);
+      const pageY = Math.floor(y / pageSize);
+      const key = `${pageX},${pageY}`;
+      let page = this.pages.get(key);
+      if (page) {
+        this.pages.delete(key);
+        this.pages.set(key, page);
+      } else {
+        page = this.buildPage(pageX, pageY, sampleAt);
+        this.pages.set(key, page);
+        while (this.pages.size > this.profile.rivers.maximumCachedPages) {
+          const oldest = this.pages.keys().next().value;
+          if (oldest === void 0) break;
+          this.pages.delete(oldest);
+        }
+      }
+      const localX = x - pageX * pageSize;
+      const localY = y - pageY * pageSize;
+      const value = page.riverEdges[localX * pageSize + localY];
+      return value < 0 ? void 0 : value;
+    }
+    isRiverTile(x, y, sampleAt) {
+      return this.riverEdgesAt(x, y, sampleAt) !== void 0;
+    }
+    get stats() {
+      const mask = this.toroidalMask;
+      let toroidalRiverTiles = 0;
+      if (mask) for (const value of mask) toroidalRiverTiles += value >= 0 ? 1 : 0;
+      return Object.freeze({
+        cachedPages: this.pages.size,
+        maximumCachedPages: this.profile.rivers.maximumCachedPages,
+        toroidalMaskReady: mask !== void 0,
+        toroidalRiverTiles
+      });
+    }
+    clear() {
+      this.pages.clear();
+      this.toroidalMask = void 0;
+    }
+    normalizePoint(point) {
+      if (this.domain.topology === "infinite") return point;
+      if (this.domain.topology === "toroidal") {
+        return {
+          x: positiveModulo3(point.x, this.domain.width),
+          y: positiveModulo3(point.y, this.domain.height)
+        };
+      }
+      return point.x >= 0 && point.x < this.domain.width && point.y >= 0 && point.y < this.domain.height ? point : void 0;
+    }
+    sourceSuitability(sample) {
+      if (!isSourceTerrain(sample.baseTerrain)) return 0;
+      const rivers = this.profile.rivers;
+      const elevationBand = smoothstep2(
+        rivers.sourceMinimumElevation,
+        rivers.sourceMinimumElevation + rivers.sourceElevationTransition,
+        sample.landform.elevation
+      ) * (1 - smoothstep2(
+        rivers.sourceMaximumElevation - rivers.sourceElevationTransition,
+        rivers.sourceMaximumElevation,
+        sample.landform.elevation
+      ));
+      const moisture = rivers.sourceMoistureFloor + (1 - rivers.sourceMoistureFloor) * smoothstep2(rivers.sourceMinimumMoisture, 1, sample.landform.moisture);
+      const valley = rivers.sourceValleyFloor + (1 - rivers.sourceValleyFloor) * sample.landform.valley;
+      return clamp012(elevationBand * moisture * valley);
+    }
+    drainagePotential(point, sample) {
+      if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) return -1;
+      if (sample.baseTerrain === "mountain" /* mountain */ || sample.baseTerrain === "snow" /* snow */) return Infinity;
+      const rivers = this.profile.rivers;
+      const jitter = (randomAt(this.numericSeed, point.x, point.y, rivers.flowSalt) - 0.5) * rivers.potentialJitter;
+      return sample.landform.continentalness * rivers.potentialContinentalWeight + sample.landform.elevation * rivers.potentialElevationWeight - sample.landform.valley * rivers.potentialValleyWeight - sample.landform.moisture * rivers.potentialMoistureWeight - sample.lakePotential * rivers.potentialLakeWeight + jitter;
+    }
+    traceCourse(source, sampleAt) {
+      const rivers = this.profile.rivers;
+      const course = [];
+      let current = this.normalizePoint(source);
+      let mouth;
+      for (let step = 0; current && step < rivers.maximumCourseLength; step += 1) {
+        const sample = sampleAt(current.x, current.y);
+        if (!sample) break;
+        if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
+          mouth = current;
+          break;
+        }
+        if (!isSourceTerrain(sample.baseTerrain)) break;
+        course.push(current);
+        const currentPotential = this.drainagePotential(current, sample);
+        let next;
+        let nextPotential = currentPotential;
+        for (const neighbor of getNeighbors(current.x, current.y)) {
+          const canonical = this.normalizePoint(neighbor);
+          if (!canonical) continue;
+          const adjacent = sampleAt(canonical.x, canonical.y);
+          if (!adjacent) continue;
+          const potential = this.drainagePotential(canonical, adjacent);
+          if (potential < nextPotential) {
+            next = canonical;
+            nextPotential = potential;
+          }
+        }
+        if (!next) break;
+        current = next;
+      }
+      return course.length >= rivers.minimumCourseLength || mouth && course.length >= 2 ? { points: course, mouth } : void 0;
+    }
+    directionBetween(from, to) {
+      for (const neighbor of getNeighbors(from.x, from.y)) {
+        const canonical = this.normalizePoint(neighbor);
+        if (canonical?.x === to.x && canonical.y === to.y) return neighbor.direction;
+      }
+      throw new Error("water course contains non-neighboring hex cells");
+    }
+    sourceForCell(cellX, cellY, slot, cellWidth, cellHeight, sampleAt) {
+      const rivers = this.profile.rivers;
+      const key = sourceKey(this.numericSeed, cellX, cellY, slot, rivers.sourceSalt);
+      const point = this.normalizePoint({
+        x: Math.floor((cellX + 0.06 + randomForSource(this.numericSeed, key, 311) * 0.88) * cellWidth),
+        y: Math.floor((cellY + 0.06 + randomForSource(this.numericSeed, key, 435) * 0.88) * cellHeight)
+      });
+      if (!point) return void 0;
+      const sample = sampleAt(point.x, point.y);
+      if (!sample) return void 0;
+      const chance = rivers.sourceSpawnChance * this.sourceSuitability(sample);
+      return randomForSource(this.numericSeed, key, 535) < chance ? point : void 0;
+    }
+    visitSourceCells(firstCellX, lastCellX, firstCellY, lastCellY, cellWidth, cellHeight, sampleAt, visitEdge) {
+      const rivers = this.profile.rivers;
+      for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
+        for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
+          for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
+            const source = this.sourceForCell(
+              cellX,
+              cellY,
+              slot,
+              cellWidth,
+              cellHeight,
+              sampleAt
+            );
+            if (!source) continue;
+            const course = this.traceCourse(source, sampleAt);
+            if (!course) continue;
+            for (let index = 1; index < course.points.length; index += 1) {
+              const previous = course.points[index - 1];
+              const current = course.points[index];
+              const direction = this.directionBetween(previous, current);
+              visitEdge(previous, direction);
+              visitEdge(current, oppositeNeighborDirection(direction));
+            }
+            if (course.mouth) {
+              const last = course.points[course.points.length - 1];
+              visitEdge(last, this.directionBetween(last, course.mouth));
+            }
+          }
+        }
+      }
+    }
+    buildPage(pageX, pageY, sampleAt) {
+      const rivers = this.profile.rivers;
+      const pageSize = rivers.pageSize;
+      const minX = pageX * pageSize;
+      const minY = pageY * pageSize;
+      const maxX = minX + pageSize - 1;
+      const maxY = minY + pageSize - 1;
+      const reach = rivers.maximumCourseLength;
+      const firstCellX = Math.floor((minX - reach) / rivers.sourceCellSize);
+      const lastCellX = Math.floor((maxX + reach) / rivers.sourceCellSize);
+      const firstCellY = Math.floor((minY - reach) / rivers.sourceCellSize);
+      const lastCellY = Math.floor((maxY + reach) / rivers.sourceCellSize);
+      const riverEdges = new Int8Array(pageSize * pageSize);
+      riverEdges.fill(-1);
+      this.visitSourceCells(
+        firstCellX,
+        lastCellX,
+        firstCellY,
+        lastCellY,
+        rivers.sourceCellSize,
+        rivers.sourceCellSize,
+        sampleAt,
+        (point, direction) => {
+          const localX = point.x - minX;
+          const localY = point.y - minY;
+          if (localX >= 0 && localX < pageSize && localY >= 0 && localY < pageSize) {
+            const index = localX * pageSize + localY;
+            const value = Math.max(0, riverEdges[index]);
+            riverEdges[index] = value | 1 << NEIGHBOR_DIRECTION_BITS[direction];
+          }
+        }
+      );
+      return { riverEdges };
+    }
+    buildToroidalMask(sampleAt) {
+      if (this.domain.topology !== "toroidal") throw new Error("toroidal water mask requires a toroidal domain");
+      const domain = this.domain;
+      const rivers = this.profile.rivers;
+      const columns = Math.max(1, Math.ceil(domain.width / rivers.sourceCellSize));
+      const rows = Math.max(1, Math.ceil(domain.height / rivers.sourceCellSize));
+      const mask = new Int8Array(domain.width * domain.height);
+      mask.fill(-1);
+      this.visitSourceCells(
+        0,
+        columns - 1,
+        0,
+        rows - 1,
+        domain.width / columns,
+        domain.height / rows,
+        sampleAt,
+        (point, direction) => {
+          const index = point.x * domain.height + point.y;
+          const value = Math.max(0, mask[index]);
+          mask[index] = value | 1 << NEIGHBOR_DIRECTION_BITS[direction];
+        }
+      );
+      return mask;
+    }
+  };
+  function createWorldWaterSampler(numericSeed, domain, profile) {
+    return new DeterministicWorldWaterSampler(numericSeed, domain, profile);
+  }
+
+  // src/world/WorldSurfaceResolver.ts
+  var isWater2 = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
+  var clamp013 = (value) => Math.max(0, Math.min(1, value));
+  var smoothstep3 = (edge0, edge1, value) => {
+    const t = clamp013((value - edge0) / (edge1 - edge0));
     return t * t * (3 - 2 * t);
   };
   var modulo = (value, period) => (value % period + period) % period;
@@ -10933,7 +11312,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const terrain = profile.terrain;
     if (sample.elevation < terrain.seaLevel) return "sea" /* sea */;
     if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
-    const snowColdness = terrain.snowTemperature > 0 ? clamp012((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
+    const snowColdness = terrain.snowTemperature > 0 ? clamp013((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
     const minimumSnowElevation = terrain.seaLevel + (terrain.hillElevation - terrain.seaLevel) * 0.45;
     const snowElevation = terrain.hillElevation - (terrain.hillElevation - minimumSnowElevation) * snowColdness;
     if (sample.temperature < terrain.snowTemperature && sample.elevation > snowElevation) return "snow" /* snow */;
@@ -10946,12 +11325,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
     const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
     const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
-    const hill = smoothstep2(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
+    const hill = smoothstep3(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
     const mountainT = Math.max(
       0,
       (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
     );
-    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp012(mountainT) * relief.mountainRidgeScale;
+    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale;
     return Math.max(
       relief.shoreline,
       Math.min(relief.mountainMaximum, plain + hill + mountain)
@@ -10961,23 +11340,23 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (isWater2(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
     const terrain = profile.terrain;
     const transition = terrain.climateTransition;
-    const cold = 1 - smoothstep2(
+    const cold = 1 - smoothstep3(
       terrain.snowTemperature - transition,
       terrain.tundraTemperature + transition,
       sample.temperature
     );
-    const dry = smoothstep2(
+    const dry = smoothstep3(
       terrain.sandTemperature - transition,
       terrain.sandTemperature + transition,
       sample.temperature
-    ) * (1 - smoothstep2(
+    ) * (1 - smoothstep3(
       terrain.sandMoisture - transition,
       terrain.sandMoisture + transition,
       sample.moisture
     ));
-    const alpine = clamp012(Math.max(
+    const alpine = clamp013(Math.max(
       type === "mountain" /* mountain */ ? 0.7 : 0,
-      smoothstep2(
+      smoothstep3(
         terrain.mountainElevation - transition,
         terrain.mountainPeakElevation,
         sample.elevation
@@ -11005,19 +11384,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function vegetationDensityFor(type, sample, profile) {
     if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
     const vegetation = profile.vegetation;
-    const moisture = smoothstep2(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
-    const cold = smoothstep2(
+    const moisture = smoothstep3(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
+    const cold = smoothstep3(
       vegetation.temperatureMinimum - vegetation.temperatureTransition,
       vegetation.temperatureMinimum + vegetation.temperatureTransition,
       sample.temperature
     );
-    const heat = 1 - smoothstep2(
+    const heat = 1 - smoothstep3(
       vegetation.temperatureMaximum - vegetation.temperatureTransition,
       vegetation.temperatureMaximum + vegetation.temperatureTransition,
       sample.temperature
     );
-    const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep2(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
-    const slope = clamp012(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
+    const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep3(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
+    const slope = clamp013(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
     return Math.min(
       vegetation.maximumDensity,
       moisture * cold * heat * patch * slope * vegetation.densityScale
@@ -11026,11 +11405,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function lakePotentialFor(type, sample, profile) {
     if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
     const lakes = profile.lakes;
-    const elevation = smoothstep2(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep2(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
-    const moisture = smoothstep2(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
-    const valley = smoothstep2(lakes.valleyStart, lakes.valleyFull, sample.valley);
-    const patch = smoothstep2(lakes.patchStart, lakes.patchFull, sample.lakePatch);
-    return clamp012(elevation * moisture * valley * patch);
+    const elevation = smoothstep3(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep3(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
+    const moisture = smoothstep3(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
+    const valley = smoothstep3(lakes.valleyStart, lakes.valleyFull, sample.valley);
+    const patch = smoothstep3(lakes.patchStart, lakes.patchFull, sample.lakePatch);
+    return clamp013(elevation * moisture * valley * patch);
   }
   function vegetationKindFor(sample, profile) {
     return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
@@ -11053,7 +11432,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       landform
     });
   }
-  function resolveTile(numericSeed, profile, x, y, sampleAt) {
+  function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
     const sample = sampleAt(x, y);
     if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
     let type = sample.baseTerrain;
@@ -11084,11 +11463,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (lake) {
       modifiers.push("lake");
     } else {
-      if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-      const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
-      if (forest) {
-        modifiers.push("wood");
-        tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
+      const riverEdges = riverAt(x, y);
+      if (riverEdges !== void 0) {
+        modifiers.push("river");
+        tile.riverEdges = riverEdges;
+      } else {
+        if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+        const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
+        if (forest) {
+          modifiers.push("wood");
+          tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
+        }
       }
     }
     if (modifiers.length > 0) {
@@ -11104,6 +11489,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.profile = options.profile ?? WORLD_STYLE_PROFILE;
       this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
       this.domain = Object.freeze({ ...this.sampler.domain });
+      this.waterSampler = createWorldWaterSampler(this.sampler.numericSeed, this.domain, this.profile);
     }
     sampleGenerated(x, y) {
       const point = normalizeCoordinates(this.domain, x, y);
@@ -11121,17 +11507,26 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         (sampleX, sampleY) => {
           const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
           return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
-        }
+        },
+        (riverX, riverY) => this.waterSampler.riverEdgesAt(
+          riverX,
+          riverY,
+          (sampleX, sampleY) => {
+            const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
+            return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
+          }
+        )
       );
     }
     createWindow() {
-      return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed);
+      return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);
     }
   };
   var WorldSurfaceResolverWindow = class {
-    constructor(resolver, numericSeed) {
+    constructor(resolver, numericSeed, waterSampler) {
       this.resolver = resolver;
       this.numericSeed = numericSeed;
+      this.waterSampler = waterSampler;
       this.samples = /* @__PURE__ */ new Map();
       this.tiles = /* @__PURE__ */ new Map();
     }
@@ -11157,7 +11552,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           this.resolver.profile,
           point.x,
           point.y,
-          (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+          (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY),
+          (riverX, riverY) => this.waterSampler.riverEdgesAt(
+            riverX,
+            riverY,
+            (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+          )
         );
         this.tiles.set(key, tile);
       }
@@ -11224,8 +11624,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   // src/world/generateWorldChunk.ts
   var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
   var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-  var WORLD_CHUNK_FORMAT_VERSION = 1;
+  var WORLD_CHUNK_FORMAT_VERSION = 2;
   var WORLD_CHUNK_PADDING = 1;
+  var recentChunkResolver;
+  function resolverMatchesOptions(resolver, options) {
+    if (resolver.seed !== String(options.seed)) return false;
+    if (!options.world) return resolver.domain.topology === "infinite";
+    return resolver.domain.topology === "toroidal" && resolver.domain.width === options.world.width && resolver.domain.height === options.world.height;
+  }
+  function resolverForSynchronousGeneration(options) {
+    if (!recentChunkResolver || !resolverMatchesOptions(recentChunkResolver, options)) {
+      recentChunkResolver = createWorldChunkSurfaceResolver(options);
+    }
+    return recentChunkResolver;
+  }
   function cloneWorldTileOverride(value) {
     const copy = { ...value };
     if (value.modifiers) copy.modifiers = [...value.modifiers];
@@ -11236,7 +11648,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function worldTileOverridesEqual(first, second) {
     if (first === second) return true;
     if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
-    if (first.type !== second.type || first.treeModel !== second.treeModel || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
+    if (first.type !== second.type || first.treeModel !== second.treeModel || first.riverEdges !== second.riverEdges || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
     const firstModifiers = first.modifiers;
     const secondModifiers = second.modifiers;
     if (firstModifiers?.length !== secondModifiers?.length || firstModifiers?.some((value, index) => value !== secondModifiers?.[index])) return false;
@@ -11245,7 +11657,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return firstRivers?.length === secondRivers?.length && !firstRivers?.some((value, index) => value.riverIndex !== secondRivers?.[index]?.riverIndex || value.riverTileIndex !== secondRivers?.[index]?.riverTileIndex);
   }
   function hasWorldTileOverride(value) {
-    return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
+    return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.riverEdges !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
   }
   function assertWorldTileOverride(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -11259,6 +11671,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     if (value.treeModel !== void 0 && typeof value.treeModel !== "string") {
       throw new TypeError("tile override treeModel must be a string");
+    }
+    if (value.riverEdges !== void 0 && (!Number.isInteger(value.riverEdges) || value.riverEdges < 0 || value.riverEdges > 63)) {
+      throw new RangeError("tile override riverEdges must be an integer between 0 and 63");
     }
     if (value.unit !== void 0 && typeof value.unit !== "string") {
       throw new TypeError("tile override unit must be a string");
@@ -11290,6 +11705,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var FLAG_LAKE = 1 << 5;
   var TREE_SHIFT = 6;
   var TREE_MASK = 3 << TREE_SHIFT;
+  var FLAG_RIVER = 1 << 8;
+  var RIVER_EDGES_SHIFT = 9;
+  var RIVER_EDGES_MASK = 63 << RIVER_EDGES_SHIFT;
+  var FLAG_EXPLICIT_RIVER_EDGES = 1 << 15;
   var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
   function assertChunkCoordinate(name, value) {
     if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
@@ -11305,6 +11724,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
     if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
     if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
+    if (tile.modifiers?.includes("river")) packed |= FLAG_RIVER;
+    if (tile.riverEdges !== void 0) {
+      if (!Number.isInteger(tile.riverEdges) || tile.riverEdges < 0 || tile.riverEdges > 63) {
+        throw new RangeError("tile riverEdges must be an integer between 0 and 63");
+      }
+      packed |= FLAG_EXPLICIT_RIVER_EDGES | tile.riverEdges << RIVER_EDGES_SHIFT;
+    }
     const treeCode = TREE_MODELS.indexOf(tile.treeModel);
     if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
     return packed;
@@ -11320,7 +11746,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     assertChunkCoordinate("chunkY", options.chunkY);
     validateBoundedWorld(options.world);
     const chunkSize = resolveChunkSize(options.chunkSize);
-    const resolver = createWorldChunkSurfaceResolver(options);
+    const resolver = resolverForSynchronousGeneration(options);
     return generateWorldChunkWithResolver(options, resolver, chunkSize);
   }
   function createWorldChunkSurfaceResolver(options) {
@@ -11378,7 +11804,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if ((packed & FLAG_HILL) !== 0) modifiers.push("hill");
     if ((packed & FLAG_WOOD) !== 0) modifiers.push("wood");
     if ((packed & FLAG_LAKE) !== 0) modifiers.push("lake");
+    if ((packed & FLAG_RIVER) !== 0) modifiers.push("river");
     if (modifiers.length > 0) tile.modifiers = modifiers;
+    if ((packed & FLAG_EXPLICIT_RIVER_EDGES) !== 0) {
+      tile.riverEdges = (packed & RIVER_EDGES_MASK) >> RIVER_EDGES_SHIFT;
+    }
     const treeModel = TREE_MODELS[(packed & TREE_MASK) >> TREE_SHIFT];
     if (treeModel) tile.treeModel = treeModel;
     return tile;
@@ -12097,9 +12527,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     tundra: [151, 166, 157],
     snow: [225, 233, 235],
     mountain: [105, 108, 109],
-    lake: [35, 105, 129]
+    lake: [35, 105, 129],
+    river: [31, 116, 142]
   };
-  var clamp013 = (value) => Math.max(0, Math.min(1, value));
+  var clamp014 = (value) => Math.max(0, Math.min(1, value));
   function assertSafeExtentCoordinate(name, value) {
     if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
   }
@@ -12139,7 +12570,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   }
   function mix2(first, second, amount) {
-    const t = clamp013(amount);
+    const t = clamp014(amount);
     return [
       first[0] + (second[0] - first[0]) * t,
       first[1] + (second[1] - first[1]) * t,
@@ -12160,6 +12591,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function staticTileColor(tile) {
     if (tile.modifiers?.includes("lake")) return PALETTE.lake;
+    if (tile.modifiers?.includes("river")) return PALETTE.river;
     if (tile.type === "sea" /* sea */) return PALETTE.deepWater;
     if (tile.type === "coastal" /* coastal */) return PALETTE.coast;
     if (tile.type === "sand" /* sand */) return PALETTE.sand;
@@ -12185,7 +12617,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const sample = resolver.sampleGenerated(tileX, tileY);
         let color;
         if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
-          const shoreline = clamp013(
+          const shoreline = clamp014(
             1 - (terrain.seaLevel - sample.landform.elevation) / Math.max(1e-3, terrain.seaLevel * 0.42)
           );
           color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
@@ -12203,7 +12635,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
           color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
         }
-        const reliefShade = 0.88 + clamp013((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
+        const reliefShade = 0.88 + clamp014((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
         writePixel(pixels, offset, shadeRgb(color, reliefShade));
         offset += 4;
       }
@@ -15339,6 +15771,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       tile?.type ?? null,
       modifiers,
       tile?.treeModel ?? null,
+      tile?.riverEdges ?? null,
       rivers
     ]);
   }

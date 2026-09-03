@@ -65,9 +65,10 @@ local decision record.
   hardware browser trace for frame, submission, draw-call and overdraw gates.
 - [Automatic river generation](./world-style-generation-v1.md) was approved on
   2026-09-03 by the explicit infinite-world generated-water requirement. The
-  [v7 decision](./decisions/automatic-river-generation-v7.md) fixes curve
-  identity, C0/non-smooth geometry, hex-chain continuity, toroidal wrapping and
-  bounded page-cache costs before production code is allowed to ship.
+  [v7 decision](./decisions/automatic-river-generation-v7.md) fixes hex-source
+  identity, strictly descending six-neighbour flow, C0 bank rendering,
+  toroidal wrapping and bounded page-cache costs; generator v7 now implements
+  and verifies that contract.
 
 Adding a new deferred optimization means adding one register entry, an owner
 marker and a reproducible measurement command. Keep speculative implementation

@@ -220,6 +220,25 @@ describe("deterministic infinite world chunks", () => {
         expect(() => decodeWorldChunkTile(first, 12, 12)).not.toThrow();
     });
 
+    test("round-trips generated river modifiers through the packed chunk bit", () => {
+        const chunk = generateWorldChunk({
+            seed: "surface-v7-infinite", chunkX: -1, chunkY: 0, chunkSize: 24
+        });
+        const rivers = chunk.tiles.reduce((count, packed) => count + ((packed & (1 << 8)) !== 0 ? 1 : 0), 0);
+        expect(rivers).toBeGreaterThan(0);
+        let decodedRivers = 0;
+        for (let x = -1; x <= chunk.chunkSize; x += 1) {
+            for (let y = -1; y <= chunk.chunkSize; y += 1) {
+                const tile = decodeWorldChunkTile(chunk, x, y);
+                if (!tile.modifiers?.includes("river")) continue;
+                decodedRivers += 1;
+                expect(tile.riverEdges).toBeGreaterThan(0);
+                expect(tile.riverEdges).toBeLessThanOrEqual(63);
+            }
+        }
+        expect(decodedRivers).toBe(rivers);
+    });
+
     test("adjacent chunks agree exactly across their halo", () => {
         const left = generateWorldChunk({ seed: 91, chunkX: 0, chunkY: 0, chunkSize: 12 });
         const right = generateWorldChunk({ seed: 91, chunkX: 1, chunkY: 0, chunkSize: 12 });
@@ -1036,6 +1055,8 @@ describe("procedural world source", () => {
             { x: 1, y: 2, changes: { unit: "scout" } },
             { x: 2, y: 2, changes: { rivers: "invalid" } as never }
         ])).toThrow(/rivers/);
+        expect(store.tileOverrideCount).toBe(0);
+        expect(() => store.setTileOverride(2, 2, { riverEdges: 64 })).toThrow(/riverEdges/);
         expect(store.tileOverrideCount).toBe(0);
     });
 });

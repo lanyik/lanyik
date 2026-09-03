@@ -1,5 +1,9 @@
 import { Land } from "../../src/enums";
-import { getNeighbors } from "../../src/helpers/neighbors";
+import {
+    getNeighbors,
+    NEIGHBOR_DIRECTION_BITS,
+    NeighborDirection
+} from "../../src/helpers/neighbors";
 import { positiveModulo } from "../../src/helpers/topology";
 import { createWorldSurfaceResolver, WorldBiome } from "../../src/world/WorldSurfaceResolver";
 
@@ -82,6 +86,7 @@ const BIOME_CODES = new Map(BIOMES.map((biome, index) => [biome, index]));
 const FLAG_HILL = 1;
 const FLAG_FOREST = 2;
 const FLAG_LAKE = 4;
+const FLAG_RIVER = 8;
 
 export interface WorldStyleComponentMetrics {
     readonly components: number;
@@ -113,11 +118,13 @@ export interface WorldStyleGalleryMetrics {
         readonly hill: number;
         readonly forest: number;
         readonly lake: number;
+        readonly river: number;
     };
     readonly climateRatios: Readonly<Record<WorldBiome, number>>;
     readonly mountains: WorldStyleComponentMetrics;
     readonly forests: WorldStyleComponentMetrics & { readonly adjacencyRatio: number };
     readonly lakes: WorldStyleComponentMetrics & { readonly singleCellRatio: number };
+    readonly rivers: WorldStyleComponentMetrics & { readonly connectedRatio: number };
     readonly coastlineEdges: number;
     readonly coastlineEdgesPerThousandTiles: number;
     readonly topologySeamErrors: number;
@@ -127,6 +134,7 @@ export interface WorldStyleGalleryMetrics {
         readonly mountain: WorldStyleGalleryPoint;
         readonly forest: WorldStyleGalleryPoint;
         readonly lake: WorldStyleGalleryPoint;
+        readonly river: WorldStyleGalleryPoint;
         readonly coast: WorldStyleGalleryPoint;
     };
 }
@@ -134,6 +142,7 @@ export interface WorldStyleGalleryMetrics {
 interface SampleGrid {
     readonly terrain: Uint8Array;
     readonly flags: Uint8Array;
+    readonly riverEdges: Int8Array;
     readonly biome: Uint8Array;
     readonly relief: Float32Array;
 }
@@ -179,18 +188,19 @@ function localIndex(
 function forEachNeighborIndex(
     sample: WorldStyleGallerySample,
     index: number,
-    visit: (neighbor: number | undefined) => void
+    visit: (neighbor: number | undefined, direction: NeighborDirection) => void
 ): void {
     const point = pointFromIndex(sample, index);
     for (const neighbor of getNeighbors(point.x, point.y)) {
-        visit(localIndex(sample, neighbor.x, neighbor.y));
+        visit(localIndex(sample, neighbor.x, neighbor.y), neighbor.direction);
     }
 }
 
 function distribution(
     sample: WorldStyleGallerySample,
     mask: (index: number) => boolean,
-    anchorScore: Float32Array
+    anchorScore: Float32Array,
+    connects: (from: number, to: number, direction: NeighborDirection) => boolean = () => true
 ): ComponentResult {
     const total = sample.width * sample.height;
     const visited = new Uint8Array(total);
@@ -213,12 +223,12 @@ function distribution(
         while (read < write) {
             const current = queue[read++];
             if (anchorScore[current] > anchorScore[componentAnchor]) componentAnchor = current;
-            forEachNeighborIndex(sample, current, neighbor => {
+            forEachNeighborIndex(sample, current, (neighbor, direction) => {
                 if (neighbor === undefined) {
                     if (sample.topology === "infinite") truncated = true;
                     return;
                 }
-                if (visited[neighbor] || !mask(neighbor)) return;
+                if (visited[neighbor] || !mask(neighbor) || !connects(current, neighbor, direction)) return;
                 visited[neighbor] = 1;
                 queue[write++] = neighbor;
             });
@@ -299,6 +309,8 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
     const total = sample.width * sample.height;
     const terrain = new Uint8Array(total);
     const flags = new Uint8Array(total);
+    const riverEdges = new Int8Array(total);
+    riverEdges.fill(-1);
     const biome = new Uint8Array(total);
     const relief = new Float32Array(total);
     const blockSize = 24;
@@ -318,7 +330,9 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
                     terrain[index] = TERRAIN_CODES.get(tile.type) ?? 255;
                     flags[index] = (modifiers.includes("hill") ? FLAG_HILL : 0)
                         | (modifiers.includes("wood") ? FLAG_FOREST : 0)
-                        | (modifiers.includes("lake") ? FLAG_LAKE : 0);
+                        | (modifiers.includes("lake") ? FLAG_LAKE : 0)
+                        | (modifiers.includes("river") ? FLAG_RIVER : 0);
+                    if (tile.riverEdges !== undefined) riverEdges[index] = tile.riverEdges;
                     biome[index] = BIOME_CODES.get(surface.biome) ?? 255;
                     relief[index] = surface.relief;
                 }
@@ -326,7 +340,7 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
             window.clear();
         }
     }
-    return { terrain, flags, biome, relief };
+    return { terrain, flags, riverEdges, biome, relief };
 }
 
 export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample): WorldStyleGalleryMetrics {
@@ -337,12 +351,17 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
     let hills = 0;
     let forests = 0;
     let lakes = 0;
+    let rivers = 0;
     let adjacentForests = 0;
+    let connectedRivers = 0;
     let coastlineTwice = 0;
     let highestRelief = 0;
     let coastAnchor: number | undefined;
     const climateCounts = new Uint32Array(BIOMES.length);
-    const isWater = (index: number): boolean => grid.terrain[index] <= 1 || Boolean(grid.flags[index] & FLAG_LAKE);
+    const isStandingWater = (index: number): boolean => grid.terrain[index] <= 1
+        || Boolean(grid.flags[index] & FLAG_LAKE);
+    const isRiver = (index: number): boolean => Boolean(grid.flags[index] & FLAG_RIVER);
+    const isWater = (index: number): boolean => isStandingWater(index) || isRiver(index);
     const isMountain = (index: number): boolean => grid.terrain[index] === TERRAIN_CODES.get(Land.mountain);
     const isForest = (index: number): boolean => Boolean(grid.flags[index] & FLAG_FOREST);
     const isLake = (index: number): boolean => Boolean(grid.flags[index] & FLAG_LAKE);
@@ -353,26 +372,41 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
         if (grid.flags[index] & FLAG_HILL) hills += 1;
         if (isForest(index)) forests += 1;
         if (isLake(index)) lakes += 1;
+        if (isRiver(index)) rivers += 1;
         if (grid.biome[index] < climateCounts.length) climateCounts[grid.biome[index]] += 1;
         if (grid.relief[index] > grid.relief[highestRelief]) highestRelief = index;
         let hasForestNeighbor = false;
-        forEachNeighborIndex(sample, index, neighbor => {
+        let hasRiverConnection = false;
+        forEachNeighborIndex(sample, index, (neighbor, direction) => {
             if (neighbor === undefined) return;
-            if (isWater(index) !== isWater(neighbor)) {
+            if (isStandingWater(index) !== isStandingWater(neighbor)) {
                 coastlineTwice += 1;
-                if (coastAnchor === undefined && !isWater(index)) coastAnchor = index;
+                if (coastAnchor === undefined && !isStandingWater(index)) coastAnchor = index;
             }
             if (isForest(index) && isForest(neighbor)) hasForestNeighbor = true;
+            const edge = grid.riverEdges[index];
+            if (isRiver(index) && edge >= 0
+                && (edge & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0
+                && (isRiver(neighbor) || isStandingWater(neighbor))) hasRiverConnection = true;
         });
         if (hasForestNeighbor) adjacentForests += 1;
+        if (hasRiverConnection) connectedRivers += 1;
     }
 
     const mountainDistribution = distribution(sample, isMountain, grid.relief);
     const forestDistribution = distribution(sample, isForest, grid.relief);
     const lakeDistribution = distribution(sample, isLake, grid.relief);
+    const riverDistribution = distribution(
+        sample,
+        isRiver,
+        grid.relief,
+        (from, _to, direction) => (grid.riverEdges[from]
+            & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0
+    );
     const { anchorIndex: _mountainAnchor, ...mountainMetrics } = mountainDistribution;
     const { anchorIndex: _forestAnchor, ...forestMetrics } = forestDistribution;
     const { anchorIndex: _lakeAnchor, ...lakeMetrics } = lakeDistribution;
+    const { anchorIndex: _riverAnchor, ...riverMetrics } = riverDistribution;
     const climateRatios = Object.fromEntries(BIOMES.map((name, index) => [
         name,
         round(climateCounts[index] / total)
@@ -396,7 +430,8 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             mountain: round(mountains / total),
             hill: round(hills / total),
             forest: round(forests / total),
-            lake: round(lakes / total)
+            lake: round(lakes / total),
+            river: round(rivers / total)
         },
         climateRatios,
         mountains: mountainMetrics,
@@ -408,6 +443,10 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             ...lakeMetrics,
             singleCellRatio: lakes === 0 ? 0 : round(lakeDistribution.isolatedTiles / lakes)
         },
+        rivers: {
+            ...riverMetrics,
+            connectedRatio: rivers === 0 ? 0 : round(connectedRivers / rivers)
+        },
         coastlineEdges,
         coastlineEdgesPerThousandTiles: round(coastlineEdges * 1000 / total),
         topologySeamErrors: topologySeamErrors(sample),
@@ -417,6 +456,7 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             mountain: pointFromIndex(sample, mountainDistribution.anchorIndex ?? highestRelief),
             forest: pointFromIndex(sample, forestDistribution.anchorIndex),
             lake: pointFromIndex(sample, lakeDistribution.anchorIndex),
+            river: pointFromIndex(sample, riverDistribution.anchorIndex),
             coast: pointFromIndex(sample, coastAnchor)
         }
     };
