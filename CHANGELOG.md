@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Approved the generator-v7 automatic-river contract: deterministic infinite
+  curve identities, continuous non-smooth sub-hex displacement,
+  topology-preserving hex traversal, periodic toroidal masks and bounded
+  page-cache ownership. Production implementation remains gated until these
+  invariants and generation budgets are verified.
 - An isolated infinite water-field prototype with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
   tributaries, and Poisson-spaced irregular sea basins spanning many chunks

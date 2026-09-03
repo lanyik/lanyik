@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "gateId": "automatic-river-generation",
+  "capturedAt": "2026-09-03T13:50:06.528Z",
+  "measurementContext": "Product review requires deterministic generated waterways at arbitrary coordinates in the infinite flat world; finite manual river content cannot satisfy the requested spatial scale or cross-chunk identity.",
+  "measurements": {
+    "worldGenerationRequiresDeterministicInfiniteRiverNetwork": true
+  },
+  "artifactReferences": [
+    "docs/evidence/automatic-river-generation/product-requirement-2026-09-03.md"
+  ]
+}

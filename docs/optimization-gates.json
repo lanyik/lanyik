@@ -10,11 +10,6 @@
       "triggerGroups": [
         {
           "all": [
-            { "metric": "gameplayRequiresNavigableOrEditableRiverNetwork", "operator": "==", "threshold": true }
-          ]
-        },
-        {
-          "all": [
             { "metric": "renderSubmissionOrCullingP95Ms", "operator": ">=", "threshold": 2 }
           ]
         },
@@ -47,11 +42,16 @@
     },
     {
       "id": "automatic-river-generation",
-      "state": "deferred",
+      "state": "approved",
       "ownerDocument": "docs/world-style-generation-v1.md",
       "measurementScript": "review:world-style",
       "triggerMode": "any",
       "triggerGroups": [
+        {
+          "all": [
+            { "metric": "worldGenerationRequiresDeterministicInfiniteRiverNetwork", "operator": "==", "threshold": true }
+          ]
+        },
         {
           "all": [
             { "metric": "recurringHydrologyDefectSamples", "operator": ">=", "threshold": 3 },
@@ -67,8 +67,10 @@
         "Specify deterministic source, confluence, mouth and cross-chunk continuity invariants before implementation.",
         "Budget generation latency, cache identity and infinite-world regional state before approving a prototype."
       ],
-      "evidenceReferences": [],
-      "decisionRecord": null
+      "evidenceReferences": [
+        "docs/evidence/automatic-river-generation/product-trigger-2026-09-03.json"
+      ],
+      "decisionRecord": "docs/decisions/automatic-river-generation-v7.md"
     }
   ]
 }
