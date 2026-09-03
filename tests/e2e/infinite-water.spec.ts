@@ -7,6 +7,7 @@ interface InfiniteWaterDiagnostics {
     renderedMainCurves: number;
     renderedBranches: number;
     directionBins: number;
+    oceanCoverage: number;
     sampleSignature: string;
 }
 
@@ -21,15 +22,14 @@ test("the infinite water curve field is deterministic across distant viewport qu
         if (message.type() === "error") errors.push(message.text());
     });
 
-    await page.goto("/infinite-water.html?seed=e2e-water", { waitUntil: "domcontentloaded" });
+    await page.goto("/infinite-water.html?seed=water-spve36-jen8lk", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => (window as unknown as {
         getInfiniteWaterDiagnostics?: () => InfiniteWaterDiagnostics;
     }).getInfiniteWaterDiagnostics?.().ready);
 
     const initial = await page.evaluate(readDiagnostics);
-    expect(initial.seed).toBe("e2e-water");
+    expect(initial.seed).toBe("water-spve36-jen8lk");
     expect(initial.renderedMainCurves).toBeGreaterThan(0);
-    expect(initial.renderedBranches).toBeGreaterThan(0);
     expect(initial.sampleSignature).not.toBe("");
 
     const canvas = page.locator("[data-water-field]");
@@ -43,13 +43,16 @@ test("the infinite water curve field is deterministic across distant viewport qu
 
     await expect.poll(() => page.evaluate(readDiagnostics)).toMatchObject({
         ready: true,
-        seed: "e2e-water"
+        seed: "water-spve36-jen8lk"
     });
     const moved = await page.evaluate(readDiagnostics);
     expect(Math.abs(moved.camera.x) + Math.abs(moved.camera.y)).toBeGreaterThan(4_000);
     expect(moved.camera.zoom).toBeLessThan(initial.camera.zoom);
     expect(moved.renderedMainCurves).toBeGreaterThan(0);
+    expect(moved.renderedBranches).toBeGreaterThan(0);
     expect(moved.directionBins).toBeGreaterThanOrEqual(6);
+    expect(moved.oceanCoverage).toBeGreaterThan(0.08);
+    expect(moved.oceanCoverage).toBeLessThan(0.9);
     expect(moved.sampleSignature).toBe(initial.sampleSignature);
 
     await page.reload({ waitUntil: "domcontentloaded" });

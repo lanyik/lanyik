@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>无限随机曲线场</title>
+    <title>无限无序水系场</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="infinite-water.css">
 </head>
@@ -12,8 +12,8 @@
 
     <header class="title-card">
         <span>PROCEDURAL WATER FIELD</span>
-        <h1>无限随机曲线场</h1>
-        <p>世界空间随机落点，各自决定方向、长度与转向；视口只查询、裁剪和采样。</p>
+        <h1>无限无序水系场</h1>
+        <p>簇状多尺度曲线叠加连续广域海洋；视口只查询、裁剪和采样。</p>
     </header>
 
     <aside class="control-card" aria-label="曲线场控制">
@@ -33,8 +33,13 @@
             <span><b>弯曲强度</b><output data-curvature-output></output></span>
             <input data-curvature type="range" min="20" max="100" step="1" value="68">
         </label>
+        <label>
+            <span><b>海洋占比</b><output data-sea-level-output></output></span>
+            <input data-sea-level type="range" min="20" max="78" step="1" value="58">
+        </label>
 
         <div class="toggle-grid">
+            <label><input data-show-ocean type="checkbox" checked> 广域海洋</label>
             <label><input data-show-branches type="checkbox" checked> 支流</label>
             <label><input data-show-samples type="checkbox"> 采样折线</label>
             <label><input data-show-chunks type="checkbox" checked> 区块边界</label>
@@ -51,6 +56,7 @@
         <div><span>视口中心</span><strong data-position>0, 0</strong></div>
         <div><span>缩放</span><strong data-zoom>1.00×</strong></div>
         <div><span>当前曲线</span><strong data-features>0</strong></div>
+        <div><span>视口海洋</span><strong data-ocean-coverage>0%</strong></div>
         <small>拖拽平移 · 滚轮缩放 · G 区块 · P 采样点 · H 六边格 · 0 复位</small>
     </aside>
 

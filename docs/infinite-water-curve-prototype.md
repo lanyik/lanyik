@@ -16,12 +16,17 @@ finite drainage map first?
 The prototype defines water features from stable spatial identities rather than
 from chunks:
 
-- Coarse spatial cells only own candidate identities. A seed independently
-  decides whether a candidate exists, then jitters its origin anywhere inside
-  the cell. The cell axes never influence the resulting path.
-- Every accepted main curve independently chooses its direction, length, width
-  and multiscale turn field. Integrating that field in both directions produces
-  a control polyline with no shared global orientation or fixed lane spacing.
+- Three independent candidate families represent short, medium and major
+  curves. Each has a different ownership-cell size, feature count, length,
+  width and sampling scale, so no single spacing can emerge across zoom levels.
+- A continuous low-frequency density field controls candidate acceptance. It
+  deliberately produces empty regions and dense clusters; accepted origins are
+  then independently jittered inside their ownership cells. Cell axes never
+  influence a resulting path.
+- Every accepted curve independently chooses its direction, length, width and
+  turn field. Turn is accumulated along the control line instead of remaining
+  bounded around its initial heading, allowing long curves to change direction
+  substantially. There is no shared global orientation.
 - A Catmull-Rom curve is reconstructed from the control polyline and sampled at
   a density selected from the current zoom. Camera zoom therefore changes only
   tessellation, not world-space geometry.
@@ -39,6 +44,22 @@ spacing, not by distance from the origin or total explored area. Only the
 current viewport geometry is retained; it is replaced when the view, seed or
 curve controls change.
 
+## Broad ocean field
+
+The ocean is generated independently from the curve candidates. A very
+low-frequency continental field, a regional field and smaller coastline detail
+are sampled after deterministic two-dimensional domain warping. Thresholding
+that continuous value produces single water bodies spanning many render and
+source chunks rather than per-tile water noise.
+
+The ocean mask is sampled into a bounded screen-space cache only when the
+camera, seed, sea level or viewport changes. The cached mask is transformed
+during active pan/zoom and resampled after a short interaction debounce, so
+navigation does not synchronously rebuild the coastline on every pointer event.
+It is composited after river curves, so curve portions beneath the ocean
+disappear while their landward parts end at the same deterministic coastline.
+Chunk and hex diagnostics are drawn last and do not affect either field.
+
 ## Run and inspect
 
 Start the static demo server:
@@ -51,21 +72,23 @@ Then open <http://127.0.0.1:3000/infinite-water.html>. A seed can also be passed
 as `?seed=value`.
 
 - Drag to move through world space and use the wheel to zoom around the pointer.
-- Adjust candidate density and curvature live.
+- Adjust candidate density, accumulated curvature and ocean coverage live.
 - Toggle tributaries, chunk boundaries and the hex grid independently.
 - Enable **sample polyline** to see the actual points submitted to Canvas rather
   than the conceptual continuous curve.
 - `G`, `P`, `H` and `0` toggle chunks, sample points, hexes and reset the view.
 
 `window.getInfiniteWaterDiagnostics()` exposes the seed, camera, visible feature
-counts and a deterministic sample signature for browser verification.
+counts, direction-bin count, viewport ocean coverage and a deterministic sample
+signature for browser verification.
 
 ## Deliberate omissions
 
-This prototype evaluates geometry, continuity and query cost only. It does not
-yet assign flow direction, discharge, elevation, erosion, lakes, deltas,
-cross-river avoidance or gameplay crossings. Those are production integration
-decisions, not fallback behavior hidden inside this scene.
+This prototype evaluates geometry, continuity, large water-body composition and
+query cost only. It does not yet assign flow direction, discharge, elevation,
+erosion, lakes, deltas, cross-river avoidance or gameplay crossings. Those are
+production integration decisions, not fallback behavior hidden inside this
+scene.
 
 Before integrating it into generator v7, the visual model should be accepted or
 rejected on its own. If accepted, the next design step is to define a single

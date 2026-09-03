@@ -2,15 +2,19 @@ const canvas = document.querySelector("[data-water-field]");
 const seedInput = document.querySelector("[data-seed]");
 const densityInput = document.querySelector("[data-density]");
 const curvatureInput = document.querySelector("[data-curvature]");
+const seaLevelInput = document.querySelector("[data-sea-level]");
 const showBranchesInput = document.querySelector("[data-show-branches]");
+const showOceanInput = document.querySelector("[data-show-ocean]");
 const showSamplesInput = document.querySelector("[data-show-samples]");
 const showChunksInput = document.querySelector("[data-show-chunks]");
 const showHexesInput = document.querySelector("[data-show-hexes]");
 const positionOutput = document.querySelector("[data-position]");
 const zoomOutput = document.querySelector("[data-zoom]");
 const featuresOutput = document.querySelector("[data-features]");
+const oceanCoverageOutput = document.querySelector("[data-ocean-coverage]");
 const densityOutput = document.querySelector("[data-density-output]");
 const curvatureOutput = document.querySelector("[data-curvature-output]");
+const seaLevelOutput = document.querySelector("[data-sea-level-output]");
 const applySeedButton = document.querySelector("[data-apply-seed]");
 const resetViewButton = document.querySelector("[data-reset-view]");
 const randomSeedButton = document.querySelector("[data-random-seed]");
@@ -19,15 +23,19 @@ if (!(canvas instanceof HTMLCanvasElement)
     || !(seedInput instanceof HTMLInputElement)
     || !(densityInput instanceof HTMLInputElement)
     || !(curvatureInput instanceof HTMLInputElement)
+    || !(seaLevelInput instanceof HTMLInputElement)
     || !(showBranchesInput instanceof HTMLInputElement)
+    || !(showOceanInput instanceof HTMLInputElement)
     || !(showSamplesInput instanceof HTMLInputElement)
     || !(showChunksInput instanceof HTMLInputElement)
     || !(showHexesInput instanceof HTMLInputElement)
     || !(positionOutput instanceof HTMLElement)
     || !(zoomOutput instanceof HTMLElement)
     || !(featuresOutput instanceof HTMLElement)
+    || !(oceanCoverageOutput instanceof HTMLElement)
     || !(densityOutput instanceof HTMLOutputElement)
     || !(curvatureOutput instanceof HTMLOutputElement)
+    || !(seaLevelOutput instanceof HTMLOutputElement)
     || !(applySeedButton instanceof HTMLButtonElement)
     || !(resetViewButton instanceof HTMLButtonElement)
     || !(randomSeedButton instanceof HTMLButtonElement)) {
@@ -36,13 +44,38 @@ if (!(canvas instanceof HTMLCanvasElement)
 
 const context = canvas.getContext("2d", { alpha: false });
 if (!context) throw new Error("2D canvas is unavailable");
+const oceanCanvas = document.createElement("canvas");
+const oceanContext = oceanCanvas.getContext("2d");
+if (!oceanContext) throw new Error("2D ocean canvas is unavailable");
 
 const TAU = Math.PI * 2;
 const MIN_ZOOM = 0.08;
 const MAX_ZOOM = 5;
-const FEATURE_CELL_SIZE = 1650;
-const MAX_CURVE_REACH = 4500;
 const MAX_BRANCH_LENGTH = 860;
+const CURVE_FAMILIES = [
+    {
+        cellSize: 950, slots: 2, spawnScale: 0.34,
+        minLength: 700, maxLength: 2600,
+        minWidth: 2.5, maxWidth: 11,
+        minStep: 65, maxStep: 125,
+        maxBranches: 1
+    },
+    {
+        cellSize: 2300, slots: 2, spawnScale: 0.52,
+        minLength: 2200, maxLength: 7200,
+        minWidth: 9, maxWidth: 29,
+        minStep: 115, maxStep: 210,
+        maxBranches: 3
+    },
+    {
+        cellSize: 5900, slots: 1, spawnScale: 0.62,
+        minLength: 7200, maxLength: 17_000,
+        minWidth: 24, maxWidth: 54,
+        minStep: 190, maxStep: 310,
+        maxBranches: 5
+    }
+];
+const OCEAN_SAMPLE_STEP = 12;
 const CHUNK_SIZE = 384;
 const HEX_RADIUS = 28;
 const HEX_HEIGHT = Math.sqrt(3) * HEX_RADIUS;
@@ -59,6 +92,11 @@ let landGradient;
 let seed = seedInput.value.trim();
 let numericSeed = hashText(seed);
 let geometryDirty = true;
+let oceanDirty = true;
+let oceanInteractionPending = false;
+let oceanRefreshTimer;
+let oceanCacheView;
+let oceanCoverage = 0;
 let renderedMainCurves = 0;
 let renderedBranches = 0;
 let waterGeometry = { mains: [], branches: [] };
@@ -91,12 +129,18 @@ function randomAt(x, y = 0, salt = 0) {
     return mix32(value) / 0x1_0000_0000;
 }
 
-function featureKey(cellX, cellY) {
+function featureKey(familyIndex, cellX, cellY, slot) {
     return mix32(
         numericSeed
         ^ Math.imul(cellX | 0, 0x632be5ab)
         ^ Math.imul(cellY | 0, 0x85157af5)
+        ^ Math.imul(familyIndex | 0, 0x9e3779b1)
+        ^ Math.imul(slot | 0, 0x85ebca77)
     );
+}
+
+function randomForFeature(key, salt) {
+    return mix32(numericSeed ^ key ^ Math.imul(salt | 0, 0x27d4eb2d)) / 0x1_0000_0000;
 }
 
 function smoothstep(value) {
@@ -111,12 +155,43 @@ function valueNoise1d(x, key, salt) {
     return first + (second - first) * amount;
 }
 
+function valueNoise2d(x, y, salt) {
+    const cellX = Math.floor(x);
+    const cellY = Math.floor(y);
+    const amountX = smoothstep(x - cellX);
+    const amountY = smoothstep(y - cellY);
+    const topLeft = randomAt(cellX, cellY, salt) * 2 - 1;
+    const topRight = randomAt(cellX + 1, cellY, salt) * 2 - 1;
+    const bottomLeft = randomAt(cellX, cellY + 1, salt) * 2 - 1;
+    const bottomRight = randomAt(cellX + 1, cellY + 1, salt) * 2 - 1;
+    const top = topLeft + (topRight - topLeft) * amountX;
+    const bottom = bottomLeft + (bottomRight - bottomLeft) * amountX;
+    return top + (bottom - top) * amountY;
+}
+
 function density() {
     return Number(densityInput.value) / 100;
 }
 
 function curvature() {
     return Number(curvatureInput.value) / 100;
+}
+
+function seaLevel() {
+    return Number(seaLevelInput.value) / 100;
+}
+
+function oceanField(x, y) {
+    const warpX = valueNoise2d(x / 18_000, y / 18_000, 881) * 4400;
+    const warpY = valueNoise2d(x / 18_000, y / 18_000, 887) * 4400;
+    const continental = valueNoise2d((x + warpX) / 22_000, (y + warpY) / 22_000, 907);
+    const regional = valueNoise2d((x - warpY) / 8200, (y + warpX) / 8200, 911);
+    const coast = valueNoise2d(x / 3100, y / 3100, 919);
+    return continental * 0.68 + regional * 0.24 + coast * 0.08;
+}
+
+function oceanThreshold() {
+    return (seaLevel() - 0.5) * 0.9;
 }
 
 function visibleBounds() {
@@ -130,62 +205,76 @@ function visibleBounds() {
     };
 }
 
-function headingAt(key, baseAngle, parameter) {
-    const bend = 0.14 + curvature() * 1.02;
-    const broad = valueNoise1d(parameter / 10.5, key, 101);
-    const middle = valueNoise1d(parameter / 4.1, key, 211);
-    const detail = valueNoise1d(parameter / 1.8, key, 307);
-    return baseAngle + bend * (broad * 0.55 + middle * 0.32 + detail * 0.13);
+function turnAt(key, parameter, turnScale) {
+    const broad = valueNoise1d(parameter / 8.2, key, 101);
+    const middle = valueNoise1d(parameter / 3.3, key, 211);
+    const detail = valueNoise1d(parameter / 1.45, key, 307);
+    return turnScale * (broad * 0.58 + middle * 0.29 + detail * 0.13);
 }
 
-function buildMainControlLine(cellX, cellY) {
-    if (randomAt(cellX, cellY, 17) >= density()) return undefined;
+function localCurveDensity(x, y) {
+    const broad = valueNoise2d(x / 11_000, y / 11_000, 61) * 0.5 + 0.5;
+    const regional = valueNoise2d(x / 4800, y / 4800, 67) * 0.5 + 0.5;
+    const clustered = Math.max(0, Math.min(1, (broad * 0.72 + regional * 0.28 - 0.36) / 0.44));
+    return 0.02 + smoothstep(clustered) * 0.98;
+}
 
-    const key = featureKey(cellX, cellY);
+function buildMainControlLine(familyIndex, cellX, cellY, slot) {
+    const family = CURVE_FAMILIES[familyIndex];
+    const key = featureKey(familyIndex, cellX, cellY, slot);
+    const centerX = (cellX + 0.5) * family.cellSize;
+    const centerY = (cellY + 0.5) * family.cellSize;
+    const spawnChance = density() * family.spawnScale * localCurveDensity(centerX, centerY);
+    if (randomForFeature(key, 17) >= spawnChance) return undefined;
+
     const origin = {
-        x: (cellX + 0.08 + randomAt(cellX, cellY, 23) * 0.84) * FEATURE_CELL_SIZE,
-        y: (cellY + 0.08 + randomAt(cellX, cellY, 29) * 0.84) * FEATURE_CELL_SIZE
+        x: (cellX + 0.04 + randomForFeature(key, 23) * 0.92) * family.cellSize,
+        y: (cellY + 0.04 + randomForFeature(key, 29) * 0.92) * family.cellSize
     };
-    const baseAngle = randomAt(cellX, cellY, 31) * TAU;
-    const totalLength = 2200 + randomAt(cellX, cellY, 37) * 5000;
-    const controlStep = 135 + randomAt(cellX, cellY, 41) * 65;
+    const baseAngle = randomForFeature(key, 31) * TAU;
+    const lengthAmount = randomForFeature(key, 37) ** 1.35;
+    const totalLength = family.minLength + lengthAmount * (family.maxLength - family.minLength);
+    const controlStep = family.minStep + randomForFeature(key, 41) * (family.maxStep - family.minStep);
     const halfSteps = Math.ceil(totalLength / (controlStep * 2));
-    const baseWidth = 13 + randomAt(cellX, cellY, 43) * 22;
+    const baseWidth = family.minWidth
+        + randomForFeature(key, 43) * (family.maxWidth - family.minWidth);
+    const turnScale = (0.035 + curvature() * 0.24)
+        * (0.78 + randomForFeature(key, 47) * 0.72);
     const before = [];
     const after = [];
 
     const widthAt = parameter => {
         const progress = (parameter + halfSteps) / (halfSteps * 2);
-        const growth = 0.46 + smoothstep(progress) * 0.68;
-        const variation = 1 + valueNoise1d(parameter / 5.5, key, 401) * 0.2;
-        return Math.max(3, baseWidth * growth * variation);
+        const growth = 0.38 + smoothstep(progress) * 0.78;
+        const variation = 1 + valueNoise1d(parameter / 5.5, key, 401) * 0.24;
+        return Math.max(1.2, baseWidth * growth * variation);
     };
 
     let current = { ...origin };
+    let heading = baseAngle;
     for (let step = 1; step <= halfSteps; step += 1) {
-        const parameter = -step + 0.5;
-        const angle = headingAt(key, baseAngle, parameter);
+        heading -= turnAt(key, -step + 0.5, turnScale);
         current = {
-            x: current.x - Math.cos(angle) * controlStep,
-            y: current.y - Math.sin(angle) * controlStep
+            x: current.x - Math.cos(heading) * controlStep,
+            y: current.y - Math.sin(heading) * controlStep
         };
         before.push({ point: current, width: widthAt(-step) });
     }
 
     current = { ...origin };
+    heading = baseAngle;
     for (let step = 1; step <= halfSteps; step += 1) {
-        const parameter = step - 0.5;
-        const angle = headingAt(key, baseAngle, parameter);
+        heading += turnAt(key, step - 0.5, turnScale);
         current = {
-            x: current.x + Math.cos(angle) * controlStep,
-            y: current.y + Math.sin(angle) * controlStep
+            x: current.x + Math.cos(heading) * controlStep,
+            y: current.y + Math.sin(heading) * controlStep
         };
         after.push({ point: current, width: widthAt(step) });
     }
 
     const controls = before.reverse();
     controls.push({ point: origin, width: widthAt(0) }, ...after);
-    return { cellX, cellY, key, controls };
+    return { family, key, controls };
 }
 
 function catmullRomPoint(first, second, third, fourth, amount) {
@@ -204,7 +293,10 @@ function catmullRomPoint(first, second, third, fourth, amount) {
 }
 
 function sampleMainCurve(main) {
-    const subdivisions = Math.max(2, Math.min(9, Math.ceil(150 * camera.zoom / 18)));
+    const subdivisions = Math.max(
+        2,
+        Math.min(10, Math.ceil(main.family.maxStep * camera.zoom / 18))
+    );
     const points = [];
     const widths = [];
     for (let index = 0; index < main.controls.length - 1; index += 1) {
@@ -304,26 +396,34 @@ function intersectsWorld(points, bounds, margin = 40) {
 function rebuildWaterGeometry(bounds) {
     const mains = [];
     const branches = [];
-    const queryMargin = MAX_CURVE_REACH + MAX_BRANCH_LENGTH;
-    const firstCellX = Math.floor((bounds.minX - queryMargin) / FEATURE_CELL_SIZE);
-    const lastCellX = Math.floor((bounds.maxX + queryMargin) / FEATURE_CELL_SIZE);
-    const firstCellY = Math.floor((bounds.minY - queryMargin) / FEATURE_CELL_SIZE);
-    const lastCellY = Math.floor((bounds.maxY + queryMargin) / FEATURE_CELL_SIZE);
 
-    for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
-        for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
-            const main = buildMainControlLine(cellX, cellY);
-            if (!main) continue;
-            const controlPoints = main.controls.map(control => control.point);
-            if (!intersectsWorld(controlPoints, bounds, MAX_BRANCH_LENGTH)) continue;
+    for (let familyIndex = 0; familyIndex < CURVE_FAMILIES.length; familyIndex += 1) {
+        const family = CURVE_FAMILIES[familyIndex];
+        const queryMargin = family.maxLength / 2 + family.maxStep + MAX_BRANCH_LENGTH;
+        const firstCellX = Math.floor((bounds.minX - queryMargin) / family.cellSize);
+        const lastCellX = Math.floor((bounds.maxX + queryMargin) / family.cellSize);
+        const firstCellY = Math.floor((bounds.minY - queryMargin) / family.cellSize);
+        const lastCellY = Math.floor((bounds.maxY + queryMargin) / family.cellSize);
 
-            const sampledMain = sampleMainCurve(main);
-            if (intersectsWorld(sampledMain.points, bounds, 100)) mains.push(sampledMain);
+        for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
+            for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
+                for (let slot = 0; slot < family.slots; slot += 1) {
+                    const main = buildMainControlLine(familyIndex, cellX, cellY, slot);
+                    if (!main) continue;
+                    const controlPoints = main.controls.map(control => control.point);
+                    if (!intersectsWorld(controlPoints, bounds, MAX_BRANCH_LENGTH)) continue;
 
-            const branchCount = Math.floor(randomAt(main.key, 0, 557) * 4);
-            for (let branchIndex = 0; branchIndex < branchCount; branchIndex += 1) {
-                const branch = buildBranch(main, branchIndex);
-                if (intersectsWorld(branch.points, bounds, 60)) branches.push(branch);
+                    const sampledMain = sampleMainCurve(main);
+                    if (intersectsWorld(sampledMain.points, bounds, 100)) mains.push(sampledMain);
+
+                    const branchCount = Math.floor(
+                        randomForFeature(main.key, 557) * (family.maxBranches + 1)
+                    );
+                    for (let branchIndex = 0; branchIndex < branchCount; branchIndex += 1) {
+                        const branch = buildBranch(main, branchIndex);
+                        if (intersectsWorld(branch.points, bounds, 60)) branches.push(branch);
+                    }
+                }
             }
         }
     }
@@ -431,6 +531,158 @@ function drawLand(bounds) {
     }
 }
 
+function thresholdIntersection(first, second, threshold) {
+    const difference = second.value - first.value;
+    const amount = difference === 0 ? 0.5 : (threshold - first.value) / difference;
+    return {
+        x: first.x + (second.x - first.x) * amount,
+        y: first.y + (second.y - first.y) * amount,
+        value: threshold
+    };
+}
+
+function clipTriangleToOcean(vertices, threshold) {
+    const clipped = [];
+    for (let index = 0; index < vertices.length; index += 1) {
+        const current = vertices[index];
+        const previous = vertices[(index + vertices.length - 1) % vertices.length];
+        const currentInside = current.value < threshold;
+        const previousInside = previous.value < threshold;
+        if (currentInside) {
+            if (!previousInside) clipped.push(thresholdIntersection(previous, current, threshold));
+            clipped.push(current);
+        } else if (previousInside) {
+            clipped.push(thresholdIntersection(previous, current, threshold));
+        }
+    }
+    return clipped;
+}
+
+function polygonArea(points) {
+    let twiceArea = 0;
+    for (let index = 0; index < points.length; index += 1) {
+        const current = points[index];
+        const next = points[(index + 1) % points.length];
+        twiceArea += current.x * next.y - next.x * current.y;
+    }
+    return Math.abs(twiceArea) * 0.5;
+}
+
+function appendPolygon(path, points) {
+    if (points.length < 3) return;
+    path.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) path.lineTo(points[index].x, points[index].y);
+    path.closePath();
+}
+
+function rebuildOceanLayer() {
+    const columns = Math.max(1, Math.ceil(width / OCEAN_SAMPLE_STEP));
+    const rows = Math.max(1, Math.ceil(height / OCEAN_SAMPLE_STEP));
+    const stride = columns + 1;
+    const threshold = oceanThreshold();
+    const samples = new Array((columns + 1) * (rows + 1));
+
+    for (let row = 0; row <= rows; row += 1) {
+        const screenY = Math.min(height, row * OCEAN_SAMPLE_STEP);
+        const worldY = camera.y + (screenY - height / 2) / camera.zoom;
+        for (let column = 0; column <= columns; column += 1) {
+            const screenX = Math.min(width, column * OCEAN_SAMPLE_STEP);
+            const worldX = camera.x + (screenX - width / 2) / camera.zoom;
+            samples[row * stride + column] = {
+                x: screenX,
+                y: screenY,
+                value: oceanField(worldX, worldY)
+            };
+        }
+    }
+
+    oceanCanvas.width = Math.ceil(width);
+    oceanCanvas.height = Math.ceil(height);
+    const waterPath = new Path2D();
+    const coastPath = new Path2D();
+    let waterArea = 0;
+    for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < columns; column += 1) {
+            const topLeft = samples[row * stride + column];
+            const topRight = samples[row * stride + column + 1];
+            const bottomLeft = samples[(row + 1) * stride + column];
+            const bottomRight = samples[(row + 1) * stride + column + 1];
+            const triangles = [
+                [topLeft, topRight, bottomRight],
+                [topLeft, bottomRight, bottomLeft]
+            ];
+            for (const triangle of triangles) {
+                const polygon = clipTriangleToOcean(triangle, threshold);
+                appendPolygon(waterPath, polygon);
+                if (polygon.length >= 3) waterArea += polygonArea(polygon);
+            }
+
+            const intersections = [];
+            const edges = [
+                [topLeft, topRight],
+                [topRight, bottomRight],
+                [bottomRight, bottomLeft],
+                [bottomLeft, topLeft]
+            ];
+            for (const [first, second] of edges) {
+                if ((first.value < threshold) !== (second.value < threshold)) {
+                    intersections.push(thresholdIntersection(first, second, threshold));
+                }
+            }
+            for (let index = 0; index + 1 < intersections.length; index += 2) {
+                coastPath.moveTo(intersections[index].x, intersections[index].y);
+                coastPath.lineTo(intersections[index + 1].x, intersections[index + 1].y);
+            }
+        }
+    }
+
+    const oceanGradient = oceanContext.createLinearGradient(0, 0, 0, oceanCanvas.height);
+    oceanGradient.addColorStop(0, "rgba(22, 116, 139, 0.98)");
+    oceanGradient.addColorStop(1, "rgba(14, 91, 116, 0.99)");
+    oceanContext.fillStyle = oceanGradient;
+    oceanContext.fill(waterPath);
+    oceanContext.strokeStyle = "rgba(79, 166, 166, 0.9)";
+    oceanContext.lineWidth = 2;
+    oceanContext.lineCap = "round";
+    oceanContext.lineJoin = "round";
+    oceanContext.stroke(coastPath);
+    oceanCoverage = waterArea / (width * height);
+    oceanCacheView = { x: camera.x, y: camera.y, zoom: camera.zoom, width, height };
+    oceanDirty = false;
+}
+
+function drawOcean() {
+    if (!showOceanInput.checked) return;
+    if (oceanDirty && (!oceanCacheView || !oceanInteractionPending)) rebuildOceanLayer();
+    if (!oceanCacheView) return;
+    const scale = camera.zoom / oceanCacheView.zoom;
+    const cachedWorldLeft = oceanCacheView.x - oceanCacheView.width / (oceanCacheView.zoom * 2);
+    const cachedWorldTop = oceanCacheView.y - oceanCacheView.height / (oceanCacheView.zoom * 2);
+    const destinationX = width / 2 + (cachedWorldLeft - camera.x) * camera.zoom;
+    const destinationY = height / 2 + (cachedWorldTop - camera.y) * camera.zoom;
+    context.save();
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.imageSmoothingEnabled = true;
+    context.filter = "blur(0.45px)";
+    context.drawImage(
+        oceanCanvas,
+        destinationX,
+        destinationY,
+        oceanCacheView.width * scale,
+        oceanCacheView.height * scale
+    );
+    context.restore();
+}
+
+function deferOceanRefresh() {
+    oceanInteractionPending = true;
+    clearTimeout(oceanRefreshTimer);
+    oceanRefreshTimer = setTimeout(() => {
+        oceanInteractionPending = false;
+        oceanDirty = true;
+    }, 90);
+}
+
 function drawChunkGrid(bounds) {
     if (!showChunksInput.checked) return;
     setWorldTransform();
@@ -524,6 +776,7 @@ function resize() {
         landGradient.addColorStop(0, "#263a2f");
         landGradient.addColorStop(1, "#14221d");
         geometryDirty = true;
+        oceanDirty = true;
     }
 }
 
@@ -531,16 +784,21 @@ function updateOutputs() {
     positionOutput.textContent = `${Math.round(camera.x).toLocaleString()}, ${Math.round(camera.y).toLocaleString()}`;
     zoomOutput.textContent = `${camera.zoom.toFixed(2)}×`;
     featuresOutput.textContent = `${renderedMainCurves} 主曲线 / ${renderedBranches} 支线`;
+    oceanCoverageOutput.textContent = showOceanInput.checked
+        ? `${Math.round(oceanCoverage * 100)}%`
+        : "关闭";
     densityOutput.value = `${Math.round(density() * 100)}%`;
     curvatureOutput.value = `${Math.round(curvature() * 100)}%`;
+    seaLevelOutput.value = `${Math.round(seaLevel() * 100)}%`;
 }
 
 function render(time) {
     const bounds = visibleBounds();
     drawLand(bounds);
+    drawWater(bounds, time);
+    drawOcean();
     drawChunkGrid(bounds);
     drawHexGrid(bounds);
-    drawWater(bounds, time);
     updateOutputs();
     canvas.dataset.state = "ready";
     requestAnimationFrame(render);
@@ -565,6 +823,7 @@ function applySeed() {
     seed = next;
     numericSeed = hashText(seed);
     geometryDirty = true;
+    oceanDirty = true;
     const nextQuery = new URLSearchParams(location.search);
     nextQuery.set("seed", seed);
     history.replaceState(null, "", `${location.pathname}?${nextQuery}`);
@@ -575,6 +834,7 @@ function resetView() {
     camera.y = 0;
     camera.zoom = 0.82;
     geometryDirty = true;
+    oceanDirty = true;
 }
 
 canvas.addEventListener("pointerdown", event => {
@@ -583,6 +843,7 @@ canvas.addEventListener("pointerdown", event => {
     pointer.y = event.clientY;
     canvas.setPointerCapture(event.pointerId);
     canvas.dataset.dragging = "true";
+    oceanInteractionPending = true;
 });
 
 canvas.addEventListener("pointermove", event => {
@@ -592,12 +853,15 @@ canvas.addEventListener("pointermove", event => {
     pointer.x = event.clientX;
     pointer.y = event.clientY;
     geometryDirty = true;
+    oceanDirty = true;
 });
 
 const endDrag = event => {
     if (pointer.id !== event.pointerId) return;
     pointer.id = undefined;
     delete canvas.dataset.dragging;
+    oceanInteractionPending = false;
+    oceanDirty = true;
 };
 canvas.addEventListener("pointerup", endDrag);
 canvas.addEventListener("pointercancel", endDrag);
@@ -610,6 +874,8 @@ canvas.addEventListener("wheel", event => {
     camera.x += before.x - after.x;
     camera.y += before.y - after.y;
     geometryDirty = true;
+    oceanDirty = true;
+    deferOceanRefresh();
 }, { passive: false });
 
 applySeedButton.addEventListener("click", applySeed);
@@ -621,6 +887,10 @@ densityInput.addEventListener("input", () => {
 });
 curvatureInput.addEventListener("input", () => {
     geometryDirty = true;
+});
+seaLevelInput.addEventListener("input", () => {
+    oceanDirty = true;
+    deferOceanRefresh();
 });
 resetViewButton.addEventListener("click", resetView);
 randomSeedButton.addEventListener("click", () => {
@@ -640,7 +910,7 @@ window.addEventListener("keydown", event => {
 });
 
 window.getInfiniteWaterDiagnostics = () => {
-    const key = featureKey(-7, 11);
+    const key = featureKey(1, -7, 11, 0);
     const directionBins = new Set(waterGeometry.mains.map(main => {
         const start = main.points[0];
         const end = main.points.at(-1);
@@ -654,12 +924,15 @@ window.getInfiniteWaterDiagnostics = () => {
         renderedMainCurves,
         renderedBranches,
         directionBins,
+        oceanCoverage: showOceanInput.checked ? oceanCoverage : 0,
         sampleSignature: [
             randomAt(-7, 11, 17),
             randomAt(-7, 11, 23),
-            headingAt(key, randomAt(-7, 11, 31) * TAU, -3),
+            turnAt(key, -3, 0.2),
+            oceanField(-7200, 11_400),
             density(),
-            curvature()
+            curvature(),
+            seaLevel()
         ].map(value => value.toFixed(6)).join("|")
     };
 };
