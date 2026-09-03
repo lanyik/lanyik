@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An isolated infinite water-field prototype with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
-  tributaries, and a domain-warped low-frequency ocean field spanning many
-  chunks. View-local adaptive sampling, chunk/hex/sample diagnostics, and
-  browser coverage verify distant queries, direction diversity, mixed
-  coastlines and seed reproducibility.
+  tributaries, and Poisson-spaced irregular sea basins spanning many chunks
+  without merging into unbounded water walls. Hard basin-radius and center-gap
+  constraints preserve land corridors; view-local adaptive sampling,
+  chunk/hex/sample diagnostics, and browser coverage verify distant queries,
+  direction diversity, bounded coastlines and seed reproducibility.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.

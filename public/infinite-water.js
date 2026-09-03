@@ -12,6 +12,7 @@ const positionOutput = document.querySelector("[data-position]");
 const zoomOutput = document.querySelector("[data-zoom]");
 const featuresOutput = document.querySelector("[data-features]");
 const oceanCoverageOutput = document.querySelector("[data-ocean-coverage]");
+const oceanDiameterOutput = document.querySelector("[data-ocean-diameter]");
 const densityOutput = document.querySelector("[data-density-output]");
 const curvatureOutput = document.querySelector("[data-curvature-output]");
 const seaLevelOutput = document.querySelector("[data-sea-level-output]");
@@ -33,6 +34,7 @@ if (!(canvas instanceof HTMLCanvasElement)
     || !(zoomOutput instanceof HTMLElement)
     || !(featuresOutput instanceof HTMLElement)
     || !(oceanCoverageOutput instanceof HTMLElement)
+    || !(oceanDiameterOutput instanceof HTMLElement)
     || !(densityOutput instanceof HTMLOutputElement)
     || !(curvatureOutput instanceof HTMLOutputElement)
     || !(seaLevelOutput instanceof HTMLOutputElement)
@@ -76,6 +78,9 @@ const CURVE_FAMILIES = [
     }
 ];
 const OCEAN_SAMPLE_STEP = 12;
+const OCEAN_CANDIDATE_CELL_SIZE = 2600;
+const OCEAN_MIN_SEPARATION = 5600;
+const OCEAN_MAX_REACH = 2600;
 const CHUNK_SIZE = 384;
 const HEX_RADIUS = 28;
 const HEX_HEIGHT = Math.sqrt(3) * HEX_RADIUS;
@@ -97,6 +102,8 @@ let oceanInteractionPending = false;
 let oceanRefreshTimer;
 let oceanCacheView;
 let oceanCoverage = 0;
+let visibleOceanBasins = 0;
+let largestOceanDiameter = 0;
 let renderedMainCurves = 0;
 let renderedBranches = 0;
 let waterGeometry = { mains: [], branches: [] };
@@ -181,17 +188,100 @@ function seaLevel() {
     return Number(seaLevelInput.value) / 100;
 }
 
-function oceanField(x, y) {
-    const warpX = valueNoise2d(x / 18_000, y / 18_000, 881) * 4400;
-    const warpY = valueNoise2d(x / 18_000, y / 18_000, 887) * 4400;
-    const continental = valueNoise2d((x + warpX) / 22_000, (y + warpY) / 22_000, 907);
-    const regional = valueNoise2d((x - warpY) / 8200, (y + warpX) / 8200, 911);
-    const coast = valueNoise2d(x / 3100, y / 3100, 919);
-    return continental * 0.68 + regional * 0.24 + coast * 0.08;
+function buildOceanCandidate(cellX, cellY) {
+    const key = featureKey(101, cellX, cellY, 0);
+    const spawnChance = Math.min(0.58, 0.12 + seaLevel() * 0.55);
+    if (randomForFeature(key, 1001) >= spawnChance) return undefined;
+
+    return {
+        cellX,
+        cellY,
+        key,
+        centerX: (cellX + 0.05 + randomForFeature(key, 1019) * 0.9) * OCEAN_CANDIDATE_CELL_SIZE,
+        centerY: (cellY + 0.05 + randomForFeature(key, 1021) * 0.9) * OCEAN_CANDIDATE_CELL_SIZE,
+        priority: randomForFeature(key, 1003)
+    };
 }
 
-function oceanThreshold() {
-    return (seaLevel() - 0.5) * 0.9;
+function buildOceanBasin(cellX, cellY, candidateAt) {
+    const candidate = candidateAt(cellX, cellY);
+    if (!candidate) return undefined;
+
+    const neighborRadius = Math.ceil(OCEAN_MIN_SEPARATION / OCEAN_CANDIDATE_CELL_SIZE);
+    const minimumSquaredDistance = OCEAN_MIN_SEPARATION ** 2;
+    for (let neighborX = cellX - neighborRadius; neighborX <= cellX + neighborRadius; neighborX += 1) {
+        for (let neighborY = cellY - neighborRadius; neighborY <= cellY + neighborRadius; neighborY += 1) {
+            if (neighborX === cellX && neighborY === cellY) continue;
+            const neighbor = candidateAt(neighborX, neighborY);
+            if (!neighbor) continue;
+            const squaredDistance = (neighbor.centerX - candidate.centerX) ** 2
+                + (neighbor.centerY - candidate.centerY) ** 2;
+            const neighborWins = neighbor.priority < candidate.priority
+                || (neighbor.priority === candidate.priority
+                    && (neighborX < cellX || (neighborX === cellX && neighborY < cellY)));
+            if (squaredDistance < minimumSquaredDistance && neighborWins) return undefined;
+        }
+    }
+
+    const key = candidate.key;
+    const sizeScale = 0.82 + seaLevel() * 0.22;
+    const majorRadius = (1250 + randomForFeature(key, 1009) * 800) * sizeScale;
+    const minorRadius = majorRadius * (0.55 + randomForFeature(key, 1013) * 0.27);
+    const angle = randomForFeature(key, 1031) * TAU;
+    return {
+        centerX: candidate.centerX,
+        centerY: candidate.centerY,
+        cosine: Math.cos(angle),
+        sine: Math.sin(angle),
+        majorRadius,
+        minorRadius,
+        waveA: 0.07 + randomForFeature(key, 1033) * 0.05,
+        waveB: 0.035 + randomForFeature(key, 1039) * 0.035,
+        waveC: 0.02 + randomForFeature(key, 1049) * 0.03,
+        phaseA: randomForFeature(key, 1051) * TAU,
+        phaseB: randomForFeature(key, 1061) * TAU,
+        phaseC: randomForFeature(key, 1063) * TAU
+    };
+}
+
+function queryOceanBasins(bounds) {
+    const firstCellX = Math.floor((bounds.minX - OCEAN_MAX_REACH) / OCEAN_CANDIDATE_CELL_SIZE);
+    const lastCellX = Math.floor((bounds.maxX + OCEAN_MAX_REACH) / OCEAN_CANDIDATE_CELL_SIZE);
+    const firstCellY = Math.floor((bounds.minY - OCEAN_MAX_REACH) / OCEAN_CANDIDATE_CELL_SIZE);
+    const lastCellY = Math.floor((bounds.maxY + OCEAN_MAX_REACH) / OCEAN_CANDIDATE_CELL_SIZE);
+    const candidates = new Map();
+    const candidateAt = (cellX, cellY) => {
+        const cacheKey = `${cellX}:${cellY}`;
+        if (!candidates.has(cacheKey)) candidates.set(cacheKey, buildOceanCandidate(cellX, cellY));
+        return candidates.get(cacheKey);
+    };
+    const basins = [];
+    for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
+        for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
+            const basin = buildOceanBasin(cellX, cellY, candidateAt);
+            if (basin) basins.push(basin);
+        }
+    }
+    return basins;
+}
+
+function oceanBasinValue(x, y, basin) {
+    const deltaX = x - basin.centerX;
+    const deltaY = y - basin.centerY;
+    const localX = deltaX * basin.cosine + deltaY * basin.sine;
+    const localY = -deltaX * basin.sine + deltaY * basin.cosine;
+    const angle = Math.atan2(localY / basin.minorRadius, localX / basin.majorRadius);
+    const boundary = 1
+        + Math.sin(angle * 3 + basin.phaseA) * basin.waveA
+        + Math.sin(angle * 5 + basin.phaseB) * basin.waveB
+        + Math.sin(angle * 8 + basin.phaseC) * basin.waveC;
+    return Math.hypot(localX / basin.majorRadius, localY / basin.minorRadius) / boundary - 1;
+}
+
+function oceanValue(x, y, basins) {
+    let value = Infinity;
+    for (const basin of basins) value = Math.min(value, oceanBasinValue(x, y, basin));
+    return value;
 }
 
 function visibleBounds() {
@@ -579,8 +669,14 @@ function rebuildOceanLayer() {
     const columns = Math.max(1, Math.ceil(width / OCEAN_SAMPLE_STEP));
     const rows = Math.max(1, Math.ceil(height / OCEAN_SAMPLE_STEP));
     const stride = columns + 1;
-    const threshold = oceanThreshold();
+    const threshold = 0;
+    const basins = queryOceanBasins(visibleBounds());
     const samples = new Array((columns + 1) * (rows + 1));
+    visibleOceanBasins = basins.length;
+    largestOceanDiameter = basins.reduce((largest, basin) => Math.max(
+        largest,
+        basin.majorRadius * 2 * (1 + basin.waveA + basin.waveB + basin.waveC)
+    ), 0);
 
     for (let row = 0; row <= rows; row += 1) {
         const screenY = Math.min(height, row * OCEAN_SAMPLE_STEP);
@@ -591,7 +687,7 @@ function rebuildOceanLayer() {
             samples[row * stride + column] = {
                 x: screenX,
                 y: screenY,
-                value: oceanField(worldX, worldY)
+                value: oceanValue(worldX, worldY, basins)
             };
         }
     }
@@ -787,6 +883,9 @@ function updateOutputs() {
     oceanCoverageOutput.textContent = showOceanInput.checked
         ? `${Math.round(oceanCoverage * 100)}%`
         : "关闭";
+    oceanDiameterOutput.textContent = showOceanInput.checked && largestOceanDiameter > 0
+        ? `${Math.round(largestOceanDiameter).toLocaleString()} u`
+        : "—";
     densityOutput.value = `${Math.round(density() * 100)}%`;
     curvatureOutput.value = `${Math.round(curvature() * 100)}%`;
     seaLevelOutput.value = `${Math.round(seaLevel() * 100)}%`;
@@ -925,11 +1024,14 @@ window.getInfiniteWaterDiagnostics = () => {
         renderedBranches,
         directionBins,
         oceanCoverage: showOceanInput.checked ? oceanCoverage : 0,
+        visibleOceanBasins: showOceanInput.checked ? visibleOceanBasins : 0,
+        largestOceanDiameter: showOceanInput.checked ? largestOceanDiameter : 0,
+        minimumOceanCorridor: OCEAN_MIN_SEPARATION - OCEAN_MAX_REACH * 2,
         sampleSignature: [
             randomAt(-7, 11, 17),
             randomAt(-7, 11, 23),
             turnAt(key, -3, 0.2),
-            oceanField(-7200, 11_400),
+            randomAt(-7200, 11_400, 1001),
             density(),
             curvature(),
             seaLevel()

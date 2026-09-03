@@ -13,7 +13,7 @@
     <header class="title-card">
         <span>PROCEDURAL WATER FIELD</span>
         <h1>无限无序水系场</h1>
-        <p>簇状多尺度曲线叠加连续广域海洋；视口只查询、裁剪和采样。</p>
+        <p>簇状多尺度曲线叠加有界广域海盆；视口只查询、裁剪和采样。</p>
     </header>
 
     <aside class="control-card" aria-label="曲线场控制">
@@ -34,12 +34,12 @@
             <input data-curvature type="range" min="20" max="100" step="1" value="68">
         </label>
         <label>
-            <span><b>海洋占比</b><output data-sea-level-output></output></span>
+            <span><b>海域密度</b><output data-sea-level-output></output></span>
             <input data-sea-level type="range" min="20" max="78" step="1" value="58">
         </label>
 
         <div class="toggle-grid">
-            <label><input data-show-ocean type="checkbox" checked> 广域海洋</label>
+            <label><input data-show-ocean type="checkbox" checked> 有界海域</label>
             <label><input data-show-branches type="checkbox" checked> 支流</label>
             <label><input data-show-samples type="checkbox"> 采样折线</label>
             <label><input data-show-chunks type="checkbox" checked> 区块边界</label>
@@ -57,6 +57,7 @@
         <div><span>缩放</span><strong data-zoom>1.00×</strong></div>
         <div><span>当前曲线</span><strong data-features>0</strong></div>
         <div><span>视口海洋</span><strong data-ocean-coverage>0%</strong></div>
+        <div><span>最大海域</span><strong data-ocean-diameter>—</strong></div>
         <small>拖拽平移 · 滚轮缩放 · G 区块 · P 采样点 · H 六边格 · 0 复位</small>
     </aside>
 

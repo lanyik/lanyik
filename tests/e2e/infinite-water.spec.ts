@@ -8,6 +8,9 @@ interface InfiniteWaterDiagnostics {
     renderedBranches: number;
     directionBins: number;
     oceanCoverage: number;
+    visibleOceanBasins: number;
+    largestOceanDiameter: number;
+    minimumOceanCorridor: number;
     sampleSignature: string;
 }
 
@@ -51,8 +54,11 @@ test("the infinite water curve field is deterministic across distant viewport qu
     expect(moved.renderedMainCurves).toBeGreaterThan(0);
     expect(moved.renderedBranches).toBeGreaterThan(0);
     expect(moved.directionBins).toBeGreaterThanOrEqual(6);
-    expect(moved.oceanCoverage).toBeGreaterThan(0.08);
+    expect(moved.oceanCoverage).toBeGreaterThan(0.03);
     expect(moved.oceanCoverage).toBeLessThan(0.9);
+    expect(moved.visibleOceanBasins).toBeGreaterThan(0);
+    expect(moved.largestOceanDiameter).toBeLessThan(5_200);
+    expect(moved.minimumOceanCorridor).toBeGreaterThanOrEqual(400);
     expect(moved.sampleSignature).toBe(initial.sampleSignature);
 
     await page.reload({ waitUntil: "domcontentloaded" });

@@ -44,13 +44,21 @@ spacing, not by distance from the origin or total explored area. Only the
 current viewport geometry is retained; it is replaced when the view, seed or
 curve controls change.
 
-## Broad ocean field
+## Bounded broad-water field
 
-The ocean is generated independently from the curve candidates. A very
-low-frequency continental field, a regional field and smaller coastline detail
-are sampled after deterministic two-dimensional domain warping. Thresholding
-that continuous value produces single water bodies spanning many render and
-source chunks rather than per-tile water noise.
+Broad water is generated independently from the curve candidates. Fine spatial
+cells propose randomly jittered basin centers and priorities. A deterministic
+Poisson-thinning pass rejects a candidate whenever a higher-priority center is
+too close, so the surviving centers have no visible placement grid while still
+obeying a hard minimum separation.
+
+Each center owns one rotated elliptical basin with several angular boundary
+harmonics. A basin can span many render and source chunks, but its effective
+radius is capped below `2,600` world units. Surviving centers are separated by
+at least `5,600` units, which guarantees a land corridor of at least `400`
+units and prevents neighboring basins from merging into an unbounded water
+wall. The sea-density control changes candidate frequency and modestly changes
+size within that cap; it cannot remove the corridor invariant.
 
 The ocean mask is sampled into a bounded screen-space cache only when the
 camera, seed, sea level or viewport changes. The cached mask is transformed
@@ -72,15 +80,16 @@ Then open <http://127.0.0.1:3000/infinite-water.html>. A seed can also be passed
 as `?seed=value`.
 
 - Drag to move through world space and use the wheel to zoom around the pointer.
-- Adjust candidate density, accumulated curvature and ocean coverage live.
+- Adjust candidate density, accumulated curvature and bounded-sea density live.
 - Toggle tributaries, chunk boundaries and the hex grid independently.
 - Enable **sample polyline** to see the actual points submitted to Canvas rather
   than the conceptual continuous curve.
 - `G`, `P`, `H` and `0` toggle chunks, sample points, hexes and reset the view.
 
 `window.getInfiniteWaterDiagnostics()` exposes the seed, camera, visible feature
-counts, direction-bin count, viewport ocean coverage and a deterministic sample
-signature for browser verification.
+counts, direction-bin count, viewport ocean coverage, largest queried basin,
+minimum land corridor and a deterministic sample signature for browser
+verification.
 
 ## Deliberate omissions
 

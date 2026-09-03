@@ -13,7 +13,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
 | World-style generation v1 | Generator v6; elevated climate snow and seam-free mountain lighting, automatic rivers deliberately deferred | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| Infinite water field prototype | Clustered multi-scale curves plus a domain-warped broad ocean; not integrated into generator v6 | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
+| Infinite water field prototype | Clustered multi-scale curves plus Poisson-spaced bounded seas with guaranteed land corridors; not integrated into generator v6 | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
 
