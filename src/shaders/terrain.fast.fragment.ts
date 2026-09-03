@@ -31,7 +31,7 @@ varying float vTerrain;
 varying vec3 vNormal;
 varying float vFogState;
 varying vec2 vFogUV;
-varying float vRiverEdges;
+varying float vTileWater;
 varying vec2 vLocal;
 varying vec3 vNeighborsKindA;
 varying vec3 vNeighborsKindB;
@@ -176,8 +176,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
     }
 
-    if (vRiverEdges > -0.5) {
-        float mask = floor(vRiverEdges + 0.5);
+    if (vTileWater > -0.5) {
+        float mask = floor(vTileWater + 0.5);
         float waterT = 0.0;
         float bankT = 0.0;
         float depthT = 0.0;

@@ -50,6 +50,7 @@ export interface InfiniteWaterCurveProfile {
 
 export interface InfiniteWaterCurveField {
     readonly maximumReach: number;
+    readonly maximumWidth: number;
     forEachPathIntersecting(bounds: WaterCurveBounds, visit: (path: WaterCurvePath) => void): void;
     forEachPathOwnedBy(bounds: WaterCurveBounds, visit: (path: WaterCurvePath) => void): void;
 }
@@ -557,6 +558,7 @@ export function scaleInfiniteWaterCurveProfile(
 
 class DeterministicInfiniteWaterCurveField implements InfiniteWaterCurveField {
     public readonly maximumReach: number;
+    public readonly maximumWidth: number;
 
     constructor(
         private readonly numericSeed: number,
@@ -568,6 +570,10 @@ class DeterministicInfiniteWaterCurveField implements InfiniteWaterCurveField {
                 + family.maximumControlStep * 2
                 + profile.maximumBranchLength
         ), 0);
+        this.maximumWidth = profile.families.reduce(
+            (maximum, family) => Math.max(maximum, family.maximumWidth),
+            0
+        );
     }
 
     public forEachPathIntersecting(bounds: WaterCurveBounds, visit: (path: WaterCurvePath) => void): void {

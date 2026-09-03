@@ -3,13 +3,13 @@
 ## Status and scope
 
 `public/infinite-water.html` is the visual inspection scene for the same
-deterministic curve field now consumed by generator v8. It is no longer a
+deterministic curve field now consumed by generator v9. It is no longer a
 separate implementation: the page imports the built
 `infinite-water-curve-field.mjs` entry, while production `WorldWaterSampler`
 imports its TypeScript source.
 
 The scene still contains a separate broad-water basin experiment. Those basin
-shapes are not part of generator v8; the production world retains its existing
+shapes are not part of generator v9; the production world retains its existing
 continental sea and regional lake rules.
 
 ## Shared curve model
@@ -39,18 +39,18 @@ values, so the browser scene remains a faithful geometry inspector.
 ## Production sampling boundary
 
 The shared path is a macro sampling parent, not a second render layer.
-Generator v8 converts it to the existing hex world:
+Generator v9 converts it to the existing hex world:
 
 1. Curve samples are rounded through axial/cube coordinates to the current
    even-column grid.
 2. A cube-coordinate line fills every gap between samples, guaranteeing a chain
-   of six-neighbour steps across page and chunk boundaries.
-3. Land, sand and tundra cells touched by those steps become river modifiers.
-   Sea creates an open mouth, mountains/snow interrupt the channel and existing
-   generated lakes retain priority.
-4. Exact reciprocal edge masks come from the sampled steps and branches. The
-   visual water remains hex-native and non-differentiable rather than becoming
-   a smooth spline mesh.
+   of six-neighbour cells across page and chunk boundaries.
+3. Each curve radius is sampled against nearby hex footprints. The centerline
+   keeps sub-cell tributaries continuous while major paths occupy multiple
+   cells according to their generated width.
+4. Selected cells become ordinary `Land.sea`/`Land.coastal` terrain. Their
+   visual boundary is the discrete hex occupancy boundary, not a smooth spline
+   mesh or a river-channel displacement inside a land cell.
 
 Infinite/bounded production uses a bounded 32x32-page LRU. Toroidal production
 owns one canonical, domain-scaled feature set and wraps the rasterized steps
@@ -58,7 +58,7 @@ into a periodic mask. Overview generation queries the same curves directly so
 thin long paths survive wide-area minimap downsampling.
 
 See the current
-[generator v8 decision](./decisions/curve-sampled-water-network-v8.md) for the
+[generator v9 decision](./decisions/hex-water-terrain-sampling-v9.md) for the
 identity, topology, packed-format and verification contract. The superseded
 generator v7 document records the short local-drainage implementation that was
 removed after the integration requirement was clarified.
@@ -96,7 +96,7 @@ metrics for browser verification.
 
 ## Deliberate omissions
 
-Generator v8 does not claim physical discharge, erosion, drainage elevation,
+Generator v9 does not claim physical discharge, erosion, drainage elevation,
 deltas or navigability. It establishes a deterministic macro water skeleton
 and faithful hex sampling. Gameplay classification, crossings, city placement
 and any later physical hydrology remain separate versioned decisions.

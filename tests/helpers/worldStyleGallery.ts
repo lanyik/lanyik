@@ -1,7 +1,6 @@
 import { Land } from "../../src/enums";
 import {
     getNeighbors,
-    NEIGHBOR_DIRECTION_BITS,
     NeighborDirection
 } from "../../src/helpers/neighbors";
 import { positiveModulo } from "../../src/helpers/topology";
@@ -142,7 +141,6 @@ export interface WorldStyleGalleryMetrics {
 interface SampleGrid {
     readonly terrain: Uint8Array;
     readonly flags: Uint8Array;
-    readonly riverEdges: Int8Array;
     readonly biome: Uint8Array;
     readonly relief: Float32Array;
 }
@@ -309,8 +307,6 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
     const total = sample.width * sample.height;
     const terrain = new Uint8Array(total);
     const flags = new Uint8Array(total);
-    const riverEdges = new Int8Array(total);
-    riverEdges.fill(-1);
     const biome = new Uint8Array(total);
     const relief = new Float32Array(total);
     const blockSize = 24;
@@ -328,11 +324,12 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
                     const tile = window.resolveGeneratedTile(x, y);
                     const modifiers = tile.modifiers ?? [];
                     terrain[index] = TERRAIN_CODES.get(tile.type) ?? 255;
+                    const generatedWater = (tile.type === Land.sea || tile.type === Land.coastal)
+                        && surface.baseTerrain !== Land.sea && surface.baseTerrain !== Land.coastal;
                     flags[index] = (modifiers.includes("hill") ? FLAG_HILL : 0)
                         | (modifiers.includes("wood") ? FLAG_FOREST : 0)
                         | (modifiers.includes("lake") ? FLAG_LAKE : 0)
-                        | (modifiers.includes("river") ? FLAG_RIVER : 0);
-                    if (tile.riverEdges !== undefined) riverEdges[index] = tile.riverEdges;
+                        | (generatedWater ? FLAG_RIVER : 0);
                     biome[index] = BIOME_CODES.get(surface.biome) ?? 255;
                     relief[index] = surface.relief;
                 }
@@ -340,7 +337,7 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
             window.clear();
         }
     }
-    return { terrain, flags, riverEdges, biome, relief };
+    return { terrain, flags, biome, relief };
 }
 
 export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample): WorldStyleGalleryMetrics {
@@ -384,10 +381,9 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
                 if (coastAnchor === undefined && !isStandingWater(index)) coastAnchor = index;
             }
             if (isForest(index) && isForest(neighbor)) hasForestNeighbor = true;
-            const edge = grid.riverEdges[index];
-            if (isRiver(index) && edge >= 0
-                && (edge & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0
-                && (isRiver(neighbor) || isStandingWater(neighbor))) hasRiverConnection = true;
+            if (isRiver(index) && (isRiver(neighbor) || isStandingWater(neighbor))) {
+                hasRiverConnection = true;
+            }
         });
         if (hasForestNeighbor) adjacentForests += 1;
         if (hasRiverConnection) connectedRivers += 1;
@@ -396,13 +392,14 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
     const mountainDistribution = distribution(sample, isMountain, grid.relief);
     const forestDistribution = distribution(sample, isForest, grid.relief);
     const lakeDistribution = distribution(sample, isLake, grid.relief);
-    const riverDistribution = distribution(
-        sample,
-        isRiver,
+    // Prefer ordinary lowland reaches for visual review. Maximum relief hid
+    // water under mountain walls; minimum relief biased every view to a mouth
+    // already merged into continental sea.
+    const waterwayAnchorScore = Float32Array.from(
         grid.relief,
-        (from, _to, direction) => (grid.riverEdges[from]
-            & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0
+        value => 1 - Math.abs(value - 0.07)
     );
+    const riverDistribution = distribution(sample, isRiver, waterwayAnchorScore);
     const { anchorIndex: _mountainAnchor, ...mountainMetrics } = mountainDistribution;
     const { anchorIndex: _forestAnchor, ...forestMetrics } = forestDistribution;
     const { anchorIndex: _lakeAnchor, ...lakeMetrics } = lakeDistribution;

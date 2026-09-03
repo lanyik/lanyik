@@ -49,7 +49,7 @@ uniform float landformDebugMode; // 0 normal, 1 elevation, 2 ridge, 3 valley, 4 
 uniform vec3 lightDir;
 
 // Rivers/lakes, drawn over the atlas texture on tiles with the "river"/"lake"
-// modifier (vRiverEdges >= 0, see helpers/rivers.ts for the encoding). The
+// modifier (vTileWater >= 0, see helpers/rivers.ts for the encoding). The
 // waterline - a river's channel-centerline distance, a lake's shore factor -
 // is bent by *static* world-space value noise: world-space makes the curved
 // banks continue seamlessly across tile borders, static keeps the banks
@@ -89,7 +89,7 @@ varying vec3 vNormal;
 varying float vBeachT;
 varying float vFogState;
 varying vec2 vFogUV;
-varying float vRiverEdges;
+varying float vTileWater;
 varying float vRiverSeaMouthEdges;
 varying float vRiverLakeMouthEdges;
 varying float vLakeNeighborEdges;
@@ -380,7 +380,7 @@ float lakeNeighborField(float mask) {
 // visibly lighter hex-shaped ring (shallow-based paint against deep water).
 // Kinds arrive as varyings and must be re-rounded (floor(v + 0.5)): varying
 // interpolation is not exact even for per-instance-constant values, and the
-// >= 0.5 water test would otherwise flip per pixel (see vRiverEdges below).
+// >= 0.5 water test would otherwise flip per pixel (see vTileWater below).
 vec2 coastField() {
     vec3 kA = floor(vNeighborsKindA + 0.5);
     vec3 kB = floor(vNeighborsKindB + 0.5);
@@ -551,13 +551,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     // Rivers/lakes (see the uniform block's comment above). Drawn before
     // lighting/fog/grid so all three keep applying to them unchanged; the
     // Unseen fog short-circuit at the top already hides them entirely.
-    if (vRiverEdges > -0.5 || vLakeNeighborEdges > 0.5) {
+    if (vTileWater > -0.5 || vLakeNeighborEdges > 0.5) {
         // Round the mask back to an exact integer: every vertex of an instance
-        // carries the same riverEdges value, but varying interpolation is not
+        // carries the same encoded value, but varying interpolation is not
         // exact - a mask of 34.0 can arrive as 33.99997 on some fragments, and
         // floor(mask / 2^i) then decodes *different connection bits on
         // neighboring pixels* (pixel-level water/bank garbage along the river).
-        float mask = floor(vRiverEdges + 0.5);
+        float mask = floor(vTileWater + 0.5);
         float apothem = hexSize * 0.8660254;
 
         // Static two-octave C0 world-space noise bends the waterline. It is

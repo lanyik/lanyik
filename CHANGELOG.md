@@ -9,16 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Generator v8 curve-sampled hex water networks. The production generator and
+- Generator v9 curve-sampled hex water terrain. The production generator and
   visual inspector now share one bounds-queryable infinite curve/polyline
-  field; world generation continuously rasterizes those paths through axial
-  coordinates into six-neighbour river cells instead of inventing a separate
-  local downhill route. Infinite/bounded worlds use a bounded 32x32-page LRU;
-  toroidal worlds wrap one canonical domain-scaled feature set. Exact edge
-  masks, sea mouths, terrain/lake priority, packed Worker chunks and sparse
-  editing remain hex-native. Procedural overview pages aggregate every sampled
-  river crossing their pixel footprints, preserving the macro network at wide
-  minimap scales. The curve field is also published as the optional
+  field; world generation rasterizes path radius through axial coordinates
+  into connected `sea`/`coastal` hex cells instead of cutting a river channel
+  into land. Infinite/bounded worlds use a bounded 32x32-page LRU; toroidal
+  worlds wrap one canonical domain-scaled feature set. Procedural overview
+  pages aggregate every sampled water cell crossing their pixel footprints,
+  preserving the macro network at wide minimap scales. The obsolete generated
+  `riverEdges` mask was removed, and packed Worker chunks now use one-byte v3
+  payloads. The curve field is also published as the optional
   `three-hex-map/infinite-water-curve-field` package subpath.
 - An infinite water-field visual inspector with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
@@ -77,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   draw-call, triangle, visible/resident chunk and LOD counters.
 - Dedicated browser Worker build and `WorldGeneratorClient` for non-blocking
   procedural generation. Supported world dimensions now extend to 512×512.
-- Deterministic infinite-world chunks with a compact 16-bit tile format, halo
+- Deterministic infinite-world chunks with a compact 8-bit v3 tile format, halo
   cells for seamless borders, a prioritized multi-Worker pool, sparse
   reference-counted residency, camera-driven loading and floating-origin
   rebasing through `ProceduralWorldSource` and `HexMap.loadWorld()`.

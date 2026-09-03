@@ -62,6 +62,7 @@ describe("InfiniteWaterCurveField", () => {
             INFINITE_WATER_CURVE_REFERENCE_PROFILE.sampleSpacing * scale
         );
         expect(scaled.families[2].maximumLength).toBeCloseTo(17_000);
+        expect(createInfiniteWaterCurveField("scale-check", scaled).maximumWidth).toBeCloseTo(54);
         expect(scaled.families[2].slots).toBe(INFINITE_WATER_CURVE_REFERENCE_PROFILE.families[2].slots);
         expect(scaled.families[2].maximumBranches)
             .toBe(INFINITE_WATER_CURVE_REFERENCE_PROFILE.families[2].maximumBranches);

@@ -1,7 +1,10 @@
 # Curve-sampled water networks for generator v8
 
-Status: implemented on 2026-09-03. Supersedes the generator v7 local-drainage
-decision.
+Status: superseded on 2026-09-04 by the
+[generator v9 hex-terrain sampling decision](./hex-water-terrain-sampling-v9.md).
+This record preserves the intermediate implementation that incorrectly routed
+generated water through the land-tile river-channel modifier. It had already
+superseded the generator v7 local-drainage decision.
 
 ## Corrected requirement
 

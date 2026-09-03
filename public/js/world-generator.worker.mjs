@@ -700,30 +700,6 @@ var require_robust_pnp = __commonJS({
 
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
-var NEIGHBOR_DIRECTION_BITS = Object.freeze({
-  SE: 0,
-  S: 1,
-  SW: 2,
-  NW: 3,
-  N: 4,
-  NE: 5
-});
-function oppositeNeighborDirection(direction) {
-  switch (direction) {
-    case "NE":
-      return "SW";
-    case "N":
-      return "S";
-    case "NW":
-      return "SE";
-    case "SW":
-      return "NE";
-    case "S":
-      return "N";
-    case "SE":
-      return "NW";
-  }
-}
 function getNeighborCoords(x, y, direction) {
   const odd = x % 2 !== 0;
   switch (direction) {
@@ -833,7 +809,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 8;
+var WORLD_GENERATOR_VERSION = 9;
 
 // src/world/InfiniteWaterCurveField.ts
 var UINT32_RANGE = 4294967296;
@@ -1235,6 +1211,10 @@ var DeterministicInfiniteWaterCurveField = class {
       maximum,
       family.maximumLength / 2 + family.maximumControlStep * 2 + profile.maximumBranchLength
     ), 0);
+    this.maximumWidth = profile.families.reduce(
+      (maximum, family) => Math.max(maximum, family.maximumWidth),
+      0
+    );
   }
   forEachPathIntersecting(bounds, visit) {
     assertBounds(bounds);
@@ -1775,8 +1755,9 @@ function createLandformSamplerForProfile(options, profile) {
 
 // src/world/WorldWaterSampler.ts
 var SQRT_THREE = Math.sqrt(3);
+var HEX_APOTHEM = SQRT_THREE / 2;
 var positiveModulo2 = (value, period) => (value % period + period) % period;
-function assertRiverExtent(originX, originY, width, height) {
+function assertWaterExtent(originX, originY, width, height) {
   if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)) {
     throw new RangeError("water extent origins must be safe integers");
   }
@@ -1789,12 +1770,6 @@ function assertRiverExtent(originX, originY, width, height) {
   if (!Number.isSafeInteger(width * height)) {
     throw new RangeError("water extent area exceeds safe integer indexing");
   }
-}
-function isRiverTerrain(type) {
-  return type === "land" /* land */ || type === "sand" /* sand */ || type === "tundra" /* tundra */;
-}
-function isOpenWater(type) {
-  return type === "sea" /* sea */ || type === "coastal" /* coastal */;
 }
 function roundCube(q, r, s) {
   let roundedQ = Math.round(q);
@@ -1821,6 +1796,12 @@ function worldPointToHex(point) {
   const r = -point.x / 3 + point.y / SQRT_THREE - 0.5;
   return cubeToOffset(roundCube(q, r, -q - r));
 }
+function hexCenter(point) {
+  return {
+    x: point.x * 1.5,
+    y: point.y * SQRT_THREE + (point.x % 2 === 0 ? SQRT_THREE / 2 : 0)
+  };
+}
 function hexLine(from, to) {
   const start = offsetToCube(from);
   const end = offsetToCube(to);
@@ -1844,13 +1825,26 @@ function hexLine(from, to) {
   }
   return result;
 }
-function tileExtentToWorldBounds(originX, originY, width, height) {
+function tileExtentToWorldBounds(originX, originY, width, height, margin) {
   return {
-    minX: originX * 1.5 - 1,
-    maxX: (originX + width - 1) * 1.5 + 1,
-    minY: originY * SQRT_THREE - 1,
-    maxY: (originY + height) * SQRT_THREE + 1
+    minX: originX * 1.5 - 1 - margin,
+    maxX: (originX + width - 1) * 1.5 + 1 + margin,
+    minY: originY * SQRT_THREE - 1 - margin,
+    maxY: (originY + height) * SQRT_THREE + 1 + margin
   };
+}
+function isCenterInsideRibbon(center, first, second) {
+  const segmentX = second.x - first.x;
+  const segmentY = second.y - first.y;
+  const lengthSquared = segmentX * segmentX + segmentY * segmentY;
+  const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(
+    1,
+    ((center.x - first.x) * segmentX + (center.y - first.y) * segmentY) / lengthSquared
+  ));
+  const nearestX = first.x + segmentX * amount;
+  const nearestY = first.y + segmentY * amount;
+  const width = first.width + (second.width - first.width) * amount;
+  return Math.hypot(center.x - nearestX, center.y - nearestY) <= width + HEX_APOTHEM;
 }
 var DeterministicWorldWaterSampler = class {
   constructor(numericSeed, domain, profile) {
@@ -1870,14 +1864,17 @@ var DeterministicWorldWaterSampler = class {
       this.curveField = createInfiniteWaterCurveFieldFromUint32(numericSeed, profile.rivers.curve);
     }
   }
-  riverEdgesAt(x, y, sampleAt) {
+  isWaterTile(x, y) {
+    if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+      throw new RangeError("water coordinates must be safe integers");
+    }
     if (this.domain.topology === "toroidal") {
       const canonicalX = positiveModulo2(x, this.domain.width);
       const canonicalY = positiveModulo2(y, this.domain.height);
-      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
-      const value2 = mask[canonicalX * this.domain.height + canonicalY];
-      return value2 < 0 ? void 0 : value2;
+      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask());
+      return mask[canonicalX * this.domain.height + canonicalY] !== 0;
     }
+    if (this.domain.topology === "bounded" && (x < 0 || x >= this.domain.width || y < 0 || y >= this.domain.height)) return false;
     const pageSize = this.profile.rivers.pageSize;
     const pageX = Math.floor(x / pageSize);
     const pageY = Math.floor(y / pageSize);
@@ -1887,7 +1884,7 @@ var DeterministicWorldWaterSampler = class {
       this.pages.delete(key);
       this.pages.set(key, page);
     } else {
-      page = this.buildPage(pageX, pageY, sampleAt);
+      page = this.buildPage(pageX, pageY);
       this.pages.set(key, page);
       while (this.pages.size > this.profile.rivers.maximumCachedPages) {
         const oldest = this.pages.keys().next().value;
@@ -1897,32 +1894,29 @@ var DeterministicWorldWaterSampler = class {
     }
     const localX = x - pageX * pageSize;
     const localY = y - pageY * pageSize;
-    const value = page.riverEdges[localX * pageSize + localY];
-    return value < 0 ? void 0 : value;
+    return page.water[localX * pageSize + localY] !== 0;
   }
-  isRiverTile(x, y, sampleAt) {
-    return this.riverEdgesAt(x, y, sampleAt) !== void 0;
-  }
-  forEachRiverTile(originX, originY, width, height, sampleAt, visit) {
-    assertRiverExtent(originX, originY, width, height);
-    if (typeof visit !== "function") throw new TypeError("river tile visitor must be a function");
+  forEachWaterTile(originX, originY, width, height, visit) {
+    assertWaterExtent(originX, originY, width, height);
+    if (typeof visit !== "function") throw new TypeError("water tile visitor must be a function");
     const endX = originX + width;
     const endY = originY + height;
     if (this.domain.topology === "toroidal") {
-      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
+      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask());
       for (let x = originX; x < endX; x += 1) {
         const canonicalX = positiveModulo2(x, this.domain.width);
         for (let y = originY; y < endY; y += 1) {
           const canonicalY = positiveModulo2(y, this.domain.height);
-          if (mask[canonicalX * this.domain.height + canonicalY] >= 0) visit(x, y);
+          if (mask[canonicalX * this.domain.height + canonicalY] !== 0) visit(x, y);
         }
       }
       return;
     }
     const visited = /* @__PURE__ */ new Set();
-    this.openCurveField().forEachPathIntersecting(
-      tileExtentToWorldBounds(originX, originY, width, height),
-      (path) => this.visitPathEdges(path, sampleAt, (point) => {
+    const field2 = this.openCurveField();
+    field2.forEachPathIntersecting(
+      tileExtentToWorldBounds(originX, originY, width, height, field2.maximumWidth),
+      (path) => this.visitPathTiles(path, (point) => {
         if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
         visited.add((point.x - originX) * height + point.y - originY);
       })
@@ -1933,13 +1927,13 @@ var DeterministicWorldWaterSampler = class {
   }
   get stats() {
     const mask = this.toroidalMask;
-    let toroidalRiverTiles = 0;
-    if (mask) for (const value of mask) toroidalRiverTiles += value >= 0 ? 1 : 0;
+    let toroidalWaterTiles = 0;
+    if (mask) for (const value of mask) toroidalWaterTiles += value !== 0 ? 1 : 0;
     return Object.freeze({
       cachedPages: this.pages.size,
       maximumCachedPages: this.profile.rivers.maximumCachedPages,
       toroidalMaskReady: mask !== void 0,
-      toroidalRiverTiles
+      toroidalWaterTiles
     });
   }
   clear() {
@@ -1960,77 +1954,58 @@ var DeterministicWorldWaterSampler = class {
     if (!this.curveField) throw new Error("open water curve field is unavailable for a toroidal domain");
     return this.curveField;
   }
-  directionBetween(from, to) {
-    for (const neighbor of getNeighbors(from.x, from.y)) {
-      const canonical = this.normalizePoint(neighbor);
-      if (canonical?.x === to.x && canonical.y === to.y) return neighbor.direction;
-    }
-    throw new Error("sampled water curve contains non-neighboring hex cells");
-  }
-  visitPathEdges(path, sampleAt, visit) {
+  visitPathTiles(path, visit) {
     if (path.points.length < 2) return;
-    let previous = worldPointToHex(path.points[0]);
     for (let index = 1; index < path.points.length; index += 1) {
-      const next = worldPointToHex(path.points[index]);
-      const cells = hexLine(previous, next);
-      for (let cellIndex = 1; cellIndex < cells.length; cellIndex += 1) {
-        this.visitCandidateEdge(cells[cellIndex - 1], cells[cellIndex], sampleAt, visit);
+      const first = path.points[index - 1];
+      const second = path.points[index];
+      const centerline = hexLine(worldPointToHex(first), worldPointToHex(second));
+      const radius = Math.ceil((Math.max(first.width, second.width) + 1) / SQRT_THREE);
+      for (const base of centerline) {
+        const normalizedBase = this.normalizePoint(base);
+        if (normalizedBase) visit(normalizedBase);
+        for (let offsetX = -radius; offsetX <= radius; offsetX += 1) {
+          for (let offsetY = -radius; offsetY <= radius; offsetY += 1) {
+            if (offsetX === 0 && offsetY === 0) continue;
+            const candidate = { x: base.x + offsetX, y: base.y + offsetY };
+            if (!isCenterInsideRibbon(hexCenter(candidate), first, second)) continue;
+            const normalized = this.normalizePoint(candidate);
+            if (normalized) visit(normalized);
+          }
+        }
       }
-      previous = next;
     }
   }
-  visitCandidateEdge(rawFrom, rawTo, sampleAt, visit) {
-    const from = this.normalizePoint(rawFrom);
-    const to = this.normalizePoint(rawTo);
-    if (!from || !to || from.x === to.x && from.y === to.y) return;
-    const direction = this.directionBetween(from, to);
-    const fromSample = sampleAt(from.x, from.y);
-    const toSample = sampleAt(to.x, to.y);
-    if (!fromSample || !toSample) return;
-    const fromRiver = isRiverTerrain(fromSample.baseTerrain);
-    const toRiver = isRiverTerrain(toSample.baseTerrain);
-    if (fromRiver && toRiver) {
-      visit(from, direction);
-      visit(to, oppositeNeighborDirection(direction));
-    } else if (fromRiver && isOpenWater(toSample.baseTerrain)) {
-      visit(from, direction);
-    } else if (toRiver && isOpenWater(fromSample.baseTerrain)) {
-      visit(to, oppositeNeighborDirection(direction));
-    }
-  }
-  buildPage(pageX, pageY, sampleAt) {
+  buildPage(pageX, pageY) {
     const pageSize = this.profile.rivers.pageSize;
     const minX = pageX * pageSize;
     const minY = pageY * pageSize;
-    const riverEdges = new Int8Array(pageSize * pageSize);
-    riverEdges.fill(-1);
-    this.openCurveField().forEachPathIntersecting(
-      tileExtentToWorldBounds(minX, minY, pageSize, pageSize),
-      (path) => this.visitPathEdges(path, sampleAt, (point, direction) => {
+    const water = new Uint8Array(pageSize * pageSize);
+    const field2 = this.openCurveField();
+    field2.forEachPathIntersecting(
+      tileExtentToWorldBounds(minX, minY, pageSize, pageSize, field2.maximumWidth),
+      (path) => this.visitPathTiles(path, (point) => {
         const localX = point.x - minX;
         const localY = point.y - minY;
         if (localX < 0 || localX >= pageSize || localY < 0 || localY >= pageSize) return;
-        const index = localX * pageSize + localY;
-        riverEdges[index] = Math.max(0, riverEdges[index]) | 1 << NEIGHBOR_DIRECTION_BITS[direction];
+        water[localX * pageSize + localY] = 1;
       })
     );
-    return { riverEdges };
+    return { water };
   }
-  buildToroidalMask(sampleAt) {
+  buildToroidalMask() {
     if (this.domain.topology !== "toroidal" || !this.toroidalCurveField) {
       throw new Error("toroidal water mask requires a toroidal domain");
     }
     const domain = this.domain;
-    const mask = new Int8Array(domain.width * domain.height);
-    mask.fill(-1);
+    const mask = new Uint8Array(domain.width * domain.height);
     this.toroidalCurveField.forEachPathOwnedBy({
       minX: 0,
       maxX: domain.width * 1.5,
       minY: 0,
       maxY: domain.height * SQRT_THREE
-    }, (path) => this.visitPathEdges(path, sampleAt, (point, direction) => {
-      const index = point.x * domain.height + point.y;
-      mask[index] = Math.max(0, mask[index]) | 1 << NEIGHBOR_DIRECTION_BITS[direction];
+    }, (path) => this.visitPathTiles(path, (point) => {
+      mask[point.x * domain.height + point.y] = 1;
     }));
     return mask;
   }
@@ -2184,10 +2159,10 @@ function sampleSurface(sampler, profile, x, y) {
     landform
   });
 }
-function isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample = sampleAt(x, y)) {
+function isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample = sampleAt(x, y)) {
   if (!sample) return false;
   const lakes = profile.lakes;
-  const isCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
+  const isCandidate = (candidate, tileX, tileY) => Boolean(candidate && !waterAt(tileX, tileY) && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
   if (!isCandidate(sample, x, y)) return false;
   const lakeNeighbors = getNeighbors(x, y).reduce((count, neighbor) => {
     const adjacent = sampleAt(neighbor.x, neighbor.y);
@@ -2195,16 +2170,16 @@ function isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample = sampleAt
   }, 0);
   return lakeNeighbors >= lakes.minimumNeighbors;
 }
-function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
+function resolveTile(numericSeed, profile, x, y, sampleAt, waterAt) {
   const sample = sampleAt(x, y);
   if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
   let type = sample.baseTerrain;
-  if (type === "sea" /* sea */) {
+  if (isWater(type) || waterAt(x, y)) {
     const touchesLand = getNeighbors(x, y).some((neighbor) => {
       const adjacent = sampleAt(neighbor.x, neighbor.y);
-      return adjacent !== void 0 && adjacent.baseTerrain !== "sea" /* sea */;
+      return adjacent !== void 0 && !isWater(adjacent.baseTerrain) && !waterAt(neighbor.x, neighbor.y);
     });
-    if (touchesLand) type = "coastal" /* coastal */;
+    type = touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
   }
   const tile = { type };
   if (isWater(type) || type === "mountain" /* mountain */) return Object.freeze(tile);
@@ -2215,21 +2190,15 @@ function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
     Object.freeze(modifiers);
     return Object.freeze(tile);
   }
-  const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample);
+  const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample);
   if (lake) {
     modifiers.push("lake");
   } else {
-    const riverEdges = riverAt(x, y);
-    if (riverEdges !== void 0) {
-      modifiers.push("river");
-      tile.riverEdges = riverEdges;
-    } else {
-      if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-      const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
-      if (forest) {
-        modifiers.push("wood");
-        tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
-      }
+    if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+    const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
+    if (forest) {
+      modifiers.push("wood");
+      tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
     }
   }
   if (modifiers.length > 0) {
@@ -2264,38 +2233,17 @@ var FrozenWorldSurfaceResolver = class {
         const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
         return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
       },
-      (riverX, riverY) => this.waterSampler.riverEdgesAt(
-        riverX,
-        riverY,
-        (sampleX, sampleY) => {
-          const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
-          return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
-        }
-      )
+      (waterX, waterY) => this.waterSampler.isWaterTile(waterX, waterY)
     );
   }
-  visitGeneratedRiverTiles(originX, originY, width, height, visit) {
-    if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
+  visitGeneratedWaterTiles(originX, originY, width, height, visit) {
+    if (typeof visit !== "function") throw new TypeError("generated water visitor must be a function");
     const window = this.createWindow();
     try {
-      const sampleAt = (x, y) => window.sampleGenerated(x, y);
-      this.waterSampler.forEachRiverTile(
-        originX,
-        originY,
-        width,
-        height,
-        sampleAt,
-        (x, y) => {
-          const point = normalizeCoordinates(this.domain, x, y);
-          if (!isGeneratedLake(
-            this.sampler.numericSeed,
-            this.profile,
-            point.x,
-            point.y,
-            sampleAt
-          )) visit(x, y);
-        }
-      );
+      this.waterSampler.forEachWaterTile(originX, originY, width, height, (x, y) => {
+        const sample = window.sampleGenerated(x, y);
+        if (sample && !isWater(sample.baseTerrain)) visit(x, y);
+      });
     } finally {
       window.clear();
     }
@@ -2335,11 +2283,7 @@ var WorldSurfaceResolverWindow = class {
         point.x,
         point.y,
         (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY),
-        (riverX, riverY) => this.waterSampler.riverEdgesAt(
-          riverX,
-          riverY,
-          (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
-        )
+        (waterX, waterY) => this.waterSampler.isWaterTile(waterX, waterY)
       );
       this.tiles.set(key, tile);
     }
@@ -2406,7 +2350,7 @@ function generateWorld({ seed, width, height, topology = "bounded" }) {
 // src/world/generateWorldChunk.ts
 var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-var WORLD_CHUNK_FORMAT_VERSION = 2;
+var WORLD_CHUNK_FORMAT_VERSION = 3;
 var WORLD_CHUNK_PADDING = 1;
 var LAND_BY_CODE = [
   "sea" /* sea */,
@@ -2423,10 +2367,6 @@ var FLAG_WOOD = 1 << 4;
 var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
-var FLAG_RIVER = 1 << 8;
-var RIVER_EDGES_SHIFT = 9;
-var RIVER_EDGES_MASK = 63 << RIVER_EDGES_SHIFT;
-var FLAG_EXPLICIT_RIVER_EDGES = 1 << 15;
 var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
 function assertChunkCoordinate(name, value) {
   if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
@@ -2442,13 +2382,6 @@ function encodeTileInfo(tile) {
   if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
   if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
   if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
-  if (tile.modifiers?.includes("river")) packed |= FLAG_RIVER;
-  if (tile.riverEdges !== void 0) {
-    if (!Number.isInteger(tile.riverEdges) || tile.riverEdges < 0 || tile.riverEdges > 63) {
-      throw new RangeError("tile riverEdges must be an integer between 0 and 63");
-    }
-    packed |= FLAG_EXPLICIT_RIVER_EDGES | tile.riverEdges << RIVER_EDGES_SHIFT;
-  }
   const treeCode = TREE_MODELS.indexOf(tile.treeModel);
   if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
   return packed;
@@ -2473,7 +2406,7 @@ function generateWorldChunkWithResolver(options, resolver, resolvedChunkSize) {
   validateBoundedWorld(options.world);
   const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
   const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-  const tiles = new Uint16Array(stride * stride);
+  const tiles = new Uint8Array(stride * stride);
   const expectedDomain = options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" };
   if (!resolver || resolver.seed !== String(options.seed) || resolver.domain.topology !== expectedDomain.topology || expectedDomain.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== expectedDomain.width || resolver.domain.height !== expectedDomain.height)) {
     throw new TypeError("world surface resolver does not match the chunk request");
@@ -2743,18 +2676,6 @@ function isLakeTile(tile) {
 function isSeaOrCoastal(tile) {
   return tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */;
 }
-function explicitRiverEdges(tile) {
-  const edges = tile.riverEdges;
-  if (edges === void 0) return void 0;
-  if (!Number.isInteger(edges) || edges < 0 || edges > 63) {
-    throw new RangeError("tile riverEdges must be an integer between 0 and 63");
-  }
-  return edges;
-}
-function riverAllowsEdge(tile, direction) {
-  const edges = explicitRiverEdges(tile);
-  return edges === void 0 || (edges & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0;
-}
 function waterEdgeValue(map, x, y) {
   const tile = getMapTile(map, x, y);
   if (isLakeTile(tile)) {
@@ -2764,18 +2685,17 @@ function waterEdgeValue(map, x, y) {
       const neighbor = getMapTile(map, n.x, n.y);
       if (!neighbor) return;
       if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
-      else if (isRiverTile(neighbor) && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction))) channelMask |= 1 << bit;
+      else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
     });
     return LAKE_FLAG + openMask * 64 + channelMask;
   }
   if (tile && isRiverTile(tile)) {
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
-      if (!riverAllowsEdge(tile, direction)) return;
       const n = getNeighborCoords(x, y, direction);
       const neighbor = getMapTile(map, n.x, n.y);
       if (!neighbor) return;
-      if (isRiverTile(neighbor) && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction)) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
+      if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
     });
     return mask;
   }
@@ -2786,7 +2706,6 @@ function riverSeaMouthEdgeValue(map, x, y) {
   if (!tile || !isRiverTile(tile)) return 0;
   let mask = 0;
   MASK_DIRECTIONS.forEach((direction, bit) => {
-    if (!riverAllowsEdge(tile, direction)) return;
     const n = getNeighborCoords(x, y, direction);
     const neighbor = getMapTile(map, n.x, n.y);
     if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
@@ -2798,7 +2717,6 @@ function riverLakeMouthEdgeValue(map, x, y) {
   if (!tile || !isRiverTile(tile)) return 0;
   let mask = 0;
   MASK_DIRECTIONS.forEach((direction, bit) => {
-    if (!riverAllowsEdge(tile, direction)) return;
     const n = getNeighborCoords(x, y, direction);
     const neighbor = getMapTile(map, n.x, n.y);
     if (isLakeTile(neighbor)) mask |= 1 << bit;
@@ -3319,9 +3237,9 @@ function writePixel(pixels, offset, color) {
 function overviewTileCoordinate(origin, span, pixel, pixels) {
   return origin + Math.min(span - 1, Math.floor((pixel + 0.5) * span / pixels));
 }
-function generatedRiverCoverage(options, resolver) {
+function generatedWaterCoverage(options, resolver) {
   const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
-  resolver.visitGeneratedRiverTiles(
+  resolver.visitGeneratedWaterTiles(
     options.originX,
     options.originY,
     options.tileSpanX,
@@ -3348,7 +3266,7 @@ function generateWorldOverviewWithResolver(options, resolver) {
     throw new TypeError("world overview resolver does not match its descriptor");
   }
   const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-  const riverCoverage = generatedRiverCoverage(options, resolver);
+  const waterCoverage = generatedWaterCoverage(options, resolver);
   const terrain = resolver.profile.terrain;
   let offset = 0;
   for (let py = 0; py < options.pixelHeight; py += 1) {
@@ -3381,7 +3299,7 @@ function generateWorldOverviewWithResolver(options, resolver) {
       writePixel(
         pixels,
         offset,
-        riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
+        waterCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
       );
       offset += 4;
     }

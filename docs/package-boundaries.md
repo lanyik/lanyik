@@ -25,7 +25,7 @@ explicit subpaths:
 | `three-hex-map/persistence` | IndexedDB chunk cache, sparse world deltas and recoverable checkpoints |
 | `three-hex-map/pathfinding` | Versioned hierarchical navigation summaries and routing |
 | `three-hex-map/simulation` | Camera-independent simulation runtime and snapshot stores |
-| `three-hex-map/infinite-water-curve-field` | Deterministic curve/polyline queries shared by generator v8 and the browser visual inspector |
+| `three-hex-map/infinite-water-curve-field` | Deterministic curve/polyline queries shared by generator v9 and the browser visual inspector |
 
 Each subpath has independent ESM, CommonJS and declaration outputs. The classic
 `hex-map.global.js` is built from the renderer entry and does not publish the

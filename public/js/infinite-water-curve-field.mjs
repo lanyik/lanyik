@@ -407,6 +407,10 @@ var DeterministicInfiniteWaterCurveField = class {
       maximum,
       family.maximumLength / 2 + family.maximumControlStep * 2 + profile.maximumBranchLength
     ), 0);
+    this.maximumWidth = profile.families.reduce(
+      (maximum, family) => Math.max(maximum, family.maximumWidth),
+      0
+    );
   }
   forEachPathIntersecting(bounds, visit) {
     assertBounds(bounds);

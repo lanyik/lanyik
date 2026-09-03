@@ -43,7 +43,7 @@ export interface WorldSurfaceResolver {
     readonly profile: Readonly<WorldStyleProfile>;
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
-    visitGeneratedRiverTiles(
+    visitGeneratedWaterTiles(
         originX: number,
         originY: number,
         width: number,
@@ -255,7 +255,7 @@ function sampleSurface(
 }
 
 type SampleAt = (x: number, y: number) => Readonly<WorldSurfaceSample> | undefined;
-type RiverAt = (x: number, y: number) => number | undefined;
+type WaterAt = (x: number, y: number) => boolean;
 
 function isGeneratedLake(
     numericSeed: number,
@@ -263,6 +263,7 @@ function isGeneratedLake(
     x: number,
     y: number,
     sampleAt: SampleAt,
+    waterAt: WaterAt,
     sample: Readonly<WorldSurfaceSample> | undefined = sampleAt(x, y)
 ): boolean {
     if (!sample) return false;
@@ -271,7 +272,8 @@ function isGeneratedLake(
         candidate: Readonly<WorldSurfaceSample> | undefined,
         tileX: number,
         tileY: number
-    ): boolean => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential
+    ): boolean => Boolean(candidate && !waterAt(tileX, tileY)
+        && candidate.lakePotential >= lakes.minimumPotential
         && randomAt(numericSeed, tileX, tileY, lakes.placementSalt)
             < candidate.lakePotential * lakes.placementScale);
     if (!isCandidate(sample, x, y)) return false;
@@ -288,17 +290,18 @@ function resolveTile(
     x: number,
     y: number,
     sampleAt: SampleAt,
-    riverAt: RiverAt
+    waterAt: WaterAt
 ): Readonly<TileInfo> {
     const sample = sampleAt(x, y);
     if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
     let type = sample.baseTerrain;
-    if (type === Land.sea) {
+    if (isWater(type) || waterAt(x, y)) {
         const touchesLand = getNeighbors(x, y).some(neighbor => {
             const adjacent = sampleAt(neighbor.x, neighbor.y);
-            return adjacent !== undefined && adjacent.baseTerrain !== Land.sea;
+            return adjacent !== undefined && !isWater(adjacent.baseTerrain)
+                && !waterAt(neighbor.x, neighbor.y);
         });
-        if (touchesLand) type = Land.coastal;
+        type = touchesLand ? Land.coastal : Land.sea;
     }
 
     const tile: TileInfo = { type };
@@ -314,28 +317,18 @@ function resolveTile(
         Object.freeze(modifiers);
         return Object.freeze(tile);
     }
-    const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample);
+    const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample);
     if (lake) {
         modifiers.push("lake");
     } else {
-        const riverEdges = riverAt(x, y);
-        if (riverEdges !== undefined) {
-            // Generated rivers are one-cell topology chains. They replace hill
-            // and wood modifiers so relief or vegetation cannot occlude the
-            // water. The explicit edge mask keeps nearby unrelated courses
-            // visually separate.
-            modifiers.push("river");
-            tile.riverEdges = riverEdges;
-        } else {
-            if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-            const forest = sample.vegetationDensity
-                + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
-                    * profile.vegetation.placementJitter
-                >= profile.vegetation.placementThreshold;
-            if (forest) {
-                modifiers.push("wood");
-                tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
-            }
+        if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+        const forest = sample.vegetationDensity
+            + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
+                * profile.vegetation.placementJitter
+            >= profile.vegetation.placementThreshold;
+        if (forest) {
+            modifiers.push("wood");
+            tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
         }
     }
     if (modifiers.length > 0) {
@@ -379,47 +372,24 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
                 const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
                 return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : undefined;
             },
-            (riverX, riverY) => this.waterSampler.riverEdgesAt(
-                riverX,
-                riverY,
-                (sampleX, sampleY) => {
-                    const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
-                    return normalized
-                        ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y)
-                        : undefined;
-                }
-            )
+            (waterX, waterY) => this.waterSampler.isWaterTile(waterX, waterY)
         );
     }
 
-    public visitGeneratedRiverTiles(
+    public visitGeneratedWaterTiles(
         originX: number,
         originY: number,
         width: number,
         height: number,
         visit: (x: number, y: number) => void
     ): void {
-        if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
+        if (typeof visit !== "function") throw new TypeError("generated water visitor must be a function");
         const window = this.createWindow();
         try {
-            const sampleAt = (x: number, y: number) => window.sampleGenerated(x, y);
-            this.waterSampler.forEachRiverTile(
-                originX,
-                originY,
-                width,
-                height,
-                sampleAt,
-                (x, y) => {
-                    const point = normalizeCoordinates(this.domain, x, y)!;
-                    if (!isGeneratedLake(
-                        this.sampler.numericSeed,
-                        this.profile,
-                        point.x,
-                        point.y,
-                        sampleAt
-                    )) visit(x, y);
-                }
-            );
+            this.waterSampler.forEachWaterTile(originX, originY, width, height, (x, y) => {
+                const sample = window.sampleGenerated(x, y);
+                if (sample && !isWater(sample.baseTerrain)) visit(x, y);
+            });
         } finally {
             window.clear();
         }
@@ -464,11 +434,7 @@ export class WorldSurfaceResolverWindow {
                 point.x,
                 point.y,
                 (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY),
-                (riverX, riverY) => this.waterSampler.riverEdgesAt(
-                    riverX,
-                    riverY,
-                    (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
-                )
+                (waterX, waterY) => this.waterSampler.isWaterTile(waterX, waterY)
             );
             this.tiles.set(key, tile);
         }

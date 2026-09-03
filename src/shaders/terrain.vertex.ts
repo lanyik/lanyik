@@ -95,7 +95,7 @@ varying vec3 vNormal;
 varying float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
 varying float vFogState;
 varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
-varying float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
+varying float vTileWater; // encoded authored river/lake value, flat per tile
 varying float vRiverSeaMouthEdges;
 varying float vRiverLakeMouthEdges;
 varying float vLakeNeighborEdges;
@@ -366,7 +366,7 @@ void main() {
     vec2 local = position.xz;
     vec2 tileOffset = nearestWorldOffset(offset);
     vec2 logicalTileOffset = tileOffset + chunkOrigin;
-    float riverEdges = waterEdges.x;
+    float tileWater = waterEdges.x;
     float riverSeaMouthEdges = waterEdges.y;
     float riverLakeMouthEdges = waterEdges.z;
     float lakeNeighborEdges = waterEdges.w;
@@ -410,17 +410,17 @@ void main() {
     // anyway. min() with the beach sink (both are <= 0) so a mouth next to
     // the sea takes the deeper of the two carves instead of stacking them.
     float riverSink = 0.0;
-    if (riverEdges >= 0.0) {
+    if (tileWater >= 0.0) {
         float bedT = 0.0;
-        if (riverEdges >= 2048.0) {
-            float openMask = floor((riverEdges - 4096.0) / 64.0);
-            float channelMask = riverEdges - 4096.0 - openMask * 64.0;
+        if (tileWater >= 2048.0) {
+            float openMask = floor((tileWater - 4096.0) / 64.0);
+            float channelMask = tileWater - 4096.0 - openMask * 64.0;
             bedT = 1.0;
             if (channelMask > 0.5) {
                 bedT = max(bedT, riverMouthBedT(local, channelMask, apothem));
             }
         } else {
-            float dRiver = riverChannelDist(local, riverEdges, apothem) / hexSize;
+            float dRiver = riverChannelDist(local, tileWater, apothem) / hexSize;
             bedT = 1.0 - smoothstep(riverWidth * 0.5, riverWidth + riverBankWidth, dRiver);
             bedT = max(bedT, riverMouthBedT(local, floor(riverSeaMouthEdges + 0.5), apothem));
             bedT = max(bedT, riverMouthBedT(local, floor(riverLakeMouthEdges + 0.5), apothem));
@@ -502,7 +502,7 @@ void main() {
         independentBiomeWeights
     );
     vFogState = fogState.x;
-    vRiverEdges = riverEdges;
+    vTileWater = tileWater;
     vRiverSeaMouthEdges = riverSeaMouthEdges;
     vRiverLakeMouthEdges = riverLakeMouthEdges;
     vLakeNeighborEdges = lakeNeighborEdges;

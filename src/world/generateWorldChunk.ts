@@ -8,7 +8,7 @@ import {
 
 export const DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 export const MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-export const WORLD_CHUNK_FORMAT_VERSION = 2;
+export const WORLD_CHUNK_FORMAT_VERSION = 3;
 export const WORLD_CHUNK_PADDING = 1;
 export { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
@@ -51,9 +51,8 @@ function resolverForSynchronousGeneration(options: WorldChunkGenerationOptions):
     return recentChunkResolver;
 }
 
-//One Uint16 per tile keeps worker transfer and CPU cache compact. Bit layout:
-//0..2 terrain, 3 hill, 4 wood, 5 lake, 6..7 tree species, 8 river,
-//9..14 explicit river-edge mask, 15 explicit river-edge flag.
+//One Uint8 per tile keeps worker transfer and CPU cache compact. Bit layout:
+//0..2 terrain, 3 hill, 4 wood, 5 lake, 6..7 tree species.
 export interface PackedWorldChunk {
     version: typeof WORLD_CHUNK_FORMAT_VERSION;
     chunkX: number;
@@ -61,7 +60,7 @@ export interface PackedWorldChunk {
     chunkSize: number;
     padding: typeof WORLD_CHUNK_PADDING;
     stride: number;
-    tiles: Uint16Array;
+    tiles: Uint8Array;
 }
 
 //Packed terrain variants remain shared and immutable. Applications can attach
@@ -90,7 +89,6 @@ export function worldTileOverridesEqual(
     if (first === second) return true;
     if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
     if (first.type !== second.type || first.treeModel !== second.treeModel
-        || first.riverEdges !== second.riverEdges
         || first.unit !== second.unit || first.city?.name !== second.city?.name
         || first.city?.model !== second.city?.model
         || Boolean(first.city) !== Boolean(second.city)) return false;
@@ -107,7 +105,7 @@ export function worldTileOverridesEqual(
 
 export function hasWorldTileOverride(value: WorldTileOverride | undefined): boolean {
     return !!value && (value.type !== undefined || value.modifiers !== undefined
-        || value.treeModel !== undefined || value.riverEdges !== undefined || value.rivers !== undefined
+        || value.treeModel !== undefined || value.rivers !== undefined
         || value.unit !== undefined || value.city !== undefined);
 }
 
@@ -124,10 +122,6 @@ export function assertWorldTileOverride(value: WorldTileOverride): void {
     }
     if (value.treeModel !== undefined && typeof value.treeModel !== "string") {
         throw new TypeError("tile override treeModel must be a string");
-    }
-    if (value.riverEdges !== undefined
-        && (!Number.isInteger(value.riverEdges) || value.riverEdges < 0 || value.riverEdges > 0b11_1111)) {
-        throw new RangeError("tile override riverEdges must be an integer between 0 and 63");
     }
     if (value.unit !== undefined && typeof value.unit !== "string") {
         throw new TypeError("tile override unit must be a string");
@@ -158,7 +152,7 @@ export function assertPackedWorldChunk(chunk: PackedWorldChunk): void {
         || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE
         || chunk.padding !== WORLD_CHUNK_PADDING
         || chunk.stride !== chunk.chunkSize + chunk.padding * 2
-        || !(chunk.tiles instanceof Uint16Array)
+        || !(chunk.tiles instanceof Uint8Array)
         || chunk.tiles.length !== chunk.stride * chunk.stride) {
         throw new TypeError("packed world chunk payload is invalid");
     }
@@ -180,10 +174,6 @@ const FLAG_WOOD = 1 << 4;
 const FLAG_LAKE = 1 << 5;
 const TREE_SHIFT = 6;
 const TREE_MASK = 0b11 << TREE_SHIFT;
-const FLAG_RIVER = 1 << 8;
-const RIVER_EDGES_SHIFT = 9;
-const RIVER_EDGES_MASK = 0b11_1111 << RIVER_EDGES_SHIFT;
-const FLAG_EXPLICIT_RIVER_EDGES = 1 << 15;
 const TREE_MODELS = [undefined, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"] as const;
 function assertChunkCoordinate(name: "chunkX" | "chunkY", value: number): void {
     if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
@@ -201,13 +191,6 @@ function encodeTileInfo(tile: TileInfo): number {
     if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
     if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
     if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
-    if (tile.modifiers?.includes("river")) packed |= FLAG_RIVER;
-    if (tile.riverEdges !== undefined) {
-        if (!Number.isInteger(tile.riverEdges) || tile.riverEdges < 0 || tile.riverEdges > 0b11_1111) {
-            throw new RangeError("tile riverEdges must be an integer between 0 and 63");
-        }
-        packed |= FLAG_EXPLICIT_RIVER_EDGES | tile.riverEdges << RIVER_EDGES_SHIFT;
-    }
     const treeCode = TREE_MODELS.indexOf(tile.treeModel as typeof TREE_MODELS[number]);
     if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
     return packed;
@@ -253,7 +236,7 @@ export function generateWorldChunkWithResolver(
     validateBoundedWorld(options.world);
     const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
     const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-    const tiles = new Uint16Array(stride * stride);
+    const tiles = new Uint8Array(stride * stride);
     const expectedDomain = options.world
         ? { topology: "toroidal" as const, width: options.world.width, height: options.world.height }
         : { topology: "infinite" as const };
@@ -306,11 +289,7 @@ export function decodeWorldChunkTile(chunk: PackedWorldChunk, localX: number, lo
     if ((packed & FLAG_HILL) !== 0) modifiers.push("hill");
     if ((packed & FLAG_WOOD) !== 0) modifiers.push("wood");
     if ((packed & FLAG_LAKE) !== 0) modifiers.push("lake");
-    if ((packed & FLAG_RIVER) !== 0) modifiers.push("river");
     if (modifiers.length > 0) tile.modifiers = modifiers;
-    if ((packed & FLAG_EXPLICIT_RIVER_EDGES) !== 0) {
-        tile.riverEdges = (packed & RIVER_EDGES_MASK) >> RIVER_EDGES_SHIFT;
-    }
     const treeModel = TREE_MODELS[(packed & TREE_MASK) >> TREE_SHIFT];
     if (treeModel) tile.treeModel = treeModel;
     return tile;

@@ -24,7 +24,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generator v8 samples one deterministic infinite curve/polyline field into cross-chunk hex water cells |
+| World style | Generator v9 samples deterministic curve ribbons into `sea`/`coastal` hex terrain across chunks |
 | Next milestone | Use the generated water network for settlement, crossing and navigation gameplay |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
@@ -40,7 +40,7 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   floating-origin rebasing.
 - Periodic four-way wrapped maps with seam-aware rendering, picking, neighbors,
   fog and shortest-path movement.
-- Automatically generated and manually editable rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
+- Generated hex-water networks, authored channel modifiers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
   atmospheric sky, cities, units and fog of war.
 - Worker-based terrain and vegetation generation, optional IndexedDB base-chunk
   caching and sparse persistent tile overrides.
@@ -66,7 +66,7 @@ Open <http://127.0.0.1:3000>. The control panel exposes three modes:
 
 The [infinite water-curve scene](public/infinite-water.html) is available at
 <http://127.0.0.1:3000/infinite-water.html>. Its curve geometry comes from the
-same package entry sampled by generator v8; its broad-ocean layer remains a
+same package entry sampled by generator v9; its broad-ocean layer remains a
 visual-only experiment.
 
 | Mode | Purpose |
@@ -276,7 +276,7 @@ frozen contracts, focused subsystem guides, decisions and future designs.
 Current deliberate boundaries:
 
 - [World-style generation v1](docs/world-style-generation-v1.md) is implemented
-  through generator v8, including curve-field sampling into hex-native water.
+  through generator v9, including curve-width sampling into ordinary hex water terrain.
 - [Machine-checked optimization gates](docs/optimization-gates.md) record the
   implemented river decision; WebGPU/GPU culling remains deferred until its
   recorded measurements justify a prototype.

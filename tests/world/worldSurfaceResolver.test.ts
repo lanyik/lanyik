@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { Land } from "../../src/enums";
+import { getNeighbors } from "../../src/helpers/neighbors";
 import { getMapNeighbors } from "../../src/helpers/topology";
 import { generateWorld } from "../../src/world/generateWorld";
 import { generateWorldChunk } from "../../src/world/generateWorldChunk";
@@ -25,7 +26,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v8 outputs", () => {
+    test("preserves the frozen generator v9 outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v7-infinite", chunkX: -1, chunkY: 0, chunkSize: 24
         });
@@ -49,9 +50,9 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("river") ? 8 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("c66b54d6");
-        expect(checksum(toroidal.tiles)).toBe("184132e3");
-        expect(checksum(encoded)).toBe("30bf99af");
+        expect(checksum(infinite.tiles)).toBe("1f4e1e07");
+        expect(checksum(toroidal.tiles)).toBe("76903c55");
+        expect(checksum(encoded)).toBe("87c5d4d5");
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -65,12 +66,37 @@ describe("WorldSurfaceResolver", () => {
                 const sample = resolver.sampleGenerated(x, y);
                 if (sample.baseTerrain !== Land.snow) continue;
                 const tile = resolver.resolveGeneratedTile(x, y);
+                if (tile.type === Land.sea || tile.type === Land.coastal) continue;
                 snowTiles += 1;
                 expect(sample.landform.elevation).toBeGreaterThan(minimumSnowElevation);
                 expect(tile.modifiers).toContain("hill");
             }
         }
         expect(snowTiles).toBeGreaterThan(0);
+    });
+
+    test("resolves curve samples as full hex water terrain instead of river channels", () => {
+        const resolver = createWorldSurfaceResolver({
+            seed: "rough-water-field",
+            domain: { topology: "infinite" }
+        });
+        let convertedLand = 0;
+        resolver.visitGeneratedWaterTiles(-96, -96, 192, 192, (x, y) => {
+            const base = resolver.sampleGenerated(x, y).baseTerrain;
+            if (base === Land.sea || base === Land.coastal) return;
+            const tile = resolver.resolveGeneratedTile(x, y);
+            convertedLand += 1;
+            expect(tile.type === Land.sea || tile.type === Land.coastal).toBe(true);
+            expect(tile.modifiers ?? []).not.toContain("river");
+            expect("riverEdges" in tile).toBe(false);
+            if (tile.type === Land.sea) {
+                expect(getNeighbors(x, y).every(neighbor => {
+                    const adjacent = resolver.resolveGeneratedTile(neighbor.x, neighbor.y);
+                    return adjacent.type === Land.sea || adjacent.type === Land.coastal;
+                })).toBe(true);
+            }
+        });
+        expect(convertedLand).toBeGreaterThan(200);
     });
 
     test("freezes continuous relief, biome, vegetation and lake fields", () => {
@@ -138,7 +164,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("152bdeb0");
+        expect(checksum(encoded)).toBe("9e5ede59");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {

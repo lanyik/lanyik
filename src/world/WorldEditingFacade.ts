@@ -44,7 +44,6 @@ export function worldTileTerrainSignature(tile: TileInfo | undefined): string {
         tile?.type ?? null,
         modifiers,
         tile?.treeModel ?? null,
-        tile?.riverEdges ?? null,
         rivers
     ]);
 }

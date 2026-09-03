@@ -89,9 +89,11 @@ describe("LandformSampler", () => {
                         const sample = sampler.sample(x, y);
                         const expectedMountain = (sample.elevation > 0.7 && sample.ridge > 0.2)
                             || sample.elevation > 0.82;
-                        const generatedMountain = decodeWorldChunkTile(chunk, localX, localY).type
-                            === Land.mountain;
-                        expect(generatedMountain).toBe(expectedMountain);
+                        const generatedType = decodeWorldChunkTile(chunk, localX, localY).type;
+                        const generatedMountain = generatedType === Land.mountain;
+                        if (generatedType !== Land.sea && generatedType !== Land.coastal) {
+                            expect(generatedMountain).toBe(expectedMountain);
+                        }
                         if (generatedMountain) mountains += 1;
                     }
                 }

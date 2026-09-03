@@ -127,19 +127,19 @@ function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
 }
 
-function generatedRiverCoverage(
+function generatedWaterCoverage(
     options: WorldOverviewPreparationOptions,
     resolver: WorldSurfaceResolver
 ): Uint8Array {
     const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
-    resolver.visitGeneratedRiverTiles(
+    resolver.visitGeneratedWaterTiles(
         options.originX,
         options.originY,
         options.tileSpanX,
         options.tileSpanY,
         (x, y) => {
             // Overview pixels represent an area, not one center sample. Marking
-            // any river cell in that footprint preserves one-cell-wide courses
+            // any curve-water cell in that footprint preserves one-cell-wide courses
             // when many hexes collapse into a single cartographic pixel.
             const px = Math.min(
                 options.pixelWidth - 1,
@@ -170,7 +170,7 @@ export function generateWorldOverviewWithResolver(
     }
 
     const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-    const riverCoverage = generatedRiverCoverage(options, resolver);
+    const waterCoverage = generatedWaterCoverage(options, resolver);
     const terrain = resolver.profile.terrain;
     let offset = 0;
     for (let py = 0; py < options.pixelHeight; py += 1) {
@@ -206,7 +206,7 @@ export function generateWorldOverviewWithResolver(
             writePixel(
                 pixels,
                 offset,
-                riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
+                waterCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
             );
             offset += 4;
         }

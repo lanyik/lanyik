@@ -142,7 +142,7 @@ const field = (
     minimumToroidalCells
 });
 
-// Generator v8 owns one frozen macro-style profile. Any semantic change to
+// Generator v9 owns one frozen macro-style profile. Any semantic change to
 // these values must move the generator version and its checksum baselines.
 export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,

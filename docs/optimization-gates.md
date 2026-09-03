@@ -65,11 +65,11 @@ local decision record.
   hardware browser trace for frame, submission, draw-call and overdraw gates.
 - [Automatic river generation](./world-style-generation-v1.md) was approved on
   2026-09-03 by the explicit infinite-world generated-water requirement. The
-  corrected [v8 decision](./decisions/curve-sampled-water-network-v8.md) makes
-  the shared infinite curve/polyline field the macro source, then fixes
-  six-neighbour rasterization, exact edge masks, toroidal wrapping and bounded
-  page-cache costs. The earlier v7 local-drainage decision is retained only as
-  a superseded record.
+  corrected [v9 decision](./decisions/hex-water-terrain-sampling-v9.md) makes
+  the shared infinite curve/polyline field the macro source, samples its width
+  into ordinary hex water terrain, and fixes toroidal wrapping and bounded
+  page-cache costs. The earlier v7 local-drainage and v8 channel-modifier
+  decisions are retained only as superseded records.
 
 Adding a new deferred optimization means adding one register entry, an owner
 marker and a reproducible measurement command. Keep speculative implementation

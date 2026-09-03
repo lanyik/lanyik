@@ -54,14 +54,14 @@ describe("world overview raster", () => {
         expect(shifted.pixels).toEqual(first.pixels);
     });
 
-    it("preserves a one-cell generated river inside a coarse overview pixel", () => {
+    it("preserves a one-cell generated waterway inside a coarse overview pixel", () => {
         const descriptor = createWorldDescriptor({ seed: "rough-water-field", chunkSize: 24 });
         const resolver = createWorldSurfaceResolver({
             seed: descriptor.seed,
             domain: { topology: "infinite" }
         });
         const riverTiles: Array<{ x: number; y: number }> = [];
-        resolver.visitGeneratedRiverTiles(-128, -128, 256, 256, (x, y) => {
+        resolver.visitGeneratedWaterTiles(-128, -128, 256, 256, (x, y) => {
             riverTiles.push({ x, y });
         });
         expect(riverTiles.length).toBeGreaterThan(300);
@@ -70,10 +70,13 @@ describe("world overview raster", () => {
             point,
             originX: Math.floor(point.x / 8) * 8,
             originY: Math.floor(point.y / 8) * 8
-        })).find(candidate => !resolver.resolveGeneratedTile(
+        })).find(candidate => {
+            const tile = resolver.resolveGeneratedTile(
             candidate.originX + 4,
             candidate.originY + 4
-        ).modifiers?.includes("river"));
+            );
+            return tile.type !== "sea" && tile.type !== "coastal";
+        });
         expect(coarse).toBeDefined();
 
         const raster = generateWorldOverviewWithResolver({

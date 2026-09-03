@@ -2,9 +2,7 @@ import { MapInfo, TileInfo } from "../interfaces";
 import { Land } from "../enums";
 import {
     getNeighborCoords,
-    NEIGHBOR_DIRECTION_BITS,
-    NeighborDirection,
-    oppositeNeighborDirection
+    NeighborDirection
 } from "./neighbors";
 import { getMapTile } from "./topology";
 
@@ -20,9 +18,8 @@ import { getMapTile } from "./topology";
 //  tiles are fully open (the water just continues), edges to river tiles stay
 //  shored but get a channel-shaped opening so the river visibly flows in/out.
 //
-//Authored rivers derive connectivity from neighboring map data, so map authors
-//only mark tiles. Generated rivers additionally carry a six-bit `riverEdges`
-//mask; this prevents adjacent but unrelated courses from visually joining.
+//Connectivity is derived from neighboring map data, so map authors only mark
+//tiles; there is no separate connection mask to keep in sync.
 //
 //Everything a tile needs is packed into ONE float instanced attribute (see
 //waterEdgeValue() below and its decoding mirror in the shaders):
@@ -60,20 +57,6 @@ function isSeaOrCoastal(tile: TileInfo): boolean {
     return tile.type === Land.sea || tile.type === Land.coastal;
 }
 
-function explicitRiverEdges(tile: TileInfo): number | undefined {
-    const edges = tile.riverEdges;
-    if (edges === undefined) return undefined;
-    if (!Number.isInteger(edges) || edges < 0 || edges > 0b11_1111) {
-        throw new RangeError("tile riverEdges must be an integer between 0 and 63");
-    }
-    return edges;
-}
-
-function riverAllowsEdge(tile: TileInfo, direction: NeighborDirection): boolean {
-    const edges = explicitRiverEdges(tile);
-    return edges === undefined || (edges & 1 << NEIGHBOR_DIRECTION_BITS[direction]) !== 0;
-}
-
 //The encoded water value for the tile at (x, y) - see the format table above.
 export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
     const tile = getMapTile(map, x, y);
@@ -85,8 +68,7 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
             const neighbor = getMapTile(map, n.x, n.y);
             if (!neighbor) return;
             if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
-            else if (isRiverTile(neighbor)
-                && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction))) channelMask |= 1 << bit;
+            else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
         });
         return LAKE_FLAG + openMask * 64 + channelMask;
     }
@@ -94,13 +76,10 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
     if (tile && isRiverTile(tile)) {
         let mask = 0;
         MASK_DIRECTIONS.forEach((direction, bit) => {
-            if (!riverAllowsEdge(tile, direction)) return;
             const n = getNeighborCoords(x, y, direction);
             const neighbor = getMapTile(map, n.x, n.y);
             if (!neighbor) return;
-            if ((isRiverTile(neighbor)
-                && riverAllowsEdge(neighbor, oppositeNeighborDirection(direction)))
-                || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
+            if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
         });
         return mask;
     }
@@ -114,7 +93,6 @@ export function riverSeaMouthEdgeValue(map: MapInfo, x: number, y: number): numb
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
-        if (!riverAllowsEdge(tile, direction)) return;
         const n = getNeighborCoords(x, y, direction);
         const neighbor = getMapTile(map, n.x, n.y);
         if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
@@ -128,7 +106,6 @@ export function riverLakeMouthEdgeValue(map: MapInfo, x: number, y: number): num
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
-        if (!riverAllowsEdge(tile, direction)) return;
         const n = getNeighborCoords(x, y, direction);
         const neighbor = getMapTile(map, n.x, n.y);
         if (isLakeTile(neighbor)) mask |= 1 << bit;

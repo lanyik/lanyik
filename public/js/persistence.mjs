@@ -10,18 +10,8 @@ var Land = /* @__PURE__ */ ((Land2) => {
   return Land2;
 })(Land || {});
 
-// src/helpers/neighbors.ts
-var NEIGHBOR_DIRECTION_BITS = Object.freeze({
-  SE: 0,
-  S: 1,
-  SW: 2,
-  NW: 3,
-  N: 4,
-  NE: 5
-});
-
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 8;
+var WORLD_GENERATOR_VERSION = 9;
 
 // src/world/InfiniteWaterCurveField.ts
 var TAU = Math.PI * 2;
@@ -457,10 +447,11 @@ var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 
 // src/world/WorldWaterSampler.ts
 var SQRT_THREE = Math.sqrt(3);
+var HEX_APOTHEM = SQRT_THREE / 2;
 
 // src/world/generateWorldChunk.ts
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-var WORLD_CHUNK_FORMAT_VERSION = 2;
+var WORLD_CHUNK_FORMAT_VERSION = 3;
 var WORLD_CHUNK_PADDING = 1;
 function cloneWorldTileOverride(value) {
   const copy = { ...value };
@@ -472,7 +463,7 @@ function cloneWorldTileOverride(value) {
 function worldTileOverridesEqual(first, second) {
   if (first === second) return true;
   if (!first || !second) return !hasWorldTileOverride(first) && !hasWorldTileOverride(second);
-  if (first.type !== second.type || first.treeModel !== second.treeModel || first.riverEdges !== second.riverEdges || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
+  if (first.type !== second.type || first.treeModel !== second.treeModel || first.unit !== second.unit || first.city?.name !== second.city?.name || first.city?.model !== second.city?.model || Boolean(first.city) !== Boolean(second.city)) return false;
   const firstModifiers = first.modifiers;
   const secondModifiers = second.modifiers;
   if (firstModifiers?.length !== secondModifiers?.length || firstModifiers?.some((value, index) => value !== secondModifiers?.[index])) return false;
@@ -481,7 +472,7 @@ function worldTileOverridesEqual(first, second) {
   return firstRivers?.length === secondRivers?.length && !firstRivers?.some((value, index) => value.riverIndex !== secondRivers?.[index]?.riverIndex || value.riverTileIndex !== secondRivers?.[index]?.riverTileIndex);
 }
 function hasWorldTileOverride(value) {
-  return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.riverEdges !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
+  return !!value && (value.type !== void 0 || value.modifiers !== void 0 || value.treeModel !== void 0 || value.rivers !== void 0 || value.unit !== void 0 || value.city !== void 0);
 }
 function assertWorldTileOverride(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -496,9 +487,6 @@ function assertWorldTileOverride(value) {
   if (value.treeModel !== void 0 && typeof value.treeModel !== "string") {
     throw new TypeError("tile override treeModel must be a string");
   }
-  if (value.riverEdges !== void 0 && (!Number.isInteger(value.riverEdges) || value.riverEdges < 0 || value.riverEdges > 63)) {
-    throw new RangeError("tile override riverEdges must be an integer between 0 and 63");
-  }
   if (value.unit !== void 0 && typeof value.unit !== "string") {
     throw new TypeError("tile override unit must be a string");
   }
@@ -510,7 +498,7 @@ function assertWorldTileOverride(value) {
   }
 }
 function assertPackedWorldChunk(chunk) {
-  if (!chunk || typeof chunk !== "object" || chunk.version !== WORLD_CHUNK_FORMAT_VERSION || !Number.isSafeInteger(chunk.chunkX) || !Number.isSafeInteger(chunk.chunkY) || !Number.isInteger(chunk.chunkSize) || chunk.chunkSize <= 0 || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunk.padding !== WORLD_CHUNK_PADDING || chunk.stride !== chunk.chunkSize + chunk.padding * 2 || !(chunk.tiles instanceof Uint16Array) || chunk.tiles.length !== chunk.stride * chunk.stride) {
+  if (!chunk || typeof chunk !== "object" || chunk.version !== WORLD_CHUNK_FORMAT_VERSION || !Number.isSafeInteger(chunk.chunkX) || !Number.isSafeInteger(chunk.chunkY) || !Number.isInteger(chunk.chunkSize) || chunk.chunkSize <= 0 || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE || chunk.padding !== WORLD_CHUNK_PADDING || chunk.stride !== chunk.chunkSize + chunk.padding * 2 || !(chunk.tiles instanceof Uint8Array) || chunk.tiles.length !== chunk.stride * chunk.stride) {
     throw new TypeError("packed world chunk payload is invalid");
   }
 }
@@ -529,10 +517,6 @@ var FLAG_WOOD = 1 << 4;
 var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
-var FLAG_RIVER = 1 << 8;
-var RIVER_EDGES_SHIFT = 9;
-var RIVER_EDGES_MASK = 63 << RIVER_EDGES_SHIFT;
-var FLAG_EXPLICIT_RIVER_EDGES = 1 << 15;
 
 // src/world/WorldDescriptor.ts
 var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
@@ -672,7 +656,7 @@ var IndexedDbWorldChunkCache = class {
         chunkSize: record.chunkSize,
         padding: record.padding,
         stride: record.stride,
-        tiles: new Uint16Array(record.tiles.slice(0))
+        tiles: new Uint8Array(record.tiles.slice(0))
       };
       assertPackedWorldChunk(chunk);
       this.snapshot.hits += 1;
