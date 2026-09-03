@@ -1,24 +1,26 @@
 # Infinite-world generated water requirement
 
-Captured on 2026-09-03 from the active world-generation design review and
-corrected after the production boundary was clarified.
+Captured and corrected on 2026-09-03 during active world-generation review.
 
-The existing generated hex world now requires a deterministic water-network
-sampling stage that works at arbitrary positive or negative coordinates.
-Manual river content cannot cover an infinite coordinate space and cannot make
-separately generated chunk halos agree by itself.
+The existing generated hex world requires a deterministic water-network
+sampling stage at arbitrary positive and negative coordinates. Manual river
+content cannot cover an infinite coordinate space or make separately generated
+chunk halos agree.
 
-The production requirement explicitly does **not** adopt the isolated infinite
-continuous-curve prototype as the world skeleton. Existing terrain fields and
-the six-neighbour hex grid remain authoritative. Sources are sampled on hex
-coordinates and courses advance only through adjacent hex cells using the
-current generated surface fields.
+The infinite curve/polyline field created during the visual review is the
+intended macro sampling source. Production must query that field and convert
+its paths into water-bearing hex cells. The existing world generator remains
+the terrain base and the six-neighbour hex grid remains the authoritative
+output; neither condition means that terrain noise should invent a different
+short drainage path.
 
-Visual river banks should be continuous across tile borders without becoming
-spline-smooth. That is a rendering constraint inside selected river cells, not
-permission to introduce continuous curve geometry into world generation.
+The conversion must fill gaps between curve samples, write exact connected hex
+edges and remain deterministic across pages, chunks, reloads and toroidal
+seams. Terrain may decide whether a sampled point is land, sea, mountain or an
+existing lake, but it must not replace the curve's macro shape.
 
-The first production increment generates `river` modifiers only. Existing
-continental sea classification and regional lake rules remain authoritative;
-changing sea size, lake placement or the base terrain algorithm is outside this
-approval and requires a separate generator review.
+Final water is intentionally angular and non-differentiable at hex scale even
+when a parent curve is smooth. The first production correction changes river
+modifiers only. Existing continental sea classification and regional lake
+placement remain outside this decision; the prototype's broad ocean basins are
+not imported.

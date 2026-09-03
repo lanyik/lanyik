@@ -1,6 +1,9 @@
 # Automatic river generation for generator v7
 
-Status: implemented on 2026-09-03.
+Status: superseded on 2026-09-03 by the corrected
+[generator v8 curve-sampled water-network decision](./curve-sampled-water-network-v8.md).
+This document remains as the historical record of the short local-drainage
+implementation; it is not the current production contract.
 
 ## Decision
 

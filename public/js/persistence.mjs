@@ -21,7 +21,115 @@ var NEIGHBOR_DIRECTION_BITS = Object.freeze({
 });
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 7;
+var WORLD_GENERATOR_VERSION = 8;
+
+// src/world/InfiniteWaterCurveField.ts
+var TAU = Math.PI * 2;
+var REFERENCE_FAMILIES = Object.freeze([
+  Object.freeze({
+    cellSize: 950 / 28,
+    slots: 2,
+    spawnScale: 0.34,
+    minimumLength: 700 / 28,
+    maximumLength: 2600 / 28,
+    minimumWidth: 2.5 / 28,
+    maximumWidth: 11 / 28,
+    minimumControlStep: 65 / 28,
+    maximumControlStep: 125 / 28,
+    maximumBranches: 1
+  }),
+  Object.freeze({
+    cellSize: 2300 / 28,
+    slots: 2,
+    spawnScale: 0.52,
+    minimumLength: 2200 / 28,
+    maximumLength: 7200 / 28,
+    minimumWidth: 9 / 28,
+    maximumWidth: 29 / 28,
+    minimumControlStep: 115 / 28,
+    maximumControlStep: 210 / 28,
+    maximumBranches: 3
+  }),
+  Object.freeze({
+    cellSize: 5900 / 28,
+    slots: 1,
+    spawnScale: 0.62,
+    minimumLength: 7200 / 28,
+    maximumLength: 17e3 / 28,
+    minimumWidth: 24 / 28,
+    maximumWidth: 54 / 28,
+    minimumControlStep: 190 / 28,
+    maximumControlStep: 310 / 28,
+    maximumBranches: 5
+  })
+]);
+var INFINITE_WATER_CURVE_REFERENCE_PROFILE = Object.freeze({
+  density: 0.46,
+  curvature: 0.68,
+  polylineChance: 0.34,
+  sampleSpacing: 0.64,
+  minimumBranchLength: 280 / 28,
+  maximumBranchLength: 860 / 28,
+  broadDensityScale: 11e3 / 28,
+  regionalDensityScale: 4800 / 28,
+  families: REFERENCE_FAMILIES
+});
+function finite(name, value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`${name} must be a finite number`);
+  }
+  return value;
+}
+function positive(name, value) {
+  const number = finite(name, value);
+  if (number <= 0) throw new RangeError(`${name} must be positive`);
+  return number;
+}
+function unitInterval(name, value) {
+  const number = finite(name, value);
+  if (number < 0 || number > 1) throw new RangeError(`${name} must be between 0 and 1`);
+  return number;
+}
+function assertInfiniteWaterCurveProfile(value) {
+  if (!value || typeof value !== "object") throw new TypeError("water curve profile must be an object");
+  const profile = value;
+  unitInterval("waterCurve.density", profile.density);
+  unitInterval("waterCurve.curvature", profile.curvature);
+  unitInterval("waterCurve.polylineChance", profile.polylineChance);
+  positive("waterCurve.sampleSpacing", profile.sampleSpacing);
+  positive("waterCurve.minimumBranchLength", profile.minimumBranchLength);
+  positive("waterCurve.maximumBranchLength", profile.maximumBranchLength);
+  positive("waterCurve.broadDensityScale", profile.broadDensityScale);
+  positive("waterCurve.regionalDensityScale", profile.regionalDensityScale);
+  if (!(profile.minimumBranchLength < profile.maximumBranchLength)) {
+    throw new RangeError("water curve branch length range must be ordered");
+  }
+  if (!Array.isArray(profile.families) || profile.families.length === 0) {
+    throw new RangeError("water curve profile must contain at least one family");
+  }
+  for (const [index, family] of profile.families.entries()) {
+    if (!family || typeof family !== "object") {
+      throw new TypeError(`waterCurve.families.${index} must be an object`);
+    }
+    positive(`waterCurve.families.${index}.cellSize`, family.cellSize);
+    positive(`waterCurve.families.${index}.minimumLength`, family.minimumLength);
+    positive(`waterCurve.families.${index}.maximumLength`, family.maximumLength);
+    positive(`waterCurve.families.${index}.minimumWidth`, family.minimumWidth);
+    positive(`waterCurve.families.${index}.maximumWidth`, family.maximumWidth);
+    positive(`waterCurve.families.${index}.minimumControlStep`, family.minimumControlStep);
+    positive(`waterCurve.families.${index}.maximumControlStep`, family.maximumControlStep);
+    unitInterval(`waterCurve.families.${index}.spawnScale`, family.spawnScale);
+    if (!Number.isInteger(family.slots) || family.slots <= 0) {
+      throw new RangeError(`waterCurve.families.${index}.slots must be a positive integer`);
+    }
+    if (!Number.isInteger(family.maximumBranches) || family.maximumBranches < 0) {
+      throw new RangeError(`waterCurve.families.${index}.maximumBranches must be a non-negative integer`);
+    }
+    if (!(family.minimumLength < family.maximumLength) || !(family.minimumWidth < family.maximumWidth) || !(family.minimumControlStep < family.maximumControlStep)) {
+      throw new RangeError(`waterCurve.families.${index} ranges must be ordered`);
+    }
+  }
+}
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -141,52 +249,35 @@ var WORLD_STYLE_PROFILE = Object.freeze({
   rivers: Object.freeze({
     pageSize: 32,
     maximumCachedPages: 16,
-    sourceCellSize: 32,
-    sourcesPerCell: 6,
-    sourceSpawnChance: 1,
-    sourceMinimumElevation: 0.46,
-    sourceMaximumElevation: 0.8,
-    sourceElevationTransition: 0.04,
-    sourceMinimumMoisture: 0.2,
-    sourceMoistureFloor: 0.6,
-    sourceValleyFloor: 0.65,
-    minimumCourseLength: 3,
-    maximumCourseLength: 96,
-    potentialContinentalWeight: 0.9,
-    potentialElevationWeight: 0.1,
-    potentialValleyWeight: 0.035,
-    potentialMoistureWeight: 0.01,
-    potentialLakeWeight: 0.02,
-    potentialJitter: 5e-4,
-    sourceSalt: 1013904242,
-    flowSalt: 1542469173
+    toroidalReferenceSize: 512,
+    curve: INFINITE_WATER_CURVE_REFERENCE_PROFILE
   })
 });
-var finite = (name, value) => {
+var finite2 = (name, value) => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new TypeError(`${name} must be a finite number`);
   }
   return value;
 };
-var positive = (name, value) => {
-  const number = finite(name, value);
+var positive2 = (name, value) => {
+  const number = finite2(name, value);
   if (number <= 0) throw new RangeError(`${name} must be positive`);
   return number;
 };
 var nonNegative = (name, value) => {
-  const number = finite(name, value);
+  const number = finite2(name, value);
   if (number < 0) throw new RangeError(`${name} must be non-negative`);
   return number;
 };
-var unitInterval = (name, value) => {
-  const number = finite(name, value);
+var unitInterval2 = (name, value) => {
+  const number = finite2(name, value);
   if (number < 0 || number > 1) throw new RangeError(`${name} must be between 0 and 1`);
   return number;
 };
 function assertFiniteNumbers(value, path) {
   for (const [name, candidate] of Object.entries(value)) {
     const key = path ? `${path}.${name}` : name;
-    if (typeof candidate === "number") finite(key, candidate);
+    if (typeof candidate === "number") finite2(key, candidate);
     else if (candidate && typeof candidate === "object") assertFiniteNumbers(candidate, key);
   }
 }
@@ -219,8 +310,8 @@ function assertWorldStyleProfile(value) {
       throw new TypeError(`fields.${name} must be a noise field profile`);
     }
     const noise = candidate;
-    positive(`fields.${name}.openScale`, noise.openScale);
-    positive(`fields.${name}.toroidalScale`, noise.toroidalScale);
+    positive2(`fields.${name}.openScale`, noise.openScale);
+    positive2(`fields.${name}.toroidalScale`, noise.toroidalScale);
     if (!Number.isInteger(noise.octaves) || noise.octaves <= 0) {
       throw new RangeError(`fields.${name}.octaves must be a positive integer`);
     }
@@ -248,17 +339,17 @@ function assertWorldStyleProfile(value) {
     "boundedEdgeFalloff"
   ];
   for (const name of nonNegativeFieldNames) nonNegative(`fields.${name}`, profile.fields[name]);
-  finite("fields.elevationBias", profile.fields.elevationBias);
-  unitInterval("fields.landMaskStart", profile.fields.landMaskStart);
-  unitInterval("fields.landMaskEnd", profile.fields.landMaskEnd);
-  unitInterval("fields.valleyMaskStart", profile.fields.valleyMaskStart);
-  unitInterval("fields.valleyMaskEnd", profile.fields.valleyMaskEnd);
+  finite2("fields.elevationBias", profile.fields.elevationBias);
+  unitInterval2("fields.landMaskStart", profile.fields.landMaskStart);
+  unitInterval2("fields.landMaskEnd", profile.fields.landMaskEnd);
+  unitInterval2("fields.valleyMaskStart", profile.fields.valleyMaskStart);
+  unitInterval2("fields.valleyMaskEnd", profile.fields.valleyMaskEnd);
   if (!(profile.fields.landMaskStart < profile.fields.landMaskEnd) || !(profile.fields.valleyMaskStart < profile.fields.valleyMaskEnd)) {
     throw new RangeError("world style field mask thresholds must be ordered");
   }
-  positive("fields.ridgeExponent", profile.fields.ridgeExponent);
-  positive("fields.valleyExponent", profile.fields.valleyExponent);
-  positive("fields.boundedEdgePower", profile.fields.boundedEdgePower);
+  positive2("fields.ridgeExponent", profile.fields.ridgeExponent);
+  positive2("fields.valleyExponent", profile.fields.valleyExponent);
+  positive2("fields.boundedEdgePower", profile.fields.boundedEdgePower);
   const terrain = profile.terrain;
   const terrainNames = [
     "seaLevel",
@@ -272,70 +363,70 @@ function assertWorldStyleProfile(value) {
     "hillElevation",
     "climateTransition"
   ];
-  for (const name of terrainNames) unitInterval(`terrain.${name}`, terrain[name]);
-  positive("terrain.climateTransition", terrain.climateTransition);
-  if (!(finite("terrain.mountainElevation", terrain.mountainElevation) < finite("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
+  for (const name of terrainNames) unitInterval2(`terrain.${name}`, terrain[name]);
+  positive2("terrain.climateTransition", terrain.climateTransition);
+  if (!(finite2("terrain.mountainElevation", terrain.mountainElevation) < finite2("terrain.mountainPeakElevation", terrain.mountainPeakElevation))) {
     throw new RangeError("terrain mountain thresholds must be ordered");
   }
-  if (!(finite("terrain.snowTemperature", terrain.snowTemperature) < finite("terrain.tundraTemperature", terrain.tundraTemperature))) {
+  if (!(finite2("terrain.snowTemperature", terrain.snowTemperature) < finite2("terrain.tundraTemperature", terrain.tundraTemperature))) {
     throw new RangeError("terrain temperature thresholds must be ordered");
   }
   const relief = profile.relief;
   for (const [name, candidate] of Object.entries(relief)) {
-    if (finite(`relief.${name}`, candidate) < 0) {
+    if (finite2(`relief.${name}`, candidate) < 0) {
       throw new RangeError("relief heights and scales must be non-negative");
     }
   }
-  positive("relief.mountainElevationSpan", relief.mountainElevationSpan);
-  positive("relief.mountainPower", relief.mountainPower);
-  positive("relief.mountainScale", relief.mountainScale);
-  unitInterval("relief.mountainElevationStart", relief.mountainElevationStart);
-  unitInterval("relief.hillElevationStart", relief.hillElevationStart);
-  unitInterval("relief.hillElevationEnd", relief.hillElevationEnd);
+  positive2("relief.mountainElevationSpan", relief.mountainElevationSpan);
+  positive2("relief.mountainPower", relief.mountainPower);
+  positive2("relief.mountainScale", relief.mountainScale);
+  unitInterval2("relief.mountainElevationStart", relief.mountainElevationStart);
+  unitInterval2("relief.hillElevationStart", relief.hillElevationStart);
+  unitInterval2("relief.hillElevationEnd", relief.hillElevationEnd);
   if (!(relief.hillElevationStart < relief.hillElevationEnd) || !(relief.plainMinimum <= relief.plainMaximum) || !(relief.hillMinimum <= relief.hillMaximum) || !(relief.plainMaximum < relief.hillMinimum)) {
     throw new RangeError("relief plain and hill ranges must be ordered");
   }
-  if (finite("relief.mountainMinimum", relief.mountainMinimum) > finite("relief.mountainMaximum", relief.mountainMaximum)) {
+  if (finite2("relief.mountainMinimum", relief.mountainMinimum) > finite2("relief.mountainMaximum", relief.mountainMaximum)) {
     throw new RangeError("relief mountain range must be ordered");
   }
   if (relief.staticHill < relief.hillMinimum || relief.staticHill > relief.hillMaximum || relief.staticMountain < relief.mountainMinimum || relief.staticMountain > relief.mountainMaximum) {
     throw new RangeError("static relief heights must stay inside their terrain ranges");
   }
   const lakes = profile.lakes;
-  unitInterval("lakes.minimumElevation", lakes.minimumElevation);
-  unitInterval("lakes.maximumElevation", lakes.maximumElevation);
-  unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
-  unitInterval("lakes.fullMoisture", lakes.fullMoisture);
-  unitInterval("lakes.valleyStart", lakes.valleyStart);
-  unitInterval("lakes.valleyFull", lakes.valleyFull);
-  unitInterval("lakes.patchStart", lakes.patchStart);
-  unitInterval("lakes.patchFull", lakes.patchFull);
-  unitInterval("lakes.minimumPotential", lakes.minimumPotential);
-  unitInterval("lakes.placementScale", lakes.placementScale);
+  unitInterval2("lakes.minimumElevation", lakes.minimumElevation);
+  unitInterval2("lakes.maximumElevation", lakes.maximumElevation);
+  unitInterval2("lakes.minimumMoisture", lakes.minimumMoisture);
+  unitInterval2("lakes.fullMoisture", lakes.fullMoisture);
+  unitInterval2("lakes.valleyStart", lakes.valleyStart);
+  unitInterval2("lakes.valleyFull", lakes.valleyFull);
+  unitInterval2("lakes.patchStart", lakes.patchStart);
+  unitInterval2("lakes.patchFull", lakes.patchFull);
+  unitInterval2("lakes.minimumPotential", lakes.minimumPotential);
+  unitInterval2("lakes.placementScale", lakes.placementScale);
   if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
     throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
   }
-  if (!(finite("lakes.minimumElevation", lakes.minimumElevation) < finite("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
+  if (!(finite2("lakes.minimumElevation", lakes.minimumElevation) < finite2("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
     throw new RangeError("lake thresholds must be ordered");
   }
-  unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
-  unitInterval("vegetation.moistureFull", profile.vegetation.moistureFull);
-  unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
-  unitInterval("vegetation.neutralDensity", profile.vegetation.neutralDensity);
-  unitInterval("vegetation.temperatureMinimum", profile.vegetation.temperatureMinimum);
-  unitInterval("vegetation.temperatureMaximum", profile.vegetation.temperatureMaximum);
-  unitInterval("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
-  positive("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
-  unitInterval("vegetation.patchStart", profile.vegetation.patchStart);
-  unitInterval("vegetation.patchFull", profile.vegetation.patchFull);
-  unitInterval("vegetation.patchMinimum", profile.vegetation.patchMinimum);
-  unitInterval("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
-  unitInterval("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
-  unitInterval("vegetation.placementThreshold", profile.vegetation.placementThreshold);
-  unitInterval("vegetation.placementJitter", profile.vegetation.placementJitter);
-  unitInterval("vegetation.palmTemperature", profile.vegetation.palmTemperature);
-  unitInterval("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
-  positive("vegetation.densityScale", profile.vegetation.densityScale);
+  unitInterval2("vegetation.moistureStart", profile.vegetation.moistureStart);
+  unitInterval2("vegetation.moistureFull", profile.vegetation.moistureFull);
+  unitInterval2("vegetation.maximumDensity", profile.vegetation.maximumDensity);
+  unitInterval2("vegetation.neutralDensity", profile.vegetation.neutralDensity);
+  unitInterval2("vegetation.temperatureMinimum", profile.vegetation.temperatureMinimum);
+  unitInterval2("vegetation.temperatureMaximum", profile.vegetation.temperatureMaximum);
+  unitInterval2("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  positive2("vegetation.temperatureTransition", profile.vegetation.temperatureTransition);
+  unitInterval2("vegetation.patchStart", profile.vegetation.patchStart);
+  unitInterval2("vegetation.patchFull", profile.vegetation.patchFull);
+  unitInterval2("vegetation.patchMinimum", profile.vegetation.patchMinimum);
+  unitInterval2("vegetation.ridgePenalty", profile.vegetation.ridgePenalty);
+  unitInterval2("vegetation.roughnessPenalty", profile.vegetation.roughnessPenalty);
+  unitInterval2("vegetation.placementThreshold", profile.vegetation.placementThreshold);
+  unitInterval2("vegetation.placementJitter", profile.vegetation.placementJitter);
+  unitInterval2("vegetation.palmTemperature", profile.vegetation.palmTemperature);
+  unitInterval2("vegetation.piniaTemperature", profile.vegetation.piniaTemperature);
+  positive2("vegetation.densityScale", profile.vegetation.densityScale);
   if (!(profile.vegetation.moistureStart < profile.vegetation.moistureFull) || !(profile.vegetation.temperatureMinimum < profile.vegetation.temperatureMaximum) || !(profile.vegetation.patchStart < profile.vegetation.patchFull)) {
     throw new RangeError("vegetation suitability thresholds must be ordered");
   }
@@ -352,49 +443,20 @@ function assertWorldStyleProfile(value) {
     throw new RangeError("world style placement salts must be safe integers");
   }
   const rivers = profile.rivers;
-  for (const name of [
-    "pageSize",
-    "maximumCachedPages",
-    "sourceCellSize",
-    "sourcesPerCell",
-    "minimumCourseLength",
-    "maximumCourseLength"
-  ]) {
+  for (const name of ["pageSize", "maximumCachedPages", "toroidalReferenceSize"]) {
     if (!Number.isInteger(rivers[name]) || rivers[name] <= 0) {
       throw new RangeError(`rivers.${name} must be a positive integer`);
     }
   }
-  for (const name of [
-    "sourceElevationTransition",
-    "potentialContinentalWeight",
-    "potentialElevationWeight",
-    "potentialValleyWeight",
-    "potentialMoistureWeight",
-    "potentialLakeWeight",
-    "potentialJitter"
-  ]) positive(`rivers.${name}`, rivers[name]);
-  for (const name of [
-    "sourceSpawnChance",
-    "sourceMinimumElevation",
-    "sourceMaximumElevation",
-    "sourceMinimumMoisture",
-    "sourceMoistureFloor",
-    "sourceValleyFloor"
-  ]) unitInterval(`rivers.${name}`, rivers[name]);
-  if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
-    throw new RangeError("river source elevation range must contain both transition bands");
-  }
-  if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
-    throw new RangeError("river course length range must be ordered");
-  }
-  if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
-    throw new RangeError("river salts must be safe integers");
-  }
+  assertInfiniteWaterCurveProfile(rivers.curve);
 }
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);
 
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
+
+// src/world/WorldWaterSampler.ts
+var SQRT_THREE = Math.sqrt(3);
 
 // src/world/generateWorldChunk.ts
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;

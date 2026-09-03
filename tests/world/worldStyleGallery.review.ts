@@ -6,7 +6,7 @@ import {
     WorldStyleGalleryMetrics
 } from "../helpers/worldStyleGallery";
 
-describe("world style v7 full gallery review", () => {
+describe("world style v8 full gallery review", () => {
     test("records the fixed corpus and rejects topology or regional-noise regressions", () => {
         const report: WorldStyleGalleryMetrics[] = WORLD_STYLE_GALLERY_SAMPLES
             .map(sample => analyzeWorldStyleGallerySample(sample));
@@ -49,8 +49,20 @@ describe("world style v7 full gallery review", () => {
                 // A sampled window can clip a valid chain at its boundary, so
                 // water-aware adjacency is the hard per-tile invariant. Keep
                 // the river-only component diagnostic deliberately broader.
-                expect(metrics.rivers.isolatedRatio, `${sample.id} isolated rivers`).toBeLessThan(0.06);
+                // A one-cell land mouth connected directly to generated sea is
+                // intentionally isolated in the river-only component graph.
+                expect(metrics.rivers.isolatedRatio, `${sample.id} isolated rivers`).toBeLessThan(0.16);
                 expect(metrics.rivers.maximumSize, `${sample.id} river chain size`).toBeGreaterThanOrEqual(7);
+                if (sample.group === "toroidal-512") {
+                    expect(metrics.rivers.maximumSize, `${sample.id} macro river chain`)
+                        .toBeGreaterThanOrEqual(50);
+                } else if (sample.group === "infinite-window" && metrics.rivers.tiles >= 32) {
+                    expect(metrics.rivers.maximumSize, `${sample.id} macro river chain`)
+                        .toBeGreaterThanOrEqual(12);
+                } else if (sample.group === "bounded" && metrics.rivers.tiles >= 32) {
+                    expect(metrics.rivers.maximumSize, `${sample.id} macro river chain`)
+                        .toBeGreaterThanOrEqual(14);
+                }
             }
             const expected = sample.group === "bounded"
                 ? { water: [0.6, 0.92], mountain: [0, 0.08], forest: [0.002, 0.08] }

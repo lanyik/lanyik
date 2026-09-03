@@ -16,6 +16,8 @@ const copies = [
     ["dist/pathfinding.mjs.map", "public/js/pathfinding.mjs.map"],
     ["dist/simulation.mjs", "public/js/simulation.mjs"],
     ["dist/simulation.mjs.map", "public/js/simulation.mjs.map"],
+    ["dist/infinite-water-curve-field.mjs", "public/js/infinite-water-curve-field.mjs"],
+    ["dist/infinite-water-curve-field.mjs.map", "public/js/infinite-water-curve-field.mjs.map"],
     ["dist/persistence.mjs", "public/js/persistence.mjs"],
     ["dist/persistence.mjs.map", "public/js/persistence.mjs.map"],
     ["node_modules/three/build/three.module.js", "public/js/vendor/three.module.js"],

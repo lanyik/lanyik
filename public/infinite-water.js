@@ -1,3 +1,10 @@
+import {
+    createInfiniteWaterCurveField,
+    INFINITE_WATER_CURVE_REFERENCE_PROFILE,
+    scaleInfiniteWaterCurveProfile,
+    waterCurveSeedToUint32
+} from "./js/infinite-water-curve-field.mjs";
+
 const canvas = document.querySelector("[data-water-field]");
 const seedInput = document.querySelector("[data-seed]");
 const densityInput = document.querySelector("[data-density]");
@@ -53,30 +60,6 @@ if (!oceanContext) throw new Error("2D ocean canvas is unavailable");
 const TAU = Math.PI * 2;
 const MIN_ZOOM = 0.08;
 const MAX_ZOOM = 5;
-const MAX_BRANCH_LENGTH = 860;
-const CURVE_FAMILIES = [
-    {
-        cellSize: 950, slots: 2, spawnScale: 0.34,
-        minLength: 700, maxLength: 2600,
-        minWidth: 2.5, maxWidth: 11,
-        minStep: 65, maxStep: 125,
-        maxBranches: 1
-    },
-    {
-        cellSize: 2300, slots: 2, spawnScale: 0.52,
-        minLength: 2200, maxLength: 7200,
-        minWidth: 9, maxWidth: 29,
-        minStep: 115, maxStep: 210,
-        maxBranches: 3
-    },
-    {
-        cellSize: 5900, slots: 1, spawnScale: 0.62,
-        minLength: 7200, maxLength: 17_000,
-        minWidth: 24, maxWidth: 54,
-        minStep: 190, maxStep: 310,
-        maxBranches: 5
-    }
-];
 const OCEAN_SAMPLE_STEP = 12;
 const OCEAN_CANDIDATE_CELL_SIZE = 2600;
 const OCEAN_MIN_SEPARATION = 5600;
@@ -95,7 +78,7 @@ let height = 1;
 let pixelRatio = 1;
 let landGradient;
 let seed = seedInput.value.trim();
-let numericSeed = hashText(seed);
+let numericSeed = waterCurveSeedToUint32(seed);
 let geometryDirty = true;
 let oceanDirty = true;
 let oceanInteractionPending = false;
@@ -107,16 +90,6 @@ let largestOceanDiameter = 0;
 let renderedMainCurves = 0;
 let renderedBranches = 0;
 let waterGeometry = { mains: [], branches: [] };
-
-function hashText(value) {
-    let hash = 0x811c9dc5;
-    for (let index = 0; index < value.length; index += 1) {
-        hash ^= value.charCodeAt(index);
-        hash = Math.imul(hash, 0x01000193);
-        hash ^= hash >>> 13;
-    }
-    return hash >>> 0;
-}
 
 function mix32(value) {
     let mixed = value >>> 0;
@@ -152,14 +125,6 @@ function randomForFeature(key, salt) {
 
 function smoothstep(value) {
     return value * value * (3 - 2 * value);
-}
-
-function valueNoise1d(x, key, salt) {
-    const cell = Math.floor(x);
-    const amount = smoothstep(x - cell);
-    const first = randomAt(cell, key, salt) * 2 - 1;
-    const second = randomAt(cell + 1, key, salt) * 2 - 1;
-    return first + (second - first) * amount;
 }
 
 function valueNoise2d(x, y, salt) {
@@ -295,228 +260,26 @@ function visibleBounds() {
     };
 }
 
-function turnAt(key, parameter, turnScale) {
-    const broad = valueNoise1d(parameter / 8.2, key, 101);
-    const middle = valueNoise1d(parameter / 3.3, key, 211);
-    const detail = valueNoise1d(parameter / 1.45, key, 307);
-    return turnScale * (broad * 0.58 + middle * 0.29 + detail * 0.13);
-}
-
-function localCurveDensity(x, y) {
-    const broad = valueNoise2d(x / 11_000, y / 11_000, 61) * 0.5 + 0.5;
-    const regional = valueNoise2d(x / 4800, y / 4800, 67) * 0.5 + 0.5;
-    const clustered = Math.max(0, Math.min(1, (broad * 0.72 + regional * 0.28 - 0.36) / 0.44));
-    return 0.02 + smoothstep(clustered) * 0.98;
-}
-
-function buildMainControlLine(familyIndex, cellX, cellY, slot) {
-    const family = CURVE_FAMILIES[familyIndex];
-    const key = featureKey(familyIndex, cellX, cellY, slot);
-    const centerX = (cellX + 0.5) * family.cellSize;
-    const centerY = (cellY + 0.5) * family.cellSize;
-    const spawnChance = density() * family.spawnScale * localCurveDensity(centerX, centerY);
-    if (randomForFeature(key, 17) >= spawnChance) return undefined;
-
-    const origin = {
-        x: (cellX + 0.04 + randomForFeature(key, 23) * 0.92) * family.cellSize,
-        y: (cellY + 0.04 + randomForFeature(key, 29) * 0.92) * family.cellSize
-    };
-    const baseAngle = randomForFeature(key, 31) * TAU;
-    const lengthAmount = randomForFeature(key, 37) ** 1.35;
-    const totalLength = family.minLength + lengthAmount * (family.maxLength - family.minLength);
-    const controlStep = family.minStep + randomForFeature(key, 41) * (family.maxStep - family.minStep);
-    const halfSteps = Math.ceil(totalLength / (controlStep * 2));
-    const baseWidth = family.minWidth
-        + randomForFeature(key, 43) * (family.maxWidth - family.minWidth);
-    const turnScale = (0.035 + curvature() * 0.24)
-        * (0.78 + randomForFeature(key, 47) * 0.72);
-    const before = [];
-    const after = [];
-
-    const widthAt = parameter => {
-        const progress = (parameter + halfSteps) / (halfSteps * 2);
-        const growth = 0.38 + smoothstep(progress) * 0.78;
-        const variation = 1 + valueNoise1d(parameter / 5.5, key, 401) * 0.24;
-        return Math.max(1.2, baseWidth * growth * variation);
-    };
-
-    let current = { ...origin };
-    let heading = baseAngle;
-    for (let step = 1; step <= halfSteps; step += 1) {
-        heading -= turnAt(key, -step + 0.5, turnScale);
-        current = {
-            x: current.x - Math.cos(heading) * controlStep,
-            y: current.y - Math.sin(heading) * controlStep
-        };
-        before.push({ point: current, width: widthAt(-step) });
-    }
-
-    current = { ...origin };
-    heading = baseAngle;
-    for (let step = 1; step <= halfSteps; step += 1) {
-        heading += turnAt(key, step - 0.5, turnScale);
-        current = {
-            x: current.x + Math.cos(heading) * controlStep,
-            y: current.y + Math.sin(heading) * controlStep
-        };
-        after.push({ point: current, width: widthAt(step) });
-    }
-
-    const controls = before.reverse();
-    controls.push({ point: origin, width: widthAt(0) }, ...after);
-    return { family, key, controls };
-}
-
-function catmullRomPoint(first, second, third, fourth, amount) {
-    const squared = amount * amount;
-    const cubed = squared * amount;
-    return {
-        x: 0.5 * ((2 * second.x)
-            + (-first.x + third.x) * amount
-            + (2 * first.x - 5 * second.x + 4 * third.x - fourth.x) * squared
-            + (-first.x + 3 * second.x - 3 * third.x + fourth.x) * cubed),
-        y: 0.5 * ((2 * second.y)
-            + (-first.y + third.y) * amount
-            + (2 * first.y - 5 * second.y + 4 * third.y - fourth.y) * squared
-            + (-first.y + 3 * second.y - 3 * third.y + fourth.y) * cubed)
-    };
-}
-
-function sampleMainCurve(main) {
-    const subdivisions = Math.max(
-        2,
-        Math.min(10, Math.ceil(main.family.maxStep * camera.zoom / 18))
-    );
-    const points = [];
-    const widths = [];
-    for (let index = 0; index < main.controls.length - 1; index += 1) {
-        const first = main.controls[Math.max(0, index - 1)].point;
-        const second = main.controls[index].point;
-        const third = main.controls[index + 1].point;
-        const fourth = main.controls[Math.min(main.controls.length - 1, index + 2)].point;
-        for (let sample = 0; sample < subdivisions; sample += 1) {
-            const amount = sample / subdivisions;
-            points.push(catmullRomPoint(first, second, third, fourth, amount));
-            widths.push(
-                main.controls[index].width
-                + (main.controls[index + 1].width - main.controls[index].width) * smoothstep(amount)
-            );
-        }
-    }
-    const finalControl = main.controls.at(-1);
-    points.push(finalControl.point);
-    widths.push(finalControl.width);
-    return { points, widths, branch: false };
-}
-
-function cubicPoint(points, amount) {
-    const inverse = 1 - amount;
-    const first = inverse ** 3;
-    const second = 3 * inverse ** 2 * amount;
-    const third = 3 * inverse * amount ** 2;
-    const fourth = amount ** 3;
-    return {
-        x: points[0].x * first + points[1].x * second + points[2].x * third + points[3].x * fourth,
-        y: points[0].y * first + points[1].y * second + points[2].y * third + points[3].y * fourth
-    };
-}
-
-function buildBranch(main, branchIndex) {
-    const controls = main.controls;
-    const joinIndex = 2 + Math.floor(
-        randomAt(main.key, branchIndex, 503) * Math.max(1, controls.length - 4)
-    );
-    const join = controls[joinIndex].point;
-    const previous = controls[joinIndex - 1].point;
-    const next = controls[joinIndex + 1].point;
-    const tangentLength = Math.hypot(next.x - previous.x, next.y - previous.y) || 1;
-    const tangent = {
-        x: (next.x - previous.x) / tangentLength,
-        y: (next.y - previous.y) / tangentLength
-    };
-    const normal = { x: -tangent.y, y: tangent.x };
-    const side = randomAt(main.key, branchIndex, 509) < 0.5 ? -1 : 1;
-    const length = 280 + randomAt(main.key, branchIndex, 521) * (MAX_BRANCH_LENGTH - 280);
-    const upstream = length * (0.34 + randomAt(main.key, branchIndex, 523) * 0.28);
-    const lateral = length * (0.48 + randomAt(main.key, branchIndex, 541) * 0.38) * side;
-    const source = {
-        x: join.x - tangent.x * upstream + normal.x * lateral,
-        y: join.y - tangent.y * upstream + normal.y * lateral
-    };
-    const curveControls = [
-        source,
-        {
-            x: source.x + tangent.x * length * 0.23 - normal.x * lateral * 0.12,
-            y: source.y + tangent.y * length * 0.23 - normal.y * lateral * 0.12
-        },
-        {
-            x: join.x - tangent.x * length * 0.22,
-            y: join.y - tangent.y * length * 0.22
-        },
-        join
-    ];
-    const sampleCount = Math.max(8, Math.min(48, Math.ceil(length * camera.zoom / 18)));
-    const points = [];
-    const widths = [];
-    const sourceWidth = 1.8 + randomAt(main.key, branchIndex, 547) * 3.2;
-    const targetWidth = Math.min(12, controls[joinIndex].width * 0.42);
-    for (let index = 0; index <= sampleCount; index += 1) {
-        const amount = index / sampleCount;
-        points.push(cubicPoint(curveControls, amount));
-        widths.push(sourceWidth + (targetWidth - sourceWidth) * smoothstep(amount));
-    }
-    return { points, widths, branch: true };
-}
-
-function intersectsWorld(points, bounds, margin = 40) {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const point of points) {
-        minX = Math.min(minX, point.x);
-        maxX = Math.max(maxX, point.x);
-        minY = Math.min(minY, point.y);
-        maxY = Math.max(maxY, point.y);
-    }
-    return maxX >= bounds.minX - margin && minX <= bounds.maxX + margin
-        && maxY >= bounds.minY - margin && minY <= bounds.maxY + margin;
-}
-
 function rebuildWaterGeometry(bounds) {
     const mains = [];
     const branches = [];
-
-    for (let familyIndex = 0; familyIndex < CURVE_FAMILIES.length; familyIndex += 1) {
-        const family = CURVE_FAMILIES[familyIndex];
-        const queryMargin = family.maxLength / 2 + family.maxStep + MAX_BRANCH_LENGTH;
-        const firstCellX = Math.floor((bounds.minX - queryMargin) / family.cellSize);
-        const lastCellX = Math.floor((bounds.maxX + queryMargin) / family.cellSize);
-        const firstCellY = Math.floor((bounds.minY - queryMargin) / family.cellSize);
-        const lastCellY = Math.floor((bounds.maxY + queryMargin) / family.cellSize);
-
-        for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
-            for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
-                for (let slot = 0; slot < family.slots; slot += 1) {
-                    const main = buildMainControlLine(familyIndex, cellX, cellY, slot);
-                    if (!main) continue;
-                    const controlPoints = main.controls.map(control => control.point);
-                    if (!intersectsWorld(controlPoints, bounds, MAX_BRANCH_LENGTH)) continue;
-
-                    const sampledMain = sampleMainCurve(main);
-                    if (intersectsWorld(sampledMain.points, bounds, 100)) mains.push(sampledMain);
-
-                    const branchCount = Math.floor(
-                        randomForFeature(main.key, 557) * (family.maxBranches + 1)
-                    );
-                    for (let branchIndex = 0; branchIndex < branchCount; branchIndex += 1) {
-                        const branch = buildBranch(main, branchIndex);
-                        if (intersectsWorld(branch.points, bounds, 60)) branches.push(branch);
-                    }
-                }
-            }
-        }
-    }
+    const reference = {
+        ...INFINITE_WATER_CURVE_REFERENCE_PROFILE,
+        density: density(),
+        curvature: curvature()
+    };
+    const field = createInfiniteWaterCurveField(
+        seed,
+        scaleInfiniteWaterCurveProfile(reference, HEX_RADIUS)
+    );
+    field.forEachPathIntersecting(bounds, path => {
+        const feature = {
+            points: path.points.map(point => ({ x: point.x, y: point.y })),
+            widths: path.points.map(point => point.width),
+            branch: path.branch
+        };
+        (path.branch ? branches : mains).push(feature);
+    });
 
     waterGeometry = { mains, branches };
     geometryDirty = false;
@@ -920,7 +683,7 @@ function applySeed() {
     }
     seedInput.setCustomValidity("");
     seed = next;
-    numericSeed = hashText(seed);
+    numericSeed = waterCurveSeedToUint32(seed);
     geometryDirty = true;
     oceanDirty = true;
     const nextQuery = new URLSearchParams(location.search);
@@ -1009,7 +772,6 @@ window.addEventListener("keydown", event => {
 });
 
 window.getInfiniteWaterDiagnostics = () => {
-    const key = featureKey(1, -7, 11, 0);
     const directionBins = new Set(waterGeometry.mains.map(main => {
         const start = main.points[0];
         const end = main.points.at(-1);
@@ -1030,7 +792,7 @@ window.getInfiniteWaterDiagnostics = () => {
         sampleSignature: [
             randomAt(-7, 11, 17),
             randomAt(-7, 11, 23),
-            turnAt(key, -3, 0.2),
+            randomAt(-3, 1, 307),
             randomAt(-7200, 11_400, 1001),
             density(),
             curvature(),

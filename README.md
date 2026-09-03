@@ -24,7 +24,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generator v7 adds deterministic, cross-chunk generated rivers to the continuous terrain, climate, forest and lake fields |
+| World style | Generator v8 samples one deterministic infinite curve/polyline field into cross-chunk hex water cells |
 | Next milestone | Use the generated water network for settlement, crossing and navigation gameplay |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
@@ -64,9 +64,10 @@ npm start
 
 Open <http://127.0.0.1:3000>. The control panel exposes three modes:
 
-The isolated [infinite water-curve prototype](public/infinite-water.html) is
-available at <http://127.0.0.1:3000/infinite-water.html>; it is a visual design
-scene and does not modify the current world generator.
+The [infinite water-curve scene](public/infinite-water.html) is available at
+<http://127.0.0.1:3000/infinite-water.html>. Its curve geometry comes from the
+same package entry sampled by generator v8; its broad-ocean layer remains a
+visual-only experiment.
 
 | Mode | Purpose |
 |---|---|
@@ -179,6 +180,7 @@ browser/display refresh rate rather than a library-side frame lock.
 | `three-hex-map/persistence` | Base-chunk caches, sparse world deltas and recoverable checkpoints |
 | `three-hex-map/pathfinding` | Versioned navigation summaries and hierarchical routing |
 | `three-hex-map/simulation` | Camera-independent chunk simulation, snapshot stores and army marching |
+| `three-hex-map/infinite-water-curve-field` | Deterministic bounds-queryable curve/polyline geometry shared by production generation and the visual inspector |
 | `three-hex-map/world-generator.worker` | Browser module Worker used by procedural sources |
 
 ## Map data and editing
@@ -274,7 +276,7 @@ frozen contracts, focused subsystem guides, decisions and future designs.
 Current deliberate boundaries:
 
 - [World-style generation v1](docs/world-style-generation-v1.md) is implemented
-  through generator v7, including hex-native automatic river sampling.
+  through generator v8, including curve-field sampling into hex-native water.
 - [Machine-checked optimization gates](docs/optimization-gates.md) record the
   implemented river decision; WebGPU/GPU culling remains deferred until its
   recorded measurements justify a prototype.

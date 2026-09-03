@@ -9,18 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Generator v7 hex-native automatic rivers. Stable source hexes sample the
-  existing elevation, continentalness, valley, moisture and lake-potential
-  fields, then follow a strictly descending choice among six neighbours.
-  Infinite/bounded worlds use a bounded 32x32-page LRU; toroidal worlds use one
-  canonical periodic mask. River modifiers survive packed Worker chunks,
-  carry an explicit six-edge connection mask so adjacent courses do not form
-  false loops, suppress obstructing hill/wood placement and use C0 bank noise
-  in the terrain shader without adopting the separate continuous-curve prototype.
-  Procedural overview pages aggregate every river crossing their pixel
-  footprints, preserving one-cell watercourses at minimap scale without
-  resolving every covered terrain tile.
-- An isolated infinite water-field prototype with clustered multi-scale curve
+- Generator v8 curve-sampled hex water networks. The production generator and
+  visual inspector now share one bounds-queryable infinite curve/polyline
+  field; world generation continuously rasterizes those paths through axial
+  coordinates into six-neighbour river cells instead of inventing a separate
+  local downhill route. Infinite/bounded worlds use a bounded 32x32-page LRU;
+  toroidal worlds wrap one canonical domain-scaled feature set. Exact edge
+  masks, sea mouths, terrain/lake priority, packed Worker chunks and sparse
+  editing remain hex-native. Procedural overview pages aggregate every sampled
+  river crossing their pixel footprints, preserving the macro network at wide
+  minimap scales. The curve field is also published as the optional
+  `three-hex-map/infinite-water-curve-field` package subpath.
+- An infinite water-field visual inspector with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
   tributaries, and Poisson-spaced irregular sea basins spanning many chunks
   without merging into unbounded water walls. Hard basin-radius and center-gap

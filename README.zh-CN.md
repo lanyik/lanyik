@@ -23,7 +23,7 @@
 | 玩法服务 | 稀疏世界增量、可恢复世代存档、分层寻路和与镜头无关的模拟已通过可选子路径提供 |
 | 演示 | 有限环形世界、无限世界和持久化战役共用一个页面，模式选择会跨刷新保存 |
 | 基础设施 | v1 已冻结；生命周期、所有权、调度、持久化和资源预算合同已有自动化验证 |
-| 世界风格 | generator v7 已在连续地貌、气候、森林与湖泊场上加入确定性、跨区块自动河流 |
+| 世界风格 | generator v8 将同一套确定性无限曲线/折线场采样为跨区块六边格水体 |
 | 下一阶段 | 基于生成水网实现聚落、渡河与导航玩法 |
 
 开发环境要求 Node.js 20 或更高版本；作为库使用时，应用需要提供
@@ -54,8 +54,9 @@ npm start
 
 打开 <http://127.0.0.1:3000>。控制面板提供三种世界模式：
 
-独立的[无限水系曲线原型](public/infinite-water.html)位于
-<http://127.0.0.1:3000/infinite-water.html>；它只用于验证视觉设计，尚未改动当前世界生成器。
+[无限水系曲线场景](public/infinite-water.html)位于
+<http://127.0.0.1:3000/infinite-water.html>；其中的曲线几何与 generator v8
+采样的包入口完全相同，广域海盆层仍只用于视觉实验。
 
 | 模式 | 用途 |
 |---|---|
@@ -156,6 +157,7 @@ await source.flushDeltas();
 | `three-hex-map/persistence` | 基础区块缓存、稀疏世界增量和可恢复存档 |
 | `three-hex-map/pathfinding` | 带版本的导航摘要和分层寻路 |
 | `three-hex-map/simulation` | 与镜头无关的区块模拟、快照存储和军队行军 |
+| `three-hex-map/infinite-water-curve-field` | 供生产生成器与视觉检查页共用、可按范围查询的确定性曲线/折线场 |
 | `three-hex-map/world-generator.worker` | 程序化数据源使用的浏览器模块 Worker |
 
 ## 地图数据与编辑
@@ -244,7 +246,7 @@ npm run test:e2e
 
 当前有意保留的边界：
 
-- [世界风格生成 v1](docs/world-style-generation-v1.md) 保留 generator v6 冻结基线，并记录 generator v7 自动河流扩展。
+- [世界风格生成 v1](docs/world-style-generation-v1.md) 保留 generator v6 冻结基线，并记录 generator v8 曲线场六边格水体采样扩展。
 - [机器校验的优化门槛](docs/optimization-gates.md)已记录自动河流的产品触发、决策和实现；WebGPU/GPU culling 继续延后，等待物理硬件测量。
 - 多人冲突合并、云存档、服务器权威状态以及完整经济/战斗规则属于应用层工作，
   不是当前库能力。

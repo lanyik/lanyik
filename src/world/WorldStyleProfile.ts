@@ -1,4 +1,9 @@
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import {
+    assertInfiniteWaterCurveProfile,
+    INFINITE_WATER_CURVE_REFERENCE_PROFILE,
+    type InfiniteWaterCurveProfile
+} from "./InfiniteWaterCurveField";
 
 export interface WorldNoiseFieldProfile {
     readonly salt: number;
@@ -118,25 +123,8 @@ export interface WorldStyleProfile {
     readonly rivers: {
         readonly pageSize: number;
         readonly maximumCachedPages: number;
-        readonly sourceCellSize: number;
-        readonly sourcesPerCell: number;
-        readonly sourceSpawnChance: number;
-        readonly sourceMinimumElevation: number;
-        readonly sourceMaximumElevation: number;
-        readonly sourceElevationTransition: number;
-        readonly sourceMinimumMoisture: number;
-        readonly sourceMoistureFloor: number;
-        readonly sourceValleyFloor: number;
-        readonly minimumCourseLength: number;
-        readonly maximumCourseLength: number;
-        readonly potentialContinentalWeight: number;
-        readonly potentialElevationWeight: number;
-        readonly potentialValleyWeight: number;
-        readonly potentialMoistureWeight: number;
-        readonly potentialLakeWeight: number;
-        readonly potentialJitter: number;
-        readonly sourceSalt: number;
-        readonly flowSalt: number;
+        readonly toroidalReferenceSize: number;
+        readonly curve: InfiniteWaterCurveProfile;
     };
 }
 
@@ -154,7 +142,7 @@ const field = (
     minimumToroidalCells
 });
 
-// Generator v7 owns one frozen macro-style profile. Any semantic change to
+// Generator v8 owns one frozen macro-style profile. Any semantic change to
 // these values must move the generator version and its checksum baselines.
 export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,
@@ -266,25 +254,8 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     rivers: Object.freeze({
         pageSize: 32,
         maximumCachedPages: 16,
-        sourceCellSize: 32,
-        sourcesPerCell: 6,
-        sourceSpawnChance: 1,
-        sourceMinimumElevation: 0.46,
-        sourceMaximumElevation: 0.8,
-        sourceElevationTransition: 0.04,
-        sourceMinimumMoisture: 0.2,
-        sourceMoistureFloor: 0.6,
-        sourceValleyFloor: 0.65,
-        minimumCourseLength: 3,
-        maximumCourseLength: 96,
-        potentialContinentalWeight: 0.9,
-        potentialElevationWeight: 0.1,
-        potentialValleyWeight: 0.035,
-        potentialMoistureWeight: 0.01,
-        potentialLakeWeight: 0.02,
-        potentialJitter: 0.0005,
-        sourceSalt: 0x3c6ef372,
-        flowSalt: 0x5bf03635
+        toroidalReferenceSize: 512,
+        curve: INFINITE_WATER_CURVE_REFERENCE_PROFILE
     })
 });
 
@@ -475,32 +446,12 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
         throw new RangeError("world style placement salts must be safe integers");
     }
     const rivers = profile.rivers;
-    for (const name of [
-        "pageSize", "maximumCachedPages", "sourceCellSize", "sourcesPerCell",
-        "minimumCourseLength", "maximumCourseLength"
-    ] as const) {
+    for (const name of ["pageSize", "maximumCachedPages", "toroidalReferenceSize"] as const) {
         if (!Number.isInteger(rivers[name]) || rivers[name] <= 0) {
             throw new RangeError(`rivers.${name} must be a positive integer`);
         }
     }
-    for (const name of [
-        "sourceElevationTransition", "potentialContinentalWeight", "potentialElevationWeight",
-        "potentialValleyWeight", "potentialMoistureWeight", "potentialLakeWeight", "potentialJitter"
-    ] as const) positive(`rivers.${name}`, rivers[name]);
-    for (const name of [
-        "sourceSpawnChance", "sourceMinimumElevation", "sourceMaximumElevation",
-        "sourceMinimumMoisture", "sourceMoistureFloor", "sourceValleyFloor"
-    ] as const) unitInterval(`rivers.${name}`, rivers[name]);
-    if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition
-        < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
-        throw new RangeError("river source elevation range must contain both transition bands");
-    }
-    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
-        throw new RangeError("river course length range must be ordered");
-    }
-    if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
-        throw new RangeError("river salts must be safe integers");
-    }
+    assertInfiniteWaterCurveProfile(rivers.curve);
 }
 
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);

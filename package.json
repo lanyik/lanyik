@@ -27,6 +27,11 @@
       "import": "./dist/simulation.mjs",
       "require": "./dist/simulation.cjs"
     },
+    "./infinite-water-curve-field": {
+      "types": "./dist/types/world/InfiniteWaterCurveField.d.ts",
+      "import": "./dist/infinite-water-curve-field.mjs",
+      "require": "./dist/infinite-water-curve-field.cjs"
+    },
     "./world-generator.worker": "./dist/world-generator.worker.mjs"
   },
   "unpkg": "dist/hex-map.global.js",

@@ -12,8 +12,8 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
-| World-style generation v1 | Generator v7; continuous terrain and climate plus deterministic cross-chunk automatic rivers | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| Infinite water field prototype | Isolated curve/sea experiment; generator v7 uses hex-native water sampling instead | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
+| World-style generation v1 | Generator v8; continuous terrain plus shared curve-field sampling into cross-chunk hex water | [world-style-generation-v1.md](./world-style-generation-v1.md) |
+| Infinite water curve field | Shared production/inspection curve geometry; broad-sea experiment remains visual-only | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
 
@@ -24,7 +24,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 - [Infrastructure v1 freeze contract](./foundation-v1-freeze.md): boundaries that
   new gameplay and content systems must consume rather than reopen.
 - [Package boundaries](./package-boundaries.md): main entry and optional
-  `persistence`, `pathfinding` and `simulation` subpaths.
+  `persistence`, `pathfinding`, `simulation` and curve-field subpaths.
 - [Event contracts](./event-contracts.md): typed HexMap, Unit and GameEngine
   payload maps plus synchronous dispatch and unhandled-error policy.
 - [Test strategy](./testing.md): contract tests, browser E2E, soak tests and

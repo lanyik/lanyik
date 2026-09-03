@@ -30,13 +30,34 @@ function sampleRiverKeys(seed: string, min: number, max: number): Set<string> {
     return result;
 }
 
+function maximumRiverComponent(points: ReadonlySet<string>): number {
+    const remaining = new Set(points);
+    let maximum = 0;
+    for (const start of points) {
+        if (!remaining.delete(start)) continue;
+        const queue = [start];
+        let size = 0;
+        for (let index = 0; index < queue.length; index += 1) {
+            const [x, y] = queue[index].split(",").map(Number);
+            size += 1;
+            for (const neighbor of getNeighbors(x, y)) {
+                const key = pointKey(neighbor.x, neighbor.y);
+                if (remaining.delete(key)) queue.push(key);
+            }
+        }
+        maximum = Math.max(maximum, size);
+    }
+    return maximum;
+}
+
 describe("WorldWaterSampler", () => {
-    test("is deterministic, sparse and directionally disordered", () => {
+    test("is deterministic, sparse, long-range and directionally disordered", () => {
         const first = sampleRiverKeys("rough-water-field", -128, 128);
         const second = sampleRiverKeys("rough-water-field", -128, 128);
         expect(second).toEqual(first);
         expect(first.size).toBeGreaterThan(350);
         expect(first.size).toBeLessThan(3_500);
+        expect(maximumRiverComponent(first)).toBeGreaterThan(40);
 
         const sampler = createWorldWaterSampler(
             seedToUint32("rough-water-field"),

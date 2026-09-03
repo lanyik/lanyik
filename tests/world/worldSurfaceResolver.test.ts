@@ -25,7 +25,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v7 outputs", () => {
+    test("preserves the frozen generator v8 outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v7-infinite", chunkX: -1, chunkY: 0, chunkSize: 24
         });
@@ -49,9 +49,9 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("river") ? 8 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("631f8bfa");
-        expect(checksum(toroidal.tiles)).toBe("4f1396f5");
-        expect(checksum(encoded)).toBe("00a630e7");
+        expect(checksum(infinite.tiles)).toBe("c66b54d6");
+        expect(checksum(toroidal.tiles)).toBe("184132e3");
+        expect(checksum(encoded)).toBe("30bf99af");
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -138,7 +138,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("5ede4132");
+        expect(checksum(encoded)).toBe("152bdeb0");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -184,8 +184,9 @@ describe("WorldSurfaceResolver", () => {
         expect(() => assertWorldStyleProfile(invalidPlacement)).toThrow(/placement threshold/);
 
         const invalidRiverSampling = structuredClone(WORLD_STYLE_PROFILE) as any;
-        invalidRiverSampling.rivers.maximumCourseLength = invalidRiverSampling.rivers.minimumCourseLength;
-        expect(() => assertWorldStyleProfile(invalidRiverSampling)).toThrow(/course length/);
+        invalidRiverSampling.rivers.curve.families[1].maximumLength
+            = invalidRiverSampling.rivers.curve.families[1].minimumLength;
+        expect(() => assertWorldStyleProfile(invalidRiverSampling)).toThrow(/ranges must be ordered/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

@@ -70,7 +70,7 @@
       "evidenceReferences": [
         "docs/evidence/automatic-river-generation/product-trigger-2026-09-03.json"
       ],
-      "decisionRecord": "docs/decisions/automatic-river-generation-v7.md"
+      "decisionRecord": "docs/decisions/curve-sampled-water-network-v8.md"
     }
   ]
 }

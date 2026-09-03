@@ -28,6 +28,16 @@ for (const marker of ["IndexedDbWorldChunkCache", "IndexedDbWorldDeltaStore", "i
     }
 }
 
+const curveField = await readFile(resolve("dist/infinite-water-curve-field.mjs"), "utf8");
+for (const marker of ["createInfiniteWaterCurveField", "forEachPathIntersecting", "forEachPathOwnedBy"]) {
+    if (!curveField.includes(marker)) {
+        throw new Error(`dist/infinite-water-curve-field.mjs is missing expected API ${marker}`);
+    }
+}
+if (/from\s+["']three["']/.test(curveField)) {
+    throw new Error("standalone infinite water curve field must not depend on three.js");
+}
+
 for (const [relativePath, bytes] of sizes) {
     console.log(`${relativePath}: ${(bytes / 1024).toFixed(2)} KiB`);
 }
