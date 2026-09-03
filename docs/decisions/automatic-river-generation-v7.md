@@ -72,4 +72,6 @@ and rendering connectivity read only six neighbours.
 Verification covers deterministic checksums, direct/window equivalence,
 overlapping chunk halos, six-neighbour continuity, all six directions,
 toroidal seams, profile validation, bounded cache residency, the fixed visual
-gallery and hot-path generation cost.
+gallery and hot-path generation cost. Overview rasters enumerate sparse course
+tiles over each requested extent and aggregate coverage per pixel; they do not
+reduce a many-tile footprint to one center sample or resolve its full tile area.

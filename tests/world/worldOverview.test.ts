@@ -53,4 +53,41 @@ describe("world overview raster", () => {
 
         expect(shifted.pixels).toEqual(first.pixels);
     });
+
+    it("preserves a one-cell generated river inside a coarse overview pixel", () => {
+        const descriptor = createWorldDescriptor({ seed: "rough-water-field", chunkSize: 24 });
+        const resolver = createWorldSurfaceResolver({
+            seed: descriptor.seed,
+            domain: { topology: "infinite" }
+        });
+        const riverTiles: Array<{ x: number; y: number }> = [];
+        resolver.visitGeneratedRiverTiles(-128, -128, 256, 256, (x, y) => {
+            riverTiles.push({ x, y });
+        });
+        expect(riverTiles.length).toBeGreaterThan(300);
+
+        const coarse = riverTiles.map(point => ({
+            point,
+            originX: Math.floor(point.x / 8) * 8,
+            originY: Math.floor(point.y / 8) * 8
+        })).find(candidate => !resolver.resolveGeneratedTile(
+            candidate.originX + 4,
+            candidate.originY + 4
+        ).modifiers?.includes("river"));
+        expect(coarse).toBeDefined();
+
+        const raster = generateWorldOverviewWithResolver({
+            descriptor,
+            originX: coarse!.originX,
+            originY: coarse!.originY,
+            tileSpanX: 8,
+            tileSpanY: 8,
+            pixelWidth: 1,
+            pixelHeight: 1
+        }, resolver);
+
+        // The center sample is dry, but area coverage retains the subpixel
+        // river as the overview's dedicated cartographic river color.
+        expect([...raster.pixels]).toEqual([28, 142, 174, 255]);
+    });
 });

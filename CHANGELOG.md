@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry an explicit six-edge connection mask so adjacent courses do not form
   false loops, suppress obstructing hill/wood placement and use C0 bank noise
   in the terrain shader without adopting the separate continuous-curve prototype.
+  Procedural overview pages aggregate every river crossing their pixel
+  footprints, preserving one-cell watercourses at minimap scale without
+  resolving every covered terrain tile.
 - An isolated infinite water-field prototype with clustered multi-scale curve
   families, independently seeded origins and cumulative turning, deterministic
   tributaries, and Poisson-spaced irregular sea basins spanning many chunks

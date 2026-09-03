@@ -1467,6 +1467,20 @@ function randomForSource(seed, key, salt) {
 function isSourceTerrain(type) {
   return type === "land" /* land */ || type === "sand" /* sand */ || type === "tundra" /* tundra */;
 }
+function assertRiverExtent(originX, originY, width, height) {
+  if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)) {
+    throw new RangeError("water extent origins must be safe integers");
+  }
+  if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
+    throw new RangeError("water extent dimensions must be positive safe integers");
+  }
+  if (!Number.isSafeInteger(originX + width - 1) || !Number.isSafeInteger(originY + height - 1)) {
+    throw new RangeError("water extent exceeds safe integer coordinates");
+  }
+  if (!Number.isSafeInteger(width * height)) {
+    throw new RangeError("water extent area exceeds safe integer indexing");
+  }
+}
 var DeterministicWorldWaterSampler = class {
   constructor(numericSeed, domain, profile) {
     this.numericSeed = numericSeed;
@@ -1506,6 +1520,48 @@ var DeterministicWorldWaterSampler = class {
   }
   isRiverTile(x, y, sampleAt) {
     return this.riverEdgesAt(x, y, sampleAt) !== void 0;
+  }
+  forEachRiverTile(originX, originY, width, height, sampleAt, visit) {
+    assertRiverExtent(originX, originY, width, height);
+    const endX = originX + width;
+    const endY = originY + height;
+    if (this.domain.topology === "toroidal") {
+      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
+      for (let x = originX; x < endX; x += 1) {
+        const canonicalX = positiveModulo3(x, this.domain.width);
+        for (let y = originY; y < endY; y += 1) {
+          const canonicalY = positiveModulo3(y, this.domain.height);
+          if (mask[canonicalX * this.domain.height + canonicalY] >= 0) visit(x, y);
+        }
+      }
+      return;
+    }
+    const rivers = this.profile.rivers;
+    const reach = rivers.maximumCourseLength;
+    if (!Number.isSafeInteger(originX - reach) || !Number.isSafeInteger(originY - reach) || !Number.isSafeInteger(endX - 1 + reach) || !Number.isSafeInteger(endY - 1 + reach)) {
+      throw new RangeError("water extent course reach exceeds safe integer coordinates");
+    }
+    const firstCellX = Math.floor((originX - reach) / rivers.sourceCellSize);
+    const lastCellX = Math.floor((endX - 1 + reach) / rivers.sourceCellSize);
+    const firstCellY = Math.floor((originY - reach) / rivers.sourceCellSize);
+    const lastCellY = Math.floor((endY - 1 + reach) / rivers.sourceCellSize);
+    const visited = /* @__PURE__ */ new Set();
+    this.visitSourceCells(
+      firstCellX,
+      lastCellX,
+      firstCellY,
+      lastCellY,
+      rivers.sourceCellSize,
+      rivers.sourceCellSize,
+      sampleAt,
+      (point) => {
+        if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
+        const index = (point.x - originX) * height + point.y - originY;
+        if (visited.has(index)) return;
+        visited.add(index);
+        visit(point.x, point.y);
+      }
+    );
   }
   get stats() {
     const mask = this.toroidalMask;
@@ -1847,6 +1903,17 @@ function sampleSurface(sampler, profile, x, y) {
     landform
   });
 }
+function isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample = sampleAt(x, y)) {
+  if (!sample) return false;
+  const lakes = profile.lakes;
+  const isCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
+  if (!isCandidate(sample, x, y)) return false;
+  const lakeNeighbors = getNeighbors(x, y).reduce((count, neighbor) => {
+    const adjacent = sampleAt(neighbor.x, neighbor.y);
+    return count + (isCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
+  }, 0);
+  return lakeNeighbors >= lakes.minimumNeighbors;
+}
 function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
   const sample = sampleAt(x, y);
   if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
@@ -1867,14 +1934,7 @@ function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
     Object.freeze(modifiers);
     return Object.freeze(tile);
   }
-  const lakes = profile.lakes;
-  const isLakeCandidate = (candidate, tileX, tileY) => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
-  const lakeCandidate = isLakeCandidate(sample, x, y);
-  const lakeNeighbors = lakeCandidate ? getNeighbors(x, y).reduce((count, neighbor) => {
-    const adjacent = sampleAt(neighbor.x, neighbor.y);
-    return count + (isLakeCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
-  }, 0) : 0;
-  const lake = lakeCandidate && lakeNeighbors >= lakes.minimumNeighbors;
+  const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample);
   if (lake) {
     modifiers.push("lake");
   } else {
@@ -1932,6 +1992,32 @@ var FrozenWorldSurfaceResolver = class {
         }
       )
     );
+  }
+  visitGeneratedRiverTiles(originX, originY, width, height, visit) {
+    if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
+    const window = this.createWindow();
+    try {
+      const sampleAt = (x, y) => window.sampleGenerated(x, y);
+      this.waterSampler.forEachRiverTile(
+        originX,
+        originY,
+        width,
+        height,
+        sampleAt,
+        (x, y) => {
+          const point = normalizeCoordinates(this.domain, x, y);
+          if (!isGeneratedLake(
+            this.sampler.numericSeed,
+            this.profile,
+            point.x,
+            point.y,
+            sampleAt
+          )) visit(x, y);
+        }
+      );
+    } finally {
+      window.clear();
+    }
   }
   createWindow() {
     return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);

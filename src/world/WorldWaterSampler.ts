@@ -46,6 +46,14 @@ export interface WorldWaterSamplerStats {
 export interface WorldWaterSampler {
     riverEdgesAt(x: number, y: number, sampleAt: WorldWaterSampleAt): number | undefined;
     isRiverTile(x: number, y: number, sampleAt: WorldWaterSampleAt): boolean;
+    forEachRiverTile(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        sampleAt: WorldWaterSampleAt,
+        visit: (x: number, y: number) => void
+    ): void;
     readonly stats: WorldWaterSamplerStats;
     clear(): void;
 }
@@ -84,6 +92,23 @@ function randomForSource(seed: number, key: number, salt: number): number {
 
 function isSourceTerrain(type: Land): boolean {
     return type === Land.land || type === Land.sand || type === Land.tundra;
+}
+
+function assertRiverExtent(originX: number, originY: number, width: number, height: number): void {
+    if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)) {
+        throw new RangeError("water extent origins must be safe integers");
+    }
+    if (!Number.isSafeInteger(width) || width <= 0
+        || !Number.isSafeInteger(height) || height <= 0) {
+        throw new RangeError("water extent dimensions must be positive safe integers");
+    }
+    if (!Number.isSafeInteger(originX + width - 1)
+        || !Number.isSafeInteger(originY + height - 1)) {
+        throw new RangeError("water extent exceeds safe integer coordinates");
+    }
+    if (!Number.isSafeInteger(width * height)) {
+        throw new RangeError("water extent area exceeds safe integer indexing");
+    }
 }
 
 class DeterministicWorldWaterSampler implements WorldWaterSampler {
@@ -129,6 +154,58 @@ class DeterministicWorldWaterSampler implements WorldWaterSampler {
 
     public isRiverTile(x: number, y: number, sampleAt: WorldWaterSampleAt): boolean {
         return this.riverEdgesAt(x, y, sampleAt) !== undefined;
+    }
+
+    public forEachRiverTile(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        sampleAt: WorldWaterSampleAt,
+        visit: (x: number, y: number) => void
+    ): void {
+        assertRiverExtent(originX, originY, width, height);
+        const endX = originX + width;
+        const endY = originY + height;
+        if (this.domain.topology === "toroidal") {
+            const mask = this.toroidalMask ??= this.buildToroidalMask(sampleAt);
+            for (let x = originX; x < endX; x += 1) {
+                const canonicalX = positiveModulo(x, this.domain.width);
+                for (let y = originY; y < endY; y += 1) {
+                    const canonicalY = positiveModulo(y, this.domain.height);
+                    if (mask[canonicalX * this.domain.height + canonicalY] >= 0) visit(x, y);
+                }
+            }
+            return;
+        }
+
+        const rivers = this.profile.rivers;
+        const reach = rivers.maximumCourseLength;
+        if (!Number.isSafeInteger(originX - reach) || !Number.isSafeInteger(originY - reach)
+            || !Number.isSafeInteger(endX - 1 + reach) || !Number.isSafeInteger(endY - 1 + reach)) {
+            throw new RangeError("water extent course reach exceeds safe integer coordinates");
+        }
+        const firstCellX = Math.floor((originX - reach) / rivers.sourceCellSize);
+        const lastCellX = Math.floor((endX - 1 + reach) / rivers.sourceCellSize);
+        const firstCellY = Math.floor((originY - reach) / rivers.sourceCellSize);
+        const lastCellY = Math.floor((endY - 1 + reach) / rivers.sourceCellSize);
+        const visited = new Set<number>();
+        this.visitSourceCells(
+            firstCellX,
+            lastCellX,
+            firstCellY,
+            lastCellY,
+            rivers.sourceCellSize,
+            rivers.sourceCellSize,
+            sampleAt,
+            point => {
+                if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
+                const index = (point.x - originX) * height + point.y - originY;
+                if (visited.has(index)) return;
+                visited.add(index);
+                visit(point.x, point.y);
+            }
+        );
     }
 
     public get stats(): WorldWaterSamplerStats {

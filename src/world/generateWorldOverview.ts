@@ -41,7 +41,7 @@ const PALETTE = {
     snow: [225, 233, 235] as Rgb,
     mountain: [105, 108, 109] as Rgb,
     lake: [35, 105, 129] as Rgb,
-    river: [31, 116, 142] as Rgb
+    river: [28, 142, 174] as Rgb
 } as const;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -127,6 +127,34 @@ function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
 }
 
+function generatedRiverCoverage(
+    options: WorldOverviewPreparationOptions,
+    resolver: WorldSurfaceResolver
+): Uint8Array {
+    const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
+    resolver.visitGeneratedRiverTiles(
+        options.originX,
+        options.originY,
+        options.tileSpanX,
+        options.tileSpanY,
+        (x, y) => {
+            // Overview pixels represent an area, not one center sample. Marking
+            // any river cell in that footprint preserves one-cell-wide courses
+            // when many hexes collapse into a single cartographic pixel.
+            const px = Math.min(
+                options.pixelWidth - 1,
+                Math.floor((x - options.originX) * options.pixelWidth / options.tileSpanX)
+            );
+            const py = Math.min(
+                options.pixelHeight - 1,
+                Math.floor((y - options.originY) * options.pixelHeight / options.tileSpanY)
+            );
+            coverage[py * options.pixelWidth + px] = 1;
+        }
+    );
+    return coverage;
+}
+
 export function generateWorldOverviewWithResolver(
     options: WorldOverviewGenerationOptions,
     resolver: WorldSurfaceResolver
@@ -142,6 +170,7 @@ export function generateWorldOverviewWithResolver(
     }
 
     const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    const riverCoverage = generatedRiverCoverage(options, resolver);
     const terrain = resolver.profile.terrain;
     let offset = 0;
     for (let py = 0; py < options.pixelHeight; py += 1) {
@@ -173,7 +202,12 @@ export function generateWorldOverviewWithResolver(
                 + clamp01((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18
                 - sample.vegetationDensity * 0.13
                 - sample.landform.valley * 0.035;
-            writePixel(pixels, offset, shadeRgb(color, reliefShade));
+            const pixelIndex = py * options.pixelWidth + px;
+            writePixel(
+                pixels,
+                offset,
+                riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
+            );
             offset += 4;
         }
     }

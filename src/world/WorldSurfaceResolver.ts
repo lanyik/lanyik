@@ -43,6 +43,13 @@ export interface WorldSurfaceResolver {
     readonly profile: Readonly<WorldStyleProfile>;
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
+    visitGeneratedRiverTiles(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        visit: (x: number, y: number) => void
+    ): void;
     createWindow(): WorldSurfaceResolverWindow;
 }
 
@@ -250,6 +257,31 @@ function sampleSurface(
 type SampleAt = (x: number, y: number) => Readonly<WorldSurfaceSample> | undefined;
 type RiverAt = (x: number, y: number) => number | undefined;
 
+function isGeneratedLake(
+    numericSeed: number,
+    profile: Readonly<WorldStyleProfile>,
+    x: number,
+    y: number,
+    sampleAt: SampleAt,
+    sample: Readonly<WorldSurfaceSample> | undefined = sampleAt(x, y)
+): boolean {
+    if (!sample) return false;
+    const lakes = profile.lakes;
+    const isCandidate = (
+        candidate: Readonly<WorldSurfaceSample> | undefined,
+        tileX: number,
+        tileY: number
+    ): boolean => Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential
+        && randomAt(numericSeed, tileX, tileY, lakes.placementSalt)
+            < candidate.lakePotential * lakes.placementScale);
+    if (!isCandidate(sample, x, y)) return false;
+    const lakeNeighbors = getNeighbors(x, y).reduce((count, neighbor) => {
+        const adjacent = sampleAt(neighbor.x, neighbor.y);
+        return count + (isCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
+    }, 0);
+    return lakeNeighbors >= lakes.minimumNeighbors;
+}
+
 function resolveTile(
     numericSeed: number,
     profile: Readonly<WorldStyleProfile>,
@@ -282,19 +314,7 @@ function resolveTile(
         Object.freeze(modifiers);
         return Object.freeze(tile);
     }
-    const lakes = profile.lakes;
-    const isLakeCandidate = (candidate: Readonly<WorldSurfaceSample> | undefined, tileX: number, tileY: number): boolean =>
-        Boolean(candidate && candidate.lakePotential >= lakes.minimumPotential
-            && randomAt(numericSeed, tileX, tileY, lakes.placementSalt)
-                < candidate.lakePotential * lakes.placementScale);
-    const lakeCandidate = isLakeCandidate(sample, x, y);
-    const lakeNeighbors = lakeCandidate
-        ? getNeighbors(x, y).reduce((count, neighbor) => {
-            const adjacent = sampleAt(neighbor.x, neighbor.y);
-            return count + (isLakeCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
-        }, 0)
-        : 0;
-    const lake = lakeCandidate && lakeNeighbors >= lakes.minimumNeighbors;
+    const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, sample);
     if (lake) {
         modifiers.push("lake");
     } else {
@@ -370,6 +390,39 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
                 }
             )
         );
+    }
+
+    public visitGeneratedRiverTiles(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        visit: (x: number, y: number) => void
+    ): void {
+        if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
+        const window = this.createWindow();
+        try {
+            const sampleAt = (x: number, y: number) => window.sampleGenerated(x, y);
+            this.waterSampler.forEachRiverTile(
+                originX,
+                originY,
+                width,
+                height,
+                sampleAt,
+                (x, y) => {
+                    const point = normalizeCoordinates(this.domain, x, y)!;
+                    if (!isGeneratedLake(
+                        this.sampler.numericSeed,
+                        this.profile,
+                        point.x,
+                        point.y,
+                        sampleAt
+                    )) visit(x, y);
+                }
+            );
+        } finally {
+            window.clear();
+        }
     }
 
     public createWindow(): WorldSurfaceResolverWindow {

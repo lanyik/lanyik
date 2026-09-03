@@ -447,6 +447,13 @@ owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
 Worker request/response addition is protocol v3 and transfers the pixel buffer
 instead of cloning it.
 
+Procedural base color still uses one surface sample per output pixel. Generated
+rivers use a separate sparse coverage pass: only source courses capable of
+reaching the requested page are enumerated, and any river hex crossing a pixel
+footprint marks that cartographic pixel as river water. This keeps one-cell
+courses connected when 4–8 hexes collapse into one overview pixel without
+performing a full tile-resolution scan of a 1024×1024 page.
+
 `HexMap` emits `loadstart` after validating the incoming source and before it
 closes the previous render-world session. `WorldMinimap` uses that boundary to
 advance its page generation, abort every old overview request, and clear pages
