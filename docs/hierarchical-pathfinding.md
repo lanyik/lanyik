@@ -34,6 +34,7 @@ import { getChunkResidencyCoordinator } from "three-hex-map";
 const navigation = new ProceduralWorldNavigationIndex({
     seed: "endless-continent",
     chunkSize: source.chunkSize,
+    waterStyle: source.descriptor.waterStyle,
     movementType: "walker",
     passable: tile => unitTerrain[tile.type] !== undefined,
     movementCost: tile => unitTerrain[tile.type],
@@ -68,6 +69,10 @@ Unless explicitly overridden for an authored source, its `terrainRevision` is
 the canonical serialized world descriptor fingerprint, matching procedural and
 toroidal `WorldSource.getChunkRevision()`; a bare generator version is not a
 complete terrain identity.
+When the source uses authored water parameters, pass its descriptor's
+`waterStyle` to the index as shown above. Summary generation then classifies
+ocean and river tiles with exactly the same identity-bearing parameters as the
+streamed source.
 For authored/server worlds, build summaries with
 `buildWorldNavigationSummary()` and store them in `MemoryWorldNavigationIndex`
 or implement `WorldNavigationIndex` over a database/CDN.

@@ -38,23 +38,6 @@ function findLoadedStart(map, initialTile) {
     throw new Error("No passable campaign start tile is resident near the camera");
 }
 
-function candidateInChunk(engine, seed, chunkSize, chunkX, chunkY) {
-    const packed = engine.generateWorldChunk({ seed, chunkSize, chunkX, chunkY });
-    const center = {
-        x: chunkX * chunkSize + Math.floor(chunkSize / 2),
-        y: chunkY * chunkSize + Math.floor(chunkSize / 2)
-    };
-    return engine.getWorldChunkCorePoints(packed)
-        .filter(point => isPassable(engine.decodeWorldChunkTile(
-            packed,
-            point.x - chunkX * chunkSize,
-            point.y - chunkY * chunkSize
-        )))
-        .sort((first, second) =>
-            Math.hypot(first.x - center.x, first.y - center.y)
-            - Math.hypot(second.x - center.x, second.y - center.y))[0];
-}
-
 function createMarker(map, tileSize, engine) {
     const geometry = new THREE.CylinderGeometry(tileSize * 0.2, tileSize * 0.34, tileSize * 0.5, 6);
     const material = new THREE.MeshStandardMaterial({
@@ -90,10 +73,12 @@ export async function createCampaignDemo({
     engine = window.HexMap,
     onUpdate = () => {}
 }) {
-    const worldId = `campaign-demo:${String(seed)}:${source.chunkSize}:g${engine.WORLD_GENERATOR_VERSION}`;
+    if (!source.descriptor) throw new Error("Campaign persistence requires a versioned world descriptor");
+    const worldId = source.worldId;
     const navigation = new ProceduralWorldNavigationIndex({
         seed,
         chunkSize: source.chunkSize,
+        waterStyle: source.descriptor.waterStyle,
         movementType: MOVEMENT_TYPE,
         passable: isPassable,
         movementCost,
@@ -129,7 +114,6 @@ export async function createCampaignDemo({
         store
     });
     simulation.registerSystem(createArmyMarchSystem());
-    if (!source.descriptor) throw new Error("Campaign persistence requires a versioned world descriptor");
     const checkpoints = new GenerationCheckpointCoordinator({
         worldId,
         descriptor: source.descriptor,

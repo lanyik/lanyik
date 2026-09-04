@@ -145,8 +145,9 @@ does not allocate all 262,144 tile objects. It generates the camera window and
 keeps the rest reproducible from seed plus dimensions.
 
 Eager, toroidal and infinite chunk generation now share one internal
-`WorldSurfaceResolver`. Its frozen profile is tied directly to the current
-generator identity. It produces continuous plain/valley/hill/mountain relief,
+`WorldSurfaceResolver`. Its frozen base profile is tied to the current
+generator identity, while the validated `WorldWaterGenerationStyle` subset is
+stored in the world descriptor. It produces continuous plain/valley/hill/mountain relief,
 biome weights, forest-patch density and a separate low-frequency ocean field.
 `WorldWaterSampler` adds deterministic coarse-grid drainage courses through a
 bounded page cache (or one canonical toroidal mask); short-lived resolver
@@ -154,6 +155,9 @@ windows deduplicate local samples without creating an unbounded world cache. A
 worker retains one resolver while requests keep the same canonical descriptor
 fingerprint; request order does not enter the rules. Overview requests enumerate
 and rasterize courses once instead of resolving every tile in the requested span.
+Changing an ocean or river parameter creates a new descriptor fingerprint, so
+resolver reuse, chunk caches, delta save slots and terrain revisions remain
+partitioned from worlds generated with the previous values.
 
 For rendering, one `WorldSurfaceView` combines that generated surface with the
 authoritative current `MapInfo`, so sparse terrain edits win over generated

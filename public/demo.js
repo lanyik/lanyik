@@ -16,7 +16,7 @@ const {
     ToroidalWorldSource,
     MIN_WORLD_SIZE,
     MAX_WORLD_SIZE,
-    WORLD_GENERATOR_VERSION
+    DEFAULT_WORLD_WATER_STYLE
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const fastRenderMode = query.get("quality") === "fast";
@@ -295,7 +295,17 @@ const controls = {
     seed: "new-world",
     width: 42,
     height: 32,
+    oceanScale: DEFAULT_WORLD_WATER_STYLE.oceanScale,
+    oceanLevel: DEFAULT_WORLD_WATER_STYLE.oceanLevel,
+    riverSourceCellSize: DEFAULT_WORLD_WATER_STYLE.riverSourceCellSize,
+    riverSourcesPerCell: DEFAULT_WORLD_WATER_STYLE.riverSourcesPerCell,
+    riverWarpScale: DEFAULT_WORLD_WATER_STYLE.riverWarpScale,
+    riverWarpAmplitude: DEFAULT_WORLD_WATER_STYLE.riverWarpAmplitude,
+    riverBaseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
+    riverHighFlowRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
+    riverHighFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
     regenerate,
+    resetWaterGeneration,
     clearCachedData,
     startCampaignMarch,
     followCampaignArmy,
@@ -338,6 +348,7 @@ window.getWorldDiagnostics = () => ({
     rendererPixelRatio: map.renderer?.getPixelRatio(),
     renderBackend,
     worldMode: activeWorldMode ?? controls.worldMode,
+    waterStyle: activeSource?.descriptor.waterStyle,
     performance: { ...performanceSnapshot },
     cameraTarget: map.getCameraTarget().toArray(),
     minimap: minimap.view,
@@ -425,6 +436,26 @@ function setStatus(kind, values = {}) {
     renderStatus();
 }
 
+function currentWaterStyle() {
+    return {
+        oceanScale: Number(controls.oceanScale),
+        oceanLevel: Number(controls.oceanLevel),
+        riverSourceCellSize: Number(controls.riverSourceCellSize),
+        riverSourcesPerCell: Number(controls.riverSourcesPerCell),
+        riverWarpScale: Number(controls.riverWarpScale),
+        riverWarpAmplitude: Number(controls.riverWarpAmplitude),
+        riverBaseRadius: Number(controls.riverBaseRadius),
+        riverHighFlowRadius: Number(controls.riverHighFlowRadius),
+        riverHighFlowThreshold: Number(controls.riverHighFlowThreshold)
+    };
+}
+
+function resetWaterGeneration() {
+    Object.assign(controls, DEFAULT_WORLD_WATER_STYLE);
+    waterGenerationControllers.forEach(controller => controller.updateDisplay());
+    void regenerate();
+}
+
 async function clearCachedData() {
     if (generating || !window.confirm(i18n.t("cache.confirm"))) return;
     generating = true;
@@ -461,6 +492,7 @@ async function regenerate() {
     });
 
     try {
+        const waterStyle = currentWaterStyle();
         if (activeCampaign) {
             await activeCampaign.dispose();
             activeCampaign = undefined;
@@ -475,14 +507,12 @@ async function regenerate() {
             };
             const source = new ProceduralWorldSource({
                 seed: controls.seed,
+                waterStyle,
                 workerUrl,
                 chunkSize: 24,
                 cache: new IndexedDbWorldChunkCache(),
                 deltaStore: campaignMode ? new IndexedDbWorldDeltaStore() : undefined,
-                workCoordinator: map.workCoordinator,
-                worldId: campaignMode
-                    ? `campaign-demo:${controls.seed}:terrain:g${WORLD_GENERATOR_VERSION}`
-                    : undefined
+                workCoordinator: map.workCoordinator
             });
             activeSource = undefined;
             await map.loadWorld({
@@ -513,6 +543,7 @@ async function regenerate() {
         }
         const source = new ToroidalWorldSource({
             seed: controls.seed,
+            waterStyle,
             width: Number(controls.width),
             height: Number(controls.height),
             workerUrl,
@@ -576,6 +607,35 @@ const initialYController = worldFolder.add(controls, "initialY").step(1);
 const generateController = worldFolder.add(controls, "regenerate");
 const clearCacheController = worldFolder.add(controls, "clearCachedData");
 worldFolder.open();
+
+const waterGenerationFolder = gui.addFolder("Water generation");
+const oceanScaleController = waterGenerationFolder.add(controls, "oceanScale", 0.5, 3, 0.05);
+const oceanLevelController = waterGenerationFolder.add(controls, "oceanLevel", 0.32, 0.62, 0.005);
+const riverSourceCellController = waterGenerationFolder.add(controls, "riverSourceCellSize", 6, 30, 1);
+const riverSourcesController = waterGenerationFolder.add(controls, "riverSourcesPerCell", 1, 8, 1);
+const riverWarpScaleController = waterGenerationFolder.add(controls, "riverWarpScale", 0.005, 0.08, 0.001);
+const riverWarpAmplitudeController = waterGenerationFolder.add(controls, "riverWarpAmplitude", 0, 3.75, 0.05);
+const riverBaseRadiusController = waterGenerationFolder.add(controls, "riverBaseRadius", 0, 1, 1);
+const riverHighFlowRadiusController = waterGenerationFolder.add(controls, "riverHighFlowRadius", 2, 4, 1);
+const riverHighFlowThresholdController = waterGenerationFolder.add(controls, "riverHighFlowThreshold", 2, 24, 1);
+const resetWaterController = waterGenerationFolder.add(controls, "resetWaterGeneration");
+const waterGenerationControllers = [
+    oceanScaleController,
+    oceanLevelController,
+    riverSourceCellController,
+    riverSourcesController,
+    riverWarpScaleController,
+    riverWarpAmplitudeController,
+    riverBaseRadiusController,
+    riverHighFlowRadiusController,
+    riverHighFlowThresholdController
+];
+for (const controller of waterGenerationControllers) {
+    const input = controller.domElement.querySelector("input");
+    if (input) input.dataset.waterGeneration = controller.property;
+    controller.onFinishChange(() => { void regenerate(); });
+}
+waterGenerationFolder.open();
 
 const campaignFolder = gui.addFolder("Campaign");
 const startMarchController = campaignFolder.add(controls, "startCampaignMarch");
@@ -649,6 +709,16 @@ const translatedControllers = [
     [initialYController, "control.initialY"],
     [generateController, "control.generate"],
     [clearCacheController, "control.clearCache"],
+    [oceanScaleController, "control.oceanScale"],
+    [oceanLevelController, "control.oceanLevel"],
+    [riverSourceCellController, "control.riverSourceCellSize"],
+    [riverSourcesController, "control.riverSourcesPerCell"],
+    [riverWarpScaleController, "control.riverWarpScale"],
+    [riverWarpAmplitudeController, "control.riverWarpAmplitude"],
+    [riverBaseRadiusController, "control.riverBaseRadius"],
+    [riverHighFlowRadiusController, "control.riverHighFlowRadius"],
+    [riverHighFlowThresholdController, "control.riverHighFlowThreshold"],
+    [resetWaterController, "control.resetWaterGeneration"],
     [gridController, "control.grid"],
     [blendWidthController, "control.blendWidth"],
     [blendCurveController, "control.blendCurve"],
@@ -669,6 +739,7 @@ const translatedControllers = [
 
 const translatedFolders = [
     [worldFolder, "panel.world"],
+    [waterGenerationFolder, "panel.waterGeneration"],
     [terrainFolder, "panel.terrain"],
     [waterFolder, "panel.water"],
     [vegetationFolder, "panel.vegetation"],

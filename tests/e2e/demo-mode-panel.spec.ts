@@ -7,6 +7,7 @@ interface DemoDiagnostics {
     worldStreaming?: { residentChunks: number };
     campaign?: { ready: boolean };
     renderer?: { triangles: number };
+    waterStyle?: { oceanLevel: number };
 }
 
 test("links the full terrain shader within the supported attribute budget", async ({ page }) => {
@@ -117,4 +118,34 @@ test("switches landform diagnostics and regional texture scale live without rege
 
     expect(after).toBe(before);
     expect(errors).toEqual([]);
+});
+
+test("regenerates the world with water parameters from the control panel", async ({ page }) => {
+    await page.goto("/?quality=fast", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+        const state = (window as unknown as {
+            getWorldDiagnostics?: () => DemoDiagnostics;
+        }).getWorldDiagnostics?.();
+        return state?.status === "generated" && !state.generating;
+    });
+
+    const before = await page.evaluate(() => (window as unknown as {
+        getWorldDiagnostics(): DemoDiagnostics & { worldLifecycle?: { generation: number } };
+    }).getWorldDiagnostics().worldLifecycle?.generation);
+    const oceanLevel = page.locator('[data-water-generation="oceanLevel"]');
+    await oceanLevel.fill("0.54");
+    await oceanLevel.press("Enter");
+    await page.waitForFunction(() => {
+        const state = (window as unknown as {
+            getWorldDiagnostics(): DemoDiagnostics;
+        }).getWorldDiagnostics();
+        return state.status === "generated" && !state.generating
+            && state.waterStyle?.oceanLevel === 0.54;
+    });
+    const after = await page.evaluate(() => (window as unknown as {
+        getWorldDiagnostics(): DemoDiagnostics & { worldLifecycle?: { generation: number } };
+    }).getWorldDiagnostics().worldLifecycle?.generation);
+
+    expect(after).toBeGreaterThan(before ?? -1);
+    await expect(oceanLevel).toHaveValue("0.54");
 });

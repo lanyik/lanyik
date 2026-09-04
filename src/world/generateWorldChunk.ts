@@ -2,6 +2,11 @@ import { Land } from "../enums";
 import { MapInfo, Point, TileInfo } from "../interfaces";
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 import {
+    DEFAULT_WORLD_WATER_STYLE,
+    worldWaterGenerationStylesEqual,
+    WorldWaterGenerationStyle
+} from "./WorldStyleProfile";
+import {
     createWorldSurfaceResolver,
     WorldSurfaceResolver
 } from "./WorldSurfaceResolver";
@@ -24,6 +29,7 @@ export interface WorldChunkGenerationOptions {
     chunkY: number;
     chunkSize?: number;
     world?: BoundedWorldChunkGeneration;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
 }
 
 //One Uint16 per tile keeps worker transfer and CPU cache compact. Bit layout:
@@ -195,6 +201,7 @@ export function createWorldChunkSurfaceResolver(options: WorldChunkGenerationOpt
     validateBoundedWorld(options.world);
     return createWorldSurfaceResolver({
         seed: options.seed,
+        waterStyle: options.waterStyle,
         domain: options.world
             ? { topology: "toroidal", width: options.world.width, height: options.world.height }
             : { topology: "infinite" }
@@ -215,7 +222,9 @@ export function generateWorldChunkWithResolver(
     const expectedDomain = options.world
         ? { topology: "toroidal" as const, width: options.world.width, height: options.world.height }
         : { topology: "infinite" as const };
+    const expectedWaterStyle = options.waterStyle ?? DEFAULT_WORLD_WATER_STYLE;
     if (!resolver || resolver.seed !== String(options.seed)
+        || !worldWaterGenerationStylesEqual(resolver.waterStyle, expectedWaterStyle)
         || resolver.domain.topology !== expectedDomain.topology
         || (expectedDomain.topology === "toroidal"
             && (resolver.domain.topology !== "toroidal"

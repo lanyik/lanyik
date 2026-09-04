@@ -106,6 +106,7 @@ interface WorldSurfaceResolver {
     readonly seed: string;
     readonly domain: LandformDomain;
     readonly profile: WorldStyleProfile;
+    readonly waterStyle: WorldWaterGenerationStyle;
 
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
@@ -217,7 +218,7 @@ WorldSurfaceResolverWindow 和 WorldSurfaceWindow 都只用于一次生成块或
 | 文件 | 职责 |
 |---|---|
 | src/world/WorldGeneratorVersion.ts | 生成器版本与版本校验；原导出路径继续转出 |
-| src/world/WorldStyleProfile.ts | 当前冻结风格配置和校验 |
+| src/world/WorldStyleProfile.ts | 冻结基础风格、水体生成参数的规范化和校验 |
 | src/world/WorldSurfaceResolver.ts | 唯一生成规则 |
 | src/world/WorldWaterSampler.ts | 粗网格河源、下坡追踪、汇流宽度、分页缓存与环绕掩码 |
 | src/world/generateWorldOverview.ts | 低分辨率地表采样与一次性河道覆盖栅格 |
@@ -244,7 +245,7 @@ src/world 不得导入 Three.js、HexMap 或 rendering 模块。
 
 ### 5.1 WorldStyleProfile
 
-风格配置保持内部只读，按以下几组组织：
+完整风格配置保持内部只读，按以下几组组织：
 
 | 分组 | 内容 |
 |---|---|
@@ -256,12 +257,12 @@ src/world 不得导入 Three.js、HexMap 或 rendering 模块。
 
 规则：
 
-- v1 只有一个默认配置。
-- 配置不进入公共构造参数。
-- 配置由 WORLD_GENERATOR_VERSION 唯一确定。
-- 修改任何生成语义时，必须升级生成器版本并更新格子、地表和配置基准。
+- `WORLD_STYLE_PROFILE` 是由生成器版本确定的冻结基础配置。
+- 应用只可覆盖 `WorldWaterGenerationStyle`：海域频率/阈值，以及河源密度、弯曲和汇流宽度；其余内部系数不开放。
+- 水体参数在数据源构造时完成严格校验和冻结，并写入 `WorldDescriptor`，不读取运行中的全局可变状态。
+- 修改基础生成语义时，必须升级生成器版本并更新格子、地表和配置基准；只调整某个世界的合法水体参数不升级生成器版本。
 - field scale 必须真正传入 LandformSampler，不能再保留另一套隐藏常量。
-- 只有出现第二个真实可选择的世界风格时，才给 WorldDescriptor 增加风格身份字段。
+- 海域频率同时缩放 open/toroidal 采样频率和 toroidal 最小周期数，避免小环形世界被最小周期钳制后滑块失效。
 
 现有公开 createLandformSampler({ seed, domain }) 仍表示“当前生成器的默认地貌场”。内部解析器通过未导出的工厂传入冻结配置。
 
@@ -575,7 +576,7 @@ surfaceChanged?(host: WorldRenderLayerHost): void | Promise<void>;
 | WorldDescriptor 字段或含义 | WORLD_DESCRIPTOR_FORMAT_VERSION |
 | 只有 Shader 颜色和光照变化 | 不升级生成器；执行视觉回归 |
 
-v1 中，一个生成器版本唯一对应一个冻结风格配置，不增加第二套总是一起增长的风格版本。
+生成器版本唯一对应一个冻结基础配置；每个世界的规范化水体参数作为独立身份字段保存，不再增加一套与生成器总是一起增长的风格版本。
 
 ### 10.3 唯一世界指纹
 
@@ -591,6 +592,7 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 - 默认 worldId 使用 fingerprint 或其稳定哈希。
 - 导航 terrainRevision 使用 fingerprint 或其稳定哈希。
 - 存档继续保存并严格比较完整描述符。
+- 水体参数变化会得到新的指纹，因此 Worker 解析器、区块缓存、增量存档和导航版本不会与旧参数混用。
 
 不能在不同调用点分别拼接字段。
 
@@ -607,10 +609,11 @@ const fingerprint = serializeWorldDescriptor(descriptor);
 5. generator v6 把永久积雪限制到气候雪线以上，并让生成雪地保留 hill relief；低温低地继续使用 tundra，山体峰顶由连续 Shader 雪线覆盖。同时渲染法线改为共享顶角坡度，常驻六边格线默认关闭。
 6. generator v12 删除程序化随机湖泊和最终 elevation 海陆切分，改为独立低频海域与确定性粗网格排水河道；小地图通过范围枚举一次栅格化河道。
 7. generator v13 保持海域不变，以低频连续扭曲打散河道粗网格方向，把每个源区候选从 3 个增至 4 个，并用范围内下游节点缓存抵消额外支流成本。
+8. descriptor v2 / Worker protocol v4 将受限的水体生成参数纳入世界身份，并让一次性生成、区块 Worker、概览 Worker 和渲染侧解析器使用同一份参数。
 
 当前固定格子回归校验和分别为：无限区块 `31edd4fd`、环绕区块 `cfd821ed`、有界世界 `99fb0dc5`；规范量化地表校验和为 `732a661d`，森林/水体区域样本为 `926f97ae`。一次性生成、区块生成和工作线程共享同一解析器；工作线程按完整描述符指纹复用解析器。
 
-阶段 3 升级过生成器版本与 Worker 协议；阶段 5 和 generator v6 修订都只升级生成器版本。小地图概览后来增加了只读 RGBA 栅格请求，因此 Worker 协议升级为 v3；它复用同一 WorldSurfaceResolver，不改变格子生成语义。PackedWorldChunk 和 descriptor 仍为 v1；单一内部风格不增加描述符字段。
+阶段 3 升级过生成器版本与 Worker 协议；阶段 5 和 generator v6 修订都只升级生成器版本。小地图概览后来增加了只读 RGBA 栅格请求，因此 Worker 协议升级为 v3。水体参数加入请求和描述符后，Worker 协议升级为 v4、descriptor 升级为 v2；PackedWorldChunk 仍为 v1，因为紧凑区块布局没有变化。
 
 旧生成器世界继续按严格描述符不匹配拒绝。自定义固定 worldId 的调用者必须主动迁移或清理旧地形编辑。
 

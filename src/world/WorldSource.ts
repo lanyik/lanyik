@@ -37,6 +37,7 @@ import {
     serializeWorldDescriptor,
     WorldDescriptor
 } from "./WorldDescriptor";
+import { WorldWaterGenerationStyle } from "./WorldStyleProfile";
 
 export interface WorldBounds {
     width: number;
@@ -178,6 +179,7 @@ export interface ProceduralWorldSourceOptions {
     deltaStore?: WorldDeltaStore;
     worldId?: string;
     workCoordinator?: RuntimeWorkCoordinator;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
 }
 
 export interface ToroidalWorldSourceOptions extends ProceduralWorldSourceOptions {
@@ -878,6 +880,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
             seed: options.seed,
             chunkSize: this.chunkSize,
             generatorVersion: options.generatorVersion,
+            waterStyle: options.waterStyle,
             world: { width: options.width, height: options.height, topology: "toroidal" }
         });
         this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
@@ -948,6 +951,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
             chunkX,
             chunkY,
             chunkSize: this.chunkSize,
+            waterStyle: this.descriptor.waterStyle,
             world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
         } as const;
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
@@ -1128,7 +1132,8 @@ export class ProceduralWorldSource implements MutableWorldSource {
         this.descriptor = createWorldDescriptor({
             seed: options.seed,
             chunkSize: this.chunkSize,
-            generatorVersion: options.generatorVersion
+            generatorVersion: options.generatorVersion,
+            waterStyle: options.waterStyle
         });
         this.worldFingerprint = serializeWorldDescriptor(this.descriptor);
         this.store = dependencies.store ?? new SparseWorldChunkStore();
@@ -1176,7 +1181,13 @@ export class ProceduralWorldSource implements MutableWorldSource {
         request: ChunkRequestOptions = {}
     ): Promise<WorldChunk> {
         if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
-        const generation = { seed: this.seed, chunkX, chunkY, chunkSize: this.chunkSize };
+        const generation = {
+            seed: this.seed,
+            chunkX,
+            chunkY,
+            chunkSize: this.chunkSize,
+            waterStyle: this.descriptor.waterStyle
+        };
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;

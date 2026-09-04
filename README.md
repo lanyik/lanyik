@@ -71,6 +71,10 @@ Open <http://127.0.0.1:3000>. The control panel exposes three modes:
 | Infinite world | An unbounded procedural source with a camera-centered resident window |
 | Persistent campaign | Infinite streaming plus IndexedDB deltas, generation checkpoints, hierarchical routing and off-camera army simulation |
 
+The **Water generation** folder exposes bounded ocean frequency/coverage and
+river source, bend and width parameters. Committing a value regenerates the
+world; the chosen values are part of its descriptor and cache identity.
+
 The selected mode survives reloads. Legacy `?infinite`, `?campaign`, coordinate
 and `?autostart` query flags remain available for automation and old bookmarks.
 
@@ -212,8 +216,8 @@ sparse coordinate overrides. Use `setTileOverride()`, `setTileOverrides()` and
 
 All constructor and world-load options are defined in
 [src/HexMapOptions.ts](src/HexMapOptions.ts). The demo is the easiest place to
-inspect live shader, water, vegetation, LOD, cache and adaptive-streaming
-controls.
+inspect live shader, water generation/rendering, vegetation, LOD, cache and
+adaptive-streaming controls.
 
 ## Optional game loop
 

@@ -99,6 +99,14 @@ export {
     sampleLandform,
     LANDFORM_SEA_LEVEL
 } from "./world/LandformSampler";
+export {
+    DEFAULT_WORLD_WATER_STYLE,
+    assertWorldWaterGenerationStyle,
+    normalizeWorldWaterGenerationStyle,
+    serializeWorldWaterGenerationStyle,
+    worldWaterGenerationStylesEqual
+} from "./world/WorldStyleProfile";
+export type { WorldWaterGenerationStyle } from "./world/WorldStyleProfile";
 export type {
     LandformDomain,
     LandformSample,

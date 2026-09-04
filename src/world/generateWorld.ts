@@ -1,5 +1,6 @@
 import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
 import { createWorldSurfaceResolver, WorldSurfaceResolver } from "./WorldSurfaceResolver";
+import { WorldWaterGenerationStyle } from "./WorldStyleProfile";
 
 export const MIN_WORLD_SIZE = 8;
 export const MAX_WORLD_SIZE = 512;
@@ -9,6 +10,7 @@ export interface WorldGenerationOptions {
     width: number;
     height: number;
     topology?: WorldTopology;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
 }
 
 export type WorldTopology = "bounded" | "toroidal";
@@ -50,7 +52,13 @@ export function generateToroidalWorldTile(
     return cloneGeneratedTile(resolver.resolveGeneratedTile(x, y));
 }
 
-export function generateWorld({ seed, width, height, topology = "bounded" }: WorldGenerationOptions): MapInfo {
+export function generateWorld({
+    seed,
+    width,
+    height,
+    topology = "bounded",
+    waterStyle
+}: WorldGenerationOptions): MapInfo {
     assertDimension("width", width);
     assertDimension("height", height);
     if (topology !== "bounded" && topology !== "toroidal") {
@@ -64,6 +72,7 @@ export function generateWorld({ seed, width, height, topology = "bounded" }: Wor
     const toroidal = topology === "toroidal";
     const resolver = createWorldSurfaceResolver({
         seed,
+        waterStyle,
         domain: toroidal
             ? { topology: "toroidal", width, height }
             : { topology: "bounded", width, height }

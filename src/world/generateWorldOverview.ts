@@ -3,6 +3,7 @@ import { getMapTile } from "../helpers/topology";
 import { MapInfo, TileInfo } from "../interfaces";
 import { assertWorldDescriptor, WorldDescriptor } from "./WorldDescriptor";
 import { WorldSurfaceResolver } from "./WorldSurfaceResolver";
+import { worldWaterGenerationStylesEqual } from "./WorldStyleProfile";
 
 export const WORLD_OVERVIEW_FORMAT_VERSION = 1;
 export const MAX_WORLD_OVERVIEW_RASTER_SIZE = 256;
@@ -160,6 +161,7 @@ export function generateWorldOverviewWithResolver(
     assertWorldDescriptor(options.descriptor);
     const expectedTopology = options.descriptor.topology;
     if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology
+        || !worldWaterGenerationStylesEqual(resolver.waterStyle, options.descriptor.waterStyle)
         || (expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal"
             || resolver.domain.width !== options.descriptor.width
             || resolver.domain.height !== options.descriptor.height))) {

@@ -137,6 +137,34 @@ export interface WorldStyleProfile {
     };
 }
 
+// Deliberately small, identity-bearing subset exposed to applications that
+// need to author water without opening every internal terrain coefficient.
+export interface WorldWaterGenerationStyle {
+    /** Frequency multiplier; larger values produce smaller ocean regions. */
+    readonly oceanScale: number;
+    /** Ocean samples below this value become water. */
+    readonly oceanLevel: number;
+    readonly riverSourceCellSize: number;
+    readonly riverSourcesPerCell: number;
+    readonly riverWarpScale: number;
+    readonly riverWarpAmplitude: number;
+    readonly riverBaseRadius: number;
+    readonly riverHighFlowRadius: number;
+    readonly riverHighFlowThreshold: number;
+}
+
+export const DEFAULT_WORLD_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.freeze({
+    oceanScale: 1,
+    oceanLevel: 0.47,
+    riverSourceCellSize: 12,
+    riverSourcesPerCell: 4,
+    riverWarpScale: 0.025,
+    riverWarpAmplitude: 2.5,
+    riverBaseRadius: 1,
+    riverHighFlowRadius: 2,
+    riverHighFlowThreshold: 8
+});
+
 const field = (
     salt: number,
     openScale: number,
@@ -151,8 +179,8 @@ const field = (
     minimumToroidalCells
 });
 
-// The current generator owns one frozen macro-style profile. Any semantic
-// change to these values must move the generator version and its checksums.
+// The current generator owns one frozen base profile. Only the bounded water
+// subset above may override it, and those values live in the world descriptor.
 export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,
     fields: Object.freeze({
@@ -197,7 +225,7 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     }),
     terrain: Object.freeze({
         seaLevel: 0.43,
-        oceanLevel: 0.47,
+        oceanLevel: DEFAULT_WORLD_WATER_STYLE.oceanLevel,
         mountainElevation: 0.7,
         mountainRidge: 0.2,
         mountainPeakElevation: 0.82,
@@ -254,12 +282,12 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         pageSize: 128,
         maximumCachedPages: 16,
         courseStep: 8,
-        courseWarpScale: 0.025,
-        courseWarpAmplitude: 2.5,
+        courseWarpScale: DEFAULT_WORLD_WATER_STYLE.riverWarpScale,
+        courseWarpAmplitude: DEFAULT_WORLD_WATER_STYLE.riverWarpAmplitude,
         courseWarpOctaves: 2,
         courseWarpSalt: 0x1b873593,
-        sourceCellSize: 12,
-        sourcesPerCell: 4,
+        sourceCellSize: DEFAULT_WORLD_WATER_STYLE.riverSourceCellSize,
+        sourcesPerCell: DEFAULT_WORLD_WATER_STYLE.riverSourcesPerCell,
         sourceSpawnChance: 1,
         sourceMinimumElevation: 0.46,
         sourceMaximumElevation: 0.82,
@@ -268,9 +296,9 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         sourceMoistureFloor: 0.7,
         minimumCourseLength: 3,
         maximumCourseLength: 72,
-        baseCourseRadius: 1,
-        highFlowCourseRadius: 2,
-        highFlowThreshold: 8,
+        baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
+        highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
+        highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
         potentialOceanWeight: 0.9,
         potentialElevationWeight: 0.08,
         potentialValleyWeight: 0.03,
@@ -448,16 +476,20 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     for (const name of [
         "pageSize", "maximumCachedPages", "courseStep", "courseWarpOctaves", "sourceCellSize",
         "sourcesPerCell", "minimumCourseLength", "maximumCourseLength",
-        "baseCourseRadius", "highFlowCourseRadius", "highFlowThreshold"
+        "highFlowCourseRadius", "highFlowThreshold"
     ] as const) {
         if (!Number.isSafeInteger(rivers[name]) || rivers[name] <= 0) {
             throw new RangeError(`rivers.${name} must be a positive safe integer`);
         }
     }
     for (const name of [
-        "courseWarpScale", "courseWarpAmplitude", "sourceElevationTransition", "potentialOceanWeight", "potentialElevationWeight",
+        "courseWarpScale", "sourceElevationTransition", "potentialOceanWeight", "potentialElevationWeight",
         "potentialValleyWeight", "potentialMoistureWeight", "potentialJitter"
     ] as const) positive(`rivers.${name}`, rivers[name]);
+    nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
+    if (!Number.isSafeInteger(rivers.baseCourseRadius) || rivers.baseCourseRadius < 0) {
+        throw new RangeError("rivers.baseCourseRadius must be a non-negative safe integer");
+    }
     for (const name of [
         "sourceSpawnChance", "sourceMinimumElevation", "sourceMaximumElevation",
         "sourceMinimumMoisture", "sourceMoistureFloor"
@@ -486,3 +518,132 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
 }
 
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);
+
+export function assertWorldWaterGenerationStyle(value: unknown): asserts value is WorldWaterGenerationStyle {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new TypeError("world water generation style must be an object");
+    }
+    const style = value as Partial<WorldWaterGenerationStyle>;
+    for (const name of [
+        "oceanScale", "oceanLevel", "riverWarpScale", "riverWarpAmplitude"
+    ] as const) finite(`waterStyle.${name}`, style[name]);
+    for (const name of [
+        "riverSourceCellSize", "riverSourcesPerCell", "riverBaseRadius",
+        "riverHighFlowRadius", "riverHighFlowThreshold"
+    ] as const) {
+        if (!Number.isSafeInteger(style[name])) {
+            throw new RangeError(`waterStyle.${name} must be a safe integer`);
+        }
+    }
+    if (style.oceanScale! < 0.25 || style.oceanScale! > 8) {
+        throw new RangeError("waterStyle.oceanScale must be between 0.25 and 8");
+    }
+    unitInterval("waterStyle.oceanLevel", style.oceanLevel);
+    if (style.riverSourceCellSize! < 4 || style.riverSourceCellSize! > 32) {
+        throw new RangeError("waterStyle.riverSourceCellSize must be between 4 and 32");
+    }
+    if (style.riverSourcesPerCell! < 1 || style.riverSourcesPerCell! > 8) {
+        throw new RangeError("waterStyle.riverSourcesPerCell must be between 1 and 8");
+    }
+    if (style.riverWarpScale! < 0.005 || style.riverWarpScale! > 0.1) {
+        throw new RangeError("waterStyle.riverWarpScale must be between 0.005 and 0.1");
+    }
+    if (style.riverWarpAmplitude! < 0 || style.riverWarpAmplitude! >= WORLD_STYLE_PROFILE.rivers.courseStep / 2) {
+        throw new RangeError("waterStyle.riverWarpAmplitude must be non-negative and below half the course step");
+    }
+    if (style.riverBaseRadius! < 0 || style.riverBaseRadius! > 2
+        || style.riverHighFlowRadius! < 1 || style.riverHighFlowRadius! > 4
+        || style.riverBaseRadius! >= style.riverHighFlowRadius!) {
+        throw new RangeError("waterStyle river radii must be ordered within supported bounds");
+    }
+    if (style.riverHighFlowThreshold! < 2 || style.riverHighFlowThreshold! > 32) {
+        throw new RangeError("waterStyle.riverHighFlowThreshold must be between 2 and 32");
+    }
+}
+
+export function normalizeWorldWaterGenerationStyle(
+    value: Readonly<WorldWaterGenerationStyle> = DEFAULT_WORLD_WATER_STYLE
+): Readonly<WorldWaterGenerationStyle> {
+    assertWorldWaterGenerationStyle(value);
+    return Object.freeze({
+        oceanScale: value.oceanScale,
+        oceanLevel: value.oceanLevel,
+        riverSourceCellSize: value.riverSourceCellSize,
+        riverSourcesPerCell: value.riverSourcesPerCell,
+        riverWarpScale: value.riverWarpScale,
+        riverWarpAmplitude: value.riverWarpAmplitude,
+        riverBaseRadius: value.riverBaseRadius,
+        riverHighFlowRadius: value.riverHighFlowRadius,
+        riverHighFlowThreshold: value.riverHighFlowThreshold
+    });
+}
+
+export function serializeWorldWaterGenerationStyle(value: Readonly<WorldWaterGenerationStyle>): string {
+    assertWorldWaterGenerationStyle(value);
+    return JSON.stringify([
+        value.oceanScale,
+        value.oceanLevel,
+        value.riverSourceCellSize,
+        value.riverSourcesPerCell,
+        value.riverWarpScale,
+        value.riverWarpAmplitude,
+        value.riverBaseRadius,
+        value.riverHighFlowRadius,
+        value.riverHighFlowThreshold
+    ]);
+}
+
+export function worldWaterGenerationStylesEqual(
+    first: Readonly<WorldWaterGenerationStyle>,
+    second: Readonly<WorldWaterGenerationStyle>
+): boolean {
+    assertWorldWaterGenerationStyle(first);
+    assertWorldWaterGenerationStyle(second);
+    return first.oceanScale === second.oceanScale
+        && first.oceanLevel === second.oceanLevel
+        && first.riverSourceCellSize === second.riverSourceCellSize
+        && first.riverSourcesPerCell === second.riverSourcesPerCell
+        && first.riverWarpScale === second.riverWarpScale
+        && first.riverWarpAmplitude === second.riverWarpAmplitude
+        && first.riverBaseRadius === second.riverBaseRadius
+        && first.riverHighFlowRadius === second.riverHighFlowRadius
+        && first.riverHighFlowThreshold === second.riverHighFlowThreshold;
+}
+
+export function createWorldStyleProfile(
+    waterStyle: Readonly<WorldWaterGenerationStyle> = DEFAULT_WORLD_WATER_STYLE
+): Readonly<WorldStyleProfile> {
+    const style = normalizeWorldWaterGenerationStyle(waterStyle);
+    const ocean = WORLD_STYLE_PROFILE.fields.ocean;
+    const profile: Readonly<WorldStyleProfile> = Object.freeze({
+        ...WORLD_STYLE_PROFILE,
+        fields: Object.freeze({
+            ...WORLD_STYLE_PROFILE.fields,
+            ocean: field(
+                ocean.salt,
+                ocean.openScale * style.oceanScale,
+                ocean.toroidalScale * style.oceanScale,
+                ocean.octaves,
+                Math.max(1, Math.round(ocean.minimumToroidalCells * style.oceanScale))
+            )
+        }),
+        terrain: Object.freeze({
+            ...WORLD_STYLE_PROFILE.terrain,
+            oceanLevel: style.oceanLevel
+        }),
+        rivers: Object.freeze({
+            ...WORLD_STYLE_PROFILE.rivers,
+            sourceCellSize: style.riverSourceCellSize,
+            sourcesPerCell: style.riverSourcesPerCell,
+            courseWarpScale: style.riverWarpScale,
+            courseWarpAmplitude: style.riverWarpAmplitude,
+            baseCourseRadius: style.riverBaseRadius,
+            highFlowCourseRadius: style.riverHighFlowRadius,
+            highFlowThreshold: style.riverHighFlowThreshold
+        })
+    });
+    assertWorldStyleProfile(profile);
+    return profile;
+}
+
+assertWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE);

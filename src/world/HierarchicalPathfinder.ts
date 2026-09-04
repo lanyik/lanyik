@@ -14,6 +14,10 @@ import {
     SparseWorldChunkStore
 } from "./generateWorldChunk";
 import { createWorldDescriptor, serializeWorldDescriptor } from "./WorldDescriptor";
+import {
+    normalizeWorldWaterGenerationStyle,
+    WorldWaterGenerationStyle
+} from "./WorldStyleProfile";
 
 export const WORLD_NAVIGATION_FORMAT_VERSION = 2;
 
@@ -142,6 +146,7 @@ export interface ProceduralWorldNavigationIndexOptions {
     seed: string | number;
     chunkSize: number;
     world?: BoundedWorldChunkGeneration;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
     passable?: TilePassability;
     movementCost?: TileMovementCost;
     movementType?: string;
@@ -160,6 +165,7 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
     public readonly movementType: string;
     private readonly seed: string | number;
     private readonly world: BoundedWorldChunkGeneration | undefined;
+    private readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
     private readonly passable: TilePassability;
     private readonly buildOptions: WorldNavigationBuildOptions;
     private readonly maxCached: number;
@@ -172,6 +178,7 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
         this.seed = options.seed;
         this.chunkSize = options.chunkSize;
         this.world = options.world;
+        this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
         this.bounds = options.world
             ? { width: options.world.width, height: options.world.height, wrapX: true, wrapY: true }
             : undefined;
@@ -183,7 +190,8 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
             terrainRevision: options.terrainRevision ?? serializeWorldDescriptor(createWorldDescriptor({
                 seed: options.seed,
                 chunkSize: options.chunkSize,
-                world: options.world
+                world: options.world,
+                waterStyle: this.waterStyle
             })),
             deltaRevision: options.deltaRevision ?? 0,
             maxPortalsPerEntrance: options.maxPortalsPerEntrance
@@ -211,7 +219,8 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
             chunkX: resolved.x,
             chunkY: resolved.y,
             chunkSize: this.chunkSize,
-            world: this.world
+            world: this.world,
+            waterStyle: this.waterStyle
         });
         const store = this.bounds ? new SparseWorldChunkStore(this.bounds) : new SparseWorldChunkStore();
         store.add(packed);

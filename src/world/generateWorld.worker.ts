@@ -69,7 +69,8 @@ function resolverFor(options: WorldChunkGenerationOptions): WorldSurfaceResolver
     const key = serializeWorldDescriptor(createWorldDescriptor({
         seed: options.seed,
         chunkSize: options.chunkSize,
-        world: options.world
+        world: options.world,
+        waterStyle: options.waterStyle
     }));
     if (!chunkResolver || chunkResolverKey !== key) {
         chunkResolver = createWorldChunkSurfaceResolver(options);
@@ -85,6 +86,7 @@ function overviewResolverFor(options: WorldOverviewGenerationOptions): WorldSurf
         const descriptor = options.descriptor;
         chunkResolver = createWorldSurfaceResolver({
             seed: descriptor.seed,
+            waterStyle: descriptor.waterStyle,
             domain: descriptor.topology === "toroidal"
                 ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
                 : { topology: "infinite" }

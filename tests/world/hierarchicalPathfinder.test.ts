@@ -12,6 +12,7 @@ import {
 import { StaticWorldSource, WorldChunk } from "../../src/world/WorldSource";
 import { getChunkResidencyCoordinator } from "../../src/world/ChunkResidencyCoordinator";
 import { createWorldDescriptor, serializeWorldDescriptor } from "../../src/world/WorldDescriptor";
+import { DEFAULT_WORLD_WATER_STYLE } from "../../src/world/WorldStyleProfile";
 
 function world(width: number, height: number, wrapped = false): MapInfo {
     const data: MapInfo["data"] = {};
@@ -238,14 +239,16 @@ describe("HierarchicalPathfinder", () => {
 
 describe("ProceduralWorldNavigationIndex", () => {
     test("generates deterministic summaries without a WorldSource detail load and bounds its cache", async () => {
+        const waterStyle = { ...DEFAULT_WORLD_WATER_STYLE, oceanLevel: 0.52 };
         const index = new ProceduralWorldNavigationIndex({
             seed: "navigation", chunkSize: 12, maxCachedSummaries: 2,
+            waterStyle,
             passable: () => true
         });
         const first = await index.getSummary(0, 0);
         expect(first?.portals.length).toBeGreaterThan(0);
         expect(first?.terrainRevision).toBe(serializeWorldDescriptor(
-            createWorldDescriptor({ seed: "navigation", chunkSize: 12 })
+            createWorldDescriptor({ seed: "navigation", chunkSize: 12, waterStyle })
         ));
         expect(await index.getSummary(0, 0)).toEqual(first);
         await index.getSummary(1, 0);

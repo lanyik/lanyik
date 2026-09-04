@@ -8,7 +8,12 @@ import {
     LandformSampler
 } from "./LandformSampler";
 import { randomAt } from "./noise";
-import { WORLD_STYLE_PROFILE, WorldStyleProfile } from "./WorldStyleProfile";
+import {
+    createWorldStyleProfile,
+    normalizeWorldWaterGenerationStyle,
+    WorldStyleProfile,
+    WorldWaterGenerationStyle
+} from "./WorldStyleProfile";
 import { createWorldWaterSampler, WorldWaterSampler } from "./WorldWaterSampler";
 
 export type WorldBiome = "ocean" | "coast" | "temperate" | "dry" | "cold" | "alpine";
@@ -33,13 +38,14 @@ export interface WorldSurfaceSample {
 export interface WorldSurfaceResolverOptions {
     seed: string | number;
     domain?: LandformDomain;
-    profile?: Readonly<WorldStyleProfile>;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
 }
 
 export interface WorldSurfaceResolver {
     readonly seed: string;
     readonly domain: LandformDomain;
     readonly profile: Readonly<WorldStyleProfile>;
+    readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
     visitGeneratedRiverTiles(
@@ -292,13 +298,15 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
     public readonly seed: string;
     public readonly domain: LandformDomain;
     public readonly profile: Readonly<WorldStyleProfile>;
+    public readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
     private readonly sampler: LandformSampler;
     private readonly waterSampler: WorldWaterSampler;
 
     constructor(options: WorldSurfaceResolverOptions) {
         if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
         this.seed = String(options.seed);
-        this.profile = options.profile ?? WORLD_STYLE_PROFILE;
+        this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
+        this.profile = createWorldStyleProfile(this.waterStyle);
         this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
         this.domain = Object.freeze({ ...this.sampler.domain });
         this.waterSampler = createWorldWaterSampler(this.sampler.numericSeed, this.domain, this.profile);

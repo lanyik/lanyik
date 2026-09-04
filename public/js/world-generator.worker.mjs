@@ -812,6 +812,17 @@ function randomAt(seed, x, y, salt) {
 var WORLD_GENERATOR_VERSION = 13;
 
 // src/world/WorldStyleProfile.ts
+var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
+  oceanScale: 1,
+  oceanLevel: 0.47,
+  riverSourceCellSize: 12,
+  riverSourcesPerCell: 4,
+  riverWarpScale: 0.025,
+  riverWarpAmplitude: 2.5,
+  riverBaseRadius: 1,
+  riverHighFlowRadius: 2,
+  riverHighFlowThreshold: 8
+});
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
   salt,
   openScale,
@@ -863,7 +874,7 @@ var WORLD_STYLE_PROFILE = Object.freeze({
   }),
   terrain: Object.freeze({
     seaLevel: 0.43,
-    oceanLevel: 0.47,
+    oceanLevel: DEFAULT_WORLD_WATER_STYLE.oceanLevel,
     mountainElevation: 0.7,
     mountainRidge: 0.2,
     mountainPeakElevation: 0.82,
@@ -920,12 +931,12 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     pageSize: 128,
     maximumCachedPages: 16,
     courseStep: 8,
-    courseWarpScale: 0.025,
-    courseWarpAmplitude: 2.5,
+    courseWarpScale: DEFAULT_WORLD_WATER_STYLE.riverWarpScale,
+    courseWarpAmplitude: DEFAULT_WORLD_WATER_STYLE.riverWarpAmplitude,
     courseWarpOctaves: 2,
     courseWarpSalt: 461845907,
-    sourceCellSize: 12,
-    sourcesPerCell: 4,
+    sourceCellSize: DEFAULT_WORLD_WATER_STYLE.riverSourceCellSize,
+    sourcesPerCell: DEFAULT_WORLD_WATER_STYLE.riverSourcesPerCell,
     sourceSpawnChance: 1,
     sourceMinimumElevation: 0.46,
     sourceMaximumElevation: 0.82,
@@ -934,9 +945,9 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     sourceMoistureFloor: 0.7,
     minimumCourseLength: 3,
     maximumCourseLength: 72,
-    baseCourseRadius: 1,
-    highFlowCourseRadius: 2,
-    highFlowThreshold: 8,
+    baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
+    highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
+    highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
     potentialOceanWeight: 0.9,
     potentialElevationWeight: 0.08,
     potentialValleyWeight: 0.03,
@@ -1130,7 +1141,6 @@ function assertWorldStyleProfile(value) {
     "sourcesPerCell",
     "minimumCourseLength",
     "maximumCourseLength",
-    "baseCourseRadius",
     "highFlowCourseRadius",
     "highFlowThreshold"
   ]) {
@@ -1140,7 +1150,6 @@ function assertWorldStyleProfile(value) {
   }
   for (const name of [
     "courseWarpScale",
-    "courseWarpAmplitude",
     "sourceElevationTransition",
     "potentialOceanWeight",
     "potentialElevationWeight",
@@ -1148,6 +1157,10 @@ function assertWorldStyleProfile(value) {
     "potentialMoistureWeight",
     "potentialJitter"
   ]) positive(`rivers.${name}`, rivers[name]);
+  nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
+  if (!Number.isSafeInteger(rivers.baseCourseRadius) || rivers.baseCourseRadius < 0) {
+    throw new RangeError("rivers.baseCourseRadius must be a non-negative safe integer");
+  }
   for (const name of [
     "sourceSpawnChance",
     "sourceMinimumElevation",
@@ -1175,6 +1188,118 @@ function assertWorldStyleProfile(value) {
   }
 }
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);
+function assertWorldWaterGenerationStyle(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("world water generation style must be an object");
+  }
+  const style = value;
+  for (const name of [
+    "oceanScale",
+    "oceanLevel",
+    "riverWarpScale",
+    "riverWarpAmplitude"
+  ]) finite(`waterStyle.${name}`, style[name]);
+  for (const name of [
+    "riverSourceCellSize",
+    "riverSourcesPerCell",
+    "riverBaseRadius",
+    "riverHighFlowRadius",
+    "riverHighFlowThreshold"
+  ]) {
+    if (!Number.isSafeInteger(style[name])) {
+      throw new RangeError(`waterStyle.${name} must be a safe integer`);
+    }
+  }
+  if (style.oceanScale < 0.25 || style.oceanScale > 8) {
+    throw new RangeError("waterStyle.oceanScale must be between 0.25 and 8");
+  }
+  unitInterval("waterStyle.oceanLevel", style.oceanLevel);
+  if (style.riverSourceCellSize < 4 || style.riverSourceCellSize > 32) {
+    throw new RangeError("waterStyle.riverSourceCellSize must be between 4 and 32");
+  }
+  if (style.riverSourcesPerCell < 1 || style.riverSourcesPerCell > 8) {
+    throw new RangeError("waterStyle.riverSourcesPerCell must be between 1 and 8");
+  }
+  if (style.riverWarpScale < 5e-3 || style.riverWarpScale > 0.1) {
+    throw new RangeError("waterStyle.riverWarpScale must be between 0.005 and 0.1");
+  }
+  if (style.riverWarpAmplitude < 0 || style.riverWarpAmplitude >= WORLD_STYLE_PROFILE.rivers.courseStep / 2) {
+    throw new RangeError("waterStyle.riverWarpAmplitude must be non-negative and below half the course step");
+  }
+  if (style.riverBaseRadius < 0 || style.riverBaseRadius > 2 || style.riverHighFlowRadius < 1 || style.riverHighFlowRadius > 4 || style.riverBaseRadius >= style.riverHighFlowRadius) {
+    throw new RangeError("waterStyle river radii must be ordered within supported bounds");
+  }
+  if (style.riverHighFlowThreshold < 2 || style.riverHighFlowThreshold > 32) {
+    throw new RangeError("waterStyle.riverHighFlowThreshold must be between 2 and 32");
+  }
+}
+function normalizeWorldWaterGenerationStyle(value = DEFAULT_WORLD_WATER_STYLE) {
+  assertWorldWaterGenerationStyle(value);
+  return Object.freeze({
+    oceanScale: value.oceanScale,
+    oceanLevel: value.oceanLevel,
+    riverSourceCellSize: value.riverSourceCellSize,
+    riverSourcesPerCell: value.riverSourcesPerCell,
+    riverWarpScale: value.riverWarpScale,
+    riverWarpAmplitude: value.riverWarpAmplitude,
+    riverBaseRadius: value.riverBaseRadius,
+    riverHighFlowRadius: value.riverHighFlowRadius,
+    riverHighFlowThreshold: value.riverHighFlowThreshold
+  });
+}
+function serializeWorldWaterGenerationStyle(value) {
+  assertWorldWaterGenerationStyle(value);
+  return JSON.stringify([
+    value.oceanScale,
+    value.oceanLevel,
+    value.riverSourceCellSize,
+    value.riverSourcesPerCell,
+    value.riverWarpScale,
+    value.riverWarpAmplitude,
+    value.riverBaseRadius,
+    value.riverHighFlowRadius,
+    value.riverHighFlowThreshold
+  ]);
+}
+function worldWaterGenerationStylesEqual(first, second) {
+  assertWorldWaterGenerationStyle(first);
+  assertWorldWaterGenerationStyle(second);
+  return first.oceanScale === second.oceanScale && first.oceanLevel === second.oceanLevel && first.riverSourceCellSize === second.riverSourceCellSize && first.riverSourcesPerCell === second.riverSourcesPerCell && first.riverWarpScale === second.riverWarpScale && first.riverWarpAmplitude === second.riverWarpAmplitude && first.riverBaseRadius === second.riverBaseRadius && first.riverHighFlowRadius === second.riverHighFlowRadius && first.riverHighFlowThreshold === second.riverHighFlowThreshold;
+}
+function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
+  const style = normalizeWorldWaterGenerationStyle(waterStyle);
+  const ocean = WORLD_STYLE_PROFILE.fields.ocean;
+  const profile = Object.freeze({
+    ...WORLD_STYLE_PROFILE,
+    fields: Object.freeze({
+      ...WORLD_STYLE_PROFILE.fields,
+      ocean: field(
+        ocean.salt,
+        ocean.openScale * style.oceanScale,
+        ocean.toroidalScale * style.oceanScale,
+        ocean.octaves,
+        Math.max(1, Math.round(ocean.minimumToroidalCells * style.oceanScale))
+      )
+    }),
+    terrain: Object.freeze({
+      ...WORLD_STYLE_PROFILE.terrain,
+      oceanLevel: style.oceanLevel
+    }),
+    rivers: Object.freeze({
+      ...WORLD_STYLE_PROFILE.rivers,
+      sourceCellSize: style.riverSourceCellSize,
+      sourcesPerCell: style.riverSourcesPerCell,
+      courseWarpScale: style.riverWarpScale,
+      courseWarpAmplitude: style.riverWarpAmplitude,
+      baseCourseRadius: style.riverBaseRadius,
+      highFlowCourseRadius: style.riverHighFlowRadius,
+      highFlowThreshold: style.riverHighFlowThreshold
+    })
+  });
+  assertWorldStyleProfile(profile);
+  return profile;
+}
+assertWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE);
 
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
@@ -1899,7 +2024,8 @@ var FrozenWorldSurfaceResolver = class {
   constructor(options) {
     if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
     this.seed = String(options.seed);
-    this.profile = options.profile ?? WORLD_STYLE_PROFILE;
+    this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
+    this.profile = createWorldStyleProfile(this.waterStyle);
     this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
     this.domain = Object.freeze({ ...this.sampler.domain });
     this.waterSampler = createWorldWaterSampler(this.sampler.numericSeed, this.domain, this.profile);
@@ -2014,7 +2140,13 @@ function cloneGeneratedTile(tile) {
     city: tile.city ? { ...tile.city } : void 0
   };
 }
-function generateWorld({ seed, width, height, topology = "bounded" }) {
+function generateWorld({
+  seed,
+  width,
+  height,
+  topology = "bounded",
+  waterStyle
+}) {
   assertDimension2("width", width);
   assertDimension2("height", height);
   if (topology !== "bounded" && topology !== "toroidal") {
@@ -2027,6 +2159,7 @@ function generateWorld({ seed, width, height, topology = "bounded" }) {
   const toroidal = topology === "toroidal";
   const resolver = createWorldSurfaceResolver({
     seed,
+    waterStyle,
     domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
   });
   const windowSize = 24;
@@ -2097,6 +2230,7 @@ function createWorldChunkSurfaceResolver(options) {
   validateBoundedWorld(options.world);
   return createWorldSurfaceResolver({
     seed: options.seed,
+    waterStyle: options.waterStyle,
     domain: options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" }
   });
 }
@@ -2108,7 +2242,8 @@ function generateWorldChunkWithResolver(options, resolver, resolvedChunkSize) {
   const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
   const tiles = new Uint16Array(stride * stride);
   const expectedDomain = options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" };
-  if (!resolver || resolver.seed !== String(options.seed) || resolver.domain.topology !== expectedDomain.topology || expectedDomain.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== expectedDomain.width || resolver.domain.height !== expectedDomain.height)) {
+  const expectedWaterStyle = options.waterStyle ?? DEFAULT_WORLD_WATER_STYLE;
+  if (!resolver || resolver.seed !== String(options.seed) || !worldWaterGenerationStylesEqual(resolver.waterStyle, expectedWaterStyle) || resolver.domain.topology !== expectedDomain.topology || expectedDomain.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== expectedDomain.width || resolver.domain.height !== expectedDomain.height)) {
     throw new TypeError("world surface resolver does not match the chunk request");
   }
   const window = resolver.createWindow();
@@ -2771,8 +2906,8 @@ function worldVegetationTransferables(layout) {
 }
 
 // src/world/WorldDescriptor.ts
-var WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-var WORLD_WORKER_PROTOCOL_VERSION = 3;
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
+var WORLD_WORKER_PROTOCOL_VERSION = 4;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -2797,12 +2932,14 @@ function createWorldDescriptor(options) {
   assertChunkSize(chunkSize);
   const generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
   assertSupportedWorldGeneratorVersion(generatorVersion);
+  const waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
   const base = {
     descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
     seed: String(options.seed),
     generatorVersion,
     chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
-    chunkSize
+    chunkSize,
+    waterStyle
   };
   if (!options.world) {
     return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
@@ -2834,6 +2971,7 @@ function assertWorldDescriptor(value) {
     throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
   }
   assertChunkSize(descriptor.chunkSize);
+  assertWorldWaterGenerationStyle(descriptor.waterStyle);
   if (descriptor.sourceKind === "procedural-infinite") {
     if (descriptor.topology !== "infinite" || descriptor.width !== void 0 || descriptor.height !== void 0) {
       throw new TypeError("infinite world descriptor topology is invalid");
@@ -2855,7 +2993,8 @@ function serializeWorldDescriptor(descriptor) {
     descriptor.chunkSize,
     descriptor.topology,
     descriptor.width ?? null,
-    descriptor.height ?? null
+    descriptor.height ?? null,
+    serializeWorldWaterGenerationStyle(descriptor.waterStyle)
   ]);
 }
 
@@ -2962,7 +3101,7 @@ function generateWorldOverviewWithResolver(options, resolver) {
   assertWorldOverviewPreparationOptions(options);
   assertWorldDescriptor(options.descriptor);
   const expectedTopology = options.descriptor.topology;
-  if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology || expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== options.descriptor.width || resolver.domain.height !== options.descriptor.height)) {
+  if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology || !worldWaterGenerationStylesEqual(resolver.waterStyle, options.descriptor.waterStyle) || expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== options.descriptor.width || resolver.domain.height !== options.descriptor.height)) {
     throw new TypeError("world overview resolver does not match its descriptor");
   }
   const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
@@ -3028,7 +3167,8 @@ function resolverFor(options) {
   const key = serializeWorldDescriptor(createWorldDescriptor({
     seed: options.seed,
     chunkSize: options.chunkSize,
-    world: options.world
+    world: options.world,
+    waterStyle: options.waterStyle
   }));
   if (!chunkResolver || chunkResolverKey !== key) {
     chunkResolver = createWorldChunkSurfaceResolver(options);
@@ -3043,6 +3183,7 @@ function overviewResolverFor(options) {
     const descriptor = options.descriptor;
     chunkResolver = createWorldSurfaceResolver({
       seed: descriptor.seed,
+      waterStyle: descriptor.waterStyle,
       domain: descriptor.topology === "toroidal" ? { topology: "toroidal", width: descriptor.width, height: descriptor.height } : { topology: "infinite" }
     });
     chunkResolverKey = key;

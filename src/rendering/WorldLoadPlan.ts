@@ -106,6 +106,7 @@ export function createWorldLoadPlan(
         const descriptor = source.descriptor;
         const resolver = descriptor ? createWorldSurfaceResolver({
             seed: descriptor.seed,
+            waterStyle: descriptor.waterStyle,
             domain: descriptor.topology === "toroidal"
                 ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
                 : { topology: "infinite" }

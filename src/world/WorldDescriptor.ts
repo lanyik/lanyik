@@ -5,9 +5,15 @@ import {
     WORLD_CHUNK_FORMAT_VERSION
 } from "./generateWorldChunk";
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import {
+    assertWorldWaterGenerationStyle,
+    normalizeWorldWaterGenerationStyle,
+    serializeWorldWaterGenerationStyle,
+    WorldWaterGenerationStyle
+} from "./WorldStyleProfile";
 
-export const WORLD_DESCRIPTOR_FORMAT_VERSION = 1;
-export const WORLD_WORKER_PROTOCOL_VERSION = 3;
+export const WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
+export const WORLD_WORKER_PROTOCOL_VERSION = 4;
 
 export type ProceduralWorldKind = "procedural-infinite" | "procedural-toroidal";
 
@@ -18,6 +24,7 @@ export interface WorldDescriptor {
     readonly generatorVersion: typeof WORLD_GENERATOR_VERSION;
     readonly chunkFormatVersion: typeof WORLD_CHUNK_FORMAT_VERSION;
     readonly chunkSize: number;
+    readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
     readonly topology: "infinite" | "toroidal";
     readonly width?: number;
     readonly height?: number;
@@ -28,6 +35,7 @@ export interface CreateWorldDescriptorOptions {
     chunkSize?: number;
     generatorVersion?: number;
     world?: BoundedWorldChunkGeneration;
+    waterStyle?: Readonly<WorldWaterGenerationStyle>;
 }
 
 function assertChunkSize(value: number): void {
@@ -56,12 +64,14 @@ export function createWorldDescriptor(options: CreateWorldDescriptorOptions): Wo
     assertChunkSize(chunkSize);
     const generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
     assertSupportedWorldGeneratorVersion(generatorVersion);
+    const waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
     const base = {
         descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
         seed: String(options.seed),
         generatorVersion,
         chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
-        chunkSize
+        chunkSize,
+        waterStyle
     } as const;
     if (!options.world) {
         return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
@@ -95,6 +105,7 @@ export function assertWorldDescriptor(value: unknown): asserts value is WorldDes
         throw new TypeError(`unsupported world chunk format ${String(descriptor.chunkFormatVersion)}`);
     }
     assertChunkSize(descriptor.chunkSize as number);
+    assertWorldWaterGenerationStyle(descriptor.waterStyle);
     if (descriptor.sourceKind === "procedural-infinite") {
         if (descriptor.topology !== "infinite" || descriptor.width !== undefined || descriptor.height !== undefined) {
             throw new TypeError("infinite world descriptor topology is invalid");
@@ -119,7 +130,8 @@ export function serializeWorldDescriptor(descriptor: WorldDescriptor): string {
         descriptor.chunkSize,
         descriptor.topology,
         descriptor.width ?? null,
-        descriptor.height ?? null
+        descriptor.height ?? null,
+        serializeWorldWaterGenerationStyle(descriptor.waterStyle)
     ]);
 }
 

@@ -9,6 +9,9 @@ import {
 } from "../../src/world/WorldSurfaceResolver";
 import {
     assertWorldStyleProfile,
+    assertWorldWaterGenerationStyle,
+    createWorldStyleProfile,
+    DEFAULT_WORLD_WATER_STYLE,
     WORLD_STYLE_PROFILE
 } from "../../src/world/WorldStyleProfile";
 
@@ -190,6 +193,39 @@ describe("WorldSurfaceResolver", () => {
         const invalidRiverWarp = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidRiverWarp.rivers.courseWarpAmplitude = invalidRiverWarp.rivers.courseStep / 2;
         expect(() => assertWorldStyleProfile(invalidRiverWarp)).toThrow(/warp amplitude/);
+    });
+
+    test("maps the bounded water authoring style into ocean and river generation", () => {
+        const waterStyle = {
+            ...DEFAULT_WORLD_WATER_STYLE,
+            oceanScale: 2,
+            oceanLevel: 0.56,
+            riverSourceCellSize: 18,
+            riverSourcesPerCell: 6,
+            riverWarpScale: 0.04,
+            riverWarpAmplitude: 3,
+            riverBaseRadius: 0,
+            riverHighFlowRadius: 3,
+            riverHighFlowThreshold: 12
+        };
+        const profile = createWorldStyleProfile(waterStyle);
+        expect(profile.fields.ocean.openScale).toBe(WORLD_STYLE_PROFILE.fields.ocean.openScale * 2);
+        expect(profile.fields.ocean.toroidalScale).toBe(WORLD_STYLE_PROFILE.fields.ocean.toroidalScale * 2);
+        expect(profile.fields.ocean.minimumToroidalCells).toBe(4);
+        expect(profile.terrain.oceanLevel).toBe(0.56);
+        expect(profile.rivers).toMatchObject({
+            sourceCellSize: 18,
+            sourcesPerCell: 6,
+            courseWarpScale: 0.04,
+            courseWarpAmplitude: 3,
+            baseCourseRadius: 0,
+            highFlowCourseRadius: 3,
+            highFlowThreshold: 12
+        });
+        expect(createWorldSurfaceResolver({ seed: "styled-water", waterStyle }).waterStyle).toEqual(waterStyle);
+
+        const invalid = { ...DEFAULT_WORLD_WATER_STYLE, riverWarpAmplitude: 4 };
+        expect(() => assertWorldWaterGenerationStyle(invalid)).toThrow(/course step/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {
