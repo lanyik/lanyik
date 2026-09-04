@@ -38,6 +38,29 @@ function findLoadedStart(map, initialTile) {
     throw new Error("No passable campaign start tile is resident near the camera");
 }
 
+function candidateInChunk(engine, seed, waterStyle, chunkSize, chunkX, chunkY) {
+    const packed = engine.generateWorldChunk({
+        seed,
+        waterStyle,
+        chunkSize,
+        chunkX,
+        chunkY
+    });
+    const center = {
+        x: chunkX * chunkSize + Math.floor(chunkSize / 2),
+        y: chunkY * chunkSize + Math.floor(chunkSize / 2)
+    };
+    return engine.getWorldChunkCorePoints(packed)
+        .filter(point => isPassable(engine.decodeWorldChunkTile(
+            packed,
+            point.x - chunkX * chunkSize,
+            point.y - chunkY * chunkSize
+        )))
+        .sort((first, second) =>
+            Math.hypot(first.x - center.x, first.y - center.y)
+            - Math.hypot(second.x - center.x, second.y - center.y))[0];
+}
+
 function createMarker(map, tileSize, engine) {
     const geometry = new THREE.CylinderGeometry(tileSize * 0.2, tileSize * 0.34, tileSize * 0.5, 6);
     const material = new THREE.MeshStandardMaterial({
@@ -286,7 +309,12 @@ export async function createCampaignDemo({
                 let lastError;
                 for (const [dx, dy] of offsets) {
                     const destination = candidateInChunk(
-                        engine, seed, source.chunkSize, originChunk.x + dx, originChunk.y + dy
+                        engine,
+                        seed,
+                        source.descriptor.waterStyle,
+                        source.chunkSize,
+                        originChunk.x + dx,
+                        originChunk.y + dy
                     );
                     if (!destination) continue;
                     try {
