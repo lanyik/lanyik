@@ -248,6 +248,11 @@ body {
 .minimap-panel--expanded .minimap-panel__canvas {
     width: min(720px, calc(100vw - 80px), calc(100vh - 150px));
     height: min(720px, calc(100vw - 80px), calc(100vh - 150px));
+    cursor: grab;
+}
+
+.minimap-panel--expanded .minimap-panel__canvas[data-panning="true"] {
+    cursor: grabbing;
 }
 
 .minimap-panel small {

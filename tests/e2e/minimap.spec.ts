@@ -136,3 +136,72 @@ test("compact infinite minimap keeps its center inside the dead zone and follows
     expect(samples[samples.length - 1]).toBeGreaterThan(samples[0]);
     expect(new Set(samples.map(value => value.toFixed(3))).size).toBeGreaterThan(2);
 });
+
+test("expanded infinite minimap right-drag pans continuously and Space recenters it", async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await page.goto("/?infinite&quality=fast&x=0&y=0", { waitUntil: "domcontentloaded" });
+    await waitForMinimap(page);
+    await page.keyboard.press("m");
+
+    const canvas = page.locator("[data-world-minimap]");
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("minimap canvas is not visible");
+    const centerX = bounds.x + bounds.width / 2;
+    const centerY = bounds.y + bounds.height / 2;
+    const initial = await page.evaluate(() => {
+        const api = window as unknown as {
+            worldMinimap: { view: MinimapView };
+            hexWorld: { getCameraTargetTile(): { x: number; y: number } };
+        };
+        return { view: api.worldMinimap.view, target: api.hexWorld.getCameraTargetTile() };
+    });
+
+    await page.mouse.move(centerX, centerY);
+    await page.mouse.down({ button: "right" });
+    await expect(canvas).toHaveAttribute("data-panning", "true");
+    const origins: number[] = [];
+    for (const offset of [40, 80, 120]) {
+        await page.mouse.move(centerX + offset, centerY + offset / 2, { steps: 4 });
+        origins.push(await page.evaluate(() => (window as unknown as {
+            worldMinimap: { view: MinimapView };
+        }).worldMinimap.view.originX!));
+    }
+    await page.mouse.up({ button: "right" });
+    await expect(canvas).toHaveAttribute("data-panning", "false");
+
+    expect(origins[0]).toBeLessThan(initial.view.originX!);
+    expect(origins[1]).toBeLessThan(origins[0]);
+    expect(origins[2]).toBeLessThan(origins[1]);
+    const panned = await page.evaluate(() => {
+        const api = window as unknown as {
+            worldMinimap: { view: MinimapView };
+            hexWorld: { getCameraTargetTile(): { x: number; y: number } };
+        };
+        return { view: api.worldMinimap.view, target: api.hexWorld.getCameraTargetTile() };
+    });
+    expect(panned.target).toEqual(initial.target);
+    expect(panned.view.originY).toBeLessThan(initial.view.originY!);
+
+    await page.keyboard.press("Space");
+    await expect.poll(() => page.evaluate(() => {
+        const api = window as unknown as {
+            worldMinimap: { view: MinimapView };
+            hexWorld: { getCameraTargetTile(): { x: number; y: number } };
+        };
+        const view = api.worldMinimap.view;
+        const target = api.hexWorld.getCameraTargetTile();
+        return {
+            originX: view.originX,
+            originY: view.originY,
+            expectedX: target.x + 0.5 - view.tileSpanX! / 2,
+            expectedY: target.y + 0.5 - view.tileSpanY! / 2
+        };
+    })).toEqual({
+        originX: initial.view.originX,
+        originY: initial.view.originY,
+        expectedX: initial.view.originX,
+        expectedY: initial.view.originY
+    });
+    expect(pageErrors).toEqual([]);
+});

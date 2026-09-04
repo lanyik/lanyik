@@ -64,6 +64,12 @@ interface MinimapZoomAnchor {
     normalizedY: number;
 }
 
+interface MinimapPan {
+    pointerId: number;
+    lastClientX: number;
+    lastClientY: number;
+}
+
 interface PageLayout {
     tileSpan: number;
     pixelSize: number;
@@ -160,6 +166,7 @@ export class WorldMinimap {
     private zoomFactor = 1;
     private targetZoomFactor = 1;
     private zoomAnchor: MinimapZoomAnchor | undefined;
+    private pan: MinimapPan | undefined;
     private viewport: MinimapViewport | undefined;
     private destination: Point | undefined;
     private reportedPageError = false;
@@ -201,6 +208,11 @@ export class WorldMinimap {
         this.onError = options.onError;
 
         this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+        this.canvas.addEventListener("pointermove", this.handlePointerMove);
+        this.canvas.addEventListener("pointerup", this.handlePointerEnd);
+        this.canvas.addEventListener("pointercancel", this.handlePointerEnd);
+        this.canvas.addEventListener("lostpointercapture", this.handlePointerCaptureLost);
+        this.canvas.addEventListener("contextmenu", this.handleContextMenu);
         this.canvas.addEventListener("click", this.handleClick);
         this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
         window.addEventListener("keydown", this.handleKeyDown);
@@ -212,6 +224,7 @@ export class WorldMinimap {
             this.resizeObserver.observe(this.canvas);
         }
         this.canvas.dataset.expanded = "false";
+        this.canvas.dataset.panning = "false";
         this.canvas.setAttribute("aria-expanded", "false");
         this.canvas.dataset.state = "empty";
         this.render();
@@ -244,6 +257,7 @@ export class WorldMinimap {
 
     public setExpanded(expanded: boolean): void {
         if (this.disposed || expanded === this.expanded) return;
+        this.endPan();
         this.expanded = expanded;
         this.zoomFactor = 1;
         this.targetZoomFactor = 1;
@@ -281,6 +295,7 @@ export class WorldMinimap {
 
     public clear(): void {
         if (this.disposed) return;
+        this.endPan();
         this.resetPageData();
         const wasExpanded = this.expanded;
         this.expanded = false;
@@ -303,6 +318,11 @@ export class WorldMinimap {
         this.disposed = true;
         this.resizeObserver?.disconnect();
         this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
+        this.canvas.removeEventListener("pointermove", this.handlePointerMove);
+        this.canvas.removeEventListener("pointerup", this.handlePointerEnd);
+        this.canvas.removeEventListener("pointercancel", this.handlePointerEnd);
+        this.canvas.removeEventListener("lostpointercapture", this.handlePointerCaptureLost);
+        this.canvas.removeEventListener("contextmenu", this.handleContextMenu);
         this.canvas.removeEventListener("click", this.handleClick);
         this.canvas.removeEventListener("wheel", this.handleWheel);
         window.removeEventListener("keydown", this.handleKeyDown);
@@ -886,7 +906,81 @@ export class WorldMinimap {
         this.setExpanded(false);
     }
 
+    private stopZoomAnimation(): void {
+        this.targetZoomFactor = this.zoomFactor;
+        this.zoomAnchor = undefined;
+    }
+
+    private recenterViewport(): void {
+        const cameraTarget = this.map.getCameraTargetTile();
+        if (!this.expanded || !cameraTarget) return;
+        this.endPan();
+        this.stopZoomAnimation();
+        this.viewport = this.createViewport(cameraTarget);
+        void this.refresh();
+    }
+
+    private endPan(pointerId?: number): void {
+        const pan = this.pan;
+        if (!pan || (pointerId !== undefined && pan.pointerId !== pointerId)) return;
+        this.pan = undefined;
+        this.canvas.dataset.panning = "false";
+        if (this.canvas.hasPointerCapture(pan.pointerId)) {
+            this.canvas.releasePointerCapture(pan.pointerId);
+        }
+    }
+
     private handlePointerDown = (event: PointerEvent): void => {
+        event.stopPropagation();
+        if (!this.expanded || event.button !== 2 || !this.viewport
+            || !this.coordinateAt(event.clientX, event.clientY)) return;
+        event.preventDefault();
+        this.stopZoomAnimation();
+        this.pan = {
+            pointerId: event.pointerId,
+            lastClientX: event.clientX,
+            lastClientY: event.clientY
+        };
+        this.canvas.dataset.panning = "true";
+        this.canvas.setPointerCapture(event.pointerId);
+    };
+
+    private handlePointerMove = (event: PointerEvent): void => {
+        const pan = this.pan;
+        const viewport = this.viewport;
+        if (!pan || pan.pointerId !== event.pointerId || !viewport) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if ((event.buttons & 2) === 0) {
+            this.endPan(event.pointerId);
+            return;
+        }
+        const deltaX = event.clientX - pan.lastClientX;
+        const deltaY = event.clientY - pan.lastClientY;
+        pan.lastClientX = event.clientX;
+        pan.lastClientY = event.clientY;
+        if (deltaX === 0 && deltaY === 0) return;
+        viewport.centerX -= deltaX / this.contentRect.width * viewport.tileSpanX;
+        viewport.centerY -= deltaY / this.contentRect.height * viewport.tileSpanY;
+        this.clampViewport(viewport);
+        this.render();
+    };
+
+    private handlePointerEnd = (event: PointerEvent): void => {
+        if (this.pan?.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.endPan(event.pointerId);
+    };
+
+    private handlePointerCaptureLost = (event: PointerEvent): void => {
+        if (this.pan?.pointerId !== event.pointerId) return;
+        this.pan = undefined;
+        this.canvas.dataset.panning = "false";
+    };
+
+    private handleContextMenu = (event: MouseEvent): void => {
+        event.preventDefault();
         event.stopPropagation();
     };
 
@@ -928,6 +1022,10 @@ export class WorldMinimap {
             if (event.repeat) return;
             event.preventDefault();
             this.teleportToDestination();
+        } else if (event.code === "Space" && this.expanded) {
+            if (event.repeat) return;
+            event.preventDefault();
+            this.recenterViewport();
         } else if (event.code === "Escape" && this.expanded) {
             event.preventDefault();
             this.setExpanded(false);

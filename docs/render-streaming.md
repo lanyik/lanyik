@@ -483,8 +483,10 @@ The UI policy is:
   the viewport; crossing that dead zone moves the logical viewport with an
   exponential smooth follow while cached pages remain spatially fixed;
 - `M` (or a compact-map click) opens the expanded map, the wheel changes its
-  sampling level, a click selects a destination, `T` confirms teleport, and
-  `M`/`Escape` closes without teleporting;
+  sampling level, holding the right button pans continuously with pointer
+  capture, `Space` recenters on the current camera target, a click selects a
+  destination, `T` confirms teleport, and `M`/`Escape` closes without
+  teleporting;
 - the dashed ellipse shows the main render-distance footprint, the pale arrow
   is the logical camera target and horizontal view heading, and the amber
   diamond is the pending destination. The arrow is a dynamic overlay and does

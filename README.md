@@ -45,7 +45,8 @@ Runtime requirements are Node.js 20 or newer for development and `three`
 - Worker-based terrain and vegetation generation, optional IndexedDB base-chunk
   caching and sparse persistent tile overrides.
 - A paged data-driven minimap with bounded Canvas/LRU storage, smooth zoom,
-  background overview generation and explicit destination confirmation.
+  captured right-button panning, camera recentering, background overview
+  generation and explicit destination confirmation.
 - Generation-scoped cancellation, WebGL context recovery, resource accounting,
   queue backpressure and observable lifecycle drain.
 - Optional `GameEngine`, long-distance hierarchical routing, background world
