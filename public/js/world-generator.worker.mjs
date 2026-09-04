@@ -809,7 +809,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 12;
+var WORLD_GENERATOR_VERSION = 13;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -920,8 +920,12 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     pageSize: 128,
     maximumCachedPages: 16,
     courseStep: 8,
+    courseWarpScale: 0.025,
+    courseWarpAmplitude: 2.5,
+    courseWarpOctaves: 2,
+    courseWarpSalt: 461845907,
     sourceCellSize: 12,
-    sourcesPerCell: 3,
+    sourcesPerCell: 4,
     sourceSpawnChance: 1,
     sourceMinimumElevation: 0.46,
     sourceMaximumElevation: 0.82,
@@ -932,7 +936,7 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     maximumCourseLength: 72,
     baseCourseRadius: 1,
     highFlowCourseRadius: 2,
-    highFlowThreshold: 6,
+    highFlowThreshold: 8,
     potentialOceanWeight: 0.9,
     potentialElevationWeight: 0.08,
     potentialValleyWeight: 0.03,
@@ -1121,6 +1125,7 @@ function assertWorldStyleProfile(value) {
     "pageSize",
     "maximumCachedPages",
     "courseStep",
+    "courseWarpOctaves",
     "sourceCellSize",
     "sourcesPerCell",
     "minimumCourseLength",
@@ -1134,6 +1139,8 @@ function assertWorldStyleProfile(value) {
     }
   }
   for (const name of [
+    "courseWarpScale",
+    "courseWarpAmplitude",
     "sourceElevationTransition",
     "potentialOceanWeight",
     "potentialElevationWeight",
@@ -1154,13 +1161,16 @@ function assertWorldStyleProfile(value) {
   if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
     throw new RangeError("river course length range must be ordered");
   }
+  if (!(rivers.courseWarpAmplitude < rivers.courseStep / 2)) {
+    throw new RangeError("river course warp amplitude must stay below half the course step");
+  }
   if (!(rivers.baseCourseRadius < rivers.highFlowCourseRadius) || rivers.highFlowThreshold <= 1) {
     throw new RangeError("river flow width thresholds must be ordered");
   }
   if (!Number.isSafeInteger(rivers.courseStep * rivers.maximumCourseLength)) {
     throw new RangeError("river maximum world reach must be a safe integer");
   }
-  if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
+  if (!Number.isSafeInteger(rivers.courseWarpSalt) || !Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
     throw new RangeError("river salts must be safe integers");
   }
 }
@@ -1480,8 +1490,41 @@ var DrainageWorldWaterSampler = class {
     }
     return 1;
   }
-  courseToWorld(point) {
+  courseToBaseWorld(point) {
     return axialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
+  }
+  courseWarpAt(base, salt) {
+    const rivers = this.profile.rivers;
+    if (this.domain.topology === "toroidal") {
+      const x = positiveModulo2(base.x, this.domain.width);
+      const y = positiveModulo2(base.y, this.domain.height);
+      return periodicFractalNoise2D(
+        this.numericSeed ^ salt,
+        x / this.domain.width,
+        y / this.domain.height,
+        Math.max(1, Math.round(this.domain.width * rivers.courseWarpScale)),
+        Math.max(1, Math.round(this.domain.height * rivers.courseWarpScale)),
+        rivers.courseWarpOctaves
+      );
+    }
+    return fractalNoise2D(
+      this.numericSeed ^ salt,
+      base.x * rivers.courseWarpScale,
+      base.y * rivers.courseWarpScale,
+      rivers.courseWarpOctaves
+    );
+  }
+  courseToWorld(point) {
+    const base = this.courseToBaseWorld(point);
+    const rivers = this.profile.rivers;
+    const amplitude = Math.min(rivers.courseWarpAmplitude, Math.max(0, (this.courseStep - 1) / 2));
+    if (amplitude === 0) return base;
+    return {
+      x: base.x + Math.round((this.courseWarpAt(base, rivers.courseWarpSalt) * 2 - 1) * amplitude),
+      y: base.y + Math.round(
+        (this.courseWarpAt(base, rivers.courseWarpSalt ^ 2654435769) * 2 - 1) * amplitude
+      )
+    };
   }
   normalizeWorld(point) {
     if (this.domain.topology === "infinite") return point;
@@ -1494,8 +1537,8 @@ var DrainageWorldWaterSampler = class {
     return point.x >= 0 && point.x < this.domain.width && point.y >= 0 && point.y < this.domain.height ? point : void 0;
   }
   canonicalCourseKey(point) {
-    const world = this.normalizeWorld(this.courseToWorld(point));
-    return world ? pointKey(world) : pointKey(point);
+    const base = this.courseToBaseWorld(point);
+    return pointKey(this.normalizeWorld(base) ?? base);
   }
   sourceSuitability(sample) {
     if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */ || sample.baseTerrain === "mountain" /* mountain */ || sample.baseTerrain === "snow" /* snow */) return 0;
@@ -1521,7 +1564,40 @@ var DrainageWorldWaterSampler = class {
     const jitter = (randomAt(this.numericSeed, world.x, world.y, rivers.flowSalt) - 0.5) * rivers.potentialJitter;
     return sample.landform.ocean * rivers.potentialOceanWeight + sample.landform.elevation * rivers.potentialElevationWeight - sample.landform.valley * rivers.potentialValleyWeight - sample.landform.moisture * rivers.potentialMoistureWeight + jitter;
   }
-  traceCourse(source, sampleAt) {
+  drainageNode(point, sampleAt, cache) {
+    const key = this.canonicalCourseKey(point);
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const world = this.courseToWorld(point);
+    const sample = sampleAt(world.x, world.y);
+    if (!sample) return void 0;
+    const node = {
+      sample,
+      potential: this.drainagePotential(point, sample),
+      nextResolved: false
+    };
+    cache.set(key, node);
+    return node;
+  }
+  nextCoursePoint(point, node, sampleAt, cache) {
+    if (node.nextResolved) {
+      return node.nextDelta ? { x: point.x + node.nextDelta.x, y: point.y + node.nextDelta.y } : void 0;
+    }
+    let bestDelta;
+    let bestPotential = node.potential;
+    for (const delta of AXIAL_NEIGHBORS) {
+      const candidate = { x: point.x + delta.x, y: point.y + delta.y };
+      const adjacent = this.drainageNode(candidate, sampleAt, cache);
+      if (adjacent && adjacent.potential < bestPotential) {
+        bestDelta = delta;
+        bestPotential = adjacent.potential;
+      }
+    }
+    node.nextResolved = true;
+    node.nextDelta = bestDelta;
+    return bestDelta ? { x: point.x + bestDelta.x, y: point.y + bestDelta.y } : void 0;
+  }
+  traceCourse(source, sampleAt, cache) {
     const rivers = this.profile.rivers;
     const points = [];
     const visited = /* @__PURE__ */ new Set();
@@ -1531,49 +1607,34 @@ var DrainageWorldWaterSampler = class {
       const key = this.canonicalCourseKey(current);
       if (visited.has(key)) break;
       visited.add(key);
-      const world = this.courseToWorld(current);
-      const sample = sampleAt(world.x, world.y);
-      if (!sample) break;
+      const node = this.drainageNode(current, sampleAt, cache);
+      if (!node) break;
       points.push(current);
-      if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
+      if (node.sample.baseTerrain === "sea" /* sea */ || node.sample.baseTerrain === "coastal" /* coastal */) {
         reachedSea = true;
         break;
       }
-      const currentPotential = this.drainagePotential(current, sample);
-      let best;
-      let bestPotential = currentPotential;
-      for (const delta of AXIAL_NEIGHBORS) {
-        const candidate = { x: current.x + delta.x, y: current.y + delta.y };
-        const candidateWorld = this.courseToWorld(candidate);
-        const adjacent = sampleAt(candidateWorld.x, candidateWorld.y);
-        if (!adjacent) continue;
-        const potential = this.drainagePotential(candidate, adjacent);
-        if (potential < bestPotential) {
-          best = candidate;
-          bestPotential = potential;
-        }
-      }
-      if (!best) break;
-      current = best;
+      const next = this.nextCoursePoint(current, node, sampleAt, cache);
+      if (!next) break;
+      current = next;
     }
     return reachedSea && points.length >= rivers.minimumCourseLength ? { points } : void 0;
   }
-  sourceFor(regionX, regionY, slot, sampleAt) {
+  sourceFor(regionX, regionY, slot, sampleAt, cache) {
     const rivers = this.profile.rivers;
     const key = sourceKey(this.numericSeed, regionX, regionY, slot, rivers.sourceSalt);
     const source = {
       x: regionX * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 1) * rivers.sourceCellSize),
       y: regionY * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 2) * rivers.sourceCellSize)
     };
-    const world = this.courseToWorld(source);
-    const sample = sampleAt(world.x, world.y);
-    if (!sample) return void 0;
-    const chance = rivers.sourceSpawnChance * this.sourceSuitability(sample);
+    const node = this.drainageNode(source, sampleAt, cache);
+    if (!node) return void 0;
+    const chance = rivers.sourceSpawnChance * this.sourceSuitability(node.sample);
     return randomForSource(this.numericSeed, key, 3) < chance ? source : void 0;
   }
   coursesForExtent(originX, originY, width, height, sampleAt) {
     const rivers = this.profile.rivers;
-    const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep;
+    const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
     const corners = [
       offsetToAxial({ x: originX - reach, y: originY - reach }),
       offsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
@@ -1590,15 +1651,16 @@ var DrainageWorldWaterSampler = class {
     const lastRegionY = Math.floor(maximumY / rivers.sourceCellSize);
     const sources = /* @__PURE__ */ new Set();
     const courses = [];
+    const drainage = /* @__PURE__ */ new Map();
     for (let regionX = firstRegionX; regionX <= lastRegionX; regionX += 1) {
       for (let regionY = firstRegionY; regionY <= lastRegionY; regionY += 1) {
         for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
-          const source = this.sourceFor(regionX, regionY, slot, sampleAt);
+          const source = this.sourceFor(regionX, regionY, slot, sampleAt, drainage);
           if (!source) continue;
           const key = this.canonicalCourseKey(source);
           if (sources.has(key)) continue;
           sources.add(key);
-          const course = this.traceCourse(source, sampleAt);
+          const course = this.traceCourse(source, sampleAt, drainage);
           if (course) courses.push(course);
         }
       }

@@ -11,7 +11,7 @@ var Land = /* @__PURE__ */ ((Land2) => {
 })(Land || {});
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 12;
+var WORLD_GENERATOR_VERSION = 13;
 
 // src/world/WorldStyleProfile.ts
 var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -122,8 +122,12 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     pageSize: 128,
     maximumCachedPages: 16,
     courseStep: 8,
+    courseWarpScale: 0.025,
+    courseWarpAmplitude: 2.5,
+    courseWarpOctaves: 2,
+    courseWarpSalt: 461845907,
     sourceCellSize: 12,
-    sourcesPerCell: 3,
+    sourcesPerCell: 4,
     sourceSpawnChance: 1,
     sourceMinimumElevation: 0.46,
     sourceMaximumElevation: 0.82,
@@ -134,7 +138,7 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     maximumCourseLength: 72,
     baseCourseRadius: 1,
     highFlowCourseRadius: 2,
-    highFlowThreshold: 6,
+    highFlowThreshold: 8,
     potentialOceanWeight: 0.9,
     potentialElevationWeight: 0.08,
     potentialValleyWeight: 0.03,
@@ -323,6 +327,7 @@ function assertWorldStyleProfile(value) {
     "pageSize",
     "maximumCachedPages",
     "courseStep",
+    "courseWarpOctaves",
     "sourceCellSize",
     "sourcesPerCell",
     "minimumCourseLength",
@@ -336,6 +341,8 @@ function assertWorldStyleProfile(value) {
     }
   }
   for (const name of [
+    "courseWarpScale",
+    "courseWarpAmplitude",
     "sourceElevationTransition",
     "potentialOceanWeight",
     "potentialElevationWeight",
@@ -356,13 +363,16 @@ function assertWorldStyleProfile(value) {
   if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
     throw new RangeError("river course length range must be ordered");
   }
+  if (!(rivers.courseWarpAmplitude < rivers.courseStep / 2)) {
+    throw new RangeError("river course warp amplitude must stay below half the course step");
+  }
   if (!(rivers.baseCourseRadius < rivers.highFlowCourseRadius) || rivers.highFlowThreshold <= 1) {
     throw new RangeError("river flow width thresholds must be ordered");
   }
   if (!Number.isSafeInteger(rivers.courseStep * rivers.maximumCourseLength)) {
     throw new RangeError("river maximum world reach must be a safe integer");
   }
-  if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
+  if (!Number.isSafeInteger(rivers.courseWarpSalt) || !Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
     throw new RangeError("river salts must be safe integers");
   }
 }

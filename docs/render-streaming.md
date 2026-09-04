@@ -434,8 +434,8 @@ objects added through the host are removed even when mount or unmount throws.
 
 `WorldMinimap` is a Canvas 2D consumer of `HexMap.requestWorldOverview()`; it
 does not create another Three.js camera, render target, or scene. Procedural
-sources schedule visible overview pages in the `prefetch` lane and the outer
-ring in the `background` lane through the existing generator pool. At most two
+sources schedule visible overview pages in the `prefetch` lane and two outer
+rings in the `background` lane through the existing generator pool. At most two
 visible pages are active per minimap. Once the visible set is complete, outer
 pages are admitted singly at a fixed 100 ms cadence. Overview and vegetation
 share the non-critical worker capacity limit, so `reservedChunkWorkers` remains
@@ -462,10 +462,12 @@ runtime failure.
 
 The minimap does not rebuild one monolithic rolling raster. Its logical view is
 split into power-of-two terrain pages sized at roughly half the current view
-span. Visible pages are requested first, one outer page ring is filled during
+span. Visible pages are requested first, two outer page rings are filled during
 background capacity, and completed pages enter a 64-entry Canvas/LRU cache.
-For the default 512×512-tile infinite view this outer ring covers roughly a
-1024×1024-tile logical buffer. Static pages are generated only when absent;
+The prefetched area extends by two current-level pages on every side of the
+visible set. `WorldMinimapView` reports total demanded and cached-demanded page
+counts alongside the visible count so this coverage is observable. Static pages
+are generated only when absent;
 there is no periodic resampling of unchanged terrain and no full-buffer copy
 when the viewport moves. Wheel input changes a continuous target scale and the
 viewport converges exponentially while preserving the world coordinate under
@@ -484,9 +486,10 @@ The UI policy is:
   exponential smooth follow while cached pages remain spatially fixed;
 - `M` (or a compact-map click) opens the expanded map, the wheel changes its
   sampling level, holding the right button pans continuously with pointer
-  capture, `Space` recenters on the current camera target, a click selects a
-  destination, `T` confirms teleport, and `M`/`Escape` closes without
-  teleporting;
+  capture, and crossing one quarter of the current page span refreshes demand
+  immediately; releasing the button performs a final demand alignment,
+  `Space` recenters on the current camera target, a click selects a destination,
+  `T` confirms teleport, and `M`/`Escape` closes without teleporting;
 - the dashed ellipse shows the main render-distance footprint, the pale arrow
   is the logical camera target and horizontal view heading, and the amber
   diamond is the pending destination. The arrow is a dynamic overlay and does

@@ -8,6 +8,9 @@ interface MinimapView {
     tileSpanY?: number;
     pixelWidth?: number;
     cachedPages: number;
+    demandedPages: number;
+    cachedDemandedPages: number;
+    visiblePages: number;
     expanded: boolean;
     zoom: number;
     destination?: { x: number; y: number };
@@ -144,6 +147,13 @@ test("expanded infinite minimap right-drag pans continuously and Space recenters
     await waitForMinimap(page);
     await page.keyboard.press("m");
 
+    await expect.poll(() => page.evaluate(() => {
+        const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
+        return view.demandedPages === 49
+            && view.visiblePages === 9
+            && view.cachedDemandedPages === view.demandedPages;
+    }), { timeout: 20_000 }).toBe(true);
+
     const canvas = page.locator("[data-world-minimap]");
     const bounds = await canvas.boundingBox();
     if (!bounds) throw new Error("minimap canvas is not visible");
@@ -167,6 +177,8 @@ test("expanded infinite minimap right-drag pans continuously and Space recenters
             worldMinimap: { view: MinimapView };
         }).worldMinimap.view.originX!));
     }
+    await page.mouse.move(centerX + bounds.width * 0.75, centerY + 60, { steps: 4 });
+    expect(await canvas.getAttribute("data-state")).toBe("ready");
     await page.mouse.up({ button: "right" });
     await expect(canvas).toHaveAttribute("data-panning", "false");
 

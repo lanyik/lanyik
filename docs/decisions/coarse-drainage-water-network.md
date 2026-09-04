@@ -1,6 +1,6 @@
 # Coarse-drainage water network
 
-Status: implemented on 2026-09-04.
+Status: implemented and visually refined on 2026-09-04.
 
 ## Context
 
@@ -23,10 +23,12 @@ Water generation has two independent layers:
    alone owns the procedural sea/land mask. Bounded worlds add a center lift and
    retain edge falloff; toroidal worlds sample the same field periodically.
 2. `WorldWaterSampler` works on an axial hex lattice spaced eight world tiles
-   apart. Stable source regions propose a bounded number of candidates. A
-   source follows the strictly lowest adjacent drainage potential until it
-   reaches the macro ocean or stops; only sea-reaching paths of sufficient
-   length survive.
+   apart. Its vertices receive a bounded, low-frequency continuous warp before
+   sampling and rasterization, so the graph keeps coarse drainage cost without
+   exposing six mechanically straight world-space directions. Stable source
+   regions propose four bounded candidates. A source follows the strictly
+   lowest adjacent drainage potential until it reaches the macro ocean or
+   stops; only sea-reaching paths of sufficient length survive.
 
 Drainage potential is dominated by the ocean field and adjusted by elevation,
 valley, moisture and a very small coordinate-stable jitter. Because the choice
@@ -35,17 +37,18 @@ that meet share the same downstream path. The number of source courses crossing
 a point is the flow proxy: normal reaches rasterize to a three-hex diameter and
 high-flow reaches to five.
 
-Coarse edges are rasterized with hex-line interpolation. Generated river tiles
-use the existing `sea`/`coastal` tile types, so water rendering, coastline
-geometry, traversal rules, chunk encoding and sparse overrides need no new
-format. Random generated lakes are removed. Authored `lake` and `river`
+Warped coarse edges are rasterized with hex-line interpolation. Generated river
+tiles use the existing `sea`/`coastal` tile types, so water rendering,
+coastline geometry, traversal rules, chunk encoding and sparse overrides need
+no new format. Random generated lakes are removed. Authored `lake` and `river`
 modifiers remain valid and unchanged.
 
 ## Identity and bounded state
 
 - Source identity and flow jitter are hashes of the world seed, stable region
-  or canonical coordinate, slot and dedicated salt. Request order and worker
-  count never participate.
+  or canonical coordinate, slot and dedicated salt. The lattice warp uses two
+  seeded continuous fields and periodic sampling in toroidal worlds. Request
+  order and worker count never participate.
 - Infinite and bounded domains build 128×128 bit-mask pages with a 16-page LRU
   ceiling. A page considers every source within the maximum possible upstream
   reach, which makes adjacent pages and differently sized requests agree.
@@ -69,6 +72,12 @@ extent rendered to one 256×256 raster. This is a one-shot worker task and an
 observation, not a portable wall-clock gate. Structural tests enforce
 deterministic enumeration, overlap/page agreement, sea or extent drainage,
 broad-ocean component bounds and toroidal periodicity.
+
+Each extent also memoizes sampled drainage nodes and their selected downstream
+edge. Additional tributary candidates therefore reuse shared confluence work
+instead of repeatedly sampling the same suffix. The refinement observation on
+the same development machine is about 0.24 s for the 2048×2048 to 256×256
+direct overview, with 1,527 visible river pixels versus the previous 959.
 
 ## Rejected alternatives
 

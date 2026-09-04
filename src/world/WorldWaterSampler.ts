@@ -1,7 +1,7 @@
 import { Land } from "../enums";
 import { Point } from "../interfaces";
 import { LandformDomain } from "./LandformSampler";
-import { randomAt } from "./noise";
+import { fractalNoise2D, periodicFractalNoise2D, randomAt } from "./noise";
 import { WorldStyleProfile } from "./WorldStyleProfile";
 
 export interface WorldWaterSurfaceSample {
@@ -26,6 +26,13 @@ interface WaterPage {
 
 interface TracedCourse {
     readonly points: readonly Point[];
+}
+
+interface DrainageNode {
+    readonly sample: Readonly<WorldWaterSurfaceSample>;
+    readonly potential: number;
+    nextResolved: boolean;
+    nextDelta?: Point;
 }
 
 export interface WorldWaterSampler {
@@ -233,8 +240,43 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         return 1;
     }
 
-    private courseToWorld(point: Point): Point {
+    private courseToBaseWorld(point: Point): Point {
         return axialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
+    }
+
+    private courseWarpAt(base: Readonly<Point>, salt: number): number {
+        const rivers = this.profile.rivers;
+        if (this.domain.topology === "toroidal") {
+            const x = positiveModulo(base.x, this.domain.width);
+            const y = positiveModulo(base.y, this.domain.height);
+            return periodicFractalNoise2D(
+                this.numericSeed ^ salt,
+                x / this.domain.width,
+                y / this.domain.height,
+                Math.max(1, Math.round(this.domain.width * rivers.courseWarpScale)),
+                Math.max(1, Math.round(this.domain.height * rivers.courseWarpScale)),
+                rivers.courseWarpOctaves
+            );
+        }
+        return fractalNoise2D(
+            this.numericSeed ^ salt,
+            base.x * rivers.courseWarpScale,
+            base.y * rivers.courseWarpScale,
+            rivers.courseWarpOctaves
+        );
+    }
+
+    private courseToWorld(point: Point): Point {
+        const base = this.courseToBaseWorld(point);
+        const rivers = this.profile.rivers;
+        const amplitude = Math.min(rivers.courseWarpAmplitude, Math.max(0, (this.courseStep - 1) / 2));
+        if (amplitude === 0) return base;
+        return {
+            x: base.x + Math.round((this.courseWarpAt(base, rivers.courseWarpSalt) * 2 - 1) * amplitude),
+            y: base.y + Math.round(
+                (this.courseWarpAt(base, rivers.courseWarpSalt ^ 0x9e3779b9) * 2 - 1) * amplitude
+            )
+        };
     }
 
     private normalizeWorld(point: Point): Point | undefined {
@@ -252,8 +294,8 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
     }
 
     private canonicalCourseKey(point: Point): string {
-        const world = this.normalizeWorld(this.courseToWorld(point));
-        return world ? pointKey(world) : pointKey(point);
+        const base = this.courseToBaseWorld(point);
+        return pointKey(this.normalizeWorld(base) ?? base);
     }
 
     private sourceSuitability(sample: Readonly<WorldWaterSurfaceSample>): number {
@@ -290,7 +332,57 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             + jitter;
     }
 
-    private traceCourse(source: Point, sampleAt: WorldWaterSampleAt): TracedCourse | undefined {
+    private drainageNode(
+        point: Point,
+        sampleAt: WorldWaterSampleAt,
+        cache: Map<string, DrainageNode>
+    ): DrainageNode | undefined {
+        const key = this.canonicalCourseKey(point);
+        const cached = cache.get(key);
+        if (cached) return cached;
+        const world = this.courseToWorld(point);
+        const sample = sampleAt(world.x, world.y);
+        if (!sample) return undefined;
+        const node: DrainageNode = {
+            sample,
+            potential: this.drainagePotential(point, sample),
+            nextResolved: false
+        };
+        cache.set(key, node);
+        return node;
+    }
+
+    private nextCoursePoint(
+        point: Point,
+        node: DrainageNode,
+        sampleAt: WorldWaterSampleAt,
+        cache: Map<string, DrainageNode>
+    ): Point | undefined {
+        if (node.nextResolved) {
+            return node.nextDelta
+                ? { x: point.x + node.nextDelta.x, y: point.y + node.nextDelta.y }
+                : undefined;
+        }
+        let bestDelta: Point | undefined;
+        let bestPotential = node.potential;
+        for (const delta of AXIAL_NEIGHBORS) {
+            const candidate = { x: point.x + delta.x, y: point.y + delta.y };
+            const adjacent = this.drainageNode(candidate, sampleAt, cache);
+            if (adjacent && adjacent.potential < bestPotential) {
+                bestDelta = delta;
+                bestPotential = adjacent.potential;
+            }
+        }
+        node.nextResolved = true;
+        node.nextDelta = bestDelta;
+        return bestDelta ? { x: point.x + bestDelta.x, y: point.y + bestDelta.y } : undefined;
+    }
+
+    private traceCourse(
+        source: Point,
+        sampleAt: WorldWaterSampleAt,
+        cache: Map<string, DrainageNode>
+    ): TracedCourse | undefined {
         const rivers = this.profile.rivers;
         const points: Point[] = [];
         const visited = new Set<string>();
@@ -300,30 +392,16 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             const key = this.canonicalCourseKey(current);
             if (visited.has(key)) break;
             visited.add(key);
-            const world = this.courseToWorld(current);
-            const sample = sampleAt(world.x, world.y);
-            if (!sample) break;
+            const node = this.drainageNode(current, sampleAt, cache);
+            if (!node) break;
             points.push(current);
-            if (sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) {
+            if (node.sample.baseTerrain === Land.sea || node.sample.baseTerrain === Land.coastal) {
                 reachedSea = true;
                 break;
             }
-            const currentPotential = this.drainagePotential(current, sample);
-            let best: Point | undefined;
-            let bestPotential = currentPotential;
-            for (const delta of AXIAL_NEIGHBORS) {
-                const candidate = { x: current.x + delta.x, y: current.y + delta.y };
-                const candidateWorld = this.courseToWorld(candidate);
-                const adjacent = sampleAt(candidateWorld.x, candidateWorld.y);
-                if (!adjacent) continue;
-                const potential = this.drainagePotential(candidate, adjacent);
-                if (potential < bestPotential) {
-                    best = candidate;
-                    bestPotential = potential;
-                }
-            }
-            if (!best) break;
-            current = best;
+            const next = this.nextCoursePoint(current, node, sampleAt, cache);
+            if (!next) break;
+            current = next;
         }
         return reachedSea && points.length >= rivers.minimumCourseLength ? { points } : undefined;
     }
@@ -332,7 +410,8 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         regionX: number,
         regionY: number,
         slot: number,
-        sampleAt: WorldWaterSampleAt
+        sampleAt: WorldWaterSampleAt,
+        cache: Map<string, DrainageNode>
     ): Point | undefined {
         const rivers = this.profile.rivers;
         const key = sourceKey(this.numericSeed, regionX, regionY, slot, rivers.sourceSalt);
@@ -342,10 +421,9 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             y: regionY * rivers.sourceCellSize
                 + Math.floor(randomForSource(this.numericSeed, key, 2) * rivers.sourceCellSize)
         };
-        const world = this.courseToWorld(source);
-        const sample = sampleAt(world.x, world.y);
-        if (!sample) return undefined;
-        const chance = rivers.sourceSpawnChance * this.sourceSuitability(sample);
+        const node = this.drainageNode(source, sampleAt, cache);
+        if (!node) return undefined;
+        const chance = rivers.sourceSpawnChance * this.sourceSuitability(node.sample);
         return randomForSource(this.numericSeed, key, 3) < chance ? source : undefined;
     }
 
@@ -363,7 +441,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         // regardless of which page requested it.
         const reach = this.domain.topology === "toroidal"
             ? 0
-            : rivers.maximumCourseLength * this.courseStep;
+            : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
         const corners = [
             offsetToAxial({ x: originX - reach, y: originY - reach }),
             offsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
@@ -380,15 +458,16 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         const lastRegionY = Math.floor(maximumY / rivers.sourceCellSize);
         const sources = new Set<string>();
         const courses: TracedCourse[] = [];
+        const drainage = new Map<string, DrainageNode>();
         for (let regionX = firstRegionX; regionX <= lastRegionX; regionX += 1) {
             for (let regionY = firstRegionY; regionY <= lastRegionY; regionY += 1) {
                 for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
-                    const source = this.sourceFor(regionX, regionY, slot, sampleAt);
+                    const source = this.sourceFor(regionX, regionY, slot, sampleAt, drainage);
                     if (!source) continue;
                     const key = this.canonicalCourseKey(source);
                     if (sources.has(key)) continue;
                     sources.add(key);
-                    const course = this.traceCourse(source, sampleAt);
+                    const course = this.traceCourse(source, sampleAt, drainage);
                     if (course) courses.push(course);
                 }
             }

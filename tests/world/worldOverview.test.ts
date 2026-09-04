@@ -72,6 +72,7 @@ describe("world overview raster", () => {
                 && overview.pixels[index + 1] === 142
                 && overview.pixels[index + 2] === 174) riverPixels += 1;
         }
-        expect(riverPixels).toBeGreaterThan(20);
+        expect(riverPixels).toBeGreaterThan(90);
+        expect(riverPixels).toBeLessThan(180);
     });
 });

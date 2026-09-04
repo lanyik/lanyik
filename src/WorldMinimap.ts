@@ -29,6 +29,8 @@ export interface WorldMinimapView {
     readonly pixelWidth?: number;
     readonly pixelHeight?: number;
     readonly cachedPages: number;
+    readonly demandedPages: number;
+    readonly cachedDemandedPages: number;
     readonly pendingPages: number;
     readonly visiblePages: number;
     readonly expanded: boolean;
@@ -100,9 +102,10 @@ const DEFAULT_REDRAW_INTERVAL_MS = 33;
 const MIN_OVERVIEW_TILE_SPAN = 8;
 const MIN_INFINITE_ZOOM_FACTOR = 0.125;
 const MAX_INFINITE_ZOOM_FACTOR = 4;
-const PAGE_PREFETCH_RINGS = 1;
+const PAGE_PREFETCH_RINGS = 2;
 const MAX_ACTIVE_PAGE_REQUESTS = 2;
 const PAGE_DEMAND_INTERVAL_MS = 50;
+const PAGE_DEMAND_PAN_THRESHOLD = 0.25;
 const PREFETCH_PAGE_INTERVAL_MS = 100;
 const PAGE_RETRY_DELAY_MS = 500;
 const FOLLOW_TIME_CONSTANT_S = 0.16;
@@ -160,6 +163,7 @@ export class WorldMinimap {
     private contentRect: ContentRect = { x: 0, y: 0, width: 0, height: 0 };
     private lastDrawAt = -Infinity;
     private lastDemandCheckAt = -Infinity;
+    private lastDemandCenter: Point | undefined;
     private lastPrefetchStartedAt = -Infinity;
     private pageGeneration = 0;
     private expanded = false;
@@ -243,6 +247,9 @@ export class WorldMinimap {
             pixelWidth: pixels?.width,
             pixelHeight: pixels?.height,
             cachedPages: this.pageCache.size,
+            demandedPages: this.pageDemand.size,
+            cachedDemandedPages: [...this.pageDemand.keys()]
+                .reduce((count, key) => count + Number(this.pageCache.has(key)), 0),
             pendingPages: this.pendingPages.size,
             visiblePages: this.visiblePageDemands().length,
             expanded: this.expanded,
@@ -450,10 +457,15 @@ export class WorldMinimap {
         const extent = this.viewportExtent();
         const layout = this.pageLayout();
         if (!extent || !layout) {
+            this.lastDemandCenter = undefined;
             this.pageDemand.clear();
             this.cancelUndemandedPages();
             return;
         }
+        this.lastDemandCenter = {
+            x: this.viewport!.centerX,
+            y: this.viewport!.centerY
+        };
         const epsilon = Number.EPSILON * Math.max(1, layout.tileSpan);
         const visibleMinX = Math.floor(extent.originX / layout.tileSpan);
         const visibleMaxX = Math.floor((extent.originX + extent.tileSpanX - epsilon) / layout.tileSpan);
@@ -596,6 +608,23 @@ export class WorldMinimap {
         for (const page of this.pageCache.values()) page.canvas.width = page.canvas.height = 0;
         this.pageCache.clear();
         this.reportedPageError = false;
+        this.lastDemandCenter = undefined;
+    }
+
+    private refreshPageDemand(now: number): void {
+        this.lastDemandCheckAt = now;
+        this.rebuildPageDemand();
+        this.pumpPageRequests();
+        this.updateCanvasState();
+    }
+
+    private panDemandThresholdExceeded(): boolean {
+        const viewport = this.viewport;
+        const center = this.lastDemandCenter;
+        const layout = this.pageLayout();
+        if (!viewport || !center || !layout) return true;
+        return Math.hypot(viewport.centerX - center.x, viewport.centerY - center.y)
+            >= layout.tileSpan * PAGE_DEMAND_PAN_THRESHOLD;
     }
 
     private visiblePageDemands(): PageDemand[] {
@@ -963,6 +992,7 @@ export class WorldMinimap {
         viewport.centerX -= deltaX / this.contentRect.width * viewport.tileSpanX;
         viewport.centerY -= deltaY / this.contentRect.height * viewport.tileSpanY;
         this.clampViewport(viewport);
+        if (this.panDemandThresholdExceeded()) this.refreshPageDemand(performance.now());
         this.render();
     };
 
@@ -971,12 +1001,14 @@ export class WorldMinimap {
         event.preventDefault();
         event.stopPropagation();
         this.endPan(event.pointerId);
+        this.refreshPageDemand(performance.now());
     };
 
     private handlePointerCaptureLost = (event: PointerEvent): void => {
         if (this.pan?.pointerId !== event.pointerId) return;
         this.pan = undefined;
         this.canvas.dataset.panning = "false";
+        this.refreshPageDemand(performance.now());
     };
 
     private handleContextMenu = (event: MouseEvent): void => {
@@ -1046,11 +1078,8 @@ export class WorldMinimap {
         const cameraTarget = this.map.getCameraTargetTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
-        if (followed || zoomed || now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
-            this.lastDemandCheckAt = now;
-            this.rebuildPageDemand();
-            this.pumpPageRequests();
-            this.updateCanvasState();
+        if (followed || zoomed || (!this.pan && now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS)) {
+            this.refreshPageDemand(now);
         }
         if (now - this.lastDrawAt >= this.redrawIntervalMs) {
             this.lastDrawAt = now;

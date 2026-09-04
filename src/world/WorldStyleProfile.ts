@@ -108,6 +108,11 @@ export interface WorldStyleProfile {
         readonly maximumCachedPages: number;
         /** World-hex spacing between drainage samples. */
         readonly courseStep: number;
+        /** Low-frequency world-space warp applied to the drainage lattice. */
+        readonly courseWarpScale: number;
+        readonly courseWarpAmplitude: number;
+        readonly courseWarpOctaves: number;
+        readonly courseWarpSalt: number;
         /** Drainage samples per stable source region edge. */
         readonly sourceCellSize: number;
         readonly sourcesPerCell: number;
@@ -249,8 +254,12 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         pageSize: 128,
         maximumCachedPages: 16,
         courseStep: 8,
+        courseWarpScale: 0.025,
+        courseWarpAmplitude: 2.5,
+        courseWarpOctaves: 2,
+        courseWarpSalt: 0x1b873593,
         sourceCellSize: 12,
-        sourcesPerCell: 3,
+        sourcesPerCell: 4,
         sourceSpawnChance: 1,
         sourceMinimumElevation: 0.46,
         sourceMaximumElevation: 0.82,
@@ -261,7 +270,7 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         maximumCourseLength: 72,
         baseCourseRadius: 1,
         highFlowCourseRadius: 2,
-        highFlowThreshold: 6,
+        highFlowThreshold: 8,
         potentialOceanWeight: 0.9,
         potentialElevationWeight: 0.08,
         potentialValleyWeight: 0.03,
@@ -437,7 +446,7 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     }
     const rivers = profile.rivers;
     for (const name of [
-        "pageSize", "maximumCachedPages", "courseStep", "sourceCellSize",
+        "pageSize", "maximumCachedPages", "courseStep", "courseWarpOctaves", "sourceCellSize",
         "sourcesPerCell", "minimumCourseLength", "maximumCourseLength",
         "baseCourseRadius", "highFlowCourseRadius", "highFlowThreshold"
     ] as const) {
@@ -446,7 +455,7 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
         }
     }
     for (const name of [
-        "sourceElevationTransition", "potentialOceanWeight", "potentialElevationWeight",
+        "courseWarpScale", "courseWarpAmplitude", "sourceElevationTransition", "potentialOceanWeight", "potentialElevationWeight",
         "potentialValleyWeight", "potentialMoistureWeight", "potentialJitter"
     ] as const) positive(`rivers.${name}`, rivers[name]);
     for (const name of [
@@ -460,6 +469,9 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
         throw new RangeError("river course length range must be ordered");
     }
+    if (!(rivers.courseWarpAmplitude < rivers.courseStep / 2)) {
+        throw new RangeError("river course warp amplitude must stay below half the course step");
+    }
     if (!(rivers.baseCourseRadius < rivers.highFlowCourseRadius)
         || rivers.highFlowThreshold <= 1) {
         throw new RangeError("river flow width thresholds must be ordered");
@@ -467,7 +479,8 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     if (!Number.isSafeInteger(rivers.courseStep * rivers.maximumCourseLength)) {
         throw new RangeError("river maximum world reach must be a safe integer");
     }
-    if (!Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
+    if (!Number.isSafeInteger(rivers.courseWarpSalt)
+        || !Number.isSafeInteger(rivers.sourceSalt) || !Number.isSafeInteger(rivers.flowSalt)) {
         throw new RangeError("river salts must be safe integers");
     }
 }

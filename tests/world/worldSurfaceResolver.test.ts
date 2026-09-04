@@ -186,6 +186,10 @@ describe("WorldSurfaceResolver", () => {
         const invalidRiverWidth = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidRiverWidth.rivers.highFlowCourseRadius = invalidRiverWidth.rivers.baseCourseRadius;
         expect(() => assertWorldStyleProfile(invalidRiverWidth)).toThrow(/flow width thresholds/);
+
+        const invalidRiverWarp = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidRiverWarp.rivers.courseWarpAmplitude = invalidRiverWarp.rivers.courseStep / 2;
+        expect(() => assertWorldStyleProfile(invalidRiverWarp)).toThrow(/warp amplitude/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {
