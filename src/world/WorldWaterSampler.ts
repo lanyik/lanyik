@@ -36,6 +36,7 @@ interface DrainageNode {
 }
 
 export interface WorldWaterSampler {
+    readonly stats: Readonly<WorldWaterSamplerStats>;
     isRiverTile(x: number, y: number, sampleAt: WorldWaterSampleAt): boolean;
     forEachRiverTile(
         originX: number,
@@ -47,7 +48,19 @@ export interface WorldWaterSampler {
     ): void;
 }
 
+export interface WorldWaterSamplerStats {
+    readonly cachedTilePages: number;
+    readonly cachedOverviewPages: number;
+    readonly tilePageBuilds: number;
+    readonly tilePageHits: number;
+    readonly overviewPageBuilds: number;
+    readonly overviewPageHits: number;
+    readonly directExtentRasterizations: number;
+}
+
 const UINT32_RANGE = 0x1_0000_0000;
+const OVERVIEW_PAGE_SIZE_MULTIPLIER = 4;
+const MAX_OVERVIEW_PAGE_AREA_OVERHEAD = 4;
 const AXIAL_NEIGHBORS: readonly Point[] = Object.freeze([
     Object.freeze({ x: 1, y: 0 }),
     Object.freeze({ x: 0, y: -1 }),
@@ -167,8 +180,14 @@ function assertExtent(originX: number, originY: number, width: number, height: n
 
 class DrainageWorldWaterSampler implements WorldWaterSampler {
     private readonly pages = new Map<string, WaterPage>();
+    private readonly overviewPages = new Map<string, WaterPage>();
     private readonly courseStep: number;
     private toroidalMask: Uint8Array | undefined;
+    private tilePageBuilds = 0;
+    private tilePageHits = 0;
+    private overviewPageBuilds = 0;
+    private overviewPageHits = 0;
+    private directExtentRasterizations = 0;
 
     constructor(
         private readonly numericSeed: number,
@@ -176,6 +195,18 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         private readonly profile: Readonly<WorldStyleProfile>
     ) {
         this.courseStep = this.resolveCourseStep();
+    }
+
+    public get stats(): Readonly<WorldWaterSamplerStats> {
+        return {
+            cachedTilePages: this.pages.size,
+            cachedOverviewPages: this.overviewPages.size,
+            tilePageBuilds: this.tilePageBuilds,
+            tilePageHits: this.tilePageHits,
+            overviewPageBuilds: this.overviewPageBuilds,
+            overviewPageHits: this.overviewPageHits,
+            directExtentRasterizations: this.directExtentRasterizations
+        };
     }
 
     public isRiverTile(x: number, y: number, sampleAt: WorldWaterSampleAt): boolean {
@@ -188,20 +219,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         const pageSize = this.profile.rivers.pageSize;
         const pageX = Math.floor(x / pageSize);
         const pageY = Math.floor(y / pageSize);
-        const key = `${pageX},${pageY}`;
-        let page = this.pages.get(key);
-        if (page) {
-            this.pages.delete(key);
-            this.pages.set(key, page);
-        } else {
-            page = this.buildPage(pageX, pageY, sampleAt);
-            this.pages.set(key, page);
-            while (this.pages.size > this.profile.rivers.maximumCachedPages) {
-                const oldest = this.pages.keys().next().value as string | undefined;
-                if (oldest === undefined) break;
-                this.pages.delete(oldest);
-            }
-        }
+        const page = this.pageFor(this.pages, pageX, pageY, pageSize, sampleAt, false);
         const localX = x - pageX * pageSize;
         const localY = y - pageY * pageSize;
         return hasBit(page.riverBits, localX * pageSize + localY);
@@ -227,7 +245,93 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             }
             return;
         }
+        if (this.shouldUseOverviewPages(originX, originY, width, height)) {
+            this.visitOverviewPages(originX, originY, width, height, sampleAt, visit);
+            return;
+        }
+        this.directExtentRasterizations += 1;
         this.rasterizeCourses(originX, originY, width, height, sampleAt, visit);
+    }
+
+    private shouldUseOverviewPages(originX: number, originY: number, width: number, height: number): boolean {
+        const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+        const firstPageX = Math.floor(originX / pageSize);
+        const lastPageX = Math.floor((originX + width - 1) / pageSize);
+        const firstPageY = Math.floor(originY / pageSize);
+        const lastPageY = Math.floor((originY + height - 1) / pageSize);
+        const pageCount = (lastPageX - firstPageX + 1) * (lastPageY - firstPageY + 1);
+        return pageCount <= this.profile.rivers.maximumCachedPages
+            && pageCount * pageSize * pageSize <= width * height * MAX_OVERVIEW_PAGE_AREA_OVERHEAD;
+    }
+
+    private visitOverviewPages(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        sampleAt: WorldWaterSampleAt,
+        visit: (x: number, y: number) => void
+    ): void {
+        const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+        const firstPageX = Math.floor(originX / pageSize);
+        const lastPageX = Math.floor((originX + width - 1) / pageSize);
+        const firstPageY = Math.floor(originY / pageSize);
+        const lastPageY = Math.floor((originY + height - 1) / pageSize);
+        const endX = originX + width;
+        const endY = originY + height;
+        for (let pageX = firstPageX; pageX <= lastPageX; pageX += 1) {
+            const pageOriginX = pageX * pageSize;
+            const startX = Math.max(originX, pageOriginX);
+            const stopX = Math.min(endX, pageOriginX + pageSize);
+            for (let pageY = firstPageY; pageY <= lastPageY; pageY += 1) {
+                const pageOriginY = pageY * pageSize;
+                const startY = Math.max(originY, pageOriginY);
+                const stopY = Math.min(endY, pageOriginY + pageSize);
+                const page = this.pageFor(
+                    this.overviewPages,
+                    pageX,
+                    pageY,
+                    pageSize,
+                    sampleAt,
+                    true
+                );
+                for (let x = startX; x < stopX; x += 1) {
+                    const column = (x - pageOriginX) * pageSize;
+                    for (let y = startY; y < stopY; y += 1) {
+                        if (hasBit(page.riverBits, column + y - pageOriginY)) visit(x, y);
+                    }
+                }
+            }
+        }
+    }
+
+    private pageFor(
+        cache: Map<string, WaterPage>,
+        pageX: number,
+        pageY: number,
+        pageSize: number,
+        sampleAt: WorldWaterSampleAt,
+        overview: boolean
+    ): WaterPage {
+        const key = `${pageX},${pageY}`;
+        let page = cache.get(key);
+        if (page) {
+            cache.delete(key);
+            cache.set(key, page);
+            if (overview) this.overviewPageHits += 1;
+            else this.tilePageHits += 1;
+            return page;
+        }
+        page = this.buildPage(pageX, pageY, pageSize, sampleAt);
+        cache.set(key, page);
+        if (overview) this.overviewPageBuilds += 1;
+        else this.tilePageBuilds += 1;
+        while (cache.size > this.profile.rivers.maximumCachedPages) {
+            const oldest = cache.keys().next().value as string | undefined;
+            if (oldest === undefined) break;
+            cache.delete(oldest);
+        }
+        return page;
     }
 
     private resolveCourseStep(): number {
@@ -521,8 +625,12 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         }
     }
 
-    private buildPage(pageX: number, pageY: number, sampleAt: WorldWaterSampleAt): WaterPage {
-        const pageSize = this.profile.rivers.pageSize;
+    private buildPage(
+        pageX: number,
+        pageY: number,
+        pageSize: number,
+        sampleAt: WorldWaterSampleAt
+    ): WaterPage {
         const riverBits = new Uint8Array(bitArrayLength(pageSize * pageSize));
         const originX = pageX * pageSize;
         const originY = pageY * pageSize;

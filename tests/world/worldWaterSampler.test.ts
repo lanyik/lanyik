@@ -114,6 +114,28 @@ describe("generated water network", () => {
         }
     });
 
+    test("reuses bounded coarse river pages across adjacent overview extents", () => {
+        const resolver = createWorldSurfaceResolver({ seed: "overview-river-cache" });
+        resolver.visitGeneratedRiverTiles(0, 0, 256, 256, () => undefined);
+        expect(resolver.waterStats).toMatchObject({
+            cachedOverviewPages: 1,
+            overviewPageBuilds: 1,
+            overviewPageHits: 0,
+            directExtentRasterizations: 0
+        });
+
+        resolver.visitGeneratedRiverTiles(256, 0, 256, 256, () => undefined);
+        expect(resolver.waterStats).toMatchObject({
+            cachedOverviewPages: 1,
+            overviewPageBuilds: 1,
+            overviewPageHits: 1,
+            directExtentRasterizations: 0
+        });
+
+        resolver.visitGeneratedRiverTiles(8, 8, 32, 32, () => undefined);
+        expect(resolver.waterStats.directExtentRasterizations).toBe(1);
+    });
+
     test("uses a broad ocean field instead of fragmented terrain-detail water", () => {
         const resolver = createWorldSurfaceResolver({ seed: "new-world" });
         const width = 128;

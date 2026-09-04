@@ -14,7 +14,11 @@ import {
     WorldStyleProfile,
     WorldWaterGenerationStyle
 } from "./WorldStyleProfile";
-import { createWorldWaterSampler, WorldWaterSampler } from "./WorldWaterSampler";
+import {
+    createWorldWaterSampler,
+    WorldWaterSampler,
+    WorldWaterSamplerStats
+} from "./WorldWaterSampler";
 
 export type WorldBiome = "ocean" | "coast" | "temperate" | "dry" | "cold" | "alpine";
 
@@ -46,6 +50,7 @@ export interface WorldSurfaceResolver {
     readonly domain: LandformDomain;
     readonly profile: Readonly<WorldStyleProfile>;
     readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
+    readonly waterStats: Readonly<WorldWaterSamplerStats>;
     sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample>;
     resolveGeneratedTile(x: number, y: number): Readonly<TileInfo>;
     visitGeneratedRiverTiles(
@@ -301,6 +306,8 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
     public readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
     private readonly sampler: LandformSampler;
     private readonly waterSampler: WorldWaterSampler;
+
+    public get waterStats(): Readonly<WorldWaterSamplerStats> { return this.waterSampler.stats; }
 
     constructor(options: WorldSurfaceResolverOptions) {
         if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");

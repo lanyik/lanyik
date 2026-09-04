@@ -11369,6 +11369,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   // src/world/WorldWaterSampler.ts
   var UINT32_RANGE = 4294967296;
+  var OVERVIEW_PAGE_SIZE_MULTIPLIER = 4;
+  var MAX_OVERVIEW_PAGE_AREA_OVERHEAD = 4;
   var AXIAL_NEIGHBORS = Object.freeze([
     Object.freeze({ x: 1, y: 0 }),
     Object.freeze({ x: 0, y: -1 }),
@@ -11473,7 +11475,24 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.domain = domain;
       this.profile = profile;
       this.pages = /* @__PURE__ */ new Map();
+      this.overviewPages = /* @__PURE__ */ new Map();
+      this.tilePageBuilds = 0;
+      this.tilePageHits = 0;
+      this.overviewPageBuilds = 0;
+      this.overviewPageHits = 0;
+      this.directExtentRasterizations = 0;
       this.courseStep = this.resolveCourseStep();
+    }
+    get stats() {
+      return {
+        cachedTilePages: this.pages.size,
+        cachedOverviewPages: this.overviewPages.size,
+        tilePageBuilds: this.tilePageBuilds,
+        tilePageHits: this.tilePageHits,
+        overviewPageBuilds: this.overviewPageBuilds,
+        overviewPageHits: this.overviewPageHits,
+        directExtentRasterizations: this.directExtentRasterizations
+      };
     }
     isRiverTile(x, y, sampleAt) {
       if (this.domain.topology === "toroidal") {
@@ -11485,20 +11504,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const pageSize = this.profile.rivers.pageSize;
       const pageX = Math.floor(x / pageSize);
       const pageY = Math.floor(y / pageSize);
-      const key = `${pageX},${pageY}`;
-      let page = this.pages.get(key);
-      if (page) {
-        this.pages.delete(key);
-        this.pages.set(key, page);
-      } else {
-        page = this.buildPage(pageX, pageY, sampleAt);
-        this.pages.set(key, page);
-        while (this.pages.size > this.profile.rivers.maximumCachedPages) {
-          const oldest = this.pages.keys().next().value;
-          if (oldest === void 0) break;
-          this.pages.delete(oldest);
-        }
-      }
+      const page = this.pageFor(this.pages, pageX, pageY, pageSize, sampleAt, false);
       const localX = x - pageX * pageSize;
       const localY = y - pageY * pageSize;
       return hasBit(page.riverBits, localX * pageSize + localY);
@@ -11516,7 +11522,75 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
         return;
       }
+      if (this.shouldUseOverviewPages(originX, originY, width, height)) {
+        this.visitOverviewPages(originX, originY, width, height, sampleAt, visit);
+        return;
+      }
+      this.directExtentRasterizations += 1;
       this.rasterizeCourses(originX, originY, width, height, sampleAt, visit);
+    }
+    shouldUseOverviewPages(originX, originY, width, height) {
+      const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+      const firstPageX = Math.floor(originX / pageSize);
+      const lastPageX = Math.floor((originX + width - 1) / pageSize);
+      const firstPageY = Math.floor(originY / pageSize);
+      const lastPageY = Math.floor((originY + height - 1) / pageSize);
+      const pageCount = (lastPageX - firstPageX + 1) * (lastPageY - firstPageY + 1);
+      return pageCount <= this.profile.rivers.maximumCachedPages && pageCount * pageSize * pageSize <= width * height * MAX_OVERVIEW_PAGE_AREA_OVERHEAD;
+    }
+    visitOverviewPages(originX, originY, width, height, sampleAt, visit) {
+      const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+      const firstPageX = Math.floor(originX / pageSize);
+      const lastPageX = Math.floor((originX + width - 1) / pageSize);
+      const firstPageY = Math.floor(originY / pageSize);
+      const lastPageY = Math.floor((originY + height - 1) / pageSize);
+      const endX = originX + width;
+      const endY = originY + height;
+      for (let pageX = firstPageX; pageX <= lastPageX; pageX += 1) {
+        const pageOriginX = pageX * pageSize;
+        const startX = Math.max(originX, pageOriginX);
+        const stopX = Math.min(endX, pageOriginX + pageSize);
+        for (let pageY = firstPageY; pageY <= lastPageY; pageY += 1) {
+          const pageOriginY = pageY * pageSize;
+          const startY = Math.max(originY, pageOriginY);
+          const stopY = Math.min(endY, pageOriginY + pageSize);
+          const page = this.pageFor(
+            this.overviewPages,
+            pageX,
+            pageY,
+            pageSize,
+            sampleAt,
+            true
+          );
+          for (let x = startX; x < stopX; x += 1) {
+            const column = (x - pageOriginX) * pageSize;
+            for (let y = startY; y < stopY; y += 1) {
+              if (hasBit(page.riverBits, column + y - pageOriginY)) visit(x, y);
+            }
+          }
+        }
+      }
+    }
+    pageFor(cache, pageX, pageY, pageSize, sampleAt, overview) {
+      const key = `${pageX},${pageY}`;
+      let page = cache.get(key);
+      if (page) {
+        cache.delete(key);
+        cache.set(key, page);
+        if (overview) this.overviewPageHits += 1;
+        else this.tilePageHits += 1;
+        return page;
+      }
+      page = this.buildPage(pageX, pageY, pageSize, sampleAt);
+      cache.set(key, page);
+      if (overview) this.overviewPageBuilds += 1;
+      else this.tilePageBuilds += 1;
+      while (cache.size > this.profile.rivers.maximumCachedPages) {
+        const oldest = cache.keys().next().value;
+        if (oldest === void 0) break;
+        cache.delete(oldest);
+      }
+      return page;
     }
     resolveCourseStep() {
       const requested = this.profile.rivers.courseStep;
@@ -11738,8 +11812,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       }
     }
-    buildPage(pageX, pageY, sampleAt) {
-      const pageSize = this.profile.rivers.pageSize;
+    buildPage(pageX, pageY, pageSize, sampleAt) {
       const riverBits = new Uint8Array(bitArrayLength(pageSize * pageSize));
       const originX = pageX * pageSize;
       const originY = pageY * pageSize;
@@ -11932,6 +12005,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return Object.freeze(tile);
   }
   var FrozenWorldSurfaceResolver = class {
+    get waterStats() {
+      return this.waterSampler.stats;
+    }
     constructor(options) {
       if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
       this.seed = String(options.seed);
@@ -21935,7 +22011,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.createLandformSampler = createLandformSampler;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
+  exports.createWorldSurfaceResolver = createWorldSurfaceResolver;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
+  exports.createWorldWaterSampler = createWorldWaterSampler;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
   exports.disposeObject3DResources = disposeObject3DResources;
   exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;

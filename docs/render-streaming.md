@@ -513,6 +513,17 @@ When a zoom level is still missing pages, intersecting pages from an already
 cached coarser level are drawn underneath it. New pages replace that underlay
 in place, so progressive refinement does not expose empty blocks.
 
+Open-world river enumeration uses a separate bounded coarse-page cache inside
+each persistent `WorldSurfaceResolver`. Adjacent 256-tile overview pages reuse a
+shared 512-tile river mask, so overlapping upstream source discovery and course
+tracing are amortized before biome pixels are sampled. The cache holds at most
+the configured river-page count (16 by default, about 512 KiB of packed bits).
+Small or highly misaligned extents bypass it when coarse coverage would exceed
+four times the requested area, and very large extents keep the single-pass
+course rasterizer; this avoids trading repeated work for pathological
+over-generation. `waterStats` exposes coarse hits/builds and direct passes for
+deterministic tests and profiling.
+
 The UI policy is:
 
 - finite worlds render their complete bounds once with preserved aspect ratio;

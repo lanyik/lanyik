@@ -123,6 +123,21 @@ export type {
     LandformSampler,
     LandformSamplerOptions
 } from "./world/LandformSampler";
+export { createWorldSurfaceResolver } from "./world/WorldSurfaceResolver";
+export type {
+    WorldBiome,
+    WorldBiomeWeights,
+    WorldSurfaceSample,
+    WorldSurfaceResolver,
+    WorldSurfaceResolverOptions
+} from "./world/WorldSurfaceResolver";
+export { createWorldWaterSampler } from "./world/WorldWaterSampler";
+export type {
+    WorldWaterSampler,
+    WorldWaterSamplerStats,
+    WorldWaterSurfaceSample,
+    WorldWaterSampleAt
+} from "./world/WorldWaterSampler";
 export type { WorldSurfaceAnchor } from "./world/WorldSurfaceView";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export {
