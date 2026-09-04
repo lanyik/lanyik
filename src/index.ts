@@ -199,7 +199,8 @@ export type {
     WorldGeneratorPoolOptions,
     WorldGeneratorPoolStats,
     ChunkRequestOptions,
-    ChunkGeneratorClient
+    ChunkGeneratorClient,
+    WorldTaskControl
 } from "./world/WorldGeneratorPool";
 export {
     generateWorldVegetation,

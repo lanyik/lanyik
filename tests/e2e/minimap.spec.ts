@@ -10,7 +10,12 @@ interface MinimapView {
     cachedPages: number;
     demandedPages: number;
     cachedDemandedPages: number;
+    pendingPages: number;
     visiblePages: number;
+    renders: number;
+    demandRebuilds: number;
+    cachedPageBytes: number;
+    displayCanvasBytes: number;
     expanded: boolean;
     zoom: number;
     destination?: { x: number; y: number };
@@ -138,6 +143,37 @@ test("compact infinite minimap keeps its center inside the dead zone and follows
     expect(samples[0]).toBeGreaterThan(initial.originX);
     expect(samples[samples.length - 1]).toBeGreaterThan(samples[0]);
     expect(new Set(samples.map(value => value.toFixed(3))).size).toBeGreaterThan(2);
+});
+
+test("an idle compact minimap stops rebuilding demand and repainting", async ({ page }) => {
+    await page.goto("/?infinite&quality=fast&x=0&y=0", { waitUntil: "domcontentloaded" });
+    await waitForMinimap(page);
+    await expect.poll(() => page.evaluate(() => {
+        const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
+        return {
+            demanded: view.demandedPages,
+            cached: view.cachedDemandedPages,
+            pending: view.pendingPages
+        };
+    }), { timeout: 20_000 }).toEqual({ demanded: 25, cached: 25, pending: 0 });
+
+    const before = await page.evaluate(() => {
+        const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
+        return { renders: view.renders, demandRebuilds: view.demandRebuilds };
+    });
+    await page.waitForTimeout(250);
+    const after = await page.evaluate(() => {
+        const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
+        return {
+            renders: view.renders,
+            demandRebuilds: view.demandRebuilds,
+            cachedPageBytes: view.cachedPageBytes,
+            displayCanvasBytes: view.displayCanvasBytes
+        };
+    });
+    expect(after).toMatchObject(before);
+    expect(after.cachedPageBytes).toBeGreaterThan(0);
+    expect(after.displayCanvasBytes).toBeGreaterThan(0);
 });
 
 test("expanded infinite minimap right-drag pans continuously and Space recenters it", async ({ page }) => {

@@ -37,6 +37,13 @@ export interface ChunkRequestOptions {
     signal?: AbortSignal;
     lane?: WorkLane;
     weight?: number;
+    onScheduled?: (task: WorldTaskControl) => void;
+}
+
+export interface WorldTaskControl {
+    readonly started: boolean;
+    reprioritize(lane: WorkLane, priority: number): boolean;
+    cancelQueued(): boolean;
 }
 
 export interface WorldGeneratorPoolStats {
@@ -70,6 +77,7 @@ interface QueuedTask {
     resolve(result: PackedWorldChunk | WorldVegetationLayout | WorldOverviewRaster): void;
     reject(error: Error): void;
     abort?: () => void;
+    started: boolean;
     settled: boolean;
 }
 
@@ -162,6 +170,7 @@ export class WorldGeneratorPool {
                 signal: request.signal,
                 resolve: result => resolve(result as PackedWorldChunk),
                 reject,
+                started: false,
                 settled: false
             };
             if (request.signal) {
@@ -182,6 +191,7 @@ export class WorldGeneratorPool {
             if (task.queueId === undefined && !task.settled) {
                 this.finishTask(task, () => reject(new WorkQueueBackpressureError("World chunk request was shed")));
             }
+            if (task.queueId !== undefined) this.notifyScheduled(task, request.onScheduled);
             this.dispatch();
         });
     }
@@ -199,6 +209,7 @@ export class WorldGeneratorPool {
                 signal: request.signal,
                 resolve: result => resolve(result as WorldVegetationLayout),
                 reject,
+                started: false,
                 settled: false
             };
             if (request.signal) {
@@ -219,6 +230,7 @@ export class WorldGeneratorPool {
             if (task.queueId === undefined && !task.settled) {
                 this.finishTask(task, () => reject(new WorkQueueBackpressureError("Vegetation request was shed")));
             }
+            if (task.queueId !== undefined) this.notifyScheduled(task, request.onScheduled);
             this.dispatch();
         });
     }
@@ -236,6 +248,7 @@ export class WorldGeneratorPool {
                 signal: request.signal,
                 resolve: result => resolve(result as WorldOverviewRaster),
                 reject,
+                started: false,
                 settled: false
             };
             if (request.signal) {
@@ -256,6 +269,7 @@ export class WorldGeneratorPool {
             if (task.queueId === undefined && !task.settled) {
                 this.finishTask(task, () => reject(new WorkQueueBackpressureError("World overview request was shed")));
             }
+            if (task.queueId !== undefined) this.notifyScheduled(task, request.onScheduled);
             this.dispatch();
         });
     }
@@ -389,8 +403,29 @@ export class WorldGeneratorPool {
         const task = this.queue.take(busyBackground >= maximumBackground
             ? candidate => candidate.kind === "chunk"
             : undefined);
-        if (task) task.queueId = undefined;
+        if (task) {
+            task.queueId = undefined;
+            task.started = true;
+        }
         return task;
+    }
+
+    private notifyScheduled(task: QueuedTask, observer: ChunkRequestOptions["onScheduled"]): void {
+        if (!observer) return;
+        try {
+            observer({
+                get started() { return task.started; },
+                reprioritize: (lane, priority) => task.queueId !== undefined
+                    && !task.settled
+                    && this.queue.update(task.queueId, { lane, priority }),
+                cancelQueued: () => task.queueId !== undefined
+                    && !task.settled
+                    && this.queue.cancel(task.queueId, lifecycleAbortError("Queued world task was cancelled"))
+            });
+        } catch (reason) {
+            const error = reason instanceof Error ? reason : new Error(String(reason));
+            if (task.queueId !== undefined) this.queue.cancel(task.queueId, error);
+        }
     }
 
     private recordDuration(kind: QueuedTask["kind"], durationMs: number): void {

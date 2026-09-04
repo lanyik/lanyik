@@ -451,6 +451,37 @@ describe("world generator pool", () => {
         pool.dispose();
     });
 
+    test("promotes a queued request in place and exposes when worker execution starts", async () => {
+        const client = new DeferredChunkClient();
+        const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });
+        const running = pool.generateChunk({ seed: 1, chunkX: 0, chunkY: 0 });
+        let promotedControl: import("../../src/world/WorldGeneratorPool").WorldTaskControl | undefined;
+        const promoted = pool.generateChunk(
+            { seed: 1, chunkX: 9, chunkY: 0 },
+            { lane: "background", priority: 9, onScheduled: task => { promotedControl = task; } }
+        );
+        const prefetch = pool.generateChunk(
+            { seed: 1, chunkX: 2, chunkY: 0 },
+            { lane: "prefetch", priority: 0 }
+        );
+
+        expect(promotedControl?.started).toBe(false);
+        expect(promotedControl?.reprioritize("visible", 0)).toBe(true);
+        client.requests[0].resolve(generateWorldChunk(client.requests[0].options));
+        await running;
+        await flush();
+        expect(client.requests[1].options.chunkX).toBe(9);
+        expect(promotedControl?.started).toBe(true);
+        expect(promotedControl?.cancelQueued()).toBe(false);
+
+        client.requests[1].resolve(generateWorldChunk(client.requests[1].options));
+        await promoted;
+        await flush();
+        client.requests[2].resolve(generateWorldChunk(client.requests[2].options));
+        await prefetch;
+        pool.dispose();
+    });
+
     test("classifies running and queued work as cancelled when the pool is disposed", async () => {
         const client = new DeferredChunkClient();
         const pool = new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client });

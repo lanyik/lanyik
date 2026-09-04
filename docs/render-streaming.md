@@ -458,12 +458,13 @@ started the request, so a late result cannot mutate its replacement.
 
 `WorldMinimap` is a Canvas 2D consumer of `HexMap.requestWorldOverview()`; it
 does not create another Three.js camera, render target, or scene. Procedural
-sources schedule visible overview pages in the `prefetch` lane and two outer
-rings in the `background` lane through the existing generator pool. At most two
-visible pages are active per minimap. Once the visible set is complete, outer
-pages are admitted singly at a fixed 100 ms cadence. Overview and vegetation
-share the non-critical worker capacity limit, so `reservedChunkWorkers` remains
-available for camera-near terrain requests. A minimap request never calls
+sources schedule visible overview pages in the `prefetch` lane and outer pages
+in the `background` lane through the existing generator pool. Expanded mode
+keeps two prefetch rings; compact mode keeps one. At most two visible pages are
+active per minimap, and background pages are admitted one at a time after the
+visible set is complete. Overview and vegetation share the non-critical worker
+capacity limit, so `reservedChunkWorkers` remains available for camera-near
+terrain requests. A minimap request never calls
 `loadChunk()` and therefore does not alter source, render, CPU, or GPU chunk
 residency.
 
@@ -486,14 +487,24 @@ runtime failure.
 
 The minimap does not rebuild one monolithic rolling raster. Its logical view is
 split into power-of-two terrain pages sized at roughly half the current view
-span. Visible pages are requested first, two outer page rings are filled during
-background capacity, and completed pages enter a 64-entry Canvas/LRU cache.
-The prefetched area extends by two current-level pages on every side of the
-visible set. `WorldMinimapView` reports total demanded and cached-demanded page
-counts alongside the visible count so this coverage is observable. Static pages
-are generated only when absent;
-there is no periodic resampling of unchanged terrain and no full-buffer copy
-when the viewport moves. Wheel input changes a continuous target scale and the
+span. Visible pages are requested first and completed pages enter a 64-entry
+Canvas/LRU cache. Demand is rebuilt from a state signature only when page
+boundaries, zoom level, mode, or world generation change. The Canvas is likewise
+redrawn only for viewport/camera/destination/size changes or page completion;
+an idle minimap performs neither its former 50 ms demand rebuild nor its former
+33 ms repaint. Drag/follow motion biases outer-page priority toward the movement
+direction. A queued outer request that becomes visible is reprioritized in place;
+started immutable work is retained and cached rather than aborted and repeated.
+
+Cache identity is the logical extent and level, independent of pixel density.
+The highest-resolution result for that extent is retained, so an expanded page
+directly satisfies a later compact request by Canvas scaling. `WorldMinimapView`
+reports demand/cache/pending counts, request/promotion/reuse/render counters,
+transferred bytes, transient raster bytes, and Canvas backing-store estimates.
+Both the display Canvas and cached page Canvases are registered with
+`ResourceBudget`; visible pages are pinned and idle pages remain evictable.
+Static pages are generated only when absent, and viewport movement never copies
+the full cached raster. Wheel input changes a continuous target scale and the
 viewport converges exponentially while preserving the world coordinate under
 the pointer. Page sampling changes only when that continuous scale crosses a
 power-of-two level; compact pages target 256 effective pixels across the view,

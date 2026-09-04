@@ -56,6 +56,17 @@ describe("PriorityTaskQueue", () => {
         expect(cancelled).toHaveBeenCalledOnce();
     });
 
+    test("reprioritizes admitted work without replacing its identity or FIFO age", () => {
+        const queue = new PriorityTaskQueue<string>();
+        const promoted = queue.enqueue("promoted", { lane: "background", priority: 10 })!;
+        queue.enqueue("prefetch", { lane: "prefetch", priority: 0 });
+
+        expect(queue.update(promoted, { lane: "visible", priority: 0 })).toBe(true);
+        expect(queue.take()).toBe("promoted");
+        expect(queue.update(promoted, { lane: "critical" })).toBe(false);
+        expect(queue.take()).toBe("prefetch");
+    });
+
     test("rejects an impossible task without evicting admitted work", () => {
         const rejected = vi.fn();
         const queue = new PriorityTaskQueue<string>({ maxPendingTasks: 3, maxPendingWeight: 3 });

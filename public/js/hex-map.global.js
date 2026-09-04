@@ -10361,6 +10361,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     cancel(id, reason = cancellationError("Queued task was cancelled")) {
       return this.remove(id, reason, true);
     }
+    update(id, options) {
+      const entry = this.entries.get(id);
+      if (!entry) return false;
+      const lane = options.lane ?? entry.lane;
+      const priority = options.priority ?? entry.priority;
+      if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
+      if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
+      entry.lane = lane;
+      entry.priority = priority;
+      return true;
+    }
     clear(reason = cancellationError("Work queue was cleared")) {
       for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
     }
@@ -13578,6 +13589,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           signal: request.signal,
           resolve: (result) => resolve(result),
           reject,
+          started: false,
           settled: false
         };
         if (request.signal) {
@@ -13597,6 +13609,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (task.queueId === void 0 && !task.settled) {
           this.finishTask(task, () => reject(new WorkQueueBackpressureError("World chunk request was shed")));
         }
+        if (task.queueId !== void 0) this.notifyScheduled(task, request.onScheduled);
         this.dispatch();
       });
     }
@@ -13610,6 +13623,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           signal: request.signal,
           resolve: (result) => resolve(result),
           reject,
+          started: false,
           settled: false
         };
         if (request.signal) {
@@ -13629,6 +13643,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (task.queueId === void 0 && !task.settled) {
           this.finishTask(task, () => reject(new WorkQueueBackpressureError("Vegetation request was shed")));
         }
+        if (task.queueId !== void 0) this.notifyScheduled(task, request.onScheduled);
         this.dispatch();
       });
     }
@@ -13642,6 +13657,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           signal: request.signal,
           resolve: (result) => resolve(result),
           reject,
+          started: false,
           settled: false
         };
         if (request.signal) {
@@ -13661,6 +13677,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (task.queueId === void 0 && !task.settled) {
           this.finishTask(task, () => reject(new WorkQueueBackpressureError("World overview request was shed")));
         }
+        if (task.queueId !== void 0) this.notifyScheduled(task, request.onScheduled);
         this.dispatch();
       });
     }
@@ -13777,8 +13794,26 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const maximumBackground = activeWorkers === 1 ? 1 : Math.max(1, activeWorkers - this.reservedChunkWorkers);
       const busyBackground = this.slots.filter((candidate) => candidate.busy && candidate.taskKind !== "chunk").length;
       const task = this.queue.take(busyBackground >= maximumBackground ? (candidate) => candidate.kind === "chunk" : void 0);
-      if (task) task.queueId = void 0;
+      if (task) {
+        task.queueId = void 0;
+        task.started = true;
+      }
       return task;
+    }
+    notifyScheduled(task, observer) {
+      if (!observer) return;
+      try {
+        observer({
+          get started() {
+            return task.started;
+          },
+          reprioritize: (lane, priority) => task.queueId !== void 0 && !task.settled && this.queue.update(task.queueId, { lane, priority }),
+          cancelQueued: () => task.queueId !== void 0 && !task.settled && this.queue.cancel(task.queueId, lifecycleAbortError("Queued world task was cancelled"))
+        });
+      } catch (reason) {
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        if (task.queueId !== void 0) this.queue.cancel(task.queueId, error);
+      }
     }
     recordDuration(kind, durationMs) {
       const alpha = 0.2;
@@ -20094,15 +20129,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var DEFAULT_RASTER_SIZE = 192;
   var DEFAULT_INFINITE_TILE_SPAN = 512;
   var DEFAULT_CACHE_ENTRIES = 64;
-  var DEFAULT_REDRAW_INTERVAL_MS = 33;
   var MIN_OVERVIEW_TILE_SPAN = 8;
   var MIN_INFINITE_ZOOM_FACTOR = 0.125;
   var MAX_INFINITE_ZOOM_FACTOR = 4;
-  var PAGE_PREFETCH_RINGS = 2;
+  var COMPACT_PAGE_PREFETCH_RINGS = 1;
+  var EXPANDED_PAGE_PREFETCH_RINGS = 2;
   var MAX_ACTIVE_PAGE_REQUESTS = 2;
-  var PAGE_DEMAND_INTERVAL_MS = 50;
-  var PAGE_DEMAND_PAN_THRESHOLD = 0.25;
-  var PREFETCH_PAGE_INTERVAL_MS = 100;
   var PAGE_RETRY_DELAY_MS = 500;
   var FOLLOW_TIME_CONSTANT_S = 0.16;
   var ZOOM_TIME_CONSTANT_S = 0.1;
@@ -20133,9 +20165,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.retryAfter = /* @__PURE__ */ new Map();
       this.cameraDirection = new three.Vector3();
       this.contentRect = { x: 0, y: 0, width: 0, height: 0 };
-      this.lastDrawAt = -Infinity;
-      this.lastDemandCheckAt = -Infinity;
-      this.lastPrefetchStartedAt = -Infinity;
+      this.motionX = 0;
+      this.motionY = 0;
+      this.displayCanvasBytes = 0;
+      this.transientRasterBytes = 0;
+      this.peakTransientRasterBytes = 0;
+      this.renders = 0;
+      this.demandRebuilds = 0;
+      this.pageRequests = 0;
+      this.pageCompletions = 0;
+      this.pagePromotions = 0;
+      this.pageReuses = 0;
+      this.queuedCancellations = 0;
+      this.transferredBytes = 0;
+      this.retryTimerAt = Infinity;
       this.pageGeneration = 0;
       this.expanded = false;
       this.zoomFactor = 1;
@@ -20170,10 +20213,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         pan.lastClientX = event.clientX;
         pan.lastClientY = event.clientY;
         if (deltaX === 0 && deltaY === 0) return;
+        const previousX = viewport.centerX;
+        const previousY = viewport.centerY;
         viewport.centerX -= deltaX / this.contentRect.width * viewport.tileSpanX;
         viewport.centerY -= deltaY / this.contentRect.height * viewport.tileSpanY;
         this.clampViewport(viewport);
-        if (this.panDemandThresholdExceeded()) this.refreshPageDemand(performance.now());
+        this.recordMotion(previousX, previousY, viewport.centerX, viewport.centerY);
+        this.syncPageDemand();
         this.render();
       };
       this.handlePointerEnd = (event) => {
@@ -20181,13 +20227,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         event.preventDefault();
         event.stopPropagation();
         this.endPan(event.pointerId);
-        this.refreshPageDemand(performance.now());
+        this.syncPageDemand();
       };
       this.handlePointerCaptureLost = (event) => {
         if (this.pan?.pointerId !== event.pointerId) return;
         this.pan = void 0;
         this.canvas.dataset.panning = "false";
-        this.refreshPageDemand(performance.now());
+        this.syncPageDemand();
       };
       this.handleContextMenu = (event) => {
         event.preventDefault();
@@ -20243,18 +20289,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         void this.refresh(true);
       };
       this.handleFrame = (frame) => {
-        const now = Number.isFinite(frame?.t) ? frame.t : performance.now();
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
-        if (followed || zoomed || !this.pan && now - this.lastDemandCheckAt >= PAGE_DEMAND_INTERVAL_MS) {
-          this.refreshPageDemand(now);
-        }
-        if (now - this.lastDrawAt >= this.redrawIntervalMs) {
-          this.lastDrawAt = now;
+        if (followed || zoomed) {
+          this.syncPageDemand();
           this.render();
+          return;
         }
+        if (this.currentOverlaySignature() !== this.overlaySignature) this.render();
       };
       if (!options || typeof options !== "object") throw new TypeError("world minimap options are required");
       if (!options.map) throw new TypeError("world minimap map is required");
@@ -20279,10 +20323,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       );
       if (this.infiniteTileSpan % 2 !== 0) throw new RangeError("infiniteTileSpan must be even");
       this.cacheEntries = asPositiveInteger("cacheEntries", options.cacheEntries ?? DEFAULT_CACHE_ENTRIES, 512);
-      this.redrawIntervalMs = options.redrawIntervalMs ?? DEFAULT_REDRAW_INTERVAL_MS;
-      if (!Number.isFinite(this.redrawIntervalMs) || this.redrawIntervalMs <= 0) {
-        throw new RangeError("redrawIntervalMs must be positive and finite");
-      }
+      this.resources = this.map.createResourceAccount("world-minimap");
       this.onNavigate = options.onNavigate;
       this.onDestinationChange = options.onDestinationChange;
       this.onExpandedChange = options.onExpandedChange;
@@ -20323,9 +20364,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         pixelHeight: pixels?.height,
         cachedPages: this.pageCache.size,
         demandedPages: this.pageDemand.size,
-        cachedDemandedPages: [...this.pageDemand.keys()].reduce((count, key) => count + Number(this.pageCache.has(key)), 0),
+        cachedDemandedPages: [...this.pageDemand.values()].reduce((count, demand) => count + Number(this.hasCachedPage(demand)), 0),
         pendingPages: this.pendingPages.size,
         visiblePages: this.visiblePageDemands().length,
+        cachedPageBytes: [...this.pageCache.values()].reduce((sum, page) => sum + page.bytes, 0),
+        displayCanvasBytes: this.displayCanvasBytes,
+        transientRasterBytes: this.transientRasterBytes,
+        peakTransientRasterBytes: this.peakTransientRasterBytes,
+        renders: this.renders,
+        demandRebuilds: this.demandRebuilds,
+        pageRequests: this.pageRequests,
+        pageCompletions: this.pageCompletions,
+        pagePromotions: this.pagePromotions,
+        pageReuses: this.pageReuses,
+        queuedCancellations: this.queuedCancellations,
+        transferredBytes: this.transferredBytes,
         expanded: this.expanded,
         zoom: 1 / this.zoomFactor,
         destination: this.destination ? { ...this.destination } : void 0
@@ -20348,7 +20401,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.canvas.setAttribute("aria-expanded", String(expanded));
       this.onExpandedChange?.(expanded);
       void this.refresh();
-      this.render();
     }
     toggleExpanded() {
       this.setExpanded(!this.expanded);
@@ -20363,9 +20415,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       if (force) this.resetPageData();
       this.viewport ?? (this.viewport = this.createViewport(cameraTarget));
-      this.rebuildPageDemand();
-      this.pumpPageRequests();
-      this.updateCanvasState();
+      this.syncPageDemand(force);
       this.render();
       return this.waitForVisiblePages(this.pageGeneration);
     }
@@ -20404,6 +20454,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.map.off("loadstart", this.handleWorldLoadStart);
       this.map.off("load", this.handleWorldLoad);
       this.map.off("frame", this.handleFrame);
+      this.displayReservation?.release();
+      this.displayReservation = void 0;
+      this.resources.dispose();
     }
     viewSpans() {
       const bounds = this.map.worldBounds;
@@ -20505,68 +20558,118 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         pixelHeight: Math.max(1, Math.round(layout.pixelSize * tileSpanY / layout.tileSpan))
       };
     }
-    cacheKey(options) {
-      return [
-        options.originX,
-        options.originY,
-        options.tileSpanX,
-        options.tileSpanY,
-        options.pixelWidth,
-        options.pixelHeight
-      ].join(":");
+    cacheKey(options, levelTileSpan) {
+      return [levelTileSpan, options.originX, options.originY, options.tileSpanX, options.tileSpanY].join(":");
     }
-    rebuildPageDemand() {
+    pageDemandWindow() {
       const extent = this.viewportExtent();
       const layout = this.pageLayout();
-      if (!extent || !layout) {
-        this.lastDemandCenter = void 0;
-        this.pageDemand.clear();
-        this.cancelUndemandedPages();
-        return;
-      }
-      this.lastDemandCenter = {
-        x: this.viewport.centerX,
-        y: this.viewport.centerY
-      };
+      if (!extent || !layout) return void 0;
       const epsilon = Number.EPSILON * Math.max(1, layout.tileSpan);
       const visibleMinX = Math.floor(extent.originX / layout.tileSpan);
       const visibleMaxX = Math.floor((extent.originX + extent.tileSpanX - epsilon) / layout.tileSpan);
       const visibleMinY = Math.floor(extent.originY / layout.tileSpan);
       const visibleMaxY = Math.floor((extent.originY + extent.tileSpanY - epsilon) / layout.tileSpan);
+      const prefetchRings = this.expanded ? EXPANDED_PAGE_PREFETCH_RINGS : COMPACT_PAGE_PREFETCH_RINGS;
+      return {
+        extent,
+        layout,
+        visibleMinX,
+        visibleMaxX,
+        visibleMinY,
+        visibleMaxY,
+        prefetchRings,
+        signature: [
+          layout.tileSpan,
+          layout.pixelSize,
+          visibleMinX,
+          visibleMaxX,
+          visibleMinY,
+          visibleMaxY,
+          prefetchRings
+        ].join(":")
+      };
+    }
+    syncPageDemand(force = false) {
+      const window2 = this.pageDemandWindow();
+      const signature = window2?.signature ?? "empty";
+      if (!force && signature === this.demandSignature) return;
+      this.demandSignature = signature;
+      this.demandRebuilds += 1;
+      this.rebuildPageDemand(window2);
+      this.pumpPageRequests();
+      this.updateCanvasState();
+    }
+    rebuildPageDemand(window2) {
+      if (!window2) {
+        this.pageDemand.clear();
+        this.cancelUndemandedPages();
+        return;
+      }
+      const { layout, visibleMinX, visibleMaxX, visibleMinY, visibleMaxY, prefetchRings } = window2;
+      const motionLength = Math.hypot(this.motionX, this.motionY);
+      const directionX = motionLength > 1e-6 ? this.motionX / motionLength : 0;
+      const directionY = motionLength > 1e-6 ? this.motionY / motionLength : 0;
       const next = /* @__PURE__ */ new Map();
-      for (let pageY = visibleMinY - PAGE_PREFETCH_RINGS; pageY <= visibleMaxY + PAGE_PREFETCH_RINGS; pageY += 1) {
-        for (let pageX = visibleMinX - PAGE_PREFETCH_RINGS; pageX <= visibleMaxX + PAGE_PREFETCH_RINGS; pageX += 1) {
+      for (let pageY = visibleMinY - prefetchRings; pageY <= visibleMaxY + prefetchRings; pageY += 1) {
+        for (let pageX = visibleMinX - prefetchRings; pageX <= visibleMaxX + prefetchRings; pageX += 1) {
           const options = this.pageOptions(pageX, pageY, layout);
           if (!options) continue;
           const visible = pageX >= visibleMinX && pageX <= visibleMaxX && pageY >= visibleMinY && pageY <= visibleMaxY;
           const pageCenterX = options.originX + options.tileSpanX / 2;
           const pageCenterY = options.originY + options.tileSpanY / 2;
-          const distance = Math.hypot(
-            (pageCenterX - this.viewport.centerX) / layout.tileSpan,
-            (pageCenterY - this.viewport.centerY) / layout.tileSpan
-          );
-          const key = this.cacheKey(options);
+          const offsetX = (pageCenterX - this.viewport.centerX) / layout.tileSpan;
+          const offsetY = (pageCenterY - this.viewport.centerY) / layout.tileSpan;
+          const distance = Math.hypot(offsetX, offsetY) - (offsetX * directionX + offsetY * directionY) * 0.35;
+          const key = this.cacheKey(options, layout.tileSpan);
           next.set(key, { key, options, visible, distance });
+        }
+      }
+      for (const demand of next.values()) {
+        if (demand.visible && this.pageDemand.get(demand.key)?.visible !== true && this.retryAfter.get(demand.key) === Infinity) {
+          this.retryAfter.delete(demand.key);
         }
       }
       this.pageDemand.clear();
       for (const [key, demand] of next) this.pageDemand.set(key, demand);
       for (const key of this.retryAfter.keys()) if (!next.has(key)) this.retryAfter.delete(key);
+      for (const [key, page] of this.pageCache) {
+        const demand = next.get(key);
+        page.reservation.setPinned(Boolean(demand?.visible && this.pageSatisfies(page.extent, demand.options)));
+        if (demand && this.pageSatisfies(page.extent, demand.options) && (page.extent.pixelWidth > demand.options.pixelWidth || page.extent.pixelHeight > demand.options.pixelHeight)) {
+          this.pageReuses += 1;
+        }
+      }
       this.cancelUndemandedPages();
     }
     cancelUndemandedPages() {
       for (const [key, pending] of this.pendingPages) {
         const demand = this.pageDemand.get(key);
-        if (demand && (!demand.visible || pending.visible)) continue;
+        if (demand && this.pageSatisfies(pending.options, demand.options)) {
+          if (demand.visible && !pending.visible) this.pagePromotions += 1;
+          pending.visible = demand.visible;
+          pending.control?.reprioritize(demand.visible ? "prefetch" : "background", demand.distance);
+          continue;
+        }
+        if (pending.control?.started) continue;
+        pending.control?.cancelQueued();
         pending.abort.abort();
         this.pendingPages.delete(key);
+        this.queuedCancellations += 1;
       }
+    }
+    pageSatisfies(available, requested) {
+      return available.originX === requested.originX && available.originY === requested.originY && available.tileSpanX === requested.tileSpanX && available.tileSpanY === requested.tileSpanY && available.pixelWidth >= requested.pixelWidth && available.pixelHeight >= requested.pixelHeight;
+    }
+    hasCachedPage(demand) {
+      const page = this.pageCache.get(demand.key);
+      return Boolean(page && this.pageSatisfies(page.extent, demand.options));
     }
     pumpPageRequests() {
       if (this.disposed || !this.viewport) return;
       const now = performance.now();
       while (this.pendingPages.size < MAX_ACTIVE_PAGE_REQUESTS) {
-        const candidates = [...this.pageDemand.values()].filter((candidate) => !this.pageCache.has(candidate.key) && !this.pendingPages.has(candidate.key) && (this.retryAfter.get(candidate.key) ?? -Infinity) <= now).sort((first, second) => Number(second.visible) - Number(first.visible) || first.distance - second.distance || first.key.localeCompare(second.key));
+        const candidates = [...this.pageDemand.values()].filter((candidate) => !this.hasCachedPage(candidate) && !this.pendingPages.has(candidate.key) && (this.retryAfter.get(candidate.key) ?? -Infinity) <= now).sort((first, second) => Number(second.visible) - Number(first.visible) || first.distance - second.distance || first.key.localeCompare(second.key));
         if (this.hasMissingVisiblePages()) {
           const visible = candidates.find((candidate) => candidate.visible);
           if (!visible) break;
@@ -20574,42 +20677,80 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           continue;
         }
         const prefetch = candidates.find((candidate) => !candidate.visible);
-        if (!prefetch || [...this.pendingPages.values()].some((pending) => !pending.visible) || now - this.lastPrefetchStartedAt < PREFETCH_PAGE_INTERVAL_MS) break;
-        this.lastPrefetchStartedAt = now;
+        if (!prefetch || [...this.pendingPages.values()].some((pending) => !pending.visible)) break;
         this.requestPage(prefetch);
         break;
       }
+      this.scheduleRetryPump(now);
+    }
+    scheduleRetryPump(now) {
+      let earliest = Infinity;
+      for (const [key, retryAt] of this.retryAfter) {
+        const demand = this.pageDemand.get(key);
+        if (!demand || this.hasCachedPage(demand) || this.pendingPages.has(key)) continue;
+        earliest = Math.min(earliest, retryAt);
+      }
+      if (!Number.isFinite(earliest)) {
+        if (this.retryTimer !== void 0) window.clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+        this.retryTimerAt = Infinity;
+        return;
+      }
+      if (this.retryTimer !== void 0 && this.retryTimerAt <= earliest) return;
+      if (this.retryTimer !== void 0) window.clearTimeout(this.retryTimer);
+      this.retryTimerAt = earliest;
+      this.retryTimer = window.setTimeout(() => {
+        this.retryTimer = void 0;
+        this.retryTimerAt = Infinity;
+        this.pumpPageRequests();
+        this.updateCanvasState();
+      }, Math.max(0, earliest - now));
     }
     requestPage(demand) {
       const generation = this.pageGeneration;
       const abort = new AbortController();
       let record;
+      let control;
+      this.pageRequests += 1;
       const promise = this.map.requestWorldOverview(demand.options, {
         signal: abort.signal,
         lane: demand.visible ? "prefetch" : "background",
-        priority: demand.distance
+        priority: demand.distance,
+        onScheduled: (task) => {
+          control = task;
+          if (record) record.control = task;
+        }
       }).then((raster) => {
         if (this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
-        const pageCanvas = document.createElement("canvas");
-        pageCanvas.width = raster.pixelWidth;
-        pageCanvas.height = raster.pixelHeight;
-        const context = pageCanvas.getContext("2d", { alpha: false });
-        if (!context) throw new Error("WorldMinimap could not allocate a page canvas");
-        const image = context.createImageData(raster.pixelWidth, raster.pixelHeight);
-        image.data.set(raster.pixels);
-        context.putImageData(image, 0, 0);
-        this.storePage(demand.key, {
-          extent: {
+        const bytes = raster.pixels.byteLength;
+        this.transferredBytes += bytes;
+        this.transientRasterBytes += bytes;
+        this.peakTransientRasterBytes = Math.max(this.peakTransientRasterBytes, this.transientRasterBytes);
+        try {
+          const pageCanvas = document.createElement("canvas");
+          pageCanvas.width = raster.pixelWidth;
+          pageCanvas.height = raster.pixelHeight;
+          const context = pageCanvas.getContext("2d", { alpha: false });
+          if (!context) throw new Error("WorldMinimap could not allocate a page canvas");
+          context.putImageData(new ImageData(
+            raster.pixels,
+            raster.pixelWidth,
+            raster.pixelHeight
+          ), 0, 0);
+          const stored = this.storePage(demand.key, {
             originX: raster.originX,
             originY: raster.originY,
             tileSpanX: raster.tileSpanX,
             tileSpanY: raster.tileSpanY,
             pixelWidth: raster.pixelWidth,
             pixelHeight: raster.pixelHeight
-          },
-          canvas: pageCanvas
-        });
-        this.retryAfter.delete(demand.key);
+          }, pageCanvas);
+          this.pageCompletions += 1;
+          if (stored) this.retryAfter.delete(demand.key);
+          else this.retryAfter.set(demand.key, Infinity);
+        } finally {
+          this.transientRasterBytes = Math.max(0, this.transientRasterBytes - bytes);
+        }
       }).catch((reason) => {
         if (abortError4(reason) || this.disposed || abort.signal.aborted || generation !== this.pageGeneration) return;
         this.retryAfter.set(demand.key, performance.now() + PAGE_RETRY_DELAY_MS);
@@ -20624,21 +20765,52 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.render();
         this.pumpPageRequests();
       });
-      record = { abort, visible: demand.visible, promise };
+      record = { abort, visible: demand.visible, options: demand.options, control, promise };
       this.pendingPages.set(demand.key, record);
     }
-    storePage(key, page) {
+    storePage(key, extent, canvas) {
       const previous = this.pageCache.get(key);
-      if (previous) previous.canvas.width = previous.canvas.height = 0;
+      if (previous && this.pageSatisfies(previous.extent, extent)) {
+        canvas.width = canvas.height = 0;
+        this.touchPage(key, previous);
+        return false;
+      }
+      const bytes = extent.pixelWidth * extent.pixelHeight * 4;
+      const resourceKey = `page:${key}:${extent.pixelWidth}x${extent.pixelHeight}`;
+      const cost = { cpuBytes: bytes, gpuBytes: bytes, textureBytes: bytes };
+      const required = this.pageDemand.get(key)?.visible === true;
+      let reservation = this.resources.acquire(resourceKey, cost, required);
+      while (!reservation && this.evictOneUndemandedPage(key)) {
+        reservation = this.resources.acquire(resourceKey, cost, required);
+      }
+      if (!reservation && required) reservation = this.resources.acquireRequired(resourceKey, cost, true);
+      if (!reservation) {
+        canvas.width = canvas.height = 0;
+        return false;
+      }
+      if (previous) this.disposeCachedPage(previous);
       this.pageCache.delete(key);
-      this.pageCache.set(key, page);
+      this.pageCache.set(key, { extent, canvas, bytes, reservation });
       while (this.pageCache.size > this.cacheEntries) {
         const evictable = [...this.pageCache.keys()].find((candidate) => !this.pageDemand.has(candidate)) ?? this.pageCache.keys().next().value;
         if (evictable === void 0) break;
         const evicted = this.pageCache.get(evictable);
-        if (evicted) evicted.canvas.width = evicted.canvas.height = 0;
+        if (evicted) this.disposeCachedPage(evicted);
         this.pageCache.delete(evictable);
       }
+      return true;
+    }
+    evictOneUndemandedPage(exclude) {
+      const key = [...this.pageCache.keys()].find((candidate) => candidate !== exclude && !this.pageDemand.has(candidate));
+      if (!key) return false;
+      const page = this.pageCache.get(key);
+      if (page) this.disposeCachedPage(page);
+      this.pageCache.delete(key);
+      return true;
+    }
+    disposeCachedPage(page) {
+      page.reservation.release();
+      page.canvas.width = page.canvas.height = 0;
     }
     touchPage(key, page) {
       this.pageCache.delete(key);
@@ -20650,31 +20822,23 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.pendingPages.clear();
       this.pageDemand.clear();
       this.retryAfter.clear();
-      this.lastPrefetchStartedAt = -Infinity;
-      for (const page of this.pageCache.values()) page.canvas.width = page.canvas.height = 0;
+      if (this.retryTimer !== void 0) window.clearTimeout(this.retryTimer);
+      this.retryTimer = void 0;
+      this.retryTimerAt = Infinity;
+      for (const page of this.pageCache.values()) this.disposeCachedPage(page);
       this.pageCache.clear();
       this.reportedPageError = false;
-      this.lastDemandCenter = void 0;
-    }
-    refreshPageDemand(now) {
-      this.lastDemandCheckAt = now;
-      this.rebuildPageDemand();
-      this.pumpPageRequests();
-      this.updateCanvasState();
-    }
-    panDemandThresholdExceeded() {
-      const viewport = this.viewport;
-      const center = this.lastDemandCenter;
-      const layout = this.pageLayout();
-      if (!viewport || !center || !layout) return true;
-      return Math.hypot(viewport.centerX - center.x, viewport.centerY - center.y) >= layout.tileSpan * PAGE_DEMAND_PAN_THRESHOLD;
+      this.demandSignature = void 0;
+      this.overlaySignature = void 0;
+      this.motionX = 0;
+      this.motionY = 0;
     }
     visiblePageDemands() {
       return [...this.pageDemand.values()].filter((demand) => demand.visible);
     }
     hasMissingVisiblePages() {
       const visible = this.visiblePageDemands();
-      return visible.length > 0 && visible.some((demand) => !this.pageCache.has(demand.key));
+      return visible.length > 0 && visible.some((demand) => !this.hasCachedPage(demand));
     }
     updateCanvasState() {
       const visible = this.visiblePageDemands();
@@ -20683,7 +20847,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.canvas.setAttribute("aria-busy", "false");
         return;
       }
-      const cached = visible.reduce((count, demand) => count + Number(this.pageCache.has(demand.key)), 0);
+      const cached = visible.reduce((count, demand) => count + Number(this.hasCachedPage(demand)), 0);
       const missing = cached < visible.length;
       this.canvas.dataset.state = missing ? cached === 0 ? "loading" : "streaming" : "ready";
       this.canvas.setAttribute("aria-busy", String(missing));
@@ -20723,12 +20887,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (Math.abs(desiredX - viewport.centerX) < 1e-3) viewport.centerX = desiredX;
       if (Math.abs(desiredY - viewport.centerY) < 1e-3) viewport.centerY = desiredY;
       this.clampViewport(viewport);
-      return viewport.centerX !== previousX || viewport.centerY !== previousY;
+      const changed = viewport.centerX !== previousX || viewport.centerY !== previousY;
+      if (changed) this.recordMotion(previousX, previousY, viewport.centerX, viewport.centerY);
+      return changed;
     }
     updateExpandedZoom(dtS) {
       const viewport = this.viewport;
       if (!this.expanded || !viewport || dtS <= 0 || this.zoomFactor === this.targetZoomFactor) return false;
       const previousFactor = this.zoomFactor;
+      const previousX = viewport.centerX;
+      const previousY = viewport.centerY;
       const alpha = 1 - Math.exp(-Math.min(dtS, 0.1) / ZOOM_TIME_CONSTANT_S);
       this.zoomFactor += (this.targetZoomFactor - this.zoomFactor) * alpha;
       if (Math.abs(this.targetZoomFactor - this.zoomFactor) < 1e-4) this.zoomFactor = this.targetZoomFactor;
@@ -20743,7 +20911,30 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         viewport.centerY = anchor.worldY - (anchor.normalizedY - 0.5) * viewport.tileSpanY;
       }
       this.clampViewport(viewport);
-      return this.zoomFactor !== previousFactor;
+      const changed = this.zoomFactor !== previousFactor;
+      if (changed) this.recordMotion(previousX, previousY, viewport.centerX, viewport.centerY);
+      return changed;
+    }
+    recordMotion(previousX, previousY, nextX, nextY) {
+      const dx = nextX - previousX;
+      const dy = nextY - previousY;
+      if (dx === 0 && dy === 0) return;
+      this.motionX = this.motionX * 0.65 + dx * 0.35;
+      this.motionY = this.motionY * 0.65 + dy * 0.35;
+    }
+    currentOverlaySignature() {
+      const target = this.map.getCameraTargetTile();
+      this.map.getCamera().getWorldDirection(this.cameraDirection);
+      return [
+        target?.x ?? "",
+        target?.y ?? "",
+        this.cameraDirection.x.toFixed(4),
+        this.cameraDirection.y.toFixed(4),
+        this.cameraDirection.z.toFixed(4),
+        this.destination?.x ?? "",
+        this.destination?.y ?? "",
+        Number(this.expanded)
+      ].join(":");
     }
     render() {
       if (this.disposed) return;
@@ -20757,6 +20948,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.canvas.width = bufferWidth;
         this.canvas.height = bufferHeight;
       }
+      const nextDisplayBytes = bufferWidth * bufferHeight * 4;
+      if (nextDisplayBytes !== this.displayCanvasBytes) {
+        this.displayReservation?.release();
+        this.displayCanvasBytes = nextDisplayBytes;
+        this.displayReservation = this.resources.acquireRequired("display", {
+          cpuBytes: this.displayCanvasBytes,
+          gpuBytes: this.displayCanvasBytes,
+          textureBytes: this.displayCanvasBytes
+        }, true);
+      }
+      this.renders += 1;
       const context = this.context;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
@@ -20798,6 +21000,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         context.textBaseline = "middle";
         context.fillText("...", rect.x + rect.width / 2, rect.y + rect.height / 2);
       }
+      this.overlaySignature = this.currentOverlaySignature();
     }
     drawPages(context, rect, extent) {
       let drawn = 0;

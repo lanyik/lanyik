@@ -167,6 +167,18 @@ export class PriorityTaskQueue<T> {
         return this.remove(id, reason, true);
     }
 
+    public update(id: number, options: Pick<PriorityTaskOptions, "lane" | "priority">): boolean {
+        const entry = this.entries.get(id);
+        if (!entry) return false;
+        const lane = options.lane ?? entry.lane;
+        const priority = options.priority ?? entry.priority;
+        if (!(lane in LANE_RANK)) throw new TypeError(`unknown work lane "${String(lane)}"`);
+        if (!Number.isFinite(priority)) throw new RangeError("task priority must be finite");
+        entry.lane = lane;
+        entry.priority = priority;
+        return true;
+    }
+
     public clear(reason = cancellationError("Work queue was cleared")): void {
         for (const id of [...this.entries.keys()]) this.remove(id, reason, true);
     }
