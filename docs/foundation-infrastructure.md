@@ -73,6 +73,10 @@ preparing -> committing -> committed
 
 `RuntimeWorkCoordinator` 是联邦调度面：frame、worker、streaming、simulation 保留不同执行器，同时向一个聚合统计面报告 backlog、weight、busy、最老任务、shed 和 starvation。销毁 coordinator 会取消其管理的排队任务；世界切换时旧 worker/streaming domain 会注销，统计本身不会泄漏。
 
+内存型 checkpoint journal、generation stage/manifest、simulation snapshot 与
+world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既是拒绝后续
+访问的状态边界，也是确定性的内存释放边界；不依赖所有外部引用同时被 GC。
+
 `WebGlGpuTimer` 使用 `EXT_disjoint_timer_query_webgl2` 异步查询真实 GPU elapsed time。查询只在后续帧 poll，不调用 `finish()`，disjoint 样本会丢弃，并限制最多四个 outstanding query。统计同时包含样本年龄、查询上限和饱和帧；扩展可用但查询长期堵满时，自适应控制器会把它视为明确的 GPU 落后信号，而不是因拿不到新样本而失明。
 
 ## 5. 模块边界

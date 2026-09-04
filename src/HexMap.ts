@@ -1138,13 +1138,14 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private mountTerrainWorldRenderLayer(context: WorldRenderChunkContext): Promise<void> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || !this.terrain) return Promise.resolve();
-        this.terrain.addTiles(context.points);
-        const build = this.terrain.loadCities(context.points, record).then(() => {
-            if (!context.isCurrent()) {
-                this.terrain?.removeCities(context.points, record);
+        const terrain = this.terrain;
+        terrain.addTiles(context.points);
+        const build = terrain.loadCities(context.points, record).then(() => {
+            if (!context.isCurrent() || this.terrain !== terrain) {
+                terrain.removeCities(context.points, record);
                 return;
             }
-            this.terrain?.setFogStates(this.fogChangesForPoints(context.points));
+            terrain.setFogStates(this.fogChangesForPoints(context.points));
             this.refreshWorldCopies();
         }).catch(error => {
             if (context.isCurrent()) this.emit("error", error);

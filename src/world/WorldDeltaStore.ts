@@ -116,6 +116,7 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         chunkY: number,
         options: WorldDeltaReadOptions
     ): Promise<WorldChunkDelta | undefined> {
+        if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
         assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
         const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
         return Promise.resolve(delta
@@ -196,7 +197,11 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
     }
 
-    public dispose(): void { this.disposed = true; }
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.chunks.clear();
+    }
 
     protected cloneDelta(delta: WorldChunkDelta): WorldChunkDelta {
         if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
@@ -415,7 +420,7 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         if (this.disposed || this.closing) return;
         this.closing = true;
         void this.flush().finally(() => {
-            this.disposed = true;
+            super.dispose();
             void this.databasePromise?.then(database => database.close(), () => undefined);
         }).catch(() => undefined);
     }

@@ -9,6 +9,29 @@ import {
 } from "../../src/persistence/CheckpointCoordinator";
 
 describe("CheckpointCoordinator", () => {
+    test("dispose releases in-memory journals", async () => {
+        const store = new MemoryCheckpointJournalStore();
+        const journal = {
+            formatVersion: 1 as const,
+            worldId: "disposed-world",
+            generation: 1,
+            baseGeneration: 0,
+            revision: 1,
+            sessionId: "session-1",
+            phase: "preparing" as const,
+            createdAt: 1,
+            updatedAt: 1,
+            participants: []
+        };
+        await store.compareAndSet(journal.worldId, 0, journal);
+        expect((store as unknown as { journals: Map<string, unknown> }).journals.size).toBe(1);
+
+        store.dispose();
+
+        expect((store as unknown as { journals: Map<string, unknown> }).journals.size).toBe(0);
+        await expect(store.load(journal.worldId)).rejects.toThrow("disposed");
+    });
+
     test("captures every participant before committing in deterministic order", async () => {
         const events: string[] = [];
         const participant = (id: string): CheckpointParticipant<string> => ({

@@ -434,6 +434,13 @@ changes without a full chunk remount; other layers use the safe remount path.
 Lifecycle failures are aggregated after all remaining cleanup hooks have run;
 objects added through the host are removed even when mount or unmount throws.
 
+City models use the same ownership rule inside `TerrainMesh`. One pending build
+exists per logical tile, duplicate callers share it, and the latest chunk owner
+is retained. Removing that owner, changing the city signature, replacing the
+terrain, or disposing it invalidates the build before any cloned materials or
+label textures can be published. Completion callbacks capture the terrain that
+started the request, so a late result cannot mutate its replacement.
+
 ## Data-driven world overview and minimap
 
 `WorldMinimap` is a Canvas 2D consumer of `HexMap.requestWorldOverview()`; it

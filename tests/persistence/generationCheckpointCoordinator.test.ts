@@ -18,6 +18,28 @@ import { deferred } from "../helpers/deferred";
 const descriptor = createWorldDescriptor({ seed: "strict-save", chunkSize: 24 });
 
 describe("GenerationCheckpointCoordinator", () => {
+    test("dispose releases in-memory manifests and stages", async () => {
+        const store = new MemoryGenerationCheckpointStore();
+        await store.putStage({
+            key: "disposed-world:1:simulation",
+            worldId: "disposed-world",
+            generation: 1,
+            saveId: "save-1",
+            participantId: "simulation",
+            participantVersion: 1,
+            createdAt: 1,
+            checksum: checksumCheckpointSnapshot({ coins: 1 }),
+            snapshot: { coins: 1 }
+        });
+        expect((store as unknown as { stages: Map<string, unknown> }).stages.size).toBe(1);
+
+        store.dispose();
+
+        expect((store as unknown as { stages: Map<string, unknown> }).stages.size).toBe(0);
+        expect((store as unknown as { manifests: Map<string, unknown> }).manifests.size).toBe(0);
+        expect(() => store.listStages("disposed-world")).toThrow("disposed");
+    });
+
     test("publishes one atomic manifest and retains a complete previous generation", async () => {
         const store = new MemoryGenerationCheckpointStore();
         let working = { coins: 1 };

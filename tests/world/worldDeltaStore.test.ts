@@ -12,6 +12,19 @@ import {
 const CHUNK = { chunkSize: 128 } as const;
 
 describe("MemoryWorldDeltaStore", () => {
+    test("dispose releases in-memory deltas", async () => {
+        const store = new MemoryWorldDeltaStore();
+        await store.putChunkDelta("disposed-world", 0, 0, [
+            { x: 1, y: 1, override: { unit: "stored" } }
+        ], CHUNK);
+        expect((store as unknown as { chunks: Map<string, unknown> }).chunks.size).toBe(1);
+
+        store.dispose();
+
+        expect((store as unknown as { chunks: Map<string, unknown> }).chunks.size).toBe(0);
+        await expect(store.loadChunk("disposed-world", 0, 0, CHUNK)).rejects.toThrow("disposed");
+    });
+
     test("merges a chunk batch with one revision and supports compare-and-swap", async () => {
         const store = new MemoryWorldDeltaStore();
         const changes = Array.from({ length: 1000 }, (_, index) => ({

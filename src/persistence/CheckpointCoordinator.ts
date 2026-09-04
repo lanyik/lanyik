@@ -191,7 +191,11 @@ export class MemoryCheckpointJournalStore implements CheckpointJournalStore {
         return Promise.resolve();
     }
 
-    public dispose(): void { this.disposed = true; }
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.journals.clear();
+    }
 }
 
 export interface IndexedDbCheckpointJournalStoreOptions {

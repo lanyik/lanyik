@@ -77,6 +77,12 @@ For authored/server worlds, build summaries with
 `buildWorldNavigationSummary()` and store them in `MemoryWorldNavigationIndex`
 or implement `WorldNavigationIndex` over a database/CDN.
 
+Every navigation index has an explicit `clear()`/`dispose()` lifecycle. Both
+built-in indexes release their summary maps on disposal and reject later reads;
+the campaign controller disposes its index together with simulation and
+checkpoint state. Custom indexes must provide the same deterministic ownership
+boundary even when their summaries live outside process memory.
+
 The passability and movement-cost rules used to build summaries must match the
 rules passed to the finder. Different unit movement classes use separate
 indexes identified by `movementType`. Summaries also carry `terrainRevision`

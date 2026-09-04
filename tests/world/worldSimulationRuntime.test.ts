@@ -15,6 +15,25 @@ interface State { ticks: number }
 const entity = (id: string, x: number, y: number): SimulationEntity<State> => ({ id, x, y, state: { ticks: 0 } });
 
 describe("WorldSimulationRuntime", () => {
+    test("dispose releases in-memory snapshots", async () => {
+        const store = new MemorySimulationChunkStore<State>();
+        await store.save({
+            version: 1,
+            chunkX: 1,
+            chunkY: 2,
+            revision: 1,
+            savedAt: 3,
+            simulatedSeconds: 3,
+            entities: [entity("stored", 10, 20)]
+        });
+        expect((store as unknown as { snapshots: Map<string, unknown> }).snapshots.size).toBe(1);
+
+        store.dispose();
+
+        expect((store as unknown as { snapshots: Map<string, unknown> }).snapshots.size).toBe(0);
+        expect(await store.load(1, 2)).toBeUndefined();
+    });
+
     test("does not resurrect a chunk when a pending wake completes after dispose", async () => {
         const load = deferred<undefined>();
         let storeDisposed = false;

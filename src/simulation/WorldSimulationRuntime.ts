@@ -97,7 +97,11 @@ export class MemorySimulationChunkStore<State = unknown> implements SimulationCh
     }
 
     public flush(): Promise<void> { return Promise.resolve(); }
-    public dispose(): void { this.disposed = true; }
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.snapshots.clear();
+    }
 
 }
 

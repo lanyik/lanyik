@@ -224,6 +224,12 @@ interface CityFogEntry {
     signature: string;
 }
 
+interface PendingCityBuild {
+    owner?: object;
+    readonly signature: string;
+    readonly promise: Promise<void>;
+}
+
 export interface TerrainCityRefresh {
     point: Point;
     owner?: object;
@@ -284,12 +290,14 @@ export class TerrainMesh extends Group {
     private chunkRecords = new Map<string, TerrainChunkRecord>();
     private fogStates = new Map<string, number>();
     private cityFog = new Map<string, CityFogEntry>(); // "x,y" -> that tile's city model/label
+    private readonly pendingCities = new Map<string, PendingCityBuild>();
     private fogTexture: Texture;
     private atlasTexture: Texture;
     private map: MapInfo;
     private atlasCellIndex: { [type: string]: number } = {};
     private clock = 0;
     private lodBuilds = 0;
+    private disposed = false;
     private readonly surface: WorldSurfaceView;
     //Single Color instances shared by BOTH materials' uniforms (the water
     //layer's own colors AND the land layer's painted curved-coast water - see
@@ -772,10 +780,10 @@ export class TerrainMesh extends Group {
     //called by HexMap.loadWorld() after construction, not from the constructor,
     //so callers can await it if they need cities present before proceeding.
     public async loadCities(onlyTiles?: readonly Point[], owner?: object): Promise<void> {
+        if (this.disposed) throw new Error("TerrainMesh has been disposed");
         const { size } = this.options;
         const defaultModel = this.options.cityModel ?? "Assets/models/monument";
         const cityScale = this.options.cityScale ?? 1;
-        const surfaceWindow = this.surface.createWindow();
 
         const cityTiles: Point[] = [];
         if (onlyTiles) {
@@ -789,77 +797,101 @@ export class TerrainMesh extends Group {
         }
 
         for (const { x, y } of cityTiles) {
-                const tile = getMapTile(this.map, x, y);
-                const key = `${x},${y}`;
-                if (!tile?.city) continue;
-                const existing = this.cityFog.get(key);
-                if (existing) {
-                    existing.owner = owner;
-                    continue;
-                }
+            const tile = getMapTile(this.map, x, y);
+            const key = `${x},${y}`;
+            if (!tile?.city) continue;
+            const signature = this.citySignature(tile);
+            const existing = this.cityFog.get(key);
+            if (existing?.signature === signature) {
+                existing.owner = owner;
+                continue;
+            }
+            if (existing) this.removeCity(key);
 
-                const center = getHexCenter(x, y, size);
-                const modelPath = tile.city.model ?? defaultModel;
+            const pending = this.pendingCities.get(key);
+            if (pending?.signature === signature) {
+                pending.owner = owner;
+                await pending.promise;
+                continue;
+            }
+            if (pending) this.pendingCities.delete(key);
 
-                const { scene, fixup } = await loadModel(modelPath);
-                const loadedByAnotherRequest = this.cityFog.get(key);
-                if (loadedByAnotherRequest) {
-                    loadedByAnotherRequest.owner = owner;
-                    continue;
-                }
+            let record: PendingCityBuild;
+            const modelPath = tile.city.model ?? defaultModel;
+            const promise = loadModel(modelPath).then(({ scene, fixup }) => {
+                if (!this.isCurrentCityBuild(key, record)) return;
+                const currentTile = getMapTile(this.map, x, y);
+                if (!currentTile?.city || this.citySignature(currentTile) !== signature) return;
+
                 const model = scene.clone(true);
                 model.applyMatrix4(fixup);
                 model.updateMatrixWorld(true);
+                const cityMaterials: CityFogEntry["materials"] = [];
+                let sprite: Sprite | undefined;
+                try {
+                    // glTF hierarchy clones keep their source materials. Cities
+                    // need private materials because fog darkening is per tile.
+                    model.traverse(o => {
+                        const mesh = o as Mesh;
+                        if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return;
+                        const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                        const clonedMaterials = sourceMaterials.map(material => material.clone());
+                        mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
+                        for (const material of clonedMaterials) {
+                            const colored = material as Material & { color?: Color };
+                            cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                        }
+                    });
 
-                // Clone each mesh's material so darkening this city (see
-                // setFogState()) doesn't also darken every other city sharing
-                // the same model - scene.clone(true) copies the hierarchy but
-                // leaves materials as shared references.
-                const cityMaterials: { material: Material & { color?: Color }, baseColor?: Color }[] = [];
-                model.traverse(o => {
-                    const mesh = o as Mesh;
-                    if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return;
-                    const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                    const clonedMaterials = sourceMaterials.map(material => material.clone());
-                    mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
-                    for (const material of clonedMaterials) {
-                        const colored = material as Material & { color?: Color };
-                        cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                    const center = getHexCenter(x, y, size);
+                    const modelHeight = new Box3().setFromObject(model).getSize(new Vector3()).y;
+                    const wrapper = new Group();
+                    wrapper.add(model);
+                    wrapper.scale.setScalar(cityScale);
+                    const groundHeight = this.surface.getTileCenterHeight(x, y);
+                    const labelOffset = modelHeight * cityScale + Math.round(size / 5);
+                    wrapper.position.set(center.x, groundHeight, center.y);
+                    wrapper.userData[CITY_FOG_TILE_KEY] = key;
+
+                    sprite = makeTextSprite(` ${currentTile.city.name ?? "City"} `, {
+                        fontsize: 32,
+                        fontface: "Georgia",
+                        borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
+                    });
+                    sprite.position.set(center.x, groundHeight + labelOffset, center.y);
+                    sprite.userData[CITY_FOG_TILE_KEY] = key;
+
+                    if (!this.isCurrentCityBuild(key, record)) {
+                        this.disposeCityResources(cityMaterials, sprite);
+                        return;
                     }
-                });
-
-                const box = new Box3().setFromObject(model);
-                const modelHeight = box.getSize(new Vector3()).y;
-
-                const wrapper = new Group();
-                wrapper.add(model);
-                wrapper.scale.setScalar(cityScale);
-                const groundHeight = surfaceWindow.getTileCenterHeight(x, y);
-                const labelOffset = modelHeight * cityScale + Math.round(size / 5);
-                wrapper.position.set(center.x, groundHeight, center.y);
-                wrapper.userData[CITY_FOG_TILE_KEY] = key;
-                this.add(wrapper);
-
-                const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
-                    fontsize: 32,
-                    fontface: "Georgia",
-                    borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
-                });
-                sprite.position.set(center.x, groundHeight + labelOffset, center.y);
-                sprite.userData[CITY_FOG_TILE_KEY] = key;
-                this.add(sprite);
-
-                this.cityFog.set(key, {
-                    wrapper,
-                    sprite,
-                    x,
-                    y,
-                    labelOffset,
-                    materials: cityMaterials,
-                    owner,
-                    signature: this.citySignature(tile)
-                });
+                    this.add(wrapper);
+                    this.add(sprite);
+                    this.cityFog.set(key, {
+                        wrapper,
+                        sprite,
+                        x,
+                        y,
+                        labelOffset,
+                        materials: cityMaterials,
+                        owner: record.owner,
+                        signature
+                    });
+                } catch (reason) {
+                    this.disposeCityResources(cityMaterials, sprite);
+                    throw reason;
+                }
+            }).finally(() => {
+                if (this.pendingCities.get(key) === record) this.pendingCities.delete(key);
+            });
+            record = { owner, signature, promise };
+            this.pendingCities.set(key, record);
+            await promise;
         }
+    }
+
+    private isCurrentCityBuild(key: string, record: PendingCityBuild): boolean {
+        return !this.disposed && this.pendingCities.get(key) === record;
     }
 
     public refreshCitySurfaceHeights(points?: readonly Point[]): void {
@@ -1032,14 +1064,20 @@ export class TerrainMesh extends Group {
     }
 
     private removeCity(key: string, owner?: object): void {
+        const pending = this.pendingCities.get(key);
+        if (pending && (owner === undefined || pending.owner === owner)) this.pendingCities.delete(key);
         const entry = this.cityFog.get(key);
         if (!entry || (owner !== undefined && entry.owner !== owner)) return;
         this.remove(entry.wrapper);
         this.remove(entry.sprite);
-        for (const { material } of entry.materials) material.dispose();
-        entry.sprite.material.map?.dispose();
-        entry.sprite.material.dispose();
+        this.disposeCityResources(entry.materials, entry.sprite);
         this.cityFog.delete(key);
+    }
+
+    private disposeCityResources(materials: CityFogEntry["materials"], sprite?: Sprite): void {
+        for (const { material } of materials) material.dispose();
+        sprite?.material.map?.dispose();
+        sprite?.material.dispose();
     }
 
     //Advances the water/river animation. `dtS` is the elapsed time in seconds
@@ -1499,6 +1537,9 @@ export class TerrainMesh extends Group {
     //Model geometry remains shared with loadModel()'s cache. Per-city cloned
     //materials and canvas label textures are owned here and released below.
     public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.pendingCities.clear();
         for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
         for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
         this.baseLodGeometries.clear();
@@ -1507,9 +1548,7 @@ export class TerrainMesh extends Group {
         this.atlasTexture.dispose(); // shared by both materials - dispose once
         this.fogTexture.dispose();
         for (const entry of this.cityFog.values()) {
-            for (const { material } of entry.materials) material.dispose();
-            entry.sprite.material.map?.dispose();
-            entry.sprite.material.dispose();
+            this.disposeCityResources(entry.materials, entry.sprite);
         }
         this.cityFog.clear();
     }

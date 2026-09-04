@@ -28,6 +28,7 @@ vi.mock("../../src/objects/citysprite", async () => {
 
 import { Land, MapInfo, Point } from "../../src/index";
 import { getWorldChunkMetadata } from "../../src/helpers/chunks";
+import { loadModel } from "../../src/helpers/models";
 import { createForest, ForestSharedResources } from "../../src/objects/Forest";
 import { createGrassField, GrassSharedResources } from "../../src/objects/Grass";
 import { CITY_FOG_TILE_KEY, TerrainMesh } from "../../src/objects/TerrainMesh";
@@ -44,6 +45,7 @@ import { WATER_FRAGMENT_SHADER } from "../../src/shaders/water.fragment";
 import { WATER_VERTEX_SHADER } from "../../src/shaders/water.vertex";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldSurfaceView } from "../../src/world/WorldSurfaceView";
+import { deferred } from "../helpers/deferred";
 
 function mapWithVegetation(): MapInfo {
     const data: MapInfo["data"] = {};
@@ -186,6 +188,48 @@ describe("streamed render resource sharing", () => {
         expect(terrain.children).not.toContain(firstMesh);
 
         terrain.dispose();
+        texture.mockRestore();
+    });
+
+    test("does not publish a city whose terrain owner was disposed while its model loaded", async () => {
+        const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
+        const map = mapWithVegetation();
+        map.data[4][4].city = { name: "Late city" };
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6 });
+        const terrain = new TerrainMesh(map, {
+            size: 10,
+            texturesBaseUrl: "textures/",
+            atlas: {
+                image: "terrain.png",
+                width: 1,
+                height: 1,
+                cellSize: 1,
+                cellSpacing: 0,
+                textures: { [Land.land]: { cellX: 0, cellY: 0 } }
+            },
+            surface
+        }, []);
+        const loading = deferred<Awaited<ReturnType<typeof loadModel>>>();
+        vi.mocked(loadModel).mockReturnValueOnce(loading.promise);
+
+        const cityBuild = terrain.loadCities([{ x: 4, y: 4 }]);
+        terrain.dispose();
+        const scene = new Group();
+        scene.add(new Mesh(new BoxGeometry(1, 2, 1), new MeshBasicMaterial()));
+        scene.updateMatrixWorld(true);
+        loading.resolve({
+            scene,
+            animations: [],
+            info: {
+                offset: { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 },
+                scale: 1
+            },
+            fixup: new Matrix4()
+        });
+        await cityBuild;
+
+        expect(terrain.children.some(child => child.userData[CITY_FOG_TILE_KEY] === "4,4")).toBe(false);
         texture.mockRestore();
     });
 

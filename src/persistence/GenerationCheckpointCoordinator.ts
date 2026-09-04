@@ -415,7 +415,12 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
         return Promise.resolve(reclaimed);
     }
 
-    public dispose(): void { this.disposed = true; }
+    public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.manifests.clear();
+        this.stages.clear();
+    }
 
     private assertActive(): void {
         if (this.disposed) throw new Error("GenerationCheckpointStore has been disposed");

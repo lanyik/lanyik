@@ -255,4 +255,20 @@ describe("ProceduralWorldNavigationIndex", () => {
         await index.getSummary(2, 0);
         expect(index.cachedSummaries).toBe(2);
     });
+
+    test("clear and dispose release cached summaries", async () => {
+        const index = new ProceduralWorldNavigationIndex({
+            seed: "navigation-lifecycle", chunkSize: 12, maxCachedSummaries: 2, passable: () => true
+        });
+        await index.getSummary(0, 0);
+        expect(index.cachedSummaries).toBe(1);
+
+        index.clear();
+        expect(index.cachedSummaries).toBe(0);
+        await index.getSummary(1, 0);
+        index.dispose();
+
+        expect(index.cachedSummaries).toBe(0);
+        await expect(index.getSummary(0, 0)).rejects.toThrow("disposed");
+    });
 });

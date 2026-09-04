@@ -176,6 +176,7 @@ export async function createCampaignDemo({
     } catch (reason) {
         checkpoints.dispose();
         simulation.dispose();
+        navigation.dispose();
         throw reason;
     }
     // Keep the initial player area hot. Once the army leaves it, its route
@@ -369,6 +370,7 @@ export async function createCampaignDemo({
                     disposed = true;
                     checkpoints.dispose();
                     simulation.dispose();
+                    navigation.dispose();
                     marker.dispose();
                 }
             })();

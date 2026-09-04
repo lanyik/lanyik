@@ -48,6 +48,8 @@ export interface WorldNavigationIndex {
     readonly movementType: string;
     getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined>;
     invalidateChunk?(chunkX: number, chunkY: number): boolean;
+    clear(): void;
+    dispose(): void;
 }
 
 export type TilePassability = (tile: TileInfo, x: number, y: number) => boolean;
@@ -119,6 +121,7 @@ class MinQueue<T> {
 
 export class MemoryWorldNavigationIndex implements WorldNavigationIndex {
     private readonly summaries = new Map<string, WorldNavigationChunkSummary>();
+    private disposed = false;
     constructor(
         public readonly chunkSize: number,
         public readonly bounds?: WorldBounds,
@@ -128,6 +131,7 @@ export class MemoryWorldNavigationIndex implements WorldNavigationIndex {
         if (!movementType.trim()) throw new TypeError("navigation movementType must be a non-empty string");
     }
     public setSummary(summary: WorldNavigationChunkSummary): void {
+        this.assertActive();
         assertNavigationSummary(summary);
         if (summary.movementType !== this.movementType) {
             throw new TypeError("navigation summary movementType does not match its index");
@@ -135,10 +139,24 @@ export class MemoryWorldNavigationIndex implements WorldNavigationIndex {
         this.summaries.set(chunkKey(summary.chunkX, summary.chunkY), summary);
     }
     public getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined> {
+        if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
         return Promise.resolve(this.summaries.get(chunkKey(chunkX, chunkY)));
     }
     public invalidateChunk(chunkX: number, chunkY: number): boolean {
+        this.assertActive();
         return this.summaries.delete(chunkKey(chunkX, chunkY));
+    }
+    public clear(): void {
+        this.assertActive();
+        this.summaries.clear();
+    }
+    public dispose(): void {
+        if (this.disposed) return;
+        this.summaries.clear();
+        this.disposed = true;
+    }
+    private assertActive(): void {
+        if (this.disposed) throw new Error("WorldNavigationIndex has been disposed");
     }
 }
 
@@ -170,6 +188,7 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
     private readonly buildOptions: WorldNavigationBuildOptions;
     private readonly maxCached: number;
     private readonly cache = new Map<string, WorldNavigationChunkSummary>();
+    private disposed = false;
 
     constructor(options: ProceduralWorldNavigationIndexOptions) {
         if (!options || !Number.isSafeInteger(options.chunkSize) || options.chunkSize <= 0) {
@@ -205,6 +224,7 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
     public get cachedSummaries(): number { return this.cache.size; }
 
     public getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined> {
+        if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
         const resolved = this.resolveChunk(chunkX, chunkY);
         if (!resolved) return Promise.resolve(undefined);
         const key = chunkKey(resolved.x, resolved.y);
@@ -233,8 +253,24 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
     }
 
     public invalidateChunk(chunkX: number, chunkY: number): boolean {
+        this.assertActive();
         const resolved = this.resolveChunk(chunkX, chunkY);
         return resolved ? this.cache.delete(chunkKey(resolved.x, resolved.y)) : false;
+    }
+
+    public clear(): void {
+        this.assertActive();
+        this.cache.clear();
+    }
+
+    public dispose(): void {
+        if (this.disposed) return;
+        this.cache.clear();
+        this.disposed = true;
+    }
+
+    private assertActive(): void {
+        if (this.disposed) throw new Error("WorldNavigationIndex has been disposed");
     }
 
     private resolveChunk(chunkX: number, chunkY: number): Point | undefined {
