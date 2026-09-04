@@ -40,7 +40,8 @@ const PALETTE = {
     tundra: [151, 166, 157] as Rgb,
     snow: [225, 233, 235] as Rgb,
     mountain: [105, 108, 109] as Rgb,
-    lake: [35, 105, 129] as Rgb
+    lake: [35, 105, 129] as Rgb,
+    river: [28, 142, 174] as Rgb
 } as const;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
@@ -116,6 +117,7 @@ function overviewTileCoordinate(origin: number, span: number, pixel: number, pix
 
 function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     if (tile.modifiers?.includes("lake")) return PALETTE.lake;
+    if (tile.modifiers?.includes("river")) return PALETTE.river;
     if (tile.type === Land.sea) return PALETTE.deepWater;
     if (tile.type === Land.coastal) return PALETTE.coast;
     if (tile.type === Land.sand) return PALETTE.sand;
@@ -123,6 +125,31 @@ function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     if (tile.type === Land.snow) return PALETTE.snow;
     if (tile.type === Land.mountain) return PALETTE.mountain;
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
+}
+
+function generatedRiverCoverage(
+    options: WorldOverviewPreparationOptions,
+    resolver: WorldSurfaceResolver
+): Uint8Array {
+    const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
+    resolver.visitGeneratedRiverTiles(
+        options.originX,
+        options.originY,
+        options.tileSpanX,
+        options.tileSpanY,
+        (x, y) => {
+            const px = Math.min(
+                options.pixelWidth - 1,
+                Math.floor((x - options.originX) * options.pixelWidth / options.tileSpanX)
+            );
+            const py = Math.min(
+                options.pixelHeight - 1,
+                Math.floor((y - options.originY) * options.pixelHeight / options.tileSpanY)
+            );
+            coverage[py * options.pixelWidth + px] = 1;
+        }
+    );
+    return coverage;
 }
 
 export function generateWorldOverviewWithResolver(
@@ -140,6 +167,7 @@ export function generateWorldOverviewWithResolver(
     }
 
     const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    const riverCoverage = generatedRiverCoverage(options, resolver);
     const terrain = resolver.profile.terrain;
     let offset = 0;
     for (let py = 0; py < options.pixelHeight; py += 1) {
@@ -150,7 +178,7 @@ export function generateWorldOverviewWithResolver(
             let color: Rgb;
             if (sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) {
                 const shoreline = clamp01(
-                    1 - (terrain.seaLevel - sample.landform.elevation) / Math.max(0.001, terrain.seaLevel * 0.42)
+                    1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(0.001, terrain.oceanLevel * 0.42)
                 );
                 color = mix(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
             } else if (sample.baseTerrain === Land.sand) {
@@ -171,7 +199,12 @@ export function generateWorldOverviewWithResolver(
                 + clamp01((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18
                 - sample.vegetationDensity * 0.13
                 - sample.landform.valley * 0.035;
-            writePixel(pixels, offset, shadeRgb(color, reliefShade));
+            const pixelIndex = py * options.pixelWidth + px;
+            writePixel(
+                pixels,
+                offset,
+                riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
+            );
             offset += 4;
         }
     }

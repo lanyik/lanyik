@@ -6,7 +6,7 @@ import {
 } from "../helpers/worldStyleGallery";
 
 describe("world style gallery metrics", () => {
-    test("freezes the required stage-5 corpus shape", () => {
+    test("freezes the required topology corpus shape", () => {
         const group = (name: typeof WORLD_STYLE_GALLERY_SAMPLES[number]["group"]) =>
             WORLD_STYLE_GALLERY_SAMPLES.filter(sample => sample.group === name);
         expect(group("bounded")).toHaveLength(4);
@@ -14,7 +14,7 @@ describe("world style gallery metrics", () => {
         expect(new Set(group("infinite-window").map(sample => sample.seed)).size).toBe(4);
         expect(group("infinite-window").some(sample => sample.originX < 0 && sample.originY < 0)).toBe(true);
         expect(group("infinite-window").some(sample => sample.originX > 0 && sample.originY > 0)).toBe(true);
-        expect(group("stress")).toHaveLength(2);
+        expect(group("extreme")).toHaveLength(2);
         expect(group("minimum")).toHaveLength(2);
     });
 
@@ -29,8 +29,8 @@ describe("world style gallery metrics", () => {
             expect(metrics.mountains.tiles).toBeLessThanOrEqual(sample.width * sample.height);
             expect(metrics.forests.adjacencyRatio).toBeGreaterThanOrEqual(0);
             expect(metrics.forests.adjacencyRatio).toBeLessThanOrEqual(1);
-            expect(metrics.lakes.singleCellRatio).toBeGreaterThanOrEqual(0);
-            expect(metrics.lakes.singleCellRatio).toBeLessThanOrEqual(1);
+            expect(metrics.waters.dominantRatio).toBeGreaterThanOrEqual(0);
+            expect(metrics.waters.dominantRatio).toBeLessThanOrEqual(1);
         }
     );
 });

@@ -13,7 +13,7 @@ export interface WorldStyleGallerySample {
     readonly height: number;
     readonly originX: number;
     readonly originY: number;
-    readonly group: "bounded" | "toroidal-512" | "infinite-window" | "stress" | "minimum";
+    readonly group: "bounded" | "toroidal-512" | "infinite-window" | "extreme" | "minimum";
 }
 
 const sample = (
@@ -36,10 +36,10 @@ const sample = (
     group
 });
 
-// Stage-5's fixed corpus. Infinite worlds deliberately reuse four seeds at a
+// The fixed corpus deliberately reuses four infinite-world seeds at a
 // positive and a negative window so coordinate signs cannot become accidental
-// generation inputs. Stress samples stay small enough for quick diagnosis and
-// deliberately exercise the frozen generator's near-water and highland tails.
+// generation inputs. Extreme samples stay small enough for quick diagnosis and
+// exercise dry and water-heavy tails of the broad ocean field.
 export const WORLD_STYLE_GALLERY_SAMPLES: readonly WorldStyleGallerySample[] = Object.freeze([
     sample("bounded-a", "gallery-a", "bounded", 128, 96, "bounded"),
     sample("bounded-b", "surface-v4-bounded", "bounded", 128, 96, "bounded"),
@@ -62,8 +62,8 @@ export const WORLD_STYLE_GALLERY_SAMPLES: readonly WorldStyleGallerySample[] = O
     sample("infinite-d-negative", "gallery-infinite-d", "infinite", 144, 144, "infinite-window", -288, -816),
     sample("infinite-d-positive", "gallery-infinite-d", "infinite", 144, 144, "infinite-window", 768, 144),
 
-    sample("stress-water", "gallery-torus-8", "toroidal", 64, 64, "stress"),
-    sample("stress-highland", "gallery-torus-213", "toroidal", 64, 64, "stress"),
+    sample("extreme-dry", "gallery-torus-8", "toroidal", 64, 64, "extreme"),
+    sample("extreme-water", "gallery-torus-213", "toroidal", 64, 64, "extreme"),
     sample("minimum-bounded", "gallery-minimum-bounded", "bounded", 8, 8, "minimum"),
     sample("minimum-toroidal", "gallery-minimum-toroidal", "toroidal", 8, 8, "minimum")
 ]);
@@ -81,7 +81,6 @@ const BIOMES: readonly WorldBiome[] = ["ocean", "coast", "temperate", "dry", "co
 const BIOME_CODES = new Map(BIOMES.map((biome, index) => [biome, index]));
 const FLAG_HILL = 1;
 const FLAG_FOREST = 2;
-const FLAG_LAKE = 4;
 
 export interface WorldStyleComponentMetrics {
     readonly components: number;
@@ -112,12 +111,11 @@ export interface WorldStyleGalleryMetrics {
         readonly mountain: number;
         readonly hill: number;
         readonly forest: number;
-        readonly lake: number;
     };
     readonly climateRatios: Readonly<Record<WorldBiome, number>>;
     readonly mountains: WorldStyleComponentMetrics;
     readonly forests: WorldStyleComponentMetrics & { readonly adjacencyRatio: number };
-    readonly lakes: WorldStyleComponentMetrics & { readonly singleCellRatio: number };
+    readonly waters: WorldStyleComponentMetrics & { readonly dominantRatio: number };
     readonly coastlineEdges: number;
     readonly coastlineEdgesPerThousandTiles: number;
     readonly topologySeamErrors: number;
@@ -126,7 +124,7 @@ export interface WorldStyleGalleryMetrics {
         readonly relief: WorldStyleGalleryPoint;
         readonly mountain: WorldStyleGalleryPoint;
         readonly forest: WorldStyleGalleryPoint;
-        readonly lake: WorldStyleGalleryPoint;
+        readonly water: WorldStyleGalleryPoint;
         readonly coast: WorldStyleGalleryPoint;
     };
 }
@@ -271,8 +269,7 @@ function topologySeamErrors(sample: WorldStyleGallerySample): number {
         const bSample = resolver.sampleGenerated(bx, by);
         if (aTile.type !== bTile.type || !sameModifiers(aTile.modifiers, bTile.modifiers)
             || aSample.relief !== bSample.relief || aSample.biome !== bSample.biome
-            || aSample.vegetationDensity !== bSample.vegetationDensity
-            || aSample.lakePotential !== bSample.lakePotential) errors += 1;
+            || aSample.vegetationDensity !== bSample.vegetationDensity) errors += 1;
     };
     for (let y = 0; y < sample.height; y += 1) {
         compare(-1, y, sample.width - 1, y);
@@ -317,8 +314,7 @@ function createGrid(sample: WorldStyleGallerySample): SampleGrid {
                     const modifiers = tile.modifiers ?? [];
                     terrain[index] = TERRAIN_CODES.get(tile.type) ?? 255;
                     flags[index] = (modifiers.includes("hill") ? FLAG_HILL : 0)
-                        | (modifiers.includes("wood") ? FLAG_FOREST : 0)
-                        | (modifiers.includes("lake") ? FLAG_LAKE : 0);
+                        | (modifiers.includes("wood") ? FLAG_FOREST : 0);
                     biome[index] = BIOME_CODES.get(surface.biome) ?? 255;
                     relief[index] = surface.relief;
                 }
@@ -336,23 +332,20 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
     let mountains = 0;
     let hills = 0;
     let forests = 0;
-    let lakes = 0;
     let adjacentForests = 0;
     let coastlineTwice = 0;
     let highestRelief = 0;
     let coastAnchor: number | undefined;
     const climateCounts = new Uint32Array(BIOMES.length);
-    const isWater = (index: number): boolean => grid.terrain[index] <= 1 || Boolean(grid.flags[index] & FLAG_LAKE);
+    const isWater = (index: number): boolean => grid.terrain[index] <= 1;
     const isMountain = (index: number): boolean => grid.terrain[index] === TERRAIN_CODES.get(Land.mountain);
     const isForest = (index: number): boolean => Boolean(grid.flags[index] & FLAG_FOREST);
-    const isLake = (index: number): boolean => Boolean(grid.flags[index] & FLAG_LAKE);
 
     for (let index = 0; index < total; index += 1) {
         if (isWater(index)) water += 1;
         if (isMountain(index)) mountains += 1;
         if (grid.flags[index] & FLAG_HILL) hills += 1;
         if (isForest(index)) forests += 1;
-        if (isLake(index)) lakes += 1;
         if (grid.biome[index] < climateCounts.length) climateCounts[grid.biome[index]] += 1;
         if (grid.relief[index] > grid.relief[highestRelief]) highestRelief = index;
         let hasForestNeighbor = false;
@@ -369,10 +362,10 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
 
     const mountainDistribution = distribution(sample, isMountain, grid.relief);
     const forestDistribution = distribution(sample, isForest, grid.relief);
-    const lakeDistribution = distribution(sample, isLake, grid.relief);
+    const waterDistribution = distribution(sample, isWater, grid.relief);
     const { anchorIndex: _mountainAnchor, ...mountainMetrics } = mountainDistribution;
     const { anchorIndex: _forestAnchor, ...forestMetrics } = forestDistribution;
-    const { anchorIndex: _lakeAnchor, ...lakeMetrics } = lakeDistribution;
+    const { anchorIndex: _waterAnchor, ...waterMetrics } = waterDistribution;
     const climateRatios = Object.fromEntries(BIOMES.map((name, index) => [
         name,
         round(climateCounts[index] / total)
@@ -395,8 +388,7 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             water: round(water / total),
             mountain: round(mountains / total),
             hill: round(hills / total),
-            forest: round(forests / total),
-            lake: round(lakes / total)
+            forest: round(forests / total)
         },
         climateRatios,
         mountains: mountainMetrics,
@@ -404,9 +396,9 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             ...forestMetrics,
             adjacencyRatio: forests === 0 ? 0 : round(adjacentForests / forests)
         },
-        lakes: {
-            ...lakeMetrics,
-            singleCellRatio: lakes === 0 ? 0 : round(lakeDistribution.isolatedTiles / lakes)
+        waters: {
+            ...waterMetrics,
+            dominantRatio: water === 0 ? 0 : round(waterDistribution.maximumSize / water)
         },
         coastlineEdges,
         coastlineEdgesPerThousandTiles: round(coastlineEdges * 1000 / total),
@@ -416,7 +408,7 @@ export function analyzeWorldStyleGallerySample(sample: WorldStyleGallerySample):
             relief: pointFromIndex(sample, highestRelief),
             mountain: pointFromIndex(sample, mountainDistribution.anchorIndex ?? highestRelief),
             forest: pointFromIndex(sample, forestDistribution.anchorIndex),
-            lake: pointFromIndex(sample, lakeDistribution.anchorIndex),
+            water: pointFromIndex(sample, waterDistribution.anchorIndex),
             coast: pointFromIndex(sample, coastAnchor)
         }
     };

@@ -80,7 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Deferred WebGPU/GPU-culling and automatic-river work now has a machine-checked
+- Procedural water now separates a low-frequency connected ocean mask from
+  terrain detail and adds deterministic 3–5-hex-wide drainage courses that
+  descend and merge into the sea. Random generated lakes were removed, manual
+  lake/river edits remain supported, and world overviews rasterize coarse
+  courses once instead of tracing water per pixel or materializing every tile.
+- WebGPU/GPU-culling and automatic-river work now has a machine-checked
   decision register with explicit triggers, structured evidence and approval
   states; the render crossover benchmark reports five-sample median timing.
 - `EventEmitter` is now generic over typed payload maps; `HexMap`, `Unit` and
@@ -109,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gallery all passed. The later climate-snow correction advanced the current
   frozen identity to generator v6. Future gameplay consumes the surface
   contracts instead of extending generator or `HexMap` domain state.
-- Deferred automatic river generation after the fixed world gallery found no
+- The earlier baseline deferred automatic river generation after its fixed world gallery found no
   recurring hydrology-shaped visual defect. Existing manual river rendering,
   editing and persistence remain; no local pseudo-network or regional hydrology
   state is added to generator v5.

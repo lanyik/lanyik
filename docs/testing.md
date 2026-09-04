@@ -80,8 +80,10 @@ npm run review:world-style
 ```
 
 The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
-infinite seeds at positive and negative windows, pressure seeds and minimum
-dimensions. The gallery pass uses `quality=gallery`: full terrain materials and
+infinite seeds at positive and negative windows, water/land extreme seeds and
+minimum dimensions. It measures water-component dominance and isolation in
+addition to terrain and forest structure. The gallery pass uses
+`quality=gallery`: full terrain materials and
 trees remain enabled, while grass, sky and antialiasing are disabled and tree
 instance density is reduced so all four fixed views remain practical under CI
 software rendering. Per-sample JSON and images are artifacts; topology,

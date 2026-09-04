@@ -53,4 +53,25 @@ describe("world overview raster", () => {
 
         expect(shifted.pixels).toEqual(first.pixels);
     });
+
+    it("rasterizes generated river courses without resolving every world tile", () => {
+        const descriptor = createWorldDescriptor({ seed: "new-world", chunkSize: 24 });
+        const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
+        const overview = generateWorldOverviewWithResolver({
+            descriptor,
+            originX: -256,
+            originY: -256,
+            tileSpanX: 512,
+            tileSpanY: 512,
+            pixelWidth: 128,
+            pixelHeight: 128
+        }, resolver);
+        let riverPixels = 0;
+        for (let index = 0; index < overview.pixels.length; index += 4) {
+            if (overview.pixels[index] === 28
+                && overview.pixels[index + 1] === 142
+                && overview.pixels[index + 2] === 174) riverPixels += 1;
+        }
+        expect(riverPixels).toBeGreaterThan(20);
+    });
 });

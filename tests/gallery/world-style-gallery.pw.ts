@@ -124,11 +124,9 @@ async function loadSample(
 }
 
 function viewsFor(metrics: WorldStyleGalleryMetrics): readonly GalleryView[] {
-    const nearTarget = metrics.lakes.tiles > 0
-        ? metrics.anchors.lake
-        : metrics.forests.tiles > 0
-            ? metrics.anchors.forest
-            : metrics.anchors.coast;
+    const nearTarget = metrics.forests.tiles > 0
+        ? metrics.anchors.forest
+        : metrics.anchors.coast;
     return [
         { id: "far", target: metrics.anchors.center, distance: 780, debug: "off" },
         { id: "middle", target: metrics.anchors.mountain, distance: 500, debug: "off" },

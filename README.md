@@ -24,7 +24,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
-| World style | Generation v1 is current on generator v6 with elevated climate snow, continuous relief, regional forests and lakes |
+| World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
 | Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
@@ -40,7 +40,7 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   floating-origin rebasing.
 - Periodic four-way wrapped maps with seam-aware rendering, picking, neighbors,
   fog and shortest-path movement.
-- Rivers, lakes, coastlines, shared mountain geometry, atlas de-tiling,
+- Generated drainage rivers, broad oceans, authored lakes/rivers, shared mountain geometry, atlas de-tiling,
   atmospheric sky, cities, units and fog of war.
 - Worker-based terrain and vegetation generation, optional IndexedDB base-chunk
   caching and sparse persistent tile overrides.
@@ -269,11 +269,11 @@ frozen contracts, focused subsystem guides, decisions and future designs.
 
 Current deliberate boundaries:
 
-- [World-style generation v1](docs/world-style-generation-v1.md) is implemented
-  and frozen; automatic river generation remains deliberately deferred.
-- WebGPU/GPU culling and automatic rivers are governed by the
-  [machine-checked optimization gates](docs/optimization-gates.md); both remain
-  deferred until their recorded measurements justify a prototype.
+- [World-style generation v1](docs/world-style-generation-v1.md) includes the
+  implemented broad-ocean and coarse-drainage water revision.
+- WebGPU/GPU culling remains deferred; the automatic-river gate is implemented
+  with recorded evidence and a decision in the
+  [machine-checked optimization register](docs/optimization-gates.md).
 - Multiplayer reconciliation, cloud saves, server authority and a complete
   economy/combat ruleset are application-level work, not current library
   features.

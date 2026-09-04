@@ -25,7 +25,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v6 outputs", () => {
+    test("preserves the frozen current-generator outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v4-infinite", chunkX: -3, chunkY: 2, chunkSize: 24
         });
@@ -44,13 +44,12 @@ describe("WorldSurfaceResolver", () => {
                 const tile = bounded.data[x][y];
                 encoded.push(land.indexOf(tile.type));
                 encoded.push((tile.modifiers?.includes("hill") ? 1 : 0)
-                    | (tile.modifiers?.includes("wood") ? 2 : 0)
-                    | (tile.modifiers?.includes("lake") ? 4 : 0));
+                    | (tile.modifiers?.includes("wood") ? 2 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("ae84e215");
-        expect(checksum(toroidal.tiles)).toBe("c4507ca2");
-        expect(checksum(encoded)).toBe("50fc54b4");
+        expect(checksum(infinite.tiles)).toBe("31edd4fd");
+        expect(checksum(toroidal.tiles)).toBe("cfd821ed");
+        expect(checksum(encoded)).toBe("99fb0dc5");
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -72,12 +71,12 @@ describe("WorldSurfaceResolver", () => {
         expect(snowTiles).toBeGreaterThan(0);
     });
 
-    test("freezes continuous relief, biome, vegetation and lake fields", () => {
+    test("freezes continuous relief, biome, vegetation and ocean fields", () => {
         const resolver = createWorldSurfaceResolver({ seed: "surface-v4-fields" });
         const encoded: number[] = [];
         const reliefValues = new Set<number>();
         const vegetationValues = new Set<number>();
-        const lakeValues = new Set<number>();
+        const oceanValues = new Set<number>();
         for (let x = -20; x < 20; x += 1) {
             for (let y = -20; y < 20; y += 1) {
                 const sample = resolver.sampleGenerated(x, y);
@@ -93,51 +92,45 @@ describe("WorldSurfaceResolver", () => {
                     weights.cold,
                     weights.alpine,
                     sample.vegetationDensity,
-                    sample.lakePotential,
                     sample.landform.forestPatch,
-                    sample.landform.lakePatch
+                    sample.landform.ocean
                 ].map(value => Math.round(value * 65535));
                 encoded.push(...values);
                 reliefValues.add(values[0]);
                 vegetationValues.add(values[5]);
-                lakeValues.add(values[6]);
+                oceanValues.add(values[7]);
             }
         }
         expect(reliefValues.size).toBeGreaterThan(100);
         expect(vegetationValues.size).toBeGreaterThan(50);
-        expect(lakeValues.size).toBeGreaterThan(20);
-        expect(checksum(encoded)).toBe("7ffc9327");
+        expect(oceanValues.size).toBeGreaterThan(20);
+        expect(checksum(encoded)).toBe("732a661d");
     });
 
-    test("forms neighboring lake cells and regional forests instead of isolated noise", () => {
+    test("forms coherent generated water and regional forests without lake noise", () => {
         const world = generateWorld({ seed: "gallery-a", width: 96, height: 96 });
-        const lakes: Array<{ x: number; y: number }> = [];
+        const water: Array<{ x: number; y: number }> = [];
         const woods: Array<{ x: number; y: number }> = [];
         const encoded: number[] = [];
         const land = [Land.sea, Land.coastal, Land.land, Land.sand, Land.tundra, Land.snow, Land.mountain];
         for (let x = 0; x < world.w; x += 1) {
             for (let y = 0; y < world.h; y += 1) {
                 const tile = world.data[x][y];
-                if (tile.modifiers?.includes("lake")) lakes.push({ x, y });
+                if (tile.type === Land.sea || tile.type === Land.coastal) water.push({ x, y });
+                expect(tile.modifiers?.includes("lake") ?? false).toBe(false);
                 if (tile.modifiers?.includes("wood")) woods.push({ x, y });
                 encoded.push(land.indexOf(tile.type));
                 encoded.push((tile.modifiers?.includes("hill") ? 1 : 0)
-                    | (tile.modifiers?.includes("wood") ? 2 : 0)
-                    | (tile.modifiers?.includes("lake") ? 4 : 0));
+                    | (tile.modifiers?.includes("wood") ? 2 : 0));
             }
         }
-        expect(lakes.length).toBeGreaterThan(0);
-        for (const lake of lakes) {
-            expect(getMapNeighbors(world, lake.x, lake.y).some(neighbor =>
-                world.data[neighbor.x][neighbor.y].modifiers?.includes("lake")
-            )).toBe(true);
-        }
+        expect(water.length).toBeGreaterThan(world.w * world.h * 0.15);
         const adjacentWoods = woods.filter(wood => getMapNeighbors(world, wood.x, wood.y).some(neighbor =>
             world.data[neighbor.x][neighbor.y].modifiers?.includes("wood")
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("e0291032");
+        expect(checksum(encoded)).toBe("926f97ae");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -181,6 +174,18 @@ describe("WorldSurfaceResolver", () => {
         const invalidPlacement = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidPlacement.vegetation.placementThreshold = 0.01;
         expect(() => assertWorldStyleProfile(invalidPlacement)).toThrow(/placement threshold/);
+
+        const invalidRiverRange = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidRiverRange.rivers.maximumCourseLength = invalidRiverRange.rivers.minimumCourseLength;
+        expect(() => assertWorldStyleProfile(invalidRiverRange)).toThrow(/river course length range/);
+
+        const invalidRiverPage = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidRiverPage.rivers.pageSize = Number.MAX_SAFE_INTEGER + 1;
+        expect(() => assertWorldStyleProfile(invalidRiverPage)).toThrow(/positive safe integer/);
+
+        const invalidRiverWidth = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidRiverWidth.rivers.highFlowCourseRadius = invalidRiverWidth.rivers.baseCourseRadius;
+        expect(() => assertWorldStyleProfile(invalidRiverWidth)).toThrow(/flow width thresholds/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

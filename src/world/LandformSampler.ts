@@ -37,8 +37,8 @@ export interface LandformSample {
     temperature: number;
     /** Low-frequency regional forest suitability field. */
     forestPatch: number;
-    /** Low-frequency regional still-water suitability field. */
-    lakePatch: number;
+    /** Continent-scale standing-water field; lower values are open sea. */
+    ocean: number;
 }
 
 export interface LandformSampler {
@@ -77,7 +77,7 @@ function composeSample(
     moistureNoise: number,
     temperatureNoise: number,
     forestPatch: number,
-    lakePatch: number,
+    oceanNoise: number,
     latitude: number | undefined,
     edgeFalloff: number,
     profile: Readonly<WorldStyleProfile>
@@ -114,7 +114,7 @@ function composeSample(
         moisture,
         temperature,
         forestPatch: clamp01(forestPatch),
-        lakePatch: clamp01(lakePatch)
+        ocean: oceanNoise - edgeFalloff
     };
 }
 
@@ -140,17 +140,21 @@ function sampleOpenLandform(
     const moisture = open(fields.moisture, wx, wy);
     const temperature = open(fields.temperature, wx, wy);
     const forestPatch = open(fields.forestPatch, wx, wy);
-    const lakePatch = open(fields.lakePatch, wx, wy);
+    // Coastlines use unwarped world coordinates and their own much broader
+    // field. Terrain detail can shape relief near a shore but cannot fragment
+    // the ocean mask into high-frequency noise.
+    const ocean = open(fields.ocean, x, y);
 
     if (domain.topology === "infinite") {
         return composeSample(
             continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
-            forestPatch, lakePatch, undefined, 0, profile
+            forestPatch, ocean, undefined, 0, profile
         );
     }
     const nx = (x / (domain.width - 1)) * 2 - 1;
     const ny = (y / (domain.height - 1)) * 2 - 1;
     const edge = Math.max(Math.abs(nx), Math.abs(ny));
+    const boundedOcean = ocean + (1 - edge * edge) * fields.boundedCenterOceanLift;
     return composeSample(
         continent,
         detail,
@@ -160,7 +164,7 @@ function sampleOpenLandform(
         moisture,
         temperature,
         forestPatch,
-        lakePatch,
+        boundedOcean,
         Math.abs(ny),
         Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
         profile
@@ -198,11 +202,11 @@ function sampleToroidalLandform(
     const moisture = periodic(fields.moisture, wx, wy);
     const temperature = periodic(fields.temperature, wx, wy);
     const forestPatch = periodic(fields.forestPatch, wx, wy);
-    const lakePatch = periodic(fields.lakePatch, wx, wy);
+    const ocean = periodic(fields.ocean, nx, ny);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
     return composeSample(
         continent, detail, ridgeNoise, valleyNoise, rough, moisture, temperature,
-        forestPatch, lakePatch, latitude, 0, profile
+        forestPatch, ocean, latitude, 0, profile
     );
 }
 

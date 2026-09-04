@@ -58,17 +58,16 @@ the trigger expression from `measurements`; a prose assertion or an unrelated
 file cannot advance the state. Approval additionally requires a repository-
 local decision record.
 
-## Current deferred work
+## Current decisions
 
 - [WebGPU/GPU culling](./render-backend-evaluation.md) uses the repeatable CPU
   crossover benchmark as a baseline, but requires a representative physical-
   hardware browser trace for frame, submission, draw-call and overdraw gates.
-- [Automatic river generation](./world-style-generation-v1.md) uses the fixed
-  world-style corpus. Reopening hydrology requires either a concrete gameplay
-  dependency on a navigable/editable river network, or the same documented
-  defect across at least three samples, two topology groups and two consecutive
-  fixed-corpus runs. Both paths still require deterministic continuity and
-  budget contracts before approval.
+- [Automatic river generation](./decisions/coarse-drainage-water-network.md) is
+  implemented after direct 2048×2048 overview review exposed fragmented
+  detail-noise water, unnatural sampled channels and excessive overview cost.
+  The implementation uses a low-frequency ocean mask plus bounded coarse-grid
+  drainage with deterministic continuity and explicit overview/cache budgets.
 
 Adding a new deferred optimization means adding one register entry, an owner
 marker and a reproducible measurement command. Keep speculative implementation
