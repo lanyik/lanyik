@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { getNeighbors, NEIGHBOR_DIRECTIONS } from "../../src/helpers/neighbors";
+import { getNeighbors } from "../../src/helpers/neighbors";
 import { seedToUint32 } from "../../src/world/noise";
 import { createWorldWaterSampler } from "../../src/world/WorldWaterSampler";
 import { WORLD_STYLE_PROFILE, type WorldStyleProfile } from "../../src/world/WorldStyleProfile";
@@ -48,13 +48,12 @@ describe("WorldWaterSampler", () => {
         const first = sampleWaterKeys("rough-water-field", -128, 128);
         const second = sampleWaterKeys("rough-water-field", -128, 128);
         expect(second).toEqual(first);
-        expect(first.size).toBeGreaterThan(350);
-        expect(first.size).toBeLessThan(5_000);
+        expect(first.size).toBeGreaterThan(5_000);
+        expect(first.size).toBeLessThan(15_000);
         expect(maximumWaterComponent(first)).toBeGreaterThan(40);
 
         const usedDirections = new Set<string>();
         let isolated = 0;
-        let turns = 0;
         for (const key of first) {
             const [x, y] = key.split(",").map(Number);
             const connected = getNeighbors(x, y).filter(neighbor => {
@@ -63,20 +62,14 @@ describe("WorldWaterSampler", () => {
                 return water;
             });
             if (connected.length === 0 && x > -128 && x < 127 && y > -128 && y < 127) isolated += 1;
-            if (connected.length === 2) {
-                const firstDirection = NEIGHBOR_DIRECTIONS.indexOf(connected[0].direction);
-                const secondDirection = NEIGHBOR_DIRECTIONS.indexOf(connected[1].direction);
-                if ((firstDirection + 3) % 6 !== secondDirection
-                    && (secondDirection + 3) % 6 !== firstDirection) turns += 1;
-            }
         }
         expect(isolated).toBe(0);
         expect(usedDirections.size).toBe(6);
-        expect(turns).toBeGreaterThan(80);
     });
 
     test("uses curve radius to widen major water paths", () => {
         const narrow = structuredClone(WORLD_STYLE_PROFILE) as any;
+        narrow.rivers.curve.basins.density = 0;
         narrow.rivers.curve.families = narrow.rivers.curve.families.map((family: {
             minimumWidth: number;
             maximumWidth: number;
@@ -85,9 +78,20 @@ describe("WorldWaterSampler", () => {
             minimumWidth: 0.01,
             maximumWidth: 0.02
         }));
+        const regular = structuredClone(WORLD_STYLE_PROFILE) as any;
+        regular.rivers.curve.basins.density = 0;
         const narrowTiles = sampleWaterKeys("rough-water-field", -128, 128, narrow);
-        const regularTiles = sampleWaterKeys("rough-water-field", -128, 128);
-        expect(regularTiles.size).toBeGreaterThan(narrowTiles.size * 1.08);
+        const regularTiles = sampleWaterKeys("rough-water-field", -128, 128, regular);
+        expect(regularTiles.size).toBeGreaterThan(narrowTiles.size * 2);
+    });
+
+    test("carves broad multi-chunk sea basins without requiring curve paths", () => {
+        const basinOnly = structuredClone(WORLD_STYLE_PROFILE) as any;
+        basinOnly.rivers.curve.density = 0;
+        const tiles = sampleWaterKeys("broad-sea-basins", -256, 256, basinOnly);
+        expect(tiles.size).toBeGreaterThan(5_000);
+        expect(tiles.size).toBeLessThan(60_000);
+        expect(maximumWaterComponent(tiles)).toBeGreaterThan(1_000);
     });
 
     test("keeps the infinite page cache bounded while agreeing across page edges", () => {

@@ -139,8 +139,8 @@ function generatedWaterCoverage(
         options.tileSpanY,
         (x, y) => {
             // Overview pixels represent an area, not one center sample. Marking
-            // any curve-water cell in that footprint preserves one-cell-wide courses
-            // when many hexes collapse into a single cartographic pixel.
+            // any generated water cell in that footprint preserves waterway
+            // courses and carved-basin edges when many hexes collapse into one pixel.
             const px = Math.min(
                 options.pixelWidth - 1,
                 Math.floor((x - options.originX) * options.pixelWidth / options.tileSpanX)
@@ -203,11 +203,17 @@ export function generateWorldOverviewWithResolver(
                 - sample.vegetationDensity * 0.13
                 - sample.landform.valley * 0.035;
             const pixelIndex = py * options.pixelWidth + px;
-            writePixel(
-                pixels,
-                offset,
-                waterCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
-            );
+            if (waterCoverage[pixelIndex]) {
+                const resolved = resolver.resolveGeneratedTile(tileX, tileY);
+                color = resolved.type === Land.sea
+                    ? PALETTE.deepWater
+                    : resolved.type === Land.coastal
+                        ? PALETTE.coast
+                        : PALETTE.river;
+            } else {
+                color = shadeRgb(color, reliefShade);
+            }
+            writePixel(pixels, offset, color);
             offset += 4;
         }
     }

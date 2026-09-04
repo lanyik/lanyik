@@ -26,7 +26,7 @@ function checksum(values: ArrayLike<number>): string {
 }
 
 describe("WorldSurfaceResolver", () => {
-    test("preserves the frozen generator v9 outputs", () => {
+    test("preserves the frozen generator v10 outputs", () => {
         const infinite = generateWorldChunk({
             seed: "surface-v7-infinite", chunkX: -1, chunkY: 0, chunkSize: 24
         });
@@ -50,9 +50,9 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("river") ? 8 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("1f4e1e07");
-        expect(checksum(toroidal.tiles)).toBe("76903c55");
-        expect(checksum(encoded)).toBe("87c5d4d5");
+        expect(checksum(infinite.tiles)).toBe("343a013f");
+        expect(checksum(toroidal.tiles)).toBe("1a05c247");
+        expect(checksum(encoded)).toBe("5394bd7b");
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -164,7 +164,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("9e5ede59");
+        expect(checksum(encoded)).toBe("0e8e6953");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -213,6 +213,10 @@ describe("WorldSurfaceResolver", () => {
         invalidRiverSampling.rivers.curve.families[1].maximumLength
             = invalidRiverSampling.rivers.curve.families[1].minimumLength;
         expect(() => assertWorldStyleProfile(invalidRiverSampling)).toThrow(/ranges must be ordered/);
+
+        const invalidBasinSeparation = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidBasinSeparation.rivers.curve.basins.minimumSeparation = 1;
+        expect(() => assertWorldStyleProfile(invalidBasinSeparation)).toThrow(/positive land corridor/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

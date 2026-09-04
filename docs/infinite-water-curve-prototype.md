@@ -3,14 +3,10 @@
 ## Status and scope
 
 `public/infinite-water.html` is the visual inspection scene for the same
-deterministic curve field now consumed by generator v9. It is no longer a
-separate implementation: the page imports the built
-`infinite-water-curve-field.mjs` entry, while production `WorldWaterSampler`
-imports its TypeScript source.
-
-The scene still contains a separate broad-water basin experiment. Those basin
-shapes are not part of generator v9; the production world retains its existing
-continental sea and regional lake rules.
+deterministic curve and basin field consumed by generator v10. It imports the
+built `infinite-water-curve-field.mjs` entry, while production
+`WorldWaterSampler` imports its TypeScript source. There is no longer a second
+inspector-only basin implementation.
 
 ## Shared curve model
 
@@ -30,50 +26,61 @@ rather than chunks or camera state:
 - Bounds queries enumerate only ownership cells inside a proven maximum reach,
   reject non-intersecting controls before publishing paths and return complete,
   identical geometry through overlapping queries.
+- A separate candidate grid creates rotated elliptical sea basins. Stable
+  priorities apply Poisson thinning before three harmonic waves shape each
+  bounded coastline; the configured separation is larger than twice the
+  conservative maximum reach, so independent basins in the open field retain
+  land corridors.
 
 The reference profile is expressed in radius-one hex world units. The visual
 scene scales it by its 28-pixel diagnostic hex radius; production consumes it
-at unit scale. Density and curvature controls override only those two reference
-values, so the browser scene remains a faithful geometry inspector.
+at unit scale. Density, curvature and sea-density controls override the same
+reference values, so the browser scene remains a faithful geometry inspector.
 
 ## Production sampling boundary
 
 The shared path is a macro sampling parent, not a second render layer.
-Generator v9 converts it to the existing hex world:
+Generator v10 converts it to the existing hex world:
 
 1. Curve samples are rounded through axial/cube coordinates to the current
    even-column grid.
 2. A cube-coordinate line fills every gap between samples, guaranteeing a chain
    of six-neighbour cells across page and chunk boundaries.
-3. Each curve radius is sampled against nearby hex footprints. The centerline
-   keeps sub-cell tributaries continuous while major paths occupy multiple
-   cells according to their generated width.
-4. Selected cells become ordinary `Land.sea`/`Land.coastal` terrain. Their
+3. Each curve radius is sampled against nearby hex footprints. Every family
+   has a multi-cell minimum radius; major paths occupy a visible fraction of a
+   default 24-cell source chunk without depending on the configured chunk size.
+4. Intersecting bounded basins are sampled with the same harmonic boundary
+   function used by the inspector, expanded by one hex apothem for cell coverage.
+5. Selected cells become ordinary `Land.sea`/`Land.coastal` terrain. Their
    visual boundary is the discrete hex occupancy boundary, not a smooth spline
    mesh or a river-channel displacement inside a land cell.
 
 Infinite/bounded production uses a bounded 32x32-page LRU. Toroidal production
-owns one canonical, domain-scaled feature set and wraps the rasterized steps
-into a periodic mask. Overview generation queries the same curves directly so
-thin long paths survive wide-area minimap downsampling.
+owns one canonical, domain-scaled feature set and wraps the rasterized paths and
+basins into a periodic mask. Overview generation queries the same water field
+directly so paths and basin edges survive wide-area minimap downsampling.
 
 See the current
-[generator v9 decision](./decisions/hex-water-terrain-sampling-v9.md) for the
+[generator v10 decision](./decisions/chunk-scale-water-and-carved-basins-v10.md) for the
 identity, topology, packed-format and verification contract. The superseded
-generator v7 document records the short local-drainage implementation that was
-removed after the integration requirement was clarified.
+generator v7-v9 documents retain the earlier local-drainage, channel and thin-
+ribbon decisions.
 
-## Bounded broad-water experiment
+## Finite-reach broad-water basins
 
-The visual-only ocean layer uses randomly jittered candidate basins followed by
+The shared ocean layer uses randomly jittered candidate basins followed by
 deterministic Poisson thinning. Surviving rotated elliptical basins have
-harmonic boundaries, a maximum 2,600-unit reach and at least 5,600 units between
-centres. This preserves a minimum 400-unit land corridor and prevents adjacent
-basins from merging into an unbounded water wall.
+harmonic boundaries, a conservative maximum reach below 87 radius-one world
+units and at least 200 units between centres. At the inspector's 28-pixel
+diagnostic scale these become a reach below 2,410 pixels and a 5,600-pixel
+separation, leaving more than 780 pixels between the conservative boundary
+circles. Open-field basins therefore cannot merge into an unbounded water wall;
+toroidal modulo wrapping may intentionally connect water across its periodic
+seam.
 
-The ocean mask is cached in screen space and refreshed after interaction. It is
-composited after curves only for visual experimentation; it does not change the
-shared curve field or any production terrain sample.
+The inspector caches its presentation mask in screen space and refreshes it
+after interaction. Production queries the same basin records by world bounds
+and rasterizes only intersecting tile extents into its bounded page cache.
 
 ## Run and inspect
 
@@ -87,7 +94,7 @@ Open <http://127.0.0.1:3000/infinite-water.html>, optionally with
 `?seed=value`.
 
 - Drag to pan and use the wheel to zoom around the pointer.
-- Adjust curve density, accumulated curvature and visual-only sea density.
+- Adjust curve density, accumulated curvature and shared sea density.
 - Toggle branches, sample polylines, chunk boundaries and the hex overlay.
 - `G`, `P`, `H` and `0` toggle chunks, samples, hexes and reset the view.
 
@@ -96,7 +103,8 @@ metrics for browser verification.
 
 ## Deliberate omissions
 
-Generator v9 does not claim physical discharge, erosion, drainage elevation,
-deltas or navigability. It establishes a deterministic macro water skeleton
-and faithful hex sampling. Gameplay classification, crossings, city placement
-and any later physical hydrology remain separate versioned decisions.
+Generator v10 does not claim physical discharge, erosion, drainage elevation,
+deltas or navigability. It establishes deterministic multi-cell water paths,
+bounded broad seas and faithful hex sampling. Gameplay classification,
+crossings, city placement and any later physical hydrology remain separate
+versioned decisions.

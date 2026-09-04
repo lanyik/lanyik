@@ -809,11 +809,18 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 9;
+var WORLD_GENERATOR_VERSION = 10;
 
 // src/world/InfiniteWaterCurveField.ts
 var UINT32_RANGE = 4294967296;
 var TAU = Math.PI * 2;
+var BASIN_WAVE_A_MINIMUM = 0.07;
+var BASIN_WAVE_A_SPAN = 0.05;
+var BASIN_WAVE_B_MINIMUM = 0.035;
+var BASIN_WAVE_B_SPAN = 0.035;
+var BASIN_WAVE_C_MINIMUM = 0.02;
+var BASIN_WAVE_C_SPAN = 0.03;
+var BASIN_MAXIMUM_BOUNDARY_SCALE = 1 + BASIN_WAVE_A_MINIMUM + BASIN_WAVE_A_SPAN + BASIN_WAVE_B_MINIMUM + BASIN_WAVE_B_SPAN + BASIN_WAVE_C_MINIMUM + BASIN_WAVE_C_SPAN;
 var REFERENCE_FAMILIES = Object.freeze([
   Object.freeze({
     cellSize: 950 / 28,
@@ -821,8 +828,8 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.34,
     minimumLength: 700 / 28,
     maximumLength: 2600 / 28,
-    minimumWidth: 2.5 / 28,
-    maximumWidth: 11 / 28,
+    minimumWidth: 27 / 28,
+    maximumWidth: 42 / 28,
     minimumControlStep: 65 / 28,
     maximumControlStep: 125 / 28,
     maximumBranches: 1
@@ -833,8 +840,8 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.52,
     minimumLength: 2200 / 28,
     maximumLength: 7200 / 28,
-    minimumWidth: 9 / 28,
-    maximumWidth: 29 / 28,
+    minimumWidth: 38 / 28,
+    maximumWidth: 78 / 28,
     minimumControlStep: 115 / 28,
     maximumControlStep: 210 / 28,
     maximumBranches: 3
@@ -845,13 +852,25 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.62,
     minimumLength: 7200 / 28,
     maximumLength: 17e3 / 28,
-    minimumWidth: 24 / 28,
-    maximumWidth: 54 / 28,
+    minimumWidth: 76 / 28,
+    maximumWidth: 162 / 28,
     minimumControlStep: 190 / 28,
     maximumControlStep: 310 / 28,
     maximumBranches: 5
   })
 ]);
+var REFERENCE_BASINS = Object.freeze({
+  // These values reproduce the inspector's reviewed 58% basin setting in
+  // radius-one hex units. Basin diameters span several 24-cell source chunks
+  // while Poisson separation preserves deterministic land corridors.
+  density: 0.12 + 0.58 * 0.55,
+  candidateCellSize: 2600 / 28,
+  minimumSeparation: 5600 / 28,
+  minimumMajorRadius: 1250 * (0.82 + 0.58 * 0.22) / 28,
+  maximumMajorRadius: 2050 * (0.82 + 0.58 * 0.22) / 28,
+  minimumMinorRatio: 0.55,
+  maximumMinorRatio: 0.82
+});
 var INFINITE_WATER_CURVE_REFERENCE_PROFILE = Object.freeze({
   density: 0.46,
   curvature: 0.68,
@@ -861,7 +880,8 @@ var INFINITE_WATER_CURVE_REFERENCE_PROFILE = Object.freeze({
   maximumBranchLength: 860 / 28,
   broadDensityScale: 11e3 / 28,
   regionalDensityScale: 4800 / 28,
-  families: REFERENCE_FAMILIES
+  families: REFERENCE_FAMILIES,
+  basins: REFERENCE_BASINS
 });
 function finite(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -918,6 +938,27 @@ function assertInfiniteWaterCurveProfile(value) {
       throw new RangeError(`waterCurve.families.${index} ranges must be ordered`);
     }
   }
+  if (!profile.basins || typeof profile.basins !== "object") {
+    throw new TypeError("waterCurve.basins must be an object");
+  }
+  const basins = profile.basins;
+  unitInterval("waterCurve.basins.density", basins.density);
+  positive("waterCurve.basins.candidateCellSize", basins.candidateCellSize);
+  positive("waterCurve.basins.minimumSeparation", basins.minimumSeparation);
+  positive("waterCurve.basins.minimumMajorRadius", basins.minimumMajorRadius);
+  positive("waterCurve.basins.maximumMajorRadius", basins.maximumMajorRadius);
+  unitInterval("waterCurve.basins.minimumMinorRatio", basins.minimumMinorRatio);
+  unitInterval("waterCurve.basins.maximumMinorRatio", basins.maximumMinorRatio);
+  if (!(basins.minimumMajorRadius < basins.maximumMajorRadius) || !(basins.minimumMinorRatio < basins.maximumMinorRatio)) {
+    throw new RangeError("water curve basin ranges must be ordered");
+  }
+  if (basins.minimumMinorRatio <= 0) {
+    throw new RangeError("water curve basin minor ratios must be positive");
+  }
+  const maximumBasinReach = basins.maximumMajorRadius * BASIN_MAXIMUM_BOUNDARY_SCALE;
+  if (basins.minimumSeparation <= maximumBasinReach * 2) {
+    throw new RangeError("water curve basins must preserve a positive land corridor");
+  }
 }
 function assertBounds(bounds) {
   if (!bounds || typeof bounds !== "object") throw new TypeError("water curve bounds are required");
@@ -949,6 +990,77 @@ function random(seed, x, y, salt) {
 }
 function randomForFeature(seed, key, salt) {
   return mix32(seed ^ key ^ Math.imul(salt, 668265261)) / UINT32_RANGE;
+}
+function buildBasinCandidate(seed, profile, cellX, cellY) {
+  const key = featureKey(seed, 101, cellX, cellY, 0);
+  if (randomForFeature(seed, key, 1001) >= profile.density) return void 0;
+  return {
+    ownerCellX: cellX,
+    ownerCellY: cellY,
+    key,
+    centerX: (cellX + 0.05 + randomForFeature(seed, key, 1019) * 0.9) * profile.candidateCellSize,
+    centerY: (cellY + 0.05 + randomForFeature(seed, key, 1021) * 0.9) * profile.candidateCellSize,
+    priority: randomForFeature(seed, key, 1003)
+  };
+}
+function buildBasin(seed, profile, cellX, cellY, candidateAt) {
+  const candidate = candidateAt(cellX, cellY);
+  if (!candidate) return void 0;
+  const neighborRadius = Math.ceil(profile.minimumSeparation / profile.candidateCellSize);
+  const minimumSquaredDistance = profile.minimumSeparation ** 2;
+  for (let neighborX = cellX - neighborRadius; neighborX <= cellX + neighborRadius; neighborX += 1) {
+    for (let neighborY = cellY - neighborRadius; neighborY <= cellY + neighborRadius; neighborY += 1) {
+      if (neighborX === cellX && neighborY === cellY) continue;
+      const neighbor = candidateAt(neighborX, neighborY);
+      if (!neighbor) continue;
+      const squaredDistance = (neighbor.centerX - candidate.centerX) ** 2 + (neighbor.centerY - candidate.centerY) ** 2;
+      const neighborWins = neighbor.priority < candidate.priority || neighbor.priority === candidate.priority && (neighborX < cellX || neighborX === cellX && neighborY < cellY);
+      if (squaredDistance < minimumSquaredDistance && neighborWins) return void 0;
+    }
+  }
+  const majorRadius = profile.minimumMajorRadius + randomForFeature(seed, candidate.key, 1009) * (profile.maximumMajorRadius - profile.minimumMajorRadius);
+  const minorRadius = majorRadius * (profile.minimumMinorRatio + randomForFeature(seed, candidate.key, 1013) * (profile.maximumMinorRatio - profile.minimumMinorRatio));
+  const angle = randomForFeature(seed, candidate.key, 1031) * TAU;
+  return Object.freeze({
+    featureKey: candidate.key,
+    ownerCellX: cellX,
+    ownerCellY: cellY,
+    centerX: candidate.centerX,
+    centerY: candidate.centerY,
+    cosine: Math.cos(angle),
+    sine: Math.sin(angle),
+    majorRadius,
+    minorRadius,
+    waveA: BASIN_WAVE_A_MINIMUM + randomForFeature(seed, candidate.key, 1033) * BASIN_WAVE_A_SPAN,
+    waveB: BASIN_WAVE_B_MINIMUM + randomForFeature(seed, candidate.key, 1039) * BASIN_WAVE_B_SPAN,
+    waveC: BASIN_WAVE_C_MINIMUM + randomForFeature(seed, candidate.key, 1049) * BASIN_WAVE_C_SPAN,
+    phaseA: randomForFeature(seed, candidate.key, 1051) * TAU,
+    phaseB: randomForFeature(seed, candidate.key, 1061) * TAU,
+    phaseC: randomForFeature(seed, candidate.key, 1063) * TAU
+  });
+}
+function waterBasinValue(x, y, basin) {
+  finite("water basin x", x);
+  finite("water basin y", y);
+  const deltaX = x - basin.centerX;
+  const deltaY = y - basin.centerY;
+  const localX = deltaX * basin.cosine + deltaY * basin.sine;
+  const localY = -deltaX * basin.sine + deltaY * basin.cosine;
+  const angle = Math.atan2(localY / basin.minorRadius, localX / basin.majorRadius);
+  const boundary = 1 + Math.sin(angle * 3 + basin.phaseA) * basin.waveA + Math.sin(angle * 5 + basin.phaseB) * basin.waveB + Math.sin(angle * 8 + basin.phaseC) * basin.waveC;
+  return Math.hypot(localX / basin.majorRadius, localY / basin.minorRadius) / boundary - 1;
+}
+function isPointInsideWaterBasin(x, y, basin, footprintExpansion = 0) {
+  const expansion = finite("water basin footprint expansion", footprintExpansion);
+  if (expansion < 0) throw new RangeError("water basin footprint expansion must be non-negative");
+  return waterBasinValue(x, y, basin) <= expansion / basin.minorRadius;
+}
+function basinReach(basin) {
+  return basin.majorRadius * (1 + basin.waveA + basin.waveB + basin.waveC);
+}
+function basinIntersects(basin, bounds) {
+  const reach = basinReach(basin);
+  return basin.centerX + reach >= bounds.minX && basin.centerX - reach <= bounds.maxX && basin.centerY + reach >= bounds.minY && basin.centerY - reach <= bounds.maxY;
 }
 var smoothstep = (value) => value * value * (3 - 2 * value);
 function valueNoise1D(seed, x, key, salt) {
@@ -1010,7 +1122,7 @@ function buildMainCurve(seed, profile, familyIndex, cellX, cellY, slot) {
     const progress = (parameter + halfSteps) / (halfSteps * 2);
     const growth = 0.38 + smoothstep(progress) * 0.78;
     const variation = 1 + valueNoise1D(seed, parameter / 5.5, key, 401) * 0.24;
-    return Math.max(profile.sampleSpacing * 0.08, baseWidth * growth * variation);
+    return Math.max(family.minimumWidth, baseWidth * growth * variation);
   };
   const before = [];
   const after = [];
@@ -1121,10 +1233,13 @@ function buildBranch(seed, profile, main, branchIndex) {
   const upstream = length * (0.34 + random(seed, main.key, branchIndex, 523) * 0.28);
   const lateral = length * (0.48 + random(seed, main.key, branchIndex, 541) * 0.38) * side;
   const sourceWidth = Math.max(
-    profile.sampleSpacing * 0.08,
-    main.family.minimumWidth * (0.72 + random(seed, main.key, branchIndex, 547) * 0.8)
+    main.family.minimumWidth,
+    main.family.minimumWidth * (0.9 + random(seed, main.key, branchIndex, 547) * 0.5)
   );
-  const targetWidth = Math.min(main.family.maximumWidth * 0.42, join.width * 0.42);
+  const targetWidth = Math.max(
+    main.family.minimumWidth,
+    Math.min(main.family.maximumWidth * 0.62, join.width * 0.62)
+  );
   const source = {
     x: join.x - tangent.x * upstream + normal.x * lateral,
     y: join.y - tangent.y * upstream + normal.y * lateral,
@@ -1188,6 +1303,17 @@ function scaledFamily(family, scale) {
     maximumBranches: family.maximumBranches
   });
 }
+function scaledBasins(profile, scale) {
+  return Object.freeze({
+    density: profile.density,
+    candidateCellSize: profile.candidateCellSize * scale,
+    minimumSeparation: profile.minimumSeparation * scale,
+    minimumMajorRadius: profile.minimumMajorRadius * scale,
+    maximumMajorRadius: profile.maximumMajorRadius * scale,
+    minimumMinorRatio: profile.minimumMinorRatio,
+    maximumMinorRatio: profile.maximumMinorRatio
+  });
+}
 function scaleInfiniteWaterCurveProfile(profile, scale) {
   assertInfiniteWaterCurveProfile(profile);
   positive("water curve spatial scale", scale);
@@ -1200,7 +1326,8 @@ function scaleInfiniteWaterCurveProfile(profile, scale) {
     maximumBranchLength: profile.maximumBranchLength * scale,
     broadDensityScale: profile.broadDensityScale * scale,
     regionalDensityScale: profile.regionalDensityScale * scale,
-    families: Object.freeze(profile.families.map((family) => scaledFamily(family, scale)))
+    families: Object.freeze(profile.families.map((family) => scaledFamily(family, scale))),
+    basins: scaledBasins(profile.basins, scale)
   });
 }
 var DeterministicInfiniteWaterCurveField = class {
@@ -1215,6 +1342,7 @@ var DeterministicInfiniteWaterCurveField = class {
       (maximum, family) => Math.max(maximum, family.maximumWidth),
       0
     );
+    this.maximumBasinReach = profile.basins.maximumMajorRadius * BASIN_MAXIMUM_BOUNDARY_SCALE;
   }
   forEachPathIntersecting(bounds, visit) {
     assertBounds(bounds);
@@ -1225,6 +1353,16 @@ var DeterministicInfiniteWaterCurveField = class {
     assertBounds(bounds);
     if (typeof visit !== "function") throw new TypeError("water curve visitor must be a function");
     this.forEachCandidate(bounds, false, visit);
+  }
+  forEachBasinIntersecting(bounds, visit) {
+    assertBounds(bounds);
+    if (typeof visit !== "function") throw new TypeError("water basin visitor must be a function");
+    this.forEachBasinCandidate(bounds, true, visit);
+  }
+  forEachBasinOwnedBy(bounds, visit) {
+    assertBounds(bounds);
+    if (typeof visit !== "function") throw new TypeError("water basin visitor must be a function");
+    this.forEachBasinCandidate(bounds, false, visit);
   }
   forEachCandidate(bounds, intersecting, visit) {
     for (let familyIndex = 0; familyIndex < this.profile.families.length; familyIndex += 1) {
@@ -1266,6 +1404,29 @@ var DeterministicInfiniteWaterCurveField = class {
             }
           }
         }
+      }
+    }
+  }
+  forEachBasinCandidate(bounds, intersecting, visit) {
+    const profile = this.profile.basins;
+    if (profile.density === 0) return;
+    const reach = intersecting ? this.maximumBasinReach : 0;
+    const firstCellX = Math.floor((bounds.minX - reach) / profile.candidateCellSize);
+    const lastCellX = intersecting ? Math.floor((bounds.maxX + reach) / profile.candidateCellSize) : Math.ceil(bounds.maxX / profile.candidateCellSize) - 1;
+    const firstCellY = Math.floor((bounds.minY - reach) / profile.candidateCellSize);
+    const lastCellY = intersecting ? Math.floor((bounds.maxY + reach) / profile.candidateCellSize) : Math.ceil(bounds.maxY / profile.candidateCellSize) - 1;
+    const candidates = /* @__PURE__ */ new Map();
+    const candidateAt = (cellX, cellY) => {
+      const key = `${cellX},${cellY}`;
+      if (!candidates.has(key)) {
+        candidates.set(key, buildBasinCandidate(this.numericSeed, profile, cellX, cellY));
+      }
+      return candidates.get(key);
+    };
+    for (let cellX = firstCellX; cellX <= lastCellX; cellX += 1) {
+      for (let cellY = firstCellY; cellY <= lastCellY; cellY += 1) {
+        const basin = buildBasin(this.numericSeed, profile, cellX, cellY, candidateAt);
+        if (basin && (!intersecting || basinIntersects(basin, bounds))) visit(basin);
       }
     }
   }
@@ -1856,12 +2017,12 @@ var DeterministicWorldWaterSampler = class {
         1,
         Math.max(domain.width, domain.height) / profile.rivers.toroidalReferenceSize
       );
-      this.toroidalCurveField = createInfiniteWaterCurveFieldFromUint32(
+      this.toroidalWaterField = createInfiniteWaterCurveFieldFromUint32(
         numericSeed,
         scaleInfiniteWaterCurveProfile(profile.rivers.curve, scale)
       );
     } else {
-      this.curveField = createInfiniteWaterCurveFieldFromUint32(numericSeed, profile.rivers.curve);
+      this.waterField = createInfiniteWaterCurveFieldFromUint32(numericSeed, profile.rivers.curve);
     }
   }
   isWaterTile(x, y) {
@@ -1913,14 +2074,10 @@ var DeterministicWorldWaterSampler = class {
       return;
     }
     const visited = /* @__PURE__ */ new Set();
-    const field2 = this.openCurveField();
-    field2.forEachPathIntersecting(
-      tileExtentToWorldBounds(originX, originY, width, height, field2.maximumWidth),
-      (path) => this.visitPathTiles(path, (point) => {
-        if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
-        visited.add((point.x - originX) * height + point.y - originY);
-      })
-    );
+    this.visitOpenFieldTiles(originX, originY, width, height, (point) => {
+      if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
+      visited.add((point.x - originX) * height + point.y - originY);
+    });
     for (const index of visited) {
       visit(originX + Math.floor(index / height), originY + index % height);
     }
@@ -1950,9 +2107,9 @@ var DeterministicWorldWaterSampler = class {
     }
     return point.x >= 0 && point.x < this.domain.width && point.y >= 0 && point.y < this.domain.height ? point : void 0;
   }
-  openCurveField() {
-    if (!this.curveField) throw new Error("open water curve field is unavailable for a toroidal domain");
-    return this.curveField;
+  openWaterField() {
+    if (!this.waterField) throw new Error("open water field is unavailable for a toroidal domain");
+    return this.waterField;
   }
   visitPathTiles(path, visit) {
     if (path.points.length < 2) return;
@@ -1976,35 +2133,72 @@ var DeterministicWorldWaterSampler = class {
       }
     }
   }
+  visitBasinTiles(basin, clip, visit) {
+    const reach = basin.majorRadius * (1 + basin.waveA + basin.waveB + basin.waveC) + HEX_APOTHEM;
+    let firstX = Math.floor((basin.centerX - reach) / 1.5) - 1;
+    let lastX = Math.ceil((basin.centerX + reach) / 1.5) + 1;
+    let firstY = Math.floor((basin.centerY - reach) / SQRT_THREE) - 2;
+    let lastY = Math.ceil((basin.centerY + reach) / SQRT_THREE) + 2;
+    if (clip) {
+      firstX = Math.max(firstX, clip.originX);
+      lastX = Math.min(lastX, clip.originX + clip.width - 1);
+      firstY = Math.max(firstY, clip.originY);
+      lastY = Math.min(lastY, clip.originY + clip.height - 1);
+    }
+    for (let x = firstX; x <= lastX; x += 1) {
+      for (let y = firstY; y <= lastY; y += 1) {
+        const center = hexCenter({ x, y });
+        if (!isPointInsideWaterBasin(center.x, center.y, basin, HEX_APOTHEM)) continue;
+        const normalized = this.normalizePoint({ x, y });
+        if (normalized) visit(normalized);
+      }
+    }
+  }
+  visitOpenFieldTiles(originX, originY, width, height, visit) {
+    const field2 = this.openWaterField();
+    field2.forEachPathIntersecting(
+      tileExtentToWorldBounds(originX, originY, width, height, field2.maximumWidth),
+      (path) => this.visitPathTiles(path, visit)
+    );
+    const clip = { originX, originY, width, height };
+    field2.forEachBasinIntersecting(
+      tileExtentToWorldBounds(originX, originY, width, height, HEX_APOTHEM),
+      (basin) => this.visitBasinTiles(basin, clip, visit)
+    );
+  }
   buildPage(pageX, pageY) {
     const pageSize = this.profile.rivers.pageSize;
     const minX = pageX * pageSize;
     const minY = pageY * pageSize;
     const water = new Uint8Array(pageSize * pageSize);
-    const field2 = this.openCurveField();
-    field2.forEachPathIntersecting(
-      tileExtentToWorldBounds(minX, minY, pageSize, pageSize, field2.maximumWidth),
-      (path) => this.visitPathTiles(path, (point) => {
-        const localX = point.x - minX;
-        const localY = point.y - minY;
-        if (localX < 0 || localX >= pageSize || localY < 0 || localY >= pageSize) return;
-        water[localX * pageSize + localY] = 1;
-      })
-    );
+    this.visitOpenFieldTiles(minX, minY, pageSize, pageSize, (point) => {
+      const localX = point.x - minX;
+      const localY = point.y - minY;
+      if (localX < 0 || localX >= pageSize || localY < 0 || localY >= pageSize) return;
+      water[localX * pageSize + localY] = 1;
+    });
     return { water };
   }
   buildToroidalMask() {
-    if (this.domain.topology !== "toroidal" || !this.toroidalCurveField) {
+    if (this.domain.topology !== "toroidal" || !this.toroidalWaterField) {
       throw new Error("toroidal water mask requires a toroidal domain");
     }
     const domain = this.domain;
     const mask = new Uint8Array(domain.width * domain.height);
-    this.toroidalCurveField.forEachPathOwnedBy({
+    this.toroidalWaterField.forEachPathOwnedBy({
       minX: 0,
       maxX: domain.width * 1.5,
       minY: 0,
       maxY: domain.height * SQRT_THREE
     }, (path) => this.visitPathTiles(path, (point) => {
+      mask[point.x * domain.height + point.y] = 1;
+    }));
+    this.toroidalWaterField.forEachBasinOwnedBy({
+      minX: 0,
+      maxX: domain.width * 1.5,
+      minY: 0,
+      maxY: domain.height * SQRT_THREE
+    }, (basin) => this.visitBasinTiles(basin, void 0, (point) => {
       mask[point.x * domain.height + point.y] = 1;
     }));
     return mask;
@@ -3296,11 +3490,13 @@ function generateWorldOverviewWithResolver(options, resolver) {
       }
       const reliefShade = 0.88 + clamp013((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
       const pixelIndex = py * options.pixelWidth + px;
-      writePixel(
-        pixels,
-        offset,
-        waterCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
-      );
+      if (waterCoverage[pixelIndex]) {
+        const resolved = resolver.resolveGeneratedTile(tileX, tileY);
+        color = resolved.type === "sea" /* sea */ ? PALETTE.deepWater : resolved.type === "coastal" /* coastal */ ? PALETTE.coast : PALETTE.river;
+      } else {
+        color = shadeRgb(color, reliefShade);
+      }
+      writePixel(pixels, offset, color);
       offset += 4;
     }
   }

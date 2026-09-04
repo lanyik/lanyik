@@ -5,6 +5,8 @@ import {
     INFINITE_WATER_CURVE_REFERENCE_PROFILE,
     scaleInfiniteWaterCurveProfile,
     waterCurveSeedToUint32,
+    waterBasinValue,
+    WaterBasin,
     WaterCurvePath
 } from "../../src/world/InfiniteWaterCurveField";
 import { seedToUint32 } from "../../src/world/noise";
@@ -19,6 +21,16 @@ const pathSignature = (path: WaterCurvePath): string => [
     path.points[0].y.toFixed(6),
     path.points[path.points.length - 1].x.toFixed(6),
     path.points[path.points.length - 1].y.toFixed(6)
+].join("|");
+
+const basinKey = (basin: WaterBasin): string => `${basin.ownerCellX}:${basin.ownerCellY}`;
+
+const basinSignature = (basin: WaterBasin): string => [
+    basinKey(basin),
+    basin.centerX.toFixed(6),
+    basin.centerY.toFixed(6),
+    basin.majorRadius.toFixed(6),
+    basin.minorRadius.toFixed(6)
 ].join("|");
 
 function query(seed: string, extent: number): Map<string, string> {
@@ -52,6 +64,34 @@ describe("InfiniteWaterCurveField", () => {
         for (const [key, signature] of inner) expect(outer.get(key)).toBe(signature);
     });
 
+    test("queries deterministic separated broad-water basins through overlapping windows", () => {
+        const field = createInfiniteWaterCurveField("basin-window-overlap");
+        const queryBasins = (extent: number): Map<string, WaterBasin> => {
+            const basins = new Map<string, WaterBasin>();
+            field.forEachBasinIntersecting(
+                { minX: -extent, maxX: extent, minY: -extent, maxY: extent },
+                basin => basins.set(basinKey(basin), basin)
+            );
+            return basins;
+        };
+        const inner = queryBasins(180);
+        const outer = queryBasins(420);
+        expect(inner.size).toBeGreaterThan(0);
+        for (const [key, basin] of inner) {
+            expect(basinSignature(outer.get(key)!)).toBe(basinSignature(basin));
+            expect(waterBasinValue(basin.centerX, basin.centerY, basin)).toBeLessThan(0);
+        }
+        const basins = [...outer.values()];
+        for (let first = 0; first < basins.length; first += 1) {
+            for (let second = first + 1; second < basins.length; second += 1) {
+                expect(Math.hypot(
+                    basins[first].centerX - basins[second].centerX,
+                    basins[first].centerY - basins[second].centerY
+                )).toBeGreaterThanOrEqual(INFINITE_WATER_CURVE_REFERENCE_PROFILE.basins.minimumSeparation);
+            }
+        }
+    });
+
     test("scales every spatial parameter without changing density or topology counts", () => {
         const scale = 28;
         const scaled = scaleInfiniteWaterCurveProfile(INFINITE_WATER_CURVE_REFERENCE_PROFILE, scale);
@@ -62,7 +102,11 @@ describe("InfiniteWaterCurveField", () => {
             INFINITE_WATER_CURVE_REFERENCE_PROFILE.sampleSpacing * scale
         );
         expect(scaled.families[2].maximumLength).toBeCloseTo(17_000);
-        expect(createInfiniteWaterCurveField("scale-check", scaled).maximumWidth).toBeCloseTo(54);
+        expect(createInfiniteWaterCurveField("scale-check", scaled).maximumWidth).toBeCloseTo(162);
+        expect(scaled.basins.candidateCellSize).toBeCloseTo(2_600);
+        expect(scaled.basins.minimumSeparation).toBeCloseTo(5_600);
+        expect(createInfiniteWaterCurveField("scale-check", scaled).maximumBasinReach)
+            .toBeCloseTo(scaled.basins.maximumMajorRadius * 1.24);
         expect(scaled.families[2].slots).toBe(INFINITE_WATER_CURVE_REFERENCE_PROFILE.families[2].slots);
         expect(scaled.families[2].maximumBranches)
             .toBe(INFINITE_WATER_CURVE_REFERENCE_PROFILE.families[2].maximumBranches);

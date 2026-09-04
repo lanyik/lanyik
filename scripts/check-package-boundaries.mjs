@@ -29,7 +29,15 @@ for (const marker of ["IndexedDbWorldChunkCache", "IndexedDbWorldDeltaStore", "i
 }
 
 const curveField = await readFile(resolve("dist/infinite-water-curve-field.mjs"), "utf8");
-for (const marker of ["createInfiniteWaterCurveField", "forEachPathIntersecting", "forEachPathOwnedBy"]) {
+for (const marker of [
+    "createInfiniteWaterCurveField",
+    "forEachPathIntersecting",
+    "forEachPathOwnedBy",
+    "forEachBasinIntersecting",
+    "forEachBasinOwnedBy",
+    "waterBasinValue",
+    "isPointInsideWaterBasin"
+]) {
     if (!curveField.includes(marker)) {
         throw new Error(`dist/infinite-water-curve-field.mjs is missing expected API ${marker}`);
     }

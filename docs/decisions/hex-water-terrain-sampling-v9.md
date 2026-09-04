@@ -1,7 +1,9 @@
 # Hex-terrain water sampling for generator v9
 
-Status: implemented on 2026-09-04. Supersedes the generator v8 channel-modifier
-integration while retaining its deterministic infinite curve/polyline source.
+Status: superseded on 2026-09-04 by the
+[generator v10 chunk-scale water and carved-basin decision](./chunk-scale-water-and-carved-basins-v10.md).
+This record preserves the v9 correction that replaced generator v8's channel
+modifier with ordinary hex water terrain.
 
 ## Decision
 

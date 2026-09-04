@@ -11,10 +11,17 @@ var Land = /* @__PURE__ */ ((Land2) => {
 })(Land || {});
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 9;
+var WORLD_GENERATOR_VERSION = 10;
 
 // src/world/InfiniteWaterCurveField.ts
 var TAU = Math.PI * 2;
+var BASIN_WAVE_A_MINIMUM = 0.07;
+var BASIN_WAVE_A_SPAN = 0.05;
+var BASIN_WAVE_B_MINIMUM = 0.035;
+var BASIN_WAVE_B_SPAN = 0.035;
+var BASIN_WAVE_C_MINIMUM = 0.02;
+var BASIN_WAVE_C_SPAN = 0.03;
+var BASIN_MAXIMUM_BOUNDARY_SCALE = 1 + BASIN_WAVE_A_MINIMUM + BASIN_WAVE_A_SPAN + BASIN_WAVE_B_MINIMUM + BASIN_WAVE_B_SPAN + BASIN_WAVE_C_MINIMUM + BASIN_WAVE_C_SPAN;
 var REFERENCE_FAMILIES = Object.freeze([
   Object.freeze({
     cellSize: 950 / 28,
@@ -22,8 +29,8 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.34,
     minimumLength: 700 / 28,
     maximumLength: 2600 / 28,
-    minimumWidth: 2.5 / 28,
-    maximumWidth: 11 / 28,
+    minimumWidth: 27 / 28,
+    maximumWidth: 42 / 28,
     minimumControlStep: 65 / 28,
     maximumControlStep: 125 / 28,
     maximumBranches: 1
@@ -34,8 +41,8 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.52,
     minimumLength: 2200 / 28,
     maximumLength: 7200 / 28,
-    minimumWidth: 9 / 28,
-    maximumWidth: 29 / 28,
+    minimumWidth: 38 / 28,
+    maximumWidth: 78 / 28,
     minimumControlStep: 115 / 28,
     maximumControlStep: 210 / 28,
     maximumBranches: 3
@@ -46,13 +53,25 @@ var REFERENCE_FAMILIES = Object.freeze([
     spawnScale: 0.62,
     minimumLength: 7200 / 28,
     maximumLength: 17e3 / 28,
-    minimumWidth: 24 / 28,
-    maximumWidth: 54 / 28,
+    minimumWidth: 76 / 28,
+    maximumWidth: 162 / 28,
     minimumControlStep: 190 / 28,
     maximumControlStep: 310 / 28,
     maximumBranches: 5
   })
 ]);
+var REFERENCE_BASINS = Object.freeze({
+  // These values reproduce the inspector's reviewed 58% basin setting in
+  // radius-one hex units. Basin diameters span several 24-cell source chunks
+  // while Poisson separation preserves deterministic land corridors.
+  density: 0.12 + 0.58 * 0.55,
+  candidateCellSize: 2600 / 28,
+  minimumSeparation: 5600 / 28,
+  minimumMajorRadius: 1250 * (0.82 + 0.58 * 0.22) / 28,
+  maximumMajorRadius: 2050 * (0.82 + 0.58 * 0.22) / 28,
+  minimumMinorRatio: 0.55,
+  maximumMinorRatio: 0.82
+});
 var INFINITE_WATER_CURVE_REFERENCE_PROFILE = Object.freeze({
   density: 0.46,
   curvature: 0.68,
@@ -62,7 +81,8 @@ var INFINITE_WATER_CURVE_REFERENCE_PROFILE = Object.freeze({
   maximumBranchLength: 860 / 28,
   broadDensityScale: 11e3 / 28,
   regionalDensityScale: 4800 / 28,
-  families: REFERENCE_FAMILIES
+  families: REFERENCE_FAMILIES,
+  basins: REFERENCE_BASINS
 });
 function finite(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -118,6 +138,27 @@ function assertInfiniteWaterCurveProfile(value) {
     if (!(family.minimumLength < family.maximumLength) || !(family.minimumWidth < family.maximumWidth) || !(family.minimumControlStep < family.maximumControlStep)) {
       throw new RangeError(`waterCurve.families.${index} ranges must be ordered`);
     }
+  }
+  if (!profile.basins || typeof profile.basins !== "object") {
+    throw new TypeError("waterCurve.basins must be an object");
+  }
+  const basins = profile.basins;
+  unitInterval("waterCurve.basins.density", basins.density);
+  positive("waterCurve.basins.candidateCellSize", basins.candidateCellSize);
+  positive("waterCurve.basins.minimumSeparation", basins.minimumSeparation);
+  positive("waterCurve.basins.minimumMajorRadius", basins.minimumMajorRadius);
+  positive("waterCurve.basins.maximumMajorRadius", basins.maximumMajorRadius);
+  unitInterval("waterCurve.basins.minimumMinorRatio", basins.minimumMinorRatio);
+  unitInterval("waterCurve.basins.maximumMinorRatio", basins.maximumMinorRatio);
+  if (!(basins.minimumMajorRadius < basins.maximumMajorRadius) || !(basins.minimumMinorRatio < basins.maximumMinorRatio)) {
+    throw new RangeError("water curve basin ranges must be ordered");
+  }
+  if (basins.minimumMinorRatio <= 0) {
+    throw new RangeError("water curve basin minor ratios must be positive");
+  }
+  const maximumBasinReach = basins.maximumMajorRadius * BASIN_MAXIMUM_BOUNDARY_SCALE;
+  if (basins.minimumSeparation <= maximumBasinReach * 2) {
+    throw new RangeError("water curve basins must preserve a positive land corridor");
   }
 }
 

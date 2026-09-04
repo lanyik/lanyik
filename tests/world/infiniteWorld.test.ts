@@ -221,7 +221,7 @@ describe("deterministic infinite world chunks", () => {
         expect(() => decodeWorldChunkTile(first, 12, 12)).not.toThrow();
     });
 
-    test("packs curve-sampled water as ordinary hex terrain", () => {
+    test("packs generated curve and basin water as ordinary hex terrain", () => {
         const seed = "surface-v7-infinite";
         const chunk = generateWorldChunk({
             seed, chunkX: -1, chunkY: 0, chunkSize: 24
@@ -241,6 +241,17 @@ describe("deterministic infinite world chunks", () => {
             }
         }
         expect(sampledWater).toBeGreaterThan(0);
+    });
+
+    test("keeps generated terrain independent of source chunk granularity", () => {
+        const seed = "chunk-independent-water";
+        const regular = generateWorldChunk({ seed, chunkX: 0, chunkY: 0, chunkSize: 24 });
+        const large = generateWorldChunk({ seed, chunkX: 0, chunkY: 0, chunkSize: 48 });
+        for (let x = -1; x <= 24; x += 1) {
+            for (let y = -1; y <= 24; y += 1) {
+                expect(decodeWorldChunkTile(large, x, y)).toEqual(decodeWorldChunkTile(regular, x, y));
+            }
+        }
     });
 
     test("adjacent chunks agree exactly across their halo", () => {

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Generator v10 carved sea basins. The inspector's deterministic Poisson-spaced,
+  rotated harmonic basins now come from the shared water field and are sampled
+  into authoritative `sea`/`coastal` hex terrain for bounded, toroidal and
+  infinite worlds. Basin queries remain finite, page-local and independent of
+  runtime chunk size.
 - Generator v9 curve-sampled hex water terrain. The production generator and
   visual inspector now share one bounds-queryable infinite curve/polyline
   field; world generation rasterizes path radius through axial coordinates
@@ -98,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generated waterway radii now use multi-cell, chunk-legible width bands with
+  a family minimum for both main paths and branches. Major paths can occupy a
+  visible fraction of a source chunk while world identity remains independent
+  of the configured source-chunk size. Generator identity advances to v10.
 - Deferred WebGPU/GPU-culling and automatic-river work now has a machine-checked
   decision register with explicit triggers, structured evidence and approval
   states; the render crossover benchmark reports five-sample median timing.

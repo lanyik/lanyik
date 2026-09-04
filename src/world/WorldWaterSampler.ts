@@ -3,15 +3,17 @@ import {
     createInfiniteWaterCurveFieldFromUint32,
     scaleInfiniteWaterCurveProfile,
     type InfiniteWaterCurveField,
+    type WaterBasin,
     type WaterCurveBounds,
     type WaterCurvePath,
-    type WaterCurvePoint
+    type WaterCurvePoint,
+    isPointInsideWaterBasin
 } from "./InfiniteWaterCurveField";
 import { LandformDomain } from "./LandformSampler";
 import { WorldStyleProfile } from "./WorldStyleProfile";
 
 interface WaterPage {
-    // 0 is dry and 1 is a curve-sampled water terrain cell.
+    // 0 is dry and 1 is a generated curve-or-basin water terrain cell.
     readonly water: Uint8Array;
 }
 
@@ -162,8 +164,8 @@ function isCenterInsideRibbon(
 
 class DeterministicWorldWaterSampler implements WorldWaterSampler {
     private readonly pages = new Map<string, WaterPage>();
-    private readonly curveField: InfiniteWaterCurveField | undefined;
-    private readonly toroidalCurveField: InfiniteWaterCurveField | undefined;
+    private readonly waterField: InfiniteWaterCurveField | undefined;
+    private readonly toroidalWaterField: InfiniteWaterCurveField | undefined;
     private toroidalMask: Uint8Array | undefined;
 
     constructor(
@@ -176,12 +178,12 @@ class DeterministicWorldWaterSampler implements WorldWaterSampler {
                 1,
                 Math.max(domain.width, domain.height) / profile.rivers.toroidalReferenceSize
             );
-            this.toroidalCurveField = createInfiniteWaterCurveFieldFromUint32(
+            this.toroidalWaterField = createInfiniteWaterCurveFieldFromUint32(
                 numericSeed,
                 scaleInfiniteWaterCurveProfile(profile.rivers.curve, scale)
             );
         } else {
-            this.curveField = createInfiniteWaterCurveFieldFromUint32(numericSeed, profile.rivers.curve);
+            this.waterField = createInfiniteWaterCurveFieldFromUint32(numericSeed, profile.rivers.curve);
         }
     }
 
@@ -243,14 +245,10 @@ class DeterministicWorldWaterSampler implements WorldWaterSampler {
         }
 
         const visited = new Set<number>();
-        const field = this.openCurveField();
-        field.forEachPathIntersecting(
-            tileExtentToWorldBounds(originX, originY, width, height, field.maximumWidth),
-            path => this.visitPathTiles(path, point => {
-                if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
-                visited.add((point.x - originX) * height + point.y - originY);
-            })
-        );
+        this.visitOpenFieldTiles(originX, originY, width, height, point => {
+            if (point.x < originX || point.x >= endX || point.y < originY || point.y >= endY) return;
+            visited.add((point.x - originX) * height + point.y - originY);
+        });
         for (const index of visited) {
             visit(originX + Math.floor(index / height), originY + index % height);
         }
@@ -287,9 +285,9 @@ class DeterministicWorldWaterSampler implements WorldWaterSampler {
             : undefined;
     }
 
-    private openCurveField(): InfiniteWaterCurveField {
-        if (!this.curveField) throw new Error("open water curve field is unavailable for a toroidal domain");
-        return this.curveField;
+    private openWaterField(): InfiniteWaterCurveField {
+        if (!this.waterField) throw new Error("open water field is unavailable for a toroidal domain");
+        return this.waterField;
     }
 
     private visitPathTiles(path: WaterCurvePath, visit: (point: Point) => void): void {
@@ -318,36 +316,85 @@ class DeterministicWorldWaterSampler implements WorldWaterSampler {
         }
     }
 
+    private visitBasinTiles(
+        basin: WaterBasin,
+        clip: Readonly<{ originX: number; originY: number; width: number; height: number }> | undefined,
+        visit: (point: Point) => void
+    ): void {
+        const reach = basin.majorRadius * (1 + basin.waveA + basin.waveB + basin.waveC) + HEX_APOTHEM;
+        let firstX = Math.floor((basin.centerX - reach) / 1.5) - 1;
+        let lastX = Math.ceil((basin.centerX + reach) / 1.5) + 1;
+        let firstY = Math.floor((basin.centerY - reach) / SQRT_THREE) - 2;
+        let lastY = Math.ceil((basin.centerY + reach) / SQRT_THREE) + 2;
+        if (clip) {
+            firstX = Math.max(firstX, clip.originX);
+            lastX = Math.min(lastX, clip.originX + clip.width - 1);
+            firstY = Math.max(firstY, clip.originY);
+            lastY = Math.min(lastY, clip.originY + clip.height - 1);
+        }
+        for (let x = firstX; x <= lastX; x += 1) {
+            for (let y = firstY; y <= lastY; y += 1) {
+                const center = hexCenter({ x, y });
+                if (!isPointInsideWaterBasin(center.x, center.y, basin, HEX_APOTHEM)) continue;
+                const normalized = this.normalizePoint({ x, y });
+                if (normalized) visit(normalized);
+            }
+        }
+    }
+
+    private visitOpenFieldTiles(
+        originX: number,
+        originY: number,
+        width: number,
+        height: number,
+        visit: (point: Point) => void
+    ): void {
+        const field = this.openWaterField();
+        field.forEachPathIntersecting(
+            tileExtentToWorldBounds(originX, originY, width, height, field.maximumWidth),
+            path => this.visitPathTiles(path, visit)
+        );
+        const clip = { originX, originY, width, height };
+        field.forEachBasinIntersecting(
+            tileExtentToWorldBounds(originX, originY, width, height, HEX_APOTHEM),
+            basin => this.visitBasinTiles(basin, clip, visit)
+        );
+    }
+
     private buildPage(pageX: number, pageY: number): WaterPage {
         const pageSize = this.profile.rivers.pageSize;
         const minX = pageX * pageSize;
         const minY = pageY * pageSize;
         const water = new Uint8Array(pageSize * pageSize);
-        const field = this.openCurveField();
-        field.forEachPathIntersecting(
-            tileExtentToWorldBounds(minX, minY, pageSize, pageSize, field.maximumWidth),
-            path => this.visitPathTiles(path, point => {
-                const localX = point.x - minX;
-                const localY = point.y - minY;
-                if (localX < 0 || localX >= pageSize || localY < 0 || localY >= pageSize) return;
-                water[localX * pageSize + localY] = 1;
-            })
-        );
+        this.visitOpenFieldTiles(minX, minY, pageSize, pageSize, point => {
+            const localX = point.x - minX;
+            const localY = point.y - minY;
+            if (localX < 0 || localX >= pageSize || localY < 0 || localY >= pageSize) return;
+            water[localX * pageSize + localY] = 1;
+        });
         return { water };
     }
 
     private buildToroidalMask(): Uint8Array {
-        if (this.domain.topology !== "toroidal" || !this.toroidalCurveField) {
+        if (this.domain.topology !== "toroidal" || !this.toroidalWaterField) {
             throw new Error("toroidal water mask requires a toroidal domain");
         }
         const domain = this.domain;
         const mask = new Uint8Array(domain.width * domain.height);
-        this.toroidalCurveField.forEachPathOwnedBy({
+        this.toroidalWaterField.forEachPathOwnedBy({
             minX: 0,
             maxX: domain.width * 1.5,
             minY: 0,
             maxY: domain.height * SQRT_THREE
         }, path => this.visitPathTiles(path, point => {
+            mask[point.x * domain.height + point.y] = 1;
+        }));
+        this.toroidalWaterField.forEachBasinOwnedBy({
+            minX: 0,
+            maxX: domain.width * 1.5,
+            minY: 0,
+            maxY: domain.height * SQRT_THREE
+        }, basin => this.visitBasinTiles(basin, undefined, point => {
             mask[point.x * domain.height + point.y] = 1;
         }));
         return mask;

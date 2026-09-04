@@ -12,8 +12,8 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
 | Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
 | Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
-| World-style generation v1 | Generator v9; curve ribbons classify cross-chunk hex water terrain | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| Infinite water curve field | Shared production/inspection curve geometry; broad-sea experiment remains visual-only | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
+| World-style generation v1 | Generator v10; multi-cell ribbons and carved sea basins classify cross-chunk hex water terrain | [world-style-generation-v1.md](./world-style-generation-v1.md) |
+| Infinite water curve field | Shared production/inspection curve and bounded-basin geometry | [infinite-water-curve-prototype.md](./infinite-water-curve-prototype.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
 
