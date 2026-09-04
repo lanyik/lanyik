@@ -32,8 +32,8 @@ describe("foundation acceptance invariants", () => {
         expect(reverse).toBe(forward);
         expect(checksum(generate("different-seed"))).not.toBe(forward);
         expect(forward).toMatch(/^[0-9a-f]{8}$/);
-        // Generator v10: surface, regional placement and curve/basin water identities are frozen.
-        expect(forward).toBe("a778f09f");
+        // Generator v11: sampled water is the only generated-water identity.
+        expect(forward).toBe("8379c4e6");
     });
 
     test("admitted resources and queued work stay inside hard limits under random churn", () => {

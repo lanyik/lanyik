@@ -124,11 +124,9 @@ async function loadSample(
 }
 
 function viewsFor(metrics: WorldStyleGalleryMetrics): readonly GalleryView[] {
-    const nearTarget = metrics.generatedWater.tiles > 0
-        ? metrics.anchors.generatedWater
-        : metrics.lakes.tiles > 0
-            ? metrics.anchors.lake
-            : metrics.forests.tiles > 0
+    const nearTarget = metrics.water.tiles > 0
+        ? metrics.anchors.water
+        : metrics.forests.tiles > 0
             ? metrics.anchors.forest
             : metrics.anchors.coast;
     return [

@@ -103,6 +103,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generator v11 now treats the shared curve/basin sampler as the only
+  procedural water authority. Elevation no longer creates continental ocean,
+  bounded worlds no longer force an ocean-edge depression, and the unused
+  lake-patch field, lake-potential output and generated `lake` placement path
+  are removed. Static maps and sparse edits retain authored sea/coast/lake
+  rendering semantics.
 - Generated waterway radii now use multi-cell, chunk-legible width bands with
   a family minimum for both main paths and branches. Major paths can occupy a
   visible fraction of a source chunk while world identity remains independent

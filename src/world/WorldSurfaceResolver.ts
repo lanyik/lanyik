@@ -11,7 +11,7 @@ import { randomAt } from "./noise";
 import { WORLD_STYLE_PROFILE, WorldStyleProfile } from "./WorldStyleProfile";
 import { createWorldWaterSampler, WorldWaterSampler } from "./WorldWaterSampler";
 
-export type WorldBiome = "ocean" | "coast" | "temperate" | "dry" | "cold" | "alpine";
+export type WorldBiome = "temperate" | "dry" | "cold" | "alpine";
 
 export interface WorldBiomeWeights {
     readonly temperate: number;
@@ -27,7 +27,6 @@ export interface WorldSurfaceSample {
     readonly biomeWeights: WorldBiomeWeights;
     readonly vegetationDensity: number;
     readonly vegetationKind?: "palm" | "pinia" | "oak";
-    readonly lakePotential: number;
     readonly landform: Readonly<LandformSample>;
 }
 
@@ -78,7 +77,6 @@ function normalizeCoordinates(domain: LandformDomain, x: number, y: number): Poi
 
 function classifyTerrain(sample: LandformSample, profile: Readonly<WorldStyleProfile>): Land {
     const terrain = profile.terrain;
-    if (sample.elevation < terrain.seaLevel) return Land.sea;
     if ((sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge)
         || sample.elevation > terrain.mountainPeakElevation) return Land.mountain;
     // Permanent snow follows a climate-dependent elevation line instead of
@@ -104,7 +102,6 @@ function generatedRelief(
     profile: Readonly<WorldStyleProfile>
 ): number {
     const relief = profile.relief;
-    if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
     const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
     const plain = relief.plainMinimum
         + landElevation * relief.plainElevationScale
@@ -129,7 +126,6 @@ function biomeWeightsFor(
     sample: LandformSample,
     profile: Readonly<WorldStyleProfile>
 ): WorldBiomeWeights {
-    if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
     const terrain = profile.terrain;
     const transition = terrain.climateTransition;
     const cold = 1 - smoothstep(
@@ -164,8 +160,7 @@ function biomeWeightsFor(
     });
 }
 
-function biomeFor(type: Land, weights: WorldBiomeWeights): WorldBiome {
-    if (type === Land.sea || type === Land.coastal) return type === Land.coastal ? "coast" : "ocean";
+function biomeFor(weights: WorldBiomeWeights): WorldBiome {
     const weighted: Array<[WorldBiome, number]> = [
         ["temperate", weights.temperate],
         ["dry", weights.dry],
@@ -180,7 +175,7 @@ function vegetationDensityFor(
     sample: LandformSample,
     profile: Readonly<WorldStyleProfile>
 ): number {
-    if (isWater(type) || type === Land.mountain || type === Land.snow) return 0;
+    if (type === Land.mountain || type === Land.snow) return 0;
     const vegetation = profile.vegetation;
     const moisture = smoothstep(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
     const cold = smoothstep(
@@ -204,21 +199,6 @@ function vegetationDensityFor(
     );
 }
 
-function lakePotentialFor(
-    type: Land,
-    sample: LandformSample,
-    profile: Readonly<WorldStyleProfile>
-): number {
-    if (isWater(type) || type === Land.mountain || type === Land.snow) return 0;
-    const lakes = profile.lakes;
-    const elevation = smoothstep(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation)
-        * (1 - smoothstep(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
-    const moisture = smoothstep(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
-    const valley = smoothstep(lakes.valleyStart, lakes.valleyFull, sample.valley);
-    const patch = smoothstep(lakes.patchStart, lakes.patchFull, sample.lakePatch);
-    return clamp01(elevation * moisture * valley * patch);
-}
-
 function vegetationKindFor(
     sample: LandformSample,
     profile: Readonly<WorldStyleProfile>
@@ -239,9 +219,8 @@ function sampleSurface(
     const landform = Object.freeze({ ...sampler.sample(x, y) });
     const baseTerrain = classifyTerrain(landform, profile);
     const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
-    const biome = biomeFor(baseTerrain, biomeWeights);
+    const biome = biomeFor(biomeWeights);
     const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
-    const lakePotential = lakePotentialFor(baseTerrain, landform, profile);
     return Object.freeze({
         baseTerrain,
         relief: generatedRelief(landform, profile),
@@ -249,40 +228,12 @@ function sampleSurface(
         biomeWeights,
         vegetationDensity,
         vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : undefined,
-        lakePotential,
         landform
     });
 }
 
 type SampleAt = (x: number, y: number) => Readonly<WorldSurfaceSample> | undefined;
 type WaterAt = (x: number, y: number) => boolean;
-
-function isGeneratedLake(
-    numericSeed: number,
-    profile: Readonly<WorldStyleProfile>,
-    x: number,
-    y: number,
-    sampleAt: SampleAt,
-    waterAt: WaterAt,
-    sample: Readonly<WorldSurfaceSample> | undefined = sampleAt(x, y)
-): boolean {
-    if (!sample) return false;
-    const lakes = profile.lakes;
-    const isCandidate = (
-        candidate: Readonly<WorldSurfaceSample> | undefined,
-        tileX: number,
-        tileY: number
-    ): boolean => Boolean(candidate && !waterAt(tileX, tileY)
-        && candidate.lakePotential >= lakes.minimumPotential
-        && randomAt(numericSeed, tileX, tileY, lakes.placementSalt)
-            < candidate.lakePotential * lakes.placementScale);
-    if (!isCandidate(sample, x, y)) return false;
-    const lakeNeighbors = getNeighbors(x, y).reduce((count, neighbor) => {
-        const adjacent = sampleAt(neighbor.x, neighbor.y);
-        return count + (isCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
-    }, 0);
-    return lakeNeighbors >= lakes.minimumNeighbors;
-}
 
 function resolveTile(
     numericSeed: number,
@@ -295,11 +246,10 @@ function resolveTile(
     const sample = sampleAt(x, y);
     if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
     let type = sample.baseTerrain;
-    if (isWater(type) || waterAt(x, y)) {
+    if (waterAt(x, y)) {
         const touchesLand = getNeighbors(x, y).some(neighbor => {
             const adjacent = sampleAt(neighbor.x, neighbor.y);
-            return adjacent !== undefined && !isWater(adjacent.baseTerrain)
-                && !waterAt(neighbor.x, neighbor.y);
+            return adjacent !== undefined && !waterAt(neighbor.x, neighbor.y);
         });
         type = touchesLand ? Land.coastal : Land.sea;
     }
@@ -317,19 +267,14 @@ function resolveTile(
         Object.freeze(modifiers);
         return Object.freeze(tile);
     }
-    const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample);
-    if (lake) {
-        modifiers.push("lake");
-    } else {
-        if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-        const forest = sample.vegetationDensity
-            + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
-                * profile.vegetation.placementJitter
-            >= profile.vegetation.placementThreshold;
-        if (forest) {
-            modifiers.push("wood");
-            tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
-        }
+    if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+    const forest = sample.vegetationDensity
+        + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5)
+            * profile.vegetation.placementJitter
+        >= profile.vegetation.placementThreshold;
+    if (forest) {
+        modifiers.push("wood");
+        tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
     }
     if (modifiers.length > 0) {
         tile.modifiers = modifiers;
@@ -384,15 +329,7 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
         visit: (x: number, y: number) => void
     ): void {
         if (typeof visit !== "function") throw new TypeError("generated water visitor must be a function");
-        const window = this.createWindow();
-        try {
-            this.waterSampler.forEachWaterTile(originX, originY, width, height, (x, y) => {
-                const sample = window.sampleGenerated(x, y);
-                if (sample && !isWater(sample.baseTerrain)) visit(x, y);
-            });
-        } finally {
-            window.clear();
-        }
+        this.waterSampler.forEachWaterTile(originX, originY, width, height, visit);
     }
 
     public createWindow(): WorldSurfaceResolverWindow {

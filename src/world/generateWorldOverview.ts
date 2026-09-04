@@ -30,7 +30,6 @@ type Rgb = readonly [number, number, number];
 
 const PALETTE = {
     deepWater: [13, 48, 76] as Rgb,
-    shallowWater: [42, 112, 126] as Rgb,
     coast: [70, 139, 137] as Rgb,
     temperate: [91, 139, 73] as Rgb,
     dry: [169, 148, 86] as Rgb,
@@ -179,12 +178,7 @@ export function generateWorldOverviewWithResolver(
             const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
             const sample = resolver.sampleGenerated(tileX, tileY);
             let color: Rgb;
-            if (sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) {
-                const shoreline = clamp01(
-                    1 - (terrain.seaLevel - sample.landform.elevation) / Math.max(0.001, terrain.seaLevel * 0.42)
-                );
-                color = mix(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
-            } else if (sample.baseTerrain === Land.sand) {
+            if (sample.baseTerrain === Land.sand) {
                 color = PALETTE.sand;
             } else if (sample.baseTerrain === Land.tundra) {
                 color = PALETTE.tundra;

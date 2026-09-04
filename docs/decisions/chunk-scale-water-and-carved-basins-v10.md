@@ -1,8 +1,8 @@
 # Chunk-scale waterways and carved sea basins for generator v10
 
-Status: implemented on 2026-09-04. Supersedes generator v9 as the current
-water-terrain profile while retaining its ordinary `Land.sea` / `Land.coastal`
-tile representation and packed chunk format.
+Status: superseded on 2026-09-04 by the
+[generator v11 sampled-water-only decision](./sampled-water-only-v11.md).
+This record preserves the v10 width and carved-basin design.
 
 ## Requirement
 

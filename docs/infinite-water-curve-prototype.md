@@ -3,7 +3,7 @@
 ## Status and scope
 
 `public/infinite-water.html` is the visual inspection scene for the same
-deterministic curve and basin field consumed by generator v10. It imports the
+deterministic curve and basin field consumed by generator v11. It imports the
 built `infinite-water-curve-field.mjs` entry, while production
 `WorldWaterSampler` imports its TypeScript source. There is no longer a second
 inspector-only basin implementation.
@@ -40,7 +40,7 @@ reference values, so the browser scene remains a faithful geometry inspector.
 ## Production sampling boundary
 
 The shared path is a macro sampling parent, not a second render layer.
-Generator v10 converts it to the existing hex world:
+Generator v11 converts it to the existing hex world:
 
 1. Curve samples are rounded through axial/cube coordinates to the current
    even-column grid.
@@ -61,10 +61,11 @@ basins into a periodic mask. Overview generation queries the same water field
 directly so paths and basin edges survive wide-area minimap downsampling.
 
 See the current
-[generator v10 decision](./decisions/chunk-scale-water-and-carved-basins-v10.md) for the
-identity, topology, packed-format and verification contract. The superseded
-generator v7-v9 documents retain the earlier local-drainage, channel and thin-
-ribbon decisions.
+[generator v11 decision](./decisions/sampled-water-only-v11.md) for the source,
+identity and verification contract; the
+[generator v10 decision](./decisions/chunk-scale-water-and-carved-basins-v10.md)
+retains the geometry details. The superseded generator v7-v9 documents retain
+the earlier local-drainage, channel and thin-ribbon decisions.
 
 ## Finite-reach broad-water basins
 
@@ -103,7 +104,7 @@ metrics for browser verification.
 
 ## Deliberate omissions
 
-Generator v10 does not claim physical discharge, erosion, drainage elevation,
+Generator v11 does not claim physical discharge, erosion, drainage elevation,
 deltas or navigability. It establishes deterministic multi-cell water paths,
 bounded broad seas and faithful hex sampling. Gameplay classification,
 crossings, city placement and any later physical hydrology remain separate

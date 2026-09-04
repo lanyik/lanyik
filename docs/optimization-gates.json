@@ -70,7 +70,7 @@
       "evidenceReferences": [
         "docs/evidence/automatic-river-generation/product-trigger-2026-09-03.json"
       ],
-      "decisionRecord": "docs/decisions/chunk-scale-water-and-carved-basins-v10.md"
+      "decisionRecord": "docs/decisions/sampled-water-only-v11.md"
     }
   ]
 }

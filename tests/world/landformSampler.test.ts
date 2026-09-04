@@ -37,24 +37,19 @@ describe("LandformSampler", () => {
         }
     });
 
-    test("keeps bounded-world edges below the interior continent", () => {
+    test("does not retain the legacy bounded-world ocean-edge depression", () => {
         const width = 64;
         const height = 48;
-        const sampler = createLandformSampler({
+        const bounded = createLandformSampler({
             seed: "island-falloff",
             domain: { topology: "bounded", width, height }
         });
-        const edges: number[] = [];
-        const interior: number[] = [];
+        const open = createLandformSampler({ seed: "island-falloff" });
         for (let x = 0; x < width; x += 1) {
             for (let y = 0; y < height; y += 1) {
-                const elevation = sampler.sample(x, y).elevation;
-                if (x === 0 || y === 0 || x === width - 1 || y === height - 1) edges.push(elevation);
-                if (x >= 20 && x < 44 && y >= 15 && y < 33) interior.push(elevation);
+                expect(bounded.sample(x, y).elevation).toBeCloseTo(open.sample(x, y).elevation, 12);
             }
         }
-        const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
-        expect(average(interior) - average(edges)).toBeGreaterThan(0.25);
     });
 
     test("ridge strength creates elevated chains rather than uncorrelated peaks", () => {

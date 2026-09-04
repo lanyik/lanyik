@@ -234,10 +234,12 @@ describe("deterministic infinite world chunks", () => {
                 const worldX = -chunk.chunkSize + x;
                 const worldY = y;
                 const base = resolver.sampleGenerated(worldX, worldY).baseTerrain;
-                if ((base === Land.sea || base === Land.coastal)
-                    || (tile.type !== Land.sea && tile.type !== Land.coastal)) continue;
+                expect(base).not.toBe(Land.sea);
+                expect(base).not.toBe(Land.coastal);
+                if (tile.type !== Land.sea && tile.type !== Land.coastal) continue;
                 sampledWater += 1;
                 expect(tile.modifiers ?? []).not.toContain("river");
+                expect(tile.modifiers ?? []).not.toContain("lake");
             }
         }
         expect(sampledWater).toBeGreaterThan(0);

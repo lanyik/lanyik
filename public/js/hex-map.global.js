@@ -10453,7 +10453,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 10;
+  var WORLD_GENERATOR_VERSION = 11;
 
   // src/world/InfiniteWaterCurveField.ts
   var UINT32_RANGE = 4294967296;
@@ -11104,7 +11104,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       moisture: field(3355524772, 0.08, 0.08, 4, 2),
       temperature: field(2911926141, 0.035, 0.035, 3, 2),
       forestPatch: field(1291169091, 0.026, 0.026, 3, 2),
-      lakePatch: field(374761393, 0.021, 0.021, 3, 2),
       openWarpAmplitude: 15,
       toroidalWarpAmplitude: 0.12,
       continentWeight: 0.72,
@@ -11126,9 +11125,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       temperatureLatitudeWeight: 0.82,
       temperatureElevationStart: 0.55,
       temperatureElevationWeight: 0.8,
-      temperatureLatitudeNoiseWeight: 0.18,
-      boundedEdgePower: 3,
-      boundedEdgeFalloff: 0.58
+      temperatureLatitudeNoiseWeight: 0.18
     }),
     terrain: Object.freeze({
       seaLevel: 0.43,
@@ -11184,20 +11181,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       palmTemperature: 0.67,
       piniaTemperature: 0.4
     }),
-    lakes: Object.freeze({
-      minimumElevation: 0.455,
-      maximumElevation: 0.63,
-      minimumMoisture: 0.56,
-      fullMoisture: 0.8,
-      valleyStart: 0.03,
-      valleyFull: 0.35,
-      patchStart: 0.4,
-      patchFull: 0.72,
-      minimumPotential: 0.18,
-      minimumNeighbors: 1,
-      placementScale: 0.65,
-      placementSalt: 1821285621
-    }),
     rivers: Object.freeze({
       pageSize: 32,
       maximumCachedPages: 16,
@@ -11239,7 +11222,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
       throw new RangeError("world style profile generatorVersion is unsupported");
     }
-    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes || !profile.rivers) {
+    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.rivers) {
       throw new TypeError("world style profile groups are required");
     }
     assertFiniteNumbers(profile, "");
@@ -11253,8 +11236,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       "roughness",
       "moisture",
       "temperature",
-      "forestPatch",
-      "lakePatch"
+      "forestPatch"
     ];
     for (const name of noiseFieldNames) {
       const candidate = profile.fields[name];
@@ -11287,8 +11269,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       "temperatureLatitudeWeight",
       "temperatureElevationStart",
       "temperatureElevationWeight",
-      "temperatureLatitudeNoiseWeight",
-      "boundedEdgeFalloff"
+      "temperatureLatitudeNoiseWeight"
     ];
     for (const name of nonNegativeFieldNames) nonNegative(`fields.${name}`, profile.fields[name]);
     finite2("fields.elevationBias", profile.fields.elevationBias);
@@ -11301,7 +11282,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     positive2("fields.ridgeExponent", profile.fields.ridgeExponent);
     positive2("fields.valleyExponent", profile.fields.valleyExponent);
-    positive2("fields.boundedEdgePower", profile.fields.boundedEdgePower);
     const terrain = profile.terrain;
     const terrainNames = [
       "seaLevel",
@@ -11344,23 +11324,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (relief.staticHill < relief.hillMinimum || relief.staticHill > relief.hillMaximum || relief.staticMountain < relief.mountainMinimum || relief.staticMountain > relief.mountainMaximum) {
       throw new RangeError("static relief heights must stay inside their terrain ranges");
     }
-    const lakes = profile.lakes;
-    unitInterval2("lakes.minimumElevation", lakes.minimumElevation);
-    unitInterval2("lakes.maximumElevation", lakes.maximumElevation);
-    unitInterval2("lakes.minimumMoisture", lakes.minimumMoisture);
-    unitInterval2("lakes.fullMoisture", lakes.fullMoisture);
-    unitInterval2("lakes.valleyStart", lakes.valleyStart);
-    unitInterval2("lakes.valleyFull", lakes.valleyFull);
-    unitInterval2("lakes.patchStart", lakes.patchStart);
-    unitInterval2("lakes.patchFull", lakes.patchFull);
-    unitInterval2("lakes.minimumPotential", lakes.minimumPotential);
-    unitInterval2("lakes.placementScale", lakes.placementScale);
-    if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
-      throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
-    }
-    if (!(finite2("lakes.minimumElevation", lakes.minimumElevation) < finite2("lakes.maximumElevation", lakes.maximumElevation)) || !(lakes.minimumMoisture < lakes.fullMoisture) || !(lakes.valleyStart < lakes.valleyFull) || !(lakes.patchStart < lakes.patchFull)) {
-      throw new RangeError("lake thresholds must be ordered");
-    }
     unitInterval2("vegetation.moistureStart", profile.vegetation.moistureStart);
     unitInterval2("vegetation.moistureFull", profile.vegetation.moistureFull);
     unitInterval2("vegetation.maximumDensity", profile.vegetation.maximumDensity);
@@ -11391,8 +11354,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
       throw new RangeError("vegetation temperature thresholds must be ordered");
     }
-    if (!Number.isSafeInteger(profile.vegetation.placementSalt) || !Number.isSafeInteger(profile.lakes.placementSalt)) {
-      throw new RangeError("world style placement salts must be safe integers");
+    if (!Number.isSafeInteger(profile.vegetation.placementSalt)) {
+      throw new RangeError("world style vegetation placement salt must be a safe integer");
     }
     const rivers = profile.rivers;
     for (const name of ["pageSize", "maximumCachedPages", "toroidalReferenceSize"]) {
@@ -11424,12 +11387,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     return { ...resolved };
   }
-  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, lakePatch, latitude, edgeFalloff, profile) {
+  function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, latitude, profile) {
     const fields = profile.fields;
     const landMask = smoothstep2(fields.landMaskStart, fields.landMaskEnd, continent);
     const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
     const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent) * smoothstep2(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
-    const elevation = continent * fields.continentWeight + detail * fields.detailWeight + ridge * fields.ridgeWeight - valley * fields.valleyWeight + fields.elevationBias - edgeFalloff;
+    const elevation = continent * fields.continentWeight + detail * fields.detailWeight + ridge * fields.ridgeWeight - valley * fields.valleyWeight + fields.elevationBias;
     const moisture = clamp01(moistureNoise * fields.moistureNoiseWeight + valley * fields.moistureValleyWeight - ridge * fields.moistureRidgeWeight);
     const temperature = clamp01(latitude === void 0 ? fields.temperatureNoiseMinimum + temperatureNoise * fields.temperatureNoiseWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight : 1 - latitude * fields.temperatureLatitudeWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight + (temperatureNoise - 0.5) * fields.temperatureLatitudeNoiseWeight);
     return {
@@ -11440,8 +11403,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       roughness: clamp01(roughness),
       moisture,
       temperature,
-      forestPatch: clamp01(forestPatch),
-      lakePatch: clamp01(lakePatch)
+      forestPatch: clamp01(forestPatch)
     };
   }
   function sampleOpenLandform(seed, x, y, domain, profile) {
@@ -11459,7 +11421,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const moisture = open(fields.moisture, wx, wy);
     const temperature = open(fields.temperature, wx, wy);
     const forestPatch = open(fields.forestPatch, wx, wy);
-    const lakePatch = open(fields.lakePatch, wx, wy);
     if (domain.topology === "infinite") {
       return composeSample(
         continent,
@@ -11470,15 +11431,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         moisture,
         temperature,
         forestPatch,
-        lakePatch,
         void 0,
-        0,
         profile
       );
     }
-    const nx = x / (domain.width - 1) * 2 - 1;
     const ny = y / (domain.height - 1) * 2 - 1;
-    const edge = Math.max(Math.abs(nx), Math.abs(ny));
     return composeSample(
       continent,
       detail,
@@ -11488,9 +11445,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       moisture,
       temperature,
       forestPatch,
-      lakePatch,
       Math.abs(ny),
-      Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
       profile
     );
   }
@@ -11518,7 +11473,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const moisture = periodic(fields.moisture, wx, wy);
     const temperature = periodic(fields.temperature, wx, wy);
     const forestPatch = periodic(fields.forestPatch, wx, wy);
-    const lakePatch = periodic(fields.lakePatch, wx, wy);
     const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
     return composeSample(
       continent,
@@ -11529,9 +11483,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       moisture,
       temperature,
       forestPatch,
-      lakePatch,
       latitude,
-      0,
       profile
     );
   }
@@ -11881,7 +11833,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function classifyTerrain(sample, profile) {
     const terrain = profile.terrain;
-    if (sample.elevation < terrain.seaLevel) return "sea" /* sea */;
     if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
     const snowColdness = terrain.snowTemperature > 0 ? clamp012((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
     const minimumSnowElevation = terrain.seaLevel + (terrain.hillElevation - terrain.seaLevel) * 0.45;
@@ -11893,7 +11844,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function generatedRelief(sample, profile) {
     const relief = profile.relief;
-    if (sample.elevation < profile.terrain.seaLevel) return relief.shoreline;
     const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
     const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
     const hill = smoothstep3(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
@@ -11908,7 +11858,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     );
   }
   function biomeWeightsFor(type, sample, profile) {
-    if (isWater2(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
     const terrain = profile.terrain;
     const transition = terrain.climateTransition;
     const cold = 1 - smoothstep3(
@@ -11942,8 +11891,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       alpine: alpine / sum
     });
   }
-  function biomeFor(type, weights) {
-    if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
+  function biomeFor(weights) {
     const weighted = [
       ["temperate", weights.temperate],
       ["dry", weights.dry],
@@ -11953,7 +11901,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return weighted.reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
   }
   function vegetationDensityFor(type, sample, profile) {
-    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
+    if (type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
     const vegetation = profile.vegetation;
     const moisture = smoothstep3(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
     const cold = smoothstep3(
@@ -11973,15 +11921,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       moisture * cold * heat * patch * slope * vegetation.densityScale
     );
   }
-  function lakePotentialFor(type, sample, profile) {
-    if (isWater2(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
-    const lakes = profile.lakes;
-    const elevation = smoothstep3(lakes.minimumElevation, lakes.minimumElevation + 0.035, sample.elevation) * (1 - smoothstep3(lakes.maximumElevation - 0.05, lakes.maximumElevation, sample.elevation));
-    const moisture = smoothstep3(lakes.minimumMoisture, lakes.fullMoisture, sample.moisture);
-    const valley = smoothstep3(lakes.valleyStart, lakes.valleyFull, sample.valley);
-    const patch = smoothstep3(lakes.patchStart, lakes.patchFull, sample.lakePatch);
-    return clamp012(elevation * moisture * valley * patch);
-  }
   function vegetationKindFor(sample, profile) {
     return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
   }
@@ -11989,9 +11928,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const landform = Object.freeze({ ...sampler.sample(x, y) });
     const baseTerrain = classifyTerrain(landform, profile);
     const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
-    const biome = biomeFor(baseTerrain, biomeWeights);
+    const biome = biomeFor(biomeWeights);
     const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
-    const lakePotential = lakePotentialFor(baseTerrain, landform, profile);
     return Object.freeze({
       baseTerrain,
       relief: generatedRelief(landform, profile),
@@ -11999,29 +11937,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       biomeWeights,
       vegetationDensity,
       vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : void 0,
-      lakePotential,
       landform
     });
-  }
-  function isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample = sampleAt(x, y)) {
-    if (!sample) return false;
-    const lakes = profile.lakes;
-    const isCandidate = (candidate, tileX, tileY) => Boolean(candidate && !waterAt(tileX, tileY) && candidate.lakePotential >= lakes.minimumPotential && randomAt(numericSeed, tileX, tileY, lakes.placementSalt) < candidate.lakePotential * lakes.placementScale);
-    if (!isCandidate(sample, x, y)) return false;
-    const lakeNeighbors = getNeighbors(x, y).reduce((count, neighbor) => {
-      const adjacent = sampleAt(neighbor.x, neighbor.y);
-      return count + (isCandidate(adjacent, neighbor.x, neighbor.y) ? 1 : 0);
-    }, 0);
-    return lakeNeighbors >= lakes.minimumNeighbors;
   }
   function resolveTile(numericSeed, profile, x, y, sampleAt, waterAt) {
     const sample = sampleAt(x, y);
     if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
     let type = sample.baseTerrain;
-    if (isWater2(type) || waterAt(x, y)) {
+    if (waterAt(x, y)) {
       const touchesLand = getNeighbors(x, y).some((neighbor) => {
         const adjacent = sampleAt(neighbor.x, neighbor.y);
-        return adjacent !== void 0 && !isWater2(adjacent.baseTerrain) && !waterAt(neighbor.x, neighbor.y);
+        return adjacent !== void 0 && !waterAt(neighbor.x, neighbor.y);
       });
       type = touchesLand ? "coastal" /* coastal */ : "sea" /* sea */;
     }
@@ -12034,16 +11960,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       Object.freeze(modifiers);
       return Object.freeze(tile);
     }
-    const lake = isGeneratedLake(numericSeed, profile, x, y, sampleAt, waterAt, sample);
-    if (lake) {
-      modifiers.push("lake");
-    } else {
-      if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-      const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
-      if (forest) {
-        modifiers.push("wood");
-        tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
-      }
+    if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
+    const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
+    if (forest) {
+      modifiers.push("wood");
+      tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
     }
     if (modifiers.length > 0) {
       tile.modifiers = modifiers;
@@ -12082,15 +12003,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     visitGeneratedWaterTiles(originX, originY, width, height, visit) {
       if (typeof visit !== "function") throw new TypeError("generated water visitor must be a function");
-      const window2 = this.createWindow();
-      try {
-        this.waterSampler.forEachWaterTile(originX, originY, width, height, (x, y) => {
-          const sample = window2.sampleGenerated(x, y);
-          if (sample && !isWater2(sample.baseTerrain)) visit(x, y);
-        });
-      } finally {
-        window2.clear();
-      }
+      this.waterSampler.forEachWaterTile(originX, originY, width, height, visit);
     }
     createWindow() {
       return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);
@@ -13069,7 +12982,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var MAX_WORLD_OVERVIEW_TILE_SPAN = 16384;
   var PALETTE = {
     deepWater: [13, 48, 76],
-    shallowWater: [42, 112, 126],
     coast: [70, 139, 137],
     temperate: [91, 139, 73],
     dry: [169, 148, 86],
@@ -13190,12 +13102,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
         const sample = resolver.sampleGenerated(tileX, tileY);
         let color;
-        if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
-          const shoreline = clamp013(
-            1 - (terrain.seaLevel - sample.landform.elevation) / Math.max(1e-3, terrain.seaLevel * 0.42)
-          );
-          color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
-        } else if (sample.baseTerrain === "sand" /* sand */) {
+        if (sample.baseTerrain === "sand" /* sand */) {
           color = PALETTE.sand;
         } else if (sample.baseTerrain === "tundra" /* tundra */) {
           color = PALETTE.tundra;
