@@ -107,6 +107,8 @@ export interface HexMapOptions {
     gpuChunkCacheBytes?: number;
     /** CPU byte budget. Defaults to 384 MiB. */
     cpuChunkCacheBytes?: number;
+    /** Decoded model LRU budget across CPU and estimated GPU copies. Defaults to 64 MiB. */
+    modelAssetCacheBytes?: number;
     /** Maximum cooperative drain time for a replaced world. Defaults to 15s. */
     worldSessionDrainTimeoutMs?: number;
 }
@@ -234,6 +236,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     cpuChunkCacheSize: 192,
     gpuChunkCacheBytes: 256 * 1024 * 1024,
     cpuChunkCacheBytes: 384 * 1024 * 1024,
+    modelAssetCacheBytes: 64 * 1024 * 1024,
     worldSessionDrainTimeoutMs: 15_000
 };
 
@@ -309,6 +312,7 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     nonNegativeSafeInteger("cpuChunkCacheSize", options.cpuChunkCacheSize);
     nonNegativeSafeInteger("gpuChunkCacheBytes", options.gpuChunkCacheBytes);
     nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
+    nonNegativeSafeInteger("modelAssetCacheBytes", options.modelAssetCacheBytes);
     positive("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
     nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
     nonNegativeSafeInteger("grassDensity", options.grassDensity);

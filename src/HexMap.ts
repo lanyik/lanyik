@@ -27,6 +27,8 @@ import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
 import type { HexMapEventMap } from "./EventMaps";
 import { getHexCenter } from "./helpers/helpers";
+import { ModelAssetCache, ModelAssetCacheStats } from "./helpers/models";
+import { forEachMapTile } from "./helpers/mapData";
 import { pickTile } from "./helpers/picking";
 import {
     CITY_FOG_TILE_KEY,
@@ -159,6 +161,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private worldCopyMaterialCache = new Map<string, RawShaderMaterial>();
     private worldPatternOffset = new Vector2();
     private chunkScheduler: WorldChunkScheduler;
+    private readonly modelAssets: ModelAssetCache;
     private readonly chunkSchedulerHooks: WorldChunkSchedulerHooks = {
         enabled: metadata => {
             const layer = this.worldRenderLayers?.forKind(metadata.kind);
@@ -274,6 +277,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             cpuCacheSize: this.options.cpuChunkCacheSize,
             gpuCacheBytes: this.options.gpuChunkCacheBytes,
             cpuCacheBytes: this.options.cpuChunkCacheBytes
+        });
+        this.modelAssets = new ModelAssetCache({
+            maximumBytes: this.options.modelAssetCacheBytes,
+            resources: this.chunkScheduler.createResourceAccount("model-assets")
         });
         this.installBuiltinWorldRenderLayers();
 
@@ -1006,7 +1013,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             if (source.bounds && !options.initialTile) this.frameMap(source.map);
             else this.positionCameraAtTile(initialTile);
 
-            const atlas = await worldController.lifecycle.run(signal => this.fetchTerrainAtlas(signal));
+            const [atlas] = await worldController.lifecycle.run(signal => Promise.all([
+                this.fetchTerrainAtlas(signal),
+                this.modelAssets.preload(this.authoredModelPaths(source.map))
+            ]));
             if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
             this.atlas = atlas;
             if (!(await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true)))) return;
@@ -1064,6 +1074,17 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             throw new TypeError("Terrain atlas descriptor is invalid");
         }
         return atlas;
+    }
+
+    private authoredModelPaths(map: MapInfo): string[] {
+        const paths = new Set<string>();
+        forEachMapTile(map, tile => {
+            if (tile.city) paths.add(tile.city.model ?? this.options.cityModel);
+            if (this.options.treesPerTile > 0 && !tile.city && tile.modifiers?.includes("wood")) {
+                paths.add(tile.treeModel ?? this.options.treeModel);
+            }
+        });
+        return [...paths];
     }
 
     private positionCameraAtTile(tile: Point): void {
@@ -1264,7 +1285,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
         const forestBuildRevision = record.forestBuildRevision ??= 0;
-        this.streamedForestResources ??= new ForestSharedResources();
+        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets);
         const preparation = this.prepareWorldVegetation(context, record);
         const vegetationSignature = record.vegetationSignature!;
         const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -1274,6 +1295,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             treesPerTile: density.treesPerTile,
             treeModel: this.options.treeModel,
             treeScale: this.options.treeScale,
+            modelAssets: this.modelAssets,
             fogDarkenFactor: this.options.fogDarkenFactor,
             riverWidth: this.options.riverWidth,
             riverBankWidth: this.options.riverBankWidth,
@@ -1962,6 +1984,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             lakeShoreWidth: this.options.lakeShoreWidth,
             cityModel: this.options.cityModel,
             cityScale: this.options.cityScale,
+            modelAssets: this.modelAssets,
             fogTexture: this.options.fogTexture,
             fogDarkenFactor: this.options.fogDarkenFactor,
             fogTextureSize: this.options.fogTextureSize
@@ -2012,6 +2035,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             treesPerTile: this.options.treesPerTile,
             treeModel: this.options.treeModel,
             treeScale: this.options.treeScale,
+            modelAssets: this.modelAssets,
             fogDarkenFactor: this.options.fogDarkenFactor,
             riverWidth: this.options.riverWidth,
             riverBankWidth: this.options.riverBankWidth,
@@ -2113,7 +2137,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
         }
         this.streamedForestResources?.dispose();
-        this.streamedForestResources = new ForestSharedResources();
+        this.streamedForestResources = new ForestSharedResources(this.modelAssets);
         const layer = this.worldRenderLayers.get("@forest");
         if (!layer) return false;
         for (const [key, record] of this.worldChunkLayers) {
@@ -2154,7 +2178,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.streamedGrassResources?.dispose();
         this.streamedGrassResources = undefined;
         this.streamedForestResources?.dispose();
-        this.streamedForestResources = new ForestSharedResources();
+        this.streamedForestResources = new ForestSharedResources(this.modelAssets);
 
         const grassLayer = this.worldRenderLayers.get("@grass");
         const forestLayer = this.worldRenderLayers.get("@forest");
@@ -3143,6 +3167,15 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     public get resourceBudget(): ResourceBudgetView { return this.chunkScheduler.resourceBudget; }
 
+    public get modelAssetStats(): Readonly<ModelAssetCacheStats> { return this.modelAssets.stats; }
+
+    public get modelAssetCache(): ModelAssetCache { return this.modelAssets; }
+
+    public preloadModelAssets(paths: Iterable<string>): Promise<void> {
+        if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+        return this.modelAssets.preload(paths);
+    }
+
     public createResourceAccount(label: string): ResourceBudgetAccount {
         if (this.disposed) throw new Error("HexMap has been disposed");
         return this.chunkScheduler.createResourceAccount(label);
@@ -3315,7 +3348,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
         this.cleanRoutePath();
         this.clearWorldCopies();
-        this.chunkScheduler.dispose();
         if (this.terrain) {
             this.worldRoot.remove(this.terrain);
             this.terrain.dispose();
@@ -3330,6 +3362,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             this.grass.dispose();
             this.grass = undefined;
         }
+        this.modelAssets.dispose();
+        this.chunkScheduler.dispose();
         this.selector.geometry.dispose();
         (this.selector.material as Material).dispose();
         this.pointer.geometry.dispose();

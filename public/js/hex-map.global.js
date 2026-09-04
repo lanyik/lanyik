@@ -1681,636 +1681,6 @@
       setTimeout(resolve, ms);
     });
   }
-
-  // src/helpers/neighbors.ts
-  var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
-  function getNeighborCoords(x, y, direction) {
-    const odd = x % 2 !== 0;
-    switch (direction) {
-      case "NE":
-        return { x: x + 1, y: odd ? y - 1 : y };
-      case "N":
-        return { x, y: y - 1 };
-      case "NW":
-        return { x: x - 1, y: odd ? y - 1 : y };
-      case "SW":
-        return { x: x - 1, y: odd ? y : y + 1 };
-      case "S":
-        return { x, y: y + 1 };
-      case "SE":
-        return { x: x + 1, y: odd ? y : y + 1 };
-    }
-  }
-  function getNeighbors(x, y) {
-    return NEIGHBOR_DIRECTIONS.map((direction) => ({ direction, ...getNeighborCoords(x, y, direction) }));
-  }
-
-  // src/helpers/topology.ts
-  function positiveModulo(value, modulus) {
-    if (!Number.isFinite(value) || !Number.isFinite(modulus) || modulus <= 0) {
-      throw new RangeError("positiveModulo requires a finite value and a positive finite modulus");
-    }
-    return (value % modulus + modulus) % modulus;
-  }
-  function normalizeMapCoordinates(map, x, y) {
-    if (map.infinite) {
-      return Number.isInteger(x) && Number.isInteger(y) ? { x, y } : null;
-    }
-    if (map.w <= 0 || map.h <= 0) return null;
-    let normalizedX = x;
-    let normalizedY = y;
-    if (map.wrapX) normalizedX = positiveModulo(normalizedX, map.w);
-    else if (normalizedX < 0 || normalizedX >= map.w) return null;
-    if (map.wrapY) normalizedY = positiveModulo(normalizedY, map.h);
-    else if (normalizedY < 0 || normalizedY >= map.h) return null;
-    return { x: normalizedX, y: normalizedY };
-  }
-  function getMapTile(map, x, y) {
-    const normalized = normalizeMapCoordinates(map, x, y);
-    if (!normalized) return void 0;
-    return map.tileAt?.(normalized.x, normalized.y) ?? map.data[normalized.x]?.[normalized.y];
-  }
-  function getMapNeighbors(map, x, y) {
-    const seen = /* @__PURE__ */ new Set();
-    const neighbors = [];
-    for (const neighbor of getNeighbors(x, y)) {
-      const normalized = normalizeMapCoordinates(map, neighbor.x, neighbor.y);
-      if (!normalized) continue;
-      const key = `${normalized.x},${normalized.y}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      neighbors.push({ ...normalized, direction: neighbor.direction });
-    }
-    return neighbors;
-  }
-  function assertWrappableMap(map) {
-    if (!Number.isInteger(map.w) || !Number.isInteger(map.h) || map.w <= 0 || map.h <= 0) {
-      throw new RangeError("map width and height must be positive integers");
-    }
-    if (!map.data || typeof map.data !== "object") {
-      throw new TypeError("map data must be an object");
-    }
-    if (map.tileAt !== void 0 && typeof map.tileAt !== "function") {
-      throw new TypeError("map tileAt must be a function when provided");
-    }
-    if (map.forEachTile !== void 0 && typeof map.forEachTile !== "function") {
-      throw new TypeError("map forEachTile must be a function when provided");
-    }
-    if (map.wrapX !== void 0 && typeof map.wrapX !== "boolean") {
-      throw new TypeError("wrapX must be a boolean when provided");
-    }
-    if (map.wrapY !== void 0 && typeof map.wrapY !== "boolean") {
-      throw new TypeError("wrapY must be a boolean when provided");
-    }
-    if (map.infinite !== void 0 && typeof map.infinite !== "boolean") {
-      throw new TypeError("infinite must be a boolean when provided");
-    }
-    if (map.infinite && (map.wrapX || map.wrapY)) {
-      throw new RangeError("infinite maps cannot use finite-axis wrapping");
-    }
-    if (map.wrapX && map.w % 2 !== 0) {
-      throw new RangeError("wrapX requires an even map width");
-    }
-  }
-
-  // src/helpers/picking.ts
-  var GROUND_PLANE = new three.Plane(new three.Vector3(0, 1, 0), 0);
-  function screenToGround(clientX, clientY, canvas, camera) {
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    const ndc = new three.Vector2(
-      (clientX - rect.left) / rect.width * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const raycaster = new three.Raycaster();
-    raycaster.setFromCamera(ndc, camera);
-    const point = new three.Vector3();
-    return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
-  }
-  function pickTile(worldPoint, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
-    if (!Number.isFinite(size) || size <= 0) return null;
-    if (mapWidth !== void 0 && (!Number.isInteger(mapWidth) || mapWidth <= 0)) return null;
-    if (mapHeight !== void 0 && (!Number.isInteger(mapHeight) || mapHeight <= 0)) return null;
-    if (wrapX && mapWidth === void 0 || wrapY && mapHeight === void 0) return null;
-    const approxX = worldPoint.x / (size * 1.5);
-    const approxY = worldPoint.z / (size * Math.sqrt(3));
-    const x0 = Math.floor(approxX);
-    const y0 = Math.floor(approxY);
-    let best = null;
-    let bestDist = Infinity;
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const rawX = x0 + dx;
-        const rawY = y0 + dy;
-        const center = getHexCenter(rawX, rawY, size);
-        const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = { x: rawX, y: rawY, worldX: center.x, worldY: center.y };
-        }
-      }
-    }
-    if (!best) return null;
-    if (!wrapX && mapWidth !== void 0 && (best.x < 0 || best.x >= mapWidth)) return null;
-    if (!wrapY && mapHeight !== void 0 && (best.y < 0 || best.y >= mapHeight)) return null;
-    return {
-      ...best,
-      x: wrapX ? positiveModulo(best.x, mapWidth) : best.x,
-      y: wrapY ? positiveModulo(best.y, mapHeight) : best.y
-    };
-  }
-
-  // src/enums.ts
-  var Land = /* @__PURE__ */ ((Land2) => {
-    Land2["sea"] = "sea";
-    Land2["coastal"] = "coastal";
-    Land2["land"] = "land";
-    Land2["sand"] = "sand";
-    Land2["tundra"] = "tundra";
-    Land2["snow"] = "snow";
-    Land2["mountain"] = "mountain";
-    return Land2;
-  })(Land || {});
-  var LandColor = {
-    ["land" /* land */]: 8694355,
-    ["coastal" /* coastal */]: 5205120,
-    ["sea" /* sea */]: 2766476,
-    ["sand" /* sand */]: 11446117,
-    ["tundra" /* tundra */]: 16777215,
-    ["snow" /* snow */]: 16777215,
-    ["mountain" /* mountain */]: 9142389
-  };
-  var LandPriority = {
-    ["sea" /* sea */]: 0,
-    ["coastal" /* coastal */]: 1,
-    ["land" /* land */]: 2,
-    ["sand" /* sand */]: 3,
-    ["tundra" /* tundra */]: 4,
-    ["snow" /* snow */]: 5,
-    ["mountain" /* mountain */]: 6
-  };
-  var UnitActions = /* @__PURE__ */ ((UnitActions2) => {
-    UnitActions2["attack"] = "attack";
-    UnitActions2["walk"] = "walk";
-    UnitActions2["distanceAttack"] = "distanceAttack";
-    UnitActions2["death"] = "death";
-    UnitActions2["idle"] = "idle";
-    UnitActions2["defence"] = "defence";
-    return UnitActions2;
-  })(UnitActions || {});
-
-  // src/helpers/mapData.ts
-  function forEachMapTile(map, visit) {
-    if (map.forEachTile) {
-      map.forEachTile(visit);
-      return;
-    }
-    for (const xKey of Object.keys(map.data)) {
-      const x = Number(xKey);
-      if (!Number.isInteger(x)) continue;
-      const column = map.data[x];
-      if (!column) continue;
-      for (const yKey of Object.keys(column)) {
-        const y = Number(yKey);
-        const tile = column[y];
-        if (!Number.isInteger(y) || !tile) continue;
-        visit(tile, x, y);
-      }
-    }
-  }
-  var SharedBaseInstancedBufferGeometry = class extends three.InstancedBufferGeometry {
-    constructor(base, attributeNames) {
-      super();
-      this.sharedAttributes = /* @__PURE__ */ new Map();
-      for (const name of attributeNames) {
-        const attribute = base.getAttribute(name);
-        if (!attribute) continue;
-        this.sharedAttributes.set(name, attribute);
-        this.setAttribute(name, attribute);
-      }
-      this.sharedIndex = base.getIndex();
-      this.setIndex(this.sharedIndex);
-    }
-    dispose() {
-      for (const [name, attribute] of this.sharedAttributes) {
-        if (this.getAttribute(name) === attribute) this.deleteAttribute(name);
-      }
-      const usesSharedIndex = this.getIndex() === this.sharedIndex;
-      if (usesSharedIndex) this.setIndex(null);
-      super.dispose();
-      for (const [name, attribute] of this.sharedAttributes) this.setAttribute(name, attribute);
-      if (usesSharedIndex) this.setIndex(this.sharedIndex);
-    }
-  };
-
-  // src/rendering/BufferUpdateBatch.ts
-  function mergeBufferUpdateRanges(ranges) {
-    const sorted = ranges.filter((range) => Number.isSafeInteger(range.start) && Number.isSafeInteger(range.count) && range.start >= 0 && range.count > 0).map((range) => ({ start: range.start, count: range.count })).sort((a, b) => a.start - b.start || a.count - b.count);
-    if (sorted.length === 0) return [];
-    const merged = [sorted[0]];
-    for (let index = 1; index < sorted.length; index += 1) {
-      const next = sorted[index];
-      const current = merged[merged.length - 1];
-      const end = current.start + current.count;
-      if (next.start > end) {
-        merged.push(next);
-        continue;
-      }
-      current.count = Math.max(end, next.start + next.count) - current.start;
-    }
-    return merged;
-  }
-  function commitBufferAttributeRanges(attribute, ranges) {
-    const merged = mergeBufferUpdateRanges([...attribute.updateRanges, ...ranges]);
-    if (merged.length === 0) return;
-    attribute.clearUpdateRanges();
-    for (const range of merged) attribute.addUpdateRange(range.start, range.count);
-    attribute.needsUpdate = true;
-  }
-
-  // src/helpers/chunks.ts
-  var WORLD_CHUNK_SIZE = 12;
-  var WORLD_CHUNK_METADATA = "hexWorldChunk";
-  var DEFAULT_WORLD_CHUNK_LOD_DISTANCES = Object.freeze({
-    near: 900,
-    far: 1650,
-    vegetation: 1450,
-    hysteresis: 120
-  });
-  function getWorldChunkKey(x, y, chunkSize = WORLD_CHUNK_SIZE) {
-    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
-      throw new RangeError("chunkSize must be a positive integer");
-    }
-    return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
-  }
-  function groupTilesByWorldChunk(tiles, chunkSize = WORLD_CHUNK_SIZE) {
-    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
-      throw new RangeError("chunkSize must be a positive integer");
-    }
-    const chunks = /* @__PURE__ */ new Map();
-    for (const tile of tiles) {
-      const key = getWorldChunkKey(tile.x, tile.y, chunkSize);
-      const chunk = chunks.get(key) ?? [];
-      chunk.push(tile);
-      chunks.set(key, chunk);
-    }
-    return chunks;
-  }
-  function getWorldChunkBounds(tiles, size, minY, maxY) {
-    if (tiles.length === 0) throw new Error("Cannot compute bounds for an empty world chunk");
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
-    for (const tile of tiles) {
-      const center = getHexCenter(tile.x, tile.y, size);
-      minX = Math.min(minX, center.x - size);
-      maxX = Math.max(maxX, center.x + size);
-      minZ = Math.min(minZ, center.y - size);
-      maxZ = Math.max(maxZ, center.y + size);
-    }
-    return { minX, maxX, minY, maxY, minZ, maxZ };
-  }
-  function getWorldChunkOrigin(chunkKey, size) {
-    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
-    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) {
-      throw new TypeError(`invalid world chunk key "${chunkKey}"`);
-    }
-    return getHexCenter(chunkX * WORLD_CHUNK_SIZE, chunkY * WORLD_CHUNK_SIZE, size);
-  }
-  function localizeWorldChunkBounds(bounds, origin) {
-    return {
-      minX: bounds.minX - origin.x,
-      maxX: bounds.maxX - origin.x,
-      minY: bounds.minY,
-      maxY: bounds.maxY,
-      minZ: bounds.minZ - origin.y,
-      maxZ: bounds.maxZ - origin.y
-    };
-  }
-  function tagWorldChunk(object, chunkKey, kind, bounds, id = `${kind}:${chunkKey}`) {
-    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
-    object.userData[WORLD_CHUNK_METADATA] = {
-      id,
-      key: chunkKey,
-      chunkX,
-      chunkY,
-      kind,
-      bounds
-    };
-  }
-  function getWorldChunkMetadata(object) {
-    return object.userData[WORLD_CHUNK_METADATA];
-  }
-  function resolveWorldChunkLod(distance, kind, previous, distances = DEFAULT_WORLD_CHUNK_LOD_DISTANCES) {
-    const decorative = kind === "grass" || kind === "forest";
-    const hiddenBeyond = decorative ? distances.vegetation : Infinity;
-    if (distance > hiddenBeyond + (previous === void 0 ? 0 : distances.hysteresis)) return null;
-    const near = distances.near;
-    const far = decorative ? distances.vegetation : distances.far;
-    const h = previous === void 0 ? 0 : distances.hysteresis;
-    if (previous === 0 && distance <= near + h) return 0;
-    if (previous === 1) {
-      if (distance < near - h) return 0;
-      if (distance <= far + h) return 1;
-    }
-    if (previous === 2 && distance >= far - h) return 2;
-    if (distance <= near) return 0;
-    if (distance <= far) return 1;
-    return decorative ? null : 2;
-  }
-
-  // src/helpers/rivers.ts
-  var MASK_DIRECTIONS = ["SE", "S", "SW", "NW", "N", "NE"];
-  var LAKE_FLAG = 4096;
-  var EDGE_DIRS = [
-    [0.8660254, 0.5],
-    // SE
-    [0, 1],
-    // S
-    [-0.8660254, 0.5],
-    // SW
-    [-0.8660254, -0.5],
-    // NW
-    [0, -1],
-    // N
-    [0.8660254, -0.5]
-    // NE
-  ];
-  function isRiverTile(tile) {
-    return !!tile?.modifiers?.includes("river");
-  }
-  function isLakeTile(tile) {
-    return !!tile?.modifiers?.includes("lake");
-  }
-  function isSeaOrCoastal(tile) {
-    return tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */;
-  }
-  function waterEdgeValue(map, x, y) {
-    const tile = getMapTile(map, x, y);
-    if (isLakeTile(tile)) {
-      let openMask = 0, channelMask = 0;
-      MASK_DIRECTIONS.forEach((direction, bit) => {
-        const n = getNeighborCoords(x, y, direction);
-        const neighbor = getMapTile(map, n.x, n.y);
-        if (!neighbor) return;
-        if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
-        else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
-      });
-      return LAKE_FLAG + openMask * 64 + channelMask;
-    }
-    if (isRiverTile(tile)) {
-      let mask = 0;
-      MASK_DIRECTIONS.forEach((direction, bit) => {
-        const n = getNeighborCoords(x, y, direction);
-        const neighbor = getMapTile(map, n.x, n.y);
-        if (!neighbor) return;
-        if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
-      });
-      return mask;
-    }
-    return -1;
-  }
-  function riverSeaMouthEdgeValue(map, x, y) {
-    const tile = getMapTile(map, x, y);
-    if (!isRiverTile(tile)) return 0;
-    let mask = 0;
-    MASK_DIRECTIONS.forEach((direction, bit) => {
-      const n = getNeighborCoords(x, y, direction);
-      const neighbor = getMapTile(map, n.x, n.y);
-      if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
-    });
-    return mask;
-  }
-  function riverLakeMouthEdgeValue(map, x, y) {
-    const tile = getMapTile(map, x, y);
-    if (!isRiverTile(tile)) return 0;
-    let mask = 0;
-    MASK_DIRECTIONS.forEach((direction, bit) => {
-      const n = getNeighborCoords(x, y, direction);
-      const neighbor = getMapTile(map, n.x, n.y);
-      if (isLakeTile(neighbor)) mask |= 1 << bit;
-    });
-    return mask;
-  }
-  function lakeNeighborEdgeValue(map, x, y) {
-    const tile = getMapTile(map, x, y);
-    if (!tile || isLakeTile(tile)) return 0;
-    let mask = 0;
-    MASK_DIRECTIONS.forEach((direction, bit) => {
-      const n = getNeighborCoords(x, y, direction);
-      if (isLakeTile(getMapTile(map, n.x, n.y))) mask |= 1 << bit;
-    });
-    return mask;
-  }
-  function riverChannelDistance(lx, ly, mask, size) {
-    if (mask < 0) return Infinity;
-    const apothem = size * 0.8660254;
-    let best = Math.hypot(lx, ly);
-    for (let bit = 0; bit < 6; bit++) {
-      if (!(mask & 1 << bit)) continue;
-      const [dx, dy] = EDGE_DIRS[bit];
-      const t = Math.min(Math.max(lx * dx + ly * dy, 0), apothem);
-      best = Math.min(best, Math.hypot(lx - dx * t, ly - dy * t));
-    }
-    return best;
-  }
-  function isInRiverMouthWater(lx, ly, mask, size, options) {
-    if (mask <= 0) return false;
-    const apothem = size * 0.8660254;
-    const wobble = 0.3 * options.riverCurvature + 0.03;
-    for (let bit = 0; bit < 6; bit++) {
-      if (!(mask & 1 << bit)) continue;
-      const [dx, dy] = EDGE_DIRS[bit];
-      const t = Math.min(Math.max(lx * dx + ly * dy, 0), apothem);
-      const progress = t / apothem;
-      const mouthWidth = options.riverWidth + (0.4 - options.riverWidth) * progress * progress * (3 - 2 * progress);
-      const clearance = (mouthWidth + Math.max(options.riverBankWidth, wobble)) * size;
-      if (Math.hypot(lx - dx * t, ly - dy * t) < clearance) return true;
-    }
-    return false;
-  }
-  function isInLakeNeighborWater(lx, ly, mask, size, options) {
-    if (mask <= 0) return false;
-    const apothem = size * 0.8660254;
-    const wobble = 0.3 * options.riverCurvature + 0.03;
-    let shore = 0;
-    for (let bit = 0; bit < 6; bit++) {
-      if (!(mask & 1 << bit)) continue;
-      const [dx, dy] = EDGE_DIRS[bit];
-      shore = Math.max(shore, (lx * dx + ly * dy) / apothem);
-    }
-    return shore + wobble >= 1 - options.lakeShoreWidth;
-  }
-  function isInTileWater(lx, ly, value, size, options, riverSeaMouthValue = 0, riverLakeMouthValue = 0, lakeNeighborValue = 0) {
-    if (isInLakeNeighborWater(lx, ly, lakeNeighborValue, size, options)) return true;
-    if (value < 0) return false;
-    const wobble = 0.3 * options.riverCurvature + 0.03;
-    const channelClearance = (options.riverWidth + Math.max(options.riverBankWidth, wobble)) * size;
-    if (value >= LAKE_FLAG) {
-      return true;
-    }
-    return riverChannelDistance(lx, ly, value, size) < channelClearance || isInRiverMouthWater(lx, ly, riverSeaMouthValue, size, options) || isInRiverMouthWater(lx, ly, riverLakeMouthValue, size, options);
-  }
-  function subdivideTriangle(a, b, c, numSubdivisions) {
-    if ((numSubdivisions || 0) <= 0) return [a, b, c];
-    const ba = b.clone().sub(a);
-    const ah = a.clone().add(ba.setLength(ba.length() / 2));
-    const cb = c.clone().sub(b);
-    const bh = b.clone().add(cb.setLength(cb.length() / 2));
-    const ac = a.clone().sub(c);
-    const ch = c.clone().add(ac.setLength(ac.length() / 2));
-    return [].concat(
-      subdivideTriangle(ah, bh, ch, numSubdivisions - 1),
-      subdivideTriangle(ch, bh, c, numSubdivisions - 1),
-      subdivideTriangle(ah, ch, a, numSubdivisions - 1),
-      subdivideTriangle(bh, ah, b, numSubdivisions - 1)
-    );
-  }
-  function createHexagonGeometry(radius, numSubdivisions = 0) {
-    const numFaces = 6 * Math.pow(4, numSubdivisions);
-    const positions = new Float32Array(numFaces * 3 * 3);
-    const texcoords = new Float32Array(numFaces * 3 * 2);
-    let p = 0, t = 0;
-    const points = [0, 1, 2, 3, 4, 5].map((i) => {
-      const angle = Math.PI / 180 * (60 * i);
-      return new three.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
-    }).concat([new three.Vector3(0, 0, 0)]);
-    const faces = [0, 6, 1, 1, 6, 2, 2, 6, 3, 3, 6, 4, 4, 6, 5, 5, 6, 0];
-    let vertices = [];
-    for (let i = 0; i < faces.length; i += 3) {
-      const a = points[faces[i]], b = points[faces[i + 1]], c = points[faces[i + 2]];
-      vertices = vertices.concat(subdivideTriangle(a, b, c, numSubdivisions));
-    }
-    for (let i = 0; i < vertices.length; i++) {
-      positions[p++] = vertices[i].x;
-      positions[p++] = vertices[i].y;
-      positions[p++] = vertices[i].z;
-      texcoords[t++] = 0.02 + 0.96 * ((vertices[i].x + radius) / (radius * 2));
-      texcoords[t++] = 0.02 + 0.96 * ((vertices[i].z + radius) / (radius * 2));
-    }
-    const geometry = new three.BufferGeometry();
-    geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
-    geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
-    return geometry;
-  }
-  function createHexagonLodGeometry(radius, interiorSubdivisions, borderSubdivisions) {
-    if (interiorSubdivisions >= borderSubdivisions) {
-      return createHexagonGeometry(radius, borderSubdivisions);
-    }
-    const outerSegments = Math.pow(2, borderSubdivisions);
-    const innerSegments = Math.pow(2, Math.max(0, interiorSubdivisions));
-    const innerScale = 0.72;
-    const triangles = [];
-    const center = new three.Vector3();
-    const corners = Array.from({ length: 6 }, (_, index) => {
-      const angle = index * Math.PI / 3;
-      return new three.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
-    });
-    const appendTriangle = (a, b, c) => {
-      const crossY = b.clone().sub(a).cross(c.clone().sub(a)).y;
-      if (crossY >= 0) triangles.push(a, b, c);
-      else triangles.push(a, c, b);
-    };
-    for (let side = 0; side < 6; side++) {
-      const a = corners[side];
-      const b = corners[(side + 1) % 6];
-      const outer = Array.from(
-        { length: outerSegments + 1 },
-        (_, index) => a.clone().lerp(b, index / outerSegments)
-      );
-      const innerA = a.clone().multiplyScalar(innerScale);
-      const innerB = b.clone().multiplyScalar(innerScale);
-      const inner = Array.from(
-        { length: innerSegments + 1 },
-        (_, index) => innerA.clone().lerp(innerB, index / innerSegments)
-      );
-      let outerIndex = 0;
-      let innerIndex = 0;
-      while (outerIndex < outerSegments || innerIndex < innerSegments) {
-        const nextOuter = outerIndex < outerSegments ? (outerIndex + 1) / outerSegments : Infinity;
-        const nextInner = innerIndex < innerSegments ? (innerIndex + 1) / innerSegments : Infinity;
-        if (Math.abs(nextOuter - nextInner) < 1e-9) {
-          appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
-          appendTriangle(outer[outerIndex + 1], inner[innerIndex], inner[innerIndex + 1]);
-          outerIndex++;
-          innerIndex++;
-        } else if (nextOuter < nextInner) {
-          appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
-          outerIndex++;
-        } else {
-          appendTriangle(outer[outerIndex], inner[innerIndex], inner[innerIndex + 1]);
-          innerIndex++;
-        }
-      }
-      for (let index = 0; index < innerSegments; index++) {
-        appendTriangle(inner[index], center, inner[index + 1]);
-      }
-    }
-    const positions = new Float32Array(triangles.length * 3);
-    const texcoords = new Float32Array(triangles.length * 2);
-    triangles.forEach((vertex, index) => {
-      positions[index * 3] = vertex.x;
-      positions[index * 3 + 1] = vertex.y;
-      positions[index * 3 + 2] = vertex.z;
-      texcoords[index * 2] = 0.02 + 0.96 * ((vertex.x + radius) / (radius * 2));
-      texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex.z + radius) / (radius * 2));
-    });
-    const geometry = new three.BufferGeometry();
-    geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
-    geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
-    return geometry;
-  }
-  function makeTextSprite(message, parameters = {}) {
-    const fontface = parameters.fontface ?? "Arial";
-    const fontsize = parameters.fontsize ?? 18;
-    const borderThickness = parameters.borderThickness ?? 4;
-    const borderColor = parameters.borderColor ?? { r: 0, g: 0, b: 0, a: 1 };
-    const backgroundColor = parameters.backgroundColor ?? { r: 255, g: 255, b: 255, a: 1 };
-    const canvas = document.createElement("canvas");
-    let context = canvas.getContext("2d");
-    if (!context) throw new Error("Unable to create a 2D canvas context for city label");
-    context.font = "Bold " + fontsize + "px " + fontface;
-    let metrics = context.measureText(message);
-    let textWidth = metrics.width;
-    const width = Math.ceil(textWidth + borderThickness * 2);
-    const height = Math.ceil(fontsize * 1.4 + borderThickness * 2);
-    canvas.width = width;
-    canvas.height = height;
-    context = canvas.getContext("2d");
-    if (!context) throw new Error("Unable to recreate the 2D canvas context for city label");
-    context.font = "Bold " + fontsize + "px " + fontface;
-    context.fillStyle = "rgba(" + backgroundColor.r + "," + backgroundColor.g + "," + backgroundColor.b + "," + backgroundColor.a + ")";
-    context.strokeStyle = "rgba(" + borderColor.r + "," + borderColor.g + "," + borderColor.b + "," + borderColor.a + ")";
-    context.lineWidth = borderThickness;
-    roundRect(context, borderThickness / 2, borderThickness / 2, textWidth + borderThickness, fontsize * 1.4 + borderThickness, 6);
-    context.fillStyle = "rgba(0, 0, 0, 1.0)";
-    context.fillText(message, borderThickness, fontsize + borderThickness);
-    const texture = new three.Texture(canvas);
-    texture.needsUpdate = true;
-    const spriteMaterial = new three.SpriteMaterial(
-      { map: texture, transparent: true, depthWrite: false }
-    );
-    const sprite = new three.Sprite(spriteMaterial);
-    const scale = 100 / 300;
-    sprite.scale.set(width * scale, height * scale, 1);
-    return sprite;
-  }
-  function roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  }
   function toTrianglesDrawMode(geometry, drawMode) {
     if (drawMode === three.TrianglesDrawMode) {
       console.warn("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Geometry already defined as triangles.");
@@ -3495,9 +2865,9 @@
     MASK: "MASK",
     BLEND: "BLEND"
   };
-  function createDefaultMaterial(cache2) {
-    if (cache2["DefaultMaterial"] === void 0) {
-      cache2["DefaultMaterial"] = new three.MeshStandardMaterial({
+  function createDefaultMaterial(cache) {
+    if (cache["DefaultMaterial"] === void 0) {
+      cache["DefaultMaterial"] = new three.MeshStandardMaterial({
         color: 16777215,
         emissive: 0,
         metalness: 1,
@@ -3507,7 +2877,7 @@
         side: three.FrontSide
       });
     }
-    return cache2["DefaultMaterial"];
+    return cache["DefaultMaterial"];
   }
   function addUnknownExtensionsToUserData(knownExtensions, object, objectDef) {
     for (const name in objectDef.extensions) {
@@ -3761,12 +3131,12 @@
      * @param {Object} cache
      * @param {Object3D} index
      */
-    _addNodeRef(cache2, index) {
+    _addNodeRef(cache, index) {
       if (index === void 0) return;
-      if (cache2.refs[index] === void 0) {
-        cache2.refs[index] = cache2.uses[index] = 0;
+      if (cache.refs[index] === void 0) {
+        cache.refs[index] = cache.uses[index] = 0;
       }
-      cache2.refs[index]++;
+      cache.refs[index]++;
     }
     /**
      * Returns a reference to a shared resource, cloning it if necessary.
@@ -3777,8 +3147,8 @@
      * @param {Object} object
      * @return {Object}
      */
-    _getNodeRef(cache2, index, object) {
-      if (cache2.refs[index] <= 1) return object;
+    _getNodeRef(cache, index, object) {
+      if (cache.refs[index] <= 1) return object;
       const ref = object.clone();
       const updateMappings = (original, clone2) => {
         const mappings = this.associations.get(original);
@@ -3790,7 +3160,7 @@
         }
       };
       updateMappings(object, ref);
-      ref.name += "_instance_" + cache2.uses[index]++;
+      ref.name += "_instance_" + cache.uses[index]++;
       return ref;
     }
     _invokeOne(func) {
@@ -4330,7 +3700,7 @@
     loadGeometries(primitives) {
       const parser = this;
       const extensions = this.extensions;
-      const cache2 = this.primitiveCache;
+      const cache = this.primitiveCache;
       function createDracoPrimitive(primitive) {
         return extensions[EXTENSIONS.KHR_DRACO_MESH_COMPRESSION].decodePrimitive(primitive, parser).then(function(geometry) {
           return addPrimitiveAttributes(geometry, primitive, parser);
@@ -4340,7 +3710,7 @@
       for (let i = 0, il = primitives.length; i < il; i++) {
         const primitive = primitives[i];
         const cacheKey = createPrimitiveKey(primitive);
-        const cached = cache2[cacheKey];
+        const cached = cache[cacheKey];
         if (cached) {
           pending.push(cached.promise);
         } else {
@@ -4350,7 +3720,7 @@
           } else {
             geometryPromise = addPrimitiveAttributes(new three.BufferGeometry(), primitive, parser);
           }
-          cache2[cacheKey] = { primitive, promise: geometryPromise };
+          cache[cacheKey] = { primitive, promise: geometryPromise };
           pending.push(geometryPromise);
         }
       }
@@ -4914,6 +4284,420 @@
       return primitiveDef.targets !== void 0 ? addMorphTargets(geometry, primitiveDef.targets, parser) : geometry;
     });
   }
+  var ZERO_COST = {
+    cpuBytes: 0,
+    gpuBytes: 0,
+    geometryBytes: 0,
+    textureBytes: 0,
+    modelBytes: 0
+  };
+  function normalizeResourceCost(cost = {}) {
+    const normalized = { ...ZERO_COST, ...cost };
+    for (const [name, value] of Object.entries(normalized)) {
+      if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
+        throw new RangeError(`${name} must be a non-negative safe integer byte count`);
+      }
+    }
+    return normalized;
+  }
+  function addCost(first, second) {
+    return {
+      cpuBytes: first.cpuBytes + second.cpuBytes,
+      gpuBytes: first.gpuBytes + second.gpuBytes,
+      geometryBytes: first.geometryBytes + second.geometryBytes,
+      textureBytes: first.textureBytes + second.textureBytes,
+      modelBytes: first.modelBytes + second.modelBytes
+    };
+  }
+  function subtractCost(first, second) {
+    return {
+      cpuBytes: Math.max(0, first.cpuBytes - second.cpuBytes),
+      gpuBytes: Math.max(0, first.gpuBytes - second.gpuBytes),
+      geometryBytes: Math.max(0, first.geometryBytes - second.geometryBytes),
+      textureBytes: Math.max(0, first.textureBytes - second.textureBytes),
+      modelBytes: Math.max(0, first.modelBytes - second.modelBytes)
+    };
+  }
+  var ResourceBudgetLedger = class {
+    constructor(limits) {
+      this.entries = /* @__PURE__ */ new Map();
+      this.accounts = /* @__PURE__ */ new Set();
+      this.totals = { ...ZERO_COST };
+      this.rejectedReservations = 0;
+      this.peakCpuBytes = 0;
+      this.peakGpuBytes = 0;
+      this.nextAccountId = 1;
+      this.disposed = false;
+      this.limits = this.validateLimits(limits);
+    }
+    configure(limits) {
+      this.assertActive();
+      this.limits = this.validateLimits({ ...this.limits, ...limits });
+    }
+    reserve(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertKey(key);
+      const normalized = normalizeResourceCost(cost);
+      const existing = this.entries.get(key);
+      const prospective = addCost(subtractCost(this.totals, existing ?? ZERO_COST), normalized);
+      if (prospective.cpuBytes > this.limits.cpuBytes || prospective.gpuBytes > this.limits.gpuBytes) {
+        this.rejectedReservations += 1;
+        return false;
+      }
+      this.store(key, normalized, pinned, existing);
+      return true;
+    }
+    forceReserve(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertKey(key);
+      const normalized = normalizeResourceCost(cost);
+      this.store(key, normalized, pinned, this.entries.get(key));
+    }
+    release(key) {
+      const existing = this.entries.get(key);
+      if (!existing) return false;
+      this.entries.delete(key);
+      this.totals = subtractCost(this.totals, existing);
+      return true;
+    }
+    clear() {
+      if (this.disposed) return;
+      for (const account of this.accounts) account.invalidateReservations();
+      this.entries.clear();
+      this.totals = { ...ZERO_COST };
+    }
+    dispose() {
+      if (this.disposed) return;
+      for (const account of [...this.accounts]) account.detachFromLedger();
+      this.accounts.clear();
+      this.entries.clear();
+      this.totals = { ...ZERO_COST };
+      this.disposed = true;
+    }
+    createAccount(label) {
+      this.assertActive();
+      if (typeof label !== "string" || label.trim().length === 0) {
+        throw new TypeError("resource account label is required");
+      }
+      const account = new LedgerResourceBudgetAccount(
+        this,
+        label,
+        `@account:${this.nextAccountId++}:`,
+        (value) => {
+          this.accounts.delete(value);
+        }
+      );
+      this.accounts.add(account);
+      return account;
+    }
+    setPinned(key, pinned) {
+      const existing = this.entries.get(key);
+      if (!existing || existing.pinned === pinned) return Boolean(existing);
+      this.entries.set(key, { ...existing, pinned });
+      return true;
+    }
+    get(key) {
+      return this.entries.get(key);
+    }
+    get stats() {
+      let pinnedReservations = 0;
+      for (const entry of this.entries.values()) if (entry.pinned) pinnedReservations += 1;
+      return {
+        ...this.totals,
+        disposed: this.disposed,
+        cpuLimitBytes: this.limits.cpuBytes,
+        gpuLimitBytes: this.limits.gpuBytes,
+        accounts: this.accounts.size,
+        reservations: this.entries.size,
+        pinnedReservations,
+        cpuExceededBytes: Math.max(0, this.totals.cpuBytes - this.limits.cpuBytes),
+        gpuExceededBytes: Math.max(0, this.totals.gpuBytes - this.limits.gpuBytes),
+        rejectedReservations: this.rejectedReservations,
+        peakCpuBytes: this.peakCpuBytes,
+        peakGpuBytes: this.peakGpuBytes
+      };
+    }
+    store(key, cost, pinned, existing) {
+      this.totals = addCost(subtractCost(this.totals, existing ?? ZERO_COST), cost);
+      this.entries.set(key, { key, pinned, ...cost });
+      this.peakCpuBytes = Math.max(this.peakCpuBytes, this.totals.cpuBytes);
+      this.peakGpuBytes = Math.max(this.peakGpuBytes, this.totals.gpuBytes);
+    }
+    validateLimits(limits) {
+      for (const [name, value] of Object.entries(limits)) {
+        if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
+          throw new RangeError(`${name} budget must be a non-negative safe integer`);
+        }
+      }
+      return { ...limits };
+    }
+    assertKey(key) {
+      if (typeof key !== "string" || key.trim().length === 0) {
+        throw new TypeError("resource key is required");
+      }
+    }
+    assertActive() {
+      if (this.disposed) throw new Error("ResourceBudgetLedger has been disposed");
+    }
+  };
+  var LedgerResourceReservationHandle = class {
+    constructor(account, key, ledgerKey) {
+      this.account = account;
+      this.key = key;
+      this.ledgerKey = ledgerKey;
+      this.releasedValue = false;
+    }
+    get released() {
+      return this.releasedValue;
+    }
+    get reservation() {
+      return this.releasedValue ? void 0 : this.account.lookup(this.ledgerKey);
+    }
+    update(cost, pinned = this.reservation?.pinned ?? false) {
+      if (this.releasedValue) throw new Error(`resource reservation "${this.key}" has been released`);
+      return this.account.update(this, cost, pinned);
+    }
+    setPinned(pinned) {
+      if (this.releasedValue) return false;
+      return this.account.setPinned(this, pinned);
+    }
+    release() {
+      if (this.releasedValue) return false;
+      this.releasedValue = true;
+      return this.account.releaseHandle(this);
+    }
+    invalidate() {
+      this.releasedValue = true;
+    }
+  };
+  var LedgerResourceBudgetAccount = class {
+    constructor(ledger, label, prefix, detached) {
+      this.ledger = ledger;
+      this.label = label;
+      this.prefix = prefix;
+      this.detached = detached;
+      this.handles = /* @__PURE__ */ new Map();
+      this.disposedValue = false;
+    }
+    get disposed() {
+      return this.disposedValue;
+    }
+    acquire(key, cost, pinned = false) {
+      this.assertActive();
+      this.assertLocalKey(key);
+      if (this.handles.has(key)) {
+        throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
+      }
+      const ledgerKey = `${this.prefix}${key}`;
+      if (!this.ledger.reserve(ledgerKey, cost, pinned)) return void 0;
+      const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
+      this.handles.set(key, handle);
+      return handle;
+    }
+    acquireRequired(key, cost, pinned) {
+      this.assertActive();
+      this.assertLocalKey(key);
+      if (this.handles.has(key)) {
+        throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
+      }
+      const ledgerKey = `${this.prefix}${key}`;
+      this.ledger.forceReserve(ledgerKey, cost, pinned);
+      const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
+      this.handles.set(key, handle);
+      return handle;
+    }
+    release(key) {
+      return this.handles.get(key)?.release() ?? false;
+    }
+    clear() {
+      if (this.disposedValue) return;
+      for (const handle of [...this.handles.values()]) handle.release();
+    }
+    dispose() {
+      if (this.disposedValue) return;
+      this.clear();
+      this.disposedValue = true;
+      this.detached(this);
+    }
+    get stats() {
+      let totals = { ...ZERO_COST };
+      let reservations = 0;
+      let pinnedReservations = 0;
+      for (const handle of this.handles.values()) {
+        const reservation = handle.reservation;
+        if (!reservation) continue;
+        totals = addCost(totals, reservation);
+        reservations += 1;
+        if (reservation.pinned) pinnedReservations += 1;
+      }
+      return {
+        ...totals,
+        label: this.label,
+        disposed: this.disposedValue,
+        reservations,
+        pinnedReservations
+      };
+    }
+    lookup(ledgerKey) {
+      return this.ledger.get(ledgerKey);
+    }
+    update(handle, cost, pinned) {
+      this.assertOwned(handle);
+      return this.ledger.reserve(handle.ledgerKey, cost, pinned);
+    }
+    setPinned(handle, pinned) {
+      this.assertOwned(handle);
+      return this.ledger.setPinned(handle.ledgerKey, pinned);
+    }
+    releaseHandle(handle) {
+      if (this.handles.get(handle.key) !== handle) return false;
+      this.handles.delete(handle.key);
+      return this.ledger.release(handle.ledgerKey);
+    }
+    invalidateReservations() {
+      for (const handle of this.handles.values()) handle.invalidate();
+      this.handles.clear();
+    }
+    detachFromLedger() {
+      this.invalidateReservations();
+      this.disposedValue = true;
+    }
+    assertOwned(handle) {
+      this.assertActive();
+      if (this.handles.get(handle.key) !== handle) {
+        throw new Error(`resource reservation "${handle.key}" is not owned by account "${this.label}"`);
+      }
+    }
+    assertActive() {
+      if (this.disposedValue) throw new Error(`resource account "${this.label}" has been disposed`);
+    }
+    assertLocalKey(key) {
+      if (typeof key !== "string" || key.trim().length === 0) {
+        throw new TypeError("resource reservation key is required");
+      }
+    }
+  };
+  function attributeArray(attribute) {
+    return attribute instanceof three.InterleavedBufferAttribute ? attribute.data.array : attribute.array;
+  }
+  function estimateBufferGeometriesResourceBytes(geometries) {
+    const arrays = /* @__PURE__ */ new Set();
+    const uploads = /* @__PURE__ */ new Set();
+    let cpuBytes = 0;
+    let gpuBytes = 0;
+    const account = (attribute) => {
+      if (!attribute) return;
+      const array = attributeArray(attribute);
+      const buffer = array.buffer;
+      if (!arrays.has(buffer)) {
+        arrays.add(buffer);
+        cpuBytes += buffer.byteLength;
+      }
+      const uploadOwner = attribute instanceof three.InterleavedBufferAttribute ? attribute.data : attribute;
+      if (!uploads.has(uploadOwner)) {
+        uploads.add(uploadOwner);
+        gpuBytes += array.byteLength;
+      }
+    };
+    for (const geometry of new Set(geometries)) {
+      account(geometry.index);
+      for (const attribute of Object.values(geometry.attributes)) account(attribute);
+      for (const attributes of Object.values(geometry.morphAttributes)) {
+        for (const attribute of attributes) account(attribute);
+      }
+    }
+    return { cpuBytes, gpuBytes };
+  }
+  function estimateBufferGeometriesBytes(geometries) {
+    return estimateBufferGeometriesResourceBytes(geometries).cpuBytes;
+  }
+  function textureImageBytes(image) {
+    if (Array.isArray(image)) return image.reduce((bytes, face) => bytes + textureImageBytes(face), 0);
+    if (!image || typeof image !== "object") return 0;
+    const value = image;
+    if (value.data) return value.data.byteLength;
+    if (!Number.isFinite(value.width) || !Number.isFinite(value.height)) return 0;
+    return Math.max(0, Math.round(
+      value.width * value.height * (value.depth ?? 1) * 4
+    ));
+  }
+  function textureResourceBytes(texture) {
+    const baseBytes = textureImageBytes(texture.image);
+    const mipmapBytes = texture.mipmaps.reduce((bytes, mipmap) => bytes + textureImageBytes(mipmap), 0);
+    const generatedMipBytes = texture.generateMipmaps && mipmapBytes === 0 ? Math.ceil(baseBytes / 3) : 0;
+    return {
+      cpuBytes: baseBytes + mipmapBytes,
+      gpuBytes: baseBytes + mipmapBytes + generatedMipBytes
+    };
+  }
+  function collectTextureValue(value, textures) {
+    if (value instanceof three.Texture) {
+      textures.add(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) collectTextureValue(entry, textures);
+    }
+  }
+  function collectObject3DResources(objects) {
+    const geometries = /* @__PURE__ */ new Set();
+    const materials = /* @__PURE__ */ new Set();
+    const textures = /* @__PURE__ */ new Set();
+    for (const root of new Set(objects)) root.traverse((object) => {
+      const renderable = object;
+      if (renderable.geometry) geometries.add(renderable.geometry);
+      if (renderable.skeleton?.boneTexture) textures.add(renderable.skeleton.boneTexture);
+      const objectMaterials = renderable.material ? Array.isArray(renderable.material) ? renderable.material : [renderable.material] : [];
+      for (const material of objectMaterials) materials.add(material);
+    });
+    for (const material of materials) {
+      for (const value of Object.values(material)) collectTextureValue(value, textures);
+      const uniforms = material.uniforms;
+      for (const uniform of Object.values(uniforms ?? {})) {
+        collectTextureValue(uniform?.value, textures);
+      }
+    }
+    return { geometries, materials, textures };
+  }
+  function estimateObject3DResourceCost(objects) {
+    const { geometries, textures } = collectObject3DResources(objects);
+    const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
+    let textureCpuBytes = 0;
+    let textureGpuBytes = 0;
+    for (const texture of textures) {
+      const cost = textureResourceBytes(texture);
+      textureCpuBytes += cost.cpuBytes;
+      textureGpuBytes += cost.gpuBytes;
+    }
+    return normalizeResourceCost({
+      cpuBytes: geometry.cpuBytes + textureCpuBytes,
+      gpuBytes: geometry.gpuBytes + textureGpuBytes,
+      geometryBytes: geometry.gpuBytes,
+      textureBytes: textureGpuBytes,
+      modelBytes: geometry.cpuBytes + textureCpuBytes
+    });
+  }
+  function disposeObject3DResources(objects) {
+    const { geometries, materials, textures } = collectObject3DResources(objects);
+    const images = /* @__PURE__ */ new Set();
+    const closeImage = (image) => {
+      if (Array.isArray(image)) {
+        for (const entry of image) closeImage(entry);
+        return;
+      }
+      if (!image || typeof image !== "object" || images.has(image)) return;
+      images.add(image);
+      const close = image.close;
+      if (typeof close === "function") close.call(image);
+    };
+    for (const texture of textures) {
+      closeImage(texture.image);
+      for (const mipmap of texture.mipmaps) closeImage(mipmap);
+      texture.dispose();
+    }
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+  }
 
   // src/helpers/models.ts
   var DEFAULT_INFO = {
@@ -4969,24 +4753,820 @@
       new three.Vector3(info.scale, info.scale, info.scale)
     );
   }
-  var cache = /* @__PURE__ */ new Map();
-  function loadModel(path) {
-    let promise = cache.get(path);
-    if (!promise) {
-      promise = (async () => {
-        const [{ scene, animations }, info] = await Promise.all([
-          loadGLTF(`${path}/model.glb`),
-          loadInfo(`${path}/info.json`)
-        ]);
-        scene.updateMatrixWorld(true);
-        return { scene, animations, info, fixup: fixupMatrix(info) };
-      })().catch((reason) => {
-        cache.delete(path);
-        throw reason;
-      });
-      cache.set(path, promise);
+  var DEFAULT_MODEL_ASSET_CACHE_BYTES = 64 * 1024 * 1024;
+  async function loadModel(path) {
+    const [{ scene, animations }, info] = await Promise.all([
+      loadGLTF(`${path}/model.glb`),
+      loadInfo(`${path}/info.json`)
+    ]);
+    scene.updateMatrixWorld(true);
+    return { scene, animations, info, fixup: fixupMatrix(info) };
+  }
+  var ModelAssetCache = class {
+    constructor(options = {}) {
+      this.entries = /* @__PURE__ */ new Map();
+      this.clock = 0;
+      this.retainedBytes = 0;
+      this.cacheHits = 0;
+      this.cacheMisses = 0;
+      this.evictions = 0;
+      this.disposed = false;
+      this.maximumBytes = options.maximumBytes ?? DEFAULT_MODEL_ASSET_CACHE_BYTES;
+      if (!Number.isSafeInteger(this.maximumBytes) || this.maximumBytes < 0) {
+        throw new RangeError("model asset cache maximumBytes must be a non-negative safe integer");
+      }
+      this.resources = options.resources;
+      this.loader = options.load ?? loadModel;
     }
-    return promise;
+    async acquire(path) {
+      this.assertActive();
+      if (typeof path !== "string" || path.trim().length === 0) {
+        throw new TypeError("model asset path must be a non-empty string");
+      }
+      let entry = this.entries.get(path);
+      if (entry) {
+        this.cacheHits += 1;
+      } else {
+        this.cacheMisses += 1;
+        let created;
+        const promise = this.loader(path).then((model2) => {
+          try {
+            return this.acceptLoaded(created, model2);
+          } catch (reason) {
+            disposeObject3DResources([model2.scene]);
+            throw reason;
+          }
+        }).catch((reason) => {
+          if (this.entries.get(path) === created) this.entries.delete(path);
+          throw reason;
+        });
+        created = {
+          path,
+          promise,
+          references: 0,
+          lastUsed: ++this.clock,
+          retainedBytes: 0
+        };
+        entry = created;
+        this.entries.set(path, entry);
+      }
+      entry.references += 1;
+      entry.lastUsed = ++this.clock;
+      entry.reservation?.setPinned(true);
+      let model;
+      try {
+        model = await entry.promise;
+      } catch (reason) {
+        entry.references = Math.max(0, entry.references - 1);
+        throw reason;
+      }
+      if (this.disposed || this.entries.get(path) !== entry || entry.model !== model) {
+        entry.references = Math.max(0, entry.references - 1);
+        throw new Error("ModelAssetCache was disposed while loading an asset");
+      }
+      let released = false;
+      return {
+        path,
+        model,
+        get released() {
+          return released;
+        },
+        release: () => {
+          if (released) return false;
+          released = true;
+          this.release(entry);
+          return true;
+        }
+      };
+    }
+    async preload(paths) {
+      this.assertActive();
+      await Promise.all([...new Set(paths)].map((path) => this.acquire(path).then((lease) => {
+        lease.release();
+      })));
+    }
+    clear() {
+      if (this.disposed) return;
+      for (const entry of [...this.entries.values()]) {
+        if (entry.references === 0 && entry.model) this.evict(entry);
+      }
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      for (const entry of this.entries.values()) {
+        entry.reservation?.release();
+        if (entry.model) disposeObject3DResources([entry.model.scene]);
+      }
+      this.entries.clear();
+      this.retainedBytes = 0;
+      this.resources?.dispose();
+    }
+    get stats() {
+      let loadedEntries = 0;
+      let activeReferences = 0;
+      let cost = { cpuBytes: 0, gpuBytes: 0, geometryBytes: 0, textureBytes: 0, modelBytes: 0 };
+      for (const entry of this.entries.values()) {
+        activeReferences += entry.references;
+        if (!entry.cost) continue;
+        loadedEntries += 1;
+        cost = {
+          cpuBytes: cost.cpuBytes + entry.cost.cpuBytes,
+          gpuBytes: cost.gpuBytes + entry.cost.gpuBytes,
+          geometryBytes: cost.geometryBytes + entry.cost.geometryBytes,
+          textureBytes: cost.textureBytes + entry.cost.textureBytes,
+          modelBytes: cost.modelBytes + entry.cost.modelBytes
+        };
+      }
+      return {
+        ...cost,
+        disposed: this.disposed,
+        entries: this.entries.size,
+        loadedEntries,
+        pendingEntries: this.entries.size - loadedEntries,
+        activeReferences,
+        maximumBytes: this.maximumBytes,
+        retainedBytes: this.retainedBytes,
+        exceededBytes: Math.max(0, this.retainedBytes - this.maximumBytes),
+        cacheHits: this.cacheHits,
+        cacheMisses: this.cacheMisses,
+        evictions: this.evictions
+      };
+    }
+    acceptLoaded(entry, model) {
+      if (this.disposed || this.entries.get(entry.path) !== entry) {
+        throw new Error("ModelAssetCache was disposed while loading an asset");
+      }
+      const cost = estimateObject3DResourceCost([model.scene]);
+      const retainedBytes = cost.cpuBytes + cost.gpuBytes;
+      if (!Number.isSafeInteger(retainedBytes)) throw new RangeError("model asset byte estimate exceeds safe integer range");
+      this.evictToFit(retainedBytes);
+      entry.model = model;
+      entry.cost = cost;
+      entry.retainedBytes = retainedBytes;
+      entry.reservation = this.resources?.acquire(entry.path, cost, true) ?? this.resources?.acquireRequired(entry.path, cost, true);
+      this.retainedBytes += retainedBytes;
+      return model;
+    }
+    release(entry) {
+      if (entry.references === 0) return;
+      entry.references -= 1;
+      entry.lastUsed = ++this.clock;
+      if (entry.references === 0) entry.reservation?.setPinned(false);
+      this.evictToFit(0);
+    }
+    evictToFit(incomingBytes) {
+      while (this.retainedBytes + incomingBytes > this.maximumBytes) {
+        let oldest;
+        for (const candidate of this.entries.values()) {
+          if (!candidate.model || candidate.references > 0) continue;
+          if (!oldest || candidate.lastUsed < oldest.lastUsed) oldest = candidate;
+        }
+        if (!oldest) return;
+        this.evict(oldest);
+      }
+    }
+    evict(entry) {
+      if (!entry.model || entry.references > 0 || this.entries.get(entry.path) !== entry) return;
+      this.entries.delete(entry.path);
+      entry.reservation?.release();
+      disposeObject3DResources([entry.model.scene]);
+      this.retainedBytes = Math.max(0, this.retainedBytes - entry.retainedBytes);
+      this.evictions += 1;
+    }
+    assertActive() {
+      if (this.disposed) throw new Error("ModelAssetCache has been disposed");
+    }
+  };
+
+  // src/helpers/mapData.ts
+  function forEachMapTile(map, visit) {
+    if (map.forEachTile) {
+      map.forEachTile(visit);
+      return;
+    }
+    for (const xKey of Object.keys(map.data)) {
+      const x = Number(xKey);
+      if (!Number.isInteger(x)) continue;
+      const column = map.data[x];
+      if (!column) continue;
+      for (const yKey of Object.keys(column)) {
+        const y = Number(yKey);
+        const tile = column[y];
+        if (!Number.isInteger(y) || !tile) continue;
+        visit(tile, x, y);
+      }
+    }
+  }
+
+  // src/helpers/neighbors.ts
+  var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
+  function getNeighborCoords(x, y, direction) {
+    const odd = x % 2 !== 0;
+    switch (direction) {
+      case "NE":
+        return { x: x + 1, y: odd ? y - 1 : y };
+      case "N":
+        return { x, y: y - 1 };
+      case "NW":
+        return { x: x - 1, y: odd ? y - 1 : y };
+      case "SW":
+        return { x: x - 1, y: odd ? y : y + 1 };
+      case "S":
+        return { x, y: y + 1 };
+      case "SE":
+        return { x: x + 1, y: odd ? y : y + 1 };
+    }
+  }
+  function getNeighbors(x, y) {
+    return NEIGHBOR_DIRECTIONS.map((direction) => ({ direction, ...getNeighborCoords(x, y, direction) }));
+  }
+
+  // src/helpers/topology.ts
+  function positiveModulo(value, modulus) {
+    if (!Number.isFinite(value) || !Number.isFinite(modulus) || modulus <= 0) {
+      throw new RangeError("positiveModulo requires a finite value and a positive finite modulus");
+    }
+    return (value % modulus + modulus) % modulus;
+  }
+  function normalizeMapCoordinates(map, x, y) {
+    if (map.infinite) {
+      return Number.isInteger(x) && Number.isInteger(y) ? { x, y } : null;
+    }
+    if (map.w <= 0 || map.h <= 0) return null;
+    let normalizedX = x;
+    let normalizedY = y;
+    if (map.wrapX) normalizedX = positiveModulo(normalizedX, map.w);
+    else if (normalizedX < 0 || normalizedX >= map.w) return null;
+    if (map.wrapY) normalizedY = positiveModulo(normalizedY, map.h);
+    else if (normalizedY < 0 || normalizedY >= map.h) return null;
+    return { x: normalizedX, y: normalizedY };
+  }
+  function getMapTile(map, x, y) {
+    const normalized = normalizeMapCoordinates(map, x, y);
+    if (!normalized) return void 0;
+    return map.tileAt?.(normalized.x, normalized.y) ?? map.data[normalized.x]?.[normalized.y];
+  }
+  function getMapNeighbors(map, x, y) {
+    const seen = /* @__PURE__ */ new Set();
+    const neighbors = [];
+    for (const neighbor of getNeighbors(x, y)) {
+      const normalized = normalizeMapCoordinates(map, neighbor.x, neighbor.y);
+      if (!normalized) continue;
+      const key = `${normalized.x},${normalized.y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      neighbors.push({ ...normalized, direction: neighbor.direction });
+    }
+    return neighbors;
+  }
+  function assertWrappableMap(map) {
+    if (!Number.isInteger(map.w) || !Number.isInteger(map.h) || map.w <= 0 || map.h <= 0) {
+      throw new RangeError("map width and height must be positive integers");
+    }
+    if (!map.data || typeof map.data !== "object") {
+      throw new TypeError("map data must be an object");
+    }
+    if (map.tileAt !== void 0 && typeof map.tileAt !== "function") {
+      throw new TypeError("map tileAt must be a function when provided");
+    }
+    if (map.forEachTile !== void 0 && typeof map.forEachTile !== "function") {
+      throw new TypeError("map forEachTile must be a function when provided");
+    }
+    if (map.wrapX !== void 0 && typeof map.wrapX !== "boolean") {
+      throw new TypeError("wrapX must be a boolean when provided");
+    }
+    if (map.wrapY !== void 0 && typeof map.wrapY !== "boolean") {
+      throw new TypeError("wrapY must be a boolean when provided");
+    }
+    if (map.infinite !== void 0 && typeof map.infinite !== "boolean") {
+      throw new TypeError("infinite must be a boolean when provided");
+    }
+    if (map.infinite && (map.wrapX || map.wrapY)) {
+      throw new RangeError("infinite maps cannot use finite-axis wrapping");
+    }
+    if (map.wrapX && map.w % 2 !== 0) {
+      throw new RangeError("wrapX requires an even map width");
+    }
+  }
+
+  // src/helpers/picking.ts
+  var GROUND_PLANE = new three.Plane(new three.Vector3(0, 1, 0), 0);
+  function screenToGround(clientX, clientY, canvas, camera) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const ndc = new three.Vector2(
+      (clientX - rect.left) / rect.width * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    const raycaster = new three.Raycaster();
+    raycaster.setFromCamera(ndc, camera);
+    const point = new three.Vector3();
+    return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
+  }
+  function pickTile(worldPoint, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
+    if (!Number.isFinite(size) || size <= 0) return null;
+    if (mapWidth !== void 0 && (!Number.isInteger(mapWidth) || mapWidth <= 0)) return null;
+    if (mapHeight !== void 0 && (!Number.isInteger(mapHeight) || mapHeight <= 0)) return null;
+    if (wrapX && mapWidth === void 0 || wrapY && mapHeight === void 0) return null;
+    const approxX = worldPoint.x / (size * 1.5);
+    const approxY = worldPoint.z / (size * Math.sqrt(3));
+    const x0 = Math.floor(approxX);
+    const y0 = Math.floor(approxY);
+    let best = null;
+    let bestDist = Infinity;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const rawX = x0 + dx;
+        const rawY = y0 + dy;
+        const center = getHexCenter(rawX, rawY, size);
+        const dist = (center.x - worldPoint.x) ** 2 + (center.y - worldPoint.z) ** 2;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = { x: rawX, y: rawY, worldX: center.x, worldY: center.y };
+        }
+      }
+    }
+    if (!best) return null;
+    if (!wrapX && mapWidth !== void 0 && (best.x < 0 || best.x >= mapWidth)) return null;
+    if (!wrapY && mapHeight !== void 0 && (best.y < 0 || best.y >= mapHeight)) return null;
+    return {
+      ...best,
+      x: wrapX ? positiveModulo(best.x, mapWidth) : best.x,
+      y: wrapY ? positiveModulo(best.y, mapHeight) : best.y
+    };
+  }
+
+  // src/enums.ts
+  var Land = /* @__PURE__ */ ((Land2) => {
+    Land2["sea"] = "sea";
+    Land2["coastal"] = "coastal";
+    Land2["land"] = "land";
+    Land2["sand"] = "sand";
+    Land2["tundra"] = "tundra";
+    Land2["snow"] = "snow";
+    Land2["mountain"] = "mountain";
+    return Land2;
+  })(Land || {});
+  var LandColor = {
+    ["land" /* land */]: 8694355,
+    ["coastal" /* coastal */]: 5205120,
+    ["sea" /* sea */]: 2766476,
+    ["sand" /* sand */]: 11446117,
+    ["tundra" /* tundra */]: 16777215,
+    ["snow" /* snow */]: 16777215,
+    ["mountain" /* mountain */]: 9142389
+  };
+  var LandPriority = {
+    ["sea" /* sea */]: 0,
+    ["coastal" /* coastal */]: 1,
+    ["land" /* land */]: 2,
+    ["sand" /* sand */]: 3,
+    ["tundra" /* tundra */]: 4,
+    ["snow" /* snow */]: 5,
+    ["mountain" /* mountain */]: 6
+  };
+  var UnitActions = /* @__PURE__ */ ((UnitActions2) => {
+    UnitActions2["attack"] = "attack";
+    UnitActions2["walk"] = "walk";
+    UnitActions2["distanceAttack"] = "distanceAttack";
+    UnitActions2["death"] = "death";
+    UnitActions2["idle"] = "idle";
+    UnitActions2["defence"] = "defence";
+    return UnitActions2;
+  })(UnitActions || {});
+  var SharedBaseInstancedBufferGeometry = class extends three.InstancedBufferGeometry {
+    constructor(base, attributeNames) {
+      super();
+      this.sharedAttributes = /* @__PURE__ */ new Map();
+      for (const name of attributeNames) {
+        const attribute = base.getAttribute(name);
+        if (!attribute) continue;
+        this.sharedAttributes.set(name, attribute);
+        this.setAttribute(name, attribute);
+      }
+      this.sharedIndex = base.getIndex();
+      this.setIndex(this.sharedIndex);
+    }
+    dispose() {
+      for (const [name, attribute] of this.sharedAttributes) {
+        if (this.getAttribute(name) === attribute) this.deleteAttribute(name);
+      }
+      const usesSharedIndex = this.getIndex() === this.sharedIndex;
+      if (usesSharedIndex) this.setIndex(null);
+      super.dispose();
+      for (const [name, attribute] of this.sharedAttributes) this.setAttribute(name, attribute);
+      if (usesSharedIndex) this.setIndex(this.sharedIndex);
+    }
+  };
+
+  // src/rendering/BufferUpdateBatch.ts
+  function mergeBufferUpdateRanges(ranges) {
+    const sorted = ranges.filter((range) => Number.isSafeInteger(range.start) && Number.isSafeInteger(range.count) && range.start >= 0 && range.count > 0).map((range) => ({ start: range.start, count: range.count })).sort((a, b) => a.start - b.start || a.count - b.count);
+    if (sorted.length === 0) return [];
+    const merged = [sorted[0]];
+    for (let index = 1; index < sorted.length; index += 1) {
+      const next = sorted[index];
+      const current = merged[merged.length - 1];
+      const end = current.start + current.count;
+      if (next.start > end) {
+        merged.push(next);
+        continue;
+      }
+      current.count = Math.max(end, next.start + next.count) - current.start;
+    }
+    return merged;
+  }
+  function commitBufferAttributeRanges(attribute, ranges) {
+    const merged = mergeBufferUpdateRanges([...attribute.updateRanges, ...ranges]);
+    if (merged.length === 0) return;
+    attribute.clearUpdateRanges();
+    for (const range of merged) attribute.addUpdateRange(range.start, range.count);
+    attribute.needsUpdate = true;
+  }
+
+  // src/helpers/chunks.ts
+  var WORLD_CHUNK_SIZE = 12;
+  var WORLD_CHUNK_METADATA = "hexWorldChunk";
+  var DEFAULT_WORLD_CHUNK_LOD_DISTANCES = Object.freeze({
+    near: 900,
+    far: 1650,
+    vegetation: 1450,
+    hysteresis: 120
+  });
+  function getWorldChunkKey(x, y, chunkSize = WORLD_CHUNK_SIZE) {
+    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+      throw new RangeError("chunkSize must be a positive integer");
+    }
+    return `${Math.floor(x / chunkSize)},${Math.floor(y / chunkSize)}`;
+  }
+  function groupTilesByWorldChunk(tiles, chunkSize = WORLD_CHUNK_SIZE) {
+    if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+      throw new RangeError("chunkSize must be a positive integer");
+    }
+    const chunks = /* @__PURE__ */ new Map();
+    for (const tile of tiles) {
+      const key = getWorldChunkKey(tile.x, tile.y, chunkSize);
+      const chunk = chunks.get(key) ?? [];
+      chunk.push(tile);
+      chunks.set(key, chunk);
+    }
+    return chunks;
+  }
+  function getWorldChunkBounds(tiles, size, minY, maxY) {
+    if (tiles.length === 0) throw new Error("Cannot compute bounds for an empty world chunk");
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const tile of tiles) {
+      const center = getHexCenter(tile.x, tile.y, size);
+      minX = Math.min(minX, center.x - size);
+      maxX = Math.max(maxX, center.x + size);
+      minZ = Math.min(minZ, center.y - size);
+      maxZ = Math.max(maxZ, center.y + size);
+    }
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+  }
+  function getWorldChunkOrigin(chunkKey, size) {
+    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
+    if (!Number.isInteger(chunkX) || !Number.isInteger(chunkY)) {
+      throw new TypeError(`invalid world chunk key "${chunkKey}"`);
+    }
+    return getHexCenter(chunkX * WORLD_CHUNK_SIZE, chunkY * WORLD_CHUNK_SIZE, size);
+  }
+  function localizeWorldChunkBounds(bounds, origin) {
+    return {
+      minX: bounds.minX - origin.x,
+      maxX: bounds.maxX - origin.x,
+      minY: bounds.minY,
+      maxY: bounds.maxY,
+      minZ: bounds.minZ - origin.y,
+      maxZ: bounds.maxZ - origin.y
+    };
+  }
+  function tagWorldChunk(object, chunkKey, kind, bounds, id = `${kind}:${chunkKey}`) {
+    const [chunkX, chunkY] = chunkKey.split(",").map(Number);
+    object.userData[WORLD_CHUNK_METADATA] = {
+      id,
+      key: chunkKey,
+      chunkX,
+      chunkY,
+      kind,
+      bounds
+    };
+  }
+  function getWorldChunkMetadata(object) {
+    return object.userData[WORLD_CHUNK_METADATA];
+  }
+  function resolveWorldChunkLod(distance, kind, previous, distances = DEFAULT_WORLD_CHUNK_LOD_DISTANCES) {
+    const decorative = kind === "grass" || kind === "forest";
+    const hiddenBeyond = decorative ? distances.vegetation : Infinity;
+    if (distance > hiddenBeyond + (previous === void 0 ? 0 : distances.hysteresis)) return null;
+    const near = distances.near;
+    const far = decorative ? distances.vegetation : distances.far;
+    const h = previous === void 0 ? 0 : distances.hysteresis;
+    if (previous === 0 && distance <= near + h) return 0;
+    if (previous === 1) {
+      if (distance < near - h) return 0;
+      if (distance <= far + h) return 1;
+    }
+    if (previous === 2 && distance >= far - h) return 2;
+    if (distance <= near) return 0;
+    if (distance <= far) return 1;
+    return decorative ? null : 2;
+  }
+
+  // src/helpers/rivers.ts
+  var MASK_DIRECTIONS = ["SE", "S", "SW", "NW", "N", "NE"];
+  var LAKE_FLAG = 4096;
+  var EDGE_DIRS = [
+    [0.8660254, 0.5],
+    // SE
+    [0, 1],
+    // S
+    [-0.8660254, 0.5],
+    // SW
+    [-0.8660254, -0.5],
+    // NW
+    [0, -1],
+    // N
+    [0.8660254, -0.5]
+    // NE
+  ];
+  function isRiverTile(tile) {
+    return !!tile?.modifiers?.includes("river");
+  }
+  function isLakeTile(tile) {
+    return !!tile?.modifiers?.includes("lake");
+  }
+  function isSeaOrCoastal(tile) {
+    return tile.type === "sea" /* sea */ || tile.type === "coastal" /* coastal */;
+  }
+  function waterEdgeValue(map, x, y) {
+    const tile = getMapTile(map, x, y);
+    if (isLakeTile(tile)) {
+      let openMask = 0, channelMask = 0;
+      MASK_DIRECTIONS.forEach((direction, bit) => {
+        const n = getNeighborCoords(x, y, direction);
+        const neighbor = getMapTile(map, n.x, n.y);
+        if (!neighbor) return;
+        if (isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) openMask |= 1 << bit;
+        else if (isRiverTile(neighbor)) channelMask |= 1 << bit;
+      });
+      return LAKE_FLAG + openMask * 64 + channelMask;
+    }
+    if (isRiverTile(tile)) {
+      let mask = 0;
+      MASK_DIRECTIONS.forEach((direction, bit) => {
+        const n = getNeighborCoords(x, y, direction);
+        const neighbor = getMapTile(map, n.x, n.y);
+        if (!neighbor) return;
+        if (isRiverTile(neighbor) || isLakeTile(neighbor) || isSeaOrCoastal(neighbor)) mask |= 1 << bit;
+      });
+      return mask;
+    }
+    return -1;
+  }
+  function riverSeaMouthEdgeValue(map, x, y) {
+    const tile = getMapTile(map, x, y);
+    if (!isRiverTile(tile)) return 0;
+    let mask = 0;
+    MASK_DIRECTIONS.forEach((direction, bit) => {
+      const n = getNeighborCoords(x, y, direction);
+      const neighbor = getMapTile(map, n.x, n.y);
+      if (neighbor && isSeaOrCoastal(neighbor)) mask |= 1 << bit;
+    });
+    return mask;
+  }
+  function riverLakeMouthEdgeValue(map, x, y) {
+    const tile = getMapTile(map, x, y);
+    if (!isRiverTile(tile)) return 0;
+    let mask = 0;
+    MASK_DIRECTIONS.forEach((direction, bit) => {
+      const n = getNeighborCoords(x, y, direction);
+      const neighbor = getMapTile(map, n.x, n.y);
+      if (isLakeTile(neighbor)) mask |= 1 << bit;
+    });
+    return mask;
+  }
+  function lakeNeighborEdgeValue(map, x, y) {
+    const tile = getMapTile(map, x, y);
+    if (!tile || isLakeTile(tile)) return 0;
+    let mask = 0;
+    MASK_DIRECTIONS.forEach((direction, bit) => {
+      const n = getNeighborCoords(x, y, direction);
+      if (isLakeTile(getMapTile(map, n.x, n.y))) mask |= 1 << bit;
+    });
+    return mask;
+  }
+  function riverChannelDistance(lx, ly, mask, size) {
+    if (mask < 0) return Infinity;
+    const apothem = size * 0.8660254;
+    let best = Math.hypot(lx, ly);
+    for (let bit = 0; bit < 6; bit++) {
+      if (!(mask & 1 << bit)) continue;
+      const [dx, dy] = EDGE_DIRS[bit];
+      const t = Math.min(Math.max(lx * dx + ly * dy, 0), apothem);
+      best = Math.min(best, Math.hypot(lx - dx * t, ly - dy * t));
+    }
+    return best;
+  }
+  function isInRiverMouthWater(lx, ly, mask, size, options) {
+    if (mask <= 0) return false;
+    const apothem = size * 0.8660254;
+    const wobble = 0.3 * options.riverCurvature + 0.03;
+    for (let bit = 0; bit < 6; bit++) {
+      if (!(mask & 1 << bit)) continue;
+      const [dx, dy] = EDGE_DIRS[bit];
+      const t = Math.min(Math.max(lx * dx + ly * dy, 0), apothem);
+      const progress = t / apothem;
+      const mouthWidth = options.riverWidth + (0.4 - options.riverWidth) * progress * progress * (3 - 2 * progress);
+      const clearance = (mouthWidth + Math.max(options.riverBankWidth, wobble)) * size;
+      if (Math.hypot(lx - dx * t, ly - dy * t) < clearance) return true;
+    }
+    return false;
+  }
+  function isInLakeNeighborWater(lx, ly, mask, size, options) {
+    if (mask <= 0) return false;
+    const apothem = size * 0.8660254;
+    const wobble = 0.3 * options.riverCurvature + 0.03;
+    let shore = 0;
+    for (let bit = 0; bit < 6; bit++) {
+      if (!(mask & 1 << bit)) continue;
+      const [dx, dy] = EDGE_DIRS[bit];
+      shore = Math.max(shore, (lx * dx + ly * dy) / apothem);
+    }
+    return shore + wobble >= 1 - options.lakeShoreWidth;
+  }
+  function isInTileWater(lx, ly, value, size, options, riverSeaMouthValue = 0, riverLakeMouthValue = 0, lakeNeighborValue = 0) {
+    if (isInLakeNeighborWater(lx, ly, lakeNeighborValue, size, options)) return true;
+    if (value < 0) return false;
+    const wobble = 0.3 * options.riverCurvature + 0.03;
+    const channelClearance = (options.riverWidth + Math.max(options.riverBankWidth, wobble)) * size;
+    if (value >= LAKE_FLAG) {
+      return true;
+    }
+    return riverChannelDistance(lx, ly, value, size) < channelClearance || isInRiverMouthWater(lx, ly, riverSeaMouthValue, size, options) || isInRiverMouthWater(lx, ly, riverLakeMouthValue, size, options);
+  }
+  function subdivideTriangle(a, b, c, numSubdivisions) {
+    if ((numSubdivisions || 0) <= 0) return [a, b, c];
+    const ba = b.clone().sub(a);
+    const ah = a.clone().add(ba.setLength(ba.length() / 2));
+    const cb = c.clone().sub(b);
+    const bh = b.clone().add(cb.setLength(cb.length() / 2));
+    const ac = a.clone().sub(c);
+    const ch = c.clone().add(ac.setLength(ac.length() / 2));
+    return [].concat(
+      subdivideTriangle(ah, bh, ch, numSubdivisions - 1),
+      subdivideTriangle(ch, bh, c, numSubdivisions - 1),
+      subdivideTriangle(ah, ch, a, numSubdivisions - 1),
+      subdivideTriangle(bh, ah, b, numSubdivisions - 1)
+    );
+  }
+  function createHexagonGeometry(radius, numSubdivisions = 0) {
+    const numFaces = 6 * Math.pow(4, numSubdivisions);
+    const positions = new Float32Array(numFaces * 3 * 3);
+    const texcoords = new Float32Array(numFaces * 3 * 2);
+    let p = 0, t = 0;
+    const points = [0, 1, 2, 3, 4, 5].map((i) => {
+      const angle = Math.PI / 180 * (60 * i);
+      return new three.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+    }).concat([new three.Vector3(0, 0, 0)]);
+    const faces = [0, 6, 1, 1, 6, 2, 2, 6, 3, 3, 6, 4, 4, 6, 5, 5, 6, 0];
+    let vertices = [];
+    for (let i = 0; i < faces.length; i += 3) {
+      const a = points[faces[i]], b = points[faces[i + 1]], c = points[faces[i + 2]];
+      vertices = vertices.concat(subdivideTriangle(a, b, c, numSubdivisions));
+    }
+    for (let i = 0; i < vertices.length; i++) {
+      positions[p++] = vertices[i].x;
+      positions[p++] = vertices[i].y;
+      positions[p++] = vertices[i].z;
+      texcoords[t++] = 0.02 + 0.96 * ((vertices[i].x + radius) / (radius * 2));
+      texcoords[t++] = 0.02 + 0.96 * ((vertices[i].z + radius) / (radius * 2));
+    }
+    const geometry = new three.BufferGeometry();
+    geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
+    return geometry;
+  }
+  function createHexagonLodGeometry(radius, interiorSubdivisions, borderSubdivisions) {
+    if (interiorSubdivisions >= borderSubdivisions) {
+      return createHexagonGeometry(radius, borderSubdivisions);
+    }
+    const outerSegments = Math.pow(2, borderSubdivisions);
+    const innerSegments = Math.pow(2, Math.max(0, interiorSubdivisions));
+    const innerScale = 0.72;
+    const triangles = [];
+    const center = new three.Vector3();
+    const corners = Array.from({ length: 6 }, (_, index) => {
+      const angle = index * Math.PI / 3;
+      return new three.Vector3(radius * Math.cos(angle), 0, radius * Math.sin(angle));
+    });
+    const appendTriangle = (a, b, c) => {
+      const crossY = b.clone().sub(a).cross(c.clone().sub(a)).y;
+      if (crossY >= 0) triangles.push(a, b, c);
+      else triangles.push(a, c, b);
+    };
+    for (let side = 0; side < 6; side++) {
+      const a = corners[side];
+      const b = corners[(side + 1) % 6];
+      const outer = Array.from(
+        { length: outerSegments + 1 },
+        (_, index) => a.clone().lerp(b, index / outerSegments)
+      );
+      const innerA = a.clone().multiplyScalar(innerScale);
+      const innerB = b.clone().multiplyScalar(innerScale);
+      const inner = Array.from(
+        { length: innerSegments + 1 },
+        (_, index) => innerA.clone().lerp(innerB, index / innerSegments)
+      );
+      let outerIndex = 0;
+      let innerIndex = 0;
+      while (outerIndex < outerSegments || innerIndex < innerSegments) {
+        const nextOuter = outerIndex < outerSegments ? (outerIndex + 1) / outerSegments : Infinity;
+        const nextInner = innerIndex < innerSegments ? (innerIndex + 1) / innerSegments : Infinity;
+        if (Math.abs(nextOuter - nextInner) < 1e-9) {
+          appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+          appendTriangle(outer[outerIndex + 1], inner[innerIndex], inner[innerIndex + 1]);
+          outerIndex++;
+          innerIndex++;
+        } else if (nextOuter < nextInner) {
+          appendTriangle(outer[outerIndex], inner[innerIndex], outer[outerIndex + 1]);
+          outerIndex++;
+        } else {
+          appendTriangle(outer[outerIndex], inner[innerIndex], inner[innerIndex + 1]);
+          innerIndex++;
+        }
+      }
+      for (let index = 0; index < innerSegments; index++) {
+        appendTriangle(inner[index], center, inner[index + 1]);
+      }
+    }
+    const positions = new Float32Array(triangles.length * 3);
+    const texcoords = new Float32Array(triangles.length * 2);
+    triangles.forEach((vertex, index) => {
+      positions[index * 3] = vertex.x;
+      positions[index * 3 + 1] = vertex.y;
+      positions[index * 3 + 2] = vertex.z;
+      texcoords[index * 2] = 0.02 + 0.96 * ((vertex.x + radius) / (radius * 2));
+      texcoords[index * 2 + 1] = 0.02 + 0.96 * ((vertex.z + radius) / (radius * 2));
+    });
+    const geometry = new three.BufferGeometry();
+    geometry.setAttribute("position", new three.BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new three.BufferAttribute(texcoords, 2));
+    return geometry;
+  }
+  function makeTextSprite(message, parameters = {}) {
+    const fontface = parameters.fontface ?? "Arial";
+    const fontsize = parameters.fontsize ?? 18;
+    const borderThickness = parameters.borderThickness ?? 4;
+    const borderColor = parameters.borderColor ?? { r: 0, g: 0, b: 0, a: 1 };
+    const backgroundColor = parameters.backgroundColor ?? { r: 255, g: 255, b: 255, a: 1 };
+    const canvas = document.createElement("canvas");
+    let context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to create a 2D canvas context for city label");
+    context.font = "Bold " + fontsize + "px " + fontface;
+    let metrics = context.measureText(message);
+    let textWidth = metrics.width;
+    const width = Math.ceil(textWidth + borderThickness * 2);
+    const height = Math.ceil(fontsize * 1.4 + borderThickness * 2);
+    canvas.width = width;
+    canvas.height = height;
+    context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to recreate the 2D canvas context for city label");
+    context.font = "Bold " + fontsize + "px " + fontface;
+    context.fillStyle = "rgba(" + backgroundColor.r + "," + backgroundColor.g + "," + backgroundColor.b + "," + backgroundColor.a + ")";
+    context.strokeStyle = "rgba(" + borderColor.r + "," + borderColor.g + "," + borderColor.b + "," + borderColor.a + ")";
+    context.lineWidth = borderThickness;
+    roundRect(context, borderThickness / 2, borderThickness / 2, textWidth + borderThickness, fontsize * 1.4 + borderThickness, 6);
+    context.fillStyle = "rgba(0, 0, 0, 1.0)";
+    context.fillText(message, borderThickness, fontsize + borderThickness);
+    const texture = new three.Texture(canvas);
+    texture.needsUpdate = true;
+    const spriteMaterial = new three.SpriteMaterial(
+      { map: texture, transparent: true, depthWrite: false }
+    );
+    const sprite = new three.Sprite(spriteMaterial);
+    const scale = 100 / 300;
+    sprite.scale.set(width * scale, height * scale, 1);
+    return sprite;
+  }
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
   }
 
   // src/shaders/horizonFog.ts
@@ -6955,14 +7535,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.chunkRecords = /* @__PURE__ */ new Map();
       this.fogStates = /* @__PURE__ */ new Map();
       this.cityFog = /* @__PURE__ */ new Map();
+      // "x,y" -> that tile's city model/label
+      this.pendingCities = /* @__PURE__ */ new Map();
       this.atlasCellIndex = {};
       this.clock = 0;
       this.lodBuilds = 0;
+      this.disposed = false;
       this.map = map;
       if (options.surface.map !== map || options.surface.tileSize !== options.size) {
         throw new TypeError("terrain surface must match the map and tile size");
       }
       this.surface = options.surface;
+      this.ownsModelAssets = options.modelAssets === void 0;
+      this.modelAssets = options.modelAssets ?? new ModelAssetCache();
       this.buildAtlasCellIndex();
       this.fogTexture = this.loadFogTexture();
       this.atlasTexture = this.loadAtlasTexture();
@@ -7373,10 +7958,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //called by HexMap.loadWorld() after construction, not from the constructor,
     //so callers can await it if they need cities present before proceeding.
     async loadCities(onlyTiles, owner) {
+      if (this.disposed) throw new Error("TerrainMesh has been disposed");
       const { size } = this.options;
       const defaultModel = this.options.cityModel ?? "Assets/models/monument";
       const cityScale = this.options.cityScale ?? 1;
-      const surfaceWindow = this.surface.createWindow();
       const cityTiles = [];
       if (onlyTiles) {
         for (const point of onlyTiles) {
@@ -7391,63 +7976,97 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const tile = getMapTile(this.map, x, y);
         const key = `${x},${y}`;
         if (!tile?.city) continue;
+        const signature = this.citySignature(tile);
         const existing = this.cityFog.get(key);
-        if (existing) {
+        if (existing?.signature === signature) {
           existing.owner = owner;
           continue;
         }
-        const center = getHexCenter(x, y, size);
-        const modelPath = tile.city.model ?? defaultModel;
-        const { scene, fixup } = await loadModel(modelPath);
-        const loadedByAnotherRequest = this.cityFog.get(key);
-        if (loadedByAnotherRequest) {
-          loadedByAnotherRequest.owner = owner;
+        if (existing) this.removeCity(key);
+        const pending = this.pendingCities.get(key);
+        if (pending?.signature === signature) {
+          pending.owner = owner;
+          await pending.promise;
           continue;
         }
-        const model = scene.clone(true);
-        model.applyMatrix4(fixup);
-        model.updateMatrixWorld(true);
-        const cityMaterials = [];
-        model.traverse((o) => {
-          const mesh = o;
-          if (!mesh.isMesh) return;
-          const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          const clonedMaterials = sourceMaterials.map((material) => material.clone());
-          mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
-          for (const material of clonedMaterials) {
-            const colored = material;
-            cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+        if (pending) this.pendingCities.delete(key);
+        let record;
+        const modelPath = tile.city.model ?? defaultModel;
+        const promise = this.modelAssets.acquire(modelPath).then((asset) => {
+          let published = false;
+          try {
+            if (!this.isCurrentCityBuild(key, record)) return;
+            const currentTile = getMapTile(this.map, x, y);
+            if (!currentTile?.city || this.citySignature(currentTile) !== signature) return;
+            const { scene, fixup } = asset.model;
+            const model = scene.clone(true);
+            model.applyMatrix4(fixup);
+            model.updateMatrixWorld(true);
+            const cityMaterials = [];
+            let sprite;
+            try {
+              model.traverse((o) => {
+                const mesh = o;
+                if (!mesh.isMesh) return;
+                const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                const clonedMaterials = sourceMaterials.map((material) => material.clone());
+                mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
+                for (const material of clonedMaterials) {
+                  const colored = material;
+                  cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                }
+              });
+              const center = getHexCenter(x, y, size);
+              const modelHeight = new three.Box3().setFromObject(model).getSize(new three.Vector3()).y;
+              const wrapper = new three.Group();
+              wrapper.add(model);
+              wrapper.scale.setScalar(cityScale);
+              const groundHeight = this.surface.getTileCenterHeight(x, y);
+              const labelOffset = modelHeight * cityScale + Math.round(size / 5);
+              wrapper.position.set(center.x, groundHeight, center.y);
+              wrapper.userData[CITY_FOG_TILE_KEY] = key;
+              sprite = makeTextSprite(` ${currentTile.city.name ?? "City"} `, {
+                fontsize: 32,
+                fontface: "Georgia",
+                borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
+              });
+              sprite.position.set(center.x, groundHeight + labelOffset, center.y);
+              sprite.userData[CITY_FOG_TILE_KEY] = key;
+              if (!this.isCurrentCityBuild(key, record)) {
+                this.disposeCityResources(cityMaterials, sprite);
+                return;
+              }
+              this.add(wrapper);
+              this.add(sprite);
+              this.cityFog.set(key, {
+                wrapper,
+                sprite,
+                x,
+                y,
+                labelOffset,
+                materials: cityMaterials,
+                owner: record.owner,
+                signature,
+                asset
+              });
+              published = true;
+            } catch (reason) {
+              this.disposeCityResources(cityMaterials, sprite);
+              throw reason;
+            }
+          } finally {
+            if (!published) asset.release();
           }
+        }).finally(() => {
+          if (this.pendingCities.get(key) === record) this.pendingCities.delete(key);
         });
-        const box = new three.Box3().setFromObject(model);
-        const modelHeight = box.getSize(new three.Vector3()).y;
-        const wrapper = new three.Group();
-        wrapper.add(model);
-        wrapper.scale.setScalar(cityScale);
-        const groundHeight = surfaceWindow.getTileCenterHeight(x, y);
-        const labelOffset = modelHeight * cityScale + Math.round(size / 5);
-        wrapper.position.set(center.x, groundHeight, center.y);
-        wrapper.userData[CITY_FOG_TILE_KEY] = key;
-        this.add(wrapper);
-        const sprite = makeTextSprite(` ${tile.city.name ?? "City"} `, {
-          fontsize: 32,
-          fontface: "Georgia",
-          borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
-        });
-        sprite.position.set(center.x, groundHeight + labelOffset, center.y);
-        sprite.userData[CITY_FOG_TILE_KEY] = key;
-        this.add(sprite);
-        this.cityFog.set(key, {
-          wrapper,
-          sprite,
-          x,
-          y,
-          labelOffset,
-          materials: cityMaterials,
-          owner,
-          signature: this.citySignature(tile)
-        });
+        record = { owner, signature, promise };
+        this.pendingCities.set(key, record);
+        await promise;
       }
+    }
+    isCurrentCityBuild(key, record) {
+      return !this.disposed && this.pendingCities.get(key) === record;
     }
     refreshCitySurfaceHeights(points) {
       const filter = points ? new Set(points.map((point) => `${point.x},${point.y}`)) : void 0;
@@ -7602,14 +8221,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       for (const point of tiles) this.removeCity(`${point.x},${point.y}`, owner);
     }
     removeCity(key, owner) {
+      const pending = this.pendingCities.get(key);
+      if (pending && (owner === void 0 || pending.owner === owner)) this.pendingCities.delete(key);
       const entry = this.cityFog.get(key);
       if (!entry || owner !== void 0 && entry.owner !== owner) return;
       this.remove(entry.wrapper);
       this.remove(entry.sprite);
-      for (const { material } of entry.materials) material.dispose();
-      entry.sprite.material.map?.dispose();
-      entry.sprite.material.dispose();
+      this.disposeCityResources(entry.materials, entry.sprite);
+      entry.asset.release();
       this.cityFog.delete(key);
+    }
+    disposeCityResources(materials, sprite) {
+      for (const { material } of materials) material.dispose();
+      sprite?.material.map?.dispose();
+      sprite?.material.dispose();
     }
     //Advances the water/river animation. `dtS` is the elapsed time in seconds
     //since the previous frame - call this once per frame (see HexMap's render
@@ -8001,6 +8626,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //Model geometry remains shared with loadModel()'s cache. Per-city cloned
     //materials and canvas label textures are owned here and released below.
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.pendingCities.clear();
       for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
       for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
       this.baseLodGeometries.clear();
@@ -8009,11 +8637,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.atlasTexture.dispose();
       this.fogTexture.dispose();
       for (const entry of this.cityFog.values()) {
-        for (const { material } of entry.materials) material.dispose();
-        entry.sprite.material.map?.dispose();
-        entry.sprite.material.dispose();
+        this.disposeCityResources(entry.materials, entry.sprite);
+        entry.asset.release();
       }
       this.cityFog.clear();
+      if (this.ownsModelAssets) this.modelAssets.dispose();
     }
   };
 
@@ -8171,39 +8799,52 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   }
   var ForestSharedResources = class {
-    constructor() {
+    constructor(modelAssets) {
       this.models = /* @__PURE__ */ new Map();
       this.geometries = /* @__PURE__ */ new Set();
+      this.assets = /* @__PURE__ */ new Set();
       this.disposed = false;
+      this.ownsModelAssets = modelAssets === void 0;
+      this.modelAssets = modelAssets ?? new ModelAssetCache();
     }
     prepare(modelPath) {
       if (this.disposed) return Promise.reject(new Error("ForestSharedResources has been disposed"));
       let pending = this.models.get(modelPath);
       if (!pending) {
-        pending = loadModel(modelPath).then(({ scene, fixup }) => {
-          const meshes = [];
-          scene.traverse((object) => {
-            if (object.isMesh) meshes.push(object);
-          });
-          const parts = meshes.map((mesh) => {
-            const geometry = mesh.geometry.clone();
-            geometry.applyMatrix4(mesh.matrixWorld);
-            geometry.applyMatrix4(fixup);
-            this.geometries.add(geometry);
-            return { geometry, material: mesh.material };
-          });
-          if (this.disposed) {
-            for (const part of parts) part.geometry.dispose();
-            throw new Error("ForestSharedResources was disposed while loading a model");
+        pending = this.modelAssets.acquire(modelPath).then((asset) => {
+          try {
+            const { scene, fixup } = asset.model;
+            const meshes = [];
+            scene.traverse((object) => {
+              if (object.isMesh) meshes.push(object);
+            });
+            const parts = meshes.map((mesh) => {
+              const geometry = mesh.geometry.clone();
+              geometry.applyMatrix4(mesh.matrixWorld);
+              geometry.applyMatrix4(fixup);
+              this.geometries.add(geometry);
+              return { geometry, material: mesh.material };
+            });
+            if (this.disposed) {
+              for (const part of parts) {
+                part.geometry.dispose();
+                this.geometries.delete(part.geometry);
+              }
+              throw new Error("ForestSharedResources was disposed while loading a model");
+            }
+            this.assets.add(asset);
+            return { parts, asset };
+          } catch (reason) {
+            asset.release();
+            throw reason;
           }
-          return parts;
         }).catch((reason) => {
           this.models.delete(modelPath);
           throw reason;
         });
         this.models.set(modelPath, pending);
       }
-      return pending;
+      return pending.then((model) => model.parts);
     }
     get preparedModelCount() {
       return this.models.size;
@@ -8217,6 +8858,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       for (const geometry of this.geometries) geometry.dispose();
       this.geometries.clear();
       this.models.clear();
+      for (const asset of this.assets) asset.release();
+      this.assets.clear();
+      if (this.ownsModelAssets) this.modelAssets.dispose();
     }
   };
   var ForestField = class extends three.Group {
@@ -8520,7 +9164,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     };
     const tileRanges = /* @__PURE__ */ new Map();
     const chunkRecords = /* @__PURE__ */ new Map();
-    const resources = sharedResources ?? new ForestSharedResources();
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets);
     let modelIndex = 0;
     for (const [modelPath, tiles] of tilesByModel) {
       const preparedParts = await resources.prepare(modelPath);
@@ -9209,385 +9853,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return this.lastCandidates;
     }
   };
-  var ZERO_COST = {
-    cpuBytes: 0,
-    gpuBytes: 0,
-    geometryBytes: 0,
-    textureBytes: 0,
-    modelBytes: 0
-  };
-  function normalizeResourceCost(cost = {}) {
-    const normalized = { ...ZERO_COST, ...cost };
-    for (const [name, value] of Object.entries(normalized)) {
-      if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
-        throw new RangeError(`${name} must be a non-negative safe integer byte count`);
-      }
-    }
-    return normalized;
-  }
-  function addCost(first, second) {
-    return {
-      cpuBytes: first.cpuBytes + second.cpuBytes,
-      gpuBytes: first.gpuBytes + second.gpuBytes,
-      geometryBytes: first.geometryBytes + second.geometryBytes,
-      textureBytes: first.textureBytes + second.textureBytes,
-      modelBytes: first.modelBytes + second.modelBytes
-    };
-  }
-  function subtractCost(first, second) {
-    return {
-      cpuBytes: Math.max(0, first.cpuBytes - second.cpuBytes),
-      gpuBytes: Math.max(0, first.gpuBytes - second.gpuBytes),
-      geometryBytes: Math.max(0, first.geometryBytes - second.geometryBytes),
-      textureBytes: Math.max(0, first.textureBytes - second.textureBytes),
-      modelBytes: Math.max(0, first.modelBytes - second.modelBytes)
-    };
-  }
-  var ResourceBudgetLedger = class {
-    constructor(limits) {
-      this.entries = /* @__PURE__ */ new Map();
-      this.accounts = /* @__PURE__ */ new Set();
-      this.totals = { ...ZERO_COST };
-      this.rejectedReservations = 0;
-      this.peakCpuBytes = 0;
-      this.peakGpuBytes = 0;
-      this.nextAccountId = 1;
-      this.disposed = false;
-      this.limits = this.validateLimits(limits);
-    }
-    configure(limits) {
-      this.assertActive();
-      this.limits = this.validateLimits({ ...this.limits, ...limits });
-    }
-    reserve(key, cost, pinned = false) {
-      this.assertActive();
-      this.assertKey(key);
-      const normalized = normalizeResourceCost(cost);
-      const existing = this.entries.get(key);
-      const prospective = addCost(subtractCost(this.totals, existing ?? ZERO_COST), normalized);
-      if (prospective.cpuBytes > this.limits.cpuBytes || prospective.gpuBytes > this.limits.gpuBytes) {
-        this.rejectedReservations += 1;
-        return false;
-      }
-      this.store(key, normalized, pinned, existing);
-      return true;
-    }
-    forceReserve(key, cost, pinned = false) {
-      this.assertActive();
-      this.assertKey(key);
-      const normalized = normalizeResourceCost(cost);
-      this.store(key, normalized, pinned, this.entries.get(key));
-    }
-    release(key) {
-      const existing = this.entries.get(key);
-      if (!existing) return false;
-      this.entries.delete(key);
-      this.totals = subtractCost(this.totals, existing);
-      return true;
-    }
-    clear() {
-      if (this.disposed) return;
-      for (const account of this.accounts) account.invalidateReservations();
-      this.entries.clear();
-      this.totals = { ...ZERO_COST };
-    }
-    dispose() {
-      if (this.disposed) return;
-      for (const account of [...this.accounts]) account.detachFromLedger();
-      this.accounts.clear();
-      this.entries.clear();
-      this.totals = { ...ZERO_COST };
-      this.disposed = true;
-    }
-    createAccount(label) {
-      this.assertActive();
-      if (typeof label !== "string" || label.trim().length === 0) {
-        throw new TypeError("resource account label is required");
-      }
-      const account = new LedgerResourceBudgetAccount(
-        this,
-        label,
-        `@account:${this.nextAccountId++}:`,
-        (value) => {
-          this.accounts.delete(value);
-        }
-      );
-      this.accounts.add(account);
-      return account;
-    }
-    setPinned(key, pinned) {
-      const existing = this.entries.get(key);
-      if (!existing || existing.pinned === pinned) return Boolean(existing);
-      this.entries.set(key, { ...existing, pinned });
-      return true;
-    }
-    get(key) {
-      return this.entries.get(key);
-    }
-    get stats() {
-      let pinnedReservations = 0;
-      for (const entry of this.entries.values()) if (entry.pinned) pinnedReservations += 1;
-      return {
-        ...this.totals,
-        disposed: this.disposed,
-        cpuLimitBytes: this.limits.cpuBytes,
-        gpuLimitBytes: this.limits.gpuBytes,
-        accounts: this.accounts.size,
-        reservations: this.entries.size,
-        pinnedReservations,
-        cpuExceededBytes: Math.max(0, this.totals.cpuBytes - this.limits.cpuBytes),
-        gpuExceededBytes: Math.max(0, this.totals.gpuBytes - this.limits.gpuBytes),
-        rejectedReservations: this.rejectedReservations,
-        peakCpuBytes: this.peakCpuBytes,
-        peakGpuBytes: this.peakGpuBytes
-      };
-    }
-    store(key, cost, pinned, existing) {
-      this.totals = addCost(subtractCost(this.totals, existing ?? ZERO_COST), cost);
-      this.entries.set(key, { key, pinned, ...cost });
-      this.peakCpuBytes = Math.max(this.peakCpuBytes, this.totals.cpuBytes);
-      this.peakGpuBytes = Math.max(this.peakGpuBytes, this.totals.gpuBytes);
-    }
-    validateLimits(limits) {
-      for (const [name, value] of Object.entries(limits)) {
-        if (!Number.isFinite(value) || value < 0 || !Number.isSafeInteger(value)) {
-          throw new RangeError(`${name} budget must be a non-negative safe integer`);
-        }
-      }
-      return { ...limits };
-    }
-    assertKey(key) {
-      if (typeof key !== "string" || key.trim().length === 0) {
-        throw new TypeError("resource key is required");
-      }
-    }
-    assertActive() {
-      if (this.disposed) throw new Error("ResourceBudgetLedger has been disposed");
-    }
-  };
-  var LedgerResourceReservationHandle = class {
-    constructor(account, key, ledgerKey) {
-      this.account = account;
-      this.key = key;
-      this.ledgerKey = ledgerKey;
-      this.releasedValue = false;
-    }
-    get released() {
-      return this.releasedValue;
-    }
-    get reservation() {
-      return this.releasedValue ? void 0 : this.account.lookup(this.ledgerKey);
-    }
-    update(cost, pinned = this.reservation?.pinned ?? false) {
-      if (this.releasedValue) throw new Error(`resource reservation "${this.key}" has been released`);
-      return this.account.update(this, cost, pinned);
-    }
-    setPinned(pinned) {
-      if (this.releasedValue) return false;
-      return this.account.setPinned(this, pinned);
-    }
-    release() {
-      if (this.releasedValue) return false;
-      this.releasedValue = true;
-      return this.account.releaseHandle(this);
-    }
-    invalidate() {
-      this.releasedValue = true;
-    }
-  };
-  var LedgerResourceBudgetAccount = class {
-    constructor(ledger, label, prefix, detached) {
-      this.ledger = ledger;
-      this.label = label;
-      this.prefix = prefix;
-      this.detached = detached;
-      this.handles = /* @__PURE__ */ new Map();
-      this.disposedValue = false;
-    }
-    get disposed() {
-      return this.disposedValue;
-    }
-    acquire(key, cost, pinned = false) {
-      this.assertActive();
-      this.assertLocalKey(key);
-      if (this.handles.has(key)) {
-        throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
-      }
-      const ledgerKey = `${this.prefix}${key}`;
-      if (!this.ledger.reserve(ledgerKey, cost, pinned)) return void 0;
-      const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
-      this.handles.set(key, handle);
-      return handle;
-    }
-    release(key) {
-      return this.handles.get(key)?.release() ?? false;
-    }
-    clear() {
-      if (this.disposedValue) return;
-      for (const handle of [...this.handles.values()]) handle.release();
-    }
-    dispose() {
-      if (this.disposedValue) return;
-      this.clear();
-      this.disposedValue = true;
-      this.detached(this);
-    }
-    get stats() {
-      let totals = { ...ZERO_COST };
-      let reservations = 0;
-      let pinnedReservations = 0;
-      for (const handle of this.handles.values()) {
-        const reservation = handle.reservation;
-        if (!reservation) continue;
-        totals = addCost(totals, reservation);
-        reservations += 1;
-        if (reservation.pinned) pinnedReservations += 1;
-      }
-      return {
-        ...totals,
-        label: this.label,
-        disposed: this.disposedValue,
-        reservations,
-        pinnedReservations
-      };
-    }
-    lookup(ledgerKey) {
-      return this.ledger.get(ledgerKey);
-    }
-    update(handle, cost, pinned) {
-      this.assertOwned(handle);
-      return this.ledger.reserve(handle.ledgerKey, cost, pinned);
-    }
-    setPinned(handle, pinned) {
-      this.assertOwned(handle);
-      return this.ledger.setPinned(handle.ledgerKey, pinned);
-    }
-    releaseHandle(handle) {
-      if (this.handles.get(handle.key) !== handle) return false;
-      this.handles.delete(handle.key);
-      return this.ledger.release(handle.ledgerKey);
-    }
-    invalidateReservations() {
-      for (const handle of this.handles.values()) handle.invalidate();
-      this.handles.clear();
-    }
-    detachFromLedger() {
-      this.invalidateReservations();
-      this.disposedValue = true;
-    }
-    assertOwned(handle) {
-      this.assertActive();
-      if (this.handles.get(handle.key) !== handle) {
-        throw new Error(`resource reservation "${handle.key}" is not owned by account "${this.label}"`);
-      }
-    }
-    assertActive() {
-      if (this.disposedValue) throw new Error(`resource account "${this.label}" has been disposed`);
-    }
-    assertLocalKey(key) {
-      if (typeof key !== "string" || key.trim().length === 0) {
-        throw new TypeError("resource reservation key is required");
-      }
-    }
-  };
-  function attributeArray(attribute) {
-    return attribute instanceof three.InterleavedBufferAttribute ? attribute.data.array : attribute.array;
-  }
-  function estimateBufferGeometriesResourceBytes(geometries) {
-    const arrays = /* @__PURE__ */ new Set();
-    const uploads = /* @__PURE__ */ new Set();
-    let cpuBytes = 0;
-    let gpuBytes = 0;
-    const account = (attribute) => {
-      if (!attribute) return;
-      const array = attributeArray(attribute);
-      const buffer = array.buffer;
-      if (!arrays.has(buffer)) {
-        arrays.add(buffer);
-        cpuBytes += buffer.byteLength;
-      }
-      const uploadOwner = attribute instanceof three.InterleavedBufferAttribute ? attribute.data : attribute;
-      if (!uploads.has(uploadOwner)) {
-        uploads.add(uploadOwner);
-        gpuBytes += array.byteLength;
-      }
-    };
-    for (const geometry of new Set(geometries)) {
-      account(geometry.index);
-      for (const attribute of Object.values(geometry.attributes)) account(attribute);
-      for (const attributes of Object.values(geometry.morphAttributes)) {
-        for (const attribute of attributes) account(attribute);
-      }
-    }
-    return { cpuBytes, gpuBytes };
-  }
-  function estimateBufferGeometriesBytes(geometries) {
-    return estimateBufferGeometriesResourceBytes(geometries).cpuBytes;
-  }
-  function textureImageBytes(image) {
-    if (Array.isArray(image)) return image.reduce((bytes, face) => bytes + textureImageBytes(face), 0);
-    if (!image || typeof image !== "object") return 0;
-    const value = image;
-    if (value.data) return value.data.byteLength;
-    if (!Number.isFinite(value.width) || !Number.isFinite(value.height)) return 0;
-    return Math.max(0, Math.round(
-      value.width * value.height * (value.depth ?? 1) * 4
-    ));
-  }
-  function textureResourceBytes(texture) {
-    const baseBytes = textureImageBytes(texture.image);
-    const mipmapBytes = texture.mipmaps.reduce((bytes, mipmap) => bytes + textureImageBytes(mipmap), 0);
-    const generatedMipBytes = texture.generateMipmaps && mipmapBytes === 0 ? Math.ceil(baseBytes / 3) : 0;
-    return {
-      cpuBytes: baseBytes + mipmapBytes,
-      gpuBytes: baseBytes + mipmapBytes + generatedMipBytes
-    };
-  }
-  function collectTextureValue(value, textures) {
-    if (value instanceof three.Texture) {
-      textures.add(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) collectTextureValue(entry, textures);
-    }
-  }
-  function estimateObject3DResourceCost(objects) {
-    const geometries = /* @__PURE__ */ new Set();
-    const materials = /* @__PURE__ */ new Set();
-    const textures = /* @__PURE__ */ new Set();
-    const roots = new Set(objects);
-    for (const root of roots) root.traverse((object) => {
-      const renderable = object;
-      if (renderable.geometry) geometries.add(renderable.geometry);
-      const objectMaterials = renderable.material ? Array.isArray(renderable.material) ? renderable.material : [renderable.material] : [];
-      for (const material of objectMaterials) materials.add(material);
-    });
-    for (const material of materials) {
-      for (const value of Object.values(material)) collectTextureValue(value, textures);
-      const uniforms = material.uniforms;
-      for (const uniform of Object.values(uniforms ?? {})) {
-        collectTextureValue(uniform?.value, textures);
-      }
-    }
-    const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
-    let textureCpuBytes = 0;
-    let textureGpuBytes = 0;
-    for (const texture of textures) {
-      const cost = textureResourceBytes(texture);
-      textureCpuBytes += cost.cpuBytes;
-      textureGpuBytes += cost.gpuBytes;
-    }
-    return normalizeResourceCost({
-      cpuBytes: geometry.cpuBytes + textureCpuBytes,
-      gpuBytes: geometry.gpuBytes + textureGpuBytes,
-      geometryBytes: geometry.gpuBytes,
-      textureBytes: textureGpuBytes,
-      modelBytes: geometry.cpuBytes + textureCpuBytes
-    });
-  }
-
-  // src/rendering/WorldChunkScheduler.ts
   var EMPTY_STATS = {
     visibleObjects: 0,
     visibleChunks: 0,
@@ -11324,9 +11589,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const jitter = (randomAt(this.numericSeed, world.x, world.y, rivers.flowSalt) - 0.5) * rivers.potentialJitter;
       return sample.landform.ocean * rivers.potentialOceanWeight + sample.landform.elevation * rivers.potentialElevationWeight - sample.landform.valley * rivers.potentialValleyWeight - sample.landform.moisture * rivers.potentialMoistureWeight + jitter;
     }
-    drainageNode(point, sampleAt, cache2) {
+    drainageNode(point, sampleAt, cache) {
       const key = this.canonicalCourseKey(point);
-      const cached = cache2.get(key);
+      const cached = cache.get(key);
       if (cached) return cached;
       const world = this.courseToWorld(point);
       const sample = sampleAt(world.x, world.y);
@@ -11336,10 +11601,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         potential: this.drainagePotential(point, sample),
         nextResolved: false
       };
-      cache2.set(key, node);
+      cache.set(key, node);
       return node;
     }
-    nextCoursePoint(point, node, sampleAt, cache2) {
+    nextCoursePoint(point, node, sampleAt, cache) {
       if (node.nextResolved) {
         return node.nextDelta ? { x: point.x + node.nextDelta.x, y: point.y + node.nextDelta.y } : void 0;
       }
@@ -11347,7 +11612,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       let bestPotential = node.potential;
       for (const delta of AXIAL_NEIGHBORS) {
         const candidate = { x: point.x + delta.x, y: point.y + delta.y };
-        const adjacent = this.drainageNode(candidate, sampleAt, cache2);
+        const adjacent = this.drainageNode(candidate, sampleAt, cache);
         if (adjacent && adjacent.potential < bestPotential) {
           bestDelta = delta;
           bestPotential = adjacent.potential;
@@ -11357,7 +11622,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       node.nextDelta = bestDelta;
       return bestDelta ? { x: point.x + bestDelta.x, y: point.y + bestDelta.y } : void 0;
     }
-    traceCourse(source, sampleAt, cache2) {
+    traceCourse(source, sampleAt, cache) {
       const rivers = this.profile.rivers;
       const points = [];
       const visited = /* @__PURE__ */ new Set();
@@ -11367,27 +11632,27 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const key = this.canonicalCourseKey(current);
         if (visited.has(key)) break;
         visited.add(key);
-        const node = this.drainageNode(current, sampleAt, cache2);
+        const node = this.drainageNode(current, sampleAt, cache);
         if (!node) break;
         points.push(current);
         if (node.sample.baseTerrain === "sea" /* sea */ || node.sample.baseTerrain === "coastal" /* coastal */) {
           reachedSea = true;
           break;
         }
-        const next = this.nextCoursePoint(current, node, sampleAt, cache2);
+        const next = this.nextCoursePoint(current, node, sampleAt, cache);
         if (!next) break;
         current = next;
       }
       return reachedSea && points.length >= rivers.minimumCourseLength ? { points } : void 0;
     }
-    sourceFor(regionX, regionY, slot, sampleAt, cache2) {
+    sourceFor(regionX, regionY, slot, sampleAt, cache) {
       const rivers = this.profile.rivers;
       const key = sourceKey(this.numericSeed, regionX, regionY, slot, rivers.sourceSalt);
       const source = {
         x: regionX * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 1) * rivers.sourceCellSize),
         y: regionY * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 2) * rivers.sourceCellSize)
       };
-      const node = this.drainageNode(source, sampleAt, cache2);
+      const node = this.drainageNode(source, sampleAt, cache);
       if (!node) return void 0;
       const chance = rivers.sourceSpawnChance * this.sourceSuitability(node.sample);
       return randomForSource(this.numericSeed, key, 3) < chance ? source : void 0;
@@ -13784,10 +14049,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (dependencies.cache !== void 0 && options.cache !== void 0) {
       throw new TypeError("world chunk cache must be provided through options or dependencies, not both");
     }
-    const cache2 = dependencies.cache ?? options.cache;
-    if (cache2 !== void 0) assertWorldChunkCache(cache2);
-    if (dependencies.cache !== void 0) return { cache: cache2, owned: false };
-    if (cache2 !== void 0) return { cache: cache2, owned: true };
+    const cache = dependencies.cache ?? options.cache;
+    if (cache !== void 0) assertWorldChunkCache(cache);
+    if (dependencies.cache !== void 0) return { cache, owned: false };
+    if (cache !== void 0) return { cache, owned: true };
     return { cache: void 0, owned: false };
   }
   function resolveDeltaStore(options, dependencies) {
@@ -13800,10 +14065,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (store !== void 0) return { store, owned: true };
     return { store: void 0, owned: false };
   }
-  function assertWorldChunkCache(cache2) {
-    if (!cache2 || typeof cache2 !== "object") throw new TypeError("world chunk cache must be an object");
+  function assertWorldChunkCache(cache) {
+    if (!cache || typeof cache !== "object") throw new TypeError("world chunk cache must be an object");
     for (const method of ["get", "put", "clear", "dispose"]) {
-      if (typeof cache2[method] !== "function") throw new TypeError(`world chunk cache must implement ${method}()`);
+      if (typeof cache[method] !== "function") throw new TypeError(`world chunk cache must implement ${method}()`);
     }
   }
   function assertWorldDeltaStore(store) {
@@ -14173,8 +14438,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return reason instanceof Error ? reason : new Error(`world delta persistence failed: ${String(reason)}`);
     }
   };
-  function cacheStats(pool, cache2, cachedLoads, deltas) {
-    const stored = cache2?.stats;
+  function cacheStats(pool, cache, cachedLoads, deltas) {
+    const stored = cache?.stats;
     return {
       ...pool,
       completed: pool.completed + cachedLoads,
@@ -16301,6 +16566,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     cpuChunkCacheSize: 192,
     gpuChunkCacheBytes: 256 * 1024 * 1024,
     cpuChunkCacheBytes: 384 * 1024 * 1024,
+    modelAssetCacheBytes: 64 * 1024 * 1024,
     worldSessionDrainTimeoutMs: 15e3
   };
   function resolveHexMapOptions(options) {
@@ -16368,6 +16634,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     nonNegativeSafeInteger("cpuChunkCacheSize", options.cpuChunkCacheSize);
     nonNegativeSafeInteger("gpuChunkCacheBytes", options.gpuChunkCacheBytes);
     nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
+    nonNegativeSafeInteger("modelAssetCacheBytes", options.modelAssetCacheBytes);
     positive2("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
     nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
     nonNegativeSafeInteger("grassDensity", options.grassDensity);
@@ -17145,6 +17412,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         gpuCacheBytes: this.options.gpuChunkCacheBytes,
         cpuCacheBytes: this.options.cpuChunkCacheBytes
       });
+      this.modelAssets = new ModelAssetCache({
+        maximumBytes: this.options.modelAssetCacheBytes,
+        resources: this.chunkScheduler.createResourceAccount("model-assets")
+      });
       this.installBuiltinWorldRenderLayers();
       const el = document.querySelector(this.options.element);
       if (!(el instanceof HTMLCanvasElement)) {
@@ -17735,7 +18006,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       try {
         if (source.bounds && !options.initialTile) this.frameMap(source.map);
         else this.positionCameraAtTile(initialTile);
-        const atlas = await worldController.lifecycle.run((signal) => this.fetchTerrainAtlas(signal));
+        const [atlas] = await worldController.lifecycle.run((signal) => Promise.all([
+          this.fetchTerrainAtlas(signal),
+          this.modelAssets.preload(this.authoredModelPaths(source.map))
+        ]));
         if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
         this.atlas = atlas;
         if (!await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true))) return;
@@ -17785,6 +18059,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         throw new TypeError("Terrain atlas descriptor is invalid");
       }
       return atlas;
+    }
+    authoredModelPaths(map) {
+      const paths = /* @__PURE__ */ new Set();
+      forEachMapTile(map, (tile) => {
+        if (tile.city) paths.add(tile.city.model ?? this.options.cityModel);
+        if (this.options.treesPerTile > 0 && !tile.city && tile.modifiers?.includes("wood")) {
+          paths.add(tile.treeModel ?? this.options.treeModel);
+        }
+      });
+      return [...paths];
     }
     positionCameraAtTile(tile) {
       const center = getHexCenter(tile.x, tile.y, this.options.size);
@@ -17848,13 +18132,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     mountTerrainWorldRenderLayer(context) {
       const record = this.worldChunkLayers.get(context.key);
       if (!record || !this.terrain) return Promise.resolve();
-      this.terrain.addTiles(context.points);
-      const build = this.terrain.loadCities(context.points, record).then(() => {
-        if (!context.isCurrent()) {
-          this.terrain?.removeCities(context.points, record);
+      const terrain = this.terrain;
+      terrain.addTiles(context.points);
+      const build = terrain.loadCities(context.points, record).then(() => {
+        if (!context.isCurrent() || this.terrain !== terrain) {
+          terrain.removeCities(context.points, record);
           return;
         }
-        this.terrain?.setFogStates(this.fogChangesForPoints(context.points));
+        terrain.setFogStates(this.fogChangesForPoints(context.points));
         this.refreshWorldCopies();
       }).catch((error) => {
         if (context.isCurrent()) this.emit("error", error);
@@ -17957,7 +18242,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const record = this.worldChunkLayers.get(context.key);
       if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
       const forestBuildRevision = record.forestBuildRevision ?? (record.forestBuildRevision = 0);
-      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources());
+      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets));
       const preparation = this.prepareWorldVegetation(context, record);
       const vegetationSignature = record.vegetationSignature;
       const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -17967,6 +18252,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         treesPerTile: density.treesPerTile,
         treeModel: this.options.treeModel,
         treeScale: this.options.treeScale,
+        modelAssets: this.modelAssets,
         fogDarkenFactor: this.options.fogDarkenFactor,
         riverWidth: this.options.riverWidth,
         riverBankWidth: this.options.riverBankWidth,
@@ -18578,6 +18864,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         lakeShoreWidth: this.options.lakeShoreWidth,
         cityModel: this.options.cityModel,
         cityScale: this.options.cityScale,
+        modelAssets: this.modelAssets,
         fogTexture: this.options.fogTexture,
         fogDarkenFactor: this.options.fogDarkenFactor,
         fogTextureSize: this.options.fogTextureSize
@@ -18626,6 +18913,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         treesPerTile: this.options.treesPerTile,
         treeModel: this.options.treeModel,
         treeScale: this.options.treeScale,
+        modelAssets: this.modelAssets,
         fogDarkenFactor: this.options.fogDarkenFactor,
         riverWidth: this.options.riverWidth,
         riverBankWidth: this.options.riverBankWidth,
@@ -18720,7 +19008,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
       }
       this.streamedForestResources?.dispose();
-      this.streamedForestResources = new ForestSharedResources();
+      this.streamedForestResources = new ForestSharedResources(this.modelAssets);
       const layer = this.worldRenderLayers.get("@forest");
       if (!layer) return false;
       for (const [key, record] of this.worldChunkLayers) {
@@ -18759,7 +19047,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.streamedGrassResources?.dispose();
       this.streamedGrassResources = void 0;
       this.streamedForestResources?.dispose();
-      this.streamedForestResources = new ForestSharedResources();
+      this.streamedForestResources = new ForestSharedResources(this.modelAssets);
       const grassLayer = this.worldRenderLayers.get("@grass");
       const forestLayer = this.worldRenderLayers.get("@forest");
       const builds = [];
@@ -19616,6 +19904,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     get resourceBudget() {
       return this.chunkScheduler.resourceBudget;
     }
+    get modelAssetStats() {
+      return this.modelAssets.stats;
+    }
+    get modelAssetCache() {
+      return this.modelAssets;
+    }
+    preloadModelAssets(paths) {
+      if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
+      return this.modelAssets.preload(paths);
+    }
     createResourceAccount(label) {
       if (this.disposed) throw new Error("HexMap has been disposed");
       return this.chunkScheduler.createResourceAccount(label);
@@ -19762,7 +20060,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.interactions.dispose();
       this.cleanRoutePath();
       this.clearWorldCopies();
-      this.chunkScheduler.dispose();
       if (this.terrain) {
         this.worldRoot.remove(this.terrain);
         this.terrain.dispose();
@@ -19777,6 +20074,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.grass.dispose();
         this.grass = void 0;
       }
+      this.modelAssets.dispose();
+      this.chunkScheduler.dispose();
       this.selector.geometry.dispose();
       this.selector.material.dispose();
       this.pointer.geometry.dispose();
@@ -20693,6 +20992,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.animationClips = [];
       this.pathFraction = 0;
       this.movementToken = 0;
+      this.modelRevision = 0;
+      this.disposed = false;
       //Path currently being animated + the cell the model is nearest to right
       //now. moveTo() sets options.x/y to the *destination* immediately (so game
       //logic like "which tile holds this unit" is stable), which means position
@@ -20734,26 +21035,46 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         mapHeight: 0,
         wrapX: false,
         wrapY: false,
-        surface: void 0
+        surface: void 0,
+        modelAssets: void 0
       };
       setOptions(this, options);
+      if (!this.options.modelAssets) {
+        this.ownedModelAssets = new ModelAssetCache();
+        this.options.modelAssets = this.ownedModelAssets;
+      }
     }
     async setUnit() {
-      const { scene, animations, info, fixup } = await loadModel(this.options.type);
-      setOptions(this, info);
-      const model = clone(scene);
-      model.applyMatrix4(fixup);
-      this.animationClips = animations;
-      this.animationMixer = animations.length > 0 ? new three.AnimationMixer(model) : void 0;
-      this._unit = new three.Object3D();
-      this._unit.add(model);
-      let position = getHexCenter(this.options.x, this.options.y, this.options.size);
-      this._unit.position.set(
-        position.x,
-        this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
-        position.y
-      );
-      if (!this.activate("idle" /* idle */) && animations.length > 0) this.playClip(animations[0]);
+      if (this.disposed) throw new Error("Unit has been disposed");
+      const revision = ++this.modelRevision;
+      const asset = await this.options.modelAssets.acquire(this.options.type);
+      if (this.disposed || revision !== this.modelRevision) {
+        asset.release();
+        return;
+      }
+      const { scene, animations, info, fixup } = asset.model;
+      try {
+        setOptions(this, info);
+        const model = clone(scene);
+        model.applyMatrix4(fixup);
+        this.releaseUnitModel();
+        this.modelLease = asset;
+        this.animationClips = animations;
+        this.animationMixer = animations.length > 0 ? new three.AnimationMixer(model) : void 0;
+        this._unit = new three.Object3D();
+        this._unit.add(model);
+        const position = getHexCenter(this.options.x, this.options.y, this.options.size);
+        this._unit.position.set(
+          position.x,
+          this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
+          position.y
+        );
+        if (!this.activate("idle" /* idle */) && animations.length > 0) this.playClip(animations[0]);
+      } catch (reason) {
+        if (this.modelLease === asset) this.releaseUnitModel();
+        else asset.release();
+        throw reason;
+      }
     }
     //----------------------------------------------------------------------------------------------------------
     //RETURN CURRENT 3D Object
@@ -20925,19 +21246,33 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       ) ?? 0;
     }
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.modelRevision += 1;
       this.needAnimate = false;
       this.movementToken += 1;
       this.movePath = null;
       this._viewCell = null;
+      this.releaseUnitModel();
+      this.ownedModelAssets?.dispose();
+      this.ownedModelAssets = void 0;
+      this.removeAllListeners();
+    }
+    releaseUnitModel() {
       this._unit?.removeFromParent();
       if (this.animationMixer && this._unit?.children[0]) {
         this.animationMixer.stopAllAction();
         this.animationMixer.uncacheRoot(this._unit.children[0]);
       }
+      this._unit?.traverse((object) => {
+        const skeleton = object.skeleton;
+        skeleton?.dispose();
+      });
       this.animationMixer = void 0;
       this.animationAction = void 0;
       this.animationClips = [];
-      this.removeAllListeners();
+      this.modelLease?.release();
+      this.modelLease = void 0;
     }
   };
   function createContinuousHexPath(path, size, topology = {}, start, surface) {
@@ -21144,6 +21479,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this._mapData = mapData;
       await this._map.loadWorld({ source: new StaticWorldSource(mapData) });
       if (revision !== this.initRevision) return;
+      await this._map.preloadModelAssets(placements.map((unit) => unit.type));
+      if (revision !== this.initRevision) return;
       const units = placements.map((unitInfo) => new Unit({
         ...unitInfo,
         size: this._map.size,
@@ -21151,7 +21488,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         mapHeight: mapData.h,
         wrapX: mapData.wrapX === true,
         wrapY: mapData.wrapY === true,
-        surface: this._map.surface
+        surface: this._map.surface,
+        modelAssets: this._map.modelAssetCache
       }));
       try {
         await Promise.all(units.map((unit) => unit.setUnit()));
@@ -21324,6 +21662,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
+  exports.DEFAULT_MODEL_ASSET_CACHE_BYTES = DEFAULT_MODEL_ASSET_CACHE_BYTES;
   exports.DEFAULT_WORLD_GENERATION_CHUNK_SIZE = DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
   exports.DEFAULT_WORLD_WATER_STYLE = DEFAULT_WORLD_WATER_STYLE;
   exports.EventEmitter = EventEmitter;
@@ -21346,6 +21685,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.MAX_WORLD_OVERVIEW_TILE_SPAN = MAX_WORLD_OVERVIEW_TILE_SPAN;
   exports.MAX_WORLD_SIZE = MAX_WORLD_SIZE;
   exports.MIN_WORLD_SIZE = MIN_WORLD_SIZE;
+  exports.ModelAssetCache = ModelAssetCache;
   exports.NEIGHBOR_DIRECTIONS = NEIGHBOR_DIRECTIONS;
   exports.PathFinder = PathFinder;
   exports.PriorityTaskQueue = PriorityTaskQueue;
@@ -21394,6 +21734,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
+  exports.disposeObject3DResources = disposeObject3DResources;
   exports.estimateBufferGeometriesBytes = estimateBufferGeometriesBytes;
   exports.estimateBufferGeometriesResourceBytes = estimateBufferGeometriesResourceBytes;
   exports.estimateObject3DResourceCost = estimateObject3DResourceCost;

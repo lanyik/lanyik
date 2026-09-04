@@ -39,6 +39,10 @@ describe("HexMap option boundary", () => {
         })).toThrow(/non-negative safe integer/);
         expect(() => resolveHexMapOptions({
             element: "#map",
+            modelAssetCacheBytes: -1
+        })).toThrow(/non-negative safe integer/);
+        expect(() => resolveHexMapOptions({
+            element: "#map",
             worldSessionDrainTimeoutMs: 0
         })).toThrow(/positive finite number/);
         expect(() => resolveHexMapOptions({

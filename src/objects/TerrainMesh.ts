@@ -45,7 +45,7 @@ import {
 import { lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, waterEdgeValue } from "../helpers/rivers";
 import { createHexagonGeometry, createHexagonLodGeometry } from "./hexagonGeometry";
 import { makeTextSprite } from "./citysprite";
-import { loadModel } from "../helpers/models";
+import { ModelAssetCache, ModelAssetLease } from "../helpers/models";
 import {
     TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER,
     TERRAIN_VERTEX_SHADER
@@ -174,6 +174,7 @@ export interface TerrainMeshOptions {
     //scale, as a map-wide "make all cities a bit bigger/smaller" knob.
     cityModel?: string;
     cityScale?: number;
+    modelAssets?: ModelAssetCache;
 
     //war-fog.jpg (see FogOfWar.ts): file name resolved against texturesBaseUrl
     //(fogTexture) and the color multiplier applied to Explored (previously
@@ -222,6 +223,7 @@ interface CityFogEntry {
     materials: { material: Material & { color?: Color }, baseColor?: Color }[];
     owner?: object;
     signature: string;
+    asset: ModelAssetLease;
 }
 
 interface PendingCityBuild {
@@ -291,6 +293,8 @@ export class TerrainMesh extends Group {
     private fogStates = new Map<string, number>();
     private cityFog = new Map<string, CityFogEntry>(); // "x,y" -> that tile's city model/label
     private readonly pendingCities = new Map<string, PendingCityBuild>();
+    private readonly modelAssets: ModelAssetCache;
+    private readonly ownsModelAssets: boolean;
     private fogTexture: Texture;
     private atlasTexture: Texture;
     private map: MapInfo;
@@ -314,6 +318,8 @@ export class TerrainMesh extends Group {
             throw new TypeError("terrain surface must match the map and tile size");
         }
         this.surface = options.surface;
+        this.ownsModelAssets = options.modelAssets === undefined;
+        this.modelAssets = options.modelAssets ?? new ModelAssetCache();
         this.buildAtlasCellIndex();
         this.fogTexture = this.loadFogTexture();
         //One shared texture for both layers (via commonUniforms) - only the
@@ -818,68 +824,76 @@ export class TerrainMesh extends Group {
 
             let record: PendingCityBuild;
             const modelPath = tile.city.model ?? defaultModel;
-            const promise = loadModel(modelPath).then(({ scene, fixup }) => {
-                if (!this.isCurrentCityBuild(key, record)) return;
-                const currentTile = getMapTile(this.map, x, y);
-                if (!currentTile?.city || this.citySignature(currentTile) !== signature) return;
-
-                const model = scene.clone(true);
-                model.applyMatrix4(fixup);
-                model.updateMatrixWorld(true);
-                const cityMaterials: CityFogEntry["materials"] = [];
-                let sprite: Sprite | undefined;
+            const promise = this.modelAssets.acquire(modelPath).then(asset => {
+                let published = false;
                 try {
-                    // glTF hierarchy clones keep their source materials. Cities
-                    // need private materials because fog darkening is per tile.
-                    model.traverse(o => {
-                        const mesh = o as Mesh;
-                        if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return;
-                        const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                        const clonedMaterials = sourceMaterials.map(material => material.clone());
-                        mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
-                        for (const material of clonedMaterials) {
-                            const colored = material as Material & { color?: Color };
-                            cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                    if (!this.isCurrentCityBuild(key, record)) return;
+                    const currentTile = getMapTile(this.map, x, y);
+                    if (!currentTile?.city || this.citySignature(currentTile) !== signature) return;
+
+                    const { scene, fixup } = asset.model;
+                    const model = scene.clone(true);
+                    model.applyMatrix4(fixup);
+                    model.updateMatrixWorld(true);
+                    const cityMaterials: CityFogEntry["materials"] = [];
+                    let sprite: Sprite | undefined;
+                    try {
+                        // glTF hierarchy clones keep their source materials. Cities
+                        // need private materials because fog darkening is per tile.
+                        model.traverse(o => {
+                            const mesh = o as Mesh;
+                            if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return;
+                            const sourceMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                            const clonedMaterials = sourceMaterials.map(material => material.clone());
+                            mesh.material = Array.isArray(mesh.material) ? clonedMaterials : clonedMaterials[0];
+                            for (const material of clonedMaterials) {
+                                const colored = material as Material & { color?: Color };
+                                cityMaterials.push({ material: colored, baseColor: colored.color?.clone() });
+                            }
+                        });
+
+                        const center = getHexCenter(x, y, size);
+                        const modelHeight = new Box3().setFromObject(model).getSize(new Vector3()).y;
+                        const wrapper = new Group();
+                        wrapper.add(model);
+                        wrapper.scale.setScalar(cityScale);
+                        const groundHeight = this.surface.getTileCenterHeight(x, y);
+                        const labelOffset = modelHeight * cityScale + Math.round(size / 5);
+                        wrapper.position.set(center.x, groundHeight, center.y);
+                        wrapper.userData[CITY_FOG_TILE_KEY] = key;
+
+                        sprite = makeTextSprite(` ${currentTile.city.name ?? "City"} `, {
+                            fontsize: 32,
+                            fontface: "Georgia",
+                            borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
+                        });
+                        sprite.position.set(center.x, groundHeight + labelOffset, center.y);
+                        sprite.userData[CITY_FOG_TILE_KEY] = key;
+
+                        if (!this.isCurrentCityBuild(key, record)) {
+                            this.disposeCityResources(cityMaterials, sprite);
+                            return;
                         }
-                    });
-
-                    const center = getHexCenter(x, y, size);
-                    const modelHeight = new Box3().setFromObject(model).getSize(new Vector3()).y;
-                    const wrapper = new Group();
-                    wrapper.add(model);
-                    wrapper.scale.setScalar(cityScale);
-                    const groundHeight = this.surface.getTileCenterHeight(x, y);
-                    const labelOffset = modelHeight * cityScale + Math.round(size / 5);
-                    wrapper.position.set(center.x, groundHeight, center.y);
-                    wrapper.userData[CITY_FOG_TILE_KEY] = key;
-
-                    sprite = makeTextSprite(` ${currentTile.city.name ?? "City"} `, {
-                        fontsize: 32,
-                        fontface: "Georgia",
-                        borderColor: { r: 0, g: 0, b: 255, a: 0.8 }
-                    });
-                    sprite.position.set(center.x, groundHeight + labelOffset, center.y);
-                    sprite.userData[CITY_FOG_TILE_KEY] = key;
-
-                    if (!this.isCurrentCityBuild(key, record)) {
+                        this.add(wrapper);
+                        this.add(sprite);
+                        this.cityFog.set(key, {
+                            wrapper,
+                            sprite,
+                            x,
+                            y,
+                            labelOffset,
+                            materials: cityMaterials,
+                            owner: record.owner,
+                            signature,
+                            asset
+                        });
+                        published = true;
+                    } catch (reason) {
                         this.disposeCityResources(cityMaterials, sprite);
-                        return;
+                        throw reason;
                     }
-                    this.add(wrapper);
-                    this.add(sprite);
-                    this.cityFog.set(key, {
-                        wrapper,
-                        sprite,
-                        x,
-                        y,
-                        labelOffset,
-                        materials: cityMaterials,
-                        owner: record.owner,
-                        signature
-                    });
-                } catch (reason) {
-                    this.disposeCityResources(cityMaterials, sprite);
-                    throw reason;
+                } finally {
+                    if (!published) asset.release();
                 }
             }).finally(() => {
                 if (this.pendingCities.get(key) === record) this.pendingCities.delete(key);
@@ -1071,6 +1085,7 @@ export class TerrainMesh extends Group {
         this.remove(entry.wrapper);
         this.remove(entry.sprite);
         this.disposeCityResources(entry.materials, entry.sprite);
+        entry.asset.release();
         this.cityFog.delete(key);
     }
 
@@ -1549,7 +1564,9 @@ export class TerrainMesh extends Group {
         this.fogTexture.dispose();
         for (const entry of this.cityFog.values()) {
             this.disposeCityResources(entry.materials, entry.sprite);
+            entry.asset.release();
         }
         this.cityFog.clear();
+        if (this.ownsModelAssets) this.modelAssets.dispose();
     }
 }

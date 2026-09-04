@@ -61,6 +61,11 @@ export interface ResourceBudgetAccount {
         cost: Partial<ResourceCost>,
         pinned?: boolean
     ): ResourceReservationHandle | undefined;
+    acquireRequired(
+        key: string,
+        cost: Partial<ResourceCost>,
+        pinned: true
+    ): ResourceReservationHandle;
     release(key: string): boolean;
     clear(): void;
     dispose(): void;
@@ -318,6 +323,23 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
         return handle;
     }
 
+    public acquireRequired(
+        key: string,
+        cost: Partial<ResourceCost>,
+        pinned: true
+    ): ResourceReservationHandle {
+        this.assertActive();
+        this.assertLocalKey(key);
+        if (this.handles.has(key)) {
+            throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
+        }
+        const ledgerKey = `${this.prefix}${key}`;
+        this.ledger.forceReserve(ledgerKey, cost, pinned);
+        const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
+        this.handles.set(key, handle);
+        return handle;
+    }
+
     public release(key: string): boolean {
         return this.handles.get(key)?.release() ?? false;
     }
@@ -496,14 +518,24 @@ function collectTextureValue(value: unknown, textures: Set<Texture>): void {
     }
 }
 
-export function estimateObject3DResourceCost(objects: readonly Object3D[]): ResourceCost {
+interface Object3DResourceSets {
+    readonly geometries: Set<BufferGeometry>;
+    readonly materials: Set<Material>;
+    readonly textures: Set<Texture>;
+}
+
+function collectObject3DResources(objects: readonly Object3D[]): Object3DResourceSets {
     const geometries = new Set<BufferGeometry>();
     const materials = new Set<Material>();
     const textures = new Set<Texture>();
-    const roots = new Set(objects);
-    for (const root of roots) root.traverse(object => {
-        const renderable = object as Object3D & { geometry?: BufferGeometry; material?: Material | Material[] };
+    for (const root of new Set(objects)) root.traverse(object => {
+        const renderable = object as Object3D & {
+            geometry?: BufferGeometry;
+            material?: Material | Material[];
+            skeleton?: { boneTexture?: Texture | null };
+        };
         if (renderable.geometry) geometries.add(renderable.geometry);
+        if (renderable.skeleton?.boneTexture) textures.add(renderable.skeleton.boneTexture);
         const objectMaterials = renderable.material
             ? Array.isArray(renderable.material) ? renderable.material : [renderable.material]
             : [];
@@ -518,6 +550,11 @@ export function estimateObject3DResourceCost(objects: readonly Object3D[]): Reso
             collectTextureValue(uniform?.value, textures);
         }
     }
+    return { geometries, materials, textures };
+}
+
+export function estimateObject3DResourceCost(objects: readonly Object3D[]): ResourceCost {
+    const { geometries, textures } = collectObject3DResources(objects);
     const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
     let textureCpuBytes = 0;
     let textureGpuBytes = 0;
@@ -533,4 +570,28 @@ export function estimateObject3DResourceCost(objects: readonly Object3D[]): Reso
         textureBytes: textureGpuBytes,
         modelBytes: geometry.cpuBytes + textureCpuBytes
     });
+}
+
+// Dispose one immutable asset graph after its final borrower releases it. The
+// sets prevent shared glTF resources from being disposed more than once.
+export function disposeObject3DResources(objects: readonly Object3D[]): void {
+    const { geometries, materials, textures } = collectObject3DResources(objects);
+    const images = new Set<object>();
+    const closeImage = (image: unknown): void => {
+        if (Array.isArray(image)) {
+            for (const entry of image) closeImage(entry);
+            return;
+        }
+        if (!image || typeof image !== "object" || images.has(image)) return;
+        images.add(image);
+        const close = (image as { close?: () => void }).close;
+        if (typeof close === "function") close.call(image);
+    };
+    for (const texture of textures) {
+        closeImage(texture.image);
+        for (const mipmap of texture.mipmaps as unknown[]) closeImage(mipmap);
+        texture.dispose();
+    }
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
 }

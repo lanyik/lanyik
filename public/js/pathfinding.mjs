@@ -3046,10 +3046,12 @@ var MemoryWorldNavigationIndex = class {
     this.bounds = bounds;
     this.movementType = movementType;
     this.summaries = /* @__PURE__ */ new Map();
+    this.disposed = false;
     if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new RangeError("navigation chunkSize must be positive");
     if (!movementType.trim()) throw new TypeError("navigation movementType must be a non-empty string");
   }
   setSummary(summary) {
+    this.assertActive();
     assertNavigationSummary(summary);
     if (summary.movementType !== this.movementType) {
       throw new TypeError("navigation summary movementType does not match its index");
@@ -3057,15 +3059,30 @@ var MemoryWorldNavigationIndex = class {
     this.summaries.set(chunkKey(summary.chunkX, summary.chunkY), summary);
   }
   getSummary(chunkX, chunkY) {
+    if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
     return Promise.resolve(this.summaries.get(chunkKey(chunkX, chunkY)));
   }
   invalidateChunk(chunkX, chunkY) {
+    this.assertActive();
     return this.summaries.delete(chunkKey(chunkX, chunkY));
+  }
+  clear() {
+    this.assertActive();
+    this.summaries.clear();
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.summaries.clear();
+    this.disposed = true;
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("WorldNavigationIndex has been disposed");
   }
 };
 var ProceduralWorldNavigationIndex = class {
   constructor(options) {
     this.cache = /* @__PURE__ */ new Map();
+    this.disposed = false;
     if (!options || !Number.isSafeInteger(options.chunkSize) || options.chunkSize <= 0) {
       throw new RangeError("procedural navigation chunkSize must be positive");
     }
@@ -3097,6 +3114,7 @@ var ProceduralWorldNavigationIndex = class {
     return this.cache.size;
   }
   getSummary(chunkX, chunkY) {
+    if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
     const resolved = this.resolveChunk(chunkX, chunkY);
     if (!resolved) return Promise.resolve(void 0);
     const key = chunkKey(resolved.x, resolved.y);
@@ -3129,8 +3147,21 @@ var ProceduralWorldNavigationIndex = class {
     return Promise.resolve(summary);
   }
   invalidateChunk(chunkX, chunkY) {
+    this.assertActive();
     const resolved = this.resolveChunk(chunkX, chunkY);
     return resolved ? this.cache.delete(chunkKey(resolved.x, resolved.y)) : false;
+  }
+  clear() {
+    this.assertActive();
+    this.cache.clear();
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.cache.clear();
+    this.disposed = true;
+  }
+  assertActive() {
+    if (this.disposed) throw new Error("WorldNavigationIndex has been disposed");
   }
   resolveChunk(chunkX, chunkY) {
     if (!Number.isSafeInteger(chunkX) || !Number.isSafeInteger(chunkY)) return void 0;

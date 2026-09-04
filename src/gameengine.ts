@@ -104,6 +104,9 @@ export class GameEngine extends EventEmitter<GameEngineEventMap> {
         await this._map.loadWorld({ source: new StaticWorldSource(mapData) });
         if (revision !== this.initRevision) return;
 
+        await this._map.preloadModelAssets(placements.map(unit => unit.type));
+        if (revision !== this.initRevision) return;
+
         const units = placements.map(unitInfo => new Unit({
             ...unitInfo,
             size: this._map.size,
@@ -111,7 +114,8 @@ export class GameEngine extends EventEmitter<GameEngineEventMap> {
             mapHeight: mapData.h,
             wrapX: mapData.wrapX === true,
             wrapY: mapData.wrapY === true,
-            surface: this._map.surface
+            surface: this._map.surface,
+            modelAssets: this._map.modelAssetCache
         }));
         try {
             await Promise.all(units.map(unit => unit.setUnit()));

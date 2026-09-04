@@ -13,12 +13,25 @@ import {
 } from "three";
 
 vi.mock("../../src/helpers/models", () => ({
-    loadModel: vi.fn(async () => {
-        const scene = new Group();
-        scene.add(new Mesh(new BoxGeometry(1, 2, 1), new MeshBasicMaterial()));
-        scene.updateMatrixWorld(true);
-        return { scene, animations: [], info: {}, fixup: new Matrix4() };
-    })
+    ModelAssetCache: class {
+        public async acquire(path: string) {
+            const scene = new Group();
+            scene.add(new Mesh(new BoxGeometry(1, 2, 1), new MeshBasicMaterial()));
+            scene.updateMatrixWorld(true);
+            return {
+                path,
+                model: {
+                    scene,
+                    animations: [],
+                    info: { offset: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1 },
+                    fixup: new Matrix4()
+                },
+                released: false,
+                release: () => true
+            };
+        }
+        public dispose() {}
+    }
 }));
 
 vi.mock("../../src/objects/citysprite", async () => {
@@ -28,7 +41,7 @@ vi.mock("../../src/objects/citysprite", async () => {
 
 import { Land, MapInfo, Point } from "../../src/index";
 import { getWorldChunkMetadata } from "../../src/helpers/chunks";
-import { loadModel } from "../../src/helpers/models";
+import type { LoadedModel, ModelAssetCache, ModelAssetLease } from "../../src/helpers/models";
 import { createForest, ForestSharedResources } from "../../src/objects/Forest";
 import { createGrassField, GrassSharedResources } from "../../src/objects/Grass";
 import { CITY_FOG_TILE_KEY, TerrainMesh } from "../../src/objects/TerrainMesh";
@@ -196,6 +209,15 @@ describe("streamed render resource sharing", () => {
         const map = mapWithVegetation();
         map.data[4][4].city = { name: "Late city" };
         const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6 });
+        const loading = deferred<LoadedModel>();
+        const modelAssets = {
+            acquire: async (path: string): Promise<ModelAssetLease> => ({
+                path,
+                model: await loading.promise,
+                released: false,
+                release: () => true
+            })
+        } as ModelAssetCache;
         const terrain = new TerrainMesh(map, {
             size: 10,
             texturesBaseUrl: "textures/",
@@ -207,10 +229,9 @@ describe("streamed render resource sharing", () => {
                 cellSpacing: 0,
                 textures: { [Land.land]: { cellX: 0, cellY: 0 } }
             },
-            surface
+            surface,
+            modelAssets
         }, []);
-        const loading = deferred<Awaited<ReturnType<typeof loadModel>>>();
-        vi.mocked(loadModel).mockReturnValueOnce(loading.promise);
 
         const cityBuild = terrain.loadCities([{ x: 4, y: 4 }]);
         terrain.dispose();

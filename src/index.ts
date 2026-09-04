@@ -36,7 +36,8 @@ export {
     normalizeResourceCost,
     estimateBufferGeometriesBytes,
     estimateBufferGeometriesResourceBytes,
-    estimateObject3DResourceCost
+    estimateObject3DResourceCost,
+    disposeObject3DResources
 } from "./runtime/ResourceBudget";
 export type {
     ResourceCost,
@@ -84,6 +85,15 @@ export type {
 export { getHexCenter, HEXPolygon } from "./helpers/helpers";
 export { getNeighborCoords, getNeighbors, NEIGHBOR_DIRECTIONS } from "./helpers/neighbors";
 export type { NeighborDirection, Neighbor } from "./helpers/neighbors";
+export { ModelAssetCache, DEFAULT_MODEL_ASSET_CACHE_BYTES } from "./helpers/models";
+export type {
+    LoadedModel,
+    ModelInfo,
+    ModelMetadata,
+    ModelAssetLease,
+    ModelAssetCacheOptions,
+    ModelAssetCacheStats
+} from "./helpers/models";
 
 export {
     positiveModulo,

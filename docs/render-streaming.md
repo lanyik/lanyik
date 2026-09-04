@@ -297,6 +297,19 @@ keys use the same canonical descriptor fingerprint by default, while an explicit
 Chunk snapshots carry a format version and monotonically increasing revision;
 incompatible or corrupt records are rejected rather than applied.
 
+Decoded glTF assets are owned by a map-level `ModelAssetCache` rather than an
+unbounded module-global promise map. `acquire()` coalesces concurrent loads and
+returns an explicit lease; cities, forests, and units hold that lease for as
+long as their clones still share source geometry, materials, textures, or
+animation data. Zero-reference entries form a byte-bounded LRU (64 MiB by
+default, configurable with `modelAssetCacheBytes`). Active entries are pinned:
+if their unavoidable working set exceeds the configured cache or shared
+resource budget, diagnostics expose the excess instead of disposing resources
+still in use. `map.modelAssetStats` and `map.resourceBudget` include these
+decoded resources, and map disposal releases them deterministically. Static
+world loading prewarms only tree/city models actually authored in materialized
+tiles; `GameEngine` similarly prewarms the finite set of placed unit models.
+
 `map.worldStreamingStats` works for every source and reports source-chunk
 residency, pending work, queue depth, busy workers, completions, retries and
 terminal failures. `map.streamingStats` continues to report render-chunk

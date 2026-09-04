@@ -14,7 +14,7 @@ import pointInPolygon from "robust-point-in-polygon";
 
 import { HEXPolygon, getHexCenter } from "../helpers/helpers";
 import { forEachMapTile } from "../helpers/mapData";
-import { loadModel } from "../helpers/models";
+import { ModelAssetCache, ModelAssetLease } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
 import { getMapTile } from "../helpers/topology";
 import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
@@ -46,6 +46,7 @@ export interface ForestOptions {
     treesPerTile?: number;
     treeModel?: string; // model folder path (see helpers/models.ts), default "Assets/models/pinia"
     treeScale?: number; // extra multiplier on top of the model's own info.json scale, default 1
+    modelAssets?: ModelAssetCache;
     fogDarkenFactor?: number; // instance-color multiplier for Explored fog tiles, default 0.45 - see FogOfWar.ts
 
     //River/lake water clearance on wood+river tiles (see helpers/rivers.ts's
@@ -109,6 +110,11 @@ interface PreparedForestPart {
     material: Material | Material[];
 }
 
+interface PreparedForestModel {
+    readonly parts: PreparedForestPart[];
+    readonly asset: ModelAssetLease;
+}
+
 const HIDDEN_TREE_MATRIX = new Float32Array([
     0, 0, 0, 0,
     0, 0, 0, 0,
@@ -126,36 +132,54 @@ function writeHiddenMatrices(target: Float32Array, start: number, count: number)
 //tree species shares the baked glTF geometry/material instead of cloning it
 //again on every mount.
 export class ForestSharedResources {
-    private readonly models = new Map<string, Promise<PreparedForestPart[]>>();
+    private readonly models = new Map<string, Promise<PreparedForestModel>>();
     private readonly geometries = new Set<BufferGeometry>();
+    private readonly assets = new Set<ModelAssetLease>();
+    private readonly modelAssets: ModelAssetCache;
+    private readonly ownsModelAssets: boolean;
     private disposed = false;
+
+    constructor(modelAssets?: ModelAssetCache) {
+        this.ownsModelAssets = modelAssets === undefined;
+        this.modelAssets = modelAssets ?? new ModelAssetCache();
+    }
 
     public prepare(modelPath: string): Promise<PreparedForestPart[]> {
         if (this.disposed) return Promise.reject(new Error("ForestSharedResources has been disposed"));
         let pending = this.models.get(modelPath);
         if (!pending) {
-            pending = loadModel(modelPath).then(({ scene, fixup }) => {
-                const meshes: Mesh[] = [];
-                scene.traverse(object => { if ((object as Mesh).isMesh) meshes.push(object as Mesh); });
-                const parts = meshes.map(mesh => {
-                    const geometry = mesh.geometry.clone();
-                    geometry.applyMatrix4(mesh.matrixWorld);
-                    geometry.applyMatrix4(fixup);
-                    this.geometries.add(geometry);
-                    return { geometry, material: mesh.material };
-                });
-                if (this.disposed) {
-                    for (const part of parts) part.geometry.dispose();
-                    throw new Error("ForestSharedResources was disposed while loading a model");
+            pending = this.modelAssets.acquire(modelPath).then(asset => {
+                try {
+                    const { scene, fixup } = asset.model;
+                    const meshes: Mesh[] = [];
+                    scene.traverse(object => { if ((object as Mesh).isMesh) meshes.push(object as Mesh); });
+                    const parts = meshes.map(mesh => {
+                        const geometry = mesh.geometry.clone();
+                        geometry.applyMatrix4(mesh.matrixWorld);
+                        geometry.applyMatrix4(fixup);
+                        this.geometries.add(geometry);
+                        return { geometry, material: mesh.material };
+                    });
+                    if (this.disposed) {
+                        for (const part of parts) {
+                            part.geometry.dispose();
+                            this.geometries.delete(part.geometry);
+                        }
+                        throw new Error("ForestSharedResources was disposed while loading a model");
+                    }
+                    this.assets.add(asset);
+                    return { parts, asset };
+                } catch (reason) {
+                    asset.release();
+                    throw reason;
                 }
-                return parts;
             }).catch(reason => {
                 this.models.delete(modelPath);
                 throw reason;
             });
             this.models.set(modelPath, pending);
         }
-        return pending;
+        return pending.then(model => model.parts);
     }
 
     public get preparedModelCount(): number {
@@ -172,6 +196,9 @@ export class ForestSharedResources {
         for (const geometry of this.geometries) geometry.dispose();
         this.geometries.clear();
         this.models.clear();
+        for (const asset of this.assets) asset.release();
+        this.assets.clear();
+        if (this.ownsModelAssets) this.modelAssets.dispose();
     }
 }
 
@@ -541,7 +568,7 @@ export async function createForest(
 
     const tileRanges = new Map<string, TileTreeRange>();
     const chunkRecords = new Map<string, ForestChunkRecord>();
-    const resources = sharedResources ?? new ForestSharedResources();
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets);
     let modelIndex = 0;
 
     for (const [modelPath, tiles] of tilesByModel) {

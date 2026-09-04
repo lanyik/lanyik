@@ -1,6 +1,6 @@
 import { wait } from "../helpers/helpers";
 import { setOptions } from "../helpers/setoptions";
-import { loadModel } from "../helpers/models";
+import { ModelAssetCache, ModelAssetLease } from "../helpers/models";
 
 import { Point } from "../interfaces";
 
@@ -37,6 +37,10 @@ export class Unit extends EventEmitter<UnitEventMap> {
     private pathFraction:number = 0;
     private pointsPath!:CurvePath<Vector3>;
     private movementToken = 0;
+    private modelRevision = 0;
+    private modelLease: ModelAssetLease | undefined;
+    private ownedModelAssets: ModelAssetCache | undefined;
+    private disposed = false;
     //Path currently being animated + the cell the model is nearest to right
     //now. moveTo() sets options.x/y to the *destination* immediately (so game
     //logic like "which tile holds this unit" is stable), which means position
@@ -74,41 +78,61 @@ export class Unit extends EventEmitter<UnitEventMap> {
         mapHeight: 0,
         wrapX: false,
         wrapY: false,
-        surface: undefined as WorldSurfaceAnchor | undefined
+        surface: undefined as WorldSurfaceAnchor | undefined,
+        modelAssets: undefined as ModelAssetCache | undefined
     };
 
     constructor(options:object = {}) {
         super();
         //Merge options with default options
         setOptions(this, options);
+        if (!this.options.modelAssets) {
+            this.ownedModelAssets = new ModelAssetCache();
+            this.options.modelAssets = this.ownedModelAssets;
+        }
     }
 
     public async setUnit():Promise<void> {
-        const { scene, animations, info, fixup } = await loadModel(this.options.type);
-        //Merge gameplay stats (movement/health/actions/...) from info.json with current options
-        setOptions(this, info);
+        if (this.disposed) throw new Error("Unit has been disposed");
+        const revision = ++this.modelRevision;
+        const asset = await this.options.modelAssets!.acquire(this.options.type);
+        if (this.disposed || revision !== this.modelRevision) {
+            asset.release();
+            return;
+        }
+        const { scene, animations, info, fixup } = asset.model;
+        try {
+            //Merge gameplay stats (movement/health/actions/...) from info.json with current options
+            setOptions(this, info);
 
-        //Model's own offset/rotation/scale fine-tuning (info.json) applies to a
-        //child, not this._unit itself - moveTo()/animation() drive this._unit's
-        //position/quaternion directly for path movement, so it must stay a plain
-        //placement transform (hex position only), not also carry the asset fixup.
-        const model = cloneSkeleton(scene);
-        model.applyMatrix4(fixup);
-        this.animationClips = animations;
-        this.animationMixer = animations.length > 0 ? new AnimationMixer(model) : undefined;
+            //Model's own offset/rotation/scale fine-tuning (info.json) applies to a
+            //child, not this._unit itself - moveTo()/animation() drive this._unit's
+            //position/quaternion directly for path movement, so it must stay a plain
+            //placement transform (hex position only), not also carry the asset fixup.
+            const model = cloneSkeleton(scene);
+            model.applyMatrix4(fixup);
+            this.releaseUnitModel();
+            this.modelLease = asset;
+            this.animationClips = animations;
+            this.animationMixer = animations.length > 0 ? new AnimationMixer(model) : undefined;
 
-        this._unit = new Object3D();
-        this._unit.add(model);
+            this._unit = new Object3D();
+            this._unit.add(model);
 
-        //Get center of hexagon
-        let position:Point = getHexCenter(this.options.x, this.options.y, this.options.size);
-        //Set 3D model center to current hexagon
-        this._unit.position.set(
-            position.x,
-            this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
-            position.y
-        );
-        if (!this.activate(UnitActions.idle) && animations.length > 0) this.playClip(animations[0]);
+            //Get center of hexagon
+            const position: Point = getHexCenter(this.options.x, this.options.y, this.options.size);
+            //Set 3D model center to current hexagon
+            this._unit.position.set(
+                position.x,
+                this.options.surface?.getWorldHeight(position.x, position.y) ?? 0,
+                position.y
+            );
+            if (!this.activate(UnitActions.idle) && animations.length > 0) this.playClip(animations[0]);
+        } catch (reason) {
+            if (this.modelLease === asset) this.releaseUnitModel();
+            else asset.release();
+            throw reason;
+        }
     }
     //----------------------------------------------------------------------------------------------------------
     //RETURN CURRENT 3D Object
@@ -307,19 +331,34 @@ export class Unit extends EventEmitter<UnitEventMap> {
     }
 
     public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.modelRevision += 1;
         this.needAnimate = false;
         this.movementToken += 1;
         this.movePath = null;
         this._viewCell = null;
+        this.releaseUnitModel();
+        this.ownedModelAssets?.dispose();
+        this.ownedModelAssets = undefined;
+        this.removeAllListeners();
+    }
+
+    private releaseUnitModel(): void {
         this._unit?.removeFromParent();
         if (this.animationMixer && this._unit?.children[0]) {
             this.animationMixer.stopAllAction();
             this.animationMixer.uncacheRoot(this._unit.children[0]);
         }
+        this._unit?.traverse(object => {
+            const skeleton = (object as Object3D & { skeleton?: { dispose(): void } }).skeleton;
+            skeleton?.dispose();
+        });
         this.animationMixer = undefined;
         this.animationAction = undefined;
         this.animationClips = [];
-        this.removeAllListeners();
+        this.modelLease?.release();
+        this.modelLease = undefined;
     }
 }
 

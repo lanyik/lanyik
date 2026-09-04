@@ -4,20 +4,30 @@ import { UnitActions } from "../../src/enums";
 import { createContinuousHexPath, Unit } from "../../src/objects/Unit";
 
 vi.mock("../../src/helpers/models", () => ({
-    loadModel: vi.fn(async () => ({
-        scene: new Group(),
-        animations: [
-            new AnimationClip(UnitActions.idle, 1, []),
-            new AnimationClip(UnitActions.walk, 1, [])
-        ],
-        info: {
-            offset: { x: 0, y: 0, z: 0 },
-            rotation: { x: 0, y: 0, z: 0 },
-            scale: 1,
-            actions: [UnitActions.idle, UnitActions.walk]
-        },
-        fixup: new Matrix4()
-    }))
+    ModelAssetCache: class {
+        public async acquire(path: string) {
+            return {
+                path,
+                model: {
+                    scene: new Group(),
+                    animations: [
+                        new AnimationClip(UnitActions.idle, 1, []),
+                        new AnimationClip(UnitActions.walk, 1, [])
+                    ],
+                    info: {
+                        offset: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: 1,
+                        actions: [UnitActions.idle, UnitActions.walk]
+                    },
+                    fixup: new Matrix4()
+                },
+                released: false,
+                release: () => true
+            };
+        }
+        public dispose() {}
+    }
 }));
 
 afterEach(() => vi.useRealTimers());

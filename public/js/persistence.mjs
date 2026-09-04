@@ -1022,6 +1022,7 @@ var MemoryWorldDeltaStore = class {
     this.disposed = false;
   }
   loadChunk(worldId, chunkX, chunkY, options) {
+    if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
     assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
     const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
     return Promise.resolve(delta ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options)) : void 0);
@@ -1073,7 +1074,9 @@ var MemoryWorldDeltaStore = class {
     for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
   }
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.chunks.clear();
   }
   cloneDelta(delta) {
     if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
@@ -1238,7 +1241,7 @@ var IndexedDbWorldDeltaStore = class extends MemoryWorldDeltaStore {
     if (this.disposed || this.closing) return;
     this.closing = true;
     void this.flush().finally(() => {
-      this.disposed = true;
+      super.dispose();
       void this.databasePromise?.then((database) => database.close(), () => void 0);
     }).catch(() => void 0);
   }
@@ -1392,7 +1395,9 @@ var MemoryCheckpointJournalStore = class {
     return Promise.resolve();
   }
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.journals.clear();
   }
 };
 var JOURNAL_DATABASE_VERSION = 1;
@@ -2127,7 +2132,10 @@ var MemoryGenerationCheckpointStore = class {
     return Promise.resolve(reclaimed);
   }
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.manifests.clear();
+    this.stages.clear();
   }
   assertActive() {
     if (this.disposed) throw new Error("GenerationCheckpointStore has been disposed");

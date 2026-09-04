@@ -345,6 +345,7 @@ window.getWorldDiagnostics = () => ({
     work: map.workStats,
     rendererMemory: map.renderer ? { ...map.renderer.info.memory } : undefined,
     renderer: map.renderer ? { ...map.renderer.info.render } : undefined,
+    modelAssets: map.modelAssetStats,
     rendererPixelRatio: map.renderer?.getPixelRatio(),
     renderBackend,
     worldMode: activeWorldMode ?? controls.worldMode,

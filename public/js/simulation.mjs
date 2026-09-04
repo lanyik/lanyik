@@ -57,7 +57,9 @@ var MemorySimulationChunkStore = class {
     return Promise.resolve();
   }
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.snapshots.clear();
   }
 };
 var SIMULATION_DATABASE_VERSION = 1;
