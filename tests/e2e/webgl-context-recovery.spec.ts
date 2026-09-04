@@ -61,21 +61,6 @@ test("recovers repeatedly from real WebGL context loss with bounded resources", 
         }, { restores: cycle, generation: (baseline.webglContext?.generation ?? 1) + cycle });
     }
 
-    // Context readiness guarantees that rendering has resumed, not that all
-    // resumed source work has already settled. Observe the coordinator's real
-    // quiescent state before applying the final leak/resource assertions.
-    await page.waitForFunction(() => {
-        const state = (window as unknown as {
-            getWorldDiagnostics(): {
-                webglContext?: { state: string };
-                work?: { pendingTasks: number; busyTasks: number };
-            };
-        }).getWorldDiagnostics();
-        return state.webglContext?.state === "ready"
-            && state.work?.pendingTasks === 0
-            && state.work.busyTasks === 0;
-    });
-
     const result = await page.evaluate(() => (window as unknown as {
         getWorldDiagnostics(): {
             rendererMemory?: { geometries: number; textures: number };

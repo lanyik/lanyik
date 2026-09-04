@@ -1,9 +1,6 @@
 import { MapInfo, TileInfo } from "../interfaces";
 import { Land } from "../enums";
-import {
-    getNeighborCoords,
-    NeighborDirection
-} from "./neighbors";
+import { getNeighborCoords, NeighborDirection } from "./neighbors";
 import { getMapTile } from "./topology";
 
 //----------------------------------------------------------------------------------
@@ -18,8 +15,8 @@ import { getMapTile } from "./topology";
 //  tiles are fully open (the water just continues), edges to river tiles stay
 //  shored but get a channel-shaped opening so the river visibly flows in/out.
 //
-//Connectivity is derived from neighboring map data, so map authors only mark
-//tiles; there is no separate connection mask to keep in sync.
+//Connectivity is derived here from the map data alone, so map authors only mark
+//tiles - there is no separate river-path/lake-outline data to keep in sync.
 //
 //Everything a tile needs is packed into ONE float instanced attribute (see
 //waterEdgeValue() below and its decoding mirror in the shaders):
@@ -73,7 +70,7 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
         return LAKE_FLAG + openMask * 64 + channelMask;
     }
 
-    if (tile && isRiverTile(tile)) {
+    if (isRiverTile(tile)) {
         let mask = 0;
         MASK_DIRECTIONS.forEach((direction, bit) => {
             const n = getNeighborCoords(x, y, direction);
@@ -89,7 +86,7 @@ export function waterEdgeValue(map: MapInfo, x: number, y: number): number {
 
 export function riverSeaMouthEdgeValue(map: MapInfo, x: number, y: number): number {
     const tile = getMapTile(map, x, y);
-    if (!tile || !isRiverTile(tile)) return 0;
+    if (!isRiverTile(tile)) return 0;
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {
@@ -102,7 +99,7 @@ export function riverSeaMouthEdgeValue(map: MapInfo, x: number, y: number): numb
 
 export function riverLakeMouthEdgeValue(map: MapInfo, x: number, y: number): number {
     const tile = getMapTile(map, x, y);
-    if (!tile || !isRiverTile(tile)) return 0;
+    if (!isRiverTile(tile)) return 0;
 
     let mask = 0;
     MASK_DIRECTIONS.forEach((direction, bit) => {

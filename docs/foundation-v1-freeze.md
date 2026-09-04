@@ -98,8 +98,7 @@ non-chunk unit/building/effect owners use `HexMap.createResourceAccount()`.
 are paused. Restore resets renderer state and GPU queries, invalidates managed
 geometry/material/texture uploads, resumes scheduling, and republishes context
 generation diagnostics. Browser acceptance performs ten real loss/restore
-cycles, waits for resumed work to reach the coordinator's observable idle
-state, and asserts that rendering resumes while geometry, texture, query, and
+cycles and asserts that rendering resumes while geometry, texture, query, and
 work-queue counts remain bounded.
 
 ## Freeze gate

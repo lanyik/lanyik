@@ -1,9 +1,4 @@
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
-import {
-    assertInfiniteWaterCurveProfile,
-    INFINITE_WATER_CURVE_REFERENCE_PROFILE,
-    type InfiniteWaterCurveProfile
-} from "./InfiniteWaterCurveField";
 
 export interface WorldNoiseFieldProfile {
     readonly salt: number;
@@ -26,6 +21,7 @@ export interface WorldStyleProfile {
         readonly moisture: WorldNoiseFieldProfile;
         readonly temperature: WorldNoiseFieldProfile;
         readonly forestPatch: WorldNoiseFieldProfile;
+        readonly lakePatch: WorldNoiseFieldProfile;
         readonly openWarpAmplitude: number;
         readonly toroidalWarpAmplitude: number;
         readonly continentWeight: number;
@@ -48,6 +44,8 @@ export interface WorldStyleProfile {
         readonly temperatureElevationStart: number;
         readonly temperatureElevationWeight: number;
         readonly temperatureLatitudeNoiseWeight: number;
+        readonly boundedEdgePower: number;
+        readonly boundedEdgeFalloff: number;
     };
     readonly terrain: {
         readonly seaLevel: number;
@@ -103,11 +101,19 @@ export interface WorldStyleProfile {
         readonly palmTemperature: number;
         readonly piniaTemperature: number;
     };
-    readonly rivers: {
-        readonly pageSize: number;
-        readonly maximumCachedPages: number;
-        readonly toroidalReferenceSize: number;
-        readonly curve: InfiniteWaterCurveProfile;
+    readonly lakes: {
+        readonly minimumElevation: number;
+        readonly maximumElevation: number;
+        readonly minimumMoisture: number;
+        readonly fullMoisture: number;
+        readonly valleyStart: number;
+        readonly valleyFull: number;
+        readonly patchStart: number;
+        readonly patchFull: number;
+        readonly minimumPotential: number;
+        readonly minimumNeighbors: number;
+        readonly placementScale: number;
+        readonly placementSalt: number;
     };
 }
 
@@ -125,7 +131,7 @@ const field = (
     minimumToroidalCells
 });
 
-// Generator v11 owns one frozen macro-style profile. Any semantic change to
+// Generator v5 owns one frozen macro-style profile. Any semantic change to
 // these values must move the generator version and its checksum baselines.
 export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,
@@ -140,6 +146,7 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         moisture: field(0xc8013ea4, 0.08, 0.08, 4, 2),
         temperature: field(0xad90777d, 0.035, 0.035, 3, 2),
         forestPatch: field(0x4cf5ad43, 0.026, 0.026, 3, 2),
+        lakePatch: field(0x165667b1, 0.021, 0.021, 3, 2),
         openWarpAmplitude: 15,
         toroidalWarpAmplitude: 0.12,
         continentWeight: 0.72,
@@ -161,7 +168,9 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         temperatureLatitudeWeight: 0.82,
         temperatureElevationStart: 0.55,
         temperatureElevationWeight: 0.8,
-        temperatureLatitudeNoiseWeight: 0.18
+        temperatureLatitudeNoiseWeight: 0.18,
+        boundedEdgePower: 3,
+        boundedEdgeFalloff: 0.58
     }),
     terrain: Object.freeze({
         seaLevel: 0.43,
@@ -217,11 +226,19 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         palmTemperature: 0.67,
         piniaTemperature: 0.4
     }),
-    rivers: Object.freeze({
-        pageSize: 32,
-        maximumCachedPages: 16,
-        toroidalReferenceSize: 512,
-        curve: INFINITE_WATER_CURVE_REFERENCE_PROFILE
+    lakes: Object.freeze({
+        minimumElevation: 0.455,
+        maximumElevation: 0.63,
+        minimumMoisture: 0.56,
+        fullMoisture: 0.8,
+        valleyStart: 0.03,
+        valleyFull: 0.35,
+        patchStart: 0.4,
+        patchFull: 0.72,
+        minimumPotential: 0.18,
+        minimumNeighbors: 1,
+        placementScale: 0.65,
+        placementSalt: 0x6c8e9cf5
     })
 });
 
@@ -264,14 +281,13 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     if (profile.generatorVersion !== WORLD_GENERATOR_VERSION) {
         throw new RangeError("world style profile generatorVersion is unsupported");
     }
-    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation
-        || !profile.rivers) {
+    if (!profile.fields || !profile.terrain || !profile.relief || !profile.vegetation || !profile.lakes) {
         throw new TypeError("world style profile groups are required");
     }
     assertFiniteNumbers(profile as object, "");
     const noiseFieldNames = [
         "warpX", "warpY", "continent", "detail", "ridge",
-        "valley", "roughness", "moisture", "temperature", "forestPatch"
+        "valley", "roughness", "moisture", "temperature", "forestPatch", "lakePatch"
     ] as const;
     for (const name of noiseFieldNames) {
         const candidate = profile.fields[name];
@@ -294,7 +310,7 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
         "ridgeWeight", "valleyWeight", "moistureNoiseWeight", "moistureValleyWeight",
         "moistureRidgeWeight", "temperatureNoiseMinimum", "temperatureNoiseWeight",
         "temperatureLatitudeWeight", "temperatureElevationStart", "temperatureElevationWeight",
-        "temperatureLatitudeNoiseWeight"
+        "temperatureLatitudeNoiseWeight", "boundedEdgeFalloff"
     ] as const;
     for (const name of nonNegativeFieldNames) nonNegative(`fields.${name}`, profile.fields[name]);
     finite("fields.elevationBias", profile.fields.elevationBias);
@@ -308,6 +324,7 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     }
     positive("fields.ridgeExponent", profile.fields.ridgeExponent);
     positive("fields.valleyExponent", profile.fields.valleyExponent);
+    positive("fields.boundedEdgePower", profile.fields.boundedEdgePower);
     const terrain = profile.terrain;
     const terrainNames = [
         "seaLevel", "mountainElevation", "mountainRidge", "mountainPeakElevation",
@@ -351,6 +368,27 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
         || relief.staticMountain > relief.mountainMaximum) {
         throw new RangeError("static relief heights must stay inside their terrain ranges");
     }
+    const lakes = profile.lakes;
+    unitInterval("lakes.minimumElevation", lakes.minimumElevation);
+    unitInterval("lakes.maximumElevation", lakes.maximumElevation);
+    unitInterval("lakes.minimumMoisture", lakes.minimumMoisture);
+    unitInterval("lakes.fullMoisture", lakes.fullMoisture);
+    unitInterval("lakes.valleyStart", lakes.valleyStart);
+    unitInterval("lakes.valleyFull", lakes.valleyFull);
+    unitInterval("lakes.patchStart", lakes.patchStart);
+    unitInterval("lakes.patchFull", lakes.patchFull);
+    unitInterval("lakes.minimumPotential", lakes.minimumPotential);
+    unitInterval("lakes.placementScale", lakes.placementScale);
+    if (!Number.isInteger(lakes.minimumNeighbors) || lakes.minimumNeighbors < 1 || lakes.minimumNeighbors > 6) {
+        throw new RangeError("lakes.minimumNeighbors must be an integer between 1 and 6");
+    }
+    if (!(finite("lakes.minimumElevation", lakes.minimumElevation)
+        < finite("lakes.maximumElevation", lakes.maximumElevation))
+        || !(lakes.minimumMoisture < lakes.fullMoisture)
+        || !(lakes.valleyStart < lakes.valleyFull)
+        || !(lakes.patchStart < lakes.patchFull)) {
+        throw new RangeError("lake thresholds must be ordered");
+    }
     unitInterval("vegetation.moistureStart", profile.vegetation.moistureStart);
     unitInterval("vegetation.moistureFull", profile.vegetation.moistureFull);
     unitInterval("vegetation.maximumDensity", profile.vegetation.maximumDensity);
@@ -385,16 +423,10 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     if (!(profile.vegetation.piniaTemperature < profile.vegetation.palmTemperature)) {
         throw new RangeError("vegetation temperature thresholds must be ordered");
     }
-    if (!Number.isSafeInteger(profile.vegetation.placementSalt)) {
-        throw new RangeError("world style vegetation placement salt must be a safe integer");
+    if (!Number.isSafeInteger(profile.vegetation.placementSalt)
+        || !Number.isSafeInteger(profile.lakes.placementSalt)) {
+        throw new RangeError("world style placement salts must be safe integers");
     }
-    const rivers = profile.rivers;
-    for (const name of ["pageSize", "maximumCachedPages", "toroidalReferenceSize"] as const) {
-        if (!Number.isInteger(rivers[name]) || rivers[name] <= 0) {
-            throw new RangeError(`rivers.${name} must be a positive integer`);
-        }
-    }
-    assertInfiniteWaterCurveProfile(rivers.curve);
 }
 
 assertWorldStyleProfile(WORLD_STYLE_PROFILE);

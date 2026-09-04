@@ -15,7 +15,7 @@ cities, rivers, units and wrap topology, while streaming only visual layers.
 tile view and a bounded worker pool. The former is fixed by seed plus dimensions
 and samples periodic noise at its seams; the latter is fixed by seed alone and
 has no logical edge. Their `MapInfo.data` remains empty: `tileAt()` decodes only the small
-set of distinct 8-bit tile variants that are actually read. Both sources reach
+set of distinct 16-bit tile variants that are actually read. Both sources reach
 the renderer through the same callbacks.
 
 For each resident render chunk, `WorldChunkScheduler` performs this lifecycle:
@@ -209,7 +209,7 @@ For the built-in procedural source:
 1. `WorldStreamer` derives camera-near chunks and asks
    `ProceduralWorldSource` for them by distance priority.
 2. `ProceduralWorldSource` submits work to `WorldGeneratorPool`.
-3. Each worker returns a single transferred `Uint8Array`: one packed value per
+3. Each worker returns a single transferred `Uint16Array`: one packed value per
    tile plus a one-cell halo. Generation samples global coordinates, so worker
    count, completion order and negative chunk coordinates cannot change terrain
    or create a coast seam.
@@ -446,13 +446,6 @@ world while omitting texture and mesh detail. Static sources rasterize their
 owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
 Worker request/response addition is protocol v3 and transfers the pixel buffer
 instead of cloning it.
-
-Procedural base color still uses one surface sample per output pixel. Generated
-waterways use a separate sparse coverage pass: only source curves capable of
-reaching the requested page are enumerated, and any sampled water hex crossing
-a pixel footprint marks that cartographic pixel as water. This keeps one-cell
-courses connected when 4–8 hexes collapse into one overview pixel without
-performing a full tile-resolution scan of a 1024×1024 page.
 
 `HexMap` emits `loadstart` after validating the incoming source and before it
 closes the previous render-world session. `WorldMinimap` uses that boundary to

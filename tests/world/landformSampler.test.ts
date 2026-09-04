@@ -37,19 +37,24 @@ describe("LandformSampler", () => {
         }
     });
 
-    test("does not retain the legacy bounded-world ocean-edge depression", () => {
+    test("keeps bounded-world edges below the interior continent", () => {
         const width = 64;
         const height = 48;
-        const bounded = createLandformSampler({
+        const sampler = createLandformSampler({
             seed: "island-falloff",
             domain: { topology: "bounded", width, height }
         });
-        const open = createLandformSampler({ seed: "island-falloff" });
+        const edges: number[] = [];
+        const interior: number[] = [];
         for (let x = 0; x < width; x += 1) {
             for (let y = 0; y < height; y += 1) {
-                expect(bounded.sample(x, y).elevation).toBeCloseTo(open.sample(x, y).elevation, 12);
+                const elevation = sampler.sample(x, y).elevation;
+                if (x === 0 || y === 0 || x === width - 1 || y === height - 1) edges.push(elevation);
+                if (x >= 20 && x < 44 && y >= 15 && y < 33) interior.push(elevation);
             }
         }
+        const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+        expect(average(interior) - average(edges)).toBeGreaterThan(0.25);
     });
 
     test("ridge strength creates elevated chains rather than uncorrelated peaks", () => {
@@ -84,11 +89,9 @@ describe("LandformSampler", () => {
                         const sample = sampler.sample(x, y);
                         const expectedMountain = (sample.elevation > 0.7 && sample.ridge > 0.2)
                             || sample.elevation > 0.82;
-                        const generatedType = decodeWorldChunkTile(chunk, localX, localY).type;
-                        const generatedMountain = generatedType === Land.mountain;
-                        if (generatedType !== Land.sea && generatedType !== Land.coastal) {
-                            expect(generatedMountain).toBe(expectedMountain);
-                        }
+                        const generatedMountain = decodeWorldChunkTile(chunk, localX, localY).type
+                            === Land.mountain;
+                        expect(generatedMountain).toBe(expectedMountain);
                         if (generatedMountain) mountains += 1;
                     }
                 }

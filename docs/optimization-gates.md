@@ -58,19 +58,17 @@ the trigger expression from `measurements`; a prose assertion or an unrelated
 file cannot advance the state. Approval additionally requires a repository-
 local decision record.
 
-## Current gated work
+## Current deferred work
 
 - [WebGPU/GPU culling](./render-backend-evaluation.md) uses the repeatable CPU
   crossover benchmark as a baseline, but requires a representative physical-
   hardware browser trace for frame, submission, draw-call and overdraw gates.
-- [Automatic river generation](./world-style-generation-v1.md) was approved on
-  2026-09-03 by the explicit infinite-world generated-water requirement. The
-  current [v11 decision](./decisions/sampled-water-only-v11.md) makes the shared
-  infinite curve/polyline and basin field the sole procedural water source,
-  removes the prior continental-ocean and generated-lake paths, and keeps
-  terrain identity independent of chunk size. The v7 local-drainage, v8
-  channel-modifier, v9 thin-ribbon and v10 combined-water decisions are retained
-  only as superseded records.
+- [Automatic river generation](./world-style-generation-v1.md) uses the fixed
+  world-style corpus. Reopening hydrology requires either a concrete gameplay
+  dependency on a navigable/editable river network, or the same documented
+  defect across at least three samples, two topology groups and two consecutive
+  fixed-corpus runs. Both paths still require deterministic continuity and
+  budget contracts before approval.
 
 Adding a new deferred optimization means adding one register entry, an owner
 marker and a reproducible measurement command. Keep speculative implementation

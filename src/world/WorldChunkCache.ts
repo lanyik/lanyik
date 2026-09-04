@@ -117,7 +117,7 @@ export class IndexedDbWorldChunkCache implements WorldChunkCache {
                 chunkSize: record.chunkSize,
                 padding: record.padding as PackedWorldChunk["padding"],
                 stride: record.stride,
-                tiles: new Uint8Array(record.tiles.slice(0))
+                tiles: new Uint16Array(record.tiles.slice(0))
             };
             assertPackedWorldChunk(chunk);
             this.snapshot.hits += 1;

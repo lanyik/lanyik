@@ -29,8 +29,8 @@ describe("world style gallery metrics", () => {
             expect(metrics.mountains.tiles).toBeLessThanOrEqual(sample.width * sample.height);
             expect(metrics.forests.adjacencyRatio).toBeGreaterThanOrEqual(0);
             expect(metrics.forests.adjacencyRatio).toBeLessThanOrEqual(1);
-            expect(metrics.water.connectedRatio).toBeGreaterThanOrEqual(0);
-            expect(metrics.water.connectedRatio).toBeLessThanOrEqual(1);
+            expect(metrics.lakes.singleCellRatio).toBeGreaterThanOrEqual(0);
+            expect(metrics.lakes.singleCellRatio).toBeLessThanOrEqual(1);
         }
     );
 });

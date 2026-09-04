@@ -8,7 +8,7 @@ import {
 
 export const DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 export const MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
-export const WORLD_CHUNK_FORMAT_VERSION = 3;
+export const WORLD_CHUNK_FORMAT_VERSION = 1;
 export const WORLD_CHUNK_PADDING = 1;
 export { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
 
@@ -26,32 +26,7 @@ export interface WorldChunkGenerationOptions {
     world?: BoundedWorldChunkGeneration;
 }
 
-// The direct synchronous API is commonly called once per neighboring chunk.
-// Retaining only its most recent exact resolver avoids rebuilding the same
-// bounded water mask for every call while keeping residency independent of the
-// number of seeds/worlds visited. Workers own an equivalent resolver per active
-// descriptor in generateWorld.worker.ts.
-let recentChunkResolver: WorldSurfaceResolver | undefined;
-
-function resolverMatchesOptions(
-    resolver: WorldSurfaceResolver,
-    options: WorldChunkGenerationOptions
-): boolean {
-    if (resolver.seed !== String(options.seed)) return false;
-    if (!options.world) return resolver.domain.topology === "infinite";
-    return resolver.domain.topology === "toroidal"
-        && resolver.domain.width === options.world.width
-        && resolver.domain.height === options.world.height;
-}
-
-function resolverForSynchronousGeneration(options: WorldChunkGenerationOptions): WorldSurfaceResolver {
-    if (!recentChunkResolver || !resolverMatchesOptions(recentChunkResolver, options)) {
-        recentChunkResolver = createWorldChunkSurfaceResolver(options);
-    }
-    return recentChunkResolver;
-}
-
-//One Uint8 per tile keeps worker transfer and CPU cache compact. Bit layout:
+//One Uint16 per tile keeps worker transfer and CPU cache compact. Bit layout:
 //0..2 terrain, 3 hill, 4 wood, 5 lake, 6..7 tree species.
 export interface PackedWorldChunk {
     version: typeof WORLD_CHUNK_FORMAT_VERSION;
@@ -60,7 +35,7 @@ export interface PackedWorldChunk {
     chunkSize: number;
     padding: typeof WORLD_CHUNK_PADDING;
     stride: number;
-    tiles: Uint8Array;
+    tiles: Uint16Array;
 }
 
 //Packed terrain variants remain shared and immutable. Applications can attach
@@ -152,7 +127,7 @@ export function assertPackedWorldChunk(chunk: PackedWorldChunk): void {
         || chunk.chunkSize > MAX_WORLD_GENERATION_CHUNK_SIZE
         || chunk.padding !== WORLD_CHUNK_PADDING
         || chunk.stride !== chunk.chunkSize + chunk.padding * 2
-        || !(chunk.tiles instanceof Uint8Array)
+        || !(chunk.tiles instanceof Uint16Array)
         || chunk.tiles.length !== chunk.stride * chunk.stride) {
         throw new TypeError("packed world chunk payload is invalid");
     }
@@ -211,7 +186,7 @@ export function generateWorldChunk(options: WorldChunkGenerationOptions): Packed
     assertChunkCoordinate("chunkY", options.chunkY);
     validateBoundedWorld(options.world);
     const chunkSize = resolveChunkSize(options.chunkSize);
-    const resolver = resolverForSynchronousGeneration(options);
+    const resolver = createWorldChunkSurfaceResolver(options);
     return generateWorldChunkWithResolver(options, resolver, chunkSize);
 }
 
@@ -236,7 +211,7 @@ export function generateWorldChunkWithResolver(
     validateBoundedWorld(options.world);
     const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
     const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-    const tiles = new Uint8Array(stride * stride);
+    const tiles = new Uint16Array(stride * stride);
     const expectedDomain = options.world
         ? { topology: "toroidal" as const, width: options.world.width, height: options.world.height }
         : { topology: "infinite" as const };

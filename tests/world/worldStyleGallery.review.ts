@@ -6,7 +6,7 @@ import {
     WorldStyleGalleryMetrics
 } from "../helpers/worldStyleGallery";
 
-describe("world style v11 full gallery review", () => {
+describe("world style v5 full gallery review", () => {
     test("records the fixed corpus and rejects topology or regional-noise regressions", () => {
         const report: WorldStyleGalleryMetrics[] = WORLD_STYLE_GALLERY_SAMPLES
             .map(sample => analyzeWorldStyleGallerySample(sample));
@@ -19,15 +19,10 @@ describe("world style v11 full gallery review", () => {
         if (environment.process?.env?.WORLD_STYLE_SUMMARY === "1") {
             console.log(`WORLD_STYLE_SUMMARY=${JSON.stringify(report.map(metrics => ({
                 id: metrics.id,
-                mountain: metrics.ratios.mountain,
                 forest: metrics.ratios.forest,
                 forestAdjacency: metrics.forests.adjacencyRatio,
                 isolatedForest: metrics.forests.isolatedRatio,
-                largestForest: metrics.forests.maximumSize,
-                water: metrics.ratios.water,
-                waterConnected: metrics.water.connectedRatio,
-                isolatedWater: metrics.water.isolatedRatio,
-                largestWater: metrics.water.maximumSize
+                largestForest: metrics.forests.maximumSize
             })))}`);
         }
 
@@ -42,35 +37,15 @@ describe("world style v11 full gallery review", () => {
             if (metrics.mountains.tiles >= 32) {
                 expect(metrics.mountains.isolatedRatio, `${sample.id} isolated mountains`).toBeLessThan(0.2);
             }
-            if (metrics.water.tiles >= 16) {
-                expect(metrics.water.connectedRatio, `${sample.id} connected sampled water`)
-                    .toBeGreaterThan(0.97);
-                // A sampled window can clip a valid chain at its boundary, so
-                // adjacency is the hard per-tile invariant. Keep the sampled-
-                // water component diagnostic deliberately broader.
-                // A clipped single waterway or basin cell can be isolated inside the
-                // water-only component graph.
-                expect(metrics.water.isolatedRatio, `${sample.id} isolated sampled water`)
-                    .toBeLessThan(0.16);
-                expect(metrics.water.maximumSize, `${sample.id} sampled-water component size`)
-                    .toBeGreaterThanOrEqual(7);
-                if (sample.group === "toroidal-512") {
-                    expect(metrics.water.maximumSize, `${sample.id} macro water network`)
-                        .toBeGreaterThanOrEqual(50);
-                } else if (sample.group === "infinite-window" && metrics.water.tiles >= 32) {
-                    expect(metrics.water.maximumSize, `${sample.id} macro water network`)
-                        .toBeGreaterThanOrEqual(12);
-                } else if (sample.group === "bounded" && metrics.water.tiles >= 32) {
-                    expect(metrics.water.maximumSize, `${sample.id} macro water network`)
-                        .toBeGreaterThanOrEqual(14);
-                }
+            if (metrics.lakes.tiles >= 16) {
+                expect(metrics.lakes.singleCellRatio, `${sample.id} single-cell lakes`).toBeLessThan(0.15);
             }
             const expected = sample.group === "bounded"
-                ? { water: [0.04, 0.45], mountain: [0, 0.2], forest: [0.045, 0.13] }
+                ? { water: [0.6, 0.92], mountain: [0, 0.08], forest: [0.002, 0.08] }
                 : sample.group === "toroidal-512"
-                    ? { water: [0.07, 0.19], mountain: [0.06, 0.18], forest: [0.05, 0.095] }
+                    ? { water: [0.25, 0.5], mountain: [0.06, 0.18], forest: [0.025, 0.08] }
                     : sample.group === "infinite-window"
-                        ? { water: [0.01, 0.21], mountain: [0.05, 0.25], forest: [0.045, 0.21] }
+                        ? { water: [0.22, 0.55], mountain: [0.05, 0.25], forest: [0.025, 0.18] }
                         : undefined;
             if (expected) {
                 for (const [name, value, range] of [
@@ -86,8 +61,8 @@ describe("world style v11 full gallery review", () => {
 
         const waterStress = report.find(sample => sample.id === "stress-water")!;
         const highlandStress = report.find(sample => sample.id === "stress-highland")!;
-        expect(waterStress.ratios.water).toBeGreaterThan(0.3);
-        expect(highlandStress.ratios.mountain).toBeGreaterThan(0.26);
+        expect(waterStress.ratios.water).toBeGreaterThan(0.85);
+        expect(highlandStress.ratios.mountain).toBeGreaterThan(0.3);
 
     });
 });

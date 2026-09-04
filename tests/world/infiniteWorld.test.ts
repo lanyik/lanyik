@@ -39,7 +39,6 @@ import {
     WorldVegetationGenerationOptions,
     WorldVegetationLayout
 } from "../../src/world/generateVegetation";
-import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 
 const infiniteWorldId = (seed: string, chunkSize = 12): string =>
     serializeWorldDescriptor(createWorldDescriptor({ seed, chunkSize }));
@@ -216,44 +215,9 @@ describe("deterministic infinite world chunks", () => {
         const first = generateWorldChunk({ seed: "endless", chunkX: -3, chunkY: 7, chunkSize: 12 });
         const second = generateWorldChunk({ seed: "endless", chunkX: -3, chunkY: 7, chunkSize: 12 });
         expect(second.tiles).toEqual(first.tiles);
-        expect(first.tiles.byteLength).toBe((12 + 2) ** 2);
+        expect(first.tiles.byteLength).toBe((12 + 2) ** 2 * 2);
         expect(() => decodeWorldChunkTile(first, -1, -1)).not.toThrow();
         expect(() => decodeWorldChunkTile(first, 12, 12)).not.toThrow();
-    });
-
-    test("packs generated curve and basin water as ordinary hex terrain", () => {
-        const seed = "surface-v7-infinite";
-        const chunk = generateWorldChunk({
-            seed, chunkX: -1, chunkY: 0, chunkSize: 24
-        });
-        const resolver = createWorldSurfaceResolver({ seed, domain: { topology: "infinite" } });
-        let sampledWater = 0;
-        for (let x = -1; x <= chunk.chunkSize; x += 1) {
-            for (let y = -1; y <= chunk.chunkSize; y += 1) {
-                const tile = decodeWorldChunkTile(chunk, x, y);
-                const worldX = -chunk.chunkSize + x;
-                const worldY = y;
-                const base = resolver.sampleGenerated(worldX, worldY).baseTerrain;
-                expect(base).not.toBe(Land.sea);
-                expect(base).not.toBe(Land.coastal);
-                if (tile.type !== Land.sea && tile.type !== Land.coastal) continue;
-                sampledWater += 1;
-                expect(tile.modifiers ?? []).not.toContain("river");
-                expect(tile.modifiers ?? []).not.toContain("lake");
-            }
-        }
-        expect(sampledWater).toBeGreaterThan(0);
-    });
-
-    test("keeps generated terrain independent of source chunk granularity", () => {
-        const seed = "chunk-independent-water";
-        const regular = generateWorldChunk({ seed, chunkX: 0, chunkY: 0, chunkSize: 24 });
-        const large = generateWorldChunk({ seed, chunkX: 0, chunkY: 0, chunkSize: 48 });
-        for (let x = -1; x <= 24; x += 1) {
-            for (let y = -1; y <= 24; y += 1) {
-                expect(decodeWorldChunkTile(large, x, y)).toEqual(decodeWorldChunkTile(regular, x, y));
-            }
-        }
     });
 
     test("adjacent chunks agree exactly across their halo", () => {
@@ -400,7 +364,7 @@ describe("deterministic infinite world chunks", () => {
     test("rejects malformed transferred payloads before installing sparse data", () => {
         const store = new SparseWorldChunkStore();
         const chunk = generateWorldChunk({ seed: 1, chunkX: 0, chunkY: 0, chunkSize: 12 });
-        expect(() => store.add({ ...chunk, tiles: new Uint16Array(1) } as never)).toThrow(/payload is invalid/);
+        expect(() => store.add({ ...chunk, tiles: new Uint16Array(1) })).toThrow(/payload is invalid/);
         expect(store.residentChunkCount).toBe(0);
     });
 });

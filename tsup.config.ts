@@ -16,7 +16,6 @@ export default defineConfig({
         "persistence": "src/persistence.ts",
         "pathfinding": "src/pathfinding.ts",
         "simulation": "src/simulation.ts",
-        "infinite-water-curve-field": "src/world/InfiniteWaterCurveField.ts",
         "world-generator.worker": "src/world/generateWorld.worker.ts"
     },
     format: ["esm", "cjs"],

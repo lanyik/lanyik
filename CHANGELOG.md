@@ -9,29 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Generator v10 carved sea basins. The inspector's deterministic Poisson-spaced,
-  rotated harmonic basins now come from the shared water field and are sampled
-  into authoritative `sea`/`coastal` hex terrain for bounded, toroidal and
-  infinite worlds. Basin queries remain finite, page-local and independent of
-  runtime chunk size.
-- Generator v9 curve-sampled hex water terrain. The production generator and
-  visual inspector now share one bounds-queryable infinite curve/polyline
-  field; world generation rasterizes path radius through axial coordinates
-  into connected `sea`/`coastal` hex cells instead of cutting a river channel
-  into land. Infinite/bounded worlds use a bounded 32x32-page LRU; toroidal
-  worlds wrap one canonical domain-scaled feature set. Procedural overview
-  pages aggregate every sampled water cell crossing their pixel footprints,
-  preserving the macro network at wide minimap scales. The obsolete generated
-  `riverEdges` mask was removed, and packed Worker chunks now use one-byte v3
-  payloads. The curve field is also published as the optional
-  `three-hex-map/infinite-water-curve-field` package subpath.
-- An infinite water-field visual inspector with clustered multi-scale curve
-  families, independently seeded origins and cumulative turning, deterministic
-  tributaries, and Poisson-spaced irregular sea basins spanning many chunks
-  without merging into unbounded water walls. Hard basin-radius and center-gap
-  constraints preserve land corridors; view-local adaptive sampling,
-  chunk/hex/sample diagnostics, and browser coverage verify distant queries,
-  direction diversity, bounded coastlines and seed reproducibility.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.
@@ -82,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   draw-call, triangle, visible/resident chunk and LOD counters.
 - Dedicated browser Worker build and `WorldGeneratorClient` for non-blocking
   procedural generation. Supported world dimensions now extend to 512×512.
-- Deterministic infinite-world chunks with a compact 8-bit v3 tile format, halo
+- Deterministic infinite-world chunks with a compact 16-bit tile format, halo
   cells for seamless borders, a prioritized multi-Worker pool, sparse
   reference-counted residency, camera-driven loading and floating-origin
   rebasing through `ProceduralWorldSource` and `HexMap.loadWorld()`.
@@ -103,16 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Generator v11 now treats the shared curve/basin sampler as the only
-  procedural water authority. Elevation no longer creates continental ocean,
-  bounded worlds no longer force an ocean-edge depression, and the unused
-  lake-patch field, lake-potential output and generated `lake` placement path
-  are removed. Static maps and sparse edits retain authored sea/coast/lake
-  rendering semantics.
-- Generated waterway radii now use multi-cell, chunk-legible width bands with
-  a family minimum for both main paths and branches. Major paths can occupy a
-  visible fraction of a source chunk while world identity remains independent
-  of the configured source-chunk size. Generator identity advances to v10.
 - Deferred WebGPU/GPU-culling and automatic-river work now has a machine-checked
   decision register with explicit triggers, structured evidence and approval
   states; the render crossover benchmark reports five-sample median timing.
