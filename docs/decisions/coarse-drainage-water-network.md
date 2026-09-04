@@ -1,6 +1,6 @@
 # Coarse-drainage water network
 
-Status: implemented and visually refined on 2026-09-04.
+Status: implemented and categorical bank rasterization refined on 2026-09-05.
 
 ## Context
 
@@ -37,11 +37,20 @@ that meet share the same downstream path. The number of source courses crossing
 a point is the flow proxy: normal reaches rasterize to a three-hex diameter and
 high-flow reaches to five.
 
-Warped coarse edges are rasterized with hex-line interpolation. Generated river
-tiles use the existing `sea`/`coastal` tile types, so water rendering,
-coastline geometry, traversal rules, chunk encoding and sparse overrides need
-no new format. Random generated lakes are removed. Authored `lake` and `river`
-modifiers remain valid and unchanged.
+Warped coarse edges are rasterized against the renderer's even-column offset
+grid. Each reach is treated as an ideal constant-width capsule in rendered
+world space; a complete hex becomes water exactly when its centre falls inside
+that capsule. The one-cell centreline remains connected. This replaces the old
+union of graph-distance hex disks, whose coordinate parity disagreed with the
+render grid and whose overlapping polygonal dilation created avoidable bank
+protrusions. Ambiguous outer cells are decided geometrically, never randomly.
+
+Generated river tiles still use the existing `sea`/`coastal` tile types, so
+generation and gameplay classify every tile wholly as water or land; the
+existing narrow shore-material transition does not change tile ownership.
+Traversal, chunk encoding and sparse overrides need no new format. Random
+generated lakes are removed. Authored `lake` and `river` modifiers remain
+valid and unchanged.
 
 ## Identity and bounded state
 
@@ -55,7 +64,9 @@ modifiers remain valid and unchanged.
 - Toroidal domains enumerate canonical sources once and build one
   `width × height` bit mask. All reads normalize coordinates before indexing.
 - Failed inland paths are discarded rather than converted into random ponds.
-- The generator identity and golden checksums change; packed chunks,
+- Generator v14 corrects the river raster coordinate parity and adopts
+  centre-sampled world-space capsules. Its identity and golden checksums
+  change; packed chunks,
   descriptors and worker protocol formats do not.
 
 ## Overview path and budget
@@ -85,6 +96,9 @@ direct overview, with 1,527 visible river pixels versus the previous 959.
   the reported noise.
 - Independent random lake or water placement cannot produce drainage identity
   or confluence.
+- Randomly accepting boundary hexes produces seed-stable noise, not a closer
+  approximation of the intended bank. Centre-to-course distance is the unique
+  deterministic ownership rule for a categorical tile surface.
 - Tracing from every overview pixel scales work with display pixels and repeats
   the same courses.
 - A global watershed atlas or full hydraulic simulation would add unbounded

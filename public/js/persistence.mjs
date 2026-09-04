@@ -11,7 +11,7 @@ var Land = /* @__PURE__ */ ((Land2) => {
 })(Land || {});
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 13;
+var WORLD_GENERATOR_VERSION = 14;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({

@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generated river banks now stay categorical at the hex level while using the
+  renderer's actual even-column coordinate system and world-space capsule
+  distance to decide boundary cells. This removes parity-induced protrusions
+  and graph-dilation artifacts without randomizing water/land ownership.
 - Procedural water now separates a low-frequency connected ocean mask from
   terrain detail and adds deterministic 3–5-hex-wide drainage courses that
   descend and merge into the sea. Random generated lakes were removed, manual

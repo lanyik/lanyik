@@ -889,7 +889,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 13;
+var WORLD_GENERATOR_VERSION = 14;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -1536,6 +1536,105 @@ function createLandformSamplerForProfile(options, profile) {
   };
 }
 
+// src/world/hexRaster.ts
+var SQRT_3 = 1.7320508075688772;
+var positiveModulo3 = (value, period) => (value % period + period) % period;
+function worldOffsetToAxial(point) {
+  const parity = positiveModulo3(point.x, 2);
+  return { x: point.x, y: point.y - (point.x + parity) / 2 };
+}
+function worldAxialToOffset(point) {
+  const parity = positiveModulo3(point.x, 2);
+  return { x: point.x, y: point.y + (point.x + parity) / 2 };
+}
+function cubeRound(x, y, z) {
+  let roundedX = Math.round(x);
+  let roundedY = Math.round(y);
+  let roundedZ = Math.round(z);
+  const deltaX = Math.abs(roundedX - x);
+  const deltaY = Math.abs(roundedY - y);
+  const deltaZ = Math.abs(roundedZ - z);
+  if (deltaX > deltaY && deltaX > deltaZ) roundedX = -roundedY - roundedZ;
+  else if (deltaY > deltaZ) roundedY = -roundedX - roundedZ;
+  else roundedZ = -roundedX - roundedY;
+  return worldAxialToOffset({ x: roundedX, y: roundedZ });
+}
+function rasterizeHexLine(from, to) {
+  const first = worldOffsetToAxial(from);
+  const second = worldOffsetToAxial(to);
+  const firstY = -first.x - first.y;
+  const secondY = -second.x - second.y;
+  const distance = Math.max(
+    Math.abs(first.x - second.x),
+    Math.abs(firstY - secondY),
+    Math.abs(first.y - second.y)
+  );
+  const result = [];
+  for (let index = 0; index <= distance; index += 1) {
+    const amount = distance === 0 ? 0 : index / distance;
+    result.push(cubeRound(
+      first.x + (second.x - first.x) * amount,
+      firstY + (secondY - firstY) * amount,
+      first.y + (second.y - first.y) * amount
+    ));
+  }
+  return result;
+}
+function renderedCenterY(x, y) {
+  return (y + (x % 2 === 0 ? 0.5 : 0)) * SQRT_3;
+}
+function squaredDistanceToSegment(pointX, pointY, fromX, fromY, toX, toY) {
+  const segmentX = toX - fromX;
+  const segmentY = toY - fromY;
+  const lengthSquared = segmentX * segmentX + segmentY * segmentY;
+  if (lengthSquared === 0) {
+    const deltaX2 = pointX - fromX;
+    const deltaY2 = pointY - fromY;
+    return deltaX2 * deltaX2 + deltaY2 * deltaY2;
+  }
+  const amount = Math.max(0, Math.min(
+    1,
+    ((pointX - fromX) * segmentX + (pointY - fromY) * segmentY) / lengthSquared
+  ));
+  const deltaX = pointX - (fromX + segmentX * amount);
+  const deltaY = pointY - (fromY + segmentY * amount);
+  return deltaX * deltaX + deltaY * deltaY;
+}
+function forEachHexCapsule(from, to, radius, visit) {
+  if (!Number.isSafeInteger(radius) || radius < 0) {
+    throw new RangeError("hex capsule radius must be a non-negative safe integer");
+  }
+  if (radius === 0) {
+    rasterizeHexLine(from, to).forEach(visit);
+    return;
+  }
+  const fromWorldX = from.x * 1.5;
+  const fromWorldY = renderedCenterY(from.x, from.y);
+  const toWorldX = to.x * 1.5;
+  const toWorldY = renderedCenterY(to.x, to.y);
+  const maximumDistanceSquared = radius * radius * 3 + 1e-9;
+  const padding = radius + 1;
+  const minimumX = Math.min(from.x, to.x) - padding;
+  const maximumX = Math.max(from.x, to.x) + padding;
+  const minimumY = Math.min(from.y, to.y) - padding;
+  const maximumY = Math.max(from.y, to.y) + padding;
+  for (let x = minimumX; x <= maximumX; x += 1) {
+    const candidateWorldX = x * 1.5;
+    for (let y = minimumY; y <= maximumY; y += 1) {
+      if (squaredDistanceToSegment(
+        candidateWorldX,
+        renderedCenterY(x, y),
+        fromWorldX,
+        fromWorldY,
+        toWorldX,
+        toWorldY
+      ) <= maximumDistanceSquared) {
+        visit({ x, y });
+      }
+    }
+  }
+}
+
 // src/world/WorldWaterSampler.ts
 var UINT32_RANGE = 4294967296;
 var OVERVIEW_PAGE_SIZE_MULTIPLIER = 4;
@@ -1548,7 +1647,7 @@ var AXIAL_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 0, y: 1 }),
   Object.freeze({ x: 1, y: -1 })
 ]);
-var positiveModulo3 = (value, period) => (value % period + period) % period;
+var positiveModulo4 = (value, period) => (value % period + period) % period;
 var clamp012 = (value) => Math.max(0, Math.min(1, value));
 var smoothstep2 = (edge0, edge1, value) => {
   const amount = clamp012((value - edge0) / (edge1 - edge0));
@@ -1577,55 +1676,6 @@ function sourceKey(seed, cellX, cellY, slot, salt) {
 }
 function randomForSource(seed, key, salt) {
   return mix32(seed ^ key ^ Math.imul(salt, 668265261)) / UINT32_RANGE;
-}
-function offsetToAxial(point) {
-  return { x: point.x, y: point.y - (point.x - positiveModulo3(point.x, 2)) / 2 };
-}
-function axialToOffset(point) {
-  return { x: point.x, y: point.y + (point.x - positiveModulo3(point.x, 2)) / 2 };
-}
-function cubeRound(x, y, z) {
-  let rx = Math.round(x);
-  let ry = Math.round(y);
-  let rz = Math.round(z);
-  const dx = Math.abs(rx - x);
-  const dy = Math.abs(ry - y);
-  const dz = Math.abs(rz - z);
-  if (dx > dy && dx > dz) rx = -ry - rz;
-  else if (dy > dz) ry = -rx - rz;
-  else rz = -rx - ry;
-  return axialToOffset({ x: rx, y: rz });
-}
-function hexLine(from, to) {
-  const first = offsetToAxial(from);
-  const second = offsetToAxial(to);
-  const firstY = -first.x - first.y;
-  const secondY = -second.x - second.y;
-  const distance = Math.max(
-    Math.abs(first.x - second.x),
-    Math.abs(firstY - secondY),
-    Math.abs(first.y - second.y)
-  );
-  const result = [];
-  for (let index = 0; index <= distance; index += 1) {
-    const amount = distance === 0 ? 0 : index / distance;
-    result.push(cubeRound(
-      first.x + (second.x - first.x) * amount,
-      firstY + (secondY - firstY) * amount,
-      first.y + (second.y - first.y) * amount
-    ));
-  }
-  return result;
-}
-function forEachHexDisk(center, radius, visit) {
-  const origin = offsetToAxial(center);
-  for (let dx = -radius; dx <= radius; dx += 1) {
-    const minimumY = Math.max(-radius, -dx - radius);
-    const maximumY = Math.min(radius, -dx + radius);
-    for (let dy = minimumY; dy <= maximumY; dy += 1) {
-      visit(axialToOffset({ x: origin.x + dx, y: origin.y + dy }));
-    }
-  }
 }
 function assertExtent(originX, originY, width, height) {
   if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)) {
@@ -1666,8 +1716,8 @@ var DrainageWorldWaterSampler = class {
   isRiverTile(x, y, sampleAt) {
     if (this.domain.topology === "toroidal") {
       const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
-      const canonicalX = positiveModulo3(x, this.domain.width);
-      const canonicalY = positiveModulo3(y, this.domain.height);
+      const canonicalX = positiveModulo4(x, this.domain.width);
+      const canonicalY = positiveModulo4(y, this.domain.height);
       return hasBit(mask, canonicalX * this.domain.height + canonicalY);
     }
     const pageSize = this.profile.rivers.pageSize;
@@ -1683,9 +1733,9 @@ var DrainageWorldWaterSampler = class {
     if (this.domain.topology === "toroidal") {
       const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
       for (let x = originX; x < originX + width; x += 1) {
-        const canonicalX = positiveModulo3(x, this.domain.width);
+        const canonicalX = positiveModulo4(x, this.domain.width);
         for (let y = originY; y < originY + height; y += 1) {
-          const canonicalY = positiveModulo3(y, this.domain.height);
+          const canonicalY = positiveModulo4(y, this.domain.height);
           if (hasBit(mask, canonicalX * this.domain.height + canonicalY)) visit(x, y);
         }
       }
@@ -1770,13 +1820,13 @@ var DrainageWorldWaterSampler = class {
     return 1;
   }
   courseToBaseWorld(point) {
-    return axialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
+    return worldAxialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
   }
   courseWarpAt(base, salt) {
     const rivers = this.profile.rivers;
     if (this.domain.topology === "toroidal") {
-      const x = positiveModulo3(base.x, this.domain.width);
-      const y = positiveModulo3(base.y, this.domain.height);
+      const x = positiveModulo4(base.x, this.domain.width);
+      const y = positiveModulo4(base.y, this.domain.height);
       return periodicFractalNoise2D(
         this.numericSeed ^ salt,
         x / this.domain.width,
@@ -1809,8 +1859,8 @@ var DrainageWorldWaterSampler = class {
     if (this.domain.topology === "infinite") return point;
     if (this.domain.topology === "toroidal") {
       return {
-        x: positiveModulo3(point.x, this.domain.width),
-        y: positiveModulo3(point.y, this.domain.height)
+        x: positiveModulo4(point.x, this.domain.width),
+        y: positiveModulo4(point.y, this.domain.height)
       };
     }
     return point.x >= 0 && point.x < this.domain.width && point.y >= 0 && point.y < this.domain.height ? point : void 0;
@@ -1915,10 +1965,10 @@ var DrainageWorldWaterSampler = class {
     const rivers = this.profile.rivers;
     const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
     const corners = [
-      offsetToAxial({ x: originX - reach, y: originY - reach }),
-      offsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
-      offsetToAxial({ x: originX - reach, y: originY + height - 1 + reach }),
-      offsetToAxial({ x: originX + width - 1 + reach, y: originY + height - 1 + reach })
+      worldOffsetToAxial({ x: originX - reach, y: originY - reach }),
+      worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
+      worldOffsetToAxial({ x: originX - reach, y: originY + height - 1 + reach }),
+      worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY + height - 1 + reach })
     ];
     const minimumX = Math.floor(Math.min(...corners.map((point) => point.x)) / this.courseStep) - 1;
     const maximumX = Math.ceil(Math.max(...corners.map((point) => point.x)) / this.courseStep) + 1;
@@ -1975,9 +2025,12 @@ var DrainageWorldWaterSampler = class {
           flow.get(this.canonicalCourseKey(toCourse)) ?? 1
         );
         const radius = amount >= this.profile.rivers.highFlowThreshold ? this.profile.rivers.highFlowCourseRadius : this.profile.rivers.baseCourseRadius;
-        for (const point of hexLine(this.courseToWorld(fromCourse), this.courseToWorld(toCourse))) {
-          forEachHexDisk(point, radius, emit);
-        }
+        forEachHexCapsule(
+          this.courseToWorld(fromCourse),
+          this.courseToWorld(toCourse),
+          radius,
+          emit
+        );
       }
     }
   }

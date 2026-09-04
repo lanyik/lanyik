@@ -1,6 +1,11 @@
 import { Land } from "../enums";
 import { Point } from "../interfaces";
 import { LandformDomain } from "./LandformSampler";
+import {
+    forEachHexCapsule,
+    worldAxialToOffset,
+    worldOffsetToAxial
+} from "./hexRaster";
 import { fractalNoise2D, periodicFractalNoise2D, randomAt } from "./noise";
 import { WorldStyleProfile } from "./WorldStyleProfile";
 
@@ -107,60 +112,6 @@ function sourceKey(seed: number, cellX: number, cellY: number, slot: number, sal
 
 function randomForSource(seed: number, key: number, salt: number): number {
     return mix32(seed ^ key ^ Math.imul(salt, 0x27d4eb2d)) / UINT32_RANGE;
-}
-
-function offsetToAxial(point: Point): Point {
-    return { x: point.x, y: point.y - (point.x - positiveModulo(point.x, 2)) / 2 };
-}
-
-function axialToOffset(point: Point): Point {
-    return { x: point.x, y: point.y + (point.x - positiveModulo(point.x, 2)) / 2 };
-}
-
-function cubeRound(x: number, y: number, z: number): Point {
-    let rx = Math.round(x);
-    let ry = Math.round(y);
-    let rz = Math.round(z);
-    const dx = Math.abs(rx - x);
-    const dy = Math.abs(ry - y);
-    const dz = Math.abs(rz - z);
-    if (dx > dy && dx > dz) rx = -ry - rz;
-    else if (dy > dz) ry = -rx - rz;
-    else rz = -rx - ry;
-    return axialToOffset({ x: rx, y: rz });
-}
-
-function hexLine(from: Point, to: Point): Point[] {
-    const first = offsetToAxial(from);
-    const second = offsetToAxial(to);
-    const firstY = -first.x - first.y;
-    const secondY = -second.x - second.y;
-    const distance = Math.max(
-        Math.abs(first.x - second.x),
-        Math.abs(firstY - secondY),
-        Math.abs(first.y - second.y)
-    );
-    const result: Point[] = [];
-    for (let index = 0; index <= distance; index += 1) {
-        const amount = distance === 0 ? 0 : index / distance;
-        result.push(cubeRound(
-            first.x + (second.x - first.x) * amount,
-            firstY + (secondY - firstY) * amount,
-            first.y + (second.y - first.y) * amount
-        ));
-    }
-    return result;
-}
-
-function forEachHexDisk(center: Point, radius: number, visit: (point: Point) => void): void {
-    const origin = offsetToAxial(center);
-    for (let dx = -radius; dx <= radius; dx += 1) {
-        const minimumY = Math.max(-radius, -dx - radius);
-        const maximumY = Math.min(radius, -dx + radius);
-        for (let dy = minimumY; dy <= maximumY; dy += 1) {
-            visit(axialToOffset({ x: origin.x + dx, y: origin.y + dy }));
-        }
-    }
 }
 
 function assertExtent(originX: number, originY: number, width: number, height: number): void {
@@ -345,7 +296,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
     }
 
     private courseToBaseWorld(point: Point): Point {
-        return axialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
+        return worldAxialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
     }
 
     private courseWarpAt(base: Readonly<Point>, salt: number): number {
@@ -547,10 +498,10 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             ? 0
             : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
         const corners = [
-            offsetToAxial({ x: originX - reach, y: originY - reach }),
-            offsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
-            offsetToAxial({ x: originX - reach, y: originY + height - 1 + reach }),
-            offsetToAxial({ x: originX + width - 1 + reach, y: originY + height - 1 + reach })
+            worldOffsetToAxial({ x: originX - reach, y: originY - reach }),
+            worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
+            worldOffsetToAxial({ x: originX - reach, y: originY + height - 1 + reach }),
+            worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY + height - 1 + reach })
         ];
         const minimumX = Math.floor(Math.min(...corners.map(point => point.x)) / this.courseStep) - 1;
         const maximumX = Math.ceil(Math.max(...corners.map(point => point.x)) / this.courseStep) + 1;
@@ -618,9 +569,12 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
                 const radius = amount >= this.profile.rivers.highFlowThreshold
                     ? this.profile.rivers.highFlowCourseRadius
                     : this.profile.rivers.baseCourseRadius;
-                for (const point of hexLine(this.courseToWorld(fromCourse), this.courseToWorld(toCourse))) {
-                    forEachHexDisk(point, radius, emit);
-                }
+                forEachHexCapsule(
+                    this.courseToWorld(fromCourse),
+                    this.courseToWorld(toCourse),
+                    radius,
+                    emit
+                );
             }
         }
     }
