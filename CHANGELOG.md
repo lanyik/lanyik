@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Procedural and toroidal sources reject late chunk publication after disposal
+  or cancellation, including cache reads and asynchronous delta restoration.
 - Resource estimates include full instance matrix/color capacity and instance
   morph textures. Allocation references deduplicate shared buffers/textures
   across render chunks and model assets, and remain charged until final release.

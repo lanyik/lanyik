@@ -263,6 +263,11 @@ function abortError(): Error {
     return error;
 }
 
+function assertChunkRequestActive(disposed: boolean, request: ChunkRequestOptions): void {
+    if (request.signal?.aborted) throw abortError();
+    if (disposed) throw new Error("WorldSource has been disposed");
+}
+
 export class StaticWorldSource implements WorldSource {
     public readonly map: MapInfo;
     public readonly chunkSize: number;
@@ -941,7 +946,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
         chunkY: number,
         request: ChunkRequestOptions = {}
     ): Promise<WorldChunk> {
-        if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+        assertChunkRequestActive(this.disposed, request);
         const resolved = this.resolveChunk(chunkX, chunkY);
         if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
             throw new RangeError("toroidal chunk coordinates must use canonical bounds");
@@ -957,12 +962,14 @@ export class ToroidalWorldSource implements MutableWorldSource {
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
+        assertChunkRequestActive(this.disposed, request);
         if (!packed) {
             packed = await this.pool.generateChunk(generation, request);
+            assertChunkRequestActive(this.disposed, request);
             if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
         }
-        if (request.signal?.aborted) throw abortError();
         await this.restoreChunkDelta(chunkX, chunkY);
+        assertChunkRequestActive(this.disposed, request);
         const coreTiles = this.store.add(packed);
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
@@ -1180,7 +1187,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
         chunkY: number,
         request: ChunkRequestOptions = {}
     ): Promise<WorldChunk> {
-        if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+        assertChunkRequestActive(this.disposed, request);
         const generation = {
             seed: this.seed,
             chunkX,
@@ -1191,12 +1198,14 @@ export class ProceduralWorldSource implements MutableWorldSource {
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
+        assertChunkRequestActive(this.disposed, request);
         if (!packed) {
             packed = await this.pool.generateChunk(generation, request);
+            assertChunkRequestActive(this.disposed, request);
             if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
         }
-        if (request.signal?.aborted) throw abortError();
         await this.restoreChunkDelta(chunkX, chunkY);
+        assertChunkRequestActive(this.disposed, request);
         const coreTiles = this.store.add(packed);
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }

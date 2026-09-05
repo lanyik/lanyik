@@ -18,6 +18,11 @@ has no logical edge. Their `MapInfo.data` remains empty: `tileAt()` decodes only
 set of distinct 16-bit tile variants that are actually read. Both sources reach
 the renderer through the same callbacks.
 
+Procedural source requests recheck cancellation and source disposal after cache
+reads, Worker generation and delta restoration. Neither a late cache result nor
+a late restore may publish into a disposed source. An already cancelled request
+cannot start another generation or write a new cache entry after its await.
+
 For each resident render chunk, `WorldChunkScheduler` performs this lifecycle:
 
 1. transform the chunk's local AABB into its current toroidal image;

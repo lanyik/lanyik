@@ -14498,6 +14498,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     error.name = "AbortError";
     return error;
   }
+  function assertChunkRequestActive(disposed, request) {
+    if (request.signal?.aborted) throw abortError();
+    if (disposed) throw new Error("WorldSource has been disposed");
+  }
   var StaticWorldSource = class {
     constructor(map, options = {}) {
       this.disposed = false;
@@ -15046,7 +15050,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return Math.hypot(dx, dy);
     }
     async loadChunk(chunkX, chunkY, request = {}) {
-      if (this.disposed) throw new Error("ToroidalWorldSource has been disposed");
+      assertChunkRequestActive(this.disposed, request);
       const resolved = this.resolveChunk(chunkX, chunkY);
       if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
         throw new RangeError("toroidal chunk coordinates must use canonical bounds");
@@ -15062,12 +15066,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
+      assertChunkRequestActive(this.disposed, request);
       if (!packed) {
         packed = await this.pool.generateChunk(generation, request);
+        assertChunkRequestActive(this.disposed, request);
         if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
       }
-      if (request.signal?.aborted) throw abortError();
       await this.restoreChunkDelta(chunkX, chunkY);
+      assertChunkRequestActive(this.disposed, request);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
@@ -15238,7 +15244,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return Math.hypot(chunkX - centerChunkX, chunkY - centerChunkY);
     }
     async loadChunk(chunkX, chunkY, request = {}) {
-      if (this.disposed) throw new Error("ProceduralWorldSource has been disposed");
+      assertChunkRequestActive(this.disposed, request);
       const generation = {
         seed: this.seed,
         chunkX,
@@ -15249,12 +15255,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
+      assertChunkRequestActive(this.disposed, request);
       if (!packed) {
         packed = await this.pool.generateChunk(generation, request);
+        assertChunkRequestActive(this.disposed, request);
         if (cacheEpoch === this.cacheEpoch) void this.cache?.put(cacheKey, packed).catch(() => false);
       }
-      if (request.signal?.aborted) throw abortError();
       await this.restoreChunkDelta(chunkX, chunkY);
+      assertChunkRequestActive(this.disposed, request);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }

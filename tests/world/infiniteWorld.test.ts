@@ -210,6 +210,51 @@ const flush = async (): Promise<void> => {
     await Promise.resolve();
 };
 
+describe.each(["infinite", "toroidal"] as const)("%s source publication boundary", mode => {
+    const options = { seed: "publication-race", workerUrl: "unused", chunkSize: 12 };
+    const createSource = (dependencies: ConstructorParameters<typeof ProceduralWorldSource>[1]) => mode === "infinite"
+        ? new ProceduralWorldSource(options, dependencies)
+        : new ToroidalWorldSource({ ...options, width: 24, height: 24 }, dependencies);
+
+    test.each(["hit", "miss"])("rejects a late cache %s after disposal", async hit => {
+        const cache = new MemoryChunkCache();
+        let complete!: (chunk: PackedWorldChunk | undefined) => void;
+        vi.spyOn(cache, "get").mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+        const client = new DeferredChunkClient();
+        const source = createSource({ cache, pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => client }) });
+        const loading = source.loadChunk(0, 0);
+        const rejected = expect(loading).rejects.toThrow("disposed");
+        source.dispose();
+        complete(hit === "hit" ? generateWorldChunk({
+            ...options, chunkX: 0, chunkY: 0,
+            world: mode === "toroidal" ? { width: 24, height: 24, topology: "toroidal" } : undefined
+        }) : undefined);
+        await rejected;
+        expect(source.hasChunk(0, 0)).toBe(false);
+        expect(client.requests).toHaveLength(0);
+        expect(cache.stats.writes).toBe(0);
+    });
+
+    test.each(["abort", "dispose"])("rejects publication after %s during delta restoration", async action => {
+        const deltas = new DeferredDeltaStore();
+        const source = createSource({ deltaStore: deltas, pool: new WorldGeneratorPool("unused", {
+            size: 1, clientFactory: () => new ImmediateChunkClient()
+        }) });
+        const controller = new AbortController();
+        const loading = source.loadChunk(0, 0, { signal: controller.signal });
+        const rejected = action === "abort"
+            ? expect(loading).rejects.toMatchObject({ name: "AbortError" })
+            : expect(loading).rejects.toThrow("disposed");
+        await vi.waitFor(() => expect(deltas.resolveLoad).toBeTypeOf("function"));
+        if (action === "abort") controller.abort();
+        else source.dispose();
+        deltas.resolveLoad(undefined);
+        await rejected;
+        expect(source.hasChunk(0, 0)).toBe(false);
+        source.dispose();
+    });
+});
+
 describe("deterministic infinite world chunks", () => {
     test("uses a compact deterministic payload and supports negative chunks", () => {
         const first = generateWorldChunk({ seed: "endless", chunkX: -3, chunkY: 7, chunkSize: 12 });
