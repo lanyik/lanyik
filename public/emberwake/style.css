@@ -1,0 +1,1055 @@
+:root {
+    color-scheme: dark;
+    font-family: "Segoe UI","Microsoft YaHei",sans-serif;
+    color: #f0eee4;
+    background: #101d26;
+    font-synthesis: none;
+    --gold: #edc987;
+    --muted: #a7b6b7;
+    --line: #ffffff20;
+    --panel: #11202bed;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    overflow: hidden;
+}
+
+button,input,a {
+    -webkit-tap-highlight-color: transparent;
+}
+
+button,input {
+    font: inherit;
+}
+
+button,a {
+    touch-action: manipulation;
+}
+
+button {
+    cursor: pointer;
+    color: inherit;
+    border: 0;
+    transition: background .18s,transform .18s;
+}
+
+button:hover:enabled {
+    filter: brightness(1.13);
+    transform: translateY(-1px);
+}
+
+button:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+button:focus-visible,a:focus-visible,input:focus-visible,canvas:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 4px;
+}
+
+button:disabled:hover {
+    transform: none;
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+#world {
+    width: 100vw;
+    height: 100dvh;
+    display: block;
+}
+
+.vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: inset 0 0 180px 50px #0d172750;
+    background: linear-gradient(180deg,#0c172b66,transparent 22%,transparent 65%,#0c172a99);
+}
+
+.masthead {
+    position: fixed;
+    inset: 0 0 auto;
+    height: 104px;
+    padding: 22px 32px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    background: linear-gradient(#101c28ef,#101c2860,transparent);
+}
+
+.wordmark {
+    display: flex;
+    gap: 13px;
+    align-items: center;
+    font-size: 24px;
+    letter-spacing: 5px;
+    white-space: nowrap;
+}
+
+.sigil {
+    font-size: 46px;
+    color: var(--gold);
+    line-height: 1;
+}
+
+.wordmark small {
+    display: block;
+    font-size: 9px;
+    letter-spacing: 2.2px;
+    color: var(--muted);
+    margin-top: 7px;
+}
+
+.telemetry {
+    display: flex;
+    gap: 36px;
+    margin: auto;
+    transform: translateX(-50px);
+}
+
+.telemetry>div {
+    min-width: 118px;
+}
+
+.telemetry>div>span:first-child {
+    display: block;
+    font-size: 10px;
+    color: #bbc9c9;
+    letter-spacing: 2px;
+    margin-bottom: 5px;
+}
+
+.telemetry strong {
+    font-size: 27px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+.telemetry small {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+meter {
+    display: block;
+    width: 118px;
+    height: 3px;
+    margin-top: 6px;
+    border: 0;
+    background: #ffffff1a;
+}
+
+meter::-webkit-meter-bar {
+    border: 0;
+    background: #ffffff1a;
+}
+
+meter::-webkit-meter-optimum-value {
+    background: var(--gold);
+}
+
+#time-meter::-webkit-meter-optimum-value {
+    background: #8ebfc1;
+}
+
+#signal-lights {
+    display: block;
+    font-size: 11px;
+    color: var(--gold);
+    letter-spacing: 8px;
+    margin-top: 2px;
+}
+
+.quiet {
+    background: #ffffff08;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 12px;
+    color: #c1cccc;
+}
+
+#help-button {
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    padding: 0;
+}
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 35px #050e1524;
+    backdrop-filter: blur(16px);
+    border-radius: 8px;
+}
+
+.mission {
+    position: fixed;
+    top: 125px;
+    left: 30px;
+    width: 252px;
+    padding: 24px;
+}
+
+.eyebrow {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--gold);
+    font-weight: 600;
+}
+
+.live-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--gold);
+    margin: 0 6px 2px 0;
+    box-shadow: 0 0 10px #edc98780;
+}
+
+h1 {
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 1.65;
+    letter-spacing: 1px;
+    margin: 18px 0 10px;
+}
+
+.muted {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.9;
+}
+
+.divider {
+    height: 1px;
+    background: var(--line);
+    margin: 23px 0;
+}
+
+.section-label {
+    font-size: 10px;
+    letter-spacing: 1.6px;
+    color: #bac7c5;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.section-label span {
+    color: var(--gold);
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+.beacon-list {
+    margin: 16px 0;
+}
+
+.beacon-card {
+    display: flex;
+    width: 100%;
+    gap: 12px;
+    align-items: center;
+    text-align: left;
+    background: transparent;
+    padding: 12px 0;
+    border-bottom: 1px solid #ffffff0d;
+}
+
+.beacon-icon {
+    width: 31px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    color: var(--gold);
+    font-size: 21px;
+    background: #edc9870c;
+    border: 1px solid #edc98738;
+    clip-path: polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%);
+}
+
+.beacon-card strong {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 1px;
+}
+
+.beacon-card small {
+    display: block;
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 5px;
+}
+
+.beacon-card.lit .beacon-icon {
+    color: #9ccdb2;
+    background: #9ccdb225;
+}
+
+.beacon-card.lit small {
+    color: #9ccdb2;
+}
+
+.full {
+    width: 100%;
+}
+
+.outline {
+    border: 1px solid #ffffff30;
+    background: #ffffff03;
+    padding: 12px 15px;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.outline span {
+    float: right;
+    color: var(--gold);
+}
+
+.installed {
+    font-size: 9px;
+    color: var(--muted);
+    line-height: 1.8;
+    margin-top: 15px;
+}
+
+.navigation {
+    position: fixed;
+    right: 30px;
+    top: 125px;
+    width: 242px;
+    padding: 17px 16px 12px;
+}
+
+#radar {
+    display: block;
+    width: 208px;
+    height: 191px;
+    cursor: crosshair;
+    margin-top: 10px;
+}
+
+.radar-legend {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 9px;
+    color: var(--muted);
+    margin: 6px 0 17px;
+}
+
+.radar-legend i {
+    width: 5px;
+    height: 5px;
+    display: inline-block;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.gold {
+    background: var(--gold);
+}
+
+.mint {
+    background: #a4d6ae;
+}
+
+.blue {
+    background: #98bbf3;
+}
+
+.navigation .quiet {
+    border-color: #ffffff12;
+    font-size: 10px;
+    background: transparent;
+}
+
+kbd {
+    font: 9px "Segoe UI",sans-serif;
+    border: 1px solid #ffffff25;
+    border-radius: 3px;
+    padding: 1px 4px;
+    margin-left: 8px;
+    color: #c1cccc;
+}
+
+.journal {
+    position: fixed;
+    right: 33px;
+    top: 463px;
+    width: 232px;
+}
+
+.journal .eyebrow {
+    display: flex;
+    justify-content: space-between;
+    letter-spacing: 1px;
+    font-size: 9px;
+}
+
+.journal .eyebrow span {
+    font-size: 8px;
+    letter-spacing: 0;
+    color: #acc1b6;
+}
+
+.journal p {
+    background: #10232bc9;
+    border-left: 2px solid #edc98760;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: #ced4ce;
+    line-height: 1.9;
+}
+
+.flight-deck {
+    position: fixed;
+    bottom: 50px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(880px,calc(100% - 60px));
+    padding: 21px 24px;
+    display: flex;
+    gap: 24px;
+    align-items: center;
+}
+
+.destination {
+    flex: 1;
+    min-width: 0;
+}
+
+.destination strong {
+    display: block;
+    font-weight: 500;
+    font-size: 17px;
+    margin: 6px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.destination>span {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.deck-actions {
+    display: flex;
+    gap: 9px;
+    align-items: center;
+}
+
+.deck-actions .outline {
+    padding: 14px 12px;
+}
+
+.primary {
+    background: var(--gold);
+    color: #1c282f;
+    padding: 15px 23px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 1px;
+}
+
+.primary span {
+    margin-left: 20px;
+}
+
+#fly {
+    min-width: 112px;
+}
+
+.footer {
+    position: fixed;
+    bottom: 17px;
+    left: 32px;
+    right: 32px;
+    display: flex;
+    justify-content: space-between;
+    color: #aababa;
+    font-size: 9px;
+    letter-spacing: 1px;
+}
+
+.footer a {
+    color: var(--gold);
+}
+
+#notice {
+    position: fixed;
+    left: 50%;
+    bottom: 185px;
+    transform: translateX(-50%);
+    background: #192b32f5;
+    border: 1px solid #edc98760;
+    padding: 12px 20px;
+    border-radius: 4px;
+    max-width: calc(100% - 40px);
+    font-size: 12px;
+    color: #f2ddaf;
+    box-shadow: 0 8px 40px #0006;
+}
+
+dialog {
+    color: #eeeade;
+    background: #12242d;
+    border: 1px solid #c2ba8b40;
+    border-radius: 12px;
+    padding: 34px 40px;
+    width: min(540px,calc(100vw - 32px));
+    max-height: calc(100dvh - 40px);
+    box-shadow: 0 32px 100px #0008;
+}
+
+dialog::backdrop {
+    background: #07131bb0;
+    backdrop-filter: blur(8px);
+}
+
+dialog h2 {
+    font-size: 31px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    line-height: 1.55;
+    margin: 17px 0;
+}
+
+dialog p {
+    font-size: 12px;
+    color: #b7c5c5;
+    line-height: 1.9;
+}
+
+dialog b {
+    color: #ecdbb6;
+    font-weight: 500;
+}
+
+.dialog-art {
+    height: 90px;
+    position: relative;
+    overflow: hidden;
+    margin: -34px -40px 26px;
+    background: radial-gradient(ellipse at 50% 140%,#71837377,#182f3880 55%,#101f29);
+    border-bottom: 1px solid #edc98725;
+    display: grid;
+    place-items: center;
+}
+
+.dialog-art>span {
+    font-size: 47px;
+    color: var(--gold);
+    z-index: 1;
+}
+
+.dialog-art small {
+    position: absolute;
+    bottom: 12px;
+    right: 17px;
+    color: #94a9a9;
+    letter-spacing: 2px;
+    font-size: 7px;
+}
+
+.orbit {
+    position: absolute;
+    border: 1px solid #edc9872a;
+    border-radius: 50%;
+    width: 190px;
+    height: 190px;
+    top: 0;
+    transform: rotate(-30deg) scaleY(.5);
+}
+
+.orbit-two {
+    width: 350px;
+    height: 350px;
+    top: -62px;
+    transform: rotate(25deg) scaleY(.6);
+}
+
+.briefing {
+    margin: 20px 0;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+}
+
+.briefing p {
+    font-size: 11px;
+    margin: 9px 0;
+}
+
+.briefing b {
+    margin-right: 8px;
+}
+
+.seed-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-top: 19px;
+}
+
+.seed-row label {
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--muted);
+}
+
+input {
+    background: #07151c66;
+    border: 1px solid var(--line);
+    padding: 9px 12px;
+    color: #d9ddd3;
+    border-radius: 4px;
+    width: 100%;
+    font-size: 11px;
+}
+
+.small {
+    font-size: 10px;
+    min-height: 18px;
+}
+
+.dialog-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.dialog-actions .primary {
+    flex: 1;
+}
+
+.upgrade-choice {
+    width: 100%;
+    text-align: left;
+    display: block;
+    background: #edc98708;
+    border: 1px solid #edc98730;
+    border-radius: 5px;
+    padding: 17px;
+    margin: 12px 0;
+}
+
+.upgrade-choice strong {
+    display: block;
+    color: var(--gold);
+    font-size: 14px;
+}
+
+.upgrade-choice span {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 8px;
+    line-height: 1.7;
+}
+
+#ending-score {
+    font-size: 40px;
+    color: var(--gold);
+    margin: 22px 0;
+}
+
+#ending-score small {
+    font-size: 11px;
+    color: var(--muted);
+    display: block;
+    margin-top: 8px;
+}
+
+body[data-danger="true"] #time {
+    color: #f1a385;
+}
+
+body[data-danger="true"] #time-meter::-webkit-meter-optimum-value {
+    background: #e89978;
+}
+
+@media(min-width: 1600px) {
+    .mission {
+        left: 45px;
+        top: 145px;
+    }
+
+    .navigation {
+        right: 45px;
+        top: 145px;
+    }
+
+    .journal {
+        right: 48px;
+        top: 485px;
+    }
+
+    .flight-deck {
+        bottom: 62px;
+    }
+
+}
+
+@media(max-height: 780px) and (min-width: 901px) {
+    .mission {
+        padding: 18px;
+        top: 107px;
+    }
+
+    .mission h1 {
+        font-size: 23px;
+        line-height: 1.5;
+        margin: 12px 0 7px;
+    }
+
+    .mission .divider {
+        margin: 15px 0;
+    }
+
+    .beacon-list {
+        margin: 10px 0;
+    }
+
+    .beacon-card {
+        padding: 10px 0;
+    }
+
+    .installed {
+        margin-top: 10px;
+    }
+
+    .navigation {
+        top: 107px;
+    }
+
+    .journal {
+        top: 440px;
+    }
+
+    .flight-deck {
+        padding: 16px 20px;
+        bottom: 43px;
+    }
+
+    .footer {
+        bottom: 13px;
+    }
+
+}
+
+@media(max-width: 1050px) {
+    .telemetry {
+        transform: none;
+        gap: 18px;
+    }
+
+    .telemetry>div {
+        min-width: 95px;
+    }
+
+    meter {
+        width: 95px;
+    }
+
+    .mission {
+        left: 18px;
+        width: 223px;
+        padding: 18px;
+    }
+
+    .navigation {
+        right: 18px;
+        width: 220px;
+    }
+
+    #radar {
+        width: 186px;
+        height: 171px;
+    }
+
+    .journal {
+        right: 21px;
+        width: 204px;
+    }
+
+    .masthead {
+        padding: 20px;
+    }
+
+    .flight-deck {
+        width: calc(100% - 36px);
+        gap: 14px;
+    }
+
+    .deck-actions {
+        gap: 6px;
+    }
+
+    .deck-actions .outline {
+        padding: 13px 9px;
+    }
+
+}
+
+@media(max-width: 760px) {
+    .masthead {
+        height: 83px;
+        padding: 13px 15px;
+        gap: 12px;
+    }
+
+    .wordmark {
+        font-size: 16px;
+        letter-spacing: 3px;
+        gap: 6px;
+    }
+
+    .sigil {
+        font-size: 31px;
+    }
+
+    .wordmark small {
+        font-size: 6px;
+        letter-spacing: .6px;
+    }
+
+    .telemetry {
+        gap: 13px;
+        margin-left: auto;
+        margin-right: 0;
+    }
+
+    .telemetry>div {
+        min-width: 65px;
+    }
+
+    .telemetry>div>span:first-child {
+        font-size: 8px;
+        letter-spacing: 1px;
+    }
+
+    .telemetry strong {
+        font-size: 21px;
+    }
+
+    .telemetry small {
+        font-size: 9px;
+    }
+
+    meter {
+        width: 65px;
+    }
+
+    .signal-metric {
+        display: none;
+    }
+
+    #help-button {
+        width: 28px;
+        height: 28px;
+        flex-shrink: 0;
+    }
+
+    .mission {
+        top: 94px;
+        left: 12px;
+        width: 173px;
+        padding: 13px;
+    }
+
+    .mission h1,.mission>.muted,.mission>.divider,.mission>.eyebrow,.installed {
+        display: none;
+    }
+
+    .beacon-list {
+        margin: 8px 0;
+    }
+
+    .beacon-card {
+        padding: 8px 0;
+        gap: 8px;
+    }
+
+    .beacon-card strong {
+        font-size: 10px;
+    }
+
+    .beacon-card small {
+        font-size: 9px;
+    }
+
+    .beacon-icon {
+        width: 24px;
+        height: 26px;
+        font-size: 17px;
+    }
+
+    .mission .outline {
+        font-size: 9px;
+        padding: 10px;
+    }
+
+    .navigation {
+        top: 94px;
+        right: 12px;
+        width: 143px;
+        padding: 12px 10px 8px;
+    }
+
+    #radar {
+        width: 121px;
+        height: 112px;
+        margin-top: 6px;
+    }
+
+    .radar-legend {
+        gap: 7px;
+        font-size: 8px;
+        margin-bottom: 10px;
+    }
+
+    .radar-legend i {
+        margin-right: 3px;
+        width: 4px;
+        height: 4px;
+    }
+
+    .navigation .quiet {
+        font-size: 9px;
+        padding: 7px;
+    }
+
+    .section-label {
+        font-size: 9px;
+        letter-spacing: .4px;
+    }
+
+    .section-label span {
+        font-size: 8px;
+    }
+
+    .journal {
+        top: auto;
+        bottom: 185px;
+        left: 16px;
+        right: 16px;
+        width: auto;
+        text-shadow: 0 1px 5px #000;
+    }
+
+    .journal p {
+        margin: 7px 0;
+        font-size: 10px;
+    }
+
+    .flight-deck {
+        bottom: 34px;
+        width: calc(100% - 24px);
+        padding: 14px;
+        display: block;
+    }
+
+    .destination strong {
+        font-size: 14px;
+        margin: 5px 0;
+    }
+
+    .destination>span {
+        font-size: 9px;
+    }
+
+    .deck-actions {
+        margin-top: 12px;
+        display: flex;
+    }
+
+    .deck-actions>* {
+        flex: 1;
+    }
+
+    .deck-actions .outline {
+        font-size: 10px;
+        padding: 12px 6px;
+    }
+
+    .deck-actions kbd {
+        display: none;
+    }
+
+    .primary {
+        padding: 12px;
+        font-size: 11px;
+    }
+
+    #fly {
+        min-width: 80px;
+    }
+
+    .footer {
+        left: 15px;
+        right: 15px;
+        bottom: 10px;
+        font-size: 8px;
+        letter-spacing: 0;
+    }
+
+    .footer>span:nth-child(2) {
+        display: none;
+    }
+
+    dialog {
+        padding: 25px;
+    }
+
+    .dialog-art {
+        margin: -25px -25px 20px;
+        height: 75px;
+    }
+
+    dialog h2 {
+        font-size: 26px;
+        margin: 12px 0;
+    }
+
+    .briefing {
+        margin: 15px 0;
+    }
+
+    #notice {
+        bottom: 200px;
+    }
+
+    .primary span {
+        margin-left: 5px;
+    }
+
+}
+
+@media(prefers-reduced-motion: reduce) {
+    button {
+        transition: none;
+    }
+
+    button:hover:enabled {
+        transform: none;
+    }
+
+}

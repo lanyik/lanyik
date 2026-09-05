@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Emberwake / 余烬航线**, a playable infinite-world airship expedition at
+  `/emberwake.html`: deterministic beacon and salvage sites, fuel/time decisions,
+  three upgrades, a return-home victory condition, defeat and replay, a local
+  interactive radar, and Chinese desktop/mobile controls. Per-action generation
+  checkpoints restore the entire expedition; a Web Lock excludes a second writer.
+  Presentation consumes the existing world-layer and resource-account contracts.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101d26">
+    <title>余烬航线 · Emberwake</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="emberwake/style.css">
+</head>
+<body>
+    <canvas id="world" aria-label="无限世界航图；点击地面选择航线"></canvas>
+    <div class="vignette" aria-hidden="true"></div>
+    <header class="masthead">
+        <a class="wordmark" href="emberwake.html" aria-label="余烬航线首页"><span class="sigil">✦</span><span>余烬航线<small>EMBERWAKE / 最后的信使</small></span></a>
+        <div class="telemetry">
+            <div><span>燃料储备</span><strong id="fuel">36 <small>/ 48</small></strong><meter id="fuel-meter" min="0" max="48" value="36" aria-label="燃料"></meter></div>
+            <div><span>风暴抵达</span><strong id="time">120 <small>小时</small></strong><meter id="time-meter" min="0" max="120" value="120" aria-label="剩余时间"></meter></div>
+            <div class="signal-metric"><span>归航信号</span><strong id="signals">0 <small>/ 3</small></strong><span id="signal-lights" aria-hidden="true">○ ○ ○</span></div>
+        </div>
+        <button class="quiet" id="help-button" aria-label="航行手册">?</button>
+    </header>
+
+    <aside class="mission panel">
+        <div class="eyebrow"><span class="live-dot"></span> EXPEDITION 001</div>
+        <h1>让世界，<br>再次听见彼此。</h1>
+        <p class="muted">长夜将至。连接失落的信标，<br>为漂泊的船队点亮归途。</p>
+        <div class="divider"></div>
+        <div class="section-label">信号网络 <span id="mission-count">00 / 03</span></div>
+        <div id="beacons" class="beacon-list"></div>
+        <button id="objective" class="outline full">定位下一座信标 <span>↗</span></button>
+        <div id="upgrades" class="installed">飞艇尚未改装</div>
+    </aside>
+
+    <aside class="navigation panel">
+        <div class="section-label">近域雷达 <span id="coordinates">00 / 00</span></div>
+        <canvas id="radar" width="250" height="230" aria-label="近域雷达；点击亮点选择目的地"></canvas>
+        <div class="radar-legend"><span><i class="gold"></i>信标</span><span><i class="mint"></i>补给</span><span><i class="blue"></i>回声</span></div>
+        <button id="follow" class="quiet full">◎ 回到飞艇 <kbd>F</kbd></button>
+    </aside>
+
+    <aside class="journal">
+        <div class="eyebrow">船长日志 <span id="save-status">正在连接航图…</span></div>
+        <p id="log" aria-live="polite">风从海面升起。我们还有最后一次机会。</p>
+    </aside>
+
+    <section class="flight-deck panel" aria-label="航行控制">
+        <div class="destination"><div class="eyebrow" id="destination-kind">停泊于母港</div><strong id="destination-name">选择你的第一段航线</strong><span id="route-detail">点击地面或雷达选点，再启航。</span></div>
+        <div class="deck-actions">
+            <button id="interact" class="outline" disabled>停靠交互 <kbd>E</kbd></button>
+            <button id="charge" class="outline" disabled>太阳帆充能 <kbd>R</kbd></button>
+            <button id="fly" class="primary" disabled>启航 <span>→</span></button>
+        </div>
+    </section>
+    <footer class="footer"><span>无限世界 · 回合制探索</span><span>WASD 移动镜头 · 右键旋转 · 滚轮缩放</span><a href="index.html">基建实验室 ↗</a></footer>
+    <div id="notice" role="status" hidden></div>
+
+    <dialog id="welcome">
+        <div class="dialog-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><span>✦</span><small>TRANSMISSION / 001</small></div>
+        <div class="eyebrow">一段穿过无限世界的短途冒险</div>
+        <h2>余烬未熄，<br>我们就能找到彼此。</h2>
+        <p>你是最后一艘信使艇的船长。风暴将在 <b>120 小时</b>后覆盖天空。点亮 <b>3 座信标</b>，然后返回母港。</p>
+        <div class="briefing"><p><b>01 / 规划</b> 点击地面、雷达或信标卡片，选择航线。飞艇可以越过山海。</p><p><b>02 / 取舍</b> 每格 1 小时、1–2 燃料。补给站可停靠；太阳帆用 3 小时换取 6 燃料。</p><p><b>03 / 归航</b> 信标补充燃料并提供改装。航行只在行动时推进，每一步自动存档。</p></div>
+        <div class="seed-row"><label for="seed">航图种子</label><input id="seed" maxlength="64" spellcheck="false"></div>
+        <p class="muted small" id="welcome-status" aria-live="polite">正在生成世界…</p>
+        <div class="dialog-actions"><button id="new-game" class="outline" disabled>新航程</button><button id="begin" class="primary" disabled>准备飞艇…</button></div>
+    </dialog>
+
+    <dialog id="upgrade-dialog"><div class="eyebrow">信号接通 / 改装机会</div><h2>为下一程，<br>添一点可能。</h2><p>选择一项尚未安装的改装，不消耗时间。</p><div id="upgrade-options"></div></dialog>
+    <dialog id="ending"><div class="eyebrow" id="ending-label"></div><h2 id="ending-title"></h2><p id="ending-text"></p><div id="ending-score"></div><button id="again" class="primary full">再启一段航程 ↗</button></dialog>
+
+    <script type="module">
+        import * as THREE from "./js/vendor/three.module.js";
+        window.THREE = THREE;
+        await import("./js/hex-map.global.js");
+        await import("./emberwake/app.js");
+    </script>
+</body>
+</html>
