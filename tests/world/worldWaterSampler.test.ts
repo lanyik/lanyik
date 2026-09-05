@@ -4,7 +4,7 @@ import { Land } from "../../src/enums";
 import { getNeighbors } from "../../src/helpers/neighbors";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldWaterSampler, WorldWaterSampleAt } from "../../src/world/WorldWaterSampler";
-import { createWorldStyleProfile, DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
+import { DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
 
 const isBaseWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 const key = (x: number, y: number): string => `${x},${y}`;
@@ -87,11 +87,9 @@ function sampledWaterComponents(mask: Uint8Array, width: number, height: number)
 
 describe("generated water network", () => {
     test("extends established courses upstream without removing their downstream water", () => {
-        const extension = (riverLength: number) => createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength })
-            .rivers.upstreamExtensionSteps;
-        const original = slopingRiverTiles({ upstreamExtensionSteps: extension(0) });
-        const extended = slopingRiverTiles({ upstreamExtensionSteps: extension(24) });
-        const longest = slopingRiverTiles({ upstreamExtensionSteps: extension(96) });
+        const original = slopingRiverTiles({ upstreamExtensionSteps: 0 });
+        const extended = slopingRiverTiles({ upstreamExtensionSteps: 3 });
+        const longest = slopingRiverTiles({ upstreamExtensionSteps: 12 });
         for (const tile of original) expect(extended.has(tile)).toBe(true);
         for (const tile of extended) expect(longest.has(tile)).toBe(true);
         expect(extended.size).toBeGreaterThan(original.size * 1.1);
@@ -110,6 +108,50 @@ describe("generated water network", () => {
             const x = Number(tile.split(",")[0]);
             expect(x).toBeGreaterThan(80);
             expect(x).toBeLessThan(112);
+        }
+    });
+
+    test("changes real seeded river extent across the entire length slider, not just an upstream search cap", () => {
+        let previous = new Set<string>();
+        const counts: number[] = [];
+        for (const riverLength of [10, 25, 50, 75, 100]) {
+            const resolver = createWorldSurfaceResolver({
+                seed: "new-world", waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverLength }
+            });
+            const cells = new Set<string>();
+            resolver.visitGeneratedRiverTiles(-256, -256, 512, 512, (x, y) => cells.add(key(x, y)));
+            for (const cell of previous) expect(cells.has(cell)).toBe(true);
+            expect(cells.size).toBeGreaterThan(previous.size + 50);
+            counts.push(cells.size);
+            previous = cells;
+        }
+        expect(counts[4]).toBeGreaterThan(counts[0] * 2);
+    });
+
+    test("shorter courses retain a connected downstream suffix on a controlled coast", () => {
+        const short = slopingRiverTiles({ courseLengthRatio: 0.25 });
+        const half = slopingRiverTiles({ courseLengthRatio: 0.5 });
+        const full = slopingRiverTiles({ courseLengthRatio: 1 });
+        for (const tile of short) expect(half.has(tile)).toBe(true);
+        for (const tile of half) expect(full.has(tile)).toBe(true);
+        const mouth = (tiles: Set<string>) => new Set([...tiles].filter(tile => Number(tile.split(",")[0]) >= 104));
+        expect(mouth(short)).toEqual(mouth(full));
+        expect(short.size).toBeLessThan(full.size * 0.6);
+        const remaining = new Set(short);
+        while (remaining.size > 0) {
+            const start = remaining.values().next().value as string;
+            const queue = [start];
+            remaining.delete(start);
+            let drains = false;
+            for (const tile of queue) {
+                const [x, y] = tile.split(",").map(Number);
+                if (x >= 111 || y === 0 || y === 159) drains = true;
+                for (const neighbor of getNeighbors(x, y)) {
+                    const next = key(neighbor.x, neighbor.y);
+                    if (remaining.delete(next)) queue.push(next);
+                }
+            }
+            expect(drains).toBe(true);
         }
     });
 
@@ -145,7 +187,7 @@ describe("generated water network", () => {
         }
     });
 
-    test.each([0, 24, 96])("keeps overview and paged resolution identical at extension %i", riverLength => {
+    test.each([25, 50, 100])("keeps overview and paged resolution identical at length %i percent", riverLength => {
         const resolver = createWorldSurfaceResolver({
             seed: "new-world", waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverLength }
         });
@@ -237,7 +279,7 @@ describe("generated water network", () => {
                 ...DEFAULT_WORLD_WATER_STYLE,
                 oceanScale: 1, oceanLevel: 0.47, riverSourceCellSize: 12,
                 riverWarpScale: 0.03, riverWarpAmplitude: 3.25,
-                riverHighFlowRadius: 6, riverHighFlowThreshold: 2, riverLength: 96
+                riverHighFlowRadius: 6, riverHighFlowThreshold: 2, riverLength: 100
             }
         });
         const original = new Set<string>();

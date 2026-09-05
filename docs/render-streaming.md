@@ -545,6 +545,24 @@ remain ordinary errors. Replacement therefore cannot publish an old raster,
 retry old demand against the new source, or report expected teardown as a
 runtime failure.
 
+Source replacement preserves an expanded inspection viewport (open state,
+zoom and pan) instead of calling `clear()`, which is the explicit close/reset
+operation. Loading stops pan/zoom animation, clears the old destination and
+marks the Canvas busy. The frame loop, demand builder and request pump remain
+suspended until `load` publishes the new source. On publication, view spans and
+centre are clamped to the new domain before visible pages are requested.
+Compact views restart around the new camera. Expected aborted old-generation
+completions cannot install pixels, restart demand or overwrite the busy state.
+
+`refresh(true)` invalidates cached and pending pages while retaining the
+current viewport; `refresh()` merely fills current demand. `view.generation`
+exposes the raster epoch for refresh diagnostics. The demo refresh button uses
+the explicit invalidation path, is disabled while terrain/pages are loading,
+and shows a loading label instead of a misleading ready size. Water-parameter
+commits automatically take the same source-replacement path, so no periodic
+recalculation timer is needed. A failed demo load with no source explicitly
+clears the minimap instead of leaving it busy indefinitely.
+
 The minimap does not rebuild one monolithic rolling raster. Its logical view is
 split into power-of-two terrain pages sized at roughly half the current view
 span. Visible pages are requested first and completed pages enter a 64-entry
@@ -600,6 +618,11 @@ The UI policy is:
   is the logical camera target and horizontal view heading, and the amber
   diamond is the pending destination. The arrow is a dynamic overlay and does
   not invalidate cached terrain pages.
+- the expanded map is non-modal: the parameter panel (z=21) and non-interactive
+  performance HUD (z=20) remain above the map (z=19) and backdrop (z=18).
+  Its refresh button is in the footer, outside the overlaid HUD and parameter
+  panel at a 720p viewport. Do not use `aria-modal=true` while controls outside the
+  map remain interactive.
 
 The base raster is rebuildable navigation data, not authoritative gameplay
 state. Cities, units, explored/fog state, objectives, and terrain edits remain

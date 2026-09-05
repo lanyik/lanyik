@@ -5,6 +5,7 @@ import {
     createRiverReach,
     forEachHexRiverReach,
     RiverReach,
+    trimRiverReachStart,
     worldAxialToOffset,
     worldOffsetToAxial
 } from "./hexRaster";
@@ -41,6 +42,7 @@ interface RasterCourseNode {
     readonly nextKey?: string;
     reach?: RiverReach;
     distanceToSea: number;
+    visibleDistanceToSea: number;
     hasIncoming: boolean;
     flow: number;
     radius: number;
@@ -587,7 +589,10 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
                 const key = this.canonicalCourseKey(point);
                 const node = nodes.get(key);
                 if (node) node.flow += 1;
-                else nodes.set(key, { world, nextWorld, nextKey, distanceToSea: 0, hasIncoming: false, flow: 1, radius: 0 });
+                else nodes.set(key, {
+                    world, nextWorld, nextKey, distanceToSea: 0, visibleDistanceToSea: 0,
+                    hasIncoming: false, flow: 1, radius: 0
+                });
                 nextWorld = world;
                 nextKey = key;
             }
@@ -609,6 +614,22 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             node.distanceToSea = next.distanceToSea + node.reach.length;
         }
         const rivers = this.profile.rivers;
+        // Length changes only the retained upstream extent. Trace the same
+        // complete drainage graph first, so widths, bends and mouths stay fixed.
+        for (const course of courses) {
+            const head = nodes.get(this.canonicalCourseKey(course.points[0]))!;
+            head.visibleDistanceToSea = Math.max(
+                head.visibleDistanceToSea, head.distanceToSea * rivers.courseLengthRatio
+            );
+        }
+        // Propagate source budgets downstream; confluences keep the union of
+        // all contributing suffixes, never leaving a branch disconnected.
+        const upstreamFirst = [...nodes.values()].reverse();
+        for (const node of upstreamFirst) {
+            if (node.nextKey === undefined) continue;
+            const next = nodes.get(node.nextKey)!;
+            next.visibleDistanceToSea = Math.max(next.visibleDistanceToSea, node.visibleDistanceToSea);
+        }
         for (const node of nodes.values()) {
             const flowRadius = rivers.baseCourseRadius
                 + (rivers.highFlowCourseRadius - rivers.baseCourseRadius)
@@ -632,8 +653,13 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         // including confluences and toroidal copies. Rasterize it only once.
         for (const node of nodes.values()) {
             if (!node.reach || node.nextKey === undefined) continue;
+            const next = nodes.get(node.nextKey)!;
+            if (node.visibleDistanceToSea <= next.distanceToSea) continue;
+            const trim = Math.max(0, node.distanceToSea - node.visibleDistanceToSea);
+            const fraction = node.reach.length > 0 ? trim / node.reach.length : 0;
             forEachHexRiverReach(
-                node.reach, node.radius, nodes.get(node.nextKey)!.radius, emit
+                trimRiverReachStart(node.reach, trim),
+                node.radius + (next.radius - node.radius) * fraction, next.radius, emit
             );
         }
     }

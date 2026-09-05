@@ -212,7 +212,7 @@ describe("WorldSurfaceResolver", () => {
             oceanLevel: 0.56,
             riverSourceCellSize: 18,
             riverSourcesPerCell: 6,
-            riverLength: 64,
+            riverLength: 65,
             riverWarpScale: 0.04,
             riverWarpAmplitude: 3,
             riverBaseRadius: 0.5,
@@ -227,7 +227,7 @@ describe("WorldSurfaceResolver", () => {
         expect(profile.rivers).toMatchObject({
             sourceCellSize: 18,
             sourcesPerCell: 6,
-            upstreamExtensionSteps: 8,
+            courseLengthRatio: 0.65,
             courseWarpScale: 0.04,
             courseWarpAmplitude: 3,
             baseCourseRadius: 0.5,

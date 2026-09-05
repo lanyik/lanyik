@@ -44,6 +44,7 @@ const minimapHint = document.querySelector("[data-minimap-hint]");
 const minimapCanvas = document.querySelector("[data-world-minimap]");
 const minimapPanel = document.querySelector("[data-minimap-panel]");
 const minimapBackdrop = document.querySelector("[data-minimap-backdrop]");
+const minimapRefresh = document.querySelector("[data-minimap-refresh]");
 
 function readInitialLocale() {
     try {
@@ -143,8 +144,7 @@ const minimap = new WorldMinimap({
         minimapPanel.classList.toggle("minimap-panel--expanded", expanded);
         minimapBackdrop.hidden = !expanded;
         minimapPanel.setAttribute("role", expanded ? "dialog" : "region");
-        if (expanded) minimapPanel.setAttribute("aria-modal", "true");
-        else minimapPanel.removeAttribute("aria-modal");
+        // The authoring panel remains usable while the overview is expanded.
         minimapHint.textContent = i18n.t(expanded ? "minimap.expandedHint" : "minimap.hint");
         minimapCanvas.setAttribute("aria-label", i18n.t(
             expanded ? "minimap.expandedLabel" : "minimap.label"
@@ -154,6 +154,16 @@ const minimap = new WorldMinimap({
 });
 window.worldMinimap = minimap;
 minimapBackdrop.addEventListener("click", () => minimap.setExpanded(false));
+minimapRefresh.addEventListener("click", async () => {
+    minimapRefresh.disabled = true;
+    try {
+        await minimap.refresh(true);
+    } catch (error) {
+        console.error("World minimap refresh failed", error);
+    } finally {
+        minimapRefresh.disabled = generating || minimap.view.loading;
+    }
+});
 
 function inspectRenderBackend() {
     const gl = map.renderer?.getContext();
@@ -568,6 +578,7 @@ async function regenerate() {
             seed: controls.seed
         });
     } catch (error) {
+        if (!map.worldDescriptor) minimap.clear();
         console.error(error);
         setStatus("failed", {
             message: error instanceof Error ? error.message : String(error)
@@ -764,6 +775,7 @@ function applyLocale(locale) {
     document.title = i18n.t("app.title");
     controlsHint.textContent = i18n.t("status.controlsHint");
     minimapTitle.textContent = i18n.t("minimap.title");
+    minimapRefresh.textContent = i18n.t("minimap.refresh");
     minimapHint.textContent = i18n.t(minimap.isExpanded ? "minimap.expandedHint" : "minimap.hint");
     minimapCanvas.setAttribute("aria-label", i18n.t(
         minimap.isExpanded ? "minimap.expandedLabel" : "minimap.label"
@@ -796,9 +808,11 @@ map.on("frame", ({ t }) => {
     if (t - minimapStatusAt < 250) return;
     minimapStatusAt = t;
     const view = minimap.view;
-    const text = view.tileSpanX && view.tileSpanY
-        ? `${Math.round(view.tileSpanX)} × ${Math.round(view.tileSpanY)}`
-        : i18n.t(view.loading ? "minimap.loading" : "minimap.waiting");
+    minimapRefresh.disabled = generating || view.loading;
+    const text = view.loading ? i18n.t("minimap.loading")
+        : view.tileSpanX && view.tileSpanY
+            ? `${Math.round(view.tileSpanX)} × ${Math.round(view.tileSpanY)}`
+            : i18n.t("minimap.waiting");
     if (text !== minimapWindowText) {
         minimapWindowText = text;
         minimapWindow.textContent = text;

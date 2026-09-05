@@ -17,7 +17,7 @@ describe("water authoring contract", () => {
     test("uses the reviewed defaults in both direct samplers and authored worlds", () => {
         expect(DEFAULT_WORLD_WATER_STYLE).toEqual({
             oceanScale: 1.4, oceanLevel: 0.46,
-            riverSourceCellSize: 16, riverSourcesPerCell: 4, riverLength: 24,
+            riverSourceCellSize: 16, riverSourcesPerCell: 4, riverLength: 100,
             riverWarpScale: 0.08, riverWarpAmplitude: 3.75,
             riverBaseRadius: 1.75, riverHighFlowRadius: 4, riverHighFlowThreshold: 24
         });
@@ -38,10 +38,11 @@ describe("water authoring contract", () => {
                 expect(() => createWorldStyleProfile(style)).not.toThrow();
                 const descriptor = createWorldDescriptor({ seed: "water-authoring", waterStyle: style });
                 expect(normalizeWorldWaterGenerationStyle(style)[name]).toBe(value);
-                expect(serializeWorldWaterGenerationStyle(style)).not.toBe(serializeWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE));
-                expect(worldWaterGenerationStylesEqual(style, DEFAULT_WORLD_WATER_STYLE)).toBe(false);
-                expect(serializeWorldDescriptor(descriptor)).not.toBe(serializeWorldDescriptor(base));
-                expect(worldDescriptorsEqual(descriptor, base)).toBe(false);
+                const unchanged = value === DEFAULT_WORLD_WATER_STYLE[name];
+                expect(serializeWorldWaterGenerationStyle(style) === serializeWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE)).toBe(unchanged);
+                expect(worldWaterGenerationStylesEqual(style, DEFAULT_WORLD_WATER_STYLE)).toBe(unchanged);
+                expect(serializeWorldDescriptor(descriptor) === serializeWorldDescriptor(base)).toBe(unchanged);
+                expect(worldDescriptorsEqual(descriptor, base)).toBe(unchanged);
             }
             for (const value of [min - step, max + step, NaN, Infinity, -Infinity, undefined, "1"]) {
                 expect(() => assertWorldWaterGenerationStyle({ ...DEFAULT_WORLD_WATER_STYLE, [name]: value }))
@@ -62,8 +63,9 @@ describe("water authoring contract", () => {
         }
         expect(WORLD_WATER_STYLE_RANGES.riverBaseRadius.max).toBeLessThan(WORLD_WATER_STYLE_RANGES.riverHighFlowRadius.min);
         expect(WORLD_WATER_STYLE_RANGES.riverWarpAmplitude.max).toBeLessThan(WORLD_STYLE_PROFILE.rivers.courseStep / 2);
-        const longest = createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength: 96 });
-        expect(longest.rivers.upstreamExtensionSteps).toBe(12);
+        const longest = createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength: 100 });
+        expect(longest.rivers.courseLengthRatio).toBe(1);
+        expect(longest.rivers.upstreamExtensionSteps).toBe(WORLD_STYLE_PROFILE.rivers.upstreamExtensionSteps);
         expect(longest.rivers.maximumCourseLength).toBe(WORLD_STYLE_PROFILE.rivers.maximumCourseLength);
     });
 });

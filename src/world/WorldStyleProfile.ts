@@ -125,6 +125,8 @@ export interface WorldStyleProfile {
         readonly minimumCourseLength: number;
         readonly maximumCourseLength: number;
         readonly upstreamExtensionSteps: number;
+        /** Visible source-to-sea arc-length fraction of the complete drainage network. */
+        readonly courseLengthRatio: number;
         readonly baseCourseRadius: number;
         readonly highFlowCourseRadius: number;
         readonly highFlowThreshold: number;
@@ -150,7 +152,7 @@ export interface WorldWaterGenerationStyle {
     readonly oceanLevel: number;
     readonly riverSourceCellSize: number;
     readonly riverSourcesPerCell: number;
-    /** Nominal upstream extension in world tiles, in course-step increments; not total source-to-sea length. */
+    /** Percentage of the complete source-to-sea course to retain, measured from the sea upstream. */
     readonly riverLength: number;
     readonly riverWarpScale: number;
     readonly riverWarpAmplitude: number;
@@ -164,7 +166,7 @@ export const DEFAULT_WORLD_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Ob
     oceanLevel: 0.46,
     riverSourceCellSize: 16,
     riverSourcesPerCell: 4,
-    riverLength: 24,
+    riverLength: 100,
     riverWarpScale: 0.08,
     riverWarpAmplitude: 3.75,
     riverBaseRadius: 1.75,
@@ -181,7 +183,7 @@ export const WORLD_WATER_STYLE_RANGES = Object.freeze({
     oceanLevel: waterRange(0.32, 0.6, 0.005),
     riverSourceCellSize: waterRange(8, 32, 1),
     riverSourcesPerCell: waterRange(1, 8, 1),
-    riverLength: waterRange(0, 96, RIVER_COURSE_STEP),
+    riverLength: waterRange(10, 100, 5),
     riverWarpScale: waterRange(0.02, 0.12, 0.001),
     riverWarpAmplitude: waterRange(0, 3.9, 0.05),
     // Disjoint intervals keep every slider combination valid: tributary < main river.
@@ -325,7 +327,8 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         sourceMoistureFloor: 0.7,
         minimumCourseLength: 3,
         maximumCourseLength: 72,
-        upstreamExtensionSteps: DEFAULT_WORLD_WATER_STYLE.riverLength / RIVER_COURSE_STEP,
+        upstreamExtensionSteps: 3,
+        courseLengthRatio: DEFAULT_WORLD_WATER_STYLE.riverLength / 100,
         baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
         highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
         highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
@@ -521,6 +524,8 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     ] as const) positive(`rivers.${name}`, rivers[name]);
     nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
     nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
+    unitInterval("rivers.courseLengthRatio", rivers.courseLengthRatio);
+    positive("rivers.courseLengthRatio", rivers.courseLengthRatio);
     if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
         throw new RangeError("river course length range must be ordered");
     }
@@ -644,7 +649,7 @@ export function createWorldStyleProfile(
             ...WORLD_STYLE_PROFILE.rivers,
             sourceCellSize: style.riverSourceCellSize,
             sourcesPerCell: style.riverSourcesPerCell,
-            upstreamExtensionSteps: style.riverLength / RIVER_COURSE_STEP,
+            courseLengthRatio: style.riverLength / 100,
             courseWarpScale: style.riverWarpScale,
             courseWarpAmplitude: style.riverWarpAmplitude,
             baseCourseRadius: style.riverBaseRadius,

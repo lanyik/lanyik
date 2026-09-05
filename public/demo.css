@@ -26,7 +26,7 @@ body {
     position: fixed;
     top: 12px;
     left: 12px;
-    z-index: 9;
+    z-index: 20;
     width: min(650px, calc(100vw - 360px));
     min-width: 520px;
     padding: 9px;
@@ -218,6 +218,7 @@ body {
     align-items: baseline;
     justify-content: space-between;
     gap: 8px;
+    gap: 8px;
     padding: 0 2px 7px;
 }
 
@@ -227,9 +228,33 @@ body {
 }
 
 .minimap-panel header span {
+    margin-left: auto;
     color: #84b8ad;
     font-size: 10px;
     font-variant-numeric: tabular-nums;
+}
+
+.minimap-panel__refresh {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    color: #bff8ea;
+    background: #123b40;
+    border: 1px solid #548f88;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.minimap-panel__refresh:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+
+.minimap-panel footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .minimap-panel__canvas {
@@ -281,10 +306,10 @@ body {
     border-top: 1px solid rgba(255, 200, 87, 0.2);
 }
 
-/* dat.gui injects its .dg.ac rule after this stylesheet. Keep the authoring
-   panel above the compact minimap, but below the expanded map overlay. */
+/* dat.gui injects its .dg.ac rule after this stylesheet. Authoring remains
+   interactive above both map overlays and the non-interactive performance HUD. */
 body > .dg.ac {
-    z-index: 10;
+    z-index: 21;
 }
 
 @media (max-width: 640px) {

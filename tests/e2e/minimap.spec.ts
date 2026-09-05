@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 interface MinimapView {
+    generation: number;
+    pageRequests: number;
+    pageCompletions: number;
     loading: boolean;
     originX?: number;
     originY?: number;
@@ -24,13 +27,86 @@ interface MinimapView {
 async function waitForMinimap(page: import("@playwright/test").Page): Promise<void> {
     await page.waitForFunction(() => {
         const diagnostics = (window as unknown as {
-            getWorldDiagnostics?: () => { status: string; minimap?: MinimapView };
+            getWorldDiagnostics?: () => { status: string; generating: boolean; minimap?: MinimapView };
         }).getWorldDiagnostics?.();
-        return diagnostics?.status === "generated"
+        return diagnostics && !diagnostics.generating && diagnostics.status !== "failed"
             && diagnostics.minimap?.loading === false
             && (diagnostics.minimap.cachedPages ?? 0) > 0;
-    });
+    }, undefined, { timeout: 20_000 });
 }
+
+test("authors visible river lengths above an expanded map and refreshes without losing the inspection view", async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
+    await waitForMinimap(page);
+    await page.keyboard.press("m");
+    const canvas = page.locator("[data-world-minimap]");
+    await canvas.hover({ position: { x: 280, y: 310 } });
+    await page.mouse.wheel(0, -100);
+    await expect.poll(() => page.evaluate(() => (window as unknown as {
+        worldMinimap: { view: MinimapView };
+    }).worldMinimap.view.zoom)).toBeCloseTo(Math.exp(0.15), 6);
+    // Pan away from the main camera so a reset-to-camera bug cannot pass.
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + 280, bounds.y + 310);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.move(bounds.x + 310, bounds.y + 330, { steps: 3 });
+    await page.mouse.up({ button: "right" });
+    await waitForMinimap(page);
+
+    const snapshot = () => page.evaluate(() => {
+        const canvas = document.querySelector("[data-world-minimap]") as HTMLCanvasElement;
+        const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+        let hash = 0x811c9dc5;
+        for (const value of pixels) hash = Math.imul(hash ^ value, 0x01000193);
+        return {
+            view: (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view,
+            hash: hash >>> 0
+        };
+    });
+    const before = await snapshot();
+    const layers = await page.evaluate(() => {
+        const z = (selector: string) => Number(getComputedStyle(document.querySelector(selector)!).zIndex);
+        return { controls: z(".dg.ac"), monitor: z(".performance-panel"), overview: z(".minimap-panel") };
+    });
+    expect(layers.controls).toBeGreaterThan(layers.overview);
+    expect(layers.monitor).toBeGreaterThan(layers.overview);
+    await expect(page.locator("[data-minimap-panel]")).not.toHaveAttribute("aria-modal", "true");
+
+    const length = page.locator('[data-water-generation="riverLength"]');
+    const slider = page.locator(".cr.number").filter({ has: length }).locator(".slider");
+    await expect(slider).toBeVisible();
+    const sliderBounds = (await slider.boundingBox())!;
+    await page.mouse.move(sliderBounds.x + sliderBounds.width - 1, sliderBounds.y + sliderBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(sliderBounds.x + sliderBounds.width * (50 - 10) / 90, sliderBounds.y + sliderBounds.height / 2);
+    await page.mouse.up();
+    await expect(length).toHaveValue("50");
+    await page.waitForFunction(() => (window as unknown as {
+        getWorldDiagnostics(): { waterStyle?: { riverLength: number }; generating: boolean };
+    }).getWorldDiagnostics().waterStyle?.riverLength === 50);
+    await waitForMinimap(page);
+    const after = await snapshot();
+    expect(after.view).toMatchObject({
+        expanded: true, originX: before.view.originX, originY: before.view.originY,
+        tileSpanX: before.view.tileSpanX, tileSpanY: before.view.tileSpanY, zoom: before.view.zoom
+    });
+    expect(after.view.generation).toBeGreaterThan(before.view.generation);
+    expect(after.hash).not.toBe(before.hash);
+
+    const refresh = page.locator("[data-minimap-refresh]");
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
+    await waitForMinimap(page);
+    const refreshed = await snapshot();
+    expect(refreshed.view.generation).toBeGreaterThan(after.view.generation);
+    expect(refreshed.view.pageRequests).toBeGreaterThan(after.view.pageRequests);
+    expect(refreshed.view.expanded).toBe(true);
+    expect(refreshed.hash).toBe(after.hash);
+    expect(errors).toEqual([]);
+});
 
 test("expanded minimap zooms, selects a target, and teleports only after T", async ({ page }) => {
     const pageErrors: string[] = [];

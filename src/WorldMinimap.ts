@@ -22,6 +22,8 @@ export interface WorldMinimapOptions {
 }
 
 export interface WorldMinimapView {
+    /** Raster generation; changes on source replacement or explicit invalidation. */
+    readonly generation: number;
     readonly loading: boolean;
     readonly originX?: number;
     readonly originY?: number;
@@ -205,6 +207,7 @@ export class WorldMinimap {
     private retryTimer: number | undefined;
     private retryTimerAt = Infinity;
     private pageGeneration = 0;
+    private worldLoading = false;
     private expanded = false;
     private zoomFactor = 1;
     private targetZoomFactor = 1;
@@ -275,7 +278,8 @@ export class WorldMinimap {
         const extent = this.viewportExtent();
         const pixels = extent ? this.viewPixelSize(extent) : undefined;
         return {
-            loading: this.hasMissingVisiblePages(),
+            generation: this.pageGeneration,
+            loading: this.worldLoading || this.hasMissingVisiblePages(),
             originX: extent?.originX,
             originY: extent?.originY,
             tileSpanX: extent?.tileSpanX,
@@ -332,13 +336,18 @@ export class WorldMinimap {
 
     public refresh(force = false): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
+        if (force) this.resetPageData();
+        if (this.worldLoading) {
+            this.updateCanvasState();
+            this.render();
+            return Promise.resolve();
+        }
         const cameraTarget = this.map.getCameraTargetTile();
         if (!cameraTarget) {
             this.updateCanvasState();
             this.render();
             return Promise.resolve();
         }
-        if (force) this.resetPageData();
         this.viewport ??= this.createViewport(cameraTarget);
         this.syncPageDemand(force);
         this.render();
@@ -349,6 +358,7 @@ export class WorldMinimap {
         if (this.disposed) return;
         this.endPan();
         this.resetPageData();
+        this.worldLoading = false;
         const wasExpanded = this.expanded;
         this.expanded = false;
         this.zoomFactor = 1;
@@ -531,6 +541,7 @@ export class WorldMinimap {
     }
 
     private syncPageDemand(force = false): void {
+        if (this.worldLoading) return;
         const window = this.pageDemandWindow();
         const signature = window?.signature ?? "empty";
         if (!force && signature === this.demandSignature) return;
@@ -624,7 +635,7 @@ export class WorldMinimap {
     }
 
     private pumpPageRequests(): void {
-        if (this.disposed || !this.viewport) return;
+        if (this.disposed || this.worldLoading || !this.viewport) return;
         const now = performance.now();
         while (this.pendingPages.size < MAX_ACTIVE_PAGE_REQUESTS) {
             const candidates = [...this.pageDemand.values()]
@@ -820,6 +831,11 @@ export class WorldMinimap {
     }
 
     private updateCanvasState(): void {
+        if (this.worldLoading) {
+            this.canvas.dataset.state = "loading";
+            this.canvas.setAttribute("aria-busy", "true");
+            return;
+        }
         const visible = this.visiblePageDemands();
         if (!this.viewport || visible.length === 0) {
             this.canvas.dataset.state = "empty";
@@ -981,7 +997,7 @@ export class WorldMinimap {
         context.strokeStyle = "rgba(124, 235, 211, 0.42)";
         context.lineWidth = 1;
         context.strokeRect(rect.x + 0.5, rect.y + 0.5, Math.max(0, rect.width - 1), Math.max(0, rect.height - 1));
-        if (pagesDrawn === 0 && this.hasMissingVisiblePages()) {
+        if (pagesDrawn === 0 && (this.worldLoading || this.hasMissingVisiblePages())) {
             context.fillStyle = "#9debd8";
             context.font = "600 18px system-ui, sans-serif";
             context.textAlign = "center";
@@ -1152,7 +1168,7 @@ export class WorldMinimap {
     }
 
     private teleportToDestination(): void {
-        if (!this.expanded || !this.destination) return;
+        if (this.worldLoading || !this.expanded || !this.destination) return;
         const destination = { ...this.destination };
         this.map.setCameraTargetTile(destination.x, destination.y);
         this.onNavigate?.(destination);
@@ -1292,14 +1308,31 @@ export class WorldMinimap {
     };
 
     private handleWorldLoadStart = (): void => {
-        this.clear();
+        // Replacing terrain invalidates pixels, not the user's inspection view.
+        // No overview work may run against the replacement until its load event.
+        this.worldLoading = true;
+        this.endPan();
+        this.stopZoomAnimation();
+        this.resetPageData();
+        if (!this.expanded) this.viewport = undefined;
+        this.setDestination(undefined);
+        this.updateCanvasState();
+        this.render();
     };
 
     private handleWorldLoad = (): void => {
-        void this.refresh(true);
+        this.worldLoading = false;
+        if (this.viewport && this.expanded) {
+            const spans = this.viewSpans();
+            if (spans) Object.assign(this.viewport, spans);
+            this.targetZoomFactor = this.zoomFactor;
+            this.clampViewport(this.viewport);
+        }
+        void this.refresh();
     };
 
     private handleFrame = (frame: { dtS?: number }): void => {
+        if (this.worldLoading) return;
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS as number) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;

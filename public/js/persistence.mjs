@@ -11,7 +11,7 @@ var Land = /* @__PURE__ */ ((Land2) => {
 })(Land || {});
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 17;
+var WORLD_GENERATOR_VERSION = 18;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -19,7 +19,7 @@ var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
   oceanLevel: 0.46,
   riverSourceCellSize: 16,
   riverSourcesPerCell: 4,
-  riverLength: 24,
+  riverLength: 100,
   riverWarpScale: 0.08,
   riverWarpAmplitude: 3.75,
   riverBaseRadius: 1.75,
@@ -33,7 +33,7 @@ var WORLD_WATER_STYLE_RANGES = Object.freeze({
   oceanLevel: waterRange(0.32, 0.6, 5e-3),
   riverSourceCellSize: waterRange(8, 32, 1),
   riverSourcesPerCell: waterRange(1, 8, 1),
-  riverLength: waterRange(0, 96, RIVER_COURSE_STEP),
+  riverLength: waterRange(10, 100, 5),
   riverWarpScale: waterRange(0.02, 0.12, 1e-3),
   riverWarpAmplitude: waterRange(0, 3.9, 0.05),
   // Disjoint intervals keep every slider combination valid: tributary < main river.
@@ -170,7 +170,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     sourceMoistureFloor: 0.7,
     minimumCourseLength: 3,
     maximumCourseLength: 72,
-    upstreamExtensionSteps: DEFAULT_WORLD_WATER_STYLE.riverLength / RIVER_COURSE_STEP,
+    upstreamExtensionSteps: 3,
+    courseLengthRatio: DEFAULT_WORLD_WATER_STYLE.riverLength / 100,
     baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
     highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
     highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
@@ -389,6 +390,8 @@ function assertWorldStyleProfile(value) {
   ]) positive(`rivers.${name}`, rivers[name]);
   nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
   nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
+  unitInterval("rivers.courseLengthRatio", rivers.courseLengthRatio);
+  positive("rivers.courseLengthRatio", rivers.courseLengthRatio);
   if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
     throw new RangeError("river course length range must be ordered");
   }
@@ -538,7 +541,7 @@ var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
 
 // src/world/WorldDescriptor.ts
-var WORLD_DESCRIPTOR_FORMAT_VERSION = 3;
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 4;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);

@@ -154,11 +154,11 @@ test("regenerates the world with water parameters from the control panel", async
     await expect(oceanLevel).toHaveValue("0.54");
 
     const length = page.locator('[data-water-generation="riverLength"]');
-    await length.fill(String(WORLD_WATER_STYLE_RANGES.riverLength.max));
+    await length.fill(String(WORLD_WATER_STYLE_RANGES.riverLength.min));
     await length.press("Enter");
     await page.waitForFunction(() => {
         const state = (window as unknown as { getWorldDiagnostics(): DemoDiagnostics }).getWorldDiagnostics();
-        return state.status === "generated" && !state.generating && state.waterStyle?.riverLength === 96;
+        return state.status === "generated" && !state.generating && state.waterStyle?.riverLength === 10;
     });
     // Reset must reset the generator as well as the panel, including the new field.
     await page.getByText("Reset water parameters", { exact: true }).click();
@@ -167,6 +167,6 @@ test("regenerates the world with water parameters from the control panel", async
         return state.status === "generated" && !state.generating
             && JSON.stringify(state.waterStyle) === JSON.stringify(defaults);
     }, DEFAULT_WORLD_WATER_STYLE);
-    await expect(length).toHaveValue("24");
+    await expect(length).toHaveValue("100");
     await expect(oceanLevel).toHaveValue("0.46");
 });

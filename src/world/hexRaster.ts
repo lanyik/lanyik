@@ -123,6 +123,29 @@ export function createRiverReach(
     return { samples, length };
 }
 
+// Retain a suffix without snapping its new source to a coarse drainage node.
+// Distances are measured on the same tessellated curve used for water ownership.
+export function trimRiverReachStart(reach: RiverReach, distance: number): RiverReach {
+    if (!Number.isFinite(distance) || distance < 0 || distance > reach.length) {
+        throw new RangeError("river trim distance must stay within its arc length");
+    }
+    if (distance === 0) return reach;
+    const endIndex = reach.samples.findIndex(sample => sample.distance >= distance);
+    const end = reach.samples[endIndex];
+    const start = reach.samples[endIndex - 1];
+    const t = (distance - start.distance) / (end.distance - start.distance);
+    const samples: RiverCurveSample[] = [{
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+        distance: 0
+    }];
+    for (let index = endIndex; index < reach.samples.length; index += 1) {
+        const sample = reach.samples[index];
+        if (sample.distance > distance) samples.push({ ...sample, distance: sample.distance - distance });
+    }
+    return { samples, length: reach.length - distance };
+}
+
 // Sweep tapered disks along the unrounded curve. Test each whole tile against
 // the union once, rather than snapping spline samples to hexes and reintroducing
 // angular centreline dilation. The quadratic tests the actual disk envelope.

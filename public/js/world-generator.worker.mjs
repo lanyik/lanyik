@@ -809,7 +809,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 17;
+var WORLD_GENERATOR_VERSION = 18;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -817,7 +817,7 @@ var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
   oceanLevel: 0.46,
   riverSourceCellSize: 16,
   riverSourcesPerCell: 4,
-  riverLength: 24,
+  riverLength: 100,
   riverWarpScale: 0.08,
   riverWarpAmplitude: 3.75,
   riverBaseRadius: 1.75,
@@ -831,7 +831,7 @@ var WORLD_WATER_STYLE_RANGES = Object.freeze({
   oceanLevel: waterRange(0.32, 0.6, 5e-3),
   riverSourceCellSize: waterRange(8, 32, 1),
   riverSourcesPerCell: waterRange(1, 8, 1),
-  riverLength: waterRange(0, 96, RIVER_COURSE_STEP),
+  riverLength: waterRange(10, 100, 5),
   riverWarpScale: waterRange(0.02, 0.12, 1e-3),
   riverWarpAmplitude: waterRange(0, 3.9, 0.05),
   // Disjoint intervals keep every slider combination valid: tributary < main river.
@@ -968,7 +968,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     sourceMoistureFloor: 0.7,
     minimumCourseLength: 3,
     maximumCourseLength: 72,
-    upstreamExtensionSteps: DEFAULT_WORLD_WATER_STYLE.riverLength / RIVER_COURSE_STEP,
+    upstreamExtensionSteps: 3,
+    courseLengthRatio: DEFAULT_WORLD_WATER_STYLE.riverLength / 100,
     baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
     highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
     highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
@@ -1187,6 +1188,8 @@ function assertWorldStyleProfile(value) {
   ]) positive(`rivers.${name}`, rivers[name]);
   nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
   nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
+  unitInterval("rivers.courseLengthRatio", rivers.courseLengthRatio);
+  positive("rivers.courseLengthRatio", rivers.courseLengthRatio);
   if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
     throw new RangeError("river course length range must be ordered");
   }
@@ -1287,7 +1290,7 @@ function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
       ...WORLD_STYLE_PROFILE.rivers,
       sourceCellSize: style.riverSourceCellSize,
       sourcesPerCell: style.riverSourcesPerCell,
-      upstreamExtensionSteps: style.riverLength / RIVER_COURSE_STEP,
+      courseLengthRatio: style.riverLength / 100,
       courseWarpScale: style.riverWarpScale,
       courseWarpAmplitude: style.riverWarpAmplitude,
       baseCourseRadius: style.riverBaseRadius,
@@ -1539,6 +1542,26 @@ function createRiverReach(from, to, downstream, startsAtSource = true) {
     samples.push({ ...point, distance: length });
   }
   return { samples, length };
+}
+function trimRiverReachStart(reach, distance) {
+  if (!Number.isFinite(distance) || distance < 0 || distance > reach.length) {
+    throw new RangeError("river trim distance must stay within its arc length");
+  }
+  if (distance === 0) return reach;
+  const endIndex = reach.samples.findIndex((sample) => sample.distance >= distance);
+  const end = reach.samples[endIndex];
+  const start = reach.samples[endIndex - 1];
+  const t = (distance - start.distance) / (end.distance - start.distance);
+  const samples = [{
+    x: start.x + (end.x - start.x) * t,
+    y: start.y + (end.y - start.y) * t,
+    distance: 0
+  }];
+  for (let index = endIndex; index < reach.samples.length; index += 1) {
+    const sample = reach.samples[index];
+    if (sample.distance > distance) samples.push({ ...sample, distance: sample.distance - distance });
+  }
+  return { samples, length: reach.length - distance };
 }
 function forEachHexRiverReach(reach, fromRadius, toRadius, visit) {
   if (!Number.isFinite(fromRadius) || fromRadius < 0 || !Number.isFinite(toRadius) || toRadius < 0) {
@@ -1988,7 +2011,16 @@ var DrainageWorldWaterSampler = class {
         const key = this.canonicalCourseKey(point);
         const node = nodes.get(key);
         if (node) node.flow += 1;
-        else nodes.set(key, { world, nextWorld, nextKey, distanceToSea: 0, hasIncoming: false, flow: 1, radius: 0 });
+        else nodes.set(key, {
+          world,
+          nextWorld,
+          nextKey,
+          distanceToSea: 0,
+          visibleDistanceToSea: 0,
+          hasIncoming: false,
+          flow: 1,
+          radius: 0
+        });
         nextWorld = world;
         nextKey = key;
       }
@@ -2007,6 +2039,19 @@ var DrainageWorldWaterSampler = class {
       node.distanceToSea = next.distanceToSea + node.reach.length;
     }
     const rivers = this.profile.rivers;
+    for (const course of courses) {
+      const head = nodes.get(this.canonicalCourseKey(course.points[0]));
+      head.visibleDistanceToSea = Math.max(
+        head.visibleDistanceToSea,
+        head.distanceToSea * rivers.courseLengthRatio
+      );
+    }
+    const upstreamFirst = [...nodes.values()].reverse();
+    for (const node of upstreamFirst) {
+      if (node.nextKey === void 0) continue;
+      const next = nodes.get(node.nextKey);
+      next.visibleDistanceToSea = Math.max(next.visibleDistanceToSea, node.visibleDistanceToSea);
+    }
     for (const node of nodes.values()) {
       const flowRadius = rivers.baseCourseRadius + (rivers.highFlowCourseRadius - rivers.baseCourseRadius) * smoothstep2(1, rivers.highFlowThreshold, node.flow);
       const mouth = 1 - smoothstep2(0, rivers.mouthWideningDistance, node.distanceToSea);
@@ -2025,10 +2070,14 @@ var DrainageWorldWaterSampler = class {
     };
     for (const node of nodes.values()) {
       if (!node.reach || node.nextKey === void 0) continue;
+      const next = nodes.get(node.nextKey);
+      if (node.visibleDistanceToSea <= next.distanceToSea) continue;
+      const trim = Math.max(0, node.distanceToSea - node.visibleDistanceToSea);
+      const fraction = node.reach.length > 0 ? trim / node.reach.length : 0;
       forEachHexRiverReach(
-        node.reach,
-        node.radius,
-        nodes.get(node.nextKey).radius,
+        trimRiverReachStart(node.reach, trim),
+        node.radius + (next.radius - node.radius) * fraction,
+        next.radius,
         emit
       );
     }
@@ -3114,8 +3163,8 @@ function worldVegetationTransferables(layout) {
 }
 
 // src/world/WorldDescriptor.ts
-var WORLD_DESCRIPTOR_FORMAT_VERSION = 3;
-var WORLD_WORKER_PROTOCOL_VERSION = 5;
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 4;
+var WORLD_WORKER_PROTOCOL_VERSION = 6;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);

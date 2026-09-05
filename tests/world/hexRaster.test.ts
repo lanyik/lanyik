@@ -6,6 +6,7 @@ import {
     createRiverReach,
     forEachHexRiverReach,
     rasterizeHexLine,
+    trimRiverReachStart,
     worldAxialToOffset,
     worldOffsetToAxial
 } from "../../src/world/hexRaster";
@@ -153,6 +154,27 @@ describe("render-grid hex rasterization", () => {
             }
         }
     );
+
+    test("trims by actual arc length without changing the downstream curve or tapered width", () => {
+        const reach = createRiverReach({ x: -8, y: -3 }, { x: 0, y: 2 }, { x: 4, y: 12 });
+        const original = new Set<string>();
+        forEachHexRiverReach(reach, 1.75, 3.25, point => original.add(key(point)));
+        for (const ratio of [0.1, 0.25, 0.5, 0.9]) {
+            const trimmed = trimRiverReachStart(reach, reach.length * ratio);
+            expect(trimmed.length).toBeCloseTo(reach.length * (1 - ratio), 12);
+            expect(trimmed.samples[0].distance).toBe(0);
+            expect(trimmed.samples[trimmed.samples.length - 1].x).toBe(reach.samples[reach.samples.length - 1].x);
+            expect(trimmed.samples[trimmed.samples.length - 1].y).toBe(reach.samples[reach.samples.length - 1].y);
+            const cells = new Set<string>();
+            forEachHexRiverReach(trimmed, 1.75 + 1.5 * ratio, 3.25, point => cells.add(key(point)));
+            for (const cell of cells) expect(original.has(cell)).toBe(true);
+            expect(cells.size).toBeLessThan(original.size);
+        }
+        expect(trimRiverReachStart(reach, 0)).toBe(reach);
+        for (const distance of [-1, NaN, Infinity, reach.length + 1]) {
+            expect(() => trimRiverReachStart(reach, distance)).toThrow(/trim distance/);
+        }
+    });
 
     test("keeps sub-cell widths connected and rejects invalid radii", () => {
         const from = { x: -4, y: -3 };
