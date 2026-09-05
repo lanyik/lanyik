@@ -536,6 +536,20 @@ owned `MapInfo` directly. Both paths use `WORLD_OVERVIEW_FORMAT_VERSION`; the
 Worker request/response addition is protocol v3 and transfers the pixel buffer
 instead of cloning it.
 
+River coverage follows the overview scale on each axis independently. When
+several world tiles map to one pixel, any mapped river tile retains that pixel.
+When one tile occupies multiple pixels, all pixel centres sampling that tile
+receive the river colour, using the inverse of the terrain's centre-sampling
+rule. Non-integer enlargement and rectangular/mixed-axis scaling follow the
+same rule; tile edges must not paint neighbouring land. The previous one-pixel
+write per river tile produced sparse dots when zooming in, so Canvas filtering
+made rivers fade even as the visible world extent became smaller.
+
+Coverage still comes from one bounded river enumeration, with row fills into
+the existing pixel mask; it never resolves drainage for every output pixel.
+This is a derived-raster correction only: world tiles, generator identity,
+RGBA payload layout, page cache ownership and Canvas filtering are unchanged.
+
 `HexMap` emits `loadstart` after validating the incoming source and before it
 closes the previous render-world session. `WorldMinimap` uses that boundary to
 advance its page generation, abort every old overview request, and clear pages

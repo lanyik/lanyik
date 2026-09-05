@@ -3355,21 +3355,23 @@ function overviewTileCoordinate(origin, span, pixel, pixels) {
 }
 function generatedRiverCoverage(options, resolver) {
   const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
+  const magnifyX = options.pixelWidth > options.tileSpanX;
+  const magnifyY = options.pixelHeight > options.tileSpanY;
   resolver.visitGeneratedRiverTiles(
     options.originX,
     options.originY,
     options.tileSpanX,
     options.tileSpanY,
     (x, y) => {
-      const px = Math.min(
-        options.pixelWidth - 1,
-        Math.floor((x - options.originX) * options.pixelWidth / options.tileSpanX)
-      );
-      const py = Math.min(
-        options.pixelHeight - 1,
-        Math.floor((y - options.originY) * options.pixelHeight / options.tileSpanY)
-      );
-      coverage[py * options.pixelWidth + px] = 1;
+      const localX = x - options.originX;
+      const localY = y - options.originY;
+      const firstX = magnifyX ? Math.max(0, Math.ceil(localX * options.pixelWidth / options.tileSpanX - 0.5)) : Math.floor(localX * options.pixelWidth / options.tileSpanX);
+      const firstY = magnifyY ? Math.max(0, Math.ceil(localY * options.pixelHeight / options.tileSpanY - 0.5)) : Math.floor(localY * options.pixelHeight / options.tileSpanY);
+      const endX = magnifyX ? Math.min(options.pixelWidth, Math.ceil((localX + 1) * options.pixelWidth / options.tileSpanX - 0.5)) : firstX + 1;
+      const endY = magnifyY ? Math.min(options.pixelHeight, Math.ceil((localY + 1) * options.pixelHeight / options.tileSpanY - 0.5)) : firstY + 1;
+      for (let py = firstY; py < endY; py += 1) {
+        coverage.fill(1, py * options.pixelWidth + firstX, py * options.pixelWidth + endX);
+      }
     }
   );
   return coverage;

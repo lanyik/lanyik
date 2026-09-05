@@ -141,6 +141,17 @@ its courses and lets the overview map river tiles directly to pixels. A
 2048×2048 world therefore samples 256×256 surface pixels plus coarse drainage
 work; it does not resolve 4,194,304 world tiles.
 
+Near-view rasterization must also cover a tile's complete projected footprint.
+For an enlarged axis, pixel indices belong to tile `t` when their centres
+sample `t`: `[ceil(t * pixels / span - 0.5), ceil((t + 1) * pixels / span - 0.5))`,
+clipped to the raster. A minified axis retains the existing single mapped pixel
+per river tile. Applying the rule independently per axis handles rectangular
+rasters and fractional enlargement without painting neighbouring land.
+Rows are filled into the existing bounded coverage mask. A fixed 32×32 river
+window at (-224, 96), seed `new-world`, has 142 river tiles: at 256×256 pixels
+it must paint 9,088 river pixels, not the former 142 isolated dots. No river
+generation, tile classification or world/protocol/format version changes.
+
 The implementation observation on the development machine is about 0.32 s in a
 direct process and a 0.40 s browser-worker median for a 2048×2048 infinite
 extent rendered to one 256×256 raster. This is a one-shot worker task and an

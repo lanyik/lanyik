@@ -36,6 +36,53 @@ async function waitForMinimap(page: import("@playwright/test").Page): Promise<vo
     }, undefined, { timeout: 20_000 });
 }
 
+test("near minimap zoom fills river cells instead of fading them into isolated pixels", async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto("/?infinite&quality=fast&x=-207&y=109", { waitUntil: "domcontentloaded" });
+    await waitForMinimap(page);
+    await page.keyboard.press("m");
+    await waitForMinimap(page);
+    const canvas = page.locator("[data-world-minimap]");
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    for (let index = 0; index < 7; index += 1) await page.mouse.wheel(0, -240);
+    await expect.poll(() => page.evaluate(() => (window as unknown as {
+        worldMinimap: { view: MinimapView };
+    }).worldMinimap.view.zoom)).toBe(8);
+    await waitForMinimap(page);
+    const snapshot = () => page.evaluate(() => {
+        const canvas = document.querySelector("[data-world-minimap]") as HTMLCanvasElement;
+        const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+        let riverPixels = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+            // Allow Canvas edge interpolation but exclude ocean and land colours.
+            if (pixels[index] < 50 && pixels[index + 1] > 115 && pixels[index + 2] > 150) riverPixels += 1;
+        }
+        const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
+        return {
+            riverRatio: riverPixels / (canvas.width * canvas.height),
+            extent: [view.originX, view.originY, view.tileSpanX, view.tileSpanY, view.zoom]
+        };
+    });
+    const near = await snapshot();
+    // Pointer-anchored zoom accumulates harmless sub-pixel floating-point error.
+    expect(near.extent[0]).toBeCloseTo(-238.5, 10);
+    expect(near.extent[1]).toBeCloseTo(77.5, 10);
+    expect(near.extent.slice(2)).toEqual([64, 64, 8]);
+    // The authoritative window contains about 6.25% river tiles. A dot per
+    // tile used to leave effectively no visible blue at this zoom.
+    expect(near.riverRatio).toBeGreaterThan(0.04);
+    expect(near.riverRatio).toBeLessThan(0.08);
+    await page.locator("[data-minimap-refresh]").click();
+    await waitForMinimap(page);
+    const refreshed = await snapshot();
+    expect(refreshed.extent).toEqual(near.extent);
+    expect(refreshed.riverRatio).toBeCloseTo(near.riverRatio, 3);
+    expect(errors).toEqual([]);
+});
+
 test("authors visible river lengths above an expanded map and refreshes without losing the inspection view", async ({ page }) => {
     test.setTimeout(60_000);
     const errors: string[] = [];
