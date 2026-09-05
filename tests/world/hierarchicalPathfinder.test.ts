@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { Land } from "../../src/enums";
 import { getMapNeighbors } from "../../src/helpers/topology";
@@ -9,7 +9,10 @@ import {
     MemoryWorldNavigationIndex,
     ProceduralWorldNavigationIndex
 } from "../../src/world/HierarchicalPathfinder";
-import { StaticWorldSource, WorldChunk } from "../../src/world/WorldSource";
+import { ProceduralWorldSource, StaticWorldSource, WorldChunk } from "../../src/world/WorldSource";
+import { WorldGeneratorPool } from "../../src/world/WorldGeneratorPool";
+import { generateWorldChunk } from "../../src/world/generateWorldChunk";
+import { deferred } from "../helpers/deferred";
 import { getChunkResidencyCoordinator } from "../../src/world/ChunkResidencyCoordinator";
 import { createWorldDescriptor, serializeWorldDescriptor } from "../../src/world/WorldDescriptor";
 import { DEFAULT_WORLD_WATER_STYLE } from "../../src/world/WorldStyleProfile";
@@ -238,14 +241,26 @@ describe("HierarchicalPathfinder", () => {
 });
 
 describe("ProceduralWorldNavigationIndex", () => {
+    const createSource = (seed: string, waterStyle = DEFAULT_WORLD_WATER_STYLE) => new ProceduralWorldSource({
+        seed, chunkSize: 12, waterStyle, workerUrl: "unused"
+    }, {
+        pool: new WorldGeneratorPool("unused", { size: 1, clientFactory: () => ({
+            generateChunk: options => Promise.resolve(generateWorldChunk(options)), dispose() {}
+        }) })
+    });
+
     test("generates deterministic summaries without a WorldSource detail load and bounds its cache", async () => {
         const waterStyle = { ...DEFAULT_WORLD_WATER_STYLE, oceanLevel: 0.52 };
+        const source = createSource("navigation", waterStyle);
         const index = new ProceduralWorldNavigationIndex({
-            seed: "navigation", chunkSize: 12, maxCachedSummaries: 2,
-            waterStyle,
+            source, maxCachedSummaries: 2,
             passable: () => true
         });
+        let yielded = false;
+        setTimeout(() => { yielded = true; }, 0);
         const first = await index.getSummary(0, 0);
+        expect(yielded).toBe(true);
+        expect(source.hasChunk(0, 0)).toBe(false);
         expect(first?.portals.length).toBeGreaterThan(0);
         expect(first?.terrainRevision).toBe(serializeWorldDescriptor(
             createWorldDescriptor({ seed: "navigation", chunkSize: 12, waterStyle })
@@ -254,11 +269,14 @@ describe("ProceduralWorldNavigationIndex", () => {
         await index.getSummary(1, 0);
         await index.getSummary(2, 0);
         expect(index.cachedSummaries).toBe(2);
+        index.dispose();
+        source.dispose();
     });
 
     test("clear and dispose release cached summaries", async () => {
+        const source = createSource("navigation-lifecycle");
         const index = new ProceduralWorldNavigationIndex({
-            seed: "navigation-lifecycle", chunkSize: 12, maxCachedSummaries: 2, passable: () => true
+            source, maxCachedSummaries: 2, passable: () => true
         });
         await index.getSummary(0, 0);
         expect(index.cachedSummaries).toBe(1);
@@ -270,5 +288,29 @@ describe("ProceduralWorldNavigationIndex", () => {
 
         expect(index.cachedSummaries).toBe(0);
         await expect(index.getSummary(0, 0)).rejects.toThrow("disposed");
+        // The navigation index borrows the source's pool and cannot close it.
+        expect(await source.sampleBaseChunk(0, 0)).toBeDefined();
+        source.dispose();
+    });
+
+    test.each(["abort", "clear", "invalidate", "dispose"])("rejects a late summary after %s", async action => {
+        const source = createSource("navigation-cancel");
+        const packed = generateWorldChunk({ seed: "navigation-cancel", chunkSize: 12, chunkX: 0, chunkY: 0 });
+        const pending = deferred<typeof packed>();
+        const sample = vi.spyOn(source, "sampleBaseChunk").mockReturnValue(pending.promise);
+        const index = new ProceduralWorldNavigationIndex({ source });
+        const controller = new AbortController();
+        const summary = index.getSummary(0, 0, controller.signal);
+        const rejected = expect(summary).rejects.toMatchObject({ name: "AbortError" });
+        if (action === "abort") controller.abort();
+        else if (action === "invalidate") index.invalidateChunk(0, 0);
+        else if (action === "clear") index.clear();
+        else index.dispose();
+        expect(sample.mock.calls[0][2]?.signal?.aborted).toBe(true);
+        pending.resolve(packed);
+        await rejected;
+        expect(index.cachedSummaries).toBe(0);
+        index.dispose();
+        source.dispose();
     });
 });

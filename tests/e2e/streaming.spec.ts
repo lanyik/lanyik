@@ -120,6 +120,39 @@ test("refreshes vegetation without replacing terrain or shared model preparation
     expect(result).toEqual({ terrain: true, source: true, forest: true, grass: true, density: 3 });
 });
 
+test("samples navigation in the shared Worker pool while browser frames continue", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const entry = "/js/pathfinding.mjs";
+        const { ProceduralWorldNavigationIndex } = await import(entry);
+        const map = (window as any).hexWorld;
+        const source = map.worldSource;
+        const completed = source.stats.completed;
+        const workers = source.stats.configuredWorkers;
+        const index = new ProceduralWorldNavigationIndex({ source, passable: () => true });
+        let frames = 0;
+        const frame = () => { frames += 1; };
+        map.on("frame", frame);
+        try {
+            for (let x = 20; x < 32; x += 1) await index.getSummary(x, 20);
+            return {
+                frames,
+                jobs: source.stats.completed - completed,
+                workersUnchanged: source.stats.configuredWorkers === workers,
+                installed: source.hasChunk(20, 20),
+                summaries: index.cachedSummaries
+            };
+        } finally {
+            map.off("frame", frame);
+            index.dispose();
+        }
+    });
+    expect(result.frames).toBeGreaterThan(0);
+    expect(result.jobs).toBeGreaterThanOrEqual(12);
+    expect(result.workersUnchanged).toBe(true);
+    expect(result.installed).toBe(false);
+    expect(result.summaries).toBe(12);
+});
+
 test("streams across long distances while residency and GPU caches stay bounded", async ({ page }, testInfo) => {
     test.setTimeout(240_000);
     const samples: Diagnostics[] = [];

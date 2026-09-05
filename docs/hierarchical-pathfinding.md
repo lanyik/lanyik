@@ -32,9 +32,7 @@ import {
 import { getChunkResidencyCoordinator } from "three-hex-map";
 
 const navigation = new ProceduralWorldNavigationIndex({
-    seed: "endless-continent",
-    chunkSize: source.chunkSize,
-    waterStyle: source.descriptor.waterStyle,
+    source,
     movementType: "walker",
     passable: tile => unitTerrain[tile.type] !== undefined,
     movementCost: tile => unitTerrain[tile.type],
@@ -64,15 +62,25 @@ route.release();
 
 `ProceduralWorldNavigationIndex` deterministically derives summaries from
 packed terrain without calling `WorldSource.loadChunk()` or installing tiles in
-the render source. Its LRU bounds summary memory independently of world size.
+the render source. It borrows the procedural source's `sampleBaseChunk()` path,
+which sends generation to the existing bounded Worker pool using the complete
+source descriptor and cached Worker resolver. It creates no additional Workers
+and does not own/dispose the borrowed source. Its LRU bounds summary memory
+independently of world size.
 Unless explicitly overridden for an authored source, its `terrainRevision` is
 the canonical serialized world descriptor fingerprint, matching procedural and
 toroidal `WorldSource.getChunkRevision()`; a bare generator version is not a
 complete terrain identity.
-When the source uses authored water parameters, pass its descriptor's
-`waterStyle` to the index as shown above. Summary generation then classifies
-ocean and river tiles with exactly the same identity-bearing parameters as the
-streamed source.
+Seed, dimensions, chunk size and water style come directly from the source,
+avoiding independently configured navigation terrain. Custom passability and
+movement-cost callbacks still execute on the calling thread during the compact
+summary build; each uncached summary yields a browser task before this work.
+Terrain sampling no longer blocks that thread. The pathfinder's AbortSignal
+reaches queued/running sampling requests; clear, per-chunk invalidation and
+dispose cancel pending work and prevent late cache publication. Cancelling a
+running Worker task rejects its result; it does not preempt synchronous Worker
+computation. A separate data-only movement protocol is needed to move arbitrary
+summary rules into Workers.
 For authored/server worlds, build summaries with
 `buildWorldNavigationSummary()` and store them in `MemoryWorldNavigationIndex`
 or implement `WorldNavigationIndex` over a database/CDN.

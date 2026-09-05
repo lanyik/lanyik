@@ -38,14 +38,9 @@ function findLoadedStart(map, initialTile) {
     throw new Error("No passable campaign start tile is resident near the camera");
 }
 
-function candidateInChunk(engine, seed, waterStyle, chunkSize, chunkX, chunkY) {
-    const packed = engine.generateWorldChunk({
-        seed,
-        waterStyle,
-        chunkSize,
-        chunkX,
-        chunkY
-    });
+async function candidateInChunk(engine, source, chunkX, chunkY) {
+    const packed = await source.sampleBaseChunk(chunkX, chunkY, { lane: "interactive" });
+    const chunkSize = source.chunkSize;
     const center = {
         x: chunkX * chunkSize + Math.floor(chunkSize / 2),
         y: chunkY * chunkSize + Math.floor(chunkSize / 2)
@@ -90,7 +85,6 @@ function createMarker(map, tileSize, engine) {
 export async function createCampaignDemo({
     map,
     source,
-    seed,
     initialTile,
     tileSize,
     engine = window.HexMap,
@@ -99,9 +93,7 @@ export async function createCampaignDemo({
     if (!source.descriptor) throw new Error("Campaign persistence requires a versioned world descriptor");
     const worldId = source.worldId;
     const navigation = new ProceduralWorldNavigationIndex({
-        seed,
-        chunkSize: source.chunkSize,
-        waterStyle: source.descriptor.waterStyle,
+        source,
         movementType: MOVEMENT_TYPE,
         passable: isPassable,
         movementCost,
@@ -320,11 +312,9 @@ export async function createCampaignDemo({
                 ];
                 let lastError;
                 for (const [dx, dy] of offsets) {
-                    const destination = candidateInChunk(
+                    const destination = await candidateInChunk(
                         engine,
-                        seed,
-                        source.descriptor.waterStyle,
-                        source.chunkSize,
+                        source,
                         originChunk.x + dx,
                         originChunk.y + dy
                     );

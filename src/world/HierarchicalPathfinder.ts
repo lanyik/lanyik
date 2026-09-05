@@ -2,22 +2,16 @@ import { Land } from "../enums";
 import { getNeighbors } from "../helpers/neighbors";
 import { getMapNeighbors, getMapTile, normalizeMapCoordinates } from "../helpers/topology";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { WorldBounds, WorldChunk, WorldSource } from "./WorldSource";
+import { WorldBaseChunkSource, WorldBounds, WorldChunk, WorldSource } from "./WorldSource";
 import {
     ChunkResidencyCoordinator,
     getChunkResidencyCoordinator,
     WorldChunkLease
 } from "./ChunkResidencyCoordinator";
 import {
-    BoundedWorldChunkGeneration,
-    generateWorldChunk,
     SparseWorldChunkStore
 } from "./generateWorldChunk";
-import { createWorldDescriptor, serializeWorldDescriptor } from "./WorldDescriptor";
-import {
-    normalizeWorldWaterGenerationStyle,
-    WorldWaterGenerationStyle
-} from "./WorldStyleProfile";
+import { serializeWorldDescriptor } from "./WorldDescriptor";
 
 export const WORLD_NAVIGATION_FORMAT_VERSION = 2;
 
@@ -46,7 +40,7 @@ export interface WorldNavigationIndex {
     readonly chunkSize: number;
     readonly bounds?: WorldBounds;
     readonly movementType: string;
-    getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined>;
+    getSummary(chunkX: number, chunkY: number, signal?: AbortSignal): Promise<WorldNavigationChunkSummary | undefined>;
     invalidateChunk?(chunkX: number, chunkY: number): boolean;
     clear(): void;
     dispose(): void;
@@ -138,7 +132,8 @@ export class MemoryWorldNavigationIndex implements WorldNavigationIndex {
         }
         this.summaries.set(chunkKey(summary.chunkX, summary.chunkY), summary);
     }
-    public getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined> {
+    public async getSummary(chunkX: number, chunkY: number, signal?: AbortSignal): Promise<WorldNavigationChunkSummary | undefined> {
+        throwIfAborted(signal);
         if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
         return Promise.resolve(this.summaries.get(chunkKey(chunkX, chunkY)));
     }
@@ -161,10 +156,7 @@ export class MemoryWorldNavigationIndex implements WorldNavigationIndex {
 }
 
 export interface ProceduralWorldNavigationIndexOptions {
-    seed: string | number;
-    chunkSize: number;
-    world?: BoundedWorldChunkGeneration;
-    waterStyle?: Readonly<WorldWaterGenerationStyle>;
+    source: WorldBaseChunkSource;
     passable?: TilePassability;
     movementCost?: TileMovementCost;
     movementType?: string;
@@ -181,49 +173,43 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
     public readonly chunkSize: number;
     public readonly bounds: WorldBounds | undefined;
     public readonly movementType: string;
-    private readonly seed: string | number;
-    private readonly world: BoundedWorldChunkGeneration | undefined;
-    private readonly waterStyle: Readonly<WorldWaterGenerationStyle>;
+    private readonly source: WorldBaseChunkSource;
     private readonly passable: TilePassability;
     private readonly buildOptions: WorldNavigationBuildOptions;
     private readonly maxCached: number;
     private readonly cache = new Map<string, WorldNavigationChunkSummary>();
+    private readonly pending = new Set<{ key: string; controller: AbortController }>();
     private disposed = false;
 
     constructor(options: ProceduralWorldNavigationIndexOptions) {
-        if (!options || !Number.isSafeInteger(options.chunkSize) || options.chunkSize <= 0) {
-            throw new RangeError("procedural navigation chunkSize must be positive");
+        if (!options?.source || typeof options.source.sampleBaseChunk !== "function") {
+            throw new TypeError("procedural navigation requires a base-chunk sampling source");
         }
-        this.seed = options.seed;
-        this.chunkSize = options.chunkSize;
-        this.world = options.world;
-        this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
-        this.bounds = options.world
-            ? { width: options.world.width, height: options.world.height, wrapX: true, wrapY: true }
-            : undefined;
+        this.source = options.source;
+        this.chunkSize = this.source.chunkSize;
+        const terrainRevision = serializeWorldDescriptor(this.source.descriptor);
+        if (this.chunkSize !== this.source.descriptor.chunkSize) throw new TypeError("navigation source chunkSize does not match its descriptor");
+        this.bounds = this.source.bounds ? Object.freeze({ ...this.source.bounds }) : undefined;
         this.passable = options.passable ?? (tile => tile.type !== Land.sea);
         this.movementType = options.movementType ?? "default";
+        if (typeof this.movementType !== "string" || !this.movementType.trim()) throw new TypeError("navigation movementType must be a non-empty string");
         this.buildOptions = {
             movementType: this.movementType,
             movementCost: options.movementCost,
-            terrainRevision: options.terrainRevision ?? serializeWorldDescriptor(createWorldDescriptor({
-                seed: options.seed,
-                chunkSize: options.chunkSize,
-                world: options.world,
-                waterStyle: this.waterStyle
-            })),
+            terrainRevision: options.terrainRevision ?? terrainRevision,
             deltaRevision: options.deltaRevision ?? 0,
             maxPortalsPerEntrance: options.maxPortalsPerEntrance
         };
         this.maxCached = options.maxCachedSummaries ?? 2048;
-        if (!Number.isInteger(this.maxCached) || this.maxCached <= 0) {
-            throw new RangeError("maxCachedSummaries must be a positive integer");
+        if (!Number.isSafeInteger(this.maxCached) || this.maxCached <= 0) {
+            throw new RangeError("maxCachedSummaries must be a positive safe integer");
         }
     }
 
     public get cachedSummaries(): number { return this.cache.size; }
 
-    public getSummary(chunkX: number, chunkY: number): Promise<WorldNavigationChunkSummary | undefined> {
+    public async getSummary(chunkX: number, chunkY: number, signal?: AbortSignal): Promise<WorldNavigationChunkSummary | undefined> {
+        throwIfAborted(signal);
         if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
         const resolved = this.resolveChunk(chunkX, chunkY);
         if (!resolved) return Promise.resolve(undefined);
@@ -234,38 +220,59 @@ export class ProceduralWorldNavigationIndex implements WorldNavigationIndex {
             this.cache.set(key, cached);
             return Promise.resolve(cached);
         }
-        const packed = generateWorldChunk({
-            seed: this.seed,
-            chunkX: resolved.x,
-            chunkY: resolved.y,
-            chunkSize: this.chunkSize,
-            world: this.world,
-            waterStyle: this.waterStyle
-        });
-        const store = this.bounds ? new SparseWorldChunkStore(this.bounds) : new SparseWorldChunkStore();
-        store.add(packed);
-        const summary = buildWorldNavigationSummary(
-            store.map, resolved.x, resolved.y, this.chunkSize, this.passable, this.buildOptions
-        );
-        this.cache.set(key, summary);
-        while (this.cache.size > this.maxCached) this.cache.delete(this.cache.keys().next().value!);
-        return Promise.resolve(summary);
+        const controller = new AbortController();
+        const pending = { key, controller };
+        this.pending.add(pending);
+        const abort = () => controller.abort();
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+            const packed = await this.source.sampleBaseChunk(resolved.x, resolved.y, {
+                lane: "interactive", signal: controller.signal
+            });
+            // A resolved Promise alone never gives rendering/input a turn.
+            // Keep custom movement callbacks on the caller thread, yielding
+            // before this bounded per-chunk summary build even for cached IO.
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            throwIfAborted(controller.signal);
+            this.assertActive();
+            const store = this.bounds ? new SparseWorldChunkStore(this.bounds) : new SparseWorldChunkStore();
+            store.add(packed);
+            const summary = buildWorldNavigationSummary(
+                store.map, resolved.x, resolved.y, this.chunkSize, this.passable, this.buildOptions
+            );
+            throwIfAborted(controller.signal);
+            this.cache.set(key, summary);
+            while (this.cache.size > this.maxCached) this.cache.delete(this.cache.keys().next().value!);
+            return summary;
+        } finally {
+            this.pending.delete(pending);
+            signal?.removeEventListener("abort", abort);
+        }
     }
 
     public invalidateChunk(chunkX: number, chunkY: number): boolean {
         this.assertActive();
         const resolved = this.resolveChunk(chunkX, chunkY);
-        return resolved ? this.cache.delete(chunkKey(resolved.x, resolved.y)) : false;
+        if (!resolved) return false;
+        const key = chunkKey(resolved.x, resolved.y);
+        let invalidated = this.cache.delete(key);
+        for (const pending of this.pending) if (pending.key === key) {
+            pending.controller.abort();
+            invalidated = true;
+        }
+        return invalidated;
     }
 
     public clear(): void {
         this.assertActive();
         this.cache.clear();
+        for (const pending of this.pending) pending.controller.abort();
     }
 
     public dispose(): void {
         if (this.disposed) return;
         this.cache.clear();
+        for (const pending of this.pending) pending.controller.abort();
         this.disposed = true;
     }
 
@@ -624,7 +631,7 @@ export class HierarchicalPathfinder {
             throwIfAborted(options.signal);
             const key = chunkKey(point.x, point.y);
             if (summaries.has(key)) return summaries.get(key);
-            let summary = await this.index.getSummary(point.x, point.y);
+            let summary = await this.index.getSummary(point.x, point.y, options.signal);
             if (summary) {
                 assertNavigationSummary(summary);
                 if (summary.movementType !== this.movementType) {
@@ -633,7 +640,7 @@ export class HierarchicalPathfinder {
                 const expected = await this.expectedRevision?.(point.x, point.y);
                 if (expected && !summaryRevisionMatches(summary, expected)) {
                     this.index.invalidateChunk?.(point.x, point.y);
-                    summary = await this.index.getSummary(point.x, point.y);
+                    summary = await this.index.getSummary(point.x, point.y, options.signal);
                     if (!summary) throw new StaleWorldNavigationSummaryError(point.x, point.y);
                     assertNavigationSummary(summary);
                     if (summary.movementType !== this.movementType

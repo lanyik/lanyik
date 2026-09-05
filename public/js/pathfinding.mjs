@@ -1246,21 +1246,6 @@ function assertWorldWaterGenerationStyle(value) {
     }
   }
 }
-function normalizeWorldWaterGenerationStyle(value = DEFAULT_WORLD_WATER_STYLE) {
-  assertWorldWaterGenerationStyle(value);
-  return Object.freeze({
-    oceanScale: value.oceanScale,
-    oceanLevel: value.oceanLevel,
-    riverSourceCellSize: value.riverSourceCellSize,
-    riverSourcesPerCell: value.riverSourcesPerCell,
-    riverLength: value.riverLength,
-    riverWarpScale: value.riverWarpScale,
-    riverWarpAmplitude: value.riverWarpAmplitude,
-    riverBaseRadius: value.riverBaseRadius,
-    riverHighFlowRadius: value.riverHighFlowRadius,
-    riverHighFlowThreshold: value.riverHighFlowThreshold
-  });
-}
 function serializeWorldWaterGenerationStyle(value) {
   assertWorldWaterGenerationStyle(value);
   return JSON.stringify([
@@ -1276,449 +1261,12 @@ function serializeWorldWaterGenerationStyle(value) {
     value.riverHighFlowThreshold
   ]);
 }
-function worldWaterGenerationStylesEqual(first, second) {
-  assertWorldWaterGenerationStyle(first);
-  assertWorldWaterGenerationStyle(second);
-  return first.oceanScale === second.oceanScale && first.oceanLevel === second.oceanLevel && first.riverSourceCellSize === second.riverSourceCellSize && first.riverSourcesPerCell === second.riverSourcesPerCell && first.riverLength === second.riverLength && first.riverWarpScale === second.riverWarpScale && first.riverWarpAmplitude === second.riverWarpAmplitude && first.riverBaseRadius === second.riverBaseRadius && first.riverHighFlowRadius === second.riverHighFlowRadius && first.riverHighFlowThreshold === second.riverHighFlowThreshold;
-}
-function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
-  const style = normalizeWorldWaterGenerationStyle(waterStyle);
-  const profile = Object.freeze({
-    ...WORLD_STYLE_PROFILE,
-    fields: Object.freeze({
-      ...WORLD_STYLE_PROFILE.fields,
-      ocean: oceanField(style.oceanScale)
-    }),
-    terrain: Object.freeze({
-      ...WORLD_STYLE_PROFILE.terrain,
-      oceanLevel: style.oceanLevel
-    }),
-    rivers: Object.freeze({
-      ...WORLD_STYLE_PROFILE.rivers,
-      sourceCellSize: style.riverSourceCellSize,
-      sourcesPerCell: style.riverSourcesPerCell,
-      courseLengthMultiplier: style.riverLength / 100,
-      courseWarpScale: style.riverWarpScale,
-      courseWarpAmplitude: style.riverWarpAmplitude,
-      baseCourseRadius: style.riverBaseRadius,
-      highFlowCourseRadius: style.riverHighFlowRadius,
-      highFlowThreshold: style.riverHighFlowThreshold
-    })
-  });
-  assertWorldStyleProfile(profile);
-  return profile;
-}
 assertWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE);
-
-// src/world/noise.ts
-var UINT32_MAX = 4294967295;
-function seedToUint32(seed) {
-  const text = String(seed);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-function randomGridValue(seed, x, y) {
-  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-  hash = Math.imul(hash ^ hash >>> 15, 739982445);
-  hash = Math.imul(hash ^ hash >>> 12, 695872825);
-  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-}
-var smooth = (value) => value * value * (3 - 2 * value);
-var lerp = (from, to, amount) => from + (to - from) * amount;
-function positiveModulo2(value, modulus) {
-  return (value % modulus + modulus) % modulus;
-}
-function valueNoise2D(seed, x, y) {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function fractalNoise2D(seed, x, y, octaves) {
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-  const px = Math.max(1, Math.round(periodX));
-  const py = Math.max(1, Math.round(periodY));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const sample = (gx, gy) => randomGridValue(
-    seed,
-    positiveModulo2(gx, px),
-    positiveModulo2(gy, py)
-  );
-  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-  const baseCellsX = Math.max(1, Math.round(cellsX));
-  const baseCellsY = Math.max(1, Math.round(cellsY));
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    const periodX = baseCellsX * frequency;
-    const periodY = baseCellsY * frequency;
-    total += periodicValueNoise2D(
-      seed + Math.imul(octave, 2654435769) >>> 0,
-      normalizedX * periodX,
-      normalizedY * periodY,
-      periodX,
-      periodY
-    ) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function randomAt(seed, x, y, salt) {
-  return randomGridValue((seed ^ salt) >>> 0, x, y);
-}
 
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
-var clamp01 = (value) => Math.max(0, Math.min(1, value));
-var smoothstep = (edge0, edge1, value) => {
-  const t = clamp01((value - edge0) / (edge1 - edge0));
-  return t * t * (3 - 2 * t);
-};
-function assertDimension(name, value) {
-  if (!Number.isSafeInteger(value) || value < 2) {
-    throw new RangeError(`landform ${name} must be a safe integer >= 2`);
-  }
-}
-function resolveDomain(domain) {
-  const resolved = domain ?? { topology: "infinite" };
-  if (resolved.topology !== "infinite" && resolved.topology !== "bounded" && resolved.topology !== "toroidal") {
-    throw new TypeError("landform topology must be infinite, bounded or toroidal");
-  }
-  if (resolved.topology !== "infinite") {
-    assertDimension("width", resolved.width);
-    assertDimension("height", resolved.height);
-  }
-  return Object.freeze({ ...resolved });
-}
-function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, oceanNoise, latitude, edgeFalloff, profile) {
-  const fields = profile.fields;
-  const landMask = smoothstep(fields.landMaskStart, fields.landMaskEnd, continent);
-  const ridge = Math.pow(1 - Math.abs(ridgeNoise * 2 - 1), fields.ridgeExponent) * landMask;
-  const valley = Math.pow(1 - Math.abs(valleyNoise * 2 - 1), fields.valleyExponent) * smoothstep(fields.valleyMaskStart, fields.valleyMaskEnd, continent);
-  const elevation = continent * fields.continentWeight + detail * fields.detailWeight + ridge * fields.ridgeWeight - valley * fields.valleyWeight + fields.elevationBias - edgeFalloff;
-  const moisture = clamp01(moistureNoise * fields.moistureNoiseWeight + valley * fields.moistureValleyWeight - ridge * fields.moistureRidgeWeight);
-  const temperature = clamp01(latitude === void 0 ? fields.temperatureNoiseMinimum + temperatureNoise * fields.temperatureNoiseWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight : 1 - latitude * fields.temperatureLatitudeWeight - Math.max(0, elevation - fields.temperatureElevationStart) * fields.temperatureElevationWeight + (temperatureNoise - 0.5) * fields.temperatureLatitudeNoiseWeight);
-  return {
-    elevation,
-    continentalness: continent,
-    ridge,
-    valley,
-    roughness: clamp01(roughness),
-    moisture,
-    temperature,
-    forestPatch: clamp01(forestPatch),
-    ocean: oceanNoise - edgeFalloff
-  };
-}
-function sampleOpenLandform(seed, x, y, domain, profile) {
-  const fields = profile.fields;
-  const open = (field2, sampleX, sampleY) => fractalNoise2D(seed ^ field2.salt, sampleX * field2.openScale, sampleY * field2.openScale, field2.octaves);
-  const warpX = (open(fields.warpX, x, y) - 0.5) * fields.openWarpAmplitude;
-  const warpY = (open(fields.warpY, x, y) - 0.5) * fields.openWarpAmplitude;
-  const wx = x + warpX;
-  const wy = y + warpY;
-  const continent = open(fields.continent, wx, wy);
-  const detail = open(fields.detail, wx, wy);
-  const ridgeNoise = open(fields.ridge, wx, wy);
-  const valleyNoise = open(fields.valley, wx, wy);
-  const rough = open(fields.roughness, wx, wy);
-  const moisture = open(fields.moisture, wx, wy);
-  const temperature = open(fields.temperature, wx, wy);
-  const forestPatch = open(fields.forestPatch, wx, wy);
-  const ocean = open(fields.ocean, x, y);
-  if (domain.topology === "infinite") {
-    return composeSample(
-      continent,
-      detail,
-      ridgeNoise,
-      valleyNoise,
-      rough,
-      moisture,
-      temperature,
-      forestPatch,
-      ocean,
-      void 0,
-      0,
-      profile
-    );
-  }
-  const nx = x / (domain.width - 1) * 2 - 1;
-  const ny = y / (domain.height - 1) * 2 - 1;
-  const edge = Math.max(Math.abs(nx), Math.abs(ny));
-  const boundedOcean = ocean + (1 - edge * edge) * fields.boundedCenterOceanLift;
-  return composeSample(
-    continent,
-    detail,
-    ridgeNoise,
-    valleyNoise,
-    rough,
-    moisture,
-    temperature,
-    forestPatch,
-    boundedOcean,
-    Math.abs(ny),
-    Math.pow(edge, fields.boundedEdgePower) * fields.boundedEdgeFalloff,
-    profile
-  );
-}
-function sampleToroidalLandform(seed, x, y, domain, profile) {
-  const fields = profile.fields;
-  const nx = x / domain.width;
-  const ny = y / domain.height;
-  const periodic = (field2, u, v) => periodicFractalNoise2D(
-    seed ^ field2.salt,
-    u,
-    v,
-    Math.max(field2.minimumToroidalCells, Math.round(domain.width * field2.toroidalScale)),
-    Math.max(field2.minimumToroidalCells, Math.round(domain.height * field2.toroidalScale)),
-    field2.octaves
-  );
-  const warpX = (periodic(fields.warpX, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
-  const warpY = (periodic(fields.warpY, nx, ny) - 0.5) * fields.toroidalWarpAmplitude;
-  const wx = nx + warpX;
-  const wy = ny + warpY;
-  const continent = periodic(fields.continent, wx, wy);
-  const detail = periodic(fields.detail, wx, wy);
-  const ridgeNoise = periodic(fields.ridge, wx, wy);
-  const valleyNoise = periodic(fields.valley, wx, wy);
-  const rough = periodic(fields.roughness, wx, wy);
-  const moisture = periodic(fields.moisture, wx, wy);
-  const temperature = periodic(fields.temperature, wx, wy);
-  const forestPatch = periodic(fields.forestPatch, wx, wy);
-  const ocean = periodic(fields.ocean, nx, ny);
-  const latitude = 0.5 + 0.5 * Math.cos(ny * Math.PI * 2);
-  return composeSample(
-    continent,
-    detail,
-    ridgeNoise,
-    valleyNoise,
-    rough,
-    moisture,
-    temperature,
-    forestPatch,
-    ocean,
-    latitude,
-    0,
-    profile
-  );
-}
-function createLandformSamplerForProfile(options, profile) {
-  if (!options || typeof options !== "object") throw new TypeError("landform sampler options are required");
-  if (typeof options.seed !== "string" && typeof options.seed !== "number") {
-    throw new TypeError("landform seed must be a string or number");
-  }
-  if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
-    throw new RangeError("numeric landform seed must be finite");
-  }
-  assertWorldStyleProfile(profile);
-  const numericSeed = seedToUint32(options.seed);
-  const domain = resolveDomain(options.domain);
-  return {
-    numericSeed,
-    domain,
-    sample(x, y) {
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        throw new RangeError("landform coordinates must be finite numbers");
-      }
-      return domain.topology === "toroidal" ? sampleToroidalLandform(numericSeed, x, y, domain, profile) : sampleOpenLandform(numericSeed, x, y, domain, profile);
-    }
-  };
-}
-
-// src/world/hexRaster.ts
-var SQRT_3 = 1.7320508075688772;
-var positiveModulo3 = (value, period) => (value % period + period) % period;
-function worldOffsetToAxial(point) {
-  const parity = positiveModulo3(point.x, 2);
-  return { x: point.x, y: point.y - (point.x + parity) / 2 };
-}
-function worldAxialToOffset(point) {
-  const parity = positiveModulo3(point.x, 2);
-  return { x: point.x, y: point.y + (point.x + parity) / 2 };
-}
-function cubeRound(x, y, z) {
-  let roundedX = Math.round(x);
-  let roundedY = Math.round(y);
-  let roundedZ = Math.round(z);
-  const deltaX = Math.abs(roundedX - x);
-  const deltaY = Math.abs(roundedY - y);
-  const deltaZ = Math.abs(roundedZ - z);
-  if (deltaX > deltaY && deltaX > deltaZ) roundedX = -roundedY - roundedZ;
-  else if (deltaY > deltaZ) roundedY = -roundedX - roundedZ;
-  else roundedZ = -roundedX - roundedY;
-  return worldAxialToOffset({ x: roundedX, y: roundedZ });
-}
-function rasterizeHexLine(from, to) {
-  const first = worldOffsetToAxial(from);
-  const second = worldOffsetToAxial(to);
-  const firstY = -first.x - first.y;
-  const secondY = -second.x - second.y;
-  const distance = Math.max(
-    Math.abs(first.x - second.x),
-    Math.abs(firstY - secondY),
-    Math.abs(first.y - second.y)
-  );
-  const result = [];
-  for (let index = 0; index <= distance; index += 1) {
-    const amount = distance === 0 ? 0 : index / distance;
-    result.push(cubeRound(
-      first.x + (second.x - first.x) * amount,
-      firstY + (secondY - firstY) * amount,
-      first.y + (second.y - first.y) * amount
-    ));
-  }
-  return result;
-}
-function renderedCenterY(x, y) {
-  return (y + (x % 2 === 0 ? 0.5 : 0)) * SQRT_3;
-}
-var renderedPoint = (point) => ({
-  x: point.x * 1.5,
-  y: renderedCenterY(point.x, point.y)
-});
-function renderedPointToHex(point) {
-  const q = point.x / 1.5;
-  const r = point.y / SQRT_3 - q / 2 - 0.5;
-  return cubeRound(q, -q - r, r);
-}
-function createRiverReach(from, to, downstream, startsAtSource = true) {
-  const first = renderedPoint(from);
-  const corner = renderedPoint(to);
-  const next = downstream ? renderedPoint(downstream) : corner;
-  const start = startsAtSource ? first : { x: (first.x + corner.x) / 2, y: (first.y + corner.y) / 2 };
-  const end = downstream ? { x: (corner.x + next.x) / 2, y: (corner.y + next.y) / 2 } : corner;
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const control = { x: corner.x - start.x, y: corner.y - start.y };
-  const secondDerivative = 2 * Math.hypot(dx - 2 * control.x, dy - 2 * control.y);
-  const projection = dx * control.x + dy * control.y;
-  const straight = (dx !== 0 || dy !== 0 || control.x === 0 && control.y === 0) && Math.abs(dx * control.y - dy * control.x) < 1e-9 && projection >= 0 && projection <= dx * dx + dy * dy;
-  const segments = straight ? 1 : Math.max(1, Math.ceil(Math.sqrt(secondDerivative / (8 * SQRT_3 / 16))));
-  if (segments > 32) throw new RangeError("river reach exceeds the bounded curve tessellation budget");
-  const samples = [{ ...start, distance: 0 }];
-  let length = 0;
-  for (let index = 1; index <= segments; index += 1) {
-    const t = index / segments;
-    const u = 1 - t;
-    const point = index === segments ? end : {
-      x: start.x + 2 * u * t * control.x + t * t * dx,
-      y: start.y + 2 * u * t * control.y + t * t * dy
-    };
-    const previous = samples[samples.length - 1];
-    length += Math.hypot(point.x - previous.x, point.y - previous.y) / SQRT_3;
-    samples.push({ ...point, distance: length });
-  }
-  return { samples, length };
-}
-function trimRiverReachStart(reach, distance) {
-  if (!Number.isFinite(distance) || distance < 0 || distance > reach.length) {
-    throw new RangeError("river trim distance must stay within its arc length");
-  }
-  if (distance === 0) return reach;
-  const endIndex = reach.samples.findIndex((sample) => sample.distance >= distance);
-  const end = reach.samples[endIndex];
-  const start = reach.samples[endIndex - 1];
-  const t = (distance - start.distance) / (end.distance - start.distance);
-  const samples = [{
-    x: start.x + (end.x - start.x) * t,
-    y: start.y + (end.y - start.y) * t,
-    distance: 0
-  }];
-  for (let index = endIndex; index < reach.samples.length; index += 1) {
-    const sample = reach.samples[index];
-    if (sample.distance > distance) samples.push({ ...sample, distance: sample.distance - distance });
-  }
-  return { samples, length: reach.length - distance };
-}
-function forEachHexRiverReach(reach, fromRadius, toRadius, visit) {
-  if (!Number.isFinite(fromRadius) || fromRadius < 0 || !Number.isFinite(toRadius) || toRadius < 0) {
-    throw new RangeError("river reach radii must be finite and non-negative");
-  }
-  const radius = Math.max(fromRadius, toRadius);
-  const spine = /* @__PURE__ */ new Map();
-  if (Math.min(fromRadius, toRadius) < 1) {
-    for (let index = 1; index < reach.samples.length; index += 1) {
-      for (const point of rasterizeHexLine(
-        renderedPointToHex(reach.samples[index - 1]),
-        renderedPointToHex(reach.samples[index])
-      )) spine.set(`${point.x},${point.y}`, point);
-    }
-  }
-  if (radius === 0) {
-    spine.forEach(visit);
-    return;
-  }
-  const segments = reach.samples.slice(1).map((end, index) => {
-    const start = reach.samples[index];
-    const startFraction = reach.length === 0 ? 0 : start.distance / reach.length;
-    const endFraction = reach.length === 0 ? 1 : end.distance / reach.length;
-    const startRadius = (fromRadius + (toRadius - fromRadius) * startFraction) * SQRT_3;
-    const radiusDelta = (toRadius - fromRadius) * (endFraction - startFraction) * SQRT_3;
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const quadratic = dx * dx + dy * dy - radiusDelta * radiusDelta;
-    return { start, dx, dy, startRadius, radiusDelta, quadratic };
-  });
-  const padding = Math.ceil(radius * SQRT_3 / 1.5) + 1;
-  const minimumX = Math.floor(Math.min(...reach.samples.map((point) => point.x)) / 1.5) - padding;
-  const maximumX = Math.ceil(Math.max(...reach.samples.map((point) => point.x)) / 1.5) + padding;
-  const minimumY = Math.floor(Math.min(...reach.samples.map((point) => point.y)) / SQRT_3) - padding;
-  const maximumY = Math.ceil(Math.max(...reach.samples.map((point) => point.y)) / SQRT_3) + padding;
-  for (let x = minimumX; x <= maximumX; x += 1) {
-    const candidateWorldX = x * 1.5;
-    for (let y = minimumY; y <= maximumY; y += 1) {
-      const candidateWorldY = renderedCenterY(x, y);
-      let inside = spine.size > 0 && spine.has(`${x},${y}`);
-      for (const segment of segments) {
-        if (inside) break;
-        const { start, dx, dy, startRadius, radiusDelta, quadratic } = segment;
-        const deltaX = candidateWorldX - start.x;
-        const deltaY = candidateWorldY - start.y;
-        const linear = deltaX * dx + deltaY * dy + startRadius * radiusDelta;
-        const constant = deltaX * deltaX + deltaY * deltaY - startRadius * startRadius;
-        const amount = quadratic > 0 ? Math.max(0, Math.min(1, linear / quadratic)) : 0;
-        const distance = quadratic > 0 ? constant - 2 * linear * amount + quadratic * amount * amount : Math.min(constant, constant - 2 * linear + quadratic);
-        inside = distance <= 1e-9;
-      }
-      if (inside) visit({ x, y });
-    }
-  }
-}
 
 // src/world/WorldWaterSampler.ts
-var UINT32_RANGE = 4294967296;
-var OVERVIEW_PAGE_SIZE_MULTIPLIER = 4;
-var MAX_OVERVIEW_PAGE_AREA_OVERHEAD = 4;
 var AXIAL_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 1, y: 0 }),
   Object.freeze({ x: 0, y: -1 }),
@@ -1727,781 +1275,8 @@ var AXIAL_NEIGHBORS = Object.freeze([
   Object.freeze({ x: 0, y: 1 }),
   Object.freeze({ x: 1, y: -1 })
 ]);
-var positiveModulo4 = (value, period) => (value % period + period) % period;
-var clamp012 = (value) => Math.max(0, Math.min(1, value));
-var smoothstep2 = (edge0, edge1, value) => {
-  const amount = clamp012((value - edge0) / (edge1 - edge0));
-  return amount * amount * (3 - 2 * amount);
-};
-var pointKey = (point) => `${point.x},${point.y}`;
-var bitArrayLength = (size) => Math.ceil(size / 8);
-var hasBit = (bits, index) => (bits[Math.floor(index / 8)] & 1 << index % 8) !== 0;
-var setBit = (bits, index) => {
-  const offset = Math.floor(index / 8);
-  bits[offset] |= 1 << index % 8;
-};
-function mix32(value) {
-  let mixed = value >>> 0;
-  mixed ^= mixed >>> 16;
-  mixed = Math.imul(mixed, 2146121005);
-  mixed ^= mixed >>> 15;
-  mixed = Math.imul(mixed, 2221713035);
-  mixed ^= mixed >>> 16;
-  return mixed >>> 0;
-}
-function sourceKey(seed, cellX, cellY, slot, salt) {
-  return mix32(
-    seed ^ salt ^ Math.imul(cellX, 1663821227) ^ Math.imul(cellY, 2232777461) ^ Math.imul(slot, 2654435761)
-  );
-}
-function randomForSource(seed, key, salt) {
-  return mix32(seed ^ key ^ Math.imul(salt, 668265261)) / UINT32_RANGE;
-}
-function assertExtent(originX, originY, width, height) {
-  if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY)) {
-    throw new RangeError("water extent origins must be safe integers");
-  }
-  if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
-    throw new RangeError("water extent dimensions must be positive safe integers");
-  }
-  if (!Number.isSafeInteger(originX + width - 1) || !Number.isSafeInteger(originY + height - 1) || !Number.isSafeInteger(width * height)) {
-    throw new RangeError("water extent exceeds safe integer coordinates");
-  }
-}
-var DrainageWorldWaterSampler = class {
-  constructor(numericSeed, domain, profile) {
-    this.numericSeed = numericSeed;
-    this.domain = domain;
-    this.profile = profile;
-    this.pages = /* @__PURE__ */ new Map();
-    this.overviewPages = /* @__PURE__ */ new Map();
-    this.tilePageBuilds = 0;
-    this.tilePageHits = 0;
-    this.overviewPageBuilds = 0;
-    this.overviewPageHits = 0;
-    this.directExtentRasterizations = 0;
-    this.courseStep = this.resolveCourseStep();
-  }
-  get stats() {
-    return {
-      cachedTilePages: this.pages.size,
-      cachedOverviewPages: this.overviewPages.size,
-      tilePageBuilds: this.tilePageBuilds,
-      tilePageHits: this.tilePageHits,
-      overviewPageBuilds: this.overviewPageBuilds,
-      overviewPageHits: this.overviewPageHits,
-      directExtentRasterizations: this.directExtentRasterizations
-    };
-  }
-  isRiverTile(x, y, sampleAt) {
-    if (this.domain.topology === "toroidal") {
-      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
-      const canonicalX = positiveModulo4(x, this.domain.width);
-      const canonicalY = positiveModulo4(y, this.domain.height);
-      return hasBit(mask, canonicalX * this.domain.height + canonicalY);
-    }
-    const pageSize = this.profile.rivers.pageSize;
-    const pageX = Math.floor(x / pageSize);
-    const pageY = Math.floor(y / pageSize);
-    const page = this.pageFor(this.pages, pageX, pageY, pageSize, sampleAt, false);
-    const localX = x - pageX * pageSize;
-    const localY = y - pageY * pageSize;
-    return hasBit(page.riverBits, localX * pageSize + localY);
-  }
-  forEachRiverTile(originX, originY, width, height, sampleAt, visit) {
-    assertExtent(originX, originY, width, height);
-    if (this.domain.topology === "toroidal") {
-      const mask = this.toroidalMask ?? (this.toroidalMask = this.buildToroidalMask(sampleAt));
-      for (let x = originX; x < originX + width; x += 1) {
-        const canonicalX = positiveModulo4(x, this.domain.width);
-        for (let y = originY; y < originY + height; y += 1) {
-          const canonicalY = positiveModulo4(y, this.domain.height);
-          if (hasBit(mask, canonicalX * this.domain.height + canonicalY)) visit(x, y);
-        }
-      }
-      return;
-    }
-    if (this.shouldUseOverviewPages(originX, originY, width, height)) {
-      this.visitOverviewPages(originX, originY, width, height, sampleAt, visit);
-      return;
-    }
-    this.directExtentRasterizations += 1;
-    this.rasterizeCourses(originX, originY, width, height, sampleAt, visit);
-  }
-  shouldUseOverviewPages(originX, originY, width, height) {
-    const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
-    const firstPageX = Math.floor(originX / pageSize);
-    const lastPageX = Math.floor((originX + width - 1) / pageSize);
-    const firstPageY = Math.floor(originY / pageSize);
-    const lastPageY = Math.floor((originY + height - 1) / pageSize);
-    const pageCount = (lastPageX - firstPageX + 1) * (lastPageY - firstPageY + 1);
-    return pageCount <= this.profile.rivers.maximumCachedPages && pageCount * pageSize * pageSize <= width * height * MAX_OVERVIEW_PAGE_AREA_OVERHEAD;
-  }
-  visitOverviewPages(originX, originY, width, height, sampleAt, visit) {
-    const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
-    const firstPageX = Math.floor(originX / pageSize);
-    const lastPageX = Math.floor((originX + width - 1) / pageSize);
-    const firstPageY = Math.floor(originY / pageSize);
-    const lastPageY = Math.floor((originY + height - 1) / pageSize);
-    const endX = originX + width;
-    const endY = originY + height;
-    for (let pageX = firstPageX; pageX <= lastPageX; pageX += 1) {
-      const pageOriginX = pageX * pageSize;
-      const startX = Math.max(originX, pageOriginX);
-      const stopX = Math.min(endX, pageOriginX + pageSize);
-      for (let pageY = firstPageY; pageY <= lastPageY; pageY += 1) {
-        const pageOriginY = pageY * pageSize;
-        const startY = Math.max(originY, pageOriginY);
-        const stopY = Math.min(endY, pageOriginY + pageSize);
-        const page = this.pageFor(
-          this.overviewPages,
-          pageX,
-          pageY,
-          pageSize,
-          sampleAt,
-          true
-        );
-        for (let x = startX; x < stopX; x += 1) {
-          const column = (x - pageOriginX) * pageSize;
-          for (let y = startY; y < stopY; y += 1) {
-            if (hasBit(page.riverBits, column + y - pageOriginY)) visit(x, y);
-          }
-        }
-      }
-    }
-  }
-  pageFor(cache, pageX, pageY, pageSize, sampleAt, overview) {
-    const key = `${pageX},${pageY}`;
-    let page = cache.get(key);
-    if (page) {
-      cache.delete(key);
-      cache.set(key, page);
-      if (overview) this.overviewPageHits += 1;
-      else this.tilePageHits += 1;
-      return page;
-    }
-    page = this.buildPage(pageX, pageY, pageSize, sampleAt);
-    cache.set(key, page);
-    if (overview) this.overviewPageBuilds += 1;
-    else this.tilePageBuilds += 1;
-    while (cache.size > this.profile.rivers.maximumCachedPages) {
-      const oldest = cache.keys().next().value;
-      if (oldest === void 0) break;
-      cache.delete(oldest);
-    }
-    return page;
-  }
-  resolveCourseStep() {
-    const requested = this.profile.rivers.courseStep;
-    if (this.domain.topology !== "toroidal") return requested;
-    for (let step = requested; step >= 1; step -= 1) {
-      if (this.domain.width % step === 0 && this.domain.height % step === 0 && this.domain.width / step % 2 === 0) return step;
-    }
-    return 1;
-  }
-  courseToBaseWorld(point) {
-    return worldAxialToOffset({ x: point.x * this.courseStep, y: point.y * this.courseStep });
-  }
-  courseWarpAt(base, salt) {
-    const rivers = this.profile.rivers;
-    if (this.domain.topology === "toroidal") {
-      const x = positiveModulo4(base.x, this.domain.width);
-      const y = positiveModulo4(base.y, this.domain.height);
-      return periodicFractalNoise2D(
-        this.numericSeed ^ salt,
-        x / this.domain.width,
-        y / this.domain.height,
-        Math.max(1, Math.round(this.domain.width * rivers.courseWarpScale)),
-        Math.max(1, Math.round(this.domain.height * rivers.courseWarpScale)),
-        rivers.courseWarpOctaves
-      );
-    }
-    return fractalNoise2D(
-      this.numericSeed ^ salt,
-      base.x * rivers.courseWarpScale,
-      base.y * rivers.courseWarpScale,
-      rivers.courseWarpOctaves
-    );
-  }
-  courseToWorld(point) {
-    const base = this.courseToBaseWorld(point);
-    const rivers = this.profile.rivers;
-    const amplitude = rivers.courseWarpAmplitude * this.courseStep / rivers.courseStep;
-    if (amplitude === 0) return base;
-    return {
-      x: base.x + Math.round((this.courseWarpAt(base, rivers.courseWarpSalt) * 2 - 1) * amplitude),
-      y: base.y + Math.round(
-        (this.courseWarpAt(base, rivers.courseWarpSalt ^ 2654435769) * 2 - 1) * amplitude
-      )
-    };
-  }
-  normalizeWorld(point) {
-    if (this.domain.topology === "infinite") return point;
-    if (this.domain.topology === "toroidal") {
-      return {
-        x: positiveModulo4(point.x, this.domain.width),
-        y: positiveModulo4(point.y, this.domain.height)
-      };
-    }
-    return point.x >= 0 && point.x < this.domain.width && point.y >= 0 && point.y < this.domain.height ? point : void 0;
-  }
-  canonicalCourseKey(point) {
-    const base = this.courseToBaseWorld(point);
-    return pointKey(this.normalizeWorld(base) ?? base);
-  }
-  sourceSuitability(sample) {
-    if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */ || sample.baseTerrain === "mountain" /* mountain */ || sample.baseTerrain === "snow" /* snow */) return 0;
-    const rivers = this.profile.rivers;
-    const elevation = smoothstep2(
-      rivers.sourceMinimumElevation,
-      rivers.sourceMinimumElevation + rivers.sourceElevationTransition,
-      sample.landform.elevation
-    ) * (1 - smoothstep2(
-      rivers.sourceMaximumElevation - rivers.sourceElevationTransition,
-      rivers.sourceMaximumElevation,
-      sample.landform.elevation
-    ));
-    const moisture = rivers.sourceMoistureFloor + (1 - rivers.sourceMoistureFloor) * smoothstep2(rivers.sourceMinimumMoisture, 1, sample.landform.moisture);
-    return clamp012(elevation * moisture);
-  }
-  drainagePotential(point, sample) {
-    if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) return -1;
-    if (sample.baseTerrain === "mountain" /* mountain */ || sample.baseTerrain === "snow" /* snow */) return Infinity;
-    const rivers = this.profile.rivers;
-    const unwrappedWorld = this.courseToWorld(point);
-    const world = this.normalizeWorld(unwrappedWorld) ?? unwrappedWorld;
-    const jitter = (randomAt(this.numericSeed, world.x, world.y, rivers.flowSalt) - 0.5) * rivers.potentialJitter;
-    return sample.landform.ocean * rivers.potentialOceanWeight + sample.landform.elevation * rivers.potentialElevationWeight - sample.landform.valley * rivers.potentialValleyWeight - sample.landform.moisture * rivers.potentialMoistureWeight + jitter;
-  }
-  drainageNode(point, sampleAt, cache) {
-    const key = this.canonicalCourseKey(point);
-    const cached = cache.get(key);
-    if (cached) return cached;
-    const world = this.courseToWorld(point);
-    const sample = sampleAt(world.x, world.y);
-    if (!sample) return void 0;
-    const node = {
-      sample,
-      potential: this.drainagePotential(point, sample),
-      nextResolved: false
-    };
-    cache.set(key, node);
-    return node;
-  }
-  nextCoursePoint(point, node, sampleAt, cache) {
-    if (node.nextResolved) {
-      return node.nextDelta ? { x: point.x + node.nextDelta.x, y: point.y + node.nextDelta.y } : void 0;
-    }
-    let bestDelta;
-    let bestPotential = node.potential;
-    for (const delta of AXIAL_NEIGHBORS) {
-      const candidate = { x: point.x + delta.x, y: point.y + delta.y };
-      const adjacent = this.drainageNode(candidate, sampleAt, cache);
-      if (adjacent && adjacent.potential < bestPotential) {
-        bestDelta = delta;
-        bestPotential = adjacent.potential;
-      }
-    }
-    node.nextResolved = true;
-    node.nextDelta = bestDelta;
-    return bestDelta ? { x: point.x + bestDelta.x, y: point.y + bestDelta.y } : void 0;
-  }
-  traceCourse(source, sampleAt, cache, upstreamCache) {
-    const rivers = this.profile.rivers;
-    const points = [];
-    const visited = /* @__PURE__ */ new Set();
-    let current = source;
-    let reachedSea = false;
-    for (let index = 0; index < rivers.maximumCourseLength; index += 1) {
-      const key = this.canonicalCourseKey(current);
-      if (visited.has(key)) break;
-      visited.add(key);
-      const node = this.drainageNode(current, sampleAt, cache);
-      if (!node) break;
-      points.push(current);
-      if (node.sample.baseTerrain === "sea" /* sea */ || node.sample.baseTerrain === "coastal" /* coastal */) {
-        reachedSea = true;
-        break;
-      }
-      const next = this.nextCoursePoint(current, node, sampleAt, cache);
-      if (!next) break;
-      current = next;
-    }
-    if (!reachedSea || points.length < rivers.minimumCourseLength) return void 0;
-    while (points.length < rivers.maximumCourseLength) {
-      const head = points[0];
-      const branch = this.longestUpstreamBranch(
-        head,
-        rivers.maximumCourseLength - points.length,
-        sampleAt,
-        cache,
-        upstreamCache
-      );
-      if (!branch.delta) break;
-      points.unshift({ x: head.x + branch.delta.x, y: head.y + branch.delta.y });
-    }
-    return { points, anchor: source };
-  }
-  longestUpstreamBranch(point, remaining, sampleAt, drainage, cache) {
-    if (remaining === 0) return { length: 0 };
-    const pointId = this.canonicalCourseKey(point);
-    const key = `${pointId}:${remaining}`;
-    const cached = cache.get(key);
-    if (cached) return cached;
-    const node = this.drainageNode(point, sampleAt, drainage);
-    const world = worldOffsetToAxial(this.courseToWorld(point));
-    let best = { length: 0 };
-    for (const delta of AXIAL_NEIGHBORS) {
-      const candidate = { x: point.x + delta.x, y: point.y + delta.y };
-      const adjacent = this.drainageNode(candidate, sampleAt, drainage);
-      if (!adjacent || !Number.isFinite(adjacent.potential) || adjacent.potential <= node.potential) continue;
-      const next = this.nextCoursePoint(candidate, adjacent, sampleAt, drainage);
-      if (!next || this.canonicalCourseKey(next) !== pointId) continue;
-      const upstream = this.longestUpstreamBranch(candidate, remaining - 1, sampleAt, drainage, cache);
-      const from = worldOffsetToAxial(this.courseToWorld(candidate));
-      const dx = from.x - world.x;
-      const dy = from.y - world.y;
-      const length = upstream.length + Math.sqrt(dx * dx + dx * dy + dy * dy);
-      if (length > best.length) best = { length, delta };
-    }
-    cache.set(key, best);
-    return best;
-  }
-  sourceFor(regionX, regionY, slot, sampleAt, cache) {
-    const rivers = this.profile.rivers;
-    const key = sourceKey(this.numericSeed, regionX, regionY, slot, rivers.sourceSalt);
-    const source = {
-      x: regionX * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 1) * rivers.sourceCellSize),
-      y: regionY * rivers.sourceCellSize + Math.floor(randomForSource(this.numericSeed, key, 2) * rivers.sourceCellSize)
-    };
-    const node = this.drainageNode(source, sampleAt, cache);
-    if (!node) return void 0;
-    const chance = rivers.sourceSpawnChance * this.sourceSuitability(node.sample);
-    return randomForSource(this.numericSeed, key, 3) < chance ? source : void 0;
-  }
-  coursesForExtent(originX, originY, width, height, sampleAt) {
-    const rivers = this.profile.rivers;
-    const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep + Math.ceil(
-      this.courseStep + rivers.courseWarpAmplitude * 2 + rivers.highFlowCourseRadius * rivers.mouthWidthMultiplier * 2
-    );
-    const corners = [
-      worldOffsetToAxial({ x: originX - reach, y: originY - reach }),
-      worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
-      worldOffsetToAxial({ x: originX - reach, y: originY + height - 1 + reach }),
-      worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY + height - 1 + reach })
-    ];
-    const minimumX = Math.floor(Math.min(...corners.map((point) => point.x)) / this.courseStep) - 1;
-    const maximumX = Math.ceil(Math.max(...corners.map((point) => point.x)) / this.courseStep) + 1;
-    const minimumY = Math.floor(Math.min(...corners.map((point) => point.y)) / this.courseStep) - 1;
-    const maximumY = Math.ceil(Math.max(...corners.map((point) => point.y)) / this.courseStep) + 1;
-    const firstRegionX = Math.floor(minimumX / rivers.sourceCellSize);
-    const lastRegionX = Math.floor(maximumX / rivers.sourceCellSize);
-    const firstRegionY = Math.floor(minimumY / rivers.sourceCellSize);
-    const lastRegionY = Math.floor(maximumY / rivers.sourceCellSize);
-    const sources = /* @__PURE__ */ new Set();
-    const courses = [];
-    const drainage = /* @__PURE__ */ new Map();
-    const upstream = /* @__PURE__ */ new Map();
-    for (let regionX = firstRegionX; regionX <= lastRegionX; regionX += 1) {
-      for (let regionY = firstRegionY; regionY <= lastRegionY; regionY += 1) {
-        for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
-          const source = this.sourceFor(regionX, regionY, slot, sampleAt, drainage);
-          if (!source) continue;
-          const key = this.canonicalCourseKey(source);
-          if (sources.has(key)) continue;
-          sources.add(key);
-          const course = this.traceCourse(source, sampleAt, drainage, upstream);
-          if (course) courses.push(course);
-        }
-      }
-    }
-    return courses;
-  }
-  rasterizeCourses(originX, originY, width, height, sampleAt, visit) {
-    const courses = this.coursesForExtent(originX, originY, width, height, sampleAt);
-    const nodes = /* @__PURE__ */ new Map();
-    for (const course of courses) {
-      let nextWorld;
-      let nextKey;
-      for (let index = course.points.length - 1; index >= 0; index -= 1) {
-        const point = course.points[index];
-        const world = this.courseToWorld(point);
-        const key = this.canonicalCourseKey(point);
-        const node = nodes.get(key);
-        if (node) node.flow += 1;
-        else nodes.set(key, {
-          world,
-          nextWorld,
-          nextKey,
-          distanceToSea: 0,
-          visibleDistanceToSea: 0,
-          hasIncoming: false,
-          flow: 1,
-          radius: 0
-        });
-        nextWorld = world;
-        nextKey = key;
-      }
-    }
-    for (const node of nodes.values()) {
-      if (node.nextKey !== void 0) nodes.get(node.nextKey).hasIncoming = true;
-    }
-    for (const node of nodes.values()) {
-      if (!node.nextWorld || node.nextKey === void 0) continue;
-      const next = nodes.get(node.nextKey);
-      const downstream = next.nextWorld ? {
-        x: node.nextWorld.x + next.nextWorld.x - next.world.x,
-        y: node.nextWorld.y + next.nextWorld.y - next.world.y
-      } : void 0;
-      node.reach = createRiverReach(node.world, node.nextWorld, downstream, !node.hasIncoming);
-      node.distanceToSea = next.distanceToSea + node.reach.length;
-    }
-    const rivers = this.profile.rivers;
-    for (const course of courses) {
-      const head = nodes.get(this.canonicalCourseKey(course.points[0]));
-      const anchor = nodes.get(this.canonicalCourseKey(course.anchor));
-      head.visibleDistanceToSea = Math.max(
-        head.visibleDistanceToSea,
-        anchor.distanceToSea * rivers.courseLengthMultiplier
-      );
-    }
-    const upstreamFirst = [...nodes.values()].reverse();
-    for (const node of upstreamFirst) {
-      if (node.nextKey === void 0) continue;
-      const next = nodes.get(node.nextKey);
-      next.visibleDistanceToSea = Math.max(next.visibleDistanceToSea, node.visibleDistanceToSea);
-    }
-    for (const node of nodes.values()) {
-      const flowRadius = rivers.baseCourseRadius + (rivers.highFlowCourseRadius - rivers.baseCourseRadius) * smoothstep2(1, rivers.highFlowThreshold, node.flow);
-      const mouth = 1 - smoothstep2(0, rivers.mouthWideningDistance, node.distanceToSea);
-      node.radius = flowRadius * (1 + (rivers.mouthWidthMultiplier - 1) * mouth);
-    }
-    const endX = originX + width;
-    const endY = originY + height;
-    const visited = /* @__PURE__ */ new Set();
-    const emit = (point) => {
-      const normalized = this.normalizeWorld(point);
-      if (!normalized || normalized.x < originX || normalized.x >= endX || normalized.y < originY || normalized.y >= endY) return;
-      const index = (normalized.x - originX) * height + normalized.y - originY;
-      if (visited.has(index)) return;
-      visited.add(index);
-      visit(normalized.x, normalized.y);
-    };
-    for (const node of nodes.values()) {
-      if (!node.reach || node.nextKey === void 0) continue;
-      const next = nodes.get(node.nextKey);
-      if (node.visibleDistanceToSea <= next.distanceToSea) continue;
-      const trim = Math.max(0, node.distanceToSea - node.visibleDistanceToSea);
-      const fraction = node.reach.length > 0 ? trim / node.reach.length : 0;
-      forEachHexRiverReach(
-        trimRiverReachStart(node.reach, trim),
-        node.radius + (next.radius - node.radius) * fraction,
-        next.radius,
-        emit
-      );
-    }
-  }
-  buildPage(pageX, pageY, pageSize, sampleAt) {
-    const riverBits = new Uint8Array(bitArrayLength(pageSize * pageSize));
-    const originX = pageX * pageSize;
-    const originY = pageY * pageSize;
-    this.rasterizeCourses(originX, originY, pageSize, pageSize, sampleAt, (x, y) => {
-      setBit(riverBits, (x - originX) * pageSize + y - originY);
-    });
-    return { riverBits };
-  }
-  buildToroidalMask(sampleAt) {
-    if (this.domain.topology !== "toroidal") throw new Error("toroidal mask requires a toroidal domain");
-    const domain = this.domain;
-    const mask = new Uint8Array(bitArrayLength(domain.width * domain.height));
-    this.rasterizeCourses(0, 0, domain.width, domain.height, sampleAt, (x, y) => {
-      setBit(mask, x * domain.height + y);
-    });
-    return mask;
-  }
-};
-function createWorldWaterSampler(numericSeed, domain, profile) {
-  if (!Number.isSafeInteger(numericSeed) || numericSeed < 0 || numericSeed > 4294967295) {
-    throw new RangeError("water sampler seed must be an unsigned 32-bit integer");
-  }
-  return new DrainageWorldWaterSampler(numericSeed, domain, profile);
-}
-
-// src/world/WorldSurfaceResolver.ts
-var isWater = (type) => type === "sea" /* sea */ || type === "coastal" /* coastal */;
-var clamp013 = (value) => Math.max(0, Math.min(1, value));
-var smoothstep3 = (edge0, edge1, value) => {
-  const t = clamp013((value - edge0) / (edge1 - edge0));
-  return t * t * (3 - 2 * t);
-};
-var modulo = (value, period) => (value % period + period) % period;
-function assertTileCoordinates(x, y) {
-  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
-    throw new RangeError("world surface coordinates must be safe integers");
-  }
-}
-function normalizeCoordinates(domain, x, y) {
-  assertTileCoordinates(x, y);
-  if (domain.topology === "infinite") return { x, y };
-  if (domain.topology === "toroidal") {
-    return { x: modulo(x, domain.width), y: modulo(y, domain.height) };
-  }
-  return x >= 0 && x < domain.width && y >= 0 && y < domain.height ? { x, y } : void 0;
-}
-function classifyTerrain(sample, profile) {
-  const terrain = profile.terrain;
-  if (sample.ocean < terrain.oceanLevel) return "sea" /* sea */;
-  if (sample.elevation > terrain.mountainElevation && sample.ridge > terrain.mountainRidge || sample.elevation > terrain.mountainPeakElevation) return "mountain" /* mountain */;
-  const snowColdness = terrain.snowTemperature > 0 ? clamp013((terrain.snowTemperature - sample.temperature) / terrain.snowTemperature) : 0;
-  const minimumSnowElevation = terrain.seaLevel + (terrain.hillElevation - terrain.seaLevel) * 0.45;
-  const snowElevation = terrain.hillElevation - (terrain.hillElevation - minimumSnowElevation) * snowColdness;
-  if (sample.temperature < terrain.snowTemperature && sample.elevation > snowElevation) return "snow" /* snow */;
-  if (sample.temperature < terrain.tundraTemperature) return "tundra" /* tundra */;
-  if (sample.temperature > terrain.sandTemperature && sample.moisture < terrain.sandMoisture) return "sand" /* sand */;
-  return "land" /* land */;
-}
-function generatedRelief(sample, profile) {
-  const relief = profile.relief;
-  if (sample.ocean < profile.terrain.oceanLevel) return relief.shoreline;
-  const landElevation = Math.max(0, sample.elevation - profile.terrain.seaLevel);
-  const plain = relief.plainMinimum + landElevation * relief.plainElevationScale + sample.roughness * relief.plainRoughnessScale - sample.valley * relief.valleyDepth;
-  const hill = smoothstep3(relief.hillElevationStart, relief.hillElevationEnd, sample.elevation) * relief.hillScale;
-  const mountainT = Math.max(
-    0,
-    (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
-  );
-  const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale;
-  return Math.max(
-    relief.shoreline,
-    Math.min(relief.mountainMaximum, plain + hill + mountain)
-  );
-}
-function biomeWeightsFor(type, sample, profile) {
-  if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
-  const terrain = profile.terrain;
-  const transition = terrain.climateTransition;
-  const cold = 1 - smoothstep3(
-    terrain.snowTemperature - transition,
-    terrain.tundraTemperature + transition,
-    sample.temperature
-  );
-  const dry = smoothstep3(
-    terrain.sandTemperature - transition,
-    terrain.sandTemperature + transition,
-    sample.temperature
-  ) * (1 - smoothstep3(
-    terrain.sandMoisture - transition,
-    terrain.sandMoisture + transition,
-    sample.moisture
-  ));
-  const alpine = clamp013(Math.max(
-    type === "mountain" /* mountain */ ? 0.7 : 0,
-    smoothstep3(
-      terrain.mountainElevation - transition,
-      terrain.mountainPeakElevation,
-      sample.elevation
-    ) * (0.45 + sample.ridge * 0.55)
-  ));
-  const temperate = Math.max(0.02, (1 - cold) * (1 - dry) * (1 - alpine));
-  const sum = temperate + dry + cold + alpine;
-  return Object.freeze({
-    temperate: temperate / sum,
-    dry: dry / sum,
-    cold: cold / sum,
-    alpine: alpine / sum
-  });
-}
-function biomeFor(type, weights) {
-  if (type === "sea" /* sea */ || type === "coastal" /* coastal */) return type === "coastal" /* coastal */ ? "coast" : "ocean";
-  const weighted = [
-    ["temperate", weights.temperate],
-    ["dry", weights.dry],
-    ["cold", weights.cold],
-    ["alpine", weights.alpine]
-  ];
-  return weighted.reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
-}
-function vegetationDensityFor(type, sample, profile) {
-  if (isWater(type) || type === "mountain" /* mountain */ || type === "snow" /* snow */) return 0;
-  const vegetation = profile.vegetation;
-  const moisture = smoothstep3(vegetation.moistureStart, vegetation.moistureFull, sample.moisture);
-  const cold = smoothstep3(
-    vegetation.temperatureMinimum - vegetation.temperatureTransition,
-    vegetation.temperatureMinimum + vegetation.temperatureTransition,
-    sample.temperature
-  );
-  const heat = 1 - smoothstep3(
-    vegetation.temperatureMaximum - vegetation.temperatureTransition,
-    vegetation.temperatureMaximum + vegetation.temperatureTransition,
-    sample.temperature
-  );
-  const patch = vegetation.patchMinimum + (1 - vegetation.patchMinimum) * smoothstep3(vegetation.patchStart, vegetation.patchFull, sample.forestPatch);
-  const slope = clamp013(1 - sample.ridge * vegetation.ridgePenalty - sample.roughness * vegetation.roughnessPenalty);
-  return Math.min(
-    vegetation.maximumDensity,
-    moisture * cold * heat * patch * slope * vegetation.densityScale
-  );
-}
-function vegetationKindFor(sample, profile) {
-  return sample.temperature > profile.vegetation.palmTemperature ? "palm" : sample.temperature < profile.vegetation.piniaTemperature ? "pinia" : "oak";
-}
-function sampleSurface(sampler, profile, x, y) {
-  const landform = Object.freeze({ ...sampler.sample(x, y) });
-  const baseTerrain = classifyTerrain(landform, profile);
-  const biomeWeights = biomeWeightsFor(baseTerrain, landform, profile);
-  const biome = biomeFor(baseTerrain, biomeWeights);
-  const vegetationDensity = vegetationDensityFor(baseTerrain, landform, profile);
-  return Object.freeze({
-    baseTerrain,
-    relief: generatedRelief(landform, profile),
-    biome,
-    biomeWeights,
-    vegetationDensity,
-    vegetationKind: vegetationDensity > 0 ? vegetationKindFor(landform, profile) : void 0,
-    landform
-  });
-}
-function resolveTile(numericSeed, profile, x, y, sampleAt, riverAt) {
-  const sample = sampleAt(x, y);
-  if (!sample) throw new RangeError("world surface coordinate is outside the generated domain");
-  let type = !isWater(sample.baseTerrain) && riverAt(x, y) ? "sea" /* sea */ : sample.baseTerrain;
-  if (type === "sea" /* sea */) {
-    const touchesLand = getNeighbors(x, y).some((neighbor) => {
-      const adjacent = sampleAt(neighbor.x, neighbor.y);
-      return adjacent !== void 0 && !isWater(adjacent.baseTerrain) && !riverAt(neighbor.x, neighbor.y);
-    });
-    if (touchesLand) type = "coastal" /* coastal */;
-  }
-  const tile = { type };
-  if (isWater(type) || type === "mountain" /* mountain */) return Object.freeze(tile);
-  const modifiers = [];
-  if (type === "snow" /* snow */) {
-    modifiers.push("hill");
-    tile.modifiers = modifiers;
-    Object.freeze(modifiers);
-    return Object.freeze(tile);
-  }
-  if (sample.landform.elevation > profile.terrain.hillElevation) modifiers.push("hill");
-  const forest = sample.vegetationDensity + (randomAt(numericSeed, x, y, profile.vegetation.placementSalt) - 0.5) * profile.vegetation.placementJitter >= profile.vegetation.placementThreshold;
-  if (forest) {
-    modifiers.push("wood");
-    tile.treeModel = `Assets/models/${sample.vegetationKind ?? "oak"}`;
-  }
-  if (modifiers.length > 0) {
-    tile.modifiers = modifiers;
-    Object.freeze(modifiers);
-  }
-  return Object.freeze(tile);
-}
-var FrozenWorldSurfaceResolver = class {
-  get waterStats() {
-    return this.waterSampler.stats;
-  }
-  constructor(options) {
-    if (!options || typeof options !== "object") throw new TypeError("world surface resolver options are required");
-    this.seed = String(options.seed);
-    this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
-    this.profile = createWorldStyleProfile(this.waterStyle);
-    this.sampler = createLandformSamplerForProfile({ seed: options.seed, domain: options.domain }, this.profile);
-    this.domain = Object.freeze({ ...this.sampler.domain });
-    this.waterSampler = createWorldWaterSampler(this.sampler.numericSeed, this.domain, this.profile);
-  }
-  sampleGenerated(x, y) {
-    const point = normalizeCoordinates(this.domain, x, y);
-    if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
-    return sampleSurface(this.sampler, this.profile, point.x, point.y);
-  }
-  resolveGeneratedTile(x, y) {
-    const point = normalizeCoordinates(this.domain, x, y);
-    if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
-    return resolveTile(
-      this.sampler.numericSeed,
-      this.profile,
-      point.x,
-      point.y,
-      (sampleX, sampleY) => {
-        const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
-        return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
-      },
-      (riverX, riverY) => this.waterSampler.isRiverTile(
-        riverX,
-        riverY,
-        (sampleX, sampleY) => {
-          const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
-          return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : void 0;
-        }
-      )
-    );
-  }
-  visitGeneratedRiverTiles(originX, originY, width, height, visit) {
-    if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
-    const window = this.createWindow();
-    try {
-      const sampleAt = (x, y) => window.sampleGenerated(x, y);
-      this.waterSampler.forEachRiverTile(originX, originY, width, height, sampleAt, (x, y) => {
-        const sample = sampleAt(x, y);
-        if (sample && !isWater(sample.baseTerrain)) visit(x, y);
-      });
-    } finally {
-      window.clear();
-    }
-  }
-  createWindow() {
-    return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);
-  }
-};
-var WorldSurfaceResolverWindow = class {
-  constructor(resolver, numericSeed, waterSampler) {
-    this.resolver = resolver;
-    this.numericSeed = numericSeed;
-    this.waterSampler = waterSampler;
-    this.samples = /* @__PURE__ */ new Map();
-    this.tiles = /* @__PURE__ */ new Map();
-  }
-  sampleGenerated(x, y) {
-    const point = normalizeCoordinates(this.resolver.domain, x, y);
-    if (!point) return void 0;
-    const key = `${point.x},${point.y}`;
-    let sample = this.samples.get(key);
-    if (!sample) {
-      sample = this.resolver.sampleGenerated(point.x, point.y);
-      this.samples.set(key, sample);
-    }
-    return sample;
-  }
-  resolveGeneratedTile(x, y) {
-    const point = normalizeCoordinates(this.resolver.domain, x, y);
-    if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
-    const key = `${point.x},${point.y}`;
-    let tile = this.tiles.get(key);
-    if (!tile) {
-      tile = resolveTile(
-        this.numericSeed,
-        this.resolver.profile,
-        point.x,
-        point.y,
-        (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY),
-        (riverX, riverY) => this.waterSampler.isRiverTile(
-          riverX,
-          riverY,
-          (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
-        )
-      );
-      this.tiles.set(key, tile);
-    }
-    return tile;
-  }
-  clear() {
-    this.samples.clear();
-    this.tiles.clear();
-  }
-};
-function createWorldSurfaceResolver(options) {
-  return new FrozenWorldSurfaceResolver(options);
-}
 
 // src/world/generateWorldChunk.ts
-var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
 var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
 var WORLD_CHUNK_FORMAT_VERSION = 1;
 var WORLD_CHUNK_PADDING = 1;
@@ -2570,81 +1345,6 @@ var FLAG_LAKE = 1 << 5;
 var TREE_SHIFT = 6;
 var TREE_MASK = 3 << TREE_SHIFT;
 var TREE_MODELS = [void 0, "Assets/models/palm", "Assets/models/pinia", "Assets/models/oak"];
-function assertChunkCoordinate(name, value) {
-  if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
-}
-function resolveChunkSize(value = DEFAULT_WORLD_GENERATION_CHUNK_SIZE) {
-  if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
-    throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
-  }
-  return value;
-}
-function encodeTileInfo(tile) {
-  let packed = LAND_CODE.get(tile.type) ?? 0;
-  if (tile.modifiers?.includes("hill")) packed |= FLAG_HILL;
-  if (tile.modifiers?.includes("wood")) packed |= FLAG_WOOD;
-  if (tile.modifiers?.includes("lake")) packed |= FLAG_LAKE;
-  const treeCode = TREE_MODELS.indexOf(tile.treeModel);
-  if (treeCode > 0) packed |= treeCode << TREE_SHIFT;
-  return packed;
-}
-function validateBoundedWorld(world) {
-  if (!world) return;
-  assertToroidalWorldBounds(world);
-}
-function generateWorldChunk(options) {
-  assertChunkCoordinate("chunkX", options.chunkX);
-  assertChunkCoordinate("chunkY", options.chunkY);
-  validateBoundedWorld(options.world);
-  const chunkSize = resolveChunkSize(options.chunkSize);
-  const resolver = createWorldChunkSurfaceResolver(options);
-  return generateWorldChunkWithResolver(options, resolver, chunkSize);
-}
-function createWorldChunkSurfaceResolver(options) {
-  if (!options || typeof options !== "object") throw new TypeError("world chunk generation options are required");
-  validateBoundedWorld(options.world);
-  return createWorldSurfaceResolver({
-    seed: options.seed,
-    waterStyle: options.waterStyle,
-    domain: options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" }
-  });
-}
-function generateWorldChunkWithResolver(options, resolver, resolvedChunkSize) {
-  assertChunkCoordinate("chunkX", options.chunkX);
-  assertChunkCoordinate("chunkY", options.chunkY);
-  validateBoundedWorld(options.world);
-  const chunkSize = resolvedChunkSize ?? resolveChunkSize(options.chunkSize);
-  const stride = chunkSize + WORLD_CHUNK_PADDING * 2;
-  const tiles = new Uint16Array(stride * stride);
-  const expectedDomain = options.world ? { topology: "toroidal", width: options.world.width, height: options.world.height } : { topology: "infinite" };
-  const expectedWaterStyle = options.waterStyle ?? DEFAULT_WORLD_WATER_STYLE;
-  if (!resolver || resolver.seed !== String(options.seed) || !worldWaterGenerationStylesEqual(resolver.waterStyle, expectedWaterStyle) || resolver.domain.topology !== expectedDomain.topology || expectedDomain.topology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== expectedDomain.width || resolver.domain.height !== expectedDomain.height)) {
-    throw new TypeError("world surface resolver does not match the chunk request");
-  }
-  const window = resolver.createWindow();
-  const originX = options.chunkX * chunkSize - WORLD_CHUNK_PADDING;
-  const originY = options.chunkY * chunkSize - WORLD_CHUNK_PADDING;
-  if (!Number.isSafeInteger(originX) || !Number.isSafeInteger(originY) || !Number.isSafeInteger(originX + stride - 1) || !Number.isSafeInteger(originY + stride - 1)) {
-    throw new RangeError("chunk coordinates exceed the safe integer tile range");
-  }
-  for (let localX = 0; localX < stride; localX += 1) {
-    for (let localY = 0; localY < stride; localY += 1) {
-      const x = originX + localX;
-      const y = originY + localY;
-      tiles[localX * stride + localY] = encodeTileInfo(window.resolveGeneratedTile(x, y));
-    }
-  }
-  window.clear();
-  return {
-    version: WORLD_CHUNK_FORMAT_VERSION,
-    chunkX: options.chunkX,
-    chunkY: options.chunkY,
-    chunkSize,
-    padding: WORLD_CHUNK_PADDING,
-    stride,
-    tiles
-  };
-}
 function decodeWorldChunkTile(chunk, localX, localY) {
   if (!Number.isInteger(localX) || !Number.isInteger(localY) || localX < -chunk.padding || localX >= chunk.chunkSize + chunk.padding || localY < -chunk.padding || localY >= chunk.chunkSize + chunk.padding) {
     throw new RangeError("chunk-local tile coordinate is outside the packed payload");
@@ -2935,40 +1635,6 @@ function assertSupportedWorldGeneratorVersion(value) {
       `unsupported world generator version ${String(value)}; this build supports ${WORLD_GENERATOR_VERSION}`
     );
   }
-}
-function createWorldDescriptor(options) {
-  if (!options || typeof options !== "object") throw new TypeError("world descriptor options are required");
-  if (typeof options.seed !== "string" && typeof options.seed !== "number") {
-    throw new TypeError("world seed must be a string or number");
-  }
-  if (typeof options.seed === "number" && !Number.isFinite(options.seed)) {
-    throw new RangeError("numeric world seed must be finite");
-  }
-  const chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
-  assertChunkSize(chunkSize);
-  const generatorVersion = options.generatorVersion ?? WORLD_GENERATOR_VERSION;
-  assertSupportedWorldGeneratorVersion(generatorVersion);
-  const waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
-  const base = {
-    descriptorVersion: WORLD_DESCRIPTOR_FORMAT_VERSION,
-    seed: String(options.seed),
-    generatorVersion,
-    chunkFormatVersion: WORLD_CHUNK_FORMAT_VERSION,
-    chunkSize,
-    waterStyle
-  };
-  if (!options.world) {
-    return Object.freeze({ ...base, sourceKind: "procedural-infinite", topology: "infinite" });
-  }
-  const world = options.world;
-  assertToroidalWorldBounds(world);
-  return Object.freeze({
-    ...base,
-    sourceKind: "procedural-toroidal",
-    topology: "toroidal",
-    width: world.width,
-    height: world.height
-  });
 }
 function assertWorldDescriptor(value) {
   if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
@@ -3295,7 +1961,7 @@ var StaleWorldNavigationSummaryError = class extends Error {
     this.name = "StaleWorldNavigationSummaryError";
   }
 };
-var pointKey2 = (point) => `${point.x},${point.y}`;
+var pointKey = (point) => `${point.x},${point.y}`;
 var chunkKey = (x, y) => `${x},${y}`;
 var MinQueue = class {
   constructor() {
@@ -3352,7 +2018,8 @@ var MemoryWorldNavigationIndex = class {
     }
     this.summaries.set(chunkKey(summary.chunkX, summary.chunkY), summary);
   }
-  getSummary(chunkX, chunkY) {
+  async getSummary(chunkX, chunkY, signal) {
+    throwIfAborted(signal);
     if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
     return Promise.resolve(this.summaries.get(chunkKey(chunkX, chunkY)));
   }
@@ -3376,38 +2043,36 @@ var MemoryWorldNavigationIndex = class {
 var ProceduralWorldNavigationIndex = class {
   constructor(options) {
     this.cache = /* @__PURE__ */ new Map();
+    this.pending = /* @__PURE__ */ new Set();
     this.disposed = false;
-    if (!options || !Number.isSafeInteger(options.chunkSize) || options.chunkSize <= 0) {
-      throw new RangeError("procedural navigation chunkSize must be positive");
+    if (!options?.source || typeof options.source.sampleBaseChunk !== "function") {
+      throw new TypeError("procedural navigation requires a base-chunk sampling source");
     }
-    this.seed = options.seed;
-    this.chunkSize = options.chunkSize;
-    this.world = options.world;
-    this.waterStyle = normalizeWorldWaterGenerationStyle(options.waterStyle);
-    this.bounds = options.world ? { width: options.world.width, height: options.world.height, wrapX: true, wrapY: true } : void 0;
+    this.source = options.source;
+    this.chunkSize = this.source.chunkSize;
+    const terrainRevision = serializeWorldDescriptor(this.source.descriptor);
+    if (this.chunkSize !== this.source.descriptor.chunkSize) throw new TypeError("navigation source chunkSize does not match its descriptor");
+    this.bounds = this.source.bounds ? Object.freeze({ ...this.source.bounds }) : void 0;
     this.passable = options.passable ?? ((tile) => tile.type !== "sea" /* sea */);
     this.movementType = options.movementType ?? "default";
+    if (typeof this.movementType !== "string" || !this.movementType.trim()) throw new TypeError("navigation movementType must be a non-empty string");
     this.buildOptions = {
       movementType: this.movementType,
       movementCost: options.movementCost,
-      terrainRevision: options.terrainRevision ?? serializeWorldDescriptor(createWorldDescriptor({
-        seed: options.seed,
-        chunkSize: options.chunkSize,
-        world: options.world,
-        waterStyle: this.waterStyle
-      })),
+      terrainRevision: options.terrainRevision ?? terrainRevision,
       deltaRevision: options.deltaRevision ?? 0,
       maxPortalsPerEntrance: options.maxPortalsPerEntrance
     };
     this.maxCached = options.maxCachedSummaries ?? 2048;
-    if (!Number.isInteger(this.maxCached) || this.maxCached <= 0) {
-      throw new RangeError("maxCachedSummaries must be a positive integer");
+    if (!Number.isSafeInteger(this.maxCached) || this.maxCached <= 0) {
+      throw new RangeError("maxCachedSummaries must be a positive safe integer");
     }
   }
   get cachedSummaries() {
     return this.cache.size;
   }
-  getSummary(chunkX, chunkY) {
+  async getSummary(chunkX, chunkY, signal) {
+    throwIfAborted(signal);
     if (this.disposed) return Promise.reject(new Error("WorldNavigationIndex has been disposed"));
     const resolved = this.resolveChunk(chunkX, chunkY);
     if (!resolved) return Promise.resolve(void 0);
@@ -3418,40 +2083,59 @@ var ProceduralWorldNavigationIndex = class {
       this.cache.set(key, cached);
       return Promise.resolve(cached);
     }
-    const packed = generateWorldChunk({
-      seed: this.seed,
-      chunkX: resolved.x,
-      chunkY: resolved.y,
-      chunkSize: this.chunkSize,
-      world: this.world,
-      waterStyle: this.waterStyle
-    });
-    const store = this.bounds ? new SparseWorldChunkStore(this.bounds) : new SparseWorldChunkStore();
-    store.add(packed);
-    const summary = buildWorldNavigationSummary(
-      store.map,
-      resolved.x,
-      resolved.y,
-      this.chunkSize,
-      this.passable,
-      this.buildOptions
-    );
-    this.cache.set(key, summary);
-    while (this.cache.size > this.maxCached) this.cache.delete(this.cache.keys().next().value);
-    return Promise.resolve(summary);
+    const controller = new AbortController();
+    const pending = { key, controller };
+    this.pending.add(pending);
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const packed = await this.source.sampleBaseChunk(resolved.x, resolved.y, {
+        lane: "interactive",
+        signal: controller.signal
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      throwIfAborted(controller.signal);
+      this.assertActive();
+      const store = this.bounds ? new SparseWorldChunkStore(this.bounds) : new SparseWorldChunkStore();
+      store.add(packed);
+      const summary = buildWorldNavigationSummary(
+        store.map,
+        resolved.x,
+        resolved.y,
+        this.chunkSize,
+        this.passable,
+        this.buildOptions
+      );
+      throwIfAborted(controller.signal);
+      this.cache.set(key, summary);
+      while (this.cache.size > this.maxCached) this.cache.delete(this.cache.keys().next().value);
+      return summary;
+    } finally {
+      this.pending.delete(pending);
+      signal?.removeEventListener("abort", abort);
+    }
   }
   invalidateChunk(chunkX, chunkY) {
     this.assertActive();
     const resolved = this.resolveChunk(chunkX, chunkY);
-    return resolved ? this.cache.delete(chunkKey(resolved.x, resolved.y)) : false;
+    if (!resolved) return false;
+    const key = chunkKey(resolved.x, resolved.y);
+    let invalidated = this.cache.delete(key);
+    for (const pending of this.pending) if (pending.key === key) {
+      pending.controller.abort();
+      invalidated = true;
+    }
+    return invalidated;
   }
   clear() {
     this.assertActive();
     this.cache.clear();
+    for (const pending of this.pending) pending.controller.abort();
   }
   dispose() {
     if (this.disposed) return;
     this.cache.clear();
+    for (const pending of this.pending) pending.controller.abort();
     this.disposed = true;
   }
   assertActive() {
@@ -3535,7 +2219,7 @@ function buildWorldNavigationSummary(map, chunkX, chunkY, chunkSize, passable, o
       options.movementCost
     );
     for (let target = 0; target < portals.length; target += 1) {
-      costs[index][target] = distances.get(pointKey2(portals[target].inside)) ?? null;
+      costs[index][target] = distances.get(pointKey(portals[target].inside)) ?? null;
     }
   }
   return {
@@ -3613,17 +2297,17 @@ function undirectedCrossingKey(portal) {
   return undirectedCrossingTuple(portal).join(",");
 }
 function localDistances(map, start, chunkX, chunkY, chunkSize, passable, movementCost) {
-  const distances = /* @__PURE__ */ new Map([[pointKey2(start), 0]]);
+  const distances = /* @__PURE__ */ new Map([[pointKey(start), 0]]);
   const frontier = new MinQueue();
   frontier.push(start, 0);
   while (frontier.size > 0) {
     const queued = frontier.pop();
     const current = queued.value;
-    const distance = distances.get(pointKey2(current));
+    const distance = distances.get(pointKey(current));
     if (distance === void 0 || distance !== queued.priority) continue;
     for (const neighbor of getMapNeighbors(map, current.x, current.y)) {
       if (Math.floor(neighbor.x / chunkSize) !== chunkX || Math.floor(neighbor.y / chunkSize) !== chunkY) continue;
-      const key = pointKey2(neighbor);
+      const key = pointKey(neighbor);
       const tile = getMapTile(map, neighbor.x, neighbor.y);
       if (!tile || !passable(tile, neighbor.x, neighbor.y)) continue;
       const nextDistance = distance + getMovementCost(tile, neighbor.x, neighbor.y, movementCost);
@@ -3703,7 +2387,7 @@ var HierarchicalPathfinder = class {
       throwIfAborted(options.signal);
       const key = chunkKey(point.x, point.y);
       if (summaries.has(key)) return summaries.get(key);
-      let summary = await this.index.getSummary(point.x, point.y);
+      let summary = await this.index.getSummary(point.x, point.y, options.signal);
       if (summary) {
         assertNavigationSummary(summary);
         if (summary.movementType !== this.movementType) {
@@ -3712,7 +2396,7 @@ var HierarchicalPathfinder = class {
         const expected = await this.expectedRevision?.(point.x, point.y);
         if (expected && !summaryRevisionMatches(summary, expected)) {
           this.index.invalidateChunk?.(point.x, point.y);
-          summary = await this.index.getSummary(point.x, point.y);
+          summary = await this.index.getSummary(point.x, point.y, options.signal);
           if (!summary) throw new StaleWorldNavigationSummaryError(point.x, point.y);
           assertNavigationSummary(summary);
           if (summary.movementType !== this.movementType || !summaryRevisionMatches(summary, expected)) {
@@ -3833,11 +2517,11 @@ var HierarchicalPathfinder = class {
     const frontier = new MinQueue();
     frontier.push(start, 0);
     const parents = /* @__PURE__ */ new Map();
-    const costs = /* @__PURE__ */ new Map([[pointKey2(start), 0]]);
+    const costs = /* @__PURE__ */ new Map([[pointKey(start), 0]]);
     while (frontier.size > 0) {
       const queued = frontier.pop();
       const current = queued.value;
-      const currentCost = costs.get(pointKey2(current));
+      const currentCost = costs.get(pointKey(current));
       if (currentCost === void 0 || currentCost !== queued.priority) continue;
       if (current.x === end.x && current.y === end.y) {
         return { path: reconstruct(start, end, parents), cost: currentCost };
@@ -3845,7 +2529,7 @@ var HierarchicalPathfinder = class {
       for (const neighbor of getMapNeighbors(this.source.map, current.x, current.y)) {
         const owner = this.resolveTileChunk(neighbor);
         if (!owner || owner.x !== chunkX || owner.y !== chunkY) continue;
-        const key = pointKey2(neighbor);
+        const key = pointKey(neighbor);
         const tile = getMapTile(this.source.map, neighbor.x, neighbor.y);
         if (!tile || !this.passable(tile, neighbor.x, neighbor.y)) continue;
         const nextCost = currentCost + getMovementCost(tile, neighbor.x, neighbor.y, this.movementCost);
@@ -3884,7 +2568,7 @@ function reconstruct(start, end, parents) {
   const path = [{ ...end }];
   let current = end;
   while (current.x !== start.x || current.y !== start.y) {
-    const parent = parents.get(pointKey2(current));
+    const parent = parents.get(pointKey(current));
     if (!parent) return [];
     path.push(parent);
     current = parent;

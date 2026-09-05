@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Procedural navigation samples base terrain through the source's Worker pool
+  and descriptor, forwards cancellation, yields before compact summary builds,
+  and rejects late cache publication after invalidation or disposal.
 - Vegetation edits coalesce and serialize shared-layout refreshes, preserve
   terrain residency and shared models/materials, and reject superseded layer
   mounts. Unchanged settings avoid rebuilds entirely.

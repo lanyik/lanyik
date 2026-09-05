@@ -520,7 +520,6 @@ async function regenerate() {
                 activeCampaign = await createCampaignDemo({
                     map,
                     source,
-                    seed: controls.seed,
                     initialTile,
                     tileSize: 48,
                     onUpdate: renderCampaign

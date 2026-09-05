@@ -5,6 +5,7 @@ import {
     DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
     MAX_WORLD_GENERATION_CHUNK_SIZE,
     PackedWorldChunk,
+    WorldChunkGenerationOptions,
     SparseWorldChunkStore,
     WorldTileOverride,
     WorldTileOverrideChange,
@@ -124,6 +125,12 @@ export interface WorldSource {
 }
 
 export type WorldVegetationPreparationOptions = Omit<WorldVegetationGenerationOptions, "map">;
+
+export interface WorldBaseChunkSource extends WorldSource {
+    readonly descriptor: WorldDescriptor;
+    /** Samples deterministic base terrain without installing tiles or restoring deltas. */
+    sampleBaseChunk(chunkX: number, chunkY: number, request?: ChunkRequestOptions): Promise<PackedWorldChunk>;
+}
 
 export interface WorldVegetationSource extends WorldSource {
     prepareVegetation(
@@ -266,6 +273,16 @@ function abortError(): Error {
 function assertChunkRequestActive(disposed: boolean, request: ChunkRequestOptions): void {
     if (request.signal?.aborted) throw abortError();
     if (disposed) throw new Error("WorldSource has been disposed");
+}
+
+function baseChunkOptions(descriptor: WorldDescriptor, chunkX: number, chunkY: number): WorldChunkGenerationOptions {
+    return {
+        seed: descriptor.seed, chunkX, chunkY, chunkSize: descriptor.chunkSize,
+        waterStyle: descriptor.waterStyle,
+        world: descriptor.topology === "toroidal"
+            ? { topology: "toroidal", width: descriptor.width!, height: descriptor.height! }
+            : undefined
+    };
 }
 
 export class StaticWorldSource implements WorldSource {
@@ -853,7 +870,6 @@ export class ToroidalWorldSource implements MutableWorldSource {
     public readonly store: SparseWorldChunkStore;
     public readonly descriptor: WorldDescriptor;
     public readonly worldId: string;
-    private readonly seed: string | number;
     private readonly pool: WorldGeneratorPool;
     private readonly chunkCountX: number;
     private readonly chunkCountY: number;
@@ -876,7 +892,6 @@ export class ToroidalWorldSource implements MutableWorldSource {
         }
         this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
         validateChunkSize(this.chunkSize);
-        this.seed = options.seed;
         this.descriptor = createWorldDescriptor({
             seed: options.seed,
             chunkSize: this.chunkSize,
@@ -947,14 +962,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
         if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
             throw new RangeError("toroidal chunk coordinates must use canonical bounds");
         }
-        const generation = {
-            seed: this.seed,
-            chunkX,
-            chunkY,
-            chunkSize: this.chunkSize,
-            waterStyle: this.descriptor.waterStyle,
-            world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
-        } as const;
+        const generation = baseChunkOptions(this.descriptor, chunkX, chunkY);
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
@@ -970,6 +978,16 @@ export class ToroidalWorldSource implements MutableWorldSource {
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
 
+    public async sampleBaseChunk(chunkX: number, chunkY: number, request: ChunkRequestOptions = {}): Promise<PackedWorldChunk> {
+        assertChunkRequestActive(this.disposed, request);
+        const resolved = this.resolveChunk(chunkX, chunkY);
+        if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+            throw new RangeError("base chunk coordinates must be canonical safe integers");
+        }
+        const packed = await this.pool.generateChunk(baseChunkOptions(this.descriptor, chunkX, chunkY), request);
+        assertChunkRequestActive(this.disposed, request);
+        return packed;
+    }
     public releaseChunk(chunk: WorldChunk): void {
         this.store.remove(chunk.chunkX, chunk.chunkY);
     }
@@ -1111,7 +1129,6 @@ export class ProceduralWorldSource implements MutableWorldSource {
     public readonly store: SparseWorldChunkStore;
     public readonly descriptor: WorldDescriptor;
     public readonly worldId: string;
-    private readonly seed: string | number;
     private readonly pool: WorldGeneratorPool;
     private readonly cache: WorldChunkCache | undefined;
     private readonly ownsCache: boolean;
@@ -1131,7 +1148,6 @@ export class ProceduralWorldSource implements MutableWorldSource {
         }
         this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
         validateChunkSize(this.chunkSize);
-        this.seed = options.seed;
         this.descriptor = createWorldDescriptor({
             seed: options.seed,
             chunkSize: this.chunkSize,
@@ -1184,13 +1200,7 @@ export class ProceduralWorldSource implements MutableWorldSource {
         request: ChunkRequestOptions = {}
     ): Promise<WorldChunk> {
         assertChunkRequestActive(this.disposed, request);
-        const generation = {
-            seed: this.seed,
-            chunkX,
-            chunkY,
-            chunkSize: this.chunkSize,
-            waterStyle: this.descriptor.waterStyle
-        };
+        const generation = baseChunkOptions(this.descriptor, chunkX, chunkY);
         const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
         const cacheEpoch = this.cacheEpoch;
         let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : undefined;
@@ -1206,6 +1216,16 @@ export class ProceduralWorldSource implements MutableWorldSource {
         return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
     }
 
+    public async sampleBaseChunk(chunkX: number, chunkY: number, request: ChunkRequestOptions = {}): Promise<PackedWorldChunk> {
+        assertChunkRequestActive(this.disposed, request);
+        const resolved = this.resolveChunk(chunkX, chunkY);
+        if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+            throw new RangeError("base chunk coordinates must be canonical safe integers");
+        }
+        const packed = await this.pool.generateChunk(baseChunkOptions(this.descriptor, chunkX, chunkY), request);
+        assertChunkRequestActive(this.disposed, request);
+        return packed;
+    }
     public releaseChunk(chunk: WorldChunk): void {
         this.store.remove(chunk.chunkX, chunk.chunkY);
     }

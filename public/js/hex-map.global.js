@@ -14473,6 +14473,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (request.signal?.aborted) throw abortError();
     if (disposed) throw new Error("WorldSource has been disposed");
   }
+  function baseChunkOptions(descriptor, chunkX, chunkY) {
+    return {
+      seed: descriptor.seed,
+      chunkX,
+      chunkY,
+      chunkSize: descriptor.chunkSize,
+      waterStyle: descriptor.waterStyle,
+      world: descriptor.topology === "toroidal" ? { topology: "toroidal", width: descriptor.width, height: descriptor.height } : void 0
+    };
+  }
   var StaticWorldSource = class {
     constructor(map, options = {}) {
       this.disposed = false;
@@ -14962,7 +14972,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
       validateChunkSize(this.chunkSize);
-      this.seed = options.seed;
       this.descriptor = createWorldDescriptor({
         seed: options.seed,
         chunkSize: this.chunkSize,
@@ -15023,14 +15032,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
         throw new RangeError("toroidal chunk coordinates must use canonical bounds");
       }
-      const generation = {
-        seed: this.seed,
-        chunkX,
-        chunkY,
-        chunkSize: this.chunkSize,
-        waterStyle: this.descriptor.waterStyle,
-        world: { width: this.bounds.width, height: this.bounds.height, topology: "toroidal" }
-      };
+      const generation = baseChunkOptions(this.descriptor, chunkX, chunkY);
       const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
@@ -15044,6 +15046,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       assertChunkRequestActive(this.disposed, request);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
+    }
+    async sampleBaseChunk(chunkX, chunkY, request = {}) {
+      assertChunkRequestActive(this.disposed, request);
+      const resolved = this.resolveChunk(chunkX, chunkY);
+      if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+        throw new RangeError("base chunk coordinates must be canonical safe integers");
+      }
+      const packed = await this.pool.generateChunk(baseChunkOptions(this.descriptor, chunkX, chunkY), request);
+      assertChunkRequestActive(this.disposed, request);
+      return packed;
     }
     releaseChunk(chunk) {
       this.store.remove(chunk.chunkX, chunk.chunkY);
@@ -15169,7 +15181,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       this.chunkSize = options.chunkSize ?? DEFAULT_WORLD_GENERATION_CHUNK_SIZE;
       validateChunkSize(this.chunkSize);
-      this.seed = options.seed;
       this.descriptor = createWorldDescriptor({
         seed: options.seed,
         chunkSize: this.chunkSize,
@@ -15213,13 +15224,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     async loadChunk(chunkX, chunkY, request = {}) {
       assertChunkRequestActive(this.disposed, request);
-      const generation = {
-        seed: this.seed,
-        chunkX,
-        chunkY,
-        chunkSize: this.chunkSize,
-        waterStyle: this.descriptor.waterStyle
-      };
+      const generation = baseChunkOptions(this.descriptor, chunkX, chunkY);
       const cacheKey = createWorldChunkCacheKey({ descriptor: this.descriptor, chunkX, chunkY });
       const cacheEpoch = this.cacheEpoch;
       let packed = this.cache ? await this.readCachedChunk(cacheKey, chunkX, chunkY) : void 0;
@@ -15233,6 +15238,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       assertChunkRequestActive(this.disposed, request);
       const coreTiles = this.store.add(packed);
       return { chunkX, chunkY, chunkSize: this.chunkSize, coreTiles, payload: packed };
+    }
+    async sampleBaseChunk(chunkX, chunkY, request = {}) {
+      assertChunkRequestActive(this.disposed, request);
+      const resolved = this.resolveChunk(chunkX, chunkY);
+      if (!resolved || resolved.x !== chunkX || resolved.y !== chunkY) {
+        throw new RangeError("base chunk coordinates must be canonical safe integers");
+      }
+      const packed = await this.pool.generateChunk(baseChunkOptions(this.descriptor, chunkX, chunkY), request);
+      assertChunkRequestActive(this.disposed, request);
+      return packed;
     }
     releaseChunk(chunk) {
       this.store.remove(chunk.chunkX, chunk.chunkY);

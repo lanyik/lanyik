@@ -25,7 +25,9 @@ IndexedDbSimulationChunkStore <── WorldSimulationRuntime
    imported once when no generation manifest exists. If no army exists, it
    creates `first-army` on a resident passable tile.
 2. **Start long march** chooses a passable target in another source chunk and
-   plans it with `HierarchicalPathfinder`.
+   plans it with `HierarchicalPathfinder`. Candidate terrain and navigation
+   terrain both use the existing source Worker pool without installing distant
+   render chunks or generating terrain synchronously in the UI.
 3. `ArmyMarch` copies the route into simulation state and immediately releases
    the pathfinder's detailed chunk leases. Rendering may unload those chunks.
 4. The initial player area remains an activity anchor. Once the army leaves it,

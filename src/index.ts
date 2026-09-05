@@ -287,6 +287,7 @@ export {
 } from "./world/WorldSource";
 export type {
     WorldSource,
+    WorldBaseChunkSource,
     WorldChunkRevision,
     MutableWorldSource,
     WorldVegetationSource,
