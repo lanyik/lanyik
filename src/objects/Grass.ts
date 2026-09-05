@@ -9,7 +9,8 @@ import {
     ColorRepresentation,
     DoubleSide,
     Vector2,
-    Group
+    Group,
+    Object3D
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
@@ -42,10 +43,13 @@ import {
     WorldVegetationLayout
 } from "../world/generateVegetation";
 import { WorldSurfaceView } from "../world/WorldSurfaceView";
+import { collectGeometryAllocations, ResourceBudgetAccount } from "../runtime/ResourceBudget";
+import { grassLayoutAllocations, VegetationResources } from "../rendering/VegetationResources";
 
 export interface GrassOptions {
     size: number;
     surface: WorldSurfaceView;
+    resourceAccount?: ResourceBudgetAccount;
     density?: number;         // blades per tile, default 60
     bladeWidth?: number;      // world units, default size * 0.03
     bladeHeight?: number;     // world units, default size * 0.18
@@ -96,8 +100,11 @@ export class GrassSharedResources {
     public readonly material: RawShaderMaterial;
     private clock = 0;
     private disposed = false;
+    private readonly retained: VegetationResources;
 
     constructor(options: Omit<GrassOptions, "surface">) {
+        this.retained = new VegetationResources(options.resourceAccount);
+        this.retained.retain("blade", collectGeometryAllocations([this.blade]));
         const bladeHeight = options.bladeHeight ?? options.size * 0.18;
         this.material = new RawShaderMaterial({
             fog: true,
@@ -132,6 +139,7 @@ export class GrassSharedResources {
         this.disposed = true;
         this.blade.dispose();
         this.material.dispose();
+        this.retained.dispose();
     }
 }
 
@@ -159,16 +167,21 @@ export class GrassField extends Group {
     private readonly fogStates = new Map<string, number>();
     private readonly suppressedTiles = new Set<string>();
     private lodBuilds = 0;
+    private readonly retained: VegetationResources;
+    private disposed = false;
 
     constructor(
         private map: MapInfo,
         private chunks: Map<string, GrassChunkRecord>,
         public readonly resources: GrassSharedResources,
         private options: ResolvedGrassOptions,
-        private preparedChunks: ReadonlyMap<string, WorldVegetationGrassChunkLayout>,
-        private ownsResources: boolean
+        private preparedChunks: Map<string, WorldVegetationGrassChunkLayout>,
+        private ownsResources: boolean,
+        resourceAccount?: ResourceBudgetAccount
     ) {
         super();
+        this.retained = new VegetationResources(resourceAccount);
+        this.retained.retain("prepared", grassLayoutAllocations(preparedChunks.values()));
         for (const record of chunks.values()) this.add(record.mesh);
     }
 
@@ -239,7 +252,10 @@ export class GrassField extends Group {
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod): InstancedBufferGeometry | undefined {
         const record = this.chunks.get(metadata.id);
         if (!record) return undefined;
-        if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
+        if (record.lod === lod && record.mesh.geometry.getAttribute("position")) {
+            this.trimLods(record, lod);
+            return record.mesh.geometry;
+        }
 
         this.removeTileRanges(record);
         let cached = record.lodCache.get(lod);
@@ -251,6 +267,7 @@ export class GrassField extends Group {
                 { x: record.mesh.position.x, y: record.mesh.position.z }
             );
             record.lodCache.set(lod, cached);
+            this.retained.retain(`${record.chunkKey}:${lod}`, collectGeometryAllocations([cached.geometry]));
             this.lodBuilds += 1;
         }
         const previous = record.mesh.geometry;
@@ -266,16 +283,32 @@ export class GrassField extends Group {
         }
         commitBufferAttributeRanges(fogAttribute, updateRanges);
         record.lod = lod;
+        this.trimLods(record, lod);
         return record.mesh.geometry;
     }
 
-    public releaseChunk(metadata: WorldChunkMetadata): void {
+    private trimLods(record: GrassChunkRecord, active: WorldChunkLod): void {
+        this.retained.pin(`${record.chunkKey}:${active}`);
+        for (const [lod, cached] of record.lodCache) {
+            if (lod === active || this.retained.keepCached(`${record.chunkKey}:${lod}`)) continue;
+            cached.geometry.dispose();
+            record.lodCache.delete(lod);
+        }
+    }
+
+    public releaseChunk(metadata: WorldChunkMetadata, objects: readonly Object3D[] = []): void {
         const record = this.chunks.get(metadata.id);
         if (!record || record.lod === undefined) return;
         this.removeTileRanges(record);
-        for (const cached of record.lodCache.values()) cached.geometry.dispose();
+        for (const [lod, cached] of record.lodCache) {
+            cached.geometry.dispose();
+            this.retained.release(`${record.chunkKey}:${lod}`);
+        }
         record.lodCache.clear();
         record.mesh.geometry = new InstancedBufferGeometry();
+        for (const object of objects) if ((object as Mesh).isMesh) {
+            (object as Mesh).geometry = record.mesh.geometry;
+        }
         record.lod = undefined;
     }
 
@@ -396,6 +429,8 @@ export class GrassField extends Group {
     }
 
     public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
         for (const record of this.chunks.values()) {
             const geometries = new Set<InstancedBufferGeometry>([
                 record.mesh.geometry,
@@ -404,6 +439,13 @@ export class GrassField extends Group {
             for (const geometry of geometries) geometry.dispose();
             record.lodCache.clear();
         }
+        this.chunks.clear();
+        this.preparedChunks.clear();
+        this.tileRanges.clear();
+        this.fogStates.clear();
+        this.suppressedTiles.clear();
+        this.clear();
+        this.retained.dispose();
         if (this.ownsResources) this.resources.dispose();
     }
 }
@@ -521,5 +563,5 @@ export function createGrassField(
         bladeHeight,
         heightVariation,
         waterOptions
-    }, new Map(preparedLayout?.grass.map(chunk => [chunk.chunkKey, chunk]) ?? []), !sharedResources);
+    }, new Map(preparedLayout?.grass.map(chunk => [chunk.chunkKey, chunk]) ?? []), !sharedResources, options.resourceAccount);
 }

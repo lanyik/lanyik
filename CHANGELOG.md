@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Vegetation CPU accounting now includes prepared layouts, inactive derived LODs
+  and baked model geometry. Forest parts share lazily allocated instance buffers;
+  CPU eviction detaches every world copy, and cache expiry continues while the
+  camera is stationary. Optional derived LODs are dropped under byte pressure.
 - The performance panel now prioritizes measured CPU/GPU work and the resulting
   theoretical throughput, retaining actual display FPS as a separate reference
   and explicitly labeling estimates based on only one processor.

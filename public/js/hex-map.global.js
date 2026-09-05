@@ -4652,6 +4652,9 @@
   function attributeArray(attribute) {
     return attribute instanceof three.InterleavedBufferAttribute ? attribute.data.array : attribute.array;
   }
+  function collectCpuBufferAllocations(arrays) {
+    return [...new Set(arrays.map((array) => array.buffer))].filter((buffer) => buffer.byteLength > 0).map((buffer) => ({ identity: buffer, cost: { cpuBytes: buffer.byteLength, modelBytes: buffer.byteLength } }));
+  }
   function collectGeometryAllocations(geometries, instanceAttributes = []) {
     const arrays = /* @__PURE__ */ new Set();
     const uploads = /* @__PURE__ */ new Set();
@@ -8864,6 +8867,55 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return curvedLake >= shoreStart;
   }
 
+  // src/rendering/VegetationResources.ts
+  var nextOwner = 1;
+  var VegetationResources = class {
+    constructor(account) {
+      this.account = account;
+      this.prefix = `vegetation:${nextOwner++}:`;
+      this.reservations = /* @__PURE__ */ new Map();
+    }
+    retain(key, allocations) {
+      this.release(key);
+      const cpu = allocations.filter((allocation) => (allocation.cost.cpuBytes ?? 0) > 0);
+      if (!this.account || cpu.length === 0) return;
+      this.reservations.set(key, this.account.acquireRequired(`${this.prefix}${key}`, {}, true, cpu));
+    }
+    /** Older derived LODs are optional; a budget rejection drops their ownership. */
+    keepCached(key) {
+      const reservation = this.reservations.get(key);
+      if (!reservation || reservation.update({}, false)) return true;
+      this.release(key);
+      return false;
+    }
+    pin(key) {
+      this.reservations.get(key)?.setPinned(true);
+    }
+    release(key) {
+      this.reservations.get(key)?.release();
+      this.reservations.delete(key);
+    }
+    dispose() {
+      for (const reservation of this.reservations.values()) reservation.release();
+      this.reservations.clear();
+    }
+  };
+  function grassLayoutAllocations(chunks) {
+    const arrays = [];
+    for (const chunk of chunks) for (const lod of chunk.lods) {
+      arrays.push(lod.ranges, lod.offsets, lod.tileOffsets, lod.angles, lod.scales, lod.phases, lod.shades);
+    }
+    return collectCpuBufferAllocations(arrays);
+  }
+  function forestLayoutAllocations(chunks) {
+    const arrays = [];
+    for (const chunk of chunks) for (const lod of chunk.lods) arrays.push(lod.ranges, lod.matrices);
+    return collectCpuBufferAllocations(arrays);
+  }
+  function vegetationLayoutAllocations(layout) {
+    return [...grassLayoutAllocations(layout.grass), ...forestLayoutAllocations(layout.forest)];
+  }
+
   // src/objects/Forest.ts
   var HIDDEN_TREE_MATRIX = new Float32Array([
     0,
@@ -8958,12 +9010,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return Array.isArray(source) ? source.map(prepare) : prepare(source);
   }
   var ForestSharedResources = class {
-    constructor(modelAssets) {
+    constructor(modelAssets, resourceAccount) {
       this.models = /* @__PURE__ */ new Map();
       this.geometries = /* @__PURE__ */ new Set();
       this.materials = /* @__PURE__ */ new Set();
       this.assets = /* @__PURE__ */ new Set();
       this.disposed = false;
+      this.retained = new VegetationResources(resourceAccount);
       this.ownsModelAssets = modelAssets === void 0;
       this.modelAssets = modelAssets ?? new ModelAssetCache();
     }
@@ -9020,6 +9073,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
             if (this.disposed) {
               throw new Error("ForestSharedResources was disposed while loading a model");
             }
+            this.retained.retain(modelPath, collectGeometryAllocations([...createdGeometries]));
             for (const geometry of createdGeometries) this.geometries.add(geometry);
             for (const material of createdMaterials) this.materials.add(material);
             for (const asset of acquired) this.assets.add(asset);
@@ -9054,11 +9108,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.models.clear();
       for (const asset of this.assets) asset.release();
       this.assets.clear();
+      this.retained.dispose();
       if (this.ownsModelAssets) this.modelAssets.dispose();
     }
   };
   var ForestField = class extends three.Group {
-    constructor(tileRanges, fogDarkenFactor, chunks, context, resources, ownsResources) {
+    constructor(tileRanges, fogDarkenFactor, chunks, context, resources, ownsResources, resourceAccount) {
       super();
       this.tileRanges = tileRanges;
       this.fogDarkenFactor = fogDarkenFactor;
@@ -9069,6 +9124,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.fogStates = /* @__PURE__ */ new Map();
       this.suppressedTiles = /* @__PURE__ */ new Set();
       this.lodBuilds = 0;
+      this.disposed = false;
+      this.retained = new VegetationResources(resourceAccount);
+      this.retained.retain("prepared", forestLayoutAllocations(context.preparedChunks.values()));
       for (const record of chunks.values()) this.add(record.root);
     }
     setFogState(x, y, state) {
@@ -9084,19 +9142,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (!range) continue;
         const hidden = this.suppressedTiles.has(key) || state < 0.5;
         const shade = state < 1.5 ? this.fogDarkenFactor : 1;
-        for (const mesh of range.instancedMeshes) {
-          const matrices = mesh.instanceMatrix.array;
-          if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
-          else matrices.set(range.originalMatrices, range.start * 16);
-          const pendingMatrices = matrixUpdates.get(mesh.instanceMatrix) ?? [];
-          pendingMatrices.push({ start: range.start * 16, count: range.count * 16 });
-          matrixUpdates.set(mesh.instanceMatrix, pendingMatrices);
-          if (!mesh.instanceColor) continue;
-          mesh.instanceColor.array.fill(shade, range.start * 3, (range.start + range.count) * 3);
-          const pendingColors = colorUpdates.get(mesh.instanceColor) ?? [];
-          pendingColors.push({ start: range.start * 3, count: range.count * 3 });
-          colorUpdates.set(mesh.instanceColor, pendingColors);
-        }
+        const mesh = range.mesh;
+        const matrices = mesh.instanceMatrix.array;
+        if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+        else matrices.set(range.originalMatrices, range.start * 16);
+        const pendingMatrices = matrixUpdates.get(mesh.instanceMatrix) ?? [];
+        pendingMatrices.push({ start: range.start * 16, count: range.count * 16 });
+        matrixUpdates.set(mesh.instanceMatrix, pendingMatrices);
+        if (!mesh.instanceColor) continue;
+        mesh.instanceColor.array.fill(shade, range.start * 3, (range.start + range.count) * 3);
+        const pendingColors = colorUpdates.get(mesh.instanceColor) ?? [];
+        pendingColors.push({ start: range.start * 3, count: range.count * 3 });
+        colorUpdates.set(mesh.instanceColor, pendingColors);
       }
       for (const [attribute, ranges] of matrixUpdates) commitBufferAttributeRanges(attribute, ranges);
       for (const [attribute, ranges] of colorUpdates) commitBufferAttributeRanges(attribute, ranges);
@@ -9111,21 +9168,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const state = this.fogStates.get(key) ?? 2;
       const hidden = suppressed || state < 0.5;
       const shade = state < 1.5 ? this.fogDarkenFactor : 1;
-      for (const mesh of range.instancedMeshes) {
-        const matrices = mesh.instanceMatrix.array;
-        if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
-        else matrices.set(range.originalMatrices, range.start * 16);
-        commitBufferAttributeRanges(mesh.instanceMatrix, [{
-          start: range.start * 16,
-          count: range.count * 16
-        }]);
-        if (!mesh.instanceColor) continue;
-        mesh.instanceColor.array.fill(shade, range.start * 3, (range.start + range.count) * 3);
-        commitBufferAttributeRanges(mesh.instanceColor, [{
-          start: range.start * 3,
-          count: range.count * 3
-        }]);
-      }
+      const mesh = range.mesh;
+      const matrices = mesh.instanceMatrix.array;
+      if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+      else matrices.set(range.originalMatrices, range.start * 16);
+      commitBufferAttributeRanges(mesh.instanceMatrix, [{
+        start: range.start * 16,
+        count: range.count * 16
+      }]);
+      if (!mesh.instanceColor) return;
+      mesh.instanceColor.array.fill(shade, range.start * 3, (range.start + range.count) * 3);
+      commitBufferAttributeRanges(mesh.instanceColor, [{
+        start: range.start * 3,
+        count: range.count * 3
+      }]);
     }
     activateChunk(metadata, lod, objects) {
       const record = this.chunks.get(metadata.id);
@@ -9141,10 +9197,25 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (!cached) {
           cached = this.buildChunkLod(record, lod);
           record.lodCache.set(lod, cached);
+          this.retained.retain(`${metadata.id}:${lod}`, collectCpuBufferAllocations([cached.matrices]));
           this.lodBuilds += 1;
+        }
+        const first = record.instancedMeshes[0];
+        if (first.instanceMatrix.count < cached.instanceCount) {
+          this.replaceInstanceBuffers(record, cached.instanceCount, objects);
+          this.retained.retain(`${metadata.id}:instances`, collectCpuBufferAllocations([
+            first.instanceMatrix.array,
+            first.instanceColor.array
+          ]));
         }
         this.applyChunkLod(record, cached);
         record.lod = lod;
+      }
+      this.retained.pin(`${metadata.id}:${lod}`);
+      for (const cachedLod of record.lodCache.keys()) {
+        if (cachedLod !== lod && !this.retained.keepCached(`${metadata.id}:${cachedLod}`)) {
+          record.lodCache.delete(cachedLod);
+        }
       }
       for (const object of objects) {
         const copies = [];
@@ -9157,16 +9228,34 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           copy.geometry = source.geometry;
           copy.material = source.material;
           copy.count = source.count;
+          copy.instanceMatrix = source.instanceMatrix;
+          copy.instanceColor = source.instanceColor;
         });
       }
     }
-    releaseChunk(metadata) {
+    releaseChunk(metadata, objects = []) {
       const record = this.chunks.get(metadata.id);
       if (!record || record.lod === void 0) return;
       for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
-      for (const mesh of record.instancedMeshes) mesh.count = 0;
+      this.replaceInstanceBuffers(record, 0, objects);
+      this.retained.release(`${metadata.id}:instances`);
+      for (const lod of record.lodCache.keys()) this.retained.release(`${metadata.id}:${lod}`);
       record.lodCache.clear();
       record.lod = void 0;
+    }
+    replaceInstanceBuffers(record, capacity, objects) {
+      const matrix = new three.InstancedBufferAttribute(new Float32Array(capacity * 16), 16).setUsage(three.DynamicDrawUsage);
+      const color = new three.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+      const meshes = new Set(record.instancedMeshes);
+      for (const object of objects) object.traverse((child) => {
+        if (child.isInstancedMesh) meshes.add(child);
+      });
+      for (const mesh of meshes) {
+        mesh.dispose();
+        mesh.instanceMatrix = matrix;
+        mesh.instanceColor = color;
+        mesh.count = 0;
+      }
     }
     disposeChunkGpu(metadata) {
       const record = this.chunks.get(metadata.id);
@@ -9177,11 +9266,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return this.lodBuilds;
     }
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
       for (const record of this.chunks.values()) {
         for (const mesh of record.instancedMeshes) mesh.dispose();
       }
       this.tileRanges.clear();
       this.chunks.clear();
+      this.context.preparedChunks.clear();
+      this.fogStates.clear();
+      this.suppressedTiles.clear();
+      this.clear();
+      this.retained.dispose();
       if (this.ownsResources) this.resources.dispose();
     }
     buildChunkLod(record, lod) {
@@ -9256,16 +9352,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return { instanceCount: instance, matrices: compactMatrices, ranges };
     }
     buildPreparedChunkLod(record, prepared) {
-      const matrices = new Float32Array(prepared.matrices.length);
       const ranges = /* @__PURE__ */ new Map();
       const surfaceWindow = this.context.surface.createWindow();
+      const counts = prepared.tiles.map((tile, index) => {
+        const count = prepared.ranges[index * 2 + 1];
+        return count === 0 ? 0 : Math.max(1, Math.round(
+          count * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+        ));
+      });
+      const matrices = new Float32Array(counts.reduce((sum, count) => sum + count, 0) * 16);
       let instanceCount = 0;
       prepared.tiles.forEach((tile, index) => {
         const preparedStart = prepared.ranges[index * 2];
-        const preparedCount = prepared.ranges[index * 2 + 1];
-        const count = preparedCount === 0 ? 0 : Math.max(1, Math.round(
-          preparedCount * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-        ));
+        const count = counts[index];
         const start = instanceCount;
         const source = prepared.matrices.subarray(preparedStart * 16, (preparedStart + count) * 16);
         matrices.set(source, start * 16);
@@ -9283,40 +9382,28 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           originalMatrices: matrices.subarray(start * 16, (start + count) * 16)
         });
       });
-      const compactMatrices = matrices.slice(0, instanceCount * 16);
-      for (const range of ranges.values()) {
-        range.originalMatrices = compactMatrices.subarray(
-          range.start * 16,
-          (range.start + range.count) * 16
-        );
-      }
-      return { instanceCount, matrices: compactMatrices, ranges };
+      return { instanceCount, matrices, ranges };
     }
     applyChunkLod(record, cached) {
       for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
-      for (const mesh of record.instancedMeshes) {
-        mesh.instanceMatrix.array.set(cached.matrices);
-        mesh.instanceColor?.array?.fill(1, 0, cached.instanceCount * 3);
-      }
+      const mesh = record.instancedMeshes[0];
+      mesh.instanceMatrix.array.set(cached.matrices);
+      mesh.instanceColor?.array?.fill(1, 0, cached.instanceCount * 3);
       for (const [key, range] of cached.ranges) {
         const fogState = this.fogStates.get(key) ?? 2;
         const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
         if (this.suppressedTiles.has(key) || fogState < 0.5) {
-          for (const mesh of record.instancedMeshes) {
-            writeHiddenMatrices(mesh.instanceMatrix.array, range.start, range.count);
-          }
+          writeHiddenMatrices(mesh.instanceMatrix.array, range.start, range.count);
         }
-        if (shade !== 1) for (const mesh of record.instancedMeshes) {
+        if (shade !== 1) {
           mesh.instanceColor?.array?.fill(shade, range.start * 3, (range.start + range.count) * 3);
         }
-        this.tileRanges.set(key, { instancedMeshes: record.instancedMeshes, ...range });
+        this.tileRanges.set(key, { mesh, ...range });
       }
-      for (const mesh of record.instancedMeshes) {
-        mesh.count = cached.instanceCount;
-        commitBufferAttributeRanges(mesh.instanceMatrix, [{ start: 0, count: cached.instanceCount * 16 }]);
-        if (mesh.instanceColor) {
-          commitBufferAttributeRanges(mesh.instanceColor, [{ start: 0, count: cached.instanceCount * 3 }]);
-        }
+      for (const part of record.instancedMeshes) part.count = cached.instanceCount;
+      commitBufferAttributeRanges(mesh.instanceMatrix, [{ start: 0, count: cached.instanceCount * 16 }]);
+      if (mesh.instanceColor) {
+        commitBufferAttributeRanges(mesh.instanceColor, [{ start: 0, count: cached.instanceCount * 3 }]);
       }
     }
   };
@@ -9367,69 +9454,74 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     };
     const tileRanges = /* @__PURE__ */ new Map();
     const chunkRecords = /* @__PURE__ */ new Map();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount);
     let modelIndex = 0;
-    for (const [modelPath, tiles] of tilesByModel) {
-      const preparedLods = await resources.prepare(modelPath);
-      const preparedParts = preparedLods[0];
-      if (preparedParts.length === 0) continue;
-      const chunks = groupTilesByWorldChunk(tiles);
-      for (const [chunkKey, chunkTiles] of chunks) {
-        const totalInstances = chunkTiles.length * treesPerTile;
-        const root = new three.Group();
-        const origin = getWorldChunkOrigin(chunkKey, size);
-        root.position.set(origin.x, 0, origin.y);
-        root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
-        const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
-          const instancedMesh = new three.InstancedMesh(geometry, material, totalInstances);
-          instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
-          instancedMesh.instanceMatrix.setUsage(three.DynamicDrawUsage);
-          instancedMesh.instanceColor = new three.InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-          instancedMesh.count = 0;
-          instancedMesh.frustumCulled = false;
-          root.add(instancedMesh);
-          return instancedMesh;
-        });
-        const id = `forest:${chunkKey}:${modelIndex}`;
-        tagWorldChunk(
-          root,
-          chunkKey,
-          "forest",
-          localizeWorldChunkBounds(getWorldChunkBounds(
-            chunkTiles,
-            size,
-            surface.minimumHeight,
-            surface.maximumHeight + size * 3
-          ), origin),
-          id
-        );
-        chunkRecords.set(id, {
-          chunkKey,
-          modelPath,
-          root,
-          instancedMeshes,
-          lodParts: preparedLods,
-          tiles: chunkTiles,
-          lodCache: /* @__PURE__ */ new Map()
-        });
+    try {
+      for (const [modelPath, tiles] of tilesByModel) {
+        const preparedLods = await resources.prepare(modelPath);
+        const preparedParts = preparedLods[0];
+        if (preparedParts.length === 0) continue;
+        const chunks = groupTilesByWorldChunk(tiles);
+        for (const [chunkKey, chunkTiles] of chunks) {
+          const root = new three.Group();
+          const origin = getWorldChunkOrigin(chunkKey, size);
+          root.position.set(origin.x, 0, origin.y);
+          root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
+          const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+            const instancedMesh = new three.InstancedMesh(geometry, material, 0);
+            instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
+            instancedMesh.count = 0;
+            instancedMesh.frustumCulled = false;
+            root.add(instancedMesh);
+            return instancedMesh;
+          });
+          const id = `forest:${chunkKey}:${modelIndex}`;
+          tagWorldChunk(
+            root,
+            chunkKey,
+            "forest",
+            localizeWorldChunkBounds(getWorldChunkBounds(
+              chunkTiles,
+              size,
+              surface.minimumHeight,
+              surface.maximumHeight + size * 3
+            ), origin),
+            id
+          );
+          chunkRecords.set(id, {
+            chunkKey,
+            modelPath,
+            root,
+            instancedMeshes,
+            lodParts: preparedLods,
+            tiles: chunkTiles,
+            lodCache: /* @__PURE__ */ new Map()
+          });
+        }
+        modelIndex += 1;
       }
-      modelIndex += 1;
+      return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
+        map,
+        surface,
+        size,
+        treesPerTile,
+        treeScale,
+        treeFootprint,
+        polygon,
+        waterOptions,
+        coastOptions,
+        preparedChunks: new Map(preparedLayout?.forest.map((chunk) => [
+          `${chunk.modelPath}\0${chunk.chunkKey}`,
+          chunk
+        ]) ?? [])
+      }, resources, !sharedResources, options.resourceAccount);
+    } catch (reason) {
+      for (const record of chunkRecords.values()) {
+        for (const mesh of record.instancedMeshes) mesh.dispose();
+      }
+      if (!sharedResources) resources.dispose();
+      throw reason;
     }
-    return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
-      map,
-      surface,
-      size,
-      treesPerTile,
-      treeScale,
-      treeFootprint,
-      polygon,
-      waterOptions,
-      coastOptions,
-      preparedChunks: new Map(preparedLayout?.forest.map((chunk) => [
-        `${chunk.modelPath}\0${chunk.chunkKey}`,
-        chunk
-      ]) ?? [])
-    }, resources, !sharedResources);
   }
 
   // src/objects/Grass.ts
@@ -9545,6 +9637,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.blade = buildBladeGeometry();
       this.clock = 0;
       this.disposed = false;
+      this.retained = new VegetationResources(options.resourceAccount);
+      this.retained.retain("blade", collectGeometryAllocations([this.blade]));
       const bladeHeight = options.bladeHeight ?? options.size * 0.18;
       this.material = new three.RawShaderMaterial({
         fog: true,
@@ -9577,10 +9671,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.disposed = true;
       this.blade.dispose();
       this.material.dispose();
+      this.retained.dispose();
     }
   };
   var GrassField = class extends three.Group {
-    constructor(map, chunks, resources, options, preparedChunks, ownsResources) {
+    constructor(map, chunks, resources, options, preparedChunks, ownsResources, resourceAccount) {
       super();
       this.map = map;
       this.chunks = chunks;
@@ -9592,6 +9687,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.fogStates = /* @__PURE__ */ new Map();
       this.suppressedTiles = /* @__PURE__ */ new Set();
       this.lodBuilds = 0;
+      this.disposed = false;
+      this.retained = new VegetationResources(resourceAccount);
+      this.retained.retain("prepared", grassLayoutAllocations(preparedChunks.values()));
       for (const record of chunks.values()) this.add(record.mesh);
     }
     //Updates every blade belonging to (x, y) to the given fog state (see
@@ -9654,7 +9752,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     activateChunk(metadata, lod) {
       const record = this.chunks.get(metadata.id);
       if (!record) return void 0;
-      if (record.lod === lod && record.mesh.geometry.getAttribute("position")) return record.mesh.geometry;
+      if (record.lod === lod && record.mesh.geometry.getAttribute("position")) {
+        this.trimLods(record, lod);
+        return record.mesh.geometry;
+      }
       this.removeTileRanges(record);
       let cached = record.lodCache.get(lod);
       if (!cached) {
@@ -9665,6 +9766,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           { x: record.mesh.position.x, y: record.mesh.position.z }
         );
         record.lodCache.set(lod, cached);
+        this.retained.retain(`${record.chunkKey}:${lod}`, collectGeometryAllocations([cached.geometry]));
         this.lodBuilds += 1;
       }
       const previous = record.mesh.geometry;
@@ -9680,15 +9782,30 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       commitBufferAttributeRanges(fogAttribute, updateRanges);
       record.lod = lod;
+      this.trimLods(record, lod);
       return record.mesh.geometry;
     }
-    releaseChunk(metadata) {
+    trimLods(record, active) {
+      this.retained.pin(`${record.chunkKey}:${active}`);
+      for (const [lod, cached] of record.lodCache) {
+        if (lod === active || this.retained.keepCached(`${record.chunkKey}:${lod}`)) continue;
+        cached.geometry.dispose();
+        record.lodCache.delete(lod);
+      }
+    }
+    releaseChunk(metadata, objects = []) {
       const record = this.chunks.get(metadata.id);
       if (!record || record.lod === void 0) return;
       this.removeTileRanges(record);
-      for (const cached of record.lodCache.values()) cached.geometry.dispose();
+      for (const [lod, cached] of record.lodCache) {
+        cached.geometry.dispose();
+        this.retained.release(`${record.chunkKey}:${lod}`);
+      }
       record.lodCache.clear();
       record.mesh.geometry = new three.InstancedBufferGeometry();
+      for (const object of objects) if (object.isMesh) {
+        object.geometry = record.mesh.geometry;
+      }
       record.lod = void 0;
     }
     get lodBuildCount() {
@@ -9791,6 +9908,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return { geometry, ranges };
     }
     dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
       for (const record of this.chunks.values()) {
         const geometries = /* @__PURE__ */ new Set([
           record.mesh.geometry,
@@ -9799,6 +9918,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         for (const geometry of geometries) geometry.dispose();
         record.lodCache.clear();
       }
+      this.chunks.clear();
+      this.preparedChunks.clear();
+      this.tileRanges.clear();
+      this.fogStates.clear();
+      this.suppressedTiles.clear();
+      this.clear();
+      this.retained.dispose();
       if (this.ownsResources) this.resources.dispose();
     }
   };
@@ -9897,7 +10023,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       bladeHeight,
       heightVariation,
       waterOptions
-    }, new Map(preparedLayout?.grass.map((chunk) => [chunk.chunkKey, chunk]) ?? []), !sharedResources);
+    }, new Map(preparedLayout?.grass.map((chunk) => [chunk.chunkKey, chunk]) ?? []), !sharedResources, options.resourceAccount);
   }
 
   // src/helpers/fog.ts
@@ -10097,6 +10223,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.registeredObjects = 0;
       this.sceneTraversals = 0;
       this.frame = 0;
+      this.nextEvictionFrame = Infinity;
+      this.lastPressureCpuBytes = 0;
+      this.lastPressureGpuBytes = 0;
       this.visibilityDirty = true;
       this.visibilityChecks = 0;
       this.visibilitySkips = 0;
@@ -10137,6 +10266,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       for (const id of this.residents.keys()) this.resources.release(this.resourceKey(id));
       this.residents.clear();
       this.frame = 0;
+      this.nextEvictionFrame = Infinity;
+      this.lastPressureCpuBytes = this.lastPressureGpuBytes = 0;
       this.snapshot = { ...EMPTY_STATS };
       this.registryDirty = true;
       this.visibilityDirty = true;
@@ -10189,7 +10320,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       camera.updateMatrixWorld();
       camera.getWorldPosition(this.cameraPosition);
       camera.getWorldQuaternion(this.cameraQuaternion);
-      if (!this.shouldRefreshVisibility(root, camera, target)) {
+      const resources = this.resources.stats;
+      const pressureChanged = (resources.cpuExceededBytes > 0 || resources.gpuExceededBytes > 0) && (resources.cpuBytes !== this.lastPressureCpuBytes || resources.gpuBytes !== this.lastPressureGpuBytes);
+      if (!pressureChanged && !this.shouldRefreshVisibility(root, camera, target)) {
+        if (this.frame >= this.nextEvictionFrame) {
+          this.evictInactive(this.visibleIds, hooks);
+          this.snapshot = {
+            ...this.snapshot,
+            residentChunks: this.residents.size,
+            gpuResidentChunks: this.countGpuResidents(),
+            resourceEvictions: this.resourceEvictions
+          };
+        }
         this.visibilitySkips += 1;
         this.snapshot = { ...this.snapshot, visibilitySkips: this.visibilitySkips };
         return false;
@@ -10241,7 +10383,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const lodCounts = [0, 0, 0];
       for (const id of this.visibleIds) {
         const request = this.bindings.get(id);
-        const activation = hooks.activate(request.metadata, request.lod, request.visibleObjects);
+        const activation = hooks.activate(request.metadata, request.lod, request.objects);
         const geometries = (activation && activation.geometries) ?? this.residents.get(id)?.geometries ?? [];
         const resident = this.residents.get(id);
         const accounting = activation ? this.activationCost(activation, geometries, request.visibleObjects) : resident?.gpuResident ? resident : this.activationCost({}, geometries, request.visibleObjects);
@@ -10268,6 +10410,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       let gpuResidentChunks = 0;
       for (const entry of this.residents.values()) if (entry.gpuResident) gpuResidentChunks += 1;
       const resourceStats = this.resources.stats;
+      this.lastPressureCpuBytes = resourceStats.cpuBytes;
+      this.lastPressureGpuBytes = resourceStats.gpuBytes;
       this.snapshot = {
         visibleObjects,
         visibleChunks: this.visibleIds.size,
@@ -10294,6 +10438,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return true;
     }
     evictInactive(visible, hooks) {
+      this.nextEvictionFrame = Infinity;
       this.inactive.length = 0;
       for (const entry of this.residents.values()) {
         const isVisible = visible.has(entry.id);
@@ -10328,11 +10473,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           for (const geometry of entry.geometries) geometry.dispose();
           entry.disposeGpu?.();
         }
-        hooks.release(entry.metadata);
+        hooks.release(entry.metadata, this.bindings.get(entry.id)?.objects ?? []);
         this.residents.delete(entry.id);
         this.resources.release(this.resourceKey(entry.id));
         this.resourceEvictions += 1;
         if (cpuExcess > 0) cpuExcess -= 1;
+      }
+      for (const entry of this.inactive) {
+        if (!this.residents.has(entry.id)) continue;
+        this.nextEvictionFrame = Math.min(
+          this.nextEvictionFrame,
+          entry.lastVisible + this.options.cpuGraceFrames,
+          entry.gpuResident ? entry.lastVisible + this.options.gpuGraceFrames : Infinity
+        );
       }
     }
     countGpuResidents() {
@@ -17783,7 +17936,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           }
         },
         activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
-        release: (metadata) => this.releaseWorldChunk(metadata)
+        release: (metadata, objects) => this.releaseWorldChunk(metadata, objects)
       };
       this.runtimeWork = new RuntimeWorkCoordinator({
         defaultMaxPendingTasks: 512,
@@ -17929,6 +18082,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         maximumBytes: this.options.modelAssetCacheBytes,
         resources: this.chunkScheduler.createResourceAccount("model-assets")
       });
+      this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
       this.installBuiltinWorldRenderLayers();
       const el = document.querySelector(this.options.element);
       if (!(el instanceof HTMLCanvasElement)) {
@@ -18006,7 +18160,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         unmountChunk: (context) => this.unmountGrassWorldRenderLayer(context),
         refreshTiles: (context) => this.refreshGrassWorldRenderLayer(context),
         activateLod: (metadata, lod, objects) => this.activateGrassWorldChunk(metadata, lod, objects),
-        releaseChunk: (metadata) => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata),
+        releaseChunk: (metadata, objects) => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata, objects),
         dispose: () => void 0
       });
       this.worldRenderLayers.register({
@@ -18016,7 +18170,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         unmountChunk: (context) => this.unmountForestWorldRenderLayer(context),
         refreshTiles: (context) => this.refreshForestWorldRenderLayer(context),
         activateLod: (metadata, lod, objects) => this.activateForestWorldChunk(metadata, lod, objects),
-        releaseChunk: (metadata) => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata),
+        releaseChunk: (metadata, objects) => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata, objects),
         dispose: () => void 0
       });
     }
@@ -18435,19 +18589,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       forest?.activateChunk(metadata, lod, objects);
       return forest ? { disposeGpu: () => forest.disposeChunkGpu(metadata) } : void 0;
     }
-    releaseWorldChunk(metadata) {
+    releaseWorldChunk(metadata, objects) {
       const registered = this.worldRenderLayers?.forKind(metadata.kind);
       if (registered) {
         try {
-          registered.releaseChunk?.(metadata);
+          registered.releaseChunk?.(metadata, objects);
         } catch (reason) {
           this.reportWorldRenderLayerErrors(`world render layer "${registered.id}" failed to release a chunk`, [renderLayerError(reason)]);
         }
         return;
       }
       if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
-      else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
-      else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
+      else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata, objects);
+      else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata, objects);
     }
     //Public API
     //-------------------------------------------------------------------------
@@ -18632,7 +18786,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.frameTasks.cancel(`vegetation-quality:${key}`);
       const record = this.worldChunkLayers.get(key);
       if (!record) return;
-      record.vegetationAbort?.abort();
+      this.clearWorldVegetationPreparation(record);
       record.revision = ++this.worldLayerRevision;
       const errors = [];
       for (const layer of [...this.worldRenderLayers.values()].reverse()) {
@@ -18692,6 +18846,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const prepared = await preparation;
       if (!context.isCurrent() || record.grassBuildRevision !== grassBuildRevision || record.requestedVegetationSignature !== vegetationSignature) return;
       this.streamedGrassResources ?? (this.streamedGrassResources = new GrassSharedResources({
+        resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         bladeHeight: this.options.grassBladeHeight,
         windStrength: this.options.grassWindStrength,
@@ -18699,6 +18854,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         fogDarkenFactor: this.options.fogDarkenFactor
       }));
       const grass = createGrassField(this.mapData, {
+        resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         surface: this.worldSurface,
         density: density.grassDensity,
@@ -18755,26 +18911,30 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const record = this.worldChunkLayers.get(context.key);
       if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
       const forestBuildRevision = record.forestBuildRevision ?? (record.forestBuildRevision = 0);
-      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets));
+      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount));
       const preparation = this.prepareWorldVegetation(context, record);
       const vegetationSignature = record.vegetationSignature;
       const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
-      const build = preparation.then((prepared) => createForest(this.mapData, {
-        size: this.options.size,
-        surface: this.worldSurface,
-        treesPerTile: density.treesPerTile,
-        treeModel: this.options.treeModel,
-        treeScale: this.options.treeScale,
-        modelAssets: this.modelAssets,
-        fogDarkenFactor: this.options.fogDarkenFactor,
-        riverWidth: this.options.riverWidth,
-        riverBankWidth: this.options.riverBankWidth,
-        riverCurvature: this.options.riverCurvature,
-        lakeShoreWidth: this.options.lakeShoreWidth,
-        beachWidth: this.options.beachWidth,
-        waterCornerRounding: this.options.waterCornerRounding,
-        coastCurvature: this.options.coastCurvature
-      }, context.points, this.streamedForestResources, prepared)).then((forest) => {
+      const build = preparation.then((prepared) => {
+        if (!context.isCurrent() || record.forestBuildRevision !== forestBuildRevision || record.requestedVegetationSignature !== vegetationSignature) return null;
+        return createForest(this.mapData, {
+          resourceAccount: this.vegetationResourceAccount,
+          size: this.options.size,
+          surface: this.worldSurface,
+          treesPerTile: density.treesPerTile,
+          treeModel: this.options.treeModel,
+          treeScale: this.options.treeScale,
+          modelAssets: this.modelAssets,
+          fogDarkenFactor: this.options.fogDarkenFactor,
+          riverWidth: this.options.riverWidth,
+          riverBankWidth: this.options.riverBankWidth,
+          riverCurvature: this.options.riverCurvature,
+          lakeShoreWidth: this.options.lakeShoreWidth,
+          beachWidth: this.options.beachWidth,
+          waterCornerRounding: this.options.waterCornerRounding,
+          coastCurvature: this.options.coastCurvature
+        }, context.points, this.streamedForestResources, prepared);
+      }).then((forest) => {
         if (!context.isCurrent() || record.forestBuildRevision !== forestBuildRevision) {
           forest?.dispose();
           return;
@@ -18808,6 +18968,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       previous.dispose();
       this.chunkScheduler.forget(forgotten);
     }
+    clearWorldVegetationPreparation(record) {
+      record.vegetationAbort?.abort();
+      record.vegetationResources?.dispose();
+      record.vegetationAbort = void 0;
+      record.vegetationResources = void 0;
+      record.vegetationPromise = void 0;
+      record.vegetationSignature = void 0;
+    }
     prepareWorldVegetation(context, record) {
       const scale = record.requestedVegetationScale ?? this.adaptiveStreamingController?.currentProfile.vegetationDensityScale ?? 1;
       const density = this.worldVegetationDensity(scale);
@@ -18816,7 +18984,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (record.vegetationPromise && record.vegetationSignature === density.signature) {
         return record.vegetationPromise;
       }
-      record.vegetationAbort?.abort();
+      this.clearWorldVegetationPreparation(record);
       if (!isWorldVegetationSource(context.source)) {
         record.vegetationSignature = density.signature;
         const preparation2 = Promise.resolve(void 0);
@@ -18832,6 +19000,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       ) : 0;
       const abort = new AbortController();
       record.vegetationAbort = abort;
+      const retained = new VegetationResources(this.vegetationResourceAccount);
+      record.vegetationResources = retained;
       record.vegetationSignature = density.signature;
       const preparation = context.source.prepareVegetation({
         points: context.points,
@@ -18850,7 +19020,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         beachWidth: this.options.beachWidth,
         waterCornerRounding: this.options.waterCornerRounding,
         coastCurvature: this.options.coastCurvature
-      }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) });
+      }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) }).then((layout) => {
+        if (abort.signal.aborted || this.worldChunkLayers.get(context.key) !== record) return void 0;
+        retained.retain("layout", vegetationLayoutAllocations(layout));
+        return layout;
+      });
       record.vegetationPromise = this.worldController?.source === context.source ? this.worldController.lifecycle.track(preparation) : preparation;
       return record.vegetationPromise;
     }
@@ -18959,10 +19133,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.worldChunkLayers.get(key) !== record || record.requestedVegetationSignature !== targetSignature) return;
       record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
       record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-      record.vegetationAbort?.abort();
-      record.vegetationAbort = void 0;
-      record.vegetationPromise = void 0;
-      record.vegetationSignature = void 0;
+      this.clearWorldVegetationPreparation(record);
       const builds = [];
       if (this.options.grassEnabled && this.worldRenderLayers.get("@grass")) {
         const build = this.mountGrassWorldRenderLayer(
@@ -19214,7 +19385,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         errors.push(renderLayerError(reason));
       }
       for (const [key, record] of [...this.worldChunkLayers]) {
-        record.vegetationAbort?.abort();
+        this.clearWorldVegetationPreparation(record);
         record.revision = ++this.worldLayerRevision;
         for (const layer of [...this.worldRenderLayers.values()].reverse()) {
           errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
@@ -19426,6 +19597,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       if (!this.mapData) return false;
       const forest = await createForest(this.mapData, {
+        resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         surface: this.worldSurface,
         treesPerTile: this.options.treesPerTile,
@@ -19469,6 +19641,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       if (!this.mapData) return false;
       this.grass = createGrassField(this.mapData, {
+        resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         surface: this.worldSurface,
         density: this.options.grassDensity,
@@ -19505,9 +19678,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
         record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
         record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-        record.vegetationAbort?.abort();
-        record.vegetationAbort = void 0;
-        record.vegetationPromise = void 0;
+        this.clearWorldVegetationPreparation(record);
       }
       const grassLayer = this.worldRenderLayers.get("@grass");
       const forestLayer = this.worldRenderLayers.get("@forest");
@@ -19738,9 +19909,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
         this.reportWorldRenderLayerErrors(`failed to refresh render layers for chunk ${key}`, unmountErrors);
         record.revision = ++this.worldLayerRevision;
-        record.vegetationAbort?.abort();
-        record.vegetationAbort = void 0;
-        record.vegetationPromise = void 0;
+        this.clearWorldVegetationPreparation(record);
         for (const layer of remounted) {
           const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
           record.renderLayerPromises ?? (record.renderLayerPromises = /* @__PURE__ */ new Map());

@@ -201,6 +201,11 @@ is deliberately separate from receiving direct/ambient light.
   attributes for transparent re-upload.
 - Forest instance-matrix and instance-color buffers participate in the same GPU
   eviction lifecycle, independently of their shared model geometry.
+- Forest instance buffers start empty and allocate on activation. All model
+  parts and toroidal copies of one chunk share matrices/colors; CPU eviction
+  detaches their buffers, and later activation reconstructs them deterministically.
+- CPU/GPU grace expiry runs even when visibility checks are skipped for a
+  stationary camera. New byte pressure also triggers cache maintenance.
 - CPU eviction drops reconstructible attributes. The current `WorldSource`,
   persistent fog state and deterministic placement data remain, so revisiting a
   chunk recreates the same surface and decoration layout.
@@ -412,6 +417,15 @@ loading, Three.js object creation, fog state and WebGL buffer upload. It writes
 the final per-instance Y from `WorldSurfaceView` and applies effective forest
 density before upload, so display height never enters worker output or caches.
 It no longer runs the per-blade/per-tree layout loops for streamed procedural worlds.
+The preparation request and each consuming field retain CPU allocation references
+in the shared ledger, including all three layouts and LOD data absent from the
+active scene graph. Source-resident layouts and prepared model geometry remain
+required reconstruction inputs; old derived LOD caches must pass byte admission
+and are discarded under pressure. Source residency bounds the number of original
+layouts, and their byte overage feeds adaptive density control. CPU estimates do
+not include Worker scratch memory, JS object overhead or browser/driver storage.
+Refresh/unload cancels preparation ownership, and field disposal clears retained
+arrays and scene references rather than waiting for the field itself to be GC'd.
 Queued preparation is distance-prioritized and cancellable when a chunk is
 evicted. Static/custom sources without `prepareVegetation()` keep the existing
 synchronous layout path, so the optional `WorldSource` capability is backward

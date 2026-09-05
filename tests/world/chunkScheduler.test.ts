@@ -10,6 +10,35 @@ import { FrameTaskScheduler } from "../../src/rendering/FrameTaskScheduler";
 import { WorkQueueBackpressureError } from "../../src/runtime/PriorityTaskQueue";
 
 describe("WorldChunkScheduler", () => {
+    test("expires GPU and CPU retention while the camera stays still", () => {
+        const root = new Object3D();
+        const chunk = new Object3D();
+        tagWorldChunk(chunk, "0,0", "forest", {
+            minX: -10, maxX: 10, minY: 0, maxY: 20, minZ: -10, maxZ: 10
+        });
+        root.add(chunk);
+        const camera = new PerspectiveCamera(60, 1, 1, 2000);
+        camera.position.set(0, 100, 100);
+        camera.lookAt(0, 0, 0);
+        const disposeGpu = vi.fn();
+        const hooks = { enabled: () => true, activate: () => ({ disposeGpu }), release: vi.fn() };
+        const scheduler = new WorldChunkScheduler({
+            renderDistance: 500, lodEnabled: false,
+            lodDistances: { near: 100, far: 300, vegetation: 250, hysteresis: 10 },
+            gpuCacheSize: 10, cpuCacheSize: 10, gpuGraceFrames: 3, cpuGraceFrames: 5
+        });
+        scheduler.update(root, camera, new Vector3(), hooks);
+        const away = new Vector3(2000, 0, 2000);
+        scheduler.update(root, camera, away, hooks);
+        expect(scheduler.stats.gpuResidentChunks).toBe(1);
+        for (let frame = 3; frame <= 6; frame += 1) scheduler.update(root, camera, away, hooks);
+        expect(disposeGpu).toHaveBeenCalledOnce();
+        expect(hooks.release).toHaveBeenCalledWith(expect.objectContaining({ kind: "forest" }), [chunk]);
+        expect(scheduler.stats.residentChunks).toBe(0);
+        expect(scheduler.stats.gpuResidentChunks).toBe(0);
+        expect(scheduler.stats.visibilityChecks).toBe(2);
+    });
+
     test("activates visible chunks and releases inactive CPU resources", () => {
         const root = new Object3D();
         const chunk = new Object3D();

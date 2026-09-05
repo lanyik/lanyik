@@ -38,6 +38,7 @@ import {
 } from "./objects/TerrainMesh";
 import { createForest, ForestField, ForestSharedResources } from "./objects/Forest";
 import { GrassField, createGrassField, GrassSharedResources } from "./objects/Grass";
+import { vegetationLayoutAllocations, VegetationResources } from "./rendering/VegetationResources";
 import { FogChange, FogState } from "./objects/FogOfWar";
 import { FogStateStore } from "./helpers/fogStateStore";
 import { getMapNeighbors, getMapTile, normalizeMapCoordinates, positiveModulo } from "./helpers/topology";
@@ -162,6 +163,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private worldPatternOffset = new Vector2();
     private chunkScheduler: WorldChunkScheduler;
     private readonly modelAssets: ModelAssetCache;
+    private readonly vegetationResourceAccount: ResourceBudgetAccount;
     private readonly chunkSchedulerHooks: WorldChunkSchedulerHooks = {
         enabled: metadata => {
             const layer = this.worldRenderLayers?.forKind(metadata.kind);
@@ -176,7 +178,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             }
         },
         activate: (metadata, lod, objects) => this.activateWorldChunk(metadata, lod, objects),
-        release: metadata => this.releaseWorldChunk(metadata)
+        release: (metadata, objects) => this.releaseWorldChunk(metadata, objects)
     };
     private readonly runtimeWork = new RuntimeWorkCoordinator({
         defaultMaxPendingTasks: 512,
@@ -284,6 +286,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             maximumBytes: this.options.modelAssetCacheBytes,
             resources: this.chunkScheduler.createResourceAccount("model-assets")
         });
+        this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
         this.installBuiltinWorldRenderLayers();
 
         const el = document.querySelector(this.options.element);
@@ -354,7 +357,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             unmountChunk: context => this.unmountGrassWorldRenderLayer(context),
             refreshTiles: context => this.refreshGrassWorldRenderLayer(context),
             activateLod: (metadata, lod, objects) => this.activateGrassWorldChunk(metadata, lod, objects),
-            releaseChunk: metadata => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata),
+            releaseChunk: (metadata, objects) => (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata, objects),
             dispose: () => undefined
         });
         this.worldRenderLayers.register({
@@ -364,7 +367,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             unmountChunk: context => this.unmountForestWorldRenderLayer(context),
             refreshTiles: context => this.refreshForestWorldRenderLayer(context),
             activateLod: (metadata, lod, objects) => this.activateForestWorldChunk(metadata, lod, objects),
-            releaseChunk: metadata => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata),
+            releaseChunk: (metadata, objects) => (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata, objects),
             dispose: () => undefined
         });
     }
@@ -921,19 +924,19 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return forest ? { disposeGpu: () => forest.disposeChunkGpu(metadata) } : undefined;
     }
 
-    private releaseWorldChunk(metadata: WorldChunkMetadata): void {
+    private releaseWorldChunk(metadata: WorldChunkMetadata, objects: Object3D[]): void {
         const registered = this.worldRenderLayers?.forKind(metadata.kind);
         if (registered) {
             try {
-                registered.releaseChunk?.(metadata);
+                registered.releaseChunk?.(metadata, objects);
             } catch (reason) {
                 this.reportWorldRenderLayerErrors(`world render layer "${registered.id}" failed to release a chunk`, [renderLayerError(reason)]);
             }
             return;
         }
         if (metadata.kind === "land" || metadata.kind === "water") this.terrain?.releaseChunk(metadata);
-        else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata);
-        else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata);
+        else if (metadata.kind === "grass") (this.streamedGrassByChunkId.get(metadata.id) ?? this.grass)?.releaseChunk(metadata, objects);
+        else if (metadata.kind === "forest") (this.streamedForestByChunkId.get(metadata.id) ?? this.forest)?.releaseChunk(metadata, objects);
     }
 
     //Public API
@@ -1144,7 +1147,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.frameTasks.cancel(`vegetation-quality:${key}`);
         const record = this.worldChunkLayers.get(key);
         if (!record) return;
-        record.vegetationAbort?.abort();
+        this.clearWorldVegetationPreparation(record);
         //Invalidate existing async mount contexts before teardown, while
         //keeping the record addressable to built-in unmount hooks until they
         //have released their terrain/grass/forest resources.
@@ -1214,6 +1217,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (!context.isCurrent() || record.grassBuildRevision !== grassBuildRevision
             || record.requestedVegetationSignature !== vegetationSignature) return;
         this.streamedGrassResources ??= new GrassSharedResources({
+            resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             bladeHeight: this.options.grassBladeHeight,
             windStrength: this.options.grassWindStrength,
@@ -1221,6 +1225,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             fogDarkenFactor: this.options.fogDarkenFactor
         });
         const grass = createGrassField(this.mapData, {
+            resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             surface: this.worldSurface!,
             density: density.grassDensity,
@@ -1287,26 +1292,31 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
         const forestBuildRevision = record.forestBuildRevision ??= 0;
-        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets);
+        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount);
         const preparation = this.prepareWorldVegetation(context, record);
         const vegetationSignature = record.vegetationSignature!;
         const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
-        const build = preparation.then(prepared => createForest(this.mapData, {
-            size: this.options.size,
-            surface: this.worldSurface!,
-            treesPerTile: density.treesPerTile,
-            treeModel: this.options.treeModel,
-            treeScale: this.options.treeScale,
-            modelAssets: this.modelAssets,
-            fogDarkenFactor: this.options.fogDarkenFactor,
-            riverWidth: this.options.riverWidth,
-            riverBankWidth: this.options.riverBankWidth,
-            riverCurvature: this.options.riverCurvature,
-            lakeShoreWidth: this.options.lakeShoreWidth,
-            beachWidth: this.options.beachWidth,
-            waterCornerRounding: this.options.waterCornerRounding,
-            coastCurvature: this.options.coastCurvature
-        }, context.points, this.streamedForestResources, prepared)).then(forest => {
+        const build = preparation.then(prepared => {
+            if (!context.isCurrent() || record.forestBuildRevision !== forestBuildRevision
+                || record.requestedVegetationSignature !== vegetationSignature) return null;
+            return createForest(this.mapData, {
+                resourceAccount: this.vegetationResourceAccount,
+                size: this.options.size,
+                surface: this.worldSurface!,
+                treesPerTile: density.treesPerTile,
+                treeModel: this.options.treeModel,
+                treeScale: this.options.treeScale,
+                modelAssets: this.modelAssets,
+                fogDarkenFactor: this.options.fogDarkenFactor,
+                riverWidth: this.options.riverWidth,
+                riverBankWidth: this.options.riverBankWidth,
+                riverCurvature: this.options.riverCurvature,
+                lakeShoreWidth: this.options.lakeShoreWidth,
+                beachWidth: this.options.beachWidth,
+                waterCornerRounding: this.options.waterCornerRounding,
+                coastCurvature: this.options.coastCurvature
+            }, context.points, this.streamedForestResources, prepared);
+        }).then(forest => {
             if (!context.isCurrent() || record.forestBuildRevision !== forestBuildRevision) {
                 forest?.dispose();
                 return;
@@ -1347,6 +1357,15 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.chunkScheduler.forget(forgotten);
     }
 
+    private clearWorldVegetationPreparation(record: WorldChunkLayers): void {
+        record.vegetationAbort?.abort();
+        record.vegetationResources?.dispose();
+        record.vegetationAbort = undefined;
+        record.vegetationResources = undefined;
+        record.vegetationPromise = undefined;
+        record.vegetationSignature = undefined;
+    }
+
     private prepareWorldVegetation(
         context: WorldRenderChunkContext,
         record: WorldChunkLayers
@@ -1360,7 +1379,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (record.vegetationPromise && record.vegetationSignature === density.signature) {
             return record.vegetationPromise;
         }
-        record.vegetationAbort?.abort();
+        this.clearWorldVegetationPreparation(record);
         if (!isWorldVegetationSource(context.source)) {
             record.vegetationSignature = density.signature;
             const preparation = Promise.resolve(undefined);
@@ -1378,6 +1397,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             : 0;
         const abort = new AbortController();
         record.vegetationAbort = abort;
+        const retained = new VegetationResources(this.vegetationResourceAccount);
+        record.vegetationResources = retained;
         record.vegetationSignature = density.signature;
         const preparation = context.source.prepareVegetation({
             points: context.points,
@@ -1396,7 +1417,11 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             beachWidth: this.options.beachWidth,
             waterCornerRounding: this.options.waterCornerRounding,
             coastCurvature: this.options.coastCurvature
-        }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) });
+        }, { priority, signal: abort.signal, lane: "prefetch", weight: Math.max(1, Math.ceil(context.points.length / 128)) }).then(layout => {
+            if (abort.signal.aborted || this.worldChunkLayers.get(context.key) !== record) return undefined;
+            retained.retain("layout", vegetationLayoutAllocations(layout));
+            return layout;
+        });
         record.vegetationPromise = this.worldController?.source === context.source
             ? this.worldController.lifecycle.track(preparation)
             : preparation;
@@ -1537,10 +1562,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             || record.requestedVegetationSignature !== targetSignature) return;
         record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
         record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-        record.vegetationAbort?.abort();
-        record.vegetationAbort = undefined;
-        record.vegetationPromise = undefined;
-        record.vegetationSignature = undefined;
+        this.clearWorldVegetationPreparation(record);
 
         const builds: Promise<void>[] = [];
         if (this.options.grassEnabled && this.worldRenderLayers.get("@grass")) {
@@ -1832,7 +1854,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         //A custom source/controller failure must not strand layer records that
         //the normal Streamer callbacks did not reach.
         for (const [key, record] of [...this.worldChunkLayers]) {
-            record.vegetationAbort?.abort();
+            this.clearWorldVegetationPreparation(record);
             record.revision = ++this.worldLayerRevision;
             for (const layer of [...this.worldRenderLayers.values()].reverse()) {
                 errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
@@ -2037,6 +2059,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (!this.mapData) return false;
 
         const forest = (await createForest(this.mapData, {
+            resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             surface: this.worldSurface!,
             treesPerTile: this.options.treesPerTile,
@@ -2084,6 +2107,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (!this.mapData) return false;
 
         this.grass = createGrassField(this.mapData, {
+            resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             surface: this.worldSurface!,
             density: this.options.grassDensity,
@@ -2123,9 +2147,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
             record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
             record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-            record.vegetationAbort?.abort();
-            record.vegetationAbort = undefined;
-            record.vegetationPromise = undefined;
+            this.clearWorldVegetationPreparation(record);
         }
 
         const grassLayer = this.worldRenderLayers.get("@grass");
@@ -2400,9 +2422,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             }
             this.reportWorldRenderLayerErrors(`failed to refresh render layers for chunk ${key}`, unmountErrors);
             record.revision = ++this.worldLayerRevision;
-            record.vegetationAbort?.abort();
-            record.vegetationAbort = undefined;
-            record.vegetationPromise = undefined;
+            this.clearWorldVegetationPreparation(record);
             for (const layer of remounted) {
                 const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
                 record.renderLayerPromises ??= new Map();

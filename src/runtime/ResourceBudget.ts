@@ -526,7 +526,13 @@ function attributeArray(attribute: BufferAttribute | InterleavedBufferAttribute)
     return attribute instanceof InterleavedBufferAttribute ? attribute.data.array : attribute.array;
 }
 
-function collectGeometryAllocations(
+export function collectCpuBufferAllocations(arrays: readonly ArrayBufferView[]): ResourceAllocation[] {
+    return [...new Set(arrays.map(array => array.buffer))]
+        .filter(buffer => buffer.byteLength > 0)
+        .map(buffer => ({ identity: buffer, cost: { cpuBytes: buffer.byteLength, modelBytes: buffer.byteLength } }));
+}
+
+export function collectGeometryAllocations(
     geometries: readonly BufferGeometry[],
     instanceAttributes: readonly BufferAttribute[] = []
 ): ResourceAllocation[] {

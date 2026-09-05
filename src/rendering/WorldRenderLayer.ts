@@ -54,7 +54,8 @@ export interface WorldRenderLayer {
         lod: WorldChunkLod,
         objects: Object3D[]
     ): WorldChunkActivation | void;
-    releaseChunk?(metadata: WorldChunkMetadata): void;
+    /** Includes all registered world copies so CPU eviction can detach their buffers. */
+    releaseChunk?(metadata: WorldChunkMetadata, objects: Object3D[]): void;
     dispose(): void;
 }
 

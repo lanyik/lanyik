@@ -54,8 +54,19 @@ CPU 按 backing buffer/纹理 source、GPU 按 attribute/interleaved buffer/纹�
 单个账户的 stats 对账户内去重，整个地图再次跨账户去重，所以不能将各账户的
 引用字节简单相加。手工 `resourceCost` 覆盖仍由自定义层负责共享资源的所有权。
 
-当前图遍历计量覆盖已激活的渲染资源及模型缓存；Worker 临时堆、未激活的植被布局、
-未被渲染图引用的 LOD 缓存和浏览器/驱动开销不在此计量范围内。
+植被通过独立的 `vegetation-cpu` 账户补足渲染图之外的所有权：Worker 返回的三档布局、
+草地贴地高度/雾属性、森林贴地矩阵及三档预处理模型都按 backing buffer 引用计费。
+准备请求、草地和森林可以共同引用同一布局；取消或卸载一个所有者不会提前扣除仍被其他
+所有者使用的数据。当前 LOD 与有界 source 驻留所需的原始布局、共享模型属于必要输入；
+旧的派生 LOD 则必须通过预算 admission 才能继续缓存，超额时可重建缓存优先释放。
+原始布局的数量受 source 驻留限制，字节超额明确进入自适应密度控制；此处不承诺任意密度、
+任意必需工作集都能装入给定字节上限。Worker 临时堆、JS 对象本身和浏览器/驱动开销仍不计量。
+
+森林实例矩阵和颜色在首次激活时分配，同一渲染区块的模型部件及环绕副本共享一套缓冲。
+CPU 淘汰会将全部副本切换为空缓冲；草地也会解除全部副本对已释放几何的引用。
+GPU 淘汰保持 CPU 所有权，字段销毁则清空布局、LOD、雾状态与子对象引用。
+缓存到期回收独立于可见性重算，相机静止时仍按 grace frame 执行；新增字节压力会重新检查
+当前缓存，而不会因相机没有移动而忽略。
 
 `WorldChunkScheduler` 同时保留逻辑区块上限和字节上限。非可见驻留只要超过任一字节预算就立即按 LRU 淘汰，不等待 grace frame。当前帧必需的 visible working set 被标为 pinned；若它自身大于预算，不会错误销毁正在绘制的对象，而是通过 `cpuBudgetExceededBytes` / `gpuBudgetExceededBytes` 暴露不可避免的压力，交给自适应 LOD/密度降级。默认上限为 CPU 384 MiB、GPU 256 MiB，可通过 `cpuChunkCacheBytes` / `gpuChunkCacheBytes` 配置。
 

@@ -46,7 +46,9 @@ vi.mock("../../src/objects/citysprite", async () => {
     return { makeTextSprite: vi.fn(() => new Sprite()) };
 });
 
-import { Land, MapInfo, Point } from "../../src/index";
+import { generateWorldVegetation, Land, MapInfo, Point, worldVegetationTransferables } from "../../src/index";
+import { collectObject3DResourceAllocations, ResourceBudgetLedger } from "../../src/runtime/ResourceBudget";
+import { vegetationLayoutAllocations, VegetationResources } from "../../src/rendering/VegetationResources";
 import { getWorldChunkMetadata } from "../../src/helpers/chunks";
 import type { LoadedModel, ModelAssetCache, ModelAssetLease } from "../../src/helpers/models";
 import { createForest, ForestSharedResources } from "../../src/objects/Forest";
@@ -87,6 +89,101 @@ function points(startX: number): Point[] {
 }
 
 describe("streamed render resource sharing", () => {
+    test("accounts prepared and cached vegetation until its final CPU owner releases it", async () => {
+        const map = mapWithVegetation();
+        const selected = points(0);
+        const layout = generateWorldVegetation({
+            map, points: selected, size: 10, grassDensity: 4, grassBladeWidth: 0.3, grassBladeHeight: 1.8,
+            treesPerTile: 2, treeScale: 1, treeModel: "test-tree", riverWidth: 0.28, riverBankWidth: 0.14,
+            riverCurvature: 0.5, lakeShoreWidth: 0.18, beachWidth: 0.35, waterCornerRounding: 0.4, coastCurvature: 0.5
+        });
+        const ledger = new ResourceBudgetLedger({ cpuBytes: 1e8, gpuBytes: 1e8 });
+        const account = ledger.createAccount("vegetation");
+        const preparation = new VegetationResources(account);
+        preparation.retain("layout", vegetationLayoutAllocations(layout));
+        const preparedBytes = worldVegetationTransferables(layout).reduce<number>((sum, buffer) => {
+            expect(buffer).toBeInstanceOf(ArrayBuffer);
+            return sum + (buffer as ArrayBuffer).byteLength;
+        }, 0);
+        expect(ledger.stats.cpuBytes).toBe(preparedBytes);
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6,
+            resolver: createWorldSurfaceResolver({ seed: "retained-vegetation",
+                domain: { topology: "bounded", width: map.w, height: map.h } }) });
+        const grassResources = new GrassSharedResources({ size: 10, resourceAccount: account });
+        const forestResources = new ForestSharedResources(undefined, account);
+        const grass = createGrassField(map, { size: 10, density: 4, surface, resourceAccount: account },
+            selected, grassResources, layout)!;
+        const forest = (await createForest(map, { size: 10, treesPerTile: 2, surface, resourceAccount: account },
+            selected, forestResources, layout))!;
+        preparation.dispose();
+        const baseline = ledger.stats.cpuBytes;
+        expect(baseline).toBeGreaterThan(preparedBytes);
+        const grassMesh = grass.children[0] as Mesh;
+        const forestRoot = forest.children[0] as Group;
+        const grassMetadata = getWorldChunkMetadata(grassMesh)!;
+        const forestMetadata = getWorldChunkMetadata(forestRoot)!;
+        const tree = forestRoot.children[0] as InstancedMesh;
+        expect(tree.instanceMatrix.array.byteLength).toBe(0);
+        grass.activateChunk(grassMetadata, 0);
+        forest.activateChunk(forestMetadata, 0, [forestRoot]);
+        const nearBytes = ledger.stats.cpuBytes;
+        grass.activateChunk(grassMetadata, 1);
+        forest.activateChunk(forestMetadata, 1, [forestRoot]);
+        expect(ledger.stats.cpuBytes).toBeGreaterThan(nearBytes);
+        const cachedBytes = ledger.stats.cpuBytes;
+        const render = ledger.createAccount("render");
+        render.acquireRequired("active", {}, true, collectObject3DResourceAllocations([grass, forest]));
+        expect(ledger.stats.cpuBytes).toBe(cachedBytes);
+        render.dispose();
+        ledger.configure({ cpuBytes: 1 });
+        grass.activateChunk(grassMetadata, 1);
+        forest.activateChunk(forestMetadata, 1, [forestRoot]);
+        expect(ledger.stats.cpuBytes).toBeLessThan(cachedBytes);
+        expect(tree.count).toBeGreaterThan(0);
+        grass.releaseChunk(grassMetadata, [grassMesh]);
+        forest.releaseChunk(forestMetadata, [forestRoot]);
+        expect(tree.instanceMatrix.array.byteLength).toBe(0);
+        expect(ledger.stats.cpuBytes).toBe(baseline);
+        grass.dispose();
+        forest.dispose();
+        grassResources.dispose();
+        forestResources.dispose();
+        expect(ledger.stats.cpuBytes).toBe(0);
+        expect(ledger.stats.reservations).toBe(0);
+        ledger.dispose();
+    });
+
+    test("shares lazily allocated instance buffers across tree parts and all world copies", async () => {
+        const map = mapWithVegetation();
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6,
+            resolver: createWorldSurfaceResolver({ seed: "shared-tree-parts",
+                domain: { topology: "bounded", width: map.w, height: map.h } }) });
+        const resources = new ForestSharedResources();
+        const parts = [0, 1].map(() => ({ geometry: new BoxGeometry(), material: new MeshBasicMaterial() }));
+        vi.spyOn(resources, "prepare").mockResolvedValue([parts, parts, parts]);
+        const forest = (await createForest(map, { size: 10, treesPerTile: 2, surface }, points(0), resources))!;
+        const root = forest.children[0] as Group;
+        const metadata = getWorldChunkMetadata(root)!;
+        const copy = root.clone(true);
+        const all = [...root.children, ...copy.children] as InstancedMesh[];
+        expect(all.every(mesh => mesh.instanceMatrix.count === 0)).toBe(true);
+        forest.activateChunk(metadata, 0, [root, copy]);
+        expect(all.every(mesh => mesh.instanceMatrix === all[0].instanceMatrix)).toBe(true);
+        expect(all.every(mesh => mesh.instanceColor === all[0].instanceColor)).toBe(true);
+        const matrices = all[0].instanceMatrix.array.slice();
+        forest.setTileSuppressed(0, 0, true);
+        forest.setTileSuppressed(0, 0, false);
+        expect(all[0].instanceMatrix.array).toEqual(matrices);
+        forest.releaseChunk(metadata, [root, copy]);
+        expect(all.every(mesh => mesh.instanceMatrix.array.byteLength === 0 && mesh.count === 0)).toBe(true);
+        forest.activateChunk(metadata, 0, [root, copy]);
+        expect(all.every(mesh => mesh.instanceMatrix === all[0].instanceMatrix)).toBe(true);
+        expect(all[0].instanceMatrix.array).toEqual(matrices);
+        forest.dispose();
+        resources.dispose();
+        for (const part of parts) { part.geometry.dispose(); part.material.dispose(); }
+    });
+
     test("de-tiles atlas cells without adding another texture lookup site", () => {
         for (const shader of [TERRAIN_FRAGMENT_SHADER, TERRAIN_FAST_FRAGMENT_SHADER]) {
             expect(shader).toContain("vec3 terrainPattern()");

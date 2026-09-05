@@ -39,7 +39,7 @@ export interface WorldChunkActivation {
 export interface WorldChunkSchedulerHooks {
     enabled(metadata: WorldChunkMetadata): boolean;
     activate(metadata: WorldChunkMetadata, lod: WorldChunkLod, objects: Object3D[]): WorldChunkActivation | void;
-    release(metadata: WorldChunkMetadata): void;
+    release(metadata: WorldChunkMetadata, objects: Object3D[]): void;
 }
 
 export interface WorldChunkSchedulerOptions {
@@ -142,6 +142,9 @@ export class WorldChunkScheduler {
     private registeredObjects = 0;
     private sceneTraversals = 0;
     private frame = 0;
+    private nextEvictionFrame = Infinity;
+    private lastPressureCpuBytes = 0;
+    private lastPressureGpuBytes = 0;
     private visibilityDirty = true;
     private visibilityChecks = 0;
     private visibilitySkips = 0;
@@ -186,6 +189,8 @@ export class WorldChunkScheduler {
         for (const id of this.residents.keys()) this.resources.release(this.resourceKey(id));
         this.residents.clear();
         this.frame = 0;
+        this.nextEvictionFrame = Infinity;
+        this.lastPressureCpuBytes = this.lastPressureGpuBytes = 0;
         this.snapshot = { ...EMPTY_STATS };
         this.registryDirty = true;
         this.visibilityDirty = true;
@@ -246,7 +251,21 @@ export class WorldChunkScheduler {
         camera.updateMatrixWorld();
         camera.getWorldPosition(this.cameraPosition);
         camera.getWorldQuaternion(this.cameraQuaternion);
-        if (!this.shouldRefreshVisibility(root, camera, target)) {
+        const resources = this.resources.stats;
+        const pressureChanged = (resources.cpuExceededBytes > 0 || resources.gpuExceededBytes > 0)
+            && (resources.cpuBytes !== this.lastPressureCpuBytes || resources.gpuBytes !== this.lastPressureGpuBytes);
+        if (!pressureChanged && !this.shouldRefreshVisibility(root, camera, target)) {
+            // Expiry belongs to residency, not camera motion. A stationary
+            // camera must not hold expired CPU/GPU caches indefinitely.
+            if (this.frame >= this.nextEvictionFrame) {
+                this.evictInactive(this.visibleIds, hooks);
+                this.snapshot = {
+                    ...this.snapshot,
+                    residentChunks: this.residents.size,
+                    gpuResidentChunks: this.countGpuResidents(),
+                    resourceEvictions: this.resourceEvictions
+                };
+            }
             this.visibilitySkips += 1;
             this.snapshot = { ...this.snapshot, visibilitySkips: this.visibilitySkips };
             return false;
@@ -312,7 +331,7 @@ export class WorldChunkScheduler {
         const lodCounts = [0, 0, 0];
         for (const id of this.visibleIds) {
             const request = this.bindings.get(id)!;
-            const activation = hooks.activate(request.metadata, request.lod, request.visibleObjects);
+            const activation = hooks.activate(request.metadata, request.lod, request.objects);
             const geometries = (activation && activation.geometries)
                 ?? this.residents.get(id)?.geometries
                 ?? [];
@@ -352,6 +371,8 @@ export class WorldChunkScheduler {
         let gpuResidentChunks = 0;
         for (const entry of this.residents.values()) if (entry.gpuResident) gpuResidentChunks += 1;
         const resourceStats = this.resources.stats;
+        this.lastPressureCpuBytes = resourceStats.cpuBytes;
+        this.lastPressureGpuBytes = resourceStats.gpuBytes;
         this.snapshot = {
             visibleObjects,
             visibleChunks: this.visibleIds.size,
@@ -379,6 +400,7 @@ export class WorldChunkScheduler {
     }
 
     private evictInactive(visible: ReadonlySet<string>, hooks: WorldChunkSchedulerHooks): void {
+        this.nextEvictionFrame = Infinity;
         this.inactive.length = 0;
         for (const entry of this.residents.values()) {
             const isVisible = visible.has(entry.id);
@@ -414,11 +436,18 @@ export class WorldChunkScheduler {
                 for (const geometry of entry.geometries) geometry.dispose();
                 entry.disposeGpu?.();
             }
-            hooks.release(entry.metadata);
+            hooks.release(entry.metadata, this.bindings.get(entry.id)?.objects ?? []);
             this.residents.delete(entry.id);
             this.resources.release(this.resourceKey(entry.id));
             this.resourceEvictions += 1;
             if (cpuExcess > 0) cpuExcess -= 1;
+        }
+        for (const entry of this.inactive) {
+            if (!this.residents.has(entry.id)) continue;
+            this.nextEvictionFrame = Math.min(this.nextEvictionFrame,
+                entry.lastVisible + this.options.cpuGraceFrames,
+                entry.gpuResident ? entry.lastVisible + this.options.gpuGraceFrames : Infinity
+            );
         }
     }
 

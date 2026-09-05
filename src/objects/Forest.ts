@@ -42,10 +42,13 @@ import {
     WorldVegetationLayout
 } from "../world/generateVegetation";
 import { WorldSurfaceView } from "../world/WorldSurfaceView";
+import { collectCpuBufferAllocations, collectGeometryAllocations, ResourceBudgetAccount } from "../runtime/ResourceBudget";
+import { forestLayoutAllocations, VegetationResources } from "../rendering/VegetationResources";
 
 export interface ForestOptions {
     size: number;
     surface: WorldSurfaceView;
+    resourceAccount?: ResourceBudgetAccount;
     treesPerTile?: number;
     treeModel?: string; // model folder path (see helpers/models.ts), default "Assets/models/pinia"
     treeScale?: number; // extra multiplier on top of the model's own info.json scale, default 1
@@ -73,7 +76,7 @@ export interface ForestOptions {
 //InstancedMeshes (see createForest) - kept around so setFogState() can hide
 //(Unseen), darken (Explored) or restore (Visible) them without a rebuild.
 interface TileTreeRange {
-    instancedMeshes: InstancedMesh[];
+    mesh: InstancedMesh;
     start: number;
     count: number;
     originalMatrices: Float32Array;
@@ -106,7 +109,7 @@ interface ForestBuildContext {
     polygon: number[][];
     waterOptions: WaterClearanceOptions;
     coastOptions: CoastClearanceOptions;
-    preparedChunks: ReadonlyMap<string, WorldVegetationForestChunkLayout>;
+    preparedChunks: Map<string, WorldVegetationForestChunkLayout>;
 }
 
 interface PreparedForestPart {
@@ -242,8 +245,10 @@ export class ForestSharedResources {
     private readonly modelAssets: ModelAssetCache;
     private readonly ownsModelAssets: boolean;
     private disposed = false;
+    private readonly retained: VegetationResources;
 
-    constructor(modelAssets?: ModelAssetCache) {
+    constructor(modelAssets?: ModelAssetCache, resourceAccount?: ResourceBudgetAccount) {
+        this.retained = new VegetationResources(resourceAccount);
         this.ownsModelAssets = modelAssets === undefined;
         this.modelAssets = modelAssets ?? new ModelAssetCache();
     }
@@ -302,6 +307,7 @@ export class ForestSharedResources {
                     if (this.disposed) {
                         throw new Error("ForestSharedResources was disposed while loading a model");
                     }
+                    this.retained.retain(modelPath, collectGeometryAllocations([...createdGeometries]));
                     for (const geometry of createdGeometries) this.geometries.add(geometry);
                     for (const material of createdMaterials) this.materials.add(material);
                     for (const asset of acquired) this.assets.add(asset);
@@ -339,6 +345,7 @@ export class ForestSharedResources {
         this.models.clear();
         for (const asset of this.assets) asset.release();
         this.assets.clear();
+        this.retained.dispose();
         if (this.ownsModelAssets) this.modelAssets.dispose();
     }
 }
@@ -356,6 +363,8 @@ export class ForestField extends Group {
     private readonly fogStates = new Map<string, number>();
     private readonly suppressedTiles = new Set<string>();
     private lodBuilds = 0;
+    private readonly retained: VegetationResources;
+    private disposed = false;
 
     constructor(
         private tileRanges: Map<string, TileTreeRange>,
@@ -363,9 +372,12 @@ export class ForestField extends Group {
         private chunks: Map<string, ForestChunkRecord>,
         private context: ForestBuildContext,
         private resources: ForestSharedResources,
-        private ownsResources: boolean
+        private ownsResources: boolean,
+        resourceAccount?: ResourceBudgetAccount
     ) {
         super();
+        this.retained = new VegetationResources(resourceAccount);
+        this.retained.retain("prepared", forestLayoutAllocations(context.preparedChunks.values()));
         for (const record of chunks.values()) this.add(record.root);
     }
 
@@ -383,21 +395,20 @@ export class ForestField extends Group {
             if (!range) continue;
             const hidden = this.suppressedTiles.has(key) || state < 0.5;
             const shade = state < 1.5 ? this.fogDarkenFactor : 1;
-            for (const mesh of range.instancedMeshes) {
-                const matrices = mesh.instanceMatrix.array as Float32Array;
-                if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
-                else matrices.set(range.originalMatrices, range.start * 16);
-                const pendingMatrices = matrixUpdates.get(mesh.instanceMatrix) ?? [];
-                pendingMatrices.push({ start: range.start * 16, count: range.count * 16 });
-                matrixUpdates.set(mesh.instanceMatrix, pendingMatrices);
+            const mesh = range.mesh;
+            const matrices = mesh.instanceMatrix.array as Float32Array;
+            if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+            else matrices.set(range.originalMatrices, range.start * 16);
+            const pendingMatrices = matrixUpdates.get(mesh.instanceMatrix) ?? [];
+            pendingMatrices.push({ start: range.start * 16, count: range.count * 16 });
+            matrixUpdates.set(mesh.instanceMatrix, pendingMatrices);
 
-                if (!mesh.instanceColor) continue;
-                (mesh.instanceColor.array as Float32Array)
-                    .fill(shade, range.start * 3, (range.start + range.count) * 3);
-                const pendingColors = colorUpdates.get(mesh.instanceColor) ?? [];
-                pendingColors.push({ start: range.start * 3, count: range.count * 3 });
-                colorUpdates.set(mesh.instanceColor, pendingColors);
-            }
+            if (!mesh.instanceColor) continue;
+            (mesh.instanceColor.array as Float32Array)
+                .fill(shade, range.start * 3, (range.start + range.count) * 3);
+            const pendingColors = colorUpdates.get(mesh.instanceColor) ?? [];
+            pendingColors.push({ start: range.start * 3, count: range.count * 3 });
+            colorUpdates.set(mesh.instanceColor, pendingColors);
         }
         for (const [attribute, ranges] of matrixUpdates) commitBufferAttributeRanges(attribute, ranges);
         for (const [attribute, ranges] of colorUpdates) commitBufferAttributeRanges(attribute, ranges);
@@ -413,22 +424,21 @@ export class ForestField extends Group {
         const state = this.fogStates.get(key) ?? 2;
         const hidden = suppressed || state < 0.5;
         const shade = state < 1.5 ? this.fogDarkenFactor : 1;
-        for (const mesh of range.instancedMeshes) {
-            const matrices = mesh.instanceMatrix.array as Float32Array;
-            if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
-            else matrices.set(range.originalMatrices, range.start * 16);
-            commitBufferAttributeRanges(mesh.instanceMatrix, [{
-                start: range.start * 16,
-                count: range.count * 16
-            }]);
-            if (!mesh.instanceColor) continue;
-            (mesh.instanceColor.array as Float32Array)
-                .fill(shade, range.start * 3, (range.start + range.count) * 3);
-            commitBufferAttributeRanges(mesh.instanceColor, [{
-                start: range.start * 3,
-                count: range.count * 3
-            }]);
-        }
+        const mesh = range.mesh;
+        const matrices = mesh.instanceMatrix.array as Float32Array;
+        if (hidden) writeHiddenMatrices(matrices, range.start, range.count);
+        else matrices.set(range.originalMatrices, range.start * 16);
+        commitBufferAttributeRanges(mesh.instanceMatrix, [{
+            start: range.start * 16,
+            count: range.count * 16
+        }]);
+        if (!mesh.instanceColor) return;
+        (mesh.instanceColor.array as Float32Array)
+            .fill(shade, range.start * 3, (range.start + range.count) * 3);
+        commitBufferAttributeRanges(mesh.instanceColor, [{
+            start: range.start * 3,
+            count: range.count * 3
+        }]);
     }
 
     public activateChunk(metadata: WorldChunkMetadata, lod: WorldChunkLod, objects: Object3D[]): void {
@@ -445,10 +455,24 @@ export class ForestField extends Group {
             if (!cached) {
                 cached = this.buildChunkLod(record, lod);
                 record.lodCache.set(lod, cached);
+                this.retained.retain(`${metadata.id}:${lod}`, collectCpuBufferAllocations([cached.matrices]));
                 this.lodBuilds += 1;
+            }
+            const first = record.instancedMeshes[0];
+            if (first.instanceMatrix.count < cached.instanceCount) {
+                this.replaceInstanceBuffers(record, cached.instanceCount, objects);
+                this.retained.retain(`${metadata.id}:instances`, collectCpuBufferAllocations([
+                    first.instanceMatrix.array, first.instanceColor!.array
+                ]));
             }
             this.applyChunkLod(record, cached);
             record.lod = lod;
+        }
+        this.retained.pin(`${metadata.id}:${lod}`);
+        for (const cachedLod of record.lodCache.keys()) {
+            if (cachedLod !== lod && !this.retained.keepCached(`${metadata.id}:${cachedLod}`)) {
+                record.lodCache.delete(cachedLod);
+            }
         }
 
         //World copies share matrices/colors, but InstancedMesh.count is a plain
@@ -465,17 +489,36 @@ export class ForestField extends Group {
                 copy.geometry = source.geometry;
                 copy.material = source.material;
                 copy.count = source.count;
+                copy.instanceMatrix = source.instanceMatrix;
+                copy.instanceColor = source.instanceColor;
             });
         }
     }
 
-    public releaseChunk(metadata: WorldChunkMetadata): void {
+    public releaseChunk(metadata: WorldChunkMetadata, objects: readonly Object3D[] = []): void {
         const record = this.chunks.get(metadata.id);
         if (!record || record.lod === undefined) return;
         for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
-        for (const mesh of record.instancedMeshes) mesh.count = 0;
+        this.replaceInstanceBuffers(record, 0, objects);
+        this.retained.release(`${metadata.id}:instances`);
+        for (const lod of record.lodCache.keys()) this.retained.release(`${metadata.id}:${lod}`);
         record.lodCache.clear();
         record.lod = undefined;
+    }
+
+    private replaceInstanceBuffers(record: ForestChunkRecord, capacity: number, objects: readonly Object3D[]): void {
+        const matrix = new InstancedBufferAttribute(new Float32Array(capacity * 16), 16).setUsage(DynamicDrawUsage);
+        const color = new InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+        const meshes = new Set(record.instancedMeshes);
+        for (const object of objects) object.traverse(child => {
+            if ((child as InstancedMesh).isInstancedMesh) meshes.add(child as InstancedMesh);
+        });
+        for (const mesh of meshes) {
+            mesh.dispose();
+            mesh.instanceMatrix = matrix;
+            mesh.instanceColor = color;
+            mesh.count = 0;
+        }
     }
 
     public disposeChunkGpu(metadata: WorldChunkMetadata): void {
@@ -489,11 +532,18 @@ export class ForestField extends Group {
     }
 
     public dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
         for (const record of this.chunks.values()) {
             for (const mesh of record.instancedMeshes) mesh.dispose();
         }
         this.tileRanges.clear();
         this.chunks.clear();
+        this.context.preparedChunks.clear();
+        this.fogStates.clear();
+        this.suppressedTiles.clear();
+        this.clear();
+        this.retained.dispose();
         if (this.ownsResources) this.resources.dispose();
     }
 
@@ -570,16 +620,19 @@ export class ForestField extends Group {
         record: ForestChunkRecord,
         prepared: WorldVegetationForestLodLayout
     ): ForestLodCache {
-        const matrices = new Float32Array(prepared.matrices.length);
         const ranges = new Map<string, { start: number, count: number, originalMatrices: Float32Array }>();
         const surfaceWindow = this.context.surface.createWindow();
+        const counts = prepared.tiles.map((tile, index) => {
+            const count = prepared.ranges[index * 2 + 1];
+            return count === 0 ? 0 : Math.max(1, Math.round(
+                count * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
+            ));
+        });
+        const matrices = new Float32Array(counts.reduce((sum, count) => sum + count, 0) * 16);
         let instanceCount = 0;
         prepared.tiles.forEach((tile, index) => {
             const preparedStart = prepared.ranges[index * 2];
-            const preparedCount = prepared.ranges[index * 2 + 1];
-            const count = preparedCount === 0 ? 0 : Math.max(1, Math.round(
-                preparedCount * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-            ));
+            const count = counts[index];
             const start = instanceCount;
             const source = prepared.matrices.subarray(preparedStart * 16, (preparedStart + count) * 16);
             matrices.set(source, start * 16);
@@ -597,43 +650,31 @@ export class ForestField extends Group {
                 originalMatrices: matrices.subarray(start * 16, (start + count) * 16)
             });
         });
-        const compactMatrices = matrices.slice(0, instanceCount * 16);
-        for (const range of ranges.values()) {
-            range.originalMatrices = compactMatrices.subarray(
-                range.start * 16,
-                (range.start + range.count) * 16
-            );
-        }
-        return { instanceCount, matrices: compactMatrices, ranges };
+        return { instanceCount, matrices, ranges };
     }
 
     private applyChunkLod(record: ForestChunkRecord, cached: ForestLodCache): void {
         for (const tile of record.tiles) this.tileRanges.delete(`${tile.x},${tile.y}`);
-        for (const mesh of record.instancedMeshes) {
-            (mesh.instanceMatrix.array as Float32Array).set(cached.matrices);
-            (mesh.instanceColor?.array as Float32Array | undefined)?.fill(1, 0, cached.instanceCount * 3);
-        }
+        const mesh = record.instancedMeshes[0];
+        (mesh.instanceMatrix.array as Float32Array).set(cached.matrices);
+        (mesh.instanceColor?.array as Float32Array | undefined)?.fill(1, 0, cached.instanceCount * 3);
         for (const [key, range] of cached.ranges) {
             const fogState = this.fogStates.get(key) ?? 2;
             const shade = fogState < 1.5 ? this.fogDarkenFactor : 1;
             if (this.suppressedTiles.has(key) || fogState < 0.5) {
-                for (const mesh of record.instancedMeshes) {
-                    writeHiddenMatrices(mesh.instanceMatrix.array as Float32Array, range.start, range.count);
-                }
+                writeHiddenMatrices(mesh.instanceMatrix.array as Float32Array, range.start, range.count);
             }
-            if (shade !== 1) for (const mesh of record.instancedMeshes) {
+            if (shade !== 1) {
                 (mesh.instanceColor?.array as Float32Array | undefined)
                     ?.fill(shade, range.start * 3, (range.start + range.count) * 3);
             }
-            this.tileRanges.set(key, { instancedMeshes: record.instancedMeshes, ...range });
+            this.tileRanges.set(key, { mesh, ...range });
         }
 
-        for (const mesh of record.instancedMeshes) {
-            mesh.count = cached.instanceCount;
-            commitBufferAttributeRanges(mesh.instanceMatrix, [{ start: 0, count: cached.instanceCount * 16 }]);
-            if (mesh.instanceColor) {
-                commitBufferAttributeRanges(mesh.instanceColor, [{ start: 0, count: cached.instanceCount * 3 }]);
-            }
+        for (const part of record.instancedMeshes) part.count = cached.instanceCount;
+        commitBufferAttributeRanges(mesh.instanceMatrix, [{ start: 0, count: cached.instanceCount * 16 }]);
+        if (mesh.instanceColor) {
+            commitBufferAttributeRanges(mesh.instanceColor, [{ start: 0, count: cached.instanceCount * 3 }]);
         }
     }
 }
@@ -719,71 +760,76 @@ export async function createForest(
 
     const tileRanges = new Map<string, TileTreeRange>();
     const chunkRecords = new Map<string, ForestChunkRecord>();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount);
     let modelIndex = 0;
 
-    for (const [modelPath, tiles] of tilesByModel) {
-        const preparedLods = await resources.prepare(modelPath);
-        const preparedParts = preparedLods[0];
-        if (preparedParts.length === 0) continue;
+    try {
+        for (const [modelPath, tiles] of tilesByModel) {
+            const preparedLods = await resources.prepare(modelPath);
+            const preparedParts = preparedLods[0];
+            if (preparedParts.length === 0) continue;
 
-        const chunks = groupTilesByWorldChunk(tiles);
+            const chunks = groupTilesByWorldChunk(tiles);
 
-        for (const [chunkKey, chunkTiles] of chunks) {
-            const totalInstances = chunkTiles.length * treesPerTile;
-            const root = new Group();
-            const origin = getWorldChunkOrigin(chunkKey, size);
-            root.position.set(origin.x, 0, origin.y);
-            root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
-            const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
-                const instancedMesh = new InstancedMesh(geometry, material, totalInstances);
-                instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
-                instancedMesh.instanceMatrix.setUsage(DynamicDrawUsage);
-                instancedMesh.instanceColor = new InstancedBufferAttribute(new Float32Array(totalInstances * 3).fill(1), 3);
-                instancedMesh.count = 0;
-                instancedMesh.frustumCulled = false;
-                root.add(instancedMesh);
-                return instancedMesh;
-            });
-            const id = `forest:${chunkKey}:${modelIndex}`;
-            tagWorldChunk(
-                root,
-                chunkKey,
-                "forest",
-                localizeWorldChunkBounds(getWorldChunkBounds(
-                    chunkTiles,
-                    size,
-                    surface.minimumHeight,
-                    surface.maximumHeight + size * 3
-                ), origin),
-                id
-            );
-            chunkRecords.set(id, {
-                chunkKey,
-                modelPath,
-                root,
-                instancedMeshes,
-                lodParts: preparedLods,
-                tiles: chunkTiles,
-                lodCache: new Map()
-            });
+            for (const [chunkKey, chunkTiles] of chunks) {
+                const root = new Group();
+                const origin = getWorldChunkOrigin(chunkKey, size);
+                root.position.set(origin.x, 0, origin.y);
+                root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
+                const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+                    const instancedMesh = new InstancedMesh(geometry, material, 0);
+                    instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
+                    instancedMesh.count = 0;
+                    instancedMesh.frustumCulled = false;
+                    root.add(instancedMesh);
+                    return instancedMesh;
+                });
+                const id = `forest:${chunkKey}:${modelIndex}`;
+                tagWorldChunk(
+                    root,
+                    chunkKey,
+                    "forest",
+                    localizeWorldChunkBounds(getWorldChunkBounds(
+                        chunkTiles,
+                        size,
+                        surface.minimumHeight,
+                        surface.maximumHeight + size * 3
+                    ), origin),
+                    id
+                );
+                chunkRecords.set(id, {
+                    chunkKey,
+                    modelPath,
+                    root,
+                    instancedMeshes,
+                    lodParts: preparedLods,
+                    tiles: chunkTiles,
+                    lodCache: new Map()
+                });
+            }
+            modelIndex += 1;
         }
-        modelIndex += 1;
-    }
 
-    return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
-        map,
-        surface,
-        size,
-        treesPerTile,
-        treeScale,
-        treeFootprint,
-        polygon,
-        waterOptions,
-        coastOptions,
-        preparedChunks: new Map(preparedLayout?.forest.map(chunk => [
-            `${chunk.modelPath}\u0000${chunk.chunkKey}`,
-            chunk
-        ]) ?? [])
-    }, resources, !sharedResources);
+        return new ForestField(tileRanges, fogDarkenFactor, chunkRecords, {
+            map,
+            surface,
+            size,
+            treesPerTile,
+            treeScale,
+            treeFootprint,
+            polygon,
+            waterOptions,
+            coastOptions,
+            preparedChunks: new Map(preparedLayout?.forest.map(chunk => [
+                `${chunk.modelPath}\u0000${chunk.chunkKey}`,
+                chunk
+            ]) ?? [])
+        }, resources, !sharedResources, options.resourceAccount);
+    } catch (reason) {
+        for (const record of chunkRecords.values()) {
+            for (const mesh of record.instancedMeshes) mesh.dispose();
+        }
+        if (!sharedResources) resources.dispose();
+        throw reason;
+    }
 }
