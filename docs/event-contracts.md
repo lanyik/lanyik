@@ -24,9 +24,17 @@ The frame event's `t` is the animation-frame timestamp and `dtS` is the elapsed
 time since the previous frame (zero on startup/context recovery). `cpuFrameMs`
 measures the previous frame's CPU work; `gpuFrameMs` is an asynchronously
 available GPU timer result. Neither measures display cadence. The demo computes
-FPS as frame intervals counted per elapsed timestamp window, and reports their
-mean as frame time. CPU/GPU averages remain separate diagnostic fields. Hidden
-pages and context recovery reset the demo's sampling window.
+actual FPS as frame intervals counted per elapsed timestamp window. Its primary
+panel shows CPU work, GPU render time, `max(mean CPU, mean GPU)` frame work and
+`1000 / frame work` theoretical FPS over 500 ms windows. CPU/GPU work overlaps
+across frames, so these averages are not added. This estimates throughput at the
+current workload without the display interval; it is not a measured uncapped
+frame rate and excludes work outside the map's animation callback/GPU query.
+When only one processor has valid samples, the panel explicitly labels that
+processor's ceiling; it never treats a missing GPU sample as measured zero.
+Zero work produces no FPS estimate. No GPU sample is reused across windows.
+Actual FPS remains a separate reference, and diagnostics retain `frameTime` as
+the mean display interval. Hidden pages and context recovery reset sampling.
 
 Dispatch is synchronous and uses a listener snapshot. Adding or removing a
 listener during dispatch affects the next emission, not the current snapshot.

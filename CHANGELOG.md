@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The performance panel now prioritizes measured CPU/GPU work and the resulting
+  theoretical throughput, retaining actual display FPS as a separate reference
+  and explicitly labeling estimates based on only one processor.
 - Generated river banks now stay categorical at the hex level while using the
   renderer's actual even-column coordinate system and world-space capsule
   distance to decide boundary cells. This removes parity-induced protrusions

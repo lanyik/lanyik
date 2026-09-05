@@ -1,4 +1,4 @@
-/** Measures animation-frame cadence separately from CPU/GPU work. */
+/** Measures display cadence and estimates throughput from measured CPU/GPU work. */
 export class FramePerformanceSampler {
     constructor(intervalMs = 500) {
         this.intervalMs = intervalMs;
@@ -30,11 +30,21 @@ export class FramePerformanceSampler {
         }
         const elapsed = t - this.start;
         if (elapsed < this.intervalMs) return null;
+        const meanCpuMs = this.cpuSamples ? this.cpuTotal / this.cpuSamples : null;
+        const meanGpuMs = this.gpuSamples ? this.gpuTotal / this.gpuSamples : null;
+        // CPU submission and GPU execution overlap across frames. Their slower
+        // average estimates throughput; adding them would measure a different quantity.
+        const workFrameMs = meanCpuMs === null && meanGpuMs === null
+            ? null : Math.max(meanCpuMs ?? 0, meanGpuMs ?? 0);
         const sample = {
             fps: this.frames * 1000 / elapsed,
             frameTime: elapsed / this.frames,
-            cpuFrameMs: this.cpuSamples ? this.cpuTotal / this.cpuSamples : null,
-            gpuFrameMs: this.gpuSamples ? this.gpuTotal / this.gpuSamples : null
+            cpuFrameMs: meanCpuMs,
+            gpuFrameMs: meanGpuMs,
+            workFrameMs,
+            theoreticalFps: workFrameMs > 0 ? 1000 / workFrameMs : null,
+            timingBasis: meanCpuMs !== null && meanGpuMs !== null ? "cpuGpu"
+                : meanCpuMs !== null ? "cpu" : meanGpuMs !== null ? "gpu" : null
         };
         this.reset();
         this.start = t;

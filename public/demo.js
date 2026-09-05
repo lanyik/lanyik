@@ -191,6 +191,9 @@ let performanceSnapshot = {
     frameTime: null,
     cpuFrameMs: null,
     gpuFrameMs: null,
+    workFrameMs: null,
+    theoreticalFps: null,
+    timingBasis: null,
     memory: null,
     drawCalls: null,
     triangles: null,
@@ -207,7 +210,10 @@ let performanceSnapshot = {
 function renderPerformance() {
     const formats = {
         fps: value => Math.round(value),
-        frameTime: value => value.toFixed(1),
+        theoreticalFps: value => Math.round(value),
+        workFrameMs: value => value.toFixed(2),
+        cpuFrameMs: value => value.toFixed(2),
+        gpuFrameMs: value => value.toFixed(2),
         memory: value => Math.round(value),
         drawCalls: value => performanceNumberFormatter.format(value),
         triangles: value => performanceCompactFormatter.format(value),
@@ -228,6 +234,15 @@ function renderPerformance() {
             ? i18n.t("performance.unavailable")
             : typeof value === "number" ? performanceNumberFormatter.format(value) : String(value);
     });
+    performanceLabels.forEach(element => {
+        const key = element.dataset.performanceLabel;
+        const basis = performanceSnapshot.timingBasis;
+        const partial = basis === "cpu" || basis === "gpu";
+        element.textContent = i18n.t(`performance.${key}${key === "theoreticalFps" && partial ? `.${basis}` : ""}`);
+        if (key === "theoreticalFps" || key === "workFrameMs") {
+            element.title = i18n.t(`performance.timing.${basis ?? "unavailable"}`);
+        }
+    });
 }
 
 function updatePerformanceLocale(locale) {
@@ -237,9 +252,6 @@ function updatePerformanceLocale(locale) {
         maximumFractionDigits: 1
     });
     performanceTitle.textContent = i18n.t("performance.title");
-    performanceLabels.forEach(element => {
-        element.textContent = i18n.t(`performance.${element.dataset.performanceLabel}`);
-    });
     performanceUnits.forEach(element => {
         element.textContent = i18n.t(`performance.unit.${element.dataset.performanceUnit}`);
     });

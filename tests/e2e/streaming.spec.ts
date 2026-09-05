@@ -29,7 +29,15 @@ interface Diagnostics {
         busyTasks: number;
         domains: Record<string, unknown>;
     };
-    performance?: { fps: number | null; frameTime: number | null };
+    performance?: {
+        fps: number | null;
+        frameTime: number | null;
+        cpuFrameMs: number | null;
+        gpuFrameMs: number | null;
+        workFrameMs: number | null;
+        theoreticalFps: number | null;
+        timingBasis: "cpuGpu" | "cpu" | "gpu" | null;
+    };
     renderBackend?: { renderer: string; software: boolean };
 }
 
@@ -89,6 +97,12 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
     expect(sample.adaptive!.enabled).toBe(false);
     expect(sample.adaptive!.targetFrameMs).toBeCloseTo(1000 / 240);
     expect(sample.performance!.fps! * sample.performance!.frameTime!).toBeCloseTo(1000, 6);
+    expect(sample.performance!.workFrameMs).toBe(Math.max(
+        sample.performance!.cpuFrameMs ?? 0, sample.performance!.gpuFrameMs ?? 0
+    ));
+    expect(sample.performance!.theoreticalFps! * sample.performance!.workFrameMs!).toBeCloseTo(1000, 6);
+    await expect(page.locator('[data-performance-value="theoreticalFps"]')).not.toHaveText("—");
+    await expect(page.locator('[data-performance-value="cpuFrameMs"]')).not.toHaveText("—");
     expect(sample.renderBackend!.renderer.length).toBeGreaterThan(0);
     expect(await page.evaluate(() => (window as unknown as {
         hexWorld: { mountainHeight: number };
