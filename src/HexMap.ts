@@ -2343,14 +2343,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return refresh;
     }
 
-    private refreshTileOverrideRendering(
-        point: Point,
-        source: WorldSource,
-        loadRevision: number
-    ): Promise<void> {
-        return this.refreshTileOverridesRendering([point], source, loadRevision);
-    }
-
     private async refreshTileOverridesRendering(
         points: readonly Point[],
         source: WorldSource,
@@ -2383,12 +2375,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (affectedChunks.size === 0) return;
 
         const keys = [...affectedChunks.keys()].sort();
-        if (!this.worldRenderLayers) {
-            for (const key of keys) this.unmountWorldChunk(affectedChunks.get(key)!);
-            for (const key of keys) this.mountWorldChunk(affectedChunks.get(key)!);
-            this.updateWorldChunkVisibility();
-            return;
-        }
         const layers = this.worldRenderLayers.values();
         const refreshable = layers.filter(layer => layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
         await Promise.all(refreshable.flatMap(layer => keys.map(key =>

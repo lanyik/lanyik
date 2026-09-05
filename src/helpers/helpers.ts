@@ -1,12 +1,4 @@
-import { Points } from "three";
 import { Point } from "../interfaces";
-
-//Ger random int include min and max values
-export function getRandomInt(min:number, max:number):number {
-    min = Math.ceil(min);
-    max = Math.floor(max);
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
 
 //Get HEX point according number
 export function pointy_hex_corner(center:Point, size:number, i:number):Point {
@@ -39,7 +31,7 @@ export function getHexCenter(x:number, y:number, size:number):Point {
 }
 
 export function wait(ms:number):Promise<void> {
-    return new Promise(function(resolve, reject) {
+    return new Promise(function(resolve) {
         setTimeout(resolve, ms);
     });
 }

@@ -4,6 +4,11 @@ The test suite protects observable contracts and failure boundaries. Test
 counts are not an acceptance target: adding or removing a case is useful only
 when it changes the defects the suite can detect.
 
+The standard TypeScript gate enables `noUnusedLocals` and
+`noUnusedParameters`. Remove dead declarations and unreachable compatibility
+branches; test fixtures must initialize the production layer registry instead
+of keeping a test-only runtime path alive.
+
 ## Test layers
 
 | Layer | Purpose | Typical location |

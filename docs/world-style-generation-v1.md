@@ -69,30 +69,14 @@
 - 不提前建设通用地形特征系统、全局地图集或 AssetRegistry。
 - 不以噪声复杂度和单测数量衡量视觉质量。
 
-## 3. 当前实现的主要问题
+## 3. 当前实现
 
-现有基础可继续使用：
-
-- 设计起点的 WORLD_GENERATOR_VERSION 为 3；连续地表、森林和雪线修订依次推进到 6；海域和河网修订推进到 12，河道自然度复核推进到 13，整格河岸栅格修订推进到 14，河源延伸与渐宽河口推进到 15，曲线中心线推进到 16。
-- LandformSampler 提供 elevation、continentalness、ridge、valley、roughness、moisture、temperature 和独立低频 ocean 场。
-- 无限世界使用全局坐标；环绕世界使用周期噪声；有界世界有边缘衰减。
-- PackedWorldChunk 使用 16 位格子数据，并带一圈邻域。
-- TerrainMesh 已使用六邻居高度构造共享山体顶角。
-- Shader 的细节相位来自逻辑世界坐标，不受区块顺序和浮动原点影响。
-
-需要解决的问题：
-
-1. generateWorld.ts 与 generateWorldChunk.ts 重复实现地形分类、湖泊、丘陵、森林和树种规则。
-2. 生成器与渲染器只共享原始地貌场，没有唯一的最终地表规则。
-3. 普通陆地、丘陵和谷地仍缺少统一的连续高度。
-4. 森林和湖泊仍带有较强的逐格随机感。
-5. 静态 MapInfo 没有种子，只能使用中性山体高度。
-6. 现有测试只证明数据邻域一致，没有直接证明最终几何跨区块和 LOD 无缝。
-7. 当前 Shader 会用较宽的系数缩放整座山体，这已经不是“小细节”，CPU 无法据此准确贴地。
-8. Terrain 当前使用 15 个顶点属性位置，新增地貌字段容易超过部分 GPU 的能力。
-9. 地形块的 Y 方向裁剪边界是经验值，扩大起伏后可能提前消失。
-10. 缓存键、默认 worldId 和导航 terrainRevision 分别拼接身份字段，容易出现漏项。
-
+- 当前生成器为 v19。一次性生成和 chunk 生成共用 `WorldSurfaceResolver`，不再分别维护地形分类、湖泊、丘陵、森林和树种规则。
+- `LandformSampler` 提供连续地貌、气候和独立低频 ocean 场；无限域使用全局坐标，环绕域使用周期噪声，有界域保留边缘衰减。
+- `WorldSurfaceView` 将基础生成和稀疏编辑合成为生效地表，城市、单位、草木、路线和标记使用同一贴地高度契约。
+- `PackedWorldChunk` 保持每格 16 位和一圈邻域；共享地表顶角、LOD 边缘采样和逻辑坐标细节相位保护跨区块一致性。
+- 完整 descriptor 统一缓存键、默认 worldId 和导航 terrainRevision。参数变化产生新身份，冻结描述符防止计算指纹后的配置漂移。
+- 固定 checksum、邻域/环绕接缝、最终地表与概览像素测试保护确定性；风格语料负责生成分布和连通性验收。
 ## 4. 核心结构
 
 ### 4.1 生成地表
@@ -117,7 +101,9 @@ interface WorldSurfaceResolver {
 
 sampleGenerated() 只处理单点连续结果，不逐像素追踪河道。resolveGeneratedTile() 合并分页河网并读取固定的一圈六邻域，用于海岸和最终格子修饰。visitGeneratedRiverTiles() 一次追踪并栅格化目标范围内的河道，供小地图避免逐格解析整个世界。
 
-这两个接口首版保持包内使用，不直接成为公共 API。
+主入口导出 `createWorldSurfaceResolver` 及解析器相关类型；应用可读取连续采样和生成地格。
+生效地表的 `WorldSurfaceView` 实现仍在包内，渲染和游戏对象通过公开的
+`WorldSurfaceAnchor` 契约读取贴地高度，避免绕过玩家编辑。
 
 ### 4.2 地表样本
 

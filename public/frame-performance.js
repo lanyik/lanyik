@@ -1,4 +1,4 @@
-/** Measures presented frame cadence separately from CPU/GPU work. */
+/** Measures animation-frame cadence separately from CPU/GPU work. */
 export class FramePerformanceSampler {
     constructor(intervalMs = 500) {
         this.intervalMs = intervalMs;

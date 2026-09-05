@@ -1677,7 +1677,7 @@
     return { x: x * size * 1.5, y: y * size * Math.sqrt(3) + space };
   }
   function wait(ms) {
-    return new Promise(function(resolve, reject) {
+    return new Promise(function(resolve) {
       setTimeout(resolve, ms);
     });
   }
@@ -19687,9 +19687,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldTileUpdateQueue = refresh.catch(() => void 0);
       return refresh;
     }
-    refreshTileOverrideRendering(point, source, loadRevision) {
-      return this.refreshTileOverridesRendering([point], source, loadRevision);
-    }
     async refreshTileOverridesRendering(points, source, loadRevision, refreshKind2 = "terrain") {
       const streamer = this.worldStreamer;
       if (!streamer || !this.isWorldSessionCurrent(source, loadRevision)) return;
@@ -19716,12 +19713,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       if (affectedChunks.size === 0) return;
       const keys = [...affectedChunks.keys()].sort();
-      if (!this.worldRenderLayers) {
-        for (const key of keys) this.unmountWorldChunk(affectedChunks.get(key));
-        for (const key of keys) this.mountWorldChunk(affectedChunks.get(key));
-        this.updateWorldChunkVisibility();
-        return;
-      }
       const layers = this.worldRenderLayers.values();
       const refreshable = layers.filter((layer) => layer.refreshTiles && this.initializedWorldRenderLayers.has(layer.id));
       await Promise.all(refreshable.flatMap((layer) => keys.map(
@@ -21819,7 +21810,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (!this.options.actions.includes(action)) return false;
       const clip = this.animationClips.find((candidate) => candidate.name.toLowerCase() === action.toLowerCase());
       if (!clip) return false;
-      this._action = action;
       this.playClip(clip, action === "death" /* death */);
       return true;
     }

@@ -30,7 +30,6 @@ export class Unit extends EventEmitter<UnitEventMap> {
 
     private needAnimate = false;
     private _unit!:Object3D;
-    private _action:UnitActions | undefined;
     private animationMixer: AnimationMixer | undefined;
     private animationAction: AnimationAction | undefined;
     private animationClips: AnimationClip[] = [];
@@ -198,7 +197,6 @@ export class Unit extends EventEmitter<UnitEventMap> {
         if (!this.options.actions.includes(action)) return false;
         const clip = this.animationClips.find(candidate => candidate.name.toLowerCase() === action.toLowerCase());
         if (!clip) return false;
-        this._action = action;
         this.playClip(clip, action === UnitActions.death);
         return true;
     }

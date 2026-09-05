@@ -7,30 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Procedural navigation samples base terrain through the source's Worker pool
-  and descriptor, forwards cancellation, yields before compact summary builds,
-  and rejects late cache publication after invalidation or disposal.
-- Vegetation edits coalesce and serialize shared-layout refreshes, preserve
-  terrain residency and shared models/materials, and reject superseded layer
-  mounts. Unchanged settings avoid rebuilds entirely.
-- Magnified world overviews reuse terrain samples through a bounded pixel row,
-  preserving terrain colors and river footprints without per-pixel resampling.
-- World descriptors and landform domains are immutable at runtime. Finite
-  generation entry points share dimension limits, and invalid sampler topology
-  or unsafe dimensions fail before sampling.
-- Generation checkpoints require an explicit authoritative mutation boundary
-  around complete capture and restore. Campaign ownership checks and shutdown
-  admission prevent asynchronous snapshots from crossing world-state changes.
-- Procedural and toroidal sources reject late chunk publication after disposal
-  or cancellation, including cache reads and asynchronous delta restoration.
-- Resource estimates include full instance matrix/color capacity and instance
-  morph textures. Allocation references deduplicate shared buffers/textures
-  across render chunks and model assets, and remain charged until final release.
-- Demo FPS and frame time now measure animation-frame cadence, with separate
-  CPU/GPU work averages and sampling resets on page visibility/context recovery.
-
 ### Added
 
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
@@ -204,6 +180,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idle unit mixers update at a configurable lower cadence.
 
 ### Fixed
+
+- Standard type checking rejects unused locals/parameters. Dead helpers,
+  unread unit state and a test-only tile-refresh branch have been removed.
+- Procedural navigation samples base terrain through the source's Worker pool
+  and descriptor, forwards cancellation, yields before compact summary builds,
+  and rejects late cache publication after invalidation or disposal.
+- Vegetation edits coalesce and serialize shared-layout refreshes, preserve
+  terrain residency and shared models/materials, and reject superseded layer
+  mounts. Unchanged settings avoid rebuilds entirely.
+- Magnified world overviews reuse terrain samples through a bounded pixel row,
+  preserving terrain colors and river footprints without per-pixel resampling.
+- World descriptors and landform domains are immutable at runtime. Finite
+  generation entry points share dimension limits, and invalid sampler topology
+  or unsafe dimensions fail before sampling.
+- Generation checkpoints require an explicit authoritative mutation boundary
+  around complete capture and restore. Campaign ownership checks and shutdown
+  admission prevent asynchronous snapshots from crossing world-state changes.
+- Procedural and toroidal sources reject late chunk publication after disposal
+  or cancellation, including cache reads and asynchronous delta restoration.
+- Resource estimates include full instance matrix/color capacity and instance
+  morph textures. Allocation references deduplicate shared buffers/textures
+  across render chunks and model assets, and remain charged until final release.
+- Demo FPS and frame time now measure animation-frame cadence, with separate
+  CPU/GPU work averages and sampling resets on page visibility/context recovery.
 
 - World replacement now invalidates and aborts old minimap overview pages before
   disposing their source. Worker client and pool teardown classify accepted

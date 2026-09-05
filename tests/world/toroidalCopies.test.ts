@@ -13,6 +13,7 @@ import { Land } from "../../src/enums";
 import { WorldChunkMetadata } from "../../src/helpers/chunks";
 import { MapInfo, Point, TileInfo } from "../../src/interfaces";
 import { WorldChunk, WorldSource } from "../../src/world/WorldSource";
+import { WorldRenderLayer, WorldRenderLayerRegistry } from "../../src/rendering/WorldRenderLayer";
 
 type TestableHexMap = {
     terrain?: { activateChunk(metadata: WorldChunkMetadata, lod: 0 | 1 | 2): InstancedBufferGeometry };
@@ -42,10 +43,14 @@ type RefreshTestableHexMap = {
     readonly worldSource: WorldSource;
     worldController: { source: WorldSource; streamer: { residentChunks: readonly WorldChunk[] } };
     worldChunkLayers: Map<string, { points: readonly Point[]; revision: number }>;
-    unmountWorldChunk(chunk: WorldChunk): void;
-    mountWorldChunk(chunk: WorldChunk): void;
+    worldRenderLayers: WorldRenderLayerRegistry;
+    initializedWorldRenderLayers: Set<string>;
+    worldLayerRevision: number;
+    unmountRegisteredWorldRenderLayer(layer: WorldRenderLayer, key: string): Error[];
+    mountRegisteredWorldRenderLayer(layer: WorldRenderLayer, key: string): Promise<void>;
+    reportWorldRenderLayerErrors(): void;
     updateWorldChunkVisibility(): void;
-    refreshTileOverrideRendering(point: Point, source: WorldSource, revision: number): Promise<void>;
+    refreshTileOverridesRendering(points: readonly Point[], source: WorldSource, revision: number): Promise<void>;
 };
 
 const metadata: WorldChunkMetadata = {
@@ -168,8 +173,8 @@ describe("toroidal render copies", () => {
             chunkSize: 12,
             resolveChunk: (x: number, y: number) => ({ x, y })
         } as unknown as WorldSource;
-        const unmount = vi.fn();
-        const mount = vi.fn();
+        const unmount = vi.fn<RefreshTestableHexMap["unmountRegisteredWorldRenderLayer"]>(() => []);
+        const mount = vi.fn<RefreshTestableHexMap["mountRegisteredWorldRenderLayer"]>(async () => {});
         const updateVisibility = vi.fn();
         const map = Object.create(HexMap.prototype) as RefreshTestableHexMap;
         map.disposed = false;
@@ -181,14 +186,19 @@ describe("toroidal render copies", () => {
             ["1,0", { points: [], revision: 1 }],
             ["4,4", { points: [], revision: 1 }]
         ]);
-        map.unmountWorldChunk = unmount;
-        map.mountWorldChunk = mount;
+        map.worldRenderLayers = new WorldRenderLayerRegistry();
+        map.worldRenderLayers.register({ id: "content", mountChunk: () => {}, unmountChunk: () => {}, dispose: () => {} });
+        map.initializedWorldRenderLayers = new Set(["content"]);
+        map.worldLayerRevision = 1;
+        map.unmountRegisteredWorldRenderLayer = unmount;
+        map.mountRegisteredWorldRenderLayer = mount;
+        map.reportWorldRenderLayerErrors = vi.fn();
         map.updateWorldChunkVisibility = updateVisibility;
 
-        await map.refreshTileOverrideRendering({ x: 11, y: 5 }, source, 3);
+        await map.refreshTileOverridesRendering([{ x: 11, y: 5 }], source, 3);
 
-        expect(unmount.mock.calls.map(([chunk]) => `${chunk.chunkX},${chunk.chunkY}`)).toEqual(["0,0", "1,0"]);
-        expect(mount.mock.calls.map(([chunk]) => `${chunk.chunkX},${chunk.chunkY}`)).toEqual(["0,0", "1,0"]);
+        expect(unmount.mock.calls.map(([, key]) => key)).toEqual(["0,0", "1,0"]);
+        expect(mount.mock.calls.map(([, key]) => key)).toEqual(["0,0", "1,0"]);
         expect(updateVisibility).toHaveBeenCalledOnce();
     });
 });
