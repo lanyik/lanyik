@@ -23,10 +23,10 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | World runtime | Bounded static maps, streamed toroidal maps, deterministic infinite worlds and custom `WorldSource` implementations use one `HexMap.loadWorld()` entry |
 | Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
 | Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
-| Playable game | **Emberwake** is a standalone airship expedition over the infinite world, with fuel, beacon upgrades, a storm deadline and recoverable saves |
+| Playable game | **Emberwake** is a real-time moving-fortress survival game over the infinite world, with vulnerable mining convoys, deployable defenses, directed bombardment and recoverable battles |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Gameplay direction | Iterate on the playable expedition while keeping game rules outside the frozen runtime and surface contracts |
+| Gameplay direction | Iterate on mobile-fortress survival while keeping game rules outside the frozen runtime and surface contracts |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -64,10 +64,11 @@ npm ci
 npm start
 ```
 
-For a playable game, open [**Emberwake / 余烬航线**](http://127.0.0.1:3000/emberwake.html)
-or use the link in the demo's world-status panel. Fly across the infinite world,
-activate three beacons, choose airship upgrades and return home before the storm.
-The game has a Chinese interface and automatically saves every action. See the
+For a playable game, open [**Emberwake / 余烬要塞**](http://127.0.0.1:3000/emberwake.html)
+or use the link in the demo's world-status panel. Escort a mobile fortress 48 tiles
+east, protect mining rovers, pack up turrets and break through approaching swarms.
+Bombardment consumes the same fuel needed to escape. The game has a Chinese interface,
+tactical pause, optional continued survival and automatic battle checkpoints. See the
 [game design and implementation](docs/emberwake.md) for its rules and boundaries.
 
 The [world lab](http://127.0.0.1:3000) control panel exposes three modes:

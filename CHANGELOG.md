@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Emberwake / 余烬航线**, a playable infinite-world airship expedition at
-  `/emberwake.html`: deterministic beacon and salvage sites, fuel/time decisions,
-  three upgrades, a return-home victory condition, defeat and replay, a local
-  interactive radar, and Chinese desktop/mobile controls. Per-action generation
-  checkpoints restore the entire expedition; a Web Lock excludes a second writer.
-  Presentation consumes the existing world-layer and resource-account contracts.
+- **Emberwake / 余烬要塞**, a real-time moving-fortress survival game at
+  `/emberwake.html`: mining rovers carry vulnerable cargo, turrets take time to
+  recover, and aimed bombardment competes with movement for fuel. Alternating
+  pursuit, flank attacks and interception accompany an advancing destruction front.
+  The game includes tactical pause, upgrades, evacuation and continued survival,
+  desktop/mobile controls, synthesized sound and complete battle checkpoints.
+  A Web Lock excludes a second writer. The bounded combat window, pathfinding,
+  presentation and saves consume existing foundation contracts.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.

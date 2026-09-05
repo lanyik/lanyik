@@ -3,71 +3,82 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#101d26">
-    <title>余烬航线 · Emberwake</title>
+    <meta name="theme-color" content="#121d23">
+    <title>余烬要塞 · Emberwake</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="emberwake/style.css">
 </head>
 <body>
-    <canvas id="world" aria-label="无限世界航图；点击地面选择航线"></canvas>
+    <canvas id="world" aria-label="要塞战场，选择底部指令后点击地面执行"></canvas>
     <div class="vignette" aria-hidden="true"></div>
     <header class="masthead">
-        <a class="wordmark" href="emberwake.html" aria-label="余烬航线首页"><span class="sigil">✦</span><span>余烬航线<small>EMBERWAKE / 最后的信使</small></span></a>
-        <div class="telemetry">
-            <div><span>燃料储备</span><strong id="fuel">36 <small>/ 48</small></strong><meter id="fuel-meter" min="0" max="48" value="36" aria-label="燃料"></meter></div>
-            <div><span>风暴抵达</span><strong id="time">120 <small>小时</small></strong><meter id="time-meter" min="0" max="120" value="120" aria-label="剩余时间"></meter></div>
-            <div class="signal-metric"><span>归航信号</span><strong id="signals">0 <small>/ 3</small></strong><span id="signal-lights" aria-hidden="true">○ ○ ○</span></div>
+        <div class="brand"><span class="brand-mark">▰</span><div>余烬要塞<small>EMBERWAKE / MOBILE FORTRESS</small></div></div>
+        <div class="resources">
+            <div class="armor-stat"><span>核心耐久</span><strong id="health-value">160</strong><meter id="health-meter" min="0" max="160" value="160" aria-label="核心耐久"></meter></div>
+            <div><span>金属</span><strong id="metal">38</strong><small>布防 / 维修</small></div>
+            <div><span>燃料</span><strong id="fuel">14</strong><small>迁移 / 炮击</small></div>
         </div>
-        <button class="quiet" id="help-button" aria-label="航行手册">?</button>
+        <div class="top-actions"><button id="sound" class="quiet">音效 关</button><button id="speed" class="quiet" disabled>1×</button><button id="pause" class="quiet" disabled>Ⅱ 暂停</button><button id="help" class="quiet" aria-label="作战手册">?</button></div>
     </header>
 
-    <aside class="mission panel">
-        <div class="eyebrow"><span class="live-dot"></span> EXPEDITION 001</div>
-        <h1>让世界，<br>再次听见彼此。</h1>
-        <p class="muted">长夜将至。连接失落的信标，<br>为漂泊的船队点亮归途。</p>
+    <section class="threat-banner" aria-label="虫潮情报"><span class="threat-dot"></span><strong id="wave">西侧发现虫群</strong><span id="countdown">首次接触 12s</span><span id="enemy-count">0 个敌对目标</span></section>
+    <aside class="command-panel panel">
+        <div class="eyebrow">OPERATION / 向东突围</div>
+        <h1>带着家，<br>穿过这片长夜。</h1>
+        <div class="progress-label"><span>撤离进度</span><strong id="distance">0 / 48 格</strong></div>
+        <progress id="progress" max="48" value="0" aria-label="撤离进度"></progress>
+        <p id="objective" class="muted">向东突破封锁线，16 格和 32 格处获得改装。</p>
+        <button id="advance" class="outline full" disabled>向东转移 8 格 <span>→</span></button>
         <div class="divider"></div>
-        <div class="section-label">信号网络 <span id="mission-count">00 / 03</span></div>
-        <div id="beacons" class="beacon-list"></div>
-        <button id="objective" class="outline full">定位下一座信标 <span>↗</span></button>
-        <div id="upgrades" class="installed">飞艇尚未改装</div>
+        <div class="section-label">采矿编队 <span id="crew-count">2 / 2 待命</span></div>
+        <div id="rovers" class="rover-list"></div>
+        <div class="pair"><button id="mine-nearest" class="outline" disabled>就近采矿</button><button id="recall" class="outline" disabled>全部召回 <kbd>R</kbd></button></div>
+        <button id="rebuild-rover" class="quiet full" hidden>重建矿车 · 22 金属</button>
+        <div id="installed" class="installed">履带、装甲、火炮。一座移动的家。</div>
     </aside>
 
-    <aside class="navigation panel">
-        <div class="section-label">近域雷达 <span id="coordinates">00 / 00</span></div>
-        <canvas id="radar" width="250" height="230" aria-label="近域雷达；点击亮点选择目的地"></canvas>
-        <div class="radar-legend"><span><i class="gold"></i>信标</span><span><i class="mint"></i>补给</span><span><i class="blue"></i>回声</span></div>
-        <button id="follow" class="quiet full">◎ 回到飞艇 <kbd>F</kbd></button>
+    <aside class="radar-panel panel">
+        <div class="section-label">战术雷达 <span id="coordinates">0 / 0</span></div>
+        <canvas id="radar" width="232" height="204" aria-label="战术雷达，点击选点或执行当前指令"></canvas>
+        <div class="radar-legend"><span class="red-dot">虫群</span><span class="mint-dot">矿脉</span><span class="gold-dot">防线</span></div>
+        <div class="danger-row"><span>吞噬带距离</span><strong id="danger-distance">10 格</strong></div>
+        <div class="progress-label"><span>开采噪声</span><strong id="heat">0%</strong></div>
+        <meter id="heat-meter" min="0" max="100" value="0" aria-label="开采噪声"></meter>
+        <small class="muted">噪声越高，虫潮越密集。</small>
+        <button id="follow" class="quiet full">◎ 镜头回主车 <kbd>F</kbd></button>
     </aside>
 
-    <aside class="journal">
-        <div class="eyebrow">船长日志 <span id="save-status">正在连接航图…</span></div>
-        <p id="log" aria-live="polite">风从海面升起。我们还有最后一次机会。</p>
-    </aside>
-
-    <section class="flight-deck panel" aria-label="航行控制">
-        <div class="destination"><div class="eyebrow" id="destination-kind">停泊于母港</div><strong id="destination-name">选择你的第一段航线</strong><span id="route-detail">点击地面或雷达选点，再启航。</span></div>
-        <div class="deck-actions">
-            <button id="interact" class="outline" disabled>停靠交互 <kbd>E</kbd></button>
-            <button id="charge" class="outline" disabled>太阳帆充能 <kbd>R</kbd></button>
-            <button id="fly" class="primary" disabled>启航 <span>→</span></button>
+    <aside class="battle-log"><div class="eyebrow">战地电台 <span id="time">00:00</span></div><p id="log" aria-live="polite">主车已就绪。先派矿车，再保护它们回来。</p></aside>
+    <div id="pause-label" hidden>战术暂停 <small>可以下达指令 · 空格继续</small></div>
+    <div id="notice" role="status" hidden></div>
+    <section class="action-deck panel" aria-label="作战指令">
+        <div class="selection"><span id="selection-kind" class="eyebrow">指挥频道已接通</span><strong id="selection-name">先派采矿车，再在西侧布防。</strong><span id="selection-detail">选择下方指令，再点击战场；空格随时暂停。</span></div>
+        <div class="tools">
+            <button class="tool" data-mode="move"><kbd>M</kbd><span class="tool-icon">➜</span><strong>转移</strong><small>1 燃料 / 格</small></button>
+            <button class="tool" data-mode="mine"><kbd>1</kbd><span class="tool-icon">⛏</span><strong>采矿车</strong><small>运回后入库</small></button>
+            <button class="tool" data-mode="gun"><kbd>2</kbd><span class="tool-icon">⏣</span><strong>速射机炮</strong><small>16 金属</small></button>
+            <button class="tool" data-mode="mortar"><kbd>3</kbd><span class="tool-icon">◉</span><strong>迫击炮</strong><small>26 金属 / 群伤</small></button>
+            <button class="tool barrage-tool" data-mode="barrage"><kbd>Q</kbd><span class="tool-icon">✣</span><strong>轨道炮击</strong><small id="barrage-cost">4 燃料 / 范围伤害</small></button>
+            <button class="tool" data-mode="salvage"><kbd>X</kbd><span class="tool-icon">↶</span><strong>回收炮塔</strong><small>停火打包 3 秒</small></button>
+            <button class="tool" id="repair"><kbd>V</kbd><span class="tool-icon">✚</span><strong>紧急维修</strong><small>18 金属 / +40</small></button>
         </div>
     </section>
-    <footer class="footer"><span>无限世界 · 回合制探索</span><span>WASD 移动镜头 · 右键旋转 · 滚轮缩放</span><a href="index.html">基建实验室 ↗</a></footer>
-    <div id="notice" role="status" hidden></div>
+    <footer class="footer"><a href="index.html">基建实验室 ↗</a><span>WASD 镜头 · 右键旋转 · 滚轮缩放 · Esc 取消指令</span><button id="save" class="text-button" disabled><span id="save-status">接入战场…</span></button></footer>
 
     <dialog id="welcome">
-        <div class="dialog-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><span>✦</span><small>TRANSMISSION / 001</small></div>
-        <div class="eyebrow">一段穿过无限世界的短途冒险</div>
-        <h2>余烬未熄，<br>我们就能找到彼此。</h2>
-        <p>你是最后一艘信使艇的船长。风暴将在 <b>120 小时</b>后覆盖天空。点亮 <b>3 座信标</b>，然后返回母港。</p>
-        <div class="briefing"><p><b>01 / 规划</b> 点击地面、雷达或信标卡片，选择航线。飞艇可以越过山海。</p><p><b>02 / 取舍</b> 每格 1 小时、1–2 燃料。补给站可停靠；太阳帆用 3 小时换取 6 燃料。</p><p><b>03 / 归航</b> 信标补充燃料并提供改装。航行只在行动时推进，每一步自动存档。</p></div>
-        <div class="seed-row"><label for="seed">航图种子</label><input id="seed" maxlength="64" spellcheck="false"></div>
-        <p class="muted small" id="welcome-status" aria-live="polite">正在生成世界…</p>
-        <div class="dialog-actions"><button id="new-game" class="outline" disabled>新航程</button><button id="begin" class="primary" disabled>准备飞艇…</button></div>
+        <div class="intro-art" aria-hidden="true">
+            <svg viewBox="0 0 540 160"><defs><linearGradient id="sky" x2="1" y2="1"><stop stop-color="#314443"/><stop offset="1" stop-color="#14232c"/></linearGradient></defs><path fill="url(#sky)" d="M0 0h540v160H0z"/><path fill="#101c25" d="M0 124l80-23 46 16 91-18 75 16 85-15 77 22 86-18v56H0z"/><g fill="#718078"><path d="M179 102h176v25H179zM198 70h139v34H198zM221 47h71v25h-71zM304 44h9v41h-9zM321 38h8v49h-8z"/><path d="M218 33h46v18h-46zM253 37h58v7h-58z"/></g><path fill="#edbb73" d="M204 64h28v7h-28zM241 56h35v5h-35zM194 83h16v20h-16z"/><g fill="#111e25" stroke="#42504c" stroke-width="5"><circle cx="195" cy="121" r="14"/><circle cx="224" cy="121" r="14"/><circle cx="253" cy="121" r="14"/><circle cx="282" cy="121" r="14"/><circle cx="311" cy="121" r="14"/><circle cx="340" cy="121" r="14"/></g><g fill="#ed8e65"><circle cx="42" cy="104" r="3"/><circle cx="97" cy="120" r="2"/><circle cx="125" cy="86" r="2"/><circle cx="163" cy="133" r="3"/></g></svg>
+            <span>THE LAST CRAWLER / 001</span>
+        </div>
+        <div class="eyebrow">实时采矿 · 移动防线 · 虫潮撤离</div>
+        <h2>家在履带上。<br><em>停留，就是赌注。</em></h2>
+        <p>后方的吞噬带正在逼近。你需要驾驶要塞向东走 <b>48 格</b>，在沿途矿区补给，让主车活着抵达撤离线。</p>
+        <div class="briefing"><p><b>先派车</b> 矿车自动开采并返回，满载需要约 12 秒。它们也会被虫群攻击。</p><p><b>再架炮</b> 炮塔自动射击；高地增加射程。回收时停火 3 秒，别提前开走主车。</p><p><b>敢于撤</b> 炮击可以救场，但会消耗撤离燃料。按空格暂停思考，按 R 提前召回矿车。</p></div>
+        <p id="welcome-status" class="small muted" aria-live="polite">正在准备战场…</p>
+        <div class="dialog-actions"><button id="new-game" class="outline" disabled>重新开局</button><button id="begin" class="primary" disabled>准备主车…</button></div>
     </dialog>
-
-    <dialog id="upgrade-dialog"><div class="eyebrow">信号接通 / 改装机会</div><h2>为下一程，<br>添一点可能。</h2><p>选择一项尚未安装的改装，不消耗时间。</p><div id="upgrade-options"></div></dialog>
-    <dialog id="ending"><div class="eyebrow" id="ending-label"></div><h2 id="ending-title"></h2><p id="ending-text"></p><div id="ending-score"></div><button id="again" class="primary full">再启一段航程 ↗</button></dialog>
+    <dialog id="upgrade-dialog"><div class="eyebrow">封锁线突破 / 移动装甲工坊</div><h2>让下一段路，<br>多一种活法。</h2><p>选择一项改装。战场已暂停。</p><div id="upgrade-options"></div></dialog>
+    <dialog id="ending"><div class="eyebrow" id="ending-label"></div><h2 id="ending-title"></h2><p id="ending-text"></p><div id="ending-score"></div><div class="dialog-actions"><button id="again" class="outline">重新开局</button><button id="continue" class="primary">继续深入 +48 格 →</button></div></dialog>
 
     <script type="module">
         import * as THREE from "./js/vendor/three.module.js";

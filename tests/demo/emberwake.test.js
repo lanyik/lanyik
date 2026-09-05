@@ -1,109 +1,194 @@
 import { describe, expect, it } from "vitest";
 import { getNeighbors } from "../../src/helpers/neighbors";
-import {
-    DEFAULT_SEED, HOME, TURN_LIMIT, UPGRADES, act, beacons, capacity, createExpedition,
-    distance, flightCost, keyOf, samePoint, siteAt, validateExpedition
-} from "../../public/emberwake/rules.js";
+import { PathFinder } from "../../src/helpers/pathfinder";
+import { decodeWorldChunkTile, generateWorldChunk } from "../../src/world/generateWorldChunk";
+import { CombatWorld } from "../../public/emberwake/world.js";
+import { createRun, distance, FortressSimulation, frontX, LIMITS, samePoint, SEED, validateRun } from "../../public/emberwake/rules.js";
 
 const plain = { type: "land", modifiers: [] };
-const snowyHill = { type: "snow", modifiers: ["hill"] };
-
-function flyTo(state, destination, tile = plain) {
-    while (!samePoint(state.position, destination)) {
-        const next = getNeighbors(state.position.x, state.position.y).reduce((best, point) =>
-            distance(point, destination) < distance(best, destination) ? point : best);
-        if (state.fuel < flightCost(state, tile)) state = act(state, { type: "charge" });
-        state = act(state, { type: "move", to: next, tile });
+const flatWorld = {
+    tile: () => plain,
+    path(from, to) {
+        const path = []; let point = from;
+        while (!samePoint(point, to)) {
+            point = getNeighbors(point.x, point.y).reduce((best, next) => distance(next, to) < distance(best, to) ? next : best);
+            path.push({ x: point.x, y: point.y });
+        }
+        return path;
+    },
+    nearby(center, radius) {
+        const points = [];
+        for (let x = center.x - radius; x <= center.x + radius; x++) for (let y = center.y - radius; y <= center.y + radius; y++) {
+            if (distance(center, { x, y }) <= radius) points.push({ x, y });
+        }
+        return points;
     }
-    return state;
-}
+};
+const advance = (game, ticks) => { for (let i = 0; i < ticks; i++) game.step(); };
 
-describe("Emberwake expedition", () => {
-    it("uses the foundation's six neighbors across positive and negative odd columns", () => {
-        for (let x = -4; x <= 4; x++) for (let y = -4; y <= 4; y++) {
-            const point = { x, y };
-            expect(distance(point, point)).toBe(0);
-            for (const neighbor of getNeighbors(x, y)) {
-                expect(distance(point, neighbor)).toBe(1);
-                expect(distance(neighbor, point)).toBe(1);
+describe("moving fortress", () => {
+    it("only credits cargo after a miner reaches the moving base, and can recall a partial load", () => {
+        const game = new FortressSimulation(flatWorld);
+        game.command({ type: "mine", point: { x: 3, y: 0 } });
+        advance(game, 25);
+        expect(game.state.rovers[0].cargo).toBeGreaterThan(0);
+        expect(game.state.metal).toBe(38);
+        expect(game.state.fuel).toBe(14);
+        const cargo = game.state.rovers[0].cargo;
+        game.command({ type: "recall" });
+        game.command({ type: "move", point: { x: 5, y: 0 } });
+        advance(game, 35);
+        expect(game.state.rovers).toHaveLength(0);
+        expect(game.state.delivered).toBe(cargo);
+        expect(game.state.metal).toBe(38 + cargo);
+        expect(game.state.base.x).toBe(5);
+        expect(validateRun(game.snapshot())).toEqual(game.state);
+    });
+
+    it("makes packing suppress fire and only refunds after the three-second recovery finishes", () => {
+        const game = new FortressSimulation(flatWorld);
+        game.command({ type: "build", kind: "gun", point: { x: -2, y: 0 } });
+        expect(game.state.metal).toBe(22);
+        game.command({ type: "salvage", point: { x: -2, y: 0 } });
+        advance(game, 14);
+        expect(game.state.towers).toHaveLength(1);
+        expect(game.state.metal).toBe(22);
+        game.step();
+        expect(game.state.towers).toHaveLength(0);
+        expect(game.state.metal).toBe(34);
+    });
+
+    it("creates real attackers, supports aimed delayed bombardment, and ends an abandoned defense", () => {
+        const game = new FortressSimulation(flatWorld);
+        advance(game, 61);
+        expect(game.state.enemies.length).toBeGreaterThan(0);
+        const target = game.state.enemies[0];
+        const hp = target.hp;
+        game.command({ type: "barrage", point: { x: target.x, y: target.y } });
+        expect(game.state.fuel).toBe(10);
+        expect(target.hp).toBe(hp);
+        expect(() => game.command({ type: "barrage", point: { x: target.x, y: target.y } })).toThrow("冷却");
+        advance(game, 6);
+        expect(game.state.kills).toBeGreaterThan(0);
+        expect(game.drainEvents().some(event => event.type === "blast")).toBe(true);
+        advance(game, 500);
+        expect(game.state.status).toBe("lost");
+        expect(game.state.base.hp).toBe(0);
+        expect(frontX(game.state)).toBeGreaterThan(frontX(createRun()));
+        expect(game.state.enemies.length).toBeLessThanOrEqual(LIMITS.enemies);
+    });
+
+    it("does not grant cargo from a destroyed rover or duplicate it after save recovery", () => {
+        const game = new FortressSimulation(flatWorld);
+        game.command({ type: "mine", point: { x: 3, y: 0 } });
+        advance(game, 35);
+        const restored = new FortressSimulation(flatWorld, game.snapshot());
+        restored.state.rovers[0].hp = 0;
+        restored.step();
+        expect(restored.state.crews).toBe(1);
+        expect(restored.state.delivered).toBe(0);
+        expect(restored.state.metal).toBe(38);
+        expect(restored.state.lostRovers).toBe(1);
+        restored.command({ type: "replace-rover" });
+        expect(restored.state.metal).toBe(16);
+        expect(restored.state.crews).toBe(2);
+    });
+
+    it("preserves deterministic combat and movement across a checkpoint", () => {
+        const game = new FortressSimulation(flatWorld);
+        game.command({ type: "build", kind: "gun", point: { x: -2, y: 0 } });
+        game.command({ type: "mine", point: { x: 3, y: 0 } });
+        advance(game, 81);
+        const restored = new FortressSimulation(flatWorld, game.snapshot());
+        advance(game, 70); advance(restored, 70);
+        expect(restored.state).toEqual(game.state);
+    });
+
+    it("keeps rejected orders atomic and respects actual water passability", () => {
+        const game = new FortressSimulation({ ...flatWorld, tile: point => point.x === 2 ? { type: "sea" } : plain });
+        const before = game.snapshot();
+        for (const action of [
+            { type: "move", point: { x: 2, y: 0 } }, { type: "build", kind: "gun", point: { x: 8, y: 0 } },
+            { type: "barrage", point: { x: Infinity, y: 0 } }, { type: "upgrade", upgrade: "firepower" },
+            { type: "build", kind: "constructor", point: { x: 1, y: 0 } }
+        ]) { expect(() => game.command(action)).toThrow(); expect(game.state).toEqual(before); }
+        expect(() => validateRun({ ...createRun(), crews: -1 })).toThrow("存档");
+        expect(() => validateRun({ ...createRun(), base: { ...createRun().base, path: [{ x: 5, y: 0 }] } })).toThrow("存档");
+    });
+
+    it("can evacuate through real terrain with mining and defense, while the same unprotected convoy loses its supply line", async () => {
+        const source = { chunkSize: 24, sampleBaseChunk: (chunkX, chunkY) => Promise.resolve(generateWorldChunk({ seed: SEED, chunkSize: 24, chunkX, chunkY })) };
+        const outcomes = [];
+        for (const defended of [false, true]) {
+            const world = new CombatWorld(source, { PathFinder, decodeWorldChunkTile });
+            const game = new FortressSimulation(world);
+            let campAt = 0, lastCamp = -1, crossedSourceBoundary = false;
+            for (let t = 0; t < 1200 && game.state.status === "playing"; t++) {
+                const s = game.state;
+                await world.load(s.base);
+                crossedSourceBoundary ||= s.base.x >= 24;
+                expect(world.stats.chunks).toBe(9);
+                if (s.pendingUpgrade) game.command({ type: "upgrade", upgrade: s.upgrades.includes("firepower") ? "logistics" : "firepower" });
+                if (s.base.hp < 100 && s.metal >= 18) game.command({ type: "repair" });
+                if (s.crews < 2 && s.metal >= 22) game.command({ type: "replace-rover" });
+                if (!s.base.path.length) {
+                    if (lastCamp !== s.base.x) { lastCamp = s.base.x; campAt = t; }
+                    const departureFuel = Math.min(20, s.goal - s.base.x + 3);
+                    if (s.fuel < departureFuel) {
+                        if (defended && !s.towers.length && s.metal >= 16) {
+                            const point = world.nearby(s.base, 3).find(p => p.x === s.base.x - 2 && p.y === s.base.y && p.x > frontX(s));
+                            if (point) game.command({ type: "build", kind: "gun", point });
+                        }
+                        for (const mine of world.mines(s, 8)) {
+                            if (s.rovers.length >= s.crews) break;
+                            if (samePoint(mine, s.base) || mine.x <= frontX(s) + 1 || s.rovers.some(r => samePoint(r.mine, mine)) || !world.path(s.base, mine).length) continue;
+                            game.command({ type: "mine", point: mine });
+                        }
+                    }
+                    if (s.fuel >= departureFuel || t - campAt > 135) {
+                        if (s.rovers.some(r => r.job !== "returning")) game.command({ type: "recall" });
+                        for (const tower of s.towers) if (!tower.packing && distance(tower, s.base) <= 4 && tower.x > frontX(s)) game.command({ type: "salvage", point: tower });
+                        if (!s.towers.some(tower => tower.packing) && s.fuel > 0) {
+                            const point = [0, 1, -1, 2, -2, 3, -3].map(y => ({ x: Math.min(s.base.x + 8, s.goal), y: s.base.y + y })).find(p => world.path(s.base, p).length);
+                            if (point) game.command({ type: "move", point });
+                        }
+                    }
+                }
+                game.step();
+                if (t % 25 === 0) expect(validateRun(game.snapshot())).toEqual(game.state);
             }
+            expect(crossedSourceBoundary).toBe(true);
+            outcomes.push(game.snapshot()); world.dispose();
         }
+        expect(outcomes[0].status).toBe("lost");
+        expect(outcomes[0].lostRovers).toBeGreaterThan(0);
+        expect(outcomes[1].status).toBe("won");
+        expect(outcomes[1].delivered).toBeGreaterThanOrEqual(80);
+        expect(outcomes[1].kills).toBeGreaterThan(10);
+        expect(outcomes[1].lostRovers).toBe(0);
     });
 
-    it("places reproducible stations beyond the starting source chunk", () => {
-        for (const seed of [DEFAULT_SEED, "archipelago", "负坐标", "long-night"]) {
-            const sites = beacons(seed);
-            expect(Math.abs(sites[2].x)).toBeGreaterThan(24);
-            expect(new Set(sites.map(keyOf)).size).toBe(3);
-            for (const site of sites) expect(siteAt(seed, site)).toEqual(site);
-            expect(siteAt(seed, HOME).kind).toBe("home");
-        }
-    });
-
-    it("can finish a full voyage, including a costly snowy world, without luck or supply stations", () => {
-        for (const seed of [DEFAULT_SEED, "archipelago", "负坐标", "long-night"]) {
-            let state = createExpedition(seed);
-            const choices = Object.keys(UPGRADES);
-            for (const [index, site] of beacons(seed).entries()) {
-                state = flyTo(state, site, snowyHill);
-                state = act(state, { type: "interact" });
-                expect(state.pendingUpgrade).toBe(true);
-                expect(() => act(state, { type: "charge" })).toThrow("改装");
-                state = act(state, { type: "upgrade", upgrade: choices[index] });
-                expect(validateExpedition(state, seed)).toEqual(state);
-            }
-            state = flyTo(state, HOME, snowyHill);
-            expect(state.status).toBe("won");
-            expect(state.turn).toBeLessThan(TURN_LIMIT);
-            expect(validateExpedition(state, seed)).toEqual(state);
-        }
-    });
-
-    it("rejects illegal movement and insufficient fuel atomically, while zero fuel can charge", () => {
-        const state = { ...createExpedition(), fuel: 0 };
-        const original = structuredClone(state);
-        expect(() => act(state, { type: "move", to: { x: 10, y: 0 }, tile: plain })).toThrow("相邻");
-        expect(() => act(state, { type: "move", to: { x: 1, y: 0 }, tile: plain })).toThrow("燃料不足");
-        expect(state).toEqual(original);
-        const charged = act(state, { type: "charge" });
-        expect(charged.fuel).toBe(6);
-        expect(charged.turn).toBe(3);
-    });
-
-    it("consumes supplies once and caps fuel at the installed tank capacity", () => {
-        let site;
-        for (let x = -10; x <= 10 && !site; x++) for (let y = -10; y <= 10; y++) {
-            const candidate = siteAt(DEFAULT_SEED, { x, y });
-            if (candidate?.kind === "supply") { site = candidate; break; }
-        }
-        const state = { ...createExpedition(), position: { x: site.x, y: site.y }, fuel: 47 };
-        const claimed = act(state, { type: "interact" });
-        expect(claimed.fuel).toBe(capacity(claimed));
-        expect(claimed.turn).toBe(1);
-        expect(() => act(claimed, { type: "interact" })).toThrow("已经访问");
-        expect(state.collected).toEqual([]);
-    });
-
-    it("ends at the storm deadline, with a final-hour return still counting as victory", () => {
-        const late = { ...createExpedition(), turn: TURN_LIMIT - 1, fuel: 1 };
-        const lost = act(late, { type: "charge" });
-        expect(lost.status).toBe("lost");
-        expect(lost.turn).toBe(TURN_LIMIT);
-        expect(() => act(lost, { type: "charge" })).toThrow("已经结束");
-        const inbound = { ...late, position: { x: 1, y: 0 }, lit: beacons(late.seed).map(site => site.id) };
-        expect(act(inbound, { type: "move", to: HOME, tile: plain }).status).toBe("won");
-    });
-
-    it("validates recovery rather than accepting broken or different-world state", () => {
-        const state = createExpedition();
-        const restored = validateExpedition(state, state.seed);
-        restored.visited.push("1,0");
-        expect(state.visited).toEqual(["0,0"]);
-        for (const bad of [
-            { ...state, fuel: -1 }, { ...state, turn: Infinity }, { ...state, seed: "other" },
-            { ...state, upgrades: ["unknown"] }, { ...state, position: { x: 1.5, y: 0 } },
-            { ...state, status: "won" }, { ...state, pendingUpgrade: true },
-            { ...state, visited: ["0,0", "0,0"] }
-        ]) expect(() => validateExpedition(bad, state.seed)).toThrow("存档");
+    it("keeps negative chunk parity and leaves a failed terrain-window migration unpublished", async () => {
+        let fail = false, samples = 0;
+        const source = { chunkSize: 24, async sampleBaseChunk(chunkX, chunkY) {
+            samples++;
+            if (fail && chunkX === 1) throw new Error("terrain failed");
+            return generateWorldChunk({ seed: SEED, chunkSize: 24, chunkX, chunkY });
+        } };
+        const world = new CombatWorld(source, { PathFinder, decodeWorldChunkTile });
+        await world.load({ x: -1, y: 0 });
+        expect(samples).toBe(9);
+        const path = world.path({ x: -2, y: 0 }, { x: 3, y: 0 });
+        expect(path.length).toBeGreaterThan(0);
+        path.forEach((p, i) => expect(getNeighbors(i ? path[i - 1].x : -2, i ? path[i - 1].y : 0)).toContainEqual(expect.objectContaining(p)));
+        fail = true;
+        await expect(world.load({ x: 0, y: 0 })).rejects.toThrow("terrain failed");
+        expect(world.readyAt({ x: -1, y: 0 })).toBe(true);
+        expect(world.stats.chunks).toBe(9);
+        fail = false;
+        await world.load({ x: 0, y: 0 });
+        expect(world.readyAt({ x: 0, y: 0 })).toBe(true);
+        expect(world.stats.chunks).toBe(9);
+        world.dispose();
     });
 });
