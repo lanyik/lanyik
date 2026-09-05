@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Resource estimates include full instance matrix/color capacity and instance
+  morph textures. Allocation references deduplicate shared buffers/textures
+  across render chunks and model assets, and remain charged until final release.
 - Demo FPS and frame time now measure animation-frame cadence, with separate
   CPU/GPU work averages and sampling resets on page visibility/context recovery.
 

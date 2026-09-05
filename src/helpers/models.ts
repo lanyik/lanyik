@@ -2,7 +2,8 @@ import { AnimationClip, Group, Matrix4, Vector3, Quaternion, Euler, MathUtils } 
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
     disposeObject3DResources,
-    estimateObject3DResourceCost,
+    collectObject3DResourceAllocations,
+    sumResourceAllocations,
     ResourceBudgetAccount,
     ResourceCost,
     ResourceReservationHandle
@@ -287,15 +288,16 @@ export class ModelAssetCache {
         if (this.disposed || this.entries.get(entry.path) !== entry) {
             throw new Error("ModelAssetCache was disposed while loading an asset");
         }
-        const cost = estimateObject3DResourceCost([model.scene]);
+        const allocations = collectObject3DResourceAllocations([model.scene]);
+        const cost = sumResourceAllocations(allocations);
         const retainedBytes = cost.cpuBytes + cost.gpuBytes;
         if (!Number.isSafeInteger(retainedBytes)) throw new RangeError("model asset byte estimate exceeds safe integer range");
         this.evictToFit(retainedBytes);
         entry.model = model;
         entry.cost = cost;
         entry.retainedBytes = retainedBytes;
-        entry.reservation = this.resources?.acquire(entry.path, cost, true)
-            ?? this.resources?.acquireRequired(entry.path, cost, true);
+        entry.reservation = this.resources?.acquire(entry.path, {}, true, allocations)
+            ?? this.resources?.acquireRequired(entry.path, {}, true, allocations);
         this.retainedBytes += retainedBytes;
         return model;
     }

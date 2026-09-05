@@ -37,10 +37,12 @@ export {
     estimateBufferGeometriesBytes,
     estimateBufferGeometriesResourceBytes,
     estimateObject3DResourceCost,
+    collectObject3DResourceAllocations,
     disposeObject3DResources
 } from "./runtime/ResourceBudget";
 export type {
     ResourceCost,
+    ResourceAllocation,
     ResourceBudgetAccount,
     ResourceBudgetAccountStats,
     ResourceBudgetLimits,

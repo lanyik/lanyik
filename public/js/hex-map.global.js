@@ -4321,6 +4321,8 @@
   var ResourceBudgetLedger = class {
     constructor(limits) {
       this.entries = /* @__PURE__ */ new Map();
+      this.allocations = /* @__PURE__ */ new Map();
+      this.shared = /* @__PURE__ */ new Map();
       this.accounts = /* @__PURE__ */ new Set();
       this.totals = { ...ZERO_COST };
       this.rejectedReservations = 0;
@@ -4334,36 +4336,47 @@
       this.assertActive();
       this.limits = this.validateLimits({ ...this.limits, ...limits });
     }
-    reserve(key, cost, pinned = false) {
+    reserve(key, cost, pinned = false, allocations = this.allocations.get(key) ?? []) {
       this.assertActive();
       this.assertKey(key);
       const normalized = normalizeResourceCost(cost);
-      const existing = this.entries.get(key);
-      const prospective = addCost(subtractCost(this.totals, existing ?? ZERO_COST), normalized);
+      const prepared = this.prepareAllocations(allocations);
+      const prospective = this.prospectiveCost(key, normalized, prepared);
       if (prospective.cpuBytes > this.limits.cpuBytes || prospective.gpuBytes > this.limits.gpuBytes) {
         this.rejectedReservations += 1;
         return false;
       }
-      this.store(key, normalized, pinned, existing);
+      this.store(key, normalized, pinned, prepared);
       return true;
     }
-    forceReserve(key, cost, pinned = false) {
+    forceReserve(key, cost, pinned = false, allocations = this.allocations.get(key) ?? []) {
       this.assertActive();
       this.assertKey(key);
       const normalized = normalizeResourceCost(cost);
-      this.store(key, normalized, pinned, this.entries.get(key));
+      this.store(key, normalized, pinned, this.prepareAllocations(allocations));
     }
     release(key) {
       const existing = this.entries.get(key);
       if (!existing) return false;
       this.entries.delete(key);
       this.totals = subtractCost(this.totals, existing);
+      for (const allocation of this.allocations.get(key) ?? []) {
+        const shared = this.shared.get(allocation.identity);
+        shared.references -= 1;
+        if (shared.references === 0) {
+          this.shared.delete(allocation.identity);
+          this.totals = subtractCost(this.totals, shared.cost);
+        }
+      }
+      this.allocations.delete(key);
       return true;
     }
     clear() {
       if (this.disposed) return;
       for (const account of this.accounts) account.invalidateReservations();
       this.entries.clear();
+      this.allocations.clear();
+      this.shared.clear();
       this.totals = { ...ZERO_COST };
     }
     dispose() {
@@ -4371,6 +4384,8 @@
       for (const account of [...this.accounts]) account.detachFromLedger();
       this.accounts.clear();
       this.entries.clear();
+      this.allocations.clear();
+      this.shared.clear();
       this.totals = { ...ZERO_COST };
       this.disposed = true;
     }
@@ -4397,7 +4412,23 @@
       return true;
     }
     get(key) {
-      return this.entries.get(key);
+      const entry = this.entries.get(key);
+      return entry ? { ...entry, ...this.costForKeys([key]) } : void 0;
+    }
+    costForKeys(keys) {
+      let total = { ...ZERO_COST };
+      const seen = /* @__PURE__ */ new Set();
+      for (const key of keys) {
+        const entry = this.entries.get(key);
+        if (!entry) continue;
+        total = addCost(total, entry);
+        for (const allocation of this.allocations.get(key) ?? []) {
+          if (seen.has(allocation.identity)) continue;
+          seen.add(allocation.identity);
+          total = addCost(total, this.shared.get(allocation.identity).cost);
+        }
+      }
+      return total;
     }
     get stats() {
       let pinnedReservations = 0;
@@ -4417,11 +4448,53 @@
         peakGpuBytes: this.peakGpuBytes
       };
     }
-    store(key, cost, pinned, existing) {
-      this.totals = addCost(subtractCost(this.totals, existing ?? ZERO_COST), cost);
+    store(key, cost, pinned, allocations) {
+      this.release(key);
+      this.totals = addCost(this.totals, cost);
+      for (const allocation of allocations) {
+        const shared = this.shared.get(allocation.identity);
+        if (shared) shared.references += 1;
+        else {
+          const normalized = normalizeResourceCost(allocation.cost);
+          this.shared.set(allocation.identity, { cost: normalized, references: 1 });
+          this.totals = addCost(this.totals, normalized);
+        }
+      }
+      this.allocations.set(key, allocations);
       this.entries.set(key, { key, pinned, ...cost });
       this.peakCpuBytes = Math.max(this.peakCpuBytes, this.totals.cpuBytes);
       this.peakGpuBytes = Math.max(this.peakGpuBytes, this.totals.gpuBytes);
+    }
+    prepareAllocations(allocations) {
+      const unique = /* @__PURE__ */ new Map();
+      for (const allocation of allocations) {
+        if (!allocation.identity || typeof allocation.identity !== "object") {
+          throw new TypeError("resource allocation identity must be an object");
+        }
+        const cost = normalizeResourceCost(allocation.cost);
+        const previous = unique.get(allocation.identity) ?? this.shared.get(allocation.identity)?.cost;
+        if (previous && Object.keys(ZERO_COST).some((key) => previous[key] !== cost[key])) {
+          throw new Error("shared resource allocation cost changed; replace its identity when reallocating");
+        }
+        unique.set(allocation.identity, cost);
+      }
+      return [...unique].map(([identity, cost]) => ({ identity, cost }));
+    }
+    prospectiveCost(key, cost, allocations) {
+      let total = addCost(subtractCost(this.totals, this.entries.get(key) ?? ZERO_COST), cost);
+      const released = /* @__PURE__ */ new Set();
+      for (const allocation of this.allocations.get(key) ?? []) {
+        const shared = this.shared.get(allocation.identity);
+        if (shared.references !== 1) continue;
+        released.add(allocation.identity);
+        total = subtractCost(total, shared.cost);
+      }
+      for (const allocation of allocations) {
+        if (!this.shared.has(allocation.identity) || released.has(allocation.identity)) {
+          total = addCost(total, normalizeResourceCost(allocation.cost));
+        }
+      }
+      return total;
     }
     validateLimits(limits) {
       for (const [name, value] of Object.entries(limits)) {
@@ -4453,9 +4526,9 @@
     get reservation() {
       return this.releasedValue ? void 0 : this.account.lookup(this.ledgerKey);
     }
-    update(cost, pinned = this.reservation?.pinned ?? false) {
+    update(cost, pinned = this.reservation?.pinned ?? false, allocations) {
       if (this.releasedValue) throw new Error(`resource reservation "${this.key}" has been released`);
-      return this.account.update(this, cost, pinned);
+      return this.account.update(this, cost, pinned, allocations);
     }
     setPinned(pinned) {
       if (this.releasedValue) return false;
@@ -4482,26 +4555,26 @@
     get disposed() {
       return this.disposedValue;
     }
-    acquire(key, cost, pinned = false) {
+    acquire(key, cost, pinned = false, allocations) {
       this.assertActive();
       this.assertLocalKey(key);
       if (this.handles.has(key)) {
         throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
       }
       const ledgerKey = `${this.prefix}${key}`;
-      if (!this.ledger.reserve(ledgerKey, cost, pinned)) return void 0;
+      if (!this.ledger.reserve(ledgerKey, cost, pinned, allocations)) return void 0;
       const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
       this.handles.set(key, handle);
       return handle;
     }
-    acquireRequired(key, cost, pinned) {
+    acquireRequired(key, cost, pinned, allocations) {
       this.assertActive();
       this.assertLocalKey(key);
       if (this.handles.has(key)) {
         throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
       }
       const ledgerKey = `${this.prefix}${key}`;
-      this.ledger.forceReserve(ledgerKey, cost, pinned);
+      this.ledger.forceReserve(ledgerKey, cost, pinned, allocations);
       const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
       this.handles.set(key, handle);
       return handle;
@@ -4520,13 +4593,12 @@
       this.detached(this);
     }
     get stats() {
-      let totals = { ...ZERO_COST };
+      const totals = this.ledger.costForKeys([...this.handles.values()].map((handle) => handle.ledgerKey));
       let reservations = 0;
       let pinnedReservations = 0;
       for (const handle of this.handles.values()) {
         const reservation = handle.reservation;
         if (!reservation) continue;
-        totals = addCost(totals, reservation);
         reservations += 1;
         if (reservation.pinned) pinnedReservations += 1;
       }
@@ -4541,9 +4613,9 @@
     lookup(ledgerKey) {
       return this.ledger.get(ledgerKey);
     }
-    update(handle, cost, pinned) {
+    update(handle, cost, pinned, allocations) {
       this.assertOwned(handle);
-      return this.ledger.reserve(handle.ledgerKey, cost, pinned);
+      return this.ledger.reserve(handle.ledgerKey, cost, pinned, allocations);
     }
     setPinned(handle, pinned) {
       this.assertOwned(handle);
@@ -4580,23 +4652,22 @@
   function attributeArray(attribute) {
     return attribute instanceof three.InterleavedBufferAttribute ? attribute.data.array : attribute.array;
   }
-  function estimateBufferGeometriesResourceBytes(geometries) {
+  function collectGeometryAllocations(geometries, instanceAttributes = []) {
     const arrays = /* @__PURE__ */ new Set();
     const uploads = /* @__PURE__ */ new Set();
-    let cpuBytes = 0;
-    let gpuBytes = 0;
+    const allocations = [];
     const account = (attribute) => {
       if (!attribute) return;
       const array = attributeArray(attribute);
       const buffer = array.buffer;
       if (!arrays.has(buffer)) {
         arrays.add(buffer);
-        cpuBytes += buffer.byteLength;
+        allocations.push({ identity: buffer, cost: { cpuBytes: buffer.byteLength, modelBytes: buffer.byteLength } });
       }
       const uploadOwner = attribute instanceof three.InterleavedBufferAttribute ? attribute.data : attribute;
       if (!uploads.has(uploadOwner)) {
         uploads.add(uploadOwner);
-        gpuBytes += array.byteLength;
+        allocations.push({ identity: uploadOwner, cost: { gpuBytes: array.byteLength, geometryBytes: array.byteLength } });
       }
     };
     for (const geometry of new Set(geometries)) {
@@ -4606,7 +4677,12 @@
         for (const attribute of attributes) account(attribute);
       }
     }
-    return { cpuBytes, gpuBytes };
+    for (const attribute of instanceAttributes) account(attribute);
+    return allocations;
+  }
+  function estimateBufferGeometriesResourceBytes(geometries, instanceAttributes = []) {
+    const cost = sumResourceAllocations(collectGeometryAllocations(geometries, instanceAttributes));
+    return { cpuBytes: cost.cpuBytes, gpuBytes: cost.gpuBytes };
   }
   function estimateBufferGeometriesBytes(geometries) {
     return estimateBufferGeometriesResourceBytes(geometries).cpuBytes;
@@ -4641,11 +4717,15 @@
   }
   function collectObject3DResources(objects) {
     const geometries = /* @__PURE__ */ new Set();
+    const instanceAttributes = /* @__PURE__ */ new Set();
     const materials = /* @__PURE__ */ new Set();
     const textures = /* @__PURE__ */ new Set();
     for (const root of new Set(objects)) root.traverse((object) => {
       const renderable = object;
       if (renderable.geometry) geometries.add(renderable.geometry);
+      if (renderable.instanceMatrix) instanceAttributes.add(renderable.instanceMatrix);
+      if (renderable.instanceColor) instanceAttributes.add(renderable.instanceColor);
+      if (renderable.morphTexture) textures.add(renderable.morphTexture);
       if (renderable.skeleton?.boneTexture) textures.add(renderable.skeleton.boneTexture);
       const objectMaterials = renderable.material ? Array.isArray(renderable.material) ? renderable.material : [renderable.material] : [];
       for (const material of objectMaterials) materials.add(material);
@@ -4657,25 +4737,34 @@
         collectTextureValue(uniform?.value, textures);
       }
     }
-    return { geometries, materials, textures };
+    return { geometries, instanceAttributes, materials, textures };
   }
-  function estimateObject3DResourceCost(objects) {
-    const { geometries, textures } = collectObject3DResources(objects);
-    const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
-    let textureCpuBytes = 0;
-    let textureGpuBytes = 0;
+  function collectObject3DResourceAllocations(objects, extraGeometries = []) {
+    const { geometries, instanceAttributes, textures } = collectObject3DResources(objects);
+    const allocations = collectGeometryAllocations([...geometries, ...extraGeometries], [...instanceAttributes]);
+    const textureSources = /* @__PURE__ */ new Set();
     for (const texture of textures) {
       const cost = textureResourceBytes(texture);
-      textureCpuBytes += cost.cpuBytes;
-      textureGpuBytes += cost.gpuBytes;
+      if (cost.cpuBytes > 0 && !textureSources.has(texture.source)) {
+        textureSources.add(texture.source);
+        allocations.push({ identity: texture.source, cost: { cpuBytes: cost.cpuBytes, modelBytes: cost.cpuBytes } });
+      }
+      if (cost.gpuBytes > 0) allocations.push({ identity: texture, cost: { gpuBytes: cost.gpuBytes, textureBytes: cost.gpuBytes } });
     }
-    return normalizeResourceCost({
-      cpuBytes: geometry.cpuBytes + textureCpuBytes,
-      gpuBytes: geometry.gpuBytes + textureGpuBytes,
-      geometryBytes: geometry.gpuBytes,
-      textureBytes: textureGpuBytes,
-      modelBytes: geometry.cpuBytes + textureCpuBytes
-    });
+    return allocations;
+  }
+  function sumResourceAllocations(allocations) {
+    let cost = { ...ZERO_COST };
+    const seen = /* @__PURE__ */ new Set();
+    for (const allocation of allocations) {
+      if (seen.has(allocation.identity)) continue;
+      seen.add(allocation.identity);
+      cost = addCost(cost, normalizeResourceCost(allocation.cost));
+    }
+    return cost;
+  }
+  function estimateObject3DResourceCost(objects) {
+    return sumResourceAllocations(collectObject3DResourceAllocations(objects));
   }
   function disposeObject3DResources(objects) {
     const { geometries, materials, textures } = collectObject3DResources(objects);
@@ -4897,14 +4986,15 @@
       if (this.disposed || this.entries.get(entry.path) !== entry) {
         throw new Error("ModelAssetCache was disposed while loading an asset");
       }
-      const cost = estimateObject3DResourceCost([model.scene]);
+      const allocations = collectObject3DResourceAllocations([model.scene]);
+      const cost = sumResourceAllocations(allocations);
       const retainedBytes = cost.cpuBytes + cost.gpuBytes;
       if (!Number.isSafeInteger(retainedBytes)) throw new RangeError("model asset byte estimate exceeds safe integer range");
       this.evictToFit(retainedBytes);
       entry.model = model;
       entry.cost = cost;
       entry.retainedBytes = retainedBytes;
-      entry.reservation = this.resources?.acquire(entry.path, cost, true) ?? this.resources?.acquireRequired(entry.path, cost, true);
+      entry.reservation = this.resources?.acquire(entry.path, {}, true, allocations) ?? this.resources?.acquireRequired(entry.path, {}, true, allocations);
       this.retainedBytes += retainedBytes;
       return model;
     }
@@ -10154,7 +10244,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const activation = hooks.activate(request.metadata, request.lod, request.visibleObjects);
         const geometries = (activation && activation.geometries) ?? this.residents.get(id)?.geometries ?? [];
         const resident = this.residents.get(id);
-        const resourceCost = activation ? this.activationCost(activation, geometries, request.visibleObjects) : resident?.gpuResident ? resident.resourceCost : this.activationCost({}, geometries, request.visibleObjects);
+        const accounting = activation ? this.activationCost(activation, geometries, request.visibleObjects) : resident?.gpuResident ? resident : this.activationCost({}, geometries, request.visibleObjects);
+        const { resourceCost, allocations } = accounting;
         this.residents.set(id, {
           id,
           metadata: request.metadata,
@@ -10163,9 +10254,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           geometries,
           disposeGpu: activation?.disposeGpu ?? resident?.disposeGpu,
           gpuResident: true,
-          resourceCost
+          resourceCost,
+          allocations
         });
-        this.resources.forceReserve(this.resourceKey(id), resourceCost, true);
+        this.resources.forceReserve(this.resourceKey(id), resourceCost, true, allocations);
         if (resident && resident.lod !== request.lod) {
           for (const geometry of resident.geometries) geometry.dispose();
           resident.disposeGpu?.();
@@ -10222,7 +10314,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         entry.disposeGpu?.();
         entry.gpuResident = false;
         entry.resourceCost = { ...entry.resourceCost, gpuBytes: 0 };
-        this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false);
+        entry.allocations = entry.allocations.filter((allocation) => !allocation.cost.gpuBytes);
+        this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false, entry.allocations);
         this.resourceEvictions += 1;
         if (gpuExcess > 0) gpuExcess -= 1;
       }
@@ -10248,15 +10341,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return count;
     }
     activationCost(activation, geometries, objects) {
-      const measured = objects.length > 0 ? estimateObject3DResourceCost(objects) : normalizeResourceCost();
-      const geometry = geometries.length > 0 ? estimateBufferGeometriesResourceBytes(geometries) : { cpuBytes: measured.cpuBytes, gpuBytes: measured.geometryBytes };
-      return normalizeResourceCost({
-        ...measured,
-        cpuBytes: Math.max(measured.cpuBytes, geometry.cpuBytes),
-        gpuBytes: Math.max(measured.gpuBytes, geometry.gpuBytes),
-        geometryBytes: geometry.gpuBytes,
-        ...activation.resourceCost
-      });
+      const allocations = collectObject3DResourceAllocations(objects, geometries);
+      if (activation.resourceCost) {
+        return {
+          resourceCost: normalizeResourceCost({ ...sumResourceAllocations(allocations), ...activation.resourceCost }),
+          allocations: []
+        };
+      }
+      return { resourceCost: normalizeResourceCost(), allocations };
     }
     resourceKey(id) {
       return `world-chunk:${id}`;
@@ -22355,6 +22447,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.assertWorldTileOverride = assertWorldTileOverride;
   exports.assertWorldVegetationLayout = assertWorldVegetationLayout;
   exports.assertWorldWaterGenerationStyle = assertWorldWaterGenerationStyle;
+  exports.collectObject3DResourceAllocations = collectObject3DResourceAllocations;
   exports.commitBufferAttributeRanges = commitBufferAttributeRanges;
   exports.createLandformSampler = createLandformSampler;
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;

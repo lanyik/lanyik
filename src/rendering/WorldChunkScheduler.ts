@@ -18,13 +18,14 @@ import {
     WorldChunkMetadata
 } from "../helpers/chunks";
 import {
-    estimateBufferGeometriesResourceBytes,
-    estimateObject3DResourceCost,
+    collectObject3DResourceAllocations,
+    sumResourceAllocations,
     normalizeResourceCost,
     ResourceBudgetAccount,
     ResourceBudgetLedger,
     ResourceBudgetView,
-    ResourceCost
+    ResourceCost,
+    ResourceAllocation
 } from "../runtime/ResourceBudget";
 
 export interface WorldChunkActivation {
@@ -88,6 +89,7 @@ interface ResidentChunk {
     disposeGpu?: () => void;
     gpuResident: boolean;
     resourceCost: ResourceCost;
+    allocations: readonly ResourceAllocation[];
 }
 
 interface ChunkBinding {
@@ -315,11 +317,12 @@ export class WorldChunkScheduler {
                 ?? this.residents.get(id)?.geometries
                 ?? [];
             const resident = this.residents.get(id);
-            const resourceCost = activation
+            const accounting = activation
                 ? this.activationCost(activation, geometries, request.visibleObjects)
                 : resident?.gpuResident
-                    ? resident.resourceCost
+                    ? resident
                     : this.activationCost({}, geometries, request.visibleObjects);
+            const { resourceCost, allocations } = accounting;
             this.residents.set(id, {
                 id,
                 metadata: request.metadata,
@@ -328,12 +331,13 @@ export class WorldChunkScheduler {
                 geometries,
                 disposeGpu: activation?.disposeGpu ?? resident?.disposeGpu,
                 gpuResident: true,
-                resourceCost
+                resourceCost,
+                allocations
             });
             // Visible chunks form the pinned working set. Their unavoidable
             // overage is surfaced explicitly so adaptive quality can react;
             // all inactive retention remains subject to the hard byte limit.
-            this.resources.forceReserve(this.resourceKey(id), resourceCost, true);
+            this.resources.forceReserve(this.resourceKey(id), resourceCost, true, allocations);
             //A changed LOD can replace attribute data without changing the
             //BufferGeometry identity. Disposing here guarantees stale GPU
             //buffers are gone before Three uploads the new attributes.
@@ -395,7 +399,8 @@ export class WorldChunkScheduler {
             entry.disposeGpu?.();
             entry.gpuResident = false;
             entry.resourceCost = { ...entry.resourceCost, gpuBytes: 0 };
-            this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false);
+            entry.allocations = entry.allocations.filter(allocation => !allocation.cost.gpuBytes);
+            this.resources.forceReserve(this.resourceKey(entry.id), entry.resourceCost, false, entry.allocations);
             this.resourceEvictions += 1;
             if (gpuExcess > 0) gpuExcess -= 1;
         }
@@ -427,20 +432,15 @@ export class WorldChunkScheduler {
         activation: WorldChunkActivation,
         geometries: readonly BufferGeometry[],
         objects: readonly Object3D[]
-    ): ResourceCost {
-        const measured = objects.length > 0
-            ? estimateObject3DResourceCost(objects)
-            : normalizeResourceCost();
-        const geometry = geometries.length > 0
-            ? estimateBufferGeometriesResourceBytes(geometries)
-            : { cpuBytes: measured.cpuBytes, gpuBytes: measured.geometryBytes };
-        return normalizeResourceCost({
-            ...measured,
-            cpuBytes: Math.max(measured.cpuBytes, geometry.cpuBytes),
-            gpuBytes: Math.max(measured.gpuBytes, geometry.gpuBytes),
-            geometryBytes: geometry.gpuBytes,
-            ...activation.resourceCost
-        });
+    ): { resourceCost: ResourceCost; allocations: readonly ResourceAllocation[] } {
+        const allocations = collectObject3DResourceAllocations(objects, geometries);
+        if (activation.resourceCost) {
+            return {
+                resourceCost: normalizeResourceCost({ ...sumResourceAllocations(allocations), ...activation.resourceCost }),
+                allocations: []
+            };
+        }
+        return { resourceCost: normalizeResourceCost(), allocations };
     }
 
     private resourceKey(id: string): string {

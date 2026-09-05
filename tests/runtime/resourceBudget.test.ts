@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { BufferAttribute, BufferGeometry, Mesh, ShaderMaterial, Texture } from "three";
+import { BufferAttribute, BufferGeometry, InstancedBufferAttribute, InstancedMesh, Mesh, ShaderMaterial, Texture } from "three";
 
 import {
     estimateBufferGeometriesBytes,
     estimateBufferGeometriesResourceBytes,
     estimateObject3DResourceCost,
+    collectObject3DResourceAllocations,
     ResourceBudgetLedger
 } from "../../src/runtime/ResourceBudget";
 
@@ -71,6 +72,26 @@ describe("ResourceBudgetLedger", () => {
         });
     });
 
+    test("counts allocated instance capacity and deduplicates shared world images", () => {
+        const geometry = new BufferGeometry();
+        geometry.setAttribute("position", new BufferAttribute(new Float32Array(9), 3));
+        const mesh = new InstancedMesh(geometry, new ShaderMaterial(), 10_000);
+        mesh.instanceColor = new InstancedBufferAttribute(new Float32Array(30_000), 3);
+        mesh.count = 1; // Drawing fewer instances does not free the allocation.
+        const image = new InstancedMesh(geometry, mesh.material, 0);
+        image.instanceMatrix = mesh.instanceMatrix;
+        image.instanceColor = mesh.instanceColor;
+        expect(estimateObject3DResourceCost([mesh, image, mesh])).toMatchObject({
+            cpuBytes: 760_036, gpuBytes: 760_036, geometryBytes: 760_036
+        });
+        // A geometry attribute can also borrow the same CPU allocation while
+        // Three.js uploads its distinct BufferAttribute separately.
+        geometry.setAttribute("borrowed", new BufferAttribute(mesh.instanceColor.array, 3));
+        expect(estimateObject3DResourceCost([mesh, image])).toMatchObject({
+            cpuBytes: 760_036, gpuBytes: 880_036
+        });
+    });
+
     test("isolates owner keys and releases every reservation with its account", () => {
         const budget = new ResourceBudgetLedger({ cpuBytes: 200, gpuBytes: 200 });
         const units = budget.createAccount("units");
@@ -93,5 +114,48 @@ describe("ResourceBudgetLedger", () => {
         expect(effects.disposed).toBe(true);
         expect(budget.stats).toMatchObject({ disposed: true, accounts: 0, reservations: 0, cpuBytes: 0, gpuBytes: 0 });
         expect(() => effects.acquire("late", { cpuBytes: 1 })).toThrow("disposed");
+    });
+
+    test("admits shared allocations once across accounts and retains them until the last release", () => {
+        const budget = new ResourceBudgetLedger({ cpuBytes: 36, gpuBytes: 36 });
+        const geometry = new BufferGeometry();
+        geometry.setAttribute("position", new BufferAttribute(new Float32Array(9), 3));
+        const mesh = new Mesh(geometry, new ShaderMaterial());
+        const assets = budget.createAccount("assets");
+        const chunks = budget.createAccount("chunks");
+        const allocations = collectObject3DResourceAllocations([mesh]);
+        const asset = assets.acquire("mesh", {}, true, allocations)!;
+        const first = chunks.acquire("first", {}, true, allocations)!;
+        const second = chunks.acquire("second", {}, true, allocations)!;
+        expect(first).toBeDefined();
+        expect(second).toBeDefined();
+        expect(chunks.stats).toMatchObject({ cpuBytes: 36, gpuBytes: 36, reservations: 2 });
+        expect(budget.stats).toMatchObject({ cpuBytes: 36, gpuBytes: 36, reservations: 3 });
+        expect(first.update({ cpuBytes: 1 })).toBe(false);
+        expect(first.reservation).toMatchObject({ cpuBytes: 36, gpuBytes: 36 });
+        asset.release();
+        first.release();
+        expect(budget.stats).toMatchObject({ cpuBytes: 36, gpuBytes: 36, reservations: 1 });
+        second.release();
+        expect(budget.stats).toMatchObject({ cpuBytes: 0, gpuBytes: 0, reservations: 0 });
+    });
+
+    test("replaces LOD allocations atomically and releases GPU references independently", () => {
+        const budget = new ResourceBudgetLedger({ cpuBytes: 100, gpuBytes: 100 });
+        const cpu = { identity: new ArrayBuffer(40), cost: { cpuBytes: 40 } };
+        const gpu = { identity: {}, cost: { gpuBytes: 80 } };
+        budget.forceReserve("first", {}, true, [cpu, gpu]);
+        budget.forceReserve("second", {}, true, [cpu, gpu]);
+        budget.forceReserve("first", {}, false, [cpu]);
+        expect(budget.stats).toMatchObject({ cpuBytes: 40, gpuBytes: 80 });
+        expect(budget.reserve("second", {}, false, [cpu, { identity: {}, cost: { gpuBytes: 120 } }])).toBe(false);
+        expect(budget.stats).toMatchObject({ cpuBytes: 40, gpuBytes: 80 });
+        budget.forceReserve("second", {}, false, [cpu]);
+        expect(budget.stats).toMatchObject({ cpuBytes: 40, gpuBytes: 0 });
+        expect(() => budget.reserve("bad", {}, false, [{ identity: cpu.identity, cost: { cpuBytes: 50 } }])).toThrow("cost changed");
+        budget.clear();
+        expect(budget.reserve("new", {}, false, [cpu, gpu])).toBe(true);
+        budget.dispose();
+        expect(budget.stats).toMatchObject({ cpuBytes: 0, gpuBytes: 0 });
     });
 });

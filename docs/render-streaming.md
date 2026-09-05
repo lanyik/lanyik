@@ -31,6 +31,13 @@ Toroidal images share the canonical `BufferGeometry`, instance matrices and fog
 attributes. Only chunks near a seam are cloned, rather than cloning every chunk
 into all eight neighboring world images.
 
+Resource reservations retain allocation identities across chunks and the model
+asset cache. Shared backing buffers, upload attributes and texture objects count
+once in the map ledger; instance matrix/color capacity is included even when
+only part of an `InstancedMesh` is drawn. Releasing one borrower preserves the
+charge until its final borrower releases it. Texture and GPU totals are estimates
+of retained resources, not driver VRAM measurements.
+
 Worker completions do not mount every returned chunk immediately. The center
 chunk is admitted synchronously for first-frame feedback; peripheral mounts go
 through a priority queue capped by `frameBudgetMs` and `maxMountsPerFrame`.

@@ -13,6 +13,12 @@ export interface ResourceBudgetLimits {
     gpuBytes: number;
 }
 
+/** One immutable backing allocation or upload, shared by object identity. */
+export interface ResourceAllocation {
+    readonly identity: object;
+    readonly cost: Partial<ResourceCost>;
+}
+
 export interface ResourceReservation extends ResourceCost {
     readonly key: string;
     readonly pinned: boolean;
@@ -47,7 +53,7 @@ export interface ResourceReservationHandle {
     readonly key: string;
     readonly released: boolean;
     readonly reservation: Readonly<ResourceReservation> | undefined;
-    update(cost: Partial<ResourceCost>, pinned?: boolean): boolean;
+    update(cost: Partial<ResourceCost>, pinned?: boolean, allocations?: readonly ResourceAllocation[]): boolean;
     setPinned(pinned: boolean): boolean;
     release(): boolean;
 }
@@ -59,12 +65,14 @@ export interface ResourceBudgetAccount {
     acquire(
         key: string,
         cost: Partial<ResourceCost>,
-        pinned?: boolean
+        pinned?: boolean,
+        allocations?: readonly ResourceAllocation[]
     ): ResourceReservationHandle | undefined;
     acquireRequired(
         key: string,
         cost: Partial<ResourceCost>,
-        pinned: true
+        pinned: true,
+        allocations?: readonly ResourceAllocation[]
     ): ResourceReservationHandle;
     release(key: string): boolean;
     clear(): void;
@@ -121,6 +129,8 @@ function subtractCost(first: ResourceCost, second: ResourceCost): ResourceCost {
 // use forceReserve(), which keeps the overage visible in stats for degradation.
 export class ResourceBudgetLedger {
     private readonly entries = new Map<string, ResourceReservation>();
+    private readonly allocations = new Map<string, readonly ResourceAllocation[]>();
+    private readonly shared = new Map<object, { cost: ResourceCost; references: number }>();
     private readonly accounts = new Set<LedgerResourceBudgetAccount>();
     private totals: ResourceCost = { ...ZERO_COST };
     private limits: ResourceBudgetLimits;
@@ -139,25 +149,31 @@ export class ResourceBudgetLedger {
         this.limits = this.validateLimits({ ...this.limits, ...limits });
     }
 
-    public reserve(key: string, cost: Partial<ResourceCost>, pinned = false): boolean {
+    public reserve(
+        key: string, cost: Partial<ResourceCost>, pinned = false,
+        allocations = this.allocations.get(key) ?? []
+    ): boolean {
         this.assertActive();
         this.assertKey(key);
         const normalized = normalizeResourceCost(cost);
-        const existing = this.entries.get(key);
-        const prospective = addCost(subtractCost(this.totals, existing ?? ZERO_COST), normalized);
+        const prepared = this.prepareAllocations(allocations);
+        const prospective = this.prospectiveCost(key, normalized, prepared);
         if (prospective.cpuBytes > this.limits.cpuBytes || prospective.gpuBytes > this.limits.gpuBytes) {
             this.rejectedReservations += 1;
             return false;
         }
-        this.store(key, normalized, pinned, existing);
+        this.store(key, normalized, pinned, prepared);
         return true;
     }
 
-    public forceReserve(key: string, cost: Partial<ResourceCost>, pinned = false): void {
+    public forceReserve(
+        key: string, cost: Partial<ResourceCost>, pinned = false,
+        allocations = this.allocations.get(key) ?? []
+    ): void {
         this.assertActive();
         this.assertKey(key);
         const normalized = normalizeResourceCost(cost);
-        this.store(key, normalized, pinned, this.entries.get(key));
+        this.store(key, normalized, pinned, this.prepareAllocations(allocations));
     }
 
     public release(key: string): boolean {
@@ -165,6 +181,15 @@ export class ResourceBudgetLedger {
         if (!existing) return false;
         this.entries.delete(key);
         this.totals = subtractCost(this.totals, existing);
+        for (const allocation of this.allocations.get(key) ?? []) {
+            const shared = this.shared.get(allocation.identity)!;
+            shared.references -= 1;
+            if (shared.references === 0) {
+                this.shared.delete(allocation.identity);
+                this.totals = subtractCost(this.totals, shared.cost);
+            }
+        }
+        this.allocations.delete(key);
         return true;
     }
 
@@ -172,6 +197,8 @@ export class ResourceBudgetLedger {
         if (this.disposed) return;
         for (const account of this.accounts) account.invalidateReservations();
         this.entries.clear();
+        this.allocations.clear();
+        this.shared.clear();
         this.totals = { ...ZERO_COST };
     }
 
@@ -180,6 +207,8 @@ export class ResourceBudgetLedger {
         for (const account of [...this.accounts]) account.detachFromLedger();
         this.accounts.clear();
         this.entries.clear();
+        this.allocations.clear();
+        this.shared.clear();
         this.totals = { ...ZERO_COST };
         this.disposed = true;
     }
@@ -206,7 +235,26 @@ export class ResourceBudgetLedger {
         return true;
     }
 
-    public get(key: string): Readonly<ResourceReservation> | undefined { return this.entries.get(key); }
+    public get(key: string): Readonly<ResourceReservation> | undefined {
+        const entry = this.entries.get(key);
+        return entry ? { ...entry, ...this.costForKeys([key]) } : undefined;
+    }
+
+    public costForKeys(keys: Iterable<string>): ResourceCost {
+        let total = { ...ZERO_COST };
+        const seen = new Set<object>();
+        for (const key of keys) {
+            const entry = this.entries.get(key);
+            if (!entry) continue;
+            total = addCost(total, entry);
+            for (const allocation of this.allocations.get(key) ?? []) {
+                if (seen.has(allocation.identity)) continue;
+                seen.add(allocation.identity);
+                total = addCost(total, this.shared.get(allocation.identity)!.cost);
+            }
+        }
+        return total;
+    }
 
     public get stats(): Readonly<ResourceBudgetStats> {
         let pinnedReservations = 0;
@@ -231,12 +279,56 @@ export class ResourceBudgetLedger {
         key: string,
         cost: ResourceCost,
         pinned: boolean,
-        existing: ResourceReservation | undefined
+        allocations: readonly ResourceAllocation[]
     ): void {
-        this.totals = addCost(subtractCost(this.totals, existing ?? ZERO_COST), cost);
+        this.release(key);
+        this.totals = addCost(this.totals, cost);
+        for (const allocation of allocations) {
+            const shared = this.shared.get(allocation.identity);
+            if (shared) shared.references += 1;
+            else {
+                const normalized = normalizeResourceCost(allocation.cost);
+                this.shared.set(allocation.identity, { cost: normalized, references: 1 });
+                this.totals = addCost(this.totals, normalized);
+            }
+        }
+        this.allocations.set(key, allocations);
         this.entries.set(key, { key, pinned, ...cost });
         this.peakCpuBytes = Math.max(this.peakCpuBytes, this.totals.cpuBytes);
         this.peakGpuBytes = Math.max(this.peakGpuBytes, this.totals.gpuBytes);
+    }
+
+    private prepareAllocations(allocations: readonly ResourceAllocation[]): ResourceAllocation[] {
+        const unique = new Map<object, ResourceCost>();
+        for (const allocation of allocations) {
+            if (!allocation.identity || typeof allocation.identity !== "object") {
+                throw new TypeError("resource allocation identity must be an object");
+            }
+            const cost = normalizeResourceCost(allocation.cost);
+            const previous = unique.get(allocation.identity) ?? this.shared.get(allocation.identity)?.cost;
+            if (previous && Object.keys(ZERO_COST).some(key => previous[key as keyof ResourceCost] !== cost[key as keyof ResourceCost])) {
+                throw new Error("shared resource allocation cost changed; replace its identity when reallocating");
+            }
+            unique.set(allocation.identity, cost);
+        }
+        return [...unique].map(([identity, cost]) => ({ identity, cost }));
+    }
+
+    private prospectiveCost(key: string, cost: ResourceCost, allocations: readonly ResourceAllocation[]): ResourceCost {
+        let total = addCost(subtractCost(this.totals, this.entries.get(key) ?? ZERO_COST), cost);
+        const released = new Set<object>();
+        for (const allocation of this.allocations.get(key) ?? []) {
+            const shared = this.shared.get(allocation.identity)!;
+            if (shared.references !== 1) continue;
+            released.add(allocation.identity);
+            total = subtractCost(total, shared.cost);
+        }
+        for (const allocation of allocations) {
+            if (!this.shared.has(allocation.identity) || released.has(allocation.identity)) {
+                total = addCost(total, normalizeResourceCost(allocation.cost));
+            }
+        }
+        return total;
     }
 
     private validateLimits(limits: ResourceBudgetLimits): ResourceBudgetLimits {
@@ -274,9 +366,9 @@ class LedgerResourceReservationHandle implements ResourceReservationHandle {
         return this.releasedValue ? undefined : this.account.lookup(this.ledgerKey);
     }
 
-    public update(cost: Partial<ResourceCost>, pinned = this.reservation?.pinned ?? false): boolean {
+    public update(cost: Partial<ResourceCost>, pinned = this.reservation?.pinned ?? false, allocations?: readonly ResourceAllocation[]): boolean {
         if (this.releasedValue) throw new Error(`resource reservation "${this.key}" has been released`);
-        return this.account.update(this, cost, pinned);
+        return this.account.update(this, cost, pinned, allocations);
     }
 
     public setPinned(pinned: boolean): boolean {
@@ -309,7 +401,8 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
     public acquire(
         key: string,
         cost: Partial<ResourceCost>,
-        pinned = false
+        pinned = false,
+        allocations?: readonly ResourceAllocation[]
     ): ResourceReservationHandle | undefined {
         this.assertActive();
         this.assertLocalKey(key);
@@ -317,7 +410,7 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
             throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
         }
         const ledgerKey = `${this.prefix}${key}`;
-        if (!this.ledger.reserve(ledgerKey, cost, pinned)) return undefined;
+        if (!this.ledger.reserve(ledgerKey, cost, pinned, allocations)) return undefined;
         const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
         this.handles.set(key, handle);
         return handle;
@@ -326,7 +419,8 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
     public acquireRequired(
         key: string,
         cost: Partial<ResourceCost>,
-        pinned: true
+        pinned: true,
+        allocations?: readonly ResourceAllocation[]
     ): ResourceReservationHandle {
         this.assertActive();
         this.assertLocalKey(key);
@@ -334,7 +428,7 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
             throw new Error(`resource account "${this.label}" already owns reservation "${key}"`);
         }
         const ledgerKey = `${this.prefix}${key}`;
-        this.ledger.forceReserve(ledgerKey, cost, pinned);
+        this.ledger.forceReserve(ledgerKey, cost, pinned, allocations);
         const handle = new LedgerResourceReservationHandle(this, key, ledgerKey);
         this.handles.set(key, handle);
         return handle;
@@ -357,13 +451,12 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
     }
 
     public get stats(): Readonly<ResourceBudgetAccountStats> {
-        let totals: ResourceCost = { ...ZERO_COST };
+        const totals = this.ledger.costForKeys([...this.handles.values()].map(handle => handle.ledgerKey));
         let reservations = 0;
         let pinnedReservations = 0;
         for (const handle of this.handles.values()) {
             const reservation = handle.reservation;
             if (!reservation) continue;
-            totals = addCost(totals, reservation);
             reservations += 1;
             if (reservation.pinned) pinnedReservations += 1;
         }
@@ -383,10 +476,11 @@ class LedgerResourceBudgetAccount implements ResourceBudgetAccount {
     public update(
         handle: LedgerResourceReservationHandle,
         cost: Partial<ResourceCost>,
-        pinned: boolean
+        pinned: boolean,
+        allocations?: readonly ResourceAllocation[]
     ): boolean {
         this.assertOwned(handle);
-        return this.ledger.reserve(handle.ledgerKey, cost, pinned);
+        return this.ledger.reserve(handle.ledgerKey, cost, pinned, allocations);
     }
 
     public setPinned(handle: LedgerResourceReservationHandle, pinned: boolean): boolean {
@@ -432,13 +526,13 @@ function attributeArray(attribute: BufferAttribute | InterleavedBufferAttribute)
     return attribute instanceof InterleavedBufferAttribute ? attribute.data.array : attribute.array;
 }
 
-export function estimateBufferGeometriesResourceBytes(
-    geometries: readonly BufferGeometry[]
-): BufferGeometryResourceBytes {
+function collectGeometryAllocations(
+    geometries: readonly BufferGeometry[],
+    instanceAttributes: readonly BufferAttribute[] = []
+): ResourceAllocation[] {
     const arrays = new Set<ArrayBufferLike>();
     const uploads = new Set<object>();
-    let cpuBytes = 0;
-    let gpuBytes = 0;
+    const allocations: ResourceAllocation[] = [];
     const account = (attribute: BufferAttribute | InterleavedBufferAttribute | null | undefined): void => {
         if (!attribute) return;
         const array = attributeArray(attribute);
@@ -447,7 +541,7 @@ export function estimateBufferGeometriesResourceBytes(
             arrays.add(buffer);
             // A view keeps its complete backing allocation alive even when it
             // exposes only a slice of that allocation.
-            cpuBytes += buffer.byteLength;
+            allocations.push({ identity: buffer, cost: { cpuBytes: buffer.byteLength, modelBytes: buffer.byteLength } });
         }
         // Three.js caches WebGL buffers by BufferAttribute, or by the shared
         // InterleavedBuffer for interleaved attributes—not by ArrayBuffer.
@@ -456,7 +550,7 @@ export function estimateBufferGeometriesResourceBytes(
             : attribute;
         if (!uploads.has(uploadOwner)) {
             uploads.add(uploadOwner);
-            gpuBytes += array.byteLength;
+            allocations.push({ identity: uploadOwner, cost: { gpuBytes: array.byteLength, geometryBytes: array.byteLength } });
         }
     };
     for (const geometry of new Set(geometries)) {
@@ -466,11 +560,19 @@ export function estimateBufferGeometriesResourceBytes(
             for (const attribute of attributes) account(attribute);
         }
     }
-    return { cpuBytes, gpuBytes };
+    for (const attribute of instanceAttributes) account(attribute);
+    return allocations;
 }
 
-// Kept as the CPU backing-store estimate for compatibility. Callers that make
-// GPU admission decisions should use estimateBufferGeometriesResourceBytes().
+export function estimateBufferGeometriesResourceBytes(
+    geometries: readonly BufferGeometry[],
+    instanceAttributes: readonly BufferAttribute[] = []
+): BufferGeometryResourceBytes {
+    const cost = sumResourceAllocations(collectGeometryAllocations(geometries, instanceAttributes));
+    return { cpuBytes: cost.cpuBytes, gpuBytes: cost.gpuBytes };
+}
+
+// CPU backing-store estimate. GPU admission uses the separate upload estimate.
 export function estimateBufferGeometriesBytes(geometries: readonly BufferGeometry[]): number {
     return estimateBufferGeometriesResourceBytes(geometries).cpuBytes;
 }
@@ -520,12 +622,14 @@ function collectTextureValue(value: unknown, textures: Set<Texture>): void {
 
 interface Object3DResourceSets {
     readonly geometries: Set<BufferGeometry>;
+    readonly instanceAttributes: Set<BufferAttribute>;
     readonly materials: Set<Material>;
     readonly textures: Set<Texture>;
 }
 
 function collectObject3DResources(objects: readonly Object3D[]): Object3DResourceSets {
     const geometries = new Set<BufferGeometry>();
+    const instanceAttributes = new Set<BufferAttribute>();
     const materials = new Set<Material>();
     const textures = new Set<Texture>();
     for (const root of new Set(objects)) root.traverse(object => {
@@ -533,8 +637,14 @@ function collectObject3DResources(objects: readonly Object3D[]): Object3DResourc
             geometry?: BufferGeometry;
             material?: Material | Material[];
             skeleton?: { boneTexture?: Texture | null };
+            instanceMatrix?: BufferAttribute;
+            instanceColor?: BufferAttribute | null;
+            morphTexture?: Texture | null;
         };
         if (renderable.geometry) geometries.add(renderable.geometry);
+        if (renderable.instanceMatrix) instanceAttributes.add(renderable.instanceMatrix);
+        if (renderable.instanceColor) instanceAttributes.add(renderable.instanceColor);
+        if (renderable.morphTexture) textures.add(renderable.morphTexture);
         if (renderable.skeleton?.boneTexture) textures.add(renderable.skeleton.boneTexture);
         const objectMaterials = renderable.material
             ? Array.isArray(renderable.material) ? renderable.material : [renderable.material]
@@ -550,26 +660,39 @@ function collectObject3DResources(objects: readonly Object3D[]): Object3DResourc
             collectTextureValue(uniform?.value, textures);
         }
     }
-    return { geometries, materials, textures };
+    return { geometries, instanceAttributes, materials, textures };
+}
+
+export function collectObject3DResourceAllocations(
+    objects: readonly Object3D[], extraGeometries: readonly BufferGeometry[] = []
+): ResourceAllocation[] {
+    const { geometries, instanceAttributes, textures } = collectObject3DResources(objects);
+    const allocations = collectGeometryAllocations([...geometries, ...extraGeometries], [...instanceAttributes]);
+    const textureSources = new Set<object>();
+    for (const texture of textures) {
+        const cost = textureResourceBytes(texture);
+        if (cost.cpuBytes > 0 && !textureSources.has(texture.source)) {
+            textureSources.add(texture.source);
+            allocations.push({ identity: texture.source, cost: { cpuBytes: cost.cpuBytes, modelBytes: cost.cpuBytes } });
+        }
+        if (cost.gpuBytes > 0) allocations.push({ identity: texture, cost: { gpuBytes: cost.gpuBytes, textureBytes: cost.gpuBytes } });
+    }
+    return allocations;
+}
+
+export function sumResourceAllocations(allocations: readonly ResourceAllocation[]): ResourceCost {
+    let cost = { ...ZERO_COST };
+    const seen = new Set<object>();
+    for (const allocation of allocations) {
+        if (seen.has(allocation.identity)) continue;
+        seen.add(allocation.identity);
+        cost = addCost(cost, normalizeResourceCost(allocation.cost));
+    }
+    return cost;
 }
 
 export function estimateObject3DResourceCost(objects: readonly Object3D[]): ResourceCost {
-    const { geometries, textures } = collectObject3DResources(objects);
-    const geometry = estimateBufferGeometriesResourceBytes([...geometries]);
-    let textureCpuBytes = 0;
-    let textureGpuBytes = 0;
-    for (const texture of textures) {
-        const cost = textureResourceBytes(texture);
-        textureCpuBytes += cost.cpuBytes;
-        textureGpuBytes += cost.gpuBytes;
-    }
-    return normalizeResourceCost({
-        cpuBytes: geometry.cpuBytes + textureCpuBytes,
-        gpuBytes: geometry.gpuBytes + textureGpuBytes,
-        geometryBytes: geometry.gpuBytes,
-        textureBytes: textureGpuBytes,
-        modelBytes: geometry.cpuBytes + textureCpuBytes
-    });
+    return sumResourceAllocations(collectObject3DResourceAllocations(objects));
 }
 
 // Dispose one immutable asset graph after its final borrower releases it. The

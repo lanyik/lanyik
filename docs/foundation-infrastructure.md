@@ -46,12 +46,23 @@ preparing -> committing -> committed
 
 ## 3. 真实资源预算
 
-`ResourceBudgetLedger` 以实际字节而不是区块数量做 admission/accounting：
+`ResourceBudgetLedger` 以保留缓冲区和预计上传字节做 admission/accounting，区块数量仍作为独立上限。这些计数不是进程堆占用或驱动实际 VRAM：
 
 - 硬维度：`cpuBytes`、`gpuBytes`。
 - 诊断维度：`geometryBytes`、`textureBytes`、`modelBytes`。
 - BufferGeometry 分开计算 CPU backing store 与 Three.js 实际 attribute/index upload；interleaved buffer 只上传一次，不同 BufferAttribute 即使共享 ArrayBuffer 也按独立 GPU buffer 计费。
-- Object3D 估算会遍历 geometry、material、shader uniforms、纹理面与 mip 层；自定义渲染层可用 `resourceCost` 覆盖共享模型/纹理的保守估值。
+- Object3D 估算会遍历 geometry、实例矩阵/颜色、骨骼/实例 morph 纹理、material、shader uniforms、纹理面与 mip 层。实例缓冲按分配容量计费，降低 `InstancedMesh.count` 不代表释放内存；同一次估算中，共享 CPU backing buffer 与共享 Three.js 上传对象分别去重。自定义渲染层可用 `resourceCost` 覆盖共享模型/纹理的保守估值。
+
+内置区块和 `ModelAssetCache` 使用 `ResourceAllocation` 引用同一账本中的资源。
+CPU 按 backing buffer/纹理 source、GPU 按 attribute/interleaved buffer/纹理对象去重；
+只有最后一个引用释放后才扣除共享资源。GPU 驻留淘汰只释放 GPU 引用，CPU 引用仍保留。
+预算拒绝不会改变引用计数或已有 reservation。分配的 identity 与 cost 必须保持不变，
+重新分配应提供新 identity；尚未加载的零字节纹理不建立分配引用。
+单个账户的 stats 对账户内去重，整个地图再次跨账户去重，所以不能将各账户的
+引用字节简单相加。手工 `resourceCost` 覆盖仍由自定义层负责共享资源的所有权。
+
+当前图遍历计量覆盖已激活的渲染资源及模型缓存；Worker 临时堆、未激活的植被布局、
+未被渲染图引用的 LOD 缓存和浏览器/驱动开销不在此计量范围内。
 
 `WorldChunkScheduler` 同时保留逻辑区块上限和字节上限。非可见驻留只要超过任一字节预算就立即按 LRU 淘汰，不等待 grace frame。当前帧必需的 visible working set 被标为 pinned；若它自身大于预算，不会错误销毁正在绘制的对象，而是通过 `cpuBudgetExceededBytes` / `gpuBudgetExceededBytes` 暴露不可避免的压力，交给自适应 LOD/密度降级。默认上限为 CPU 384 MiB、GPU 256 MiB，可通过 `cpuChunkCacheBytes` / `gpuChunkCacheBytes` 配置。
 
