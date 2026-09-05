@@ -76,5 +76,11 @@ describe("world descriptor protocol", () => {
         const missingWaterStyle = { ...createWorldDescriptor({ seed: "world" }) } as any;
         delete missingWaterStyle.waterStyle;
         expect(() => assertWorldDescriptor(missingWaterStyle)).toThrow(/water generation style/);
+        const missingLength = structuredClone(createWorldDescriptor({ seed: "world" })) as any;
+        delete missingLength.waterStyle.riverLength;
+        expect(() => assertWorldDescriptor(missingLength)).toThrow(/riverLength/);
+        expect(() => assertWorldDescriptor({
+            ...createWorldDescriptor({ seed: "world" }), descriptorVersion: 2
+        })).toThrow(/descriptor format/);
     });
 });

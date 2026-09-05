@@ -281,7 +281,9 @@ body {
     border-top: 1px solid rgba(255, 200, 87, 0.2);
 }
 
-.dg.ac {
+/* dat.gui injects its .dg.ac rule after this stylesheet. Keep the authoring
+   panel above the compact minimap, but below the expanded map overlay. */
+body > .dg.ac {
     z-index: 10;
 }
 

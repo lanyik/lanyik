@@ -191,7 +191,8 @@ function benchmarkFogFrontier() {
 }
 
 function benchmarkVegetationPreparation() {
-    const chunk = generateWorldChunk({ seed: "perf-vegetation", chunkX: 0, chunkY: 0, chunkSize: 24 });
+    // The old fixture became open ocean under v17's reviewed defaults.
+    const chunk = generateWorldChunk({ seed: "new-world", chunkX: 0, chunkY: 0, chunkSize: 24 });
     const store = new SparseWorldChunkStore();
     store.add(chunk);
     const points = getWorldChunkCorePoints(chunk);
@@ -230,6 +231,9 @@ function benchmarkVegetationPreparation() {
         (count, prepared) => count + prepared.lods.reduce((sum, lod) => sum + lod.instanceCount, 0),
         0
     );
+    if (grassInstances === 0 || treeInstances === 0) {
+        throw new Error("vegetation benchmark fixture must exercise both grass and trees");
+    }
     return {
         operation: "24x24 grass/tree three-LOD preparation x5",
         timing: sampled.timing,

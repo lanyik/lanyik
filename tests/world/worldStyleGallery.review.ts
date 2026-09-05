@@ -20,6 +20,7 @@ describe("world style hydrology review", () => {
             console.log(`WORLD_STYLE_SUMMARY=${JSON.stringify(report.map(metrics => ({
                 id: metrics.id,
                 water: metrics.ratios.water,
+                mountain: metrics.ratios.mountain,
                 waterComponents: metrics.waters.components,
                 dominantWater: metrics.waters.dominantRatio,
                 isolatedWater: metrics.waters.isolatedRatio,
@@ -47,7 +48,9 @@ describe("world style hydrology review", () => {
                 expect(metrics.waters.dominantRatio, `${sample.id} dominant water body`).toBeGreaterThan(0.3);
             }
             const expected = sample.group === "bounded"
-                ? { water: [0.45, 0.88], mountain: [0, 0.05], forest: [0.002, 0.05] }
+                // v17's reviewed ocean field exposes more of bounded-a's
+                // forest region; forest placement rules themselves are unchanged.
+                ? { water: [0.45, 0.88], mountain: [0, 0.05], forest: [0.002, 0.09] }
                 : sample.group === "toroidal-512"
                     ? { water: [0.15, 0.58], mountain: [0.04, 0.11], forest: [0.035, 0.07] }
                     : undefined;

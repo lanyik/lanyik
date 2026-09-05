@@ -16,7 +16,8 @@ const {
     ToroidalWorldSource,
     MIN_WORLD_SIZE,
     MAX_WORLD_SIZE,
-    DEFAULT_WORLD_WATER_STYLE
+    DEFAULT_WORLD_WATER_STYLE,
+    WORLD_WATER_STYLE_RANGES
 } = window.HexMap;
 const query = new URLSearchParams(window.location.search);
 const fastRenderMode = query.get("quality") === "fast";
@@ -299,6 +300,7 @@ const controls = {
     oceanLevel: DEFAULT_WORLD_WATER_STYLE.oceanLevel,
     riverSourceCellSize: DEFAULT_WORLD_WATER_STYLE.riverSourceCellSize,
     riverSourcesPerCell: DEFAULT_WORLD_WATER_STYLE.riverSourcesPerCell,
+    riverLength: DEFAULT_WORLD_WATER_STYLE.riverLength,
     riverWarpScale: DEFAULT_WORLD_WATER_STYLE.riverWarpScale,
     riverWarpAmplitude: DEFAULT_WORLD_WATER_STYLE.riverWarpAmplitude,
     riverBaseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
@@ -443,6 +445,7 @@ function currentWaterStyle() {
         oceanLevel: Number(controls.oceanLevel),
         riverSourceCellSize: Number(controls.riverSourceCellSize),
         riverSourcesPerCell: Number(controls.riverSourcesPerCell),
+        riverLength: Number(controls.riverLength),
         riverWarpScale: Number(controls.riverWarpScale),
         riverWarpAmplitude: Number(controls.riverWarpAmplitude),
         riverBaseRadius: Number(controls.riverBaseRadius),
@@ -610,21 +613,27 @@ const clearCacheController = worldFolder.add(controls, "clearCachedData");
 worldFolder.open();
 
 const waterGenerationFolder = gui.addFolder("Water generation");
-const oceanScaleController = waterGenerationFolder.add(controls, "oceanScale", 0.5, 3, 0.05);
-const oceanLevelController = waterGenerationFolder.add(controls, "oceanLevel", 0.32, 0.62, 0.005);
-const riverSourceCellController = waterGenerationFolder.add(controls, "riverSourceCellSize", 6, 30, 1);
-const riverSourcesController = waterGenerationFolder.add(controls, "riverSourcesPerCell", 1, 8, 1);
-const riverWarpScaleController = waterGenerationFolder.add(controls, "riverWarpScale", 0.005, 0.08, 0.001);
-const riverWarpAmplitudeController = waterGenerationFolder.add(controls, "riverWarpAmplitude", 0, 3.75, 0.05);
-const riverBaseRadiusController = waterGenerationFolder.add(controls, "riverBaseRadius", 0, 1.75, 0.05);
-const riverHighFlowRadiusController = waterGenerationFolder.add(controls, "riverHighFlowRadius", 2, 4, 0.05);
-const riverHighFlowThresholdController = waterGenerationFolder.add(controls, "riverHighFlowThreshold", 2, 24, 1);
+function addWaterController(property) {
+    const { min, max, step } = WORLD_WATER_STYLE_RANGES[property];
+    return waterGenerationFolder.add(controls, property, min, max, step);
+}
+const oceanScaleController = addWaterController("oceanScale");
+const oceanLevelController = addWaterController("oceanLevel");
+const riverSourceCellController = addWaterController("riverSourceCellSize");
+const riverSourcesController = addWaterController("riverSourcesPerCell");
+const riverLengthController = addWaterController("riverLength");
+const riverWarpScaleController = addWaterController("riverWarpScale");
+const riverWarpAmplitudeController = addWaterController("riverWarpAmplitude");
+const riverBaseRadiusController = addWaterController("riverBaseRadius");
+const riverHighFlowRadiusController = addWaterController("riverHighFlowRadius");
+const riverHighFlowThresholdController = addWaterController("riverHighFlowThreshold");
 const resetWaterController = waterGenerationFolder.add(controls, "resetWaterGeneration");
 const waterGenerationControllers = [
     oceanScaleController,
     oceanLevelController,
     riverSourceCellController,
     riverSourcesController,
+    riverLengthController,
     riverWarpScaleController,
     riverWarpAmplitudeController,
     riverBaseRadiusController,
@@ -714,6 +723,7 @@ const translatedControllers = [
     [oceanLevelController, "control.oceanLevel"],
     [riverSourceCellController, "control.riverSourceCellSize"],
     [riverSourcesController, "control.riverSourcesPerCell"],
+    [riverLengthController, "control.riverLength"],
     [riverWarpScaleController, "control.riverWarpScale"],
     [riverWarpAmplitudeController, "control.riverWarpAmplitude"],
     [riverBaseRadiusController, "control.riverBaseRadius"],

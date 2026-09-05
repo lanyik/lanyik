@@ -12,8 +12,8 @@ import {
     WorldWaterGenerationStyle
 } from "./WorldStyleProfile";
 
-export const WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
-export const WORLD_WORKER_PROTOCOL_VERSION = 4;
+export const WORLD_DESCRIPTOR_FORMAT_VERSION = 3;
+export const WORLD_WORKER_PROTOCOL_VERSION = 5;
 
 export type ProceduralWorldKind = "procedural-infinite" | "procedural-toroidal";
 

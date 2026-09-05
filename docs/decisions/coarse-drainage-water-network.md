@@ -1,6 +1,6 @@
 # Coarse-drainage water network
 
-Status: implemented; categorical banks, upstream extension, curved courses and tapered mouths refined on 2026-09-05 (generator v16).
+Status: implemented; reviewed water defaults and authored upstream length on 2026-09-05 (generator v17).
 
 ## Context
 
@@ -34,14 +34,26 @@ Drainage potential is dominated by the ocean field and adjusted by elevation,
 valley, moisture and a very small coordinate-stable jitter. Because the choice
 at a coarse coordinate is independent of the source that reached it, courses
 that meet share the same downstream path. The number of source courses crossing
-a point is the flow proxy: the radius now varies continuously from 1.25 to 2.75
-hex-neighbour spacings via `smoothstep(1, 8, flow)`. Each successful source
-course extends up to three genuine incoming drainage edges upstream, choosing
-the highest-potential eligible predecessor. Source count and the 72-node trace
-limit remain bounded; the existing downstream route does not change.
+a point is the flow proxy: the radius now varies continuously from 1.75 to 4
+hex-neighbour spacings via `smoothstep(1, 24, flow)`. Each successful source
+course extends up to `riverLength / 8` genuine incoming drainage edges upstream,
+choosing the highest-potential eligible predecessor. Default length 24 retains
+three steps; accepted values are 0–96 in increments of 8. This is nominal extra
+upstream length, not a prescribed total arc length. Zero disables extension,
+not rivers; a watershed or missing eligible predecessor stops it early.
+Source count and the 72-node trace limit remain bounded; the existing
+downstream route and source-search radius do not change.
 
-The default warp frequency/amplitude are 0.03 / 3.25, up from 0.025 / 2.5.
-The sea field remains unchanged. Accumulated rendered-centre distance to the
+The reviewed default warp frequency/amplitude are 0.08 / 3.75, source-region
+spacing is 16, ocean frequency multiplier is 1.4 and ocean threshold is 0.46.
+`WORLD_WATER_STYLE_RANGES` supplies both the panel and API validation; the full
+bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数v17).
+Tributary/main radius intervals are disjoint so every slider combination is valid.
+Warp amplitude remains below half a coarse step, with a 3.90 authoring ceiling;
+the old hidden 3.5 clamp is removed. Reduced lattices in small toroidal worlds
+scale the warp proportionally. Base and authored profiles use one ocean-field
+factory so changing the default multiplier cannot diverge direct sampling.
+Accumulated rendered-centre distance to the
 actual sea endpoint drives an additional smooth mouth flare over the last 24
 neighbour spacings, reaching 1.6 times the local flow radius at the sea. Merely
 passing near a coast does not trigger widening.
@@ -89,10 +101,12 @@ valid and unchanged.
 - Failed inland paths are discarded rather than converted into random ponds.
 - Generator v14 corrected raster coordinate parity; v15 added upstream extension,
   continuous flow widths and tapered mouths; v16 rounds the actual centreline.
-  Bumping again prevents interim v15 cached chunks from retaining straight reaches.
-  The generator identity changes;
-  existing golden checksums are retained where the fixture is unaffected. Packed chunks,
-  descriptors and worker protocol formats do not.
+  V17 changes the water defaults and adds required `waterStyle.riverLength`.
+  Descriptor v3 and Worker protocol v5 explicitly reject old identities and
+  missing fields; there is no migration or per-field defaulting. Normalization,
+  equality and serialization include length, partitioning chunks, overview
+  resolvers, persistence and navigation through the existing fingerprint.
+  Packed chunk encoding remains v1. Golden checksums change only where affected.
 
 ## Overview path and budget
 

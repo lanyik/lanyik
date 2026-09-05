@@ -111,6 +111,7 @@ export {
 } from "./world/LandformSampler";
 export {
     DEFAULT_WORLD_WATER_STYLE,
+    WORLD_WATER_STYLE_RANGES,
     assertWorldWaterGenerationStyle,
     normalizeWorldWaterGenerationStyle,
     serializeWorldWaterGenerationStyle,

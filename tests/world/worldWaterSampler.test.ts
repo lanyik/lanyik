@@ -4,7 +4,7 @@ import { Land } from "../../src/enums";
 import { getNeighbors } from "../../src/helpers/neighbors";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldWaterSampler, WorldWaterSampleAt } from "../../src/world/WorldWaterSampler";
-import { DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
+import { createWorldStyleProfile, DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
 
 const isBaseWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 const key = (x: number, y: number): string => `${x},${y}`;
@@ -87,10 +87,15 @@ function sampledWaterComponents(mask: Uint8Array, width: number, height: number)
 
 describe("generated water network", () => {
     test("extends established courses upstream without removing their downstream water", () => {
-        const original = slopingRiverTiles({ upstreamExtensionSteps: 0 });
-        const extended = slopingRiverTiles({ upstreamExtensionSteps: 3 });
+        const extension = (riverLength: number) => createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength })
+            .rivers.upstreamExtensionSteps;
+        const original = slopingRiverTiles({ upstreamExtensionSteps: extension(0) });
+        const extended = slopingRiverTiles({ upstreamExtensionSteps: extension(24) });
+        const longest = slopingRiverTiles({ upstreamExtensionSteps: extension(96) });
         for (const tile of original) expect(extended.has(tile)).toBe(true);
+        for (const tile of extended) expect(longest.has(tile)).toBe(true);
         expect(extended.size).toBeGreaterThan(original.size * 1.1);
+        expect(longest.size).toBeGreaterThan(extended.size);
         const upstreamArea = (tiles: Set<string>) => [...tiles].filter(tile => Number(tile.split(",")[0]) < 32).length;
         expect(upstreamArea(extended)).toBeGreaterThan(upstreamArea(original));
     });
@@ -140,8 +145,10 @@ describe("generated water network", () => {
         }
     });
 
-    test("keeps overview enumeration and paged tile resolution identical", () => {
-        const resolver = createWorldSurfaceResolver({ seed: "new-world" });
+    test.each([0, 24, 96])("keeps overview and paged resolution identical at extension %i", riverLength => {
+        const resolver = createWorldSurfaceResolver({
+            seed: "new-world", waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverLength }
+        });
         const enumerated = new Set<string>();
         resolver.visitGeneratedRiverTiles(-64, -64, 128, 128, (x, y) => enumerated.add(key(x, y)));
         const outer = new Set<string>();
@@ -224,7 +231,14 @@ describe("generated water network", () => {
         const resolver = createWorldSurfaceResolver({
             seed: "new-world",
             domain: { topology: "toroidal", width: 512, height: 512 },
-            waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverHighFlowRadius: 4, riverHighFlowThreshold: 2 }
+            // Pin a known coast/river intersection at the seam independently
+            // of authoring defaults; an all-sea seam cannot exercise this case.
+            waterStyle: {
+                ...DEFAULT_WORLD_WATER_STYLE,
+                oceanScale: 1, oceanLevel: 0.47, riverSourceCellSize: 12,
+                riverWarpScale: 0.03, riverWarpAmplitude: 3.25,
+                riverHighFlowRadius: 6, riverHighFlowThreshold: 2, riverLength: 96
+            }
         });
         const original = new Set<string>();
         const shifted = new Set<string>();

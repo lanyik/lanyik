@@ -337,7 +337,9 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
     private courseToWorld(point: Point): Point {
         const base = this.courseToBaseWorld(point);
         const rivers = this.profile.rivers;
-        const amplitude = Math.min(rivers.courseWarpAmplitude, Math.max(0, (this.courseStep - 1) / 2));
+        // Preserve the authored amplitude on the normal lattice. Small tori
+        // shrink the lattice and its warp together; do not silently cap 3.75 at 3.5.
+        const amplitude = rivers.courseWarpAmplitude * this.courseStep / rivers.courseStep;
         if (amplitude === 0) return base;
         return {
             x: base.x + Math.round((this.courseWarpAt(base, rivers.courseWarpSalt) * 2 - 1) * amplitude),

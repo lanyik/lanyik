@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { DEFAULT_WORLD_WATER_STYLE, WORLD_WATER_STYLE_RANGES, WorldWaterGenerationStyle } from "../../src/world/WorldStyleProfile";
 
 interface DemoDiagnostics {
     status: string;
@@ -7,7 +8,7 @@ interface DemoDiagnostics {
     worldStreaming?: { residentChunks: number };
     campaign?: { ready: boolean };
     renderer?: { triangles: number };
-    waterStyle?: { oceanLevel: number };
+    waterStyle?: WorldWaterGenerationStyle;
 }
 
 test("links the full terrain shader within the supported attribute budget", async ({ page }) => {
@@ -129,6 +130,9 @@ test("regenerates the world with water parameters from the control panel", async
         return state?.status === "generated" && !state.generating;
     });
 
+    for (const [name, value] of Object.entries(DEFAULT_WORLD_WATER_STYLE)) {
+        await expect(page.locator(`[data-water-generation="${name}"]`)).toHaveValue(String(value));
+    }
     const before = await page.evaluate(() => (window as unknown as {
         getWorldDiagnostics(): DemoDiagnostics & { worldLifecycle?: { generation: number } };
     }).getWorldDiagnostics().worldLifecycle?.generation);
@@ -148,4 +152,21 @@ test("regenerates the world with water parameters from the control panel", async
 
     expect(after).toBeGreaterThan(before ?? -1);
     await expect(oceanLevel).toHaveValue("0.54");
+
+    const length = page.locator('[data-water-generation="riverLength"]');
+    await length.fill(String(WORLD_WATER_STYLE_RANGES.riverLength.max));
+    await length.press("Enter");
+    await page.waitForFunction(() => {
+        const state = (window as unknown as { getWorldDiagnostics(): DemoDiagnostics }).getWorldDiagnostics();
+        return state.status === "generated" && !state.generating && state.waterStyle?.riverLength === 96;
+    });
+    // Reset must reset the generator as well as the panel, including the new field.
+    await page.getByText("Reset water parameters", { exact: true }).click();
+    await page.waitForFunction(defaults => {
+        const state = (window as unknown as { getWorldDiagnostics(): DemoDiagnostics }).getWorldDiagnostics();
+        return state.status === "generated" && !state.generating
+            && JSON.stringify(state.waterStyle) === JSON.stringify(defaults);
+    }, DEFAULT_WORLD_WATER_STYLE);
+    await expect(length).toHaveValue("24");
+    await expect(oceanLevel).toHaveValue("0.46");
 });

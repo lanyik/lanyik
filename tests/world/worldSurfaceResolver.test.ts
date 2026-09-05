@@ -51,7 +51,7 @@ describe("WorldSurfaceResolver", () => {
             }
         }
         expect(checksum(infinite.tiles)).toBe("31edd4fd");
-        expect(checksum(toroidal.tiles)).toBe("cfd821ed");
+        expect(checksum(toroidal.tiles)).toBe("5c34968c");
         expect(checksum(encoded)).toBe("99fb0dc5");
     });
 
@@ -107,7 +107,7 @@ describe("WorldSurfaceResolver", () => {
         expect(reliefValues.size).toBeGreaterThan(100);
         expect(vegetationValues.size).toBeGreaterThan(50);
         expect(oceanValues.size).toBeGreaterThan(20);
-        expect(checksum(encoded)).toBe("732a661d");
+        expect(checksum(encoded)).toBe("ce340641");
     });
 
     test("forms coherent generated water and regional forests without lake noise", () => {
@@ -133,7 +133,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("926f97ae");
+        expect(checksum(encoded)).toBe("62718e8f");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {
@@ -212,30 +212,32 @@ describe("WorldSurfaceResolver", () => {
             oceanLevel: 0.56,
             riverSourceCellSize: 18,
             riverSourcesPerCell: 6,
+            riverLength: 64,
             riverWarpScale: 0.04,
             riverWarpAmplitude: 3,
-            riverBaseRadius: 0,
+            riverBaseRadius: 0.5,
             riverHighFlowRadius: 3.25,
             riverHighFlowThreshold: 12
         };
         const profile = createWorldStyleProfile(waterStyle);
-        expect(profile.fields.ocean.openScale).toBe(WORLD_STYLE_PROFILE.fields.ocean.openScale * 2);
-        expect(profile.fields.ocean.toroidalScale).toBe(WORLD_STYLE_PROFILE.fields.ocean.toroidalScale * 2);
+        expect(profile.fields.ocean.openScale).toBe(0.0035 * 2);
+        expect(profile.fields.ocean.toroidalScale).toBe(0.006 * 2);
         expect(profile.fields.ocean.minimumToroidalCells).toBe(4);
         expect(profile.terrain.oceanLevel).toBe(0.56);
         expect(profile.rivers).toMatchObject({
             sourceCellSize: 18,
             sourcesPerCell: 6,
+            upstreamExtensionSteps: 8,
             courseWarpScale: 0.04,
             courseWarpAmplitude: 3,
-            baseCourseRadius: 0,
+            baseCourseRadius: 0.5,
             highFlowCourseRadius: 3.25,
             highFlowThreshold: 12
         });
         expect(createWorldSurfaceResolver({ seed: "styled-water", waterStyle }).waterStyle).toEqual(waterStyle);
 
         const invalid = { ...DEFAULT_WORLD_WATER_STYLE, riverWarpAmplitude: 4 };
-        expect(() => assertWorldWaterGenerationStyle(invalid)).toThrow(/course step/);
+        expect(() => assertWorldWaterGenerationStyle(invalid)).toThrow(/riverWarpAmplitude/);
     });
 
     test("rejects invalid seed and coordinate identities", () => {

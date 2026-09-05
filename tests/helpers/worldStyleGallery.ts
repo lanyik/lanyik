@@ -62,8 +62,10 @@ export const WORLD_STYLE_GALLERY_SAMPLES: readonly WorldStyleGallerySample[] = O
     sample("infinite-d-negative", "gallery-infinite-d", "infinite", 144, 144, "infinite-window", -288, -816),
     sample("infinite-d-positive", "gallery-infinite-d", "infinite", 144, 144, "infinite-window", 768, 144),
 
-    sample("extreme-dry", "gallery-torus-8", "toroidal", 64, 64, "extreme"),
-    sample("extreme-water", "gallery-torus-213", "toroidal", 64, 64, "extreme"),
+    // Re-selected for v17's authored ocean frequency/level; retain the actual
+    // <5% / >90% coverage gates, not the old seeds that no longer are extremes.
+    sample("extreme-dry", "gallery-torus-38", "toroidal", 64, 64, "extreme"),
+    sample("extreme-water", "gallery-open-ocean", "infinite", 64, 64, "extreme", 256, 0),
     sample("minimum-bounded", "gallery-minimum-bounded", "bounded", 8, 8, "minimum"),
     sample("minimum-toroidal", "gallery-minimum-toroidal", "toroidal", 8, 8, "minimum")
 ]);

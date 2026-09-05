@@ -10829,19 +10829,35 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 16;
+  var WORLD_GENERATOR_VERSION = 17;
 
   // src/world/WorldStyleProfile.ts
   var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
-    oceanScale: 1,
-    oceanLevel: 0.47,
-    riverSourceCellSize: 12,
+    oceanScale: 1.4,
+    oceanLevel: 0.46,
+    riverSourceCellSize: 16,
     riverSourcesPerCell: 4,
-    riverWarpScale: 0.03,
-    riverWarpAmplitude: 3.25,
-    riverBaseRadius: 1.25,
-    riverHighFlowRadius: 2.75,
-    riverHighFlowThreshold: 8
+    riverLength: 24,
+    riverWarpScale: 0.08,
+    riverWarpAmplitude: 3.75,
+    riverBaseRadius: 1.75,
+    riverHighFlowRadius: 4,
+    riverHighFlowThreshold: 24
+  });
+  var RIVER_COURSE_STEP = 8;
+  var waterRange = (min, max, step) => Object.freeze({ min, max, step });
+  var WORLD_WATER_STYLE_RANGES = Object.freeze({
+    oceanScale: waterRange(0.7, 2.8, 0.05),
+    oceanLevel: waterRange(0.32, 0.6, 5e-3),
+    riverSourceCellSize: waterRange(8, 32, 1),
+    riverSourcesPerCell: waterRange(1, 8, 1),
+    riverLength: waterRange(0, 96, RIVER_COURSE_STEP),
+    riverWarpScale: waterRange(0.02, 0.12, 1e-3),
+    riverWarpAmplitude: waterRange(0, 3.9, 0.05),
+    // Disjoint intervals keep every slider combination valid: tributary < main river.
+    riverBaseRadius: waterRange(0.5, 2.75, 0.05),
+    riverHighFlowRadius: waterRange(3, 6, 0.05),
+    riverHighFlowThreshold: waterRange(2, 48, 1)
   });
   var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
     salt,
@@ -10850,6 +10866,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     octaves,
     minimumToroidalCells
   });
+  var oceanField = (scale) => field(
+    374761393,
+    35e-4 * scale,
+    6e-3 * scale,
+    3,
+    Math.max(1, Math.round(2 * scale))
+  );
   var WORLD_STYLE_PROFILE = Object.freeze({
     generatorVersion: WORLD_GENERATOR_VERSION,
     fields: Object.freeze({
@@ -10865,7 +10888,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       forestPatch: field(1291169091, 0.026, 0.026, 3, 2),
       // This field intentionally stays an order of magnitude broader than
       // terrain detail. It owns continent-scale coastlines, not local relief.
-      ocean: field(374761393, 35e-4, 6e-3, 3, 2),
+      ocean: oceanField(DEFAULT_WORLD_WATER_STYLE.oceanScale),
       openWarpAmplitude: 15,
       toroidalWarpAmplitude: 0.12,
       continentWeight: 0.72,
@@ -10950,7 +10973,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     rivers: Object.freeze({
       pageSize: 128,
       maximumCachedPages: 16,
-      courseStep: 8,
+      courseStep: RIVER_COURSE_STEP,
       courseWarpScale: DEFAULT_WORLD_WATER_STYLE.riverWarpScale,
       courseWarpAmplitude: DEFAULT_WORLD_WATER_STYLE.riverWarpAmplitude,
       courseWarpOctaves: 2,
@@ -10965,7 +10988,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       sourceMoistureFloor: 0.7,
       minimumCourseLength: 3,
       maximumCourseLength: 72,
-      upstreamExtensionSteps: 3,
+      upstreamExtensionSteps: DEFAULT_WORLD_WATER_STYLE.riverLength / RIVER_COURSE_STEP,
       baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
       highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
       highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
@@ -11222,44 +11245,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw new TypeError("world water generation style must be an object");
     }
     const style = value;
-    for (const name of [
-      "oceanScale",
-      "oceanLevel",
-      "riverWarpScale",
-      "riverWarpAmplitude",
-      "riverBaseRadius",
-      "riverHighFlowRadius"
-    ]) finite(`waterStyle.${name}`, style[name]);
-    for (const name of [
-      "riverSourceCellSize",
-      "riverSourcesPerCell",
-      "riverHighFlowThreshold"
-    ]) {
-      if (!Number.isSafeInteger(style[name])) {
-        throw new RangeError(`waterStyle.${name} must be a safe integer`);
+    for (const name of Object.keys(WORLD_WATER_STYLE_RANGES)) {
+      const number = finite(`waterStyle.${name}`, style[name]);
+      const { min, max, step } = WORLD_WATER_STYLE_RANGES[name];
+      if (number < min || number > max) {
+        throw new RangeError(`waterStyle.${name} must be between ${min} and ${max}`);
       }
-    }
-    if (style.oceanScale < 0.25 || style.oceanScale > 8) {
-      throw new RangeError("waterStyle.oceanScale must be between 0.25 and 8");
-    }
-    unitInterval("waterStyle.oceanLevel", style.oceanLevel);
-    if (style.riverSourceCellSize < 4 || style.riverSourceCellSize > 32) {
-      throw new RangeError("waterStyle.riverSourceCellSize must be between 4 and 32");
-    }
-    if (style.riverSourcesPerCell < 1 || style.riverSourcesPerCell > 8) {
-      throw new RangeError("waterStyle.riverSourcesPerCell must be between 1 and 8");
-    }
-    if (style.riverWarpScale < 5e-3 || style.riverWarpScale > 0.1) {
-      throw new RangeError("waterStyle.riverWarpScale must be between 0.005 and 0.1");
-    }
-    if (style.riverWarpAmplitude < 0 || style.riverWarpAmplitude >= WORLD_STYLE_PROFILE.rivers.courseStep / 2) {
-      throw new RangeError("waterStyle.riverWarpAmplitude must be non-negative and below half the course step");
-    }
-    if (style.riverBaseRadius < 0 || style.riverBaseRadius > 2 || style.riverHighFlowRadius < 1 || style.riverHighFlowRadius > 4 || style.riverBaseRadius >= style.riverHighFlowRadius) {
-      throw new RangeError("waterStyle river radii must be ordered within supported bounds");
-    }
-    if (style.riverHighFlowThreshold < 2 || style.riverHighFlowThreshold > 32) {
-      throw new RangeError("waterStyle.riverHighFlowThreshold must be between 2 and 32");
+      if (step >= 1 && (!Number.isSafeInteger(number) || (number - min) % step !== 0)) {
+        throw new RangeError(`waterStyle.${name} must be an integer in increments of ${step} from ${min}`);
+      }
     }
   }
   function normalizeWorldWaterGenerationStyle(value = DEFAULT_WORLD_WATER_STYLE) {
@@ -11269,6 +11263,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       oceanLevel: value.oceanLevel,
       riverSourceCellSize: value.riverSourceCellSize,
       riverSourcesPerCell: value.riverSourcesPerCell,
+      riverLength: value.riverLength,
       riverWarpScale: value.riverWarpScale,
       riverWarpAmplitude: value.riverWarpAmplitude,
       riverBaseRadius: value.riverBaseRadius,
@@ -11283,6 +11278,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       value.oceanLevel,
       value.riverSourceCellSize,
       value.riverSourcesPerCell,
+      value.riverLength,
       value.riverWarpScale,
       value.riverWarpAmplitude,
       value.riverBaseRadius,
@@ -11293,22 +11289,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function worldWaterGenerationStylesEqual(first, second) {
     assertWorldWaterGenerationStyle(first);
     assertWorldWaterGenerationStyle(second);
-    return first.oceanScale === second.oceanScale && first.oceanLevel === second.oceanLevel && first.riverSourceCellSize === second.riverSourceCellSize && first.riverSourcesPerCell === second.riverSourcesPerCell && first.riverWarpScale === second.riverWarpScale && first.riverWarpAmplitude === second.riverWarpAmplitude && first.riverBaseRadius === second.riverBaseRadius && first.riverHighFlowRadius === second.riverHighFlowRadius && first.riverHighFlowThreshold === second.riverHighFlowThreshold;
+    return first.oceanScale === second.oceanScale && first.oceanLevel === second.oceanLevel && first.riverSourceCellSize === second.riverSourceCellSize && first.riverSourcesPerCell === second.riverSourcesPerCell && first.riverLength === second.riverLength && first.riverWarpScale === second.riverWarpScale && first.riverWarpAmplitude === second.riverWarpAmplitude && first.riverBaseRadius === second.riverBaseRadius && first.riverHighFlowRadius === second.riverHighFlowRadius && first.riverHighFlowThreshold === second.riverHighFlowThreshold;
   }
   function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
     const style = normalizeWorldWaterGenerationStyle(waterStyle);
-    const ocean = WORLD_STYLE_PROFILE.fields.ocean;
     const profile = Object.freeze({
       ...WORLD_STYLE_PROFILE,
       fields: Object.freeze({
         ...WORLD_STYLE_PROFILE.fields,
-        ocean: field(
-          ocean.salt,
-          ocean.openScale * style.oceanScale,
-          ocean.toroidalScale * style.oceanScale,
-          ocean.octaves,
-          Math.max(1, Math.round(ocean.minimumToroidalCells * style.oceanScale))
-        )
+        ocean: oceanField(style.oceanScale)
       }),
       terrain: Object.freeze({
         ...WORLD_STYLE_PROFILE.terrain,
@@ -11318,6 +11307,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ...WORLD_STYLE_PROFILE.rivers,
         sourceCellSize: style.riverSourceCellSize,
         sourcesPerCell: style.riverSourcesPerCell,
+        upstreamExtensionSteps: style.riverLength / RIVER_COURSE_STEP,
         courseWarpScale: style.riverWarpScale,
         courseWarpAmplitude: style.riverWarpAmplitude,
         baseCourseRadius: style.riverBaseRadius,
@@ -11842,7 +11832,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     courseToWorld(point) {
       const base = this.courseToBaseWorld(point);
       const rivers = this.profile.rivers;
-      const amplitude = Math.min(rivers.courseWarpAmplitude, Math.max(0, (this.courseStep - 1) / 2));
+      const amplitude = rivers.courseWarpAmplitude * this.courseStep / rivers.courseStep;
       if (amplitude === 0) return base;
       return {
         x: base.x + Math.round((this.courseWarpAt(base, rivers.courseWarpSalt) * 2 - 1) * amplitude),
@@ -12849,8 +12839,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   };
 
   // src/world/WorldDescriptor.ts
-  var WORLD_DESCRIPTOR_FORMAT_VERSION = 2;
-  var WORLD_WORKER_PROTOCOL_VERSION = 4;
+  var WORLD_DESCRIPTOR_FORMAT_VERSION = 3;
+  var WORLD_WORKER_PROTOCOL_VERSION = 5;
   function assertChunkSize(value) {
     if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -22243,6 +22233,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.WORLD_GENERATOR_VERSION = WORLD_GENERATOR_VERSION;
   exports.WORLD_OVERVIEW_FORMAT_VERSION = WORLD_OVERVIEW_FORMAT_VERSION;
   exports.WORLD_VEGETATION_FORMAT_VERSION = WORLD_VEGETATION_FORMAT_VERSION;
+  exports.WORLD_WATER_STYLE_RANGES = WORLD_WATER_STYLE_RANGES;
   exports.WORLD_WORKER_PROTOCOL_VERSION = WORLD_WORKER_PROTOCOL_VERSION;
   exports.WebGlGpuTimer = WebGlGpuTimer;
   exports.WorkQueueBackpressureError = WorkQueueBackpressureError;
