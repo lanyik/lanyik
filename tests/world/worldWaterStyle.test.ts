@@ -67,4 +67,14 @@ describe("water authoring contract", () => {
         expect(longest.rivers.courseLengthMultiplier).toBe(3);
         expect(longest.rivers.maximumCourseLength).toBe(WORLD_STYLE_PROFILE.rivers.maximumCourseLength);
     });
+
+    test("keeps API bounds strict and fractional authoring unquantized", () => {
+        // Decimal cleanup belongs to the demo's stepped inputs, not to world identity.
+        const snapped = Math.round(3.9 / 0.05) * 0.05;
+        expect(snapped).toBeGreaterThan(WORLD_WATER_STYLE_RANGES.riverWarpAmplitude.max);
+        expect(() => assertWorldWaterGenerationStyle({ ...DEFAULT_WORLD_WATER_STYLE, riverWarpAmplitude: snapped }))
+            .toThrow(/riverWarpAmplitude/);
+        const precise = { ...DEFAULT_WORLD_WATER_STYLE, riverWarpAmplitude: 3.87654321 };
+        expect(normalizeWorldWaterGenerationStyle(precise)).toEqual(precise);
+    });
 });

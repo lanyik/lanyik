@@ -626,7 +626,13 @@ worldFolder.open();
 const waterGenerationFolder = gui.addFolder("Water generation");
 function addWaterController(property) {
     const { min, max, step } = WORLD_WATER_STYLE_RANGES[property];
-    return waterGenerationFolder.add(controls, property, min, max, step);
+    const precision = (String(step).split(".")[1] ?? "").length;
+    return waterGenerationFolder.add(controls, property, min, max, step).onChange(value => {
+        // dat.gui clamps before snapping to step multiples: 78 * 0.05 becomes
+        // 3.9000000000000004. Normalize the authored decimal AFTER that snap,
+        // for both the slider and its linked input. setValue would snap again.
+        controls[property] = Number(value.toFixed(precision));
+    });
 }
 const oceanScaleController = addWaterController("oceanScale");
 const oceanLevelController = addWaterController("oceanLevel");

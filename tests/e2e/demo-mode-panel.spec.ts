@@ -170,3 +170,58 @@ test("regenerates the world with water parameters from the control panel", async
     await expect(length).toHaveValue("100");
     await expect(oceanLevel).toHaveValue("0.46");
 });
+
+test("publishes exact decimal water values at slider bounds and from typed input", async ({ page }) => {
+    test.setTimeout(90_000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => {
+        if (message.type() === "error") errors.push(message.text());
+    });
+    await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => {
+        const state = (window as unknown as { getWorldDiagnostics?: () => DemoDiagnostics }).getWorldDiagnostics?.();
+        return state?.waterStyle && !state.generating;
+    });
+    const checkPublication = async (property: keyof WorldWaterGenerationStyle, value: number) => {
+        await page.waitForFunction(({ property, value }) => {
+            const state = (window as unknown as { getWorldDiagnostics(): DemoDiagnostics }).getWorldDiagnostics();
+            return !state.generating && (state.status === "failed" || state.waterStyle?.[property] === value);
+        }, { property, value }, { timeout: 20_000 });
+        const result = await page.evaluate(property => {
+            const api = window as unknown as {
+                getWorldDiagnostics(): DemoDiagnostics;
+                worldControls: WorldWaterGenerationStyle;
+            };
+            const state = api.getWorldDiagnostics();
+            return { failed: state.status === "failed", authored: api.worldControls[property], published: state.waterStyle?.[property] };
+        }, property);
+        expect(result).toEqual({ failed: false, authored: value, published: value });
+    };
+    // Reproduce 78 * 0.05 at the upper edge first, then cover every fractional
+    // step's endpoints. The real drag goes outside the track to exercise clamping.
+    const properties = ["riverWarpAmplitude", ...Object.keys(WORLD_WATER_STYLE_RANGES)
+        .filter(name => name !== "riverWarpAmplitude") ] as (keyof WorldWaterGenerationStyle)[];
+    for (const property of properties) {
+        const { min, max, step } = WORLD_WATER_STYLE_RANGES[property];
+        if (step >= 1) continue;
+        const input = page.locator(`[data-water-generation="${property}"]`);
+        const slider = page.locator(".cr.number").filter({ has: input }).locator(".slider");
+        const bounds = (await slider.boundingBox())!;
+        for (const value of [max, min]) {
+            await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+            await page.mouse.down();
+            await page.mouse.move(value === max ? bounds.x + bounds.width + 8 : bounds.x - 8, bounds.y + bounds.height / 2);
+            await page.mouse.up();
+            await checkPublication(property, value);
+        }
+    }
+    const amplitude = page.locator('[data-water-generation="riverWarpAmplitude"]');
+    for (const [typed, expected] of [["3.15", 3.15], ["3.9", 3.9], ["4", 3.9], ["-1", 0]] as const) {
+        await amplitude.fill(typed);
+        await amplitude.press("Enter");
+        await checkPublication("riverWarpAmplitude", expected);
+        await expect(amplitude).toHaveValue(String(expected));
+    }
+    expect(errors).toEqual([]);
+});
