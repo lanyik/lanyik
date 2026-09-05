@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generation checkpoints require an explicit authoritative mutation boundary
+  around complete capture and restore. Campaign ownership checks and shutdown
+  admission prevent asynchronous snapshots from crossing world-state changes.
 - Procedural and toroidal sources reject late chunk publication after disposal
   or cancellation, including cache reads and asynchronous delta restoration.
 - Resource estimates include full instance matrix/color capacity and instance

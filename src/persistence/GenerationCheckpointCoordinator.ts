@@ -89,6 +89,8 @@ export interface GenerationCheckpointCoordinatorOptions {
     descriptor: WorldDescriptor;
     participants: readonly GenerationCheckpointParticipant[];
     store: GenerationCheckpointStore;
+    /** Runs capture/restore exclusively with respect to authoritative mutations. */
+    withWorldState: <T>(operation: () => Promise<T>) => Promise<T>;
     operationTimeoutMs?: number;
     orphanGraceMs?: number;
     now?: () => number;
@@ -646,6 +648,7 @@ export class GenerationCheckpointCoordinator {
     private readonly participants: readonly GenerationCheckpointParticipant[];
     private readonly participantById = new Map<string, GenerationCheckpointParticipant>();
     private readonly store: GenerationCheckpointStore;
+    private readonly withWorldState: GenerationCheckpointCoordinatorOptions["withWorldState"];
     private readonly timeoutMs: number;
     private readonly orphanGraceMs: number;
     private readonly now: () => number;
@@ -667,10 +670,14 @@ export class GenerationCheckpointCoordinator {
         if (!Array.isArray(options.participants) || options.participants.length === 0) {
             throw new TypeError("checkpoint participants must be a non-empty array");
         }
+        if (typeof options.withWorldState !== "function") {
+            throw new TypeError("checkpoint withWorldState must provide an authoritative state boundary");
+        }
         this.worldId = options.worldId;
         this.descriptor = cloneValue(options.descriptor);
         this.participants = [...options.participants];
         this.store = options.store;
+        this.withWorldState = options.withWorldState;
         this.timeoutMs = options.operationTimeoutMs ?? 10_000;
         this.orphanGraceMs = options.orphanGraceMs ?? 5 * 60_000;
         this.now = options.now ?? Date.now;
@@ -756,16 +763,20 @@ export class GenerationCheckpointCoordinator {
         const stagedKeys: string[] = [];
         let publishStarted = false;
         try {
-            const captures = await Promise.all(this.participants.map(async participant => {
-                try {
-                    const snapshot = await this.runParticipant(controller, () => participant.capture(context));
-                    const copy = cloneValue(snapshot);
-                    return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) } as const;
-                } catch (reason) {
-                    if (participant.required ?? true) throw reason;
-                    return { participant, error: errorMessage(reason) } as const;
-                }
-            }));
+            const captures = await this.runInWorldState(controller, async () => {
+                const results = await Promise.all(this.participants.map(async participant => {
+                    try {
+                        const snapshot = await this.runParticipant(controller, () => participant.capture(context));
+                        const copy = cloneValue(snapshot);
+                        return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) } as const;
+                    } catch (reason) {
+                        return { participant, error: errorMessage(reason), reason } as const;
+                    }
+                }));
+                const failed = results.find(result => "error" in result && (result.participant.required ?? true));
+                if (failed && "reason" in failed) throw failed.reason;
+                return results;
+            });
             const records: GenerationCheckpointParticipantRecord[] = [];
             for (const capture of captures) {
                 if ("error" in capture) {
@@ -904,9 +915,11 @@ export class GenerationCheckpointCoordinator {
                 signal: controller.signal,
                 startedAt: this.now()
             };
-            for (const restore of restores) {
-                await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
-            }
+            await this.runInWorldState(controller, async () => {
+                for (const restore of restores) {
+                    await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
+                }
+            });
             this.recoveredCheckpoints += 1;
             await this.collectUnreferencedStages(controller.signal);
         } catch (reason) {
@@ -939,6 +952,7 @@ export class GenerationCheckpointCoordinator {
     }
 
     private startOperation(signal?: AbortSignal): AbortController {
+        if (this.disposed) throw new Error("GenerationCheckpointCoordinator has been disposed");
         this.running = true;
         const controller = new AbortController();
         this.activeController = controller;
@@ -980,5 +994,25 @@ export class GenerationCheckpointCoordinator {
             controller.signal.addEventListener("abort", aborted, { once: true });
             void task.then(value => finish(resolve as (value: T | unknown) => void, value), reason => finish(reject, reason));
         });
+    }
+
+    private async runInWorldState<T>(controller: AbortController, operation: () => Promise<T>): Promise<T> {
+        let invoked = false;
+        let completed = false;
+        let active = true;
+        try {
+            const result = await this.runParticipant(controller, () => this.withWorldState(async () => {
+                if (!active || invoked) throw new Error("checkpoint state boundary must invoke its operation exactly once while active");
+                invoked = true;
+                if (controller.signal.aborted) throw controller.signal.reason;
+                const value = await operation();
+                completed = true;
+                return value;
+            }));
+            if (!completed) throw new Error("checkpoint state boundary must await its operation");
+            return result;
+        } finally {
+            active = false;
+        }
     }
 }

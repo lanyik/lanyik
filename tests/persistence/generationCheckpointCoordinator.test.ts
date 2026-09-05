@@ -18,6 +18,49 @@ import { deferred } from "../helpers/deferred";
 const descriptor = createWorldDescriptor({ seed: "strict-save", chunkSize: 24 });
 
 describe("GenerationCheckpointCoordinator", () => {
+    test("captures asynchronous participants at one world-state boundary", async () => {
+        let queued = Promise.resolve();
+        const exclusive = <T>(task: () => Promise<T>): Promise<T> => {
+            const result = queued.then(task);
+            queued = result.then(() => undefined, () => undefined);
+            return result;
+        };
+        const entered = deferred<void>();
+        const release = deferred<void>();
+        const state = { terrain: 0, simulation: 0 };
+        const restored: number[] = [];
+        const coordinator = new GenerationCheckpointCoordinator({
+            worldId: "boundary", descriptor, store: new MemoryGenerationCheckpointStore(),
+            withWorldState: exclusive,
+            participants: [{
+                id: "terrain", version: 1, capture: () => state.terrain,
+                restore: (_context, snapshot) => { restored.push(snapshot as number); }
+            }, {
+                id: "simulation", version: 1,
+                capture: async () => { entered.resolve(); await release.promise; return state.simulation; },
+                restore: (_context, snapshot) => { restored.push(snapshot as number); }
+            }]
+        });
+        const saving = coordinator.checkpoint();
+        await entered.promise;
+        const mutation = exclusive(async () => { state.terrain = state.simulation = 1; });
+        await Promise.resolve();
+        expect(state).toEqual({ terrain: 0, simulation: 0 });
+        release.resolve();
+        await saving;
+        await mutation;
+        expect(state).toEqual({ terrain: 1, simulation: 1 });
+        await coordinator.recover();
+        expect(restored).toEqual([0, 0]);
+    });
+
+    test("rejects a missing state boundary instead of assuming domain synchronization", () => {
+        expect(() => new GenerationCheckpointCoordinator({
+            worldId: "boundary", descriptor, store: new MemoryGenerationCheckpointStore(),
+            withWorldState: undefined as never,
+            participants: [{ id: "state", version: 1, capture: () => 0, restore: () => {} }]
+        })).toThrow("authoritative state boundary");
+    });
     test("dispose releases in-memory manifests and stages", async () => {
         const store = new MemoryGenerationCheckpointStore();
         await store.putStage({
@@ -50,6 +93,7 @@ describe("GenerationCheckpointCoordinator", () => {
             restore: vi.fn()
         };
         const coordinator = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "world", descriptor, store, participants: [participant], orphanGraceMs: 0
         });
         const first = await coordinator.checkpoint();
@@ -67,6 +111,7 @@ describe("GenerationCheckpointCoordinator", () => {
 
         const restored: Array<{ coins: number }> = [];
         const reopened = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "world",
             descriptor,
             store,
@@ -138,6 +183,7 @@ describe("GenerationCheckpointCoordinator", () => {
         } satisfies GenerationCheckpointStore;
         const restore = vi.fn();
         const coordinator = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "legacy-checksum", descriptor, store,
             participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
         });
@@ -163,10 +209,12 @@ describe("GenerationCheckpointCoordinator", () => {
         const store = new PausedPublishStore();
         const participant = { id: "state", version: 1, capture: () => ({ durable: true }), restore() {} };
         const writer = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "publish-race", descriptor, store, participants: [participant],
             now: () => 10, orphanGraceMs: 0
         });
         const collector = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "publish-race", descriptor, store, participants: [participant],
             now: () => 10, orphanGraceMs: 0
         });
@@ -193,6 +241,7 @@ describe("GenerationCheckpointCoordinator", () => {
         }
         const store = new AmbiguousStore();
         const coordinator = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "ambiguous",
             descriptor,
             store,
@@ -204,6 +253,7 @@ describe("GenerationCheckpointCoordinator", () => {
 
         const restore = vi.fn();
         const reopened = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "ambiguous", descriptor, store,
             participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
         });
@@ -217,10 +267,12 @@ describe("GenerationCheckpointCoordinator", () => {
             id: "state", version: 1, capture: () => ({ value }), restore() {}
         });
         const first = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "concurrent", descriptor, store, participants: [participant("first")],
             createSaveId: () => "first-save", orphanGraceMs: 0
         });
         const second = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "concurrent", descriptor, store, participants: [participant("second")],
             createSaveId: () => "second-save", orphanGraceMs: 0
         });
@@ -237,6 +289,7 @@ describe("GenerationCheckpointCoordinator", () => {
         const store = new MemoryGenerationCheckpointStore();
         let state: { value: number; label?: string } = { value: 3 };
         const old = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "migration", descriptor, store,
             participants: [{ id: "state", version: 1, capture: () => state, restore() {} }],
             createSaveId: () => "old-save"
@@ -244,6 +297,7 @@ describe("GenerationCheckpointCoordinator", () => {
         await old.checkpoint();
 
         const current = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "migration", descriptor, store,
             participants: [{
                 id: "state",
@@ -265,9 +319,11 @@ describe("GenerationCheckpointCoordinator", () => {
         const store = new MemoryGenerationCheckpointStore();
         const participant = { id: "state", version: 1, capture: () => ({}), restore: vi.fn() };
         await new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "descriptor", descriptor, store, participants: [participant]
         }).checkpoint();
         const wrong = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "descriptor",
             descriptor: createWorldDescriptor({ seed: "different", chunkSize: 24 }),
             store,
@@ -286,6 +342,7 @@ describe("GenerationCheckpointCoordinator", () => {
         };
         await store.putStage(orphan);
         const coordinator = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "garbage", descriptor, store, now: () => 20, orphanGraceMs: 0,
             participants: [{ id: "state", version: 1, capture: () => ({}), restore() {} }]
         });
@@ -297,6 +354,7 @@ describe("GenerationCheckpointCoordinator", () => {
         const databaseName = `generation-checkpoint-${Date.now()}-${Math.random()}`;
         const firstStore = new IndexedDbGenerationCheckpointStore({ databaseName });
         const first = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "indexed", descriptor, store: firstStore,
             participants: [{ id: "state", version: 1, capture: () => ({ durable: true }), restore() {} }]
         });
@@ -307,6 +365,7 @@ describe("GenerationCheckpointCoordinator", () => {
         const restore = vi.fn();
         const reopenedStore = new IndexedDbGenerationCheckpointStore({ databaseName });
         const reopened = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: "indexed", descriptor, store: reopenedStore,
             participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
         });

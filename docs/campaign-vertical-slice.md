@@ -55,6 +55,11 @@ automation, but they are no longer separate user-facing launch routes.
 - Army position, route cursor and progress belong to simulation snapshots.
 - The outpost belongs to sparse World Delta persistence.
 - The marker is disposable presentation state and is never persisted.
+- Startup, the serial campaign operation queue and drained shutdown own
+  authoritative state. The checkpoint `withWorldState` hook asserts that
+  ownership before capturing/restoring simulation and terrain together.
+  Closing the controller rejects newly submitted operations before its final
+  checkpoint, so they cannot race shutdown persistence.
 - This example writes only a passability-neutral city delta. A terrain editor
   must rebuild versioned navigation summaries when terrain or movement costs
   change; it must not reuse the demo's neutral-delta revision policy.

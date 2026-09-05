@@ -99,6 +99,7 @@ describe("foundation generation checkpoint participants", () => {
         source.setTileOverride(2, 3, { unit: "committed" });
 
         const coordinator = new GenerationCheckpointCoordinator({
+            withWorldState: operation => operation(),
             worldId: source.worldId,
             descriptor: source.descriptor,
             store: new MemoryGenerationCheckpointStore(),

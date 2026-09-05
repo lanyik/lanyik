@@ -2354,10 +2354,14 @@ var GenerationCheckpointCoordinator = class {
     if (!Array.isArray(options.participants) || options.participants.length === 0) {
       throw new TypeError("checkpoint participants must be a non-empty array");
     }
+    if (typeof options.withWorldState !== "function") {
+      throw new TypeError("checkpoint withWorldState must provide an authoritative state boundary");
+    }
     this.worldId = options.worldId;
     this.descriptor = cloneValue(options.descriptor);
     this.participants = [...options.participants];
     this.store = options.store;
+    this.withWorldState = options.withWorldState;
     this.timeoutMs = options.operationTimeoutMs ?? 1e4;
     this.orphanGraceMs = options.orphanGraceMs ?? 5 * 6e4;
     this.now = options.now ?? Date.now;
@@ -2435,16 +2439,20 @@ var GenerationCheckpointCoordinator = class {
     const stagedKeys = [];
     let publishStarted = false;
     try {
-      const captures = await Promise.all(this.participants.map(async (participant) => {
-        try {
-          const snapshot = await this.runParticipant(controller, () => participant.capture(context));
-          const copy = cloneValue(snapshot);
-          return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) };
-        } catch (reason) {
-          if (participant.required ?? true) throw reason;
-          return { participant, error: errorMessage2(reason) };
-        }
-      }));
+      const captures = await this.runInWorldState(controller, async () => {
+        const results = await Promise.all(this.participants.map(async (participant) => {
+          try {
+            const snapshot = await this.runParticipant(controller, () => participant.capture(context));
+            const copy = cloneValue(snapshot);
+            return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) };
+          } catch (reason) {
+            return { participant, error: errorMessage2(reason), reason };
+          }
+        }));
+        const failed = results.find((result) => "error" in result && (result.participant.required ?? true));
+        if (failed && "reason" in failed) throw failed.reason;
+        return results;
+      });
       const records = [];
       for (const capture of captures) {
         if ("error" in capture) {
@@ -2574,9 +2582,11 @@ var GenerationCheckpointCoordinator = class {
         signal: controller.signal,
         startedAt: this.now()
       };
-      for (const restore of restores) {
-        await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
-      }
+      await this.runInWorldState(controller, async () => {
+        for (const restore of restores) {
+          await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
+        }
+      });
       this.recoveredCheckpoints += 1;
       await this.collectUnreferencedStages(controller.signal);
     } catch (reason) {
@@ -2603,6 +2613,7 @@ var GenerationCheckpointCoordinator = class {
     }
   }
   startOperation(signal) {
+    if (this.disposed) throw new Error("GenerationCheckpointCoordinator has been disposed");
     this.running = true;
     const controller = new AbortController();
     this.activeController = controller;
@@ -2645,6 +2656,25 @@ var GenerationCheckpointCoordinator = class {
       controller.signal.addEventListener("abort", aborted, { once: true });
       void task.then((value) => finish(resolve, value), (reason) => finish(reject, reason));
     });
+  }
+  async runInWorldState(controller, operation) {
+    let invoked = false;
+    let completed = false;
+    let active = true;
+    try {
+      const result = await this.runParticipant(controller, () => this.withWorldState(async () => {
+        if (!active || invoked) throw new Error("checkpoint state boundary must invoke its operation exactly once while active");
+        invoked = true;
+        if (controller.signal.aborted) throw controller.signal.reason;
+        const value = await operation();
+        completed = true;
+        return value;
+      }));
+      if (!completed) throw new Error("checkpoint state boundary must await its operation");
+      return result;
+    } finally {
+      active = false;
+    }
   }
 };
 

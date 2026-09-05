@@ -17,31 +17,24 @@
 
 ## 2. 统一持久化边界
 
-`CheckpointCoordinator` 在独立 IndexedDB/存储之间建立应用级 checkpoint 协议。它不声称浏览器能提供跨数据库事务，而是用 CAS journal 和幂等提交获得崩溃后可恢复的一致结果。
+`GenerationCheckpointCoordinator` 是权威存档入口。每次存档先在应用提供的
+`withWorldState(operation)` 互斥边界内捕获全部参与者并复制快照，再写不可变 staging，
+读回校验 checksum，最后以单次 CAS manifest 事务公开整个世代。manifest 是唯一提交点；
+崩溃前后只能选中完整的旧世代或新世代。
 
-```text
-preparing -> committing -> committed
-     |             |
-     | crash       | crash
-     v             v
- abort old      replay unfinished commits
- session        from durable tokens
-```
+该边界必须排除模拟推进、地形编辑和其他权威状态变更，直到全部异步 capture 完成。
+仅把多个 capture 放进 `Promise.all`，或给记录分配同一 saveId，不能保证同一逻辑时刻。
+恢复在全部记录校验通过后，也通过同一互斥边界应用快照；参与者失败应中止恢复，
+不能把互斥误认为跨 store 的回滚事务。staging 写入不占用捕获锁，允许游戏继续运行。
+缺少边界、未等待回调或重复调用均显式失败，不推断应用已经同步。
 
-硬约束：
+Campaign 的初始恢复、串行操作队列和排空后的关闭过程持有该边界；关闭时拒绝新操作。
+必需参与者是 simulation 和 terrain delta，可重建 world cache 不进入权威存档。
+存档校验完整 world descriptor、参与者版本和快照 checksum，保留上一完整世代，
+并通过原子垃圾回收删除未引用的 staging。
 
-- participant 的 `prepare()` 只能返回不可变快照或已持久化的 staging token，不能提前公开新状态。
-- 所有 required participant 均 prepared 后，journal 才进入 committing，形成提交点。
-- `commit()` 必须幂等；每个成功 participant 都单独写入 journal。
-- 新进程会续做 committing；旧进程未完成的 preparing 若缺 token，则安全标为 aborted。
-- required participant 在 prepare 阶段失败或超时时，会先持久化 aborted 意图；即使仍在同一进程，下一次 checkpoint 也必须回滚旧 staging 并开启新 generation，不能把两个时间点的 token 拼成一个存档。
-- journal 使用 revision CAS，两个页面/进程不能静默覆盖同一 world generation。
-- participant token 带版本；恢复时必须显式迁移，不兼容版本会停止恢复。
-- prepare 使用外部 staging 时应实现幂等 `rollback()`；废弃世代先持久化 aborted 意图，再逐 participant 清理，崩溃后可续做。
-- 单次参与者操作有超时和独立取消信号；可重建 cache 可设为 optional，失败只形成 degraded checkpoint。
-
-`createFlushCheckpointParticipant()` 是旧式串行 store 的兼容桥。它提供幂等 forward recovery，但严格的 point-in-time 存档应直接实现 prepare/commit，并在 token 中保存快照或 staging 引用。Campaign 已统一通过 coordinator 保存 simulation、terrain delta 和可重建 world cache；模拟先于地形提交，领域层的前哨站重放仍作为额外的业务一致性保护。
-
+`CheckpointCoordinator` 与 `createFlushCheckpointParticipant()` 是独立的 journal/flush
+协议，代码仍然导出，但不具备严格的同一时刻快照保证，不用于 Campaign 的权威存档。
 协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包；这让存档协议可以独立演进，也避免只使用地图渲染的应用承担 IndexedDB/journal 代码体积。
 
 ## 3. 真实资源预算

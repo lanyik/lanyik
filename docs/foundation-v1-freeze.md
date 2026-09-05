@@ -18,6 +18,23 @@ captures every required participant, writes immutable records under one unique
 manifest with an IndexedDB compare-and-set transaction. The manifest is the
 only commit point.
 
+The required `withWorldState(operation)` option supplies the application's
+authoritative mutation boundary. It must execute and await the operation once,
+excluding simulation advances, terrain edits and other authoritative mutations
+until every participant has produced a detached snapshot. Asynchronous capture
+alone cannot establish a common logical time. Immutable staging and manifest
+publication run after capture releases this boundary; ordinary play can resume
+while those records are persisted. Recovery applies all validated participants
+inside the same boundary. A failed restore must be treated as a failed recovery;
+the boundary does not add rollback across participant stores.
+
+Applications can route mutations and `withWorldState` through one serial queue,
+calling `checkpoint()` outside that queue. If the entire checkpoint already runs
+inside an exclusive application operation, the hook should assert ownership and
+execute directly, avoiding a recursive enqueue. Capture/restore callbacks must
+observe their cancellation signal. The coordinator rejects a missing boundary,
+early return, repeated invocation and late invocation after cancellation.
+
 - A crash before manifest publication leaves the previous generation active.
 - A crash after publication exposes the complete new generation.
 - The manifest retains one complete previous generation; garbage collection

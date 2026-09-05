@@ -137,7 +137,14 @@ export async function createCampaignDemo({
         store
     });
     simulation.registerSystem(createArmyMarchSystem());
+    // Startup, queued campaign operations and drained shutdown are the only
+    // owners allowed to capture or replace authoritative state.
+    let exclusiveStateAccess = true;
     const checkpoints = new GenerationCheckpointCoordinator({
+        withWorldState: task => {
+            if (!exclusiveStateAccess) throw new Error("Campaign checkpoint requires an exclusive world operation");
+            return task();
+        },
         worldId,
         descriptor: source.descriptor,
         store: new IndexedDbGenerationCheckpointStore({
@@ -243,11 +250,15 @@ export async function createCampaignDemo({
     };
 
     await handleArrival();
+    exclusiveStateAccess = false;
 
     const enqueue = task => {
+        if (disposing || disposed) return Promise.reject(new Error("Campaign demo is closing"));
         const result = operation.then(async () => {
             if (disposed) throw new Error("Campaign demo has been disposed");
-            return task();
+            exclusiveStateAccess = true;
+            try { return await task(); }
+            finally { exclusiveStateAccess = false; }
         });
         operation = result.then(() => undefined, error => {
             console.error(error);
@@ -365,8 +376,10 @@ export async function createCampaignDemo({
             disposePromise = (async () => {
                 try {
                     await operation;
+                    exclusiveStateAccess = true;
                     await checkpoints.checkpoint();
                 } finally {
+                    exclusiveStateAccess = false;
                     disposed = true;
                     checkpoints.dispose();
                     simulation.dispose();
