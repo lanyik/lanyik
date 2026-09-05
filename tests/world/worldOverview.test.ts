@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHash } from "node:crypto";
 import {
     assertWorldOverviewRaster,
+    generateWorldOverviewAsyncWithResolver,
     generateWorldOverviewWithResolver
 } from "../../src/world/generateWorldOverview";
 import { createWorldDescriptor } from "../../src/world/WorldDescriptor";
@@ -17,15 +17,36 @@ describe("world overview raster", () => {
     it.each([
         [4096, "0b8f4e74889ff462d3eb07bcc3f2e38b209526bd9d1eb2c568dcc07ee4141ddc"],
         [8192, "68bfdaa4a5ecebcb43b514b6802e17258c35ebeebdca550861c2d339df388b31"]
-    ] as const)("preserves the v19 raster across bounded water batches at span %i", (span, checksum) => {
+    ] as const)("preserves the v19 raster across bounded water batches at span %i", async (span, checksum) => {
         const descriptor = createWorldDescriptor({ seed: "new-world", chunkSize: 24 });
         const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
         const options = { descriptor, originX: 0, originY: 0, tileSpanX: span, tileSpanY: span,
             pixelWidth: 128, pixelHeight: 128 };
         const raster = generateWorldOverviewWithResolver(options, resolver);
-        expect(createHash("sha256").update(raster.pixels).digest("hex")).toBe(checksum);
+        const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(raster.pixels));
+        expect([...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("")).toBe(checksum);
         expect(generateWorldOverviewWithResolver(options, resolver).pixels).toEqual(raster.pixels);
         expect(resolver.waterStats.maximumRasterizedTiles).toBeLessThanOrEqual(2048 * 2048);
+    });
+
+    it("yields to cancellation between water batches and can reuse the completed pages", async () => {
+        const descriptor = createWorldDescriptor({ seed: "new-world" });
+        const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
+        const controller = new AbortController();
+        const options = { descriptor, originX: 0, originY: 0, tileSpanX: 16384, tileSpanY: 16384,
+            pixelWidth: 128, pixelHeight: 128 };
+        const timer = setTimeout(() => controller.abort(), 0);
+        try {
+            await expect(generateWorldOverviewAsyncWithResolver(options, resolver, controller.signal))
+                .rejects.toMatchObject({ name: "AbortError" });
+        } finally { clearTimeout(timer); }
+        expect(resolver.waterStats.overviewPageBuilds).toBeGreaterThan(0);
+        expect(resolver.waterStats.overviewPageBuilds).toBeLessThan(64);
+        const next = { ...options, tileSpanX: 4096, tileSpanY: 4096 };
+        const hits = resolver.waterStats.overviewPageHits;
+        const raster = await generateWorldOverviewAsyncWithResolver(next, resolver);
+        expect(resolver.waterStats.overviewPageHits).toBeGreaterThan(hits);
+        expect(raster.pixels).toEqual(generateWorldOverviewWithResolver(next, resolver).pixels);
     });
 
     it.each([[64, 64], [128, 128], [256, 256], [73, 109], [256, 16], [16, 256]])(
@@ -39,7 +60,7 @@ describe("world overview raster", () => {
             const tiles = new Set<string>();
             resolver.visitGeneratedRiverTiles(-224, 96, 32, 32, (x, y) => tiles.add(`${x + 224},${y - 96}`));
             expect(tiles.size).toBe(142);
-            const visit = vi.spyOn(resolver, "visitGeneratedRiverTiles");
+            const visit = vi.spyOn(resolver, "generatedRiverTileBatches");
             const resolve = vi.spyOn(resolver, "resolveGeneratedTile");
             const overview = generateWorldOverviewWithResolver({ descriptor, ...extent, pixelWidth, pixelHeight }, resolver);
             const expected = new Uint8Array(pixelWidth * pixelHeight);

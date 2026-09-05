@@ -1,6 +1,7 @@
 import { Land } from "../enums";
 import { getMapTile } from "../helpers/topology";
 import { MapInfo, TileInfo } from "../interfaces";
+import { lifecycleAbortError } from "../runtime/LifecycleScope";
 import { assertWorldDescriptor, WorldDescriptor } from "./WorldDescriptor";
 import { WorldSurfaceResolver } from "./WorldSurfaceResolver";
 import { worldWaterGenerationStylesEqual } from "./WorldStyleProfile";
@@ -128,14 +129,14 @@ function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
 }
 
-function generatedRiverCoverage(
+function* generatedRiverCoverage(
     options: WorldOverviewPreparationOptions,
     resolver: WorldSurfaceResolver
-): Uint8Array {
+): Generator<void, Uint8Array> {
     const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
     const magnifyX = options.pixelWidth > options.tileSpanX;
     const magnifyY = options.pixelHeight > options.tileSpanY;
-    resolver.visitGeneratedRiverTiles(
+    yield* resolver.generatedRiverTileBatches(
         options.originX,
         options.originY,
         options.tileSpanX,
@@ -170,6 +171,34 @@ export function generateWorldOverviewWithResolver(
     options: WorldOverviewGenerationOptions,
     resolver: WorldSurfaceResolver
 ): WorldOverviewRaster {
+    const steps = generateWorldOverviewSteps(options, resolver);
+    let step = steps.next();
+    while (!step.done) step = steps.next();
+    return step.value;
+}
+
+/** Worker work yields between bounded water batches and small terrain row groups. */
+export async function generateWorldOverviewAsyncWithResolver(
+    options: WorldOverviewGenerationOptions,
+    resolver: WorldSurfaceResolver,
+    signal?: AbortSignal
+): Promise<WorldOverviewRaster> {
+    const steps = generateWorldOverviewSteps(options, resolver);
+    let deadline = performance.now() + 8;
+    for (;;) {
+        if (signal?.aborted) steps.throw(lifecycleAbortError("World overview request was aborted"));
+        const step = steps.next();
+        if (step.done) return step.value;
+        if (performance.now() < deadline) continue;
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        deadline = performance.now() + 8;
+    }
+}
+
+function* generateWorldOverviewSteps(
+    options: WorldOverviewGenerationOptions,
+    resolver: WorldSurfaceResolver
+): Generator<void, WorldOverviewRaster> {
     assertWorldOverviewPreparationOptions(options);
     assertWorldDescriptor(options.descriptor);
     const expectedTopology = options.descriptor.topology;
@@ -182,7 +211,7 @@ export function generateWorldOverviewWithResolver(
     }
 
     const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-    const riverCoverage = generatedRiverCoverage(options, resolver);
+    const riverCoverage = yield* generatedRiverCoverage(options, resolver);
     const terrain = resolver.profile.terrain;
     // Pixel centres are monotonic in each axis. One terrain row is enough to
     // reuse magnified tile samples without retaining a map of sample objects.
@@ -234,6 +263,7 @@ export function generateWorldOverviewWithResolver(
             const pixelIndex = py * options.pixelWidth + px;
             if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
         }
+        if ((py + 1) % 16 === 0) yield;
     }
     return {
         version: WORLD_OVERVIEW_FORMAT_VERSION,

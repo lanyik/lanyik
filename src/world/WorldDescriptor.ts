@@ -14,7 +14,7 @@ import {
 } from "./WorldStyleProfile";
 
 export const WORLD_DESCRIPTOR_FORMAT_VERSION = 5;
-export const WORLD_WORKER_PROTOCOL_VERSION = 7;
+export const WORLD_WORKER_PROTOCOL_VERSION = 8;
 
 export type ProceduralWorldKind = "procedural-infinite" | "procedural-toroidal";
 

@@ -10,7 +10,7 @@ import {
     worldVegetationTransferables
 } from "./generateVegetation";
 import {
-    generateWorldOverviewWithResolver,
+    generateWorldOverviewAsyncWithResolver,
     WorldOverviewGenerationOptions,
     worldOverviewTransferables
 } from "./generateWorldOverview";
@@ -55,7 +55,14 @@ interface GenerateOverviewRequest {
     options: WorldOverviewGenerationOptions;
 }
 
-type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest | GenerateVegetationRequest | GenerateOverviewRequest;
+interface CancelOverviewRequest {
+    protocolVersion: typeof WORLD_WORKER_PROTOCOL_VERSION;
+    generatorVersion: typeof WORLD_GENERATOR_VERSION;
+    id: number;
+    type: "cancel-overview";
+}
+
+type GenerateRequest = GenerateWorldRequest | GenerateChunkRequest | GenerateVegetationRequest | GenerateOverviewRequest | CancelOverviewRequest;
 
 const scope = globalThis as unknown as {
     addEventListener(type: "message", listener: (event: MessageEvent<GenerateRequest>) => void): void;
@@ -64,6 +71,7 @@ const scope = globalThis as unknown as {
 
 let chunkResolver: WorldSurfaceResolver | undefined;
 let chunkResolverKey: string | undefined;
+const activeOverviews = new Map<number, AbortController>();
 
 function resolverFor(options: WorldChunkGenerationOptions): WorldSurfaceResolver {
     const key = serializeWorldDescriptor(createWorldDescriptor({
@@ -96,15 +104,20 @@ function overviewResolverFor(options: WorldOverviewGenerationOptions): WorldSurf
     return chunkResolver;
 }
 
-scope.addEventListener("message", event => {
+scope.addEventListener("message", async event => {
     try {
         const request = event.data;
         if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION
             || request.generatorVersion !== WORLD_GENERATOR_VERSION
-            || !Number.isSafeInteger(request.id) || !request.options
-            || !["world", "chunk", "vegetation", "overview"].includes(request.type)) {
+            || !Number.isSafeInteger(request.id)
+            || !["world", "chunk", "vegetation", "overview", "cancel-overview"].includes(request.type)) {
             throw new TypeError("World generator received an invalid request");
         }
+        if (request.type === "cancel-overview") {
+            activeOverviews.get(request.id)?.abort();
+            return;
+        }
+        if (!request.options) throw new TypeError("World generator received an invalid request");
         if (request.type === "chunk") {
             const chunk = generateWorldChunkWithResolver(request.options, resolverFor(request.options));
             scope.postMessage({
@@ -122,13 +135,22 @@ scope.addEventListener("message", event => {
                 vegetation
             }, worldVegetationTransferables(vegetation));
         } else if (request.type === "overview") {
-            const overview = generateWorldOverviewWithResolver(request.options, overviewResolverFor(request.options));
-            scope.postMessage({
-                protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
-                generatorVersion: WORLD_GENERATOR_VERSION,
-                id: request.id,
-                overview
-            }, worldOverviewTransferables(overview));
+            if (activeOverviews.has(request.id)) throw new TypeError("Duplicate active overview request id");
+            const abort = new AbortController();
+            activeOverviews.set(request.id, abort);
+            try {
+                const overview = await generateWorldOverviewAsyncWithResolver(
+                    request.options, overviewResolverFor(request.options), abort.signal
+                );
+                scope.postMessage({
+                    protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                    generatorVersion: WORLD_GENERATOR_VERSION,
+                    id: request.id,
+                    overview
+                }, worldOverviewTransferables(overview));
+            } finally {
+                activeOverviews.delete(request.id);
+            }
         } else {
             scope.postMessage({
                 protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,

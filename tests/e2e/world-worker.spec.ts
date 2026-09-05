@@ -49,6 +49,38 @@ test("world worker generates a transferable chunk in a real browser", async ({ p
     expect(result).toEqual({ kind: "message", chunkLength: 26 * 26 });
 });
 
+test("cancels running overview batches without restarting the Worker", async ({ page }) => {
+    await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => Boolean((window as any).HexMap));
+    const result = await page.evaluate(async () => {
+        const library = (window as any).HexMap;
+        const client = new library.WorldGeneratorClient("/js/world-generator.worker.mjs");
+        const responses: any[] = [];
+        client.worker.addEventListener("message", (event: MessageEvent) => responses.push(event.data));
+        let clients = 0;
+        const pool = new library.WorldGeneratorPool("unused", { size: 1, clientFactory: () => { clients += 1; return client; } });
+        const controller = new AbortController();
+        let errorName = "";
+        try {
+            const pending = pool.generateOverview({ descriptor: library.createWorldDescriptor({ seed: "new-world" }),
+                originX: 0, originY: 0, tileSpanX: 16384, tileSpanY: 16384, pixelWidth: 128, pixelHeight: 128
+            }, { signal: controller.signal });
+            setTimeout(() => controller.abort(), 20);
+            try { await pending; } catch (error) { errorName = (error as Error).name; }
+            const chunk = await pool.generateChunk({ seed: "new-world", chunkX: 3, chunkY: -2, chunkSize: 24 });
+            await new Promise(resolve => setTimeout(resolve, 0));
+            return {
+                errorName, clients, workerDisposed: client.isDisposed,
+                response: responses.find(response => response.id === 1)?.error?.name,
+                staleRaster: responses.some(response => response.id === 1 && response.overview),
+                chunk: [chunk.chunkX, chunk.chunkY], failures: pool.stats.workerFailures, busy: pool.stats.busyWorkers
+            };
+        } finally { pool.dispose(); }
+    });
+    expect(result).toEqual({ errorName: "AbortError", clients: 1, workerDisposed: false,
+        response: "AbortError", staleRaster: false, chunk: [3, -2], failures: 0, busy: 0 });
+});
+
 test("worker pool replaces a real crashed Worker and serves the next request", async ({ page }) => {
     await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => Boolean((window as unknown as { HexMap?: unknown }).HexMap));

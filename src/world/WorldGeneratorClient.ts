@@ -45,6 +45,8 @@ interface PendingRequest {
     reject(error: Error): void;
     expectedChunk?: { chunkX: number; chunkY: number; chunkSize: number };
     expectedOverview?: WorldOverviewGenerationOptions;
+    signal?: AbortSignal;
+    cleanup?(): void;
 }
 
 //Small lifecycle-safe client for the dedicated world generator worker. The
@@ -135,16 +137,30 @@ export class WorldGeneratorClient {
         });
     }
 
-    public generateOverview(options: WorldOverviewGenerationOptions): Promise<WorldOverviewRaster> {
+    public generateOverview(options: WorldOverviewGenerationOptions, signal?: AbortSignal): Promise<WorldOverviewRaster> {
         if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+        if (signal?.aborted) return Promise.reject(lifecycleAbortError("World overview request was aborted"));
         const id = this.nextRequestId++;
         return new Promise<WorldOverviewRaster>((resolve, reject) => {
+            // Keep this request pending until the Worker acknowledges cancellation.
+            // The pool can reject its caller immediately without reusing a busy slot.
+            const abort = (): void => {
+                try {
+                    this.worker.postMessage({ protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+                        generatorVersion: WORLD_GENERATOR_VERSION, id, type: "cancel-overview" });
+                } catch (reason) {
+                    this.fail(reason instanceof Error ? reason : new Error(String(reason)));
+                }
+            };
             this.pending.set(id, {
                 kind: "overview",
                 resolve: value => resolve(value as WorldOverviewRaster),
                 reject,
-                expectedOverview: { ...options }
+                expectedOverview: { ...options },
+                signal,
+                cleanup: () => signal?.removeEventListener("abort", abort)
             });
+            signal?.addEventListener("abort", abort, { once: true });
             try {
                 this.worker.postMessage({
                     protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
@@ -154,6 +170,7 @@ export class WorldGeneratorClient {
                     options
                 });
             } catch (reason) {
+                this.pending.get(id)?.cleanup?.();
                 this.pending.delete(id);
                 reject(reason instanceof Error ? reason : new Error(String(reason)));
             }
@@ -168,7 +185,10 @@ export class WorldGeneratorClient {
         this.worker.removeEventListener("messageerror", this.handleMessageError);
         this.worker.terminate();
         const error = lifecycleAbortError("World generation worker was disposed");
-        for (const request of this.pending.values()) request.reject(error);
+        for (const request of this.pending.values()) {
+            request.cleanup?.();
+            request.reject(error);
+        }
         this.pending.clear();
     }
 
@@ -185,6 +205,11 @@ export class WorldGeneratorClient {
         const request = this.pending.get(data.id);
         if (!request) return;
         this.pending.delete(data.id);
+        request.cleanup?.();
+        if (request.signal?.aborted) {
+            request.reject(lifecycleAbortError("World overview request was aborted"));
+            return;
+        }
         if (request.kind === "world" && "world" in data && data.world) {
             request.resolve(data.world);
             return;
@@ -257,7 +282,10 @@ export class WorldGeneratorClient {
     };
 
     private fail(error: Error): void {
-        for (const request of this.pending.values()) request.reject(error);
+        for (const request of this.pending.values()) {
+            request.cleanup?.();
+            request.reject(error);
+        }
         this.pending.clear();
         this.dispose();
     }

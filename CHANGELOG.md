@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Worker protocol v8 adds cooperative overview cancellation with acknowledgement,
+  preserving the Worker and completed river pages for the next request. Queue
+  weights include logical sampling area; generator and descriptor versions stay
+  unchanged.
 - River overview sampling now uses bounded 512/2048-tile pages, compact bitset
   traversal and terrain-only water samples. Cached pages need no terrain
   resampling; large or thin extents no longer build one unbounded temporary

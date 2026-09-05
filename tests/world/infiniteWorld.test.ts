@@ -415,6 +415,23 @@ describe("deterministic infinite world chunks", () => {
 });
 
 describe("world generator pool", () => {
+    test("charges overview queue weight for logical river area as well as output pixels", async () => {
+        const client = new DeferredChunkClient();
+        const pool = new WorldGeneratorPool("unused", { size: 1, maxQueuedWeight: 8, clientFactory: () => client });
+        const chunkOptions = { seed: 3, chunkX: 0, chunkY: 0, chunkSize: 12 };
+        const busy = pool.generateChunk(chunkOptions);
+        const options = { descriptor: createWorldDescriptor({ seed: 3 }), originX: 0, originY: 0,
+            tileSpanX: 8192, tileSpanY: 8192, pixelWidth: 128, pixelHeight: 128 };
+        await expect(pool.generateOverview(options)).rejects.toMatchObject({ name: "WorkQueueBackpressureError" });
+        const controller = new AbortController();
+        const small = pool.generateOverview({ ...options, tileSpanX: 512, tileSpanY: 512 }, { signal: controller.signal });
+        expect(pool.stats).toMatchObject({ queuedOverviews: 1, queuedWeight: 4 });
+        controller.abort();
+        await expect(small).rejects.toMatchObject({ name: "AbortError" });
+        client.requests[0].resolve(generateWorldChunk(chunkOptions));
+        await busy;
+        pool.dispose();
+    });
     test("reserves capacity so long vegetation work cannot block a new terrain chunk", async () => {
         const clients: DeferredMixedClient[] = [];
         const pool = new WorldGeneratorPool("unused", {

@@ -13,7 +13,7 @@ import { lifecycleAbortError } from "../runtime/LifecycleScope";
 export interface ChunkGeneratorClient {
     generateChunk(options: WorldChunkGenerationOptions): Promise<PackedWorldChunk>;
     generateVegetation?(options: WorldVegetationGenerationOptions): Promise<WorldVegetationLayout>;
-    generateOverview?(options: WorldOverviewGenerationOptions): Promise<WorldOverviewRaster>;
+    generateOverview?(options: WorldOverviewGenerationOptions, signal?: AbortSignal): Promise<WorldOverviewRaster>;
     dispose(): void;
     readonly isDisposed?: boolean;
 }
@@ -263,7 +263,10 @@ export class WorldGeneratorPool {
             task.queueId = this.queue.enqueue(task, {
                 priority: Number.isFinite(request.priority) ? request.priority as number : 0,
                 lane: request.lane ?? "background",
-                weight: request.weight ?? Math.max(1, Math.ceil(options.pixelWidth * options.pixelHeight / 4096)),
+                weight: request.weight ?? Math.max(1,
+                    Math.ceil(options.pixelWidth * options.pixelHeight / 4096),
+                    Math.ceil(options.tileSpanX * options.tileSpanY / (512 * 512))
+                ),
                 cancelled: reason => this.finishTask(task, () => task.reject(reason))
             });
             if (task.queueId === undefined && !task.settled) {
@@ -361,7 +364,7 @@ export class WorldGeneratorPool {
                         : Promise.reject(new Error("World generation client does not support vegetation tasks"));
                 } else {
                     pending = slot.client.generateOverview
-                        ? slot.client.generateOverview(task.options as WorldOverviewGenerationOptions)
+                        ? slot.client.generateOverview(task.options as WorldOverviewGenerationOptions, task.signal)
                         : Promise.reject(new Error("World generation client does not support overview tasks"));
                 }
             } catch (reason) {

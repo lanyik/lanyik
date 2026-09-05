@@ -3245,9 +3245,17 @@ function worldVegetationTransferables(layout) {
   return [...buffers];
 }
 
+// src/runtime/LifecycleScope.ts
+function lifecycleAbortError(message = "Lifecycle scope was closed") {
+  if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
 // src/world/WorldDescriptor.ts
 var WORLD_DESCRIPTOR_FORMAT_VERSION = 5;
-var WORLD_WORKER_PROTOCOL_VERSION = 7;
+var WORLD_WORKER_PROTOCOL_VERSION = 8;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -3416,11 +3424,11 @@ function writePixel(pixels, offset, color) {
 function overviewTileCoordinate(origin, span, pixel, pixels) {
   return origin + Math.min(span - 1, Math.floor((pixel + 0.5) * span / pixels));
 }
-function generatedRiverCoverage(options, resolver) {
+function* generatedRiverCoverage(options, resolver) {
   const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
   const magnifyX = options.pixelWidth > options.tileSpanX;
   const magnifyY = options.pixelHeight > options.tileSpanY;
-  resolver.visitGeneratedRiverTiles(
+  yield* resolver.generatedRiverTileBatches(
     options.originX,
     options.originY,
     options.tileSpanX,
@@ -3439,7 +3447,19 @@ function generatedRiverCoverage(options, resolver) {
   );
   return coverage;
 }
-function generateWorldOverviewWithResolver(options, resolver) {
+async function generateWorldOverviewAsyncWithResolver(options, resolver, signal) {
+  const steps = generateWorldOverviewSteps(options, resolver);
+  let deadline = performance.now() + 8;
+  for (; ; ) {
+    if (signal?.aborted) steps.throw(lifecycleAbortError("World overview request was aborted"));
+    const step = steps.next();
+    if (step.done) return step.value;
+    if (performance.now() < deadline) continue;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    deadline = performance.now() + 8;
+  }
+}
+function* generateWorldOverviewSteps(options, resolver) {
   assertWorldOverviewPreparationOptions(options);
   assertWorldDescriptor(options.descriptor);
   const expectedTopology = options.descriptor.topology;
@@ -3447,7 +3467,7 @@ function generateWorldOverviewWithResolver(options, resolver) {
     throw new TypeError("world overview resolver does not match its descriptor");
   }
   const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-  const riverCoverage = generatedRiverCoverage(options, resolver);
+  const riverCoverage = yield* generatedRiverCoverage(options, resolver);
   const terrain = resolver.profile.terrain;
   const terrainRow = new Uint8ClampedArray(options.pixelWidth * 4);
   let previousY;
@@ -3494,6 +3514,7 @@ function generateWorldOverviewWithResolver(options, resolver) {
       const pixelIndex = py * options.pixelWidth + px;
       if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
     }
+    if ((py + 1) % 16 === 0) yield;
   }
   return {
     version: WORLD_OVERVIEW_FORMAT_VERSION,
@@ -3515,6 +3536,7 @@ function worldOverviewTransferables(overview) {
 var scope = globalThis;
 var chunkResolver;
 var chunkResolverKey;
+var activeOverviews = /* @__PURE__ */ new Map();
 function resolverFor(options) {
   const key = serializeWorldDescriptor(createWorldDescriptor({
     seed: options.seed,
@@ -3542,12 +3564,17 @@ function overviewResolverFor(options) {
   }
   return chunkResolver;
 }
-scope.addEventListener("message", (event) => {
+scope.addEventListener("message", async (event) => {
   try {
     const request = event.data;
-    if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || request.generatorVersion !== WORLD_GENERATOR_VERSION || !Number.isSafeInteger(request.id) || !request.options || !["world", "chunk", "vegetation", "overview"].includes(request.type)) {
+    if (!request || request.protocolVersion !== WORLD_WORKER_PROTOCOL_VERSION || request.generatorVersion !== WORLD_GENERATOR_VERSION || !Number.isSafeInteger(request.id) || !["world", "chunk", "vegetation", "overview", "cancel-overview"].includes(request.type)) {
       throw new TypeError("World generator received an invalid request");
     }
+    if (request.type === "cancel-overview") {
+      activeOverviews.get(request.id)?.abort();
+      return;
+    }
+    if (!request.options) throw new TypeError("World generator received an invalid request");
     if (request.type === "chunk") {
       const chunk = generateWorldChunkWithResolver(request.options, resolverFor(request.options));
       scope.postMessage({
@@ -3565,13 +3592,24 @@ scope.addEventListener("message", (event) => {
         vegetation
       }, worldVegetationTransferables(vegetation));
     } else if (request.type === "overview") {
-      const overview = generateWorldOverviewWithResolver(request.options, overviewResolverFor(request.options));
-      scope.postMessage({
-        protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
-        generatorVersion: WORLD_GENERATOR_VERSION,
-        id: request.id,
-        overview
-      }, worldOverviewTransferables(overview));
+      if (activeOverviews.has(request.id)) throw new TypeError("Duplicate active overview request id");
+      const abort = new AbortController();
+      activeOverviews.set(request.id, abort);
+      try {
+        const overview = await generateWorldOverviewAsyncWithResolver(
+          request.options,
+          overviewResolverFor(request.options),
+          abort.signal
+        );
+        scope.postMessage({
+          protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+          generatorVersion: WORLD_GENERATOR_VERSION,
+          id: request.id,
+          overview
+        }, worldOverviewTransferables(overview));
+      } finally {
+        activeOverviews.delete(request.id);
+      }
     } else {
       scope.postMessage({
         protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,

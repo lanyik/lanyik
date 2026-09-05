@@ -439,6 +439,17 @@ of waiting behind several non-preemptible ~11ms vegetation jobs. Pool stats
 separate queued/running terrain and vegetation work and expose an EMA for each
 task duration; a single-Worker pool remains fully utilized.
 
+Overview queue weight is the larger of output pixel work (4096 pixels per unit)
+and logical water area (512×512 tiles per unit), unless the caller supplies an
+explicit weight. Overview work yields between bounded river batches and groups
+of 16 terrain rows, checking an 8 ms cooperative budget between work units.
+One cold water batch can exceed 8 ms; the budget is not a hard execution deadline.
+Cancellation sends a versioned `cancel-overview` message to the current Worker.
+The pool rejects the caller immediately but retains the busy slot until the
+Worker acknowledges cancellation, then serves the next task on that Worker.
+Completed mask pages remain reusable. Terrain and vegetation generation remain
+synchronous within their existing task bounds.
+
 ## Batched GPU attribute updates
 
 Fog/frontier changes are grouped by resident terrain, grass and forest buffer.

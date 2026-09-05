@@ -13169,7 +13169,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   // src/world/WorldDescriptor.ts
   var WORLD_DESCRIPTOR_FORMAT_VERSION = 5;
-  var WORLD_WORKER_PROTOCOL_VERSION = 7;
+  var WORLD_WORKER_PROTOCOL_VERSION = 8;
   function assertChunkSize(value) {
     if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
       throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);
@@ -13609,209 +13609,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return [...buffers];
   }
 
-  // src/world/generateWorldOverview.ts
-  var WORLD_OVERVIEW_FORMAT_VERSION = 1;
-  var MAX_WORLD_OVERVIEW_RASTER_SIZE = 256;
-  var MAX_WORLD_OVERVIEW_TILE_SPAN = 16384;
-  var PALETTE = {
-    deepWater: [13, 48, 76],
-    shallowWater: [42, 112, 126],
-    coast: [70, 139, 137],
-    temperate: [91, 139, 73],
-    dry: [169, 148, 86],
-    cold: [126, 146, 126],
-    alpine: [113, 119, 116],
-    sand: [188, 166, 102],
-    tundra: [151, 166, 157],
-    snow: [225, 233, 235],
-    mountain: [105, 108, 109],
-    lake: [35, 105, 129],
-    river: [28, 142, 174]
-  };
-  var clamp014 = (value) => Math.max(0, Math.min(1, value));
-  function assertSafeExtentCoordinate(name, value) {
-    if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
-  }
-  function assertWorldOverviewPreparationOptions(options) {
-    if (!options || typeof options !== "object") throw new TypeError("world overview options are required");
-    assertSafeExtentCoordinate("originX", options.originX);
-    assertSafeExtentCoordinate("originY", options.originY);
-    for (const [name, value] of [
-      ["tileSpanX", options.tileSpanX],
-      ["tileSpanY", options.tileSpanY]
-    ]) {
-      if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_TILE_SPAN) {
-        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_TILE_SPAN}`);
-      }
-    }
-    for (const [name, value] of [
-      ["pixelWidth", options.pixelWidth],
-      ["pixelHeight", options.pixelHeight]
-    ]) {
-      if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_RASTER_SIZE) {
-        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_RASTER_SIZE}`);
-      }
-    }
-    if (!Number.isSafeInteger(options.originX + options.tileSpanX - 1) || !Number.isSafeInteger(options.originY + options.tileSpanY - 1)) {
-      throw new RangeError("world overview extent exceeds safe integer coordinates");
-    }
-  }
-  function assertWorldOverviewRaster(value) {
-    if (!value || typeof value !== "object") throw new TypeError("world overview raster must be an object");
-    const raster = value;
-    if (raster.version !== WORLD_OVERVIEW_FORMAT_VERSION) {
-      throw new TypeError(`unsupported world overview format ${String(raster.version)}`);
-    }
-    assertWorldOverviewPreparationOptions(raster);
-    if (!(raster.pixels instanceof Uint8ClampedArray) || raster.pixels.length !== raster.pixelWidth * raster.pixelHeight * 4) {
-      throw new TypeError("world overview pixels are invalid");
-    }
-  }
-  function mix2(first, second, amount) {
-    const t = clamp014(amount);
-    return [
-      first[0] + (second[0] - first[0]) * t,
-      first[1] + (second[1] - first[1]) * t,
-      first[2] + (second[2] - first[2]) * t
-    ];
-  }
-  function shadeRgb(color, amount) {
-    return [color[0] * amount, color[1] * amount, color[2] * amount];
-  }
-  function writePixel(pixels, offset, color) {
-    pixels[offset] = Math.round(color[0]);
-    pixels[offset + 1] = Math.round(color[1]);
-    pixels[offset + 2] = Math.round(color[2]);
-    pixels[offset + 3] = 255;
-  }
-  function overviewTileCoordinate(origin, span, pixel, pixels) {
-    return origin + Math.min(span - 1, Math.floor((pixel + 0.5) * span / pixels));
-  }
-  function staticTileColor(tile) {
-    if (tile.modifiers?.includes("lake")) return PALETTE.lake;
-    if (tile.modifiers?.includes("river")) return PALETTE.river;
-    if (tile.type === "sea" /* sea */) return PALETTE.deepWater;
-    if (tile.type === "coastal" /* coastal */) return PALETTE.coast;
-    if (tile.type === "sand" /* sand */) return PALETTE.sand;
-    if (tile.type === "tundra" /* tundra */) return PALETTE.tundra;
-    if (tile.type === "snow" /* snow */) return PALETTE.snow;
-    if (tile.type === "mountain" /* mountain */) return PALETTE.mountain;
-    return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
-  }
-  function generatedRiverCoverage(options, resolver) {
-    const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
-    const magnifyX = options.pixelWidth > options.tileSpanX;
-    const magnifyY = options.pixelHeight > options.tileSpanY;
-    resolver.visitGeneratedRiverTiles(
-      options.originX,
-      options.originY,
-      options.tileSpanX,
-      options.tileSpanY,
-      (x, y) => {
-        const localX = x - options.originX;
-        const localY = y - options.originY;
-        const firstX = magnifyX ? Math.max(0, Math.ceil(localX * options.pixelWidth / options.tileSpanX - 0.5)) : Math.floor(localX * options.pixelWidth / options.tileSpanX);
-        const firstY = magnifyY ? Math.max(0, Math.ceil(localY * options.pixelHeight / options.tileSpanY - 0.5)) : Math.floor(localY * options.pixelHeight / options.tileSpanY);
-        const endX = magnifyX ? Math.min(options.pixelWidth, Math.ceil((localX + 1) * options.pixelWidth / options.tileSpanX - 0.5)) : firstX + 1;
-        const endY = magnifyY ? Math.min(options.pixelHeight, Math.ceil((localY + 1) * options.pixelHeight / options.tileSpanY - 0.5)) : firstY + 1;
-        for (let py = firstY; py < endY; py += 1) {
-          coverage.fill(1, py * options.pixelWidth + firstX, py * options.pixelWidth + endX);
-        }
-      }
-    );
-    return coverage;
-  }
-  function generateWorldOverviewWithResolver(options, resolver) {
-    assertWorldOverviewPreparationOptions(options);
-    assertWorldDescriptor(options.descriptor);
-    const expectedTopology = options.descriptor.topology;
-    if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology || !worldWaterGenerationStylesEqual(resolver.waterStyle, options.descriptor.waterStyle) || expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== options.descriptor.width || resolver.domain.height !== options.descriptor.height)) {
-      throw new TypeError("world overview resolver does not match its descriptor");
-    }
-    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-    const riverCoverage = generatedRiverCoverage(options, resolver);
-    const terrain = resolver.profile.terrain;
-    const terrainRow = new Uint8ClampedArray(options.pixelWidth * 4);
-    let previousY;
-    for (let py = 0; py < options.pixelHeight; py += 1) {
-      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
-      if (tileY !== previousY) {
-        let previousX;
-        for (let px = 0; px < options.pixelWidth; px += 1) {
-          const offset = px * 4;
-          const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
-          if (tileX === previousX) {
-            terrainRow.copyWithin(offset, offset - 4, offset);
-            continue;
-          }
-          previousX = tileX;
-          const sample = resolver.sampleGenerated(tileX, tileY);
-          let color;
-          if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
-            const shoreline = clamp014(
-              1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(1e-3, terrain.oceanLevel * 0.42)
-            );
-            color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
-          } else if (sample.baseTerrain === "sand" /* sand */) {
-            color = PALETTE.sand;
-          } else if (sample.baseTerrain === "tundra" /* tundra */) {
-            color = PALETTE.tundra;
-          } else if (sample.baseTerrain === "snow" /* snow */) {
-            color = PALETTE.snow;
-          } else if (sample.baseTerrain === "mountain" /* mountain */) {
-            color = mix2(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
-          } else {
-            const weights = sample.biomeWeights;
-            const dryCold = mix2(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(1e-3, weights.dry + weights.cold));
-            const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
-            color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
-          }
-          const reliefShade = 0.88 + clamp014((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
-          writePixel(terrainRow, offset, shadeRgb(color, reliefShade));
-        }
-        previousY = tileY;
-      }
-      pixels.set(terrainRow, py * terrainRow.length);
-      for (let px = 0; px < options.pixelWidth; px += 1) {
-        const pixelIndex = py * options.pixelWidth + px;
-        if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
-      }
-    }
-    return {
-      version: WORLD_OVERVIEW_FORMAT_VERSION,
-      originX: options.originX,
-      originY: options.originY,
-      tileSpanX: options.tileSpanX,
-      tileSpanY: options.tileSpanY,
-      pixelWidth: options.pixelWidth,
-      pixelHeight: options.pixelHeight,
-      pixels
-    };
-  }
-  function generateStaticWorldOverview(map, options) {
-    assertWorldOverviewPreparationOptions(options);
-    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
-    let offset = 0;
-    for (let py = 0; py < options.pixelHeight; py += 1) {
-      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
-      for (let px = 0; px < options.pixelWidth; px += 1) {
-        const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
-        const tile = getMapTile(map, tileX, tileY);
-        if (tile) writePixel(pixels, offset, staticTileColor(tile));
-        offset += 4;
-      }
-    }
-    return {
-      version: WORLD_OVERVIEW_FORMAT_VERSION,
-      ...options,
-      pixels
-    };
-  }
-  function worldOverviewTransferables(overview) {
-    assertWorldOverviewRaster(overview);
-    return [overview.pixels.buffer];
-  }
-
   // src/runtime/LifecycleScope.ts
   var nextLifecycleGeneration = 1;
   function lifecycleAbortError(message = "Lifecycle scope was closed") {
@@ -13993,6 +13790,216 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
 
+  // src/world/generateWorldOverview.ts
+  var WORLD_OVERVIEW_FORMAT_VERSION = 1;
+  var MAX_WORLD_OVERVIEW_RASTER_SIZE = 256;
+  var MAX_WORLD_OVERVIEW_TILE_SPAN = 16384;
+  var PALETTE = {
+    deepWater: [13, 48, 76],
+    shallowWater: [42, 112, 126],
+    coast: [70, 139, 137],
+    temperate: [91, 139, 73],
+    dry: [169, 148, 86],
+    cold: [126, 146, 126],
+    alpine: [113, 119, 116],
+    sand: [188, 166, 102],
+    tundra: [151, 166, 157],
+    snow: [225, 233, 235],
+    mountain: [105, 108, 109],
+    lake: [35, 105, 129],
+    river: [28, 142, 174]
+  };
+  var clamp014 = (value) => Math.max(0, Math.min(1, value));
+  function assertSafeExtentCoordinate(name, value) {
+    if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a safe integer`);
+  }
+  function assertWorldOverviewPreparationOptions(options) {
+    if (!options || typeof options !== "object") throw new TypeError("world overview options are required");
+    assertSafeExtentCoordinate("originX", options.originX);
+    assertSafeExtentCoordinate("originY", options.originY);
+    for (const [name, value] of [
+      ["tileSpanX", options.tileSpanX],
+      ["tileSpanY", options.tileSpanY]
+    ]) {
+      if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_TILE_SPAN) {
+        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_TILE_SPAN}`);
+      }
+    }
+    for (const [name, value] of [
+      ["pixelWidth", options.pixelWidth],
+      ["pixelHeight", options.pixelHeight]
+    ]) {
+      if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_OVERVIEW_RASTER_SIZE) {
+        throw new RangeError(`${name} must be an integer between 1 and ${MAX_WORLD_OVERVIEW_RASTER_SIZE}`);
+      }
+    }
+    if (!Number.isSafeInteger(options.originX + options.tileSpanX - 1) || !Number.isSafeInteger(options.originY + options.tileSpanY - 1)) {
+      throw new RangeError("world overview extent exceeds safe integer coordinates");
+    }
+  }
+  function assertWorldOverviewRaster(value) {
+    if (!value || typeof value !== "object") throw new TypeError("world overview raster must be an object");
+    const raster = value;
+    if (raster.version !== WORLD_OVERVIEW_FORMAT_VERSION) {
+      throw new TypeError(`unsupported world overview format ${String(raster.version)}`);
+    }
+    assertWorldOverviewPreparationOptions(raster);
+    if (!(raster.pixels instanceof Uint8ClampedArray) || raster.pixels.length !== raster.pixelWidth * raster.pixelHeight * 4) {
+      throw new TypeError("world overview pixels are invalid");
+    }
+  }
+  function mix2(first, second, amount) {
+    const t = clamp014(amount);
+    return [
+      first[0] + (second[0] - first[0]) * t,
+      first[1] + (second[1] - first[1]) * t,
+      first[2] + (second[2] - first[2]) * t
+    ];
+  }
+  function shadeRgb(color, amount) {
+    return [color[0] * amount, color[1] * amount, color[2] * amount];
+  }
+  function writePixel(pixels, offset, color) {
+    pixels[offset] = Math.round(color[0]);
+    pixels[offset + 1] = Math.round(color[1]);
+    pixels[offset + 2] = Math.round(color[2]);
+    pixels[offset + 3] = 255;
+  }
+  function overviewTileCoordinate(origin, span, pixel, pixels) {
+    return origin + Math.min(span - 1, Math.floor((pixel + 0.5) * span / pixels));
+  }
+  function staticTileColor(tile) {
+    if (tile.modifiers?.includes("lake")) return PALETTE.lake;
+    if (tile.modifiers?.includes("river")) return PALETTE.river;
+    if (tile.type === "sea" /* sea */) return PALETTE.deepWater;
+    if (tile.type === "coastal" /* coastal */) return PALETTE.coast;
+    if (tile.type === "sand" /* sand */) return PALETTE.sand;
+    if (tile.type === "tundra" /* tundra */) return PALETTE.tundra;
+    if (tile.type === "snow" /* snow */) return PALETTE.snow;
+    if (tile.type === "mountain" /* mountain */) return PALETTE.mountain;
+    return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
+  }
+  function* generatedRiverCoverage(options, resolver) {
+    const coverage = new Uint8Array(options.pixelWidth * options.pixelHeight);
+    const magnifyX = options.pixelWidth > options.tileSpanX;
+    const magnifyY = options.pixelHeight > options.tileSpanY;
+    yield* resolver.generatedRiverTileBatches(
+      options.originX,
+      options.originY,
+      options.tileSpanX,
+      options.tileSpanY,
+      (x, y) => {
+        const localX = x - options.originX;
+        const localY = y - options.originY;
+        const firstX = magnifyX ? Math.max(0, Math.ceil(localX * options.pixelWidth / options.tileSpanX - 0.5)) : Math.floor(localX * options.pixelWidth / options.tileSpanX);
+        const firstY = magnifyY ? Math.max(0, Math.ceil(localY * options.pixelHeight / options.tileSpanY - 0.5)) : Math.floor(localY * options.pixelHeight / options.tileSpanY);
+        const endX = magnifyX ? Math.min(options.pixelWidth, Math.ceil((localX + 1) * options.pixelWidth / options.tileSpanX - 0.5)) : firstX + 1;
+        const endY = magnifyY ? Math.min(options.pixelHeight, Math.ceil((localY + 1) * options.pixelHeight / options.tileSpanY - 0.5)) : firstY + 1;
+        for (let py = firstY; py < endY; py += 1) {
+          coverage.fill(1, py * options.pixelWidth + firstX, py * options.pixelWidth + endX);
+        }
+      }
+    );
+    return coverage;
+  }
+  function generateWorldOverviewWithResolver(options, resolver) {
+    const steps = generateWorldOverviewSteps(options, resolver);
+    let step = steps.next();
+    while (!step.done) step = steps.next();
+    return step.value;
+  }
+  function* generateWorldOverviewSteps(options, resolver) {
+    assertWorldOverviewPreparationOptions(options);
+    assertWorldDescriptor(options.descriptor);
+    const expectedTopology = options.descriptor.topology;
+    if (resolver.seed !== options.descriptor.seed || resolver.domain.topology !== expectedTopology || !worldWaterGenerationStylesEqual(resolver.waterStyle, options.descriptor.waterStyle) || expectedTopology === "toroidal" && (resolver.domain.topology !== "toroidal" || resolver.domain.width !== options.descriptor.width || resolver.domain.height !== options.descriptor.height)) {
+      throw new TypeError("world overview resolver does not match its descriptor");
+    }
+    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    const riverCoverage = yield* generatedRiverCoverage(options, resolver);
+    const terrain = resolver.profile.terrain;
+    const terrainRow = new Uint8ClampedArray(options.pixelWidth * 4);
+    let previousY;
+    for (let py = 0; py < options.pixelHeight; py += 1) {
+      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
+      if (tileY !== previousY) {
+        let previousX;
+        for (let px = 0; px < options.pixelWidth; px += 1) {
+          const offset = px * 4;
+          const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+          if (tileX === previousX) {
+            terrainRow.copyWithin(offset, offset - 4, offset);
+            continue;
+          }
+          previousX = tileX;
+          const sample = resolver.sampleGenerated(tileX, tileY);
+          let color;
+          if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
+            const shoreline = clamp014(
+              1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(1e-3, terrain.oceanLevel * 0.42)
+            );
+            color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
+          } else if (sample.baseTerrain === "sand" /* sand */) {
+            color = PALETTE.sand;
+          } else if (sample.baseTerrain === "tundra" /* tundra */) {
+            color = PALETTE.tundra;
+          } else if (sample.baseTerrain === "snow" /* snow */) {
+            color = PALETTE.snow;
+          } else if (sample.baseTerrain === "mountain" /* mountain */) {
+            color = mix2(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
+          } else {
+            const weights = sample.biomeWeights;
+            const dryCold = mix2(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(1e-3, weights.dry + weights.cold));
+            const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
+            color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
+          }
+          const reliefShade = 0.88 + clamp014((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
+          writePixel(terrainRow, offset, shadeRgb(color, reliefShade));
+        }
+        previousY = tileY;
+      }
+      pixels.set(terrainRow, py * terrainRow.length);
+      for (let px = 0; px < options.pixelWidth; px += 1) {
+        const pixelIndex = py * options.pixelWidth + px;
+        if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
+      }
+      if ((py + 1) % 16 === 0) yield;
+    }
+    return {
+      version: WORLD_OVERVIEW_FORMAT_VERSION,
+      originX: options.originX,
+      originY: options.originY,
+      tileSpanX: options.tileSpanX,
+      tileSpanY: options.tileSpanY,
+      pixelWidth: options.pixelWidth,
+      pixelHeight: options.pixelHeight,
+      pixels
+    };
+  }
+  function generateStaticWorldOverview(map, options) {
+    assertWorldOverviewPreparationOptions(options);
+    const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
+    let offset = 0;
+    for (let py = 0; py < options.pixelHeight; py += 1) {
+      const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
+      for (let px = 0; px < options.pixelWidth; px += 1) {
+        const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+        const tile = getMapTile(map, tileX, tileY);
+        if (tile) writePixel(pixels, offset, staticTileColor(tile));
+        offset += 4;
+      }
+    }
+    return {
+      version: WORLD_OVERVIEW_FORMAT_VERSION,
+      ...options,
+      pixels
+    };
+  }
+  function worldOverviewTransferables(overview) {
+    assertWorldOverviewRaster(overview);
+    return [overview.pixels.buffer];
+  }
+
   // src/world/WorldGeneratorClient.ts
   var WorldGeneratorClient = class {
     constructor(workerUrl, workerOptions = { type: "module" }) {
@@ -14008,6 +14015,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const request = this.pending.get(data.id);
         if (!request) return;
         this.pending.delete(data.id);
+        request.cleanup?.();
+        if (request.signal?.aborted) {
+          request.reject(lifecycleAbortError("World overview request was aborted"));
+          return;
+        }
         if (request.kind === "world" && "world" in data && data.world) {
           request.resolve(data.world);
           return;
@@ -14144,16 +14156,32 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       });
     }
-    generateOverview(options) {
+    generateOverview(options, signal) {
       if (this.disposed) return Promise.reject(new Error("WorldGeneratorClient has been disposed"));
+      if (signal?.aborted) return Promise.reject(lifecycleAbortError("World overview request was aborted"));
       const id = this.nextRequestId++;
       return new Promise((resolve, reject) => {
+        const abort = () => {
+          try {
+            this.worker.postMessage({
+              protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
+              generatorVersion: WORLD_GENERATOR_VERSION,
+              id,
+              type: "cancel-overview"
+            });
+          } catch (reason) {
+            this.fail(reason instanceof Error ? reason : new Error(String(reason)));
+          }
+        };
         this.pending.set(id, {
           kind: "overview",
           resolve: (value) => resolve(value),
           reject,
-          expectedOverview: { ...options }
+          expectedOverview: { ...options },
+          signal,
+          cleanup: () => signal?.removeEventListener("abort", abort)
         });
+        signal?.addEventListener("abort", abort, { once: true });
         try {
           this.worker.postMessage({
             protocolVersion: WORLD_WORKER_PROTOCOL_VERSION,
@@ -14163,6 +14191,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
             options
           });
         } catch (reason) {
+          this.pending.get(id)?.cleanup?.();
           this.pending.delete(id);
           reject(reason instanceof Error ? reason : new Error(String(reason)));
         }
@@ -14176,11 +14205,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worker.removeEventListener("messageerror", this.handleMessageError);
       this.worker.terminate();
       const error = lifecycleAbortError("World generation worker was disposed");
-      for (const request of this.pending.values()) request.reject(error);
+      for (const request of this.pending.values()) {
+        request.cleanup?.();
+        request.reject(error);
+      }
       this.pending.clear();
     }
     fail(error) {
-      for (const request of this.pending.values()) request.reject(error);
+      for (const request of this.pending.values()) {
+        request.cleanup?.();
+        request.reject(error);
+      }
       this.pending.clear();
       this.dispose();
     }
@@ -14335,7 +14370,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         task.queueId = this.queue.enqueue(task, {
           priority: Number.isFinite(request.priority) ? request.priority : 0,
           lane: request.lane ?? "background",
-          weight: request.weight ?? Math.max(1, Math.ceil(options.pixelWidth * options.pixelHeight / 4096)),
+          weight: request.weight ?? Math.max(
+            1,
+            Math.ceil(options.pixelWidth * options.pixelHeight / 4096),
+            Math.ceil(options.tileSpanX * options.tileSpanY / (512 * 512))
+          ),
           cancelled: (reason) => this.finishTask(task, () => task.reject(reason))
         });
         if (task.queueId === void 0 && !task.settled) {
@@ -14423,7 +14462,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           } else if (task.kind === "vegetation") {
             pending = slot.client.generateVegetation ? slot.client.generateVegetation(task.options) : Promise.reject(new Error("World generation client does not support vegetation tasks"));
           } else {
-            pending = slot.client.generateOverview ? slot.client.generateOverview(task.options) : Promise.reject(new Error("World generation client does not support overview tasks"));
+            pending = slot.client.generateOverview ? slot.client.generateOverview(task.options, task.signal) : Promise.reject(new Error("World generation client does not support overview tasks"));
           }
         } catch (reason) {
           pending = Promise.reject(reason);
