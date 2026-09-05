@@ -51,6 +51,14 @@ chunk/model completion notices coalesce into one queued synchronization instead
 of clearing and recloning every image. This backpressure prevents a batch of
 completed workers from creating a long main-thread frame.
 
+Vegetation option setters ignore unchanged values and coalesce changes made in
+one JavaScript turn. Replacement operations serialize, discard obsolete world
+generations and rebuild streamed grass/forest together from one Worker layout.
+Only affected vegetation chunk reservations are forgotten; terrain residency,
+shared grass materials and prepared forest models survive a density/size edit.
+Each layer mount has a revision, so an older completion or failure cannot publish
+over or tear down its replacement. Rebuild failures follow the map error event.
+
 The scheduler builds a flat chunk registry only when the mounted scene changes.
 Normal frames compare cached camera, target and projection anchors without
 iterating that registry or allocating new scheduler callbacks. Bounds,

@@ -17786,6 +17786,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.disposed = false;
       this.loadRevision = 0;
       this.forestRevision = 0;
+      this.vegetationRefreshQueue = Promise.resolve();
       this.drainingWorldSessions = /* @__PURE__ */ new Set();
       this.worldChunkLayers = /* @__PURE__ */ new Map();
       this.streamedGrassByChunkId = /* @__PURE__ */ new Map();
@@ -19025,10 +19026,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (!this.initializedWorldRenderLayers.has(layer.id)) return;
       record.renderLayerStates ?? (record.renderLayerStates = /* @__PURE__ */ new Map());
       record.renderLayerStates.set(layer.id, "mounting");
-      const context = this.createWorldRenderChunkContext(layer.id, key, record);
+      record.renderLayerMountRevisions ?? (record.renderLayerMountRevisions = /* @__PURE__ */ new Map());
+      const mountRevision = (record.renderLayerMountRevisions.get(layer.id) ?? 0) + 1;
+      record.renderLayerMountRevisions.set(layer.id, mountRevision);
+      const baseContext = this.createWorldRenderChunkContext(layer.id, key, record);
+      const context = {
+        ...baseContext,
+        isCurrent: () => baseContext.isCurrent() && record.renderLayerMountRevisions?.get(layer.id) === mountRevision
+      };
       try {
         await layer.mountChunk(context);
       } catch (reason) {
+        if (!context.isCurrent()) return;
         const errors = [renderLayerError(reason)];
         if (record.renderLayerStates.get(layer.id) !== "unmounted") {
           errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
@@ -19039,7 +19048,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       const current = context.isCurrent() && this.worldRenderLayers.get(layer.id) === layer && this.initializedWorldRenderLayers.has(layer.id);
       if (!current || record.renderLayerStates.get(layer.id) === "unmounted") {
-        this.removeWorldRenderLayerObjects(layer.id, key);
+        if (record.renderLayerMountRevisions.get(layer.id) === mountRevision) this.removeWorldRenderLayerObjects(layer.id, key);
         return;
       }
       record.renderLayerStates.set(layer.id, "mounted");
@@ -19393,9 +19402,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
     async rebuildForest(expectedRevision = this.loadRevision) {
       const forestRevision = ++this.forestRevision;
-      if (this.worldStreamer) {
-        return this.rebuildStreamedForests(expectedRevision, forestRevision);
-      }
       this.clearWorldCopies();
       this.chunkScheduler.clear();
       if (this.forest) {
@@ -19439,9 +19445,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
     async rebuildGrass() {
-      if (this.worldStreamer) {
-        return this.rebuildStreamedGrass();
-      }
       this.clearWorldCopies();
       this.chunkScheduler.clear();
       if (this.grass) {
@@ -19473,62 +19476,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.refreshWorldCopies();
       return true;
     }
-    async rebuildStreamedGrass() {
-      this.chunkScheduler.clear();
-      this.streamedGrassByChunkId.clear();
-      for (const [key, record] of this.worldChunkLayers) {
-        this.unmountGrassWorldRenderLayer(this.createWorldRenderChunkContext("@grass", key, record));
-      }
-      this.streamedGrassResources?.dispose();
-      this.streamedGrassResources = void 0;
-      const layer = this.worldRenderLayers.get("@grass");
-      if (!layer) return false;
-      const builds = [];
-      for (const [key, record] of this.worldChunkLayers) {
-        record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
-        record.vegetationAbort?.abort();
-        record.vegetationPromise = void 0;
-        record.vegetationAbort = void 0;
-        const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
-        record.renderLayerPromises?.set(layer.id, mounted);
-        builds.push(mounted);
-      }
-      await Promise.all(builds);
-      this.refreshWorldCopies();
-      return !this.disposed;
-    }
-    async rebuildStreamedForests(expectedRevision, forestRevision) {
-      this.chunkScheduler.clear();
-      this.streamedForestByChunkId.clear();
-      const builds = [];
-      for (const [key, record] of this.worldChunkLayers) {
-        this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
-      }
-      this.streamedForestResources?.dispose();
-      this.streamedForestResources = new ForestSharedResources(this.modelAssets);
-      const layer = this.worldRenderLayers.get("@forest");
-      if (!layer) return false;
-      for (const [key, record] of this.worldChunkLayers) {
-        record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-        record.vegetationAbort?.abort();
-        record.vegetationPromise = void 0;
-        record.vegetationAbort = void 0;
-        const build = this.mountRegisteredWorldRenderLayer(layer, key, record);
-        record.forestPromise = build;
-        record.renderLayerPromises?.set(layer.id, build);
-        builds.push(build);
-      }
-      await Promise.all(builds);
-      this.refreshWorldCopies();
-      return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
-    }
     async rebuildSurfaceVegetation(expectedRevision) {
       if (!this.worldStreamer) {
         await Promise.all([this.rebuildGrass(), this.rebuildForest(expectedRevision)]);
         return !this.disposed && expectedRevision === this.loadRevision;
       }
       const forestRevision = ++this.forestRevision;
-      this.chunkScheduler.clear();
       this.streamedGrassByChunkId.clear();
       this.streamedForestByChunkId.clear();
       for (const [key, record] of this.worldChunkLayers) {
@@ -19541,10 +19494,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         record.vegetationAbort = void 0;
         record.vegetationPromise = void 0;
       }
-      this.streamedGrassResources?.dispose();
-      this.streamedGrassResources = void 0;
-      this.streamedForestResources?.dispose();
-      this.streamedForestResources = new ForestSharedResources(this.modelAssets);
       const grassLayer = this.worldRenderLayers.get("@grass");
       const forestLayer = this.worldRenderLayers.get("@forest");
       const builds = [];
@@ -20285,36 +20234,61 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.terrain) this.terrain.lakeShoreWidth = value;
     }
     //-------------------------------------------------------------------------
-    //Tree density/size - baked into the instanced geometry at build time (like
-    //grass), so both rebuild the forest rather than touching a uniform.
+    //Instance layout settings coalesce within a turn and serialize replacement
+    //work. Streamed grass/forest consume one shared Worker layout generation.
     //-------------------------------------------------------------------------
+    scheduleVegetationRefresh(kind) {
+      if (this.disposed || !this.mapData) return;
+      const revision = this.loadRevision;
+      if (this.pendingVegetationRefresh?.revision === revision) {
+        this.pendingVegetationRefresh[kind] = true;
+        return;
+      }
+      const request = { revision, grass: kind === "grass", forest: kind === "forest" };
+      this.pendingVegetationRefresh = request;
+      const queued = this.vegetationRefreshQueue.then(async () => {
+        if (this.pendingVegetationRefresh === request) this.pendingVegetationRefresh = void 0;
+        if (this.disposed || this.loadRevision !== revision) return;
+        if (this.worldStreamer || request.grass && request.forest) {
+          await this.rebuildSurfaceVegetation(revision);
+        } else if (request.grass) await this.rebuildGrass();
+        else await this.rebuildForest(revision);
+      });
+      const refresh = this.worldController?.lifecycle.track(queued) ?? queued;
+      this.vegetationRefreshQueue = refresh.then(() => void 0, () => void 0);
+      void refresh.catch((error) => {
+        if (!this.disposed && this.loadRevision === revision) this.emit("error", error);
+      });
+    }
     get treesPerTile() {
       return this.options.treesPerTile;
     }
     set treesPerTile(value) {
       if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
+      if (value === this.options.treesPerTile) return;
       this.options.treesPerTile = value;
-      void this.rebuildForest().catch((error) => this.emit("error", error));
+      this.scheduleVegetationRefresh("forest");
     }
     get treeScale() {
       return this.options.treeScale;
     }
     set treeScale(value) {
       if (!Number.isFinite(value) || value < 0) throw new RangeError("treeScale must be a non-negative finite number");
+      if (value === this.options.treeScale) return;
       this.options.treeScale = value;
-      void this.rebuildForest().catch((error) => this.emit("error", error));
+      this.scheduleVegetationRefresh("forest");
     }
-    //Toggling visibility just flips the mesh's own `visible` flag (grass is
-    //still generated even when disabled) - the terrain's own grass texture
-    //keeps rendering underneath either way, so disabling this is purely
-    //"remove the blade overlay", not "regenerate as flat grass".
+    //Streamed visibility changes replace the shared vegetation layout so
+    //disabled blades release their field resources and stop generating.
     get grassVisible() {
       return this.options.grassEnabled;
     }
     set grassVisible(value) {
+      if (typeof value !== "boolean") throw new TypeError("grassVisible must be a boolean");
+      if (value === this.options.grassEnabled) return;
       this.options.grassEnabled = value;
       if (this.grass) this.grass.visible = value;
-      if (this.worldStreamer) this.rebuildStreamedGrass();
+      if (this.worldStreamer) this.scheduleVegetationRefresh("grass");
       this.refreshWorldCopies();
     }
     //Wind uniforms are cheap to update live - no rebuild needed.
@@ -20341,24 +20315,27 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     set grassDensity(value) {
       if (!Number.isInteger(value) || value < 0) throw new RangeError("grassDensity must be a non-negative integer");
+      if (value === this.options.grassDensity) return;
       this.options.grassDensity = value;
-      void this.rebuildGrass().catch((error) => this.emit("error", error));
+      this.scheduleVegetationRefresh("grass");
     }
     get grassBladeWidth() {
       return this.options.grassBladeWidth;
     }
     set grassBladeWidth(value) {
       if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeWidth must be a positive finite number");
+      if (value === this.options.grassBladeWidth) return;
       this.options.grassBladeWidth = value;
-      void this.rebuildGrass().catch((error) => this.emit("error", error));
+      this.scheduleVegetationRefresh("grass");
     }
     get grassBladeHeight() {
       return this.options.grassBladeHeight;
     }
     set grassBladeHeight(value) {
       if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeHeight must be a positive finite number");
+      if (value === this.options.grassBladeHeight) return;
       this.options.grassBladeHeight = value;
-      void this.rebuildGrass().catch((error) => this.emit("error", error));
+      this.scheduleVegetationRefresh("grass");
     }
     selectTile(x, y) {
       const normalized = this.mapData ? normalizeMapCoordinates(this.mapData, x, y) : { x, y };

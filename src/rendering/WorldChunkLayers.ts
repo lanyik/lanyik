@@ -26,4 +26,5 @@ export interface WorldChunkLayers {
     forestVegetationSignature?: string;
     renderLayerPromises?: Map<string, Promise<void>>;
     renderLayerStates?: Map<string, "mounting" | "mounted" | "unmounted">;
+    renderLayerMountRevisions?: Map<string, number>;
 }

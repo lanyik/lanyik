@@ -196,6 +196,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private disposed = false;
     private loadRevision = 0;
     private forestRevision = 0;
+    private vegetationRefreshQueue: Promise<void> = Promise.resolve();
+    private pendingVegetationRefresh: { revision: number; grass: boolean; forest: boolean } | undefined;
     private worldSurface: WorldSurfaceView | undefined;
     private worldController: RenderWorldController | undefined;
     private worldEditing: WorldEditingFacade | undefined;
@@ -1635,10 +1637,18 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (!this.initializedWorldRenderLayers.has(layer.id)) return;
         record.renderLayerStates ??= new Map();
         record.renderLayerStates.set(layer.id, "mounting");
-        const context = this.createWorldRenderChunkContext(layer.id, key, record);
+        record.renderLayerMountRevisions ??= new Map();
+        const mountRevision = (record.renderLayerMountRevisions.get(layer.id) ?? 0) + 1;
+        record.renderLayerMountRevisions.set(layer.id, mountRevision);
+        const baseContext = this.createWorldRenderChunkContext(layer.id, key, record);
+        const context = {
+            ...baseContext,
+            isCurrent: () => baseContext.isCurrent() && record.renderLayerMountRevisions?.get(layer.id) === mountRevision
+        };
         try {
             await layer.mountChunk(context);
         } catch (reason) {
+            if (!context.isCurrent()) return;
             const errors = [renderLayerError(reason)];
             if (record.renderLayerStates.get(layer.id) !== "unmounted") {
                 errors.push(...this.unmountRegisteredWorldRenderLayer(layer, key, record));
@@ -1651,7 +1661,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             && this.worldRenderLayers.get(layer.id) === layer
             && this.initializedWorldRenderLayers.has(layer.id);
         if (!current || record.renderLayerStates.get(layer.id) === "unmounted") {
-            this.removeWorldRenderLayerObjects(layer.id, key);
+            if (record.renderLayerMountRevisions.get(layer.id) === mountRevision) this.removeWorldRenderLayerObjects(layer.id, key);
             return;
         }
         record.renderLayerStates.set(layer.id, "mounted");
@@ -2017,9 +2027,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     //helpers/models.ts), so repeated rebuilds don't re-fetch the glTF.
     private async rebuildForest(expectedRevision = this.loadRevision): Promise<boolean> {
         const forestRevision = ++this.forestRevision;
-        if (this.worldStreamer) {
-            return this.rebuildStreamedForests(expectedRevision, forestRevision);
-        }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.forest) {
@@ -2067,9 +2074,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     //grassBladeHeight setters below) - a rebuild replaces the whole instanced
     //geometry, there's no partial/incremental update.
     private async rebuildGrass(): Promise<boolean> {
-        if (this.worldStreamer) {
-            return this.rebuildStreamedGrass();
-        }
         this.clearWorldCopies();
         this.chunkScheduler.clear();
         if (this.grass) {
@@ -2104,57 +2108,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return true;
     }
 
-    private async rebuildStreamedGrass(): Promise<boolean> {
-        this.chunkScheduler.clear();
-        this.streamedGrassByChunkId.clear();
-        for (const [key, record] of this.worldChunkLayers) {
-            this.unmountGrassWorldRenderLayer(this.createWorldRenderChunkContext("@grass", key, record));
-        }
-        this.streamedGrassResources?.dispose();
-        this.streamedGrassResources = undefined;
-        const layer = this.worldRenderLayers.get("@grass");
-        if (!layer) return false;
-        const builds: Promise<void>[] = [];
-        for (const [key, record] of this.worldChunkLayers) {
-            record.grassBuildRevision = (record.grassBuildRevision ?? 0) + 1;
-            record.vegetationAbort?.abort();
-            record.vegetationPromise = undefined;
-            record.vegetationAbort = undefined;
-            const mounted = this.mountRegisteredWorldRenderLayer(layer, key, record);
-            record.renderLayerPromises?.set(layer.id, mounted);
-            builds.push(mounted);
-        }
-        await Promise.all(builds);
-        this.refreshWorldCopies();
-        return !this.disposed;
-    }
-
-    private async rebuildStreamedForests(expectedRevision: number, forestRevision: number): Promise<boolean> {
-        this.chunkScheduler.clear();
-        this.streamedForestByChunkId.clear();
-        const builds: Promise<void>[] = [];
-        for (const [key, record] of this.worldChunkLayers) {
-            this.unmountForestWorldRenderLayer(this.createWorldRenderChunkContext("@forest", key, record));
-        }
-        this.streamedForestResources?.dispose();
-        this.streamedForestResources = new ForestSharedResources(this.modelAssets);
-        const layer = this.worldRenderLayers.get("@forest");
-        if (!layer) return false;
-        for (const [key, record] of this.worldChunkLayers) {
-            record.forestBuildRevision = (record.forestBuildRevision ?? 0) + 1;
-            record.vegetationAbort?.abort();
-            record.vegetationPromise = undefined;
-            record.vegetationAbort = undefined;
-            const build = this.mountRegisteredWorldRenderLayer(layer, key, record);
-            record.forestPromise = build;
-            record.renderLayerPromises?.set(layer.id, build);
-            builds.push(build);
-        }
-        await Promise.all(builds);
-        this.refreshWorldCopies();
-        return !this.disposed && expectedRevision === this.loadRevision && forestRevision === this.forestRevision;
-    }
-
     private async rebuildSurfaceVegetation(expectedRevision: number): Promise<boolean> {
         if (!this.worldStreamer) {
             await Promise.all([this.rebuildGrass(), this.rebuildForest(expectedRevision)]);
@@ -2162,7 +2115,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         }
 
         const forestRevision = ++this.forestRevision;
-        this.chunkScheduler.clear();
         this.streamedGrassByChunkId.clear();
         this.streamedForestByChunkId.clear();
         for (const [key, record] of this.worldChunkLayers) {
@@ -2175,10 +2127,6 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             record.vegetationAbort = undefined;
             record.vegetationPromise = undefined;
         }
-        this.streamedGrassResources?.dispose();
-        this.streamedGrassResources = undefined;
-        this.streamedForestResources?.dispose();
-        this.streamedForestResources = new ForestSharedResources(this.modelAssets);
 
         const grassLayer = this.worldRenderLayers.get("@grass");
         const forestLayer = this.worldRenderLayers.get("@forest");
@@ -3026,16 +2974,41 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     }
 
     //-------------------------------------------------------------------------
-    //Tree density/size - baked into the instanced geometry at build time (like
-    //grass), so both rebuild the forest rather than touching a uniform.
+    //Instance layout settings coalesce within a turn and serialize replacement
+    //work. Streamed grass/forest consume one shared Worker layout generation.
     //-------------------------------------------------------------------------
+    private scheduleVegetationRefresh(kind: "grass" | "forest"): void {
+        if (this.disposed || !this.mapData) return;
+        const revision = this.loadRevision;
+        if (this.pendingVegetationRefresh?.revision === revision) {
+            this.pendingVegetationRefresh[kind] = true;
+            return;
+        }
+        const request = { revision, grass: kind === "grass", forest: kind === "forest" };
+        this.pendingVegetationRefresh = request;
+        const queued = this.vegetationRefreshQueue.then(async () => {
+            if (this.pendingVegetationRefresh === request) this.pendingVegetationRefresh = undefined;
+            if (this.disposed || this.loadRevision !== revision) return;
+            if (this.worldStreamer || (request.grass && request.forest)) {
+                await this.rebuildSurfaceVegetation(revision);
+            } else if (request.grass) await this.rebuildGrass();
+            else await this.rebuildForest(revision);
+        });
+        const refresh = this.worldController?.lifecycle.track(queued) ?? queued;
+        this.vegetationRefreshQueue = refresh.then(() => undefined, () => undefined);
+        void refresh.catch(error => {
+            if (!this.disposed && this.loadRevision === revision) this.emit("error", error);
+        });
+    }
+
     public get treesPerTile(): number {
         return this.options.treesPerTile;
     }
     public set treesPerTile(value: number) {
         if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
+        if (value === this.options.treesPerTile) return;
         this.options.treesPerTile = value;
-        void this.rebuildForest().catch(error => this.emit("error", error));
+        this.scheduleVegetationRefresh("forest");
     }
 
     public get treeScale(): number {
@@ -3043,22 +3016,23 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     }
     public set treeScale(value: number) {
         if (!Number.isFinite(value) || value < 0) throw new RangeError("treeScale must be a non-negative finite number");
+        if (value === this.options.treeScale) return;
         this.options.treeScale = value;
-        void this.rebuildForest().catch(error => this.emit("error", error));
+        this.scheduleVegetationRefresh("forest");
     }
 
-    //Toggling visibility just flips the mesh's own `visible` flag (grass is
-    //still generated even when disabled) - the terrain's own grass texture
-    //keeps rendering underneath either way, so disabling this is purely
-    //"remove the blade overlay", not "regenerate as flat grass".
+    //Streamed visibility changes replace the shared vegetation layout so
+    //disabled blades release their field resources and stop generating.
     public get grassVisible(): boolean {
         return this.options.grassEnabled;
     }
 
     public set grassVisible(value: boolean) {
+        if (typeof value !== "boolean") throw new TypeError("grassVisible must be a boolean");
+        if (value === this.options.grassEnabled) return;
         this.options.grassEnabled = value;
         if (this.grass) this.grass.visible = value;
-        if (this.worldStreamer) this.rebuildStreamedGrass();
+        if (this.worldStreamer) this.scheduleVegetationRefresh("grass");
         this.refreshWorldCopies();
     }
 
@@ -3091,8 +3065,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     public set grassDensity(value: number) {
         if (!Number.isInteger(value) || value < 0) throw new RangeError("grassDensity must be a non-negative integer");
+        if (value === this.options.grassDensity) return;
         this.options.grassDensity = value;
-        void this.rebuildGrass().catch(error => this.emit("error", error));
+        this.scheduleVegetationRefresh("grass");
     }
 
     public get grassBladeWidth(): number {
@@ -3101,8 +3076,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     public set grassBladeWidth(value: number) {
         if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeWidth must be a positive finite number");
+        if (value === this.options.grassBladeWidth) return;
         this.options.grassBladeWidth = value;
-        void this.rebuildGrass().catch(error => this.emit("error", error));
+        this.scheduleVegetationRefresh("grass");
     }
 
     public get grassBladeHeight(): number {
@@ -3111,8 +3087,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     public set grassBladeHeight(value: number) {
         if (!Number.isFinite(value) || value <= 0) throw new RangeError("grassBladeHeight must be a positive finite number");
+        if (value === this.options.grassBladeHeight) return;
         this.options.grassBladeHeight = value;
-        void this.rebuildGrass().catch(error => this.emit("error", error));
+        this.scheduleVegetationRefresh("grass");
     }
 
     public selectTile(x: number, y: number): void {

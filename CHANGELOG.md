@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Vegetation edits coalesce and serialize shared-layout refreshes, preserve
+  terrain residency and shared models/materials, and reject superseded layer
+  mounts. Unchanged settings avoid rebuilds entirely.
 - Magnified world overviews reuse terrain samples through a bounded pixel row,
   preserving terrain colors and river footprints without per-pixel resampling.
 - World descriptors and landform domains are immutable at runtime. Finite

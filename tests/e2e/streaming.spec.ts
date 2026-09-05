@@ -95,6 +95,31 @@ test("keeps the default infinite-world render budget bounded", async ({ page }, 
     }).hexWorld.mountainHeight)).toBe(80);
 });
 
+test("refreshes vegetation without replacing terrain or shared model preparation", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+        const map = (window as any).hexWorld;
+        const terrain = map.terrain;
+        const source = map.worldSource;
+        map.grassVisible = true;
+        map.grassDensity = 2;
+        map.treesPerTile = 1;
+        await map.vegetationRefreshQueue;
+        const forestResources = map.streamedForestResources;
+        const grassResources = map.streamedGrassResources;
+        map.grassDensity = 3;
+        map.treeScale = map.treeScale * 1.1;
+        await map.vegetationRefreshQueue;
+        return {
+            terrain: map.terrain === terrain,
+            source: map.worldSource === source,
+            forest: Boolean(forestResources) && map.streamedForestResources === forestResources,
+            grass: Boolean(grassResources) && map.streamedGrassResources === grassResources,
+            density: map.grassDensity
+        };
+    });
+    expect(result).toEqual({ terrain: true, source: true, forest: true, grass: true, density: 3 });
+});
+
 test("streams across long distances while residency and GPU caches stay bounded", async ({ page }, testInfo) => {
     test.setTimeout(240_000);
     const samples: Diagnostics[] = [];
