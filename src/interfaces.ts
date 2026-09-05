@@ -36,7 +36,9 @@ export interface CityInfo {
 //            neighboring lake tiles merge into one body - see helpers/rivers.ts
 //`treeModel` (only meaningful with the "wood" modifier) is a model folder path
 //just like city.model above - which tree species/asset to scatter on this
-//specific tile, falling back to HexMapOptions' treeModel if not set.
+//specific tile, falling back to HexMapOptions' treeModel if not set. A tree
+//asset's info.json owns its required middle/far forest LOD paths and albedo
+//calibration; see docs/render-streaming.md.
 //----------------------------------------------------------------------------------
 export interface TileInfo {
     type: Land,

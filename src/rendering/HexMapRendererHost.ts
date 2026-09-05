@@ -6,6 +6,7 @@ import {
     DirectionalLight,
     Fog,
     Group,
+    HemisphereLight,
     PerspectiveCamera,
     Scene,
     Texture,
@@ -28,6 +29,13 @@ export interface HexMapRendererHostOptions {
 }
 
 export type WebGlContextState = "ready" | "lost" | "restoring" | "disposed";
+
+const SUN_ELEVATION = 24 * Math.PI / 180;
+const SUN_AZIMUTH = 205 * Math.PI / 180;
+
+function createSunDirection(): Vector3 {
+    return new Vector3().setFromSphericalCoords(1, Math.PI / 2 - SUN_ELEVATION, SUN_AZIMUTH);
+}
 
 export interface WebGlContextStats {
     readonly state: WebGlContextState;
@@ -68,13 +76,15 @@ export class HexMapRendererHost {
         this.camera.position.set(900, 500, 1000);
         this.scene.add(this.camera);
 
-        const primary = new DirectionalLight(0xffffff);
-        primary.position.set(1, 1, 1);
+        // Keep direct lighting aligned with the visible sky sun. A natural
+        // hemisphere fill preserves normal-dependent shading on untextured
+        // vegetation without the below-ground blue directional light that
+        // previously left most tree faces nearly black.
+        const primary = new DirectionalLight(0xfff3dc, 1.65);
+        primary.position.copy(createSunDirection());
         this.scene.add(primary);
-        const fill = new DirectionalLight(0x002288);
-        fill.position.set(-1, -1, -1);
-        this.scene.add(fill);
-        this.scene.add(new AmbientLight(0x222222));
+        this.scene.add(new HemisphereLight(0xc7e7ff, 0x435433, 1));
+        this.scene.add(new AmbientLight(0xffffff, 0.18));
 
         this.sky = this.createSky(options.skyVisible);
         this.scene.add(this.sky);
@@ -137,10 +147,7 @@ export class HexMapRendererHost {
         uniforms.rayleigh.value = 1.7;
         uniforms.mieCoefficient.value = 0.002;
         uniforms.mieDirectionalG.value = 0.76;
-        const elevation = 24 * Math.PI / 180;
-        const azimuth = 205 * Math.PI / 180;
-        const sun = new Vector3().setFromSphericalCoords(1, Math.PI / 2 - elevation, azimuth);
-        uniforms.sunPosition.value.copy(sun);
+        uniforms.sunPosition.value.copy(createSunDirection());
         return sky;
     }
 

@@ -1,5 +1,10 @@
 {
     "offset": { "x": 0, "y": 0, "z": 0 },
     "rotation": { "x": 0, "y": 0, "z": 0 },
-    "scale": 0.97
+    "scale": 0.97,
+    "forestAlbedoScale": 1.25,
+    "forestLods": {
+        "middle": "Assets/models/pinia/lod1",
+        "far": "Assets/models/pinia/lod2"
+    }
 }

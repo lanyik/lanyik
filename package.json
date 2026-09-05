@@ -34,8 +34,9 @@
     "dist"
   ],
   "scripts": {
+    "generate:forest-lods": "node scripts/generate-forest-lods.mjs",
     "build:lib": "tsup && tsc -p tsconfig.build.json && rollup -c rollup.config.global.mjs",
-    "build:demo": "npm run build:lib && node scripts/copy-demo-assets.cjs",
+    "build:demo": "npm run generate:forest-lods && npm run build:lib && node scripts/copy-demo-assets.cjs",
     "build": "npm run build:demo",
     "server": "http-server public -c-1 -p 3000",
     "start": "npm run build && npm run server",

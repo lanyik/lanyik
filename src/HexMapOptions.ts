@@ -23,6 +23,7 @@ export interface HexMapOptions {
     gridOpacity?: number;
     selectorColor?: ColorRepresentation;
     pointerColor?: ColorRepresentation;
+    /** Maximum near-LOD tree instances per wooded tile. Defaults to 12. */
     treesPerTile?: number;
 
     // Animated sea/coast surface. waterDepth defaults to size * 0.25.
@@ -68,7 +69,8 @@ export interface HexMapOptions {
     riverDepth?: number;
     lakeShoreWidth?: number;
 
-    // Model values are folder paths containing model.glb and info.json.
+    // Model values are folder paths containing model.glb and info.json. Tree
+    // metadata also declares forestLods.middle/far and forestAlbedoScale.
     treeModel?: string;
     treeScale?: number;
     cityModel?: string;
@@ -182,7 +184,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     gridOpacity: 0.35,
     selectorColor: 0xffff00,
     pointerColor: 0xeeeeee,
-    treesPerTile: 20,
+    treesPerTile: 12,
     waterColorShallow: LandColor[Land.coastal],
     waterColorDeep: LandColor[Land.sea],
     waterWaveAmplitude: 1.6,

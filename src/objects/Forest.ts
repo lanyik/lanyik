@@ -8,7 +8,10 @@ import {
     Vector3,
     Object3D,
     BufferGeometry,
-    Material
+    Material,
+    MeshLambertMaterial,
+    Color,
+    Texture
 } from "three";
 import pointInPolygon from "robust-point-in-polygon";
 
@@ -81,6 +84,7 @@ interface ForestChunkRecord {
     modelPath: string;
     root: Group;
     instancedMeshes: InstancedMesh[];
+    lodParts: readonly (readonly PreparedForestPart[])[];
     tiles: Point[];
     lod?: WorldChunkLod;
     lodCache: Map<WorldChunkLod, ForestLodCache>;
@@ -111,9 +115,30 @@ interface PreparedForestPart {
 }
 
 interface PreparedForestModel {
-    readonly parts: PreparedForestPart[];
-    readonly asset: ModelAssetLease;
+    readonly lods: readonly (readonly PreparedForestPart[])[];
 }
+
+interface ForestLodMetadata {
+    middle: string;
+    far: string;
+}
+
+type ForestMaterialSource = Material & {
+    color?: Color;
+    map?: Texture | null;
+    lightMap?: Texture | null;
+    lightMapIntensity?: number;
+    aoMap?: Texture | null;
+    aoMapIntensity?: number;
+    emissive?: Color;
+    emissiveIntensity?: number;
+    emissiveMap?: Texture | null;
+    alphaMap?: Texture | null;
+    wireframe?: boolean;
+    flatShading?: boolean;
+    fog?: boolean;
+    vertexColors?: boolean;
+};
 
 const HIDDEN_TREE_MATRIX = new Float32Array([
     0, 0, 0, 0,
@@ -128,12 +153,91 @@ function writeHiddenMatrices(target: Float32Array, start: number, count: number)
     }
 }
 
+function readForestLodMetadata(modelPath: string, value: unknown): ForestLodMetadata {
+    if (!value || typeof value !== "object") {
+        throw new TypeError(`${modelPath}/info.json must define forestLods.middle and forestLods.far`);
+    }
+    const metadata = value as Record<string, unknown>;
+    for (const level of ["middle", "far"] as const) {
+        if (typeof metadata[level] !== "string" || metadata[level].trim().length === 0) {
+            throw new TypeError(`${modelPath}/info.json forestLods.${level} must be a non-empty model path`);
+        }
+    }
+    if (metadata.middle === modelPath || metadata.far === modelPath || metadata.middle === metadata.far) {
+        throw new TypeError(`${modelPath}/info.json forestLods must reference two distinct LOD assets`);
+    }
+    return { middle: metadata.middle as string, far: metadata.far as string };
+}
+
+function readForestAlbedoScale(modelPath: string, value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 4) {
+        throw new TypeError(`${modelPath}/info.json forestAlbedoScale must be in (0, 4]`);
+    }
+    return value;
+}
+
+function createForestMaterial(source: Material, albedoScale: number): MeshLambertMaterial {
+    const input = source as ForestMaterialSource;
+    if (!(input.color instanceof Color)) {
+        throw new TypeError(`Forest material ${source.name || source.type} must expose a base color`);
+    }
+    const material = new MeshLambertMaterial({
+        color: input.color.clone().multiplyScalar(albedoScale),
+        map: input.map ?? null,
+        lightMap: input.lightMap ?? null,
+        lightMapIntensity: input.lightMapIntensity ?? 1,
+        aoMap: input.aoMap ?? null,
+        aoMapIntensity: input.aoMapIntensity ?? 1,
+        emissive: input.emissive ?? 0x000000,
+        emissiveIntensity: input.emissiveIntensity ?? 1,
+        emissiveMap: input.emissiveMap ?? null,
+        alphaMap: input.alphaMap ?? null,
+        alphaTest: source.alphaTest,
+        transparent: source.transparent,
+        opacity: source.opacity,
+        side: source.side,
+        depthTest: source.depthTest,
+        depthWrite: source.depthWrite,
+        colorWrite: source.colorWrite,
+        wireframe: input.wireframe ?? false,
+        flatShading: input.flatShading ?? false,
+        fog: input.fog ?? true,
+        vertexColors: input.vertexColors ?? false
+    });
+    material.name = source.name ? `${source.name}:forest-lit` : "forest-lit";
+    material.alphaHash = source.alphaHash;
+    material.alphaToCoverage = source.alphaToCoverage;
+    material.premultipliedAlpha = source.premultipliedAlpha;
+    material.dithering = source.dithering;
+    material.toneMapped = source.toneMapped;
+    material.visible = source.visible;
+    return material;
+}
+
+function prepareForestMaterials(
+    source: Material | Material[],
+    albedoScale: number,
+    cache: Map<Material, Material>,
+    created: Set<Material>
+): Material | Material[] {
+    const prepare = (material: Material): Material => {
+        const cached = cache.get(material);
+        if (cached) return cached;
+        const lit = createForestMaterial(material, albedoScale);
+        cache.set(material, lit);
+        created.add(lit);
+        return lit;
+    };
+    return Array.isArray(source) ? source.map(prepare) : prepare(source);
+}
+
 //One cache per HexMap load session. Every resident source chunk using the same
 //tree species shares the baked glTF geometry/material instead of cloning it
 //again on every mount.
 export class ForestSharedResources {
     private readonly models = new Map<string, Promise<PreparedForestModel>>();
     private readonly geometries = new Set<BufferGeometry>();
+    private readonly materials = new Set<Material>();
     private readonly assets = new Set<ModelAssetLease>();
     private readonly modelAssets: ModelAssetCache;
     private readonly ownsModelAssets: boolean;
@@ -144,33 +248,68 @@ export class ForestSharedResources {
         this.modelAssets = modelAssets ?? new ModelAssetCache();
     }
 
-    public prepare(modelPath: string): Promise<PreparedForestPart[]> {
+    public prepare(modelPath: string): Promise<readonly (readonly PreparedForestPart[])[]> {
         if (this.disposed) return Promise.reject(new Error("ForestSharedResources has been disposed"));
         let pending = this.models.get(modelPath);
         if (!pending) {
-            pending = this.modelAssets.acquire(modelPath).then(asset => {
+            pending = this.modelAssets.acquire(modelPath).then(async baseAsset => {
+                const acquired = [baseAsset];
+                const createdGeometries = new Set<BufferGeometry>();
+                const createdMaterials = new Set<Material>();
                 try {
-                    const { scene, fixup } = asset.model;
-                    const meshes: Mesh[] = [];
-                    scene.traverse(object => { if ((object as Mesh).isMesh) meshes.push(object as Mesh); });
-                    const parts = meshes.map(mesh => {
+                    const metadata = readForestLodMetadata(modelPath, baseAsset.model.info.forestLods);
+                    const albedoScale = readForestAlbedoScale(modelPath, baseAsset.model.info.forestAlbedoScale);
+                    if (this.disposed) throw new Error("ForestSharedResources was disposed while loading a model");
+                    const settled = await Promise.allSettled([
+                        this.modelAssets.acquire(metadata.middle),
+                        this.modelAssets.acquire(metadata.far)
+                    ]);
+                    for (const result of settled) if (result.status === "fulfilled") acquired.push(result.value);
+                    const failure = settled.find(result => result.status === "rejected") as PromiseRejectedResult | undefined;
+                    if (failure) throw failure.reason;
+
+                    const meshesByLod = acquired.map(asset => {
+                        const meshes: Mesh[] = [];
+                        asset.model.scene.traverse(object => {
+                            if ((object as Mesh).isMesh) meshes.push(object as Mesh);
+                        });
+                        return meshes;
+                    });
+                    const partCount = meshesByLod[0].length;
+                    if (partCount === 0 || meshesByLod.some(meshes => meshes.length !== partCount)) {
+                        throw new TypeError(`${modelPath} forest LOD assets must contain the same non-zero mesh count`);
+                    }
+                    const partNames = meshesByLod[0].map(mesh => mesh.name);
+                    for (const meshes of meshesByLod) meshes.forEach((mesh, part) => {
+                        if (mesh.name !== partNames[part]) {
+                            throw new TypeError(`${modelPath} forest LOD assets must retain mesh order and names`);
+                        }
+                        if (!mesh.geometry.getAttribute("normal")) {
+                            throw new TypeError(`${modelPath} forest LOD mesh ${mesh.name || part} must contain normals`);
+                        }
+                    });
+                    const materialCache = new Map<Material, Material>();
+                    const baseMaterials = meshesByLod[0].map(mesh =>
+                        prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials)
+                    );
+                    const lods = meshesByLod.map((meshes, lod) => meshes.map((mesh, part) => {
                         const geometry = mesh.geometry.clone();
                         geometry.applyMatrix4(mesh.matrixWorld);
-                        geometry.applyMatrix4(fixup);
-                        this.geometries.add(geometry);
-                        return { geometry, material: mesh.material };
-                    });
+                        geometry.applyMatrix4(acquired[lod].model.fixup);
+                        createdGeometries.add(geometry);
+                        return { geometry, material: baseMaterials[part] };
+                    }));
                     if (this.disposed) {
-                        for (const part of parts) {
-                            part.geometry.dispose();
-                            this.geometries.delete(part.geometry);
-                        }
                         throw new Error("ForestSharedResources was disposed while loading a model");
                     }
-                    this.assets.add(asset);
-                    return { parts, asset };
+                    for (const geometry of createdGeometries) this.geometries.add(geometry);
+                    for (const material of createdMaterials) this.materials.add(material);
+                    for (const asset of acquired) this.assets.add(asset);
+                    return { lods };
                 } catch (reason) {
-                    asset.release();
+                    for (const geometry of createdGeometries) geometry.dispose();
+                    for (const material of createdMaterials) material.dispose();
+                    for (const asset of acquired) asset.release();
                     throw reason;
                 }
             }).catch(reason => {
@@ -179,7 +318,7 @@ export class ForestSharedResources {
             });
             this.models.set(modelPath, pending);
         }
-        return pending.then(model => model.parts);
+        return pending.then(model => model.lods);
     }
 
     public get preparedModelCount(): number {
@@ -195,6 +334,8 @@ export class ForestSharedResources {
         this.disposed = true;
         for (const geometry of this.geometries) geometry.dispose();
         this.geometries.clear();
+        for (const material of this.materials) material.dispose();
+        this.materials.clear();
         this.models.clear();
         for (const asset of this.assets) asset.release();
         this.assets.clear();
@@ -208,9 +349,8 @@ export class ForestSharedResources {
 //Hiding a tile's trees zero-scales their matrices (setFogState() keeps the
 //original matrices around to restore, since InstancedMesh has no "get the
 //matrix I set earlier" API once overwritten); darkening uses each
-//InstancedMesh's own instanceColor attribute, a plain built-in three.js
-//feature that any GLTFLoader-produced Standard/Physical/Lambert/Phong
-//material already multiplies its color by, no shader changes needed here.
+//InstancedMesh's own instanceColor attribute, which the shared light-reactive
+//Lambert forest materials multiply without per-chunk shader variants.
 //----------------------------------------------------------------------------------
 export class ForestField extends Group {
     private readonly fogStates = new Map<string, number>();
@@ -295,6 +435,12 @@ export class ForestField extends Group {
         const record = this.chunks.get(metadata.id);
         if (!record) return;
         if (record.lod !== lod) {
+            const parts = record.lodParts[lod];
+            record.instancedMeshes.forEach((mesh, index) => {
+                const part = parts[index];
+                mesh.geometry = part.geometry;
+                mesh.material = part.material;
+            });
             let cached = record.lodCache.get(lod);
             if (!cached) {
                 cached = this.buildChunkLod(record, lod);
@@ -315,7 +461,10 @@ export class ForestField extends Group {
             });
             copies.forEach((copy, index) => {
                 const source = record.instancedMeshes[index];
-                if (source) copy.count = source.count;
+                if (!source) return;
+                copy.geometry = source.geometry;
+                copy.material = source.material;
+                copy.count = source.count;
             });
         }
     }
@@ -510,6 +659,8 @@ function stableRandom(x: number, y: number, salt: number): number {
 //has several parts - trunk, foliage - as separate meshes/materials, so this
 //builds one InstancedMesh per part, not per model, all parts sharing the same
 //per-tree transform - see the shared `matrix` written to every part below).
+//Each model supplies three topology-compatible geometry levels; LOD changes
+//swap their shared geometry while retaining the same instance buffers.
 //Each part's own offset within the model (its node transform in the glTF) plus
 //the model's info.json fine-tuning (fixup, see loadModel) is baked into its
 //geometry once, since InstancedMesh only applies one transform per instance.
@@ -524,7 +675,7 @@ export async function createForest(
     preparedLayout?: WorldVegetationLayout
 ): Promise<ForestField | null> {
     const { size, surface } = options;
-    const treesPerTile = options.treesPerTile ?? 20;
+    const treesPerTile = options.treesPerTile ?? 12;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
     const treeScale = options.treeScale ?? 1;
     const fogDarkenFactor = options.fogDarkenFactor ?? 0.45;
@@ -572,7 +723,8 @@ export async function createForest(
     let modelIndex = 0;
 
     for (const [modelPath, tiles] of tilesByModel) {
-        const preparedParts = await resources.prepare(modelPath);
+        const preparedLods = await resources.prepare(modelPath);
+        const preparedParts = preparedLods[0];
         if (preparedParts.length === 0) continue;
 
         const chunks = groupTilesByWorldChunk(tiles);
@@ -611,6 +763,7 @@ export async function createForest(
                 modelPath,
                 root,
                 instancedMeshes,
+                lodParts: preparedLods,
                 tiles: chunkTiles,
                 lodCache: new Map()
             });

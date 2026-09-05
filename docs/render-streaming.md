@@ -52,9 +52,10 @@ remains conservative instead of exposing a temporarily missing strip.
 `visibilityChecks` and `visibilitySkips` expose both paths in
 `map.streamingStats`.
 
-Grass fields share one blade geometry/material/clock per load session, forest
-fields share each prepared model geometry/material, and every layer caches its
-deterministic CPU result per LOD. The render loop updates the finite-map and
+Grass fields share one blade geometry/material/clock per load session. Forest
+fields share one prepared near/middle/far geometry set and one light-reactive
+material set per species, and every layer caches its deterministic CPU result
+per LOD. The render loop updates the finite-map and
 streamed grass clocks directly; it does not allocate a set or scan resident
 source chunks every frame. Terrain chunks also share one immutable base hex
 geometry per LOD; each chunk stores only instance attributes. Disposing one
@@ -96,11 +97,11 @@ does not need a second visual fade or a separate eagerly loaded ring.
 
 ## LOD policy
 
-| Level | Land subdivisions | Water subdivisions | Grass density | Forest density |
-|---|---:|---:|---:|---:|
-| LOD 0 | 3 (original quality) | 2 (original quality) | 100% | 100% |
-| LOD 1 | 2 | 1 | 38% | 50% |
-| LOD 2 | 1 | 0 | 14%* | 20%* |
+| Level | Land subdivisions | Water subdivisions | Grass density | Forest density | Forest mesh triangles |
+|---|---:|---:|---:|---:|---:|
+| LOD 0 | 3 (original quality) | 2 (original quality) | 100% | 100% | about 63% of source |
+| LOD 1 | 2 | 1 | 38% | 50% | about 27% of source |
+| LOD 2 | 1 | 0 | 14%* | 20%* | about 9% of source |
 
 `*` Decorative chunks normally reach their vegetation cutoff before LOD 2, but
 the resource layer supports it for custom policies.
@@ -111,6 +112,26 @@ keeps a chunk on its current level while the camera oscillates near a threshold.
 All hex LODs retain the full-detail rim tessellation; only their inner ring is
 simplified. Displaced mountain, beach and wave edges therefore evaluate at the
 same points on both sides of an LOD transition, preventing cracks.
+
+Forest LOD is a real geometry switch, not only an instance-count reduction.
+Built-in tree sources live under `assets-source/forest`; `npm run
+generate:forest-lods` deterministically writes the three public glTF levels.
+The normal demo build runs that asset step before bundling. A tree folder's
+`info.json` must declare `forestLods.middle`, `forestLods.far`, and a positive
+`forestAlbedoScale`. Missing or structurally inconsistent levels are rejected
+instead of silently drawing the high-detail mesh at every distance. Near-level
+tree density now defaults to 12 instances per wooded tile; lower levels retain
+50% and 20% of that deterministic placement.
+
+Tree glTF materials are reduced to shared `MeshLambertMaterial`s when prepared.
+The shipped assets have no useful specular response, so running their former
+Physical shader added fragment work without adding information. Base colour,
+maps, alpha state, fog and instance fog tint are preserved, while the
+asset-owned albedo scale corrects unusually dark authored colours. The scene's
+directional light uses the same sun vector as the sky and a hemisphere plus
+small ambient term keeps normal-dependent foliage readable. Dense forests do
+not enable per-tree realtime shadows: that would add another geometry pass and
+is deliberately separate from receiving direct/ambient light.
 
 ## Residency and reconstruction
 

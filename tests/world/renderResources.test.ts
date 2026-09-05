@@ -7,6 +7,7 @@ import {
     Matrix4,
     Mesh,
     MeshBasicMaterial,
+    MeshLambertMaterial,
     RawShaderMaterial,
     Texture,
     TextureLoader
@@ -23,7 +24,13 @@ vi.mock("../../src/helpers/models", () => ({
                 model: {
                     scene,
                     animations: [],
-                    info: { offset: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1 },
+                    info: {
+                        offset: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: 1,
+                        forestAlbedoScale: 1.5,
+                        forestLods: { middle: "test-tree/lod1", far: "test-tree/lod2" }
+                    },
                     fixup: new Matrix4()
                 },
                 released: false,
@@ -319,15 +326,19 @@ describe("streamed render resource sharing", () => {
         const left = (await createForest(map, options, points(0), resources))!;
         const right = (await createForest(map, options, points(12), resources))!;
         expect(resources.preparedModelCount).toBe(1);
-        expect(resources.preparedGeometryCount).toBe(1);
+        expect(resources.preparedGeometryCount).toBe(3);
 
         const leftRoot = left.children[0] as Group;
         const rightRoot = right.children[0] as Group;
         expect((leftRoot.children[0] as Mesh).geometry).toBe((rightRoot.children[0] as Mesh).geometry);
+        expect((leftRoot.children[0] as Mesh).material).toBeInstanceOf(MeshLambertMaterial);
         const metadata = getWorldChunkMetadata(leftRoot)!;
         left.activateChunk(metadata, 0, [leftRoot]);
+        const nearGeometry = (leftRoot.children[0] as Mesh).geometry;
         left.activateChunk(metadata, 1, [leftRoot]);
+        expect((leftRoot.children[0] as Mesh).geometry).not.toBe(nearGeometry);
         left.activateChunk(metadata, 0, [leftRoot]);
+        expect((leftRoot.children[0] as Mesh).geometry).toBe(nearGeometry);
         expect(left.lodBuildCount).toBe(2);
 
         const instanced = leftRoot.children[0] as InstancedMesh;

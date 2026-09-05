@@ -90,7 +90,7 @@ const map = new HexMap({
     gridColor: 0x42322b,
     gridWidth: 0.04,
     gridOpacity: 0.35,
-    treesPerTile: 16,
+    treesPerTile: 12,
     treeModel: "Assets/models/oak",
     grassEnabled: true,
     grassDensity: 45,
