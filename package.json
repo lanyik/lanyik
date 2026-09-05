@@ -91,6 +91,7 @@
     "dat.gui": "^0.7.9",
     "fake-indexeddb": "^6.2.5",
     "http-server": "^14.1.1",
+    "meshoptimizer": "1.2.0",
     "rollup": "^4.62.2",
     "stats.js": "^0.17.0",
     "three": "^0.185.1",

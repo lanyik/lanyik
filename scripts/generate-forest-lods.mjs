@@ -3,17 +3,11 @@ import path from "node:path";
 
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { SimplifyModifier } from "three/examples/jsm/modifiers/SimplifyModifier.js";
-import { mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { FOREST_LOD_LEVELS, simplifyForestGeometry } from "./lib/forest-lod-geometry.mjs";
 
 const ROOT = process.cwd();
 const SOURCE_ROOT = path.join(ROOT, "assets-source", "forest");
 const PUBLIC_MODEL_ROOT = path.join(ROOT, "public", "Assets", "models");
-const LEVELS = [
-    { name: "near", directory: "", vertexRetention: 0.65 },
-    { name: "middle", directory: "lod1", vertexRetention: 0.28 },
-    { name: "far", directory: "lod2", vertexRetention: 0.10 }
-];
 
 class NodeFileReader {
     result = null;
@@ -59,17 +53,23 @@ function triangleCount(geometry) {
     return (geometry.index?.count ?? geometry.attributes.position.count) / 3;
 }
 
-function simplifyScene(source, vertexRetention) {
+async function simplifyScene(source, level) {
     const scene = source.clone(true);
-    const modifier = new SimplifyModifier();
     let sourceTriangles = 0;
     let outputTriangles = 0;
-    let meshCount = 0;
-
+    const meshes = [];
     scene.traverse(object => {
-        if (!object.isMesh) return;
+        if (object.isMesh) meshes.push(object);
+    });
+    for (const object of meshes) {
         if (object.isSkinnedMesh || Object.keys(object.geometry.morphAttributes).length > 0) {
             throw new TypeError(`Forest LOD source ${object.name || "<unnamed>"} must be a static mesh`);
+        }
+        // This asset pipeline targets the shipped untextured trees. Textured
+        // assets need UV-error weights and texture-aware visual validation.
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        if (materials.some(material => Object.values(material).some(value => value?.isTexture))) {
+            throw new TypeError("Forest LOD generation requires untextured source materials");
         }
         const position = object.geometry.getAttribute("position");
         const normal = object.geometry.getAttribute("normal");
@@ -79,22 +79,17 @@ function simplifyScene(source, vertexRetention) {
         if (!normal || normal.count !== position.count) {
             throw new TypeError(`Forest LOD source ${object.name || "<unnamed>"} must contain vertex normals`);
         }
-        const merged = mergeVertices(object.geometry);
-        const mergedVertices = merged.getAttribute("position").count;
-        merged.dispose();
-        const retainedVertices = Math.max(4, Math.round(mergedVertices * vertexRetention));
-        const removeVertices = Math.max(0, mergedVertices - retainedVertices);
-        const simplified = modifier.modify(object.geometry, removeVertices);
-        simplified.computeBoundingBox();
-        simplified.computeBoundingSphere();
+        const { geometry: simplified } = await simplifyForestGeometry(object.geometry, level)
+            .catch(error => {
+                throw new Error(`${object.name}/${level.name}: ${error.message}`, { cause: error });
+            });
         sourceTriangles += triangleCount(object.geometry);
         outputTriangles += triangleCount(simplified);
         object.geometry = simplified;
-        meshCount += 1;
-    });
+    }
 
-    if (meshCount === 0) throw new TypeError("Forest LOD source contains no meshes");
-    return { scene, sourceTriangles, outputTriangles, meshCount };
+    if (meshes.length === 0) throw new TypeError("Forest LOD source contains no meshes");
+    return { scene, sourceTriangles, outputTriangles };
 }
 
 async function exportGlb(scene) {
@@ -118,6 +113,9 @@ const sources = fs.readdirSync(SOURCE_ROOT, { withFileTypes: true })
 
 if (sources.length === 0) throw new Error(`No forest source assets found in ${SOURCE_ROOT}`);
 
+// Validate the entire set before overwriting any shipped asset. A topology or
+// exporter failure must not leave a mixture of old and new LODs in public/.
+const outputs = [];
 for (const sourceEntry of sources) {
     const modelName = path.basename(sourceEntry.name, path.extname(sourceEntry.name));
     const modelRoot = path.join(PUBLIC_MODEL_ROOT, modelName);
@@ -135,23 +133,26 @@ for (const sourceEntry of sources) {
         rotation: info.rotation,
         scale: info.scale
     };
-    const gltf = await parseGlb(path.join(SOURCE_ROOT, sourceEntry.name));
+    const sourceFile = path.join(SOURCE_ROOT, sourceEntry.name);
+    const gltf = await parseGlb(sourceFile);
+    // Near LOD is byte-identical to the authored asset, including every face,
+    // split normal and original node transform. Never decimate this level.
+    outputs.push([path.join(modelRoot, "model.glb"), fs.readFileSync(sourceFile)]);
+    console.log(`${modelName}/near: original asset (no simplification)`);
 
-    for (const level of LEVELS) {
-        const generated = simplifyScene(gltf.scene, level.vertexRetention);
+    for (const level of FOREST_LOD_LEVELS) {
+        const generated = await simplifyScene(gltf.scene, level);
         const outputDirectory = path.join(modelRoot, level.directory);
-        fs.mkdirSync(outputDirectory, { recursive: true });
-        fs.writeFileSync(path.join(outputDirectory, "model.glb"), await exportGlb(generated.scene));
-        if (level.directory) {
-            fs.writeFileSync(
-                path.join(outputDirectory, "info.json"),
-                `${JSON.stringify(transformInfo, null, 4)}\n`,
-                "utf8"
-            );
-        }
+        outputs.push([path.join(outputDirectory, "model.glb"), await exportGlb(generated.scene)]);
+        outputs.push([path.join(outputDirectory, "info.json"), `${JSON.stringify(transformInfo, null, 4)}\n`]);
         disposeGeneratedScene(generated.scene);
         console.log(
             `${modelName}/${level.name}: ${generated.sourceTriangles} -> ${generated.outputTriangles} triangles`
         );
     }
+}
+
+for (const [file, contents] of outputs) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, contents);
 }

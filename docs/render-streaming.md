@@ -99,9 +99,9 @@ does not need a second visual fade or a separate eagerly loaded ring.
 
 | Level | Land subdivisions | Water subdivisions | Grass density | Forest density | Forest mesh triangles |
 |---|---:|---:|---:|---:|---:|
-| LOD 0 | 3 (original quality) | 2 (original quality) | 100% | 100% | about 63% of source |
-| LOD 1 | 2 | 1 | 38% | 50% | about 27% of source |
-| LOD 2 | 1 | 0 | 14%* | 20%* | about 9% of source |
+| LOD 0 | 3 (original quality) | 2 (original quality) | 100% | 100% | original asset, 100% |
+| LOD 1 | 2 | 1 | 38% | 50% | error-limited; target 65% |
+| LOD 2 | 1 | 0 | 14%* | 20%* | error-limited; target 40% |
 
 `*` Decorative chunks normally reach their vegetation cutoff before LOD 2, but
 the resource layer supports it for custom policies.
@@ -122,6 +122,45 @@ The normal demo build runs that asset step before bundling. A tree folder's
 instead of silently drawing the high-detail mesh at every distance. Near-level
 tree density now defaults to 12 instances per wooded tile; lower levels retain
 50% and 20% of that deterministic placement.
+
+Near geometry is copied byte-for-byte from the source GLB: close inspection
+must retain every authored face, hard normal and node transform. Middle and
+far levels are generated independently from that source with the pinned,
+build-only `meshoptimizer` dependency. `scripts/lib/forest-lod-geometry.mjs`
+uses attribute-aware edge collapse with normal weights of 0.25 per component,
+relative appearance-error limits of 0.005 / 0.01, and locked physical boundaries.
+These are the simplifier's approximate error metrics, not a screen-pixel or
+Hausdorff guarantee. Triangle retention is only a target: error and topology
+constraints win, and an already-low-poly part may retain every triangle.
+No simplification runs in the browser.
+
+The former vertex-quota simplifier tore hard-normal seams and introduced real
+holes even at near distance. Do not treat attribute-split vertices as unrelated
+surface boundaries. The new build compares physical boundary edges (position
+identity at 1e-5 model units), edge incidence and connected-component counts
+before and after simplification/compaction. Existing open leaf/trunk boundaries
+must remain identical; no new opening, non-manifold edge or dropped component
+is accepted. Source triangles collapsed at that positional precision are
+excluded from this topology check. All attributes share one compaction remap;
+authored normals are preserved, not recomputed across hard edges. The pipeline
+currently accepts static, untextured tree primitives: textures need an explicit
+UV-error policy before being added. All models are validated/exported before
+any public asset is overwritten, so validation failures cannot publish a partial
+set. `tests/world/forestLodAssets.test.js` checks the real shipped GLBs, source
+immutability, reproduction, transforms, topology and normal validity.
+
+Current triangles per complete tree (before instancing/density scaling):
+
+| Asset | Near | Middle | Far |
+|---|---:|---:|---:|
+| oak | 886 | 868 | 752 |
+| palm | 1636 | 1204 | 934 |
+| pinia | 174 | 174 | 174 |
+
+Triangle counts increase compared with the broken assets; missing faces are not
+a valid optimization. Instance-density LOD, chunk culling and distance cutoff
+remain active. More aggressive savings require silhouette-preserving authored
+LODs or impostors with separate visual validation, not larger deletion quotas.
 
 Tree glTF materials are reduced to shared `MeshLambertMaterial`s when prepared.
 The shipped assets have no useful specular response, so running their former
