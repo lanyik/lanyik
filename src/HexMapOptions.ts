@@ -23,7 +23,7 @@ export interface HexMapOptions {
     gridOpacity?: number;
     selectorColor?: ColorRepresentation;
     pointerColor?: ColorRepresentation;
-    /** Maximum near-LOD tree instances per wooded tile. Defaults to 12. */
+    /** Average near-LOD candidates per hex area, before spacing/biome limits. Defaults to 12. */
     treesPerTile?: number;
 
     // Animated sea/coast surface. waterDepth defaults to size * 0.25.
@@ -72,12 +72,14 @@ export interface HexMapOptions {
     // Model values are folder paths containing model.glb and info.json. Tree
     // metadata also declares forestLods.middle/far and forestAlbedoScale.
     treeModel?: string;
+    /** Model size multiplier (default 1.6); also increases minimum trunk spacing. */
     treeScale?: number;
     cityModel?: string;
     cityScale?: number;
 
     // Decorative grass. Size-derived width/height defaults follow hex size.
     grassEnabled?: boolean;
+    /** Average grass candidates per hex area, before water/shore clearance. */
     grassDensity?: number;
     grassBladeWidth?: number;
     grassBladeHeight?: number;
@@ -216,7 +218,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     riverFlowSpeed: 1,
     lakeShoreWidth: 0.18,
     treeModel: "Assets/models/pinia",
-    treeScale: 1,
+    treeScale: 1.6,
     cityModel: "Assets/models/monument",
     cityScale: 1,
     grassEnabled: true,

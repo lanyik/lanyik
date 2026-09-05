@@ -713,6 +713,7 @@ const foamController = waterFolder.add(map, "coastalWaveOpacity", 0, 1, 0.01);
 
 const vegetationFolder = gui.addFolder("Vegetation");
 const treesController = vegetationFolder.add(map, "treesPerTile", 0, 40, 1);
+const treeScaleController = vegetationFolder.add(map, "treeScale", 0.5, 3, 0.1);
 const grassController = vegetationFolder.add(map, "grassVisible");
 const windController = vegetationFolder.add(map, "grassWindStrength", 0, 6, 0.1);
 
@@ -748,6 +749,7 @@ const translatedControllers = [
     [coastCurveController, "control.coastCurve"],
     [foamController, "control.foam"],
     [treesController, "control.trees"],
+    [treeScaleController, "control.treeScale"],
     [grassController, "control.grass"],
     [windController, "control.wind"],
     [startMarchController, "control.startMarch"],

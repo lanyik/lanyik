@@ -4,698 +4,7 @@
   (global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.HexMap = {}, global.THREE));
 })(this, (function (exports, three) { 'use strict';
 
-  var __create = Object.create;
-  var __defProp = Object.defineProperty;
-  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-  var __getOwnPropNames = Object.getOwnPropertyNames;
-  var __getProtoOf = Object.getPrototypeOf;
-  var __hasOwnProp = Object.prototype.hasOwnProperty;
-  var __commonJS = (cb, mod) => function __require() {
-    try {
-      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-    } catch (e) {
-      throw mod = 0, e;
-    }
-  };
-  var __copyProps = (to, from, except, desc) => {
-    if (from && typeof from === "object" || typeof from === "function") {
-      for (let key of __getOwnPropNames(from))
-        if (!__hasOwnProp.call(to, key) && key !== except)
-          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-    }
-    return to;
-  };
-  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-    // If the importer is in node compatibility mode or this is not an ESM
-    // file that has been converted to a CommonJS file using a Babel-
-    // compatible transform (i.e. "__esModule" has not been set), then set
-    // "default" to the CommonJS "module.exports" for node compatibility.
-    __defProp(target, "default", { value: mod, enumerable: true }) ,
-    mod
-  ));
-
-  // node_modules/two-product/two-product.js
-  var require_two_product = __commonJS({
-    "node_modules/two-product/two-product.js"(exports, module) {
-      module.exports = twoProduct;
-      var SPLITTER = +(Math.pow(2, 27) + 1);
-      function twoProduct(a, b, result) {
-        var x = a * b;
-        var c = SPLITTER * a;
-        var abig = c - a;
-        var ahi = c - abig;
-        var alo = a - ahi;
-        var d = SPLITTER * b;
-        var bbig = d - b;
-        var bhi = d - bbig;
-        var blo = b - bhi;
-        var err1 = x - ahi * bhi;
-        var err2 = err1 - alo * bhi;
-        var err3 = err2 - ahi * blo;
-        var y = alo * blo - err3;
-        if (result) {
-          result[0] = y;
-          result[1] = x;
-          return result;
-        }
-        return [y, x];
-      }
-    }
-  });
-
-  // node_modules/robust-sum/robust-sum.js
-  var require_robust_sum = __commonJS({
-    "node_modules/robust-sum/robust-sum.js"(exports, module) {
-      module.exports = linearExpansionSum;
-      function scalarScalar(a, b) {
-        var x = a + b;
-        var bv = x - a;
-        var av = x - bv;
-        var br = b - bv;
-        var ar = a - av;
-        var y = ar + br;
-        if (y) {
-          return [y, x];
-        }
-        return [x];
-      }
-      function linearExpansionSum(e, f) {
-        var ne = e.length | 0;
-        var nf = f.length | 0;
-        if (ne === 1 && nf === 1) {
-          return scalarScalar(e[0], f[0]);
-        }
-        var n = ne + nf;
-        var g = new Array(n);
-        var count = 0;
-        var eptr = 0;
-        var fptr = 0;
-        var abs = Math.abs;
-        var ei = e[eptr];
-        var ea = abs(ei);
-        var fi = f[fptr];
-        var fa = abs(fi);
-        var a, b;
-        if (ea < fa) {
-          b = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          b = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = f[fptr];
-            fa = abs(fi);
-          }
-        }
-        if (eptr < ne && ea < fa || fptr >= nf) {
-          a = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          a = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = f[fptr];
-            fa = abs(fi);
-          }
-        }
-        var x = a + b;
-        var bv = x - a;
-        var y = b - bv;
-        var q0 = y;
-        var q1 = x;
-        var _x, _bv, _av, _br, _ar;
-        while (eptr < ne && fptr < nf) {
-          if (ea < fa) {
-            a = ei;
-            eptr += 1;
-            if (eptr < ne) {
-              ei = e[eptr];
-              ea = abs(ei);
-            }
-          } else {
-            a = fi;
-            fptr += 1;
-            if (fptr < nf) {
-              fi = f[fptr];
-              fa = abs(fi);
-            }
-          }
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-        }
-        while (eptr < ne) {
-          a = ei;
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-          }
-        }
-        while (fptr < nf) {
-          a = fi;
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = f[fptr];
-          }
-        }
-        if (q0) {
-          g[count++] = q0;
-        }
-        if (q1) {
-          g[count++] = q1;
-        }
-        if (!count) {
-          g[count++] = 0;
-        }
-        g.length = count;
-        return g;
-      }
-    }
-  });
-
-  // node_modules/two-sum/two-sum.js
-  var require_two_sum = __commonJS({
-    "node_modules/two-sum/two-sum.js"(exports, module) {
-      module.exports = fastTwoSum;
-      function fastTwoSum(a, b, result) {
-        var x = a + b;
-        var bv = x - a;
-        var av = x - bv;
-        var br = b - bv;
-        var ar = a - av;
-        if (result) {
-          result[0] = ar + br;
-          result[1] = x;
-          return result;
-        }
-        return [ar + br, x];
-      }
-    }
-  });
-
-  // node_modules/robust-scale/robust-scale.js
-  var require_robust_scale = __commonJS({
-    "node_modules/robust-scale/robust-scale.js"(exports, module) {
-      var twoProduct = require_two_product();
-      var twoSum = require_two_sum();
-      module.exports = scaleLinearExpansion;
-      function scaleLinearExpansion(e, scale) {
-        var n = e.length;
-        if (n === 1) {
-          var ts = twoProduct(e[0], scale);
-          if (ts[0]) {
-            return ts;
-          }
-          return [ts[1]];
-        }
-        var g = new Array(2 * n);
-        var q = [0.1, 0.1];
-        var t = [0.1, 0.1];
-        var count = 0;
-        twoProduct(e[0], scale, q);
-        if (q[0]) {
-          g[count++] = q[0];
-        }
-        for (var i = 1; i < n; ++i) {
-          twoProduct(e[i], scale, t);
-          var pq = q[1];
-          twoSum(pq, t[0], q);
-          if (q[0]) {
-            g[count++] = q[0];
-          }
-          var a = t[1];
-          var b = q[1];
-          var x = a + b;
-          var bv = x - a;
-          var y = b - bv;
-          q[1] = x;
-          if (y) {
-            g[count++] = y;
-          }
-        }
-        if (q[1]) {
-          g[count++] = q[1];
-        }
-        if (count === 0) {
-          g[count++] = 0;
-        }
-        g.length = count;
-        return g;
-      }
-    }
-  });
-
-  // node_modules/robust-subtract/robust-diff.js
-  var require_robust_diff = __commonJS({
-    "node_modules/robust-subtract/robust-diff.js"(exports, module) {
-      module.exports = robustSubtract;
-      function scalarScalar(a, b) {
-        var x = a + b;
-        var bv = x - a;
-        var av = x - bv;
-        var br = b - bv;
-        var ar = a - av;
-        var y = ar + br;
-        if (y) {
-          return [y, x];
-        }
-        return [x];
-      }
-      function robustSubtract(e, f) {
-        var ne = e.length | 0;
-        var nf = f.length | 0;
-        if (ne === 1 && nf === 1) {
-          return scalarScalar(e[0], -f[0]);
-        }
-        var n = ne + nf;
-        var g = new Array(n);
-        var count = 0;
-        var eptr = 0;
-        var fptr = 0;
-        var abs = Math.abs;
-        var ei = e[eptr];
-        var ea = abs(ei);
-        var fi = -f[fptr];
-        var fa = abs(fi);
-        var a, b;
-        if (ea < fa) {
-          b = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          b = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = -f[fptr];
-            fa = abs(fi);
-          }
-        }
-        if (eptr < ne && ea < fa || fptr >= nf) {
-          a = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          a = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = -f[fptr];
-            fa = abs(fi);
-          }
-        }
-        var x = a + b;
-        var bv = x - a;
-        var y = b - bv;
-        var q0 = y;
-        var q1 = x;
-        var _x, _bv, _av, _br, _ar;
-        while (eptr < ne && fptr < nf) {
-          if (ea < fa) {
-            a = ei;
-            eptr += 1;
-            if (eptr < ne) {
-              ei = e[eptr];
-              ea = abs(ei);
-            }
-          } else {
-            a = fi;
-            fptr += 1;
-            if (fptr < nf) {
-              fi = -f[fptr];
-              fa = abs(fi);
-            }
-          }
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-        }
-        while (eptr < ne) {
-          a = ei;
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-          }
-        }
-        while (fptr < nf) {
-          a = fi;
-          b = q0;
-          x = a + b;
-          bv = x - a;
-          y = b - bv;
-          if (y) {
-            g[count++] = y;
-          }
-          _x = q1 + x;
-          _bv = _x - q1;
-          _av = _x - _bv;
-          _br = x - _bv;
-          _ar = q1 - _av;
-          q0 = _ar + _br;
-          q1 = _x;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = -f[fptr];
-          }
-        }
-        if (q0) {
-          g[count++] = q0;
-        }
-        if (q1) {
-          g[count++] = q1;
-        }
-        if (!count) {
-          g[count++] = 0;
-        }
-        g.length = count;
-        return g;
-      }
-    }
-  });
-
-  // node_modules/robust-orientation/orientation.js
-  var require_orientation = __commonJS({
-    "node_modules/robust-orientation/orientation.js"(exports, module) {
-      var twoProduct = require_two_product();
-      var robustSum = require_robust_sum();
-      var robustScale = require_robust_scale();
-      var robustSubtract = require_robust_diff();
-      var NUM_EXPAND = 5;
-      var EPSILON = 11102230246251565e-32;
-      var ERRBOUND3 = (3 + 16 * EPSILON) * EPSILON;
-      var ERRBOUND4 = (7 + 56 * EPSILON) * EPSILON;
-      function orientation_3(sum, prod, scale, sub) {
-        return function orientation3Exact2(m0, m1, m2) {
-          var p = sum(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])));
-          var n = sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0]));
-          var d = sub(p, n);
-          return d[d.length - 1];
-        };
-      }
-      function orientation_4(sum, prod, scale, sub) {
-        return function orientation4Exact2(m0, m1, m2, m3) {
-          var p = sum(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))));
-          var n = sum(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))));
-          var d = sub(p, n);
-          return d[d.length - 1];
-        };
-      }
-      function orientation_5(sum, prod, scale, sub) {
-        return function orientation5Exact(m0, m1, m2, m3, m4) {
-          var p = sum(sum(sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m2[2]), sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), -m3[2]), scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m4[2]))), m1[3]), sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m3[2]), scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m4[2]))), -m2[3]), scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m4[2]))), m3[3]))), sum(scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), -m4[3]), sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m3[2]), scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m3[2]), scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), m4[2]))), -m1[3])))), sum(sum(scale(sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m4[2]))), m3[3]), sum(scale(sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))), -m4[3]), scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), m0[3]))), sum(scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), -m1[3]), sum(scale(sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))), m2[3]), scale(sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))), -m3[3])))));
-          var n = sum(sum(sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m2[2]), sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), -m3[2]), scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m3[2]), scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), m4[2]))), -m2[3])), sum(scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m4[2]))), m3[3]), scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), -m4[3]))), sum(sum(scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m4[2]))), -m1[3])), sum(scale(sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m4[2]))), m2[3]), scale(sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))), -m4[3]))));
-          var d = sub(p, n);
-          return d[d.length - 1];
-        };
-      }
-      function orientation(n) {
-        var fn = n === 3 ? orientation_3 : n === 4 ? orientation_4 : orientation_5;
-        return fn(robustSum, twoProduct, robustScale, robustSubtract);
-      }
-      var orientation3Exact = orientation(3);
-      var orientation4Exact = orientation(4);
-      var CACHED = [
-        function orientation0() {
-          return 0;
-        },
-        function orientation1() {
-          return 0;
-        },
-        function orientation2(a, b) {
-          return b[0] - a[0];
-        },
-        function orientation3(a, b, c) {
-          var l = (a[1] - c[1]) * (b[0] - c[0]);
-          var r = (a[0] - c[0]) * (b[1] - c[1]);
-          var det = l - r;
-          var s;
-          if (l > 0) {
-            if (r <= 0) {
-              return det;
-            } else {
-              s = l + r;
-            }
-          } else if (l < 0) {
-            if (r >= 0) {
-              return det;
-            } else {
-              s = -(l + r);
-            }
-          } else {
-            return det;
-          }
-          var tol = ERRBOUND3 * s;
-          if (det >= tol || det <= -tol) {
-            return det;
-          }
-          return orientation3Exact(a, b, c);
-        },
-        function orientation4(a, b, c, d) {
-          var adx = a[0] - d[0];
-          var bdx = b[0] - d[0];
-          var cdx = c[0] - d[0];
-          var ady = a[1] - d[1];
-          var bdy = b[1] - d[1];
-          var cdy = c[1] - d[1];
-          var adz = a[2] - d[2];
-          var bdz = b[2] - d[2];
-          var cdz = c[2] - d[2];
-          var bdxcdy = bdx * cdy;
-          var cdxbdy = cdx * bdy;
-          var cdxady = cdx * ady;
-          var adxcdy = adx * cdy;
-          var adxbdy = adx * bdy;
-          var bdxady = bdx * ady;
-          var det = adz * (bdxcdy - cdxbdy) + bdz * (cdxady - adxcdy) + cdz * (adxbdy - bdxady);
-          var permanent = (Math.abs(bdxcdy) + Math.abs(cdxbdy)) * Math.abs(adz) + (Math.abs(cdxady) + Math.abs(adxcdy)) * Math.abs(bdz) + (Math.abs(adxbdy) + Math.abs(bdxady)) * Math.abs(cdz);
-          var tol = ERRBOUND4 * permanent;
-          if (det > tol || -det > tol) {
-            return det;
-          }
-          return orientation4Exact(a, b, c, d);
-        }
-      ];
-      function slowOrient(args) {
-        var proc2 = CACHED[args.length];
-        if (!proc2) {
-          proc2 = CACHED[args.length] = orientation(args.length);
-        }
-        return proc2.apply(void 0, args);
-      }
-      function proc(slow, o0, o1, o2, o3, o4, o5) {
-        return function getOrientation(a0, a1, a2, a3, a4) {
-          switch (arguments.length) {
-            case 0:
-            case 1:
-              return 0;
-            case 2:
-              return o2(a0, a1);
-            case 3:
-              return o3(a0, a1, a2);
-            case 4:
-              return o4(a0, a1, a2, a3);
-            case 5:
-              return o5(a0, a1, a2, a3, a4);
-          }
-          var s = new Array(arguments.length);
-          for (var i = 0; i < arguments.length; ++i) {
-            s[i] = arguments[i];
-          }
-          return slow(s);
-        };
-      }
-      function generateOrientationProc() {
-        while (CACHED.length <= NUM_EXPAND) {
-          CACHED.push(orientation(CACHED.length));
-        }
-        module.exports = proc.apply(void 0, [slowOrient].concat(CACHED));
-        for (var i = 0; i <= NUM_EXPAND; ++i) {
-          module.exports[i] = CACHED[i];
-        }
-      }
-      generateOrientationProc();
-    }
-  });
-
-  // node_modules/robust-point-in-polygon/robust-pnp.js
-  var require_robust_pnp = __commonJS({
-    "node_modules/robust-point-in-polygon/robust-pnp.js"(exports, module) {
-      module.exports = robustPointInPolygon;
-      var orient = require_orientation();
-      function robustPointInPolygon(vs, point) {
-        var x = point[0];
-        var y = point[1];
-        var n = vs.length;
-        var inside = 1;
-        var lim = n;
-        for (var i = 0, j = n - 1; i < lim; j = i++) {
-          var a = vs[i];
-          var b = vs[j];
-          var yi = a[1];
-          var yj = b[1];
-          if (yj < yi) {
-            if (yj < y && y < yi) {
-              var s = orient(a, b, point);
-              if (s === 0) {
-                return 0;
-              } else {
-                inside ^= 0 < s | 0;
-              }
-            } else if (y === yi) {
-              var c = vs[(i + 1) % n];
-              var yk = c[1];
-              if (yi < yk) {
-                var s = orient(a, b, point);
-                if (s === 0) {
-                  return 0;
-                } else {
-                  inside ^= 0 < s | 0;
-                }
-              }
-            }
-          } else if (yi < yj) {
-            if (yi < y && y < yj) {
-              var s = orient(a, b, point);
-              if (s === 0) {
-                return 0;
-              } else {
-                inside ^= s < 0 | 0;
-              }
-            } else if (y === yi) {
-              var c = vs[(i + 1) % n];
-              var yk = c[1];
-              if (yk < yi) {
-                var s = orient(a, b, point);
-                if (s === 0) {
-                  return 0;
-                } else {
-                  inside ^= s < 0 | 0;
-                }
-              }
-            }
-          } else if (y === yi) {
-            var x0 = Math.min(a[0], b[0]);
-            var x1 = Math.max(a[0], b[0]);
-            if (i === 0) {
-              while (j > 0) {
-                var k = (j + n - 1) % n;
-                var p = vs[k];
-                if (p[1] !== y) {
-                  break;
-                }
-                var px = p[0];
-                x0 = Math.min(x0, px);
-                x1 = Math.max(x1, px);
-                j = k;
-              }
-              if (j === 0) {
-                if (x0 <= x && x <= x1) {
-                  return 0;
-                }
-                return 1;
-              }
-              lim = j + 1;
-            }
-            var y0 = vs[(j + n - 1) % n][1];
-            while (i + 1 < lim) {
-              var p = vs[i + 1];
-              if (p[1] !== y) {
-                break;
-              }
-              var px = p[0];
-              x0 = Math.min(x0, px);
-              x1 = Math.max(x1, px);
-              i += 1;
-            }
-            if (x0 <= x && x <= x1) {
-              return 0;
-            }
-            var y1 = vs[(i + 1) % n][1];
-            if (x < x0 && y0 < y !== y1 < y) {
-              inside ^= 1;
-            }
-          }
-        }
-        return 2 * inside - 1;
-      }
-    }
-  });
+  // src/HexMap.ts
   var _changeEvent = { type: "change" };
   var _startEvent = { type: "start" };
   var _endEvent = { type: "end" };
@@ -1681,6 +990,616 @@
       setTimeout(resolve, ms);
     });
   }
+
+  // src/shaders/horizonFog.ts
+  var HORIZON_FOG_VERTEX_VARYING = `
+varying float vHorizonFogDepth;
+`;
+  var HORIZON_FOG_FRAGMENT_HEADER = `
+uniform vec3 fogColor;
+uniform float fogNear;
+uniform float fogFar;
+varying float vHorizonFogDepth;
+
+vec3 applyHorizonFog(vec3 color) {
+    float fogFactor = smoothstep(fogNear, fogFar, vHorizonFogDepth);
+    return mix(color, fogColor, fogFactor);
+}
+`;
+  var HORIZON_FOG_FRAGMENT_APPLY = `
+    gl_FragColor.rgb = applyHorizonFog(gl_FragColor.rgb);
+`;
+
+  // src/shaders/terrain.vertex.ts
+  var TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
+  var TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
+  var TERRAIN_VERTEX_SHADER = `
+// highp to match terrain.fragment.ts (see its precision comment) - vWorldXZ /
+// vLocal feed the river noise there, and varyings shouldn't lose precision on
+// the vertex side of the interpolation.
+precision highp float;
+
+${HORIZON_FOG_VERTEX_VARYING}
+
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
+
+uniform float hexSize; // tile circumradius, matches getHexCenter's "size" (world units)
+
+// Beach slope towards water neighbors (see neighborsKindA/B below). waterLevel
+// is where the water plane sits (see water.vertex.ts) - a coastal land tile's
+// rim sinks to meet it instead of staying flat and only color-blending in 2D.
+// beachWidth is the fraction of the tile's radius over which the slope happens.
+uniform float waterLevel;
+uniform float beachWidth;
+uniform float sandAtlasIndex;
+
+// Mountain centres and their surrounding foothill tiles form one world-space
+// height field. Nothing in mountainHeightAt treats the hex centre as a summit:
+// neighbouring instances therefore evaluate the same height at every shared
+// vertex instead of building one cone per tile. The lighting normal is derived
+// by finite differences; mountainHeight is the vertical scale in world units.
+uniform float mountainHeight;
+
+// Rivers/lakes (tiles with the "river"/"lake" modifier - see helpers/rivers.ts
+// and terrain.fragment.ts). The vertex stage only carves the bed: a smooth
+// sink towards -riverDepth around a river's channel centerline / across a
+// lake's body. Widths are fractions of the tile radius (hexSize); the sink
+// reaches slightly past the painted waterline so the fragment stage's
+// noise-bent banks always lie on sloped ground.
+uniform float riverWidth;
+uniform float riverBankWidth;
+uniform float riverDepth;
+uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
+
+// World units one repeat of the war-fog texture spans. Fog UVs are computed
+// from world position (not per-tile local UVs) so one copy of the texture
+// flows continuously across every fogged tile - the image tiles seamlessly on
+// each side, so neighboring repeats merge with no visible hex-shaped seams.
+uniform float fogTextureSize;
+uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
+uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
+uniform vec2 worldCenter; // camera target on the ground plane
+uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
+
+attribute vec3 position;
+attribute vec2 uv;
+
+attribute vec2 offset;       // world-space (x,z) offset of this tile instance
+attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
+attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
+attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
+attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
+attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
+attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
+attribute vec3 neighborsKindB; // NW/N/NE
+// x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
+// mask. Packed to leave two attribute slots for neighbour relief samples.
+attribute vec4 waterEdges;
+// x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
+// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
+attribute vec4 fogState;
+// x elevation, y ridge strength, z valley strength, w roughness. Values are
+// sampled in global tile coordinates by LandformSampler, so chunk order and
+// worker count cannot change the visible macro landform.
+attribute vec4 landform;
+// Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
+// Together with style.w at this tile centre these define a continuous fan
+// surface whose shared edge endpoints are identical in adjacent instances.
+attribute vec3 reliefNeighborsA;
+attribute vec3 reliefNeighborsB;
+
+varying vec2 vUV;
+varying float vBorder;
+varying float vTerrain;
+varying float vModifiers;
+varying float vPriority;
+varying vec3 vNeighborsA;
+varying vec3 vNeighborsB;
+varying vec3 vNeighborsPriorityA;
+varying vec3 vNeighborsPriorityB;
+varying vec3 vEdgeFactorsA; // SE, S, SW
+varying vec3 vEdgeFactorsB; // NW, N, NE
+varying vec3 vNormal;
+varying float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
+varying float vFogState;
+varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
+varying float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
+varying float vRiverSeaMouthEdges;
+varying float vRiverLakeMouthEdges;
+varying float vLakeNeighborEdges;
+varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
+varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
+varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
+varying vec3 vNeighborsKindB;
+// x = final normalized macro+detail elevation; y/z/w = generated
+// ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
+varying vec4 vLandform;
+varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
+
+const vec2 DIR_SE = vec2(0.8660254, 0.5);
+const vec2 DIR_S  = vec2(0.0, 1.0);
+const vec2 DIR_SW = vec2(-0.8660254, 0.5);
+const vec2 DIR_NW = vec2(-0.8660254, -0.5);
+const vec2 DIR_N  = vec2(0.0, -1.0);
+const vec2 DIR_NE = vec2(0.8660254, -0.5);
+
+//Move each logical tile to the nearest toroidal image around the camera. This
+//draws the map exactly once instead of submitting 9 complete copies; crossing
+//a seam only moves far/off-screen instances from one side to the other.
+vec2 nearestWorldOffset(vec2 canonical) {
+    vec2 wrapped = canonical;
+    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
+    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
+    return wrapped;
+}
+
+// Same cheap value noise as the fragment stages. Mountain relief is sampled
+// exclusively in world-space so its extrema are unrelated to hex centres and
+// adjacent tiles agree at every shared vertex.
+float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+        u.y
+    );
+}
+
+float centerMountainRelief() {
+    return style.w;
+}
+
+float cornerRelief(float center, float a, float b) {
+    // -1 is the CPU surface view's explicit shoreline/out-of-map sentinel.
+    // A shared corner touching water is held at the shoreline baseline.
+    if (center < -0.5 || a < -0.5 || b < -0.5) return 0.0;
+    // Mountain centres carry relief and ordinary land centres carry zero.
+    // Averaging the same three centres makes every tile touching this world
+    // vertex resolve the exact same height. Ordinary land therefore becomes
+    // a short foothill ramp instead of forcing the range boundary into a
+    // cliff, while two-tile-wide ridges no longer acquire a trench between
+    // their mountain centres.
+    return (center + a + b) / 3.0;
+}
+
+float fanTriangleRelief(vec2 p, vec2 a, vec2 b, float center, float ha, float hb) {
+    vec2 q = p / hexSize;
+    float det = a.x * b.y - a.y * b.x;
+    float wa = (q.x * b.y - q.y * b.x) / det;
+    float wb = (a.x * q.y - a.y * q.x) / det;
+    return max(center * (1.0 - wa - wb) + ha * wa + hb * wb, 0.0);
+}
+
+// Lighting uses one slope at each shared world corner and interpolates those
+// slopes over the same fan triangles as the displaced surface. A corner slope
+// is defined only by the three tile-centre relief samples meeting there, so all
+// three tile instances calculate the exact same value. This removes the dark
+// hex outlines produced when each tile previously finite-differenced only its
+// own local fan at a shared edge. The tiny world-space detail displacement is
+// deliberately omitted from lighting; at +/-1.5% it belongs in the material
+// texture and should not reintroduce per-tile normal discontinuities.
+vec2 sharedCornerSlope(float center, float a, vec2 dirA, float b, vec2 dirB) {
+    float spacing = hexSize * 1.7320508;
+    vec2 pa = dirA * spacing;
+    vec2 pb = dirB * spacing;
+    float h0 = max(center, 0.0);
+    float ha = max(a, 0.0) - h0;
+    float hb = max(b, 0.0) - h0;
+    float det = pa.x * pb.y - pa.y * pb.x;
+    vec2 gradient = vec2(
+        (ha * pb.y - pa.y * hb) / det,
+        (pa.x * hb - ha * pb.x) / det
+    );
+    return gradient * mountainHeight;
+}
+
+vec2 fanTriangleSlope(vec2 p, vec2 a, vec2 b, vec2 center, vec2 sa, vec2 sb) {
+    vec2 q = p / hexSize;
+    float det = a.x * b.y - a.y * b.x;
+    float wa = (q.x * b.y - q.y * b.x) / det;
+    float wb = (a.x * q.y - a.y * q.x) / det;
+    return center * (1.0 - wa - wb) + sa * wa + sb * wb;
+}
+
+vec2 smoothMountainSlopeAt(vec2 p) {
+    float sourceCenter = centerMountainRelief();
+    vec2 sE  = sharedCornerSlope(sourceCenter, reliefNeighborsB.z, DIR_NE, reliefNeighborsA.x, DIR_SE);
+    vec2 sSE = sharedCornerSlope(sourceCenter, reliefNeighborsA.x, DIR_SE, reliefNeighborsA.y, DIR_S);
+    vec2 sSW = sharedCornerSlope(sourceCenter, reliefNeighborsA.y, DIR_S,  reliefNeighborsA.z, DIR_SW);
+    vec2 sW  = sharedCornerSlope(sourceCenter, reliefNeighborsA.z, DIR_SW, reliefNeighborsB.x, DIR_NW);
+    vec2 sNW = sharedCornerSlope(sourceCenter, reliefNeighborsB.x, DIR_NW, reliefNeighborsB.y, DIR_N);
+    vec2 sNE = sharedCornerSlope(sourceCenter, reliefNeighborsB.y, DIR_N,  reliefNeighborsB.z, DIR_NE);
+    vec2 centerSlope = (sE + sSE + sSW + sW + sNW + sNE) / 6.0;
+
+    const vec2 C_E  = vec2(1.0, 0.0);
+    const vec2 C_SE = vec2(0.5, 0.8660254);
+    const vec2 C_SW = vec2(-0.5, 0.8660254);
+    const vec2 C_W  = vec2(-1.0, 0.0);
+    const vec2 C_NW = vec2(-0.5, -0.8660254);
+    const vec2 C_NE = vec2(0.5, -0.8660254);
+    float angle = atan(p.y, p.x);
+    if (angle < 0.0) angle += 6.2831853;
+    if (angle < 1.0471976) return fanTriangleSlope(p, C_E,  C_SE, centerSlope, sE,  sSE);
+    if (angle < 2.0943951) return fanTriangleSlope(p, C_SE, C_SW, centerSlope, sSE, sSW);
+    if (angle < 3.1415927) return fanTriangleSlope(p, C_SW, C_W,  centerSlope, sSW, sW);
+    if (angle < 4.1887902) return fanTriangleSlope(p, C_W,  C_NW, centerSlope, sW,  sNW);
+    if (angle < 5.2359878) return fanTriangleSlope(p, C_NW, C_NE, centerSlope, sNW, sNE);
+    return fanTriangleSlope(p, C_NE, C_E, centerSlope, sNE, sE);
+}
+
+// Piecewise-linear macro elevation over the six fan triangles. A corner uses
+// the same three tile-centre samples from every touching hex, and a shared
+// edge is the same interpolation between its two corners from either side.
+// This is the actual cross-hex height contract; no tile centre is forced high.
+float mountainMacroReliefAt(vec2 p) {
+    float sourceCenter = centerMountainRelief();
+    float cE  = cornerRelief(sourceCenter, reliefNeighborsB.z, reliefNeighborsA.x);
+    float cSE = cornerRelief(sourceCenter, reliefNeighborsA.x, reliefNeighborsA.y);
+    float cSW = cornerRelief(sourceCenter, reliefNeighborsA.y, reliefNeighborsA.z);
+    float cW  = cornerRelief(sourceCenter, reliefNeighborsA.z, reliefNeighborsB.x);
+    float cNW = cornerRelief(sourceCenter, reliefNeighborsB.x, reliefNeighborsB.y);
+    float cNE = cornerRelief(sourceCenter, reliefNeighborsB.y, reliefNeighborsB.z);
+    // The mesh's fan centre is derived from its six shared corner samples,
+    // rather than using the tile's source sample as a seventh control point.
+    // This removes the remaining tendency for every hex centre to become a
+    // little convex summit; actual extrema now come from world-space detail.
+    float macroCenter = (cE + cSE + cSW + cW + cNW + cNE) / 6.0;
+
+    const vec2 C_E  = vec2(1.0, 0.0);
+    const vec2 C_SE = vec2(0.5, 0.8660254);
+    const vec2 C_SW = vec2(-0.5, 0.8660254);
+    const vec2 C_W  = vec2(-1.0, 0.0);
+    const vec2 C_NW = vec2(-0.5, -0.8660254);
+    const vec2 C_NE = vec2(0.5, -0.8660254);
+    float angle = atan(p.y, p.x);
+    if (angle < 0.0) angle += 6.2831853;
+    if (angle < 1.0471976) return fanTriangleRelief(p, C_E, C_SE, macroCenter, cE, cSE);
+    if (angle < 2.0943951) return fanTriangleRelief(p, C_SE, C_SW, macroCenter, cSE, cSW);
+    if (angle < 3.1415927) return fanTriangleRelief(p, C_SW, C_W, macroCenter, cSW, cW);
+    if (angle < 4.1887902) return fanTriangleRelief(p, C_W, C_NW, macroCenter, cW, cNW);
+    if (angle < 5.2359878) return fanTriangleRelief(p, C_NW, C_NE, macroCenter, cNW, cNE);
+    return fanTriangleRelief(p, C_NE, C_E, macroCenter, cNE, cE);
+}
+
+// The generator-driven macro surface supplies the massif and summit heights.
+// Two world-space samples add only bounded micro detail. This displacement is
+// deliberately tiny so CPU-grounded objects remain visually attached and the
+// generated macro relief, rather than the shader, owns the mountain silhouette.
+float mountainHeightAt(vec2 p, vec2 tileOffset) {
+    float macroRelief = mountainMacroReliefAt(p);
+    if (macroRelief <= 0.0) return 0.0;
+    vec2 w = tileOffset + p + worldOffset;
+    vec2 terrainP = w / hexSize;
+    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
+    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
+    float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
+    float detailGate = smoothstep(0.08, 0.32, macroRelief);
+    return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
+}
+
+// Tracks the strongest "closeness to a water-adjacent edge" (see
+// vEdgeFactorsA/B) together with the direction it came from, so both the
+// height (sink towards waterLevel) and its slope (for lighting normals) can be
+// derived from the same single dominant edge.
+vec3 strongestWaterEdge(vec3 best, float kind, float factor, vec2 dir) {
+    if (kind >= 1.0 && factor > best.x) return vec3(factor, dir);
+    return best;
+}
+
+// Distance from a tile-local point to the segment running from the hex center
+// to the midpoint of the edge in direction dir (at the apothem) - one straight
+// piece of the river channel's centerline.
+float riverSegDist(vec2 p, vec2 dir, float apothem) {
+    float t = clamp(dot(p, dir), 0.0, apothem);
+    return length(p - dir * t);
+}
+
+// Distance to the river channel centerline: the min over every *connected*
+// edge's center-to-edge-midpoint segment (bit i of mask, order SE,S,SW,NW,N,NE
+// - decoded with mod/floor, GLSL ES 1.0 has no bitwise ops). A mask of 0 (a
+// river tile with no connections) falls back to distance-to-center: a pond.
+// Mirrors riverChannelDistance() in helpers/rivers.ts - keep the two in sync.
+float riverChannelDist(vec2 p, float mask, float apothem) {
+    float d = length(p);
+    if (mod(floor(mask /  1.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SE, apothem));
+    if (mod(floor(mask /  2.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_S,  apothem));
+    if (mod(floor(mask /  4.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SW, apothem));
+    if (mod(floor(mask /  8.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NW, apothem));
+    if (mod(floor(mask / 16.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_N,  apothem));
+    if (mod(floor(mask / 32.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NE, apothem));
+    return d;
+}
+
+vec2 riverMouthSeg(vec2 p, vec2 dir, float apothem) {
+    float t = clamp(dot(p, dir), 0.0, apothem);
+    return vec2(length(p - dir * t), t / apothem);
+}
+
+float riverMouthBedT(vec2 p, float mask, float apothem) {
+    float bedT = 0.0;
+    for (int i = 0; i < 6; i++) {
+        float bit = pow(2.0, float(i));
+        if (mod(floor(mask / bit), 2.0) < 0.5) continue;
+
+        vec2 dir = DIR_SE;
+        if (i == 1) dir = DIR_S;
+        else if (i == 2) dir = DIR_SW;
+        else if (i == 3) dir = DIR_NW;
+        else if (i == 4) dir = DIR_N;
+        else if (i == 5) dir = DIR_NE;
+
+        vec2 seg = riverMouthSeg(p, dir, apothem);
+        // 0.4 half-width = 0.8 full outlet width relative to one hex side.
+        float mouthWidth = mix(riverWidth, 0.4, smoothstep(0.0, 1.0, seg.y));
+        float d = seg.x / hexSize;
+        bedT = max(bedT, 1.0 - smoothstep(mouthWidth * 0.5, mouthWidth + riverBankWidth, d));
+    }
+    return bedT;
+}
+
+float edgeFieldFromMask(float mask, vec3 efA, vec3 efB) {
+    float f = 0.0;
+    if (mod(floor(mask /  1.0), 2.0) > 0.5) f = max(f, efA.x);
+    if (mod(floor(mask /  2.0), 2.0) > 0.5) f = max(f, efA.y);
+    if (mod(floor(mask /  4.0), 2.0) > 0.5) f = max(f, efA.z);
+    if (mod(floor(mask /  8.0), 2.0) > 0.5) f = max(f, efB.x);
+    if (mod(floor(mask / 16.0), 2.0) > 0.5) f = max(f, efB.y);
+    if (mod(floor(mask / 32.0), 2.0) > 0.5) f = max(f, efB.z);
+    return f;
+}
+
+// Lake shore factor: how far this point sits towards the nearest *shored* edge
+// (one NOT in openMask) - 1.0 exactly on such an edge, falling off towards the
+// far side. 0 on a fully-open tile (lake interior: all water). Mirrors
+// isInTileWater() in helpers/rivers.ts - keep the two in sync.
+float lakeShore(float openMask, vec3 efA, vec3 efB) {
+    float s = 0.0;
+    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
+    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
+    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
+    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
+    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
+    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
+    return s;
+}
+
+void main() {
+    float apothem = hexSize * 0.8660254;
+    vec2 local = position.xz;
+    vec2 tileOffset = nearestWorldOffset(offset);
+    vec2 logicalTileOffset = tileOffset + chunkOrigin;
+    float riverEdges = waterEdges.x;
+    float riverSeaMouthEdges = waterEdges.y;
+    float riverLakeMouthEdges = waterEdges.z;
+    float lakeNeighborEdges = waterEdges.w;
+
+    vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
+    vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
+
+    vec3 best = vec3(0.0); // (edgeFactor, dir.x, dir.y)
+    best = strongestWaterEdge(best, neighborsKindA.x, vEdgeFactorsA.x, DIR_SE);
+    best = strongestWaterEdge(best, neighborsKindA.y, vEdgeFactorsA.y, DIR_S);
+    best = strongestWaterEdge(best, neighborsKindA.z, vEdgeFactorsA.z, DIR_SW);
+    best = strongestWaterEdge(best, neighborsKindB.x, vEdgeFactorsB.x, DIR_NW);
+    best = strongestWaterEdge(best, neighborsKindB.y, vEdgeFactorsB.y, DIR_N);
+    best = strongestWaterEdge(best, neighborsKindB.z, vEdgeFactorsB.z, DIR_NE);
+
+    // beachWidth is the *total* transition width shared with the water layer's
+    // own mirrored slope (see water.vertex.ts) - each side only covers half of
+    // it, so the two meet in the middle of the shared edge instead of the
+    // whole transition being crammed into the land tile alone.
+    float waterEdge = clamp(best.x, 0.0, 1.0);
+    float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
+    float beachT = smoothstep(e0, 1.0, waterEdge);
+
+    // Unseen (fog of war): keep the tile perfectly flat - a coastal land
+    // tile's sunken beach rim would betray that water sits next door, which
+    // the fog is supposed to hide.
+    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
+
+    // Land only sinks *half* the way down to waterLevel - the water layer
+    // rises to meet it the other half (see water.vertex.ts's riseY), so the
+    // two tiles' fall is evenly split instead of the whole drop happening on
+    // the land side alone. The extra *1.2 nudges land slightly past that
+    // midpoint (rather than exactly onto it) so the two meshes' edges don't
+    // end up perfectly coincident and z-fight (flickery dark patches).
+    float sinkY = beachT * (waterLevel * 0.5) * 1.2 * fogVisible;
+
+    // River/lake bed: sink smoothly towards -riverDepth around a river's
+    // channel centerline / across a lake's body. Undistorted distances only -
+    // the fragment stage's noise-bent waterline stays within the carved area,
+    // and per-vertex noise would be too coarse at this subdivision level
+    // anyway. min() with the beach sink (both are <= 0) so a mouth next to
+    // the sea takes the deeper of the two carves instead of stacking them.
+    float riverSink = 0.0;
+    if (riverEdges >= 0.0) {
+        float bedT = 0.0;
+        if (riverEdges >= 2048.0) {
+            float openMask = floor((riverEdges - 4096.0) / 64.0);
+            float channelMask = riverEdges - 4096.0 - openMask * 64.0;
+            bedT = 1.0;
+            if (channelMask > 0.5) {
+                bedT = max(bedT, riverMouthBedT(local, channelMask, apothem));
+            }
+        } else {
+            float dRiver = riverChannelDist(local, riverEdges, apothem) / hexSize;
+            bedT = 1.0 - smoothstep(riverWidth * 0.5, riverWidth + riverBankWidth, dRiver);
+            bedT = max(bedT, riverMouthBedT(local, floor(riverSeaMouthEdges + 0.5), apothem));
+            bedT = max(bedT, riverMouthBedT(local, floor(riverLakeMouthEdges + 0.5), apothem));
+        }
+        riverSink = -riverDepth * bedT * fogVisible;
+    }
+    float lakeEdge = edgeFieldFromMask(floor(lakeNeighborEdges + 0.5), vEdgeFactorsA, vEdgeFactorsB);
+    if (lakeEdge > 0.0) {
+        float s0Lake = 1.0 - clamp(lakeShoreWidth, 0.001, 1.0);
+        float lakeSinkT = smoothstep(s0Lake, 1.0, lakeEdge);
+        riverSink = min(riverSink, -riverDepth * lakeSinkT * fogVisible);
+    }
+    sinkY = min(sinkY, riverSink);
+
+    // Mountain elevation comes from one continuous cross-tile field. A land
+    // tile adjacent to mountains participates only in the shared foothill
+    // corners, keeping the range boundary continuous without lifting its
+    // centre. Interior hex edges are no longer local peak/rim pairs.
+    float raiseY = 0.0;
+    vec2 mountainSlope = vec2(0.0);
+    float elevation = 0.0;
+    float reliefInfluence = max(max(centerMountainRelief(), 0.0), max(
+        max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
+        max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
+    ));
+    if (reliefInfluence > 0.001) {
+        float gate = fogVisible;
+        if (gate > 0.0) {
+            elevation = mountainHeightAt(local, logicalTileOffset) * gate;
+            raiseY = elevation * mountainHeight;
+            mountainSlope = smoothMountainSlopeAt(local) * gate;
+        }
+    }
+
+    vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    vHorizonFogDepth = -mvPosition.z;
+
+    // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
+    // smoothstep, for lighting - see water.vertex.ts for the same idea applied
+    // to waves. Only the single dominant edge direction is considered, which is
+    // exact away from corners and a reasonable approximation right at them.
+    // The mountain raise's finite-difference slope just adds on top.
+    float xN = clamp((waterEdge - e0) / (1.0 - e0), 0.0, 1.0);
+    float dSmooth = waterEdge > 0.0 ? 6.0 * xN * (1.0 - xN) / (1.0 - e0) : 0.0;
+    vec2 slope = (waterLevel * 0.5) * 1.2 * dSmooth * (best.yz / apothem) * fogVisible + mountainSlope;
+    vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
+
+    // Rim distance for the grid line - NOT radial distance from center
+    // (length(local)/hexSize): that only reaches 1.0 exactly at the 6 corners
+    // and dips to ~0.866 (the apothem) at an edge's midpoint, since a hexagon's
+    // boundary is 6 straight chords, not a circle. That went unnoticed while
+    // this geometry had 0 subdivisions (both rim vertices of every wedge sat
+    // exactly at a corner, so linear interpolation between two 1.0s stayed
+    // 1.0 the whole edge) - once subdivided, the new mid-edge vertices' lower
+    // radial value made the grid line threshold fail there, fragmenting a
+    // continuous hex outline into isolated blobs at each corner. The edge
+    // factors above are already exactly 1.0 along an entire straight edge
+    // (not just at its endpoints), so reusing their max is the correct metric.
+    float rimFactor = max(max(max(vEdgeFactorsA.x, vEdgeFactorsA.y), max(vEdgeFactorsA.z, vEdgeFactorsB.x)), max(vEdgeFactorsB.y, vEdgeFactorsB.z));
+
+    vUV = uv;
+    vBorder = clamp(rimFactor, 0.0, 1.0);
+    vTerrain = style.x;
+    vModifiers = style.y;
+    vPriority = style.z;
+    vBeachT = beachT;
+    vNeighborsA = neighborsA;
+    vNeighborsB = neighborsB;
+    vNeighborsPriorityA = neighborsPriorityA;
+    vNeighborsPriorityB = neighborsPriorityB;
+    vNeighborsKindA = neighborsKindA;
+    vNeighborsKindB = neighborsKindB;
+    vLandform = vec4(elevation, landform.yzw);
+    vec3 independentBiomeWeights = clamp(fogState.yzw, 0.0, 1.0);
+    vBiomeWeights = vec4(
+        max(0.0, 1.0 - independentBiomeWeights.x - independentBiomeWeights.y - independentBiomeWeights.z),
+        independentBiomeWeights
+    );
+    vFogState = fogState.x;
+    vRiverEdges = riverEdges;
+    vRiverSeaMouthEdges = riverSeaMouthEdges;
+    vRiverLakeMouthEdges = riverLakeMouthEdges;
+    vLakeNeighborEdges = lakeNeighborEdges;
+    vLocal = local;
+    vec2 logicalWorldXZ = pos.xz + chunkOrigin + worldOffset;
+    vWorldXZ = logicalWorldXZ;
+    // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
+    // upright from this map's camera: the camera's azimuth is locked to ~90deg
+    // (see HexMap's setupControls), which puts screen-right along world -Z and
+    // screen-up along world -X - mapping u to -z and v to -x orients the
+    // texture to the screen and keeps it un-mirrored when viewed from above.
+    // Negation is free for a seamlessly wrapping texture (just a phase shift).
+    vFogUV = vec2(-logicalWorldXZ.y, -logicalWorldXZ.x) / fogTextureSize;
+}
+`;
+
+  // src/rendering/SurfaceHexMarker.ts
+  var EDGE_SEGMENTS = 8;
+  var CACHE_CAPACITY = 128;
+  var SurfaceMarkerProjectionCache = class {
+    constructor() {
+      this.revision = -1;
+      this.entries = /* @__PURE__ */ new Map();
+    }
+    project(surface, tile) {
+      if (this.surface !== surface || this.revision !== surface.revision) {
+        this.clear();
+        this.surface = surface;
+        this.revision = surface.revision;
+      }
+      const key = `${tile.x},${tile.y}`;
+      let positions = this.entries.get(key);
+      if (positions) this.entries.delete(key);
+      else {
+        const size = surface.tileSize;
+        const center = getHexCenter(tile.x, tile.y, size);
+        const window2 = surface.createWindow();
+        positions = new Float32Array(6 * (EDGE_SEGMENTS + 1) * 2 * 3);
+        let offset = 0;
+        for (let edge = 0; edge < 6; edge += 1) {
+          const a = edge * Math.PI / 3;
+          const b = (edge + 1) * Math.PI / 3;
+          for (let segment = 0; segment <= EDGE_SEGMENTS; segment += 1) {
+            const t = segment / EDGE_SEGMENTS;
+            for (const radius of [0.97, 1]) {
+              const x = (Math.cos(a) * (1 - t) + Math.cos(b) * t) * size * radius;
+              const z = (Math.sin(a) * (1 - t) + Math.sin(b) * t) * size * radius;
+              const height = window2.getWorldHeight(center.x + x, center.y + z);
+              positions[offset++] = x;
+              positions[offset++] = height * (1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE) + size * 8e-3;
+              positions[offset++] = z;
+            }
+          }
+        }
+      }
+      this.entries.set(key, positions);
+      if (this.entries.size > CACHE_CAPACITY) this.entries.delete(this.entries.keys().next().value);
+      return positions;
+    }
+    clear() {
+      this.entries.clear();
+      this.surface = void 0;
+      this.revision = -1;
+    }
+  };
+  var SurfaceHexMarker = class extends three.Mesh {
+    constructor(color, projections) {
+      const geometry = new three.BufferGeometry();
+      geometry.setAttribute("position", new three.Float32BufferAttribute(new Float32Array(6 * (EDGE_SEGMENTS + 1) * 2 * 3), 3));
+      const indices = [];
+      for (let edge = 0; edge < 6; edge += 1) for (let segment = 0; segment < EDGE_SEGMENTS; segment += 1) {
+        const i = (edge * (EDGE_SEGMENTS + 1) + segment) * 2;
+        indices.push(i, i + 2, i + 1, i + 1, i + 2, i + 3);
+      }
+      geometry.setIndex(indices);
+      super(geometry, new three.MeshBasicMaterial({ color, depthWrite: false }));
+      this.projections = projections;
+      this.renderOrder = 1;
+      this.visible = false;
+    }
+    project(surface, tile) {
+      const position = this.geometry.getAttribute("position");
+      position.array.set(this.projections.project(surface, tile));
+      position.needsUpdate = true;
+      this.geometry.computeBoundingSphere();
+    }
+  };
   function toTrianglesDrawMode(geometry, drawMode) {
     if (drawMode === three.TrianglesDrawMode) {
       console.warn("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Geometry already defined as triangles.");
@@ -5144,18 +5063,73 @@
   }
 
   // src/helpers/picking.ts
-  var GROUND_PLANE = new three.Plane(new three.Vector3(0, 1, 0), 0);
-  function screenToGround(clientX, clientY, canvas, camera) {
+  function intersectWorldSurface(ray, surface, far) {
+    if (Math.abs(ray.direction.y) < 1e-12) return null;
+    const lower = (surface.minimumHeight - ray.origin.y) / ray.direction.y;
+    const upper = (surface.maximumHeight - ray.origin.y) / ray.direction.y;
+    let distance = Math.max(0, Math.min(lower, upper));
+    const end = Math.min(far, Math.max(lower, upper));
+    if (distance > end) return null;
+    const size = surface.tileSize;
+    const epsilon = size * 1e-7;
+    const apothem = size * Math.sqrt(3) / 2;
+    const window2 = surface.createWindow();
+    const probe = new three.Vector3();
+    const center = new three.Vector3();
+    const first = new three.Vector3();
+    const second = new three.Vector3();
+    const hit = new three.Vector3();
+    while (distance <= end + epsilon) {
+      ray.at(distance + epsilon, probe);
+      const tile = pickTile(probe, size);
+      let exit = end + epsilon;
+      for (let edge = 0; edge < 6; edge += 1) {
+        const angle = (edge + 0.5) * Math.PI / 3;
+        const nx = Math.cos(angle), nz = Math.sin(angle);
+        const speed = nx * ray.direction.x + nz * ray.direction.z;
+        if (speed <= 1e-12) continue;
+        const crossing = (apothem - nx * (ray.origin.x - tile.worldX) - nz * (ray.origin.z - tile.worldY)) / speed;
+        if (crossing > distance + epsilon * 0.5) exit = Math.min(exit, crossing);
+      }
+      if (getMapTile(surface.map, tile.x, tile.y)) {
+        const heights = window2.getCornerReliefs(tile.x, tile.y);
+        center.set(tile.worldX, window2.getTileCenterHeight(tile.x, tile.y), tile.worldY);
+        let nearest = Infinity;
+        for (let edge = 0; edge < 6; edge += 1) {
+          const a = edge * Math.PI / 3, b = (edge + 1) * Math.PI / 3;
+          first.set(
+            tile.worldX + Math.cos(a) * size,
+            heights[edge] * surface.mountainHeight,
+            tile.worldY + Math.sin(a) * size
+          );
+          second.set(
+            tile.worldX + Math.cos(b) * size,
+            heights[(edge + 1) % 6] * surface.mountainHeight,
+            tile.worldY + Math.sin(b) * size
+          );
+          if (!ray.intersectTriangle(center, first, second, false, hit)) continue;
+          const t = hit.distanceTo(ray.origin);
+          if (t >= distance - epsilon && t <= exit + epsilon) nearest = Math.min(nearest, t);
+        }
+        if (nearest <= end + epsilon) return ray.at(nearest, hit);
+      }
+      if (exit >= end) break;
+      distance = exit;
+    }
+    return null;
+  }
+  function screenToSurface(clientX, clientY, canvas, camera, surface, logicalGround) {
     const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
+    if (rect.width <= 0 || rect.height <= 0 || clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
     const ndc = new three.Vector2(
       (clientX - rect.left) / rect.width * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     const raycaster = new three.Raycaster();
     raycaster.setFromCamera(ndc, camera);
-    const point = new three.Vector3();
-    return raycaster.ray.intersectPlane(GROUND_PLANE, point) ? point : null;
+    const far = new three.Vector3(ndc.x, ndc.y, 1).unproject(camera).distanceTo(raycaster.ray.origin);
+    logicalGround(raycaster.ray.origin);
+    return intersectWorldSurface(raycaster.ray, surface, far);
   }
   function pickTile(worldPoint, size, mapWidth, mapHeight, wrapX = false, wrapY = false) {
     if (!Number.isFinite(size) || size <= 0) return null;
@@ -5661,544 +5635,6 @@
     ctx.fill();
     ctx.stroke();
   }
-
-  // src/shaders/horizonFog.ts
-  var HORIZON_FOG_VERTEX_VARYING = `
-varying float vHorizonFogDepth;
-`;
-  var HORIZON_FOG_FRAGMENT_HEADER = `
-uniform vec3 fogColor;
-uniform float fogNear;
-uniform float fogFar;
-varying float vHorizonFogDepth;
-
-vec3 applyHorizonFog(vec3 color) {
-    float fogFactor = smoothstep(fogNear, fogFar, vHorizonFogDepth);
-    return mix(color, fogColor, fogFactor);
-}
-`;
-  var HORIZON_FOG_FRAGMENT_APPLY = `
-    gl_FragColor.rgb = applyHorizonFog(gl_FragColor.rgb);
-`;
-
-  // src/shaders/terrain.vertex.ts
-  var TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
-  var TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER = 1 + TERRAIN_SURFACE_DETAIL_AMPLITUDE;
-  var TERRAIN_VERTEX_SHADER = `
-// highp to match terrain.fragment.ts (see its precision comment) - vWorldXZ /
-// vLocal feed the river noise there, and varyings shouldn't lose precision on
-// the vertex side of the interpolation.
-precision highp float;
-
-${HORIZON_FOG_VERTEX_VARYING}
-
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-uniform mat3 normalMatrix;
-
-uniform float hexSize; // tile circumradius, matches getHexCenter's "size" (world units)
-
-// Beach slope towards water neighbors (see neighborsKindA/B below). waterLevel
-// is where the water plane sits (see water.vertex.ts) - a coastal land tile's
-// rim sinks to meet it instead of staying flat and only color-blending in 2D.
-// beachWidth is the fraction of the tile's radius over which the slope happens.
-uniform float waterLevel;
-uniform float beachWidth;
-uniform float sandAtlasIndex;
-
-// Mountain centres and their surrounding foothill tiles form one world-space
-// height field. Nothing in mountainHeightAt treats the hex centre as a summit:
-// neighbouring instances therefore evaluate the same height at every shared
-// vertex instead of building one cone per tile. The lighting normal is derived
-// by finite differences; mountainHeight is the vertical scale in world units.
-uniform float mountainHeight;
-
-// Rivers/lakes (tiles with the "river"/"lake" modifier - see helpers/rivers.ts
-// and terrain.fragment.ts). The vertex stage only carves the bed: a smooth
-// sink towards -riverDepth around a river's channel centerline / across a
-// lake's body. Widths are fractions of the tile radius (hexSize); the sink
-// reaches slightly past the painted waterline so the fragment stage's
-// noise-bent banks always lie on sloped ground.
-uniform float riverWidth;
-uniform float riverBankWidth;
-uniform float riverDepth;
-uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
-
-// World units one repeat of the war-fog texture spans. Fog UVs are computed
-// from world position (not per-tile local UVs) so one copy of the texture
-// flows continuously across every fogged tile - the image tiles seamlessly on
-// each side, so neighboring repeats merge with no visible hex-shaped seams.
-uniform float fogTextureSize;
-uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
-uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
-uniform vec2 worldCenter; // camera target on the ground plane
-uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
-
-attribute vec3 position;
-attribute vec2 uv;
-
-attribute vec2 offset;       // world-space (x,z) offset of this tile instance
-attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
-attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
-attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
-attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
-attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
-attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
-attribute vec3 neighborsKindB; // NW/N/NE
-// x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
-// mask. Packed to leave two attribute slots for neighbour relief samples.
-attribute vec4 waterEdges;
-// x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
-// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
-attribute vec4 fogState;
-// x elevation, y ridge strength, z valley strength, w roughness. Values are
-// sampled in global tile coordinates by LandformSampler, so chunk order and
-// worker count cannot change the visible macro landform.
-attribute vec4 landform;
-// Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
-// Together with style.w at this tile centre these define a continuous fan
-// surface whose shared edge endpoints are identical in adjacent instances.
-attribute vec3 reliefNeighborsA;
-attribute vec3 reliefNeighborsB;
-
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying float vModifiers;
-varying float vPriority;
-varying vec3 vNeighborsA;
-varying vec3 vNeighborsB;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vEdgeFactorsA; // SE, S, SW
-varying vec3 vEdgeFactorsB; // NW, N, NE
-varying vec3 vNormal;
-varying float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
-varying float vFogState;
-varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
-varying float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
-varying float vRiverSeaMouthEdges;
-varying float vRiverLakeMouthEdges;
-varying float vLakeNeighborEdges;
-varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
-varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
-varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
-varying vec3 vNeighborsKindB;
-// x = final normalized macro+detail elevation; y/z/w = generated
-// ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
-varying vec4 vLandform;
-varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
-
-const vec2 DIR_SE = vec2(0.8660254, 0.5);
-const vec2 DIR_S  = vec2(0.0, 1.0);
-const vec2 DIR_SW = vec2(-0.8660254, 0.5);
-const vec2 DIR_NW = vec2(-0.8660254, -0.5);
-const vec2 DIR_N  = vec2(0.0, -1.0);
-const vec2 DIR_NE = vec2(0.8660254, -0.5);
-
-//Move each logical tile to the nearest toroidal image around the camera. This
-//draws the map exactly once instead of submitting 9 complete copies; crossing
-//a seam only moves far/off-screen instances from one side to the other.
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
-
-// Same cheap value noise as the fragment stages. Mountain relief is sampled
-// exclusively in world-space so its extrema are unrelated to hex centres and
-// adjacent tiles agree at every shared vertex.
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
-
-float centerMountainRelief() {
-    return style.w;
-}
-
-float cornerRelief(float center, float a, float b) {
-    // -1 is the CPU surface view's explicit shoreline/out-of-map sentinel.
-    // A shared corner touching water is held at the shoreline baseline.
-    if (center < -0.5 || a < -0.5 || b < -0.5) return 0.0;
-    // Mountain centres carry relief and ordinary land centres carry zero.
-    // Averaging the same three centres makes every tile touching this world
-    // vertex resolve the exact same height. Ordinary land therefore becomes
-    // a short foothill ramp instead of forcing the range boundary into a
-    // cliff, while two-tile-wide ridges no longer acquire a trench between
-    // their mountain centres.
-    return (center + a + b) / 3.0;
-}
-
-float fanTriangleRelief(vec2 p, vec2 a, vec2 b, float center, float ha, float hb) {
-    vec2 q = p / hexSize;
-    float det = a.x * b.y - a.y * b.x;
-    float wa = (q.x * b.y - q.y * b.x) / det;
-    float wb = (a.x * q.y - a.y * q.x) / det;
-    return max(center * (1.0 - wa - wb) + ha * wa + hb * wb, 0.0);
-}
-
-// Lighting uses one slope at each shared world corner and interpolates those
-// slopes over the same fan triangles as the displaced surface. A corner slope
-// is defined only by the three tile-centre relief samples meeting there, so all
-// three tile instances calculate the exact same value. This removes the dark
-// hex outlines produced when each tile previously finite-differenced only its
-// own local fan at a shared edge. The tiny world-space detail displacement is
-// deliberately omitted from lighting; at +/-1.5% it belongs in the material
-// texture and should not reintroduce per-tile normal discontinuities.
-vec2 sharedCornerSlope(float center, float a, vec2 dirA, float b, vec2 dirB) {
-    float spacing = hexSize * 1.7320508;
-    vec2 pa = dirA * spacing;
-    vec2 pb = dirB * spacing;
-    float h0 = max(center, 0.0);
-    float ha = max(a, 0.0) - h0;
-    float hb = max(b, 0.0) - h0;
-    float det = pa.x * pb.y - pa.y * pb.x;
-    vec2 gradient = vec2(
-        (ha * pb.y - pa.y * hb) / det,
-        (pa.x * hb - ha * pb.x) / det
-    );
-    return gradient * mountainHeight;
-}
-
-vec2 fanTriangleSlope(vec2 p, vec2 a, vec2 b, vec2 center, vec2 sa, vec2 sb) {
-    vec2 q = p / hexSize;
-    float det = a.x * b.y - a.y * b.x;
-    float wa = (q.x * b.y - q.y * b.x) / det;
-    float wb = (a.x * q.y - a.y * q.x) / det;
-    return center * (1.0 - wa - wb) + sa * wa + sb * wb;
-}
-
-vec2 smoothMountainSlopeAt(vec2 p) {
-    float sourceCenter = centerMountainRelief();
-    vec2 sE  = sharedCornerSlope(sourceCenter, reliefNeighborsB.z, DIR_NE, reliefNeighborsA.x, DIR_SE);
-    vec2 sSE = sharedCornerSlope(sourceCenter, reliefNeighborsA.x, DIR_SE, reliefNeighborsA.y, DIR_S);
-    vec2 sSW = sharedCornerSlope(sourceCenter, reliefNeighborsA.y, DIR_S,  reliefNeighborsA.z, DIR_SW);
-    vec2 sW  = sharedCornerSlope(sourceCenter, reliefNeighborsA.z, DIR_SW, reliefNeighborsB.x, DIR_NW);
-    vec2 sNW = sharedCornerSlope(sourceCenter, reliefNeighborsB.x, DIR_NW, reliefNeighborsB.y, DIR_N);
-    vec2 sNE = sharedCornerSlope(sourceCenter, reliefNeighborsB.y, DIR_N,  reliefNeighborsB.z, DIR_NE);
-    vec2 centerSlope = (sE + sSE + sSW + sW + sNW + sNE) / 6.0;
-
-    const vec2 C_E  = vec2(1.0, 0.0);
-    const vec2 C_SE = vec2(0.5, 0.8660254);
-    const vec2 C_SW = vec2(-0.5, 0.8660254);
-    const vec2 C_W  = vec2(-1.0, 0.0);
-    const vec2 C_NW = vec2(-0.5, -0.8660254);
-    const vec2 C_NE = vec2(0.5, -0.8660254);
-    float angle = atan(p.y, p.x);
-    if (angle < 0.0) angle += 6.2831853;
-    if (angle < 1.0471976) return fanTriangleSlope(p, C_E,  C_SE, centerSlope, sE,  sSE);
-    if (angle < 2.0943951) return fanTriangleSlope(p, C_SE, C_SW, centerSlope, sSE, sSW);
-    if (angle < 3.1415927) return fanTriangleSlope(p, C_SW, C_W,  centerSlope, sSW, sW);
-    if (angle < 4.1887902) return fanTriangleSlope(p, C_W,  C_NW, centerSlope, sW,  sNW);
-    if (angle < 5.2359878) return fanTriangleSlope(p, C_NW, C_NE, centerSlope, sNW, sNE);
-    return fanTriangleSlope(p, C_NE, C_E, centerSlope, sNE, sE);
-}
-
-// Piecewise-linear macro elevation over the six fan triangles. A corner uses
-// the same three tile-centre samples from every touching hex, and a shared
-// edge is the same interpolation between its two corners from either side.
-// This is the actual cross-hex height contract; no tile centre is forced high.
-float mountainMacroReliefAt(vec2 p) {
-    float sourceCenter = centerMountainRelief();
-    float cE  = cornerRelief(sourceCenter, reliefNeighborsB.z, reliefNeighborsA.x);
-    float cSE = cornerRelief(sourceCenter, reliefNeighborsA.x, reliefNeighborsA.y);
-    float cSW = cornerRelief(sourceCenter, reliefNeighborsA.y, reliefNeighborsA.z);
-    float cW  = cornerRelief(sourceCenter, reliefNeighborsA.z, reliefNeighborsB.x);
-    float cNW = cornerRelief(sourceCenter, reliefNeighborsB.x, reliefNeighborsB.y);
-    float cNE = cornerRelief(sourceCenter, reliefNeighborsB.y, reliefNeighborsB.z);
-    // The mesh's fan centre is derived from its six shared corner samples,
-    // rather than using the tile's source sample as a seventh control point.
-    // This removes the remaining tendency for every hex centre to become a
-    // little convex summit; actual extrema now come from world-space detail.
-    float macroCenter = (cE + cSE + cSW + cW + cNW + cNE) / 6.0;
-
-    const vec2 C_E  = vec2(1.0, 0.0);
-    const vec2 C_SE = vec2(0.5, 0.8660254);
-    const vec2 C_SW = vec2(-0.5, 0.8660254);
-    const vec2 C_W  = vec2(-1.0, 0.0);
-    const vec2 C_NW = vec2(-0.5, -0.8660254);
-    const vec2 C_NE = vec2(0.5, -0.8660254);
-    float angle = atan(p.y, p.x);
-    if (angle < 0.0) angle += 6.2831853;
-    if (angle < 1.0471976) return fanTriangleRelief(p, C_E, C_SE, macroCenter, cE, cSE);
-    if (angle < 2.0943951) return fanTriangleRelief(p, C_SE, C_SW, macroCenter, cSE, cSW);
-    if (angle < 3.1415927) return fanTriangleRelief(p, C_SW, C_W, macroCenter, cSW, cW);
-    if (angle < 4.1887902) return fanTriangleRelief(p, C_W, C_NW, macroCenter, cW, cNW);
-    if (angle < 5.2359878) return fanTriangleRelief(p, C_NW, C_NE, macroCenter, cNW, cNE);
-    return fanTriangleRelief(p, C_NE, C_E, macroCenter, cNE, cE);
-}
-
-// The generator-driven macro surface supplies the massif and summit heights.
-// Two world-space samples add only bounded micro detail. This displacement is
-// deliberately tiny so CPU-grounded objects remain visually attached and the
-// generated macro relief, rather than the shader, owns the mountain silhouette.
-float mountainHeightAt(vec2 p, vec2 tileOffset) {
-    float macroRelief = mountainMacroReliefAt(p);
-    if (macroRelief <= 0.0) return 0.0;
-    vec2 w = tileOffset + p + worldOffset;
-    vec2 terrainP = w / hexSize;
-    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
-    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
-    float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
-    float detailGate = smoothstep(0.08, 0.32, macroRelief);
-    return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
-}
-
-// Tracks the strongest "closeness to a water-adjacent edge" (see
-// vEdgeFactorsA/B) together with the direction it came from, so both the
-// height (sink towards waterLevel) and its slope (for lighting normals) can be
-// derived from the same single dominant edge.
-vec3 strongestWaterEdge(vec3 best, float kind, float factor, vec2 dir) {
-    if (kind >= 1.0 && factor > best.x) return vec3(factor, dir);
-    return best;
-}
-
-// Distance from a tile-local point to the segment running from the hex center
-// to the midpoint of the edge in direction dir (at the apothem) - one straight
-// piece of the river channel's centerline.
-float riverSegDist(vec2 p, vec2 dir, float apothem) {
-    float t = clamp(dot(p, dir), 0.0, apothem);
-    return length(p - dir * t);
-}
-
-// Distance to the river channel centerline: the min over every *connected*
-// edge's center-to-edge-midpoint segment (bit i of mask, order SE,S,SW,NW,N,NE
-// - decoded with mod/floor, GLSL ES 1.0 has no bitwise ops). A mask of 0 (a
-// river tile with no connections) falls back to distance-to-center: a pond.
-// Mirrors riverChannelDistance() in helpers/rivers.ts - keep the two in sync.
-float riverChannelDist(vec2 p, float mask, float apothem) {
-    float d = length(p);
-    if (mod(floor(mask /  1.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SE, apothem));
-    if (mod(floor(mask /  2.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_S,  apothem));
-    if (mod(floor(mask /  4.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_SW, apothem));
-    if (mod(floor(mask /  8.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NW, apothem));
-    if (mod(floor(mask / 16.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_N,  apothem));
-    if (mod(floor(mask / 32.0), 2.0) > 0.5) d = min(d, riverSegDist(p, DIR_NE, apothem));
-    return d;
-}
-
-vec2 riverMouthSeg(vec2 p, vec2 dir, float apothem) {
-    float t = clamp(dot(p, dir), 0.0, apothem);
-    return vec2(length(p - dir * t), t / apothem);
-}
-
-float riverMouthBedT(vec2 p, float mask, float apothem) {
-    float bedT = 0.0;
-    for (int i = 0; i < 6; i++) {
-        float bit = pow(2.0, float(i));
-        if (mod(floor(mask / bit), 2.0) < 0.5) continue;
-
-        vec2 dir = DIR_SE;
-        if (i == 1) dir = DIR_S;
-        else if (i == 2) dir = DIR_SW;
-        else if (i == 3) dir = DIR_NW;
-        else if (i == 4) dir = DIR_N;
-        else if (i == 5) dir = DIR_NE;
-
-        vec2 seg = riverMouthSeg(p, dir, apothem);
-        // 0.4 half-width = 0.8 full outlet width relative to one hex side.
-        float mouthWidth = mix(riverWidth, 0.4, smoothstep(0.0, 1.0, seg.y));
-        float d = seg.x / hexSize;
-        bedT = max(bedT, 1.0 - smoothstep(mouthWidth * 0.5, mouthWidth + riverBankWidth, d));
-    }
-    return bedT;
-}
-
-float edgeFieldFromMask(float mask, vec3 efA, vec3 efB) {
-    float f = 0.0;
-    if (mod(floor(mask /  1.0), 2.0) > 0.5) f = max(f, efA.x);
-    if (mod(floor(mask /  2.0), 2.0) > 0.5) f = max(f, efA.y);
-    if (mod(floor(mask /  4.0), 2.0) > 0.5) f = max(f, efA.z);
-    if (mod(floor(mask /  8.0), 2.0) > 0.5) f = max(f, efB.x);
-    if (mod(floor(mask / 16.0), 2.0) > 0.5) f = max(f, efB.y);
-    if (mod(floor(mask / 32.0), 2.0) > 0.5) f = max(f, efB.z);
-    return f;
-}
-
-// Lake shore factor: how far this point sits towards the nearest *shored* edge
-// (one NOT in openMask) - 1.0 exactly on such an edge, falling off towards the
-// far side. 0 on a fully-open tile (lake interior: all water). Mirrors
-// isInTileWater() in helpers/rivers.ts - keep the two in sync.
-float lakeShore(float openMask, vec3 efA, vec3 efB) {
-    float s = 0.0;
-    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
-    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
-    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
-    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
-    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
-    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
-    return s;
-}
-
-void main() {
-    float apothem = hexSize * 0.8660254;
-    vec2 local = position.xz;
-    vec2 tileOffset = nearestWorldOffset(offset);
-    vec2 logicalTileOffset = tileOffset + chunkOrigin;
-    float riverEdges = waterEdges.x;
-    float riverSeaMouthEdges = waterEdges.y;
-    float riverLakeMouthEdges = waterEdges.z;
-    float lakeNeighborEdges = waterEdges.w;
-
-    vEdgeFactorsA = vec3(dot(local, DIR_SE), dot(local, DIR_S), dot(local, DIR_SW)) / apothem;
-    vEdgeFactorsB = vec3(dot(local, DIR_NW), dot(local, DIR_N), dot(local, DIR_NE)) / apothem;
-
-    vec3 best = vec3(0.0); // (edgeFactor, dir.x, dir.y)
-    best = strongestWaterEdge(best, neighborsKindA.x, vEdgeFactorsA.x, DIR_SE);
-    best = strongestWaterEdge(best, neighborsKindA.y, vEdgeFactorsA.y, DIR_S);
-    best = strongestWaterEdge(best, neighborsKindA.z, vEdgeFactorsA.z, DIR_SW);
-    best = strongestWaterEdge(best, neighborsKindB.x, vEdgeFactorsB.x, DIR_NW);
-    best = strongestWaterEdge(best, neighborsKindB.y, vEdgeFactorsB.y, DIR_N);
-    best = strongestWaterEdge(best, neighborsKindB.z, vEdgeFactorsB.z, DIR_NE);
-
-    // beachWidth is the *total* transition width shared with the water layer's
-    // own mirrored slope (see water.vertex.ts) - each side only covers half of
-    // it, so the two meet in the middle of the shared edge instead of the
-    // whole transition being crammed into the land tile alone.
-    float waterEdge = clamp(best.x, 0.0, 1.0);
-    float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
-    float beachT = smoothstep(e0, 1.0, waterEdge);
-
-    // Unseen (fog of war): keep the tile perfectly flat - a coastal land
-    // tile's sunken beach rim would betray that water sits next door, which
-    // the fog is supposed to hide.
-    float fogVisible = fogState.x < 0.5 ? 0.0 : 1.0;
-
-    // Land only sinks *half* the way down to waterLevel - the water layer
-    // rises to meet it the other half (see water.vertex.ts's riseY), so the
-    // two tiles' fall is evenly split instead of the whole drop happening on
-    // the land side alone. The extra *1.2 nudges land slightly past that
-    // midpoint (rather than exactly onto it) so the two meshes' edges don't
-    // end up perfectly coincident and z-fight (flickery dark patches).
-    float sinkY = beachT * (waterLevel * 0.5) * 1.2 * fogVisible;
-
-    // River/lake bed: sink smoothly towards -riverDepth around a river's
-    // channel centerline / across a lake's body. Undistorted distances only -
-    // the fragment stage's noise-bent waterline stays within the carved area,
-    // and per-vertex noise would be too coarse at this subdivision level
-    // anyway. min() with the beach sink (both are <= 0) so a mouth next to
-    // the sea takes the deeper of the two carves instead of stacking them.
-    float riverSink = 0.0;
-    if (riverEdges >= 0.0) {
-        float bedT = 0.0;
-        if (riverEdges >= 2048.0) {
-            float openMask = floor((riverEdges - 4096.0) / 64.0);
-            float channelMask = riverEdges - 4096.0 - openMask * 64.0;
-            bedT = 1.0;
-            if (channelMask > 0.5) {
-                bedT = max(bedT, riverMouthBedT(local, channelMask, apothem));
-            }
-        } else {
-            float dRiver = riverChannelDist(local, riverEdges, apothem) / hexSize;
-            bedT = 1.0 - smoothstep(riverWidth * 0.5, riverWidth + riverBankWidth, dRiver);
-            bedT = max(bedT, riverMouthBedT(local, floor(riverSeaMouthEdges + 0.5), apothem));
-            bedT = max(bedT, riverMouthBedT(local, floor(riverLakeMouthEdges + 0.5), apothem));
-        }
-        riverSink = -riverDepth * bedT * fogVisible;
-    }
-    float lakeEdge = edgeFieldFromMask(floor(lakeNeighborEdges + 0.5), vEdgeFactorsA, vEdgeFactorsB);
-    if (lakeEdge > 0.0) {
-        float s0Lake = 1.0 - clamp(lakeShoreWidth, 0.001, 1.0);
-        float lakeSinkT = smoothstep(s0Lake, 1.0, lakeEdge);
-        riverSink = min(riverSink, -riverDepth * lakeSinkT * fogVisible);
-    }
-    sinkY = min(sinkY, riverSink);
-
-    // Mountain elevation comes from one continuous cross-tile field. A land
-    // tile adjacent to mountains participates only in the shared foothill
-    // corners, keeping the range boundary continuous without lifting its
-    // centre. Interior hex edges are no longer local peak/rim pairs.
-    float raiseY = 0.0;
-    vec2 mountainSlope = vec2(0.0);
-    float elevation = 0.0;
-    float reliefInfluence = max(max(centerMountainRelief(), 0.0), max(
-        max(reliefNeighborsA.x, max(reliefNeighborsA.y, reliefNeighborsA.z)),
-        max(reliefNeighborsB.x, max(reliefNeighborsB.y, reliefNeighborsB.z))
-    ));
-    if (reliefInfluence > 0.001) {
-        float gate = fogVisible;
-        if (gate > 0.0) {
-            elevation = mountainHeightAt(local, logicalTileOffset) * gate;
-            raiseY = elevation * mountainHeight;
-            mountainSlope = smoothMountainSlopeAt(local) * gate;
-        }
-    }
-
-    vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
-    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-    gl_Position = projectionMatrix * mvPosition;
-    vHorizonFogDepth = -mvPosition.z;
-
-    // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
-    // smoothstep, for lighting - see water.vertex.ts for the same idea applied
-    // to waves. Only the single dominant edge direction is considered, which is
-    // exact away from corners and a reasonable approximation right at them.
-    // The mountain raise's finite-difference slope just adds on top.
-    float xN = clamp((waterEdge - e0) / (1.0 - e0), 0.0, 1.0);
-    float dSmooth = waterEdge > 0.0 ? 6.0 * xN * (1.0 - xN) / (1.0 - e0) : 0.0;
-    vec2 slope = (waterLevel * 0.5) * 1.2 * dSmooth * (best.yz / apothem) * fogVisible + mountainSlope;
-    vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
-
-    // Rim distance for the grid line - NOT radial distance from center
-    // (length(local)/hexSize): that only reaches 1.0 exactly at the 6 corners
-    // and dips to ~0.866 (the apothem) at an edge's midpoint, since a hexagon's
-    // boundary is 6 straight chords, not a circle. That went unnoticed while
-    // this geometry had 0 subdivisions (both rim vertices of every wedge sat
-    // exactly at a corner, so linear interpolation between two 1.0s stayed
-    // 1.0 the whole edge) - once subdivided, the new mid-edge vertices' lower
-    // radial value made the grid line threshold fail there, fragmenting a
-    // continuous hex outline into isolated blobs at each corner. The edge
-    // factors above are already exactly 1.0 along an entire straight edge
-    // (not just at its endpoints), so reusing their max is the correct metric.
-    float rimFactor = max(max(max(vEdgeFactorsA.x, vEdgeFactorsA.y), max(vEdgeFactorsA.z, vEdgeFactorsB.x)), max(vEdgeFactorsB.y, vEdgeFactorsB.z));
-
-    vUV = uv;
-    vBorder = clamp(rimFactor, 0.0, 1.0);
-    vTerrain = style.x;
-    vModifiers = style.y;
-    vPriority = style.z;
-    vBeachT = beachT;
-    vNeighborsA = neighborsA;
-    vNeighborsB = neighborsB;
-    vNeighborsPriorityA = neighborsPriorityA;
-    vNeighborsPriorityB = neighborsPriorityB;
-    vNeighborsKindA = neighborsKindA;
-    vNeighborsKindB = neighborsKindB;
-    vLandform = vec4(elevation, landform.yzw);
-    vec3 independentBiomeWeights = clamp(fogState.yzw, 0.0, 1.0);
-    vBiomeWeights = vec4(
-        max(0.0, 1.0 - independentBiomeWeights.x - independentBiomeWeights.y - independentBiomeWeights.z),
-        independentBiomeWeights
-    );
-    vFogState = fogState.x;
-    vRiverEdges = riverEdges;
-    vRiverSeaMouthEdges = riverSeaMouthEdges;
-    vRiverLakeMouthEdges = riverLakeMouthEdges;
-    vLakeNeighborEdges = lakeNeighborEdges;
-    vLocal = local;
-    vec2 logicalWorldXZ = pos.xz + chunkOrigin + worldOffset;
-    vWorldXZ = logicalWorldXZ;
-    // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
-    // upright from this map's camera: the camera's azimuth is locked to ~90deg
-    // (see HexMap's setupControls), which puts screen-right along world -Z and
-    // screen-up along world -X - mapping u to -z and v to -x orients the
-    // texture to the screen and keeps it un-mirrored when viewed from above.
-    // Negation is free for a seamlessly wrapping texture (just a phase shift).
-    vFogUV = vec2(-logicalWorldXZ.y, -logicalWorldXZ.x) / fogTextureSize;
-}
-`;
 
   // src/shaders/terrain.fragment.ts
   var TERRAIN_FRAGMENT_SHADER = `
@@ -8738,9 +8174,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
 
-  // src/objects/Forest.ts
-  var import_robust_point_in_polygon = __toESM(require_robust_pnp());
-
   // src/helpers/coast.ts
   var DIRS = {
     SE: { x: 0.8660254, y: 0.5 },
@@ -8865,6 +8298,380 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const curvedLake = lakeField + (0.6 * coarse + 0.4 * fine) * coastCurvature * 0.5;
     const shoreStart = 1 - clamp(options.lakeShoreWidth ?? 0.18, 1e-3, 1);
     return curvedLake >= shoreStart;
+  }
+
+  // src/world/VegetationSampling.ts
+  function vegetationRandom(x, y, salt) {
+    let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
+    value ^= value >>> 16;
+    value = Math.imul(value, 2146121005);
+    value ^= value >>> 15;
+    value = Math.imul(value, 2221713035);
+    value ^= value >>> 16;
+    return (value >>> 0) / 4294967296;
+  }
+  var VegetationSampling = class {
+    constructor(map, size, spacing, jitter, salt) {
+      this.size = size;
+      this.jitter = jitter;
+      this.salt = salt;
+      const periodX = map.w * size * 1.5;
+      const periodZ = map.h * size * Math.sqrt(3);
+      this.columns = map.wrapX ? Math.max(1, Math.floor(periodX / spacing)) : 0;
+      this.rows = map.wrapY ? Math.max(1, Math.floor(periodZ / spacing)) : 0;
+      this.stepX = this.columns ? periodX / this.columns : spacing;
+      this.stepZ = this.rows ? periodZ / this.rows : spacing;
+      this.tileCapacity = (Math.ceil(size * 2 / this.stepX) + 1) * (Math.ceil(size * Math.sqrt(3) / this.stepZ) + 1);
+    }
+    forTile(tile, visit) {
+      const center = getHexCenter(tile.x, tile.y, this.size);
+      const apothem = this.size * Math.sqrt(3) / 2;
+      const minX = Math.floor((center.x - this.size) / this.stepX);
+      const maxX = Math.floor((center.x + this.size) / this.stepX);
+      const minZ = Math.floor((center.y - apothem) / this.stepZ);
+      const maxZ = Math.floor((center.y + apothem) / this.stepZ);
+      for (let cx = minX; cx <= maxX; cx += 1) for (let cz = minZ; cz <= maxZ; cz += 1) {
+        const sx = this.columns ? positiveModulo(cx, this.columns) : cx;
+        const sz = this.rows ? positiveModulo(cz, this.rows) : cz;
+        const x = (cx + 0.5 + (vegetationRandom(sx, sz, this.salt) * 2 - 1) * this.jitter) * this.stepX;
+        const z = (cz + 0.5 + (vegetationRandom(sx, sz, this.salt + 1) * 2 - 1) * this.jitter) * this.stepZ;
+        const lx = Math.abs(x - center.x);
+        const lz = Math.abs(z - center.y);
+        if (lz >= apothem || Math.sqrt(3) * lx + lz >= Math.sqrt(3) * this.size) continue;
+        visit(x, z, sx, sz);
+      }
+    }
+  };
+
+  // src/world/generateVegetation.ts
+  var WORLD_VEGETATION_FORMAT_VERSION = 1;
+  var LODS = [0, 1, 2];
+  var GRASS_DENSITY = [1, 0.38, 0.14];
+  var FOREST_DENSITY = [1, 0.5, 0.2];
+  function cloneTile(tile) {
+    return {
+      ...tile,
+      modifiers: tile.modifiers?.slice(),
+      rivers: tile.rivers?.map((river) => ({ ...river })),
+      city: tile.city ? { ...tile.city } : void 0
+    };
+  }
+  function createWorldVegetationMapSnapshot(map, points) {
+    var _a;
+    const data = {};
+    const selected = /* @__PURE__ */ new Map();
+    for (const point of points) {
+      selected.set(`${point.x},${point.y}`, point);
+      for (const neighbor of getMapNeighbors(map, point.x, point.y)) {
+        selected.set(`${neighbor.x},${neighbor.y}`, neighbor);
+      }
+    }
+    for (const point of selected.values()) {
+      const tile = getMapTile(map, point.x, point.y);
+      if (!tile) continue;
+      data[_a = point.x] ?? (data[_a] = {});
+      data[point.x][point.y] = cloneTile(tile);
+    }
+    return {
+      data,
+      w: map.w,
+      h: map.h,
+      wrapX: map.wrapX,
+      wrapY: map.wrapY,
+      infinite: map.infinite
+    };
+  }
+  function assertOptions(options) {
+    if (!options || typeof options !== "object" || !options.map || !Array.isArray(options.points)) {
+      throw new TypeError("vegetation generation options are invalid");
+    }
+    if (!Number.isFinite(options.size) || options.size <= 0) {
+      throw new RangeError("vegetation tile size must be a positive finite number");
+    }
+    for (const [name, value] of [
+      ["grassDensity", options.grassDensity],
+      ["treesPerTile", options.treesPerTile]
+    ]) {
+      if (!Number.isInteger(value) || value < 0) {
+        throw new RangeError(`${name} must be a non-negative integer`);
+      }
+    }
+    if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
+      throw new RangeError("treeScale must be a non-negative finite number");
+    }
+    for (const point of options.points) {
+      if (!Number.isSafeInteger(point?.x) || !Number.isSafeInteger(point?.y)) {
+        throw new RangeError("vegetation points must use safe integer coordinates");
+      }
+    }
+  }
+  function grassTiles(map, points) {
+    return points.filter(({ x, y }) => {
+      const tile = getMapTile(map, x, y);
+      return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
+    }).map((point) => ({ x: point.x, y: point.y }));
+  }
+  function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {
+    const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+    const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
+    const capacity = tiles.length * sampling.tileCapacity;
+    const offsets = new Float32Array(capacity * 2);
+    const tileOffsets = new Float32Array(capacity * 2);
+    const angles = new Float32Array(capacity);
+    const scales = new Float32Array(capacity * 2);
+    const phases = new Float32Array(capacity);
+    const shades = new Float32Array(capacity);
+    const ranges = new Uint32Array(tiles.length * 2);
+    const origin = getWorldChunkOrigin(chunkKey, options.size);
+    const heightVariation = options.grassHeightVariation ?? 0.4;
+    let instance = 0;
+    tiles.forEach((tile, tileIndex) => {
+      const center = getHexCenter(tile.x, tile.y, options.size);
+      const start = instance;
+      const waterValue = waterEdgeValue(map, tile.x, tile.y);
+      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+      sampling.forTile(tile, (x, z, sx, sz) => {
+        if (vegetationRandom(sx, sz, 709) >= GRASS_DENSITY[lod]) return;
+        const lx = x - center.x;
+        const ly = z - center.y;
+        if (isInTileWater(
+          lx,
+          ly,
+          waterValue,
+          options.size,
+          waterOptions,
+          seaMouthValue,
+          lakeMouthValue,
+          lakeNeighborValue
+        )) return;
+        if (isInCoastalShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions) || isInLakeShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)) return;
+        offsets[instance * 2] = center.x + lx - origin.x;
+        offsets[instance * 2 + 1] = center.y + ly - origin.y;
+        tileOffsets[instance * 2] = center.x - origin.x;
+        tileOffsets[instance * 2 + 1] = center.y - origin.y;
+        angles[instance] = vegetationRandom(sx, sz, 741) * Math.PI * 2;
+        const heightJitter = 1 - heightVariation * 0.5 + vegetationRandom(sx, sz, 743) * heightVariation;
+        scales[instance * 2] = options.grassBladeWidth * (0.8 + vegetationRandom(sx, sz, 747) * 0.4);
+        scales[instance * 2 + 1] = options.grassBladeHeight * heightJitter;
+        phases[instance] = vegetationRandom(sx, sz, 753) * Math.PI * 2;
+        shades[instance] = 0.75 + vegetationRandom(sx, sz, 759) * 0.35;
+        instance += 1;
+      });
+      ranges[tileIndex * 2] = start;
+      ranges[tileIndex * 2 + 1] = instance - start;
+    });
+    return {
+      lod,
+      instanceCount: instance,
+      tiles,
+      ranges,
+      offsets: offsets.slice(0, instance * 2),
+      tileOffsets: tileOffsets.slice(0, instance * 2),
+      angles: angles.slice(0, instance),
+      scales: scales.slice(0, instance * 2),
+      phases: phases.slice(0, instance),
+      shades: shades.slice(0, instance)
+    };
+  }
+  function buildGrass(map, options, waterOptions, coastOptions) {
+    if (options.grassDensity <= 0) return [];
+    return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey, tiles]) => ({
+      chunkKey,
+      lods: LODS.map((lod) => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions))
+    }));
+  }
+  function writeTreeMatrix(target, index, angle, scale, x, z) {
+    const offset = index * 16;
+    const cosine = Math.cos(angle) * scale;
+    const sine = Math.sin(angle) * scale;
+    target.set([
+      cosine,
+      0,
+      -sine,
+      0,
+      0,
+      scale,
+      0,
+      0,
+      sine,
+      0,
+      cosine,
+      0,
+      x,
+      0,
+      z,
+      1
+    ], offset);
+  }
+  function buildForestLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {
+    const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+    const spacing = Math.max(Math.sqrt(area / options.treesPerTile), options.size * options.treeScale * 0.5);
+    const sampling = new VegetationSampling(map, options.size, spacing, 0.22, 1701);
+    const matrices = new Float32Array(tiles.length * sampling.tileCapacity * 16);
+    const ranges = new Uint32Array(tiles.length * 2);
+    const origin = getWorldChunkOrigin(chunkKey, options.size);
+    let instance = 0;
+    tiles.forEach((tile, tileIndex) => {
+      const center = getHexCenter(tile.x, tile.y, options.size);
+      const start = instance;
+      const waterValue = waterEdgeValue(map, tile.x, tile.y);
+      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
+      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
+      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
+      const candidates = [];
+      sampling.forTile(tile, (x, z, sx, sz) => {
+        if (vegetationRandom(sx, sz, 1709) >= FOREST_DENSITY[lod]) return;
+        const lx = x - center.x;
+        const ly = z - center.y;
+        if (isInTileWater(
+          lx,
+          ly,
+          waterValue,
+          options.size,
+          waterOptions,
+          seaMouthValue,
+          lakeMouthValue,
+          lakeNeighborValue
+        )) return;
+        if (isInCoastalShore(
+          map,
+          tile.x,
+          tile.y,
+          lx,
+          ly,
+          center.x + lx,
+          center.y + ly,
+          options.size,
+          coastOptions
+        )) return;
+        if (isInLakeShore(
+          map,
+          tile.x,
+          tile.y,
+          lx,
+          ly,
+          center.x + lx,
+          center.y + ly,
+          options.size,
+          coastOptions
+        )) return;
+        candidates.push({ x, z, sx, sz, priority: vegetationRandom(sx, sz, 1709) });
+      });
+      candidates.sort((a, b) => a.priority - b.priority);
+      for (const { x, z, sx, sz } of candidates) {
+        const scale = options.treeScale * (0.8 + vegetationRandom(sx, sz, 1713) * 0.4);
+        writeTreeMatrix(
+          matrices,
+          instance,
+          vegetationRandom(sx, sz, 1715) * Math.PI * 2,
+          scale,
+          x - origin.x,
+          z - origin.y
+        );
+        instance += 1;
+      }
+      ranges[tileIndex * 2] = start;
+      ranges[tileIndex * 2 + 1] = instance - start;
+    });
+    return { lod, instanceCount: instance, tiles, ranges, matrices: matrices.slice(0, instance * 16) };
+  }
+  function buildForest(map, options, waterOptions, coastOptions) {
+    if (options.treesPerTile <= 0 || options.treeScale === 0) return [];
+    const tilesByModel = /* @__PURE__ */ new Map();
+    for (const point of options.points) {
+      const tile = getMapTile(map, point.x, point.y);
+      if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) continue;
+      const modelPath = tile.treeModel ?? options.treeModel;
+      const tiles = tilesByModel.get(modelPath) ?? [];
+      tiles.push({ x: point.x, y: point.y });
+      tilesByModel.set(modelPath, tiles);
+    }
+    const layouts = [];
+    for (const [modelPath, tiles] of tilesByModel) {
+      for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
+        layouts.push({
+          chunkKey,
+          modelPath,
+          lods: LODS.map((lod) => buildForestLod(
+            map,
+            chunkKey,
+            chunkTiles,
+            lod,
+            options,
+            waterOptions,
+            coastOptions
+          ))
+        });
+      }
+    }
+    return layouts;
+  }
+  function generateWorldVegetation(options) {
+    assertOptions(options);
+    const map = options.map;
+    const waterOptions = {
+      riverWidth: options.riverWidth,
+      riverBankWidth: options.riverBankWidth,
+      riverCurvature: options.riverCurvature,
+      lakeShoreWidth: options.lakeShoreWidth
+    };
+    const coastOptions = {
+      beachWidth: options.beachWidth,
+      lakeShoreWidth: options.lakeShoreWidth,
+      waterCornerRounding: options.waterCornerRounding,
+      coastCurvature: options.coastCurvature
+    };
+    return {
+      version: WORLD_VEGETATION_FORMAT_VERSION,
+      grass: buildGrass(map, options, waterOptions, coastOptions),
+      forest: buildForest(map, options, waterOptions, coastOptions)
+    };
+  }
+  function assertWorldVegetationLayout(layout) {
+    if (!layout || typeof layout !== "object" || layout.version !== WORLD_VEGETATION_FORMAT_VERSION || !Array.isArray(layout.grass) || !Array.isArray(layout.forest)) {
+      throw new TypeError("world vegetation layout is invalid");
+    }
+    for (const chunk of layout.grass) {
+      if (typeof chunk?.chunkKey !== "string" || !Array.isArray(chunk.lods) || chunk.lods.length !== 3) {
+        throw new TypeError("world grass layout is invalid");
+      }
+      for (const lod of chunk.lods) {
+        if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array) || !(lod.tileOffsets instanceof Float32Array) || !(lod.angles instanceof Float32Array) || !(lod.scales instanceof Float32Array) || !(lod.phases instanceof Float32Array) || !(lod.shades instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.offsets.length !== lod.instanceCount * 2 || lod.tileOffsets.length !== lod.instanceCount * 2 || lod.angles.length !== lod.instanceCount || lod.scales.length !== lod.instanceCount * 2 || lod.phases.length !== lod.instanceCount || lod.shades.length !== lod.instanceCount) {
+          throw new TypeError("world grass LOD layout is invalid");
+        }
+      }
+    }
+    for (const chunk of layout.forest) {
+      if (typeof chunk?.chunkKey !== "string" || typeof chunk.modelPath !== "string" || !Array.isArray(chunk.lods) || chunk.lods.length !== 3) {
+        throw new TypeError("world forest layout is invalid");
+      }
+      for (const lod of chunk.lods) {
+        if (!(lod.ranges instanceof Uint32Array) || !(lod.matrices instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.matrices.length !== lod.instanceCount * 16) {
+          throw new TypeError("world forest LOD layout is invalid");
+        }
+      }
+    }
+  }
+  function worldVegetationTransferables(layout) {
+    const buffers = /* @__PURE__ */ new Set();
+    for (const chunk of layout.grass) for (const lod of chunk.lods) {
+      for (const array of [
+        lod.ranges,
+        lod.offsets,
+        lod.tileOffsets,
+        lod.angles,
+        lod.scales,
+        lod.phases,
+        lod.shades
+      ]) buffers.add(array.buffer);
+    }
+    for (const chunk of layout.forest) for (const lod of chunk.lods) {
+      buffers.add(lod.ranges.buffer);
+      buffers.add(lod.matrices.buffer);
+    }
+    return [...buffers];
   }
 
   // src/rendering/VegetationResources.ts
@@ -9283,73 +9090,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     buildChunkLod(record, lod) {
       const prepared = this.context.preparedChunks.get(`${record.modelPath}\0${record.chunkKey}`)?.lods.find((candidate) => candidate.lod === lod);
       if (prepared) return this.buildPreparedChunkLod(record, prepared);
-      const {
-        map,
-        surface,
-        size,
-        treesPerTile,
-        treeScale,
-        treeFootprint,
-        polygon,
-        waterOptions,
-        coastOptions
-      } = this.context;
-      const maximumDensity = Math.max(1, Math.round(treesPerTile * [1, 0.5, 0.2][lod]));
-      const matrix = new three.Matrix4();
-      const scaleVector = new three.Vector3();
-      const matrices = new Float32Array(record.tiles.length * maximumDensity * 16);
-      const ranges = /* @__PURE__ */ new Map();
-      const surfaceWindow = surface.createWindow();
-      let instance = 0;
-      for (const tile of record.tiles) {
-        const key = `${tile.x},${tile.y}`;
-        const center = getHexCenter(tile.x, tile.y, size);
-        const density = Math.max(1, Math.round(
-          maximumDensity * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-        ));
-        const placed = [];
-        const tileStart = instance;
-        let attempts = 0;
-        const waterValue = waterEdgeValue(map, tile.x, tile.y);
-        const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-        const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-        const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-        while (placed.length < density && attempts < density * 20) {
-          const salt = attempts++ * 17;
-          const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * size;
-          const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * size;
-          if ((0, import_robust_point_in_polygon.default)(polygon, [lx, ly]) !== -1) continue;
-          if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
-          if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-          if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-          if (placed.some((p) => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint)) continue;
-          placed.push({ x: lx, y: ly });
-          const scale = treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
-          matrix.makeRotationY(stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2);
-          matrix.scale(scaleVector.set(scale, scale, scale));
-          matrix.setPosition(
-            center.x + lx - record.root.position.x,
-            surfaceWindow.getWorldHeight(center.x + lx, center.y + ly),
-            center.y + ly - record.root.position.z
-          );
-          matrix.toArray(matrices, instance * 16);
-          instance++;
-        }
-        const count = instance - tileStart;
-        ranges.set(key, {
-          start: tileStart,
-          count,
-          originalMatrices: matrices.subarray(tileStart * 16, (tileStart + count) * 16)
-        });
-      }
-      const compactMatrices = matrices.slice(0, instance * 16);
-      for (const range of ranges.values()) {
-        range.originalMatrices = compactMatrices.subarray(
-          range.start * 16,
-          (range.start + range.count) * 16
-        );
-      }
-      return { instanceCount: instance, matrices: compactMatrices, ranges };
+      const context = this.context;
+      return this.buildPreparedChunkLod(record, buildForestLod(
+        context.map,
+        record.chunkKey,
+        record.tiles,
+        lod,
+        context,
+        context.waterOptions,
+        context.coastOptions
+      ));
     }
     buildPreparedChunkLod(record, prepared) {
       const ranges = /* @__PURE__ */ new Map();
@@ -9407,22 +9157,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
     }
   };
-  function stableRandom(x, y, salt) {
-    let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
-    value ^= value >>> 16;
-    value = Math.imul(value, 2146121005);
-    value ^= value >>> 15;
-    value = Math.imul(value, 2221713035);
-    value ^= value >>> 16;
-    return (value >>> 0) / 4294967296;
-  }
   async function createForest(map, options, onlyTiles, sharedResources, preparedLayout) {
     const { size, surface } = options;
     const treesPerTile = options.treesPerTile ?? 12;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
-    const treeScale = options.treeScale ?? 1;
+    const treeScale = options.treeScale ?? 1.6;
     const fogDarkenFactor = options.fogDarkenFactor ?? 0.45;
-    if (treesPerTile <= 0) return null;
+    if (treesPerTile <= 0 || treeScale === 0) return null;
     const tilesByModel = /* @__PURE__ */ new Map();
     const considerTile = (x, y) => {
       const tile = getMapTile(map, x, y);
@@ -9438,8 +9179,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       forEachMapTile(map, (_tile, x, y) => considerTile(x, y));
     }
     if (tilesByModel.size === 0) return null;
-    const treeFootprint = Math.max(1, Math.round(size / 10));
-    const polygon = HEXPolygon({ x: 0, y: 0 }, size - treeFootprint).map((p) => [p.x, p.y]);
     const waterOptions = {
       riverWidth: options.riverWidth ?? 0.28,
       riverBankWidth: options.riverBankWidth ?? 0.14,
@@ -9461,6 +9200,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const preparedLods = await resources.prepare(modelPath);
         const preparedParts = preparedLods[0];
         if (preparedParts.length === 0) continue;
+        const modelBounds = new three.Box3();
+        for (const parts of preparedLods) for (const { geometry } of parts) {
+          if (!geometry.boundingBox) geometry.computeBoundingBox();
+          modelBounds.union(geometry.boundingBox);
+        }
+        const maximumScale = treeScale * 1.2;
+        const canopyRadius = Math.hypot(
+          Math.max(Math.abs(modelBounds.min.x), Math.abs(modelBounds.max.x)),
+          Math.max(Math.abs(modelBounds.min.z), Math.abs(modelBounds.max.z))
+        ) * maximumScale;
         const chunks = groupTilesByWorldChunk(tiles);
         for (const [chunkKey, chunkTiles] of chunks) {
           const root = new three.Group();
@@ -9476,16 +9225,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
             return instancedMesh;
           });
           const id = `forest:${chunkKey}:${modelIndex}`;
+          const bounds = getWorldChunkBounds(
+            chunkTiles,
+            size,
+            surface.minimumHeight + Math.min(0, modelBounds.min.y * maximumScale),
+            surface.maximumHeight + Math.max(0, modelBounds.max.y * maximumScale)
+          );
+          bounds.minX -= canopyRadius;
+          bounds.maxX += canopyRadius;
+          bounds.minZ -= canopyRadius;
+          bounds.maxZ += canopyRadius;
           tagWorldChunk(
             root,
             chunkKey,
             "forest",
-            localizeWorldChunkBounds(getWorldChunkBounds(
-              chunkTiles,
-              size,
-              surface.minimumHeight,
-              surface.maximumHeight + size * 3
-            ), origin),
+            localizeWorldChunkBounds(bounds, origin),
             id
           );
           chunkRecords.set(id, {
@@ -9506,8 +9260,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         size,
         treesPerTile,
         treeScale,
-        treeFootprint,
-        polygon,
         waterOptions,
         coastOptions,
         preparedChunks: new Map(preparedLayout?.forest.map((chunk) => [
@@ -9523,9 +9275,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw reason;
     }
   }
-
-  // src/objects/Grass.ts
-  var import_robust_point_in_polygon2 = __toESM(require_robust_pnp());
 
   // src/shaders/grass.vertex.ts
   var GRASS_VERTEX_SHADER = `
@@ -9817,66 +9566,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     buildChunkGeometry(chunkKey, chunkTiles, lod, origin) {
       const prepared = this.preparedChunks.get(chunkKey)?.lods.find((candidate) => candidate.lod === lod);
       if (prepared) return this.buildPreparedChunkGeometry(prepared, origin);
-      const { size, surface, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
-      const densityScale = [1, 0.38, 0.14][lod];
-      const density = Math.max(1, Math.round(this.options.density * densityScale));
-      const totalBlades = chunkTiles.length * density;
-      const offsets = new Float32Array(totalBlades * 2);
-      const tileOffsets = new Float32Array(totalBlades * 2);
-      const angles = new Float32Array(totalBlades);
-      const scales = new Float32Array(totalBlades * 2);
-      const phases = new Float32Array(totalBlades);
-      const shades = new Float32Array(totalBlades);
-      const fogStates = new Float32Array(totalBlades);
-      const groundHeights = new Float32Array(totalBlades);
-      const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map((p) => [p.x, p.y]);
-      const pendingRanges = [];
-      const surfaceWindow = surface.createWindow();
-      let instance = 0;
-      for (const tile of chunkTiles) {
-        const key = `${tile.x},${tile.y}`;
-        const center = getHexCenter(tile.x, tile.y, size);
-        const tileStart = instance;
-        const waterValue = waterEdgeValue(this.map, tile.x, tile.y);
-        const seaMouthValue = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
-        const lakeMouthValue = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
-        const lakeNeighborValue = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
-        for (let i = 0; i < density; i++) {
-          let lx = 0, ly = 0, attempts = 0, valid = false;
-          while (!valid && attempts < 20) {
-            lx = (stableRandom2(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * size;
-            ly = (stableRandom2(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * size;
-            valid = (0, import_robust_point_in_polygon2.default)(polygon, [lx, ly]) === -1 && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
-            attempts++;
-          }
-          if (!valid) continue;
-          offsets[instance * 2] = center.x + lx - origin.x;
-          offsets[instance * 2 + 1] = center.y + ly - origin.y;
-          tileOffsets[instance * 2] = center.x - origin.x;
-          tileOffsets[instance * 2 + 1] = center.y - origin.y;
-          angles[instance] = stableRandom2(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
-          const heightJitter = 1 - heightVariation * 0.5 + stableRandom2(tile.x, tile.y, i * 97 + 43) * heightVariation;
-          scales[instance * 2] = bladeWidth * (0.8 + stableRandom2(tile.x, tile.y, i * 97 + 47) * 0.4);
-          scales[instance * 2 + 1] = bladeHeight * heightJitter;
-          phases[instance] = stableRandom2(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
-          shades[instance] = 0.75 + stableRandom2(tile.x, tile.y, i * 97 + 59) * 0.35;
-          fogStates[instance] = this.fogStates.get(key) ?? 2;
-          groundHeights[instance] = surfaceWindow.getWorldHeight(center.x + lx, center.y + ly);
-          instance++;
-        }
-        pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
-      }
-      const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
-      geometry.instanceCount = instance;
-      geometry.setAttribute("offset", new three.InstancedBufferAttribute(offsets, 2));
-      geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(tileOffsets, 2));
-      geometry.setAttribute("angle", new three.InstancedBufferAttribute(angles, 1));
-      geometry.setAttribute("scale", new three.InstancedBufferAttribute(scales, 2));
-      geometry.setAttribute("phase", new three.InstancedBufferAttribute(phases, 1));
-      geometry.setAttribute("shade", new three.InstancedBufferAttribute(shades, 1));
-      geometry.setAttribute("fogState", new three.InstancedBufferAttribute(fogStates, 1));
-      geometry.setAttribute("groundHeight", new three.InstancedBufferAttribute(groundHeights, 1));
-      return { geometry, ranges: pendingRanges };
+      const options = this.options;
+      return this.buildPreparedChunkGeometry(buildGrassLod(this.map, chunkKey, chunkTiles, lod, {
+        size: options.size,
+        grassDensity: options.density,
+        grassBladeWidth: options.bladeWidth,
+        grassBladeHeight: options.bladeHeight,
+        grassHeightVariation: options.heightVariation
+      }, options.waterOptions, options.coastOptions), origin);
     }
     buildPreparedChunkGeometry(prepared, origin) {
       const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
@@ -9928,15 +9625,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.ownsResources) this.resources.dispose();
     }
   };
-  function stableRandom2(x, y, salt) {
-    let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
-    value ^= value >>> 16;
-    value = Math.imul(value, 2146121005);
-    value ^= value >>> 15;
-    value = Math.imul(value, 2221713035);
-    value ^= value >>> 16;
-    return (value >>> 0) / 4294967296;
-  }
   function buildBladeGeometry() {
     const positions = new Float32Array([
       -0.5,
@@ -9985,6 +9673,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       riverCurvature: options.riverCurvature ?? 0.5,
       lakeShoreWidth: options.lakeShoreWidth ?? 0.18
     };
+    const coastOptions = {
+      beachWidth: options.beachWidth ?? 0.35,
+      lakeShoreWidth: options.lakeShoreWidth ?? 0.18,
+      waterCornerRounding: options.waterCornerRounding ?? 0.4,
+      coastCurvature: options.coastCurvature ?? 0.5
+    };
     const resources = sharedResources ?? new GrassSharedResources(options);
     const chunks = /* @__PURE__ */ new Map();
     for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -10022,7 +9716,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       bladeWidth,
       bladeHeight,
       heightVariation,
-      waterOptions
+      waterOptions,
+      coastOptions
     }, new Map(preparedLayout?.grass.map((chunk) => [chunk.chunkKey, chunk]) ?? []), !sharedResources, options.resourceAccount);
   }
 
@@ -13263,352 +12958,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return serializeWorldDescriptor(first) === serializeWorldDescriptor(second);
   }
 
-  // src/world/generateVegetation.ts
-  var import_robust_point_in_polygon3 = __toESM(require_robust_pnp());
-  var WORLD_VEGETATION_FORMAT_VERSION = 1;
-  var LODS = [0, 1, 2];
-  var GRASS_DENSITY = [1, 0.38, 0.14];
-  var FOREST_DENSITY = [1, 0.5, 0.2];
-  function stableRandom3(x, y, salt) {
-    let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
-    value ^= value >>> 16;
-    value = Math.imul(value, 2146121005);
-    value ^= value >>> 15;
-    value = Math.imul(value, 2221713035);
-    value ^= value >>> 16;
-    return (value >>> 0) / 4294967296;
-  }
-  function cloneTile(tile) {
-    return {
-      ...tile,
-      modifiers: tile.modifiers?.slice(),
-      rivers: tile.rivers?.map((river) => ({ ...river })),
-      city: tile.city ? { ...tile.city } : void 0
-    };
-  }
-  function createWorldVegetationMapSnapshot(map, points) {
-    var _a;
-    const data = {};
-    const selected = /* @__PURE__ */ new Map();
-    for (const point of points) {
-      selected.set(`${point.x},${point.y}`, point);
-      for (const neighbor of getMapNeighbors(map, point.x, point.y)) {
-        selected.set(`${neighbor.x},${neighbor.y}`, neighbor);
-      }
-    }
-    for (const point of selected.values()) {
-      const tile = getMapTile(map, point.x, point.y);
-      if (!tile) continue;
-      data[_a = point.x] ?? (data[_a] = {});
-      data[point.x][point.y] = cloneTile(tile);
-    }
-    return {
-      data,
-      w: map.w,
-      h: map.h,
-      wrapX: map.wrapX,
-      wrapY: map.wrapY,
-      infinite: map.infinite
-    };
-  }
-  function assertOptions(options) {
-    if (!options || typeof options !== "object" || !options.map || !Array.isArray(options.points)) {
-      throw new TypeError("vegetation generation options are invalid");
-    }
-    if (!Number.isFinite(options.size) || options.size <= 0) {
-      throw new RangeError("vegetation tile size must be a positive finite number");
-    }
-    for (const [name, value] of [
-      ["grassDensity", options.grassDensity],
-      ["treesPerTile", options.treesPerTile]
-    ]) {
-      if (!Number.isInteger(value) || value < 0) {
-        throw new RangeError(`${name} must be a non-negative integer`);
-      }
-    }
-    for (const point of options.points) {
-      if (!Number.isSafeInteger(point?.x) || !Number.isSafeInteger(point?.y)) {
-        throw new RangeError("vegetation points must use safe integer coordinates");
-      }
-    }
-  }
-  function grassTiles(map, points) {
-    return points.filter(({ x, y }) => {
-      const tile = getMapTile(map, x, y);
-      return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
-    }).map((point) => ({ x: point.x, y: point.y }));
-  }
-  function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
-    const density = Math.max(1, Math.round(options.grassDensity * GRASS_DENSITY[lod]));
-    const capacity = tiles.length * density;
-    const offsets = new Float32Array(capacity * 2);
-    const tileOffsets = new Float32Array(capacity * 2);
-    const angles = new Float32Array(capacity);
-    const scales = new Float32Array(capacity * 2);
-    const phases = new Float32Array(capacity);
-    const shades = new Float32Array(capacity);
-    const ranges = new Uint32Array(tiles.length * 2);
-    const polygon = HEXPolygon({ x: 0, y: 0 }, options.size * 0.8).map((point) => [point.x, point.y]);
-    const origin = getWorldChunkOrigin(chunkKey, options.size);
-    const heightVariation = options.grassHeightVariation ?? 0.4;
-    let instance = 0;
-    tiles.forEach((tile, tileIndex) => {
-      const center = getHexCenter(tile.x, tile.y, options.size);
-      const start = instance;
-      const waterValue = waterEdgeValue(map, tile.x, tile.y);
-      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-      for (let i = 0; i < density; i += 1) {
-        let lx = 0;
-        let ly = 0;
-        let attempts = 0;
-        let valid = false;
-        while (!valid && attempts < 20) {
-          lx = (stableRandom3(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * options.size;
-          ly = (stableRandom3(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * options.size;
-          valid = (0, import_robust_point_in_polygon3.default)(polygon, [lx, ly]) === -1 && !isInTileWater(
-            lx,
-            ly,
-            waterValue,
-            options.size,
-            waterOptions,
-            seaMouthValue,
-            lakeMouthValue,
-            lakeNeighborValue
-          );
-          attempts += 1;
-        }
-        if (!valid) continue;
-        offsets[instance * 2] = center.x + lx - origin.x;
-        offsets[instance * 2 + 1] = center.y + ly - origin.y;
-        tileOffsets[instance * 2] = center.x - origin.x;
-        tileOffsets[instance * 2 + 1] = center.y - origin.y;
-        angles[instance] = stableRandom3(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
-        const heightJitter = 1 - heightVariation * 0.5 + stableRandom3(tile.x, tile.y, i * 97 + 43) * heightVariation;
-        scales[instance * 2] = options.grassBladeWidth * (0.8 + stableRandom3(tile.x, tile.y, i * 97 + 47) * 0.4);
-        scales[instance * 2 + 1] = options.grassBladeHeight * heightJitter;
-        phases[instance] = stableRandom3(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
-        shades[instance] = 0.75 + stableRandom3(tile.x, tile.y, i * 97 + 59) * 0.35;
-        instance += 1;
-      }
-      ranges[tileIndex * 2] = start;
-      ranges[tileIndex * 2 + 1] = instance - start;
-    });
-    return {
-      lod,
-      instanceCount: instance,
-      tiles,
-      ranges,
-      offsets: offsets.slice(0, instance * 2),
-      tileOffsets: tileOffsets.slice(0, instance * 2),
-      angles: angles.slice(0, instance),
-      scales: scales.slice(0, instance * 2),
-      phases: phases.slice(0, instance),
-      shades: shades.slice(0, instance)
-    };
-  }
-  function buildGrass(map, options, waterOptions) {
-    if (options.grassDensity <= 0) return [];
-    return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey, tiles]) => ({
-      chunkKey,
-      lods: LODS.map((lod) => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions))
-    }));
-  }
-  function writeTreeMatrix(target, index, angle, scale, x, z) {
-    const offset = index * 16;
-    const cosine = Math.cos(angle) * scale;
-    const sine = Math.sin(angle) * scale;
-    target.set([
-      cosine,
-      0,
-      -sine,
-      0,
-      0,
-      scale,
-      0,
-      0,
-      sine,
-      0,
-      cosine,
-      0,
-      x,
-      0,
-      z,
-      1
-    ], offset);
-  }
-  function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootprint, waterOptions, coastOptions) {
-    const density = Math.max(1, Math.round(options.treesPerTile * FOREST_DENSITY[lod]));
-    const matrices = new Float32Array(tiles.length * density * 16);
-    const ranges = new Uint32Array(tiles.length * 2);
-    const origin = getWorldChunkOrigin(chunkKey, options.size);
-    let instance = 0;
-    tiles.forEach((tile, tileIndex) => {
-      const center = getHexCenter(tile.x, tile.y, options.size);
-      const placed = [];
-      const start = instance;
-      let attempts = 0;
-      const waterValue = waterEdgeValue(map, tile.x, tile.y);
-      const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-      const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-      const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-      while (placed.length < density && attempts < density * 20) {
-        const salt = attempts++ * 17;
-        const lx = (stableRandom3(tile.x, tile.y, salt) * 2 - 1) * options.size;
-        const ly = (stableRandom3(tile.x, tile.y, salt + 1) * 2 - 1) * options.size;
-        if ((0, import_robust_point_in_polygon3.default)(polygon, [lx, ly]) !== -1) continue;
-        if (isInTileWater(
-          lx,
-          ly,
-          waterValue,
-          options.size,
-          waterOptions,
-          seaMouthValue,
-          lakeMouthValue,
-          lakeNeighborValue
-        )) continue;
-        if (isInCoastalShore(
-          map,
-          tile.x,
-          tile.y,
-          lx,
-          ly,
-          center.x + lx,
-          center.y + ly,
-          options.size,
-          coastOptions
-        )) continue;
-        if (isInLakeShore(
-          map,
-          tile.x,
-          tile.y,
-          lx,
-          ly,
-          center.x + lx,
-          center.y + ly,
-          options.size,
-          coastOptions
-        )) continue;
-        if (placed.some((point) => Math.abs(point.x - lx) < treeFootprint && Math.abs(point.y - ly) < treeFootprint)) continue;
-        placed.push({ x: lx, y: ly });
-        const scale = options.treeScale * (0.8 + stableRandom3(tile.x, tile.y, salt + 3) * 0.4);
-        writeTreeMatrix(
-          matrices,
-          instance,
-          stableRandom3(tile.x, tile.y, salt + 5) * Math.PI * 2,
-          scale,
-          center.x + lx - origin.x,
-          center.y + ly - origin.y
-        );
-        instance += 1;
-      }
-      ranges[tileIndex * 2] = start;
-      ranges[tileIndex * 2 + 1] = instance - start;
-    });
-    return { lod, instanceCount: instance, tiles, ranges, matrices: matrices.slice(0, instance * 16) };
-  }
-  function buildForest(map, options, waterOptions, coastOptions) {
-    if (options.treesPerTile <= 0) return [];
-    const tilesByModel = /* @__PURE__ */ new Map();
-    for (const point of options.points) {
-      const tile = getMapTile(map, point.x, point.y);
-      if (!tile?.modifiers?.includes("wood") || tile.city || isLakeTile(tile)) continue;
-      const modelPath = tile.treeModel ?? options.treeModel;
-      const tiles = tilesByModel.get(modelPath) ?? [];
-      tiles.push({ x: point.x, y: point.y });
-      tilesByModel.set(modelPath, tiles);
-    }
-    const treeFootprint = Math.max(1, Math.round(options.size / 10));
-    const polygon = HEXPolygon({ x: 0, y: 0 }, options.size - treeFootprint).map((point) => [point.x, point.y]);
-    const layouts = [];
-    for (const [modelPath, tiles] of tilesByModel) {
-      for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
-        layouts.push({
-          chunkKey,
-          modelPath,
-          lods: LODS.map((lod) => buildForestLod(
-            map,
-            chunkKey,
-            chunkTiles,
-            lod,
-            options,
-            polygon,
-            treeFootprint,
-            waterOptions,
-            coastOptions
-          ))
-        });
-      }
-    }
-    return layouts;
-  }
-  function generateWorldVegetation(options) {
-    assertOptions(options);
-    const map = options.map;
-    const waterOptions = {
-      riverWidth: options.riverWidth,
-      riverBankWidth: options.riverBankWidth,
-      riverCurvature: options.riverCurvature,
-      lakeShoreWidth: options.lakeShoreWidth
-    };
-    const coastOptions = {
-      beachWidth: options.beachWidth,
-      lakeShoreWidth: options.lakeShoreWidth,
-      waterCornerRounding: options.waterCornerRounding,
-      coastCurvature: options.coastCurvature
-    };
-    return {
-      version: WORLD_VEGETATION_FORMAT_VERSION,
-      grass: buildGrass(map, options, waterOptions),
-      forest: buildForest(map, options, waterOptions, coastOptions)
-    };
-  }
-  function assertWorldVegetationLayout(layout) {
-    if (!layout || typeof layout !== "object" || layout.version !== WORLD_VEGETATION_FORMAT_VERSION || !Array.isArray(layout.grass) || !Array.isArray(layout.forest)) {
-      throw new TypeError("world vegetation layout is invalid");
-    }
-    for (const chunk of layout.grass) {
-      if (typeof chunk?.chunkKey !== "string" || !Array.isArray(chunk.lods) || chunk.lods.length !== 3) {
-        throw new TypeError("world grass layout is invalid");
-      }
-      for (const lod of chunk.lods) {
-        if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array) || !(lod.tileOffsets instanceof Float32Array) || !(lod.angles instanceof Float32Array) || !(lod.scales instanceof Float32Array) || !(lod.phases instanceof Float32Array) || !(lod.shades instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.offsets.length !== lod.instanceCount * 2 || lod.tileOffsets.length !== lod.instanceCount * 2 || lod.angles.length !== lod.instanceCount || lod.scales.length !== lod.instanceCount * 2 || lod.phases.length !== lod.instanceCount || lod.shades.length !== lod.instanceCount) {
-          throw new TypeError("world grass LOD layout is invalid");
-        }
-      }
-    }
-    for (const chunk of layout.forest) {
-      if (typeof chunk?.chunkKey !== "string" || typeof chunk.modelPath !== "string" || !Array.isArray(chunk.lods) || chunk.lods.length !== 3) {
-        throw new TypeError("world forest layout is invalid");
-      }
-      for (const lod of chunk.lods) {
-        if (!(lod.ranges instanceof Uint32Array) || !(lod.matrices instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.matrices.length !== lod.instanceCount * 16) {
-          throw new TypeError("world forest LOD layout is invalid");
-        }
-      }
-    }
-  }
-  function worldVegetationTransferables(layout) {
-    const buffers = /* @__PURE__ */ new Set();
-    for (const chunk of layout.grass) for (const lod of chunk.lods) {
-      for (const array of [
-        lod.ranges,
-        lod.offsets,
-        lod.tileOffsets,
-        lod.angles,
-        lod.scales,
-        lod.phases,
-        lod.shades
-      ]) buffers.add(array.buffer);
-    }
-    for (const chunk of layout.forest) for (const lod of chunk.lods) {
-      buffers.add(lod.ranges.buffer);
-      buffers.add(lod.matrices.buffer);
-    }
-    return [...buffers];
-  }
-
   // src/runtime/LifecycleScope.ts
   var nextLifecycleGeneration = 1;
   function lifecycleAbortError(message = "Lifecycle scope was closed") {
@@ -16803,8 +16152,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
         this.hovered = { x: picked.x, y: picked.y };
         this.options.pointer.visible = true;
-        this.options.pointer.position.setX(picked.worldX);
-        this.options.pointer.position.setZ(picked.worldY);
         this.options.hover(picked.x, picked.y, tile);
       };
       this.onMouseUp = (event) => {
@@ -16888,9 +16235,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.reset();
     }
     pick(clientX, clientY) {
-      const ground = screenToGround(clientX, clientY, this.options.canvas, this.options.camera);
+      const surface = this.options.surface();
+      if (!surface) return null;
+      const ground = screenToSurface(
+        clientX,
+        clientY,
+        this.options.canvas,
+        this.options.camera,
+        surface,
+        this.options.logicalGround
+      );
       if (!ground) return null;
-      this.options.logicalGround(ground);
       const map = this.options.map();
       return pickTile(
         ground,
@@ -17302,7 +16657,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     riverFlowSpeed: 1,
     lakeShoreWidth: 0.18,
     treeModel: "Assets/models/pinia",
-    treeScale: 1,
+    treeScale: 1.6,
     cityModel: "Assets/models/monument",
     cityScale: 1,
     grassEnabled: true,
@@ -18009,6 +17364,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var HexMap = class extends EventEmitter {
     constructor(options) {
       super();
+      this.markerProjections = new SurfaceMarkerProjectionCache();
       this.worldCopies = [];
       this.worldCopyGroups = /* @__PURE__ */ new Map();
       this.worldCopyObjects = /* @__PURE__ */ new Map();
@@ -18213,12 +17569,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         pointer: this.pointer,
         size: this.options.size,
         map: () => this.mapData,
+        surface: () => this.worldSurface,
         logicalGround: (point) => {
           this.logicalGround(point);
         },
         tile: (x, y) => this.getTile(x, y),
         select: (x, y) => this.selectTile(x, y),
-        hover: (x, y, tile) => this.emit("hover", { x, y, tile }),
+        hover: (x, y, tile) => {
+          this.positionMarker(this.pointer, { x, y });
+          this.emit("hover", { x, y, tile });
+        },
         click: (x, y, tile) => this.emit("click", { x, y, tile })
       });
       this.setupEvents();
@@ -18354,12 +17714,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return center;
     }
     positionMarker(marker, tile, reference = this.getCameraTarget()) {
+      if (!this.worldSurface) return;
       const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
-      marker.position.setX(center.x);
-      marker.position.setY(
-        (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0) + this.options.size / 10 + 1.1
-      );
-      marker.position.setZ(center.y);
+      marker.project(this.worldSurface, tile);
+      marker.position.set(center.x, 0, center.y);
     }
     updateMarkerPositions() {
       const hovered = this.interactions.hoveredTile;
@@ -18622,19 +17980,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (sceneChanged) this.chunkScheduler.invalidateScene();
     }
     setupMarkers() {
-      const size = this.options.size;
-      const selectorGeom = new three.RingGeometry(0.97 * size, size, 6, 2);
-      this.selector = new three.Mesh(selectorGeom, new three.MeshBasicMaterial({ color: this.options.selectorColor }));
-      this.selector.rotateX(-Math.PI / 2);
-      this.selector.position.setY(size / 10 + 1.1);
-      this.selector.visible = false;
-      this.worldRoot.add(this.selector);
-      const pointerGeom = new three.RingGeometry(0.97 * size, size, 6, 2);
-      this.pointer = new three.Mesh(pointerGeom, new three.MeshBasicMaterial({ color: this.options.pointerColor }));
-      this.pointer.rotateX(-Math.PI / 2);
-      this.pointer.position.setY(size / 10 + 1.1);
-      this.pointer.visible = false;
-      this.worldRoot.add(this.pointer);
+      this.selector = new SurfaceHexMarker(this.options.selectorColor, this.markerProjections);
+      this.selector.renderOrder = 2;
+      this.pointer = new SurfaceHexMarker(this.options.pointerColor, this.markerProjections);
+      this.worldRoot.add(this.selector, this.pointer);
     }
     setupEvents() {
       window.addEventListener("resize", this.handleResize, { passive: true });
@@ -18959,7 +18308,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         riverWidth: this.options.riverWidth,
         riverBankWidth: this.options.riverBankWidth,
         riverCurvature: this.options.riverCurvature,
-        lakeShoreWidth: this.options.lakeShoreWidth
+        lakeShoreWidth: this.options.lakeShoreWidth,
+        beachWidth: this.options.beachWidth,
+        waterCornerRounding: this.options.waterCornerRounding,
+        coastCurvature: this.options.coastCurvature
       }, context.points, this.streamedGrassResources, prepared) ?? void 0;
       if (!context.isCurrent() || record.grassBuildRevision !== grassBuildRevision || record.requestedVegetationSignature !== vegetationSignature) {
         grass?.dispose();
@@ -19494,6 +18846,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       } catch (reason) {
         errors.push(renderLayerError(reason));
       }
+      this.markerProjections.clear();
       this.worldSurface = void 0;
       this.worldController = void 0;
       this.worldTileUpdateQueue = Promise.resolve();
@@ -19746,7 +19099,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         riverWidth: this.options.riverWidth,
         riverBankWidth: this.options.riverBankWidth,
         riverCurvature: this.options.riverCurvature,
-        lakeShoreWidth: this.options.lakeShoreWidth
+        lakeShoreWidth: this.options.lakeShoreWidth,
+        beachWidth: this.options.beachWidth,
+        waterCornerRounding: this.options.waterCornerRounding,
+        coastCurvature: this.options.coastCurvature
       }) ?? void 0;
       this.applyWorldPatternToObject(this.grass);
       if (this.grass) {

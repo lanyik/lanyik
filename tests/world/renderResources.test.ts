@@ -89,6 +89,39 @@ function points(startX: number): Point[] {
 }
 
 describe("streamed render resource sharing", () => {
+    test("uploads identical static and Worker vegetation at every LOD", async () => {
+        const map = mapWithVegetation();
+        const selected = points(0);
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 80 });
+        const layout = generateWorldVegetation({
+            map, points: selected, size: 10, grassDensity: 6, grassBladeWidth: 0.3, grassBladeHeight: 1.8,
+            treesPerTile: 12, treeScale: 1.6, treeModel: "test-tree", riverWidth: 0.28, riverBankWidth: 0.14,
+            riverCurvature: 0.5, lakeShoreWidth: 0.18, beachWidth: 0.35, waterCornerRounding: 0.4, coastCurvature: 0.5
+        });
+        const grassResources = new GrassSharedResources({ size: 10 });
+        const forestResources = new ForestSharedResources();
+        const staticGrass = createGrassField(map, { size: 10, density: 6, surface }, selected, grassResources)!;
+        const workerGrass = createGrassField(map, { size: 10, density: 6, surface }, selected, grassResources, layout)!;
+        const staticForest = (await createForest(map, { size: 10, surface }, selected, forestResources))!;
+        const workerForest = (await createForest(map, { size: 10, surface }, selected, forestResources, layout))!;
+        for (const lod of [0, 1, 2] as const) {
+            const local = staticGrass.activateChunk(getWorldChunkMetadata(staticGrass.children[0])!, lod)!;
+            const prepared = workerGrass.activateChunk(getWorldChunkMetadata(workerGrass.children[0])!, lod)!;
+            for (const attribute of ["offset", "scale", "phase", "groundHeight", "fogState"]) {
+                expect(local.getAttribute(attribute).array).toEqual(prepared.getAttribute(attribute).array);
+            }
+            staticForest.activateChunk(getWorldChunkMetadata(staticForest.children[0])!, lod, [staticForest.children[0]]);
+            workerForest.activateChunk(getWorldChunkMetadata(workerForest.children[0])!, lod, [workerForest.children[0]]);
+            const a = staticForest.children[0].children[0] as InstancedMesh;
+            const b = workerForest.children[0].children[0] as InstancedMesh;
+            expect(a.count).toBe(b.count);
+            expect(a.instanceMatrix.array).toEqual(b.instanceMatrix.array);
+        }
+        for (const field of [staticGrass, workerGrass, staticForest, workerForest]) field.dispose();
+        grassResources.dispose();
+        forestResources.dispose();
+    });
+
     test("accounts prepared and cached vegetation until its final CPU owner releases it", async () => {
         const map = mapWithVegetation();
         const selected = points(0);
@@ -394,13 +427,19 @@ describe("streamed render resource sharing", () => {
             { x: 0, y: 0, state: 0 },
             { x: 0, y: 1, state: 0 }
         ]);
-        expect(fog.updateRanges).toEqual([{ start: 0, count: 8 }]);
+        const owner = lod0.getAttribute("tileOffset");
+        const owned = (y: number) => Array.from({ length: owner.count }, (_, index) => index)
+            .filter(index => owner.getX(index) === 0 && Math.abs(owner.getY(index) - y * 10 * Math.sqrt(3)) < 1e-4);
+        const hidden = [...owned(0), ...owned(1)];
+        expect(hidden.length).toBeGreaterThan(0);
+        expect(fog.updateRanges).toEqual([{ start: hidden[0], count: hidden.length }]);
 
         fog.clearUpdateRanges();
         left.setTileSuppressed(0, 2, true);
-        expect([...fog.array.slice(8, 12)]).toEqual([0, 0, 0, 0]);
+        expect(owned(2).length).toBeGreaterThan(0);
+        expect(owned(2).every(index => fog.getX(index) === 0)).toBe(true);
         left.setTileSuppressed(0, 2, false);
-        expect([...fog.array.slice(8, 12)]).toEqual([2, 2, 2, 2]);
+        expect(owned(2).every(index => fog.getX(index) === 2)).toBe(true);
 
         left.dispose();
         right.dispose();
@@ -421,7 +460,7 @@ describe("streamed render resource sharing", () => {
         const options = { size: 10, treesPerTile: 2, surface };
         const resources = new ForestSharedResources();
         const left = (await createForest(map, options, points(0), resources))!;
-        const right = (await createForest(map, options, points(12), resources))!;
+        const right = (await createForest(map, { ...options, treeScale: 3 }, points(12), resources))!;
         expect(resources.preparedModelCount).toBe(1);
         expect(resources.preparedGeometryCount).toBe(3);
 
@@ -430,6 +469,10 @@ describe("streamed render resource sharing", () => {
         expect((leftRoot.children[0] as Mesh).geometry).toBe((rightRoot.children[0] as Mesh).geometry);
         expect((leftRoot.children[0] as Mesh).material).toBeInstanceOf(MeshLambertMaterial);
         const metadata = getWorldChunkMetadata(leftRoot)!;
+        const largerBounds = getWorldChunkMetadata(rightRoot)!.bounds;
+        expect(largerBounds.maxY).toBeCloseTo(surface.maximumHeight + 3.6);
+        expect(largerBounds.minY).toBeCloseTo(surface.minimumHeight - 3.6);
+        expect(largerBounds.minX).toBeLessThan(metadata.bounds.minX);
         left.activateChunk(metadata, 0, [leftRoot]);
         const nearGeometry = (leftRoot.children[0] as Mesh).geometry;
         left.activateChunk(metadata, 1, [leftRoot]);

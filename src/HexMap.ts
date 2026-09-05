@@ -3,8 +3,6 @@ import {
     Scene as ThreeScene,
     PerspectiveCamera,
     Mesh,
-    RingGeometry,
-    MeshBasicMaterial,
     Line,
     LineBasicMaterial,
     BufferGeometry,
@@ -27,6 +25,7 @@ import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
 import type { HexMapEventMap } from "./EventMaps";
 import { getHexCenter } from "./helpers/helpers";
+import { SurfaceHexMarker, SurfaceMarkerProjectionCache } from "./rendering/SurfaceHexMarker";
 import { ModelAssetCache, ModelAssetCacheStats } from "./helpers/models";
 import { forEachMapTile } from "./helpers/mapData";
 import { pickTile } from "./helpers/picking";
@@ -151,8 +150,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private terrain!: TerrainMesh;
     private forest: ForestField | undefined;
     private grass: GrassField | undefined;
-    private selector!: Mesh;
-    private pointer!: Mesh;
+    private readonly markerProjections = new SurfaceMarkerProjectionCache();
+    private selector!: SurfaceHexMarker;
+    private pointer!: SurfaceHexMarker;
     private routeLine: Line | undefined;
     private routePath: Point[] | undefined;
     private worldCopies: Group[] = [];
@@ -326,10 +326,14 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             pointer: this.pointer,
             size: this.options.size,
             map: () => this.mapData,
+            surface: () => this.worldSurface,
             logicalGround: point => { this.logicalGround(point); },
             tile: (x, y) => this.getTile(x, y),
             select: (x, y) => this.selectTile(x, y),
-            hover: (x, y, tile) => this.emit("hover", { x, y, tile }),
+            hover: (x, y, tile) => {
+                this.positionMarker(this.pointer, { x, y });
+                this.emit("hover", { x, y, tile });
+            },
             click: (x, y, tile) => this.emit("click", { x, y, tile })
         });
         this.setupEvents();
@@ -471,14 +475,11 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return center;
     }
 
-    private positionMarker(marker: Mesh, tile: Point, reference = this.getCameraTarget()): void {
+    private positionMarker(marker: SurfaceHexMarker, tile: Point, reference = this.getCameraTarget()): void {
+        if (!this.worldSurface) return;
         const center = this.nearestRepeatedCenter(tile.x, tile.y, reference);
-        marker.position.setX(center.x);
-        marker.position.setY(
-            (this.worldSurface?.getWorldHeight(center.x, center.y) ?? 0)
-            + this.options.size / 10 + 1.1
-        );
-        marker.position.setZ(center.y);
+        marker.project(this.worldSurface, tile);
+        marker.position.set(center.x, 0, center.y);
     }
 
     private updateMarkerPositions(): void {
@@ -783,21 +784,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     }
 
     private setupMarkers(): void {
-        const size = this.options.size;
-
-        const selectorGeom = new RingGeometry(0.97 * size, size, 6, 2);
-        this.selector = new Mesh(selectorGeom, new MeshBasicMaterial({ color: this.options.selectorColor }));
-        this.selector.rotateX(-Math.PI / 2);
-        this.selector.position.setY(size / 10 + 1.1);
-        this.selector.visible = false;
-        this.worldRoot.add(this.selector);
-
-        const pointerGeom = new RingGeometry(0.97 * size, size, 6, 2);
-        this.pointer = new Mesh(pointerGeom, new MeshBasicMaterial({ color: this.options.pointerColor }));
-        this.pointer.rotateX(-Math.PI / 2);
-        this.pointer.position.setY(size / 10 + 1.1);
-        this.pointer.visible = false;
-        this.worldRoot.add(this.pointer);
+        this.selector = new SurfaceHexMarker(this.options.selectorColor, this.markerProjections);
+        this.selector.renderOrder = 2;
+        this.pointer = new SurfaceHexMarker(this.options.pointerColor, this.markerProjections);
+        this.worldRoot.add(this.selector, this.pointer);
     }
 
     private setupEvents(): void {
@@ -1237,7 +1227,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             riverWidth: this.options.riverWidth,
             riverBankWidth: this.options.riverBankWidth,
             riverCurvature: this.options.riverCurvature,
-            lakeShoreWidth: this.options.lakeShoreWidth
+            lakeShoreWidth: this.options.lakeShoreWidth,
+            beachWidth: this.options.beachWidth,
+            waterCornerRounding: this.options.waterCornerRounding,
+            coastCurvature: this.options.coastCurvature
         }, context.points, this.streamedGrassResources, prepared) ?? undefined;
         if (!context.isCurrent() || record.grassBuildRevision !== grassBuildRevision
             || record.requestedVegetationSignature !== vegetationSignature) {
@@ -1870,6 +1863,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         } catch (reason) {
             errors.push(renderLayerError(reason));
         }
+        this.markerProjections.clear();
         this.worldSurface = undefined;
         this.worldController = undefined;
         this.worldTileUpdateQueue = Promise.resolve();
@@ -2119,7 +2113,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             riverWidth: this.options.riverWidth,
             riverBankWidth: this.options.riverBankWidth,
             riverCurvature: this.options.riverCurvature,
-            lakeShoreWidth: this.options.lakeShoreWidth
+            lakeShoreWidth: this.options.lakeShoreWidth,
+            beachWidth: this.options.beachWidth,
+            waterCornerRounding: this.options.waterCornerRounding,
+            coastCurvature: this.options.coastCurvature
         }) ?? undefined;
         this.applyWorldPatternToObject(this.grass);
 

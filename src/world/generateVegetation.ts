@@ -1,5 +1,3 @@
-import pointInPolygon from "robust-point-in-polygon";
-
 import { Land } from "../enums";
 import { CoastClearanceOptions, isInCoastalShore, isInLakeShore } from "../helpers/coast";
 import {
@@ -7,7 +5,7 @@ import {
     groupTilesByWorldChunk,
     WorldChunkLod
 } from "../helpers/chunks";
-import { getHexCenter, HEXPolygon } from "../helpers/helpers";
+import { getHexCenter } from "../helpers/helpers";
 import {
     isInTileWater,
     isLakeTile,
@@ -19,6 +17,8 @@ import {
 } from "../helpers/rivers";
 import { getMapNeighbors, getMapTile } from "../helpers/topology";
 import { MapInfo, MapInfoData, Point, TileInfo } from "../interfaces";
+
+import { VegetationSampling, vegetationRandom as stableRandom } from "./VegetationSampling";
 
 export const WORLD_VEGETATION_FORMAT_VERSION = 1;
 
@@ -93,18 +93,6 @@ const LODS: readonly WorldChunkLod[] = [0, 1, 2];
 const GRASS_DENSITY = [1, 0.38, 0.14] as const;
 const FOREST_DENSITY = [1, 0.5, 0.2] as const;
 
-function stableRandom(x: number, y: number, salt: number): number {
-    let value = Math.imul(x ^ 0x9e3779b9, 0x85ebca6b)
-        ^ Math.imul(y ^ 0xc2b2ae35, 0x27d4eb2f)
-        ^ Math.imul(salt ^ 0x165667b1, 0x85ebca77);
-    value ^= value >>> 16;
-    value = Math.imul(value, 0x7feb352d);
-    value ^= value >>> 15;
-    value = Math.imul(value, 0x846ca68b);
-    value ^= value >>> 16;
-    return (value >>> 0) / 0x100000000;
-}
-
 function cloneTile(tile: TileInfo): TileInfo {
     return {
         ...tile,
@@ -160,6 +148,9 @@ function assertOptions(options: WorldVegetationGenerationOptions): void {
             throw new RangeError(`${name} must be a non-negative integer`);
         }
     }
+    if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
+        throw new RangeError("treeScale must be a non-negative finite number");
+    }
     for (const point of options.points) {
         if (!Number.isSafeInteger(point?.x) || !Number.isSafeInteger(point?.y)) {
             throw new RangeError("vegetation points must use safe integer coordinates");
@@ -174,16 +165,18 @@ function grassTiles(map: MapInfo, points: readonly Point[]): Point[] {
     }).map(point => ({ x: point.x, y: point.y }));
 }
 
-function buildGrassLod(
+export function buildGrassLod(
     map: MapInfo,
     chunkKey: string,
     tiles: Point[],
     lod: WorldChunkLod,
-    options: WorldVegetationGenerationOptions,
-    waterOptions: WaterClearanceOptions
+    options: Pick<WorldVegetationGenerationOptions, "size" | "grassDensity" | "grassBladeWidth" | "grassBladeHeight" | "grassHeightVariation">,
+    waterOptions: WaterClearanceOptions,
+    coastOptions: CoastClearanceOptions
 ): WorldVegetationGrassLodLayout {
-    const density = Math.max(1, Math.round(options.grassDensity * GRASS_DENSITY[lod]));
-    const capacity = tiles.length * density;
+    const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+    const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
+    const capacity = tiles.length * sampling.tileCapacity;
     const offsets = new Float32Array(capacity * 2);
     const tileOffsets = new Float32Array(capacity * 2);
     const angles = new Float32Array(capacity);
@@ -191,7 +184,6 @@ function buildGrassLod(
     const phases = new Float32Array(capacity);
     const shades = new Float32Array(capacity);
     const ranges = new Uint32Array(tiles.length * 2);
-    const polygon = HEXPolygon({ x: 0, y: 0 }, options.size * 0.8).map(point => [point.x, point.y]);
     const origin = getWorldChunkOrigin(chunkKey, options.size);
     const heightVariation = options.grassHeightVariation ?? 0.4;
     let instance = 0;
@@ -204,43 +196,29 @@ function buildGrassLod(
         const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
         const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
 
-        for (let i = 0; i < density; i += 1) {
-            let lx = 0;
-            let ly = 0;
-            let attempts = 0;
-            let valid = false;
-            while (!valid && attempts < 20) {
-                lx = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * options.size;
-                ly = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * options.size;
-                valid = pointInPolygon(polygon, [lx, ly]) === -1
-                    && !isInTileWater(
-                        lx,
-                        ly,
-                        waterValue,
-                        options.size,
-                        waterOptions,
-                        seaMouthValue,
-                        lakeMouthValue,
-                        lakeNeighborValue
-                    );
-                attempts += 1;
-            }
-            if (!valid) continue;
+        sampling.forTile(tile, (x, z, sx, sz) => {
+            if (stableRandom(sx, sz, 709) >= GRASS_DENSITY[lod]) return;
+            const lx = x - center.x;
+            const ly = z - center.y;
+            if (isInTileWater(lx, ly, waterValue, options.size, waterOptions,
+                seaMouthValue, lakeMouthValue, lakeNeighborValue)) return;
+            if (isInCoastalShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)
+                || isInLakeShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)) return;
 
             offsets[instance * 2] = center.x + lx - origin.x;
             offsets[instance * 2 + 1] = center.y + ly - origin.y;
             tileOffsets[instance * 2] = center.x - origin.x;
             tileOffsets[instance * 2 + 1] = center.y - origin.y;
-            angles[instance] = stableRandom(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
+            angles[instance] = stableRandom(sx, sz, 741) * Math.PI * 2;
             const heightJitter = 1 - heightVariation * 0.5
-                + stableRandom(tile.x, tile.y, i * 97 + 43) * heightVariation;
+                + stableRandom(sx, sz, 743) * heightVariation;
             scales[instance * 2] = options.grassBladeWidth
-                * (0.8 + stableRandom(tile.x, tile.y, i * 97 + 47) * 0.4);
+                * (0.8 + stableRandom(sx, sz, 747) * 0.4);
             scales[instance * 2 + 1] = options.grassBladeHeight * heightJitter;
-            phases[instance] = stableRandom(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
-            shades[instance] = 0.75 + stableRandom(tile.x, tile.y, i * 97 + 59) * 0.35;
+            phases[instance] = stableRandom(sx, sz, 753) * Math.PI * 2;
+            shades[instance] = 0.75 + stableRandom(sx, sz, 759) * 0.35;
             instance += 1;
-        }
+        });
         ranges[tileIndex * 2] = start;
         ranges[tileIndex * 2 + 1] = instance - start;
     });
@@ -262,12 +240,13 @@ function buildGrassLod(
 function buildGrass(
     map: MapInfo,
     options: WorldVegetationGenerationOptions,
-    waterOptions: WaterClearanceOptions
+    waterOptions: WaterClearanceOptions,
+    coastOptions: CoastClearanceOptions
 ): WorldVegetationGrassChunkLayout[] {
     if (options.grassDensity <= 0) return [];
     return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey, tiles]) => ({
         chunkKey,
-        lods: LODS.map(lod => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions))
+        lods: LODS.map(lod => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions))
     }));
 }
 
@@ -290,38 +269,38 @@ function writeTreeMatrix(
     ], offset);
 }
 
-function buildForestLod(
+export function buildForestLod(
     map: MapInfo,
     chunkKey: string,
     tiles: Point[],
     lod: WorldChunkLod,
-    options: WorldVegetationGenerationOptions,
-    polygon: number[][],
-    treeFootprint: number,
+    options: Pick<WorldVegetationGenerationOptions, "size" | "treesPerTile" | "treeScale">,
     waterOptions: WaterClearanceOptions,
     coastOptions: CoastClearanceOptions
 ): WorldVegetationForestLodLayout {
-    const density = Math.max(1, Math.round(options.treesPerTile * FOREST_DENSITY[lod]));
-    const matrices = new Float32Array(tiles.length * density * 16);
+    const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+    // The jitter leaves >= 56% of a cell between trunks, across every tile,
+    // model and source chunk. Scaling trees increases their spacing too.
+    const spacing = Math.max(Math.sqrt(area / options.treesPerTile), options.size * options.treeScale * 0.5);
+    const sampling = new VegetationSampling(map, options.size, spacing, 0.22, 1701);
+    const matrices = new Float32Array(tiles.length * sampling.tileCapacity * 16);
     const ranges = new Uint32Array(tiles.length * 2);
     const origin = getWorldChunkOrigin(chunkKey, options.size);
     let instance = 0;
 
     tiles.forEach((tile, tileIndex) => {
         const center = getHexCenter(tile.x, tile.y, options.size);
-        const placed: Point[] = [];
         const start = instance;
-        let attempts = 0;
         const waterValue = waterEdgeValue(map, tile.x, tile.y);
         const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
         const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
         const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
 
-        while (placed.length < density && attempts < density * 20) {
-            const salt = attempts++ * 17;
-            const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * options.size;
-            const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * options.size;
-            if (pointInPolygon(polygon, [lx, ly]) !== -1) continue;
+        const candidates: { x: number; z: number; sx: number; sz: number; priority: number }[] = [];
+        sampling.forTile(tile, (x, z, sx, sz) => {
+            if (stableRandom(sx, sz, 1709) >= FOREST_DENSITY[lod]) return;
+            const lx = x - center.x;
+            const ly = z - center.y;
             if (isInTileWater(
                 lx,
                 ly,
@@ -331,7 +310,7 @@ function buildForestLod(
                 seaMouthValue,
                 lakeMouthValue,
                 lakeNeighborValue
-            )) continue;
+            )) return;
             if (isInCoastalShore(
                 map,
                 tile.x,
@@ -342,7 +321,7 @@ function buildForestLod(
                 center.y + ly,
                 options.size,
                 coastOptions
-            )) continue;
+            )) return;
             if (isInLakeShore(
                 map,
                 tile.x,
@@ -353,19 +332,21 @@ function buildForestLod(
                 center.y + ly,
                 options.size,
                 coastOptions
-            )) continue;
-            if (placed.some(point => Math.abs(point.x - lx) < treeFootprint
-                && Math.abs(point.y - ly) < treeFootprint)) continue;
-
-            placed.push({ x: lx, y: ly });
-            const scale = options.treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
+            )) return;
+            candidates.push({ x, z, sx, sz, priority: stableRandom(sx, sz, 1709) });
+        });
+        // Effective density takes a prefix on upload. Random priority avoids
+        // directional bands, and makes every coarser LOD a stable subset.
+        candidates.sort((a, b) => a.priority - b.priority);
+        for (const { x, z, sx, sz } of candidates) {
+            const scale = options.treeScale * (0.8 + stableRandom(sx, sz, 1713) * 0.4);
             writeTreeMatrix(
                 matrices,
                 instance,
-                stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2,
+                stableRandom(sx, sz, 1715) * Math.PI * 2,
                 scale,
-                center.x + lx - origin.x,
-                center.y + ly - origin.y
+                x - origin.x,
+                z - origin.y
             );
             instance += 1;
         }
@@ -382,7 +363,7 @@ function buildForest(
     waterOptions: WaterClearanceOptions,
     coastOptions: CoastClearanceOptions
 ): WorldVegetationForestChunkLayout[] {
-    if (options.treesPerTile <= 0) return [];
+    if (options.treesPerTile <= 0 || options.treeScale === 0) return [];
     const tilesByModel = new Map<string, Point[]>();
     for (const point of options.points) {
         const tile = getMapTile(map, point.x, point.y);
@@ -393,8 +374,6 @@ function buildForest(
         tilesByModel.set(modelPath, tiles);
     }
 
-    const treeFootprint = Math.max(1, Math.round(options.size / 10));
-    const polygon = HEXPolygon({ x: 0, y: 0 }, options.size - treeFootprint).map(point => [point.x, point.y]);
     const layouts: WorldVegetationForestChunkLayout[] = [];
     for (const [modelPath, tiles] of tilesByModel) {
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -407,8 +386,6 @@ function buildForest(
                     chunkTiles,
                     lod,
                     options,
-                    polygon,
-                    treeFootprint,
                     waterOptions,
                     coastOptions
                 ))
@@ -435,7 +412,7 @@ export function generateWorldVegetation(options: WorldVegetationGenerationOption
     };
     return {
         version: WORLD_VEGETATION_FORMAT_VERSION,
-        grass: buildGrass(map, options, waterOptions),
+        grass: buildGrass(map, options, waterOptions, coastOptions),
         forest: buildForest(map, options, waterOptions, coastOptions)
     };
 }

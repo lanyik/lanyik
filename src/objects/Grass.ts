@@ -12,9 +12,8 @@ import {
     Group,
     Object3D
 } from "three";
-import pointInPolygon from "robust-point-in-polygon";
 
-import { HEXPolygon, getHexCenter } from "../helpers/helpers";
+import { CoastClearanceOptions } from "../helpers/coast";
 import { forEachMapTile } from "../helpers/mapData";
 import { MapInfo, Point } from "../interfaces";
 import { Land } from "../enums";
@@ -25,7 +24,7 @@ import {
     commitBufferAttributeRanges,
     GpuTileStateChange
 } from "../rendering/BufferUpdateBatch";
-import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
+import { isLakeTile, WaterClearanceOptions } from "../helpers/rivers";
 import { GRASS_VERTEX_SHADER } from "../shaders/grass.vertex";
 import { GRASS_FRAGMENT_SHADER } from "../shaders/grass.fragment";
 import {
@@ -38,6 +37,7 @@ import {
     WorldChunkMetadata
 } from "../helpers/chunks";
 import {
+    buildGrassLod,
     WorldVegetationGrassChunkLayout,
     WorldVegetationGrassLodLayout,
     WorldVegetationLayout
@@ -50,7 +50,7 @@ export interface GrassOptions {
     size: number;
     surface: WorldSurfaceView;
     resourceAccount?: ResourceBudgetAccount;
-    density?: number;         // blades per tile, default 60
+    density?: number;         // average candidates per hex area, default 60
     bladeWidth?: number;      // world units, default size * 0.03
     bladeHeight?: number;     // world units, default size * 0.18
     heightVariation?: number; // 0..1 random per-blade height jitter, default 0.4
@@ -61,13 +61,15 @@ export interface GrassOptions {
     fogDarkenFactor?: number; // color multiplier for Explored fog tiles, default 0.45 - see FogOfWar.ts
 
     //River/lake water clearance (see helpers/rivers.ts's isInTileWater):
-    //blades sit at a flat y=0 baseline, so anything inside the painted water
-    //(including its noise-bent bulges) would stand in the river/lake. Same
+    //Exclude painted water (including its noise-bent bulges). Same
     //fractions-of-tile-radius values as the map's options - keep them in sync.
     riverWidth?: number;     // default 0.28
     riverBankWidth?: number; // default 0.14
     riverCurvature?: number; // default 0.5
     lakeShoreWidth?: number; // default 0.18
+    beachWidth?: number;
+    waterCornerRounding?: number;
+    coastCurvature?: number;
 }
 
 interface TileBladeRange { geometry: InstancedBufferGeometry, start: number, count: number }
@@ -93,6 +95,7 @@ interface ResolvedGrassOptions {
     bladeHeight: number;
     heightVariation: number;
     waterOptions: WaterClearanceOptions;
+    coastOptions: CoastClearanceOptions;
 }
 
 export class GrassSharedResources {
@@ -328,74 +331,14 @@ export class GrassField extends Group {
     ): GrassLodCache {
         const prepared = this.preparedChunks.get(chunkKey)?.lods.find(candidate => candidate.lod === lod);
         if (prepared) return this.buildPreparedChunkGeometry(prepared, origin);
-        const { size, surface, bladeWidth, bladeHeight, heightVariation, waterOptions } = this.options;
-        const densityScale = ([1, 0.38, 0.14] as const)[lod];
-        const density = Math.max(1, Math.round(this.options.density * densityScale));
-        const totalBlades = chunkTiles.length * density;
-        const offsets = new Float32Array(totalBlades * 2);
-        const tileOffsets = new Float32Array(totalBlades * 2);
-        const angles = new Float32Array(totalBlades);
-        const scales = new Float32Array(totalBlades * 2);
-        const phases = new Float32Array(totalBlades);
-        const shades = new Float32Array(totalBlades);
-        const fogStates = new Float32Array(totalBlades);
-        const groundHeights = new Float32Array(totalBlades);
-        const polygon = HEXPolygon({ x: 0, y: 0 }, size * 0.8).map(p => [p.x, p.y]);
-        const pendingRanges: { key: string, start: number, count: number }[] = [];
-        const surfaceWindow = surface.createWindow();
-
-        let instance = 0;
-        for (const tile of chunkTiles) {
-            const key = `${tile.x},${tile.y}`;
-            const center = getHexCenter(tile.x, tile.y, size);
-            const tileStart = instance;
-            const waterValue = waterEdgeValue(this.map, tile.x, tile.y);
-            const seaMouthValue = riverSeaMouthEdgeValue(this.map, tile.x, tile.y);
-            const lakeMouthValue = riverLakeMouthEdgeValue(this.map, tile.x, tile.y);
-            const lakeNeighborValue = lakeNeighborEdgeValue(this.map, tile.x, tile.y);
-
-            for (let i = 0; i < density; i++) {
-                let lx = 0, ly = 0, attempts = 0, valid = false;
-                while (!valid && attempts < 20) {
-                    lx = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * size;
-                    ly = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * size;
-                    valid = pointInPolygon(polygon, [lx, ly]) === -1
-                        && !isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue);
-                    attempts++;
-                }
-                if (!valid) continue;
-
-                offsets[instance * 2] = center.x + lx - origin.x;
-                offsets[instance * 2 + 1] = center.y + ly - origin.y;
-                tileOffsets[instance * 2] = center.x - origin.x;
-                tileOffsets[instance * 2 + 1] = center.y - origin.y;
-                angles[instance] = stableRandom(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
-                const heightJitter = 1 - heightVariation * 0.5
-                    + stableRandom(tile.x, tile.y, i * 97 + 43) * heightVariation;
-                scales[instance * 2] = bladeWidth * (0.8 + stableRandom(tile.x, tile.y, i * 97 + 47) * 0.4);
-                scales[instance * 2 + 1] = bladeHeight * heightJitter;
-                phases[instance] = stableRandom(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
-                shades[instance] = 0.75 + stableRandom(tile.x, tile.y, i * 97 + 59) * 0.35;
-                fogStates[instance] = this.fogStates.get(key) ?? 2;
-                groundHeights[instance] = surfaceWindow.getWorldHeight(center.x + lx, center.y + ly);
-                instance++;
-            }
-
-            pendingRanges.push({ key, start: tileStart, count: instance - tileStart });
-        }
-
-        const geometry = new SharedBaseInstancedBufferGeometry(this.resources.blade, ["position"]);
-        geometry.instanceCount = instance;
-        geometry.setAttribute("offset", new InstancedBufferAttribute(offsets, 2));
-        geometry.setAttribute("tileOffset", new InstancedBufferAttribute(tileOffsets, 2));
-        geometry.setAttribute("angle", new InstancedBufferAttribute(angles, 1));
-        geometry.setAttribute("scale", new InstancedBufferAttribute(scales, 2));
-        geometry.setAttribute("phase", new InstancedBufferAttribute(phases, 1));
-        geometry.setAttribute("shade", new InstancedBufferAttribute(shades, 1));
-        geometry.setAttribute("fogState", new InstancedBufferAttribute(fogStates, 1));
-        geometry.setAttribute("groundHeight", new InstancedBufferAttribute(groundHeights, 1));
-
-        return { geometry, ranges: pendingRanges };
+        const options = this.options;
+        return this.buildPreparedChunkGeometry(buildGrassLod(this.map, chunkKey, chunkTiles, lod, {
+            size: options.size,
+            grassDensity: options.density,
+            grassBladeWidth: options.bladeWidth,
+            grassBladeHeight: options.bladeHeight,
+            grassHeightVariation: options.heightVariation
+        }, options.waterOptions, options.coastOptions), origin);
     }
 
     private buildPreparedChunkGeometry(prepared: WorldVegetationGrassLodLayout, origin: Point): GrassLodCache {
@@ -450,18 +393,6 @@ export class GrassField extends Group {
     }
 }
 
-function stableRandom(x: number, y: number, salt: number): number {
-    let value = Math.imul(x ^ 0x9e3779b9, 0x85ebca6b)
-        ^ Math.imul(y ^ 0xc2b2ae35, 0x27d4eb2f)
-        ^ Math.imul(salt ^ 0x165667b1, 0x85ebca77);
-    value ^= value >>> 16;
-    value = Math.imul(value, 0x7feb352d);
-    value ^= value >>> 15;
-    value = Math.imul(value, 0x846ca68b);
-    value ^= value >>> 16;
-    return (value >>> 0) / 0x100000000;
-}
-
 //A single tapered blade authored in [-0.5..0.5] width x [0..1] height (local,
 //unscaled) - per-instance `scale` stretches it to the actual blade size, so
 //the geometry itself is built once and reused for every instance. The mid-
@@ -500,10 +431,7 @@ export function createGrassField(
     const bladeHeight = options.bladeHeight ?? size * 0.18;
     const heightVariation = options.heightVariation ?? 0.4;
 
-    //Lake tiles are skipped outright: with the waterline's noise wobble the
-    //remaining dry shore rim is too thin to reliably place blades in (and the
-    //10-attempt rejection fallback below would end up dropping them in the
-    //water). River tiles keep their grass - the banks are wide enough.
+    //Lake shore rims are too narrow for grass; river banks remain eligible.
     const tiles: { x: number, y: number }[] = [];
     const considerTile = (x: number, y: number): void => {
         const tile = getMapTile(map, x, y);
@@ -523,6 +451,12 @@ export function createGrassField(
         lakeShoreWidth: options.lakeShoreWidth ?? 0.18
     };
 
+    const coastOptions: CoastClearanceOptions = {
+        beachWidth: options.beachWidth ?? 0.35,
+        lakeShoreWidth: options.lakeShoreWidth ?? 0.18,
+        waterCornerRounding: options.waterCornerRounding ?? 0.4,
+        coastCurvature: options.coastCurvature ?? 0.5
+    };
     const resources = sharedResources ?? new GrassSharedResources(options);
 
     const chunks = new Map<string, GrassChunkRecord>();
@@ -562,6 +496,7 @@ export function createGrassField(
         bladeWidth,
         bladeHeight,
         heightVariation,
-        waterOptions
+        waterOptions,
+        coastOptions
     }, new Map(preparedLayout?.grass.map(chunk => [chunk.chunkKey, chunk]) ?? []), !sharedResources, options.resourceAccount);
 }

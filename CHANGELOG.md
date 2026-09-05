@@ -80,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Grass and trees now share deterministic world-space layouts between static
+  maps and Workers. Grass reaches all six tile edges; LODs preserve root
+  positions. Tree size defaults to 1.6, has a demo control, and governs spacing
+  across tiles, species and chunk seams, with model-derived culling bounds.
+- Hover and selection rims follow terrain through a bounded projection cache.
+  Mouse rays intersect the CPU terrain surface, keeping mountain selection and
+  height edits aligned with the displayed marker.
+
 - Worker protocol v8 adds cooperative overview cancellation with acknowledgement,
   preserving the Worker and completed river pages for the next request. Queue
   weights include logical sampling area; generator and descriptor versions stay

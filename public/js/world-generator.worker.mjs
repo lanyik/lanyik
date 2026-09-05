@@ -1,703 +1,3 @@
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJS = (cb, mod) => function __require() {
-  try {
-    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-  } catch (e) {
-    throw mod = 0, e;
-  }
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
-
-// node_modules/two-product/two-product.js
-var require_two_product = __commonJS({
-  "node_modules/two-product/two-product.js"(exports, module) {
-    "use strict";
-    module.exports = twoProduct;
-    var SPLITTER = +(Math.pow(2, 27) + 1);
-    function twoProduct(a, b, result) {
-      var x = a * b;
-      var c = SPLITTER * a;
-      var abig = c - a;
-      var ahi = c - abig;
-      var alo = a - ahi;
-      var d = SPLITTER * b;
-      var bbig = d - b;
-      var bhi = d - bbig;
-      var blo = b - bhi;
-      var err1 = x - ahi * bhi;
-      var err2 = err1 - alo * bhi;
-      var err3 = err2 - ahi * blo;
-      var y = alo * blo - err3;
-      if (result) {
-        result[0] = y;
-        result[1] = x;
-        return result;
-      }
-      return [y, x];
-    }
-  }
-});
-
-// node_modules/robust-sum/robust-sum.js
-var require_robust_sum = __commonJS({
-  "node_modules/robust-sum/robust-sum.js"(exports, module) {
-    "use strict";
-    module.exports = linearExpansionSum;
-    function scalarScalar(a, b) {
-      var x = a + b;
-      var bv = x - a;
-      var av = x - bv;
-      var br = b - bv;
-      var ar = a - av;
-      var y = ar + br;
-      if (y) {
-        return [y, x];
-      }
-      return [x];
-    }
-    function linearExpansionSum(e, f) {
-      var ne = e.length | 0;
-      var nf = f.length | 0;
-      if (ne === 1 && nf === 1) {
-        return scalarScalar(e[0], f[0]);
-      }
-      var n = ne + nf;
-      var g = new Array(n);
-      var count = 0;
-      var eptr = 0;
-      var fptr = 0;
-      var abs = Math.abs;
-      var ei = e[eptr];
-      var ea = abs(ei);
-      var fi = f[fptr];
-      var fa = abs(fi);
-      var a, b;
-      if (ea < fa) {
-        b = ei;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-          ea = abs(ei);
-        }
-      } else {
-        b = fi;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = f[fptr];
-          fa = abs(fi);
-        }
-      }
-      if (eptr < ne && ea < fa || fptr >= nf) {
-        a = ei;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-          ea = abs(ei);
-        }
-      } else {
-        a = fi;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = f[fptr];
-          fa = abs(fi);
-        }
-      }
-      var x = a + b;
-      var bv = x - a;
-      var y = b - bv;
-      var q0 = y;
-      var q1 = x;
-      var _x, _bv, _av, _br, _ar;
-      while (eptr < ne && fptr < nf) {
-        if (ea < fa) {
-          a = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          a = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = f[fptr];
-            fa = abs(fi);
-          }
-        }
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-      }
-      while (eptr < ne) {
-        a = ei;
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-        }
-      }
-      while (fptr < nf) {
-        a = fi;
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = f[fptr];
-        }
-      }
-      if (q0) {
-        g[count++] = q0;
-      }
-      if (q1) {
-        g[count++] = q1;
-      }
-      if (!count) {
-        g[count++] = 0;
-      }
-      g.length = count;
-      return g;
-    }
-  }
-});
-
-// node_modules/two-sum/two-sum.js
-var require_two_sum = __commonJS({
-  "node_modules/two-sum/two-sum.js"(exports, module) {
-    "use strict";
-    module.exports = fastTwoSum;
-    function fastTwoSum(a, b, result) {
-      var x = a + b;
-      var bv = x - a;
-      var av = x - bv;
-      var br = b - bv;
-      var ar = a - av;
-      if (result) {
-        result[0] = ar + br;
-        result[1] = x;
-        return result;
-      }
-      return [ar + br, x];
-    }
-  }
-});
-
-// node_modules/robust-scale/robust-scale.js
-var require_robust_scale = __commonJS({
-  "node_modules/robust-scale/robust-scale.js"(exports, module) {
-    "use strict";
-    var twoProduct = require_two_product();
-    var twoSum = require_two_sum();
-    module.exports = scaleLinearExpansion;
-    function scaleLinearExpansion(e, scale) {
-      var n = e.length;
-      if (n === 1) {
-        var ts = twoProduct(e[0], scale);
-        if (ts[0]) {
-          return ts;
-        }
-        return [ts[1]];
-      }
-      var g = new Array(2 * n);
-      var q = [0.1, 0.1];
-      var t = [0.1, 0.1];
-      var count = 0;
-      twoProduct(e[0], scale, q);
-      if (q[0]) {
-        g[count++] = q[0];
-      }
-      for (var i = 1; i < n; ++i) {
-        twoProduct(e[i], scale, t);
-        var pq = q[1];
-        twoSum(pq, t[0], q);
-        if (q[0]) {
-          g[count++] = q[0];
-        }
-        var a = t[1];
-        var b = q[1];
-        var x = a + b;
-        var bv = x - a;
-        var y = b - bv;
-        q[1] = x;
-        if (y) {
-          g[count++] = y;
-        }
-      }
-      if (q[1]) {
-        g[count++] = q[1];
-      }
-      if (count === 0) {
-        g[count++] = 0;
-      }
-      g.length = count;
-      return g;
-    }
-  }
-});
-
-// node_modules/robust-subtract/robust-diff.js
-var require_robust_diff = __commonJS({
-  "node_modules/robust-subtract/robust-diff.js"(exports, module) {
-    "use strict";
-    module.exports = robustSubtract;
-    function scalarScalar(a, b) {
-      var x = a + b;
-      var bv = x - a;
-      var av = x - bv;
-      var br = b - bv;
-      var ar = a - av;
-      var y = ar + br;
-      if (y) {
-        return [y, x];
-      }
-      return [x];
-    }
-    function robustSubtract(e, f) {
-      var ne = e.length | 0;
-      var nf = f.length | 0;
-      if (ne === 1 && nf === 1) {
-        return scalarScalar(e[0], -f[0]);
-      }
-      var n = ne + nf;
-      var g = new Array(n);
-      var count = 0;
-      var eptr = 0;
-      var fptr = 0;
-      var abs = Math.abs;
-      var ei = e[eptr];
-      var ea = abs(ei);
-      var fi = -f[fptr];
-      var fa = abs(fi);
-      var a, b;
-      if (ea < fa) {
-        b = ei;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-          ea = abs(ei);
-        }
-      } else {
-        b = fi;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = -f[fptr];
-          fa = abs(fi);
-        }
-      }
-      if (eptr < ne && ea < fa || fptr >= nf) {
-        a = ei;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-          ea = abs(ei);
-        }
-      } else {
-        a = fi;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = -f[fptr];
-          fa = abs(fi);
-        }
-      }
-      var x = a + b;
-      var bv = x - a;
-      var y = b - bv;
-      var q0 = y;
-      var q1 = x;
-      var _x, _bv, _av, _br, _ar;
-      while (eptr < ne && fptr < nf) {
-        if (ea < fa) {
-          a = ei;
-          eptr += 1;
-          if (eptr < ne) {
-            ei = e[eptr];
-            ea = abs(ei);
-          }
-        } else {
-          a = fi;
-          fptr += 1;
-          if (fptr < nf) {
-            fi = -f[fptr];
-            fa = abs(fi);
-          }
-        }
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-      }
-      while (eptr < ne) {
-        a = ei;
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-        eptr += 1;
-        if (eptr < ne) {
-          ei = e[eptr];
-        }
-      }
-      while (fptr < nf) {
-        a = fi;
-        b = q0;
-        x = a + b;
-        bv = x - a;
-        y = b - bv;
-        if (y) {
-          g[count++] = y;
-        }
-        _x = q1 + x;
-        _bv = _x - q1;
-        _av = _x - _bv;
-        _br = x - _bv;
-        _ar = q1 - _av;
-        q0 = _ar + _br;
-        q1 = _x;
-        fptr += 1;
-        if (fptr < nf) {
-          fi = -f[fptr];
-        }
-      }
-      if (q0) {
-        g[count++] = q0;
-      }
-      if (q1) {
-        g[count++] = q1;
-      }
-      if (!count) {
-        g[count++] = 0;
-      }
-      g.length = count;
-      return g;
-    }
-  }
-});
-
-// node_modules/robust-orientation/orientation.js
-var require_orientation = __commonJS({
-  "node_modules/robust-orientation/orientation.js"(exports, module) {
-    "use strict";
-    var twoProduct = require_two_product();
-    var robustSum = require_robust_sum();
-    var robustScale = require_robust_scale();
-    var robustSubtract = require_robust_diff();
-    var NUM_EXPAND = 5;
-    var EPSILON = 11102230246251565e-32;
-    var ERRBOUND3 = (3 + 16 * EPSILON) * EPSILON;
-    var ERRBOUND4 = (7 + 56 * EPSILON) * EPSILON;
-    function orientation_3(sum, prod, scale, sub) {
-      return function orientation3Exact2(m0, m1, m2) {
-        var p = sum(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])));
-        var n = sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0]));
-        var d = sub(p, n);
-        return d[d.length - 1];
-      };
-    }
-    function orientation_4(sum, prod, scale, sub) {
-      return function orientation4Exact2(m0, m1, m2, m3) {
-        var p = sum(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))));
-        var n = sum(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))));
-        var d = sub(p, n);
-        return d[d.length - 1];
-      };
-    }
-    function orientation_5(sum, prod, scale, sub) {
-      return function orientation5Exact(m0, m1, m2, m3, m4) {
-        var p = sum(sum(sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m2[2]), sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), -m3[2]), scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m4[2]))), m1[3]), sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m3[2]), scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m4[2]))), -m2[3]), scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m4[2]))), m3[3]))), sum(scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), -m4[3]), sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m3[2]), scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m3[2]), scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), m4[2]))), -m1[3])))), sum(sum(scale(sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m4[2]))), m3[3]), sum(scale(sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))), -m4[3]), scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m3[2]))), m0[3]))), sum(scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), -m1[3]), sum(scale(sum(scale(sum(prod(m1[1], m3[0]), prod(-m3[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m3[2]))), m2[3]), scale(sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))), -m3[3])))));
-        var n = sum(sum(sum(scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m2[2]), sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), -m3[2]), scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m3[1], m4[0]), prod(-m4[1], m3[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m3[2]), scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), m4[2]))), -m2[3])), sum(scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m4[2]))), m3[3]), scale(sum(scale(sum(prod(m2[1], m3[0]), prod(-m3[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m3[0]), prod(-m3[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m3[2]))), -m4[3]))), sum(sum(scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m1[2]), sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), -m2[2]), scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m4[2]))), m0[3]), scale(sum(scale(sum(prod(m2[1], m4[0]), prod(-m4[1], m2[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m2[2]), scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), m4[2]))), -m1[3])), sum(scale(sum(scale(sum(prod(m1[1], m4[0]), prod(-m4[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m4[0]), prod(-m4[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m4[2]))), m2[3]), scale(sum(scale(sum(prod(m1[1], m2[0]), prod(-m2[1], m1[0])), m0[2]), sum(scale(sum(prod(m0[1], m2[0]), prod(-m2[1], m0[0])), -m1[2]), scale(sum(prod(m0[1], m1[0]), prod(-m1[1], m0[0])), m2[2]))), -m4[3]))));
-        var d = sub(p, n);
-        return d[d.length - 1];
-      };
-    }
-    function orientation(n) {
-      var fn = n === 3 ? orientation_3 : n === 4 ? orientation_4 : orientation_5;
-      return fn(robustSum, twoProduct, robustScale, robustSubtract);
-    }
-    var orientation3Exact = orientation(3);
-    var orientation4Exact = orientation(4);
-    var CACHED = [
-      function orientation0() {
-        return 0;
-      },
-      function orientation1() {
-        return 0;
-      },
-      function orientation2(a, b) {
-        return b[0] - a[0];
-      },
-      function orientation3(a, b, c) {
-        var l = (a[1] - c[1]) * (b[0] - c[0]);
-        var r = (a[0] - c[0]) * (b[1] - c[1]);
-        var det = l - r;
-        var s;
-        if (l > 0) {
-          if (r <= 0) {
-            return det;
-          } else {
-            s = l + r;
-          }
-        } else if (l < 0) {
-          if (r >= 0) {
-            return det;
-          } else {
-            s = -(l + r);
-          }
-        } else {
-          return det;
-        }
-        var tol = ERRBOUND3 * s;
-        if (det >= tol || det <= -tol) {
-          return det;
-        }
-        return orientation3Exact(a, b, c);
-      },
-      function orientation4(a, b, c, d) {
-        var adx = a[0] - d[0];
-        var bdx = b[0] - d[0];
-        var cdx = c[0] - d[0];
-        var ady = a[1] - d[1];
-        var bdy = b[1] - d[1];
-        var cdy = c[1] - d[1];
-        var adz = a[2] - d[2];
-        var bdz = b[2] - d[2];
-        var cdz = c[2] - d[2];
-        var bdxcdy = bdx * cdy;
-        var cdxbdy = cdx * bdy;
-        var cdxady = cdx * ady;
-        var adxcdy = adx * cdy;
-        var adxbdy = adx * bdy;
-        var bdxady = bdx * ady;
-        var det = adz * (bdxcdy - cdxbdy) + bdz * (cdxady - adxcdy) + cdz * (adxbdy - bdxady);
-        var permanent = (Math.abs(bdxcdy) + Math.abs(cdxbdy)) * Math.abs(adz) + (Math.abs(cdxady) + Math.abs(adxcdy)) * Math.abs(bdz) + (Math.abs(adxbdy) + Math.abs(bdxady)) * Math.abs(cdz);
-        var tol = ERRBOUND4 * permanent;
-        if (det > tol || -det > tol) {
-          return det;
-        }
-        return orientation4Exact(a, b, c, d);
-      }
-    ];
-    function slowOrient(args) {
-      var proc2 = CACHED[args.length];
-      if (!proc2) {
-        proc2 = CACHED[args.length] = orientation(args.length);
-      }
-      return proc2.apply(void 0, args);
-    }
-    function proc(slow, o0, o1, o2, o3, o4, o5) {
-      return function getOrientation(a0, a1, a2, a3, a4) {
-        switch (arguments.length) {
-          case 0:
-          case 1:
-            return 0;
-          case 2:
-            return o2(a0, a1);
-          case 3:
-            return o3(a0, a1, a2);
-          case 4:
-            return o4(a0, a1, a2, a3);
-          case 5:
-            return o5(a0, a1, a2, a3, a4);
-        }
-        var s = new Array(arguments.length);
-        for (var i = 0; i < arguments.length; ++i) {
-          s[i] = arguments[i];
-        }
-        return slow(s);
-      };
-    }
-    function generateOrientationProc() {
-      while (CACHED.length <= NUM_EXPAND) {
-        CACHED.push(orientation(CACHED.length));
-      }
-      module.exports = proc.apply(void 0, [slowOrient].concat(CACHED));
-      for (var i = 0; i <= NUM_EXPAND; ++i) {
-        module.exports[i] = CACHED[i];
-      }
-    }
-    generateOrientationProc();
-  }
-});
-
-// node_modules/robust-point-in-polygon/robust-pnp.js
-var require_robust_pnp = __commonJS({
-  "node_modules/robust-point-in-polygon/robust-pnp.js"(exports, module) {
-    "use strict";
-    module.exports = robustPointInPolygon;
-    var orient = require_orientation();
-    function robustPointInPolygon(vs, point) {
-      var x = point[0];
-      var y = point[1];
-      var n = vs.length;
-      var inside = 1;
-      var lim = n;
-      for (var i = 0, j = n - 1; i < lim; j = i++) {
-        var a = vs[i];
-        var b = vs[j];
-        var yi = a[1];
-        var yj = b[1];
-        if (yj < yi) {
-          if (yj < y && y < yi) {
-            var s = orient(a, b, point);
-            if (s === 0) {
-              return 0;
-            } else {
-              inside ^= 0 < s | 0;
-            }
-          } else if (y === yi) {
-            var c = vs[(i + 1) % n];
-            var yk = c[1];
-            if (yi < yk) {
-              var s = orient(a, b, point);
-              if (s === 0) {
-                return 0;
-              } else {
-                inside ^= 0 < s | 0;
-              }
-            }
-          }
-        } else if (yi < yj) {
-          if (yi < y && y < yj) {
-            var s = orient(a, b, point);
-            if (s === 0) {
-              return 0;
-            } else {
-              inside ^= s < 0 | 0;
-            }
-          } else if (y === yi) {
-            var c = vs[(i + 1) % n];
-            var yk = c[1];
-            if (yk < yi) {
-              var s = orient(a, b, point);
-              if (s === 0) {
-                return 0;
-              } else {
-                inside ^= s < 0 | 0;
-              }
-            }
-          }
-        } else if (y === yi) {
-          var x0 = Math.min(a[0], b[0]);
-          var x1 = Math.max(a[0], b[0]);
-          if (i === 0) {
-            while (j > 0) {
-              var k = (j + n - 1) % n;
-              var p = vs[k];
-              if (p[1] !== y) {
-                break;
-              }
-              var px = p[0];
-              x0 = Math.min(x0, px);
-              x1 = Math.max(x1, px);
-              j = k;
-            }
-            if (j === 0) {
-              if (x0 <= x && x <= x1) {
-                return 0;
-              }
-              return 1;
-            }
-            lim = j + 1;
-          }
-          var y0 = vs[(j + n - 1) % n][1];
-          while (i + 1 < lim) {
-            var p = vs[i + 1];
-            if (p[1] !== y) {
-              break;
-            }
-            var px = p[0];
-            x0 = Math.min(x0, px);
-            x1 = Math.max(x1, px);
-            i += 1;
-          }
-          if (x0 <= x && x <= x1) {
-            return 0;
-          }
-          var y1 = vs[(i + 1) % n][1];
-          if (x < x0 && y0 < y !== y1 < y) {
-            inside ^= 1;
-          }
-        }
-      }
-      return 2 * inside - 1;
-    }
-  }
-});
-
 // src/helpers/neighbors.ts
 var NEIGHBOR_DIRECTIONS = ["NE", "N", "NW", "SW", "S", "SE"];
 function getNeighborCoords(x, y, direction) {
@@ -2611,9 +1911,6 @@ function generateWorldChunkWithResolver(options, resolver, resolvedChunkSize) {
   };
 }
 
-// src/world/generateVegetation.ts
-var import_robust_point_in_polygon = __toESM(require_robust_pnp(), 1);
-
 // src/helpers/topology.ts
 function positiveModulo4(value, modulus) {
   if (!Number.isFinite(value) || !Number.isFinite(modulus) || modulus <= 0) {
@@ -2767,21 +2064,6 @@ function isInLakeShore(map, tileX, tileY, localX, localY, worldX, worldY, size, 
 }
 
 // src/helpers/helpers.ts
-function pointy_hex_corner(center, size, i) {
-  let angle_deg = 60 * i;
-  let angle_rad = Math.PI / 180 * angle_deg;
-  return {
-    "x": Math.round(center.x + size * Math.cos(angle_rad)),
-    "y": Math.round(center.y + size * Math.sin(angle_rad))
-  };
-}
-function HEXPolygon(center = { x: 0, y: 0 }, size = 1) {
-  let arrPoints = [];
-  for (let i = 1; i <= 6; i++) {
-    arrPoints.push(pointy_hex_corner(center, size, i));
-  }
-  return arrPoints;
-}
 function getHexCenter(x, y, size) {
   let space = 0;
   if (x % 2 === 0) {
@@ -2958,12 +2240,8 @@ function isInTileWater(lx, ly, value, size, options, riverSeaMouthValue = 0, riv
   return riverChannelDistance(lx, ly, value, size) < channelClearance || isInRiverMouthWater(lx, ly, riverSeaMouthValue, size, options) || isInRiverMouthWater(lx, ly, riverLakeMouthValue, size, options);
 }
 
-// src/world/generateVegetation.ts
-var WORLD_VEGETATION_FORMAT_VERSION = 1;
-var LODS = [0, 1, 2];
-var GRASS_DENSITY = [1, 0.38, 0.14];
-var FOREST_DENSITY = [1, 0.5, 0.2];
-function stableRandom(x, y, salt) {
+// src/world/VegetationSampling.ts
+function vegetationRandom(x, y, salt) {
   let value = Math.imul(x ^ 2654435769, 2246822507) ^ Math.imul(y ^ 3266489909, 668265263) ^ Math.imul(salt ^ 374761393, 2246822519);
   value ^= value >>> 16;
   value = Math.imul(value, 2146121005);
@@ -2972,6 +2250,44 @@ function stableRandom(x, y, salt) {
   value ^= value >>> 16;
   return (value >>> 0) / 4294967296;
 }
+var VegetationSampling = class {
+  constructor(map, size, spacing, jitter, salt) {
+    this.size = size;
+    this.jitter = jitter;
+    this.salt = salt;
+    const periodX = map.w * size * 1.5;
+    const periodZ = map.h * size * Math.sqrt(3);
+    this.columns = map.wrapX ? Math.max(1, Math.floor(periodX / spacing)) : 0;
+    this.rows = map.wrapY ? Math.max(1, Math.floor(periodZ / spacing)) : 0;
+    this.stepX = this.columns ? periodX / this.columns : spacing;
+    this.stepZ = this.rows ? periodZ / this.rows : spacing;
+    this.tileCapacity = (Math.ceil(size * 2 / this.stepX) + 1) * (Math.ceil(size * Math.sqrt(3) / this.stepZ) + 1);
+  }
+  forTile(tile, visit) {
+    const center = getHexCenter(tile.x, tile.y, this.size);
+    const apothem = this.size * Math.sqrt(3) / 2;
+    const minX = Math.floor((center.x - this.size) / this.stepX);
+    const maxX = Math.floor((center.x + this.size) / this.stepX);
+    const minZ = Math.floor((center.y - apothem) / this.stepZ);
+    const maxZ = Math.floor((center.y + apothem) / this.stepZ);
+    for (let cx = minX; cx <= maxX; cx += 1) for (let cz = minZ; cz <= maxZ; cz += 1) {
+      const sx = this.columns ? positiveModulo4(cx, this.columns) : cx;
+      const sz = this.rows ? positiveModulo4(cz, this.rows) : cz;
+      const x = (cx + 0.5 + (vegetationRandom(sx, sz, this.salt) * 2 - 1) * this.jitter) * this.stepX;
+      const z = (cz + 0.5 + (vegetationRandom(sx, sz, this.salt + 1) * 2 - 1) * this.jitter) * this.stepZ;
+      const lx = Math.abs(x - center.x);
+      const lz = Math.abs(z - center.y);
+      if (lz >= apothem || Math.sqrt(3) * lx + lz >= Math.sqrt(3) * this.size) continue;
+      visit(x, z, sx, sz);
+    }
+  }
+};
+
+// src/world/generateVegetation.ts
+var WORLD_VEGETATION_FORMAT_VERSION = 1;
+var LODS = [0, 1, 2];
+var GRASS_DENSITY = [1, 0.38, 0.14];
+var FOREST_DENSITY = [1, 0.5, 0.2];
 function assertOptions(options) {
   if (!options || typeof options !== "object" || !options.map || !Array.isArray(options.points)) {
     throw new TypeError("vegetation generation options are invalid");
@@ -2987,6 +2303,9 @@ function assertOptions(options) {
       throw new RangeError(`${name} must be a non-negative integer`);
     }
   }
+  if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
+    throw new RangeError("treeScale must be a non-negative finite number");
+  }
   for (const point of options.points) {
     if (!Number.isSafeInteger(point?.x) || !Number.isSafeInteger(point?.y)) {
       throw new RangeError("vegetation points must use safe integer coordinates");
@@ -2999,9 +2318,10 @@ function grassTiles(map, points) {
     return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
   }).map((point) => ({ x: point.x, y: point.y }));
 }
-function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
-  const density = Math.max(1, Math.round(options.grassDensity * GRASS_DENSITY[lod]));
-  const capacity = tiles.length * density;
+function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {
+  const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+  const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
+  const capacity = tiles.length * sampling.tileCapacity;
   const offsets = new Float32Array(capacity * 2);
   const tileOffsets = new Float32Array(capacity * 2);
   const angles = new Float32Array(capacity);
@@ -3009,7 +2329,6 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
   const phases = new Float32Array(capacity);
   const shades = new Float32Array(capacity);
   const ranges = new Uint32Array(tiles.length * 2);
-  const polygon = HEXPolygon({ x: 0, y: 0 }, options.size * 0.8).map((point) => [point.x, point.y]);
   const origin = getWorldChunkOrigin(chunkKey, options.size);
   const heightVariation = options.grassHeightVariation ?? 0.4;
   let instance = 0;
@@ -3020,39 +2339,33 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
     const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
     const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
     const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-    for (let i = 0; i < density; i += 1) {
-      let lx = 0;
-      let ly = 0;
-      let attempts = 0;
-      let valid = false;
-      while (!valid && attempts < 20) {
-        lx = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2) * 2 - 1) * options.size;
-        ly = (stableRandom(tile.x, tile.y, i * 97 + attempts * 2 + 1) * 2 - 1) * options.size;
-        valid = (0, import_robust_point_in_polygon.default)(polygon, [lx, ly]) === -1 && !isInTileWater(
-          lx,
-          ly,
-          waterValue,
-          options.size,
-          waterOptions,
-          seaMouthValue,
-          lakeMouthValue,
-          lakeNeighborValue
-        );
-        attempts += 1;
-      }
-      if (!valid) continue;
+    sampling.forTile(tile, (x, z, sx, sz) => {
+      if (vegetationRandom(sx, sz, 709) >= GRASS_DENSITY[lod]) return;
+      const lx = x - center.x;
+      const ly = z - center.y;
+      if (isInTileWater(
+        lx,
+        ly,
+        waterValue,
+        options.size,
+        waterOptions,
+        seaMouthValue,
+        lakeMouthValue,
+        lakeNeighborValue
+      )) return;
+      if (isInCoastalShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions) || isInLakeShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)) return;
       offsets[instance * 2] = center.x + lx - origin.x;
       offsets[instance * 2 + 1] = center.y + ly - origin.y;
       tileOffsets[instance * 2] = center.x - origin.x;
       tileOffsets[instance * 2 + 1] = center.y - origin.y;
-      angles[instance] = stableRandom(tile.x, tile.y, i * 97 + 41) * Math.PI * 2;
-      const heightJitter = 1 - heightVariation * 0.5 + stableRandom(tile.x, tile.y, i * 97 + 43) * heightVariation;
-      scales[instance * 2] = options.grassBladeWidth * (0.8 + stableRandom(tile.x, tile.y, i * 97 + 47) * 0.4);
+      angles[instance] = vegetationRandom(sx, sz, 741) * Math.PI * 2;
+      const heightJitter = 1 - heightVariation * 0.5 + vegetationRandom(sx, sz, 743) * heightVariation;
+      scales[instance * 2] = options.grassBladeWidth * (0.8 + vegetationRandom(sx, sz, 747) * 0.4);
       scales[instance * 2 + 1] = options.grassBladeHeight * heightJitter;
-      phases[instance] = stableRandom(tile.x, tile.y, i * 97 + 53) * Math.PI * 2;
-      shades[instance] = 0.75 + stableRandom(tile.x, tile.y, i * 97 + 59) * 0.35;
+      phases[instance] = vegetationRandom(sx, sz, 753) * Math.PI * 2;
+      shades[instance] = 0.75 + vegetationRandom(sx, sz, 759) * 0.35;
       instance += 1;
-    }
+    });
     ranges[tileIndex * 2] = start;
     ranges[tileIndex * 2 + 1] = instance - start;
   });
@@ -3069,11 +2382,11 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions) {
     shades: shades.slice(0, instance)
   };
 }
-function buildGrass(map, options, waterOptions) {
+function buildGrass(map, options, waterOptions, coastOptions) {
   if (options.grassDensity <= 0) return [];
   return [...groupTilesByWorldChunk(grassTiles(map, options.points))].map(([chunkKey, tiles]) => ({
     chunkKey,
-    lods: LODS.map((lod) => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions))
+    lods: LODS.map((lod) => buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions))
   }));
 }
 function writeTreeMatrix(target, index, angle, scale, x, z) {
@@ -3099,26 +2412,26 @@ function writeTreeMatrix(target, index, angle, scale, x, z) {
     1
   ], offset);
 }
-function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootprint, waterOptions, coastOptions) {
-  const density = Math.max(1, Math.round(options.treesPerTile * FOREST_DENSITY[lod]));
-  const matrices = new Float32Array(tiles.length * density * 16);
+function buildForestLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {
+  const area = options.size * options.size * 3 * Math.sqrt(3) / 2;
+  const spacing = Math.max(Math.sqrt(area / options.treesPerTile), options.size * options.treeScale * 0.5);
+  const sampling = new VegetationSampling(map, options.size, spacing, 0.22, 1701);
+  const matrices = new Float32Array(tiles.length * sampling.tileCapacity * 16);
   const ranges = new Uint32Array(tiles.length * 2);
   const origin = getWorldChunkOrigin(chunkKey, options.size);
   let instance = 0;
   tiles.forEach((tile, tileIndex) => {
     const center = getHexCenter(tile.x, tile.y, options.size);
-    const placed = [];
     const start = instance;
-    let attempts = 0;
     const waterValue = waterEdgeValue(map, tile.x, tile.y);
     const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
     const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
     const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-    while (placed.length < density && attempts < density * 20) {
-      const salt = attempts++ * 17;
-      const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * options.size;
-      const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * options.size;
-      if ((0, import_robust_point_in_polygon.default)(polygon, [lx, ly]) !== -1) continue;
+    const candidates = [];
+    sampling.forTile(tile, (x, z, sx, sz) => {
+      if (vegetationRandom(sx, sz, 1709) >= FOREST_DENSITY[lod]) return;
+      const lx = x - center.x;
+      const ly = z - center.y;
       if (isInTileWater(
         lx,
         ly,
@@ -3128,7 +2441,7 @@ function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootpri
         seaMouthValue,
         lakeMouthValue,
         lakeNeighborValue
-      )) continue;
+      )) return;
       if (isInCoastalShore(
         map,
         tile.x,
@@ -3139,7 +2452,7 @@ function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootpri
         center.y + ly,
         options.size,
         coastOptions
-      )) continue;
+      )) return;
       if (isInLakeShore(
         map,
         tile.x,
@@ -3150,17 +2463,19 @@ function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootpri
         center.y + ly,
         options.size,
         coastOptions
-      )) continue;
-      if (placed.some((point) => Math.abs(point.x - lx) < treeFootprint && Math.abs(point.y - ly) < treeFootprint)) continue;
-      placed.push({ x: lx, y: ly });
-      const scale = options.treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
+      )) return;
+      candidates.push({ x, z, sx, sz, priority: vegetationRandom(sx, sz, 1709) });
+    });
+    candidates.sort((a, b) => a.priority - b.priority);
+    for (const { x, z, sx, sz } of candidates) {
+      const scale = options.treeScale * (0.8 + vegetationRandom(sx, sz, 1713) * 0.4);
       writeTreeMatrix(
         matrices,
         instance,
-        stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2,
+        vegetationRandom(sx, sz, 1715) * Math.PI * 2,
         scale,
-        center.x + lx - origin.x,
-        center.y + ly - origin.y
+        x - origin.x,
+        z - origin.y
       );
       instance += 1;
     }
@@ -3170,7 +2485,7 @@ function buildForestLod(map, chunkKey, tiles, lod, options, polygon, treeFootpri
   return { lod, instanceCount: instance, tiles, ranges, matrices: matrices.slice(0, instance * 16) };
 }
 function buildForest(map, options, waterOptions, coastOptions) {
-  if (options.treesPerTile <= 0) return [];
+  if (options.treesPerTile <= 0 || options.treeScale === 0) return [];
   const tilesByModel = /* @__PURE__ */ new Map();
   for (const point of options.points) {
     const tile = getMapTile(map, point.x, point.y);
@@ -3180,8 +2495,6 @@ function buildForest(map, options, waterOptions, coastOptions) {
     tiles.push({ x: point.x, y: point.y });
     tilesByModel.set(modelPath, tiles);
   }
-  const treeFootprint = Math.max(1, Math.round(options.size / 10));
-  const polygon = HEXPolygon({ x: 0, y: 0 }, options.size - treeFootprint).map((point) => [point.x, point.y]);
   const layouts = [];
   for (const [modelPath, tiles] of tilesByModel) {
     for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -3194,8 +2507,6 @@ function buildForest(map, options, waterOptions, coastOptions) {
           chunkTiles,
           lod,
           options,
-          polygon,
-          treeFootprint,
           waterOptions,
           coastOptions
         ))
@@ -3221,7 +2532,7 @@ function generateWorldVegetation(options) {
   };
   return {
     version: WORLD_VEGETATION_FORMAT_VERSION,
-    grass: buildGrass(map, options, waterOptions),
+    grass: buildGrass(map, options, waterOptions, coastOptions),
     forest: buildForest(map, options, waterOptions, coastOptions)
   };
 }

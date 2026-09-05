@@ -99,9 +99,6 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.11"
   },
-  "dependencies": {
-    "robust-point-in-polygon": "^1.0.3"
-  },
   "overrides": {
     "esbuild": "^0.28.2"
   }

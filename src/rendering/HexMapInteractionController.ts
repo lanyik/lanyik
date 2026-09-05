@@ -1,8 +1,9 @@
 import { Camera, Object3D, Vector3 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
+import { WorldSurfaceView } from "../world/WorldSurfaceView";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { pickTile, screenToGround } from "../helpers/picking";
+import { pickTile, screenToSurface } from "../helpers/picking";
 
 export interface HexMapInteractionControllerOptions {
     canvas: HTMLCanvasElement;
@@ -11,6 +12,7 @@ export interface HexMapInteractionControllerOptions {
     pointer: Object3D;
     size: number;
     map(): MapInfo | undefined;
+    surface(): WorldSurfaceView | undefined;
     logicalGround(point: Vector3): void;
     tile(x: number, y: number): TileInfo | undefined;
     select(x: number, y: number): void;
@@ -146,8 +148,6 @@ export class HexMapInteractionController {
         }
         this.hovered = { x: picked.x, y: picked.y };
         this.options.pointer.visible = true;
-        this.options.pointer.position.setX(picked.worldX);
-        this.options.pointer.position.setZ(picked.worldY);
         this.options.hover(picked.x, picked.y, tile);
     };
 
@@ -165,9 +165,11 @@ export class HexMapInteractionController {
     };
 
     private pick(clientX: number, clientY: number) {
-        const ground = screenToGround(clientX, clientY, this.options.canvas, this.options.camera);
+        const surface = this.options.surface();
+        if (!surface) return null;
+        const ground = screenToSurface(clientX, clientY, this.options.canvas, this.options.camera,
+            surface, this.options.logicalGround);
         if (!ground) return null;
-        this.options.logicalGround(ground);
         const map = this.options.map();
         return pickTile(
             ground,

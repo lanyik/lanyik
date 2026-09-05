@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import { getHexCenter } from "../../src/helpers/helpers";
+import { getWorldChunkOrigin } from "../../src/helpers/chunks";
 
 import {
     assertWorldVegetationLayout,
@@ -52,6 +54,65 @@ function options(map: MapInfo, points: readonly Point[]) {
 }
 
 describe("worker vegetation layout", () => {
+    test("grass fills every edge band and keeps identical roots across independent requests and LODs", () => {
+        const map = testMap();
+        const tile = { x: 10, y: 10 };
+        const selected = [tile, { x: 11, y: 10 }, { x: 12, y: 10 }];
+        const request = { ...options(map, selected), grassDensity: 600 };
+        const layout = generateWorldVegetation(request);
+        const isolated = generateWorldVegetation({ ...request, points: [tile] }).grass[0].lods[0];
+        const lods = layout.grass[0].lods;
+        const count = lods[0].ranges[1];
+        expect(lods[0].offsets.slice(0, count * 2)).toEqual(isolated.offsets);
+        const center = getHexCenter(tile.x, tile.y, request.size);
+        const origin = getWorldChunkOrigin(layout.grass[0].chunkKey, request.size);
+        const edgeCounts = new Array<number>(6).fill(0);
+        for (let i = 0; i < isolated.instanceCount; i += 1) {
+            const x = isolated.offsets[i * 2] + origin.x - center.x;
+            const z = isolated.offsets[i * 2 + 1] + origin.y - center.y;
+            for (let edge = 0; edge < 6; edge += 1) {
+                const angle = (edge + 0.5) * Math.PI / 3;
+                if ((x * Math.cos(angle) + z * Math.sin(angle)) / (40 * Math.sqrt(3) / 2) > 0.92) edgeCounts[edge] += 1;
+            }
+        }
+        expect(Math.min(...edgeCounts)).toBeGreaterThan(5);
+        const roots = (lod: typeof isolated) => new Set(Array.from({ length: lod.instanceCount }, (_, i) =>
+            `${lod.offsets[i * 2]},${lod.offsets[i * 2 + 1]}`));
+        const near = roots(lods[0]), middle = roots(lods[1]);
+        expect([...middle].every(root => near.has(root))).toBe(true);
+        expect([...roots(lods[2])].every(root => middle.has(root))).toBe(true);
+    });
+
+    test("larger trees reduce density and preserve spacing across models, chunks and wrapped seams", () => {
+        const map = testMap();
+        map.wrapX = map.wrapY = true;
+        const points: Point[] = [];
+        for (let x = 0; x < 20; x += 1) for (let y = 0; y < 20; y += 1) {
+            map.data[x][y] = { type: Land.land, modifiers: ["wood"], treeModel: x % 2 ? "oak" : "pine" };
+            points.push({ x, y });
+        }
+        const request = { ...options(map, points), grassDensity: 0, treesPerTile: 40 };
+        const trees = (scale: number) => generateWorldVegetation({ ...request, treeScale: scale }).forest.flatMap(chunk => {
+            const origin = getWorldChunkOrigin(chunk.chunkKey, 40);
+            const lod = chunk.lods[0];
+            return Array.from({ length: lod.instanceCount }, (_, i) => ({
+                x: lod.matrices[i * 16 + 12] + origin.x, z: lod.matrices[i * 16 + 14] + origin.y,
+                scale: lod.matrices[i * 16 + 5]
+            }));
+        });
+        const small = trees(1), large = trees(2);
+        expect(large.length).toBeGreaterThan(100);
+        expect(large.length).toBeLessThan(small.length * 0.4);
+        expect(large.every(tree => tree.scale >= 1.6 && tree.scale <= 2.4)).toBe(true);
+        const periodX = 20 * 40 * 1.5, periodZ = 20 * 40 * Math.sqrt(3);
+        let minimumDistance = Infinity;
+        for (let i = 0; i < large.length; i += 1) for (let j = i + 1; j < large.length; j += 1) {
+            const dx = Math.abs(large[i].x - large[j].x), dz = Math.abs(large[i].z - large[j].z);
+            minimumDistance = Math.min(minimumDistance, Math.hypot(Math.min(dx, periodX - dx), Math.min(dz, periodZ - dz)));
+        }
+        expect(minimumDistance).toBeGreaterThanOrEqual(40 * 2 * 0.28 - 0.001);
+    });
+
     test("snapshots only the core plus one-ring neighbor data", () => {
         const map = testMap();
         const snapshot = createWorldVegetationMapSnapshot(map, [{ x: 6, y: 6 }]);

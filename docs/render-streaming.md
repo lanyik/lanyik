@@ -59,6 +59,23 @@ shared grass materials and prepared forest models survive a density/size edit.
 Each layer mount has a revision, so an older completion or failure cannot publish
 over or tear down its replacement. Rebuild failures follow the map error event.
 
+Grass and trees sample jittered cells in world coordinates; hexes only assign
+ownership for fog and editing. Grass uses the entire hex footprint, with no
+empty band at its six edges. `grassDensity` is an average candidate density per
+hex area; individual tile counts vary. Rivers, lake shores, coastlines and
+cities still exclude vegetation. All LODs thin the same candidates with stable
+priorities, preserving root positions, scales and species. Static and Worker
+paths call the same layout builders.
+
+`treeScale` defaults to 1.6 and is exposed as **Tree size** in the demo.
+`treesPerTile` controls candidate density before spacing and effective biome
+density. The tree sampling cell width is at least `size * treeScale * 0.5`;
+bounded 22% jitter leaves at least 56% of that width between trunks, including
+across tile, model and source-chunk boundaries. Wrapped axes use an integer
+number of periodic cells. Increasing size therefore reduces excessive crowding
+without retry loops. Tree bounds include the actual prepared model extents,
+random scale maximum and rotated canopy radius.
+
 The scheduler builds a flat chunk registry only when the mounted scene changes.
 Normal frames compare cached camera, target and projection anchors without
 iterating that registry or allocating new scheduler callbacks. Bounds,
@@ -282,6 +299,25 @@ remains a live explicit `gridVisible` presentation option for tactical/editor
 views, while selection and hover feedback continue to show the active cell
 without drawing dark lines over every mountain edge.
 
+Hover and selection use `SurfaceHexMarker`: each of the six edges has eight
+segments, and both sides of the rim sample `WorldSurfaceView` at their own XZ.
+The lift is `height * 0.015 + size * 0.008`, covering the shader's bounded micro
+relief while keeping depth occlusion. The two markers share an LRU of at most
+128 CPU projections (162 KiB of position arrays), keyed by canonical tile and
+the current surface identity/revision. Height or terrain edits invalidate it;
+world unload clears it. Each marker keeps its own GPU buffer so cache eviction
+cannot dispose visible geometry. Toroidal repeats and floating origins only
+translate the projected rim.
+Markers draw after opaque ground, with selection above hover when both share
+a tile; depth writes remain disabled so the rim does not occlude later objects.
+
+Mouse picking traverses hexes crossed by the camera ray within the CPU surface
+height interval and intersects their six-triangle fans. It uses the same macro
+surface as marker projection, including on mountains and at negative logical
+coordinates; shader-only micro relief does not affect logical tile selection.
+The camera far plane bounds traversal, and pointers outside the canvas do not
+produce a hover.
+
 ## Unified world sources
 
 `HexMap.loadWorld()` owns one source for the duration of a load session. Calling
@@ -407,7 +443,7 @@ Procedural and toroidal sources reuse their bounded generation pool for a
 second task type: vegetation preparation. After a source chunk becomes
 resident, grass and forest share one request containing only its core tiles and
 the one-ring halo needed for river, lake and coast clearance. The worker performs
-deterministic rejection sampling, tree-spacing checks and all three LOD builds.
+deterministic world-cell sampling, water/shore clearance and all three LOD builds.
 
 The response contains transferable `Float32Array`/`Uint32Array` buffers. Grass
 receives ready-to-bind offset, tile-offset, angle, scale, phase and shade
@@ -427,9 +463,8 @@ not include Worker scratch memory, JS object overhead or browser/driver storage.
 Refresh/unload cancels preparation ownership, and field disposal clears retained
 arrays and scene references rather than waiting for the field itself to be GC'd.
 Queued preparation is distance-prioritized and cancellable when a chunk is
-evicted. Static/custom sources without `prepareVegetation()` keep the existing
-synchronous layout path, so the optional `WorldSource` capability is backward
-compatible.
+evicted. Static/custom sources without `prepareVegetation()` call the same
+layout builders synchronously on LOD activation.
 
 The shared pool reserves one Worker slot for terrain by default whenever it has
 more than one Worker (`reservedChunkWorkers` is configurable). Vegetation may

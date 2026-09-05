@@ -84,6 +84,15 @@ or surface semantics additionally run:
 npm run review:world-style
 ```
 
+Vegetation placement contracts cover coverage of all six edge bands, stable
+LOD subsets, independent request equivalence and scale-dependent trunk spacing
+across model/chunk/toroidal seams. `surfaceHexMarker.test.ts` checks sloped rims,
+bounded projection reuse and invalidation, ray picking and translated worlds.
+`surface-markers.spec.ts` exercises real hover/click wiring with grass and trees
+enabled, captures `vegetation-and-slope-marker.png`, and changes mountain height
+to verify both markers refresh. This complements the standard gallery, whose
+grass is disabled for software-rendering cost.
+
 The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
 infinite seeds at positive and negative windows, water/land extreme seeds and
 minimum dimensions. It measures water-component dominance and isolation in

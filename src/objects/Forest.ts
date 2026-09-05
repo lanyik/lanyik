@@ -1,11 +1,10 @@
 import {
+    Box3,
     InstancedMesh,
     InstancedBufferAttribute,
-    Matrix4,
     Group,
     DynamicDrawUsage,
     Mesh,
-    Vector3,
     Object3D,
     BufferGeometry,
     Material,
@@ -13,15 +12,13 @@ import {
     Color,
     Texture
 } from "three";
-import pointInPolygon from "robust-point-in-polygon";
 
-import { HEXPolygon, getHexCenter } from "../helpers/helpers";
 import { forEachMapTile } from "../helpers/mapData";
 import { ModelAssetCache, ModelAssetLease } from "../helpers/models";
 import { MapInfo, Point } from "../interfaces";
 import { getMapTile } from "../helpers/topology";
-import { waterEdgeValue, isInTileWater, isLakeTile, lakeNeighborEdgeValue, riverLakeMouthEdgeValue, riverSeaMouthEdgeValue, WaterClearanceOptions } from "../helpers/rivers";
-import { isInCoastalShore, isInLakeShore, CoastClearanceOptions } from "../helpers/coast";
+import { isLakeTile, WaterClearanceOptions } from "../helpers/rivers";
+import { CoastClearanceOptions } from "../helpers/coast";
 import {
     getWorldChunkBounds,
     getWorldChunkOrigin,
@@ -37,6 +34,7 @@ import {
     GpuTileStateChange
 } from "../rendering/BufferUpdateBatch";
 import {
+    buildForestLod,
     WorldVegetationForestChunkLayout,
     WorldVegetationForestLodLayout,
     WorldVegetationLayout
@@ -51,14 +49,13 @@ export interface ForestOptions {
     resourceAccount?: ResourceBudgetAccount;
     treesPerTile?: number;
     treeModel?: string; // model folder path (see helpers/models.ts), default "Assets/models/pinia"
-    treeScale?: number; // extra multiplier on top of the model's own info.json scale, default 1
+    treeScale?: number; // extra multiplier on top of the model's own info.json scale, default 1.6
     modelAssets?: ModelAssetCache;
     fogDarkenFactor?: number; // instance-color multiplier for Explored fog tiles, default 0.45 - see FogOfWar.ts
 
     //River/lake water clearance on wood+river tiles (see helpers/rivers.ts's
-    //isInTileWater and GrassOptions' matching fields): trees sit at y=0, so
-    //anything inside the painted water (noise-bent bulges included) would
-    //stand in the river/lake. Same fractions-of-tile-radius values as the
+    //isInTileWater and GrassOptions' matching fields): exclude painted water
+    //(noise-bent bulges included). Same fractions-of-tile-radius values as the
     //map's options - keep them in sync.
     riverWidth?: number;     // default 0.28
     riverBankWidth?: number; // default 0.14
@@ -105,8 +102,6 @@ interface ForestBuildContext {
     size: number;
     treesPerTile: number;
     treeScale: number;
-    treeFootprint: number;
-    polygon: number[][];
     waterOptions: WaterClearanceOptions;
     coastOptions: CoastClearanceOptions;
     preparedChunks: Map<string, WorldVegetationForestChunkLayout>;
@@ -551,69 +546,10 @@ export class ForestField extends Group {
         const prepared = this.context.preparedChunks
             .get(`${record.modelPath}\u0000${record.chunkKey}`)?.lods.find(candidate => candidate.lod === lod);
         if (prepared) return this.buildPreparedChunkLod(record, prepared);
-        const {
-            map, surface, size, treesPerTile, treeScale, treeFootprint, polygon, waterOptions, coastOptions
-        } = this.context;
-        const maximumDensity = Math.max(1, Math.round(treesPerTile * ([1, 0.5, 0.2] as const)[lod]));
-
-        const matrix = new Matrix4();
-        const scaleVector = new Vector3();
-        const matrices = new Float32Array(record.tiles.length * maximumDensity * 16);
-        const ranges = new Map<string, { start: number, count: number, originalMatrices: Float32Array }>();
-        const surfaceWindow = surface.createWindow();
-        let instance = 0;
-        for (const tile of record.tiles) {
-            const key = `${tile.x},${tile.y}`;
-            const center = getHexCenter(tile.x, tile.y, size);
-            const density = Math.max(1, Math.round(
-                maximumDensity * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-            ));
-            const placed: Point[] = [];
-            const tileStart = instance;
-            let attempts = 0;
-            const waterValue = waterEdgeValue(map, tile.x, tile.y);
-            const seaMouthValue = riverSeaMouthEdgeValue(map, tile.x, tile.y);
-            const lakeMouthValue = riverLakeMouthEdgeValue(map, tile.x, tile.y);
-            const lakeNeighborValue = lakeNeighborEdgeValue(map, tile.x, tile.y);
-
-            while (placed.length < density && attempts < density * 20) {
-                const salt = attempts++ * 17;
-                const lx = (stableRandom(tile.x, tile.y, salt) * 2 - 1) * size;
-                const ly = (stableRandom(tile.x, tile.y, salt + 1) * 2 - 1) * size;
-                if (pointInPolygon(polygon, [lx, ly]) !== -1) continue;
-                if (isInTileWater(lx, ly, waterValue, size, waterOptions, seaMouthValue, lakeMouthValue, lakeNeighborValue)) continue;
-                if (isInCoastalShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-                if (isInLakeShore(map, tile.x, tile.y, lx, ly, center.x + lx, center.y + ly, size, coastOptions)) continue;
-                if (placed.some(p => Math.abs(p.x - lx) < treeFootprint && Math.abs(p.y - ly) < treeFootprint)) continue;
-
-                placed.push({ x: lx, y: ly });
-                const scale = treeScale * (0.8 + stableRandom(tile.x, tile.y, salt + 3) * 0.4);
-                matrix.makeRotationY(stableRandom(tile.x, tile.y, salt + 5) * Math.PI * 2);
-                matrix.scale(scaleVector.set(scale, scale, scale));
-                matrix.setPosition(
-                    center.x + lx - record.root.position.x,
-                    surfaceWindow.getWorldHeight(center.x + lx, center.y + ly),
-                    center.y + ly - record.root.position.z
-                );
-                matrix.toArray(matrices, instance * 16);
-                instance++;
-            }
-            const count = instance - tileStart;
-            ranges.set(key, {
-                start: tileStart,
-                count,
-                originalMatrices: matrices.subarray(tileStart * 16, (tileStart + count) * 16)
-            });
-        }
-
-        const compactMatrices = matrices.slice(0, instance * 16);
-        for (const range of ranges.values()) {
-            range.originalMatrices = compactMatrices.subarray(
-                range.start * 16,
-                (range.start + range.count) * 16
-            );
-        }
-        return { instanceCount: instance, matrices: compactMatrices, ranges };
+        const context = this.context;
+        return this.buildPreparedChunkLod(record, buildForestLod(
+            context.map, record.chunkKey, record.tiles, lod, context, context.waterOptions, context.coastOptions
+        ));
     }
 
     private buildPreparedChunkLod(
@@ -679,18 +615,6 @@ export class ForestField extends Group {
     }
 }
 
-function stableRandom(x: number, y: number, salt: number): number {
-    let value = Math.imul(x ^ 0x9e3779b9, 0x85ebca6b)
-        ^ Math.imul(y ^ 0xc2b2ae35, 0x27d4eb2f)
-        ^ Math.imul(salt ^ 0x165667b1, 0x85ebca77);
-    value ^= value >>> 16;
-    value = Math.imul(value, 0x7feb352d);
-    value ^= value >>> 15;
-    value = Math.imul(value, 0x846ca68b);
-    value ^= value >>> 16;
-    return (value >>> 0) / 0x100000000;
-}
-
 //----------------------------------------------------------------------------------
 //Replaces the old procedurally-generated cone trees with instances of real glTF
 //models (see helpers/models.ts) - each wood tile can pick its own tree species
@@ -718,9 +642,9 @@ export async function createForest(
     const { size, surface } = options;
     const treesPerTile = options.treesPerTile ?? 12;
     const defaultModel = options.treeModel ?? "Assets/models/pinia";
-    const treeScale = options.treeScale ?? 1;
+    const treeScale = options.treeScale ?? 1.6;
     const fogDarkenFactor = options.fogDarkenFactor ?? 0.45;
-    if (treesPerTile <= 0) return null;
+    if (treesPerTile <= 0 || treeScale === 0) return null;
 
     //Wood is a tile *modifier* (TileInfo.modifiers, like "river"/"lake"/
     //"hill"), not its own field. City and lake tiles are skipped: city models
@@ -742,9 +666,6 @@ export async function createForest(
     }
     if (tilesByModel.size === 0) return null;
 
-    // polygon slightly shrunk from the hex boundary, same as the old WOOD()
-    const treeFootprint = Math.max(1, Math.round(size / 10));
-    const polygon = HEXPolygon({ x: 0, y: 0 }, size - treeFootprint).map(p => [p.x, p.y]);
     const waterOptions: WaterClearanceOptions = {
         riverWidth: options.riverWidth ?? 0.28,
         riverBankWidth: options.riverBankWidth ?? 0.14,
@@ -768,6 +689,16 @@ export async function createForest(
             const preparedLods = await resources.prepare(modelPath);
             const preparedParts = preparedLods[0];
             if (preparedParts.length === 0) continue;
+            const modelBounds = new Box3();
+            for (const parts of preparedLods) for (const { geometry } of parts) {
+                if (!geometry.boundingBox) geometry.computeBoundingBox();
+                modelBounds.union(geometry.boundingBox!);
+            }
+            const maximumScale = treeScale * 1.2;
+            const canopyRadius = Math.hypot(
+                Math.max(Math.abs(modelBounds.min.x), Math.abs(modelBounds.max.x)),
+                Math.max(Math.abs(modelBounds.min.z), Math.abs(modelBounds.max.z))
+            ) * maximumScale;
 
             const chunks = groupTilesByWorldChunk(tiles);
 
@@ -785,16 +716,18 @@ export async function createForest(
                     return instancedMesh;
                 });
                 const id = `forest:${chunkKey}:${modelIndex}`;
+                const bounds = getWorldChunkBounds(chunkTiles, size,
+                    surface.minimumHeight + Math.min(0, modelBounds.min.y * maximumScale),
+                    surface.maximumHeight + Math.max(0, modelBounds.max.y * maximumScale));
+                bounds.minX -= canopyRadius;
+                bounds.maxX += canopyRadius;
+                bounds.minZ -= canopyRadius;
+                bounds.maxZ += canopyRadius;
                 tagWorldChunk(
                     root,
                     chunkKey,
                     "forest",
-                    localizeWorldChunkBounds(getWorldChunkBounds(
-                        chunkTiles,
-                        size,
-                        surface.minimumHeight,
-                        surface.maximumHeight + size * 3
-                    ), origin),
+                    localizeWorldChunkBounds(bounds, origin),
                     id
                 );
                 chunkRecords.set(id, {
@@ -816,8 +749,6 @@ export async function createForest(
             size,
             treesPerTile,
             treeScale,
-            treeFootprint,
-            polygon,
             waterOptions,
             coastOptions,
             preparedChunks: new Map(preparedLayout?.forest.map(chunk => [
