@@ -63,9 +63,8 @@ describe("water authoring contract", () => {
         }
         expect(WORLD_WATER_STYLE_RANGES.riverBaseRadius.max).toBeLessThan(WORLD_WATER_STYLE_RANGES.riverHighFlowRadius.min);
         expect(WORLD_WATER_STYLE_RANGES.riverWarpAmplitude.max).toBeLessThan(WORLD_STYLE_PROFILE.rivers.courseStep / 2);
-        const longest = createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength: 100 });
-        expect(longest.rivers.courseLengthRatio).toBe(1);
-        expect(longest.rivers.upstreamExtensionSteps).toBe(WORLD_STYLE_PROFILE.rivers.upstreamExtensionSteps);
+        const longest = createWorldStyleProfile({ ...DEFAULT_WORLD_WATER_STYLE, riverLength: 300 });
+        expect(longest.rivers.courseLengthMultiplier).toBe(3);
         expect(longest.rivers.maximumCourseLength).toBe(WORLD_STYLE_PROFILE.rivers.maximumCourseLength);
     });
 });

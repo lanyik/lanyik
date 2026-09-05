@@ -194,9 +194,9 @@ describe("WorldSurfaceResolver", () => {
         invalidRiverWarp.rivers.courseWarpAmplitude = invalidRiverWarp.rivers.courseStep / 2;
         expect(() => assertWorldStyleProfile(invalidRiverWarp)).toThrow(/warp amplitude/);
 
-        const invalidExtension = structuredClone(WORLD_STYLE_PROFILE) as any;
-        invalidExtension.rivers.upstreamExtensionSteps = 1.5;
-        expect(() => assertWorldStyleProfile(invalidExtension)).toThrow(/upstream extension/);
+        const invalidLength = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidLength.rivers.courseLengthMultiplier = 3.01;
+        expect(() => assertWorldStyleProfile(invalidLength)).toThrow(/length multiplier/);
 
         const invalidMouth = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidMouth.rivers.mouthWidthMultiplier = 0.9;
@@ -227,7 +227,7 @@ describe("WorldSurfaceResolver", () => {
         expect(profile.rivers).toMatchObject({
             sourceCellSize: 18,
             sourcesPerCell: 6,
-            courseLengthRatio: 0.65,
+            courseLengthMultiplier: 0.65,
             courseWarpScale: 0.04,
             courseWarpAmplitude: 3,
             baseCourseRadius: 0.5,

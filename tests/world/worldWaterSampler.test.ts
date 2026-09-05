@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { Land } from "../../src/enums";
 import { getNeighbors } from "../../src/helpers/neighbors";
+import { worldAxialToOffset } from "../../src/world/hexRaster";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 import { createWorldWaterSampler, WorldWaterSampleAt } from "../../src/world/WorldWaterSampler";
 import { DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
@@ -87,9 +88,9 @@ function sampledWaterComponents(mask: Uint8Array, width: number, height: number)
 
 describe("generated water network", () => {
     test("extends established courses upstream without removing their downstream water", () => {
-        const original = slopingRiverTiles({ upstreamExtensionSteps: 0 });
-        const extended = slopingRiverTiles({ upstreamExtensionSteps: 3 });
-        const longest = slopingRiverTiles({ upstreamExtensionSteps: 12 });
+        const original = slopingRiverTiles({ courseLengthMultiplier: 1 });
+        const extended = slopingRiverTiles({ courseLengthMultiplier: 1.5 });
+        const longest = slopingRiverTiles({ courseLengthMultiplier: 3 });
         for (const tile of original) expect(extended.has(tile)).toBe(true);
         for (const tile of extended) expect(longest.has(tile)).toBe(true);
         expect(extended.size).toBeGreaterThan(original.size * 1.1);
@@ -111,30 +112,94 @@ describe("generated water network", () => {
         }
     });
 
+    test("grows through ordinary land along the longest incoming branch, not the highest adjacent dead end", () => {
+        // One eligible anchor, one steep but short branch, one long lower-potential
+        // branch. Non-anchor land is too low to spawn a source, but can carry water.
+        const nodes = new Map<string, { potential: number; anchor: boolean }>();
+        for (const [q, r, potential] of [
+            [0, 0, -1], [0, 1, 0.1], [0, 2, 0.2], [1, 2, 0.9],
+            [-1, 3, 0.3], [-2, 4, 0.4], [-3, 5, 0.5], [-4, 6, 0.6]
+        ]) {
+            const world = worldAxialToOffset({ x: q * 8, y: r * 8 });
+            nodes.set(key(world.x, world.y), { potential, anchor: q === 0 && r === 2 });
+        }
+        const sampleAt: WorldWaterSampleAt = (x, y) => {
+            const node = nodes.get(key(x, y));
+            return node && {
+                baseTerrain: node.potential < 0 ? Land.sea : Land.land,
+                landform: {
+                    ocean: node.potential, elevation: node.anchor ? 0.6 : 0.3,
+                    moisture: 1, valley: 0, continentalness: 0.8
+                }
+            };
+        };
+        const collect = (courseLengthMultiplier: number, blocked = false) => {
+            const sampler = createWorldWaterSampler(1, { topology: "infinite" }, {
+                ...WORLD_STYLE_PROFILE,
+                rivers: {
+                    ...WORLD_STYLE_PROFILE.rivers, courseWarpAmplitude: 0,
+                    sourceCellSize: 1, sourcesPerCell: 1, maximumCourseLength: 12,
+                    baseCourseRadius: 0.5, highFlowCourseRadius: 1, mouthWidthMultiplier: 1,
+                    potentialJitter: 0, courseLengthMultiplier
+                }
+            });
+            const tiles = new Set<string>();
+            sampler.forEachRiverTile(-64, -16, 128, 96, (x, y) => {
+                const sample = sampleAt(x, y);
+                return sample && blocked && sample.landform.ocean === 0.4
+                    ? { ...sample, baseTerrain: Land.mountain } : sample;
+            }, (x, y) => tiles.add(key(x, y)));
+            return tiles;
+        };
+        const baseline = collect(1);
+        const longer = collect(3);
+        expect(baseline.size).toBeGreaterThan(0);
+        for (const tile of baseline) expect(longer.has(tile)).toBe(true);
+        expect([...baseline].some(tile => Number(tile.split(",")[0]) < -8)).toBe(false);
+        expect([...longer].some(tile => Number(tile.split(",")[0]) < -16)).toBe(true);
+        // Choosing the steep branch would put water east of the anchor instead.
+        expect([...longer].some(tile => Number(tile.split(",")[0]) > 4)).toBe(false);
+        const stopped = collect(3, true);
+        expect([...stopped].some(tile => Number(tile.split(",")[0]) < -16)).toBe(false);
+    });
+
     test("changes real seeded river extent across the entire length slider, not just an upstream search cap", () => {
         let previous = new Set<string>();
         const counts: number[] = [];
-        for (const riverLength of [10, 25, 50, 75, 100]) {
+        for (const riverLength of [10, 50, 100, 150, 200, 250, 300]) {
             const resolver = createWorldSurfaceResolver({
                 seed: "new-world", waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverLength }
             });
             const cells = new Set<string>();
             resolver.visitGeneratedRiverTiles(-256, -256, 512, 512, (x, y) => cells.add(key(x, y)));
+            if (riverLength === 100 || riverLength === 300) {
+                let hash = 0x811c9dc5;
+                for (const character of [...cells].sort().join(";")) {
+                    hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193);
+                }
+                expect((hash >>> 0).toString(16)).toBe(riverLength === 100 ? "ed375a16" : "65ae1140");
+            }
             for (const cell of previous) expect(cells.has(cell)).toBe(true);
             expect(cells.size).toBeGreaterThan(previous.size + 50);
             counts.push(cells.size);
             previous = cells;
         }
-        expect(counts[4]).toBeGreaterThan(counts[0] * 2);
+        expect(counts[6]).toBeGreaterThan(counts[2] * 1.2);
+        // More water alone could mean a width change. Subset checks above and
+        // the controlled source/mouth tests below require actual upstream growth.
+        expect(counts[6]).toBeGreaterThan(1443); // v18's complete 100% network
     });
 
     test("shorter courses retain a connected downstream suffix on a controlled coast", () => {
-        const short = slopingRiverTiles({ courseLengthRatio: 0.25 });
-        const half = slopingRiverTiles({ courseLengthRatio: 0.5 });
-        const full = slopingRiverTiles({ courseLengthRatio: 1 });
+        const short = slopingRiverTiles({ courseLengthMultiplier: 0.25 });
+        const half = slopingRiverTiles({ courseLengthMultiplier: 0.5 });
+        const full = slopingRiverTiles({ courseLengthMultiplier: 1 });
         for (const tile of short) expect(half.has(tile)).toBe(true);
         for (const tile of half) expect(full.has(tile)).toBe(true);
-        const mouth = (tiles: Set<string>) => new Set([...tiles].filter(tile => Number(tile.split(",")[0]) >= 104));
+        // The shortest source can end inside the last coarse reach. Check the
+        // actual shoreline contact, not an eight-tile band that includes its head.
+        const mouth = (tiles: Set<string>) => new Set([...tiles].filter(tile => Number(tile.split(",")[0]) >= 110));
+        expect(mouth(short).size).toBeGreaterThan(0);
         expect(mouth(short)).toEqual(mouth(full));
         expect(short.size).toBeLessThan(full.size * 0.6);
         const remaining = new Set(short);
@@ -187,7 +252,7 @@ describe("generated water network", () => {
         }
     });
 
-    test.each([25, 50, 100])("keeps overview and paged resolution identical at length %i percent", riverLength => {
+    test.each([25, 100, 200, 300])("keeps overview and paged resolution identical at length %i percent", riverLength => {
         const resolver = createWorldSurfaceResolver({
             seed: "new-world", waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverLength }
         });
@@ -269,7 +334,7 @@ describe("generated water network", () => {
         }
     });
 
-    test("keeps wide fractional mouths identical across real wrap-crossing rivers", () => {
+    test.each([100, 300])("keeps wide fractional mouths identical across real wrap-crossing rivers at %i percent", riverLength => {
         const resolver = createWorldSurfaceResolver({
             seed: "new-world",
             domain: { topology: "toroidal", width: 512, height: 512 },
@@ -279,7 +344,7 @@ describe("generated water network", () => {
                 ...DEFAULT_WORLD_WATER_STYLE,
                 oceanScale: 1, oceanLevel: 0.47, riverSourceCellSize: 12,
                 riverWarpScale: 0.03, riverWarpAmplitude: 3.25,
-                riverHighFlowRadius: 6, riverHighFlowThreshold: 2, riverLength: 100
+                riverHighFlowRadius: 6, riverHighFlowThreshold: 2, riverLength
             }
         });
         const original = new Set<string>();

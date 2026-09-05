@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { WORLD_WATER_STYLE_RANGES } from "../../src/world/WorldStyleProfile";
 
 interface MinimapView {
     generation: number;
@@ -79,14 +80,15 @@ test("authors visible river lengths above an expanded map and refreshes without 
     const slider = page.locator(".cr.number").filter({ has: length }).locator(".slider");
     await expect(slider).toBeVisible();
     const sliderBounds = (await slider.boundingBox())!;
-    await page.mouse.move(sliderBounds.x + sliderBounds.width - 1, sliderBounds.y + sliderBounds.height / 2);
+    const { min, max } = WORLD_WATER_STYLE_RANGES.riverLength;
+    await page.mouse.move(sliderBounds.x + sliderBounds.width * (100 - min) / (max - min), sliderBounds.y + sliderBounds.height / 2);
     await page.mouse.down();
-    await page.mouse.move(sliderBounds.x + sliderBounds.width * (50 - 10) / 90, sliderBounds.y + sliderBounds.height / 2);
+    await page.mouse.move(sliderBounds.x + sliderBounds.width * (200 - min) / (max - min), sliderBounds.y + sliderBounds.height / 2);
     await page.mouse.up();
-    await expect(length).toHaveValue("50");
+    await expect(length).toHaveValue("200");
     await page.waitForFunction(() => (window as unknown as {
         getWorldDiagnostics(): { waterStyle?: { riverLength: number }; generating: boolean };
-    }).getWorldDiagnostics().waterStyle?.riverLength === 50);
+    }).getWorldDiagnostics().waterStyle?.riverLength === 200);
     await waitForMinimap(page);
     const after = await snapshot();
     expect(after.view).toMatchObject({

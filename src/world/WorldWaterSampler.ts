@@ -34,6 +34,12 @@ interface WaterPage {
 
 interface TracedCourse {
     readonly points: readonly Point[];
+    readonly anchor: Point;
+}
+
+interface UpstreamBranch {
+    readonly length: number;
+    readonly delta?: Point;
 }
 
 interface RasterCourseNode {
@@ -453,7 +459,8 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
     private traceCourse(
         source: Point,
         sampleAt: WorldWaterSampleAt,
-        cache: Map<string, DrainageNode>
+        cache: Map<string, DrainageNode>,
+        upstreamCache: Map<string, UpstreamBranch>
     ): TracedCourse | undefined {
         const rivers = this.profile.rivers;
         const points: Point[] = [];
@@ -476,26 +483,52 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             current = next;
         }
         if (!reachedSea || points.length < rivers.minimumCourseLength) return undefined;
-        // Extend only along real incoming drainage edges. This lengthens the
-        // same course without adding sources, random walks or uphill water.
-        for (let step = 0; step < rivers.upstreamExtensionSteps && points.length < rivers.maximumCourseLength; step += 1) {
+        // Build the longest real incoming branch, independently of the slider.
+        // The seeded source becomes an anchor, not an upper bound on river length.
+        // Low source suitability is not a barrier to a river crossing ordinary land.
+        while (points.length < rivers.maximumCourseLength) {
             const head = points[0];
-            const headKey = this.canonicalCourseKey(head);
-            let upstream: Point | undefined;
-            let bestPotential = -Infinity;
-            for (const delta of AXIAL_NEIGHBORS) {
-                const candidate = { x: head.x + delta.x, y: head.y + delta.y };
-                const node = this.drainageNode(candidate, sampleAt, cache);
-                if (!node || node.potential <= bestPotential || this.sourceSuitability(node.sample) === 0) continue;
-                const next = this.nextCoursePoint(candidate, node, sampleAt, cache);
-                if (!next || this.canonicalCourseKey(next) !== headKey) continue;
-                bestPotential = node.potential;
-                upstream = candidate;
-            }
-            if (!upstream) break;
-            points.unshift(upstream);
+            const branch = this.longestUpstreamBranch(
+                head, rivers.maximumCourseLength - points.length, sampleAt, cache, upstreamCache
+            );
+            if (!branch.delta) break;
+            points.unshift({ x: head.x + branch.delta.x, y: head.y + branch.delta.y });
         }
-        return { points };
+        return { points, anchor: source };
+    }
+
+    private longestUpstreamBranch(
+        point: Point,
+        remaining: number,
+        sampleAt: WorldWaterSampleAt,
+        drainage: Map<string, DrainageNode>,
+        cache: Map<string, UpstreamBranch>
+    ): UpstreamBranch {
+        if (remaining === 0) return { length: 0 };
+        const pointId = this.canonicalCourseKey(point);
+        const key = `${pointId}:${remaining}`;
+        const cached = cache.get(key);
+        if (cached) return cached;
+        const node = this.drainageNode(point, sampleAt, drainage)!;
+        const world = worldOffsetToAxial(this.courseToWorld(point));
+        let best: UpstreamBranch = { length: 0 };
+        for (const delta of AXIAL_NEIGHBORS) {
+            const candidate = { x: point.x + delta.x, y: point.y + delta.y };
+            const adjacent = this.drainageNode(candidate, sampleAt, drainage);
+            // Strictly rising potential makes the incoming graph acyclic, including tori.
+            if (!adjacent || !Number.isFinite(adjacent.potential) || adjacent.potential <= node.potential) continue;
+            const next = this.nextCoursePoint(candidate, adjacent, sampleAt, drainage);
+            if (!next || this.canonicalCourseKey(next) !== pointId) continue;
+            const upstream = this.longestUpstreamBranch(candidate, remaining - 1, sampleAt, drainage, cache);
+            const from = worldOffsetToAxial(this.courseToWorld(candidate));
+            const dx = from.x - world.x;
+            const dy = from.y - world.y;
+            // Rendered centre distance in hex-neighbour units. Stable neighbour order breaks ties.
+            const length = upstream.length + Math.sqrt(dx * dx + dx * dy + dy * dy);
+            if (length > best.length) best = { length, delta };
+        }
+        cache.set(key, best);
+        return best;
     }
 
     private sourceFor(
@@ -554,6 +587,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         const sources = new Set<string>();
         const courses: TracedCourse[] = [];
         const drainage = new Map<string, DrainageNode>();
+        const upstream = new Map<string, UpstreamBranch>();
         for (let regionX = firstRegionX; regionX <= lastRegionX; regionX += 1) {
             for (let regionY = firstRegionY; regionY <= lastRegionY; regionY += 1) {
                 for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
@@ -562,7 +596,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
                     const key = this.canonicalCourseKey(source);
                     if (sources.has(key)) continue;
                     sources.add(key);
-                    const course = this.traceCourse(source, sampleAt, drainage);
+                    const course = this.traceCourse(source, sampleAt, drainage, upstream);
                     if (course) courses.push(course);
                 }
             }
@@ -614,12 +648,14 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             node.distanceToSea = next.distanceToSea + node.reach.length;
         }
         const rivers = this.profile.rivers;
-        // Length changes only the retained upstream extent. Trace the same
-        // complete drainage graph first, so widths, bends and mouths stay fixed.
+        // Measure from the seeded anchor, NOT from the farthest available head.
+        // Above 100% the budget moves the visible source onto newly explored
+        // upstream reaches; below it the same connected sea suffix is retained.
         for (const course of courses) {
             const head = nodes.get(this.canonicalCourseKey(course.points[0]))!;
+            const anchor = nodes.get(this.canonicalCourseKey(course.anchor))!;
             head.visibleDistanceToSea = Math.max(
-                head.visibleDistanceToSea, head.distanceToSea * rivers.courseLengthRatio
+                head.visibleDistanceToSea, anchor.distanceToSea * rivers.courseLengthMultiplier
             );
         }
         // Propagate source budgets downstream; confluences keep the union of

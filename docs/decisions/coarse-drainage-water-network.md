@@ -1,6 +1,6 @@
 # Coarse-drainage water network
 
-Status: implemented; actual course-length authoring on 2026-09-05 (generator v18).
+Status: implemented; upstream source growth beyond the baseline on 2026-09-05 (generator v19).
 
 ## Context
 
@@ -35,29 +35,41 @@ valley, moisture and a very small coordinate-stable jitter. Because the choice
 at a coarse coordinate is independent of the source that reached it, courses
 that meet share the same downstream path. The number of source courses crossing
 a point is the flow proxy: the radius now varies continuously from 1.75 to 4
-hex-neighbour spacings via `smoothstep(1, 24, flow)`. Each successful source
-course extends up to three genuine incoming drainage edges upstream,
-choosing the highest-potential eligible predecessor. A watershed or missing
-eligible predecessor stops it early. This fixed bounded exploration defines
-the complete drainage graph; it is not the user-facing length control.
-Source count and the 72-node trace limit remain bounded; the existing
-downstream route and source-search radius do not change.
+hex-neighbour spacings via `smoothstep(1, 24, flow)`. Each successful seeded
+source is an anchor for length authoring. From that anchor, a bounded dynamic
+program explores genuine incoming drainage edges and chooses the branch with
+the greatest accumulated rendered-centre distance. It no longer greedily picks
+the highest adjacent potential, which can lead to a short dead end. Ordinary
+land can carry the upstream course even if it is too low or dry to spawn an
+independent source. Mountains/snow, undefined domain samples and watersheds
+still stop growth; routing never invents a new uphill edge.
 
-`riverLength` retains 10–100 percent of each complete source-to-sea arc, in steps
-of 5, with default 100 preserving the reviewed full network. The old upstream
-search budget saturated: `new-world` produced identical river cells at 24, 48
-and 96. V18 measures the actual curve arc, assigns each source a retained
-sea-distance budget and propagates the maximum budget downstream at confluences.
-Each shared edge is still rasterized once. A partially retained edge starts
-inside its tessellated curve with the original interpolated radius, never at
-a rounded coarse vertex. Widths use the complete graph's potential flow,
-independently of length, so longer settings add upstream cells without changing
-existing downstream widths or mouths. They do not extend past watersheds.
+`riverLength` is a target multiplier of the anchor-to-sea curve arc: 10–300
+percent in steps of 5, default 100. Below 100 it shortens the downstream suffix;
+above 100 it moves the visible source into the newly explored incoming branch.
+The denominator is the seeded anchor's sea distance, NOT the complete expanded
+head's distance. This replaces both the old three-step extension and v18's
+10–100% clipping-only interpretation, with no compatibility path.
+
+Exploration builds the same complete graph for every slider value. Its total
+source-to-sea course remains capped at 72 nodes. Incoming potential strictly
+increases, so traversal cannot cycle, including on tori. Results are memoized
+by canonical coordinate and remaining node budget, in an extent-local cache
+released with the drainage cache. Source count, lattice spacing and page search
+halo remain unchanged; raising the multiplier does not widen the search area.
+
+Each source assigns its desired sea-distance budget to the explored upstream
+head. Budgets propagate downstream by maximum at confluences. Each shared edge
+is rasterized once; a partial edge starts inside its tessellated curve using
+the original interpolated radius. Widths use the complete graph's potential
+flow independently of the multiplier. Thus increasing length preserves existing
+water cells, bends and mouths. 300% is a target, not a guarantee: an exhausted
+basin can saturate earlier. It neither triples every river nor triples water area.
 
 The reviewed default warp frequency/amplitude are 0.08 / 3.75, source-region
 spacing is 16, ocean frequency multiplier is 1.4 and ocean threshold is 0.46.
 `WORLD_WATER_STYLE_RANGES` supplies both the panel and API validation; the full
-bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数v18).
+bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数v19).
 Tributary/main radius intervals are disjoint so every slider combination is valid.
 Warp amplitude remains below half a coarse step, with a 3.90 authoring ceiling;
 the old hidden 3.5 clamp is removed. Reduced lattices in small toroidal worlds
@@ -112,12 +124,14 @@ valid and unchanged.
 - Generator v14 corrected raster coordinate parity; v15 added upstream extension,
   continuous flow widths and tapered mouths; v16 rounds the actual centreline.
   V17 changes the water defaults and adds required `waterStyle.riverLength`.
-  V18 changes that field's meaning from extension tiles to a retained arc-length
-  percentage; descriptor v4 and Worker protocol v6 reject the old meaning and
-  missing fields. There is no migration or per-field defaulting. Normalization,
+  V18 changed that field from extension tiles to a retained arc-length percentage.
+  V19 changes it to an anchor-relative target with actual upstream exploration;
+  descriptor v5 and Worker protocol v7 reject earlier meanings and missing fields.
+  There is no migration or per-field defaulting. Normalization,
   equality and serialization include length, partitioning chunks, overview
   resolvers, persistence and navigation through the existing fingerprint.
-  Packed chunk encoding remains v1. Default 100% retains v17's golden checksums.
+  Packed chunk encoding remains v1. Existing small tile/surface fixtures happen
+  to retain their checksums; new whole river-window goldens lock both 100 and 300%.
 
 ## Overview path and budget
 

@@ -809,7 +809,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 18;
+var WORLD_GENERATOR_VERSION = 19;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -831,7 +831,7 @@ var WORLD_WATER_STYLE_RANGES = Object.freeze({
   oceanLevel: waterRange(0.32, 0.6, 5e-3),
   riverSourceCellSize: waterRange(8, 32, 1),
   riverSourcesPerCell: waterRange(1, 8, 1),
-  riverLength: waterRange(10, 100, 5),
+  riverLength: waterRange(10, 300, 5),
   riverWarpScale: waterRange(0.02, 0.12, 1e-3),
   riverWarpAmplitude: waterRange(0, 3.9, 0.05),
   // Disjoint intervals keep every slider combination valid: tributary < main river.
@@ -968,8 +968,7 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     sourceMoistureFloor: 0.7,
     minimumCourseLength: 3,
     maximumCourseLength: 72,
-    upstreamExtensionSteps: 3,
-    courseLengthRatio: DEFAULT_WORLD_WATER_STYLE.riverLength / 100,
+    courseLengthMultiplier: DEFAULT_WORLD_WATER_STYLE.riverLength / 100,
     baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
     highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
     highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
@@ -1188,13 +1187,12 @@ function assertWorldStyleProfile(value) {
   ]) positive(`rivers.${name}`, rivers[name]);
   nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
   nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
-  unitInterval("rivers.courseLengthRatio", rivers.courseLengthRatio);
-  positive("rivers.courseLengthRatio", rivers.courseLengthRatio);
+  positive("rivers.courseLengthMultiplier", rivers.courseLengthMultiplier);
+  if (rivers.courseLengthMultiplier > WORLD_WATER_STYLE_RANGES.riverLength.max / 100) {
+    throw new RangeError("river course length multiplier exceeds the authoring limit");
+  }
   if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
     throw new RangeError("river course length range must be ordered");
-  }
-  if (!Number.isSafeInteger(rivers.upstreamExtensionSteps) || rivers.upstreamExtensionSteps < 0 || rivers.upstreamExtensionSteps >= rivers.maximumCourseLength) {
-    throw new RangeError("river upstream extension must be a non-negative integer below the course limit");
   }
   if (rivers.mouthWidthMultiplier < 1) {
     throw new RangeError("river mouth width multiplier must be at least one");
@@ -1290,7 +1288,7 @@ function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
       ...WORLD_STYLE_PROFILE.rivers,
       sourceCellSize: style.riverSourceCellSize,
       sourcesPerCell: style.riverSourcesPerCell,
-      courseLengthRatio: style.riverLength / 100,
+      courseLengthMultiplier: style.riverLength / 100,
       courseWarpScale: style.riverWarpScale,
       courseWarpAmplitude: style.riverWarpAmplitude,
       baseCourseRadius: style.riverBaseRadius,
@@ -1909,7 +1907,7 @@ var DrainageWorldWaterSampler = class {
     node.nextDelta = bestDelta;
     return bestDelta ? { x: point.x + bestDelta.x, y: point.y + bestDelta.y } : void 0;
   }
-  traceCourse(source, sampleAt, cache) {
+  traceCourse(source, sampleAt, cache, upstreamCache) {
     const rivers = this.profile.rivers;
     const points = [];
     const visited = /* @__PURE__ */ new Set();
@@ -1931,24 +1929,44 @@ var DrainageWorldWaterSampler = class {
       current = next;
     }
     if (!reachedSea || points.length < rivers.minimumCourseLength) return void 0;
-    for (let step = 0; step < rivers.upstreamExtensionSteps && points.length < rivers.maximumCourseLength; step += 1) {
+    while (points.length < rivers.maximumCourseLength) {
       const head = points[0];
-      const headKey = this.canonicalCourseKey(head);
-      let upstream;
-      let bestPotential = -Infinity;
-      for (const delta of AXIAL_NEIGHBORS) {
-        const candidate = { x: head.x + delta.x, y: head.y + delta.y };
-        const node = this.drainageNode(candidate, sampleAt, cache);
-        if (!node || node.potential <= bestPotential || this.sourceSuitability(node.sample) === 0) continue;
-        const next = this.nextCoursePoint(candidate, node, sampleAt, cache);
-        if (!next || this.canonicalCourseKey(next) !== headKey) continue;
-        bestPotential = node.potential;
-        upstream = candidate;
-      }
-      if (!upstream) break;
-      points.unshift(upstream);
+      const branch = this.longestUpstreamBranch(
+        head,
+        rivers.maximumCourseLength - points.length,
+        sampleAt,
+        cache,
+        upstreamCache
+      );
+      if (!branch.delta) break;
+      points.unshift({ x: head.x + branch.delta.x, y: head.y + branch.delta.y });
     }
-    return { points };
+    return { points, anchor: source };
+  }
+  longestUpstreamBranch(point, remaining, sampleAt, drainage, cache) {
+    if (remaining === 0) return { length: 0 };
+    const pointId = this.canonicalCourseKey(point);
+    const key = `${pointId}:${remaining}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const node = this.drainageNode(point, sampleAt, drainage);
+    const world = worldOffsetToAxial(this.courseToWorld(point));
+    let best = { length: 0 };
+    for (const delta of AXIAL_NEIGHBORS) {
+      const candidate = { x: point.x + delta.x, y: point.y + delta.y };
+      const adjacent = this.drainageNode(candidate, sampleAt, drainage);
+      if (!adjacent || !Number.isFinite(adjacent.potential) || adjacent.potential <= node.potential) continue;
+      const next = this.nextCoursePoint(candidate, adjacent, sampleAt, drainage);
+      if (!next || this.canonicalCourseKey(next) !== pointId) continue;
+      const upstream = this.longestUpstreamBranch(candidate, remaining - 1, sampleAt, drainage, cache);
+      const from = worldOffsetToAxial(this.courseToWorld(candidate));
+      const dx = from.x - world.x;
+      const dy = from.y - world.y;
+      const length = upstream.length + Math.sqrt(dx * dx + dx * dy + dy * dy);
+      if (length > best.length) best = { length, delta };
+    }
+    cache.set(key, best);
+    return best;
   }
   sourceFor(regionX, regionY, slot, sampleAt, cache) {
     const rivers = this.profile.rivers;
@@ -1984,6 +2002,7 @@ var DrainageWorldWaterSampler = class {
     const sources = /* @__PURE__ */ new Set();
     const courses = [];
     const drainage = /* @__PURE__ */ new Map();
+    const upstream = /* @__PURE__ */ new Map();
     for (let regionX = firstRegionX; regionX <= lastRegionX; regionX += 1) {
       for (let regionY = firstRegionY; regionY <= lastRegionY; regionY += 1) {
         for (let slot = 0; slot < rivers.sourcesPerCell; slot += 1) {
@@ -1992,7 +2011,7 @@ var DrainageWorldWaterSampler = class {
           const key = this.canonicalCourseKey(source);
           if (sources.has(key)) continue;
           sources.add(key);
-          const course = this.traceCourse(source, sampleAt, drainage);
+          const course = this.traceCourse(source, sampleAt, drainage, upstream);
           if (course) courses.push(course);
         }
       }
@@ -2041,9 +2060,10 @@ var DrainageWorldWaterSampler = class {
     const rivers = this.profile.rivers;
     for (const course of courses) {
       const head = nodes.get(this.canonicalCourseKey(course.points[0]));
+      const anchor = nodes.get(this.canonicalCourseKey(course.anchor));
       head.visibleDistanceToSea = Math.max(
         head.visibleDistanceToSea,
-        head.distanceToSea * rivers.courseLengthRatio
+        anchor.distanceToSea * rivers.courseLengthMultiplier
       );
     }
     const upstreamFirst = [...nodes.values()].reverse();
@@ -3163,8 +3183,8 @@ function worldVegetationTransferables(layout) {
 }
 
 // src/world/WorldDescriptor.ts
-var WORLD_DESCRIPTOR_FORMAT_VERSION = 4;
-var WORLD_WORKER_PROTOCOL_VERSION = 6;
+var WORLD_DESCRIPTOR_FORMAT_VERSION = 5;
+var WORLD_WORKER_PROTOCOL_VERSION = 7;
 function assertChunkSize(value) {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_WORLD_GENERATION_CHUNK_SIZE) {
     throw new RangeError(`chunkSize must be an integer between 1 and ${MAX_WORLD_GENERATION_CHUNK_SIZE}`);

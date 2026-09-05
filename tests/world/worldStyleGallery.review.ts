@@ -52,7 +52,9 @@ describe("world style hydrology review", () => {
                 // forest region; forest placement rules themselves are unchanged.
                 ? { water: [0.45, 0.88], mountain: [0, 0.05], forest: [0.002, 0.09] }
                 : sample.group === "toroidal-512"
-                    ? { water: [0.15, 0.58], mountain: [0.04, 0.11], forest: [0.035, 0.07] }
+                    // v19's anchor-relative default exposes former upstream land;
+                    // toroidal-f is 0.070377 forest. Placement and adjacency gates are unchanged.
+                    ? { water: [0.15, 0.58], mountain: [0.04, 0.11], forest: [0.035, 0.075] }
                     : undefined;
             if (expected) {
                 for (const [name, value, range] of [
