@@ -5,6 +5,7 @@ import {
     WORLD_CHUNK_FORMAT_VERSION
 } from "./generateWorldChunk";
 import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import { assertToroidalWorldBounds } from "./WorldGenerationLimits";
 import {
     assertWorldWaterGenerationStyle,
     normalizeWorldWaterGenerationStyle,
@@ -74,20 +75,17 @@ export function createWorldDescriptor(options: CreateWorldDescriptorOptions): Wo
         waterStyle
     } as const;
     if (!options.world) {
-        return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+        return Object.freeze({ ...base, sourceKind: "procedural-infinite", topology: "infinite" });
     }
     const world = options.world;
-    if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8
-        || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-        throw new TypeError("toroidal world descriptor bounds are invalid");
-    }
-    return {
+    assertToroidalWorldBounds(world);
+    return Object.freeze({
         ...base,
         sourceKind: "procedural-toroidal",
         topology: "toroidal",
         width: world.width,
         height: world.height
-    };
+    });
 }
 
 export function assertWorldDescriptor(value: unknown): asserts value is WorldDescriptor {
@@ -112,11 +110,11 @@ export function assertWorldDescriptor(value: unknown): asserts value is WorldDes
         }
         return;
     }
-    if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width)
-        || (descriptor.width as number) < 8 || (descriptor.width as number) % 2 !== 0
-        || !Number.isInteger(descriptor.height) || (descriptor.height as number) < 8) {
-        throw new TypeError("toroidal world descriptor topology is invalid");
-    }
+    assertToroidalWorldBounds({
+        topology: descriptor.topology as string,
+        width: descriptor.width as number,
+        height: descriptor.height as number
+    });
 }
 
 export function serializeWorldDescriptor(descriptor: WorldDescriptor): string {

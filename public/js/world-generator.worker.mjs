@@ -1309,17 +1309,20 @@ var smoothstep = (edge0, edge1, value) => {
   return t * t * (3 - 2 * t);
 };
 function assertDimension(name, value) {
-  if (!Number.isInteger(value) || value < 2) {
-    throw new RangeError(`landform ${name} must be an integer >= 2`);
+  if (!Number.isSafeInteger(value) || value < 2) {
+    throw new RangeError(`landform ${name} must be a safe integer >= 2`);
   }
 }
 function resolveDomain(domain) {
   const resolved = domain ?? { topology: "infinite" };
+  if (resolved.topology !== "infinite" && resolved.topology !== "bounded" && resolved.topology !== "toroidal") {
+    throw new TypeError("landform topology must be infinite, bounded or toroidal");
+  }
   if (resolved.topology !== "infinite") {
     assertDimension("width", resolved.width);
     assertDimension("height", resolved.height);
   }
-  return { ...resolved };
+  return Object.freeze({ ...resolved });
 }
 function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, oceanNoise, latitude, edgeFalloff, profile) {
   const fields = profile.fields;
@@ -2401,14 +2404,23 @@ function createWorldSurfaceResolver(options) {
   return new FrozenWorldSurfaceResolver(options);
 }
 
-// src/world/generateWorld.ts
+// src/world/WorldGenerationLimits.ts
 var MIN_WORLD_SIZE = 8;
 var MAX_WORLD_SIZE = 512;
-function assertDimension2(name, value) {
-  if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-    throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+function assertWorldDimensions(width, height) {
+  for (const [name, value] of [["width", width], ["height", height]]) {
+    if (!Number.isSafeInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+    }
   }
 }
+function assertToroidalWorldBounds(world) {
+  if (world.topology !== "toroidal") throw new TypeError("world topology must be toroidal");
+  assertWorldDimensions(world.width, world.height);
+  if (world.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+}
+
+// src/world/generateWorld.ts
 function cloneGeneratedTile(tile) {
   return {
     ...tile,
@@ -2424,8 +2436,7 @@ function generateWorld({
   topology = "bounded",
   waterStyle
 }) {
-  assertDimension2("width", width);
-  assertDimension2("height", height);
+  assertWorldDimensions(width, height);
   if (topology !== "bounded" && topology !== "toroidal") {
     throw new RangeError('topology must be either "bounded" or "toroidal"');
   }
@@ -2498,9 +2509,7 @@ function encodeTileInfo(tile) {
 }
 function validateBoundedWorld(world) {
   if (!world) return;
-  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-    throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
-  }
+  assertToroidalWorldBounds(world);
 }
 function createWorldChunkSurfaceResolver(options) {
   if (!options || typeof options !== "object") throw new TypeError("world chunk generation options are required");
@@ -3219,19 +3228,17 @@ function createWorldDescriptor(options) {
     waterStyle
   };
   if (!options.world) {
-    return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+    return Object.freeze({ ...base, sourceKind: "procedural-infinite", topology: "infinite" });
   }
   const world = options.world;
-  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-    throw new TypeError("toroidal world descriptor bounds are invalid");
-  }
-  return {
+  assertToroidalWorldBounds(world);
+  return Object.freeze({
     ...base,
     sourceKind: "procedural-toroidal",
     topology: "toroidal",
     width: world.width,
     height: world.height
-  };
+  });
 }
 function assertWorldDescriptor(value) {
   if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
@@ -3255,9 +3262,11 @@ function assertWorldDescriptor(value) {
     }
     return;
   }
-  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
-    throw new TypeError("toroidal world descriptor topology is invalid");
-  }
+  assertToroidalWorldBounds({
+    topology: descriptor.topology,
+    width: descriptor.width,
+    height: descriptor.height
+  });
 }
 function serializeWorldDescriptor(descriptor) {
   assertWorldDescriptor(descriptor);

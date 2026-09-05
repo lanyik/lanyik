@@ -801,91 +801,20 @@ function assertWrappableMap(map) {
   }
 }
 
-// src/world/noise.ts
-var UINT32_MAX = 4294967295;
-function seedToUint32(seed) {
-  const text = String(seed);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
+// src/world/WorldGenerationLimits.ts
+var MIN_WORLD_SIZE = 8;
+var MAX_WORLD_SIZE = 512;
+function assertWorldDimensions(width, height) {
+  for (const [name, value] of [["width", width], ["height", height]]) {
+    if (!Number.isSafeInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+    }
   }
-  return hash >>> 0;
 }
-function randomGridValue(seed, x, y) {
-  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-  hash = Math.imul(hash ^ hash >>> 15, 739982445);
-  hash = Math.imul(hash ^ hash >>> 12, 695872825);
-  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-}
-var smooth = (value) => value * value * (3 - 2 * value);
-var lerp = (from, to, amount) => from + (to - from) * amount;
-function positiveModulo2(value, modulus) {
-  return (value % modulus + modulus) % modulus;
-}
-function valueNoise2D(seed, x, y) {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function fractalNoise2D(seed, x, y, octaves) {
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-  const px = Math.max(1, Math.round(periodX));
-  const py = Math.max(1, Math.round(periodY));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const sample = (gx, gy) => randomGridValue(
-    seed,
-    positiveModulo2(gx, px),
-    positiveModulo2(gy, py)
-  );
-  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-  return lerp(top, bottom, ty);
-}
-function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-  const baseCellsX = Math.max(1, Math.round(cellsX));
-  const baseCellsY = Math.max(1, Math.round(cellsY));
-  let amplitude = 1;
-  let frequency = 1;
-  let total = 0;
-  let normalization = 0;
-  for (let octave = 0; octave < octaves; octave += 1) {
-    const periodX = baseCellsX * frequency;
-    const periodY = baseCellsY * frequency;
-    total += periodicValueNoise2D(
-      seed + Math.imul(octave, 2654435769) >>> 0,
-      normalizedX * periodX,
-      normalizedY * periodY,
-      periodX,
-      periodY
-    ) * amplitude;
-    normalization += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2;
-  }
-  return total / normalization;
-}
-function randomAt(seed, x, y, salt) {
-  return randomGridValue((seed ^ salt) >>> 0, x, y);
+function assertToroidalWorldBounds(world) {
+  if (world.topology !== "toroidal") throw new TypeError("world topology must be toroidal");
+  assertWorldDimensions(world.width, world.height);
+  if (world.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
 }
 
 // src/world/WorldGeneratorVersion.ts
@@ -1381,6 +1310,93 @@ function createWorldStyleProfile(waterStyle = DEFAULT_WORLD_WATER_STYLE) {
 }
 assertWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE);
 
+// src/world/noise.ts
+var UINT32_MAX = 4294967295;
+function seedToUint32(seed) {
+  const text = String(seed);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function randomGridValue(seed, x, y) {
+  let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+  hash = Math.imul(hash ^ hash >>> 15, 739982445);
+  hash = Math.imul(hash ^ hash >>> 12, 695872825);
+  return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+}
+var smooth = (value) => value * value * (3 - 2 * value);
+var lerp = (from, to, amount) => from + (to - from) * amount;
+function positiveModulo2(value, modulus) {
+  return (value % modulus + modulus) % modulus;
+}
+function valueNoise2D(seed, x, y) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smooth(x - x0);
+  const ty = smooth(y - y0);
+  const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+  const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+  return lerp(top, bottom, ty);
+}
+function fractalNoise2D(seed, x, y, octaves) {
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let normalization = 0;
+  for (let octave = 0; octave < octaves; octave += 1) {
+    total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+    normalization += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+  return total / normalization;
+}
+function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+  const px = Math.max(1, Math.round(periodX));
+  const py = Math.max(1, Math.round(periodY));
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = smooth(x - x0);
+  const ty = smooth(y - y0);
+  const sample = (gx, gy) => randomGridValue(
+    seed,
+    positiveModulo2(gx, px),
+    positiveModulo2(gy, py)
+  );
+  const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+  const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+  return lerp(top, bottom, ty);
+}
+function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+  const baseCellsX = Math.max(1, Math.round(cellsX));
+  const baseCellsY = Math.max(1, Math.round(cellsY));
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let normalization = 0;
+  for (let octave = 0; octave < octaves; octave += 1) {
+    const periodX = baseCellsX * frequency;
+    const periodY = baseCellsY * frequency;
+    total += periodicValueNoise2D(
+      seed + Math.imul(octave, 2654435769) >>> 0,
+      normalizedX * periodX,
+      normalizedY * periodY,
+      periodX,
+      periodY
+    ) * amplitude;
+    normalization += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+  return total / normalization;
+}
+function randomAt(seed, x, y, salt) {
+  return randomGridValue((seed ^ salt) >>> 0, x, y);
+}
+
 // src/world/LandformSampler.ts
 var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
 var clamp01 = (value) => Math.max(0, Math.min(1, value));
@@ -1389,17 +1405,20 @@ var smoothstep = (edge0, edge1, value) => {
   return t * t * (3 - 2 * t);
 };
 function assertDimension(name, value) {
-  if (!Number.isInteger(value) || value < 2) {
-    throw new RangeError(`landform ${name} must be an integer >= 2`);
+  if (!Number.isSafeInteger(value) || value < 2) {
+    throw new RangeError(`landform ${name} must be a safe integer >= 2`);
   }
 }
 function resolveDomain(domain) {
   const resolved = domain ?? { topology: "infinite" };
+  if (resolved.topology !== "infinite" && resolved.topology !== "bounded" && resolved.topology !== "toroidal") {
+    throw new TypeError("landform topology must be infinite, bounded or toroidal");
+  }
   if (resolved.topology !== "infinite") {
     assertDimension("width", resolved.width);
     assertDimension("height", resolved.height);
   }
-  return { ...resolved };
+  return Object.freeze({ ...resolved });
 }
 function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, oceanNoise, latitude, edgeFalloff, profile) {
   const fields = profile.fields;
@@ -2571,9 +2590,7 @@ function encodeTileInfo(tile) {
 }
 function validateBoundedWorld(world) {
   if (!world) return;
-  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-    throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
-  }
+  assertToroidalWorldBounds(world);
 }
 function generateWorldChunk(options) {
   assertChunkCoordinate("chunkX", options.chunkX);
@@ -2941,19 +2958,17 @@ function createWorldDescriptor(options) {
     waterStyle
   };
   if (!options.world) {
-    return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+    return Object.freeze({ ...base, sourceKind: "procedural-infinite", topology: "infinite" });
   }
   const world = options.world;
-  if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-    throw new TypeError("toroidal world descriptor bounds are invalid");
-  }
-  return {
+  assertToroidalWorldBounds(world);
+  return Object.freeze({
     ...base,
     sourceKind: "procedural-toroidal",
     topology: "toroidal",
     width: world.width,
     height: world.height
-  };
+  });
 }
 function assertWorldDescriptor(value) {
   if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
@@ -2977,9 +2992,11 @@ function assertWorldDescriptor(value) {
     }
     return;
   }
-  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
-    throw new TypeError("toroidal world descriptor topology is invalid");
-  }
+  assertToroidalWorldBounds({
+    topology: descriptor.topology,
+    width: descriptor.width,
+    height: descriptor.height
+  });
 }
 function serializeWorldDescriptor(descriptor) {
   assertWorldDescriptor(descriptor);

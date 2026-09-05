@@ -1,9 +1,9 @@
 import { MapInfo, MapInfoData, TileInfo } from "../interfaces";
 import { createWorldSurfaceResolver, WorldSurfaceResolver } from "./WorldSurfaceResolver";
 import { WorldWaterGenerationStyle } from "./WorldStyleProfile";
+import { assertWorldDimensions } from "./WorldGenerationLimits";
 
-export const MIN_WORLD_SIZE = 8;
-export const MAX_WORLD_SIZE = 512;
+export { MIN_WORLD_SIZE, MAX_WORLD_SIZE } from "./WorldGenerationLimits";
 
 export interface WorldGenerationOptions {
     seed: string | number;
@@ -14,12 +14,6 @@ export interface WorldGenerationOptions {
 }
 
 export type WorldTopology = "bounded" | "toroidal";
-
-function assertDimension(name: "width" | "height", value: number): void {
-    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-        throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-    }
-}
 
 function cloneGeneratedTile(tile: Readonly<TileInfo>): TileInfo {
     return {
@@ -59,8 +53,7 @@ export function generateWorld({
     topology = "bounded",
     waterStyle
 }: WorldGenerationOptions): MapInfo {
-    assertDimension("width", width);
-    assertDimension("height", height);
+    assertWorldDimensions(width, height);
     if (topology !== "bounded" && topology !== "toroidal") {
         throw new RangeError('topology must be either "bounded" or "toroidal"');
     }

@@ -10,6 +10,22 @@ var Land = /* @__PURE__ */ ((Land2) => {
   return Land2;
 })(Land || {});
 
+// src/world/WorldGenerationLimits.ts
+var MIN_WORLD_SIZE = 8;
+var MAX_WORLD_SIZE = 512;
+function assertWorldDimensions(width, height) {
+  for (const [name, value] of [["width", width], ["height", height]]) {
+    if (!Number.isSafeInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+    }
+  }
+}
+function assertToroidalWorldBounds(world) {
+  if (world.topology !== "toroidal") throw new TypeError("world topology must be toroidal");
+  assertWorldDimensions(world.width, world.height);
+  if (world.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+}
+
 // src/world/WorldGeneratorVersion.ts
 var WORLD_GENERATOR_VERSION = 19;
 
@@ -574,9 +590,11 @@ function assertWorldDescriptor(value) {
     }
     return;
   }
-  if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
-    throw new TypeError("toroidal world descriptor topology is invalid");
-  }
+  assertToroidalWorldBounds({
+    topology: descriptor.topology,
+    width: descriptor.width,
+    height: descriptor.height
+  });
 }
 function serializeWorldDescriptor(descriptor) {
   assertWorldDescriptor(descriptor);

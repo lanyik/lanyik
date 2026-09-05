@@ -10833,91 +10833,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
   };
 
-  // src/world/noise.ts
-  var UINT32_MAX = 4294967295;
-  function seedToUint32(seed) {
-    const text = String(seed);
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
+  // src/world/WorldGenerationLimits.ts
+  var MIN_WORLD_SIZE = 8;
+  var MAX_WORLD_SIZE = 512;
+  function assertWorldDimensions(width, height) {
+    for (const [name, value] of [["width", width], ["height", height]]) {
+      if (!Number.isSafeInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
+        throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
+      }
     }
-    return hash >>> 0;
   }
-  function randomGridValue(seed, x, y) {
-    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
-    hash = Math.imul(hash ^ hash >>> 15, 739982445);
-    hash = Math.imul(hash ^ hash >>> 12, 695872825);
-    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
-  }
-  var smooth = (value) => value * value * (3 - 2 * value);
-  var lerp = (from, to, amount) => from + (to - from) * amount;
-  function positiveModulo2(value, modulus) {
-    return (value % modulus + modulus) % modulus;
-  }
-  function valueNoise2D(seed, x, y) {
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
-    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function fractalNoise2D(seed, x, y, octaves) {
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
-    const px = Math.max(1, Math.round(periodX));
-    const py = Math.max(1, Math.round(periodY));
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const tx = smooth(x - x0);
-    const ty = smooth(y - y0);
-    const sample = (gx, gy) => randomGridValue(
-      seed,
-      positiveModulo2(gx, px),
-      positiveModulo2(gy, py)
-    );
-    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
-    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
-    return lerp(top, bottom, ty);
-  }
-  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
-    const baseCellsX = Math.max(1, Math.round(cellsX));
-    const baseCellsY = Math.max(1, Math.round(cellsY));
-    let amplitude = 1;
-    let frequency = 1;
-    let total = 0;
-    let normalization = 0;
-    for (let octave = 0; octave < octaves; octave += 1) {
-      const periodX = baseCellsX * frequency;
-      const periodY = baseCellsY * frequency;
-      total += periodicValueNoise2D(
-        seed + Math.imul(octave, 2654435769) >>> 0,
-        normalizedX * periodX,
-        normalizedY * periodY,
-        periodX,
-        periodY
-      ) * amplitude;
-      normalization += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2;
-    }
-    return total / normalization;
-  }
-  function randomAt(seed, x, y, salt) {
-    return randomGridValue((seed ^ salt) >>> 0, x, y);
+  function assertToroidalWorldBounds(world) {
+    if (world.topology !== "toroidal") throw new TypeError("world topology must be toroidal");
+    assertWorldDimensions(world.width, world.height);
+    if (world.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
   }
 
   // src/world/WorldGeneratorVersion.ts
@@ -11413,6 +11342,93 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   assertWorldWaterGenerationStyle(DEFAULT_WORLD_WATER_STYLE);
 
+  // src/world/noise.ts
+  var UINT32_MAX = 4294967295;
+  function seedToUint32(seed) {
+    const text = String(seed);
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+  function randomGridValue(seed, x, y) {
+    let hash = seed ^ Math.imul(x, 521288629) ^ Math.imul(y, 1597334677);
+    hash = Math.imul(hash ^ hash >>> 15, 739982445);
+    hash = Math.imul(hash ^ hash >>> 12, 695872825);
+    return ((hash ^ hash >>> 15) >>> 0) / UINT32_MAX;
+  }
+  var smooth = (value) => value * value * (3 - 2 * value);
+  var lerp = (from, to, amount) => from + (to - from) * amount;
+  function positiveModulo2(value, modulus) {
+    return (value % modulus + modulus) % modulus;
+  }
+  function valueNoise2D(seed, x, y) {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const top = lerp(randomGridValue(seed, x0, y0), randomGridValue(seed, x0 + 1, y0), tx);
+    const bottom = lerp(randomGridValue(seed, x0, y0 + 1), randomGridValue(seed, x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function fractalNoise2D(seed, x, y, octaves) {
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      total += valueNoise2D(seed + Math.imul(octave, 2654435769) >>> 0, x * frequency, y * frequency) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function periodicValueNoise2D(seed, x, y, periodX, periodY) {
+    const px = Math.max(1, Math.round(periodX));
+    const py = Math.max(1, Math.round(periodY));
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = smooth(x - x0);
+    const ty = smooth(y - y0);
+    const sample = (gx, gy) => randomGridValue(
+      seed,
+      positiveModulo2(gx, px),
+      positiveModulo2(gy, py)
+    );
+    const top = lerp(sample(x0, y0), sample(x0 + 1, y0), tx);
+    const bottom = lerp(sample(x0, y0 + 1), sample(x0 + 1, y0 + 1), tx);
+    return lerp(top, bottom, ty);
+  }
+  function periodicFractalNoise2D(seed, normalizedX, normalizedY, cellsX, cellsY, octaves) {
+    const baseCellsX = Math.max(1, Math.round(cellsX));
+    const baseCellsY = Math.max(1, Math.round(cellsY));
+    let amplitude = 1;
+    let frequency = 1;
+    let total = 0;
+    let normalization = 0;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      const periodX = baseCellsX * frequency;
+      const periodY = baseCellsY * frequency;
+      total += periodicValueNoise2D(
+        seed + Math.imul(octave, 2654435769) >>> 0,
+        normalizedX * periodX,
+        normalizedY * periodY,
+        periodX,
+        periodY
+      ) * amplitude;
+      normalization += amplitude;
+      amplitude *= 0.5;
+      frequency *= 2;
+    }
+    return total / normalization;
+  }
+  function randomAt(seed, x, y, salt) {
+    return randomGridValue((seed ^ salt) >>> 0, x, y);
+  }
+
   // src/world/LandformSampler.ts
   var LANDFORM_SEA_LEVEL = WORLD_STYLE_PROFILE.terrain.seaLevel;
   var clamp01 = (value) => Math.max(0, Math.min(1, value));
@@ -11421,17 +11437,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return t * t * (3 - 2 * t);
   };
   function assertDimension(name, value) {
-    if (!Number.isInteger(value) || value < 2) {
-      throw new RangeError(`landform ${name} must be an integer >= 2`);
+    if (!Number.isSafeInteger(value) || value < 2) {
+      throw new RangeError(`landform ${name} must be a safe integer >= 2`);
     }
   }
   function resolveDomain(domain) {
     const resolved = domain ?? { topology: "infinite" };
+    if (resolved.topology !== "infinite" && resolved.topology !== "bounded" && resolved.topology !== "toroidal") {
+      throw new TypeError("landform topology must be infinite, bounded or toroidal");
+    }
     if (resolved.topology !== "infinite") {
       assertDimension("width", resolved.width);
       assertDimension("height", resolved.height);
     }
-    return { ...resolved };
+    return Object.freeze({ ...resolved });
   }
   function composeSample(continent, detail, ridgeNoise, valleyNoise, roughness, moistureNoise, temperatureNoise, forestPatch, oceanNoise, latitude, edgeFalloff, profile) {
     const fields = profile.fields;
@@ -12519,62 +12538,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     return new FrozenWorldSurfaceResolver(options);
   }
 
-  // src/world/generateWorld.ts
-  var MIN_WORLD_SIZE = 8;
-  var MAX_WORLD_SIZE = 512;
-  function assertDimension2(name, value) {
-    if (!Number.isInteger(value) || value < MIN_WORLD_SIZE || value > MAX_WORLD_SIZE) {
-      throw new RangeError(`${name} must be an integer between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-    }
-  }
-  function cloneGeneratedTile(tile) {
-    return {
-      ...tile,
-      modifiers: tile.modifiers ? [...tile.modifiers] : void 0,
-      rivers: tile.rivers?.map((river) => ({ ...river })),
-      city: tile.city ? { ...tile.city } : void 0
-    };
-  }
-  function generateWorld({
-    seed,
-    width,
-    height,
-    topology = "bounded",
-    waterStyle
-  }) {
-    assertDimension2("width", width);
-    assertDimension2("height", height);
-    if (topology !== "bounded" && topology !== "toroidal") {
-      throw new RangeError('topology must be either "bounded" or "toroidal"');
-    }
-    if (topology === "toroidal" && width % 2 !== 0) {
-      throw new RangeError("toroidal worlds require an even width");
-    }
-    const data = {};
-    const toroidal = topology === "toroidal";
-    const resolver = createWorldSurfaceResolver({
-      seed,
-      waterStyle,
-      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
-    });
-    const windowSize = 24;
-    for (let startX = 0; startX < width; startX += windowSize) {
-      for (let startY = 0; startY < height; startY += windowSize) {
-        const window2 = resolver.createWindow();
-        const endX = Math.min(width, startX + windowSize);
-        const endY = Math.min(height, startY + windowSize);
-        for (let x = startX; x < endX; x += 1) {
-          data[x] ?? (data[x] = {});
-          for (let y = startY; y < endY; y += 1) {
-            data[x][y] = cloneGeneratedTile(window2.resolveGeneratedTile(x, y));
-          }
-        }
-        window2.clear();
-      }
-    }
-    return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
-  }
-
   // src/world/generateWorldChunk.ts
   var DEFAULT_WORLD_GENERATION_CHUNK_SIZE = 24;
   var MAX_WORLD_GENERATION_CHUNK_SIZE = 128;
@@ -12665,9 +12628,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function validateBoundedWorld(world) {
     if (!world) return;
-    if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-      throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
-    }
+    assertToroidalWorldBounds(world);
   }
   function generateWorldChunk(options) {
     assertChunkCoordinate("chunkX", options.chunkX);
@@ -13036,19 +12997,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       waterStyle
     };
     if (!options.world) {
-      return { ...base, sourceKind: "procedural-infinite", topology: "infinite" };
+      return Object.freeze({ ...base, sourceKind: "procedural-infinite", topology: "infinite" });
     }
     const world = options.world;
-    if (world.topology !== "toroidal" || !Number.isInteger(world.width) || world.width < 8 || !Number.isInteger(world.height) || world.height < 8 || world.width % 2 !== 0) {
-      throw new TypeError("toroidal world descriptor bounds are invalid");
-    }
-    return {
+    assertToroidalWorldBounds(world);
+    return Object.freeze({
       ...base,
       sourceKind: "procedural-toroidal",
       topology: "toroidal",
       width: world.width,
       height: world.height
-    };
+    });
   }
   function assertWorldDescriptor(value) {
     if (!value || typeof value !== "object") throw new TypeError("world descriptor must be an object");
@@ -13072,9 +13031,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       return;
     }
-    if (descriptor.topology !== "toroidal" || !Number.isInteger(descriptor.width) || descriptor.width < 8 || descriptor.width % 2 !== 0 || !Number.isInteger(descriptor.height) || descriptor.height < 8) {
-      throw new TypeError("toroidal world descriptor topology is invalid");
-    }
+    assertToroidalWorldBounds({
+      topology: descriptor.topology,
+      width: descriptor.width,
+      height: descriptor.height
+    });
   }
   function serializeWorldDescriptor(descriptor) {
     assertWorldDescriptor(descriptor);
@@ -14985,10 +14946,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.cacheEpoch = 0;
       this.disposed = false;
       if (!options || typeof options !== "object") throw new TypeError("toroidal world options are required");
-      if (!Number.isInteger(options.width) || options.width < MIN_WORLD_SIZE || options.width > MAX_WORLD_SIZE || !Number.isInteger(options.height) || options.height < MIN_WORLD_SIZE || options.height > MAX_WORLD_SIZE) {
-        throw new RangeError(`toroidal world dimensions must be integers between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-      }
-      if (options.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+      assertToroidalWorldBounds({ topology: "toroidal", width: options.width, height: options.height });
       if (options.workerCount !== void 0 && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
         throw new RangeError("workerCount must be an integer between 1 and 8");
       }
@@ -22385,6 +22343,54 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.removeAllListeners();
     }
   };
+
+  // src/world/generateWorld.ts
+  function cloneGeneratedTile(tile) {
+    return {
+      ...tile,
+      modifiers: tile.modifiers ? [...tile.modifiers] : void 0,
+      rivers: tile.rivers?.map((river) => ({ ...river })),
+      city: tile.city ? { ...tile.city } : void 0
+    };
+  }
+  function generateWorld({
+    seed,
+    width,
+    height,
+    topology = "bounded",
+    waterStyle
+  }) {
+    assertWorldDimensions(width, height);
+    if (topology !== "bounded" && topology !== "toroidal") {
+      throw new RangeError('topology must be either "bounded" or "toroidal"');
+    }
+    if (topology === "toroidal" && width % 2 !== 0) {
+      throw new RangeError("toroidal worlds require an even width");
+    }
+    const data = {};
+    const toroidal = topology === "toroidal";
+    const resolver = createWorldSurfaceResolver({
+      seed,
+      waterStyle,
+      domain: toroidal ? { topology: "toroidal", width, height } : { topology: "bounded", width, height }
+    });
+    const windowSize = 24;
+    for (let startX = 0; startX < width; startX += windowSize) {
+      for (let startY = 0; startY < height; startY += windowSize) {
+        const window2 = resolver.createWindow();
+        const endX = Math.min(width, startX + windowSize);
+        const endY = Math.min(height, startY + windowSize);
+        for (let x = startX; x < endX; x += 1) {
+          data[x] ?? (data[x] = {});
+          for (let y = startY; y < endY; y += 1) {
+            data[x][y] = cloneGeneratedTile(window2.resolveGeneratedTile(x, y));
+          }
+        }
+        window2.clear();
+      }
+    }
+    return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
+  }
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;

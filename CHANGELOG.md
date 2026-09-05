@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- World descriptors and landform domains are immutable at runtime. Finite
+  generation entry points share dimension limits, and invalid sampler topology
+  or unsafe dimensions fail before sampling.
 - Generation checkpoints require an explicit authoritative mutation boundary
   around complete capture and restore. Campaign ownership checks and shutdown
   admission prevent asynchronous snapshots from crossing world-state changes.

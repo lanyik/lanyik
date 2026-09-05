@@ -10,6 +10,8 @@ import {
     WORLD_GENERATOR_VERSION,
     worldDescriptorsEqual
 } from "../../src/index";
+import { generateWorld } from "../../src/world/generateWorld";
+import { generateWorldChunk } from "../../src/world/generateWorldChunk";
 
 describe("world descriptor protocol", () => {
     test("canonicalizes an infinite procedural world", () => {
@@ -25,6 +27,8 @@ describe("world descriptor protocol", () => {
             topology: "infinite"
         });
         expect(() => assertWorldDescriptor(structuredClone(descriptor))).not.toThrow();
+        expect(Object.isFrozen(descriptor)).toBe(true);
+        expect(() => Object.assign(descriptor, { seed: "mutated" })).toThrow(TypeError);
         expect(worldDescriptorsEqual(descriptor, createWorldDescriptor({ seed: "42", chunkSize: 24 }))).toBe(true);
     });
 
@@ -82,5 +86,15 @@ describe("world descriptor protocol", () => {
         expect(() => assertWorldDescriptor({
             ...createWorldDescriptor({ seed: "world" }), descriptorVersion: 2
         })).toThrow(/descriptor format/);
+    });
+
+    test.each([7, 513, 1e20, Number.POSITIVE_INFINITY, 24.5])("rejects width %s consistently before generation", width => {
+        const world = { topology: "toroidal" as const, width, height: 24 };
+        expect(() => createWorldDescriptor({ seed: "bounds", world })).toThrow();
+        expect(() => generateWorld({ seed: "bounds", ...world })).toThrow();
+        expect(() => generateWorldChunk({ seed: "bounds", world, chunkX: 0, chunkY: 0 })).toThrow();
+        expect(() => assertWorldDescriptor({
+            ...createWorldDescriptor({ seed: "bounds", world: { ...world, width: 24 } }), width
+        })).toThrow();
     });
 });

@@ -54,18 +54,21 @@ const smoothstep = (edge0: number, edge1: number, value: number): number => {
 };
 
 function assertDimension(name: "width" | "height", value: number): void {
-    if (!Number.isInteger(value) || value < 2) {
-        throw new RangeError(`landform ${name} must be an integer >= 2`);
+    if (!Number.isSafeInteger(value) || value < 2) {
+        throw new RangeError(`landform ${name} must be a safe integer >= 2`);
     }
 }
 
 function resolveDomain(domain: LandformDomain | undefined): LandformDomain {
     const resolved = domain ?? { topology: "infinite" };
+    if (resolved.topology !== "infinite" && resolved.topology !== "bounded" && resolved.topology !== "toroidal") {
+        throw new TypeError("landform topology must be infinite, bounded or toroidal");
+    }
     if (resolved.topology !== "infinite") {
         assertDimension("width", resolved.width);
         assertDimension("height", resolved.height);
     }
-    return { ...resolved };
+    return Object.freeze({ ...resolved });
 }
 
 function composeSample(

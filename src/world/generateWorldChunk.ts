@@ -1,6 +1,6 @@
 import { Land } from "../enums";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { WORLD_GENERATOR_VERSION } from "./WorldGeneratorVersion";
+import { assertToroidalWorldBounds } from "./WorldGenerationLimits";
 import {
     DEFAULT_WORLD_WATER_STYLE,
     worldWaterGenerationStylesEqual,
@@ -179,12 +179,7 @@ function encodeTileInfo(tile: TileInfo): number {
 
 function validateBoundedWorld(world: BoundedWorldChunkGeneration | undefined): void {
     if (!world) return;
-    if (world.topology !== "toroidal"
-        || !Number.isInteger(world.width) || world.width < 8
-        || !Number.isInteger(world.height) || world.height < 8
-        || world.width % 2 !== 0) {
-        throw new RangeError("bounded chunk generation requires an even-width toroidal world of at least 8x8");
-    }
+    assertToroidalWorldBounds(world);
 }
 
 export function generateWorldChunk(options: WorldChunkGenerationOptions): PackedWorldChunk {

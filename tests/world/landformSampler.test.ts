@@ -11,6 +11,15 @@ import {
 } from "../../src/world/generateWorldChunk";
 
 describe("LandformSampler", () => {
+    test("rejects invalid domains and keeps the sampling domain immutable", () => {
+        expect(() => createLandformSampler({ seed: "bounds", domain: { topology: "invalid", width: 16, height: 16 } as never }))
+            .toThrow("topology");
+        expect(() => createLandformSampler({ seed: "bounds", domain: { topology: "bounded", width: 1e20, height: 16 } }))
+            .toThrow("safe integer");
+        const sampler = createLandformSampler({ seed: "bounds", domain: { topology: "toroidal", width: 16, height: 16 } });
+        expect(Object.isFrozen(sampler.domain)).toBe(true);
+        expect(() => Object.assign(sampler.domain, { width: 32 })).toThrow(TypeError);
+    });
     test("is deterministic and seed-sensitive", () => {
         const first = sampleLandform("ranges", -37, 91);
         expect(sampleLandform("ranges", -37, 91)).toEqual(first);

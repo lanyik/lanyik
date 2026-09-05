@@ -1,6 +1,6 @@
 import { assertWrappableMap, getMapTile, positiveModulo } from "../helpers/topology";
 import { MapInfo, Point, TileInfo } from "../interfaces";
-import { MAX_WORLD_SIZE, MIN_WORLD_SIZE } from "./generateWorld";
+import { assertToroidalWorldBounds } from "./WorldGenerationLimits";
 import {
     DEFAULT_WORLD_GENERATION_CHUNK_SIZE,
     MAX_WORLD_GENERATION_CHUNK_SIZE,
@@ -869,11 +869,7 @@ export class ToroidalWorldSource implements MutableWorldSource {
 
     constructor(options: ToroidalWorldSourceOptions, dependencies: ToroidalWorldSourceDependencies = {}) {
         if (!options || typeof options !== "object") throw new TypeError("toroidal world options are required");
-        if (!Number.isInteger(options.width) || options.width < MIN_WORLD_SIZE || options.width > MAX_WORLD_SIZE
-            || !Number.isInteger(options.height) || options.height < MIN_WORLD_SIZE || options.height > MAX_WORLD_SIZE) {
-            throw new RangeError(`toroidal world dimensions must be integers between ${MIN_WORLD_SIZE} and ${MAX_WORLD_SIZE}`);
-        }
-        if (options.width % 2 !== 0) throw new RangeError("toroidal worlds require an even width");
+        assertToroidalWorldBounds({ topology: "toroidal", width: options.width, height: options.height });
         if (options.workerCount !== undefined
             && (!Number.isInteger(options.workerCount) || options.workerCount <= 0 || options.workerCount > 8)) {
             throw new RangeError("workerCount must be an integer between 1 and 8");
