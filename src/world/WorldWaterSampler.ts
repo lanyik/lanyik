@@ -2,7 +2,9 @@ import { Land } from "../enums";
 import { Point } from "../interfaces";
 import { LandformDomain } from "./LandformSampler";
 import {
-    forEachHexCapsule,
+    createRiverReach,
+    forEachHexRiverReach,
+    RiverReach,
     worldAxialToOffset,
     worldOffsetToAxial
 } from "./hexRaster";
@@ -31,6 +33,17 @@ interface WaterPage {
 
 interface TracedCourse {
     readonly points: readonly Point[];
+}
+
+interface RasterCourseNode {
+    readonly world: Point;
+    readonly nextWorld?: Point;
+    readonly nextKey?: string;
+    reach?: RiverReach;
+    distanceToSea: number;
+    hasIncoming: boolean;
+    flow: number;
+    radius: number;
 }
 
 interface DrainageNode {
@@ -458,7 +471,27 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             if (!next) break;
             current = next;
         }
-        return reachedSea && points.length >= rivers.minimumCourseLength ? { points } : undefined;
+        if (!reachedSea || points.length < rivers.minimumCourseLength) return undefined;
+        // Extend only along real incoming drainage edges. This lengthens the
+        // same course without adding sources, random walks or uphill water.
+        for (let step = 0; step < rivers.upstreamExtensionSteps && points.length < rivers.maximumCourseLength; step += 1) {
+            const head = points[0];
+            const headKey = this.canonicalCourseKey(head);
+            let upstream: Point | undefined;
+            let bestPotential = -Infinity;
+            for (const delta of AXIAL_NEIGHBORS) {
+                const candidate = { x: head.x + delta.x, y: head.y + delta.y };
+                const node = this.drainageNode(candidate, sampleAt, cache);
+                if (!node || node.potential <= bestPotential || this.sourceSuitability(node.sample) === 0) continue;
+                const next = this.nextCoursePoint(candidate, node, sampleAt, cache);
+                if (!next || this.canonicalCourseKey(next) !== headKey) continue;
+                bestPotential = node.potential;
+                upstream = candidate;
+            }
+            if (!upstream) break;
+            points.unshift(upstream);
+        }
+        return { points };
     }
 
     private sourceFor(
@@ -496,7 +529,10 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         // regardless of which page requested it.
         const reach = this.domain.topology === "toroidal"
             ? 0
-            : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
+            : rivers.maximumCourseLength * this.courseStep + Math.ceil(
+                this.courseStep + rivers.courseWarpAmplitude * 2
+                    + rivers.highFlowCourseRadius * rivers.mouthWidthMultiplier * 2
+            );
         const corners = [
             worldOffsetToAxial({ x: originX - reach, y: originY - reach }),
             worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
@@ -539,12 +575,44 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         visit: (x: number, y: number) => void
     ): void {
         const courses = this.coursesForExtent(originX, originY, width, height, sampleAt);
-        const flow = new Map<string, number>();
+        const nodes = new Map<string, RasterCourseNode>();
         for (const course of courses) {
-            for (const point of course.points) {
+            let nextWorld: Point | undefined;
+            let nextKey: string | undefined;
+            for (let index = course.points.length - 1; index >= 0; index -= 1) {
+                const point = course.points[index];
+                const world = this.courseToWorld(point);
                 const key = this.canonicalCourseKey(point);
-                flow.set(key, (flow.get(key) ?? 0) + 1);
+                const node = nodes.get(key);
+                if (node) node.flow += 1;
+                else nodes.set(key, { world, nextWorld, nextKey, distanceToSea: 0, hasIncoming: false, flow: 1, radius: 0 });
+                nextWorld = world;
+                nextKey = key;
             }
+        }
+        for (const node of nodes.values()) {
+            if (node.nextKey !== undefined) nodes.get(node.nextKey)!.hasIncoming = true;
+        }
+        // Reverse course insertion is downstream-first even across confluences.
+        // Each midpoint spline's end is exactly the next spline's start. Keep
+        // directions in the current unwrapped frame when a toroidal alias joins.
+        for (const node of nodes.values()) {
+            if (!node.nextWorld || node.nextKey === undefined) continue;
+            const next = nodes.get(node.nextKey)!;
+            const downstream = next.nextWorld ? {
+                x: node.nextWorld.x + next.nextWorld.x - next.world.x,
+                y: node.nextWorld.y + next.nextWorld.y - next.world.y
+            } : undefined;
+            node.reach = createRiverReach(node.world, node.nextWorld, downstream, !node.hasIncoming);
+            node.distanceToSea = next.distanceToSea + node.reach.length;
+        }
+        const rivers = this.profile.rivers;
+        for (const node of nodes.values()) {
+            const flowRadius = rivers.baseCourseRadius
+                + (rivers.highFlowCourseRadius - rivers.baseCourseRadius)
+                    * smoothstep(1, rivers.highFlowThreshold, node.flow);
+            const mouth = 1 - smoothstep(0, rivers.mouthWideningDistance, node.distanceToSea);
+            node.radius = flowRadius * (1 + (rivers.mouthWidthMultiplier - 1) * mouth);
         }
         const endX = originX + width;
         const endY = originY + height;
@@ -558,24 +626,13 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             visited.add(index);
             visit(normalized.x, normalized.y);
         };
-        for (const course of courses) {
-            for (let index = 1; index < course.points.length; index += 1) {
-                const fromCourse = course.points[index - 1];
-                const toCourse = course.points[index];
-                const amount = Math.max(
-                    flow.get(this.canonicalCourseKey(fromCourse)) ?? 1,
-                    flow.get(this.canonicalCourseKey(toCourse)) ?? 1
-                );
-                const radius = amount >= this.profile.rivers.highFlowThreshold
-                    ? this.profile.rivers.highFlowCourseRadius
-                    : this.profile.rivers.baseCourseRadius;
-                forEachHexCapsule(
-                    this.courseToWorld(fromCourse),
-                    this.courseToWorld(toCourse),
-                    radius,
-                    emit
-                );
-            }
+        // Every directed reach has one downstream edge and one width profile,
+        // including confluences and toroidal copies. Rasterize it only once.
+        for (const node of nodes.values()) {
+            if (!node.reach || node.nextKey === undefined) continue;
+            forEachHexRiverReach(
+                node.reach, node.radius, nodes.get(node.nextKey)!.radius, emit
+            );
         }
     }
 

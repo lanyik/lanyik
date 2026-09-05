@@ -124,9 +124,13 @@ export interface WorldStyleProfile {
         readonly sourceMoistureFloor: number;
         readonly minimumCourseLength: number;
         readonly maximumCourseLength: number;
+        readonly upstreamExtensionSteps: number;
         readonly baseCourseRadius: number;
         readonly highFlowCourseRadius: number;
         readonly highFlowThreshold: number;
+        /** Distance to the sea along the course, in world-hex neighbour spacing. */
+        readonly mouthWideningDistance: number;
+        readonly mouthWidthMultiplier: number;
         readonly potentialOceanWeight: number;
         readonly potentialElevationWeight: number;
         readonly potentialValleyWeight: number;
@@ -158,10 +162,10 @@ export const DEFAULT_WORLD_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Ob
     oceanLevel: 0.47,
     riverSourceCellSize: 12,
     riverSourcesPerCell: 4,
-    riverWarpScale: 0.025,
-    riverWarpAmplitude: 2.5,
-    riverBaseRadius: 1,
-    riverHighFlowRadius: 2,
+    riverWarpScale: 0.03,
+    riverWarpAmplitude: 3.25,
+    riverBaseRadius: 1.25,
+    riverHighFlowRadius: 2.75,
     riverHighFlowThreshold: 8
 });
 
@@ -296,9 +300,12 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
         sourceMoistureFloor: 0.7,
         minimumCourseLength: 3,
         maximumCourseLength: 72,
+        upstreamExtensionSteps: 3,
         baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
         highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
         highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
+        mouthWideningDistance: 24,
+        mouthWidthMultiplier: 1.6,
         potentialOceanWeight: 0.9,
         potentialElevationWeight: 0.08,
         potentialValleyWeight: 0.03,
@@ -476,7 +483,7 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     for (const name of [
         "pageSize", "maximumCachedPages", "courseStep", "courseWarpOctaves", "sourceCellSize",
         "sourcesPerCell", "minimumCourseLength", "maximumCourseLength",
-        "highFlowCourseRadius", "highFlowThreshold"
+        "highFlowThreshold"
     ] as const) {
         if (!Number.isSafeInteger(rivers[name]) || rivers[name] <= 0) {
             throw new RangeError(`rivers.${name} must be a positive safe integer`);
@@ -484,11 +491,20 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     }
     for (const name of [
         "courseWarpScale", "sourceElevationTransition", "potentialOceanWeight", "potentialElevationWeight",
-        "potentialValleyWeight", "potentialMoistureWeight", "potentialJitter"
+        "potentialValleyWeight", "potentialMoistureWeight", "potentialJitter",
+        "highFlowCourseRadius", "mouthWideningDistance", "mouthWidthMultiplier"
     ] as const) positive(`rivers.${name}`, rivers[name]);
     nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
-    if (!Number.isSafeInteger(rivers.baseCourseRadius) || rivers.baseCourseRadius < 0) {
-        throw new RangeError("rivers.baseCourseRadius must be a non-negative safe integer");
+    nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
+    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
+        throw new RangeError("river course length range must be ordered");
+    }
+    if (!Number.isSafeInteger(rivers.upstreamExtensionSteps) || rivers.upstreamExtensionSteps < 0
+        || rivers.upstreamExtensionSteps >= rivers.maximumCourseLength) {
+        throw new RangeError("river upstream extension must be a non-negative integer below the course limit");
+    }
+    if (rivers.mouthWidthMultiplier < 1) {
+        throw new RangeError("river mouth width multiplier must be at least one");
     }
     for (const name of [
         "sourceSpawnChance", "sourceMinimumElevation", "sourceMaximumElevation",
@@ -497,9 +513,6 @@ export function assertWorldStyleProfile(value: unknown): asserts value is WorldS
     if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition
         < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
         throw new RangeError("river source elevation range must contain both transition bands");
-    }
-    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
-        throw new RangeError("river course length range must be ordered");
     }
     if (!(rivers.courseWarpAmplitude < rivers.courseStep / 2)) {
         throw new RangeError("river course warp amplitude must stay below half the course step");
@@ -525,11 +538,11 @@ export function assertWorldWaterGenerationStyle(value: unknown): asserts value i
     }
     const style = value as Partial<WorldWaterGenerationStyle>;
     for (const name of [
-        "oceanScale", "oceanLevel", "riverWarpScale", "riverWarpAmplitude"
+        "oceanScale", "oceanLevel", "riverWarpScale", "riverWarpAmplitude",
+        "riverBaseRadius", "riverHighFlowRadius"
     ] as const) finite(`waterStyle.${name}`, style[name]);
     for (const name of [
-        "riverSourceCellSize", "riverSourcesPerCell", "riverBaseRadius",
-        "riverHighFlowRadius", "riverHighFlowThreshold"
+        "riverSourceCellSize", "riverSourcesPerCell", "riverHighFlowThreshold"
     ] as const) {
         if (!Number.isSafeInteger(style[name])) {
             throw new RangeError(`waterStyle.${name} must be a safe integer`);

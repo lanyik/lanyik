@@ -1,6 +1,6 @@
 # Coarse-drainage water network
 
-Status: implemented and categorical bank rasterization refined on 2026-09-05.
+Status: implemented; categorical banks, upstream extension, curved courses and tapered mouths refined on 2026-09-05 (generator v16).
 
 ## Context
 
@@ -34,13 +34,35 @@ Drainage potential is dominated by the ocean field and adjusted by elevation,
 valley, moisture and a very small coordinate-stable jitter. Because the choice
 at a coarse coordinate is independent of the source that reached it, courses
 that meet share the same downstream path. The number of source courses crossing
-a point is the flow proxy: normal reaches rasterize to a three-hex diameter and
-high-flow reaches to five.
+a point is the flow proxy: the radius now varies continuously from 1.25 to 2.75
+hex-neighbour spacings via `smoothstep(1, 8, flow)`. Each successful source
+course extends up to three genuine incoming drainage edges upstream, choosing
+the highest-potential eligible predecessor. Source count and the 72-node trace
+limit remain bounded; the existing downstream route does not change.
+
+The default warp frequency/amplitude are 0.03 / 3.25, up from 0.025 / 2.5.
+The sea field remains unchanged. Accumulated rendered-centre distance to the
+actual sea endpoint drives an additional smooth mouth flare over the last 24
+neighbour spacings, reaching 1.6 times the local flow radius at the sea. Merely
+passing near a coast does not trigger widening.
 
 Warped coarse edges are rasterized against the renderer's even-column offset
-grid. Each reach is treated as an ideal constant-width capsule in rendered
-world space; a complete hex becomes water exactly when its centre falls inside
-that capsule. The one-cell centreline remains connected. This replaces the old
+grid. Each reach rounds the next coarse corner with a quadratic Bezier between
+edge midpoints. Coarse nodes are controls, not mandatory hard vertices; real
+sources and sea endpoints retain their positions. Incoming branches meet at
+one outgoing midpoint with aligned tangents. Curve samples stay in continuous
+rendered coordinates and use a 1/16-neighbour-spacing interpolation tolerance,
+bounded to 32 segments per reach. Curves stay inside the original path's convex
+hull, avoiding outward overshoot and hooks. Sea distance and width progression
+use their accumulated arc length.
+
+Each curve sweeps a disk with linearly interpolated endpoint radii; a complete
+hex becomes water when its centre falls inside that envelope. Every candidate
+is tested once against the union, without first rounding curve samples to hexes.
+Minimizing `|P - tD|² - (r0 + t dr)²` for `t` in `[0,1]` avoids
+stepped width bands and covers coincident endpoints or nested disks. Custom
+sub-cell widths also retain a connected digital spine. Fractional radii never
+create partially water tiles. This replaces the old
 union of graph-distance hex disks, whose coordinate parity disagreed with the
 render grid and whose overlapping polygonal dilation created avoidable bank
 protrusions. Ambiguous outer cells are decided geometrically, never randomly.
@@ -60,13 +82,16 @@ valid and unchanged.
   order and worker count never participate.
 - Infinite and bounded domains build 128×128 bit-mask pages with a 16-page LRU
   ceiling. A page considers every source within the maximum possible upstream
-  reach, which makes adjacent pages and differently sized requests agree.
+  reach plus warp, a coarse-step curve margin and maximum mouth-width padding, which makes adjacent pages
+  and differently sized requests agree.
 - Toroidal domains enumerate canonical sources once and build one
   `width × height` bit mask. All reads normalize coordinates before indexing.
 - Failed inland paths are discarded rather than converted into random ponds.
-- Generator v14 corrects the river raster coordinate parity and adopts
-  centre-sampled world-space capsules. Its identity and golden checksums
-  change; packed chunks,
+- Generator v14 corrected raster coordinate parity; v15 added upstream extension,
+  continuous flow widths and tapered mouths; v16 rounds the actual centreline.
+  Bumping again prevents interim v15 cached chunks from retaining straight reaches.
+  The generator identity changes;
+  existing golden checksums are retained where the fixture is unaffected. Packed chunks,
   descriptors and worker protocol formats do not.
 
 ## Overview path and budget
@@ -85,7 +110,9 @@ deterministic enumeration, overlap/page agreement, sea or extent drainage,
 broad-ocean component bounds and toroidal periodicity.
 
 Each extent also memoizes sampled drainage nodes and their selected downstream
-edge. Additional tributary candidates therefore reuse shared confluence work
+edge. Flow and sea distance are aggregated by canonical node, and every directed
+reach is rasterized only once even when multiple source courses share it.
+Additional tributary candidates therefore reuse shared confluence work
 instead of repeatedly sampling the same suffix. The refinement observation on
 the same development machine is about 0.24 s for the 2048×2048 to 256×256
 direct overview, with 1,527 visible river pixels versus the previous 959.

@@ -72,7 +72,9 @@ describe("world overview raster", () => {
                 && overview.pixels[index + 1] === 142
                 && overview.pixels[index + 2] === 174) riverPixels += 1;
         }
-        expect(riverPixels).toBeGreaterThan(90);
-        expect(riverPixels).toBeLessThan(180);
+        // v15 intentionally lengthens/widens courses and adds sea approaches;
+        // retain a narrow composition gate rather than freezing the old area.
+        expect(riverPixels).toBeGreaterThan(120);
+        expect(riverPixels).toBeLessThan(240);
     });
 });

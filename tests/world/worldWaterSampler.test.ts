@@ -3,9 +3,36 @@ import { describe, expect, test } from "vitest";
 import { Land } from "../../src/enums";
 import { getNeighbors } from "../../src/helpers/neighbors";
 import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
+import { createWorldWaterSampler, WorldWaterSampleAt } from "../../src/world/WorldWaterSampler";
+import { DEFAULT_WORLD_WATER_STYLE, WORLD_STYLE_PROFILE, WorldStyleProfile } from "../../src/world/WorldStyleProfile";
 
 const isBaseWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 const key = (x: number, y: number): string => `${x},${y}`;
+
+// A controlled coast and downhill field isolate reach length / mouth width
+// from seeded terrain composition. The same sources and routing are retained.
+function slopingRiverTiles(overrides: Partial<WorldStyleProfile["rivers"]>): Set<string> {
+    const sampleAt: WorldWaterSampleAt = (x, y) => x < 0 || y < 0 || x >= 160 || y >= 160
+        ? undefined
+        : {
+            baseTerrain: x >= 112 ? Land.sea : Land.land,
+            landform: { ocean: 1 - x / 256, elevation: 0.6, moisture: 1, valley: 0, continentalness: 0.8 }
+        };
+    const sampler = createWorldWaterSampler(1, { topology: "bounded", width: 160, height: 160 }, {
+        ...WORLD_STYLE_PROFILE,
+        rivers: {
+            ...WORLD_STYLE_PROFILE.rivers,
+            courseWarpAmplitude: 0, sourceCellSize: 8, sourcesPerCell: 1,
+            potentialJitter: 0, highFlowThreshold: 32, mouthWidthMultiplier: 1,
+            ...overrides
+        }
+    });
+    const tiles = new Set<string>();
+    sampler.forEachRiverTile(0, 0, 160, 160, sampleAt, (x, y) => {
+        if (x < 112) tiles.add(key(x, y));
+    });
+    return tiles;
+}
 
 function collectRiverTiles(
     seed: string,
@@ -59,6 +86,28 @@ function sampledWaterComponents(mask: Uint8Array, width: number, height: number)
 }
 
 describe("generated water network", () => {
+    test("extends established courses upstream without removing their downstream water", () => {
+        const original = slopingRiverTiles({ upstreamExtensionSteps: 0 });
+        const extended = slopingRiverTiles({ upstreamExtensionSteps: 3 });
+        for (const tile of original) expect(extended.has(tile)).toBe(true);
+        expect(extended.size).toBeGreaterThan(original.size * 1.1);
+        const upstreamArea = (tiles: Set<string>) => [...tiles].filter(tile => Number(tile.split(",")[0]) < 32).length;
+        expect(upstreamArea(extended)).toBeGreaterThan(upstreamArea(original));
+    });
+
+    test("widens the sea approach without changing the upstream channel", () => {
+        const original = slopingRiverTiles({ mouthWidthMultiplier: 1 });
+        const estuary = slopingRiverTiles({ mouthWidthMultiplier: 1.6 });
+        for (const tile of original) expect(estuary.has(tile)).toBe(true);
+        const additions = [...estuary].filter(tile => !original.has(tile));
+        expect(additions.length).toBeGreaterThan(20);
+        for (const tile of additions) {
+            const x = Number(tile.split(",")[0]);
+            expect(x).toBeGreaterThan(80);
+            expect(x).toBeLessThan(112);
+        }
+    });
+
     test("enumerates deterministic contiguous river courses that drain to water or the extent edge", () => {
         const originX = -256;
         const originY = -256;
@@ -169,5 +218,24 @@ describe("generated water network", () => {
                     .toEqual(resolver.resolveGeneratedTile(x, y));
             }
         }
+    });
+
+    test("keeps wide fractional mouths identical across real wrap-crossing rivers", () => {
+        const resolver = createWorldSurfaceResolver({
+            seed: "new-world",
+            domain: { topology: "toroidal", width: 512, height: 512 },
+            waterStyle: { ...DEFAULT_WORLD_WATER_STYLE, riverHighFlowRadius: 4, riverHighFlowThreshold: 2 }
+        });
+        const original = new Set<string>();
+        const shifted = new Set<string>();
+        let boundaryTiles = 0;
+        resolver.visitGeneratedRiverTiles(0, 0, 512, 512, (x, y) => {
+            original.add(key(x, y));
+            if (x < 8 || x >= 504 || y < 8 || y >= 504) boundaryTiles += 1;
+        });
+        resolver.visitGeneratedRiverTiles(512, -512, 512, 512, (x, y) => shifted.add(key(x - 512, y + 512)));
+        expect(original.size).toBeGreaterThan(1000);
+        expect(boundaryTiles).toBeGreaterThan(0);
+        expect(shifted).toEqual(original);
     });
 });

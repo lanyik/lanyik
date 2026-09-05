@@ -193,6 +193,16 @@ describe("WorldSurfaceResolver", () => {
         const invalidRiverWarp = structuredClone(WORLD_STYLE_PROFILE) as any;
         invalidRiverWarp.rivers.courseWarpAmplitude = invalidRiverWarp.rivers.courseStep / 2;
         expect(() => assertWorldStyleProfile(invalidRiverWarp)).toThrow(/warp amplitude/);
+
+        const invalidExtension = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidExtension.rivers.upstreamExtensionSteps = 1.5;
+        expect(() => assertWorldStyleProfile(invalidExtension)).toThrow(/upstream extension/);
+
+        const invalidMouth = structuredClone(WORLD_STYLE_PROFILE) as any;
+        invalidMouth.rivers.mouthWidthMultiplier = 0.9;
+        expect(() => assertWorldStyleProfile(invalidMouth)).toThrow(/mouth width multiplier/);
+        invalidMouth.rivers.mouthWideningDistance = NaN;
+        expect(() => assertWorldStyleProfile(invalidMouth)).toThrow(/mouthWideningDistance/);
     });
 
     test("maps the bounded water authoring style into ocean and river generation", () => {
@@ -205,7 +215,7 @@ describe("WorldSurfaceResolver", () => {
             riverWarpScale: 0.04,
             riverWarpAmplitude: 3,
             riverBaseRadius: 0,
-            riverHighFlowRadius: 3,
+            riverHighFlowRadius: 3.25,
             riverHighFlowThreshold: 12
         };
         const profile = createWorldStyleProfile(waterStyle);
@@ -219,7 +229,7 @@ describe("WorldSurfaceResolver", () => {
             courseWarpScale: 0.04,
             courseWarpAmplitude: 3,
             baseCourseRadius: 0,
-            highFlowCourseRadius: 3,
+            highFlowCourseRadius: 3.25,
             highFlowThreshold: 12
         });
         expect(createWorldSurfaceResolver({ seed: "styled-water", waterStyle }).waterStyle).toEqual(waterStyle);

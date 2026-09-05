@@ -56,76 +56,133 @@ function renderedCenterY(x: number, y: number): number {
     return (y + (x % 2 === 0 ? 0.5 : 0)) * SQRT_3;
 }
 
-function squaredDistanceToSegment(
-    pointX: number,
-    pointY: number,
-    fromX: number,
-    fromY: number,
-    toX: number,
-    toY: number
-): number {
-    const segmentX = toX - fromX;
-    const segmentY = toY - fromY;
-    const lengthSquared = segmentX * segmentX + segmentY * segmentY;
-    if (lengthSquared === 0) {
-        const deltaX = pointX - fromX;
-        const deltaY = pointY - fromY;
-        return deltaX * deltaX + deltaY * deltaY;
-    }
-    const amount = Math.max(0, Math.min(1,
-        ((pointX - fromX) * segmentX + (pointY - fromY) * segmentY) / lengthSquared
-    ));
-    const deltaX = pointX - (fromX + segmentX * amount);
-    const deltaY = pointY - (fromY + segmentY * amount);
-    return deltaX * deltaX + deltaY * deltaY;
+interface RiverCurveSample extends Point {
+    readonly distance: number;
 }
 
-// Rasterize a constant-width capsule by testing tile centres against the
-// ideal line in rendered world space. Every emitted item is still a complete
-// hex tile; this only gives ambiguous outer-ring tiles a deterministic,
-// geometric water/land decision. Compared with graph-distance disk dilation,
-// bends no longer inherit the jagged union of several offset hexagons.
-export function forEachHexCapsule(
+export interface RiverReach {
+    /** Continuous rendered-plane points, NOT rounded hex coordinates. */
+    readonly samples: readonly RiverCurveSample[];
+    /** Arc length measured in hex-neighbour spacing. */
+    readonly length: number;
+}
+
+const renderedPoint = (point: Readonly<Point>): Point => ({
+    x: point.x * 1.5,
+    y: renderedCenterY(point.x, point.y)
+});
+
+function renderedPointToHex(point: Readonly<Point>): Point {
+    const q = point.x / 1.5;
+    const r = point.y / SQRT_3 - q / 2 - 0.5;
+    return cubeRound(q, -q - r, r);
+}
+
+// Round drainage corners using quadratic Bezier spans between edge midpoints.
+// A coarse node is a control point, not a mandatory sharp turn in the water.
+// All incoming branches share the midpoint/tangent of the outgoing edge.
+export function createRiverReach(
     from: Readonly<Point>,
     to: Readonly<Point>,
-    radius: number,
+    downstream?: Readonly<Point>,
+    startsAtSource = true
+): RiverReach {
+    const first = renderedPoint(from);
+    const corner = renderedPoint(to);
+    const next = downstream ? renderedPoint(downstream) : corner;
+    const start = startsAtSource ? first : { x: (first.x + corner.x) / 2, y: (first.y + corner.y) / 2 };
+    const end = downstream ? { x: (corner.x + next.x) / 2, y: (corner.y + next.y) / 2 } : corner;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    // Work relative to the start so translating a toroidal copy does not
+    // change the polynomial through large-coordinate cancellation.
+    const control = { x: corner.x - start.x, y: corner.y - start.y };
+    // Linear interpolation error <= max |B''| / (8 n²). A 1/16-hex
+    // tolerance is below categorical bank resolution; normal reaches need
+    // only a few samples. The coarse lattice bounds the maximum work.
+    const secondDerivative = 2 * Math.hypot(dx - 2 * control.x, dy - 2 * control.y);
+    const projection = dx * control.x + dy * control.y;
+    const straight = (dx !== 0 || dy !== 0 || (control.x === 0 && control.y === 0))
+        && Math.abs(dx * control.y - dy * control.x) < 1e-9
+        && projection >= 0 && projection <= dx * dx + dy * dy;
+    const segments = straight ? 1 : Math.max(1, Math.ceil(Math.sqrt(secondDerivative / (8 * SQRT_3 / 16))));
+    if (segments > 32) throw new RangeError("river reach exceeds the bounded curve tessellation budget");
+    const samples: RiverCurveSample[] = [{ ...start, distance: 0 }];
+    let length = 0;
+    for (let index = 1; index <= segments; index += 1) {
+        const t = index / segments;
+        const u = 1 - t;
+        const point = index === segments ? end : {
+            x: start.x + 2 * u * t * control.x + t * t * dx,
+            y: start.y + 2 * u * t * control.y + t * t * dy
+        };
+        const previous = samples[samples.length - 1];
+        length += Math.hypot(point.x - previous.x, point.y - previous.y) / SQRT_3;
+        samples.push({ ...point, distance: length });
+    }
+    return { samples, length };
+}
+
+// Sweep tapered disks along the unrounded curve. Test each whole tile against
+// the union once, rather than snapping spline samples to hexes and reintroducing
+// angular centreline dilation. The quadratic tests the actual disk envelope.
+export function forEachHexRiverReach(
+    reach: RiverReach,
+    fromRadius: number,
+    toRadius: number,
     visit: (point: Point) => void
 ): void {
-    if (!Number.isSafeInteger(radius) || radius < 0) {
-        throw new RangeError("hex capsule radius must be a non-negative safe integer");
+    if (!Number.isFinite(fromRadius) || fromRadius < 0 || !Number.isFinite(toRadius) || toRadius < 0) {
+        throw new RangeError("river reach radii must be finite and non-negative");
+    }
+    const radius = Math.max(fromRadius, toRadius);
+    const spine = new Map<string, Point>();
+    if (Math.min(fromRadius, toRadius) < 1) {
+        for (let index = 1; index < reach.samples.length; index += 1) {
+            for (const point of rasterizeHexLine(
+                renderedPointToHex(reach.samples[index - 1]), renderedPointToHex(reach.samples[index])
+            )) spine.set(`${point.x},${point.y}`, point);
+        }
     }
     if (radius === 0) {
-        rasterizeHexLine(from, to).forEach(visit);
+        spine.forEach(visit);
         return;
     }
-
-    const fromWorldX = from.x * 1.5;
-    const fromWorldY = renderedCenterY(from.x, from.y);
-    const toWorldX = to.x * 1.5;
-    const toWorldY = renderedCenterY(to.x, to.y);
-    const maximumDistanceSquared = radius * radius * 3 + 1e-9;
-    // In offset coordinates r world-radius rings require at most r+1 columns
-    // or rows of padding (the extra half-row is the even-column offset). A
-    // compact rectangle is cheaper than repeatedly unioning a disk around
-    // every digital-line cell and allocates no transient key set.
-    const padding = radius + 1;
-    const minimumX = Math.min(from.x, to.x) - padding;
-    const maximumX = Math.max(from.x, to.x) + padding;
-    const minimumY = Math.min(from.y, to.y) - padding;
-    const maximumY = Math.max(from.y, to.y) + padding;
+    const segments = reach.samples.slice(1).map((end, index) => {
+        const start = reach.samples[index];
+        const startFraction = reach.length === 0 ? 0 : start.distance / reach.length;
+        const endFraction = reach.length === 0 ? 1 : end.distance / reach.length;
+        const startRadius = (fromRadius + (toRadius - fromRadius) * startFraction) * SQRT_3;
+        const radiusDelta = (toRadius - fromRadius) * (endFraction - startFraction) * SQRT_3;
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const quadratic = dx * dx + dy * dy - radiusDelta * radiusDelta;
+        return { start, dx, dy, startRadius, radiusDelta, quadratic };
+    });
+    const padding = Math.ceil(radius * SQRT_3 / 1.5) + 1;
+    const minimumX = Math.floor(Math.min(...reach.samples.map(point => point.x)) / 1.5) - padding;
+    const maximumX = Math.ceil(Math.max(...reach.samples.map(point => point.x)) / 1.5) + padding;
+    const minimumY = Math.floor(Math.min(...reach.samples.map(point => point.y)) / SQRT_3) - padding;
+    const maximumY = Math.ceil(Math.max(...reach.samples.map(point => point.y)) / SQRT_3) + padding;
     for (let x = minimumX; x <= maximumX; x += 1) {
         const candidateWorldX = x * 1.5;
         for (let y = minimumY; y <= maximumY; y += 1) {
-            if (squaredDistanceToSegment(
-                candidateWorldX,
-                renderedCenterY(x, y),
-                fromWorldX,
-                fromWorldY,
-                toWorldX,
-                toWorldY
-            ) <= maximumDistanceSquared) {
-                visit({ x, y });
+            const candidateWorldY = renderedCenterY(x, y);
+            let inside = spine.size > 0 && spine.has(`${x},${y}`);
+            for (const segment of segments) {
+                if (inside) break;
+                const { start, dx, dy, startRadius, radiusDelta, quadratic } = segment;
+                const deltaX = candidateWorldX - start.x;
+                const deltaY = candidateWorldY - start.y;
+                const linear = deltaX * dx + deltaY * dy + startRadius * radiusDelta;
+                const constant = deltaX * deltaX + deltaY * deltaY - startRadius * startRadius;
+                const amount = quadratic > 0 ? Math.max(0, Math.min(1, linear / quadratic)) : 0;
+                const distance = quadratic > 0
+                    ? constant - 2 * linear * amount + quadratic * amount * amount
+                    : Math.min(constant, constant - 2 * linear + quadratic);
+                inside = distance <= 1e-9;
             }
+            if (inside) visit({ x, y });
         }
     }
 }

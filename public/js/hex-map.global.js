@@ -10829,7 +10829,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 14;
+  var WORLD_GENERATOR_VERSION = 16;
 
   // src/world/WorldStyleProfile.ts
   var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -10837,10 +10837,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     oceanLevel: 0.47,
     riverSourceCellSize: 12,
     riverSourcesPerCell: 4,
-    riverWarpScale: 0.025,
-    riverWarpAmplitude: 2.5,
-    riverBaseRadius: 1,
-    riverHighFlowRadius: 2,
+    riverWarpScale: 0.03,
+    riverWarpAmplitude: 3.25,
+    riverBaseRadius: 1.25,
+    riverHighFlowRadius: 2.75,
     riverHighFlowThreshold: 8
   });
   var field = (salt, openScale, toroidalScale, octaves, minimumToroidalCells) => Object.freeze({
@@ -10965,9 +10965,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       sourceMoistureFloor: 0.7,
       minimumCourseLength: 3,
       maximumCourseLength: 72,
+      upstreamExtensionSteps: 3,
       baseCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverBaseRadius,
       highFlowCourseRadius: DEFAULT_WORLD_WATER_STYLE.riverHighFlowRadius,
       highFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
+      mouthWideningDistance: 24,
+      mouthWidthMultiplier: 1.6,
       potentialOceanWeight: 0.9,
       potentialElevationWeight: 0.08,
       potentialValleyWeight: 0.03,
@@ -11161,7 +11164,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       "sourcesPerCell",
       "minimumCourseLength",
       "maximumCourseLength",
-      "highFlowCourseRadius",
       "highFlowThreshold"
     ]) {
       if (!Number.isSafeInteger(rivers[name]) || rivers[name] <= 0) {
@@ -11175,11 +11177,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       "potentialElevationWeight",
       "potentialValleyWeight",
       "potentialMoistureWeight",
-      "potentialJitter"
+      "potentialJitter",
+      "highFlowCourseRadius",
+      "mouthWideningDistance",
+      "mouthWidthMultiplier"
     ]) positive(`rivers.${name}`, rivers[name]);
     nonNegative("rivers.courseWarpAmplitude", rivers.courseWarpAmplitude);
-    if (!Number.isSafeInteger(rivers.baseCourseRadius) || rivers.baseCourseRadius < 0) {
-      throw new RangeError("rivers.baseCourseRadius must be a non-negative safe integer");
+    nonNegative("rivers.baseCourseRadius", rivers.baseCourseRadius);
+    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
+      throw new RangeError("river course length range must be ordered");
+    }
+    if (!Number.isSafeInteger(rivers.upstreamExtensionSteps) || rivers.upstreamExtensionSteps < 0 || rivers.upstreamExtensionSteps >= rivers.maximumCourseLength) {
+      throw new RangeError("river upstream extension must be a non-negative integer below the course limit");
+    }
+    if (rivers.mouthWidthMultiplier < 1) {
+      throw new RangeError("river mouth width multiplier must be at least one");
     }
     for (const name of [
       "sourceSpawnChance",
@@ -11190,9 +11202,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     ]) unitInterval(`rivers.${name}`, rivers[name]);
     if (!(rivers.sourceMinimumElevation + rivers.sourceElevationTransition < rivers.sourceMaximumElevation - rivers.sourceElevationTransition)) {
       throw new RangeError("river source elevation range must contain both transition bands");
-    }
-    if (!(rivers.minimumCourseLength < rivers.maximumCourseLength)) {
-      throw new RangeError("river course length range must be ordered");
     }
     if (!(rivers.courseWarpAmplitude < rivers.courseStep / 2)) {
       throw new RangeError("river course warp amplitude must stay below half the course step");
@@ -11217,13 +11226,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       "oceanScale",
       "oceanLevel",
       "riverWarpScale",
-      "riverWarpAmplitude"
+      "riverWarpAmplitude",
+      "riverBaseRadius",
+      "riverHighFlowRadius"
     ]) finite(`waterStyle.${name}`, style[name]);
     for (const name of [
       "riverSourceCellSize",
       "riverSourcesPerCell",
-      "riverBaseRadius",
-      "riverHighFlowRadius",
       "riverHighFlowThreshold"
     ]) {
       if (!Number.isSafeInteger(style[name])) {
@@ -11529,54 +11538,95 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function renderedCenterY(x, y) {
     return (y + (x % 2 === 0 ? 0.5 : 0)) * SQRT_3;
   }
-  function squaredDistanceToSegment(pointX, pointY, fromX, fromY, toX, toY) {
-    const segmentX = toX - fromX;
-    const segmentY = toY - fromY;
-    const lengthSquared = segmentX * segmentX + segmentY * segmentY;
-    if (lengthSquared === 0) {
-      const deltaX2 = pointX - fromX;
-      const deltaY2 = pointY - fromY;
-      return deltaX2 * deltaX2 + deltaY2 * deltaY2;
-    }
-    const amount = Math.max(0, Math.min(
-      1,
-      ((pointX - fromX) * segmentX + (pointY - fromY) * segmentY) / lengthSquared
-    ));
-    const deltaX = pointX - (fromX + segmentX * amount);
-    const deltaY = pointY - (fromY + segmentY * amount);
-    return deltaX * deltaX + deltaY * deltaY;
+  var renderedPoint = (point) => ({
+    x: point.x * 1.5,
+    y: renderedCenterY(point.x, point.y)
+  });
+  function renderedPointToHex(point) {
+    const q = point.x / 1.5;
+    const r = point.y / SQRT_3 - q / 2 - 0.5;
+    return cubeRound(q, -q - r, r);
   }
-  function forEachHexCapsule(from, to, radius, visit) {
-    if (!Number.isSafeInteger(radius) || radius < 0) {
-      throw new RangeError("hex capsule radius must be a non-negative safe integer");
+  function createRiverReach(from, to, downstream, startsAtSource = true) {
+    const first = renderedPoint(from);
+    const corner = renderedPoint(to);
+    const next = downstream ? renderedPoint(downstream) : corner;
+    const start = startsAtSource ? first : { x: (first.x + corner.x) / 2, y: (first.y + corner.y) / 2 };
+    const end = downstream ? { x: (corner.x + next.x) / 2, y: (corner.y + next.y) / 2 } : corner;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const control = { x: corner.x - start.x, y: corner.y - start.y };
+    const secondDerivative = 2 * Math.hypot(dx - 2 * control.x, dy - 2 * control.y);
+    const projection = dx * control.x + dy * control.y;
+    const straight = (dx !== 0 || dy !== 0 || control.x === 0 && control.y === 0) && Math.abs(dx * control.y - dy * control.x) < 1e-9 && projection >= 0 && projection <= dx * dx + dy * dy;
+    const segments = straight ? 1 : Math.max(1, Math.ceil(Math.sqrt(secondDerivative / (8 * SQRT_3 / 16))));
+    if (segments > 32) throw new RangeError("river reach exceeds the bounded curve tessellation budget");
+    const samples = [{ ...start, distance: 0 }];
+    let length = 0;
+    for (let index = 1; index <= segments; index += 1) {
+      const t = index / segments;
+      const u = 1 - t;
+      const point = index === segments ? end : {
+        x: start.x + 2 * u * t * control.x + t * t * dx,
+        y: start.y + 2 * u * t * control.y + t * t * dy
+      };
+      const previous = samples[samples.length - 1];
+      length += Math.hypot(point.x - previous.x, point.y - previous.y) / SQRT_3;
+      samples.push({ ...point, distance: length });
+    }
+    return { samples, length };
+  }
+  function forEachHexRiverReach(reach, fromRadius, toRadius, visit) {
+    if (!Number.isFinite(fromRadius) || fromRadius < 0 || !Number.isFinite(toRadius) || toRadius < 0) {
+      throw new RangeError("river reach radii must be finite and non-negative");
+    }
+    const radius = Math.max(fromRadius, toRadius);
+    const spine = /* @__PURE__ */ new Map();
+    if (Math.min(fromRadius, toRadius) < 1) {
+      for (let index = 1; index < reach.samples.length; index += 1) {
+        for (const point of rasterizeHexLine(
+          renderedPointToHex(reach.samples[index - 1]),
+          renderedPointToHex(reach.samples[index])
+        )) spine.set(`${point.x},${point.y}`, point);
+      }
     }
     if (radius === 0) {
-      rasterizeHexLine(from, to).forEach(visit);
+      spine.forEach(visit);
       return;
     }
-    const fromWorldX = from.x * 1.5;
-    const fromWorldY = renderedCenterY(from.x, from.y);
-    const toWorldX = to.x * 1.5;
-    const toWorldY = renderedCenterY(to.x, to.y);
-    const maximumDistanceSquared = radius * radius * 3 + 1e-9;
-    const padding = radius + 1;
-    const minimumX = Math.min(from.x, to.x) - padding;
-    const maximumX = Math.max(from.x, to.x) + padding;
-    const minimumY = Math.min(from.y, to.y) - padding;
-    const maximumY = Math.max(from.y, to.y) + padding;
+    const segments = reach.samples.slice(1).map((end, index) => {
+      const start = reach.samples[index];
+      const startFraction = reach.length === 0 ? 0 : start.distance / reach.length;
+      const endFraction = reach.length === 0 ? 1 : end.distance / reach.length;
+      const startRadius = (fromRadius + (toRadius - fromRadius) * startFraction) * SQRT_3;
+      const radiusDelta = (toRadius - fromRadius) * (endFraction - startFraction) * SQRT_3;
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const quadratic = dx * dx + dy * dy - radiusDelta * radiusDelta;
+      return { start, dx, dy, startRadius, radiusDelta, quadratic };
+    });
+    const padding = Math.ceil(radius * SQRT_3 / 1.5) + 1;
+    const minimumX = Math.floor(Math.min(...reach.samples.map((point) => point.x)) / 1.5) - padding;
+    const maximumX = Math.ceil(Math.max(...reach.samples.map((point) => point.x)) / 1.5) + padding;
+    const minimumY = Math.floor(Math.min(...reach.samples.map((point) => point.y)) / SQRT_3) - padding;
+    const maximumY = Math.ceil(Math.max(...reach.samples.map((point) => point.y)) / SQRT_3) + padding;
     for (let x = minimumX; x <= maximumX; x += 1) {
       const candidateWorldX = x * 1.5;
       for (let y = minimumY; y <= maximumY; y += 1) {
-        if (squaredDistanceToSegment(
-          candidateWorldX,
-          renderedCenterY(x, y),
-          fromWorldX,
-          fromWorldY,
-          toWorldX,
-          toWorldY
-        ) <= maximumDistanceSquared) {
-          visit({ x, y });
+        const candidateWorldY = renderedCenterY(x, y);
+        let inside = spine.size > 0 && spine.has(`${x},${y}`);
+        for (const segment of segments) {
+          if (inside) break;
+          const { start, dx, dy, startRadius, radiusDelta, quadratic } = segment;
+          const deltaX = candidateWorldX - start.x;
+          const deltaY = candidateWorldY - start.y;
+          const linear = deltaX * dx + deltaY * dy + startRadius * radiusDelta;
+          const constant = deltaX * deltaX + deltaY * deltaY - startRadius * startRadius;
+          const amount = quadratic > 0 ? Math.max(0, Math.min(1, linear / quadratic)) : 0;
+          const distance = quadratic > 0 ? constant - 2 * linear * amount + quadratic * amount * amount : Math.min(constant, constant - 2 * linear + quadratic);
+          inside = distance <= 1e-9;
         }
+        if (inside) visit({ x, y });
       }
     }
   }
@@ -11893,7 +11943,25 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (!next) break;
         current = next;
       }
-      return reachedSea && points.length >= rivers.minimumCourseLength ? { points } : void 0;
+      if (!reachedSea || points.length < rivers.minimumCourseLength) return void 0;
+      for (let step = 0; step < rivers.upstreamExtensionSteps && points.length < rivers.maximumCourseLength; step += 1) {
+        const head = points[0];
+        const headKey = this.canonicalCourseKey(head);
+        let upstream;
+        let bestPotential = -Infinity;
+        for (const delta of AXIAL_NEIGHBORS) {
+          const candidate = { x: head.x + delta.x, y: head.y + delta.y };
+          const node = this.drainageNode(candidate, sampleAt, cache);
+          if (!node || node.potential <= bestPotential || this.sourceSuitability(node.sample) === 0) continue;
+          const next = this.nextCoursePoint(candidate, node, sampleAt, cache);
+          if (!next || this.canonicalCourseKey(next) !== headKey) continue;
+          bestPotential = node.potential;
+          upstream = candidate;
+        }
+        if (!upstream) break;
+        points.unshift(upstream);
+      }
+      return { points };
     }
     sourceFor(regionX, regionY, slot, sampleAt, cache) {
       const rivers = this.profile.rivers;
@@ -11909,7 +11977,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     coursesForExtent(originX, originY, width, height, sampleAt) {
       const rivers = this.profile.rivers;
-      const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep + Math.ceil(rivers.courseWarpAmplitude * 2);
+      const reach = this.domain.topology === "toroidal" ? 0 : rivers.maximumCourseLength * this.courseStep + Math.ceil(
+        this.courseStep + rivers.courseWarpAmplitude * 2 + rivers.highFlowCourseRadius * rivers.mouthWidthMultiplier * 2
+      );
       const corners = [
         worldOffsetToAxial({ x: originX - reach, y: originY - reach }),
         worldOffsetToAxial({ x: originX + width - 1 + reach, y: originY - reach }),
@@ -11944,12 +12014,39 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     rasterizeCourses(originX, originY, width, height, sampleAt, visit) {
       const courses = this.coursesForExtent(originX, originY, width, height, sampleAt);
-      const flow = /* @__PURE__ */ new Map();
+      const nodes = /* @__PURE__ */ new Map();
       for (const course of courses) {
-        for (const point of course.points) {
+        let nextWorld;
+        let nextKey;
+        for (let index = course.points.length - 1; index >= 0; index -= 1) {
+          const point = course.points[index];
+          const world = this.courseToWorld(point);
           const key = this.canonicalCourseKey(point);
-          flow.set(key, (flow.get(key) ?? 0) + 1);
+          const node = nodes.get(key);
+          if (node) node.flow += 1;
+          else nodes.set(key, { world, nextWorld, nextKey, distanceToSea: 0, hasIncoming: false, flow: 1, radius: 0 });
+          nextWorld = world;
+          nextKey = key;
         }
+      }
+      for (const node of nodes.values()) {
+        if (node.nextKey !== void 0) nodes.get(node.nextKey).hasIncoming = true;
+      }
+      for (const node of nodes.values()) {
+        if (!node.nextWorld || node.nextKey === void 0) continue;
+        const next = nodes.get(node.nextKey);
+        const downstream = next.nextWorld ? {
+          x: node.nextWorld.x + next.nextWorld.x - next.world.x,
+          y: node.nextWorld.y + next.nextWorld.y - next.world.y
+        } : void 0;
+        node.reach = createRiverReach(node.world, node.nextWorld, downstream, !node.hasIncoming);
+        node.distanceToSea = next.distanceToSea + node.reach.length;
+      }
+      const rivers = this.profile.rivers;
+      for (const node of nodes.values()) {
+        const flowRadius = rivers.baseCourseRadius + (rivers.highFlowCourseRadius - rivers.baseCourseRadius) * smoothstep2(1, rivers.highFlowThreshold, node.flow);
+        const mouth = 1 - smoothstep2(0, rivers.mouthWideningDistance, node.distanceToSea);
+        node.radius = flowRadius * (1 + (rivers.mouthWidthMultiplier - 1) * mouth);
       }
       const endX = originX + width;
       const endY = originY + height;
@@ -11962,22 +12059,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         visited.add(index);
         visit(normalized.x, normalized.y);
       };
-      for (const course of courses) {
-        for (let index = 1; index < course.points.length; index += 1) {
-          const fromCourse = course.points[index - 1];
-          const toCourse = course.points[index];
-          const amount = Math.max(
-            flow.get(this.canonicalCourseKey(fromCourse)) ?? 1,
-            flow.get(this.canonicalCourseKey(toCourse)) ?? 1
-          );
-          const radius = amount >= this.profile.rivers.highFlowThreshold ? this.profile.rivers.highFlowCourseRadius : this.profile.rivers.baseCourseRadius;
-          forEachHexCapsule(
-            this.courseToWorld(fromCourse),
-            this.courseToWorld(toCourse),
-            radius,
-            emit
-          );
-        }
+      for (const node of nodes.values()) {
+        if (!node.reach || node.nextKey === void 0) continue;
+        forEachHexRiverReach(
+          node.reach,
+          node.radius,
+          nodes.get(node.nextKey).radius,
+          emit
+        );
       }
     }
     buildPage(pageX, pageY, pageSize, sampleAt) {
