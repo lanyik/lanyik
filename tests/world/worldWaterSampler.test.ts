@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { Land } from "../../src/enums";
 import { getNeighbors } from "../../src/helpers/neighbors";
@@ -125,10 +125,12 @@ describe("generated water network", () => {
         }
         const sampleAt: WorldWaterSampleAt = (x, y) => {
             const node = nodes.get(key(x, y));
-            return node && {
-                baseTerrain: node.potential < 0 ? Land.sea : Land.land,
+            // Unlisted coarse nodes block drainage; the raster between nodes
+            // still has a defined base terrain for the land-only river mask.
+            return {
+                baseTerrain: !node ? Land.mountain : node.potential < 0 ? Land.sea : Land.land,
                 landform: {
-                    ocean: node.potential, elevation: node.anchor ? 0.6 : 0.3,
+                    ocean: node?.potential ?? 1, elevation: node?.anchor ? 0.6 : 0.3,
                     moisture: 1, valley: 0, continentalness: 0.8
                 }
             };
@@ -297,6 +299,24 @@ describe("generated water network", () => {
 
         resolver.visitGeneratedRiverTiles(8, 8, 32, 32, () => undefined);
         expect(resolver.waterStats.directExtentRasterizations).toBe(1);
+    });
+
+    test("bounds large overview batches and skips all terrain sampling on cached pages", () => {
+        const sampler = createWorldWaterSampler(1, { topology: "infinite" }, WORLD_STYLE_PROFILE);
+        const sampleAt = vi.fn<WorldWaterSampleAt>(() => ({ baseTerrain: Land.sea,
+            landform: { ocean: 0, elevation: 0, moisture: 0, valley: 0, continentalness: 0 } }));
+        sampler.forEachRiverTile(0, 0, 256, 256, sampleAt, () => undefined);
+        const batches = sampler.riverTileBatches(0, 0, 4096, 4096, sampleAt, () => undefined);
+        expect([...batches]).toHaveLength(4);
+        sampleAt.mockClear();
+        sampler.forEachRiverTile(0, 0, 4096, 4096, sampleAt, () => undefined);
+        expect(sampleAt).not.toHaveBeenCalled();
+        // Mixing mask resolutions must not alias pages at the same origin.
+        expect(sampler.stats.cachedOverviewPages).toBe(5);
+        sampler.forEachRiverTile(-8192, -8192, 16384, 16384, sampleAt, () => undefined);
+        expect(sampler.stats.maximumRasterizedTiles).toBe(2048 * 2048);
+        expect(sampler.stats.cachedOverviewPages).toBeLessThanOrEqual(WORLD_STYLE_PROFILE.rivers.maximumCachedPages);
+        expect(sampler.stats.cachedRiverBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
     });
 
     test("uses a broad ocean field instead of fragmented terrain-detail water", () => {

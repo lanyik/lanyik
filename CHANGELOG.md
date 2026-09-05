@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- River overview sampling now uses bounded 512/2048-tile pages, compact bitset
+  traversal and terrain-only water samples. Cached pages need no terrain
+  resampling; large or thin extents no longer build one unbounded temporary
+  drainage window. Version 19 map and overview output is preserved.
 - Vegetation CPU accounting now includes prepared layouts, inactive derived LODs
   and baked model geometry. Forest parts share lazily allocated instance buffers;
   CPU eviction detaches every world copy, and cache expiry continues while the

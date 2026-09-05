@@ -72,6 +72,10 @@ export interface WorldWaterSampler {
         sampleAt: WorldWaterSampleAt,
         visit: (x: number, y: number) => void
     ): void;
+    riverTileBatches(
+        originX: number, originY: number, width: number, height: number,
+        sampleAt: WorldWaterSampleAt, visit: (x: number, y: number) => void
+    ): Generator<void>;
 }
 
 export interface WorldWaterSamplerStats {
@@ -82,11 +86,14 @@ export interface WorldWaterSamplerStats {
     readonly overviewPageBuilds: number;
     readonly overviewPageHits: number;
     readonly directExtentRasterizations: number;
+    readonly cachedRiverBytes: number;
+    readonly maximumRasterizedTiles: number;
 }
 
 const UINT32_RANGE = 0x1_0000_0000;
 const OVERVIEW_PAGE_SIZE_MULTIPLIER = 4;
 const MAX_OVERVIEW_PAGE_AREA_OVERHEAD = 4;
+const MAX_RIVER_BATCH_SIZE = 2048;
 const AXIAL_NEIGHBORS: readonly Point[] = Object.freeze([
     Object.freeze({ x: 1, y: 0 }),
     Object.freeze({ x: 0, y: -1 }),
@@ -110,6 +117,25 @@ const setBit = (bits: Uint8Array, index: number): void => {
     const offset = Math.floor(index / 8);
     bits[offset] |= 1 << (index % 8);
 };
+
+/** Skip empty bytes instead of testing every tile in a mostly empty river mask. */
+function visitColumnBits(
+    bits: Uint8Array, column: number, start: number, end: number, visit: (y: number) => void
+): void {
+    const first = column + start;
+    const stop = column + end;
+    const lastByte = (stop - 1) >>> 3;
+    for (let byte = first >>> 3; byte <= lastByte; byte += 1) {
+        let value = bits[byte];
+        if (byte === (first >>> 3)) value &= 0xff << (first & 7);
+        if (byte === lastByte && (stop & 7) !== 0) value &= (1 << (stop & 7)) - 1;
+        while (value !== 0) {
+            const bit = 31 - Math.clz32(value & -value);
+            visit(byte * 8 + bit - column);
+            value &= value - 1;
+        }
+    }
+}
 
 function mix32(value: number): number {
     let mixed = value >>> 0;
@@ -160,6 +186,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
     private overviewPageBuilds = 0;
     private overviewPageHits = 0;
     private directExtentRasterizations = 0;
+    private maximumRasterizedTiles = 0;
 
     constructor(
         private readonly numericSeed: number,
@@ -177,7 +204,10 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
             tilePageHits: this.tilePageHits,
             overviewPageBuilds: this.overviewPageBuilds,
             overviewPageHits: this.overviewPageHits,
-            directExtentRasterizations: this.directExtentRasterizations
+            directExtentRasterizations: this.directExtentRasterizations,
+            cachedRiverBytes: [...this.pages.values(), ...this.overviewPages.values()]
+                .reduce((bytes, page) => bytes + page.riverBits.byteLength, this.toroidalMask?.byteLength ?? 0),
+            maximumRasterizedTiles: this.maximumRasterizedTiles
         };
     }
 
@@ -205,46 +235,68 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         sampleAt: WorldWaterSampleAt,
         visit: (x: number, y: number) => void
     ): void {
+        const batches = this.riverTileBatches(originX, originY, width, height, sampleAt, visit);
+        while (!batches.next().done) { /* synchronous callers consume the same bounded batches */ }
+    }
+
+    public *riverTileBatches(
+        originX: number, originY: number, width: number, height: number,
+        sampleAt: WorldWaterSampleAt, visit: (x: number, y: number) => void
+    ): Generator<void> {
         assertExtent(originX, originY, width, height);
         if (this.domain.topology === "toroidal") {
             const mask = this.toroidalMask ??= this.buildToroidalMask(sampleAt);
             for (let x = originX; x < originX + width; x += 1) {
                 const canonicalX = positiveModulo(x, this.domain.width);
-                for (let y = originY; y < originY + height; y += 1) {
+                for (let y = originY; y < originY + height;) {
                     const canonicalY = positiveModulo(y, this.domain.height);
-                    if (hasBit(mask, canonicalX * this.domain.height + canonicalY)) visit(x, y);
+                    const count = Math.min(this.domain.height - canonicalY, originY + height - y);
+                    const offset = y - canonicalY;
+                    visitColumnBits(mask, canonicalX * this.domain.height, canonicalY, canonicalY + count,
+                        localY => visit(x, offset + localY));
+                    y += count;
                 }
+                if ((x - originX + 1) % 128 === 0) yield;
             }
+            yield;
             return;
         }
-        if (this.shouldUseOverviewPages(originX, originY, width, height)) {
-            this.visitOverviewPages(originX, originY, width, height, sampleAt, visit);
+        const pageSize = Math.max(width, height) > MAX_RIVER_BATCH_SIZE && Math.min(width, height) >= 512
+            ? MAX_RIVER_BATCH_SIZE
+            : Math.min(MAX_RIVER_BATCH_SIZE, this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER);
+        if (this.shouldUseOverviewPages(originX, originY, width, height, pageSize)) {
+            yield* this.visitOverviewPages(originX, originY, width, height, pageSize, sampleAt, visit);
             return;
         }
-        this.directExtentRasterizations += 1;
-        this.rasterizeCourses(originX, originY, width, height, sampleAt, visit);
+        for (let x = originX; x < originX + width; x += MAX_RIVER_BATCH_SIZE) {
+            for (let y = originY; y < originY + height; y += MAX_RIVER_BATCH_SIZE) {
+                this.directExtentRasterizations += 1;
+                this.rasterizeCourses(x, y,
+                    Math.min(MAX_RIVER_BATCH_SIZE, originX + width - x),
+                    Math.min(MAX_RIVER_BATCH_SIZE, originY + height - y), sampleAt, visit);
+                yield;
+            }
+        }
     }
 
-    private shouldUseOverviewPages(originX: number, originY: number, width: number, height: number): boolean {
-        const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+    private shouldUseOverviewPages(originX: number, originY: number, width: number, height: number, pageSize: number): boolean {
         const firstPageX = Math.floor(originX / pageSize);
         const lastPageX = Math.floor((originX + width - 1) / pageSize);
         const firstPageY = Math.floor(originY / pageSize);
         const lastPageY = Math.floor((originY + height - 1) / pageSize);
         const pageCount = (lastPageX - firstPageX + 1) * (lastPageY - firstPageY + 1);
-        return pageCount <= this.profile.rivers.maximumCachedPages
-            && pageCount * pageSize * pageSize <= width * height * MAX_OVERVIEW_PAGE_AREA_OVERHEAD;
+        return pageCount * pageSize * pageSize <= width * height * MAX_OVERVIEW_PAGE_AREA_OVERHEAD;
     }
 
-    private visitOverviewPages(
+    private *visitOverviewPages(
         originX: number,
         originY: number,
         width: number,
         height: number,
+        pageSize: number,
         sampleAt: WorldWaterSampleAt,
         visit: (x: number, y: number) => void
-    ): void {
-        const pageSize = this.profile.rivers.pageSize * OVERVIEW_PAGE_SIZE_MULTIPLIER;
+    ): Generator<void> {
         const firstPageX = Math.floor(originX / pageSize);
         const lastPageX = Math.floor((originX + width - 1) / pageSize);
         const firstPageY = Math.floor(originY / pageSize);
@@ -269,10 +321,10 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
                 );
                 for (let x = startX; x < stopX; x += 1) {
                     const column = (x - pageOriginX) * pageSize;
-                    for (let y = startY; y < stopY; y += 1) {
-                        if (hasBit(page.riverBits, column + y - pageOriginY)) visit(x, y);
-                    }
+                    visitColumnBits(page.riverBits, column, startY - pageOriginY, stopY - pageOriginY,
+                        localY => visit(x, pageOriginY + localY));
                 }
+                yield;
             }
         }
     }
@@ -285,7 +337,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         sampleAt: WorldWaterSampleAt,
         overview: boolean
     ): WaterPage {
-        const key = `${pageX},${pageY}`;
+        const key = `${pageSize}:${pageX},${pageY}`;
         let page = cache.get(key);
         if (page) {
             cache.delete(key);
@@ -612,6 +664,7 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         sampleAt: WorldWaterSampleAt,
         visit: (x: number, y: number) => void
     ): void {
+        this.maximumRasterizedTiles = Math.max(this.maximumRasterizedTiles, width * height);
         const courses = this.coursesForExtent(originX, originY, width, height, sampleAt);
         const nodes = new Map<string, RasterCourseNode>();
         for (const course of courses) {
@@ -675,14 +728,18 @@ class DrainageWorldWaterSampler implements WorldWaterSampler {
         }
         const endX = originX + width;
         const endY = originY + height;
-        const visited = new Set<number>();
+        const visited = new Uint8Array(bitArrayLength(width * height));
         const emit = (point: Point): void => {
             const normalized = this.normalizeWorld(point);
             if (!normalized || normalized.x < originX || normalized.x >= endX
                 || normalized.y < originY || normalized.y >= endY) return;
             const index = (normalized.x - originX) * height + normalized.y - originY;
-            if (visited.has(index)) return;
-            visited.add(index);
+            if (hasBit(visited, index)) return;
+            setBit(visited, index);
+            // Cache only river land cells. Warm overview pages then need no
+            // terrain resampling just to discard their sea approach.
+            const sample = sampleAt(normalized.x, normalized.y);
+            if (!sample || sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) return;
             visit(normalized.x, normalized.y);
         };
         // Every directed reach has one downstream edge and one width profile,

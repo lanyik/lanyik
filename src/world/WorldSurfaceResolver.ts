@@ -16,6 +16,7 @@ import {
 } from "./WorldStyleProfile";
 import {
     createWorldWaterSampler,
+    WorldWaterSampleAt,
     WorldWaterSampler,
     WorldWaterSamplerStats
 } from "./WorldWaterSampler";
@@ -60,6 +61,11 @@ export interface WorldSurfaceResolver {
         height: number,
         visit: (x: number, y: number) => void
     ): void;
+    /** Yields after each bounded water batch; draining synchronously gives the same cells. */
+    generatedRiverTileBatches(
+        originX: number, originY: number, width: number, height: number,
+        visit: (x: number, y: number) => void
+    ): Generator<void>;
     createWindow(): WorldSurfaceResolverWindow;
 }
 
@@ -325,6 +331,13 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
         return sampleSurface(this.sampler, this.profile, point.x, point.y);
     }
 
+    private readonly sampleWater: WorldWaterSampleAt = (x, y) => {
+        const point = normalizeCoordinates(this.domain, x, y);
+        if (!point) return undefined;
+        const landform = this.sampler.sample(point.x, point.y);
+        return { baseTerrain: classifyTerrain(landform, this.profile), landform };
+    };
+
     public resolveGeneratedTile(x: number, y: number): Readonly<TileInfo> {
         const point = normalizeCoordinates(this.domain, x, y);
         if (!point) throw new RangeError("world surface coordinate is outside the generated domain");
@@ -338,14 +351,7 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
                 return normalized ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y) : undefined;
             },
             (riverX, riverY) => this.waterSampler.isRiverTile(
-                riverX,
-                riverY,
-                (sampleX, sampleY) => {
-                    const normalized = normalizeCoordinates(this.domain, sampleX, sampleY);
-                    return normalized
-                        ? sampleSurface(this.sampler, this.profile, normalized.x, normalized.y)
-                        : undefined;
-                }
+                riverX, riverY, this.sampleWater
             )
         );
     }
@@ -357,21 +363,20 @@ class FrozenWorldSurfaceResolver implements WorldSurfaceResolver {
         height: number,
         visit: (x: number, y: number) => void
     ): void {
+        const batches = this.generatedRiverTileBatches(originX, originY, width, height, visit);
+        while (!batches.next().done) { /* synchronous traversal */ }
+    }
+
+    public generatedRiverTileBatches(
+        originX: number, originY: number, width: number, height: number,
+        visit: (x: number, y: number) => void
+    ): Generator<void> {
         if (typeof visit !== "function") throw new TypeError("generated river visitor must be a function");
-        const window = this.createWindow();
-        try {
-            const sampleAt = (x: number, y: number) => window.sampleGenerated(x, y);
-            this.waterSampler.forEachRiverTile(originX, originY, width, height, sampleAt, (x, y) => {
-                const sample = sampleAt(x, y);
-                if (sample && !isWater(sample.baseTerrain)) visit(x, y);
-            });
-        } finally {
-            window.clear();
-        }
+        return this.waterSampler.riverTileBatches(originX, originY, width, height, this.sampleWater, visit);
     }
 
     public createWindow(): WorldSurfaceResolverWindow {
-        return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler);
+        return new WorldSurfaceResolverWindow(this, this.sampler.numericSeed, this.waterSampler, this.sampleWater);
     }
 }
 
@@ -382,7 +387,8 @@ export class WorldSurfaceResolverWindow {
     constructor(
         private readonly resolver: WorldSurfaceResolver,
         private readonly numericSeed: number,
-        private readonly waterSampler: WorldWaterSampler
+        private readonly waterSampler: WorldWaterSampler,
+        private readonly sampleWater: WorldWaterSampleAt
     ) {}
 
     public sampleGenerated(x: number, y: number): Readonly<WorldSurfaceSample> | undefined {
@@ -412,7 +418,7 @@ export class WorldSurfaceResolverWindow {
                 (riverX, riverY) => this.waterSampler.isRiverTile(
                     riverX,
                     riverY,
-                    (sampleX, sampleY) => this.sampleGenerated(sampleX, sampleY)
+                    this.sampleWater
                 )
             );
             this.tiles.set(key, tile);

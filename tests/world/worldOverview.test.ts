@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
     assertWorldOverviewRaster,
     generateWorldOverviewWithResolver
@@ -13,6 +14,20 @@ function riverMask(pixels: Uint8ClampedArray): Uint8Array {
 }
 
 describe("world overview raster", () => {
+    it.each([
+        [4096, "0b8f4e74889ff462d3eb07bcc3f2e38b209526bd9d1eb2c568dcc07ee4141ddc"],
+        [8192, "68bfdaa4a5ecebcb43b514b6802e17258c35ebeebdca550861c2d339df388b31"]
+    ] as const)("preserves the v19 raster across bounded water batches at span %i", (span, checksum) => {
+        const descriptor = createWorldDescriptor({ seed: "new-world", chunkSize: 24 });
+        const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
+        const options = { descriptor, originX: 0, originY: 0, tileSpanX: span, tileSpanY: span,
+            pixelWidth: 128, pixelHeight: 128 };
+        const raster = generateWorldOverviewWithResolver(options, resolver);
+        expect(createHash("sha256").update(raster.pixels).digest("hex")).toBe(checksum);
+        expect(generateWorldOverviewWithResolver(options, resolver).pixels).toEqual(raster.pixels);
+        expect(resolver.waterStats.maximumRasterizedTiles).toBeLessThanOrEqual(2048 * 2048);
+    });
+
     it.each([[64, 64], [128, 128], [256, 256], [73, 109], [256, 16], [16, 256]])(
         "fills the projected river tile footprint at %i by %i pixels without resampling drainage per pixel",
         (pixelWidth, pixelHeight) => {
