@@ -69,6 +69,35 @@ describe("world overview raster", () => {
         expect(first.pixels.some((value, index) => index % 4 !== 3 && value !== first.pixels[index % 4])).toBe(true);
     });
 
+    it("preserves every terrain and river pixel when magnifying a native tile raster", () => {
+        const descriptor = createWorldDescriptor({ seed: "new-world" });
+        const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
+        const extent = { descriptor, originX: -224, originY: 96, tileSpanX: 32, tileSpanY: 32 };
+        const native = generateWorldOverviewWithResolver({ ...extent, pixelWidth: 32, pixelHeight: 32 }, resolver);
+        const enlarged = generateWorldOverviewWithResolver({ ...extent, pixelWidth: 73, pixelHeight: 109 }, resolver);
+        for (let y = 0; y < 109; y += 1) {
+            for (let x = 0; x < 73; x += 1) {
+                const expected = (Math.floor((y + 0.5) * 32 / 109) * 32 + Math.floor((x + 0.5) * 32 / 73)) * 4;
+                const actual = (y * 73 + x) * 4;
+                expect(enlarged.pixels.subarray(actual, actual + 4)).toEqual(native.pixels.subarray(expected, expected + 4));
+            }
+        }
+    });
+
+    it("samples each magnified terrain tile once with only one retained pixel row", () => {
+        const descriptor = createWorldDescriptor({ seed: "sampling" });
+        const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
+        // Isolate base-terrain sampling from the independent drainage pass.
+        vi.spyOn(resolver, "visitGeneratedRiverTiles").mockImplementation(() => {});
+        const sample = vi.spyOn(resolver, "sampleGenerated");
+        generateWorldOverviewWithResolver({
+            descriptor, originX: -32, originY: 16, tileSpanX: 32, tileSpanY: 32,
+            pixelWidth: 128, pixelHeight: 128
+        }, resolver);
+        expect(sample).toHaveBeenCalledTimes(1024);
+        expect(new Set(sample.mock.calls.map(([x, y]) => `${x},${y}`)).size).toBe(1024);
+    });
+
     it("keeps enlarged river and land pixels identical across page boundaries", () => {
         const descriptor = createWorldDescriptor({ seed: "new-world" });
         const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });

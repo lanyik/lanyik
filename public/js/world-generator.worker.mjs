@@ -3395,40 +3395,50 @@ function generateWorldOverviewWithResolver(options, resolver) {
   const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
   const riverCoverage = generatedRiverCoverage(options, resolver);
   const terrain = resolver.profile.terrain;
-  let offset = 0;
+  const terrainRow = new Uint8ClampedArray(options.pixelWidth * 4);
+  let previousY;
   for (let py = 0; py < options.pixelHeight; py += 1) {
     const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
-    for (let px = 0; px < options.pixelWidth; px += 1) {
-      const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
-      const sample = resolver.sampleGenerated(tileX, tileY);
-      let color;
-      if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
-        const shoreline = clamp014(
-          1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(1e-3, terrain.oceanLevel * 0.42)
-        );
-        color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
-      } else if (sample.baseTerrain === "sand" /* sand */) {
-        color = PALETTE.sand;
-      } else if (sample.baseTerrain === "tundra" /* tundra */) {
-        color = PALETTE.tundra;
-      } else if (sample.baseTerrain === "snow" /* snow */) {
-        color = PALETTE.snow;
-      } else if (sample.baseTerrain === "mountain" /* mountain */) {
-        color = mix2(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
-      } else {
-        const weights = sample.biomeWeights;
-        const dryCold = mix2(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(1e-3, weights.dry + weights.cold));
-        const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
-        color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
+    if (tileY !== previousY) {
+      let previousX;
+      for (let px = 0; px < options.pixelWidth; px += 1) {
+        const offset = px * 4;
+        const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+        if (tileX === previousX) {
+          terrainRow.copyWithin(offset, offset - 4, offset);
+          continue;
+        }
+        previousX = tileX;
+        const sample = resolver.sampleGenerated(tileX, tileY);
+        let color;
+        if (sample.baseTerrain === "sea" /* sea */ || sample.baseTerrain === "coastal" /* coastal */) {
+          const shoreline = clamp014(
+            1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(1e-3, terrain.oceanLevel * 0.42)
+          );
+          color = mix2(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
+        } else if (sample.baseTerrain === "sand" /* sand */) {
+          color = PALETTE.sand;
+        } else if (sample.baseTerrain === "tundra" /* tundra */) {
+          color = PALETTE.tundra;
+        } else if (sample.baseTerrain === "snow" /* snow */) {
+          color = PALETTE.snow;
+        } else if (sample.baseTerrain === "mountain" /* mountain */) {
+          color = mix2(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
+        } else {
+          const weights = sample.biomeWeights;
+          const dryCold = mix2(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(1e-3, weights.dry + weights.cold));
+          const nonTemperate = mix2(dryCold, PALETTE.alpine, weights.alpine);
+          color = mix2(nonTemperate, PALETTE.temperate, weights.temperate);
+        }
+        const reliefShade = 0.88 + clamp014((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
+        writePixel(terrainRow, offset, shadeRgb(color, reliefShade));
       }
-      const reliefShade = 0.88 + clamp014((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18 - sample.vegetationDensity * 0.13 - sample.landform.valley * 0.035;
+      previousY = tileY;
+    }
+    pixels.set(terrainRow, py * terrainRow.length);
+    for (let px = 0; px < options.pixelWidth; px += 1) {
       const pixelIndex = py * options.pixelWidth + px;
-      writePixel(
-        pixels,
-        offset,
-        riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
-      );
-      offset += 4;
+      if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
     }
   }
   return {

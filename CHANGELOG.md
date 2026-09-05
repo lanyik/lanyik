@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Magnified world overviews reuse terrain samples through a bounded pixel row,
+  preserving terrain colors and river footprints without per-pixel resampling.
 - World descriptors and landform domains are immutable at runtime. Finite
   generation entry points share dimension limits, and invalid sampler topology
   or unsafe dimensions fail before sampling.

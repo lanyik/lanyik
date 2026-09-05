@@ -184,43 +184,55 @@ export function generateWorldOverviewWithResolver(
     const pixels = new Uint8ClampedArray(options.pixelWidth * options.pixelHeight * 4);
     const riverCoverage = generatedRiverCoverage(options, resolver);
     const terrain = resolver.profile.terrain;
-    let offset = 0;
+    // Pixel centres are monotonic in each axis. One terrain row is enough to
+    // reuse magnified tile samples without retaining a map of sample objects.
+    const terrainRow = new Uint8ClampedArray(options.pixelWidth * 4);
+    let previousY: number | undefined;
     for (let py = 0; py < options.pixelHeight; py += 1) {
         const tileY = overviewTileCoordinate(options.originY, options.tileSpanY, py, options.pixelHeight);
-        for (let px = 0; px < options.pixelWidth; px += 1) {
-            const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
-            const sample = resolver.sampleGenerated(tileX, tileY);
-            let color: Rgb;
-            if (sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) {
-                const shoreline = clamp01(
-                    1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(0.001, terrain.oceanLevel * 0.42)
-                );
-                color = mix(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
-            } else if (sample.baseTerrain === Land.sand) {
-                color = PALETTE.sand;
-            } else if (sample.baseTerrain === Land.tundra) {
-                color = PALETTE.tundra;
-            } else if (sample.baseTerrain === Land.snow) {
-                color = PALETTE.snow;
-            } else if (sample.baseTerrain === Land.mountain) {
-                color = mix(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
-            } else {
-                const weights = sample.biomeWeights;
-                const dryCold = mix(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(0.001, weights.dry + weights.cold));
-                const nonTemperate = mix(dryCold, PALETTE.alpine, weights.alpine);
-                color = mix(nonTemperate, PALETTE.temperate, weights.temperate);
+        if (tileY !== previousY) {
+            let previousX: number | undefined;
+            for (let px = 0; px < options.pixelWidth; px += 1) {
+                const offset = px * 4;
+                const tileX = overviewTileCoordinate(options.originX, options.tileSpanX, px, options.pixelWidth);
+                if (tileX === previousX) {
+                    terrainRow.copyWithin(offset, offset - 4, offset);
+                    continue;
+                }
+                previousX = tileX;
+                const sample = resolver.sampleGenerated(tileX, tileY);
+                let color: Rgb;
+                if (sample.baseTerrain === Land.sea || sample.baseTerrain === Land.coastal) {
+                    const shoreline = clamp01(
+                        1 - (terrain.oceanLevel - sample.landform.ocean) / Math.max(0.001, terrain.oceanLevel * 0.42)
+                    );
+                    color = mix(PALETTE.deepWater, PALETTE.shallowWater, shoreline);
+                } else if (sample.baseTerrain === Land.sand) {
+                    color = PALETTE.sand;
+                } else if (sample.baseTerrain === Land.tundra) {
+                    color = PALETTE.tundra;
+                } else if (sample.baseTerrain === Land.snow) {
+                    color = PALETTE.snow;
+                } else if (sample.baseTerrain === Land.mountain) {
+                    color = mix(PALETTE.mountain, PALETTE.snow, sample.biomeWeights.alpine * 0.22);
+                } else {
+                    const weights = sample.biomeWeights;
+                    const dryCold = mix(PALETTE.dry, PALETTE.cold, weights.cold / Math.max(0.001, weights.dry + weights.cold));
+                    const nonTemperate = mix(dryCold, PALETTE.alpine, weights.alpine);
+                    color = mix(nonTemperate, PALETTE.temperate, weights.temperate);
+                }
+                const reliefShade = 0.88
+                    + clamp01((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18
+                    - sample.vegetationDensity * 0.13
+                    - sample.landform.valley * 0.035;
+                writePixel(terrainRow, offset, shadeRgb(color, reliefShade));
             }
-            const reliefShade = 0.88
-                + clamp01((sample.landform.elevation - terrain.seaLevel) * 1.7) * 0.18
-                - sample.vegetationDensity * 0.13
-                - sample.landform.valley * 0.035;
+            previousY = tileY;
+        }
+        pixels.set(terrainRow, py * terrainRow.length);
+        for (let px = 0; px < options.pixelWidth; px += 1) {
             const pixelIndex = py * options.pixelWidth + px;
-            writePixel(
-                pixels,
-                offset,
-                riverCoverage[pixelIndex] ? PALETTE.river : shadeRgb(color, reliefShade)
-            );
-            offset += 4;
+            if (riverCoverage[pixelIndex]) writePixel(pixels, pixelIndex * 4, PALETTE.river);
         }
     }
     return {
