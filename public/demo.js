@@ -1,5 +1,6 @@
 import { GUI } from "./js/vendor/dat.gui.module.js";
 import { createI18n } from "./i18n.js";
+import { FramePerformanceSampler } from "./frame-performance.js";
 import {
     IndexedDbWorldChunkCache,
     IndexedDbWorldDeltaStore,
@@ -181,17 +182,15 @@ function inspectRenderBackend() {
 
 const renderBackend = inspectRenderBackend();
 
-const PERFORMANCE_SAMPLE_INTERVAL = 500;
-let performanceSampleStart = performance.now();
-let performanceCpuFrameMsTotal = 0;
-let performanceCpuFrameSamples = 0;
-let performanceGpuFrameMsTotal = 0;
-let performanceGpuFrameSamples = 0;
+const performanceSampler = new FramePerformanceSampler();
+document.addEventListener("visibilitychange", () => performanceSampler.reset());
 let performanceNumberFormatter;
 let performanceCompactFormatter;
 let performanceSnapshot = {
     fps: null,
     frameTime: null,
+    cpuFrameMs: null,
+    gpuFrameMs: null,
     memory: null,
     drawCalls: null,
     triangles: null,
@@ -247,33 +246,18 @@ function updatePerformanceLocale(locale) {
     renderPerformance();
 }
 
-function samplePerformance({ cpuFrameMs, gpuFrameMs } = {}) {
-    const now = performance.now();
-    const elapsed = now - performanceSampleStart;
-    if (Number.isFinite(cpuFrameMs) && cpuFrameMs > 0) {
-        performanceCpuFrameMsTotal += cpuFrameMs;
-        performanceCpuFrameSamples += 1;
-    }
-    if (Number.isFinite(gpuFrameMs) && gpuFrameMs > 0) {
-        performanceGpuFrameMsTotal += gpuFrameMs;
-        performanceGpuFrameSamples += 1;
-    }
-    if (elapsed < PERFORMANCE_SAMPLE_INTERVAL) return;
+function samplePerformance(frame) {
+    if (document.hidden || frame.dtS === 0) performanceSampler.reset();
+    if (document.hidden) return;
+    const timing = performanceSampler.sample(frame);
+    if (!timing) return;
 
     const rendererInfo = map.renderer?.info;
     const streaming = map.streamingStats;
     const worldStreaming = map.worldStreamingStats;
     const heapSize = performance.memory?.usedJSHeapSize;
-    const averageCpuFrameMs = performanceCpuFrameSamples > 0
-        ? performanceCpuFrameMsTotal / performanceCpuFrameSamples
-        : null;
-    const averageGpuFrameMs = performanceGpuFrameSamples > 0
-        ? performanceGpuFrameMsTotal / performanceGpuFrameSamples
-        : null;
-    const frameTime = Math.max(averageCpuFrameMs ?? 0, averageGpuFrameMs ?? 0) || null;
     performanceSnapshot = {
-        fps: frameTime === null ? null : 1000 / frameTime,
-        frameTime,
+        ...timing,
         memory: Number.isFinite(heapSize) ? heapSize / 1048576 : null,
         drawCalls: rendererInfo?.render.calls ?? null,
         triangles: rendererInfo?.render.triangles ?? null,
@@ -288,11 +272,6 @@ function samplePerformance({ cpuFrameMs, gpuFrameMs } = {}) {
         cacheStorage: worldStreaming ? worldStreaming.cachedBytes / 1048576 : null,
         backend: renderBackend.label
     };
-    performanceCpuFrameMsTotal = 0;
-    performanceCpuFrameSamples = 0;
-    performanceGpuFrameMsTotal = 0;
-    performanceGpuFrameSamples = 0;
-    performanceSampleStart = now;
     renderPerformance();
 }
 

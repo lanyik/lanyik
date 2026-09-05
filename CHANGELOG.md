@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Demo FPS and frame time now measure animation-frame cadence, with separate
+  CPU/GPU work averages and sampling resets on page visibility/context recovery.
+
 ### Added
 
 - A paged data-driven world minimap backed by versioned Worker overview rasters,

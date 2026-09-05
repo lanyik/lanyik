@@ -20,6 +20,14 @@ map.on("frame", ({ dtS, cpuFrameMs, gpuFrameMs }) => {
 map.on("load", () => {});
 ```
 
+The frame event's `t` is the animation-frame timestamp and `dtS` is the elapsed
+time since the previous frame (zero on startup/context recovery). `cpuFrameMs`
+measures the previous frame's CPU work; `gpuFrameMs` is an asynchronously
+available GPU timer result. Neither measures display cadence. The demo computes
+FPS as frame intervals counted per elapsed timestamp window, and reports their
+mean as frame time. CPU/GPU averages remain separate diagnostic fields. Hidden
+pages and context recovery reset the demo's sampling window.
+
 Dispatch is synchronous and uses a listener snapshot. Adding or removing a
 listener during dispatch affects the next emission, not the current snapshot.
 A listener exception propagates to the emitter's caller; remaining listeners
