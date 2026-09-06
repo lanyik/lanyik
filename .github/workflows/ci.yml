@@ -24,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:optimization-gates
       - run: npm run build
+      - run: npm run app:build
       - run: npm run check:generated:built
       - run: npm run check:package-boundaries:built
       - run: npm run benchmark:check:built
@@ -42,6 +43,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - run: npm run test:app:e2e
       - name: Upload browser artifacts
         if: failure() || github.event_name == 'schedule'
         uses: actions/upload-artifact@v7

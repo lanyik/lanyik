@@ -3,6 +3,9 @@
   "version": "0.5.0",
   "description": "A browser-first 3D hex-world renderer and streamed-world runtime built on three.js.",
   "type": "module",
+  "workspaces": [
+    "apps/expedition"
+  ],
   "main": "dist/hex-map.cjs",
   "module": "dist/hex-map.mjs",
   "types": "dist/types/index.d.ts",
@@ -35,6 +38,12 @@
     "build": "npm run build:demo",
     "server": "http-server public -c-1 -p 3000",
     "start": "npm run build && npm run server",
+    "app:prepare": "npm run generate:forest-lods && npm run build:lib && node scripts/prepare-app-assets.mjs",
+    "app:dev": "npm run app:prepare && npm run dev --workspace @preview/expedition",
+    "app:build": "npm run app:prepare && npm run build --workspace @preview/expedition",
+    "app:preview": "npm run preview --workspace @preview/expedition",
+    "app:typecheck": "npm run build:lib && npm run typecheck --workspace @preview/expedition",
+    "test:app:e2e": "playwright test --config playwright.app.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",

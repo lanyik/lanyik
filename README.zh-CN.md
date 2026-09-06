@@ -24,9 +24,9 @@
 | 演示 | 有限环形世界和无限世界共用一个页面，模式选择会跨刷新保存 |
 | 基础设施 | v1 已冻结；生命周期、所有权、调度、持久化和资源预算合同已有自动化验证 |
 | 世界风格 | 生成 v1 现包含大尺度连通海域、确定性粗网格汇流河网、气候雪线、连续地貌和区域森林 |
-| 游戏应用 | 工业经营框架见 [App 开发设计](docs/app-development.md)；应用尚未实现 |
+| 游戏应用 | [独立勘察入口](docs/game/application-shell.md)、会话和固定时钟已实现；工业玩法见 [App 开发设计](docs/app-development.md) |
 
-开发环境要求 Node.js 20 或更高版本；作为库使用时，应用需要提供
+完整仓库开发使用 Node.js 22.12+；作为库使用时，应用需要提供
 `^0.185.0` 的 `three` peer dependency。
 
 ## 当前已经具备的能力
@@ -210,12 +210,19 @@ game.dispose();
 
 ## 开发与验证
 
+游戏应用：在根目录执行 `npm ci`，再运行 `npm run app:dev`，打开
+`http://127.0.0.1:5173`。目前支持地表勘察、地块选中、暂停/加速和重载星球；矿藏与
+工业玩法接着开发。代码职责和运行合同见 [应用入口](docs/game/application-shell.md)。
+
 | 命令 | 作用 |
 |---|---|
 | `npm run build:lib` | 在 `dist/` 生成 ESM、CJS、全局包和类型声明 |
 | `npm run build` | 构建库，并把可运行演示资源复制到 `public/` |
 | `npm run server` | 不重新构建，直接在 3000 端口提供 `public/` |
 | `npm start` | 构建后启动演示服务器 |
+| `npm run app:dev` | 准备基建与资产，在 5173 端口启动游戏应用 |
+| `npm run app:build` | 检查应用类型并生成独立生产构建 |
+| `npm run test:app:e2e` | 构建并验证游戏应用的真实浏览器流程 |
 | `npm test` | 运行确定性的 Vitest 合同与稳定性测试 |
 | `npm run typecheck` | 仅执行 TypeScript 检查，不输出文件 |
 | `npm run test:e2e` | 构建并运行 Chromium 集成测试；普通运行跳过可选 soak |

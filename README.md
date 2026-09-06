@@ -25,9 +25,9 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Game application | Industrial gameplay is designed in [App development](docs/app-development.md); the application is not implemented |
+| Game application | [Standalone survey shell](docs/game/application-shell.md), session and fixed clock implemented; industrial gameplay remains planned in [App development](docs/app-development.md) |
 
-Runtime requirements are Node.js 20 or newer for development and `three`
+Use Node.js 22.12+ for full repository development and `three`
 `^0.185.0` as a peer dependency for library consumers.
 
 ## What works today
@@ -239,12 +239,20 @@ The industrial application's boundaries are defined in
 
 ## Development and verification
 
+For the game application, run `npm ci` and `npm run app:dev` from the root,
+then open `http://127.0.0.1:5173`. The current shell supports terrain surveys,
+tile selection, pause/speed controls and planet replacement. Minerals and
+industrial gameplay follow next; see the [application contract](docs/game/application-shell.md).
+
 | Command | Purpose |
 |---|---|
 | `npm run build:lib` | Build ESM, CJS, global bundle and declarations into `dist/` |
 | `npm run build` | Build the library and copy the runnable demo assets into `public/` |
 | `npm run server` | Serve `public/` on port 3000 without rebuilding |
 | `npm start` | Build, then serve the demo |
+| `npm run app:dev` | Prepare library/assets and serve the game application on port 5173 |
+| `npm run app:build` | Typecheck and build the standalone application |
+| `npm run test:app:e2e` | Build and verify the application in a real browser |
 | `npm test` | Run deterministic Vitest contract and stability tests |
 | `npm run typecheck` | Run TypeScript without emitting files |
 | `npm run test:e2e` | Build and run Chromium integration tests; normal runs skip the opt-in soak |

@@ -11,7 +11,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Rendering and world streaming | Implemented; WebGL2, source chunks, 12x12 render chunks, LOD and bounded residency | [render-streaming.md](./render-streaming.md) |
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
 | Persistence and pathfinding | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
-| Industrial game application | Architecture and development contracts defined; application not implemented | [app-development.md](./app-development.md) |
+| Industrial game application | Survey shell, session and fixed clock implemented; industrial gameplay planned | [application-shell.md](./game/application-shell.md), [app-development.md](./app-development.md) |
 | World-style generation v1 | Broad connected oceans and deterministic coarse-drainage rivers, with elevated climate snow and seam-free mountain lighting | [world-style-generation-v1.md](./world-style-generation-v1.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
@@ -42,13 +42,15 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 
 ## Gameplay-side services
 
+- [Application shell](./game/application-shell.md): standalone React/Vite entry,
+  map ownership, surveys, fixed clock, pause/speed controls and lifecycle tests.
 - [Hierarchical pathfinding](./hierarchical-pathfinding.md): long routes over
   unloaded source chunks.
 
 ## Decisions and roadmap
 
-- [App development](./app-development.md): planned industrial application
-  structure, authoritative state, global ticks, inventory, construction,
+- [App development](./app-development.md): industrial application structure,
+  authoritative state, global ticks, inventory, construction,
   logistics, power, research, projects, navigation and checkpoint integration.
 - [Alien industry and wormhole megastructure concept](../游戏想法.md): solo
   industrial management with light survival pressure, gene-based research,

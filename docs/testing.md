@@ -18,6 +18,7 @@ of keeping a test-only runtime path alive.
 | Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
+| Game application | Pure clock/session contracts and production-build browser integration | `apps/expedition/tests`, `apps/expedition/tests/e2e` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
 | Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
@@ -54,10 +55,16 @@ resource accounting must additionally run:
 $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
 
+Application changes also run `npm run app:build` and `npm run test:app:e2e`.
+The root `npm test` includes application unit tests; the application build checks
+its source, configuration and tests with TypeScript. Application E2E runs on
+port 4174 and stores browser artifacts under `test-results/app`, separate from
+the foundation demo on port 4173. Both application gates run in CI.
+
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
-soak on its scheduled job. The verify job builds once, checks committed demo
-artifacts with `check:generated:built`, and benchmarks that exact output with
+soak on its scheduled job. The verify job builds the library/demo and application,
+checks committed demo artifacts with `check:generated:built`, and benchmarks that output with
 `benchmark:check:built`. It also runs `check:package-boundaries:built` against
 the same outputs so IndexedDB implementations cannot drift back into the root
 bundle. The public `check:generated`, `check:package-boundaries` and

@@ -112,3 +112,4 @@ dist
 .browser-artifacts/
 playwright-report/
 test-results/
+apps/expedition/.assets/
