@@ -15,7 +15,6 @@ export default defineConfig({
         "hex-map": "src/index.ts",
         "persistence": "src/persistence.ts",
         "pathfinding": "src/pathfinding.ts",
-        "simulation": "src/simulation.ts",
         "world-generator.worker": "src/world/generateWorld.worker.ts"
     },
     format: ["esm", "cjs"],

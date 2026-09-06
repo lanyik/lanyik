@@ -4,9 +4,8 @@ import { DEFAULT_WORLD_WATER_STYLE, WORLD_WATER_STYLE_RANGES, WorldWaterGenerati
 interface DemoDiagnostics {
     status: string;
     generating: boolean;
-    worldMode: "finite" | "infinite" | "campaign";
+    worldMode: "finite" | "infinite";
     worldStreaming?: { residentChunks: number };
-    campaign?: { ready: boolean };
     renderer?: { triangles: number };
     waterStyle?: WorldWaterGenerationStyle;
 }
@@ -45,7 +44,7 @@ test("switches and remembers world mode from the root demo control panel", async
     });
 
     // quality=fast is the CI render preset; mode selection itself starts from
-    // the root route without an infinite/campaign launch flag.
+    // the root route without an infinite launch flag.
     await page.goto("/?quality=fast", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => {
         const state = (window as unknown as {
@@ -74,15 +73,16 @@ test("switches and remembers world mode from the root demo control panel", async
     });
     await expect(page.locator("[data-world-mode]")).toHaveValue("infinite");
 
-    await page.locator("[data-world-mode]").selectOption("campaign");
+    await expect(page.locator("[data-world-mode] option")).toHaveCount(2);
+    await page.locator("[data-world-mode]").selectOption("finite");
     await page.waitForFunction(() => {
         const state = (window as unknown as {
             getWorldDiagnostics(): DemoDiagnostics;
         }).getWorldDiagnostics();
         return state.status === "generated" && !state.generating
-            && state.worldMode === "campaign" && state.campaign?.ready;
+            && state.worldMode === "finite";
     });
-    await expect(page.locator("[data-campaign-panel]")).toBeVisible();
+    await expect(page.locator("[data-world-mode]")).toHaveValue("finite");
     expect(errors).toEqual([]);
 });
 

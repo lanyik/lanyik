@@ -24,16 +24,15 @@ explicit subpaths:
 | `three-hex-map` | HexMap, rendering, world sources, streaming, persistence contracts and core helpers |
 | `three-hex-map/persistence` | IndexedDB chunk cache, sparse world deltas and recoverable checkpoints |
 | `three-hex-map/pathfinding` | Versioned hierarchical navigation summaries and routing |
-| `three-hex-map/simulation` | Camera-independent simulation runtime and snapshot stores |
 
 Each subpath has independent ESM, CommonJS and declaration outputs. The classic
 `hex-map.global.js` is built from the renderer entry and does not publish the
-pathfinding or simulation APIs. Those modules must be loaded through a module
+pathfinding or persistence implementation APIs. Those modules must be loaded through a module
 bundler or native ESM when needed.
 
 The validation build reports the current root ESM size in the `tsup` output.
 This is a build observation rather than a fixed budget; use the `tsup` output
-from `npm run build:lib` as the current measurement. Pathfinding, simulation and
+from `npm run build:lib` as the current measurement. Pathfinding and
 browser persistence remain separate subpaths, so applications do not pull those
 optional runtimes through their dedicated imports. The root exposes only the
 cache/delta capability contracts and deterministic normalization/key helpers.
@@ -42,3 +41,8 @@ Applications explicitly construct IndexedDB implementations from
 disposes option-level stores. `npm run check:package-boundaries:built` scans all
 root runtime formats after a build and fails if IndexedDB implementation markers
 cross that boundary.
+
+Gameplay simulation belongs to the application. The package has no simulation
+subpath; applications define their own state and implement
+`GenerationCheckpointParticipant` when saving it together with terrain deltas.
+See [App development](./app-development.md) for the planned industrial game.

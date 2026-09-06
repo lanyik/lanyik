@@ -22,11 +22,6 @@
       "import": "./dist/pathfinding.mjs",
       "require": "./dist/pathfinding.cjs"
     },
-    "./simulation": {
-      "types": "./dist/types/simulation.d.ts",
-      "import": "./dist/simulation.mjs",
-      "require": "./dist/simulation.cjs"
-    },
     "./world-generator.worker": "./dist/world-generator.worker.mjs"
   },
   "unpkg": "dist/hex-map.global.js",

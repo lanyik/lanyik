@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 A browser-first 3D hex-world renderer and streamed-world runtime built on
 [three.js](https://threejs.org/). It renders Civilization-style terrain with
 instancing and custom shaders, while keeping world generation, persistence,
-pathfinding and simulation behind explicit runtime boundaries.
+and pathfinding behind explicit runtime boundaries.
 
 This repository is the customized [lanyik/lanyik](https://github.com/lanyik/lanyik)
 fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
@@ -21,11 +21,11 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Package | Metadata remains at `0.5.0`; the current branch also contains the work listed under **Unreleased** |
 | Rendering | Production path is WebGL2 with instanced terrain, water and vegetation, source-chunk streaming, 12x12 render chunks and three LOD levels |
 | World runtime | Bounded static maps, streamed toroidal maps, deterministic infinite worlds and custom `WorldSource` implementations use one `HexMap.loadWorld()` entry |
-| Gameplay services | Sparse world deltas, recoverable generation checkpoints, hierarchical pathfinding and camera-independent simulation are implemented as optional package subpaths |
-| Demo | Finite toroidal, infinite and persistent-campaign modes share one page and one remembered mode selector |
+| Gameplay services | Sparse world deltas, recoverable generation checkpoints and hierarchical pathfinding are implemented as optional package subpaths |
+| Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Next milestone | Build the first real gameplay and content systems on the frozen runtime and surface contracts |
+| Game application | Industrial gameplay is designed in [App development](docs/app-development.md); the application is not implemented |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -49,8 +49,7 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   generation with two-ring prefetch, and explicit destination confirmation.
 - Generation-scoped cancellation, WebGL context recovery, resource accounting,
   queue backpressure and observable lifecycle drain.
-- Optional `GameEngine`, long-distance hierarchical routing, background world
-  simulation and a persistent campaign integration slice.
+- Optional `GameEngine` unit controls and long-distance hierarchical routing.
 - English and Simplified Chinese demo UI, live visual controls and runtime
   diagnostics for frame, Worker, cache and residency state.
 
@@ -63,24 +62,22 @@ npm ci
 npm start
 ```
 
-Open <http://127.0.0.1:3000>. The control panel exposes three modes:
+Open <http://127.0.0.1:3000>. The control panel exposes two modes:
 
 | Mode | Purpose |
 |---|---|
 | Finite toroidal | A seed plus width/height, streamed through Workers without materializing the complete map |
 | Infinite world | An unbounded procedural source with a camera-centered resident window |
-| Persistent campaign | Infinite streaming plus IndexedDB deltas, generation checkpoints, hierarchical routing and off-camera army simulation |
 
 The **Water generation** folder exposes bounded ocean frequency/coverage and
 river source, bend and width parameters. Committing a value regenerates the
 world; the chosen values are part of its descriptor and cache identity.
 
-The selected mode survives reloads. Legacy `?infinite`, `?campaign`, coordinate
-and `?autostart` query flags remain available for automation and old bookmarks.
+The selected mode survives reloads. The `?infinite` flag and coordinate query
+parameters can also select the initial infinite-world view.
 
 Click the canvas before using **WASD**. Left-click selects a tile, right-drag
-orbits the camera and the wheel zooms. The default finite/infinite modes are
-world viewers; only Persistent campaign starts the integration scenario.
+orbits the camera and the wheel zooms. Both modes are world viewers.
 
 ## Use as a library
 
@@ -179,7 +176,6 @@ browser/display refresh rate rather than a library-side frame lock.
 | `three-hex-map` | `HexMap`, `GameEngine`, world sources, streaming, runtime ownership and core helpers |
 | `three-hex-map/persistence` | Base-chunk caches, sparse world deltas and recoverable checkpoints |
 | `three-hex-map/pathfinding` | Versioned navigation summaries and hierarchical routing |
-| `three-hex-map/simulation` | Camera-independent chunk simulation, snapshot stores and army marching |
 | `three-hex-map/world-generator.worker` | Browser module Worker used by procedural sources |
 
 ## Map data and editing
@@ -235,9 +231,11 @@ game.on("end_move", event => console.log("arrived", event));
 game.dispose();
 ```
 
-It is a compatibility gameplay layer, not a complete Civilization ruleset. New
-large-world gameplay should keep authoritative state in the persistence,
-pathfinding and simulation services instead of tying it to camera residency.
+It provides unit controls rather than a complete Civilization ruleset. New
+large-world gameplay owns its authoritative state in the application and uses
+the persistence and pathfinding services independently of camera residency.
+The industrial application's boundaries are defined in
+[App development](docs/app-development.md).
 
 ## Development and verification
 

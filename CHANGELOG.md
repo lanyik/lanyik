@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- An application development design for the industrial game, specifying module
+  ownership, global ticks, inventory, production, power, logistics, navigation,
+  content validation and generation checkpoints. Gameplay remains unimplemented.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.
@@ -28,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation propagation, bounded/observable drain tracking, and
   `HexMap.disposeAsync()`.
 - Strict multi-store generation checkpoints with immutable staging, an atomic
-  CAS manifest, complete simulation/delta snapshots, explicit migrations,
+  CAS manifest, complete application/terrain snapshots, explicit migrations,
   previous-generation retention, descriptor validation, and orphan cleanup.
 - CPU/GPU byte budgets, geometry/texture/model accounting, weighted queue
   backpressure, starvation protection, federated runtime telemetry, and real
@@ -176,9 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rendering consume the same seed and continuous elevation field; mountain
   tiles share edge/corner heights with their neighbors and hex centers are no
   longer forced into one peak per tile.
-- Consolidated the finite, infinite, and persistent-campaign demos under the
-  `/` entry point with a remembered in-game world-mode selector; legacy query
-  flags remain available for automation and old bookmarks.
+- Consolidated the finite and infinite world viewers under the `/` entry point
+  with a remembered world-mode selector and infinite-world coordinate queries.
 - Terrain, water, grass and forests now expose lazy chunk-resource interfaces
   managed by a dedicated scheduler. Only distance/frustum-visible canonical or
   toroidal chunks construct CPU render data and submit GPU work.
@@ -218,8 +220,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generation entry points share dimension limits, and invalid sampler topology
   or unsafe dimensions fail before sampling.
 - Generation checkpoints require an explicit authoritative mutation boundary
-  around complete capture and restore. Campaign ownership checks and shutdown
-  admission prevent asynchronous snapshots from crossing world-state changes.
+  around complete capture and restore, preventing asynchronous snapshots from
+  crossing application-owned world-state changes.
 - Procedural and toroidal sources reject late chunk publication after disposal
   or cancellation, including cache reads and asynchronous delta restoration.
 - Resource estimates include full instance matrix/color capacity and instance
@@ -279,6 +281,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Grass wraps with its owning hex, and physical terrain/grass chunks share the
   same toroidal placement and visibility rules as their decorations, preventing
   surface content from appearing to float beyond a cut-off ground edge.
+
+### Removed
+
+- The `three-hex-map/simulation` subpath, chunk simulation runtime and stores,
+  army marching helper, and simulation checkpoint adapter. Industrial simulation
+  will be owned by the application; no compatibility exports remain.
+- The persistent campaign demo, its controls and translations, generated
+  simulation assets, dedicated tests and simulation benchmark cases.
 
 ## [0.5.0] - 2026-07-19
 

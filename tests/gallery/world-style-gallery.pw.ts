@@ -63,7 +63,7 @@ async function loadSample(
 ): Promise<{ firstVisibleMs: number; stableMs: number }> {
     await page.goto("/?quality=gallery", { waitUntil: "domcontentloaded" });
     await page.addStyleTag({
-        content: ".performance-panel,.world-status,.campaign-panel,.dg{display:none!important}"
+        content: ".performance-panel,.world-status,.dg{display:none!important}"
     });
     await page.waitForFunction(() => {
         const api = window as unknown as { getWorldDiagnostics?: () => GalleryDiagnostics };

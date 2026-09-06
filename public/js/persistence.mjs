@@ -2697,18 +2697,6 @@ var GenerationCheckpointCoordinator = class {
 };
 
 // src/persistence/FoundationCheckpointParticipants.ts
-function createSimulationGenerationParticipant(runtime) {
-  if (!runtime || typeof runtime.createCheckpointSnapshot !== "function" || typeof runtime.restoreCheckpointSnapshot !== "function") {
-    throw new TypeError("simulation runtime does not support generation checkpoints");
-  }
-  return {
-    id: "simulation",
-    version: 1,
-    required: true,
-    capture: () => runtime.createCheckpointSnapshot(),
-    restore: (_context, snapshot) => runtime.restoreCheckpointSnapshot(snapshot)
-  };
-}
 function createWorldDeltaGenerationParticipant(source, options = {}) {
   if (!source || typeof source.createDeltaCheckpointSnapshot !== "function" || typeof source.restoreDeltaCheckpointSnapshot !== "function") {
     throw new TypeError("world source does not support generation checkpoints");
@@ -2745,7 +2733,6 @@ export {
   checksumCheckpointSnapshot,
   clearWorldChunkCache,
   createFlushCheckpointParticipant,
-  createSimulationGenerationParticipant,
   createWorldChunkCacheKey,
   createWorldDeltaGenerationParticipant,
   normalizeWorldChunkDelta

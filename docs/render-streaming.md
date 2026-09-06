@@ -743,7 +743,7 @@ transform writes until their nearest physical world copy changes.
 
 Run `npm run benchmark` after performance changes. It builds the library and
 measures packed chunk residency, 512×512 fog frontier, vegetation preparation,
-GPU range merging, adaptive sampling, navigation summaries and simulation using
+GPU range merging, adaptive sampling and navigation summaries using
 fixed input. Each case is warmed once and sampled five times; output reports the
 median, range, spread, raw samples and runtime/CPU environment. The regression
 gate evaluates medians so a one-off JIT or scheduler outlier is visible without

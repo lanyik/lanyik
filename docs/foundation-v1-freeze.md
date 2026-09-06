@@ -10,6 +10,12 @@ scheduling, resource budgeting, checkpoint persistence, and render-layer
 ownership. New simulation, economy, combat, automation, unit, and building
 systems must consume these contracts instead of adding their state to `HexMap`.
 
+The current package no longer includes the chunk-based simulation runtime or
+the persistent campaign demo. This removes those consumers and their package
+entry; the ownership, checkpoint and rendering contracts below remain in force.
+The application-owned industrial simulation is specified in
+[App development](./app-development.md) and has not been implemented.
+
 ## Strict generation checkpoints
 
 `GenerationCheckpointCoordinator` is the authoritative save path. A save first
@@ -54,10 +60,11 @@ early return, repeated invocation and late invocation after cancellation.
 - A participant migration restores the old snapshot and publishes a new
   generation. Committed records are never rewritten in place.
 
-The campaign registers the real `WorldSimulationRuntime` and sparse terrain
-delta source as required participants. Their snapshot restore operations
-replace the complete backing store atomically. Rebuildable render/cache state
-is deliberately excluded from the authoritative checkpoint. Terrain edits are
+`createWorldDeltaGenerationParticipant()` adapts the sparse terrain delta
+source. Applications supply their own required gameplay-state participants.
+The terrain participant replaces its complete backing store atomically;
+the coordinator does not add rollback across participants. Rebuildable
+render/cache state is excluded from the authoritative checkpoint. Terrain edits are
 rejected with an explicit recovery-in-progress error during replacement rather
 than being accepted and then silently discarded.
 
@@ -83,7 +90,7 @@ Version changes follow these rules:
 | Packed chunk encoding or halo semantics | Increment `WORLD_CHUNK_FORMAT_VERSION` |
 | Worker request/response shape or transfer semantics | Increment `WORLD_WORKER_PROTOCOL_VERSION` and update both endpoints together |
 | Persisted descriptor fields or meaning | Increment `WORLD_DESCRIPTOR_FORMAT_VERSION` and provide an explicit compatibility decision |
-| Simulation or delta snapshot shape | Increment that participant version and provide a migration, or reject the old save |
+| Application or delta snapshot shape | Increment that participant version and provide an explicit version policy; the planned industrial app rejects incompatible saves |
 
 Changing a golden checksum without the corresponding explicit protocol change
 is a test failure, not routine snapshot maintenance. Worker requests and

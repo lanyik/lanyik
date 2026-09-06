@@ -35,7 +35,6 @@ export {
     GENERATION_CHECKPOINT_FORMAT_VERSION
 } from "./persistence/GenerationCheckpointCoordinator";
 export {
-    createSimulationGenerationParticipant,
     createWorldDeltaGenerationParticipant
 } from "./persistence/FoundationCheckpointParticipants";
 export type {

@@ -56,7 +56,7 @@ const route = await finder.find(start, destination, {
 
 unit.follow(route.path);
 // Release path-owned leases after the movement system no longer needs their
-// detailed tiles. Render/simulation leases for the same chunks remain valid.
+// detailed tiles. Other owners' leases for the same chunks remain valid.
 route.release();
 ```
 
@@ -87,8 +87,8 @@ or implement `WorldNavigationIndex` over a database/CDN.
 
 Every navigation index has an explicit `clear()`/`dispose()` lifecycle. Both
 built-in indexes release their summary maps on disposal and reject later reads;
-the campaign controller disposes its index together with simulation and
-checkpoint state. Custom indexes must provide the same deterministic ownership
+the application disposes its index when its world session ends.
+Custom indexes must provide the same deterministic ownership
 boundary even when their summaries live outside process memory.
 
 The passability and movement-cost rules used to build summaries must match the

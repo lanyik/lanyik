@@ -151,28 +151,6 @@ body {
     border-top: 1px solid rgba(178, 217, 180, 0.16);
 }
 
-.campaign-panel {
-    position: fixed;
-    right: 254px;
-    bottom: 16px;
-    z-index: 9;
-    display: grid;
-    gap: 4px;
-    min-width: 280px;
-    padding: 12px 14px;
-    color: #fff3cf;
-    background: rgba(35, 20, 7, 0.84);
-    border: 1px solid rgba(255, 200, 87, 0.38);
-    border-radius: 10px;
-    box-shadow: 0 12px 38px rgba(0, 0, 0, 0.32);
-    backdrop-filter: blur(12px);
-    pointer-events: none;
-}
-
-.campaign-panel[hidden] {
-    display: none;
-}
-
 .minimap-backdrop {
     position: fixed;
     inset: 0;
@@ -288,24 +266,6 @@ body {
     line-height: 1.3;
 }
 
-.campaign-panel strong {
-    color: #ffc857;
-    font-size: 14px;
-}
-
-.campaign-panel span {
-    color: #f2d9a2;
-    font-size: 12px;
-}
-
-.campaign-panel small {
-    margin-top: 5px;
-    padding-top: 7px;
-    color: #c9ab72;
-    font-size: 11px;
-    border-top: 1px solid rgba(255, 200, 87, 0.2);
-}
-
 /* dat.gui injects its .dg.ac rule after this stylesheet. Authoring remains
    interactive above both map overlays and the non-interactive performance HUD. */
 body > .dg.ac {
@@ -328,13 +288,6 @@ body > .dg.ac {
     .world-status {
         right: 10px;
         bottom: 10px;
-        left: 10px;
-        min-width: 0;
-    }
-
-    .campaign-panel {
-        right: 180px;
-        bottom: 122px;
         left: 10px;
         min-width: 0;
     }

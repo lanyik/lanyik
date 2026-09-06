@@ -12,7 +12,7 @@ chunk:
 ```ts
 import { IndexedDbWorldDeltaStore } from "three-hex-map/persistence";
 
-const deltas = new IndexedDbWorldDeltaStore({ databaseName: "campaign" });
+const deltas = new IndexedDbWorldDeltaStore({ databaseName: "world-deltas" });
 const current = await deltas.loadChunk(worldId, chunkX, chunkY, { chunkSize: 24 });
 const saved = await deltas.putChunkDelta?.(
     worldId,

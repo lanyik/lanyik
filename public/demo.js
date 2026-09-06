@@ -3,13 +3,12 @@ import { createI18n } from "./i18n.js";
 import { FramePerformanceSampler } from "./frame-performance.js";
 import {
     IndexedDbWorldChunkCache,
-    IndexedDbWorldDeltaStore,
     clearWorldChunkCache
 } from "./js/persistence.mjs";
 
 const LOCALE_STORAGE_KEY = "three-hex-world.locale";
 const WORLD_MODE_STORAGE_KEY = "three-hex-world.mode";
-const WORLD_MODES = new Set(["finite", "infinite", "campaign"]);
+const WORLD_MODES = new Set(["finite", "infinite"]);
 const {
     HexMap,
     WorldMinimap,
@@ -28,10 +27,6 @@ const TARGET_FRAME_MS = 1000 / TARGET_FRAME_RATE;
 const title = document.querySelector("[data-world-title]");
 const detail = document.querySelector("[data-world-detail]");
 const controlsHint = document.querySelector("[data-world-controls]");
-const campaignPanel = document.querySelector("[data-campaign-panel]");
-const campaignTitle = document.querySelector("[data-campaign-title]");
-const campaignDetail = document.querySelector("[data-campaign-detail]");
-const campaignMeta = document.querySelector("[data-campaign-meta]");
 const performanceTitle = document.querySelector("[data-performance-title]");
 const performanceLabels = document.querySelectorAll("[data-performance-label]");
 const performanceUnits = document.querySelectorAll("[data-performance-unit]");
@@ -64,7 +59,6 @@ function persistLocale(locale) {
 }
 
 function readInitialWorldMode() {
-    if (query.has("campaign")) return "campaign";
     if (query.has("infinite")) return "infinite";
     try {
         const stored = localStorage.getItem(WORLD_MODE_STORAGE_KEY);
@@ -309,30 +303,18 @@ const controls = {
     riverHighFlowThreshold: DEFAULT_WORLD_WATER_STYLE.riverHighFlowThreshold,
     regenerate,
     resetWaterGeneration,
-    clearCachedData,
-    startCampaignMarch,
-    followCampaignArmy,
-    saveCampaign
+    clearCachedData
 };
 
 window.worldControls = controls;
 window.regenerateWorld = regenerate;
 window.clearWorldCache = clearCachedData;
-window.startCampaignMarch = startCampaignMarch;
-window.followCampaignArmy = followCampaignArmy;
-window.saveCampaign = saveCampaign;
-window.advanceCampaign = seconds => activeCampaign?.advance(seconds);
-window.runCampaignUntilSettled = seconds => activeCampaign?.runUntilSettled(seconds);
 
 let activeSource;
-let activeCampaign;
 let activeWorldMode;
 let generating = false;
 let pendingRegeneration = false;
 let statusState = { kind: "initializing" };
-let campaignSnapshot;
-
-campaignPanel.hidden = true;
 
 window.getWorldDiagnostics = () => ({
     status: statusState.kind,
@@ -355,50 +337,13 @@ window.getWorldDiagnostics = () => ({
     waterStyle: activeSource?.descriptor.waterStyle,
     performance: { ...performanceSnapshot },
     cameraTarget: map.getCameraTarget().toArray(),
-    minimap: minimap.view,
-    campaign: activeCampaign?.diagnostics
+    minimap: minimap.view
 });
-
-window.getCampaignDiagnostics = () => activeCampaign?.diagnostics ?? { ready: false };
 
 window.addEventListener("beforeunload", () => {
     minimap.dispose();
-    if (activeCampaign) void activeCampaign.dispose().finally(() => map.dispose());
-    else map.dispose();
+    map.dispose();
 }, { once: true });
-
-function renderCampaign(snapshot = campaignSnapshot) {
-    campaignSnapshot = snapshot;
-    if (activeWorldMode !== "campaign") return;
-    campaignTitle.textContent = i18n.t("campaign.title");
-    const army = snapshot?.army;
-    if (!army) {
-        campaignDetail.textContent = i18n.t("campaign.loading");
-        campaignMeta.textContent = "";
-        return;
-    }
-    campaignDetail.textContent = i18n.t(`campaign.${army.state.status}`, {
-        label: army.state.label,
-        x: army.x,
-        y: army.y
-    });
-    campaignMeta.textContent = i18n.t("campaign.meta", {
-        chunks: snapshot.simulation.residentChunks,
-        visibility: i18n.t(snapshot.offscreen ? "campaign.offscreen" : "campaign.onscreen")
-    });
-}
-
-async function startCampaignMarch() {
-    if (activeCampaign) await activeCampaign.startLongMarch();
-}
-
-function followCampaignArmy() {
-    activeCampaign?.followArmy();
-}
-
-async function saveCampaign() {
-    await activeCampaign?.flush();
-}
 
 function formatTile(tile) {
     return [
@@ -487,7 +432,6 @@ async function regenerate() {
     generating = true;
     const requestedWorldMode = WORLD_MODES.has(controls.worldMode) ? controls.worldMode : "finite";
     const infiniteMode = requestedWorldMode !== "finite";
-    const campaignMode = requestedWorldMode === "campaign";
     persistWorldMode(requestedWorldMode);
     syncWorldModeUi();
     setStatus("generating", {
@@ -498,11 +442,6 @@ async function regenerate() {
 
     try {
         const waterStyle = currentWaterStyle();
-        if (activeCampaign) {
-            await activeCampaign.dispose();
-            activeCampaign = undefined;
-            renderCampaign(null);
-        }
         activeWorldMode = requestedWorldMode;
         const workerUrl = new URL("./js/world-generator.worker.mjs", window.location.href);
         if (infiniteMode) {
@@ -516,7 +455,6 @@ async function regenerate() {
                 workerUrl,
                 chunkSize: 24,
                 cache: new IndexedDbWorldChunkCache(),
-                deltaStore: campaignMode ? new IndexedDbWorldDeltaStore() : undefined,
                 workCoordinator: map.workCoordinator
             });
             activeSource = undefined;
@@ -527,21 +465,6 @@ async function regenerate() {
                 targetFrameMs: TARGET_FRAME_MS
             });
             activeSource = source;
-            if (campaignMode) {
-                const { createCampaignDemo } = await import("./campaign.js");
-                activeCampaign = await createCampaignDemo({
-                    map,
-                    source,
-                    initialTile,
-                    tileSize: 48,
-                    onUpdate: renderCampaign
-                });
-                const army = activeCampaign.diagnostics.army;
-                if (query.has("autostart") && army?.state.status === "idle"
-                    && army.state.completedMarches === 0) {
-                    await activeCampaign.startLongMarch();
-                }
-            }
             setStatus("generated", { infinite: true, seed: controls.seed });
             return;
         }
@@ -583,13 +506,7 @@ async function regenerate() {
 }
 
 map.on("hover", ({ x, y, tile }) => setStatus("tile", { x, y, tile }));
-map.on("click", ({ x, y, tile }) => {
-    setStatus("selected", { x, y, tile });
-    if (activeWorldMode === "campaign" && activeCampaign && tile.type !== "sea"
-        && tile.type !== "coastal" && tile.type !== "mountain") {
-        void activeCampaign.orderTo({ x, y }).catch(console.error);
-    }
-});
+map.on("click", ({ x, y, tile }) => setStatus("selected", { x, y, tile }));
 
 const gui = new GUI({ width: 310 });
 const languageOptions = { English: "en", "简体中文": "zh-CN" };
@@ -598,8 +515,7 @@ const languageController = gui.add(controls, "language", languageOptions);
 const worldFolder = gui.addFolder("World generation");
 const worldModeOptions = {
     [i18n.t("worldMode.finite")]: "finite",
-    [i18n.t("worldMode.infinite")]: "infinite",
-    [i18n.t("worldMode.campaign")]: "campaign"
+    [i18n.t("worldMode.infinite")]: "infinite"
 };
 const worldModeController = worldFolder.add(controls, "worldMode", worldModeOptions);
 const worldModeSelect = worldModeController.domElement.querySelector("select");
@@ -654,12 +570,6 @@ for (const controller of waterGenerationControllers) {
 }
 waterGenerationFolder.open();
 
-const campaignFolder = gui.addFolder("Campaign");
-const startMarchController = campaignFolder.add(controls, "startCampaignMarch");
-const followArmyController = campaignFolder.add(controls, "followCampaignArmy");
-const saveCampaignController = campaignFolder.add(controls, "saveCampaign");
-campaignFolder.open();
-
 function setControllerVisible(controller, visible) {
     const row = controller.domElement.closest("li");
     if (row) row.style.display = visible ? "" : "none";
@@ -667,15 +577,10 @@ function setControllerVisible(controller, visible) {
 
 function syncWorldModeUi() {
     const infinite = controls.worldMode !== "finite";
-    const campaign = controls.worldMode === "campaign";
     setControllerVisible(widthController, !infinite);
     setControllerVisible(heightController, !infinite);
     setControllerVisible(initialXController, infinite);
     setControllerVisible(initialYController, infinite);
-    if (campaignFolder.domElement.parentElement) {
-        campaignFolder.domElement.parentElement.style.display = campaign ? "" : "none";
-    }
-    campaignPanel.hidden = !campaign;
 }
 
 worldModeController.onChange(mode => {
@@ -751,10 +656,7 @@ const translatedControllers = [
     [treesController, "control.trees"],
     [treeScaleController, "control.treeScale"],
     [grassController, "control.grass"],
-    [windController, "control.wind"],
-    [startMarchController, "control.startMarch"],
-    [followArmyController, "control.followArmy"],
-    [saveCampaignController, "control.saveCampaign"]
+    [windController, "control.wind"]
 ];
 
 const translatedFolders = [
@@ -762,8 +664,7 @@ const translatedFolders = [
     [waterGenerationFolder, "panel.waterGeneration"],
     [terrainFolder, "panel.terrain"],
     [waterFolder, "panel.water"],
-    [vegetationFolder, "panel.vegetation"],
-    [campaignFolder, "panel.campaign"]
+    [vegetationFolder, "panel.vegetation"]
 ];
 
 function applyLocale(locale) {
@@ -797,7 +698,6 @@ function applyLocale(locale) {
     gui.closed = gui.closed;
     updatePerformanceLocale(locale);
     renderStatus();
-    renderCampaign();
 }
 
 let minimapStatusAt = -Infinity;

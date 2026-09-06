@@ -28,13 +28,14 @@
 不能把互斥误认为跨 store 的回滚事务。staging 写入不占用捕获锁，允许游戏继续运行。
 缺少边界、未等待回调或重复调用均显式失败，不推断应用已经同步。
 
-Campaign 的初始恢复、串行操作队列和排空后的关闭过程持有该边界；关闭时拒绝新操作。
-必需参与者是 simulation 和 terrain delta，可重建 world cache 不进入权威存档。
+应用负责在初始恢复、串行操作与关闭过程中持有该边界；关闭时拒绝新操作。
+现有 `createWorldDeltaGenerationParticipant()` 提供 terrain delta 参与者；
+应用通过 `GenerationCheckpointParticipant` 接入自身状态，可重建 world cache 不进入权威存档。
 存档校验完整 world descriptor、参与者版本和快照 checksum，保留上一完整世代，
 并通过原子垃圾回收删除未引用的 staging。
 
 `CheckpointCoordinator` 与 `createFlushCheckpointParticipant()` 是独立的 journal/flush
-协议，代码仍然导出，但不具备严格的同一时刻快照保证，不用于 Campaign 的权威存档。
+协议，代码仍然导出，但不具备严格的同一时刻快照保证，不用于游戏的权威存档。
 协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包；这让存档协议可以独立演进，也避免只使用地图渲染的应用承担 IndexedDB/journal 代码体积。
 
 ## 3. 真实资源预算
@@ -84,11 +85,10 @@ GPU 淘汰保持 CPU 所有权，字段销毁则清空布局、LOD、雾状态�
 - 等待超过 starvation window 后逐级晋升，background 最终不会饿死。
 - starvation 只影响执行选择，不影响背压淘汰；暂停很久的后台任务不会因此挤掉刚到的 critical 工作。
 - 帧挂载和 Worker pool 已使用同一实现；Worker 仍保留 terrain capacity reservation。
-- simulation 保持严格 FIFO，避免优先级重排破坏确定性，但有独立的有界操作上限。
 
-`RuntimeWorkCoordinator` 是联邦调度面：frame、worker、streaming、simulation 保留不同执行器，同时向一个聚合统计面报告 backlog、weight、busy、最老任务、shed 和 starvation。销毁 coordinator 会取消其管理的排队任务；世界切换时旧 worker/streaming domain 会注销，统计本身不会泄漏。
+`RuntimeWorkCoordinator` 是联邦调度面：frame、worker、streaming 保留不同执行器，同时向一个聚合统计面报告 backlog、weight、busy、最老任务、shed 和 starvation。应用可通过 `registerTelemetry()` 登记自有执行器的压力；协调器不提供经营时钟或业务结算。销毁 coordinator 会取消其管理的排队任务；世界切换时旧 worker/streaming domain 会注销，统计本身不会泄漏。
 
-内存型 checkpoint journal、generation stage/manifest、simulation snapshot 与
+内存型 checkpoint journal、generation stage/manifest 与
 world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既是拒绝后续
 访问的状态边界，也是确定性的内存释放边界；不依赖所有外部引用同时被 GC。
 
@@ -118,6 +118,6 @@ world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既
 - 超重任务、后台 starvation、资源账户销毁、GPU query 饱和和不响应取消的生命周期均有独立回归测试。
 - E2E 连续快速替换世界时，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
 - 定时 CI 运行可配置的长时间浏览器 soak（默认 500 个世界世代），混合稳态替换和取消突发，并持续采样生命周期、调度域、WebGL 资源和强制 GC 后的 JS heap 上界。
-- benchmark gate 对生成、植被、GPU range 合并、导航摘要和模拟 tick 设置宽松但强制的回归上限；每项先预热再采集五个样本，以中位数判定，并输出 Node/V8、CPU、样本范围与离散度。
+- benchmark gate 对生成、植被、GPU range 合并和导航摘要设置宽松但强制的回归上限；每项先预热再采集五个样本，以中位数判定，并输出 Node/V8、CPU、样本范围与离散度。
 
 完整命令和各层适用范围统一维护在 [testing.md](./testing.md)，不在架构文档中重复容易漂移的测试数量或命令清单。

@@ -5,7 +5,7 @@ test("hover and selection follow mountain slopes and refresh after height edits"
     page.on("pageerror", error => errors.push(error.message));
     await page.goto("/?quality=gallery", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => (window as any).getWorldDiagnostics?.().status === "generated");
-    await page.addStyleTag({ content: ".performance-panel,.world-status,.campaign-panel,.dg,.minimap-panel{display:none!important}" });
+    await page.addStyleTag({ content: ".performance-panel,.world-status,.dg,.minimap-panel{display:none!important}" });
     await page.evaluate(async () => {
         const { hexWorld: map, HexMap: api } = window as any;
         const data: Record<number, Record<number, object>> = {};

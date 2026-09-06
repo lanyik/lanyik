@@ -8,7 +8,7 @@ chunks.
 ```text
 WorldStreamer lease -------+
 Pathfinder route lease -----+--> ChunkResidencyCoordinator --> WorldSource
-Simulation lease ----------+
+Application lease ---------+
 ```
 
 Use the source-scoped factory whenever several systems share a source:
@@ -43,13 +43,13 @@ const finder = new HierarchicalPathfinder(
     source,
     navigation,
     passable,
-    { residency, owner: "army-navigation" }
+    { residency, owner: "application-navigation" }
 );
 ```
 
 The coordinator's stats expose resident/pending chunk counts and active leases
 grouped by owner. Those counts are diagnostics, not an eviction policy. Camera
-retention remains the streamer's job; route and simulation lifetimes remain
+retention remains the streamer's job; route and application lifetimes remain
 their owners' jobs.
 
 Disposing a coordinator invalidates every lease in that world session. Pass

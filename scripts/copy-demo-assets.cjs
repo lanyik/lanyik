@@ -14,8 +14,6 @@ const copies = [
     ["dist/world-generator.worker.mjs.map", "public/js/world-generator.worker.mjs.map"],
     ["dist/pathfinding.mjs", "public/js/pathfinding.mjs"],
     ["dist/pathfinding.mjs.map", "public/js/pathfinding.mjs.map"],
-    ["dist/simulation.mjs", "public/js/simulation.mjs"],
-    ["dist/simulation.mjs.map", "public/js/simulation.mjs.map"],
     ["dist/persistence.mjs", "public/js/persistence.mjs"],
     ["dist/persistence.mjs.map", "public/js/persistence.mjs.map"],
     ["node_modules/three/build/three.module.js", "public/js/vendor/three.module.js"],

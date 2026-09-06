@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { RuntimeWorkCoordinator } from "../../src/runtime/RuntimeWorkCoordinator";
 
 describe("RuntimeWorkCoordinator", () => {
-    test("aggregates frame, worker, streaming and simulation pressure", () => {
+    test("aggregates frame and worker queues with application telemetry", () => {
         const coordinator = new RuntimeWorkCoordinator({
             defaultMaxPendingTasks: 4,
             defaultMaxPendingWeight: 8
@@ -12,14 +12,14 @@ describe("RuntimeWorkCoordinator", () => {
         const worker = coordinator.createQueue<string>("worker");
         frame.enqueue("mount", { weight: 2 });
         worker.enqueue("terrain", { weight: 3 });
-        const detach = coordinator.registerTelemetry("simulation", () => ({ pendingTasks: 2, busyTasks: 1 }));
+        const detach = coordinator.registerTelemetry("application", () => ({ pendingTasks: 2, busyTasks: 1 }));
 
         expect(coordinator.stats).toMatchObject({
             pendingTasks: 4,
             pendingWeight: 7,
             busyTasks: 1
         });
-        expect(Object.keys(coordinator.stats.domains)).toEqual(["frame", "worker", "simulation"]);
+        expect(Object.keys(coordinator.stats.domains)).toEqual(["frame", "worker", "application"]);
         detach();
         expect(coordinator.stats.pendingTasks).toBe(2);
         coordinator.dispose();

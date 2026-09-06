@@ -13,7 +13,6 @@ import {
     worldVegetationTransferables
 } from "../dist/hex-map.mjs";
 import { buildWorldNavigationSummary } from "../dist/pathfinding.mjs";
-import { WorldSimulationRuntime } from "../dist/simulation.mjs";
 
 const WARMUP_RUNS = integerEnvironment("FOUNDATION_BENCHMARK_WARMUPS", 1, 1, 5, false);
 const SAMPLE_RUNS = integerEnvironment("FOUNDATION_BENCHMARK_SAMPLES", 5, 3, 15, true);
@@ -69,22 +68,6 @@ function collectSync(measure) {
     for (let run = 0; run < SAMPLE_RUNS; run += 1) {
         globalThis.gc?.();
         measurements.push(measure());
-    }
-    return {
-        timing: summarizeTiming(measurements.map(measurement => measurement.durationMs)),
-        observation: measurements.at(-1)
-    };
-}
-
-async function collectAsync(measure) {
-    for (let run = 0; run < WARMUP_RUNS; run += 1) {
-        globalThis.gc?.();
-        await measure();
-    }
-    const measurements = [];
-    for (let run = 0; run < SAMPLE_RUNS; run += 1) {
-        globalThis.gc?.();
-        measurements.push(await measure());
     }
     return {
         timing: summarizeTiming(measurements.map(measurement => measurement.durationMs)),
@@ -327,70 +310,6 @@ function benchmarkNavigationSummaries() {
     };
 }
 
-async function benchmarkSimulationRuntime() {
-    const coldInsert = await collectAsync(async () => {
-        const runtime = new WorldSimulationRuntime({
-            chunkSize: 10,
-            activeTickIntervalSeconds: 0.1,
-            backgroundTickIntervalSeconds: 5
-        });
-        globalThis.gc?.();
-        const started = performance.now();
-        for (let index = 0; index < 5000; index += 1) {
-            runtime.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
-        }
-        const durationMs = performance.now() - started;
-        runtime.dispose();
-        return { durationMs };
-    });
-    const coldIdle = await collectAsync(async () => {
-        const runtime = new WorldSimulationRuntime({
-            chunkSize: 10,
-            activeTickIntervalSeconds: 0.1,
-            backgroundTickIntervalSeconds: 5
-        });
-        for (let index = 0; index < 5000; index += 1) {
-            runtime.addEntity({ id: `cold-${index}`, x: index * 10, y: 0, state: { value: 0 } });
-        }
-        globalThis.gc?.();
-        const started = performance.now();
-        await runtime.advance(0.016);
-        const durationMs = performance.now() - started;
-        runtime.dispose();
-        return { durationMs };
-    });
-    const denseTick = await collectAsync(async () => {
-        const runtime = new WorldSimulationRuntime({
-            chunkSize: 1000,
-            activeTickIntervalSeconds: 1,
-            backgroundTickIntervalSeconds: 1
-        });
-        for (let index = 0; index < 100000; index += 1) {
-            runtime.addEntity({
-                id: `dense-${index}`,
-                x: index % 1000,
-                y: Math.floor(index / 1000),
-                state: { value: 0 }
-            });
-        }
-        runtime.registerSystem({ id: "noop", update() {} });
-        globalThis.gc?.();
-        const started = performance.now();
-        await runtime.advance(1);
-        const durationMs = performance.now() - started;
-        runtime.dispose();
-        return { durationMs };
-    });
-    return {
-        operation: "generic simulation scale probes",
-        coldChunks: 5000,
-        coldInsertTiming: coldInsert.timing,
-        coldIdleAdvanceTiming: coldIdle.timing,
-        denseEntities: 100000,
-        denseNoopTickTiming: denseTick.timing
-    };
-}
-
 const cpu = os.cpus()[0];
 const results = {
     environment: {
@@ -412,8 +331,7 @@ const results = {
     vegetationPreparation: benchmarkVegetationPreparation(),
     gpuRangeBatching: benchmarkGpuRangeBatching(),
     adaptiveController: benchmarkAdaptiveController(),
-    navigationSummaries: benchmarkNavigationSummaries(),
-    simulationRuntime: await benchmarkSimulationRuntime()
+    navigationSummaries: benchmarkNavigationSummaries()
 };
 
 console.log(JSON.stringify(results, null, 2));
@@ -437,8 +355,6 @@ if (CHECK_MODE) {
     under("gpuRangeBatching.timing.medianMs", results.gpuRangeBatching.timing.medianMs, 500);
     under("adaptiveController.timing.medianMs", results.adaptiveController.timing.medianMs, 500);
     under("navigationSummaries.exactTiming.medianMs", results.navigationSummaries.exactTiming.medianMs, 2_500);
-    under("simulationRuntime.coldInsertTiming.medianMs", results.simulationRuntime.coldInsertTiming.medianMs, 500);
-    under("simulationRuntime.denseNoopTickTiming.medianMs", results.simulationRuntime.denseNoopTickTiming.medianMs, 2_000);
     if (results.toroidalWindow.residentChunks !== 25) {
         failures.push(`toroidalWindow.residentChunks: ${results.toroidalWindow.residentChunks} !== 25`);
     }

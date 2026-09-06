@@ -10,8 +10,8 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Package metadata | `0.5.0`; current `main` also contains unreleased work | [CHANGELOG](../CHANGELOG.md) |
 | Rendering and world streaming | Implemented; WebGL2, source chunks, 12x12 render chunks, LOD and bounded residency | [render-streaming.md](./render-streaming.md) |
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
-| Persistence, pathfinding and simulation | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
-| Persistent campaign | Implemented as a small integration/demo slice, not a complete game | [campaign-vertical-slice.md](./campaign-vertical-slice.md) |
+| Persistence and pathfinding | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
+| Industrial game application | Architecture and development contracts defined; application not implemented | [app-development.md](./app-development.md) |
 | World-style generation v1 | Broad connected oceans and deterministic coarse-drainage rivers, with elevated climate snow and seam-free mountain lighting | [world-style-generation-v1.md](./world-style-generation-v1.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
@@ -23,7 +23,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 - [Infrastructure v1 freeze contract](./foundation-v1-freeze.md): boundaries that
   new gameplay and content systems must consume rather than reopen.
 - [Package boundaries](./package-boundaries.md): main entry and optional
-  `persistence`, `pathfinding` and `simulation` subpaths.
+  `persistence` and `pathfinding` subpaths.
 - [Event contracts](./event-contracts.md): typed HexMap, Unit and GameEngine
   payload maps plus synchronous dispatch and unhandled-error policy.
 - [Test strategy](./testing.md): contract tests, browser E2E, soak tests and
@@ -36,7 +36,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 - [Render world controller](./render-world-controller.md): ownership of one
   streamed rendering session.
 - [Chunk residency](./chunk-residency.md): shared leases across rendering,
-  navigation and simulation consumers.
+  navigation and application consumers.
 - [World delta persistence](./world-delta-persistence.md): sparse mutable
   overrides kept separate from reproducible base terrain.
 
@@ -44,13 +44,12 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 
 - [Hierarchical pathfinding](./hierarchical-pathfinding.md): long routes over
   unloaded source chunks.
-- [World simulation](./world-simulation.md): camera-independent active and
-  background simulation chunks.
-- [Persistent campaign slice](./campaign-vertical-slice.md): integration of
-  streaming, deltas, pathfinding, simulation and generation checkpoints.
 
 ## Decisions and roadmap
 
+- [App development](./app-development.md): planned industrial application
+  structure, authoritative state, global ticks, inventory, construction,
+  logistics, power, research, projects, navigation and checkpoint integration.
 - [Alien industry and wormhole megastructure concept](../游戏想法.md): solo
   industrial management with light survival pressure, gene-based research,
   expanding production chains and a wormhole connection to Earth as the final
