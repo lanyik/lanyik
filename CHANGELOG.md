@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Deterministic iron, copper and stone deposits with finite per-tile reserves,
+  instanced mineral rendering, survey inspection/location and bounded landing
+  assessment against real terrain, reachable resources and a second metal deposit.
 - A standalone React/Vite expedition application with real terrain surveys,
   tile inspection, a fixed game clock, pause/speed controls and guarded planet
   replacement. Includes npm workspace commands, clock/session contracts and
-  production-build browser tests; minerals and industrial gameplay remain pending.
+  production-build browser tests; construction and industrial production remain pending.
 - An application development design for the industrial game, specifying module
   ownership, global ticks, inventory, production, power, logistics, navigation,
   content validation and generation checkpoints. Gameplay remains unimplemented.

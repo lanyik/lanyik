@@ -1,9 +1,17 @@
 import { HexMap, ProceduralWorldSource } from "three-hex-map";
 import workerUrl from "three-hex-map/world-generator.worker?url";
 import type { WorldSelection, WorldView } from "../app/WorldView";
+import type { TilePosition } from "../content/minerals";
+import { MineralField } from "../core/resources/MineralField";
+import { MineralLayer } from "../presentation/layers/MineralLayer";
+import { surveyLanding, toSurveyTerrain } from "./surveyTerrain";
+import type { LandingSurvey } from "../scenarios/landingSurvey";
 
 export class HexWorldView implements WorldView {
     private readonly map: HexMap;
+    private readonly layerReady: Promise<void>;
+    private field: MineralField | undefined;
+    private attempt: { controller: AbortController; source: ProceduralWorldSource | undefined } | undefined;
 
     constructor(onSelect: (selection: WorldSelection) => void, onError: (error: Error) => void) {
         this.map = new HexMap({
@@ -27,20 +35,54 @@ export class HexWorldView implements WorldView {
         camera.position.set(target.x - 280, target.y + 360, target.z + 280);
         camera.lookAt(target);
         this.map.on("click", ({ x, y, tile }) => {
-            onSelect({ x, y, terrain: tile.type, modifiers: tile.modifiers ?? [] });
+            onSelect({ x, y, terrain: tile.type, modifiers: tile.modifiers ?? [],
+                mineral: this.field?.nodeAt(x, y, toSurveyTerrain(tile)) });
         });
         this.map.on("error", onError);
+        this.layerReady = this.map.registerWorldRenderLayer(new MineralLayer(this.map.createResourceAccount("mineral-assets")));
     }
 
-    public async load(seed: string): Promise<void> {
+    public async load(seed: string): Promise<LandingSurvey> {
+        this.cancelSurvey();
+        const controller = new AbortController();
         const source = new ProceduralWorldSource({
             seed,
             workerUrl,
             chunkSize: 24,
             workCoordinator: this.map.workCoordinator
         });
-        await this.map.loadWorld({ source, initialTile: { x: 0, y: 0 }, adaptiveStreaming: false });
+        const attempt = { controller, source: source as ProceduralWorldSource | undefined };
+        this.attempt = attempt;
+        try {
+            await this.layerReady;
+            controller.signal.throwIfAborted();
+            const field = new MineralField(seed);
+            const survey = await surveyLanding(source, field, controller.signal);
+            controller.signal.throwIfAborted();
+            // loadWorld takes ownership even when its load plan fails.
+            attempt.source = undefined;
+            await this.map.loadWorld({ source, initialTile: survey.landing, adaptiveStreaming: false });
+            controller.signal.throwIfAborted();
+            this.field = field;
+            return survey;
+        } finally {
+            attempt.source?.dispose();
+            attempt.source = undefined;
+            if (this.attempt === attempt) this.attempt = undefined;
+        }
     }
 
-    public dispose(): Promise<void> { return this.map.disposeAsync(); }
+    public focus(position: TilePosition): void { this.map.setCameraTargetTile(position.x, position.y); }
+
+    public dispose(): Promise<void> {
+        this.cancelSurvey();
+        return this.map.disposeAsync();
+    }
+
+    private cancelSurvey(): void {
+        this.attempt?.controller.abort();
+        this.attempt?.source?.dispose();
+        if (this.attempt) this.attempt.source = undefined;
+        this.attempt = undefined;
+    }
 }

@@ -25,7 +25,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Game application | [Standalone survey shell](docs/game/application-shell.md), session and fixed clock implemented; industrial gameplay remains planned in [App development](docs/app-development.md) |
+| Game application | [Survey shell](docs/game/application-shell.md), fixed clock, [three mineral types and landing assessment](docs/game/mineral-survey.md) implemented; construction and production remain planned |
 
 Use Node.js 22.12+ for full repository development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -240,9 +240,10 @@ The industrial application's boundaries are defined in
 ## Development and verification
 
 For the game application, run `npm ci` and `npm run app:dev` from the root,
-then open `http://127.0.0.1:5173`. The current shell supports terrain surveys,
-tile selection, pause/speed controls and planet replacement. Minerals and
-industrial gameplay follow next; see the [application contract](docs/game/application-shell.md).
+then open `http://127.0.0.1:5173`. The application supports iron/copper/stone
+deposits, landing assessment, mineral inspection and location, pause/speed
+controls and planet replacement. Construction and extraction follow next;
+see the [mineral survey contract](docs/game/mineral-survey.md).
 
 | Command | Purpose |
 |---|---|

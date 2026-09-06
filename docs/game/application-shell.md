@@ -1,9 +1,9 @@
 # 应用入口、会话与游戏时钟
 
 状态：已实现。对应 `apps/expedition` 的首个开发阶段，提供真实地表勘察、地块选中、
-暂停、1/2/4 倍时间和按种子重新加载星球。工业规则的整体设计见
-[App 开发设计](../app-development.md)。矿藏、登陆校验、建筑、库存、生产和游戏存档
-仍待实现；当前选择的地块只是勘察目标，不表示已经满足登陆条件。
+暂停、1/2/4 倍时间和按种子重新加载星球，并已接入 [矿藏与登陆勘察](./mineral-survey.md)。
+工业规则的整体设计见 [App 开发设计](../app-development.md)。建筑、库存、生产和游戏
+存档仍待实现；推荐登陆区已通过起步条件筛选，点击其他地块不表示完成建造选址校验。
 
 ## 运行与构建
 
@@ -36,10 +36,10 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 |---|---|
 | [main.tsx](../../apps/expedition/src/main.tsx) | 启动、启动失败展示和开发热替换时的释放 |
 | [bootstrap.tsx](../../apps/expedition/src/app/bootstrap.tsx) | 组合地图、会话、React；持有动画回调、页面事件与退出顺序 |
-| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 会话状态、时间命令、选中快照、异步加载发布边界 |
+| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 会话状态、时间/定位命令、勘察报告、选中快照、异步加载发布边界 |
 | [WorldView.ts](../../apps/expedition/src/app/WorldView.ts) | 应用实际使用的加载、释放和地块信息接口 |
 | [GameClock.ts](../../apps/expedition/src/core/GameClock.ts) | 不依赖 DOM、React 或 Three.js 的固定游戏时钟 |
-| [HexWorldView.ts](../../apps/expedition/src/adapters/HexWorldView.ts) | 公开 HexMap/ProceduralWorldSource 接入、选中事件与错误转发 |
+| [HexWorldView.ts](../../apps/expedition/src/adapters/HexWorldView.ts) | 地形勘察与 source 所有权移交、地图/矿藏层接入、选中与错误转发 |
 | [App.tsx](../../apps/expedition/src/presentation/App.tsx) | 订阅会话快照、展示勘察信息、发送暂停/倍率命令和重载请求 |
 
 当前不创建空的工业模拟器、库存容器或通用系统注册器。第一条采集规则实现时再建立
@@ -68,11 +68,12 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 
 加载期间清除选中、停止时间并禁用时间命令。加载失败或地图报告运行错误时转为
 `failed`，展示实际原因并停止时间；用户可以重新发起勘察。失败不会自动替换种子或
-生成另一份世界。一次新勘察的场景从原点开始，由现有确定性地形生成器提供地表。
+生成另一份世界。新勘察先筛选起步区域，通过后在推荐登陆位置加载确定性地形。
 初始相机采用斜俯视角，便于查看相邻地块；之后沿用地图的移动、旋转和缩放操作。
 
-`HexWorldView` 持有一个 `HexMap`；每次加载创建独立 `ProceduralWorldSource`，
-其所有权在调用 `HexMap.loadWorld()` 时移交地图。地图负责替换时取消旧 Worker 工作、
+`HexWorldView` 持有一个 `HexMap`；每次加载创建独立 `ProceduralWorldSource`，先由适配器
+拥有并用于可取消的地形勘察，其所有权在调用 `HexMap.loadWorld()` 时移交地图。
+地图负责替换时取消旧 Worker 工作、
 卸载旧世界和清除地图选中。应用修订号额外保护自身 UI/时间状态的发布。
 
 React 经 `useSyncExternalStore` 读取缓存的只读快照。没有完成 tick 或发生操作时
@@ -94,6 +95,5 @@ React 经 `useSyncExternalStore` 读取缓存的只读快照。没有完成 tick
 Worker、WebGL 地块选中、时间操作、星球替换，以及 Worker 加载失败后的显式重试。
 浏览器产物位于 `test-results/app`；CI 同时执行应用构建与应用 E2E。
 
-下一阶段实现矿藏与登陆场景：先确定矿种、稳定矿点 ID、储量与地形约束，再验证跨区块
-和访问顺序下生成一致、初始资源量和可建设空间足够，最后把勘察信息扩展为矿点查询。
-随后接入库存、采集和首个建造闭环；矿藏生成属于游戏场景，已开采量属于权威玩法状态。
+矿藏与起步区域筛选已实现，正式合同见 [矿藏与登陆勘察](./mineral-survey.md)。下一阶段
+接入指挥中心放置、库存和采集闭环；已开采量属于权威玩法状态，不能由地图模型保存。

@@ -61,6 +61,13 @@ its source, configuration and tests with TypeScript. Application E2E runs on
 port 4174 and stores browser artifacts under `test-results/app`, separate from
 the foundation demo on port 4173. Both application gates run in CI.
 
+Vitest resolves the public `three-hex-map` root import to `src/index.ts`, allowing
+application integration tests to exercise the library before a build exists.
+Application development and production builds still consume public package
+outputs. Mineral tests cover real terrain generation, bounded landing failures,
+resource access across water, and instance-buffer eviction/reconstruction;
+browser tests perform mineral location and tile inspection through the UI.
+
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
 soak on its scheduled job. The verify job builds the library/demo and application,

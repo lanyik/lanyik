@@ -1,12 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { GameSession } from "../src/app/GameSession";
 import type { WorldSelection, WorldView } from "../src/app/WorldView";
+import { MINERAL_IDS, type MineralNode } from "../src/content/minerals";
+import type { LandingSurvey } from "../src/scenarios/landingSurvey";
+
+const mineralNode = (x: number): MineralNode => Object.freeze({ x, y: 0, id: `m1:0:0:${x}:0`, depositId: "m1:0:0", mineral: "iron", initialAmount: 5000 });
+const survey: LandingSurvey = Object.freeze({
+    landing: Object.freeze({ x: 0, y: 0 }), buildingTiles: 90, forestTiles: 12,
+    resources: Object.freeze(MINERAL_IDS.map(mineral => Object.freeze({ mineral, amount: 20_000, tiles: 4, nearest: Object.freeze({ ...mineralNode(3), mineral }), distance: 3 }))),
+    expansion: Object.freeze({ node: Object.freeze({ ...mineralNode(25), depositId: "m1:1:0" }), distance: 25 })
+});
 
 function deferred() {
-    let resolve!: () => void;
+    let resolve!: (value: LandingSurvey) => void;
     let reject!: (reason: Error) => void;
-    const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-    return { promise, resolve, reject };
+    const promise = new Promise<LandingSurvey>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve: (value = survey) => resolve(value), reject };
 }
 
 function createWorld() {
@@ -17,7 +26,8 @@ function createWorld() {
             loads.push(pending);
             return pending.promise;
         }),
-        dispose: vi.fn(async () => {})
+        dispose: vi.fn(async () => {}),
+        focus: vi.fn()
     };
     return { world, loads };
 }
@@ -54,6 +64,7 @@ describe("GameSession", () => {
         session.frame(0);
         session.frame(100);
         const failed = session.start("broken");
+        expect(session.getSnapshot().survey).toBeUndefined();
         session.frame(5000);
         expect(() => session.dispatch({ type: "set-paused", paused: false })).toThrow("not ready");
         loads[1].reject(new Error("Worker unavailable"));
@@ -65,6 +76,17 @@ describe("GameSession", () => {
         loads[2].resolve();
         await retry;
         expect(session.getSnapshot()).toMatchObject({ status: "ready", tick: 0, error: undefined, speed: 1 });
+    });
+
+    it("focuses surveyed targets without advancing game time or accepting targets during loading", async () => {
+        const { session, world } = await readySession();
+        session.dispatch({ type: "focus-survey", target: "copper" });
+        expect(world.focus).toHaveBeenLastCalledWith(survey.resources[1].nearest);
+        session.dispatch({ type: "focus-survey", target: "expansion" });
+        expect(world.focus).toHaveBeenLastCalledWith(survey.expansion.node);
+        expect(session.getSnapshot().tick).toBe(0);
+        session.dispose();
+        expect(() => session.dispatch({ type: "focus-survey", target: "landing" })).toThrow("not ready");
     });
 
     it("keeps explicit pause through visibility changes and rebases time after backgrounding", async () => {

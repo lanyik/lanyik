@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore, type FormEvent } from "react";
 import { GAME_SPEEDS } from "../core/GameClock";
 import type { GameSession } from "../app/GameSession";
 import type { WorldSelection } from "../app/WorldView";
+import { MINERALS } from "../content/minerals";
 
 const terrainNames: Record<WorldSelection["terrain"], string> = {
     sea: "海洋", coastal: "近岸水域", land: "平原", sand: "沙地",
@@ -23,6 +24,8 @@ export function App({ session }: { session: GameSession }) {
     const ready = state.status === "ready";
     const loading = state.status === "idle" || state.status === "loading";
     const selected = state.selection;
+    const survey = state.survey;
+    const mineral = selected?.mineral;
     const start = (event: FormEvent) => {
         event.preventDefault();
         void session.start(seed);
@@ -70,12 +73,44 @@ export function App({ session }: { session: GameSession }) {
                     <div><dt>地表特征</dt><dd>{selected.modifiers.length === 0 ? "无附加特征" :
                         selected.modifiers.map(modifier => modifierNames[modifier]).join(" · ")}</dd></div>
                 </dl> : <p className="selection-hint"><span aria-hidden="true">⌖</span>点击一块地表，查看勘察信息。</p>}
+                {selected && <div className="mineral-inspection" data-testid="mineral-inspection" data-mineral={mineral?.mineral ?? "none"}>
+                    {mineral ? <>
+                        <strong style={{ color: MINERALS[mineral.mineral].color }}>{MINERALS[mineral.mineral].name}露头</strong>
+                        <p>本格储量 <b>{mineral.initialAmount.toLocaleString("zh-CN")}</b></p>
+                        <span>{MINERALS[mineral.mineral].use}</span>
+                    </> : <span>本格未发现可开采矿藏。</span>}
+                </div>}
             </section>
             <p className="session-status" role="status">
                 {loading ? "正在展开星球地表…" : state.status === "failed" ? "本次勘察未能完成" :
                     state.paused ? "时间已暂停，可以继续查看地表。" : "勘察进行中"}
             </p>
         </aside>
+
+        {ready && survey && <aside className="resource-panel" aria-label="登陆区资源评估">
+            <div className="panel-heading"><span className="eyebrow">LANDING SURVEY</span><span className="section-number">02</span></div>
+            <h2>一片可以起步的土地</h2>
+            <p className="panel-description">连片平地 {survey.buildingTiles} 格 · 可达林地 {survey.forestTiles} 格</p>
+            <button className="landing-focus" onClick={() => session.dispatch({ type: "focus-survey", target: "landing" })}>
+                返回推荐登陆区 <span>{survey.landing.x}, {survey.landing.y}</span>
+            </button>
+            <div className="inspection-heading"><h3>起步矿藏</h3><span className="eyebrow">18 步以内</span></div>
+            <div className="resource-list">
+                {survey.resources.map(resource => <button key={resource.mineral} className="resource-card"
+                    data-testid="survey-resource" data-mineral={resource.mineral}
+                    aria-label={`定位${MINERALS[resource.mineral].name}`}
+                    onClick={() => session.dispatch({ type: "focus-survey", target: resource.mineral })}>
+                    <span className="mineral-symbol" style={{ color: MINERALS[resource.mineral].color }}>{MINERALS[resource.mineral].symbol}</span>
+                    <span className="resource-detail"><strong>{MINERALS[resource.mineral].name}<small>最近 {resource.distance} 步</small></strong>
+                        <span>{resource.amount.toLocaleString("zh-CN")} 储量 · {resource.tiles} 格露头</span></span>
+                    <span className="locate-symbol" aria-hidden="true">⌖</span>
+                </button>)}
+            </div>
+            <button className="expansion-focus" onClick={() => session.dispatch({ type: "focus-survey", target: "expansion" })}>
+                <span>第二片{MINERALS[survey.expansion.node.mineral].name}区</span><span>{survey.expansion.distance} 步 →</span>
+            </button>
+            <p className="resource-hint">点击资源定位矿区，再点击地块查看储量。距离按可通行地表到作业位置计算。</p>
+        </aside>}
 
         {state.status === "failed" && <div className="error-notice" role="alert">
             <strong>星球加载失败</strong><p>{state.error}</p><span>请重新发起勘察。</span>
