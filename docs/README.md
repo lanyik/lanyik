@@ -51,10 +51,11 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 
 ## Decisions and roadmap
 
-- [Alien expedition base game concept](../游戏想法.md): solo expedition with an
-  automated base and no population system; proposed construction, economy,
-  energy and defense loop, with an initial playable scope and explicit mapping
-  to implemented infrastructure. The proposed gameplay remains unimplemented.
+- [Alien industry and wormhole megastructure concept](../游戏想法.md): solo
+  industrial management with light survival pressure, gene-based research,
+  expanding production chains and a wormhole connection to Earth as the final
+  objective. Includes an initial playable scope and infrastructure mapping;
+  the proposed gameplay remains unimplemented.
 - [Deferred optimization gates](./optimization-gates.md): measurable triggers,
   evidence format and approval state for intentionally postponed work.
 - [Render backend evaluation](./render-backend-evaluation.md): why WebGL2 and
