@@ -22,23 +22,6 @@ body {
     height: 100%;
 }
 
-.game-link {
-    align-self: flex-start;
-    padding: 7px 12px;
-    border: 1px solid rgba(237, 201, 135, 0.45);
-    border-radius: 5px;
-    color: #edc987;
-    background: rgba(17, 32, 43, 0.9);
-    font-size: 12px;
-    text-decoration: none;
-    pointer-events: auto;
-}
-
-.game-link:hover,
-.game-link:focus-visible {
-    background: #314047;
-}
-
 .performance-panel {
     position: fixed;
     top: 12px;
