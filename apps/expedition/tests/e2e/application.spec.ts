@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("surveys a real world, selects terrain, controls time and replaces the planet", async ({ page }, testInfo) => {
+test("surveys a real world, inspects minerals and controls time", async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -28,7 +28,19 @@ test("surveys a real world, selects terrain, controls time and replaces the plan
     await expect(time).toHaveAttribute("data-tick", pausedTick!);
     await page.getByRole("button", { name: "继续", exact: true }).click();
     await expect.poll(async () => Number(await time.getAttribute("data-tick"))).toBeGreaterThan(Number(pausedTick));
+    expect(errors).toEqual([]);
+});
 
+test("replaces surveyed planets and resets time controls and selection", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const application = page.locator(".expedition");
+    await expect(application).toHaveAttribute("data-state", "ready");
+    await page.getByRole("button", { name: "4×", exact: true }).click();
+    await page.mouse.click(800, 400);
+    await expect(page.getByTestId("tile-inspection")).toBeVisible();
     for (const seed of ["expedition-2", "expedition-1"]) {
         await page.getByLabel("星球种子").fill(seed);
         await page.getByRole("button", { name: "重新勘察" }).click();
@@ -46,7 +58,8 @@ test("reports an unsuitable landing survey and allows choosing a different plane
     await expect(page.locator(".expedition")).toHaveAttribute("data-state", "ready");
     await page.getByLabel("星球种子").fill("expedition-3");
     await page.getByRole("button", { name: "重新勘察" }).click();
-    await expect(page.getByRole("alert")).toContainText("未找到满足条件的登陆区");
+    // Rejecting a seed exhausts all nine survey windows while the previous world is still rendered.
+    await expect(page.getByRole("alert")).toContainText("未找到满足条件的登陆区", { timeout: 60_000 });
     await expect(page.getByTestId("survey-resource")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "暂停", exact: true })).toBeDisabled();
     await page.getByLabel("星球种子").fill("expedition-1");

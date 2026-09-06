@@ -20,19 +20,20 @@ export class HexWorldView implements WorldView {
             texturesBaseUrl: `${import.meta.env.BASE_URL}textures/`,
             treeModel: `${import.meta.env.BASE_URL}Assets/models/oak`,
             maxPixelRatio: 1.5,
+            cameraMaxDistance: 1800,
             treesPerTile: 4,
             grassDensity: 12,
             gridVisible: false,
             pointerColor: 0x79d7ce,
             selectorColor: 0xefc17b,
-            renderDistance: 1400,
+            renderDistance: 2800,
             lodNearDistance: 550,
             lodFarDistance: 1100,
-            vegetationRenderDistance: 1250
+            vegetationRenderDistance: 2400
         });
         const target = this.map.getCameraTarget();
         const camera = this.map.getCamera();
-        camera.position.set(target.x - 280, target.y + 360, target.z + 280);
+        camera.position.set(target.x - 400, target.y + 640, target.z + 400);
         camera.lookAt(target);
         this.map.on("click", ({ x, y, tile }) => {
             onSelect({ x, y, terrain: tile.type, modifiers: tile.modifiers ?? [],

@@ -12,6 +12,8 @@ describe("HexMap option boundary", () => {
         });
         expect(options).toMatchObject({
             size: 50,
+            cameraMinDistance: 100,
+            cameraMaxDistance: 800,
             waterDepth: 12.5,
             fogTextureSize: 400,
             riverDepth: 7.5,
@@ -67,5 +69,14 @@ describe("HexMap option boundary", () => {
             horizonFogStart: 780,
             horizonFogEnd: 950
         });
+    });
+
+    test("rejects invalid camera zoom bounds before creating controls", () => {
+        for (const distance of [0, -1, NaN, Infinity]) {
+            expect(() => resolveHexMapOptions({ element: "#map", cameraMinDistance: distance })).toThrow(/cameraMinDistance/);
+            expect(() => resolveHexMapOptions({ element: "#map", cameraMaxDistance: distance })).toThrow(/cameraMaxDistance/);
+        }
+        expect(() => resolveHexMapOptions({ element: "#map", cameraMinDistance: 900, cameraMaxDistance: 800 }))
+            .toThrow(/cameraMaxDistance must be >= cameraMinDistance/);
     });
 });

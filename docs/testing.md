@@ -67,6 +67,12 @@ Application development and production builds still consume public package
 outputs. Mineral tests cover real terrain generation, bounded landing failures,
 resource access across water, and instance-buffer eviction/reconstruction;
 browser tests perform mineral location and tile inspection through the UI.
+Mineral/time interactions and repeated planet replacement run as separate
+browser scenarios, keeping each within the per-test timeout under software
+rendering while retaining both sets of assertions.
+The unsuitable-seed rejection allows 60 seconds for all nine terrain survey
+windows under software rendering; ordinary UI assertions keep their 20-second
+default and the per-test budget remains 120 seconds.
 
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration

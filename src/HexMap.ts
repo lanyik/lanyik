@@ -389,8 +389,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.screenSpacePanning = false;
-        this.controls.minDistance = 100;
-        this.controls.maxDistance = 800;
+        this.controls.minDistance = this.options.cameraMinDistance;
+        this.controls.maxDistance = this.options.cameraMaxDistance;
         this.controls.minAzimuthAngle = -Infinity;
         this.controls.maxAzimuthAngle = Infinity;
         this.controls.minPolarAngle = 15 * (Math.PI / 180);

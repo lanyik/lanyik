@@ -12,6 +12,10 @@ export interface HexMapOptions {
     size?: number;
     /** Device-pixel-ratio ceiling. Defaults to 2. */
     maxPixelRatio?: number;
+    /** Minimum camera-to-target distance in world units. Defaults to 100. */
+    cameraMinDistance?: number;
+    /** Maximum camera-to-target distance. Defaults to 800; world loading starts at the range midpoint. */
+    cameraMaxDistance?: number;
     antialias?: boolean;
     terrainShaderQuality?: "full" | "fast";
     skyVisible?: boolean;
@@ -176,6 +180,8 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
 >> = {
     size: 40,
     maxPixelRatio: 2,
+    cameraMinDistance: 100,
+    cameraMaxDistance: 800,
     antialias: true,
     terrainShaderQuality: "full",
     skyVisible: true,
@@ -303,6 +309,11 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
         throw new RangeError("horizonFogEnd must be finite, greater than horizonFogStart, and <= renderDistance");
     }
     positive("maxPixelRatio", options.maxPixelRatio);
+    positive("cameraMinDistance", options.cameraMinDistance);
+    positive("cameraMaxDistance", options.cameraMaxDistance);
+    if (options.cameraMaxDistance < options.cameraMinDistance) {
+        throw new RangeError("cameraMaxDistance must be >= cameraMinDistance");
+    }
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
         throw new RangeError('terrainShaderQuality must be "full" or "fast"');
     }

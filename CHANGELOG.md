@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Configurable camera zoom bounds, with a higher, wider expedition starting view
+  and extended terrain/vegetation coverage for inspecting surrounding deposits.
 - Deterministic iron, copper and stone deposits with finite per-tile reserves,
   instanced mineral rendering, survey inspection/location and bounded landing
   assessment against real terrain, reachable resources and a second metal deposit.

@@ -2,6 +2,13 @@
 
 ## Pipeline
 
+`HexMapOptions.cameraMinDistance` and `cameraMaxDistance` bound the camera's
+distance to its target in world units (defaults: 100 and 800). Both must be
+positive and finite, with the maximum at least the minimum. World loading frames
+the initial tile at the range midpoint and preserves the viewing direction;
+moving the target preserves the current distance. Applications that raise the
+zoom ceiling should size `renderDistance` and vegetation coverage for that view.
+
 Every map runs through two intentionally separate chunk layers:
 
 1. `WorldStreamer` asks a `WorldSource` for camera-near source chunks, cancels

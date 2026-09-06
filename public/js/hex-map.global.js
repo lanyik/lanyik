@@ -16615,6 +16615,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var DEFAULT_HEX_MAP_OPTIONS = {
     size: 40,
     maxPixelRatio: 2,
+    cameraMinDistance: 100,
+    cameraMaxDistance: 800,
     antialias: true,
     terrainShaderQuality: "full",
     skyVisible: true,
@@ -16734,6 +16736,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       throw new RangeError("horizonFogEnd must be finite, greater than horizonFogStart, and <= renderDistance");
     }
     positive2("maxPixelRatio", options.maxPixelRatio);
+    positive2("cameraMinDistance", options.cameraMinDistance);
+    positive2("cameraMaxDistance", options.cameraMaxDistance);
+    if (options.cameraMaxDistance < options.cameraMinDistance) {
+      throw new RangeError("cameraMaxDistance must be >= cameraMinDistance");
+    }
     if (options.terrainShaderQuality !== "full" && options.terrainShaderQuality !== "fast") {
       throw new RangeError('terrainShaderQuality must be "full" or "fast"');
     }
@@ -17637,8 +17644,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.05;
       this.controls.screenSpacePanning = false;
-      this.controls.minDistance = 100;
-      this.controls.maxDistance = 800;
+      this.controls.minDistance = this.options.cameraMinDistance;
+      this.controls.maxDistance = this.options.cameraMaxDistance;
       this.controls.minAzimuthAngle = -Infinity;
       this.controls.maxAzimuthAngle = Infinity;
       this.controls.minPolarAngle = 15 * (Math.PI / 180);
