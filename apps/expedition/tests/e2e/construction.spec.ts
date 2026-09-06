@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { findMinerOrientation, landAtRecommendation } from "./constructionHelpers";
+import { findPlacement, landAtRecommendation, walkToMineral } from "./constructionHelpers";
 
 test("B opens classified construction, mining consumes ore and credits the paused/speed-controlled warehouse", async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -15,18 +16,18 @@ test("B opens classified construction, mining consumes ore and credits the pause
     await landAtRecommendation(page);
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     const pausedTick = await page.getByTestId("game-time").getAttribute("data-tick");
-    await page.getByRole("button", { name: "定位铁矿", exact: true }).click();
+    await walkToMineral(page, "铁矿");
     await page.keyboard.press("b");
     await expect(page.getByRole("tab", { name: "资源采集" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tablist")).toBeVisible();
     await expect(page.getByRole("tab")).toHaveCount(5);
-    await findMinerOrientation(page);
+    const mine = await findPlacement(page, { rotate: true });
     await page.screenshot({ path: testInfo.outputPath("miner-placement.png") });
-    await page.mouse.click(640, 360);
+    await page.mouse.click(mine.x, mine.y);
     await expect(page.getByTestId("building-inspection")).toHaveAttribute("data-building", "miner");
     await expect(page.getByTestId("inventory-iron")).toHaveAttribute("data-amount", "100");
     await expect(page.getByTestId("inventory-copper")).toHaveAttribute("data-amount", "50");
-    await page.mouse.click(640, 360);
+    await page.mouse.click(mine.x, mine.y);
     await expect(page.getByTestId("placement-status")).toContainText("重叠");
     await expect(page.getByTestId("inventory-iron")).toHaveAttribute("data-amount", "100");
     await expect(page.getByTestId("game-time")).toHaveAttribute("data-tick", pausedTick!);
@@ -51,16 +52,16 @@ test("warehouse placement expands storage and demolition returns materials witho
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await landAtRecommendation(page);
     await page.getByRole("button", { name: "暂停", exact: true }).click();
+    await expect(page.getByTestId("building-inspection")).toHaveAttribute("data-building", "command-center");
+    await expect(page.getByRole("button", { name: "拆除并回收材料" })).toHaveCount(0);
     await page.keyboard.press("b");
     await page.getByRole("tab", { name: "仓储", exact: true }).click();
-    await page.mouse.move(640, 360);
-    await expect(page.getByTestId("placement-status")).toContainText("重叠");
     await page.keyboard.press("r");
     await expect(page.getByRole("button", { name: "旋转建筑" })).toContainText("60°");
     await page.getByRole("button", { name: "选择仓库", exact: true }).click();
-    await page.mouse.move(500, 360);
+    const warehouse = await findPlacement(page, { preferred: { x: 500, y: 360 } });
     await expect(page.getByTestId("placement-status")).toHaveAttribute("data-valid", "true");
-    await page.mouse.click(500, 360);
+    await page.mouse.click(warehouse.x, warehouse.y);
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("building-inspection")).toHaveAttribute("data-building", "warehouse");
     await expect(page.getByTestId("inventory-capacity")).toHaveText("220 / 7,000");
@@ -68,8 +69,5 @@ test("warehouse placement expands storage and demolition returns materials witho
     await page.getByRole("button", { name: "拆除并回收材料" }).click();
     await expect(page.getByTestId("inventory-capacity")).toHaveText("300 / 2,000");
     await expect(page.getByTestId("building-inspection")).toHaveCount(0);
-    await page.mouse.click(640, 360);
-    await expect(page.getByTestId("building-inspection")).toHaveAttribute("data-building", "command-center");
-    await expect(page.getByRole("button", { name: "拆除并回收材料" })).toHaveCount(0);
     expect(errors).toEqual([]);
 });

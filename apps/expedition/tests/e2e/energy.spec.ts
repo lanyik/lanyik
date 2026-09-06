@@ -1,19 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { findMinerOrientation, landAtRecommendation } from "./constructionHelpers";
+import { findPlacement, landAtRecommendation, walkToMineral } from "./constructionHelpers";
 
 async function place(page: Page, category: string, name: string, preferred: { x: number; y: number }) {
     if (!(await page.getByTestId("build-toolbar").count())) await page.keyboard.press("b");
     await page.getByRole("tab", { name: category, exact: true }).click();
     await page.getByRole("button", { name: `选择${name}`, exact: true }).click();
-    let point = preferred;
-    // Survey terrain is authoritative: choose a visibly valid footprint in this bounded camera area.
-    for (const candidate of [preferred, { x: 560, y: 360 }, { x: 860, y: 320 }, { x: 800, y: 400 },
-        { x: 460, y: 400 }, { x: 500, y: 300 }, { x: 720, y: 300 }, { x: 560, y: 300 }, { x: 860, y: 380 }]) {
-        point = candidate;
-        await page.mouse.move(point.x, point.y);
-        await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
-        if (await page.getByTestId("placement-status").getAttribute("data-valid") === "true") break;
-    }
+    const point = await findPlacement(page, { preferred });
     await expect(page.getByTestId("placement-status")).toHaveAttribute("data-valid", "true");
     await page.mouse.click(point.x, point.y);
     await page.keyboard.press("Escape");
@@ -53,10 +45,10 @@ test("actual power shortage suspends mining until the player changes equipment p
     await page.getByRole("button", { name: "暂停", exact: true }).click();
     await place(page, "工业生产", "冶炼厂", { x: 500, y: 360 });
     await expect(page.getByTestId("building-inspection")).toHaveAttribute("data-building", "smelter");
-    await page.getByRole("button", { name: "定位铁矿", exact: true }).click();
+    await walkToMineral(page, "铁矿");
     await page.keyboard.press("b");
-    await findMinerOrientation(page);
-    await page.mouse.click(640, 360);
+    const mine = await findPlacement(page, { rotate: true });
+    await page.mouse.click(mine.x, mine.y);
     await page.keyboard.press("Escape");
     await expect(page.locator(".building-state")).toHaveAttribute("data-status", "insufficient-power");
     const iron = await page.getByTestId("inventory-iron").getAttribute("data-amount");

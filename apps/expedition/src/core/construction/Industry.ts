@@ -73,6 +73,7 @@ export class Industry {
 
     public getSnapshot(): IndustrySnapshot { return this.snapshot; }
     public remaining(node: MineralNode): number { return node.initialAmount - (this.extracted.get(node.id) ?? 0); }
+    public isOccupied(position: TilePosition): boolean { return this.occupied.has(tileKey(position)); }
     public buildingAt(position: TilePosition): BuildingSnapshot | undefined {
         const id = this.occupied.get(tileKey(position));
         return this.snapshot.buildings.find(building => building.id === id);

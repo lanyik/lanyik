@@ -24,7 +24,7 @@
 | 演示 | 有限环形世界和无限世界共用一个页面，模式选择会跨刷新保存 |
 | 基础设施 | v1 已冻结；生命周期、所有权、调度、持久化和资源预算合同已有自动化验证 |
 | 世界风格 | 生成 v1 现包含大尺度连通海域、确定性粗网格汇流河网、气候雪线、连续地貌和区域森林 |
-| 游戏应用 | [独立入口](docs/game/application-shell.md)、[矿藏勘察](docs/game/mineral-survey.md)、[基地建造与采矿](docs/game/construction-and-mining.md)、[能源网络与初级冶炼](docs/game/energy-and-production.md)已实现；制造、运输、研究与游戏存档待接入 |
+| 游戏应用 | [基地建造与采矿](docs/game/construction-and-mining.md)、[能源与初级冶炼](docs/game/energy-and-production.md)、[主角行走与镜头跟随](docs/game/explorer-and-follow.md)已实现；制造、运输、研究与游戏存档待接入 |
 
 完整仓库开发使用 Node.js 22.12+；作为库使用时，应用需要提供
 `^0.185.0` 的 `three` peer dependency。
@@ -216,6 +216,8 @@ game.dispose();
 采矿机和仓库，采集内容直接进入基地库存。能源分类提供光能、辐射站和储能站；冶炼厂
 生产储能建材，实际耗电、昼夜和优先级决定设备能否工作。见 [建造](docs/game/construction-and-mining.md)
 与[能源加工合同](docs/game/energy-and-production.md)。
+指挥中心展开后，WASD 操控先遣员、Shift 奔跑，镜头跟随；矿区按钮改为真实步行导航，
+建造和拆除需在主角 6 格内。工业暂停/倍率不影响步速，详见[主角合同](docs/game/explorer-and-follow.md)。
 
 | 命令 | 作用 |
 |---|---|

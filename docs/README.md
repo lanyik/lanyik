@@ -11,7 +11,7 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 | Rendering and world streaming | Implemented; WebGL2, source chunks, 12x12 render chunks, LOD and bounded residency | [render-streaming.md](./render-streaming.md) |
 | Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
 | Persistence and pathfinding | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
-| Industrial game application | Survey, seven buildings, mining, refining and energy networks implemented; manufacturing, transport, research and game saves planned | [energy-and-production.md](./game/energy-and-production.md), [app-development.md](./app-development.md) |
+| Industrial game application | Survey, seven buildings, mining, refining, energy and a walking astronaut with camera follow implemented; manufacturing, transport, research and game saves planned | [explorer-and-follow.md](./game/explorer-and-follow.md), [app-development.md](./app-development.md) |
 | World-style generation v1 | Broad connected oceans and deterministic coarse-drainage rivers, with elevated climate snow and seam-free mountain lighting | [world-style-generation-v1.md](./world-style-generation-v1.md) |
 | WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
 | Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
@@ -41,6 +41,9 @@ plans. Start with the root [README](../README.md) for setup and public API usage
   overrides kept separate from reproducible base terrain.
 
 ## Gameplay-side services
+
+- [Explorer and following camera](./game/explorer-and-follow.md): astronaut locomotion,
+  collision, nearby construction, walking navigation, input ownership and render lifecycle.
 
 - [Application shell](./game/application-shell.md): standalone React/Vite entry,
   map ownership, surveys, fixed clock, pause/speed controls and lifecycle tests.

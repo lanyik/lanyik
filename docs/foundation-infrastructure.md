@@ -98,6 +98,8 @@ world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既
 
 - `HexMapRendererHost`：WebGLRenderer、Scene、Camera、lights、Sky、GPU timer 和 context-bound dispose。
 - `HexMapInteractionController`：DOM 输入监听、焦点所有权、WASD 移动和解析式 tile picking。
+  `HexMap.cameraPanEnabled` 统一开关键盘/触摸平移，供角色跟随应用接管；
+  `setCameraTarget(worldX, worldZ)` 接受连续逻辑坐标、跟随地表并保留相机偏移，支持浮动原点。
 - `WorldChunkMountQueue`：连接流式驻留与帧挂载，并对因背压拒绝的可见挂载做有界重试。
 - `RenderWorldController`：一次世界渲染会话的 source/residency/streamer/lifecycle。
 - `WorldLoadPlan`：在替换现有会话之前，一次性校验并解析初始坐标、驻留预算、预测参数、自适应控制器和 surface view；规划失败会释放尚未发布的数据源。

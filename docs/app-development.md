@@ -5,6 +5,8 @@
 [应用入口](./game/application-shell.md)、[矿藏勘察](./game/mineral-survey.md)和
 [基地建造与采矿](./game/construction-and-mining.md)及[能源与加工](./game/energy-and-production.md)。
 制造、研究、运输和游戏存档待实现。
+当前已改为主角行走与镜头跟随，支持步行导航和 6 格就近施工；详见
+[主角与跟随](./game/explorer-and-follow.md)。登陆前保留选址视角，展开指挥中心后出舱。
 玩法目标、首版范围和内容方向以 [游戏想法](../游戏想法.md)为准；本文定义代码组织、
 权威状态、结算顺序和基建接入方式。下文明确标记当前能力，其余经营模块、多阶段结算
 和存档接入仍为后续设计。
@@ -51,7 +53,7 @@ apps/expedition/
       bootstrap.tsx               # 已实现：创建并连接依赖、退出
       GameSession.ts              # 已实现：时间/建造命令、采集推进、加载边界
       WorldView.ts                # 已实现：地图、只读建造地形与表现边界
-    core/
+      core/
       GameClock.ts                # 已实现：固定时钟、暂停与倍率
       resources/MineralField.ts   # 已实现：确定性初始矿藏；开采增量归 Industry
       simulation/                 # IndustrySimulation、GameState、固定 tick
@@ -62,7 +64,7 @@ apps/expedition/
       production/                 # 复杂加工接入后拆分；初级批次当前由 Industry 持有
       power/PowerGrid.ts          # 已实现：连接图、昼夜发电、设备储能与功率分配
       logistics/                  # 园区、线路、运力、在途货物
-      exploration/                # 勘察、采样、测序
+      exploration/                # 已有主角移动/碰撞/步行导航；采样与测序待接入
       research/                   # 科技条件、研究与解锁
       projects/                   # 巨构安装、调试与验收
       queries/                    # 面板快照、统计与瓶颈查询
@@ -137,9 +139,11 @@ flowchart LR
 
 ## 4. 会话、命令与固定 tick
 
-当前 `GameSession` 持有 `GameClock`、`Industry`、地图适配接口与只读快照，支持时间、
-矿区定位、建造选择、旋转、放置、拆除及设备配方/优先级/启停命令。`bootstrap.tsx` 持有 React、页面事件、
-B/R/Esc 快捷键和动画循环。先落地唯一指挥中心再推进时间，每次发布 tick 前完成实际
+当前 `GameSession` 持有 `GameClock`、`Industry`、`Explorer`、地图适配接口与只读快照，支持时间、
+矿区定位/步行导航、停止行走、建造选择、旋转、放置、拆除及设备配方/优先级/启停命令。
+`bootstrap.tsx` 持有 React、页面事件、B/R/Esc/空格快捷键和动画循环。
+`ExplorerInput` 持有画布 WASD/Shift 与焦点监听，方向按镜头变换；主角 20ms 步长独立于
+工业暂停/倍率，隐藏或失焦不移动，模型逐帧插值。先落地唯一指挥中心再推进工业时间，每次发布 tick 前完成实际
 采矿、冶炼和电力结算。当前由 `Industry` 组织有序阶段，`PowerGrid` 负责能源；后续
 复杂经营系统出现时再拆出统一 `IndustrySimulation` 与存档协调器。
 状态变更经同一串行边界执行。典型命令包括 `PlaceBuilding`、`CancelConstruction`、
@@ -327,6 +331,7 @@ B/R/Esc 快捷键和动画循环。先落地唯一指挥中心再推进时间，
 `createWorldDeltaGenerationParticipant()` 在同一世代保存。游戏快照包含：
 
 - 经营 tick、ID 分配状态、必要随机状态、内容版本与场景版本。
+- 主角连续位置、朝向与导航意图；按键与帧时间戳不持久化，读档后重新验证通路。
 - 建筑、施工/升级投入、库存、预留、容量承诺和生产批次。
 - 矿藏变化、储能、园区归属、运力、路线与在途货物。
 - 勘察与解析任务、序列档案、研究解锁和巨构阶段。
@@ -389,6 +394,7 @@ Promise、模型、GPU 缓冲和派生索引不存档；尚未完成的外部查
 | 矿藏与起步区域（已实现） | 三类矿藏、逐格储量、矿区定位和登陆推荐 | 生成与装卸顺序无关，资源按地表路径可达，失败不补刷；见 [矿藏合同](./game/mineral-survey.md) |
 | 基地建造与采矿（已实现） | B 分类建造、指挥中心、采矿机、扩容仓库与直接入库 | 六向占地、原子扣料、满仓/断路/耗尽、暂停/倍率、拆除退款与跨区块渲染；见 [建造合同](./game/construction-and-mining.md) |
 | 能源与初级加工（已实现） | 光能、辐射站、储能、昼夜与优先级，三种冶炼配方生产储能建材 | 功率/容量独立、拆网不复制电量、缺电不扣料、切配方不换旧投入、满仓等待；见 [能源合同](./game/energy-and-production.md) |
+| 主角与跟随（已实现） | 宇航员出舱、WASD/Shift、贴地跟随、步行到矿区和就近施工 | 帧率/对角速度一致、建筑与水域阻挡、路线重算、焦点释放、不瞬移和身体施工保护；见 [主角合同](./game/explorer-and-follow.md) |
 | 一致性保存与制造 | 半批次/电量恢复、制造车间及后续加工 | 批次投入和产出守恒，镜头外继续生产，恢复后库存、批次和电量一致 |
 | 经营取舍 | 光能、储能、优先级、第二园区与自动运输 | 电网拆分不复制电量，物资保持归属，往返影响吞吐，堵路与容量不足可解释 |
 | 首版完整循环 | 采样、测序、精炼科技、替换工艺、基座模块试制 | 主线内容可达，永久序列不重复获益，工艺改变真实产能，跨系统恢复一致 |

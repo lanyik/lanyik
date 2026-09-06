@@ -30,7 +30,9 @@ function createWorld() {
         focus: vi.fn(),
         readTile: vi.fn(() => ({ terrain: { type: "land" as const, hill: false, forest: false, lake: false } })),
         showIndustry: vi.fn(),
-        showPlacement: vi.fn()
+        showPlacement: vi.fn(),
+        showExplorer: vi.fn(), clearMovement: vi.fn(),
+        readMovement: vi.fn(() => ({ x: 0, z: 0, sprint: false, active: true }))
     };
     return { world, loads };
 }
@@ -127,15 +129,46 @@ describe("GameSession", () => {
         expect(session.getSnapshot()).toMatchObject({ status: "ready", tick: 0, error: undefined, speed: 1 });
     });
 
-    it("focuses surveyed targets without advancing game time or accepting targets during loading", async () => {
+    it("walks to surveyed targets after landing without teleporting the explorer or moving a free camera", async () => {
         const { session, world } = await readySession();
+        const before = session.getSnapshot().explorer!;
         session.dispatch({ type: "focus-survey", target: "copper" });
-        expect(world.focus).toHaveBeenLastCalledWith(survey.resources[1].nearest);
+        expect(world.focus).not.toHaveBeenCalled();
+        expect(session.getSnapshot().explorer).toMatchObject({ x: before.x, z: before.z, status: "navigating", target: survey.resources[1].nearest });
         session.dispatch({ type: "focus-survey", target: "expansion" });
-        expect(world.focus).toHaveBeenLastCalledWith(survey.expansion.node);
+        expect(session.getSnapshot().explorer?.target).toEqual(survey.expansion.node);
         expect(session.getSnapshot().tick).toBe(0);
         session.dispose();
         expect(() => session.dispatch({ type: "focus-survey", target: "landing" })).toThrow("not ready");
+    });
+
+    it("rejects distant construction and footprints over the explorer without spending inventory", async () => {
+        const { session } = await readySession();
+        const before = session.getSnapshot().industry!.inventory;
+        const hero = session.getSnapshot().explorer!;
+        session.dispatch({ type: "build-select", kind: "power-relay" });
+        for (const position of [hero.tile, { x: 12, y: 0 }]) {
+            session.select({ ...position, terrain: "land" as WorldSelection["terrain"], modifiers: [] });
+            expect(session.getSnapshot().build?.preview?.valid).toBe(false);
+            expect(session.getSnapshot().industry!.inventory).toBe(before);
+        }
+        expect(session.getSnapshot().notice).toContain("施工距离");
+    });
+
+    it("keeps walking at real-time speed during production pause and does not catch up after hiding", async () => {
+        const { session, world } = await readySession();
+        world.readMovement = () => ({ x: 0, z: -1, sprint: false, active: true });
+        session.dispatch({ type: "set-paused", paused: true });
+        session.dispatch({ type: "set-speed", speed: 4 });
+        session.frame(0);
+        for (let timestamp = 100; timestamp <= 1000; timestamp += 100) session.frame(timestamp);
+        expect(session.getSnapshot().explorer!.distance).toBeCloseTo(3.2);
+        expect(session.getSnapshot().tick).toBe(0);
+        session.setHidden(true);
+        session.frame(50_000);
+        session.setHidden(false);
+        session.frame(100_000);
+        expect(session.getSnapshot().explorer!.distance).toBeCloseTo(3.2);
     });
 
     it("keeps explicit pause through visibility changes and rebases time after backgrounding", async () => {

@@ -19,7 +19,8 @@ export function bootstrap(): { dispose(): Promise<void> } {
         if (target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select"))) return;
         const command = event.code === "KeyB" ? "build-toggle"
             : session.getSnapshot().build && event.code === "KeyR" ? "build-rotate"
-            : session.getSnapshot().build && event.code === "Escape" ? "build-cancel" : undefined;
+            : session.getSnapshot().build && event.code === "Escape" ? "build-cancel"
+            : session.getSnapshot().explorer && event.code === "Space" && target === document.getElementById("expedition-world") ? "stop-walking" : undefined;
         if (!command) return;
         event.preventDefault();
         session.dispatch({ type: command });

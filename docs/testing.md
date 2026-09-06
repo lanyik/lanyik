@@ -79,13 +79,20 @@ configuration. Industry tests also exercise refining input ownership, priority,
 recipe switching, one-batch output backpressure and real materials funding storage.
 Energy browser scenarios build new facilities through the catalog, change actual
 generation and load priority, refine all battery materials and verify charging.
+Explorer contracts cover negative coordinates, diagonal/frame-rate speed, body collision,
+bounded route finding, layout invalidation, focus/visibility suspension and nearby construction.
+Browser tests walk a real astronaut, verify the camera follows the same tile, isolate text
+input, reject construction over the body, and navigate to ore before building a miner.
+Placement helpers drive the public pointer/keyboard handlers and read visible validity and
+coordinates, selecting a bounded candidate footprint without modifying gameplay state directly.
 Mineral inspection, planet replacement, mining and warehouse scenarios run
 separately to keep each within the software-rendering timeout.
 The unsuitable-seed rejection allows 60 seconds for all nine terrain survey
 windows under software rendering; ordinary UI assertions keep their 20-second
 default and the ordinary per-test budget remains 120 seconds. Solar/relay
 construction, load-priority recovery and battery production are separate scenarios.
-The priority scenario allows 180 seconds. The battery scenario allows 240 seconds
+The mining and priority scenarios allow 180 seconds, including actual walking navigation.
+The battery scenario allows 240 seconds
 for three actual refining runs, paid construction, charging and final inspection;
 refining ten real units has a 35-second assertion budget at 4× under software rendering.
 

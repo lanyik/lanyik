@@ -94,8 +94,9 @@ procedural source 和取消信号。新请求或退出会取消勘察并释放�
 过期加载不能发布到当前会话，只有勘察和地图加载都成功后才进入 `ready`。
 
 [GameSession](../../apps/expedition/src/app/GameSession.ts) 发布只读勘察报告和包含矿点的
-地块快照。`focus-survey` 命令可定位铁、铜、石、推荐登陆区和第二片矿区，只移动镜头，
-不修改时间或储量。实际点击地块后显示矿种、单格剩余储量和用途；新勘察清除旧报告与选中。
+地块快照。`focus-survey` 可定位铁、铜、石、推荐登陆区和第二片矿区；登陆前移动镜头，
+登陆后改为[主角步行导航](./explorer-and-follow.md)，返回基地使用实际指挥中心位置。
+定位不直接修改时间或储量。实际点击地块后显示矿种、剩余储量和用途；新勘察清除旧报告与选中。
 
 [MineralLayer](../../apps/expedition/src/presentation/layers/MineralLayer.ts) 通过公开
 `WorldRenderLayer` 接入。source chunk 挂载时计算矿格，按现有 `12×12` render chunk

@@ -5,6 +5,7 @@
 工业规则的整体设计见 [App 开发设计](../app-development.md)。指挥中心、采矿机、仓库、
 建造操作与直接入库已接入，见 [基地建造与采矿](./construction-and-mining.md)。
 光能、辐射站、储能、设备耗电与冶炼已接入，见 [能源与加工](./energy-and-production.md)。
+指挥中心落地后生成先遣员，提供行走、镜头跟随、步行导航与就近施工，见[主角合同](./explorer-and-follow.md)。
 运输、复杂加工和游戏存档仍待实现。
 
 ## 运行与构建
@@ -46,6 +47,9 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 | [BuildToolbar.tsx](../../apps/expedition/src/presentation/BuildToolbar.tsx) | 底部建筑分类、成本、旋转与放置提示 |
 | [BuildingInspector.tsx](../../apps/expedition/src/presentation/BuildingInspector.tsx) | 建筑状态、配方与批次、供电优先级、设备启停和拆除 |
 | [EnergyPanel.tsx](../../apps/expedition/src/presentation/EnergyPanel.tsx) | 昼夜倒计时、独立电网功率和实际储能 |
+| [Explorer.ts](../../apps/expedition/src/core/exploration/Explorer.ts) | 主角位置、固定步长、碰撞、导航与路径重算 |
+| [ExplorerInput.ts](../../apps/expedition/src/presentation/ExplorerInput.ts) | 焦点隔离的 WASD/Shift 输入、相机朝向变换与按键释放 |
+| [ExplorerLayer.ts](../../apps/expedition/src/presentation/layers/ExplorerLayer.ts) | 贴地宇航员、步态、定位标识与模型资源生命周期 |
 
 `Industry` 持有建筑、占地、采矿/加工进度与已开采量，`InventoryLedger` 独占物资修改，
 `PowerGrid` 持有储能并派生电网。会话在发布新的 tick 快照前完成对应的实际经营结算。
@@ -69,8 +73,9 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 页面重载或新星球成功加载会从 tick 0、1 倍和未暂停状态开始；本阶段不保存游戏时间。
 指挥中心落地前处于登陆选址阶段，时钟保持 tick 0，暂停和倍率按钮禁用。落地后按
 主动暂停及页面可见性推进采集。B 建造模式本身不暂停时间，手动暂停时仍可建造与拆除。
-同一时钟同时推进昼夜、加工批次与充放电，页面隐藏不补电；暂停时所有权威数量保持
-不变，设备设置仍可修改。材料是否足够发生变化时才重新校验建造预览，普通产出和
+同一时钟同时推进昼夜、加工批次与充放电，页面隐藏不补电；暂停时工业物资与电量保持
+不变，设备设置仍可修改。主角位置由独立 20ms 步长推进，工业暂停与倍率不改变行走；
+失焦、隐藏时停止且不补算。材料是否足够发生变化时才重新校验建造预览，普通产出和
 扣料不会反复重算同一条服务路径。
 
 ## 会话状态与所有权
@@ -87,15 +92,18 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 目标地表约 712。重新勘察恢复到距离区间中点 950，并保留当前朝向。
 地形显示距离为 2800，植被显示距离为 2400；近/中 LOD
 距离维持 550/1100，扩大视野时仍由分级细节和现有预算控制绘制开销。
-之后沿用地图的移动、旋转和滚轮缩放操作，定位矿区保留当前缩放和朝向。
+登陆前沿用地图的移动、旋转和滚轮缩放，定位矿区保留缩放与朝向。落地后禁用自由平移，
+镜头连续跟随主角；矿区按钮改为步行到目标旁边，旋转/缩放保留。身体、距离与路线
+规则由主角核心负责，相机不修改人物坐标。
 
 `HexWorldView` 持有一个 `HexMap`；每次加载创建独立 `ProceduralWorldSource`，先由适配器
 拥有并用于可取消的地形勘察，其所有权在调用 `HexMap.loadWorld()` 时移交地图。
 地图负责替换时取消旧 Worker 工作、
 卸载旧世界和清除地图选中。应用修订号额外保护自身 UI/时间状态的发布。
 
-React 经 `useSyncExternalStore` 读取缓存的只读快照。没有完成 tick 或发生操作时
-不会因动画帧重新发布快照。选中信息及其特征数组由会话复制并冻结，外部修改不能
+React 经 `useSyncExternalStore` 读取缓存的只读快照。没有完成工业 tick、主角变化或操作时
+不重新发布快照。人物状态/所在格变化立即发布，连续坐标至多每 100ms 发布一次。
+选中信息及其特征数组由会话复制并冻结，外部修改不能
 悄悄改变已发布的状态。界面不直接写时钟或地图内部状态。
 
 退出先取消应用动画帧、移除页面监听、卸载 React，再关闭会话并等待地图

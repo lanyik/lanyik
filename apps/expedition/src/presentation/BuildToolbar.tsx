@@ -56,9 +56,11 @@ export function BuildToolbar({ session, state }: { session: GameSession; state: 
                     ↻ R 旋转 <span>{build.rotation * 60}°</span></button><span>左键放置 · 可连续建造</span></div>
             </div>
         </div>
-        <p className="placement-status" data-testid="placement-status" data-valid={build.preview?.valid ?? false} role="status">
+        <p className="placement-status" data-testid="placement-status" data-valid={build.preview?.valid ?? false}
+            data-x={build.preview?.anchor.x} data-y={build.preview?.anchor.y} role="status">
             <span>{build.preview ? build.preview.valid ? "◇" : "!" : "⌖"}</span>
             {build.preview?.message ?? "将指针移到地图上预览完整占地"}
+            {build.preview && <small className="placement-coordinates">{build.preview.anchor.x}, {build.preview.anchor.y}</small>}
         </p>
     </section>;
 }

@@ -9,12 +9,19 @@ import type { LandingSurvey } from "../scenarios/landingSurvey";
 import type { TerrainWindow } from "../scenarios/landingSurvey";
 import type { ConstructionTile, IndustrySnapshot, Placement } from "../core/construction/Industry";
 import { BuildingLayer } from "../presentation/layers/BuildingLayer";
+import { ExplorerLayer } from "../presentation/layers/ExplorerLayer";
+import { ExplorerInput } from "../presentation/ExplorerInput";
+import type { ExplorerSnapshot, GroundPoint, MovementInput } from "../core/exploration/Explorer";
 
 export class HexWorldView implements WorldView {
     private readonly map: HexMap;
     private readonly layerReady: Promise<void>;
     private readonly minerals: MineralLayer;
     private readonly buildings: BuildingLayer;
+    private readonly explorer: ExplorerLayer;
+    private readonly input: ExplorerInput;
+    private following = false;
+    private followPoint: GroundPoint | undefined;
     private readonly canvas: HTMLCanvasElement;
     private terrain: TerrainWindow | undefined;
     private constructionTiles: readonly ConstructionTile[] = [];
@@ -53,8 +60,11 @@ export class HexWorldView implements WorldView {
         this.map.on("error", onError);
         this.minerals = new MineralLayer(this.map.createResourceAccount("mineral-assets"));
         this.buildings = new BuildingLayer(this.map.createResourceAccount("building-assets"));
-        this.layerReady = this.map.registerWorldRenderLayer(this.minerals).then(() => this.map.registerWorldRenderLayer(this.buildings));
+        this.explorer = new ExplorerLayer(this.map.createResourceAccount("explorer-assets"));
+        this.layerReady = this.map.registerWorldRenderLayer(this.minerals).then(() => this.map.registerWorldRenderLayer(this.buildings))
+            .then(() => this.map.registerWorldRenderLayer(this.explorer));
         this.canvas = document.querySelector<HTMLCanvasElement>("#expedition-world")!;
+        this.input = new ExplorerInput(this.canvas);
         this.canvas.addEventListener("pointermove", this.pointerMoved);
         this.canvas.addEventListener("pointerleave", this.pointerLeft);
         this.map.on("frame", () => {
@@ -71,6 +81,7 @@ export class HexWorldView implements WorldView {
 
     public async load(seed: string): Promise<LandingSurvey> {
         this.cancelSurvey();
+        this.showExplorer(undefined);
         this.terrain = undefined;
         this.constructionTiles = [];
         this.buildings.setBuildings([]);
@@ -122,11 +133,29 @@ export class HexWorldView implements WorldView {
         this.minerals.setDepleted(state.depleted);
     }
     public showPlacement(placement: Placement | undefined): void { this.buildings.showPlacement(placement); }
+    public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
+    public clearMovement(): void { this.input.clear(); }
+    public showExplorer(state: ExplorerSnapshot | undefined, point?: GroundPoint): void {
+        const following = !!state;
+        if (following !== this.following) {
+            this.following = following;
+            this.followPoint = undefined;
+            this.map.cameraPanEnabled = !following;
+            this.input.setEnabled(following);
+        }
+        const position = point ?? state;
+        this.explorer.update(state, position);
+        if (position && (position.x !== this.followPoint?.x || position.z !== this.followPoint?.z)) {
+            this.map.setCameraTarget(position.x * this.map.size, position.z * this.map.size);
+            this.followPoint = { x: position.x, z: position.z };
+        }
+    }
 
     public dispose(): Promise<void> {
         this.cancelSurvey();
         this.canvas.removeEventListener("pointermove", this.pointerMoved);
         this.canvas.removeEventListener("pointerleave", this.pointerLeft);
+        this.input.dispose();
         this.terrain = undefined;
         this.constructionTiles = [];
         return this.map.disposeAsync();

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A controllable expedition astronaut with fixed-step walking/sprinting, terrain and
+  building collision, continuous camera follow, walking survey navigation and nearby
+  construction. Movement remains at real-time speed during industrial pause/acceleration.
+- Public `HexMap.cameraPanEnabled` and `setCameraTarget(worldX, worldZ)` for application-owned
+  camera following, preserving orbit/zoom and logical coordinates across floating origins.
+
 - Expedition solar generators, wireless power relays, batteries and smelters,
   with day/night supply, independent power networks, device-owned stored energy,
   load priorities and equipment controls. Refining consumes actual ore to make

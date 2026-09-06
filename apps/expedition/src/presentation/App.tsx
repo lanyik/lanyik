@@ -2,11 +2,12 @@ import { useState, useSyncExternalStore, type FormEvent } from "react";
 import { GAME_SPEEDS } from "../core/GameClock";
 import type { GameSession } from "../app/GameSession";
 import type { WorldSelection } from "../app/WorldView";
-import { MINERALS } from "../content/minerals";
+import { MINERALS, type MineralId } from "../content/minerals";
 import { ITEM_IDS, ITEMS } from "../content/items";
 import { BuildToolbar } from "./BuildToolbar";
 import { BuildingInspector } from "./BuildingInspector";
 import { EnergyPanel } from "./EnergyPanel";
+import type { ExplorerStatus } from "../core/exploration/Explorer";
 
 const terrainNames: Record<WorldSelection["terrain"], string> = {
     sea: "海洋", coastal: "近岸水域", land: "平原", sand: "沙地",
@@ -14,6 +15,9 @@ const terrainNames: Record<WorldSelection["terrain"], string> = {
 };
 const modifierNames: Record<string, string> = {
     hill: "丘陵", wood: "森林", lake: "湖泊"
+};
+const explorerStatus: Record<ExplorerStatus, string> = {
+    idle: "待命", walking: "行走中", navigating: "步行导航", arrived: "已到达目标附近", blocked: "前方无法通行", unreachable: "目标暂不可达"
 };
 
 function formatTime(milliseconds: number): string {
@@ -32,10 +36,15 @@ export function App({ session }: { session: GameSession }) {
     const mineral = selected?.mineral;
     const industry = state.industry;
     const landed = industry?.landed === true;
+    const base = industry?.buildings.find(building => building.kind === "command-center")?.anchor ?? survey?.landing;
     const building = state.selectedBuilding;
     const start = (event: FormEvent) => {
         event.preventDefault();
         void session.start(seed);
+    };
+    const navigate = (target: MineralId | "landing" | "expansion") => {
+        session.dispatch({ type: "focus-survey", target });
+        document.getElementById("expedition-world")?.focus({ preventScroll: true });
     };
 
     return <main className="expedition" data-state={state.status} data-building-mode={!!state.build} data-landed={landed}>
@@ -50,7 +59,7 @@ export function App({ session }: { session: GameSession }) {
                 <div className="mission-time"><span>远征时间</span>
                     <output data-testid="game-time" data-tick={state.tick}>{formatTime(state.elapsedMs)}</output>
                 </div>
-                <button className="pause-button" disabled={!ready || !landed} onClick={() => session.dispatch({
+                <button className="pause-button" title="暂停或继续基地生产；主角行走不受生产暂停和倍率影响" disabled={!ready || !landed} onClick={() => session.dispatch({
                     type: "set-paused", paused: !state.paused
                 })}>{state.paused ? "继续" : "暂停"}</button>
                 <div className="speed-controls" aria-label="时间倍率">
@@ -104,33 +113,33 @@ export function App({ session }: { session: GameSession }) {
             </section>
             <p className="session-status" role="status">
                 {loading ? "正在展开星球地表…" : state.status === "failed" ? "本次勘察未能完成" :
-                    !landed ? "等待展开指挥中心 · 时间暂停" : state.paused ? "时间已暂停，可以继续建造。" : "基地运转中"}
+                    !landed ? "等待展开指挥中心 · 时间暂停" : state.paused ? "生产已暂停，仍可行走和建造。" : "基地运转中"}
             </p>
         </aside>
 
         {ready && survey && <aside className="resource-panel" aria-label="登陆区资源评估">
             <div className="panel-heading"><span className="eyebrow">LANDING SURVEY</span><span className="section-number">02</span></div>
-            <h2>一片可以起步的土地</h2>
+            <h2>{landed ? "从基地出发" : "一片可以起步的土地"}</h2>
             <p className="panel-description">连片平地 {survey.buildingTiles} 格 · 可达林地 {survey.forestTiles} 格</p>
-            <button className="landing-focus" onClick={() => session.dispatch({ type: "focus-survey", target: "landing" })}>
-                返回推荐登陆区 <span>{survey.landing.x}, {survey.landing.y}</span>
+            <button className="landing-focus" onClick={() => navigate("landing")}>
+                {landed ? "步行返回指挥中心" : "返回推荐登陆区"} <span>{base?.x}, {base?.y}</span>
             </button>
             <div className="inspection-heading"><h3>起步矿藏</h3><span className="eyebrow">18 步以内</span></div>
             <div className="resource-list">
                 {survey.resources.map(resource => <button key={resource.mineral} className="resource-card"
                     data-testid="survey-resource" data-mineral={resource.mineral}
                     aria-label={`定位${MINERALS[resource.mineral].name}`}
-                    onClick={() => session.dispatch({ type: "focus-survey", target: resource.mineral })}>
+                    onClick={() => navigate(resource.mineral)}>
                     <span className="mineral-symbol" style={{ color: MINERALS[resource.mineral].color }}>{MINERALS[resource.mineral].symbol}</span>
                     <span className="resource-detail"><strong>{MINERALS[resource.mineral].name}<small>最近 {resource.distance} 步</small></strong>
                         <span>{resource.amount.toLocaleString("zh-CN")} 初始量 · {resource.tiles} 格露头</span></span>
-                    <span className="locate-symbol" aria-hidden="true">⌖</span>
+                    <span className="locate-symbol" aria-hidden="true">{landed ? "→" : "⌖"}</span>
                 </button>)}
             </div>
-            <button className="expansion-focus" onClick={() => session.dispatch({ type: "focus-survey", target: "expansion" })}>
+            <button className="expansion-focus" onClick={() => navigate("expansion")}>
                 <span>第二片{MINERALS[survey.expansion.node.mineral].name}区</span><span>{survey.expansion.distance} 步 →</span>
             </button>
-            <p className="resource-hint">点击资源定位矿区，再点击地块查看储量。距离按可通行地表到作业位置计算。</p>
+            <p className="resource-hint">{landed ? "选择目标后步行前往，WASD 随时接管，空格停止。水域、山体和建筑不可穿过，当前可在已勘察区域内活动。" : "点击资源定位矿区，再点击地块查看储量。距离按可通行地表到作业位置计算。"}</p>
         </aside>}
 
         {state.status === "failed" && <div className="error-notice" role="alert">
@@ -142,10 +151,23 @@ export function App({ session }: { session: GameSession }) {
         <BuildToolbar session={session} state={state} />
         {ready && state.notice && <p className="construction-notice" role="status">{state.notice}</p>}
 
-        <footer className="map-guide" aria-label="地图操作说明">
-            <span><kbd>左键</kbd>查看地表</span><span><kbd>W A S D</kbd>移动</span>
-            <span><kbd>右键拖动</kbd>旋转</span><span><kbd>滚轮</kbd>缩放</span>
-            <span><kbd>B</kbd>建造</span>
+        <footer className="map-guide" data-follow={!!state.explorer} aria-label="地图操作说明">
+            {state.explorer && <div className="explorer-strip" data-testid="explorer" data-status={state.explorer.status}
+                data-x={state.explorer.x} data-z={state.explorer.z} data-tile-x={state.explorer.tile.x} data-tile-y={state.explorer.tile.y}
+                data-distance={state.explorer.distance}>
+                <strong><span className="status-light" />先遣员</strong>
+                <span>{state.explorer.tile.x}, {state.explorer.tile.y}</span>
+                <span>{explorerStatus[state.explorer.status]}{state.explorer.status === "navigating" ? ` · 剩余 ${state.explorer.remainingSteps} 步` : ""}</span>
+                {state.explorer.target && <button onClick={() => {
+                    session.dispatch({ type: "stop-walking" });
+                    document.getElementById("expedition-world")?.focus({ preventScroll: true });
+                }}>停止导航</button>}
+            </div>}
+            <div className="map-shortcuts"><span><kbd>W A S D</kbd>{landed ? "行走" : "移动镜头"}</span>
+                {landed && <span><kbd>Shift</kbd>奔跑</span>}
+                <span><kbd>右键拖动</kbd>旋转</span><span><kbd>滚轮</kbd>缩放</span>
+                <span><kbd>B</kbd>{landed ? "附近建造" : "建造"}</span>
+            </div>
         </footer>
     </main>;
 }
