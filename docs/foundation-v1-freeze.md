@@ -13,8 +13,9 @@ systems must consume these contracts instead of adding their state to `HexMap`.
 The current package no longer includes the chunk-based simulation runtime or
 the persistent campaign demo. This removes those consumers and their package
 entry; the ownership, checkpoint and rendering contracts below remain in force.
-The application-owned industrial simulation is specified in
-[App development](./app-development.md) and has not been implemented.
+The application-owned survivor combat and progression runtime is specified in
+[App development](./app-development.md). It remains outside `HexMap`; the
+current vertical slice deliberately does not persist a run.
 
 ## Strict generation checkpoints
 
@@ -90,7 +91,7 @@ Version changes follow these rules:
 | Packed chunk encoding or halo semantics | Increment `WORLD_CHUNK_FORMAT_VERSION` |
 | Worker request/response shape or transfer semantics | Increment `WORLD_WORKER_PROTOCOL_VERSION` and update both endpoints together |
 | Persisted descriptor fields or meaning | Increment `WORLD_DESCRIPTOR_FORMAT_VERSION` and provide an explicit compatibility decision |
-| Application or delta snapshot shape | Increment that participant version and provide an explicit version policy; the planned industrial app rejects incompatible saves |
+| Application or delta snapshot shape | Increment that participant version and provide an explicit version policy; a future survivor-run participant must reject incompatible saves |
 
 Changing a golden checksum without the corresponding explicit protocol change
 is a test failure, not routine snapshot maintenance. Worker requests and

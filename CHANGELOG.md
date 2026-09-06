@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- An application development design for the industrial game, specifying module
-  ownership, global ticks, inventory, production, power, logistics, navigation,
-  content validation and generation checkpoints. Gameplay remains unimplemented.
+- A standalone survivor-RPG application with continuous deterministic monster
+  spawning, fixed-step automatic combat, experience levels, allocatable
+  attributes, generated rarity/affix equipment, inventory swaps and a complete
+  React HUD over the streamed procedural world.
+- Packed typed-array pools and instanced rendering for bounded enemies,
+  projectiles, experience orbs and ground equipment, plus browser and core
+  gameplay acceptance tests.
+- Continuous logical camera targeting and explicit camera-pan ownership for
+  player-follow applications across floating-origin rebases.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.
@@ -285,8 +291,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - The `three-hex-map/simulation` subpath, chunk simulation runtime and stores,
-  army marching helper, and simulation checkpoint adapter. Industrial simulation
-  will be owned by the application; no compatibility exports remain.
+  army marching helper, and simulation checkpoint adapter. Gameplay simulation
+  is owned by the application; no compatibility exports remain.
 - The persistent campaign demo, its controls and translations, generated
   simulation assets, dedicated tests and simulation benchmark cases.
 

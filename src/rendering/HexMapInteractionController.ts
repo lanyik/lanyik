@@ -55,7 +55,7 @@ export class HexMapInteractionController {
     }
 
     public update(dtSeconds: number): void {
-        if (this.disposed || dtSeconds <= 0 || this.movementKeys.size === 0) return;
+        if (this.disposed || !this.options.controls.enablePan || dtSeconds <= 0 || this.movementKeys.size === 0) return;
         const forwardAmount = Number(this.movementKeys.has("KeyW")) - Number(this.movementKeys.has("KeyS"));
         const rightAmount = Number(this.movementKeys.has("KeyD")) - Number(this.movementKeys.has("KeyA"));
         if (forwardAmount === 0 && rightAmount === 0) return;
@@ -116,7 +116,8 @@ export class HexMapInteractionController {
     private onContextMenu = (event: Event): void => event.preventDefault();
 
     private onKeyDown = (event: KeyboardEvent): void => {
-        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
+        if (!this.options.controls.enablePan || !this.isMovementKey(event.code) || this.isTextInput(event.target)
+            || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
         this.movementKeys.add(event.code);
         event.preventDefault();
     };

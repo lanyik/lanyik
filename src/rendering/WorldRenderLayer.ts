@@ -16,7 +16,7 @@ export interface WorldRenderLayerHost {
     readonly signal: AbortSignal;
     addObject(object: Object3D): void;
     removeObject(object: Object3D): void;
-    /** Required after changing an existing object's transform or enabled state outside add/remove. */
+    /** Required when changing an existing object's transform/enabled state affects scheduler-owned visibility bounds. */
     invalidateVisibility(): void;
     requestWorldCopyRefresh(): void;
 }

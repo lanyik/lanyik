@@ -25,7 +25,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Game application | Industrial gameplay is designed in [App development](docs/app-development.md); the application is not implemented |
+| Game application | A playable survivor-RPG slice now combines continuous monster waves, automatic combat, XP levels, attribute points and generated equipment loot |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -50,8 +50,18 @@ Runtime requirements are Node.js 20 or newer for development and `three`
 - Generation-scoped cancellation, WebGL context recovery, resource accounting,
   queue backpressure and observable lifecycle drain.
 - Optional `GameEngine` unit controls and long-distance hierarchical routing.
+- A standalone `apps/survivor` game with fixed-step combat, batched enemy and
+  pickup rendering, Diablo-style rarity/affix loot, equipment swapping and
+  deterministic runs.
 - English and Simplified Chinese demo UI, live visual controls and runtime
   diagnostics for frame, Worker, cache and residency state.
+
+Run the game application with `npm run app:dev`, then open
+<http://127.0.0.1:5173>. Use WASD to move; attacks target the nearest monster
+automatically, `I` opens equipment and `P` pauses combat. Architecture and
+implemented gameplay contracts are documented in
+[App development](docs/app-development.md) and
+[Combat and progression](docs/game/combat-and-progression.md).
 
 ## Run the demo
 
@@ -234,7 +244,7 @@ game.dispose();
 It provides unit controls rather than a complete Civilization ruleset. New
 large-world gameplay owns its authoritative state in the application and uses
 the persistence and pathfinding services independently of camera residency.
-The industrial application's boundaries are defined in
+The survivor application's boundaries are defined in
 [App development](docs/app-development.md).
 
 ## Development and verification
@@ -244,6 +254,10 @@ The industrial application's boundaries are defined in
 | `npm run build:lib` | Build ESM, CJS, global bundle and declarations into `dist/` |
 | `npm run build` | Build the library and copy the runnable demo assets into `public/` |
 | `npm run server` | Serve `public/` on port 3000 without rebuilding |
+| `npm run app:dev` | Build dependencies and run the survivor game on port 5173 |
+| `npm run app:build` | Type-check and build the production survivor application |
+| `npm run test:app` | Run deterministic survivor core tests |
+| `npm run test:app:e2e` | Run the survivor browser acceptance flow |
 | `npm start` | Build, then serve the demo |
 | `npm test` | Run deterministic Vitest contract and stability tests |
 | `npm run typecheck` | Run TypeScript without emitting files |

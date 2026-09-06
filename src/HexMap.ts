@@ -3262,6 +3262,14 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     public get interactionStats(): Readonly<HexMapInteractionStats> { return this.interactions.stats; }
 
+    /** Disable free keyboard/touch panning while an application owns the camera target. */
+    public get cameraPanEnabled(): boolean { return this.controls.enablePan; }
+    public set cameraPanEnabled(enabled: boolean) {
+        if (typeof enabled !== "boolean") throw new TypeError("cameraPanEnabled must be boolean");
+        this.controls.enablePan = enabled;
+        this.interactions.reset();
+    }
+
     public getCameraTarget(target = new Vector3()): Vector3 {
         target.copy(this.controls.target);
         target.x += this.renderOrigin.x;
@@ -3288,11 +3296,29 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const point = normalizeMapCoordinates(this.mapData, x, y);
         if (!point) throw new RangeError("camera target tile is outside the world bounds");
         const center = getHexCenter(point.x, point.y, this.options.size);
+        this.setCameraTarget(center.x, center.y);
+    }
+
+    /** Follow a continuous logical X/Z position while preserving camera offset and orientation. */
+    public setCameraTarget(worldX: number, worldZ: number): void {
+        const mapData = this.mapData;
+        const surface = this.worldSurface;
+        if (!mapData || !surface) throw new Error("A world must be loaded before moving the camera target");
+        if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) throw new RangeError("Camera target must be finite");
+        if (!mapData.infinite && !pickTile(
+            this.logicalTargetScratch.set(worldX, 0, worldZ),
+            this.options.size,
+            mapData.w,
+            mapData.h,
+            mapData.wrapX ?? false,
+            mapData.wrapY ?? false
+        )) throw new RangeError("Camera target is outside the world bounds");
         const current = this.getCameraTarget(this.logicalTargetScratch);
-        const dx = center.x - current.x;
-        const targetY = this.worldSurface?.getTileCenterHeight(point.x, point.y) ?? 0;
+        const dx = worldX - current.x;
+        const dz = worldZ - current.z;
+        if (dx === 0 && dz === 0) return;
+        const targetY = surface.getWorldHeight(worldX, worldZ);
         const dy = targetY - current.y;
-        const dz = center.y - current.z;
         this.camera.position.x += dx;
         this.camera.position.y += dy;
         this.camera.position.z += dz;

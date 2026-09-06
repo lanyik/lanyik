@@ -45,4 +45,5 @@ cross that boundary.
 Gameplay simulation belongs to the application. The package has no simulation
 subpath; applications define their own state and implement
 `GenerationCheckpointParticipant` when saving it together with terrain deltas.
-See [App development](./app-development.md) for the planned industrial game.
+See [App development](./app-development.md) for the current survivor RPG
+application and its boundary from the reusable world runtime.

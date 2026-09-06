@@ -409,6 +409,13 @@ back towards zero. Terrain, tree models, custom units, orbit lighting and
 procedural texture phase remain aligned; `getCameraTarget()` continues to return
 the logical rather than rebased coordinate.
 
+Player-follow applications set `cameraPanEnabled = false` to transfer WASD/touch
+pan ownership away from the map interaction controller, then call
+`setCameraTarget(worldX, worldZ)` with a continuous logical ground position.
+The method samples the shared surface height and translates camera and orbit
+target together, preserving the current view offset across floating-origin
+rebases. `setCameraTargetTile()` delegates to the same path for discrete targets.
+
 Packed procedural base tiles are shared immutable variants. Per-coordinate
 gameplay fields use `ProceduralWorldSource.setTileOverride()` and
 `clearTileOverride()`, a sparse sidecar that survives chunk eviction for the
