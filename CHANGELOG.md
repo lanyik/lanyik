@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Expedition solar generators, wireless power relays, batteries and smelters,
+  with day/night supply, independent power networks, device-owned stored energy,
+  load priorities and equipment controls. Refining consumes actual ore to make
+  battery construction materials; shortages and full output storage preserve work.
+- Five construction categories, distinct instanced models, hex-accurate power
+  coverage previews, six-item inventory and per-network energy inspection.
 - Expedition base construction with B-key category tabs, six-way placement previews,
   a unique command center, miners and storage warehouses. Includes atomic material
   costs/refunds, finite reserves and capacity, path-aware service, fixed-tick mining
@@ -23,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A standalone React/Vite expedition application with real terrain surveys,
   tile inspection, a fixed game clock, pause/speed controls and guarded planet
   replacement. Includes npm workspace commands, clock/session contracts and
-  production-build browser tests; processing, power, transport and game saves remain pending.
+  production-build browser tests; manufacturing, transport, research and game saves remain pending.
 - An application development design for the industrial game, specifying module
   ownership, global ticks, inventory, production, power, logistics, navigation,
   content validation and generation checkpoints, with implemented stages tracked

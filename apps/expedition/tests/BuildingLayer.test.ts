@@ -3,6 +3,8 @@ import { InstancedMesh, Object3D } from "three";
 import { Land, ResourceBudgetLedger, StaticWorldSource, getWorldChunkMetadata, type WorldRenderChunkContext, type WorldSurfaceAnchor } from "three-hex-map";
 import { BuildingLayer } from "../src/presentation/layers/BuildingLayer";
 import { Industry } from "../src/core/construction/Industry";
+import { BUILDINGS, type BuildingId } from "../src/content/buildings";
+import { buildingFootprint } from "../src/core/spatial/footprint";
 
 describe("BuildingLayer residency and ownership", () => {
     it("owns each occupied tile once across source chunks, reconstructs evicted models and removes demolished buildings", async () => {
@@ -62,6 +64,16 @@ describe("BuildingLayer residency and ownership", () => {
         layer.surfaceChanged(contexts[0]);
         expect(activate()).toBe(4);
         for (const object of objects) if (getWorldChunkMetadata(object)) expect((object as InstancedMesh).instanceMatrix.array[13]).toBeCloseTo(26.92);
+        const additions = (["solar-array", "power-relay", "battery", "smelter"] as BuildingId[]).map((kind, index) => ({
+            id: `new-${kind}`, kind, anchor: { x: 20 + index * 3, y: 15 }, rotation: 0 as const,
+            cells: buildingFootprint(kind, { x: 20 + index * 3, y: 15 }, 0), paid: BUILDINGS[kind].cost
+        }));
+        layer.setBuildings([...industry.getSnapshot().buildings, ...additions]);
+        expect(activate()).toBe(9);
+        layer.showPlacement(industry.preview("power-relay", { x: 20, y: 10 }, 0));
+        const coverage = [...objects].find(object => object.name === "building-preview")!.getObjectByName("power-coverage-preview") as InstancedMesh;
+        expect(coverage.visible).toBe(true);
+        expect(coverage.geometry.drawRange.count).toBeLessThanOrEqual(coverage.geometry.getAttribute("position").count);
         for (const context of contexts) layer.unmountChunk(context);
         layer.unloadWorld(contexts[0]);
         expect(objects.size).toBe(0);

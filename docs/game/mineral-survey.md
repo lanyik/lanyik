@@ -117,5 +117,6 @@ procedural source 和取消信号。新请求或退出会取消勘察并释放�
 - [MineralLayer.test.ts](../../apps/expedition/tests/MineralLayer.test.ts)：实例缓冲淘汰与重建、耗尽矿点持续隐藏、贴地更新、共享资源释放。
 - [application.spec.ts](../../apps/expedition/tests/e2e/application.spec.ts)：生产构建中的三类矿区定位、真实地块查询、截图、重载，以及勘察失败/Worker 失败后的显式重试。
 
-指挥中心、库存账本和采集规则已实现。后续接入加工与电力，并把已开采量与游戏状态
-放进一致性存档。矿种数量暂时保持三类，用真实产线检验数量、速度和地图距离的关系。
+指挥中心、库存账本、采集与初级冶炼已接入，采矿和加工受 [电网](./energy-and-production.md)
+限制。后续把已开采量、批次和电量放进一致性存档。矿种保持三类，加工品不算新增矿种，
+继续用真实产线检验数量、速度和地图距离的关系。

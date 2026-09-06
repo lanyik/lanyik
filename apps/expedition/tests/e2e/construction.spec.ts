@@ -19,7 +19,7 @@ test("B opens classified construction, mining consumes ore and credits the pause
     await page.keyboard.press("b");
     await expect(page.getByRole("tab", { name: "资源采集" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tablist")).toBeVisible();
-    await expect(page.getByRole("tab")).toHaveCount(3);
+    await expect(page.getByRole("tab")).toHaveCount(5);
     await findMinerOrientation(page);
     await page.screenshot({ path: testInfo.outputPath("miner-placement.png") });
     await page.mouse.click(640, 360);

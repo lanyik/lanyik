@@ -10,6 +10,8 @@ describe("InventoryLedger boundaries", () => {
         expect(ledger.spend({ iron: 2, copper: 1, stone: 0 })).toBe(false);
         expect(() => ledger.credit("iron", 3)).toThrow("capacity");
         expect(() => ledger.setCapacity(7)).toThrow("below stored inventory");
+        expect(() => ledger.creditMany({ "iron-plate": 2, "copper-plate": 1 })).toThrow("capacity");
+        expect(() => ledger.creditMany({ energy: 1 } as never)).toThrow("Unknown inventory material");
         for (const amount of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
             expect(() => ledger.credit("iron", amount)).toThrow("safe integers");
             expect(() => ledger.spend({ iron: 1, copper: amount, stone: 0 })).toThrow("safe integers");
@@ -19,5 +21,7 @@ describe("InventoryLedger boundaries", () => {
         expect(ledger.getSnapshot().amounts.iron).toBe(5);
         expect(before.amounts.iron).toBe(8);
         expect(Object.isFrozen(before.amounts)).toBe(true);
+        ledger.creditMany({ "iron-plate": 2, "copper-plate": 1, "stone-brick": 1 });
+        expect(ledger.getSnapshot()).toMatchObject({ total: 9, amounts: { "iron-plate": 2, "copper-plate": 1, "stone-brick": 1 } });
     });
 });

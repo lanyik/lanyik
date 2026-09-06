@@ -2,10 +2,11 @@ import { useState, useSyncExternalStore, type FormEvent } from "react";
 import { GAME_SPEEDS } from "../core/GameClock";
 import type { GameSession } from "../app/GameSession";
 import type { WorldSelection } from "../app/WorldView";
-import { MINERALS, MINERAL_IDS } from "../content/minerals";
-import { BUILDINGS, MINING_CYCLE_TICKS } from "../content/buildings";
+import { MINERALS } from "../content/minerals";
+import { ITEM_IDS, ITEMS } from "../content/items";
 import { BuildToolbar } from "./BuildToolbar";
-import type { BuildingStatus } from "../core/construction/Industry";
+import { BuildingInspector } from "./BuildingInspector";
+import { EnergyPanel } from "./EnergyPanel";
 
 const terrainNames: Record<WorldSelection["terrain"], string> = {
     sea: "海洋", coastal: "近岸水域", land: "平原", sand: "沙地",
@@ -13,9 +14,6 @@ const terrainNames: Record<WorldSelection["terrain"], string> = {
 };
 const modifierNames: Record<string, string> = {
     hill: "丘陵", wood: "森林", lake: "湖泊"
-};
-const buildingStatuses: Record<BuildingStatus, string> = {
-    ready: "运行正常", mining: "采集中", "warehouse-full": "仓库已满", depleted: "矿点已枯竭", disconnected: "作业通路中断"
 };
 
 function formatTime(milliseconds: number): string {
@@ -41,6 +39,7 @@ export function App({ session }: { session: GameSession }) {
     };
 
     return <main className="expedition" data-state={state.status} data-building-mode={!!state.build} data-landed={landed}>
+        {landed && !industry.power.daylight && <div className="night-shade" aria-hidden="true" />}
         <header className="mission-bar">
             <div className="mission-brand">
                 <span className="mission-symbol" aria-hidden="true">✧</span>
@@ -64,10 +63,11 @@ export function App({ session }: { session: GameSession }) {
 
         {ready && industry && <section className="inventory-bar" aria-label="基地仓库" data-testid="base-inventory">
             <div className="inventory-heading"><strong>基地仓库</strong><span data-testid="inventory-capacity">{industry.inventory.total.toLocaleString("zh-CN")} / {industry.inventory.capacity.toLocaleString("zh-CN")}</span></div>
-            <div className="inventory-items">{MINERAL_IDS.map(mineral => <div key={mineral}>
-                <span style={{ color: MINERALS[mineral].color }}>{MINERALS[mineral].name}</span>
-                <output data-testid={`inventory-${mineral}`} data-amount={industry.inventory.amounts[mineral]}>{industry.inventory.amounts[mineral].toLocaleString("zh-CN")}</output>
+            <div className="inventory-items">{ITEM_IDS.map(item => <div key={item}>
+                <span style={{ color: ITEMS[item].color }}>{ITEMS[item].name}</span>
+                <output data-testid={`inventory-${item}`} data-amount={industry.inventory.amounts[item]}>{industry.inventory.amounts[item].toLocaleString("zh-CN")}</output>
             </div>)}</div>
+            {landed && <EnergyPanel power={industry.power} paused={state.paused} />}
         </section>}
 
         <aside className="survey-panel">
@@ -100,15 +100,7 @@ export function App({ session }: { session: GameSession }) {
                         <span>{MINERALS[mineral.mineral].use}</span>
                     </> : <span>本格未发现可开采矿藏。</span>}
                 </div>}
-                {building && <section className="building-inspection" data-testid="building-inspection" data-building={building.kind}>
-                    <div className="inspection-heading"><h3>{BUILDINGS[building.kind].name}</h3><span className="building-state" data-status={building.status}>{state.paused && building.status === "mining" ? "时间已暂停" : buildingStatuses[building.status]}</span></div>
-                    {building.mineral ? <>
-                        <p>{MINERALS[building.mineral.mineral].name} · 5 单位 / 秒</p>
-                        <progress aria-label="采集进度" max={MINING_CYCLE_TICKS} value={building.progress} />
-                        <p>剩余矿量 <b data-testid="mine-remaining">{building.remaining?.toLocaleString("zh-CN")}</b></p>
-                    </> : <p>提供 {BUILDINGS[building.kind].storage.toLocaleString("zh-CN")} 单位共享仓容</p>}
-                    {building.kind !== "command-center" && <button className="demolish-button" onClick={() => session.dispatch({ type: "demolish", id: building.id })}>拆除并回收材料</button>}
-                </section>}
+                <BuildingInspector session={session} state={state} />
             </section>
             <p className="session-status" role="status">
                 {loading ? "正在展开星球地表…" : state.status === "failed" ? "本次勘察未能完成" :

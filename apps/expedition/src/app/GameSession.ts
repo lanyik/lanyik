@@ -2,9 +2,12 @@ import { GameClock, type GameSpeed } from "../core/GameClock";
 import type { WorldSelection, WorldView } from "./WorldView";
 import type { MineralId, TilePosition } from "../content/minerals";
 import type { LandingSurvey } from "../scenarios/landingSurvey";
-import { BUILDING_IDS, type BuildingId } from "../content/buildings";
+import { BUILDINGS, BUILDING_IDS, type BuildingId } from "../content/buildings";
 import { Industry, type BuildingSnapshot, type IndustrySnapshot, type Placement } from "../core/construction/Industry";
 import type { Rotation } from "../core/spatial/footprint";
+import type { PowerPriority } from "../content/energy";
+import type { RecipeId } from "../content/recipes";
+import { ITEM_IDS } from "../content/items";
 
 export type SessionStatus = "idle" | "loading" | "ready" | "failed" | "closed";
 export type SessionCommand =
@@ -15,7 +18,8 @@ export type SessionCommand =
     | { type: "build-select"; kind: BuildingId }
     | { type: "build-rotate" }
     | { type: "build-cancel" }
-    | { type: "demolish"; id: string };
+    | { type: "demolish"; id: string }
+    | { type: "configure-building"; id: string; enabled?: boolean; priority?: PowerPriority; recipe?: RecipeId };
 
 export interface BuildMode { readonly kind: BuildingId; readonly rotation: Rotation; readonly preview: Placement | undefined }
 
@@ -151,6 +155,10 @@ export class GameSession {
                 this.refreshPreview();
                 break;
             }
+            case "configure-building":
+                this.notice = this.industry!.configure(command.id, command).message;
+                this.refreshPreview();
+                break;
             default:
                 throw new TypeError("Unknown session command");
         }
@@ -165,8 +173,11 @@ export class GameSession {
         this.industry!.advance(this.clock.tick - previousTick);
         const next = this.industry!.getSnapshot();
         if (next.depleted !== previous.depleted) this.world.showIndustry(next);
-        if (this.build?.preview && (next.depleted !== previous.depleted
-            || (!this.build.preview.valid && next.inventory !== previous.inventory))) this.refreshPreview();
+        if (this.build?.preview) {
+            const cost = BUILDINGS[this.build.kind].cost;
+            if (next.depleted !== previous.depleted || ITEM_IDS.some(id =>
+                (next.inventory.amounts[id] >= cost[id]) !== (previous.inventory.amounts[id] >= cost[id]))) this.refreshPreview();
+        }
         this.publish();
     }
 

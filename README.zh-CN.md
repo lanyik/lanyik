@@ -24,7 +24,7 @@
 | 演示 | 有限环形世界和无限世界共用一个页面，模式选择会跨刷新保存 |
 | 基础设施 | v1 已冻结；生命周期、所有权、调度、持久化和资源预算合同已有自动化验证 |
 | 世界风格 | 生成 v1 现包含大尺度连通海域、确定性粗网格汇流河网、气候雪线、连续地貌和区域森林 |
-| 游戏应用 | [独立入口](docs/game/application-shell.md)、固定时钟、[三类矿藏/登陆勘察](docs/game/mineral-survey.md)与[基地建造、采矿、仓库](docs/game/construction-and-mining.md)已实现；加工、电力、运输与游戏存档待接入 |
+| 游戏应用 | [独立入口](docs/game/application-shell.md)、[矿藏勘察](docs/game/mineral-survey.md)、[基地建造与采矿](docs/game/construction-and-mining.md)、[能源网络与初级冶炼](docs/game/energy-and-production.md)已实现；制造、运输、研究与游戏存档待接入 |
 
 完整仓库开发使用 Node.js 22.12+；作为库使用时，应用需要提供
 `^0.185.0` 的 `three` peer dependency。
@@ -213,7 +213,9 @@ game.dispose();
 游戏应用：在根目录执行 `npm ci`，再运行 `npm run app:dev`，打开
 `http://127.0.0.1:5173`。目前支持铁矿、铜矿、石材分布，登陆推荐，矿点储量查询与定位，
 暂停/加速和重载星球。按 B 打开底部建筑分类，R 旋转，Esc 退出；可放置指挥中心、
-采矿机和仓库，采集内容直接进入基地库存。见 [建造与采矿合同](docs/game/construction-and-mining.md)。
+采矿机和仓库，采集内容直接进入基地库存。能源分类提供光能、辐射站和储能站；冶炼厂
+生产储能建材，实际耗电、昼夜和优先级决定设备能否工作。见 [建造](docs/game/construction-and-mining.md)
+与[能源加工合同](docs/game/energy-and-production.md)。
 
 | 命令 | 作用 |
 |---|---|

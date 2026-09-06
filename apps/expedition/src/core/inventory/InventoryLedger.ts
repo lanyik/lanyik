@@ -1,8 +1,7 @@
-import type { MaterialAmounts } from "../../content/buildings";
-import { MINERAL_IDS, type MineralId } from "../../content/minerals";
+import { ITEM_IDS, materials, materialTotal, type ItemAmounts, type ItemId, type ItemQuantities } from "../../content/items";
 
 export interface InventorySnapshot {
-    readonly amounts: MaterialAmounts;
+    readonly amounts: ItemAmounts;
     readonly total: number;
     readonly capacity: number;
 }
@@ -12,29 +11,29 @@ const quantity = (value: number) => {
 
 /** Single-base ledger. Every multi-material spend validates before it changes any amount. */
 export class InventoryLedger {
-    private amounts = { iron: 0, copper: 0, stone: 0 };
+    private amounts = { ...materials({}) };
     private total = 0;
     private capacity = 0;
     private snapshot: InventorySnapshot = this.capture();
     public getSnapshot(): InventorySnapshot { return this.snapshot; }
     public get freeSpace(): number { return this.capacity - this.total; }
 
-    public canSpend(cost: MaterialAmounts): boolean {
-        for (const mineral of MINERAL_IDS) quantity(cost[mineral]);
-        return MINERAL_IDS.every(mineral => this.amounts[mineral] >= cost[mineral]);
+    public canSpend(cost: ItemQuantities): boolean {
+        materialTotal(cost);
+        return ITEM_IDS.every(item => this.amounts[item] >= (cost[item] ?? 0));
     }
-    public spend(cost: MaterialAmounts): boolean {
+    public spend(cost: ItemQuantities): boolean {
         if (!this.canSpend(cost)) return false;
-        for (const mineral of MINERAL_IDS) { this.amounts[mineral] -= cost[mineral]; this.total -= cost[mineral]; }
+        for (const item of ITEM_IDS) { this.amounts[item] -= cost[item] ?? 0; this.total -= cost[item] ?? 0; }
         this.snapshot = this.capture();
         return true;
     }
-    public credit(mineral: MineralId, amount: number): void {
-        if (!MINERAL_IDS.includes(mineral)) throw new TypeError("Unknown inventory material");
-        quantity(amount);
-        if (amount > this.freeSpace) throw new RangeError("Warehouse capacity exceeded");
-        this.amounts[mineral] += amount;
-        this.total += amount;
+    public credit(item: ItemId, amount: number): void { this.creditMany({ [item]: amount }); }
+    public creditMany(values: ItemQuantities): void {
+        const total = materialTotal(values);
+        if (total > this.freeSpace) throw new RangeError("Warehouse capacity exceeded");
+        for (const item of ITEM_IDS) this.amounts[item] += values[item] ?? 0;
+        this.total += total;
         this.snapshot = this.capture();
     }
     public setCapacity(capacity: number): void {

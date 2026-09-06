@@ -73,11 +73,21 @@ tests cover cross-source building ownership, eviction/reconstruction, exhausted
 mineral visibility and final resource release. Browser construction tests use
 B/R/Esc, actual category tabs and terrain placement, then check real inventory
 against ore depletion through pause/speed controls and warehouse demolition.
+Power tests cover isolated/merged/split networks, device-owned joules, daylight,
+charge/discharge rates and capacity, whole-load allocation and non-mutating
+configuration. Industry tests also exercise refining input ownership, priority,
+recipe switching, one-batch output backpressure and real materials funding storage.
+Energy browser scenarios build new facilities through the catalog, change actual
+generation and load priority, refine all battery materials and verify charging.
 Mineral inspection, planet replacement, mining and warehouse scenarios run
 separately to keep each within the software-rendering timeout.
 The unsuitable-seed rejection allows 60 seconds for all nine terrain survey
 windows under software rendering; ordinary UI assertions keep their 20-second
-default and the per-test budget remains 120 seconds.
+default and the ordinary per-test budget remains 120 seconds. Solar/relay
+construction, load-priority recovery and battery production are separate scenarios.
+The priority scenario allows 180 seconds. The battery scenario allows 240 seconds
+for three actual refining runs, paid construction, charging and final inspection;
+refining ten real units has a 35-second assertion budget at 4× under software rendering.
 
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration

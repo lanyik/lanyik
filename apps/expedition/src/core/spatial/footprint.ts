@@ -4,6 +4,12 @@ import type { TilePosition } from "../../content/minerals";
 export type Rotation = 0 | 1 | 2 | 3 | 4 | 5;
 export const tileKey = (tile: TilePosition): string => `${tile.x},${tile.y}`;
 
+export function hexDistance(a: TilePosition, b: TilePosition): number {
+    const q = a.x - b.x;
+    const r = a.y - Math.ceil(a.x / 2) - b.y + Math.ceil(b.x / 2);
+    return Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r));
+}
+
 /** The map uses even-q offset columns; axial rotation also works at negative columns. */
 export function buildingFootprint(kind: BuildingId, anchor: TilePosition, rotation: Rotation): readonly TilePosition[] {
     if (!Number.isSafeInteger(anchor.x) || !Number.isSafeInteger(anchor.y)) throw new RangeError("Unsafe building coordinates");

@@ -4,7 +4,8 @@
 暂停、1/2/4 倍时间和按种子重新加载星球，并已接入 [矿藏与登陆勘察](./mineral-survey.md)。
 工业规则的整体设计见 [App 开发设计](../app-development.md)。指挥中心、采矿机、仓库、
 建造操作与直接入库已接入，见 [基地建造与采矿](./construction-and-mining.md)。
-加工、电力、运输和游戏存档仍待实现。
+光能、辐射站、储能、设备耗电与冶炼已接入，见 [能源与加工](./energy-and-production.md)。
+运输、复杂加工和游戏存档仍待实现。
 
 ## 运行与构建
 
@@ -37,15 +38,19 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 |---|---|
 | [main.tsx](../../apps/expedition/src/main.tsx) | 启动、启动失败展示和开发热替换时的释放 |
 | [bootstrap.tsx](../../apps/expedition/src/app/bootstrap.tsx) | 组合地图、会话、React；持有动画回调、页面事件、建造快捷键与退出顺序 |
-| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 时间、定位与建造命令、逐 tick 采集、只读快照、异步加载发布边界 |
+| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 时间、定位、建造与设备配置命令，逐 tick 采集/加工/电能结算，只读快照与异步加载边界 |
 | [WorldView.ts](../../apps/expedition/src/app/WorldView.ts) | 加载与释放、只读建造地形、建筑与预览表现接口 |
 | [GameClock.ts](../../apps/expedition/src/core/GameClock.ts) | 不依赖 DOM、React 或 Three.js 的固定游戏时钟 |
 | [HexWorldView.ts](../../apps/expedition/src/adapters/HexWorldView.ts) | 勘察与 source 移交、地形缓存、矿藏/建筑层、屏幕拾取、选中与错误转发 |
 | [App.tsx](../../apps/expedition/src/presentation/App.tsx) | 订阅会话快照，展示勘察、建筑与仓库状态，发送操作命令 |
 | [BuildToolbar.tsx](../../apps/expedition/src/presentation/BuildToolbar.tsx) | 底部建筑分类、成本、旋转与放置提示 |
+| [BuildingInspector.tsx](../../apps/expedition/src/presentation/BuildingInspector.tsx) | 建筑状态、配方与批次、供电优先级、设备启停和拆除 |
+| [EnergyPanel.tsx](../../apps/expedition/src/presentation/EnergyPanel.tsx) | 昼夜倒计时、独立电网功率和实际储能 |
 
-`Industry` 持有建筑、占地、采矿进度与已开采量，`InventoryLedger` 独占物资修改。
-会话在发布新的 tick 快照前完成对应的实际采集。建造快捷键由启动层注册和释放；
+`Industry` 持有建筑、占地、采矿/加工进度与已开采量，`InventoryLedger` 独占物资修改，
+`PowerGrid` 持有储能并派生电网。会话在发布新的 tick 快照前完成对应的实际经营结算。
+`configure-building` 命令校验建筑能力后更改配方、优先级或启停，不推进时间或赠送产物。
+建造快捷键由启动层注册和释放；
 文本输入、输入法组合输入和带修饰键的操作不会触发 B/R/Esc 建造命令。
 
 ## 时间合同
@@ -64,6 +69,9 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 页面重载或新星球成功加载会从 tick 0、1 倍和未暂停状态开始；本阶段不保存游戏时间。
 指挥中心落地前处于登陆选址阶段，时钟保持 tick 0，暂停和倍率按钮禁用。落地后按
 主动暂停及页面可见性推进采集。B 建造模式本身不暂停时间，手动暂停时仍可建造与拆除。
+同一时钟同时推进昼夜、加工批次与充放电，页面隐藏不补电；暂停时所有权威数量保持
+不变，设备设置仍可修改。材料是否足够发生变化时才重新校验建造预览，普通产出和
+扣料不会反复重算同一条服务路径。
 
 ## 会话状态与所有权
 
@@ -106,5 +114,6 @@ Worker、WebGL 地块选中、时间操作、星球替换，以及 Worker 加载
 浏览器产物位于 `test-results/app`；CI 同时执行应用构建与应用 E2E。
 
 矿藏与起步区域筛选见 [矿藏与登陆勘察](./mineral-survey.md)，已落地的多格建筑、库存
-和采集闭环见 [基地建造与采矿](./construction-and-mining.md)。后续接入加工、电力和
-一致性存档；已开采量始终由玩法核心持有，不能由地图模型保存。
+和采集闭环见 [基地建造与采矿](./construction-and-mining.md)，供电与初级冶炼见
+[能源与加工](./energy-and-production.md)。后续接入一致性存档和制造/物流；已开采量、
+批次和储能始终由玩法核心持有，不能由地图模型保存。
