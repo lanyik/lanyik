@@ -164,7 +164,7 @@ export class HexMapInteractionController {
         this.options.click(picked.x, picked.y, tile);
     };
 
-    private pick(clientX: number, clientY: number) {
+    public pick(clientX: number, clientY: number) {
         const surface = this.options.surface();
         if (!surface) return null;
         const ground = screenToSurface(clientX, clientY, this.options.canvas, this.options.camera,

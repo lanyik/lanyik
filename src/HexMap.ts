@@ -23,7 +23,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
-import type { HexMapEventMap } from "./EventMaps";
+import type { HexMapEventMap, HexMapTileEvent } from "./EventMaps";
 import { getHexCenter } from "./helpers/helpers";
 import { SurfaceHexMarker, SurfaceMarkerProjectionCache } from "./rendering/SurfaceHexMarker";
 import { ModelAssetCache, ModelAssetCacheStats } from "./helpers/models";
@@ -2173,6 +2173,14 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     public getTile(x: number, y: number): TileInfo | undefined {
         if (this.worldSource && !this.worldSource.hasTile(x, y)) return undefined;
         return this.mapData ? getMapTile(this.mapData, x, y) : undefined;
+    }
+
+    /** Read-only surface picking for application tools; does not change hover or selection. */
+    public pickTileAtScreen(clientX: number, clientY: number): HexMapTileEvent | undefined {
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) throw new RangeError("Screen coordinates must be finite");
+        const position = this.interactions.pick(clientX, clientY);
+        const tile = position && this.getTile(position.x, position.y);
+        return position && tile ? { ...position, tile } : undefined;
     }
 
     public async registerWorldRenderLayer(layer: WorldRenderLayer): Promise<void> {

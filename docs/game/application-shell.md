@@ -2,8 +2,9 @@
 
 状态：已实现。对应 `apps/expedition` 的首个开发阶段，提供真实地表勘察、地块选中、
 暂停、1/2/4 倍时间和按种子重新加载星球，并已接入 [矿藏与登陆勘察](./mineral-survey.md)。
-工业规则的整体设计见 [App 开发设计](../app-development.md)。建筑、库存、生产和游戏
-存档仍待实现；推荐登陆区已通过起步条件筛选，点击其他地块不表示完成建造选址校验。
+工业规则的整体设计见 [App 开发设计](../app-development.md)。指挥中心、采矿机、仓库、
+建造操作与直接入库已接入，见 [基地建造与采矿](./construction-and-mining.md)。
+加工、电力、运输和游戏存档仍待实现。
 
 ## 运行与构建
 
@@ -35,15 +36,17 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 | 入口 | 当前职责 |
 |---|---|
 | [main.tsx](../../apps/expedition/src/main.tsx) | 启动、启动失败展示和开发热替换时的释放 |
-| [bootstrap.tsx](../../apps/expedition/src/app/bootstrap.tsx) | 组合地图、会话、React；持有动画回调、页面事件与退出顺序 |
-| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 会话状态、时间/定位命令、勘察报告、选中快照、异步加载发布边界 |
-| [WorldView.ts](../../apps/expedition/src/app/WorldView.ts) | 应用实际使用的加载、释放和地块信息接口 |
+| [bootstrap.tsx](../../apps/expedition/src/app/bootstrap.tsx) | 组合地图、会话、React；持有动画回调、页面事件、建造快捷键与退出顺序 |
+| [GameSession.ts](../../apps/expedition/src/app/GameSession.ts) | 时间、定位与建造命令、逐 tick 采集、只读快照、异步加载发布边界 |
+| [WorldView.ts](../../apps/expedition/src/app/WorldView.ts) | 加载与释放、只读建造地形、建筑与预览表现接口 |
 | [GameClock.ts](../../apps/expedition/src/core/GameClock.ts) | 不依赖 DOM、React 或 Three.js 的固定游戏时钟 |
-| [HexWorldView.ts](../../apps/expedition/src/adapters/HexWorldView.ts) | 地形勘察与 source 所有权移交、地图/矿藏层接入、选中与错误转发 |
-| [App.tsx](../../apps/expedition/src/presentation/App.tsx) | 订阅会话快照、展示勘察信息、发送暂停/倍率命令和重载请求 |
+| [HexWorldView.ts](../../apps/expedition/src/adapters/HexWorldView.ts) | 勘察与 source 移交、地形缓存、矿藏/建筑层、屏幕拾取、选中与错误转发 |
+| [App.tsx](../../apps/expedition/src/presentation/App.tsx) | 订阅会话快照，展示勘察、建筑与仓库状态，发送操作命令 |
+| [BuildToolbar.tsx](../../apps/expedition/src/presentation/BuildToolbar.tsx) | 底部建筑分类、成本、旋转与放置提示 |
 
-当前不创建空的工业模拟器、库存容器或通用系统注册器。第一条采集规则实现时再建立
-权威资源状态和逐 tick 作业入口，游戏时间随后只提交实际完成的业务 tick。
+`Industry` 持有建筑、占地、采矿进度与已开采量，`InventoryLedger` 独占物资修改。
+会话在发布新的 tick 快照前完成对应的实际采集。建造快捷键由启动层注册和释放；
+文本输入、输入法组合输入和带修饰键的操作不会触发 B/R/Esc 建造命令。
 
 ## 时间合同
 
@@ -59,6 +62,8 @@ oak/palm/pinia 模型复制到应用的 `.assets` 目录。此目录和应用 `d
 
 非法、非有限、超出安全整数范围或倒退的时间戳，以及未定义倍率，明确报错。
 页面重载或新星球成功加载会从 tick 0、1 倍和未暂停状态开始；本阶段不保存游戏时间。
+指挥中心落地前处于登陆选址阶段，时钟保持 tick 0，暂停和倍率按钮禁用。落地后按
+主动暂停及页面可见性推进采集。B 建造模式本身不暂停时间，手动暂停时仍可建造与拆除。
 
 ## 会话状态与所有权
 
@@ -100,5 +105,6 @@ React 经 `useSyncExternalStore` 读取缓存的只读快照。没有完成 tick
 Worker、WebGL 地块选中、时间操作、星球替换，以及 Worker 加载失败后的显式重试。
 浏览器产物位于 `test-results/app`；CI 同时执行应用构建与应用 E2E。
 
-矿藏与起步区域筛选已实现，正式合同见 [矿藏与登陆勘察](./mineral-survey.md)。下一阶段
-接入指挥中心放置、库存和采集闭环；已开采量属于权威玩法状态，不能由地图模型保存。
+矿藏与起步区域筛选见 [矿藏与登陆勘察](./mineral-survey.md)，已落地的多格建筑、库存
+和采集闭环见 [基地建造与采矿](./construction-and-mining.md)。后续接入加工、电力和
+一致性存档；已开采量始终由玩法核心持有，不能由地图模型保存。

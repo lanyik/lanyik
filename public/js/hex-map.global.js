@@ -19161,6 +19161,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.worldSource && !this.worldSource.hasTile(x, y)) return void 0;
       return this.mapData ? getMapTile(this.mapData, x, y) : void 0;
     }
+    /** Read-only surface picking for application tools; does not change hover or selection. */
+    pickTileAtScreen(clientX, clientY) {
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) throw new RangeError("Screen coordinates must be finite");
+      const position = this.interactions.pick(clientX, clientY);
+      const tile = position && this.getTile(position.x, position.y);
+      return position && tile ? { ...position, tile } : void 0;
+    }
     async registerWorldRenderLayer(layer) {
       if (this.disposed) throw new Error("HexMap has been disposed");
       this.worldRenderLayers.register(layer);

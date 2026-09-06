@@ -325,6 +325,13 @@ coordinates; shader-only micro relief does not affect logical tile selection.
 The camera far plane bounds traversal, and pointers outside the canvas do not
 produce a hover.
 
+`HexMap.pickTileAtScreen(clientX, clientY)` exposes this same ground picker for
+application tools. Coordinates are finite viewport CSS pixels, matching pointer
+events; invalid numbers throw. It returns a `HexMapTileEvent` for a resident tile,
+or `undefined` when no readable tile is hit, without changing hover or selection.
+Construction previews can repick after pointer or camera changes without copying
+the renderer's surface-intersection algorithm or reading its internal state.
+
 ## Unified world sources
 
 `HexMap.loadWorld()` owns one source for the duration of a load session. Calling

@@ -6,14 +6,25 @@ import { MineralField } from "../core/resources/MineralField";
 import { MineralLayer } from "../presentation/layers/MineralLayer";
 import { surveyLanding, toSurveyTerrain } from "./surveyTerrain";
 import type { LandingSurvey } from "../scenarios/landingSurvey";
+import type { TerrainWindow } from "../scenarios/landingSurvey";
+import type { ConstructionTile, IndustrySnapshot, Placement } from "../core/construction/Industry";
+import { BuildingLayer } from "../presentation/layers/BuildingLayer";
 
 export class HexWorldView implements WorldView {
     private readonly map: HexMap;
     private readonly layerReady: Promise<void>;
+    private readonly minerals: MineralLayer;
+    private readonly buildings: BuildingLayer;
+    private readonly canvas: HTMLCanvasElement;
+    private terrain: TerrainWindow | undefined;
+    private constructionTiles: readonly ConstructionTile[] = [];
+    private pointer: { x: number; y: number } | undefined;
+    private readonly cameraState = new Float64Array(32).fill(NaN);
     private field: MineralField | undefined;
     private attempt: { controller: AbortController; source: ProceduralWorldSource | undefined } | undefined;
 
-    constructor(onSelect: (selection: WorldSelection) => void, onError: (error: Error) => void) {
+    constructor(onSelect: (selection: WorldSelection) => void, onError: (error: Error) => void,
+        private readonly onHover: (position: TilePosition | undefined) => void) {
         this.map = new HexMap({
             element: "#expedition-world",
             size: 48,
@@ -40,11 +51,31 @@ export class HexWorldView implements WorldView {
                 mineral: this.field?.nodeAt(x, y, toSurveyTerrain(tile)) });
         });
         this.map.on("error", onError);
-        this.layerReady = this.map.registerWorldRenderLayer(new MineralLayer(this.map.createResourceAccount("mineral-assets")));
+        this.minerals = new MineralLayer(this.map.createResourceAccount("mineral-assets"));
+        this.buildings = new BuildingLayer(this.map.createResourceAccount("building-assets"));
+        this.layerReady = this.map.registerWorldRenderLayer(this.minerals).then(() => this.map.registerWorldRenderLayer(this.buildings));
+        this.canvas = document.querySelector<HTMLCanvasElement>("#expedition-world")!;
+        this.canvas.addEventListener("pointermove", this.pointerMoved);
+        this.canvas.addEventListener("pointerleave", this.pointerLeft);
+        this.map.on("frame", () => {
+            if (!this.pointer) return;
+            const camera = this.map.getCamera();
+            let changed = false;
+            for (let index = 0; index < 32; index += 1) {
+                const value = index < 16 ? camera.matrixWorld.elements[index] : camera.projectionMatrix.elements[index - 16];
+                if (this.cameraState[index] !== value) { this.cameraState[index] = value; changed = true; }
+            }
+            if (changed) this.updateHover();
+        });
     }
 
     public async load(seed: string): Promise<LandingSurvey> {
         this.cancelSurvey();
+        this.terrain = undefined;
+        this.constructionTiles = [];
+        this.buildings.setBuildings([]);
+        this.buildings.showPlacement(undefined);
+        this.minerals.setDepleted([]);
         const controller = new AbortController();
         const source = new ProceduralWorldSource({
             seed,
@@ -58,13 +89,16 @@ export class HexWorldView implements WorldView {
             await this.layerReady;
             controller.signal.throwIfAborted();
             const field = new MineralField(seed);
-            const survey = await surveyLanding(source, field, controller.signal);
+            const { survey, terrain } = await surveyLanding(source, field, controller.signal);
             controller.signal.throwIfAborted();
             // loadWorld takes ownership even when its load plan fails.
             attempt.source = undefined;
             await this.map.loadWorld({ source, initialTile: survey.landing, adaptiveStreaming: false });
             controller.signal.throwIfAborted();
             this.field = field;
+            this.terrain = terrain;
+            this.constructionTiles = terrain.tiles.map((tile, index) => Object.freeze({ terrain: Object.freeze(tile),
+                mineral: field.nodeAt(terrain.originX + index % terrain.size, terrain.originY + Math.floor(index / terrain.size), tile) }));
             return survey;
         } finally {
             attempt.source?.dispose();
@@ -75,9 +109,37 @@ export class HexWorldView implements WorldView {
 
     public focus(position: TilePosition): void { this.map.setCameraTargetTile(position.x, position.y); }
 
+    public readTile(position: TilePosition): ConstructionTile | undefined {
+        const window = this.terrain;
+        if (!window || !this.field) return undefined;
+        const x = position.x - window.originX;
+        const y = position.y - window.originY;
+        if (x < 0 || y < 0 || x >= window.size || y >= window.size) return undefined;
+        return this.constructionTiles[y * window.size + x];
+    }
+    public showIndustry(state: IndustrySnapshot): void {
+        this.buildings.setBuildings(state.buildings);
+        this.minerals.setDepleted(state.depleted);
+    }
+    public showPlacement(placement: Placement | undefined): void { this.buildings.showPlacement(placement); }
+
     public dispose(): Promise<void> {
         this.cancelSurvey();
+        this.canvas.removeEventListener("pointermove", this.pointerMoved);
+        this.canvas.removeEventListener("pointerleave", this.pointerLeft);
+        this.terrain = undefined;
+        this.constructionTiles = [];
         return this.map.disposeAsync();
+    }
+
+    private readonly pointerMoved = (event: PointerEvent): void => {
+        this.pointer = { x: event.clientX, y: event.clientY };
+        this.updateHover();
+    };
+    private readonly pointerLeft = (): void => { this.pointer = undefined; this.onHover(undefined); };
+    private updateHover(): void {
+        const tile = this.pointer && this.map.pickTileAtScreen(this.pointer.x, this.pointer.y);
+        this.onHover(tile && { x: tile.x, y: tile.y });
     }
 
     private cancelSurvey(): void {

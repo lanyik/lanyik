@@ -18,7 +18,7 @@ of keeping a test-only runtime path alive.
 | Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
 | Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
-| Game application | Pure clock/session contracts and production-build browser integration | `apps/expedition/tests`, `apps/expedition/tests/e2e` |
+| Game application | Pure clock, session, construction and inventory contracts; render ownership and production-build browser integration | `apps/expedition/tests`, `apps/expedition/tests/e2e` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
 | Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
@@ -67,9 +67,14 @@ Application development and production builds still consume public package
 outputs. Mineral tests cover real terrain generation, bounded landing failures,
 resource access across water, and instance-buffer eviction/reconstruction;
 browser tests perform mineral location and tile inspection through the UI.
-Mineral/time interactions and repeated planet replacement run as separate
-browser scenarios, keeping each within the per-test timeout under software
-rendering while retaining both sets of assertions.
+Industry tests verify multi-cell rotations, atomic costs/refunds, finite capacity
+and reserves, disconnected machines, and deterministic tick grouping. Rendering
+tests cover cross-source building ownership, eviction/reconstruction, exhausted
+mineral visibility and final resource release. Browser construction tests use
+B/R/Esc, actual category tabs and terrain placement, then check real inventory
+against ore depletion through pause/speed controls and warehouse demolition.
+Mineral inspection, planet replacement, mining and warehouse scenarios run
+separately to keep each within the software-rendering timeout.
 The unsuitable-seed rejection allows 60 seconds for all nine terrain survey
 windows under software rendering; ordinary UI assertions keep their 20-second
 default and the per-test budget remains 120 seconds.

@@ -8,7 +8,7 @@ describe("terrain survey integration", () => {
     it.each(["expedition-1", "expedition-2"])("finds a viable landing using actual generated terrain for %s", async seed => {
         const source = { chunkSize: 24, sampleBaseChunk: vi.fn(async (chunkX: number, chunkY: number) =>
             generateWorldChunk({ seed, chunkX, chunkY, chunkSize: 24 })) };
-        const survey = await surveyLanding(source, new MineralField(seed), new AbortController().signal);
+        const { survey } = await surveyLanding(source, new MineralField(seed), new AbortController().signal);
         expect(survey.resources).toHaveLength(3);
         expect(source.sampleBaseChunk.mock.calls.length).toBeLessThanOrEqual(SURVEY_CENTRES.length * 16);
         const node = survey.resources[0].nearest;

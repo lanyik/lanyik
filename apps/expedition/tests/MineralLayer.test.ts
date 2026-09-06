@@ -3,6 +3,7 @@ import { InstancedMesh, Object3D } from "three";
 import { ResourceBudgetLedger, StaticWorldSource, createWorldDescriptor, getWorldChunkMetadata, Land,
     type WorldRenderChunkContext, type WorldSource, type WorldSurfaceAnchor } from "three-hex-map";
 import { MineralLayer } from "../src/presentation/layers/MineralLayer";
+import { MineralField } from "../src/core/resources/MineralField";
 
 describe("MineralLayer ownership", () => {
     it("rebuilds evicted instance buffers, follows surface changes and releases its asset account", async () => {
@@ -42,6 +43,14 @@ describe("MineralLayer ownership", () => {
         layer.surfaceChanged(context);
         expect(mesh.instanceMatrix.array[13]).toBeCloseTo(original[13] + 50);
         expect(metadata.bounds.maxY).toBe(248);
+        const field = new MineralField("expedition-1");
+        const depleted = chunk.coreTiles.map(point => field.nodeAt(point.x, point.y, { type: "land", hill: false, forest: false, lake: false }))
+            .filter(node => !!node).map(node => node.id);
+        layer.setDepleted(depleted);
+        expect(mesh.instanceMatrix.array[0]).toBe(0);
+        layer.releaseChunk(metadata, [mesh]);
+        layer.activateLod(metadata, 0, [mesh]);
+        expect(mesh.instanceMatrix.array[0]).toBe(0);
         layer.unmountChunk(context);
         expect(objects.size).toBe(0);
         layer.unloadWorld();

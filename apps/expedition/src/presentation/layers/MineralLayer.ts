@@ -23,6 +23,17 @@ export class MineralLayer implements WorldRenderLayer {
     private readonly transform = new Object3D();
     private readonly color = new Color();
     private field: MineralField | undefined;
+    private depleted = new Set<string>();
+
+    public setDepleted(ids: readonly string[]): void {
+        const next = new Set(ids);
+        for (const batch of this.batches.values()) {
+            if (batch.mesh.count && batch.nodes.some(node => next.has(node.id) !== this.depleted.has(node.id))) {
+                this.populate(batch, next);
+            }
+        }
+        this.depleted = next;
+    }
 
     constructor(private readonly resources: ResourceBudgetAccount) {
         resources.acquireRequired("shared-rock", {}, true, collectObject3DResourceAllocations([], [this.geometry]));
@@ -124,7 +135,7 @@ export class MineralLayer implements WorldRenderLayer {
         else tagWorldChunk(batch.mesh, key, this.id, localBounds);
     }
 
-    private populate({ mesh, nodes, context, origin }: MineralBatch): void {
+    private populate({ mesh, nodes, context, origin }: MineralBatch, depleted = this.depleted): void {
         const count = nodes.length * ROCKS.length;
         if (mesh.instanceMatrix.count !== count) {
             mesh.instanceMatrix = new InstancedBufferAttribute(new Float32Array(count * 16), 16);
@@ -144,6 +155,7 @@ export class MineralLayer implements WorldRenderLayer {
                     context.surface!.getWorldHeight(worldX, worldZ) + scale * 0.5, worldZ - origin.y);
                 this.transform.rotation.set(0.17, (node.x * 0.7 + node.y * 1.3 + instance) % (Math.PI * 2), 0.23);
                 this.transform.scale.set(scale * 1.25, scale * 0.85, scale);
+                if (depleted.has(node.id)) this.transform.scale.setScalar(0);
                 this.transform.updateMatrix();
                 mesh.setMatrixAt(instance, this.transform.matrix);
                 mesh.setColorAt(instance, this.color);

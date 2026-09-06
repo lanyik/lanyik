@@ -1,13 +1,23 @@
 import { GameClock, type GameSpeed } from "../core/GameClock";
 import type { WorldSelection, WorldView } from "./WorldView";
-import type { MineralId } from "../content/minerals";
+import type { MineralId, TilePosition } from "../content/minerals";
 import type { LandingSurvey } from "../scenarios/landingSurvey";
+import { BUILDING_IDS, type BuildingId } from "../content/buildings";
+import { Industry, type BuildingSnapshot, type IndustrySnapshot, type Placement } from "../core/construction/Industry";
+import type { Rotation } from "../core/spatial/footprint";
 
 export type SessionStatus = "idle" | "loading" | "ready" | "failed" | "closed";
 export type SessionCommand =
     | { type: "set-paused"; paused: boolean }
     | { type: "set-speed"; speed: GameSpeed }
-    | { type: "focus-survey"; target: MineralId | "landing" | "expansion" };
+    | { type: "focus-survey"; target: MineralId | "landing" | "expansion" }
+    | { type: "build-toggle" }
+    | { type: "build-select"; kind: BuildingId }
+    | { type: "build-rotate" }
+    | { type: "build-cancel" }
+    | { type: "demolish"; id: string };
+
+export interface BuildMode { readonly kind: BuildingId; readonly rotation: Rotation; readonly preview: Placement | undefined }
 
 export interface SessionSnapshot {
     readonly status: SessionStatus;
@@ -20,6 +30,11 @@ export interface SessionSnapshot {
     readonly selection: WorldSelection | undefined;
     readonly survey: LandingSurvey | undefined;
     readonly error: string | undefined;
+    readonly industry: IndustrySnapshot | undefined;
+    readonly build: BuildMode | undefined;
+    readonly notice: string | undefined;
+    readonly selectedBuilding: BuildingSnapshot | undefined;
+    readonly selectedRemaining: number | undefined;
 }
 
 /** Owns game time and world replacement; mutations finish synchronously. */
@@ -32,6 +47,10 @@ export class GameSession {
     private selection: WorldSelection | undefined;
     private survey: LandingSurvey | undefined;
     private error: string | undefined;
+    private industry: Industry | undefined;
+    private build: BuildMode | undefined;
+    private hovered: TilePosition | undefined;
+    private notice: string | undefined;
     private revision = 0;
     private readonly listeners = new Set<() => void>();
     private closePromise: Promise<void> | undefined;
@@ -57,12 +76,19 @@ export class GameSession {
         this.error = undefined;
         this.selection = undefined;
         this.survey = undefined;
+        this.industry = undefined;
+        this.build = undefined;
+        this.hovered = undefined;
+        this.notice = undefined;
+        this.world.showPlacement(undefined);
         this.clock.setRunning(false);
         this.publish();
         try {
             const survey = await this.world.load(this.seed);
             if (revision !== this.revision) return;
             this.survey = survey;
+            this.industry = new Industry(this.world);
+            this.world.showIndustry(this.industry.getSnapshot());
             this.clock = new GameClock();
             this.paused = false;
             this.status = "ready";
@@ -96,6 +122,35 @@ export class GameSession {
                 this.world.focus(position);
                 return;
             }
+            case "build-toggle":
+                this.notice = undefined;
+                this.build = this.build ? undefined : Object.freeze({
+                    kind: this.industry!.getSnapshot().landed ? "miner" : "command-center", rotation: 0, preview: undefined
+                });
+                this.refreshPreview();
+                break;
+            case "build-select":
+                if (!BUILDING_IDS.includes(command.kind)) throw new TypeError("Unknown building type");
+                this.notice = undefined;
+                this.build = Object.freeze({ kind: command.kind, rotation: 0, preview: undefined });
+                this.refreshPreview();
+                break;
+            case "build-rotate":
+                if (!this.build) return;
+                this.build = Object.freeze({ ...this.build, rotation: ((this.build.rotation + 1) % 6) as Rotation });
+                this.refreshPreview();
+                break;
+            case "build-cancel":
+                this.build = undefined;
+                this.world.showPlacement(undefined);
+                break;
+            case "demolish": {
+                const result = this.industry!.demolish(command.id);
+                this.notice = result.message;
+                if (result.ok) this.world.showIndustry(this.industry!.getSnapshot());
+                this.refreshPreview();
+                break;
+            }
             default:
                 throw new TypeError("Unknown session command");
         }
@@ -103,7 +158,16 @@ export class GameSession {
     }
 
     public frame(timestampMs: number): void {
-        if (this.status === "ready" && this.clock.sample(timestampMs)) this.publish();
+        if (this.status !== "ready") return;
+        const previousTick = this.clock.tick;
+        if (!this.clock.sample(timestampMs)) return;
+        const previous = this.industry!.getSnapshot();
+        this.industry!.advance(this.clock.tick - previousTick);
+        const next = this.industry!.getSnapshot();
+        if (next.depleted !== previous.depleted) this.world.showIndustry(next);
+        if (this.build?.preview && (next.depleted !== previous.depleted
+            || (!this.build.preview.valid && next.inventory !== previous.inventory))) this.refreshPreview();
+        this.publish();
     }
 
     public setHidden(hidden: boolean): void {
@@ -117,6 +181,26 @@ export class GameSession {
         if (this.status !== "ready") return;
         this.selection = Object.freeze({ ...selection, modifiers: Object.freeze([...selection.modifiers]),
             mineral: selection.mineral && Object.freeze({ ...selection.mineral }) });
+        if (this.build) {
+            this.hovered = Object.freeze({ x: selection.x, y: selection.y });
+            const result = this.industry!.place(this.build.kind, this.hovered, this.build.rotation);
+            this.notice = result.message;
+            if (result.ok) {
+                this.world.showIndustry(this.industry!.getSnapshot());
+                if (this.build.kind === "command-center") this.build = undefined;
+                this.syncClock();
+            }
+            this.refreshPreview();
+        }
+        this.publish();
+    }
+
+    public hover(position: TilePosition | undefined): void {
+        if (this.status !== "ready") return;
+        if (this.hovered?.x === position?.x && this.hovered?.y === position?.y) return;
+        this.hovered = position && Object.freeze({ ...position });
+        if (!this.build) return;
+        this.refreshPreview();
         this.publish();
     }
 
@@ -125,6 +209,8 @@ export class GameSession {
         this.revision += 1;
         this.status = "failed";
         this.error = reason instanceof Error ? reason.message : String(reason);
+        this.build = undefined;
+        this.world.showPlacement(undefined);
         this.clock.setRunning(false);
         this.publish();
     }
@@ -133,6 +219,8 @@ export class GameSession {
         if (this.closePromise) return this.closePromise;
         this.revision += 1;
         this.status = "closed";
+        this.build = undefined;
+        this.world.showPlacement(undefined);
         this.clock.setRunning(false);
         this.publish();
         this.listeners.clear();
@@ -141,14 +229,24 @@ export class GameSession {
     }
 
     private syncClock(): void {
-        this.clock.setRunning(this.status === "ready" && !this.paused && !this.hidden);
+        this.clock.setRunning(this.status === "ready" && this.industry?.getSnapshot().landed === true && !this.paused && !this.hidden);
+    }
+
+    private refreshPreview(): void {
+        const preview = this.build && this.hovered
+            ? this.industry!.preview(this.build.kind, this.hovered, this.build.rotation) : undefined;
+        if (this.build) this.build = Object.freeze({ ...this.build, preview });
+        this.world.showPlacement(preview);
     }
 
     private capture(): SessionSnapshot {
         return Object.freeze({
             status: this.status, seed: this.seed, tick: this.clock.tick,
             elapsedMs: this.clock.elapsedMs, speed: this.clock.speed,
-            paused: this.paused, hidden: this.hidden, selection: this.selection, survey: this.survey, error: this.error
+            paused: this.paused, hidden: this.hidden, selection: this.selection, survey: this.survey, error: this.error,
+            industry: this.industry?.getSnapshot(), build: this.build, notice: this.notice,
+            selectedBuilding: this.selection && this.industry?.buildingAt(this.selection),
+            selectedRemaining: this.selection?.mineral && this.industry?.remaining(this.selection.mineral)
         });
     }
 

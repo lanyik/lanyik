@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { landAtRecommendation, setPlanet } from "./constructionHelpers";
 
-test("surveys a real world, inspects minerals and controls time", async ({ page }, testInfo) => {
+test("surveys and inspects three mineral types while landing time is stopped", async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -9,13 +10,7 @@ test("surveys a real world, inspects minerals and controls time", async ({ page 
     const time = page.getByTestId("game-time");
     await expect(application).toHaveAttribute("data-state", "ready");
     await expect(page.getByTestId("survey-resource")).toHaveCount(3);
-    await expect.poll(async () => Number(await time.getAttribute("data-tick"))).toBeGreaterThan(0);
-    await page.getByRole("button", { name: "暂停", exact: true }).click();
-    const pausedTick = await time.getAttribute("data-tick");
-    await page.mouse.click(800, 400);
-    await expect(page.getByTestId("tile-inspection")).toBeVisible();
-    await page.getByRole("button", { name: "4×", exact: true }).click();
-    await expect(page.getByRole("button", { name: "4×", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(time).toHaveAttribute("data-tick", "0");
     for (const [mineral, name] of [["iron", "铁矿"], ["copper", "铜矿"], ["stone", "石材"]]) {
         await page.getByRole("button", { name: `定位${name}`, exact: true }).click();
         await expect(async () => {
@@ -25,9 +20,7 @@ test("surveys a real world, inspects minerals and controls time", async ({ page 
         await expect(page.getByTestId("mineral-inspection")).toContainText("本格储量");
         if (mineral === "copper") await page.screenshot({ path: testInfo.outputPath("expedition-minerals.png") });
     }
-    await expect(time).toHaveAttribute("data-tick", pausedTick!);
-    await page.getByRole("button", { name: "继续", exact: true }).click();
-    await expect.poll(async () => Number(await time.getAttribute("data-tick"))).toBeGreaterThan(Number(pausedTick));
+    await expect(time).toHaveAttribute("data-tick", "0");
     expect(errors).toEqual([]);
 });
 
@@ -38,15 +31,18 @@ test("replaces surveyed planets and resets time controls and selection", async (
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const application = page.locator(".expedition");
     await expect(application).toHaveAttribute("data-state", "ready");
+    await landAtRecommendation(page);
     await page.getByRole("button", { name: "4×", exact: true }).click();
     await page.mouse.click(800, 400);
     await expect(page.getByTestId("tile-inspection")).toBeVisible();
     for (const seed of ["expedition-2", "expedition-1"]) {
-        await page.getByLabel("星球种子").fill(seed);
-        await page.getByRole("button", { name: "重新勘察" }).click();
+        await setPlanet(page, seed);
         await expect(application).toHaveAttribute("data-state", "ready");
         await expect(page.getByRole("button", { name: "1×", exact: true })).toHaveAttribute("aria-pressed", "true");
         await expect(page.getByTestId("tile-inspection")).toHaveCount(0);
+        await expect(application).toHaveAttribute("data-landed", "false");
+        await expect(page.getByTestId("inventory-iron")).toHaveAttribute("data-amount", "0");
+        await expect(page.getByTestId("building-inspection")).toHaveCount(0);
         await page.mouse.click(800, 400);
         await expect(page.getByTestId("tile-inspection")).toBeVisible();
     }
@@ -79,5 +75,6 @@ test("shows a failed worker load and recovers only after a new survey", async ({
     await page.unroute(workerPattern);
     await page.getByRole("button", { name: "重新勘察" }).click();
     await expect(page.locator(".expedition")).toHaveAttribute("data-state", "ready");
+    await landAtRecommendation(page);
     await expect.poll(async () => Number(await page.getByTestId("game-time").getAttribute("data-tick"))).toBeGreaterThan(0);
 });

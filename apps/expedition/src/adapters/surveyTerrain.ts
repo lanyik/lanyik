@@ -49,13 +49,13 @@ const failureNames: Record<LandingFailure, string> = {
 
 export async function surveyLanding(
     source: TerrainSamplingSource, field: MineralField, signal: AbortSignal
-): Promise<LandingSurvey> {
+): Promise<{ survey: LandingSurvey; terrain: TerrainWindow }> {
     const failures: Record<LandingFailure, number> = { clearing: 0, "building-space": 0, forest: 0, minerals: 0, expansion: 0 };
     for (const centre of SURVEY_CENTRES) {
         const terrain = await sampleTerrainWindow(source, centre.x - SURVEY_WINDOW_SIZE / 2, centre.y - SURVEY_WINDOW_SIZE / 2, signal);
         const result = new LandingSurveyWindow(terrain, field).findLanding();
         signal.throwIfAborted();
-        if (result.landing) return result.landing;
+        if (result.landing) return { survey: result.landing, terrain };
         for (const failure of Object.keys(failures) as LandingFailure[]) failures[failure] += result.failures[failure];
     }
     const reasons = (Object.keys(failures) as LandingFailure[]).filter(failure => failures[failure] > 0)

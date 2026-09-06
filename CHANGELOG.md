@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Expedition base construction with B-key category tabs, six-way placement previews,
+  a unique command center, miners and storage warehouses. Includes atomic material
+  costs/refunds, finite reserves and capacity, path-aware service, fixed-tick mining
+  directly into shared inventory, and chunk-owned instanced building rendering.
+- Public `HexMap.pickTileAtScreen()` for ground-aligned application tools without
+  changing hover or selection state; reuses the existing surface ray picker.
 - Configurable camera zoom bounds, with a higher, wider expedition starting view
   and extended terrain/vegetation coverage for inspecting surrounding deposits.
 - Deterministic iron, copper and stone deposits with finite per-tile reserves,
@@ -17,10 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A standalone React/Vite expedition application with real terrain surveys,
   tile inspection, a fixed game clock, pause/speed controls and guarded planet
   replacement. Includes npm workspace commands, clock/session contracts and
-  production-build browser tests; construction and industrial production remain pending.
+  production-build browser tests; processing, power, transport and game saves remain pending.
 - An application development design for the industrial game, specifying module
   ownership, global ticks, inventory, production, power, logistics, navigation,
-  content validation and generation checkpoints. Gameplay remains unimplemented.
+  content validation and generation checkpoints, with implemented stages tracked
+  separately from planned industrial systems.
 - A paged data-driven world minimap backed by versioned Worker overview rasters,
   bounded Canvas/LRU storage, progressive refinement, smooth pointer-anchored
   zoom, camera heading and explicit destination confirmation.

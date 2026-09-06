@@ -27,7 +27,10 @@ function createWorld() {
             return pending.promise;
         }),
         dispose: vi.fn(async () => {}),
-        focus: vi.fn()
+        focus: vi.fn(),
+        readTile: vi.fn(() => ({ terrain: { type: "land" as const, hill: false, forest: false, lake: false } })),
+        showIndustry: vi.fn(),
+        showPlacement: vi.fn()
     };
     return { world, loads };
 }
@@ -38,10 +41,55 @@ async function readySession() {
     const start = session.start("first");
     fixture.loads[0].resolve();
     await start;
+    land(session);
     return { ...fixture, session };
 }
 
+function land(session: GameSession) {
+    session.dispatch({ type: "build-select", kind: "command-center" });
+    session.select({ x: 0, y: 0, terrain: "land" as WorldSelection["terrain"], modifiers: [] });
+}
+
 describe("GameSession", () => {
+    it("keeps landing selection paused and applies mining only through the fixed clock", async () => {
+        const { world, loads } = createWorld();
+        const mineral = mineralNode(3);
+        world.readTile = position => ({ terrain: { type: "land", hill: false, forest: false, lake: false },
+            mineral: position.x === 3 && position.y === 0 ? mineral : undefined });
+        const session = new GameSession(world);
+        const start = session.start("first");
+        loads[0].resolve();
+        await start;
+        session.frame(0);
+        session.frame(5000);
+        expect(session.getSnapshot()).toMatchObject({ tick: 0, industry: { landed: false } });
+        land(session);
+        session.dispatch({ type: "set-paused", paused: true });
+        session.dispatch({ type: "build-select", kind: "miner" });
+        session.hover(mineral);
+        expect(session.getSnapshot().build?.preview?.valid).toBe(true);
+        session.select({ ...mineral, terrain: "land" as WorldSelection["terrain"], modifiers: [], mineral });
+        const placed = session.getSnapshot().industry!;
+        session.frame(10_000);
+        session.frame(10_100);
+        expect(session.getSnapshot().industry).toBe(placed);
+        session.dispatch({ type: "set-paused", paused: false });
+        session.dispatch({ type: "set-speed", speed: 4 });
+        for (let step = 0; step <= 5; step += 1) session.frame(20_000 + step * 100);
+        expect(session.getSnapshot().industry!.inventory.amounts.iron).toBe(placed.inventory.amounts.iron + 10);
+        session.setHidden(true);
+        session.frame(50_000);
+        const hidden = session.getSnapshot().industry;
+        session.setHidden(false);
+        session.frame(100_000);
+        expect(session.getSnapshot().industry).toBe(hidden);
+        const replacement = session.start("second");
+        expect(session.getSnapshot()).toMatchObject({ build: undefined, industry: undefined });
+        loads[1].resolve();
+        await replacement;
+        expect(session.getSnapshot()).toMatchObject({ tick: 0, industry: { landed: false, buildings: [], inventory: { total: 0 } } });
+    });
+
     it.each(["resolve", "reject"] as const)("ignores a superseded load that finishes with %s", async completion => {
         const { world, loads } = createWorld();
         const session = new GameSession(world);
@@ -49,6 +97,7 @@ describe("GameSession", () => {
         const second = session.start("second");
         loads[1].resolve();
         await second;
+        land(session);
         session.frame(0);
         session.frame(100);
         const winningSnapshot = session.getSnapshot();
