@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { CombatSimulation, MAX_ENEMIES, type MovementInput } from "../src/core/CombatSimulation";
+import { MAX_COMBAT_CHUNKS, RegionalWorld } from "../src/core/RegionalWorld";
 
 const movementAt = (step: number): MovementInput => {
     const angle = step / 150;
@@ -95,5 +96,85 @@ describe("CombatSimulation", () => {
         expect(combat.equip(404)).toEqual({ ok: false, message: "背包中没有这件装备" });
         expect(combat.discard(404)).toEqual({ ok: false, message: "背包中没有这件装备" });
         expect(() => combat.step({ x: NaN, z: 0, active: true })).toThrow("finite");
+    });
+
+    test("keeps fresh threats ahead and releases old entities during sustained straight travel", () => {
+        const combat = new CombatSimulation("forward-pressure");
+        const initial = combat.getRenderState().enemies;
+        const oldIds = new Set(initial.ids.slice(0, initial.count));
+        let checkpointsWithThreats = 0;
+        for (let tick = 0; tick < 2500 && !combat.gameOver; tick += 1) {
+            combat.step({ x: 1, z: 0, active: true });
+            if (tick < 600 || tick % 200 !== 0) continue;
+            const { player, enemies } = combat.getRenderState();
+            let ahead = 0;
+            for (let index = 0; index < enemies.count; index += 1) {
+                if (enemies.x[index] > player.x && enemies.x[index] < player.x + 14
+                    && Math.abs(enemies.z[index] - player.z) < 10) ahead += 1;
+            }
+            if (ahead > 0) checkpointsWithThreats += 1;
+            expect(combat.getSnapshot().chunks.total).toBe(MAX_COMBAT_CHUNKS);
+            expect(enemies.count).toBeLessThanOrEqual(MAX_ENEMIES);
+        }
+        expect(checkpointsWithThreats).toBeGreaterThanOrEqual(4);
+        const { enemies } = combat.getRenderState();
+        expect(Array.from(enemies.ids.slice(0, enemies.count)).filter(id => oldIds.has(id))).toHaveLength(0);
+    });
+
+    test("opens a world chest once and commits its equipment and coins", () => {
+        const combat = new CombatSimulation("chest-walk");
+        const initial = combat.getRenderState();
+        let nearest = -1;
+        let distance = Infinity;
+        for (let index = 0; index < initial.chests.count; index += 1) {
+            const candidate = Math.hypot(initial.chests.x[index], initial.chests.z[index]);
+            if (candidate < distance) { nearest = index; distance = candidate; }
+        }
+        expect(nearest).toBeGreaterThanOrEqual(0);
+        const x = initial.chests.x[nearest];
+        const z = initial.chests.z[nearest];
+        for (let tick = 0; tick < 800 && combat.getSnapshot().openedChests === 0; tick += 1) {
+            const { player } = combat.getRenderState();
+            combat.step({ x: x - player.x, z: z - player.z, active: true });
+        }
+        const opened = combat.getSnapshot();
+        expect(opened.openedChests).toBe(1);
+        expect(opened.player.gold).toBeGreaterThan(0);
+        expect(opened.player.inventory.length).toBeGreaterThan(0);
+        for (let tick = 0; tick < 80; tick += 1) combat.step({ x: 0, z: 0, active: false });
+        expect(combat.getSnapshot().openedChests).toBe(1);
+        expect(combat.equip(opened.player.inventory[0].id).ok).toBe(true);
+    });
+
+    test("freezes the static ring and updates returning middle-ring enemies only on their scheduled ticks", () => {
+        const combat = new CombatSimulation("lod-motion");
+        const world = new RegionalWorld("lod-motion", { x: 0, z: 0 });
+        let lowUpdates = 0;
+        let staticChecks = 0;
+        for (let tick = 0; tick < 600; tick += 1) {
+            const before = combat.getRenderState().enemies;
+            const positions = new Map(Array.from({ length: before.count }, (_, index) =>
+                [before.ids[index], { x: before.x[index], z: before.z[index] }] as const));
+            combat.step({ x: 1, z: 0, active: true });
+            const player = combat.getRenderState().player;
+            world.synchronize(player.x, player.z, combat.tick);
+            const after = combat.getRenderState().enemies;
+            for (let index = 0; index < after.count; index += 1) {
+                const previous = positions.get(after.ids[index]);
+                if (!previous) continue;
+                const lod = world.lodAt(previous.x, previous.z);
+                if (lod === "static") {
+                    expect(after.x[index]).toBe(previous.x);
+                    expect(after.z[index]).toBe(previous.z);
+                    staticChecks += 1;
+                }
+                if (lod === "low" && (after.x[index] !== previous.x || after.z[index] !== previous.z)) {
+                    expect(combat.tick % 10).toBe(after.ids[index] % 10);
+                    lowUpdates += 1;
+                }
+            }
+        }
+        expect(staticChecks).toBeGreaterThan(100);
+        expect(lowUpdates).toBeGreaterThan(0);
     });
 });

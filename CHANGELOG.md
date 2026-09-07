@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Region-driven survivor ecology with bounded active/low-frequency/static chunk
+  rings, territorial enemies, normal/hard/horror regions and regional bosses.
+- Five chest tiers, eleven equipment slots, independent item level/star/quality
+  axes, 38 affixes, complete combat attributes, gold rewards, a regenerating
+  single-hit shield and an automatic area skill.
 - A standalone survivor-RPG application with continuous deterministic monster
   spawning, fixed-step automatic combat, experience levels, allocatable
   attributes, generated rarity/affix equipment, inventory swaps and a complete

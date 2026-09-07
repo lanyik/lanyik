@@ -95,6 +95,9 @@ button { font: inherit; }
     width: 270px;
     padding: 17px;
     border-radius: 16px;
+    max-height: calc(100vh - 226px);
+    overflow-y: auto;
+    scrollbar-width: thin;
 }
 .character-panel > header, .inventory > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .character-panel h2, .inventory h2 { margin: 2px 0 0; font-family: Georgia, "Times New Roman", serif; font-size: 23px; font-weight: 500; letter-spacing: .04em; }
@@ -129,7 +132,7 @@ button { font: inherit; }
     bottom: 112px;
     width: min(380px, calc(100vw - 36px));
     padding: 19px;
-    overflow: hidden;
+    overflow-y: auto;
     border-radius: 18px;
     transform: translateX(calc(100% + 32px));
     opacity: 0;
@@ -141,13 +144,13 @@ button { font: inherit; }
 .bag-capacity b { color: #dce6e1; }
 .equipped-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .equipped-slot > small { display: block; margin: 0 0 5px 2px; color: var(--muted); font-size: 9px; }
-.equipped-slot .gear-card { min-height: 125px; padding: 8px; }
+.equipped-slot .gear-card { min-height: 65px; padding: 8px; }
 .equipped-slot .gear-card header { display: block; }
 .equipped-slot .gear-card h4 { min-height: 29px; font-size: 11px; }
 .equipped-slot .gear-card ul { font-size: 8px; }
-.equipped-slot .gear-meta, .equipped-slot .gear-score, .equipped-slot .gear-level { display: none; }
-.empty-slot { min-height: 125px; display: grid; place-items: center; color: rgba(207, 220, 214, .32); border: 1px dashed rgba(207, 220, 214, .16); border-radius: 9px; font-size: 9px; }
-.bag-items { height: calc(100% - 215px); margin-top: 12px; padding-right: 4px; display: grid; align-content: start; gap: 8px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(116,231,226,.3) transparent; }
+.equipped-slot .gear-meta, .equipped-slot .gear-score { display: none; }
+.empty-slot { min-height: 65px; display: grid; place-items: center; color: rgba(207, 220, 214, .32); border: 1px dashed rgba(207, 220, 214, .16); border-radius: 9px; font-size: 9px; }
+.bag-items { margin-top: 12px; padding-right: 4px; display: grid; align-content: start; gap: 8px; }
 .empty-bag { min-height: 150px; display: grid; place-content: center; justify-items: center; color: var(--muted); text-align: center; }
 .empty-bag span { color: var(--cyan); font-size: 34px; opacity: .5; }
 .empty-bag p { width: 220px; font-size: 11px; line-height: 1.7; }
@@ -156,6 +159,12 @@ button { font: inherit; }
 .rarity-magic { --rarity: #5fa8ff; }
 .rarity-rare { --rarity: #c56cff; }
 .rarity-legendary { --rarity: #ffad42; box-shadow: inset 0 0 20px rgba(255, 160, 48, .07); }
+.rarity-diamond { --rarity: #70f5ed; }
+.rarity-rainbow { --rarity: #ff9deb; }
+.gear-stars { color: #f3d68b; font-size: 10px; letter-spacing: 2px; }
+.gear-card .affix-list { display: grid; }
+.affix { color: var(--rarity); }
+.affix.rarity-rainbow { background: linear-gradient(90deg, #ff9cba, #ffe89b, #87f5d7, #9dc9ff, #e7a0ff); background-clip: text; color: transparent; }
 .gear-card header { display: flex; justify-content: space-between; gap: 8px; }
 .gear-card h4 { margin: 2px 0 0; color: var(--rarity); font-size: 13px; font-weight: 650; }
 .gear-level { color: var(--muted); font-size: 8px; }
@@ -168,6 +177,25 @@ button { font: inherit; }
 .gear-card footer button { padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 9px; }
 .equip-button { color: #111718; border: 1px solid var(--rarity); background: var(--rarity); font-weight: 800; }
 .discard-button { color: var(--muted); border: 1px solid var(--line); background: transparent; }
+
+.world-status { display: grid; gap: 7px; margin: 12px 0; font-size: 10px; color: var(--muted); }
+.world-status > strong { color: #9fd5b0; font-size: 13px; }
+.world-status[data-difficulty="hard"] > strong { color: #f5ba77; }
+.world-status[data-difficulty="horror"] > strong, .boss-status > b { color: #f68faf; }
+.world-status > small { font-size: 8px; }
+.region-map { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.region-cell { position: relative; display: grid; place-items: center; height: 30px; border: 1px solid #41604e; border-radius: 4px; background: #1e322b; color: #9ac4a6; font-size: 9px; }
+.region-hard { border-color: #765037; background: #3b2b22; color: #e6b67e; }
+.region-horror { border-color: #783e56; background: #3e2034; color: #f193b1; }
+.region-cell.current { outline: 1px solid #ecf7e9; }
+.region-player { position: absolute; z-index: 1; transform: translate(-50%, -50%); color: white; text-shadow: 0 0 4px black; font-size: 10px; }
+.boss-status { display: grid; gap: 6px; }
+.all-stats { margin: 12px 0; font-size: 11px; }
+.all-stats summary { cursor: pointer; color: var(--cyan); }
+.all-stats dl { display: grid; gap: 5px; margin: 10px 0; }
+.all-stats dl > div { display: flex; justify-content: space-between; gap: 8px; }
+.all-stats dt { color: var(--muted); }
+.all-stats dd { margin: 0; font-variant-numeric: tabular-nums; }
 
 .control-hint { position: absolute; left: 50%; bottom: 23px; display: flex; align-items: center; gap: 13px; transform: translateX(-50%); color: #b6c2be; padding: 7px 13px; border-radius: 9px; background: rgba(6, 10, 12, .7); font-size: 10px; letter-spacing: .03em; }
 .keys { display: grid; grid-template-columns: repeat(3, 17px); grid-template-rows: repeat(2, 17px); gap: 2px; }

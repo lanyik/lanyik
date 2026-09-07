@@ -1,25 +1,15 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ATTRIBUTE_IDS, EQUIPMENT_SLOTS, type AttributeId, type Equipment, type EquipmentBonuses, type EquipmentSlot } from "../core/Equipment";
+import { ATTRIBUTE_IDS, EQUIPMENT_SLOTS, BONUS_IDS, BONUS_INFO, SLOT_NAMES, RARITY_NAMES, type BonusId, type AttributeId, type Equipment, type EquipmentSlot } from "../core/Equipment";
 import { INVENTORY_CAPACITY } from "../core/CombatSimulation";
+import { COMBAT_CHUNK_SIZE, REGION_RULES } from "../core/RegionalWorld";
 import type { CombatSession } from "../app/CombatSession";
 import "./app.css";
 
-const SLOT_NAMES: Readonly<Record<EquipmentSlot, string>> = Object.freeze({ weapon: "武器", armor: "护甲", ring: "指环" });
 const ATTRIBUTE_INFO: Readonly<Record<AttributeId, { readonly name: string; readonly detail: string }>> = Object.freeze({
     might: { name: "力量", detail: "提高基础伤害" },
     vitality: { name: "体魄", detail: "提高生命、护甲和恢复" },
     agility: { name: "敏捷", detail: "提高移速、攻速和暴击" },
     fortune: { name: "寻宝", detail: "提高拾取范围和装备品质" }
-});
-const BONUS_INFO: Readonly<Record<keyof EquipmentBonuses, { readonly name: string; readonly percent?: boolean }>> = Object.freeze({
-    damage: { name: "伤害" },
-    maxHealth: { name: "生命" },
-    armor: { name: "护甲" },
-    moveSpeed: { name: "移动速度", percent: true },
-    attackSpeed: { name: "攻击速度", percent: true },
-    criticalChance: { name: "暴击率", percent: true },
-    pickupRadius: { name: "拾取范围" },
-    healthRegen: { name: "生命恢复" }
 });
 
 function formatTime(elapsedMs: number): string {
@@ -27,15 +17,11 @@ function formatTime(elapsedMs: number): string {
     return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function bonusLines(item: Equipment): readonly string[] {
-    return (Object.keys(item.bonuses) as (keyof EquipmentBonuses)[])
-        .filter(id => item.bonuses[id] > 0)
-        .map(id => {
-            const info = BONUS_INFO[id];
-            const value = info.percent ? `${Math.round(item.bonuses[id] * 100)}%` : Number.isInteger(item.bonuses[id])
-                ? String(item.bonuses[id]) : item.bonuses[id].toFixed(1);
-            return `+${value} ${info.name}`;
-        });
+function statValue(id: BonusId, value: number): string {
+    const unit = BONUS_INFO[id].unit;
+    if (unit === "percent") return `${Number((value * 100).toFixed(1))}%`;
+    const number = Number(value.toFixed(2));
+    return `${number}${unit === "permille" ? "‰" : unit === "seconds" ? "秒" : unit === "regen" ? "/0.5秒" : ""}`;
 }
 
 function GearCard({ item, current, onEquip, onDiscard }: {
@@ -48,13 +34,19 @@ function GearCard({ item, current, onEquip, onDiscard }: {
     return <article className={`gear-card rarity-${item.rarity}`} data-testid="inventory-item">
         <header>
             <div>
-                <span className="gear-level">物品等级 {item.itemLevel}</span>
+                <span className="gear-level">等级 {item.itemLevel} · {RARITY_NAMES[item.rarity]}品质</span>
                 <h4>{item.name}</h4>
+                <span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>
             </div>
             <span className="gear-score">{item.score}</span>
         </header>
         <div className="gear-meta"><span>{SLOT_NAMES[item.slot]}</span>{onEquip && <span className={delta >= 0 ? "positive" : "negative"}>{delta >= 0 ? "+" : ""}{delta} 战力</span>}</div>
-        <ul>{bonusLines(item).map(line => <li key={line}>{line}</li>)}</ul>
+        <ul className="base-stats">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id =>
+            <li key={id}>基础 {BONUS_INFO[id].name} +{statValue(id, item.baseBonuses[id])}</li>)}</ul>
+        <ul className="affix-list" aria-label={`${item.affixes.length}条词条`}>{item.affixes.map(affix =>
+            <li className={`affix rarity-${affix.rarity}`} title={BONUS_INFO[affix.stat].detail} key={affix.stat}>
+                {BONUS_INFO[affix.stat].name} {affix.stat === "shieldRecovery" ? "−" : "+"}{statValue(affix.stat, affix.value)}
+            </li>)}</ul>
         {(onEquip || onDiscard) && <footer>
             {onEquip && <button className="equip-button" onClick={onEquip}>装备</button>}
             {onDiscard && <button className="discard-button" onClick={onDiscard}>丢弃</button>}
@@ -89,7 +81,7 @@ export function App({ session }: { readonly session: CombatSession }) {
     }, [inventoryOpen, session]);
 
     const inventoryBySlot = useMemo(() => {
-        const result: Record<EquipmentSlot, Equipment[]> = { weapon: [], armor: [], ring: [] };
+        const result = Object.fromEntries(EQUIPMENT_SLOTS.map(slot => [slot, [] as Equipment[]])) as Record<EquipmentSlot, Equipment[]>;
         for (const item of player?.inventory ?? []) result[item.slot].push(item);
         for (const slot of EQUIPMENT_SLOTS) result[slot].sort((first, second) => second.score - first.score || first.id - second.id);
         return result;
@@ -119,6 +111,28 @@ export function App({ session }: { readonly session: CombatSession }) {
                     <span><small>暴击</small><b>{Math.round(player.stats.criticalChance * 100)}%</b></span>
                     <span><small>护甲</small><b>{player.stats.armor.toFixed(1)}</b></span>
                 </div>
+                <div className="world-status" data-testid="region-status" data-difficulty={combat.region.difficulty}>
+                    <strong>{REGION_RULES[combat.region.difficulty].name}</strong><span>地域 Lv.{combat.region.level} · 金币 {player.gold}</span>
+                    <div className="region-map" aria-label="周边地域">
+                        {combat.nearbyRegions.map(region => <div key={`${region.x},${region.z}`}
+                            className={`region-cell region-${region.difficulty}${region.x === combat.region.x && region.z === combat.region.z ? " current" : ""}`}
+                            title={`${REGION_RULES[region.difficulty].name} · 等级 ${region.level} · 地域 (${region.x}, ${region.z})`}>
+                            <span>{region.difficulty === "horror" ? "☠ 恐怖" : region.difficulty === "hard" ? "困难" : "常规"}</span>
+                            {region.x === combat.region.x && region.z === combat.region.z && <b className="region-player" style={{
+                                left: `${(player.x - region.minX) / (COMBAT_CHUNK_SIZE * 3) * 100}%`,
+                                top: `${(player.z - region.minZ) / (COMBAT_CHUNK_SIZE * 3) * 100}%`
+                            }}>●</b>}
+                        </div>)}
+                    </div>
+                    <small>● 你的位置 · ☠ 领主地域 · 靠近宝箱自动开启</small>
+                    <span>免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}秒` : "就绪"} · 裂隙脉冲 {player.skillRemaining > 0 ? `${player.skillRemaining.toFixed(1)}秒` : "就绪"}</span>
+                    {combat.boss && <div className="boss-status"><b>荒原领主 · 距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</b>
+                        <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div>
+                    </div>}
+                </div>
+                <details className="all-stats"><summary>基础与超凡属性</summary>
+                    <dl>{BONUS_IDS.map(id => <div key={id} title={BONUS_INFO[id].detail}><dt>{BONUS_INFO[id].name}</dt><dd>{statValue(id, player.stats[id])}</dd></div>)}</dl>
+                </details>
                 <div className="attribute-heading"><span>角色属性</span>{player.unspentAttributePoints > 0 && <b>{player.unspentAttributePoints} 点可用</b>}</div>
                 <div className="attribute-list">
                     {ATTRIBUTE_IDS.map(attribute => <div className="attribute-row" key={attribute}>
@@ -150,14 +164,14 @@ export function App({ session }: { readonly session: CombatSession }) {
                     </div>)}
                 </section>
                 <div className="bag-items">
-                    {player.inventory.length === 0 && <div className="empty-bag"><span>◇</span><p>击杀怪物后，靠近发光装备即可拾取。</p></div>}
+                    {player.inventory.length === 0 && <div className="empty-bag"><span>◇</span><p>探索地域寻找宝箱，击杀怪物后靠近发光装备拾取。</p></div>}
                     {EQUIPMENT_SLOTS.flatMap(slot => inventoryBySlot[slot].map(item => <GearCard key={item.id} item={item} current={player.equipment[item.slot]}
                         onEquip={() => session.dispatch({ type: "equip", itemId: item.id })}
                         onDiscard={() => session.dispatch({ type: "discard", itemId: item.id })} />))}
                 </div>
             </aside>
 
-            <div className="control-hint"><span className="keys"><b>W</b><b>A</b><b>S</b><b>D</b></span><span>移动躲避 · 武器自动攻击最近目标 · 靠近光点拾取</span></div>
+            <div className="control-hint"><span className="keys"><b>W</b><b>A</b><b>S</b><b>D</b></span><span>探索地域 · 自动攻击与脉冲 · 靠近宝箱开启</span></div>
 
             <div className="notices" aria-live="polite">
                 {snapshot.notices.map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}

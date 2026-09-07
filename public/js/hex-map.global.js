@@ -16122,7 +16122,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.disposed = false;
       this.onContextMenu = (event) => event.preventDefault();
       this.onKeyDown = (event) => {
-        if (!this.isMovementKey(event.code) || this.isTextInput(event.target)) return;
+        if (!this.options.controls.enablePan || !this.isMovementKey(event.code) || this.isTextInput(event.target) || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
         this.movementKeys.add(event.code);
         event.preventDefault();
       };
@@ -16183,7 +16183,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       window.addEventListener("mouseup", this.onMouseUp);
     }
     update(dtSeconds) {
-      if (this.disposed || dtSeconds <= 0 || this.movementKeys.size === 0) return;
+      if (this.disposed || !this.options.controls.enablePan || dtSeconds <= 0 || this.movementKeys.size === 0) return;
       const forwardAmount = Number(this.movementKeys.has("KeyW")) - Number(this.movementKeys.has("KeyS"));
       const rightAmount = Number(this.movementKeys.has("KeyD")) - Number(this.movementKeys.has("KeyA"));
       if (forwardAmount === 0 && rightAmount === 0) return;
@@ -20100,6 +20100,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     get interactionStats() {
       return this.interactions.stats;
     }
+    /** Disable free keyboard/touch panning while an application owns the camera target. */
+    get cameraPanEnabled() {
+      return this.controls.enablePan;
+    }
+    set cameraPanEnabled(enabled) {
+      if (typeof enabled !== "boolean") throw new TypeError("cameraPanEnabled must be boolean");
+      this.controls.enablePan = enabled;
+      this.interactions.reset();
+    }
     getCameraTarget(target = new three.Vector3()) {
       target.copy(this.controls.target);
       target.x += this.renderOrigin.x;
@@ -20124,11 +20133,28 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const point = normalizeMapCoordinates(this.mapData, x, y);
       if (!point) throw new RangeError("camera target tile is outside the world bounds");
       const center = getHexCenter(point.x, point.y, this.options.size);
+      this.setCameraTarget(center.x, center.y);
+    }
+    /** Follow a continuous logical X/Z position while preserving camera offset and orientation. */
+    setCameraTarget(worldX, worldZ) {
+      const mapData = this.mapData;
+      const surface = this.worldSurface;
+      if (!mapData || !surface) throw new Error("A world must be loaded before moving the camera target");
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) throw new RangeError("Camera target must be finite");
+      if (!mapData.infinite && !pickTile(
+        this.logicalTargetScratch.set(worldX, 0, worldZ),
+        this.options.size,
+        mapData.w,
+        mapData.h,
+        mapData.wrapX ?? false,
+        mapData.wrapY ?? false
+      )) throw new RangeError("Camera target is outside the world bounds");
       const current = this.getCameraTarget(this.logicalTargetScratch);
-      const dx = center.x - current.x;
-      const targetY = this.worldSurface?.getTileCenterHeight(point.x, point.y) ?? 0;
+      const dx = worldX - current.x;
+      const dz = worldZ - current.z;
+      if (dx === 0 && dz === 0) return;
+      const targetY = surface.getWorldHeight(worldX, worldZ);
       const dy = targetY - current.y;
-      const dz = center.y - current.z;
       this.camera.position.x += dx;
       this.camera.position.y += dy;
       this.camera.position.z += dz;

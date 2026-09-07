@@ -30,11 +30,14 @@ import {
     MAX_PROJECTILES,
     type CombatRenderState
 } from "../core/CombatSimulation";
+import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 
 const ENEMY_COLORS = [new Color(0xc84b58), new Color(0xaa68f0), new Color(0xd17a37), new Color(0x4aaccb)] as const;
-const RARITY_COLORS = [new Color(0xd7d9dc), new Color(0x5fa8ff), new Color(0xc56cff), new Color(0xffa93a)] as const;
+const RARITY_COLORS = [new Color(0xd7d9dc), new Color(0x5fa8ff), new Color(0xc56cff), new Color(0xffa93a), new Color(0x70f5ed), new Color(0xff79dc)] as const;
+const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
 const ELITE = new Color(0xffc857);
+const BOSS = new Color(0xa922ee);
 
 /** Converts the map's flat-top even-q layout back from logical ground coordinates. */
 export function groundTile(point: { readonly x: number; readonly z: number }): { readonly x: number; readonly y: number } {
@@ -56,10 +59,15 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly root = new Group();
     private readonly player = new Group();
     private readonly playerBody = new Group();
+    private readonly shield = new Group();
+    private readonly pulse = new Group();
     private readonly enemies: InstancedMesh;
     private readonly projectiles: InstancedMesh;
     private readonly experience: InstancedMesh;
     private readonly loot: InstancedMesh;
+    private readonly chests: InstancedMesh;
+    private readonly chestLids: InstancedMesh;
+    private readonly chestLocks: InstancedMesh;
     private readonly geometries = [
         new IcosahedronGeometry(0.36, 1),
         new SphereGeometry(0.09, 8, 6),
@@ -70,7 +78,10 @@ export class CombatLayer implements WorldRenderLayer {
         new ConeGeometry(0.35, 0.68, 8, 1, true),
         new BoxGeometry(0.06, 0.08, 0.48),
         new RingGeometry(0.42, 0.49, 32),
-        new CircleGeometry(0.34, 24)
+        new CircleGeometry(0.34, 24),
+        new BoxGeometry(0.65, 0.36, 0.46),
+        new BoxGeometry(0.7, 0.13, 0.5),
+        new BoxGeometry(0.09, 0.16, 0.045)
     ] as const;
     private readonly enemyMaterial = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.78, metalness: 0.05 });
     private readonly projectileMaterial = new MeshBasicMaterial({ color: 0xffe79a });
@@ -95,11 +106,17 @@ export class CombatLayer implements WorldRenderLayer {
         this.projectiles = this.instance(this.geometries[1], this.projectileMaterial, MAX_PROJECTILES);
         this.experience = this.instance(this.geometries[2], this.experienceMaterial, MAX_EXPERIENCE_ORBS);
         this.loot = this.instance(this.geometries[3], this.lootMaterial, MAX_GROUND_EQUIPMENT);
+        this.chests = this.instance(this.geometries[10], this.lootMaterial, MAX_COMBAT_CHUNKS);
+        this.chestLids = this.instance(this.geometries[11], this.lootMaterial, MAX_COMBAT_CHUNKS);
+        this.chestLocks = this.instance(this.geometries[12], this.emberMaterial, MAX_COMBAT_CHUNKS);
         this.enemies.setColorAt(0, WHITE);
         this.loot.setColorAt(0, WHITE);
+        this.chests.setColorAt(0, WHITE);
+        this.chestLids.setColorAt(0, WHITE);
         this.enemies.count = this.projectiles.count = this.experience.count = this.loot.count = 0;
+        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.buildPlayer();
-        this.root.add(this.enemies, this.projectiles, this.experience, this.loot, this.player);
+        this.root.add(this.enemies, this.projectiles, this.experience, this.loot, this.chests, this.chestLids, this.chestLocks, this.player);
         resources.acquireRequired("combat-render-pool", {}, true, collectObject3DResourceAllocations([this.root]));
     }
 
@@ -119,24 +136,31 @@ export class CombatLayer implements WorldRenderLayer {
         this.playerBody.rotation.y = state.player.heading;
         this.playerBody.rotation.z = state.player.gameOver ? -Math.PI / 2 : 0;
         this.playerBody.visible = !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
+        this.shield.visible = state.player.shieldReady;
+        this.pulse.visible = state.player.pulse > 0;
+        this.pulse.scale.setScalar(1 + (1 - state.player.pulse) * 5.5);
 
-        this.enemies.count = state.enemies.count;
+        this.enemies.count = 0;
         let enemyColorsChanged = false;
         for (let index = 0; index < state.enemies.count; index += 1) {
+            if (!state.enemies.active[index]) continue;
+            const instance = this.enemies.count++;
             const x = state.enemies.previousX[index] + (state.enemies.x[index] - state.enemies.previousX[index]) * blend;
             const z = state.enemies.previousZ[index] + (state.enemies.z[index] - state.enemies.previousZ[index]) * blend;
             const scale = state.enemies.radius[index] / 0.3;
-            this.setInstance(this.enemies, index, x, this.height(x, z) + state.enemies.radius[index], z, scale, timestampMs * 0.001 + state.enemies.ids[index]);
+            this.setInstance(this.enemies, instance, x, this.height(x, z) + state.enemies.radius[index], z, scale, timestampMs * 0.001 + state.enemies.ids[index]);
             const colorState = state.enemies.kinds[index]
                 | state.enemies.elite[index] << 8
-                | Number(state.enemies.hitFlash[index] > 0) << 9;
-            if (this.enemyColorState[index] !== colorState) {
-                this.enemyColorState[index] = colorState;
+                | Number(state.enemies.hitFlash[index] > 0) << 9
+                | state.enemies.boss[index] << 10;
+            if (this.enemyColorState[instance] !== colorState) {
+                this.enemyColorState[instance] = colorState;
                 const base = ENEMY_COLORS[state.enemies.kinds[index]];
                 this.color.copy(base);
                 if (state.enemies.elite[index]) this.color.lerp(ELITE, 0.62);
+                if (state.enemies.boss[index]) this.color.copy(BOSS);
                 if (state.enemies.hitFlash[index] > 0) this.color.lerp(WHITE, 0.82);
-                this.enemies.setColorAt(index, this.color);
+                this.enemies.setColorAt(instance, this.color);
                 enemyColorsChanged = true;
             }
         }
@@ -177,10 +201,28 @@ export class CombatLayer implements WorldRenderLayer {
         }
         this.loot.instanceMatrix.needsUpdate = true;
         if (lootColorsChanged && this.loot.instanceColor) this.loot.instanceColor.needsUpdate = true;
+
+        this.chests.count = this.chestLids.count = this.chestLocks.count = state.chests.count;
+        for (let index = 0; index < state.chests.count; index += 1) {
+            const x = state.chests.x[index];
+            const z = state.chests.z[index];
+            const y = this.height(x, z);
+            this.setInstance(this.chests, index, x, y + 0.2, z, 1, 0);
+            this.setInstance(this.chestLids, index, x, y + 0.445, z, 1, 0);
+            this.setInstance(this.chestLocks, index, x, y + 0.34, z + 0.26, 1, 0);
+            this.color.copy(CHEST_COLORS[state.chests.tiers[index]]);
+            if (state.chests.tiers[index] === 4) this.color.setHSL((timestampMs * 0.00015 + index * 0.13) % 1, 0.85, 0.65);
+            this.chests.setColorAt(index, this.color);
+            this.chestLids.setColorAt(index, this.color);
+        }
+        for (const mesh of [this.chests, this.chestLids, this.chestLocks]) mesh.instanceMatrix.needsUpdate = true;
+        this.chests.instanceColor!.needsUpdate = true;
+        this.chestLids.instanceColor!.needsUpdate = true;
     }
 
     public reset(): void {
         this.enemies.count = this.projectiles.count = this.experience.count = this.loot.count = 0;
+        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.heightCache.clear();
         this.enemyColorState.fill(0xffff);
         this.lootColorState.fill(0xff);
@@ -236,11 +278,16 @@ export class CombatLayer implements WorldRenderLayer {
         const aura = new Mesh(this.geometries[8], this.auraMaterial);
         aura.position.y = 0.035;
         aura.rotation.x = -Math.PI / 2;
+        const pulse = new Mesh(this.geometries[8], this.auraMaterial);
+        pulse.position.y = 0.06;
+        pulse.rotation.x = -Math.PI / 2;
+        this.shield.add(aura);
+        this.pulse.add(pulse);
         const shadow = new Mesh(this.geometries[9], this.shadowMaterial);
         shadow.position.y = 0.02;
         shadow.rotation.x = -Math.PI / 2;
         this.playerBody.add(body, head, cloak, weapon);
-        this.player.add(shadow, aura, this.playerBody);
+        this.player.add(shadow, this.shield, this.pulse, this.playerBody);
     }
 
     private setInstance(mesh: InstancedMesh, index: number, x: number, y: number, z: number, scale: number, rotation: number): void {
