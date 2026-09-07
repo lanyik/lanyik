@@ -3,7 +3,7 @@ import { EMPTY_BONUSES } from "../src/core/Equipment";
 import { deriveStats, incomingDamage, outgoingDamage, reflectedDamage, rollAttack } from "../src/core/CombatStats";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 
-const attributes = { might: 5, vitality: 5, agility: 5, fortune: 5 };
+const attributes = { might: 5, vitality: 5, agility: 5, spirit: 5 };
 describe("combat attributes", () => {
     test("applies bonus multipliers after flat bases and transfers only specified overflow", () => {
         const stats = deriveStats(1, attributes, { ...EMPTY_BONUSES, maxHealth: 68, maxHealthBonus: 0.5,
@@ -19,7 +19,7 @@ describe("combat attributes", () => {
         expect(stats.lifesteal).toBe(0.3);
         expect(stats.attackRate).toBeCloseTo(4.14);
         expect(stats.skillInterval).toBeCloseTo(5 / 3);
-        expect(stats.criticalDamage).toBeCloseTo(2.6);
+        expect(stats.criticalDamage).toBeCloseTo(2.54);
     });
 
     test("critical excludes excellent; excellent uses its own multiplier", () => {

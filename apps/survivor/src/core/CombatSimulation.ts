@@ -6,16 +6,18 @@ import {
     sumEquipment,
     type AttributeId,
     type Attributes,
-    type Equipment,
     type EquippedItems
 } from "./Equipment";
 import { DeterministicRandom } from "./DeterministicRandom";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { deriveStats, incomingDamage, outgoingDamage, reflectedDamage, rollAttack, type DerivedStats } from "./CombatStats";
 import {
-    RegionalWorld, COMBAT_CHUNK_SIZE, MAX_COMBAT_CHUNKS, LOW_FREQUENCY_TICKS, WORLD_RENEWAL_TICKS,
+    RegionalWorld, MAX_COMBAT_CHUNKS, LOW_FREQUENCY_TICKS,
     REGION_RULES, CHEST_RULES, CHEST_TIERS, type RegionalChunk, type RegionInfo
 } from "./RegionalWorld";
+import { lootProfile, BASE_LOOT_PROFILE, type LootProfile } from "./Loot";
+import { ORB_UNLOCK_LEVELS, generateOrb, sumOrbs, type Orb } from "./Orbs";
+import { createConsumable, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
 
 export const MAX_ENEMIES = 640;
 export const MAX_PROJECTILES = 128;
@@ -26,6 +28,8 @@ export const INVENTORY_CAPACITY = 40;
 const STEP_SECONDS = COMBAT_STEP_MS / 1000;
 const PLAYER_RADIUS = 0.3;
 const ENEMY_LEASH_DISTANCE = 14;
+export const PULSE_MANA_COST = 18;
+export const CONSUMABLE_COOLDOWN = 4;
 
 export type EnemyKind = 0 | 1 | 2 | 3;
 
@@ -51,6 +55,7 @@ export interface MovementInput {
 }
 
 export interface PlayerSnapshot {
+    readonly mana: number;
     readonly x: number;
     readonly z: number;
     readonly health: number;
@@ -61,10 +66,14 @@ export interface PlayerSnapshot {
     readonly gold: number;
     readonly shieldRemaining: number;
     readonly skillRemaining: number;
+    readonly potionRemaining: number;
+    readonly autoCast: boolean;
+    readonly orbs: readonly (Orb | undefined)[];
+    readonly lootProfile: LootProfile;
     readonly attributes: Attributes;
     readonly stats: DerivedStats;
     readonly equipment: EquippedItems;
-    readonly inventory: readonly Equipment[];
+    readonly inventory: readonly InventoryItem[];
 }
 
 export interface CombatSnapshot {
@@ -90,6 +99,7 @@ export interface CombatNotice {
 }
 
 export interface PlayerRenderState {
+    readonly animationTime: number;
     readonly x: number;
     readonly z: number;
     readonly previousX: number;
@@ -109,6 +119,7 @@ export interface EnemyRenderBuffer {
     readonly elite: Uint8Array;
     readonly boss: Uint8Array;
     readonly active: Uint8Array;
+    readonly level: Uint32Array;
     readonly health: Float32Array;
     readonly maxHealth: Float32Array;
     readonly x: Float32Array;
@@ -141,6 +152,7 @@ export interface LootRenderBuffer {
     readonly count: number;
     readonly itemIds: Uint32Array;
     readonly rarities: Uint8Array;
+    readonly kinds: Uint8Array;
     readonly x: Float32Array;
     readonly z: Float32Array;
 }
@@ -178,8 +190,9 @@ class EnemyPool implements EnemyRenderBuffer {
     public readonly boss = new Uint8Array(MAX_ENEMIES);
     public readonly active = new Uint8Array(MAX_ENEMIES);
     public readonly homes: (RegionalChunk | undefined)[] = new Array(MAX_ENEMIES);
-    public readonly slots = new Uint8Array(MAX_ENEMIES);
     public readonly maxHealth = new Float32Array(MAX_ENEMIES);
+    public readonly level = new Uint32Array(MAX_ENEMIES);
+    public readonly regions: (RegionInfo | undefined)[] = new Array(MAX_ENEMIES);
     public readonly homeX = new Float32Array(MAX_ENEMIES);
     public readonly homeZ = new Float32Array(MAX_ENEMIES);
     public readonly x = new Float32Array(MAX_ENEMIES);
@@ -193,7 +206,7 @@ class EnemyPool implements EnemyRenderBuffer {
     public readonly hitFlash = new Float32Array(MAX_ENEMIES);
 
     public add(id: number, kind: EnemyKind, elite: boolean, boss: boolean, x: number, z: number,
-        definition: EnemyDefinition, scale: number, home: RegionalChunk, slot: number): boolean {
+        definition: EnemyDefinition, scale: number, home: RegionalChunk, region: RegionInfo, level: number): boolean {
         if (this.count === MAX_ENEMIES) return false;
         const index = this.count++;
         this.ids[index] = id;
@@ -202,7 +215,8 @@ class EnemyPool implements EnemyRenderBuffer {
         this.boss[index] = Number(boss);
         this.active[index] = Number(home.lod === "active");
         this.homes[index] = home;
-        this.slots[index] = slot;
+        this.regions[index] = region;
+        this.level[index] = level;
         this.homeX[index] = x;
         this.homeZ[index] = z;
         this.x[index] = this.previousX[index] = x;
@@ -217,7 +231,7 @@ class EnemyPool implements EnemyRenderBuffer {
 
     public remove(index: number): void {
         const last = --this.count;
-        if (index === last) { this.homes[last] = undefined; return; }
+        if (index === last) { this.homes[last] = this.regions[last] = undefined; return; }
         this.ids[index] = this.ids[last];
         this.kinds[index] = this.kinds[last];
         this.elite[index] = this.elite[last];
@@ -226,7 +240,9 @@ class EnemyPool implements EnemyRenderBuffer {
         this.maxHealth[index] = this.maxHealth[last];
         this.homes[index] = this.homes[last];
         this.homes[last] = undefined;
-        this.slots[index] = this.slots[last];
+        this.regions[index] = this.regions[last];
+        this.regions[last] = undefined;
+        this.level[index] = this.level[last];
         this.homeX[index] = this.homeX[last];
         this.homeZ[index] = this.homeZ[last];
         this.x[index] = this.x[last];
@@ -316,14 +332,16 @@ class LootPool implements LootRenderBuffer {
     public count = 0;
     public readonly itemIds = new Uint32Array(MAX_GROUND_EQUIPMENT);
     public readonly rarities = new Uint8Array(MAX_GROUND_EQUIPMENT);
+    public readonly kinds = new Uint8Array(MAX_GROUND_EQUIPMENT);
     public readonly x = new Float32Array(MAX_GROUND_EQUIPMENT);
     public readonly z = new Float32Array(MAX_GROUND_EQUIPMENT);
 
-    public add(item: Equipment, x: number, z: number): boolean {
+    public add(item: InventoryItem, x: number, z: number): boolean {
         if (this.count === MAX_GROUND_EQUIPMENT) return false;
         const index = this.count++;
         this.itemIds[index] = item.id;
         this.rarities[index] = RARITIES.indexOf(item.rarity);
+        this.kinds[index] = item.kind === "orb" ? 1 : item.kind === "consumable" ? 2 : 0;
         this.x[index] = x;
         this.z[index] = z;
         return true;
@@ -334,13 +352,14 @@ class LootPool implements LootRenderBuffer {
         if (index === last) return;
         this.itemIds[index] = this.itemIds[last];
         this.rarities[index] = this.rarities[last];
+        this.kinds[index] = this.kinds[last];
         this.x[index] = this.x[last];
         this.z[index] = this.z[last];
     }
 }
 
-function experienceForLevel(level: number): number {
-    return Math.round(24 + level * 13 + level * level * 1.8);
+export function experienceForLevel(level: number): number {
+    return Math.round(20 + level * 18 + level * level);
 }
 
 function segmentDistanceSquared(
@@ -375,13 +394,15 @@ export class CombatSimulation {
     private readonly projectiles = new ProjectilePool();
     private readonly experienceOrbs = new ExperiencePool();
     private readonly loot = new LootPool();
-    private readonly groundItems = new Map<number, Equipment>();
+    private readonly groundItems = new Map<number, InventoryItem>();
     private readonly world: RegionalWorld;
     private readonly chests = new ChestPool();
     private currentRegion: RegionInfo;
-    private inventory: Equipment[] = [];
+    private inventory: InventoryItem[] = [];
+    private readonly orbs: (Orb | undefined)[] = new Array(ORB_UNLOCK_LEVELS.length);
+    private lootProfile = BASE_LOOT_PROFILE;
     private equipped: EquippedItems = { weapon: createStarterEquipment() };
-    private attributes: Record<AttributeId, number> = { might: 5, vitality: 5, agility: 5, fortune: 5 };
+    private attributes: Record<AttributeId, number> = { might: 5, vitality: 5, agility: 5, spirit: 5 };
     private stats: DerivedStats;
     private tickValue = 0;
     private killsValue = 0;
@@ -395,6 +416,8 @@ export class CombatSimulation {
     private skillCooldown = 0;
     private shieldCooldown = 0;
     private pulseRemaining = 0;
+    private potionCooldown = 0;
+    private autoCast = true;
     private gold = 0;
     private openedChests = 0;
     private damageImmunity = 0;
@@ -405,11 +428,13 @@ export class CombatSimulation {
     private previousPlayerZ: number;
     private heading = 0;
     private health: number;
+    private mana: number;
     private level = 1;
     private experience = 0;
     private unspentAttributePoints = 0;
     private gameOverValue = false;
     private readonly playerRenderState: MutablePlayerRenderState = {
+        animationTime: 0,
         x: 0,
         z: 0,
         previousX: 0,
@@ -439,7 +464,8 @@ export class CombatSimulation {
         this.playerZ = this.previousPlayerZ = start.z;
         this.stats = this.calculateStats();
         this.health = this.stats.maxHealth;
-        this.world.synchronize(start.x, start.z, 0);
+        this.mana = this.stats.maxMana;
+        this.world.synchronize(start.x, start.z);
         this.spawnEnemies();
         this.refreshChests();
     }
@@ -462,18 +488,21 @@ export class CombatSimulation {
         this.damageImmunity = Math.max(0, this.damageImmunity - STEP_SECONDS);
         this.shieldCooldown = Math.max(0, this.shieldCooldown - STEP_SECONDS);
         this.pulseRemaining = Math.max(0, this.pulseRemaining - STEP_SECONDS);
+        this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
+        this.skillCooldown = Math.max(0, this.skillCooldown - STEP_SECONDS);
         this.movePlayer(input);
-        const shifted = this.world.synchronize(this.playerX, this.playerZ, this.tickValue);
-        if (shifted) this.reconcileRegions();
-        if (shifted || this.tickValue % LOW_FREQUENCY_TICKS === 0) this.spawnEnemies();
+        const shifted = this.world.synchronize(this.playerX, this.playerZ);
+        if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
+        this.updateCurrentRegion();
         this.fireWeapon();
         this.advanceProjectiles();
-        this.castSkill();
+        if (this.autoCast) this.castSkill();
         this.advanceEnemies();
         if (this.gameOverValue) return;
         this.advanceExperience();
         this.collectEquipment();
         this.openNearbyChest();
+        if (this.tickValue % 25 === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
         if (this.tickValue % 25 === 0 && this.stats.healthRegen > 0 && this.health < this.stats.maxHealth) {
             this.health = Math.min(this.stats.maxHealth, this.health + this.stats.healthRegen);
             this.markChanged();
@@ -487,6 +516,7 @@ export class CombatSimulation {
             x: this.playerX,
             z: this.playerZ,
             health: this.health,
+            mana: this.mana,
             level: this.level,
             experience: this.experience,
             experienceToLevel: experienceForLevel(this.level),
@@ -494,6 +524,10 @@ export class CombatSimulation {
             gold: this.gold,
             shieldRemaining: this.shieldCooldown,
             skillRemaining: this.skillCooldown,
+            potionRemaining: this.potionCooldown,
+            autoCast: this.autoCast,
+            orbs: Object.freeze([...this.orbs]),
+            lootProfile: this.lootProfile,
             attributes: Object.freeze({ ...this.attributes }),
             stats: this.stats,
             equipment,
@@ -502,14 +536,10 @@ export class CombatSimulation {
         const chunks = { active: 0, low: 0, static: 0, total: this.world.chunks.size };
         for (const chunk of this.world.chunks.values()) if (chunk.lod !== "unloaded") chunks[chunk.lod] += 1;
         let boss: CombatSnapshot["boss"];
-        const nearbyRegions: RegionInfo[] = [];
-        for (let dz = -1; dz <= 1; dz += 1) for (let dx = -1; dx <= 1; dx += 1) {
-            nearbyRegions.push(this.world.regionAt(this.currentRegion.minX + (dx + 0.5) * COMBAT_CHUNK_SIZE * 3,
-                this.currentRegion.minZ + (dz + 0.5) * COMBAT_CHUNK_SIZE * 3));
-        }
+        const nearbyRegions = this.world.nearbyRegions(this.currentRegion);
         for (let index = 0; index < this.enemies.count; index += 1) {
-            const home = this.enemies.homes[index]!;
-            if (this.enemies.boss[index] && home.region.x === this.currentRegion.x && home.region.z === this.currentRegion.z) {
+            const region = this.enemies.regions[index]!;
+            if (this.enemies.boss[index] && region.x === this.currentRegion.x && region.z === this.currentRegion.z) {
                 boss = Object.freeze({ x: this.enemies.x[index], z: this.enemies.z[index], health: this.enemies.health[index], maxHealth: this.enemies.maxHealth[index] });
                 break;
             }
@@ -532,6 +562,7 @@ export class CombatSimulation {
     }
 
     public getRenderState(): CombatRenderState {
+        this.playerRenderState.animationTime = this.tick * STEP_SECONDS;
         const state = this.playerRenderState;
         state.x = this.playerX;
         state.z = this.playerZ;
@@ -570,6 +601,7 @@ export class CombatSimulation {
         const index = this.inventory.findIndex(item => item.id === itemId);
         if (index < 0) return { ok: false, message: "背包中没有这件装备" };
         const item = this.inventory[index];
+        if (item.kind !== "equipment") return { ok: false, message: "请选择装备" };
         const previous = this.equipped[item.slot];
         const nextInventory = [...this.inventory];
         nextInventory.splice(index, 1);
@@ -594,6 +626,71 @@ export class CombatSimulation {
         return { ok: true, message: "装备已丢弃" };
     }
 
+    public equipOrb(itemId: number, socket: number): { readonly ok: boolean; readonly message: string } {
+        if (this.gameOverValue) return { ok: false, message: "战斗已结束" };
+        if (!Number.isInteger(socket) || socket < 0 || socket >= ORB_UNLOCK_LEVELS.length) return { ok: false, message: "无效宝珠槽" };
+        if (this.level < ORB_UNLOCK_LEVELS[socket]) return { ok: false, message: "宝珠槽尚未解锁" };
+        const index = this.inventory.findIndex(item => item.id === itemId);
+        const item = this.inventory[index];
+        if (!item || item.kind !== "orb") return { ok: false, message: "背包中没有这颗宝珠" };
+        const previous = this.orbs[socket];
+        this.inventory.splice(index, 1);
+        if (previous) this.inventory.push(previous);
+        this.orbs[socket] = item;
+        this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.inventoryFullNotified = false;
+        this.pushNotice("loot", `已嵌入 ${item.name}`);
+        this.markChanged();
+        return { ok: true, message: "宝珠已嵌入" };
+    }
+
+    public unequip(slot: keyof EquippedItems): void {
+        const item = this.equipped[slot];
+        if (this.gameOverValue || !item) return;
+        if (this.inventory.length === INVENTORY_CAPACITY) { this.notifyInventoryFull(); return; }
+        this.inventory.push(item);
+        const next = { ...this.equipped };
+        delete next[slot];
+        this.equipped = next;
+        this.recalculateStats(false);
+        this.markChanged();
+    }
+
+    public removeOrb(socket: number): void {
+        const orb = this.orbs[socket];
+        if (this.gameOverValue || !orb) return;
+        if (this.inventory.length === INVENTORY_CAPACITY) { this.notifyInventoryFull(); return; }
+        this.inventory.push(orb);
+        this.orbs[socket] = undefined;
+        this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.markChanged();
+    }
+
+    public toggleAutoCast(): void {
+        if (this.gameOverValue) return;
+        this.autoCast = !this.autoCast;
+        this.markChanged();
+    }
+
+    public castPulse(): void {
+        if (this.gameOverValue) return;
+        if (this.castSkill(true)) this.markChanged();
+    }
+
+    public useConsumable(effect: ConsumableEffect, itemId?: number): void {
+        if (this.gameOverValue || this.potionCooldown > 0) return;
+        if (effect === "health" ? this.health >= this.stats.maxHealth : this.mana >= this.stats.maxMana) return;
+        const index = this.inventory.findIndex(item => item.kind === "consumable" && item.effect === effect && (itemId === undefined || item.id === itemId));
+        const item = this.inventory[index];
+        if (!item || item.kind !== "consumable") return;
+        this.inventory.splice(index, 1);
+        if (effect === "health") this.health = Math.min(this.stats.maxHealth, this.health + item.restore * (1 + this.stats.regenBonus));
+        else this.mana = Math.min(this.stats.maxMana, this.mana + item.restore);
+        this.potionCooldown = CONSUMABLE_COOLDOWN;
+        this.inventoryFullNotified = false;
+        this.markChanged();
+    }
+
     private movePlayer(input: MovementInput): void {
         if (!input.active) return;
         const length = Math.hypot(input.x, input.z);
@@ -608,29 +705,16 @@ export class CombatSimulation {
 
     private spawnEnemies(): void {
         for (const home of this.world.chunks.values()) {
-            const rules = REGION_RULES[home.region.difficulty];
-            for (let slot = 0; slot < home.enemyIds.length; slot += 1) {
-                if (home.enemyIds[slot] || home.respawnAt[slot] > this.tickValue) continue;
-                // Static content is initialized once, then has no respawn activity.
-                if (home.lod === "static" && home.respawnAt[slot] !== 0) continue;
-                const boss = home.hasBoss && slot === rules.population;
-                if (boss && this.world.isClaimed("boss", home)) continue;
-                const random = home.random;
-                const x = boss ? home.region.bossX : this.world.chunkX(home.x + 0.08 + random.next() * 0.84);
-                const z = boss ? home.region.bossZ : this.world.chunkZ(home.z + 0.08 + random.next() * 0.84);
-                const safeDistance = this.tickValue === 0 ? 3 : this.stats.attackRange + 0.5;
-                if (Math.hypot(x - this.playerX, z - this.playerZ) < safeDistance) {
-                    home.respawnAt[slot] = this.tickValue + 50;
-                    continue;
+            for (let slot = 0; slot < home.spawns.length; slot += 1) {
+                if (home.spawned[slot]) continue;
+                home.spawned[slot] = 1;
+                const spawn = home.spawns[slot];
+                if (Math.hypot(spawn.x - this.playerX, spawn.z - this.playerZ) < 3) continue;
+                const scale = REGION_RULES[spawn.region.difficulty].scale * (1 + (spawn.level - 1) * 0.15);
+                if (!this.enemies.add(this.nextEntityId++, spawn.kind, spawn.elite, spawn.boss, spawn.x, spawn.z,
+                    ENEMY_DEFINITIONS[spawn.kind], scale, home, spawn.region, spawn.level)) {
+                    throw new Error("Regional population exceeds the enemy pool budget");
                 }
-                const kind: EnemyKind = boss ? 3 : random.pick(home.region.difficulty === "normal"
-                    ? [0, 0, 1] as const : home.region.difficulty === "hard" ? [0, 1, 2] as const : [1, 2, 3] as const);
-                const elite = boss || random.chance(rules.eliteChance);
-                const scale = rules.scale * (1 + (home.region.level - rules.level) * 0.12);
-                const id = this.nextEntityId;
-                if (!this.enemies.add(id, kind, elite, boss, x, z, ENEMY_DEFINITIONS[kind], scale, home, slot)) return;
-                this.nextEntityId += 1;
-                home.enemyIds[slot] = id;
             }
         }
     }
@@ -653,6 +737,9 @@ export class CombatSimulation {
                 this.loot.remove(index);
             } else index += 1;
         }
+    }
+
+    private updateCurrentRegion(): void {
         const region = this.world.regionAt(this.playerX, this.playerZ);
         if (region.x !== this.currentRegion.x || region.z !== this.currentRegion.z) {
             this.currentRegion = region;
@@ -665,7 +752,7 @@ export class CombatSimulation {
         this.chests.count = 0;
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.lod !== "active" || this.world.isClaimed("chest", chunk)) continue;
+            if (!chest || chunk.lod !== "active" || chunk.chestOpened) continue;
             const index = this.chests.count++;
             this.chests.x[index] = chest.x;
             this.chests.z[index] = chest.z;
@@ -676,22 +763,23 @@ export class CombatSimulation {
     private openNearbyChest(): void {
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.lod !== "active" || this.world.isClaimed("chest", chunk)) continue;
+            if (!chest || chunk.lod !== "active" || chunk.chestOpened) continue;
             if (Math.hypot(chest.x - this.playerX, chest.z - this.playerZ) > 0.95) continue;
-            if (this.inventory.length >= INVENTORY_CAPACITY) {
+            const rewardCount = chest.hasOrb ? 3 : 2;
+            if (this.inventory.length + rewardCount > INVENTORY_CAPACITY) {
                 this.notifyInventoryFull();
                 break;
             }
             const rules = CHEST_RULES[chest.tier];
-            const random = this.world.chestRandom(chunk);
-            const item = generateEquipment(random, this.nextItemId++, chunk.region.level + CHEST_TIERS.indexOf(chest.tier),
-                this.attributes.fortune * 0.006, rules.rarity);
+            const item = generateEquipment(this.random, this.nextItemId++, chest.region.level, this.lootProfile, rules.rarity);
             this.inventory.push(item);
+            this.inventory.push(createConsumable(this.nextItemId++, chest.region.level, this.random.chance(0.5) ? "health" : "mana"));
+            if (chest.hasOrb) this.inventory.push(generateOrb(this.random, this.nextItemId++, chest.region.level, rules.rarity));
             this.gold += Math.round(rules.gold * (1 + this.stats.goldBonus));
-            this.world.claim("chest", chunk);
+            chunk.chestOpened = true;
             this.openedChests += 1;
             this.inventoryFullNotified = false;
-            this.pushNotice("loot", "打开" + rules.name + " · " + item.name);
+            this.pushNotice("loot", rules.name + " · " + item.name);
             this.markChanged();
             break;
         }
@@ -820,16 +908,12 @@ export class CombatSimulation {
     }
 
     private retireEnemy(index: number): void {
-        const home = this.enemies.homes[index]!;
-        const slot = this.enemies.slots[index];
-        home.enemyIds[slot] = 0;
-        home.respawnAt[slot] = this.tickValue + REGION_RULES[home.region.difficulty].respawnTicks;
+        // A consumed population slot stays empty until its whole chunk is unloaded.
         this.enemies.remove(index);
     }
 
-    private castSkill(): void {
-        this.skillCooldown = Math.max(0, this.skillCooldown - STEP_SECONDS);
-        if (this.skillCooldown > 0) return;
+    private castSkill(force = false): boolean {
+        if (this.skillCooldown > 0 || this.mana < PULSE_MANA_COST) return false;
         let hit = false;
         let index = 0;
         while (index < this.enemies.count) {
@@ -841,10 +925,13 @@ export class CombatSimulation {
             hit = true;
             if (!this.hitEnemy(index, rollAttack(this.stats, this.random, 1.3).damage)) index += 1;
         }
-        if (hit) {
+        if (hit || force) {
+            this.mana -= PULSE_MANA_COST;
             this.skillCooldown = this.stats.skillInterval;
             this.pulseRemaining = 0.35;
+            return true;
         }
+        return false;
     }
 
     private hitEnemy(index: number, rolledDamage: number): boolean {
@@ -945,31 +1032,32 @@ export class CombatSimulation {
     }
 
     private killEnemy(index: number): void {
-        const x = this.enemies.x[index];
-        const z = this.enemies.z[index];
+        const x = this.enemies.x[index], z = this.enemies.z[index];
         const kind = this.enemies.kinds[index] as EnemyKind;
         const elite = this.enemies.elite[index] !== 0;
         const boss = this.enemies.boss[index] !== 0;
-        const home = this.enemies.homes[index]!;
-        const experience = ENEMY_DEFINITIONS[kind].experience * (boss ? 25 : elite ? 3 : 1);
-        if (boss) {
-            this.world.claim("boss", home);
-            home.respawnAt[this.enemies.slots[index]] = (Math.floor(this.tickValue / WORLD_RENEWAL_TICKS) + 1) * WORLD_RENEWAL_TICKS;
-            home.enemyIds[this.enemies.slots[index]] = 0;
-            this.enemies.remove(index);
-            this.pushNotice("level", "击败荒原领主 · 恐怖地域暂时平息");
-        } else this.retireEnemy(index);
+        const level = this.enemies.level[index];
+        const experience = ENEMY_DEFINITIONS[kind].experience * (1 + (level - 1) * 0.15) * (boss ? 15 : elite ? 2 : 1);
+        this.retireEnemy(index);
         this.killsValue += 1;
-        this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * home.region.level * (1 + this.stats.goldBonus));
+        this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * level * (1 + this.stats.goldBonus));
         this.experienceOrbs.add(x, z, experience);
-        const dropChance = boss ? 1 : Math.min(0.85, (elite ? 0.62 : 0.09) * (1 + this.attributes.fortune * 0.025));
-        if (this.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(dropChance)) {
-            const itemLevel = Math.max(1, home.region.level + this.random.integer(3) - 1);
-            const item = generateEquipment(this.random, this.nextItemId++, itemLevel, this.attributes.fortune * 0.006, boss ? "legendary" : "common");
-            if (!this.loot.add(item, x, z)) throw new Error("Ground equipment capacity changed during drop creation");
-            this.groundItems.set(item.id, item);
+        if (boss && this.loot.count < MAX_GROUND_EQUIPMENT) {
+            this.dropItem(generateOrb(this.random, this.nextItemId++, level, "rare"), x, z);
+        }
+        const chance = boss ? 1 : elite ? this.lootProfile.eliteDropChance : this.lootProfile.normalDropChance;
+        if (this.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(chance)) {
+            this.dropItem(generateEquipment(this.random, this.nextItemId++, level, this.lootProfile, boss ? "legendary" : "common"), x, z);
+        }
+        if (this.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(0.14)) {
+            this.dropItem(createConsumable(this.nextItemId++, level, this.random.chance(0.6) ? "health" : "mana"), x, z);
         }
         this.markChanged();
+    }
+
+    private dropItem(item: InventoryItem, x: number, z: number): void {
+        if (!this.loot.add(item, x, z)) throw new Error("Ground loot capacity changed during creation");
+        this.groundItems.set(item.id, item);
     }
 
     private gainExperience(amount: number): void {
@@ -994,12 +1082,14 @@ export class CombatSimulation {
 
     private recalculateStats(healGrowth: boolean): void {
         const previousMaximum = this.stats.maxHealth;
+        const previousMana = this.stats.maxMana;
         this.stats = this.calculateStats();
         // Preserve health ratio when switching gear: low-health swaps cannot manufacture healing.
         this.health = Math.min(this.stats.maxHealth, (previousMaximum === this.stats.maxHealth ? this.health : this.health / previousMaximum * this.stats.maxHealth)
             + (healGrowth ? this.stats.maxHealth * 0.12 * (1 + this.stats.regenBonus) : 0));
         this.shieldCooldown = Math.min(this.shieldCooldown, this.stats.shieldRecovery);
         this.skillCooldown = Math.min(this.skillCooldown, this.stats.skillInterval);
+        this.mana = this.mana / previousMana * this.stats.maxMana;
     }
 
     private pushNotice(tone: CombatNotice["tone"], message: string): void {
@@ -1016,5 +1106,5 @@ const ATTRIBUTE_NAMES: Readonly<Record<AttributeId, string>> = Object.freeze({
     might: "力量",
     vitality: "体魄",
     agility: "敏捷",
-    fortune: "寻宝"
+    spirit: "精神"
 });

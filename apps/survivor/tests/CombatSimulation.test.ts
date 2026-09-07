@@ -73,7 +73,7 @@ describe("CombatSimulation", () => {
         expect(before.player.unspentAttributePoints).toBeGreaterThan(0);
         expect(before.player.inventory.length).toBeGreaterThan(0);
 
-        const item = before.player.inventory[0];
+        const item = before.player.inventory.find(item => item.kind === "equipment")!;
         const previous = before.player.equipment[item.slot];
         expect(combat.equip(item.id).ok).toBe(true);
         const equipped = combat.getSnapshot();
@@ -157,7 +157,7 @@ describe("CombatSimulation", () => {
                 [before.ids[index], { x: before.x[index], z: before.z[index] }] as const));
             combat.step({ x: 1, z: 0, active: true });
             const player = combat.getRenderState().player;
-            world.synchronize(player.x, player.z, combat.tick);
+            world.synchronize(player.x, player.z);
             const after = combat.getRenderState().enemies;
             for (let index = 0; index < after.count; index += 1) {
                 const previous = positions.get(after.ids[index]);

@@ -25,7 +25,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Game application | A regional survivor RPG with four simulation rings, three region difficulties and bosses, five chest tiers, eleven equipment slots, independent stars/quality and advanced combat attributes |
+| Game application | A survivor RPG with radial hex regions, four residency rings, animated KayKit actors, separate character/bag windows, mana skills, eleven equipment slots and six level-unlocked treasure-orb sockets |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.

@@ -1,4 +1,5 @@
-import type { AttributeId } from "../core/Equipment";
+import type { AttributeId, EquipmentSlot } from "../core/Equipment";
+import type { ConsumableEffect } from "../core/InventoryItem";
 import { CombatSimulation, type CombatNotice, type CombatSnapshot } from "../core/CombatSimulation";
 import { FixedStepClock } from "../core/FixedStepClock";
 import type { CombatStart, CombatView } from "./CombatView";
@@ -24,6 +25,12 @@ export type SessionCommand =
     | { readonly type: "restart" }
     | { readonly type: "allocate"; readonly attribute: AttributeId }
     | { readonly type: "equip"; readonly itemId: number }
+    | { readonly type: "unequip"; readonly slot: EquipmentSlot }
+    | { readonly type: "equip-orb"; readonly itemId: number; readonly socket: number }
+    | { readonly type: "remove-orb"; readonly socket: number }
+    | { readonly type: "cast-pulse" }
+    | { readonly type: "toggle-autocast" }
+    | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
     | { readonly type: "discard"; readonly itemId: number };
 
 const UI_PUBLISH_INTERVAL_MS = 100;
@@ -129,6 +136,16 @@ export class CombatSession {
                 break;
             case "equip":
                 this.simulation.equip(command.itemId);
+                break;
+            case "unequip": this.simulation.unequip(command.slot); break;
+            case "equip-orb": this.simulation.equipOrb(command.itemId, command.socket); break;
+            case "remove-orb": this.simulation.removeOrb(command.socket); break;
+            case "cast-pulse":
+                if (!this.paused && !this.hidden) this.simulation.castPulse();
+                break;
+            case "toggle-autocast": this.simulation.toggleAutoCast(); break;
+            case "use-consumable":
+                if (!this.paused && !this.hidden) this.simulation.useConsumable(command.effect, command.itemId);
                 break;
             case "discard":
                 this.simulation.discard(command.itemId);

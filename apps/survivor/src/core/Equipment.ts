@@ -1,4 +1,6 @@
 import { DeterministicRandom } from "./DeterministicRandom";
+import { RARITIES, rollRarity, rollStars, type Rarity, type LootProfile } from "./Loot";
+export { RARITIES, RARITY_NAMES, type Rarity } from "./Loot";
 
 export const SLOT_NAMES = Object.freeze({
     weapon: "武器", head: "头盔", chest: "胸甲", legs: "腿甲", boots: "鞋靴",
@@ -6,12 +8,7 @@ export const SLOT_NAMES = Object.freeze({
 });
 export type EquipmentSlot = keyof typeof SLOT_NAMES;
 export const EQUIPMENT_SLOTS = Object.freeze(Object.keys(SLOT_NAMES) as EquipmentSlot[]);
-export const RARITIES = ["common", "magic", "rare", "legendary", "diamond", "rainbow"] as const;
-export type Rarity = typeof RARITIES[number];
-export const RARITY_NAMES: Readonly<Record<Rarity, string>> = Object.freeze({
-    common: "白", magic: "蓝", rare: "紫", legendary: "金", diamond: "钻", rainbow: "彩"
-});
-export const ATTRIBUTE_IDS = ["might", "vitality", "agility", "fortune"] as const;
+export const ATTRIBUTE_IDS = ["might", "vitality", "agility", "spirit"] as const;
 export type AttributeId = typeof ATTRIBUTE_IDS[number];
 export type Attributes = Readonly<Record<AttributeId, number>>;
 
@@ -72,6 +69,7 @@ export interface EquipmentAffix {
     readonly rarity: Rarity;
 }
 export interface Equipment {
+    readonly kind: "equipment";
     readonly id: number;
     readonly slot: EquipmentSlot;
     readonly rarity: Rarity;
@@ -94,6 +92,14 @@ const BASES: Readonly<Record<EquipmentSlot, readonly [BonusId, number, number][]
 };
 const QUALITY_POWER = [1, 1.3, 1.7, 2.2, 2.9, 3.8] as const;
 const PREFIXES = ["狼印", "余烬", "风暴", "冷月", "猩红", "幽影"] as const;
+const ITEM_NAMES: Readonly<Record<EquipmentSlot, readonly string[]>> = Object.freeze({
+    weapon: ["猎手短弩", "符文长弓", "月刃", "巡林战杖"], head: ["游侠兜帽", "骨纹战盔", "星铁面甲", "灵纹冠冕"],
+    chest: ["巡林皮甲", "守望锁甲", "黑曜胸铠", "符文法衣"], legs: ["猎手护腿", "铁卫胫甲", "暮色战裙", "星纹腿甲"],
+    boots: ["轻羽靴", "铁卫战靴", "踏焰靴", "踏星履"], arms: ["鹿皮臂甲", "尖刺护臂", "铁卫臂铠", "灵纹臂甲"],
+    hands: ["游侠手套", "钢铁护手", "符文掌套", "月影手甲"], ring: ["琥珀戒指", "秘银指环", "黑曜骨戒", "星辉指环"],
+    necklace: ["狼牙项链", "守望吊坠", "龙骨项饰", "灵光项链"], bracelet: ["铜纹手镯", "秘银腕环", "骨纹腕镯", "月华手镯"],
+    charm: ["猎手徽记", "暮光护符", "先祖雕像", "星图罗盘"]
+});
 
 function round(value: number): number { return Math.round(value * 1000) / 1000; }
 
@@ -112,7 +118,7 @@ function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 
     const baseBonuses = equipmentBase(slot, itemLevel);
     const bonuses = { ...baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ id, slot, rarity, stars, itemLevel, name, baseBonuses,
+    return Object.freeze({ kind: "equipment", id, slot, rarity, stars, itemLevel, name, baseBonuses,
         affixes: Object.freeze(affixes), bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 
@@ -124,18 +130,13 @@ export function createStarterEquipment(): Equipment {
 }
 
 export function generateEquipment(random: DeterministicRandom, id: number, itemLevel: number,
-    qualityBonus: number, minimumRarity: Rarity = "common"): Equipment {
+    profile: LootProfile, minimumRarity: Rarity = "common"): Equipment {
     if (!Number.isSafeInteger(id) || id <= 1) throw new RangeError("Equipment id must be a safe integer above one");
     if (!Number.isSafeInteger(itemLevel) || itemLevel <= 0) throw new RangeError("Item level must be a positive safe integer");
-    if (!Number.isFinite(qualityBonus) || qualityBonus < 0) throw new RangeError("Quality bonus must be finite and nonnegative");
-    const minimum = RARITIES.indexOf(minimumRarity);
-    if (minimum < 0) throw new RangeError("Unknown minimum rarity");
     const slot = random.pick(EQUIPMENT_SLOTS);
-    const roll = random.next() / (1 + Math.min(0.35, qualityBonus));
-    const rarityIndex = Math.max(minimum, roll < 0.002 ? 5 : roll < 0.012 ? 4 : roll < 0.05 ? 3 : roll < 0.2 ? 2 : roll < 0.5 ? 1 : 0);
-    const rarity = RARITIES[rarityIndex];
-    const starRoll = random.next();
-    const stars = starRoll < 0.12 ? 3 : starRoll < 0.42 ? 2 : 1;
+    const rarity = rollRarity(random, profile, minimumRarity);
+    const rarityIndex = RARITIES.indexOf(rarity);
+    const stars = rollStars(random, profile);
     const candidates = [...BONUS_IDS];
     const affixes: EquipmentAffix[] = [];
     for (let index = 0; index < stars + 1; index += 1) {
@@ -143,7 +144,7 @@ export function generateEquipment(random: DeterministicRandom, id: number, itemL
         const value = round(BONUS_INFO[stat].value * QUALITY_POWER[rarityIndex] * (0.86 + random.next() * 0.28));
         affixes.push(Object.freeze({ stat, value, rarity }));
     }
-    return assemble(id, slot, rarity, stars, itemLevel, `${random.pick(PREFIXES)}${SLOT_NAMES[slot]}`, affixes);
+    return assemble(id, slot, rarity, stars, itemLevel, `${random.pick(PREFIXES)}${random.pick(ITEM_NAMES[slot])}`, affixes);
 }
 
 export function sumEquipment(items: EquippedItems): EquipmentBonuses {

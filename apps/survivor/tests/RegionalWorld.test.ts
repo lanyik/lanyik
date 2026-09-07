@@ -1,56 +1,54 @@
 import { describe, expect, test } from "vitest";
-import { RegionalWorld, REGION_RULES, MAX_COMBAT_CHUNKS, WORLD_RENEWAL_TICKS } from "../src/core/RegionalWorld";
+import { MAX_COMBAT_CHUNKS, RegionalWorld, REGION_RULES, hexDistance } from "../src/core/RegionalWorld";
 
-describe("regional world", () => {
-    test("bounds all four rings while moving across positive and negative coordinates", () => {
-        const world = new RegionalWorld("rings", { x: 0, z: 0 });
-        world.synchronize(0, 0, 0);
-        const original = [...world.chunks.values()];
-        expect(original.filter(chunk => chunk.lod === "active")).toHaveLength(9);
-        expect(original.filter(chunk => chunk.lod === "low")).toHaveLength(16);
-        expect(original.filter(chunk => chunk.lod === "static")).toHaveLength(24);
-        for (let step = 1; step <= 300; step += 1) {
-            world.synchronize(-step * 12, step * 12, step);
+describe("regional ecology", () => {
+    test("keeps 49 resident chunks, retires ownership and reconstructs consumed populations on reentry", () => {
+        const world = new RegionalWorld("residency", { x: 10, z: -8 });
+        world.synchronize(10, -8);
+        const initial = world.chunks.get("0,0")!;
+        initial.spawned.fill(1); initial.chestOpened = true;
+        for (let step = 1; step <= 60; step++) {
+            world.synchronize(10 + step * 12, -8);
             expect(world.chunks.size).toBe(MAX_COMBAT_CHUNKS);
+            expect([...world.chunks.values()].filter(chunk => chunk.lod === "active")).toHaveLength(9);
+            expect([...world.chunks.values()].filter(chunk => chunk.lod === "low")).toHaveLength(16);
+            expect([...world.chunks.values()].filter(chunk => chunk.lod === "static")).toHaveLength(24);
         }
-        expect(original.every(chunk => !chunk.resident)).toBe(true);
-        expect(world.lodAt(0, 0)).toBe("unloaded");
+        expect(initial.resident).toBe(false);
+        world.synchronize(10, -8);
+        const returned = world.chunks.get("0,0")!;
+        expect(returned).not.toBe(initial);
+        expect(returned.spawns).toEqual(initial.spawns);
+        expect(returned.spawned.every(value => value === 0)).toBe(true);
+        expect(returned.chestOpened).toBe(false);
+        returned.spawned.fill(1); returned.chestOpened = true;
+        for (let tick = 0; tick < 20_000; tick++) expect(world.synchronize(10, -8)).toBe(false);
+        expect(returned.spawned.every(value => value === 1)).toBe(true);
+        expect(returned.chestOpened).toBe(true);
     });
 
-    test("terrain difficulty and treasure locations are independent of load order; horror has one boss home", () => {
-        const first = new RegionalWorld("regional-content", { x: 0, z: 0 });
-        const second = new RegionalWorld("regional-content", { x: 0, z: 0 });
-        expect(first.regionAt(0, 0).difficulty).toBe("normal");
-        const difficulties = new Set<string>();
-        for (let x = -8; x <= 8; x += 1) {
-            const region = first.regionAt(x * 36, 72);
-            difficulties.add(region.difficulty);
-            first.synchronize(region.bossX, region.bossZ, 1);
-            second.synchronize(1000, -1000, 1);
-            second.synchronize(region.bossX, region.bossZ, 1);
-            const owned = [...first.chunks.values()].filter(chunk => chunk.region.x === region.x && chunk.region.z === region.z);
-            expect(owned.filter(chunk => chunk.hasBoss)).toHaveLength(region.difficulty === "horror" ? 1 : 0);
-            for (const chunk of owned) {
-                const other = second.chunks.get(chunk.key)!;
-                expect(chunk.chest).toEqual(other.chest);
-                expect(chunk.region).toEqual(other.region);
-                expect(chunk.enemyIds.length).toBe(REGION_RULES[region.difficulty].population + Number(chunk.hasBoss));
+    test("uses true hex regions, outward level bands and each spawn's own region at boundaries", () => {
+        const world = new RegionalWorld("hex-regions", { x: 20, z: -10 });
+        const difficulties = new Set<string>(); let bosses = 0;
+        for (let q = -5; q <= 5; q++) for (let r = -5; r <= 5; r++) {
+            const region = world.regionAtHex(q, r); difficulties.add(region.difficulty);
+            expect(world.regionAt(region.centerX, region.centerZ)).toEqual(region);
+            expect(region.ring).toBe(hexDistance(q, r));
+            expect(region.level).toBeGreaterThanOrEqual(region.ring * 5 + 1);
+            expect(region.level).toBeLessThanOrEqual(region.ring * 5 + 5);
+            world.synchronize(region.centerX, region.centerZ);
+            for (const chunk of world.chunks.values()) {
+                for (const spawn of chunk.spawns) {
+                    expect(world.regionAt(spawn.x, spawn.z)).toEqual(spawn.region);
+                    if (spawn.boss && spawn.region.x === q && spawn.region.z === r) bosses++;
+                    expect(spawn.level).toBeGreaterThanOrEqual(Math.max(1, spawn.region.level - 1));
+                }
+                if (chunk.chest) expect(world.regionAt(chunk.chest.x, chunk.chest.z)).toEqual(chunk.chest.region);
+                expect(chunk.spawns.length).toBeLessThanOrEqual(REGION_RULES.horror.population + 1);
             }
         }
-        expect(difficulties.size).toBe(3);
-    });
-
-    test("keeps chest claims across unloading and renews them only at the world epoch", () => {
-        const world = new RegionalWorld("claims", { x: 0, z: 0 });
-        world.synchronize(0, 0, 1);
-        const chest = [...world.chunks.values()].find(chunk => chunk.chest)!;
-        world.claim("chest", chest);
-        world.synchronize(1000, 1000, 2);
-        world.synchronize(0, 0, 3);
-        const reloaded = world.chunks.get(chest.key)!;
-        expect(reloaded).not.toBe(chest);
-        expect(world.isClaimed("chest", reloaded)).toBe(true);
-        world.synchronize(0, 0, WORLD_RENEWAL_TICKS);
-        expect(world.isClaimed("chest", reloaded)).toBe(false);
+        expect(difficulties.size).toBe(3); expect(bosses).toBeGreaterThan(0);
+        expect(world.nearbyRegions(world.regionAtHex(0, 0))).toHaveLength(19);
+        expect(world.regionAtHex(0, 0).difficulty).toBe("normal");
     });
 });

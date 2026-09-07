@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Separate character and backpack windows with fixed equipment positions,
+  keyboard-accessible probability hints, a top-right hex region map and a
+  bottom-center health/mana, skill and status HUD with complete shortcuts.
+- Six treasure-orb sockets (two unlocked initially), chest/Boss-only orbs,
+  independent diminishing quantity/quality/star find ratings, source-level
+  equipment and potions, and 44 equipment name archetypes.
+- Radial regional level bands and once-per-residency populations, replacing
+  timed enemy/chest/Boss renewal; base-only allocation and roughly five levels
+  per minute of normal combat, plus mana-backed manual casting and potions.
+- Locally bundled CC0 KayKit hero and skeleton models, a hash-verified build
+  pipeline baking eight movement poses, bounded instanced animation and
+  explicit resource-failure recovery.
 - Region-driven survivor ecology with bounded active/low-frequency/static chunk
   rings, territorial enemies, normal/hard/horror regions and regional bosses.
 - Five chest tiers, eleven equipment slots, independent item level/star/quality
