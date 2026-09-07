@@ -1,7 +1,7 @@
 import { RARITIES, RARITY_NAMES, rollRarity, BASE_LOOT_PROFILE, type Rarity, type FindRatings } from "./Loot";
 import type { DeterministicRandom } from "./DeterministicRandom";
 
-export const ORB_UNLOCK_LEVELS = [1, 1, 5, 10, 15, 20] as const;
+export const ORB_UNLOCK_LEVELS = [1, 1, 50, 100, 150, 200] as const;
 export const ORB_TYPES = ["fortune", "bounty", "constellation", "harmony"] as const;
 export type OrbType = typeof ORB_TYPES[number];
 export const ORB_NAMES: Readonly<Record<OrbType, string>> = Object.freeze({

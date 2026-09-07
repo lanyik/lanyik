@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("plays with baked actors, independent character/bag windows and complete keyboard HUD", async ({ page }) => {
+    test.setTimeout(180_000);
     const errors: string[] = [];
     const loadedActors = new Set<string>();
     page.on("pageerror", error => errors.push(error.message));
@@ -41,6 +42,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect(page.locator(".equipment-slot")).toHaveCount(11);
     await expect(page.locator(".orb-socket")).toHaveCount(6);
     await expect(page.locator(".orb-socket:not(:disabled)")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "宝珠槽 3，50级解锁", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "装备爆率说明", exact: true }).hover();
     await expect(page.getByRole("tooltip")).toContainText("寻宝分布");
     await expect(page.getByRole("tooltip")).toContainText("收益递减");
@@ -56,12 +58,35 @@ test("plays with baked actors, independent character/bag windows and complete ke
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
     await expect(bag).toBeVisible();
     await expect(bag.locator(".equipment-slot")).toHaveCount(0);
-    await expect(bag.locator(".bag-slot")).toHaveCount(40);
-    await bag.getByRole("button", { name: "守夜短弩，等级1", exact: true }).click();
+    await expect(bag.locator(".bag-inspector")).toHaveCount(0);
+    const starter = bag.getByRole("article", { name: "守夜短弩，等级1", exact: true });
+    await expect(starter.getByText("基础属性", { exact: true })).toBeVisible();
+    await expect(starter.getByText("附加词条", { exact: true })).toBeVisible();
+    await expect(starter.locator(".affix-list")).toHaveAttribute("aria-label", "2条词条");
+    const itemOrder = () => bag.getByTestId("inventory-item").evaluateAll(cards => cards.map(card => ({
+        id: Number(card.getAttribute("data-item-id")), level: Number(card.getAttribute("data-level")), rarity: card.getAttribute("data-rarity")!, kind: card.getAttribute("data-kind")
+    })));
+    const beforeSort = await itemOrder();
+    const rarities = ["common", "magic", "rare", "legendary", "diamond", "rainbow"];
+    await bag.getByRole("button", { name: "一键整理", exact: false }).click();
+    await expect.poll(itemOrder).toEqual([...beforeSort].sort((a, b) => rarities.indexOf(b.rarity) - rarities.indexOf(a.rarity) || b.level - a.level || a.id - b.id));
+    await starter.click();
     await page.keyboard.press("Enter");
     await expect(page.locator(".slot-weapon")).not.toHaveAttribute("aria-label", "武器：空");
     expect(await slotLayout()).toEqual(slotBefore);
-    await expect(bag.getByRole("button", { name: "丢弃", exact: false })).toBeVisible();
+    const beforeClear = await itemOrder();
+    const playerLevel = Number(await page.getByTestId("player-level").textContent());
+    const cleanup = bag.getByRole("checkbox", { name: "自动清理低级装备", exact: true });
+    await expect(cleanup).not.toBeChecked();
+    await cleanup.check();
+    await expect(cleanup).toBeChecked();
+    await expect.poll(itemOrder).toEqual(beforeClear.filter(item => item.kind !== "equipment" || item.level >= playerLevel));
+    await expect(page.locator(".slot-weapon")).not.toHaveAttribute("aria-label", "武器：空");
+    // Checkbox focus must keep menu shortcuts available.
+    await page.keyboard.press("KeyB"); await expect(bag).toHaveCount(0);
+    await page.keyboard.press("KeyB"); await expect(cleanup).toBeChecked();
+    await cleanup.uncheck();
+    await expect(cleanup).not.toBeChecked();
     await page.screenshot({ path: "test-results/survivor-app/character-and-bag.png" });
     await page.keyboard.press("Escape"); await expect(bag).toHaveCount(0);
     await page.keyboard.press("Escape"); await expect(page.getByRole("dialog", { name: "角色", exact: true })).toHaveCount(0);

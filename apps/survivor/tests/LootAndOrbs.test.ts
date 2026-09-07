@@ -5,7 +5,8 @@ import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } f
 import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 import { deriveStats } from "../src/core/CombatStats";
-import { ATTRIBUTE_IDS, EMPTY_BONUSES } from "../src/core/Equipment";
+import { ATTRIBUTE_IDS, EMPTY_BONUSES, generateEquipment } from "../src/core/Equipment";
+import { compareInventoryItems, createConsumable } from "../src/core/InventoryItem";
 
 function openOrbChest() {
     for (let seed = 0; seed < 100; seed++) {
@@ -23,7 +24,89 @@ function openOrbChest() {
     throw new Error("Orb chest fixture was not found");
 }
 
+function reachNextLevel(combat: CombatSimulation): void {
+    const level = combat.getSnapshot().player.level;
+    for (let tick = 0; tick < 3000 && combat.getSnapshot().player.level === level && !combat.gameOver; tick++) {
+        const state = combat.getRenderState(); let x = Math.cos(tick / 450) * 13, z = Math.sin(tick / 450) * 13;
+        let nearest = Infinity;
+        for (let index = 0; index < state.experience.count; index++) {
+            const distance = Math.hypot(state.experience.x[index] - state.player.x, state.experience.z[index] - state.player.z);
+            if (distance < nearest) { nearest = distance; x = state.experience.x[index]; z = state.experience.z[index]; }
+        }
+        combat.step({ x: x - state.player.x, z: z - state.player.z, active: true });
+    }
+    expect(combat.gameOver).toBe(false);
+    expect(combat.getSnapshot().player.level).toBeGreaterThan(level);
+}
+
 describe("loot and orb progression", () => {
+    test("sorting puts quality before level with stable ID ties across item types", () => {
+        const random = new DeterministicRandom("inventory-order");
+        const gear = (id: number, level: number, rarity: typeof RARITIES[number]) => ({ ...generateEquipment(random, id, level, BASE_LOOT_PROFILE), rarity });
+        const items = [gear(8, 100, "common"), gear(6, 5, "legendary"), gear(5, 20, "rare"),
+            gear(4, 25, "rare"), gear(3, 25, "rare"), createConsumable(2, 30, "mana")];
+        expect(items.sort(compareInventoryItems).map(item => item.id)).toEqual([6, 2, 3, 4, 5, 8]);
+        const { combat } = openOrbChest(); const before = combat.getSnapshot().player;
+        combat.sortInventory(); const after = combat.getSnapshot().player;
+        expect(after.inventory).toEqual([...before.inventory].sort(compareInventoryItems));
+        expect(after.inventory.map(item => item.id).sort()).toEqual(before.inventory.map(item => item.id).sort());
+        expect(after.equipment).toEqual(before.equipment); expect(after.gold).toBe(before.gold);
+        combat.sortInventory(); expect(combat.getSnapshot().player.inventory).toEqual(after.inventory);
+    });
+
+    test("optional cleanup removes existing low-level gear while preserving equipped items, orbs and potions", () => {
+        const { combat } = openOrbChest(); const original = combat.getSnapshot().player;
+        expect(original.autoClearLowLevelEquipment).toBe(false);
+        reachNextLevel(combat);
+        const before = combat.getSnapshot().player;
+        const removed = before.inventory.filter(item => item.kind === "equipment" && item.itemLevel < before.level);
+        expect(removed.length).toBeGreaterThan(0);
+        combat.setAutoClearLowLevelEquipment(true); const after = combat.getSnapshot().player;
+        expect(after.inventory).toEqual(before.inventory.filter(item => !removed.includes(item)));
+        expect(after.equipment).toEqual(before.equipment); expect(after.stats).toEqual(before.stats);
+        expect(after.clearedEquipment).toBe(removed.length);
+        expect(after.inventory.some(item => item.kind === "orb")).toBe(true);
+        expect(after.inventory.some(item => item.kind === "consumable")).toBe(true);
+        combat.setAutoClearLowLevelEquipment(true);
+        expect(combat.getSnapshot().player.clearedEquipment).toBe(removed.length);
+        combat.setAutoClearLowLevelEquipment(false);
+        combat.unequip("weapon");
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
+        combat.setAutoClearLowLevelEquipment(true);
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(false);
+    });
+
+    test("cleanup follows level-ups and chest pickups; newly unequipped gear uses the same rule", () => {
+        const { combat } = openOrbChest();
+        combat.setAutoClearLowLevelEquipment(true);
+        const beforeLevel = combat.getSnapshot().player;
+        expect(beforeLevel.inventory.some(item => item.kind === "equipment" && item.itemLevel === beforeLevel.level)).toBe(true);
+        reachNextLevel(combat);
+        const leveled = combat.getSnapshot().player;
+        expect(leveled.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= leveled.level)).toBe(true);
+        expect(leveled.clearedEquipment).toBeGreaterThan(0);
+        combat.unequip("weapon");
+        expect(combat.getSnapshot().player.clearedEquipment).toBe(leveled.clearedEquipment + 1);
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(false);
+
+        const initial = combat.getSnapshot(); const chests = combat.getRenderState().chests;
+        let nearest = -1, distance = Infinity;
+        for (let index = 0; index < chests.count; index++) {
+            const d = Math.hypot(chests.x[index] - initial.player.x, chests.z[index] - initial.player.z);
+            if (d < distance) { distance = d; nearest = index; }
+        }
+        expect(nearest).toBeGreaterThanOrEqual(0);
+        const x = chests.x[nearest], z = chests.z[nearest];
+        for (let tick = 0; tick < 600 && combat.getSnapshot().openedChests === initial.openedChests && !combat.gameOver; tick++) {
+            const player = combat.getRenderState().player;
+            combat.step({ x: x - player.x, z: z - player.z, active: true });
+        }
+        const opened = combat.getSnapshot();
+        expect(opened.gameOver).toBe(false); expect(opened.openedChests).toBe(initial.openedChests + 1);
+        expect(opened.player.clearedEquipment).toBeGreaterThan(initial.player.clearedEquipment);
+        expect(opened.player.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= opened.player.level)).toBe(true);
+        expect(opened.player.inventory.filter(item => item.kind === "consumable").length).toBeGreaterThan(initial.player.inventory.filter(item => item.kind === "consumable").length);
+    });
     test("keeps quantity, stars and quality independent, normalized and diminishing", () => {
         expect(BASE_LOOT_PROFILE.stars).toEqual([.58, .3, .12]);
         for (const rating of [0, 50, 100, 200, 960, 10_000]) {
@@ -142,5 +225,6 @@ describe("loot and orb progression", () => {
         expect(snapshot.player.level).toBeGreaterThanOrEqual(6); expect(snapshot.player.level).toBeLessThanOrEqual(7);
         expect(snapshot.kills).toBeGreaterThan(40);
         expect(snapshot.player.unspentAttributePoints).toBe((snapshot.player.level - 1) * 2);
+        expect(ORB_UNLOCK_LEVELS.filter(level => level <= snapshot.player.level)).toHaveLength(2);
     });
 });

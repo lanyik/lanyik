@@ -31,7 +31,9 @@ export type SessionCommand =
     | { readonly type: "cast-pulse" }
     | { readonly type: "toggle-autocast" }
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
-    | { readonly type: "discard"; readonly itemId: number };
+    | { readonly type: "discard"; readonly itemId: number }
+    | { readonly type: "sort-inventory" }
+    | { readonly type: "set-auto-clear-equipment"; readonly enabled: boolean };
 
 const UI_PUBLISH_INTERVAL_MS = 100;
 const NOTICE_LIFETIME_MS = 3200;
@@ -150,6 +152,8 @@ export class CombatSession {
             case "discard":
                 this.simulation.discard(command.itemId);
                 break;
+            case "sort-inventory": this.simulation.sortInventory(); break;
+            case "set-auto-clear-equipment": this.simulation.setAutoClearLowLevelEquipment(command.enabled); break;
             default:
                 command satisfies never;
         }

@@ -33,7 +33,7 @@ export function App({ session }: { readonly session: CombatSession }) {
         const onKeyDown = (event: KeyboardEvent) => {
             const target = event.target;
             if (snapshot.status !== "ready" || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
-                || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input, textarea, select"))) return;
+                || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"))) return;
             const menu = MENUS.find(item => item.code === event.code)?.id ?? (event.code === "KeyI" ? "inventory" : undefined);
             if (menu) toggle(menu);
             else if (event.code === "KeyP") session.dispatch({ type: "toggle-pause" });
@@ -47,7 +47,7 @@ export function App({ session }: { readonly session: CombatSession }) {
             else if (event.code === "KeyR" && combat?.gameOver) session.dispatch({ type: "restart" });
             else if (panels.inventory && selectedId !== undefined && !combat?.gameOver && (event.code === "Enter" || event.code === "Delete")) {
                 // Focused buttons keep their native Enter activation instead of firing two actions.
-                if (event.code === "Enter" && target instanceof HTMLButtonElement && !target.classList.contains("bag-slot")) return;
+                if (event.code === "Enter" && target instanceof HTMLButtonElement) return;
                 const item = player?.inventory.find(candidate => candidate.id === selectedId);
                 if (item) { if (event.code === "Enter") useItem(item); else session.dispatch({ type: "discard", itemId: item.id }); }
             } else return;
@@ -70,7 +70,9 @@ export function App({ session }: { readonly session: CombatSession }) {
                 <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div></section>}
             {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} socket={socket} onSocket={setSocket} />}
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
-                onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })} socket={socket} onSocket={setSocket} disabled={combat.gameOver} />}
+                onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
+                onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={enabled => session.dispatch({ type: "set-auto-clear-equipment", enabled })}
+                socket={socket} onSocket={setSocket} disabled={combat.gameOver} />}
             {panels.skills && <section className="skills-window window" role="dialog" aria-label="技能">
                 <header className="window-heading"><h2>技能</h2><button className="close-button" aria-label="关闭技能" onClick={() => close("skills")}>×</button></header>
                 <article><h3>守夜弩击 <span>自动</span></h3><p>攻击最近的敌人，每秒 {player.stats.attackRate.toFixed(2)} 次。可触发暴击、卓越与致命一击。</p></article>

@@ -45,7 +45,9 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
         <header><strong>{item.name}</strong><span>Lv.{item.itemLevel} · {RARITY_NAMES[item.rarity]}品质</span></header>
         {item.kind === "equipment" && <>
             <div className="item-meta"><span>{SLOT_NAMES[item.slot]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
-            <div className="item-properties">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <span key={id}>{BONUS_INFO[id].name} +{statValue(id, item.baseBonuses[id])}</span>)}</div>
+            <h4 className="item-section-title">基础属性</h4>
+            <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <span key={id}>{BONUS_INFO[id].name} +{statValue(id, item.baseBonuses[id])}</span>)}</div>
+            <h4 className="item-section-title">附加词条</h4>
             <ul className="affix-list" aria-label={`${item.affixes.length}条词条`}>{item.affixes.map(affix => <li key={affix.stat}>
                 {BONUS_INFO[affix.stat].name} {affix.stat === "shieldRecovery" ? "−" : "+"}{statValue(affix.stat, affix.value)}
                 <Hint label={BONUS_INFO[affix.stat].name}>{BONUS_INFO[affix.stat].detail}</Hint>

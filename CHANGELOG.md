@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Flat inventory cards showing all item attributes/effects, one-click quality
+  and level sorting, and opt-in cleanup of equipment below the player level
+  across existing inventory, level-ups and incoming rewards. Later orb sockets
+  now unlock at levels 50/100/150/200 while the first two remain available at start.
 - Separate character and backpack windows with fixed equipment positions,
   keyboard-accessible probability hints, a top-right hex region map and a
   bottom-center health/mana, skill and status HUD with complete shortcuts.
