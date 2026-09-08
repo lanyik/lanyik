@@ -7,6 +7,7 @@ import { RegionalWorld } from "../src/core/RegionalWorld";
 import { deriveStats } from "../src/core/CombatStats";
 import { ATTRIBUTE_IDS, EMPTY_BONUSES, generateEquipment } from "../src/core/Equipment";
 import { compareInventoryItems, createConsumable } from "../src/core/InventoryItem";
+import { compareEquipment } from "../src/core/EquipmentEvaluation";
 
 function openOrbChest() {
     for (let seed = 0; seed < 100; seed++) {
@@ -54,13 +55,13 @@ describe("loot and orb progression", () => {
         combat.sortInventory(); expect(combat.getSnapshot().player.inventory).toEqual(after.inventory);
     });
 
-    test("optional cleanup removes existing low-level gear while preserving equipped items, orbs and potions", () => {
+    test("optional cleanup only removes inferior low-level gear and keeps empty-slot upgrades", () => {
         const { combat } = openOrbChest(); const original = combat.getSnapshot().player;
         expect(original.autoClearLowLevelEquipment).toBe(false);
         reachNextLevel(combat);
         const before = combat.getSnapshot().player;
-        const removed = before.inventory.filter(item => item.kind === "equipment" && item.itemLevel < before.level);
-        expect(removed.length).toBeGreaterThan(0);
+        const removed = before.inventory.filter(item => item.kind === "equipment" && item.itemLevel < before.level && compareEquipment(item, before).canClear);
+        expect(before.inventory.some(item => item.kind === "equipment" && item.itemLevel < before.level && !compareEquipment(item, before).canClear)).toBe(true);
         combat.setAutoClearLowLevelEquipment(true); const after = combat.getSnapshot().player;
         expect(after.inventory).toEqual(before.inventory.filter(item => !removed.includes(item)));
         expect(after.equipment).toEqual(before.equipment); expect(after.stats).toEqual(before.stats);
@@ -73,21 +74,20 @@ describe("loot and orb progression", () => {
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
         combat.setAutoClearLowLevelEquipment(true);
-        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(false);
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
     });
 
-    test("cleanup follows level-ups and chest pickups; newly unequipped gear uses the same rule", () => {
+    test("level-ups and chest pickups preserve upgrades; unequipping never destroys an item", () => {
         const { combat } = openOrbChest();
         combat.setAutoClearLowLevelEquipment(true);
         const beforeLevel = combat.getSnapshot().player;
         expect(beforeLevel.inventory.some(item => item.kind === "equipment" && item.itemLevel === beforeLevel.level)).toBe(true);
         reachNextLevel(combat);
         const leveled = combat.getSnapshot().player;
-        expect(leveled.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= leveled.level)).toBe(true);
-        expect(leveled.clearedEquipment).toBeGreaterThan(0);
+        expect(leveled.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= leveled.level || !compareEquipment(item, leveled).canClear)).toBe(true);
         combat.unequip("weapon");
-        expect(combat.getSnapshot().player.clearedEquipment).toBe(leveled.clearedEquipment + 1);
-        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(false);
+        expect(combat.getSnapshot().player.clearedEquipment).toBe(leveled.clearedEquipment);
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
 
         const initial = combat.getSnapshot(); const chests = combat.getRenderState().chests;
         let nearest = -1, distance = Infinity;
@@ -103,8 +103,7 @@ describe("loot and orb progression", () => {
         }
         const opened = combat.getSnapshot();
         expect(opened.gameOver).toBe(false); expect(opened.openedChests).toBe(initial.openedChests + 1);
-        expect(opened.player.clearedEquipment).toBeGreaterThan(initial.player.clearedEquipment);
-        expect(opened.player.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= opened.player.level)).toBe(true);
+        expect(opened.player.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= opened.player.level || !compareEquipment(item, opened.player).canClear)).toBe(true);
         expect(opened.player.inventory.filter(item => item.kind === "consumable").length).toBeGreaterThan(initial.player.inventory.filter(item => item.kind === "consumable").length);
     });
     test("keeps quantity, stars and quality independent, normalized and diminishing", () => {

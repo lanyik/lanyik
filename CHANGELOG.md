@@ -9,9 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Flat inventory cards showing all item attributes/effects, one-click quality
-  and level sorting, and opt-in cleanup of equipment below the player level
-  across existing inventory, level-ups and incoming rewards. Later orb sockets
+- Distance-based fading for resident monsters, chests and loot, independent of
+  active AI chunks, so entering a combat region no longer reveals enemies abruptly.
+- Compact category-only inventory with equipment scores, projected battle-power
+  changes, hover/focus comparisons and a pickup upgrade prompt with one-click equip.
+  Shared evaluation protects stronger, tied, empty-slot and higher-score equipment
+  during manual and automatic cleanup; staged chest rewards preserve RNG and IDs
+  when protected items cannot fit. Final character power and equipment contribution
+  are visible in both the HUD and character window. Later orb sockets
   now unlock at levels 50/100/150/200 while the first two remain available at start.
 - Separate character and backpack windows with fixed equipment positions,
   keyboard-accessible probability hints, a top-right hex region map and a

@@ -7,6 +7,7 @@ import { InventoryPanel } from "./InventoryPanel";
 import { RegionMap } from "./RegionMap";
 import { ItemIcon } from "./ItemView";
 import { UiIcon } from "./UiIcon";
+import { UpgradePrompt } from "./UpgradePrompt";
 import "./app.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
@@ -86,6 +87,7 @@ export function App({ session }: { readonly session: CombatSession }) {
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
                 onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
                 onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={enabled => session.dispatch({ type: "set-auto-clear-equipment", enabled })}
+                onClear={() => session.dispatch({ type: "clear-inferior-equipment" })}
                 socket={socket} onSocket={setSocket} disabled={combat.gameOver} />}
             </div>}
             {panels.skills && <section className="skills-window window" role="dialog" aria-label="技能">
@@ -96,6 +98,7 @@ export function App({ session }: { readonly session: CombatSession }) {
                 <article><UiIcon name="shield" /><div><h3>免伤盾 <span>被动</span></h3><p>抵挡一次命中后，经过 <b>{player.stats.shieldRecovery.toFixed(1)}</b> 秒恢复。</p></div></article>
             </section>}
             <section className="combat-dock" aria-label="角色状态与技能">
+                <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
                 <div className="status-bar" aria-label="状态栏"><span className={player.shieldRemaining <= 0 ? "ready" : ""}><UiIcon name="shield" />免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}s` : "就绪"}</span>
                     {snapshot.paused && <span className="dock-pause">战斗暂停</span>}
                     <button aria-pressed={player.autoCast} onClick={() => session.dispatch({ type: "toggle-autocast" })}><i className={player.autoCast ? "enabled" : ""} />自动施法 {player.autoCast ? "开" : "关"}<kbd>F</kbd></button></div>
@@ -115,6 +118,9 @@ export function App({ session }: { readonly session: CombatSession }) {
                 <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}</span><kbd>{menu.key}</kbd></button>)}
                 <button onClick={() => session.dispatch({ type: "toggle-pause" })}><UiIcon name={snapshot.paused ? "play" : "pause"} /><span>{snapshot.paused ? "继续" : "暂停"}</span><kbd>P</kbd></button></nav>
             <div className="notices" aria-live="polite">{snapshot.notices.map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}</div>
+            {snapshot.upgrades[0] && !combat.gameOver && !Object.values(panels).some(Boolean) && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}
+                onEquip={() => session.dispatch({ type: "equip", itemId: snapshot.upgrades[0].id })}
+                onDismiss={() => session.dispatch({ type: "dismiss-upgrade", itemId: snapshot.upgrades[0].id })} />}
             {snapshot.paused && !combat.gameOver && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
             {combat.gameOver && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>再次踏入荒原<kbd>R</kbd></button></div></div>}
         </>}

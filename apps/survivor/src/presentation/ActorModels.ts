@@ -1,5 +1,7 @@
 import { DynamicDrawUsage, Group, InstancedMesh, Mesh, MeshStandardMaterial, SRGBColorSpace, TextureLoader, type Texture, type BufferGeometry, type Material } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { InstancedBufferAttribute, type Vector2 } from "three";
+import { installActorFade } from "./ActorVisibility";
 
 const NAMES = ["Rogue_Hooded", "Skeleton_Minion", "Skeleton_Rogue", "Skeleton_Warrior", "Skeleton_Mage"] as const;
 const FRAME_COUNT = 8;
@@ -16,7 +18,7 @@ export class ActorModels {
 
     private constructor() { this.pose.morphTargetInfluences = new Array(FRAME_COUNT).fill(0); }
 
-    public static async load(capacity: number): Promise<ActorModels> {
+    public static async load(capacity: number, viewCenter: Vector2): Promise<ActorModels> {
         const actors = new ActorModels();
         try {
             for (let kind = 0; kind < NAMES.length; kind++) {
@@ -41,6 +43,8 @@ export class ActorModels {
                     mesh.material.needsUpdate = true;
                     if (kind === 0) { actors.hero.add(mesh); actors.heroMeshes.push(mesh); }
                     else {
+                        installActorFade(mesh.material, viewCenter, true);
+                        mesh.geometry.setAttribute("actorHome", new InstancedBufferAttribute(new Float32Array(capacity * 2), 2).setUsage(DynamicDrawUsage));
                         const instance = new InstancedMesh(mesh.geometry, mesh.material, capacity);
                         instance.instanceMatrix.setUsage(DynamicDrawUsage);
                         instance.setColorAt(0, mesh.material.color.clone().set(0xffffff));

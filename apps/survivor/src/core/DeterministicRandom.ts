@@ -12,6 +12,12 @@ export class DeterministicRandom {
         this.value = hash >>> 0 || 0x9e3779b9;
     }
 
+    public clone(): DeterministicRandom {
+        const copy = new DeterministicRandom(0);
+        copy.value = this.value;
+        return copy;
+    }
+
     public nextUint32(): number {
         let value = this.value;
         value ^= value << 13;

@@ -6,6 +6,7 @@ import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
 import { RARITIES, RARITY_NAMES } from "../core/Loot";
 import { Hint, ItemDetails, ItemIcon, statValue } from "./ItemView";
 import { UiIcon } from "./UiIcon";
+import { ItemTooltip } from "./ItemTooltip";
 
 const ATTRIBUTE_INFO: Readonly<Record<AttributeId, { name: string; detail: string }>> = {
     might: { name: "力量", detail: "基础攻击" }, vitality: { name: "体魄", detail: "基础生命、防御、回复" },
@@ -30,29 +31,29 @@ export function CharacterPanel({ player, disabled, dispatch, onClose, socket, on
                 <div className="paper-doll" aria-label="装备栏">
                     {EQUIPMENT_SLOTS.map(slot => {
                         const item = player.equipment[slot];
-                        return <button key={slot} className={`equipment-slot slot-${slot} rarity-${item?.rarity ?? "common"}${item ? " occupied" : " empty"}${item && item.id === inspectedId ? " selected" : ""}`} data-slot={slot}
+                        return <ItemTooltip key={slot} item={item} player={player} className={`slot-${slot}`}><button className={`equipment-slot rarity-${item?.rarity ?? "common"}${item ? " occupied" : " empty"}${item && item.id === inspectedId ? " selected" : ""}`} data-slot={slot}
                             aria-label={`${SLOT_NAMES[slot]}${item ? `：${item.name}` : "：空"}`} onClick={() => setInspectedId(item?.id)}
                             onDoubleClick={() => !disabled && dispatch({ type: "unequip", slot })}>
                             <span className="slot-label">{SLOT_NAMES[slot]}</span><ItemIcon kind={slot} />
-                            <span className="slot-value">{item ? `Lv.${item.itemLevel} ${"★".repeat(item.stars)}` : "未装备"}</span>
-                        </button>;
+                            <span className="slot-value">{item ? `${item.score} 分 · ${"★".repeat(item.stars)}` : "未装备"}</span>
+                        </button></ItemTooltip>;
                     })}
                 </div>
                 <div className="section-heading orb-heading"><h3>寻宝宝珠</h3><small>{ORB_UNLOCK_LEVELS.filter(level => player.level >= level).length} / 6 已解锁</small></div>
                 <div className="orb-sockets" aria-label="宝珠栏">{ORB_UNLOCK_LEVELS.map((level, index) => {
                     const orb = player.orbs[index]; const locked = player.level < level;
-                    return <button key={index} className={`orb-socket rarity-${orb?.rarity ?? "common"}${socket === index ? " selected" : ""}`}
+                    return <ItemTooltip key={index} item={orb} player={player}><button className={`orb-socket rarity-${orb?.rarity ?? "common"}${socket === index ? " selected" : ""}`}
                         disabled={locked} aria-label={`宝珠槽 ${index + 1}${locked ? `，${level}级解锁` : orb ? `，${orb.name}` : "，空"}`}
                         onClick={() => { onSocket(index); setInspectedId(orb?.id); }} onDoubleClick={() => !disabled && dispatch({ type: "remove-orb", socket: index })}>
                         {locked ? <UiIcon name="lock" /> : <ItemIcon kind="orb" />}<small>{locked ? `Lv.${level}` : `槽 ${index + 1}`}</small>
-                    </button>;
+                    </button></ItemTooltip>;
                 })}</div>
                 <div className="equipment-inspector">{inspected ? <><ItemDetails item={inspected} />
                     {inspected.kind === "equipment" && <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.slot }); setInspectedId(undefined); }}>卸下装备</button>}
                     {inspected.kind === "orb" && <button disabled={disabled} onClick={() => { dispatch({ type: "remove-orb", socket: player.orbs.findIndex(orb => orb?.id === inspected.id) }); setInspectedId(undefined); }}>取下宝珠</button>}
                 </> : <div className="empty-inspector"><UiIcon name="shield" /><strong>查看装备详情</strong><span>选择装备或宝珠，查看属性与词条</span></div>}</div>
             </div>
-            <div className="attributes-pane"><div className="primary-stats" aria-label="核心属性">
+            <div className="attributes-pane"><div className="character-power" aria-label="角色战力"><span>总战力 <Hint label="战力">根据角色等级、基础属性与装备结算后的战斗属性加权评分；已计入百分比加成和属性上限。金币、经验与拾取范围不计战力，装备评分另含这些收益。战力用于综合比较，具体词条可在装备详情查看。</Hint></span><strong data-testid="character-power">{player.battlePower}</strong><small>装备贡献 <b>+{player.equipmentPower}</b> · 加成已计入下方属性</small></div><div className="primary-stats" aria-label="核心属性">
                 <div><span>攻击</span><strong>{statValue("damage", player.stats.damage)}</strong></div><div><span>防御</span><strong>{statValue("armor", player.stats.armor)}</strong></div><div><span>生命</span><strong>{player.stats.maxHealth}</strong></div>
             </div><div className="section-heading"><h3>基础属性</h3><span className={`attribute-points${player.unspentAttributePoints > 0 ? " available" : ""}`}>{player.unspentAttributePoints} 点可分配</span></div>
                 <div className="attribute-list">{ATTRIBUTE_IDS.map(id => <div className="attribute-row" key={id}>

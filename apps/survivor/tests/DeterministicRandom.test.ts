@@ -2,6 +2,13 @@ import { describe, expect, test } from "vitest";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 
 describe("DeterministicRandom", () => {
+    test("clones the current position without sharing subsequent mutations", () => {
+        const random = new DeterministicRandom("reward-transaction");
+        random.nextUint32(); random.nextUint32();
+        const trial = random.clone();
+        const sequence = Array.from({ length: 32 }, () => trial.nextUint32());
+        expect(Array.from({ length: 32 }, () => random.nextUint32())).toEqual(sequence);
+    });
     test("replays the same bounded sequence for the same seed", () => {
         const first = new DeterministicRandom("same-run");
         const second = new DeterministicRandom("same-run");

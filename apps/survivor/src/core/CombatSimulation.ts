@@ -9,6 +9,7 @@ import {
     type EquippedItems
 } from "./Equipment";
 import { DeterministicRandom } from "./DeterministicRandom";
+import { battlePower, compareEquipment } from "./EquipmentEvaluation";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { deriveStats, incomingDamage, outgoingDamage, reflectedDamage, rollAttack, type DerivedStats } from "./CombatStats";
 import {
@@ -72,6 +73,8 @@ export interface PlayerSnapshot {
     readonly lootProfile: LootProfile;
     readonly attributes: Attributes;
     readonly stats: DerivedStats;
+    readonly battlePower: number;
+    readonly equipmentPower: number;
     readonly equipment: EquippedItems;
     readonly inventory: readonly InventoryItem[];
     readonly autoClearLowLevelEquipment: boolean;
@@ -98,6 +101,7 @@ export interface CombatNotice {
     readonly id: number;
     readonly tone: "info" | "loot" | "level" | "danger";
     readonly message: string;
+    readonly acquiredEquipmentId?: number;
 }
 
 export interface PlayerRenderState {
@@ -120,10 +124,11 @@ export interface EnemyRenderBuffer {
     readonly kinds: Uint8Array;
     readonly elite: Uint8Array;
     readonly boss: Uint8Array;
-    readonly active: Uint8Array;
     readonly level: Uint32Array;
     readonly health: Float32Array;
     readonly maxHealth: Float32Array;
+    readonly homeX: Float32Array;
+    readonly homeZ: Float32Array;
     readonly x: Float32Array;
     readonly z: Float32Array;
     readonly previousX: Float32Array;
@@ -190,7 +195,6 @@ class EnemyPool implements EnemyRenderBuffer {
     public readonly kinds = new Uint8Array(MAX_ENEMIES);
     public readonly elite = new Uint8Array(MAX_ENEMIES);
     public readonly boss = new Uint8Array(MAX_ENEMIES);
-    public readonly active = new Uint8Array(MAX_ENEMIES);
     public readonly homes: (RegionalChunk | undefined)[] = new Array(MAX_ENEMIES);
     public readonly maxHealth = new Float32Array(MAX_ENEMIES);
     public readonly level = new Uint32Array(MAX_ENEMIES);
@@ -215,7 +219,6 @@ class EnemyPool implements EnemyRenderBuffer {
         this.kinds[index] = kind;
         this.elite[index] = Number(elite);
         this.boss[index] = Number(boss);
-        this.active[index] = Number(home.lod === "active");
         this.homes[index] = home;
         this.regions[index] = region;
         this.level[index] = level;
@@ -238,7 +241,6 @@ class EnemyPool implements EnemyRenderBuffer {
         this.kinds[index] = this.kinds[last];
         this.elite[index] = this.elite[last];
         this.boss[index] = this.boss[last];
-        this.active[index] = this.active[last];
         this.maxHealth[index] = this.maxHealth[last];
         this.homes[index] = this.homes[last];
         this.homes[last] = undefined;
@@ -391,7 +393,7 @@ function validatePosition(x: number, z: number): void {
  * packed typed arrays; equipment remains object data because it changes rarely.
  */
 export class CombatSimulation {
-    private readonly random: DeterministicRandom;
+    private random: DeterministicRandom;
     private readonly enemies = new EnemyPool();
     private readonly projectiles = new ProjectilePool();
     private readonly experienceOrbs = new ExperiencePool();
@@ -534,6 +536,8 @@ export class CombatSimulation {
             lootProfile: this.lootProfile,
             attributes: Object.freeze({ ...this.attributes }),
             stats: this.stats,
+            battlePower: battlePower(this.stats),
+            equipmentPower: battlePower(this.stats) - battlePower(deriveStats(this.level, this.attributes, sumEquipment({}))),
             equipment,
             inventory: Object.freeze([...this.inventory]),
             autoClearLowLevelEquipment: this.autoClearLowLevelEquipment,
@@ -610,10 +614,11 @@ export class CombatSimulation {
         if (item.kind !== "equipment") return { ok: false, message: "请选择装备" };
         const previous = this.equipped[item.slot];
         this.inventory.splice(index, 1);
-        if (previous) this.storeInventoryItem(previous);
         this.equipped = { ...this.equipped, [item.slot]: item };
         this.inventoryFullNotified = false;
         this.recalculateStats(false);
+        if (previous) this.storeInventoryItem(previous);
+        this.clearLowLevelInventory();
         this.pushNotice("loot", `已装备 ${item.name}`);
         this.markChanged();
         return { ok: true, message: "装备成功" };
@@ -643,6 +648,17 @@ export class CombatSimulation {
         this.markChanged();
     }
 
+    public clearInferiorEquipment(): void {
+        if (this.gameOverValue) return;
+        const before = this.inventory.length;
+        this.inventory = this.inventory.filter(item => !this.canClearEquipment(item));
+        const cleared = before - this.inventory.length;
+        this.clearedEquipment += cleared;
+        if (cleared > 0) this.inventoryFullNotified = false;
+        this.pushNotice("info", `清理 ${cleared} 件较弱装备 · 提升战力与高评分装备已保留`);
+        this.markChanged();
+    }
+
     public equipOrb(itemId: number, socket: number): { readonly ok: boolean; readonly message: string } {
         if (this.gameOverValue) return { ok: false, message: "战斗已结束" };
         if (!Number.isInteger(socket) || socket < 0 || socket >= ORB_UNLOCK_LEVELS.length) return { ok: false, message: "无效宝珠槽" };
@@ -664,8 +680,8 @@ export class CombatSimulation {
     public unequip(slot: keyof EquippedItems): void {
         const item = this.equipped[slot];
         if (this.gameOverValue || !item) return;
-        if (!this.shouldAutoClear(item) && this.inventory.length === INVENTORY_CAPACITY) { this.notifyInventoryFull(); return; }
-        this.storeInventoryItem(item);
+        if (this.inventory.length === INVENTORY_CAPACITY) { this.notifyInventoryFull(); return; }
+        this.inventory.push(item);
         const next = { ...this.equipped };
         delete next[slot];
         this.equipped = next;
@@ -769,7 +785,7 @@ export class CombatSimulation {
         this.chests.count = 0;
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.lod !== "active" || chunk.chestOpened) continue;
+            if (!chest || chunk.chestOpened) continue;
             const index = this.chests.count++;
             this.chests.x[index] = chest.x;
             this.chests.z[index] = chest.z;
@@ -782,22 +798,28 @@ export class CombatSimulation {
             const chest = chunk.chest;
             if (!chest || chunk.lod !== "active" || chunk.chestOpened) continue;
             if (Math.hypot(chest.x - this.playerX, chest.z - this.playerZ) > 0.95) continue;
-            const clearEquipment = this.autoClearLowLevelEquipment && chest.region.level < this.level;
-            const rewardCount = (chest.hasOrb ? 3 : 2) - Number(clearEquipment);
-            if (this.inventory.length + rewardCount > INVENTORY_CAPACITY) {
+            const rules = CHEST_RULES[chest.tier];
+            // Stage the actual reward before checking capacity: a low-level roll may be an upgrade.
+            // A blocked chest must not consume random state or item IDs.
+            const random = this.random.clone();
+            let nextId = this.nextItemId;
+            const item = generateEquipment(random, nextId++, chest.region.level, this.lootProfile, rules.rarity);
+            const clearEquipment = this.shouldAutoClear(item);
+            const rewards: InventoryItem[] = [createConsumable(nextId++, chest.region.level, random.chance(0.5) ? "health" : "mana")];
+            if (chest.hasOrb) rewards.push(generateOrb(random, nextId++, chest.region.level, rules.rarity));
+            if (this.inventory.length + rewards.length + Number(!clearEquipment) > INVENTORY_CAPACITY) {
                 this.notifyInventoryFull();
                 break;
             }
-            const rules = CHEST_RULES[chest.tier];
-            const item = generateEquipment(this.random, this.nextItemId++, chest.region.level, this.lootProfile, rules.rarity);
+            this.random = random;
+            this.nextItemId = nextId;
             this.storeInventoryItem(item);
-            this.inventory.push(createConsumable(this.nextItemId++, chest.region.level, this.random.chance(0.5) ? "health" : "mana"));
-            if (chest.hasOrb) this.inventory.push(generateOrb(this.random, this.nextItemId++, chest.region.level, rules.rarity));
+            this.inventory.push(...rewards);
             this.gold += Math.round(rules.gold * (1 + this.stats.goldBonus));
             chunk.chestOpened = true;
             this.openedChests += 1;
             this.inventoryFullNotified = false;
-            this.pushNotice("loot", rules.name + " · " + (clearEquipment ? "低级装备已清理" : item.name));
+            this.pushNotice("loot", rules.name + " · " + (clearEquipment ? "较弱低级装备已清理" : item.name), clearEquipment ? undefined : item.id);
             this.markChanged();
             break;
         }
@@ -887,7 +909,6 @@ export class CombatSimulation {
             this.enemies.previousZ[index] = z;
             this.enemies.hitFlash[index] = Math.max(0, this.enemies.hitFlash[index] - STEP_SECONDS);
             const lod = this.world.lodAt(x, z);
-            this.enemies.active[index] = Number(lod === "active");
             if (lod === "unloaded") {
                 this.retireEnemy(index);
                 continue;
@@ -1019,7 +1040,7 @@ export class CombatSimulation {
             this.storeInventoryItem(item);
             this.loot.remove(index);
             this.inventoryFullNotified = false;
-            if (!clear) this.pushNotice("loot", `拾取 ${item.name}`);
+            if (!clear) this.pushNotice("loot", `拾取 ${item.name}`, item.kind === "equipment" ? item.id : undefined);
             this.markChanged();
         }
     }
@@ -1101,7 +1122,13 @@ export class CombatSimulation {
     }
 
     private shouldAutoClear(item: InventoryItem): boolean {
-        return this.autoClearLowLevelEquipment && isLowLevelEquipment(item, this.level);
+        return this.autoClearLowLevelEquipment && isLowLevelEquipment(item, this.level) && this.canClearEquipment(item);
+    }
+
+    private canClearEquipment(item: InventoryItem): boolean {
+        return item.kind === "equipment" && compareEquipment(item, {
+            level: this.level, attributes: this.attributes, equipment: this.equipped, stats: this.stats
+        }).canClear;
     }
 
     /** Callers reserve capacity for kept items before beginning their inventory transaction. */
@@ -1130,8 +1157,8 @@ export class CombatSimulation {
         this.mana = this.mana / previousMana * this.stats.maxMana;
     }
 
-    private pushNotice(tone: CombatNotice["tone"], message: string): void {
-        this.notices.push(Object.freeze({ id: this.nextNoticeId++, tone, message }));
+    private pushNotice(tone: CombatNotice["tone"], message: string, acquiredEquipmentId?: number): void {
+        this.notices.push(Object.freeze({ id: this.nextNoticeId++, tone, message, acquiredEquipmentId }));
     }
 
     private markChanged(): void {

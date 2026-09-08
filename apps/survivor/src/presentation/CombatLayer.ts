@@ -13,7 +13,8 @@ import {
     Object3D,
     OctahedronGeometry,
     RingGeometry,
-    SphereGeometry
+    SphereGeometry,
+    Vector2
 } from "three";
 import {
     collectObject3DResourceAllocations,
@@ -31,6 +32,7 @@ import {
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 
 import { ActorModels } from "./ActorModels";
+import { ACTOR_FADE_END, actorVisibility, installActorFade } from "./ActorVisibility";
 const RARITY_COLORS = [new Color(0xd7d9dc), new Color(0x5fa8ff), new Color(0xc56cff), new Color(0xffa93a), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
@@ -88,10 +90,13 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly shadowMaterial = new MeshBasicMaterial({ color: 0x06090b, transparent: true, opacity: 0.3, side: DoubleSide, depthWrite: false });
     private readonly dummy = new Object3D();
     private readonly color = new Color();
+    private readonly viewCenter = new Vector2();
     private readonly heightCache = new Map<string, number>();
     private host: WorldRenderLayerHost | undefined;
 
     constructor(private readonly resources: ResourceBudgetAccount) {
+        installActorFade(this.lootMaterial, this.viewCenter);
+        installActorFade(this.emberMaterial, this.viewCenter);
         this.root.name = "survivor-combat";
         this.projectiles = this.instance(this.geometries[0], this.projectileMaterial, MAX_PROJECTILES);
         this.experience = this.instance(this.geometries[1], this.experienceMaterial, MAX_EXPERIENCE_ORBS);
@@ -112,7 +117,7 @@ export class CombatLayer implements WorldRenderLayer {
     public async initialize(host: WorldRenderLayerHost): Promise<void> {
         if (!host.surface) throw new Error("Combat rendering requires a world surface");
         if (!this.actorLoading) {
-            this.actorLoading = ActorModels.load(MAX_ENEMIES).then(actors => {
+            this.actorLoading = ActorModels.load(MAX_ENEMIES, this.viewCenter).then(actors => {
                 if (this.disposed) { actors.dispose(); throw new Error("Combat layer disposed during actor loading"); }
                 try {
                     this.resources.acquireRequired("combat-actor-models", {}, true,
@@ -135,6 +140,7 @@ export class CombatLayer implements WorldRenderLayer {
         const blend = Math.max(0, Math.min(1, alpha));
         const playerX = state.player.previousX + (state.player.x - state.player.previousX) * blend;
         const playerZ = state.player.previousZ + (state.player.z - state.player.previousZ) * blend;
+        this.viewCenter.set(playerX, playerZ);
         this.player.position.set(playerX, this.height(playerX, playerZ), playerZ);
         this.playerBody.rotation.y = state.player.heading;
         this.actors.animateHero(state.player.animationTime / .8, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
@@ -146,9 +152,13 @@ export class CombatLayer implements WorldRenderLayer {
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         for (let index = 0; index < state.enemies.count; index++) {
-            if (!state.enemies.active[index]) continue;
             const x = state.enemies.previousX[index] + (state.enemies.x[index] - state.enemies.previousX[index]) * blend;
             const z = state.enemies.previousZ[index] + (state.enemies.z[index] - state.enemies.previousZ[index]) * blend;
+            // Render resident actors ahead of the active simulation ring, without a chunk-boundary pop.
+            const homeX = state.enemies.homeX[index], homeZ = state.enemies.homeZ[index];
+            const distance = Math.max(Math.hypot(x - playerX, z - playerZ) - state.enemies.radius[index] * 2,
+                Math.hypot(homeX - playerX, homeZ - playerZ));
+            if (actorVisibility(distance) === 0) continue;
             const dx = state.enemies.x[index] - state.enemies.previousX[index];
             const dz = state.enemies.z[index] - state.enemies.previousZ[index];
             const moving = Math.hypot(dx, dz) > .0001;
@@ -161,6 +171,7 @@ export class CombatLayer implements WorldRenderLayer {
                 const instance = mesh.count++;
                 this.setInstance(mesh, instance, x, this.height(x, z), z, state.enemies.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
+                mesh.geometry.getAttribute("actorHome").setXY(instance, homeX, homeZ);
                 this.actors.animateEnemy(mesh, instance, state.player.animationTime / .8 + state.enemies.ids[index] * .37, moving);
             }
         }
@@ -168,6 +179,7 @@ export class CombatLayer implements WorldRenderLayer {
             mesh.instanceMatrix.needsUpdate = true;
             mesh.instanceColor!.needsUpdate = true;
             mesh.morphTexture!.needsUpdate = true;
+            mesh.geometry.getAttribute("actorHome").needsUpdate = true;
         }
 
         this.projectiles.count = state.projectiles.count;
@@ -191,6 +203,7 @@ export class CombatLayer implements WorldRenderLayer {
         for (const mesh of this.loot) mesh.count = 0;
         for (let index = 0; index < state.loot.count; index++) {
             const x = state.loot.x[index], z = state.loot.z[index];
+            if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
             const bob = .24 + Math.sin(timestampMs * .003 + state.loot.itemIds[index]) * .08;
             const mesh = this.loot[state.loot.kinds[index]], instance = mesh.count++;
             this.setInstance(mesh, instance, x, this.height(x, z) + bob, z, 1, timestampMs * .0015);
@@ -201,18 +214,22 @@ export class CombatLayer implements WorldRenderLayer {
             mesh.instanceColor!.needsUpdate = true;
         }
 
-        this.chests.count = this.chestLids.count = this.chestLocks.count = state.chests.count;
+        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         for (let index = 0; index < state.chests.count; index += 1) {
             const x = state.chests.x[index];
             const z = state.chests.z[index];
+            if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
+            const instance = this.chests.count++;
+            this.chestLids.count++;
+            this.chestLocks.count++;
             const y = this.height(x, z);
-            this.setInstance(this.chests, index, x, y + 0.2, z, 1, 0);
-            this.setInstance(this.chestLids, index, x, y + 0.445, z, 1, 0);
-            this.setInstance(this.chestLocks, index, x, y + 0.34, z + 0.26, 1, 0);
+            this.setInstance(this.chests, instance, x, y + 0.2, z, 1, 0);
+            this.setInstance(this.chestLids, instance, x, y + 0.445, z, 1, 0);
+            this.setInstance(this.chestLocks, instance, x, y + 0.34, z + 0.26, 1, 0);
             this.color.copy(CHEST_COLORS[state.chests.tiers[index]]);
             if (state.chests.tiers[index] === 4) this.color.setHSL((timestampMs * 0.00015 + index * 0.13) % 1, 0.85, 0.65);
-            this.chests.setColorAt(index, this.color);
-            this.chestLids.setColorAt(index, this.color);
+            this.chests.setColorAt(instance, this.color);
+            this.chestLids.setColorAt(instance, this.color);
         }
         for (const mesh of [this.chests, this.chestLids, this.chestLocks]) mesh.instanceMatrix.needsUpdate = true;
         this.chests.instanceColor!.needsUpdate = true;

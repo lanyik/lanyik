@@ -3,6 +3,8 @@ import type { ConsumableEffect } from "../core/InventoryItem";
 import { CombatSimulation, type CombatNotice, type CombatSnapshot } from "../core/CombatSimulation";
 import { FixedStepClock } from "../core/FixedStepClock";
 import type { CombatStart, CombatView } from "./CombatView";
+import { compareEquipment } from "../core/EquipmentEvaluation";
+import type { Equipment } from "../core/Equipment";
 
 export type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -17,6 +19,7 @@ export interface SessionSnapshot {
     readonly hidden: boolean;
     readonly combat?: CombatSnapshot;
     readonly notices: readonly VisibleNotice[];
+    readonly upgrades: readonly Equipment[];
     readonly error?: string;
 }
 
@@ -33,6 +36,8 @@ export type SessionCommand =
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
     | { readonly type: "discard"; readonly itemId: number }
     | { readonly type: "sort-inventory" }
+    | { readonly type: "clear-inferior-equipment" }
+    | { readonly type: "dismiss-upgrade"; readonly itemId: number }
     | { readonly type: "set-auto-clear-equipment"; readonly enabled: boolean };
 
 const UI_PUBLISH_INTERVAL_MS = 100;
@@ -49,6 +54,7 @@ export class CombatSession {
     private simulation: CombatSimulation | undefined;
     private startPosition: CombatStart | undefined;
     private visibleNotices: VisibleNotice[] = [];
+    private readonly upgradeIds = new Set<number>();
     private snapshot: SessionSnapshot;
     private loadRevision = 0;
     private lastPublishedAt = -Infinity;
@@ -73,6 +79,7 @@ export class CombatSession {
         this.paused = false;
         this.simulation = undefined;
         this.visibleNotices = [];
+        this.upgradeIds.clear();
         this.clock.setRunning(false);
         this.clock.reset();
         this.view.clearMovement();
@@ -102,6 +109,7 @@ export class CombatSession {
 
         const notices = this.simulation.drainNotices();
         if (notices.length > 0) {
+            for (const notice of notices) if (notice.acquiredEquipmentId !== undefined) this.upgradeIds.add(notice.acquiredEquipmentId);
             this.visibleNotices = [
                 ...this.visibleNotices,
                 ...notices.map(notice => Object.freeze({ ...notice, expiresAt: timestampMs + NOTICE_LIFETIME_MS }))
@@ -129,6 +137,7 @@ export class CombatSession {
                 if (!this.startPosition) throw new Error("Combat start position is missing");
                 this.simulation = new CombatSimulation(this.seed, this.startPosition);
                 this.visibleNotices = [];
+                this.upgradeIds.clear();
                 this.paused = false;
                 this.clock.reset();
                 this.syncClock();
@@ -153,6 +162,8 @@ export class CombatSession {
                 this.simulation.discard(command.itemId);
                 break;
             case "sort-inventory": this.simulation.sortInventory(); break;
+            case "clear-inferior-equipment": this.simulation.clearInferiorEquipment(); break;
+            case "dismiss-upgrade": this.upgradeIds.delete(command.itemId); break;
             case "set-auto-clear-equipment": this.simulation.setAutoClearLowLevelEquipment(command.enabled); break;
             default:
                 command satisfies never;
@@ -194,12 +205,22 @@ export class CombatSession {
     }
 
     private capture(): SessionSnapshot {
+        const combat = this.simulation?.getSnapshot();
+        const upgrades: Equipment[] = [];
+        // Re-evaluate on every publication: equipping, discarding or clearing can invalidate a prompt.
+        for (const id of this.upgradeIds) {
+            const item = combat?.player.inventory.find(candidate => candidate.id === id);
+            if (combat && item?.kind === "equipment" && compareEquipment(item, combat.player).delta > 0) upgrades.push(item);
+            else this.upgradeIds.delete(id);
+        }
+        if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);
         return Object.freeze({
             status: this.status,
             seed: this.seed,
             paused: this.paused,
             hidden: this.hidden,
-            combat: this.simulation?.getSnapshot(),
+            combat,
+            upgrades: Object.freeze(upgrades),
             notices: Object.freeze([...this.visibleNotices]),
             error: this.error
         });
