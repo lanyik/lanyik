@@ -15,7 +15,7 @@ export function Hint({ label, children }: { readonly label: string; readonly chi
         <button className="hint" aria-label={`${label}说明`} aria-describedby={anchor ? id : undefined}
             onFocus={event => { const box = event.currentTarget.getBoundingClientRect(); setAnchor({ x: box.right, y: box.bottom }); }}
             onMouseEnter={event => { const box = event.currentTarget.getBoundingClientRect(); setAnchor({ x: box.right, y: box.bottom }); }}
-            onBlur={() => setAnchor(undefined)} onMouseLeave={() => setAnchor(undefined)}>!</button>
+            onBlur={() => setAnchor(undefined)} onMouseLeave={event => { if (document.activeElement !== event.currentTarget) setAnchor(undefined); }}>!</button>
         {anchor && createPortal(<div role="tooltip" id={id} className="hint-popup" style={{
             left: Math.max(8, Math.min(anchor.x + 8, window.innerWidth - 300)), top: Math.max(8, Math.min(anchor.y + 8, window.innerHeight - 260))
         }}>{children}</div>, document.body)}
@@ -42,20 +42,20 @@ export function ItemIcon({ kind, className = "" }: { readonly kind: keyof typeof
 }
 export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">
-        <header><strong>{item.name}</strong><span>Lv.{item.itemLevel} · {RARITY_NAMES[item.rarity]}品质</span></header>
+        <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b><span>等级 {item.itemLevel}</span></span></header>
         {item.kind === "equipment" && <>
             <div className="item-meta"><span>{SLOT_NAMES[item.slot]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
             <h4 className="item-section-title">基础属性</h4>
-            <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <span key={id}>{BONUS_INFO[id].name} +{statValue(id, item.baseBonuses[id])}</span>)}</div>
+            <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <div className="property-row" key={id}><span>{BONUS_INFO[id].name}</span><b>+{statValue(id, item.baseBonuses[id])}</b></div>)}</div>
             <h4 className="item-section-title">附加词条</h4>
             <ul className="affix-list" aria-label={`${item.affixes.length}条词条`}>{item.affixes.map(affix => <li key={affix.stat}>
-                {BONUS_INFO[affix.stat].name} {affix.stat === "shieldRecovery" ? "−" : "+"}{statValue(affix.stat, affix.value)}
-                <Hint label={BONUS_INFO[affix.stat].name}>{BONUS_INFO[affix.stat].detail}</Hint>
+                <span>{BONUS_INFO[affix.stat].name}<Hint label={BONUS_INFO[affix.stat].name}>{BONUS_INFO[affix.stat].detail}</Hint></span>
+                <b>{affix.stat === "shieldRecovery" ? "−" : "+"}{statValue(affix.stat, affix.value)}</b>
             </li>)}</ul>
         </>}
         {item.kind === "orb" && <><div className="item-meta">寻宝宝珠 · 宝箱 / 领主专属</div>
-            <div className="item-properties">{item.ratings.quantity > 0 && <span>掉落数量 +{item.ratings.quantity}</span>}
-                {item.ratings.quality > 0 && <span>品质寻宝 +{item.ratings.quality}</span>}{item.ratings.stars > 0 && <span>星级寻宝 +{item.ratings.stars}</span>}</div></>}
-        {item.kind === "consumable" && <div className="item-properties">恢复 {item.restore} 点{item.effect === "health" ? "生命" : "法力"} · 药剂共用 4 秒冷却</div>}
+            <h4 className="item-section-title">嵌入效果</h4><div className="item-properties">{item.ratings.quantity > 0 && <div className="property-row"><span>掉落数量</span><b>+{item.ratings.quantity}</b></div>}
+                {item.ratings.quality > 0 && <div className="property-row"><span>品质寻宝</span><b>+{item.ratings.quality}</b></div>}{item.ratings.stars > 0 && <div className="property-row"><span>星级寻宝</span><b>+{item.ratings.stars}</b></div>}</div></>}
+        {item.kind === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row"><span>恢复{item.effect === "health" ? "生命" : "法力"}</span><b>+{item.restore}</b></div><p>药剂共用 4 秒冷却</p></>}
     </div>;
 }

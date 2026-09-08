@@ -110,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Redesigned the survivor HUD and menus with readable resource labels, visible
+  experience values, core-stat summaries, grouped attributes and consistent SVG
+  icons. Character and inventory windows share a non-overlapping desktop layout
+  and switchable narrow-screen workspace; item cards align names and values,
+  expose category counts and bag capacity, and distinguish primary actions.
 - Grass and trees now share deterministic world-space layouts between static
   maps and Workers. Grass reaches all six tile edges; LODs preserve root
   positions. Tree size defaults to 1.6, has a demo control, and governs spacing

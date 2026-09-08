@@ -1,13 +1,15 @@
 import { REGION_RADIUS, REGION_RULES } from "../core/RegionalWorld";
 import type { CombatSnapshot } from "../core/CombatSimulation";
+import { UiIcon } from "./UiIcon";
 
 const HEX_POINTS = Array.from({ length: 6 }, (_, index) => `${Math.cos(index * Math.PI / 3) * 20},${Math.sin(index * Math.PI / 3) * 20}`).join(" ");
 export function RegionMap({ combat, expanded, onToggle }: { readonly combat: CombatSnapshot; readonly expanded: boolean; readonly onToggle: () => void }) {
     const scale = 20 / REGION_RADIUS;
     const region = combat.region;
     return <section className={`region-map-panel panel${expanded ? " expanded" : ""}`} aria-label="地域地图" data-testid="region-status" data-difficulty={region.difficulty}>
-        <header><div><strong>{REGION_RULES[region.difficulty].name}</strong><small>第 {region.ring} 环 · 等级带 {region.bandMin}–{region.bandMax}</small></div>
-            <button aria-label={expanded ? "收起地图" : "展开地图"} onClick={onToggle}><kbd>M</kbd></button></header>
+        <header><div><span className="eyebrow">THE WILDS / 地域</span><strong>{REGION_RULES[region.difficulty].name}</strong></div>
+            <button aria-label={expanded ? "收起地图" : "展开地图"} onClick={onToggle}><UiIcon name={expanded ? "close" : "map"} /><kbd>M</kbd></button></header>
+        <div className="region-meta"><span>第 {region.ring} 环</span><span>等级带 <b>{region.bandMin}–{region.bandMax}</b></span></div>
         <svg className="region-map" viewBox="-112 -96 224 192" role="img" aria-label="六边形地域地图">
             {combat.nearbyRegions.map(candidate => <g className={`region-cell region-${candidate.difficulty}${candidate.x === region.x && candidate.z === region.z ? " current" : ""}`}
                 key={`${candidate.x},${candidate.z}`} transform={`translate(${(candidate.centerX - region.centerX) * scale},${(candidate.centerZ - region.centerZ) * scale})`}>
