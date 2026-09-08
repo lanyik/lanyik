@@ -2,7 +2,10 @@
 *.png -text
 *.jpg -text
 *.glb -text
-apps/survivor/assets/actors/*-LICENSE.txt -text
+# Preserve the original licenses byte-for-byte, including publisher whitespace.
+apps/survivor/assets/actors/*-LICENSE.txt -text -whitespace
+apps/survivor/assets/actors/**/*.gltf -text
+apps/survivor/assets/actors/**/*.bin -text
 
 public/** linguist-vendored
 webpack.config.js linguist-vendored

@@ -1,102 +1,171 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createHash } from "node:crypto";
-import { AnimationMixer, Box3, BufferGeometry, Float32BufferAttribute, Mesh, MeshStandardMaterial, Vector3 } from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import sharp from "sharp";
+import { MeshoptSimplifier } from "meshoptimizer";
+import { Box3, BufferGeometry, DoubleSide, Float32BufferAttribute, Matrix3, Matrix4, Mesh, MeshStandardMaterial, Vector3 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { actorPoser, disposeActorSource, loadActorSource, sourceReader } from "./actor-source.mjs";
 
-const ACTORS = ["Rogue_Hooded", "Skeleton_Minion", "Skeleton_Rogue", "Skeleton_Warrior", "Skeleton_Mage"];
 const FRAMES = 8;
+const ACTORS = [
+    { name: "Ranger", model: "ranger/Male_Ranger.gltf", height: 1.6, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", head: true },
+    { name: "Puglin", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", color: "bestiary/T_Puglin_BaseColor_2.png" },
+    { name: "Imp", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", omit: ["Imp_Mace", "Imp_Chains"] },
+    { name: "Puglin_Brute", model: "bestiary/Puglin.glb", height: 1, idle: "Sword_Idle", walk: "Walk_Loop" },
+    { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Spell_Simple_Idle_Loop", walk: "Jog_Fwd_Loop", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
+];
+const HEAD_IMAGES = { "T_Hair_1_Normal_png.png": "T_Hair_1_Normal.png", "T_Eye_Normal_png.png": "T_Eye_Normal.png" };
 class NodeFileReader {
     async readAsArrayBuffer(blob) { this.result = await blob.arrayBuffer(); this.onloadend?.(); }
     async readAsDataURL(blob) { this.result = `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString("base64")}`; this.onloadend?.(); }
 }
 
-function withoutTextures(bytes) {
-    if (bytes.readUInt32LE(0) !== 0x46546c67 || bytes.readUInt32LE(4) !== 2) throw new Error("Expected GLB 2.0 actor");
-    const jsonLength = bytes.readUInt32LE(12);
-    const json = JSON.parse(bytes.subarray(20, 20 + jsonLength).toString("utf8"));
-    const bin = bytes.subarray(28 + jsonLength);
-    if (json.images.length !== 1) throw new Error("Actor must have one embedded atlas");
-    const view = json.bufferViews[json.images[0].bufferView];
-    const atlas = bin.subarray(view.byteOffset, view.byteOffset + view.byteLength);
-    delete json.images; delete json.textures; delete json.samplers;
-    for (const material of json.materials) delete material.pbrMetallicRoughness.baseColorTexture;
-    const encoded = Buffer.from(JSON.stringify(json));
-    const padded = Buffer.alloc(Math.ceil(encoded.length / 4) * 4, 32); encoded.copy(padded);
-    const header = Buffer.alloc(20); header.writeUInt32LE(0x46546c67); header.writeUInt32LE(2, 4);
-    header.writeUInt32LE(28 + padded.length + bin.length, 8); header.writeUInt32LE(padded.length, 12); header.writeUInt32LE(0x4e4f534a, 16);
-    const binHeader = Buffer.alloc(8); binHeader.writeUInt32LE(bin.length); binHeader.writeUInt32LE(0x004e4942, 4);
-    return { buffer: Buffer.concat([header, padded, binHeader, bin]), atlas };
-}
-
-/** Bake rigged source meshes once at build time. Runtime actors share eight GPU morph poses. */
-export async function prepareSurvivorActors(source, output) {
-    globalThis.FileReader = NodeFileReader;
-    await mkdir(output, { recursive: true });
-    const sources = JSON.parse(await readFile(resolve(source, "sources.json"), "utf8"));
-    const manifest = { frames: FRAMES, actors: [] };
-    for (const name of ACTORS) {
-        const raw = await readFile(resolve(source, `${name}.glb`));
-        const digest = createHash("sha256").update(raw).digest("hex");
-        if (sources.find(entry => entry.file === `${name}.glb`)?.sha256 !== digest) throw new Error(`${name}: source asset hash mismatch`);
-        const { buffer, atlas } = withoutTextures(raw);
-        const gltf = await new GLTFLoader().parseAsync(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), "");
-        const meshes = []; gltf.scene.traverse(object => { if (object.isMesh) meshes.push(object); });
-        const mixer = new AnimationMixer(gltf.scene);
-        const idle = gltf.animations.find(clip => clip.name === "Idle");
-        const walk = gltf.animations.find(clip => clip.name === "Running_A");
-        if (!idle || !walk || meshes.length === 0) throw new Error(`${name}: missing required poses or meshes`);
-        const uv = [], indices = [], groups = []; let offset = 0;
-        const sourceMaterials = [...new Set(meshes.map(mesh => mesh.material))];
-        for (const mesh of meshes) {
-            const attr = mesh.geometry.attributes.uv;
-            if (!attr) throw new Error(`${name}: missing atlas coordinates`);
-            for (let i = 0; i < attr.count; i++) uv.push(attr.getX(i), attr.getY(i));
-            const index = mesh.geometry.index;
-            groups.push({ start: indices.length, count: index?.count ?? attr.count, material: sourceMaterials.indexOf(mesh.material) });
-            for (let i = 0; i < (index?.count ?? attr.count); i++) indices.push(offset + (index ? index.getX(i) : i));
-            offset += attr.count;
-        }
-        const point = new Vector3();
-        const pose = (clip, time) => {
-            mixer.stopAllAction(); mixer.clipAction(clip).reset().play(); mixer.setTime(time);
-            gltf.scene.updateMatrixWorld(true);
-            const vertices = [];
-            for (const mesh of meshes) {
-                if (mesh.isSkinnedMesh) mesh.skeleton.update();
-                for (let i = 0; i < mesh.geometry.attributes.position.count; i++) {
-                    mesh.getVertexPosition(i, point).applyMatrix4(mesh.matrixWorld);
-                    vertices.push(point.x, point.y, point.z);
+/** Compact the selected triangles, so the unseen body under the outfit never reaches the GPU. */
+function actorParts(rigs, descriptor) {
+    const parts = [], materialSlots = new Map();
+    for (let rigIndex = 0; rigIndex < rigs.length; rigIndex++) {
+        const rig = rigs[rigIndex];
+        const neck = rigIndex === 1 ? rig.scene.getObjectByName("neck_01").getWorldPosition(new Vector3()).y + .025 : undefined;
+        for (const mesh of rig.meshes) {
+            if (descriptor.omit?.includes(mesh.name)) continue;
+            const geometry = mesh.geometry;
+            const attributes = geometry.attributes;
+            const originalIndices = new Uint32Array(geometry.index?.array ?? Array.from({ length: attributes.position.count }, (_, i) => i));
+            // Preserve texture, shading and skin-weight changes while reducing tiny surface triangles.
+            const simplificationAttributes = new Float32Array(attributes.position.count * 13);
+            for (let i = 0; i < attributes.position.count; i++) {
+                for (let c = 0; c < 3; c++) simplificationAttributes[i * 13 + c] = attributes.normal.getComponent(i, c);
+                for (let c = 0; c < 2; c++) simplificationAttributes[i * 13 + 3 + c] = attributes.uv.getComponent(i, c);
+                for (let c = 0; c < 4; c++) {
+                    simplificationAttributes[i * 13 + 5 + c] = attributes.skinWeight.getComponent(i, c);
+                    simplificationAttributes[i * 13 + 9 + c] = attributes.skinIndex.getComponent(i, c) / mesh.skeleton.bones.length;
                 }
             }
-            return vertices;
-        };
-        const base = pose(idle, 0);
-        const bounds = new Box3().setFromArray(base);
-        const scale = 1.25 / (bounds.max.y - bounds.min.y);
-        const normalize = vertices => vertices.map((value, index) => (value - (index % 3 === 1 ? bounds.min.y : 0)) * scale);
-        const geometry = new BufferGeometry();
-        geometry.setIndex(indices); geometry.setAttribute("uv", new Float32BufferAttribute(uv, 2));
-        geometry.setAttribute("position", new Float32BufferAttribute(normalize(base), 3)); geometry.computeVertexNormals();
-        geometry.morphAttributes.position = []; geometry.morphAttributes.normal = [];
-        for (let frame = 0; frame < FRAMES; frame++) {
-            const target = new BufferGeometry(); target.setIndex(indices);
-            target.setAttribute("position", new Float32BufferAttribute(normalize(pose(walk, walk.duration * frame / FRAMES)), 3)); target.computeVertexNormals();
-            geometry.morphAttributes.position.push(target.attributes.position);
-            geometry.morphAttributes.normal.push(target.attributes.normal);
+            const [simplified] = MeshoptSimplifier.simplifyWithAttributes(originalIndices, attributes.position.array, 3,
+                simplificationAttributes, 13, [.25, .25, .25, 1, 1, .25, .25, .25, .25, .5, .5, .5, .5], null,
+                Math.floor(originalIndices.length * .4 / 3) * 3, .008);
+            const selected = [], remap = new Map(), indices = [], point = new Vector3();
+            for (let i = 0; i < simplified.length; i += 3) {
+                const triangle = [simplified[i], simplified[i + 1], simplified[i + 2]];
+                if (neck !== undefined && triangle.some(index => point.fromBufferAttribute(geometry.attributes.position, index).applyMatrix4(mesh.matrixWorld).y < neck)) continue;
+                for (const index of triangle) {
+                    if (!remap.has(index)) { remap.set(index, selected.length); selected.push(index); }
+                    indices.push(remap.get(index));
+                }
+            }
+            if (!indices.length) continue;
+            if (!materialSlots.has(mesh.material)) materialSlots.set(mesh.material, {
+                slot: materialSlots.size, textures: rig.materials.get(mesh.material.name)
+            });
+            parts.push({ mesh, selected, indices, slot: materialSlots.get(mesh.material).slot });
         }
-        for (const group of groups) geometry.addGroup(group.start, group.count, group.material);
-        const material = sourceMaterials.map(source => { const material = new MeshStandardMaterial({ color: source.color, emissive: source.emissive, side: source.side, roughness: .9 }); material.name = source.name; return material; });
-        const mesh = new Mesh(geometry, material); mesh.name = name;
-        const exported = await new GLTFExporter().parseAsync(mesh, { binary: true });
-        await writeFile(resolve(output, `${name}.glb`), Buffer.from(exported));
-        await writeFile(resolve(output, `${name}.png`), atlas);
-        manifest.actors.push({ name, frames: FRAMES, cycle: walk.duration, vertices: offset, triangles: indices.length / 3,
-            sourceSha256: digest, bytes: exported.byteLength + atlas.length });
-        geometry.dispose(); for (const entry of material) entry.dispose(); mixer.uncacheRoot(gltf.scene);
-        for (const sourceMesh of meshes) { sourceMesh.geometry.dispose(); sourceMesh.material.dispose(); }
     }
+    if (!parts.length) throw new Error(`${descriptor.name}: empty actor`);
+    return { parts, materials: [...materialSlots.values()] };
+}
+
+async function bakeAtlases(read, output, descriptor, materials) {
+    const size = descriptor.head ? 1024 : 512, columns = Math.ceil(Math.sqrt(materials.length));
+    const cell = Math.floor(size / columns), gutter = 4, inner = cell - gutter * 2;
+    let bytes = 0;
+    for (const channel of ["color", "normal", "orm", "emissive"]) {
+        const tiles = [];
+        for (const { slot, textures } of materials) {
+            let input = channel === "color" && descriptor.color ? await read(descriptor.color) : textures[channel];
+            const defaults = { color: [255, 255, 255], normal: [128, 128, 255], orm: [255, 255, 255], emissive: [0, 0, 0] };
+            const [r, g, b] = defaults[channel];
+            let pipeline = input ? sharp(input).resize(inner, inner, { fit: "fill" }) : sharp({ create: { width: inner, height: inner, channels: 3, background: { r, g, b } } });
+            if (channel === "orm") pipeline = pipeline.pipelineColourspace("srgb").removeAlpha().linear([1, textures.roughness, textures.metalness], [0, 0, 0]);
+            if (channel === "emissive") pipeline = pipeline.removeAlpha().linear(textures.emission / 2, 0);
+            input = await pipeline.extend({ top: gutter, bottom: gutter, left: gutter, right: gutter, extendWith: "copy" }).png().toBuffer();
+            tiles.push({ input, left: slot % columns * cell, top: Math.floor(slot / columns) * cell });
+        }
+        const atlas = await sharp({ create: { width: size, height: size, channels: 3, background: { r: 0, g: 0, b: 0 } } }).composite(tiles).png().toBuffer();
+        await writeFile(resolve(output, `${descriptor.name}-${channel}.png`), atlas); bytes += atlas.length;
+    }
+    return { size, columns, cell, gutter, inner, bytes };
+}
+
+/** Bake authored skin normals as well as positions, preserving smooth faces across UV seams. */
+function capture(parts) {
+    const positions = [], normals = [], point = new Vector3(), normal = new Vector3();
+    const skin = new Matrix4(), world = new Matrix4(), normalMatrix = new Matrix3();
+    for (const { mesh, selected } of parts) {
+        mesh.skeleton.update();
+        const attributes = mesh.geometry.attributes;
+        for (const index of selected) {
+            mesh.getVertexPosition(index, point).applyMatrix4(mesh.matrixWorld); positions.push(point.x, point.y, point.z);
+            skin.elements.fill(0);
+            for (let component = 0; component < 4; component++) {
+                const weight = attributes.skinWeight.getComponent(index, component);
+                const offset = attributes.skinIndex.getComponent(index, component) * 16;
+                for (let j = 0; j < 16; j++) skin.elements[j] += mesh.skeleton.boneMatrices[offset + j] * weight;
+            }
+            world.copy(mesh.matrixWorld).multiply(mesh.bindMatrixInverse).multiply(skin).multiply(mesh.bindMatrix);
+            normalMatrix.getNormalMatrix(world);
+            normal.fromBufferAttribute(attributes.normal, index).applyMatrix3(normalMatrix).normalize(); normals.push(normal.x, normal.y, normal.z);
+        }
+    }
+    if (!positions.every(Number.isFinite) || !normals.every(Number.isFinite)) throw new Error("Non-finite baked actor pose");
+    return { positions, normals };
+}
+
+/** Offline source rigs become one PBR primitive and eight GPU morph poses per actor. */
+export async function prepareSurvivorActors(source, output) {
+    globalThis.FileReader = NodeFileReader;
+    await MeshoptSimplifier.ready;
+    await mkdir(output, { recursive: true });
+    const read = await sourceReader(source);
+    const animation = await loadActorSource(read, "animation/UAL1_Standard.glb");
+    const manifest = { frames: FRAMES, actors: [] };
+    try {
+        for (const descriptor of ACTORS) {
+            const rigs = [await loadActorSource(read, descriptor.model)];
+            let poser;
+            try {
+                if (descriptor.head) rigs.push(await loadActorSource(read, "head/Superhero_Male_FullBody.gltf", HEAD_IMAGES));
+                const { parts, materials } = actorParts(rigs, descriptor);
+                const atlas = await bakeAtlases(read, output, descriptor, materials);
+                poser = actorPoser(animation, rigs);
+                poser.pose(descriptor.idle, 0);
+                const base = capture(parts), bounds = new Box3().setFromArray(base.positions);
+                const scale = descriptor.height / (bounds.max.y - bounds.min.y);
+                if (!Number.isFinite(scale) || scale <= 0) throw new Error(`${descriptor.name}: invalid pose bounds`);
+                const normalize = values => values.map((value, i) => (value - (i % 3 === 1 ? bounds.min.y : 0)) * scale);
+                const geometry = new BufferGeometry(), uv = [], indices = [];
+                let offset = 0;
+                for (const part of parts) {
+                    const attr = part.mesh.geometry.attributes.uv;
+                    for (const index of part.selected) uv.push(
+                        (part.slot % atlas.columns * atlas.cell + atlas.gutter + attr.getX(index) * atlas.inner) / atlas.size,
+                        (Math.floor(part.slot / atlas.columns) * atlas.cell + atlas.gutter + attr.getY(index) * atlas.inner) / atlas.size);
+                    for (const index of part.indices) indices.push(offset + index);
+                    offset += part.selected.length;
+                }
+                geometry.setIndex(indices); geometry.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+                geometry.setAttribute("position", new Float32BufferAttribute(normalize(base.positions), 3));
+                geometry.setAttribute("normal", new Float32BufferAttribute(base.normals, 3));
+                geometry.morphAttributes.position = []; geometry.morphAttributes.normal = [];
+                const walk = animation.animations.find(clip => clip.name === descriptor.walk);
+                for (let frame = 0; frame < FRAMES; frame++) {
+                    poser.pose(descriptor.walk, walk.duration * frame / FRAMES);
+                    const target = capture(parts);
+                    geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
+                    geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
+                }
+                const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 1, emissive: 0xffffff, emissiveIntensity: 2, side: DoubleSide });
+                material.name = descriptor.name;
+                const mesh = new Mesh(geometry, material); mesh.name = descriptor.name;
+                // Gameplay supplies phase from the real clip duration, independently for each actor type.
+                mesh.userData = { cycle: walk.duration, frames: FRAMES, height: descriptor.height };
+                const exported = await new GLTFExporter().parseAsync(mesh, { binary: true });
+                await writeFile(resolve(output, `${descriptor.name}.glb`), Buffer.from(exported));
+                manifest.actors.push({ name: descriptor.name, frames: FRAMES, cycle: walk.duration, height: descriptor.height,
+                    vertices: offset, triangles: indices.length / 3, primitives: 1, atlasSize: atlas.size, bytes: exported.byteLength + atlas.bytes });
+                geometry.dispose(); material.dispose();
+            } finally { poser?.dispose(); for (const rig of rigs) disposeActorSource(rig); }
+        }
+    } finally { disposeActorSource(animation); }
     await writeFile(resolve(output, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
     console.log(`Prepared ${ACTORS.length} animated actors (${Math.round(manifest.actors.reduce((sum, actor) => sum + actor.bytes, 0) / 1024)} KiB)`);
 }

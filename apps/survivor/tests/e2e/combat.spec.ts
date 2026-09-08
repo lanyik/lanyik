@@ -4,13 +4,16 @@ test("plays with baked actors, independent character/bag windows and complete ke
     test.setTimeout(240_000);
     const errors: string[] = [];
     const loadedActors = new Set<string>();
+    const loadedAtlases = new Set<string>();
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     page.on("response", response => { if (/\/actors\/.*\.glb$/.test(response.url()) && response.ok()) loadedActors.add(response.url()); });
+    page.on("response", response => { if (/\/actors\/.*\.png$/.test(response.url()) && response.ok()) loadedAtlases.add(response.url()); });
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const application = page.locator(".survivor");
     await expect(application).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     expect(loadedActors.size).toBe(5);
+    expect(loadedAtlases.size).toBe(20);
     const worldBounds = await page.locator("#survivor-world").boundingBox();
     expect(worldBounds?.width).toBe(page.viewportSize()!.width);
     expect(worldBounds?.height).toBe(page.viewportSize()!.height);
@@ -29,6 +32,15 @@ test("plays with baked actors, independent character/bag windows and complete ke
     const tickBefore = Number(await page.getByTestId("elapsed-time").getAttribute("data-tick"));
     await page.keyboard.down("KeyW");
     await expect.poll(async () => Number(await page.getByTestId("elapsed-time").getAttribute("data-tick"))).toBeGreaterThan(tickBefore + 10);
+    const pose = await page.evaluate(() => {
+        const session = window.survivorApplication!.session as unknown as {
+            view: { layer: { actors: { hero: { children: { morphTargetInfluences: number[] }[] }; enemies: unknown[][] } } }
+        };
+        const actors = session.view.layer.actors;
+        return { weights: actors.hero.children[0].morphTargetInfluences, primitives: actors.enemies.map(pool => pool.length) };
+    });
+    expect(pose.weights.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1);
+    expect(pose.primitives).toEqual([1, 1, 1, 1]);
     await page.keyboard.up("KeyW");
     await page.keyboard.press("KeyP");
     await expect(application).toHaveAttribute("data-paused", "true");
@@ -140,12 +152,12 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(errors).toEqual([]);
 });
 
-test("reports a failed actor download and can reload the same world after the resource recovers", async ({ page }) => {
-    const model = "**/actors/Skeleton_Rogue.glb";
+for (const file of ["Imp.glb", "Imp-normal.png"]) test(`reports failed actor resource ${file} and reloads after recovery`, async ({ page }) => {
+    const model = `**/actors/${file}`;
     await page.route(model, route => route.fulfill({ status: 503, body: "actor unavailable" }));
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "failed", { timeout: 30_000 });
-    await expect(page.getByRole("alert")).toContainText("Skeleton_Rogue.glb");
+    await expect(page.getByRole("alert")).toContainText(file);
     await page.unroute(model);
     await page.getByRole("button", { name: "重新尝试" }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });

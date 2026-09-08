@@ -4,6 +4,7 @@ import {
     CylinderGeometry,
     Color,
     DoubleSide,
+    DirectionalLight,
     DynamicDrawUsage,
     Group,
     InstancedMesh,
@@ -91,6 +92,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly dummy = new Object3D();
     private readonly color = new Color();
     private readonly viewCenter = new Vector2();
+    private readonly actorFill = new DirectionalLight(0xe2ebdf, 1.6);
     private readonly heightCache = new Map<string, number>();
     private host: WorldRenderLayerHost | undefined;
 
@@ -98,6 +100,9 @@ export class CombatLayer implements WorldRenderLayer {
         installActorFade(this.lootMaterial, this.viewCenter);
         installActorFade(this.emberMaterial, this.viewCenter);
         this.root.name = "survivor-combat";
+        // Soft light from the fixed camera direction keeps dark leather and faces readable.
+        this.actorFill.position.set(-6, 9, 7);
+        this.root.add(this.actorFill, this.actorFill.target);
         this.projectiles = this.instance(this.geometries[0], this.projectileMaterial, MAX_PROJECTILES);
         this.experience = this.instance(this.geometries[1], this.experienceMaterial, MAX_EXPERIENCE_ORBS);
         this.loot = [2, 8, 9].map(index => this.instance(this.geometries[index], this.lootMaterial, MAX_GROUND_EQUIPMENT));
@@ -143,7 +148,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.viewCenter.set(playerX, playerZ);
         this.player.position.set(playerX, this.height(playerX, playerZ), playerZ);
         this.playerBody.rotation.y = state.player.heading;
-        this.actors.animateHero(state.player.animationTime / .8, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
+        this.actors.animateHero(state.player.animationTime, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
         this.playerBody.rotation.z = state.player.gameOver ? -Math.PI / 2 : 0;
         this.playerBody.visible = !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
         this.shield.visible = state.player.shieldReady;
@@ -172,7 +177,7 @@ export class CombatLayer implements WorldRenderLayer {
                 this.setInstance(mesh, instance, x, this.height(x, z), z, state.enemies.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
                 mesh.geometry.getAttribute("actorHome").setXY(instance, homeX, homeZ);
-                this.actors.animateEnemy(mesh, instance, state.player.animationTime / .8 + state.enemies.ids[index] * .37, moving);
+                this.actors.animateEnemy(mesh, instance, state.player.animationTime, state.enemies.ids[index] * .37, moving);
             }
         }
         for (const pool of this.actors.enemies) for (const mesh of pool) {
@@ -259,6 +264,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.host?.removeObject(this.root);
         this.host = undefined;
         this.actors?.dispose();
+        this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks]) mesh.dispose();
         for (const geometry of this.geometries) geometry.dispose();
         for (const material of [

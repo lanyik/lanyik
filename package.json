@@ -98,6 +98,7 @@
     "http-server": "^14.1.1",
     "meshoptimizer": "1.2.0",
     "rollup": "^4.62.2",
+    "sharp": "^0.35.4",
     "stats.js": "^0.17.0",
     "three": "^0.185.1",
     "tsup": "^8.5.1",

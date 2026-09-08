@@ -1,50 +1,88 @@
 # 角色资产与动画构建
 
-对应 `scripts/lib/survivor-actors.mjs`、`presentation/ActorModels.ts` 与 `CombatLayer.ts`。
+对应 `scripts/lib/actor-source.mjs`、`scripts/lib/survivor-actors.mjs`、
+`scripts/prepare-survivor-assets.mjs`、`presentation/ActorModels.ts` 与 `CombatLayer.ts`。
 
-新的美术候选与免费范围见 [角色美术调研](actor-art-research.md)；该调研尚未改变下述运行时资产。
+## 当前试装与许可
 
-## 来源与授权
+本轮采用 Quaternius 的 Fantasy Outfits 游侠与 Bestiary 免费怪物。
+这是两个怪物基础模型的四种玩法表现，不是完整七怪物付费包；未购买付费资源。
+原来的 KayKit 模型与未使用许可已移除。候选比较见 [角色美术调研](actor-art-research.md)。
 
-模型采用 Kay Lousberg 的 KayKit CC0 角色包，可用于商业项目。原始 GLB 与原文许可证保存在
-`apps/survivor/assets/actors`；`sources.json` 记录固定提交 URL、文件大小和 SHA-256。
-构建不访问外网，源模型哈希不符时明确失败。
-
-| 用途 | 文件 | 官方仓库 / 固定提交 |
+| 输入 | 用途 | 作者来源 / 许可 |
 |---|---|---|
-| 守夜人 | Rogue_Hooded.glb | [Adventurers](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0) / `672074b73ba276876a19e8816ecdc5241817ab47` |
-| 骸骨仆从、潜行者、重卫、术士与领主 | Skeleton_Minion / Rogue / Warrior / Mage.glb | [Skeletons](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0) / `15b62b9bad122f72926c10fb14d622c73819fa54` |
+| `ranger/Male_Ranger.gltf` 与配套文件 | 游侠服装、护肩、兜帽 | [Fantasy Outfits](https://quaternius.itch.io/modular-character-outfits-fantasy) / CC0 |
+| `head/Superhero_Male_FullBody.gltf` 与配套文件 | 仅保留头部、眼睛与眉毛，移除衣服内部身体 | [Universal Base Characters](https://quaternius.itch.io/universal-base-characters) / CC0 |
+| `animation/UAL1_Standard.glb` | Idle、Jog、Walk、Sword Idle、Spell Idle | [Universal Animation Library](https://quaternius.itch.io/universal-animation-library) / CC0 |
+| `bestiary/Imp.glb`、`Puglin.glb` 与两张原版配色 | 两种怪物及持械、体型、施法姿势的试装变体 | [Bestiary](https://quaternius.itch.io/bestiary-dungeon-monsters-kit) / QAL 1.0 |
 
-许可原文分别为 `adventurers-LICENSE.txt`、`skeletons-LICENSE.txt`，随生产资源一起发布。
-Git 对这两份原文禁用换行转换，以保留来源清单中的原始文件哈希。
-领主使用放大的术士模型及紫色标记；精英使用金色标记，受击短暂提亮。
+实际输入位于 `apps/survivor/assets/actors`，`sources.json` 对每个文件记录作者页面、
+下载包 SHA-256、包内原始路径、单文件字节数、SHA-256 与许可。构建离线运行，
+模型、缓冲、纹理和许可读取均须通过来源清单，未登记或哈希不符明确失败。
+原始 glTF、BIN、图片与许可禁用 Git 换行转换，以保持可重建的字节输入。
+头部导出中两个法线图 URI 有重复 `_png`，导入描述明确映射到包内对应原图，源文件不改写。
+
+四份原文许可 `outfits-LICENSE.txt`、`base-characters-LICENSE.txt`、`animations-LICENSE.txt`、
+`bestiary-LICENSE.txt` 与清单随游戏构建发布。Bestiary 只能按 QAL 使用：允许作为游戏的一部分，
+禁止作为独立资产、模板或资源包再分发；不能把全部项目角色统称为 CC0。
 
 ## 离线处理
 
-`npm run app:prepare` 在受控的 `.assets/actors` 内生成生产文件。提取源文件内嵌 PNG，
-读取 Idle 和 Running_A 动作，用真实骨骼变换求出顶点位置；角色统一为 1.25 逻辑单位高。
-奔跑周期为 0.8 秒，均匀采样 8 帧，重算法线并导出 morph position / normal。
-保留 UV、材质分组、双面斗篷和眼睛发光材质，删除运行时不需要的骨架及其余动作。
-五个模型加纹理约 5.82 MiB；生成 manifest 记录帧数、周期、顶点/三角形数、来源哈希与产物大小。
-这些生成文件不入 Git，源文件与构建脚本共同构成可重建输入。
+`npm run app:prepare` 在已验证位于应用目录内的 `.assets` 中生成生产文件。
+
+1. 读取真实蒙皮与骨架，独立提取颜色、法线、金属/粗糙度和发光贴图。
+2. 用 meshoptimizer 简化网格，保留法线、UV、蒙皮权重与骨骼索引变化；目标索引数为原来的 40%，
+   误差上限 `.008`，实际数量由保真约束决定。头部按颈部高度裁掉隐藏身体，再压紧索引与顶点。
+3. 用通用动作骨架的世界旋转增量映射到目标绑定姿势；保留目标肢体长度，只按髋骨高度比例传递上下起伏，
+   不导入水平根运动。所有旋转归一化，缺动作或缺骨骼明确失败，不让局部身体静默留在 T 姿势。
+4. 分别生成静止基准和八帧循环移动姿势。位置与作者法线都经过蒙皮，保留跨 UV 接缝的平滑明暗。
+5. 主角四张 1024² 图集，怪物各四张 512² 图集；材质区域有四像素边缘延展。
+   UV 随图集重新映射，金属与粗糙度因子写入 ORM 通道，保留法线和眼睛发光。
+6. 每组模型导出一个材质 primitive，删除运行时骨架与其他动作；生产五组模型及纹理约 12 MiB。
+
+| 生产模型 / 用途 | 基准身高 | 静止 / 移动 | 周期 | 三角形 |
+|---|---:|---|---:|---:|
+| Ranger / 守夜人 | 1.60 | Idle / Jog | 0.9333 秒 | 14,084 |
+| Puglin / 地精仆从 | 1.00 | Idle / Walk | 1.3333 秒 | 3,096 |
+| Imp / 小恶魔斥候，移除武器与锁链 | 1.25 | Idle / Jog | 0.9333 秒 | 5,340 |
+| Puglin_Brute / 持棍地精重卫 | 1.00 | Sword Idle / Walk | 1.3333 秒 | 3,096 |
+| Imp_Shaman / 蓝色小恶魔术士，保留锁链、移除狼牙棒 | 1.25 | Spell Idle / Jog | 0.9333 秒 | 6,576 |
+
+运行时仍按核心半径缩放敌人，重卫、精英和领主因此具有更大轮廓。
+领主采用术士变体，HUD 名称为裂爪领主。四类敌人的数值没有变化。
+生成 manifest 记录帧数、真实周期、身高、顶点/三角形数、primitive 数、图集尺寸与产物字节数。
+模型 extras 携带周期，运行时按模型自己的周期播放，不再固定假定全部为 0.8 秒。
+
+## 场景协调
+
+应用构建时仅对地形图集 `land` 与 `_plains` 两格做饱和度 `.42`、亮度 `.8` 的处理，
+把荧光绿收敛为苔绿色；图集布局、地形语义和引擎原始纹理保持一致。
+战斗层添加固定相机方向的柔和补光（`0xe2ebdf`、强度 `1.6`、方向 `-6,9,7`），
+让皮革、面部与深色怪物在当前灯光下可读。补光与目标对象一起归战斗层所有。
 
 ## 运行时与所有权
 
-主角使用常驻 Mesh，怪物各类型、各材质 primitive 使用固定容量的 InstancedMesh。
-每个怪物仅写入变换、色彩和相邻两帧的 morph 权重，不创建逐怪 Skeleton 或 AnimationMixer。
-动作相位由战斗 tick 和稳定实体 ID 决定，暂停时动作随模拟冻结；静止回到 Idle。
-四个怪物类型按实际 GLB 的各个 primitive 建立实例池。模型显示与 AI 更新频率分离，内圈以外的已驻留怪物也按距离提交。
-`ActorVisibility.ts` 在逻辑坐标中以玩家为中心，24–30 单位 smoothstep 淡出，接近时反向淡入。
-材质使用 alpha hash 保留深度写入，不引入透明实例排序或逐怪材质；共享中心 uniform 随插值后的玩家位置更新。
-CPU 先剔除淡出范围外的实例（预留模型半径），再写变换与动画；不新增实例池、纹理或逐怪计时器。
-怪物淡出距离取当前点和出生点到玩家距离的较大值；即使高速离开时追兵尚未归位，也在出生区块卸载前消失。
-出生点复用核心已有数组；GPU 每 primitive 固定 640×2 float（5 KiB）的实例属性，创建后随几何计入现有资源账本并统一释放。
-宝箱与地面物品共用距离淡出，怪物跨 AI 内圈边界不再突然显示或隐藏。
+主角使用常驻 Mesh；四种敌人各一个固定容量 InstancedMesh，最多四次敌人模型绘制。
+每只怪物只写入变换、颜色和相邻两帧 morph 权重，不创建逐怪 Skeleton 或 AnimationMixer。
+实例相位由模拟动画时间、真实周期和实体 ID 确定，暂停时随模拟冻结，静止使用独立 Idle 基准。
+颜色与发光图用 sRGB，法线与 ORM 保持线性数据。所有贴图关闭 flipY 以匹配 glTF UV。
 
-模型首次初始化异步加载，地图重新加载时复用同一组模型；资源加载或预算申请失败会释放已创建资源。
-所属世界 signal 失效后拒绝挂载，应用关闭时释放几何、材质、atlas、实例 morphTexture 与资源账本。
-实例 morphTexture 在最大容量时预分配，再把 count 设为零，使预算采样覆盖真实纹理容量。
-资源申请通过后才挂载到表现层；无需更改地图内部代码。
+可见性与 AI 更新圈分离：`ActorVisibility.ts` 在玩家周围 24–30 逻辑单位 smoothstep 淡出，
+接近时反向淡入，使用 alpha hash 保留深度写入。
+距离取当前点和出生点到玩家距离的较大值；CPU 剔除时预留模型半径。
+每个池保留固定 640×2 float 的 `actorHome` 属性，避免追兵在出生区块卸载时突然消失。
+宝箱和地面物品继续共用距离淡出。
 
-浏览器验收检查五个模型请求成功、真实 WebGL 无错误、可见外圈实例确实提交，并生成 HUD/角色背包截图；关闭应用后资源账本归零。
-基建生命周期改动仍执行标准浏览器验收和 500 次世界替换 soak。
+模型与四类贴图首次异步加载，地图重载复用同一组模型。GLB 或贴图失败会释放已创建资源，
+错误包含具体文件名，可在资源恢复后重试同一世界；预算申请通过后才挂载。
+实例 morphTexture 按最大容量预分配，使资源账本覆盖真实容量。
+应用关闭时释放几何、材质、四类贴图、实例 morphTexture、补光与资源账本。
+没有更改引擎的生命周期、资源核算、流送或调度语义。
+
+## 验证
+
+源文件检查与动作测试覆盖全部输入哈希、未登记输入、缺失动作/骨骼、真实怪物肢体长度不变、
+水平根运动去除，以及动作切换回到相同姿势。
+浏览器验收覆盖五个 GLB、二十张贴图、移动时真实 morph 权重、每种怪物一个 primitive、
+GLB 和法线图失败后的重试、外圈实例、装备交互，以及关闭后 CPU/GPU 账本归零。
+实机截图检查完整战场和模型细节；基建生命周期改动仍执行 500 次世界替换 soak。

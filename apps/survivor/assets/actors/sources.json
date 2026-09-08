@@ -1,44 +1,262 @@
 [
   {
-    "file": "Rogue_Hooded.glb",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0/672074b73ba276876a19e8816ecdc5241817ab47/addons/kaykit_character_pack_adventures/Characters/gltf/Rogue_Hooded.glb",
-    "sha256": "93e6e25213009952276d9cf34f5d96a243767334c66f280db0433ddfabb91545",
-    "bytes": 3597652
+    "file": "outfits-LICENSE.txt",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/License_Standard.txt",
+    "license": "CC0-1.0",
+    "sha256": "2202cc2f608c4210790b112e5f121bc2e7f8dced7b5b1c7f4be6203461bdebbb",
+    "bytes": 728
   },
   {
-    "file": "adventurers-LICENSE.txt",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0/672074b73ba276876a19e8816ecdc5241817ab47/LICENSE.txt",
-    "sha256": "ae322141814056dda0deea7540d74c41d87aee1da319977cd1bd84ee5a923629",
-    "bytes": 891
+    "file": "ranger/Male_Ranger.bin",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Outfits/Male_Ranger.bin",
+    "license": "CC0-1.0",
+    "sha256": "5bbb0d42cb324c6c27ce00417e68a876d92978f07d161f83590f0d7c0570eff6",
+    "bytes": 1746884
   },
   {
-    "file": "Skeleton_Minion.glb",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Minion.glb",
-    "sha256": "6ffc003f895bed0b074791e0e490846210a2e2f8fc7da300aba53cc185f95968",
-    "bytes": 4814296
+    "file": "ranger/Male_Ranger.gltf",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Outfits/Male_Ranger.gltf",
+    "license": "CC0-1.0",
+    "sha256": "e1033a212332d84d98c19bc4927c621635478d0aa15d13c79da68d3ba9e0196f",
+    "bytes": 41447
   },
   {
-    "file": "Skeleton_Rogue.glb",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Rogue.glb",
-    "sha256": "4003f2b77891bb56f7e0de7d555abcb497aebbcaee35b614211f16275f9ccae3",
-    "bytes": 4827024
+    "file": "ranger/T_Ranger_BaseColor.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Ranger_BaseColor.png",
+    "license": "CC0-1.0",
+    "sha256": "846ef2170b04ee584ad83bb8a1e86dab57a9a43b1193204505912c274d949925",
+    "bytes": 6630927
   },
   {
-    "file": "Skeleton_Warrior.glb",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Warrior.glb",
-    "sha256": "178b6fda810b814c250d8a2010c24dfd9b458b9006dd323353e620b7ff118bbe",
-    "bytes": 4863620
+    "file": "ranger/T_Ranger_Normal.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Ranger_Normal.png",
+    "license": "CC0-1.0",
+    "sha256": "dd64da2af3180f0c8f0b721cfc5f0d2720c351b97da8285c6cf49e7717c84147",
+    "bytes": 12713653
   },
   {
-    "file": "Skeleton_Mage.glb",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/addons/kaykit_character_pack_skeletons/Characters/gltf/Skeleton_Mage.glb",
-    "sha256": "e05b0f5cfa395271c9f75fd07c0a0613c56f401ece4ab644e080001a79971075",
-    "bytes": 4761048
+    "file": "ranger/T_Ranger_ORM.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Ranger_ORM.png",
+    "license": "CC0-1.0",
+    "sha256": "aca03d2fba12508ef07d5968ca22267fb207ea26ae898b6b2def8a296bd44f1c",
+    "bytes": 10792085
   },
   {
-    "file": "skeletons-LICENSE.txt",
-    "source": "https://raw.githubusercontent.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0/15b62b9bad122f72926c10fb14d622c73819fa54/LICENSE.txt",
-    "sha256": "5d822abca4e08c5a91d329e5372b3dc605cba8d994f752cb0f7dfdb7a0a79954",
-    "bytes": 914
+    "file": "ranger/T_Regular_Male_Dark_BaseColor.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Regular_Male_Dark_BaseColor.png",
+    "license": "CC0-1.0",
+    "sha256": "b4dcc0f4139aab548d7c070c4655bd2080ef16caeaaabee6c4aeb693c524e802",
+    "bytes": 1316151
+  },
+  {
+    "file": "ranger/T_Regular_Male_Normal.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Regular_Male_Normal.png",
+    "license": "CC0-1.0",
+    "sha256": "10cd71e2453e577fdd43e912b6016a99baf64964f0593e524bdd304855e15e2a",
+    "bytes": 4064184
+  },
+  {
+    "file": "ranger/T_Regular_Male_Roughness.png",
+    "source": "https://quaternius.itch.io/modular-character-outfits-fantasy",
+    "archive": "modular-character-outfits-fantasy.zip",
+    "archiveSha256": "c3468b18871cc8c8f05ab14df7712baf22cb9f389cbd870babf130e595187f70",
+    "archivePath": "Modular Character Outfits - Fantasy[Standard]/Exports/glTF (Godot-Unreal)/Modular Parts/T_Regular_Male_Roughness.png",
+    "license": "CC0-1.0",
+    "sha256": "086c2eb25bddfdb77d8e639ccbffb8df723ef4a1910d8e1b217e852f8668bfe5",
+    "bytes": 3160102
+  },
+  {
+    "file": "base-characters-LICENSE.txt",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/License_Standard.txt",
+    "license": "CC0-1.0",
+    "sha256": "0f4beaf0fe360a7732e58bbe3dbf60a2422367fbea60cb9ea4add968f383268e",
+    "bytes": 806
+  },
+  {
+    "file": "head/Superhero_Male_FullBody.bin",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Godot - UE/Superhero_Male_FullBody.bin",
+    "license": "CC0-1.0",
+    "sha256": "459003f9745853ae562a85506a2b94dd56515c1f37728f9fa3d2ce1a3e4cd92f",
+    "bytes": 720076
+  },
+  {
+    "file": "head/Superhero_Male_FullBody.gltf",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Godot - UE/Superhero_Male_FullBody.gltf",
+    "license": "CC0-1.0",
+    "sha256": "e7fcea214ecf8855afbf910b50de6f9c7d1decfb71ca28bad8a4481452dafeb4",
+    "bytes": 30989
+  },
+  {
+    "file": "head/T_Eye_Brown.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Godot - UE/T_Eye_Brown.png",
+    "license": "CC0-1.0",
+    "sha256": "d08e3356a83211bc6ca21fe3a8e39f4b5c1a3b8f85457fc2c0fb57be09935025",
+    "bytes": 35958
+  },
+  {
+    "file": "head/T_Eye_Normal.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Textures/T_Eye_Normal.png",
+    "license": "CC0-1.0",
+    "sha256": "a74aa37050f26fe336e7dbe5d1e9f01942879dd541c67be2f836633529bc68b7",
+    "bytes": 15097
+  },
+  {
+    "file": "head/T_Hair_1_BaseColor.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Godot - UE/T_Hair_1_BaseColor.png",
+    "license": "CC0-1.0",
+    "sha256": "bc7aa863bd22ab0a995cd838cceb4d3a5186ee54ee2fb0108fad85d20c057e6e",
+    "bytes": 1570376
+  },
+  {
+    "file": "head/T_Hair_1_Normal.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Textures/T_Hair_1_Normal.png",
+    "license": "CC0-1.0",
+    "sha256": "fd4530bb696a083ac7f9c2f685b4bb15d91150040e76c905db591c7644b4aa87",
+    "bytes": 3770683
+  },
+  {
+    "file": "head/T_Superhero_Male_Dark.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Godot - UE/T_Superhero_Male_Dark.png",
+    "license": "CC0-1.0",
+    "sha256": "df680cbc1967a61e85998bfafb8f7bc0a36dd604bb3266486c4b06b1a184bb45",
+    "bytes": 1384380
+  },
+  {
+    "file": "head/T_Superhero_Male_Normal.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Textures/T_Superhero_Male_Normal.png",
+    "license": "CC0-1.0",
+    "sha256": "3645858289beb51643155a924e5148735dd5fe226230532936375c06ba829dec",
+    "bytes": 3687166
+  },
+  {
+    "file": "head/T_Superhero_Male_Roughness.png",
+    "source": "https://quaternius.itch.io/universal-base-characters",
+    "archive": "universal-base-characters.zip",
+    "archiveSha256": "fdbf1804c90dfc1ea03e992bff7da2dfd1a79318e13270a660180f9308455f40",
+    "archivePath": "Universal Base Characters[Standard]/Base Characters/Textures/T_Superhero_Male_Roughness.png",
+    "license": "CC0-1.0",
+    "sha256": "5079fd95603bdd34700abd42ca6bcf43b615929f29134822aeb63a3a8bb3400c",
+    "bytes": 1912686
+  },
+  {
+    "file": "animations-LICENSE.txt",
+    "source": "https://quaternius.itch.io/universal-animation-library",
+    "archive": "universal-animation-library.zip",
+    "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
+    "archivePath": "Universal Animation Library[Standard]/License.txt",
+    "license": "CC0-1.0",
+    "sha256": "6d01f55c6e4c49a2c9963e147e561945ae2c83958c8ca667d90a6bffdbfac061",
+    "bytes": 332
+  },
+  {
+    "file": "animation/UAL1_Standard.glb",
+    "source": "https://quaternius.itch.io/universal-animation-library",
+    "archive": "universal-animation-library.zip",
+    "archiveSha256": "cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724",
+    "archivePath": "Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb",
+    "license": "CC0-1.0",
+    "sha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
+    "bytes": 7618436
+  },
+  {
+    "file": "bestiary/Imp.glb",
+    "source": "https://quaternius.itch.io/bestiary-dungeon-monsters-kit",
+    "archive": "bestiary-standard.zip",
+    "archiveSha256": "94dbeed196b6ead9776c2ed0cfa02de818730886a25a507fb9d6c379bbbc4645",
+    "archivePath": "Bestiary - Dungeon Monsters Kit[Standard]/Exports/GLB (Godot-Unreal)/Imp.glb",
+    "license": "QAL-1.0",
+    "sha256": "cfc689f3162f0cfe72d0d4637ae348dc54b3e34083b1c96d2721b95176186df0",
+    "bytes": 9412932
+  },
+  {
+    "file": "bestiary-LICENSE.txt",
+    "source": "https://quaternius.itch.io/bestiary-dungeon-monsters-kit",
+    "archive": "bestiary-standard.zip",
+    "archiveSha256": "94dbeed196b6ead9776c2ed0cfa02de818730886a25a507fb9d6c379bbbc4645",
+    "archivePath": "Bestiary - Dungeon Monsters Kit[Standard]/License_Standard.txt",
+    "license": "QAL-1.0",
+    "sha256": "c63c3203208c86e026be8c65915e986450d305f9d31c5941e772cfc2639d45e5",
+    "bytes": 4608
+  },
+  {
+    "file": "bestiary/Puglin.glb",
+    "source": "https://quaternius.itch.io/bestiary-dungeon-monsters-kit",
+    "archive": "bestiary-standard.zip",
+    "archiveSha256": "94dbeed196b6ead9776c2ed0cfa02de818730886a25a507fb9d6c379bbbc4645",
+    "archivePath": "Bestiary - Dungeon Monsters Kit[Standard]/Exports/GLB (Godot-Unreal)/Puglin.glb",
+    "license": "QAL-1.0",
+    "sha256": "8d0a87d7165e5da0761418491511d2187e46de359e2f65110538f8b91a48e6af",
+    "bytes": 7851812
+  },
+  {
+    "file": "bestiary/T_Imp_BaseColor_3.png",
+    "source": "https://quaternius.itch.io/bestiary-dungeon-monsters-kit",
+    "archive": "bestiary-standard.zip",
+    "archiveSha256": "94dbeed196b6ead9776c2ed0cfa02de818730886a25a507fb9d6c379bbbc4645",
+    "archivePath": "Bestiary - Dungeon Monsters Kit[Standard]/Textures/T_Imp_BaseColor_3.png",
+    "license": "QAL-1.0",
+    "sha256": "6a2c6a416f09e4245d8ed3bb107c001feca4c6ac12e6405844b0a77848dba002",
+    "bytes": 1269523
+  },
+  {
+    "file": "bestiary/T_Puglin_BaseColor_2.png",
+    "source": "https://quaternius.itch.io/bestiary-dungeon-monsters-kit",
+    "archive": "bestiary-standard.zip",
+    "archiveSha256": "94dbeed196b6ead9776c2ed0cfa02de818730886a25a507fb9d6c379bbbc4645",
+    "archivePath": "Bestiary - Dungeon Monsters Kit[Standard]/Textures/T_Puglin_BaseColor_2.png",
+    "license": "QAL-1.0",
+    "sha256": "37729d358c248c7a43e4e07653c9978d4806d8875c0807e206b74c7ab503a0bc",
+    "bytes": 1080836
   }
 ]
