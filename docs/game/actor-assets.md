@@ -2,6 +2,8 @@
 
 对应 `scripts/lib/survivor-actors.mjs`、`presentation/ActorModels.ts` 与 `CombatLayer.ts`。
 
+新的美术候选与免费范围见 [角色美术调研](actor-art-research.md)；该调研尚未改变下述运行时资产。
+
 ## 来源与授权
 
 模型采用 Kay Lousberg 的 KayKit CC0 角色包，可用于商业项目。原始 GLB 与原文许可证保存在
