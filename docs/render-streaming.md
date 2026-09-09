@@ -351,6 +351,19 @@ For the built-in procedural source:
 6. Chunks outside the retention radius dispose their geometry, grass and tree
    instances and remove their sparse tile data.
 
+`HexMap.workerActivity` exposes per-worker task occupancy for the current source.
+Both procedural source types forward `WorldGeneratorPool.workerActivity`; static
+sources return no worker rows. Each snapshot contains a worker ID, busy state,
+current task kind, cumulative occupied milliseconds (including unfinished work),
+ended-task count and last-task duration. The interval starts at dispatch and ends
+when the client promise settles, including messaging and asynchronous waits, but
+excluding queued time. This measures task occupancy, not OS CPU utilization.
+Cancelled running work remains occupied until execution settles. Replacement
+clients receive a new ID and counters; disposed pools expose an empty list.
+The pool's configured clock also drives these counters. Per-worker snapshots are
+sampled separately so aggregate streaming statistics do not allocate these rows
+every frame.
+
 Source loads are abortable. A transient failure retries twice by default with
 cancellable exponential backoff; changing camera demand or replacing the world
 cancels the delay and request. Structural contract failures do not retry:

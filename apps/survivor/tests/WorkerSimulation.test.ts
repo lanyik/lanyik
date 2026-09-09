@@ -40,6 +40,12 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     const serial = makeWorld(), parallel = makeWorld(), pool = await createPool();
     advanceProjectiles(serial); await advanceProjectiles(parallel, pool);
     expect(pool.parallelBatches).toBe(1);
+    expect(pool.workerActivity).toHaveLength(2);
+    for (const worker of pool.workerActivity) {
+        expect(worker.completed).toBe(1);
+        expect(worker.busy).toBe(false);
+        expect(worker.lastTaskMs).toBeGreaterThan(0);
+    }
     expect(parallel.projectileBatch.targets).toEqual(serial.projectileBatch.targets);
     expect(parallel.projectiles).toEqual(serial.projectiles);
     expect(parallel.impacts).toEqual(serial.impacts);

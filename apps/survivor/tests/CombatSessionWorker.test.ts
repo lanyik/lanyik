@@ -18,7 +18,7 @@ class HeldTransport extends LoopbackCombatTransport {
 afterEach(() => vi.unstubAllGlobals());
 function view(): CombatView {
     vi.stubGlobal("document", { hidden: false });
-    return { load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 1, z: 0, active: true }),
+    return { workerActivity: [], load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 1, z: 0, active: true }),
         render: vi.fn(), clearMovement: vi.fn(), dispose: async () => {} };
 }
 

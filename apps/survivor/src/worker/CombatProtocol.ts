@@ -1,6 +1,7 @@
 import type { CombatCommand } from "../core/CombatCommand";
 import type { CombatNotice, CombatSnapshot, MovementInput } from "../core/CombatState";
 import type { RenderPacket } from "./RenderFrame";
+import type { WorkerActivitySnapshot } from "three-hex-map";
 
 export const MAX_STEP_BATCH = 13;
 export const MAX_COMMAND_BATCH = 64;
@@ -12,6 +13,7 @@ export interface CombatAdvance {
     readonly commands: readonly CombatCommand[];
 }
 export interface CombatWorkerStats {
+    readonly queries: readonly WorkerActivitySnapshot[];
     readonly queryWorkers: number;
     readonly parallelBatches: number;
     readonly localBatches: number;

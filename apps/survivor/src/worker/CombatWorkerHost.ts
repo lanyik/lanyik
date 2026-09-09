@@ -56,7 +56,7 @@ export class CombatWorkerHost {
             if (!frame) throw new Error("Presentation did not return its render buffer");
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver,
                 render: frame.write(simulation.getRenderState()), snapshot: publish ? simulation.getSnapshot() : undefined, notices,
-                stats: { queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
+                stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
                     computeMs: performance.now() - started, frameBytes: RenderFrame.bytes } };
             this.frame = request.type === "init" ? new RenderFrame() : undefined;
             this.send({ type: "state", id: request.id, update }, [update.render.buffer]);

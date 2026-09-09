@@ -71,6 +71,9 @@ use an inspectable test Worker entry with the production host and protocol; no d
 simulation is added to the main thread or production Worker. The assembled browser
 suite exercises parallel collision queries, twenty restarts, query-worker failure,
 recovery and final termination of both combat and terrain workers.
+Browser checks also verify per-worker HUD records, completed query timing,
+paused-window decay and narrow-screen bounds. Controlled-clock unit tests protect
+occupancy accounting across in-flight work, worker replacement and disposal.
 The assembled HUD/equipment/keyboard journey has a 300-second total budget for
 software rendering and captures; its individual assertion timeouts remain unchanged.
 

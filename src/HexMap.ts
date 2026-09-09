@@ -3145,6 +3145,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return this.chunkScheduler.stats;
     }
 
+    /** Per-worker task occupancy for the current world; static worlds have no workers. */
+    public get workerActivity() { return this.worldSource?.workerActivity ?? []; }
+
     public get resourceBudget(): ResourceBudgetView { return this.chunkScheduler.resourceBudget; }
 
     public get modelAssetStats(): Readonly<ModelAssetCacheStats> { return this.modelAssets.stats; }

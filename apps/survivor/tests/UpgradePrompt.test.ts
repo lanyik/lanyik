@@ -9,7 +9,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 test("pickup recommendations rank real upgrades, expire after swaps, and respect dismissal and restart", async () => {
     vi.stubGlobal("document", { hidden: false });
-    const view: CombatView = { load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 0, z: 0, active: false }),
+    const view: CombatView = { workerActivity: [], load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 0, z: 0, active: false }),
         render: () => {}, clearMovement: () => {}, dispose: async () => {} };
     let transport: LoopbackCombatTransport;
     const session = new CombatSession(view, () => transport = new LoopbackCombatTransport());

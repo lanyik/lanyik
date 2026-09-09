@@ -39,9 +39,11 @@ apps/survivor/
     CombatView.ts               # 最小表现端口
     CombatSession.ts            # 帧节奏、有限队列、暂停屏障、可见性与 UI 发布
     CombatTransport.ts          # 会话使用的异步传输端口
+    WorkerLoadSampler.ts         # 每个活跃 Worker 的一秒负载窗口，无历史积累
     bootstrap.tsx               # 组合与生命周期
   src/worker/
     WorkerBudget.ts             # 地形、模拟和查询线程的应用预算
+    TaskActivity.ts             # 请求在途时间、完成数与最近耗时
     CombatWorkerClient.ts       # 主线程统一拥有、连接和销毁战斗 Workers
     CombatProtocol.ts           # 初始化、批次、快照、错误及容量约束
     Combat.worker.ts            # 权威模拟 Worker 入口
@@ -60,6 +62,7 @@ apps/survivor/
     InventoryPanel.tsx          # 紧凑评分物品格、分类、整理、安全清理和物品操作
     ItemTooltip.tsx             # 悬停/聚焦详情与同部位对比
     UpgradePrompt.tsx           # 新拾取提升装备的一键穿戴提示
+    WorkerLoadPanel.tsx         # 左上逐 Worker 负载、任务频率与最近耗时
     ActorVisibility.ts         # 与 AI 圈层解耦的距离淡入淡出
     RegionMap.tsx               # 右上六边形地图，19 地域与玩家坐标
     ItemView.tsx                # 共用物品图标/详情/感叹号提示
@@ -67,6 +70,7 @@ apps/survivor/
 ```
 
 根包的 `cameraPanEnabled`、`setCameraTarget(worldX,worldZ)` 是通用公开能力，应用不访问 HexMap 私有控制器。
+地形线程观测通过公开的 `HexMap.workerActivity` 读取，不访问地图的私有 Worker 池。
 
 ## 权威状态与时钟
 
@@ -75,6 +79,7 @@ apps/survivor/
 实体事实由它持有的唯一 `CombatWorld` 存储，玩家和怪物共享位置与生命组件；主线程只读取转移过来的表现缓冲。
 `CombatSession` 管理加载状态、暂停/隐藏和通知显示期限，命令由异步端口提交，Worker 完成后发布快照。
 React 只读取冻结的低频快照和提交命令，不直接修改战斗；每 5 tick 发布常规 UI 快照，命令、通知和暂停屏障立即带回快照。
+左上 Worker 负载由已有帧循环每秒取样并发布，暂停时仍刷新；原始记录与计算口径见[线程观测](./game/simulation-and-ai.md#逐-worker-负载观测)。
 界面窗口开关、筛选、选中物品 ID 和目标宝珠槽属于本地 UI 状态，不进入模拟。
 
 固定步长 20ms，主线程单帧最多接受 250ms 墙钟时间，后台时间不追赶。

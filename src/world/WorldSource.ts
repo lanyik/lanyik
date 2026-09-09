@@ -11,7 +11,7 @@ import {
     WorldTileOverrideChange,
     assertPackedWorldChunk
 } from "./generateWorldChunk";
-import { ChunkRequestOptions, WorldGeneratorPool, WorldGeneratorPoolStats } from "./WorldGeneratorPool";
+import { ChunkRequestOptions, WorldGeneratorPool, WorldGeneratorPoolStats, type WorkerActivitySnapshot } from "./WorldGeneratorPool";
 import {
     createWorldChunkCacheKey,
     WorldChunkCache,
@@ -98,6 +98,7 @@ export interface WorldChunkRevision {
 //One source instance belongs to one HexMap load session and is disposed when
 //that session is replaced.
 export interface WorldSource {
+    readonly workerActivity?: readonly WorkerActivitySnapshot[];
     readonly map: MapInfo;
     readonly chunkSize: number;
     readonly descriptor?: WorldDescriptor;
@@ -934,6 +935,8 @@ export class ToroidalWorldSource implements MutableWorldSource {
         return this.store.map;
     }
 
+    public get workerActivity(): readonly WorkerActivitySnapshot[] { return this.pool.workerActivity; }
+
     public get stats(): Readonly<WorldSourceStats> {
         return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);
     }
@@ -1181,6 +1184,8 @@ export class ProceduralWorldSource implements MutableWorldSource {
     public get map(): MapInfo {
         return this.store.map;
     }
+
+    public get workerActivity(): readonly WorkerActivitySnapshot[] { return this.pool.workerActivity; }
 
     public get stats(): Readonly<WorldSourceStats> {
         return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);

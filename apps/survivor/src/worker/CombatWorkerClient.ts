@@ -1,24 +1,28 @@
 import type { CombatTransport } from "../app/CombatTransport";
+import { TaskActivity } from "./TaskActivity";
 import { WORKER_TIMEOUT_MS, type CombatAdvance, type CombatRequest, type CombatResponse, type CombatUpdate, type CombatWorkerStats } from "./CombatProtocol";
 
 /** Main-thread owner of every combat Worker, including query workers connected by MessagePorts. */
 export class CombatWorkerClient implements CombatTransport {
+    private readonly activity = new TaskActivity(0);
     private authority: Worker | undefined;
     private readonly workers: Worker[] = [];
-    private pending: { id: number; resolve: (update: CombatUpdate) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; sentAt: number } | undefined;
+    private pending: { id: number; resolve: (update: CombatUpdate) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
     private sequence = 0;
     private currentBuffer: ArrayBuffer | undefined;
     private recycle: ArrayBuffer | undefined;
     private closed = false;
-    private completed = 0;
-    private roundTripMs = 0;
     private simulationStats: CombatWorkerStats | undefined;
 
     constructor(private readonly queryWorkers: number, private readonly onFailure: (error: Error) => void) {
         if (!Number.isInteger(queryWorkers) || queryWorkers < 0 || queryWorkers > 2) throw new Error("Invalid collision Worker count");
     }
-    public get stats() { return Object.freeze({ workers: this.workers.length, pending: Number(Boolean(this.pending)),
-        completed: this.completed, roundTripMs: this.roundTripMs, simulation: this.simulationStats }); }
+    public get stats() {
+        const activity = this.activity.snapshot;
+        return Object.freeze({ workers: this.workers.length, pending: Number(Boolean(this.pending)),
+            completed: activity.completed, roundTripMs: activity.lastTaskMs, simulation: this.simulationStats,
+            activity: this.authority ? activity : undefined });
+    }
 
     public async start(seed: string, start: { readonly x: number; readonly z: number }): Promise<CombatUpdate> {
         if (this.closed || this.authority) throw new Error("Combat Worker client cannot start twice");
@@ -53,7 +57,8 @@ export class CombatWorkerClient implements CombatTransport {
         if (this.closed || !this.authority || this.pending) return Promise.reject(new Error("Combat transport is closed or busy"));
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => this.fail(new Error("Combat Worker timed out")), WORKER_TIMEOUT_MS);
-            this.pending = { id: message.id, resolve, reject, timer, sentAt: performance.now() };
+            this.pending = { id: message.id, resolve, reject, timer };
+            this.activity.begin();
             try { this.authority!.postMessage(message, transfer); }
             catch (reason) { this.fail(reason instanceof Error ? reason : new Error(String(reason))); }
         });
@@ -64,8 +69,9 @@ export class CombatWorkerClient implements CombatTransport {
         if (!pending || message.id !== pending.id) { this.fail(new Error("Combat response sequence mismatch")); return; }
         if (message.type === "error") { this.fail(new Error(message.message)); return; }
         clearTimeout(pending.timer); this.pending = undefined;
+        this.activity.end();
         this.recycle = this.currentBuffer; this.currentBuffer = message.update.render.buffer;
-        this.roundTripMs = performance.now() - pending.sentAt; this.simulationStats = message.update.stats; this.completed++;
+        this.simulationStats = message.update.stats;
         pending.resolve(message.update);
     }
     private fail(error: Error): void { if (!this.closed) { this.close(error); this.onFailure(error); } }

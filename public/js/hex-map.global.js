@@ -13580,6 +13580,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   var WorldGeneratorPool = class {
     constructor(workerUrl, options = {}) {
+      this.nextWorkerId = 0;
       this.completed = 0;
       this.disposed = false;
       this.averageChunkMs = 0;
@@ -13587,6 +13588,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.averageOverviewMs = 0;
       this.workerFailures = 0;
       this.clientFactoryFailures = 0;
+      this.now = options.now ?? (() => performance.now());
       this.maxWorkers = options.maxWorkers ?? 8;
       const size = options.size ?? defaultPoolSize(this.maxWorkers);
       if (!Number.isInteger(size) || size <= 0 || size > this.maxWorkers) {
@@ -13612,7 +13614,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const initialSlots = [];
       try {
         for (let index = 0; index < size; index += 1) {
-          initialSlots.push({ client: this.createClient(), busy: false });
+          initialSlots.push(this.createSlot());
         }
       } catch (reason) {
         for (const slot of initialSlots) {
@@ -13733,6 +13735,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.dispatch();
       });
     }
+    /** Sample separately from aggregate streaming stats so ordinary frames allocate no per-worker rows. */
+    get workerActivity() {
+      if (this.disposed) return [];
+      const now = this.now();
+      return this.slots.map((slot) => ({
+        id: slot.id,
+        busy: slot.busy,
+        busyMs: slot.busyMs + (slot.busy ? Math.max(0, now - slot.startedAt) : 0),
+        completed: slot.completed,
+        lastTaskMs: slot.lastTaskMs,
+        task: slot.taskKind
+      }));
+    }
     get stats() {
       const queued = this.queue.values.filter((task) => !task.settled && !task.signal?.aborted);
       const queueStats = this.queue.stats;
@@ -13803,7 +13818,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         slot.busy = true;
         slot.taskKind = task.kind;
         slot.task = task;
-        const started = typeof performance === "undefined" ? Date.now() : performance.now();
+        const started = slot.startedAt = this.now();
         let pending;
         try {
           if (task.kind === "chunk") {
@@ -13831,8 +13846,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
             if (slot.client.isDisposed) this.workerFailures += 1;
           }
         ).finally(() => {
-          const finished = typeof performance === "undefined" ? Date.now() : performance.now();
-          this.recordDuration(task.kind, Math.max(0, finished - started));
+          slot.lastTaskMs = Math.max(0, this.now() - started);
+          slot.busyMs += slot.lastTaskMs;
+          slot.completed++;
+          slot.startedAt = void 0;
+          this.recordDuration(task.kind, slot.lastTaskMs);
           slot.busy = false;
           slot.taskKind = void 0;
           slot.task = void 0;
@@ -13885,7 +13903,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     replaceDisposedClient(slot) {
       try {
-        slot.client = this.createClient();
+        Object.assign(slot, this.createSlot());
         return void 0;
       } catch (reason) {
         this.clientFactoryFailures += 1;
@@ -13906,6 +13924,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       return client;
     }
+    createSlot() {
+      const client = this.createClient();
+      return { client, id: this.nextWorkerId++, busy: false, busyMs: 0, completed: 0, lastTaskMs: 0 };
+    }
     reconcileSize(throwOnFactoryFailure) {
       if (this.disposed) return;
       while (this.slots.length > this.desiredSize) {
@@ -13925,7 +13947,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       while (this.slots.length < this.desiredSize) {
         try {
-          this.slots.push({ client: this.createClient(), busy: false });
+          this.slots.push(this.createSlot());
         } catch (reason) {
           this.clientFactoryFailures += 1;
           if (throwOnFactoryFailure) throw reason;
@@ -14606,6 +14628,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     get map() {
       return this.store.map;
     }
+    get workerActivity() {
+      return this.pool.workerActivity;
+    }
     get stats() {
       return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);
     }
@@ -14807,6 +14832,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     get map() {
       return this.store.map;
+    }
+    get workerActivity() {
+      return this.pool.workerActivity;
     }
     get stats() {
       return cacheStats(this.pool.stats, this.cache, this.cachedLoads, this.deltaSession.stats);
@@ -19998,6 +20026,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     get streamingStats() {
       return this.chunkScheduler.stats;
+    }
+    /** Per-worker task occupancy for the current world; static worlds have no workers. */
+    get workerActivity() {
+      return this.worldSource?.workerActivity ?? [];
     }
     get resourceBudget() {
       return this.chunkScheduler.resourceBudget;

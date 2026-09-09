@@ -561,6 +561,30 @@ describe("world generator pool", () => {
         }
     });
 
+    test("reports each worker's occupied time and resets counters on replacement and disposal", async () => {
+        let now = 0;
+        const clients: DeferredChunkClient[] = [];
+        const pool = new WorldGeneratorPool("unused", { size: 2, now: () => now, clientFactory: () => {
+            const client = new DeferredChunkClient(); clients.push(client); return client;
+        } });
+        const options = { seed: 1, chunkX: 0, chunkY: 0 };
+        const first = pool.generateChunk(options);
+        now = 100;
+        const second = pool.generateChunk(options);
+        now = 500;
+        expect(pool.workerActivity.map(worker => worker.busyMs)).toEqual([500, 400]);
+        clients[0].requests[0].resolve(generateWorldChunk(options)); await first; await flush();
+        now = 1000;
+        expect(pool.workerActivity[0]).toMatchObject({ id: 0, busy: false, completed: 1, lastTaskMs: 500, busyMs: 500 });
+        expect(pool.workerActivity[1]).toMatchObject({ id: 1, busy: true, completed: 0, busyMs: 900, task: "chunk" });
+        clients[1].requests[0].resolve(generateWorldChunk(options)); await second; await flush();
+        clients[0].dispose();
+        const next = pool.generateChunk(options);
+        expect(pool.workerActivity[0]).toMatchObject({ id: 2, completed: 0, busyMs: 0, busy: true });
+        clients[2].requests[0].resolve(generateWorldChunk(options)); await next; await flush();
+        pool.dispose(); expect(pool.workerActivity).toEqual([]);
+    });
+
     test("shrinks busy worker pools after in-flight tasks settle and grows them again", async () => {
         const clients: DeferredChunkClient[] = [];
         const pool = new WorldGeneratorPool("unused", {

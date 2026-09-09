@@ -69,6 +69,16 @@ export interface WorldGeneratorPoolStats {
     clientFactoryFailures: number;
 }
 
+/** Task occupancy includes messaging and asynchronous waits; it is not OS CPU utilization. */
+export interface WorkerActivitySnapshot {
+    readonly id: number;
+    readonly busy: boolean;
+    readonly busyMs: number;
+    readonly completed: number;
+    readonly lastTaskMs: number;
+    readonly task?: string;
+}
+
 interface QueuedTask {
     kind: "chunk" | "vegetation" | "overview";
     queueId?: number;
@@ -82,6 +92,11 @@ interface QueuedTask {
 }
 
 interface WorkerSlot {
+    id: number;
+    busyMs: number;
+    completed: number;
+    lastTaskMs: number;
+    startedAt?: number;
     client: ChunkGeneratorClient;
     busy: boolean;
     taskKind?: QueuedTask["kind"];
@@ -97,6 +112,8 @@ function defaultPoolSize(maxWorkers: number): number {
 //lower priorities and jump ahead of prefetch work; one task per worker avoids
 //unbounded message queues hidden inside the browser's Worker implementation.
 export class WorldGeneratorPool {
+    private nextWorkerId = 0;
+    private readonly now: () => number;
     private readonly slots: WorkerSlot[];
     private readonly clientFactory: () => ChunkGeneratorClient;
     private readonly queue: PriorityTaskQueue<QueuedTask>;
@@ -115,6 +132,7 @@ export class WorldGeneratorPool {
     private readonly workCoordinator: RuntimeWorkCoordinator | undefined;
 
     constructor(workerUrl: string | URL, options: WorldGeneratorPoolOptions = {}) {
+        this.now = options.now ?? (() => performance.now());
         this.maxWorkers = options.maxWorkers ?? 8;
         const size = options.size ?? defaultPoolSize(this.maxWorkers);
         if (!Number.isInteger(size) || size <= 0 || size > this.maxWorkers) {
@@ -144,7 +162,7 @@ export class WorldGeneratorPool {
         const initialSlots: WorkerSlot[] = [];
         try {
             for (let index = 0; index < size; index += 1) {
-                initialSlots.push({ client: this.createClient(), busy: false });
+                initialSlots.push(this.createSlot());
             }
         } catch (reason) {
             for (const slot of initialSlots) {
@@ -277,6 +295,15 @@ export class WorldGeneratorPool {
         });
     }
 
+    /** Sample separately from aggregate streaming stats so ordinary frames allocate no per-worker rows. */
+    public get workerActivity(): readonly WorkerActivitySnapshot[] {
+        if (this.disposed) return [];
+        const now = this.now();
+        return this.slots.map(slot => ({ id: slot.id, busy: slot.busy,
+            busyMs: slot.busyMs + (slot.busy ? Math.max(0, now - slot.startedAt!) : 0),
+            completed: slot.completed, lastTaskMs: slot.lastTaskMs, task: slot.taskKind }));
+    }
+
     public get stats(): Readonly<WorldGeneratorPoolStats> {
         const queued = this.queue.values.filter(task => !task.settled && !task.signal?.aborted);
         const queueStats = this.queue.stats;
@@ -350,7 +377,7 @@ export class WorldGeneratorPool {
             slot.busy = true;
             slot.taskKind = task.kind;
             slot.task = task;
-            const started = typeof performance === "undefined" ? Date.now() : performance.now();
+            const started = slot.startedAt = this.now();
             // A custom client is allowed to fail synchronously. Preserve the
             // existing immediate dispatch contract, but normalize a throw to
             // a rejected promise so slot cleanup always runs.
@@ -385,8 +412,11 @@ export class WorldGeneratorPool {
                     if (slot.client.isDisposed) this.workerFailures += 1;
                 }
             ).finally(() => {
-                const finished = typeof performance === "undefined" ? Date.now() : performance.now();
-                this.recordDuration(task!.kind, Math.max(0, finished - started));
+                slot.lastTaskMs = Math.max(0, this.now() - started);
+                slot.busyMs += slot.lastTaskMs;
+                slot.completed++;
+                slot.startedAt = undefined;
+                this.recordDuration(task!.kind, slot.lastTaskMs);
                 slot.busy = false;
                 slot.taskKind = undefined;
                 slot.task = undefined;
@@ -454,7 +484,7 @@ export class WorldGeneratorPool {
 
     private replaceDisposedClient(slot: WorkerSlot): Error | undefined {
         try {
-            slot.client = this.createClient();
+            Object.assign(slot, this.createSlot());
             return undefined;
         } catch (reason) {
             this.clientFactoryFailures += 1;
@@ -474,6 +504,11 @@ export class WorldGeneratorPool {
         return client;
     }
 
+    private createSlot(): WorkerSlot {
+        const client = this.createClient();
+        return { client, id: this.nextWorkerId++, busy: false, busyMs: 0, completed: 0, lastTaskMs: 0 };
+    }
+
     private reconcileSize(throwOnFactoryFailure: boolean): void {
         if (this.disposed) return;
         while (this.slots.length > this.desiredSize) {
@@ -490,7 +525,7 @@ export class WorldGeneratorPool {
         }
         while (this.slots.length < this.desiredSize) {
             try {
-                this.slots.push({ client: this.createClient(), busy: false });
+                this.slots.push(this.createSlot());
             } catch (reason) {
                 this.clientFactoryFailures += 1;
                 if (throwOnFactoryFailure) throw reason;

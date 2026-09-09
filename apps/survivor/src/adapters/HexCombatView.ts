@@ -143,6 +143,7 @@ export class HexCombatView implements CombatView {
     }
 
     public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
+    public get workerActivity() { return this.map.workerActivity; }
 
     public render(state: CombatRenderState, alpha: number, timestampMs: number): void {
         this.layer.update(state, alpha, timestampMs);

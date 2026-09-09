@@ -7,6 +7,7 @@ import type { Equipment } from "../core/Equipment";
 import type { CombatTransport, CombatTransportFactory } from "./CombatTransport";
 import { MAX_COMMAND_BATCH, MAX_STEP_BATCH, type CombatUpdate } from "../worker/CombatProtocol";
 import { RenderFrame } from "../worker/RenderFrame";
+import { WorkerLoadSampler, type WorkerLoad, type NamedWorkerActivity } from "./WorkerLoadSampler";
 
 export type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -15,6 +16,7 @@ export interface VisibleNotice extends CombatNotice {
 }
 
 export interface SessionSnapshot {
+    readonly workerLoads: readonly WorkerLoad[];
     readonly status: SessionStatus;
     readonly seed: string;
     readonly paused: boolean;
@@ -42,6 +44,9 @@ function freezeSnapshot<T>(value: T): T {
 }
 
 export class CombatSession {
+    private loadSampler = new WorkerLoadSampler();
+    private workerLoads: readonly WorkerLoad[] = [];
+    private sampledLoadAt = 0;
     private readonly listeners = new Set<() => void>();
     private readonly clock = new FixedStepClock();
     private status: SessionStatus = "loading";
@@ -88,6 +93,7 @@ export class CombatSession {
         if (this.status === "closed") return;
         const revision = ++this.loadRevision;
         this.status = "loading";
+        this.loadSampler = new WorkerLoadSampler(); this.workerLoads = []; this.sampledLoadAt = 0;
         this.seed = seed.trim() || "rift-ember-1";
         this.error = undefined;
         this.paused = false;
@@ -112,6 +118,7 @@ export class CombatSession {
             if (revision !== this.loadRevision) { client.dispose(); return; }
             this.accept(update);
             this.status = "ready";
+            this.sampleWorkerLoad(performance.now());
             this.clock.reset();
             this.syncClock();
             this.view.render(this.renderState!, 1, performance.now());
@@ -134,7 +141,17 @@ export class CombatSession {
         this.view.render(this.renderState, alpha, timestampMs);
         const before = this.visibleNotices.length;
         this.visibleNotices = this.visibleNotices.filter(notice => notice.expiresAt > timestampMs);
-        if (before !== this.visibleNotices.length) this.publish();
+        const now = performance.now(), refreshLoad = now - this.sampledLoadAt >= 1000;
+        if (refreshLoad) this.sampleWorkerLoad(now);
+        if (before !== this.visibleNotices.length || refreshLoad) this.publish();
+    }
+
+    private sampleWorkerLoad(now: number): void {
+        const stats = this.client?.stats, workers: NamedWorkerActivity[] = [];
+        if (stats?.activity) workers.push({ ...stats.activity, key: "simulation", label: "战斗模拟" });
+        for (const worker of stats?.simulation?.queries ?? []) workers.push({ ...worker, key: `query-${worker.id}`, label: `碰撞 ${worker.id + 1}` });
+        for (const worker of this.view.workerActivity) workers.push({ ...worker, key: `terrain-${worker.id}`, label: `地形 ${worker.id + 1}` });
+        this.workerLoads = this.loadSampler.sample(now, workers); this.sampledLoadAt = now;
     }
 
     private accept(update: CombatUpdate): void {
@@ -207,6 +224,7 @@ export class CombatSession {
         if (this.status === "closed") return;
         this.loadRevision += 1;
         this.status = "failed";
+        this.workerLoads = [];
         this.error = reason instanceof Error ? reason.message : String(reason);
         this.clock.setRunning(false);
         this.client?.dispose(); this.client = undefined;
@@ -219,6 +237,7 @@ export class CombatSession {
         if (this.closePromise) return this.closePromise;
         this.loadRevision += 1;
         this.status = "closed";
+        this.workerLoads = [];
         this.clock.setRunning(false);
         this.client?.dispose(); this.client = undefined;
         this.inFlight = undefined; this.pendingSteps = 0; this.pendingCommands = [];
@@ -246,6 +265,7 @@ export class CombatSession {
         }
         if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);
         return Object.freeze({
+            workerLoads: this.workerLoads,
             status: this.status,
             seed: this.seed,
             paused: this.paused && this.pauseAcknowledged,

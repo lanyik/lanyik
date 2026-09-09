@@ -216,6 +216,7 @@ export { WorldGeneratorPool } from "./world/WorldGeneratorPool";
 export type {
     WorldGeneratorPoolOptions,
     WorldGeneratorPoolStats,
+    WorkerActivitySnapshot,
     ChunkRequestOptions,
     ChunkGeneratorClient,
     WorldTaskControl

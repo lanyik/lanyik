@@ -1,19 +1,23 @@
 import { ProjectileBatch, resolveProjectileRange, type ProjectileExecutor } from "../core/ProjectileBatch";
 import { WORKER_TIMEOUT_MS, type QueryRequest, type QueryResponse } from "./CombatProtocol";
+import { TaskActivity } from "./TaskActivity";
 
 // Below this work estimate, dispatch costs more than the numerical query itself.
 export const PARALLEL_COLLISION_PAIRS = 49_152;
 
 class QueryLane {
+    public readonly activity: TaskActivity;
     private buffer: ArrayBuffer | undefined = new ArrayBuffer(ProjectileBatch.bytes);
     private sequence = 0;
     private pending: { id: number; resolve: (buffer: ArrayBuffer) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
-    constructor(private readonly port: MessagePort) {
+    constructor(private readonly port: MessagePort, id: number) {
+        this.activity = new TaskActivity(id);
         port.onmessage = (event: MessageEvent<QueryResponse>) => {
             const pending = this.pending;
             if (!pending) return;
             if (event.data.id !== pending.id) { this.dispose(new Error("Collision response sequence mismatch")); return; }
             this.pending = undefined; clearTimeout(pending.timer);
+            this.activity.end();
             if ("error" in event.data) pending.reject(new Error(event.data.error));
             else { this.buffer = event.data.buffer; pending.resolve(this.buffer); }
         };
@@ -27,6 +31,7 @@ class QueryLane {
         return new Promise<ArrayBuffer>((resolve, reject) => {
             const timer = setTimeout(() => this.dispose(new Error("Collision Worker timed out")), WORKER_TIMEOUT_MS);
             this.pending = { id, resolve, reject, timer };
+            this.activity.begin();
             const request: QueryRequest = { id, begin, end, buffer };
             try { this.port.postMessage(request, [buffer]); }
             catch (reason) { this.dispose(reason instanceof Error ? reason : new Error(String(reason))); }
@@ -46,8 +51,9 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
     private readonly lanes: QueryLane[];
     public parallelBatches = 0;
     public localBatches = 0;
-    constructor(ports: readonly MessagePort[]) { this.lanes = ports.map(port => new QueryLane(port)); }
+    constructor(ports: readonly MessagePort[]) { this.lanes = ports.map((port, id) => new QueryLane(port, id)); }
     public get size(): number { return this.lanes.length; }
+    public get workerActivity() { return this.lanes.map(lane => lane.activity.snapshot); }
     public async resolve(batch: ProjectileBatch): Promise<void> {
         let pairs = 0;
         for (let shot = 0; shot < batch.count; shot++) pairs += batch.hostile[shot] ? 1 : batch.enemyCount;
