@@ -1,5 +1,5 @@
 import { REGION_RADIUS, REGION_RULES } from "../core/RegionalWorld";
-import type { CombatSnapshot } from "../core/CombatSimulation";
+import type { CombatSnapshot } from "../core/CombatState";
 import { UiIcon } from "./UiIcon";
 
 const HEX_POINTS = Array.from({ length: 6 }, (_, index) => `${Math.cos(index * Math.PI / 3) * 20},${Math.sin(index * Math.PI / 3) * 20}`).join(" ");

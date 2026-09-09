@@ -1,5 +1,5 @@
 import type { Equipment } from "../core/Equipment";
-import type { PlayerSnapshot } from "../core/CombatSimulation";
+import type { PlayerSnapshot } from "../core/CombatState";
 import { compareEquipment } from "../core/EquipmentEvaluation";
 import { ItemIcon } from "./ItemView";
 import { ItemTooltip, signed } from "./ItemTooltip";

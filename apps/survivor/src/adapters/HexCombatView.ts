@@ -10,7 +10,7 @@ import {
 } from "three-hex-map";
 import workerUrl from "three-hex-map/world-generator.worker?url";
 import type { CombatStart, CombatView } from "../app/CombatView";
-import type { CombatRenderState, MovementInput } from "../core/CombatSimulation";
+import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import { CombatLayer } from "../presentation/CombatLayer";
 import { MovementInputController } from "../presentation/MovementInputController";
 

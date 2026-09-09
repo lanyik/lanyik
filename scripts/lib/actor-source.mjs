@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { AnimationMixer, Quaternion, Vector3 } from "three";
+import { AnimationMixer, LoopOnce, Quaternion, Vector3 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 /** All model, texture and license reads must match the checked-in source inventory. */
@@ -94,7 +94,10 @@ export function actorPoser(animation, targets) {
         pose(name, time) {
             const clip = animation.animations.find(clip => clip.name === name);
             if (!clip) throw new Error(`Missing animation ${name}`);
-            mixer.stopAllAction(); mixer.clipAction(clip).reset().play(); mixer.setTime(time);
+            mixer.stopAllAction();
+            const action = mixer.clipAction(clip).reset().setLoop(LoopOnce, 1);
+            action.clampWhenFinished = true;
+            action.play(); mixer.setTime(time);
             animation.scene.updateMatrixWorld(true);
             for (const rest of targetRests) {
                 const hip = rest.get("pelvis"), sourceHip = source.get("pelvis");

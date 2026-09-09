@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ATTRIBUTE_IDS, BONUS_INFO, EQUIPMENT_SLOTS, SLOT_NAMES, type AttributeId, type BonusId } from "../core/Equipment";
-import type { PlayerSnapshot } from "../core/CombatSimulation";
+import type { PlayerSnapshot } from "../core/CombatState";
 import type { SessionCommand } from "../app/CombatSession";
 import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
 import { RARITIES, RARITY_NAMES } from "../core/Loot";

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Bounded SoA ECS for survivor entities with generation-safe handles, stable
+  component slots, cached queries and staged damage resolution. Shared reactive
+  behavior trees drive territorial pursuit, interruptible melee windup/recovery,
+  caster retreat and hostile projectiles, including three-shot lord volleys.
+  Non-looping attack morphs, instanced telegraphs and hostile projectile colors
+  follow authoritative action phases. App CPU budgets and behavioral/browser
+  acceptance checks now run in CI.
 - Distance-based fading for resident monsters, chests and loot, independent of
   active AI chunks, so entering a combat region no longer reveals enemies abruptly.
 - Compact category-only inventory with equipment scores, projected battle-power
@@ -27,19 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Radial regional level bands and once-per-residency populations, replacing
   timed enemy/chest/Boss renewal; base-only allocation and roughly five levels
   per minute of normal combat, plus mana-backed manual casting and potions.
-- Locally bundled CC0 KayKit hero and skeleton models, a hash-verified build
-  pipeline baking eight movement poses, bounded instanced animation and
+- Locally bundled Quaternius hero (CC0) and goblin/imp variants (QAL), a hash-verified build
+  pipeline baking movement and monster attack poses, bounded instanced animation and
   explicit resource-failure recovery.
 - Region-driven survivor ecology with bounded active/low-frequency/static chunk
   rings, territorial enemies, normal/hard/horror regions and regional bosses.
 - Five chest tiers, eleven equipment slots, independent item level/star/quality
   axes, 38 affixes, complete combat attributes, gold rewards, a regenerating
   single-hit shield and an automatic area skill.
-- A standalone survivor-RPG application with continuous deterministic monster
-  spawning, fixed-step automatic combat, experience levels, allocatable
+- A standalone survivor-RPG application with deterministic regional monster
+  populations, fixed-step automatic combat, experience levels, allocatable
   attributes, generated rarity/affix equipment, inventory swaps and a complete
   React HUD over the streamed procedural world.
-- Packed typed-array pools and instanced rendering for bounded enemies,
+- Typed-array component storage and instanced rendering for bounded enemies,
   projectiles, experience orbs and ground equipment, plus browser and core
   gameplay acceptance tests.
 - Continuous logical camera targeting and explicit camera-pan ownership for

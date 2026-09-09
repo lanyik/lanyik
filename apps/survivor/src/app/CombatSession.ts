@@ -1,6 +1,7 @@
 import type { AttributeId, EquipmentSlot } from "../core/Equipment";
 import type { ConsumableEffect } from "../core/InventoryItem";
-import { CombatSimulation, type CombatNotice, type CombatSnapshot } from "../core/CombatSimulation";
+import { CombatSimulation } from "../core/CombatSimulation";
+import type { CombatNotice, CombatSnapshot } from "../core/CombatState";
 import { FixedStepClock } from "../core/FixedStepClock";
 import type { CombatStart, CombatView } from "./CombatView";
 import { compareEquipment } from "../core/EquipmentEvaluation";

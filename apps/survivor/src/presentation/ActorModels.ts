@@ -2,9 +2,10 @@ import { DynamicDrawUsage, Group, InstancedMesh, Mesh, MeshStandardMaterial, SRG
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { InstancedBufferAttribute, type Vector2 } from "three";
 import { installActorFade } from "./ActorVisibility";
+import { ActorAction } from "../core/CombatWorld";
+import { ACTOR_POSES, MOVEMENT_POSES, writeActorPose } from "./ActorPose";
 
 const NAMES = ["Ranger", "Puglin", "Imp", "Puglin_Brute", "Imp_Shaman"] as const;
-const FRAME_COUNT = 8;
 
 /** One fixed instance pool per primitive; all actors share build-time baked animation poses. */
 export class ActorModels {
@@ -17,7 +18,7 @@ export class ActorModels {
     private heroCycle = 0;
     private readonly pose = new Mesh();
 
-    private constructor() { this.pose.morphTargetInfluences = new Array(FRAME_COUNT).fill(0); }
+    private constructor() { this.pose.morphTargetInfluences = new Array(ACTOR_POSES).fill(0); }
 
     public static async load(capacity: number, viewCenter: Vector2): Promise<ActorModels> {
         const actors = new ActorModels();
@@ -47,7 +48,8 @@ export class ActorModels {
                 if (kind > 0) actors.enemies.push(pool);
                 for (const mesh of parts) {
                     const cycle: unknown = mesh.userData.cycle;
-                    if (!(mesh.material instanceof MeshStandardMaterial) || mesh.geometry.morphAttributes.position?.length !== FRAME_COUNT
+                    if (!(mesh.material instanceof MeshStandardMaterial) || mesh.geometry.morphAttributes.position?.length !== (kind === 0 ? MOVEMENT_POSES : ACTOR_POSES)
+                        || mesh.geometry.morphAttributes.normal?.length !== (kind === 0 ? MOVEMENT_POSES : ACTOR_POSES)
                         || typeof cycle !== "number" || !Number.isFinite(cycle) || cycle <= 0) throw new Error(`${NAMES[kind]}: invalid baked actor`);
                     mesh.material.map = atlases[0]; mesh.material.normalMap = atlases[1];
                     mesh.material.roughnessMap = atlases[2]; mesh.material.metalnessMap = atlases[2];
@@ -74,11 +76,12 @@ export class ActorModels {
     }
 
     public animateHero(seconds: number, moving: boolean): void {
-        this.setPose(seconds / this.heroCycle, moving);
-        for (const mesh of this.heroMeshes) for (let index = 0; index < FRAME_COUNT; index++) mesh.morphTargetInfluences![index] = this.pose.morphTargetInfluences![index];
+        writeActorPose(this.pose.morphTargetInfluences!, seconds / this.heroCycle, moving ? ActorAction.Moving : ActorAction.Idle, 0);
+        for (const mesh of this.heroMeshes) for (let index = 0; index < MOVEMENT_POSES; index++) mesh.morphTargetInfluences![index] = this.pose.morphTargetInfluences![index];
     }
-    public animateEnemy(mesh: InstancedMesh, index: number, seconds: number, phaseOffset: number, moving: boolean): void {
-        this.setPose(seconds / mesh.userData.cycle + phaseOffset, moving); mesh.setMorphAt(index, this.pose);
+    public animateEnemy(mesh: InstancedMesh, index: number, seconds: number, phaseOffset: number, action: ActorAction, progress: number): void {
+        writeActorPose(this.pose.morphTargetInfluences!, seconds / mesh.userData.cycle + phaseOffset, action, progress);
+        mesh.setMorphAt(index, this.pose);
     }
     public dispose(): void {
         for (const pool of this.enemies) for (const mesh of pool) mesh.dispose();
@@ -87,12 +90,5 @@ export class ActorModels {
         for (const texture of this.textures) texture.dispose();
         this.pose.geometry.dispose();
         (this.pose.material as Material).dispose();
-    }
-    private setPose(phase: number, moving: boolean): void {
-        const weights = this.pose.morphTargetInfluences!; weights.fill(0);
-        if (!moving) return;
-        const frame = ((phase % 1) + 1) % 1 * FRAME_COUNT;
-        const index = Math.floor(frame);
-        weights[index] = 1 - (frame - index); weights[(index + 1) % FRAME_COUNT] = frame - index;
     }
 }

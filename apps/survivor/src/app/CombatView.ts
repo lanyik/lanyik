@@ -1,4 +1,4 @@
-import type { CombatRenderState, MovementInput } from "../core/CombatSimulation";
+import type { CombatRenderState, MovementInput } from "../core/CombatState";
 
 export interface CombatStart {
     readonly x: number;

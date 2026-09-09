@@ -53,6 +53,30 @@ describe("survivor actor source and retargeting contracts", () => {
         } finally { poser.dispose(); }
     });
 
+    it.each([
+        ["Puglin", "Punch_Cross"], ["Imp", "Punch_Jab"],
+        ["Puglin", "Sword_Attack"], ["Imp", "Spell_Simple_Shoot"]
+    ])("samples %s %s through its true final frame without looping or stretching", async (model, name) => {
+        const target = await loadActorSource(read, `bestiary/${model}.glb`);
+        const bones = target.meshes[0].skeleton.bones;
+        const positions = bones.map(bone => bone.position.clone());
+        const poser = actorPoser(animation, [target]);
+        try {
+            const duration = animation.animations.find(clip => clip.name === name).duration;
+            poser.pose(name, 0);
+            const start = bones.map(bone => bone.quaternion.clone());
+            poser.pose(name, duration / 2);
+            expect(bones.some((bone, i) => bone.quaternion.angleTo(start[i]) > .1)).toBe(true);
+            poser.pose(name, duration - 1e-6);
+            const end = bones.map(bone => bone.quaternion.clone());
+            poser.pose(name, duration);
+            for (const [i, bone] of bones.entries()) {
+                expect(bone.quaternion.angleTo(end[i])).toBeLessThan(.001);
+                if (bone.name !== "pelvis") expect(bone.position.distanceTo(positions[i])).toBeLessThan(1e-7);
+            }
+        } finally { poser.dispose(); disposeActorSource(target); }
+    });
+
     it("rejects an unmapped target bone instead of silently leaving a broken limb", () => {
         const bone = creature.scene.getObjectByName("calf_l");
         bone.name = "missing_bone";

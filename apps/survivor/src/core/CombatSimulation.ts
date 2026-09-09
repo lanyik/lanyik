@@ -1,11 +1,9 @@
 import {
     ATTRIBUTE_IDS,
-    RARITIES,
     createStarterEquipment,
     generateEquipment,
     sumEquipment,
     type AttributeId,
-    type Attributes,
     type EquippedItems
 } from "./Equipment";
 import { DeterministicRandom } from "./DeterministicRandom";
@@ -13,173 +11,22 @@ import { battlePower, compareEquipment } from "./EquipmentEvaluation";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { deriveStats, incomingDamage, outgoingDamage, reflectedDamage, rollAttack, type DerivedStats } from "./CombatStats";
 import {
-    RegionalWorld, MAX_COMBAT_CHUNKS, LOW_FREQUENCY_TICKS,
-    REGION_RULES, CHEST_RULES, CHEST_TIERS, type RegionalChunk, type RegionInfo
+    RegionalWorld, MAX_COMBAT_CHUNKS,
+    REGION_RULES, CHEST_RULES, CHEST_TIERS, type RegionInfo
 } from "./RegionalWorld";
-import { lootProfile, BASE_LOOT_PROFILE, type LootProfile } from "./Loot";
+import { lootProfile, BASE_LOOT_PROFILE } from "./Loot";
 import { ORB_UNLOCK_LEVELS, generateOrb, sumOrbs, type Orb } from "./Orbs";
 import { compareInventoryItems, createConsumable, isLowLevelEquipment, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
 
-export const MAX_ENEMIES = 640;
-export const MAX_PROJECTILES = 128;
-export const MAX_EXPERIENCE_ORBS = 768;
-export const MAX_GROUND_EQUIPMENT = 64;
-export const INVENTORY_CAPACITY = 40;
+import { CombatWorld, Faction } from "./CombatWorld";
+import { EnemyBehavior } from "./EnemyBehavior";
+import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
+import { ENEMY_DEFINITIONS, type EnemyKind } from "./EnemyDefinitions";
+import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, INVENTORY_CAPACITY, PULSE_MANA_COST, CONSUMABLE_COOLDOWN } from "./CombatConfig";
+import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
 
 const STEP_SECONDS = COMBAT_STEP_MS / 1000;
-const PLAYER_RADIUS = 0.3;
-const ENEMY_LEASH_DISTANCE = 14;
-export const PULSE_MANA_COST = 18;
-export const CONSUMABLE_COOLDOWN = 4;
-
-export type EnemyKind = 0 | 1 | 2 | 3;
-
-interface EnemyDefinition {
-    readonly health: number;
-    readonly speed: number;
-    readonly damage: number;
-    readonly radius: number;
-    readonly experience: number;
-}
-
-const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
-    Object.freeze({ health: 22, speed: 1.18, damage: 7, radius: 0.3, experience: 6 }),
-    Object.freeze({ health: 17, speed: 1.72, damage: 6, radius: 0.25, experience: 7 }),
-    Object.freeze({ health: 70, speed: 0.72, damage: 15, radius: 0.46, experience: 16 }),
-    Object.freeze({ health: 44, speed: 1.34, damage: 11, radius: 0.34, experience: 12 })
-]);
-
-export interface MovementInput {
-    readonly x: number;
-    readonly z: number;
-    readonly active: boolean;
-}
-
-export interface PlayerSnapshot {
-    readonly mana: number;
-    readonly x: number;
-    readonly z: number;
-    readonly health: number;
-    readonly level: number;
-    readonly experience: number;
-    readonly experienceToLevel: number;
-    readonly unspentAttributePoints: number;
-    readonly gold: number;
-    readonly shieldRemaining: number;
-    readonly skillRemaining: number;
-    readonly potionRemaining: number;
-    readonly autoCast: boolean;
-    readonly orbs: readonly (Orb | undefined)[];
-    readonly lootProfile: LootProfile;
-    readonly attributes: Attributes;
-    readonly stats: DerivedStats;
-    readonly battlePower: number;
-    readonly equipmentPower: number;
-    readonly equipment: EquippedItems;
-    readonly inventory: readonly InventoryItem[];
-    readonly autoClearLowLevelEquipment: boolean;
-    readonly clearedEquipment: number;
-}
-
-export interface CombatSnapshot {
-    readonly revision: number;
-    readonly tick: number;
-    readonly elapsedMs: number;
-    readonly kills: number;
-    readonly livingEnemies: number;
-    readonly groundEquipment: number;
-    readonly region: RegionInfo;
-    readonly nearbyRegions: readonly RegionInfo[];
-    readonly chunks: Readonly<{ active: number; low: number; static: number; total: number }>;
-    readonly openedChests: number;
-    readonly boss: Readonly<{ x: number; z: number; health: number; maxHealth: number }> | undefined;
-    readonly gameOver: boolean;
-    readonly player: PlayerSnapshot;
-}
-
-export interface CombatNotice {
-    readonly id: number;
-    readonly tone: "info" | "loot" | "level" | "danger";
-    readonly message: string;
-    readonly acquiredEquipmentId?: number;
-}
-
-export interface PlayerRenderState {
-    readonly animationTime: number;
-    readonly x: number;
-    readonly z: number;
-    readonly previousX: number;
-    readonly previousZ: number;
-    readonly heading: number;
-    readonly healthRatio: number;
-    readonly invulnerable: boolean;
-    readonly shieldReady: boolean;
-    readonly pulse: number;
-    readonly gameOver: boolean;
-}
-
-export interface EnemyRenderBuffer {
-    readonly count: number;
-    readonly ids: Uint32Array;
-    readonly kinds: Uint8Array;
-    readonly elite: Uint8Array;
-    readonly boss: Uint8Array;
-    readonly level: Uint32Array;
-    readonly health: Float32Array;
-    readonly maxHealth: Float32Array;
-    readonly homeX: Float32Array;
-    readonly homeZ: Float32Array;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
-    readonly previousX: Float32Array;
-    readonly previousZ: Float32Array;
-    readonly radius: Float32Array;
-    readonly hitFlash: Float32Array;
-}
-
-export interface ProjectileRenderBuffer {
-    readonly count: number;
-    readonly critical: Uint8Array;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
-    readonly previousX: Float32Array;
-    readonly previousZ: Float32Array;
-}
-
-export interface ExperienceRenderBuffer {
-    readonly count: number;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
-    readonly previousX: Float32Array;
-    readonly previousZ: Float32Array;
-    readonly value: Float32Array;
-}
-
-export interface LootRenderBuffer {
-    readonly count: number;
-    readonly itemIds: Uint32Array;
-    readonly rarities: Uint8Array;
-    readonly kinds: Uint8Array;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
-}
-
-export interface CombatRenderState {
-    readonly player: PlayerRenderState;
-    readonly enemies: EnemyRenderBuffer;
-    readonly projectiles: ProjectileRenderBuffer;
-    readonly experience: ExperienceRenderBuffer;
-    readonly loot: LootRenderBuffer;
-    readonly chests: ChestRenderBuffer;
-}
-
-export interface ChestRenderBuffer {
-    readonly count: number;
-    readonly tiers: Uint8Array;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
-}
-
+type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: PlayerRenderState[Key] };
 class ChestPool implements ChestRenderBuffer {
     public count = 0;
     public readonly tiers = new Uint8Array(MAX_COMBAT_CHUNKS);
@@ -187,201 +34,8 @@ class ChestPool implements ChestRenderBuffer {
     public readonly z = new Float32Array(MAX_COMBAT_CHUNKS);
 }
 
-type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: PlayerRenderState[Key] };
-
-class EnemyPool implements EnemyRenderBuffer {
-    public count = 0;
-    public readonly ids = new Uint32Array(MAX_ENEMIES);
-    public readonly kinds = new Uint8Array(MAX_ENEMIES);
-    public readonly elite = new Uint8Array(MAX_ENEMIES);
-    public readonly boss = new Uint8Array(MAX_ENEMIES);
-    public readonly homes: (RegionalChunk | undefined)[] = new Array(MAX_ENEMIES);
-    public readonly maxHealth = new Float32Array(MAX_ENEMIES);
-    public readonly level = new Uint32Array(MAX_ENEMIES);
-    public readonly regions: (RegionInfo | undefined)[] = new Array(MAX_ENEMIES);
-    public readonly homeX = new Float32Array(MAX_ENEMIES);
-    public readonly homeZ = new Float32Array(MAX_ENEMIES);
-    public readonly x = new Float32Array(MAX_ENEMIES);
-    public readonly z = new Float32Array(MAX_ENEMIES);
-    public readonly previousX = new Float32Array(MAX_ENEMIES);
-    public readonly previousZ = new Float32Array(MAX_ENEMIES);
-    public readonly health = new Float32Array(MAX_ENEMIES);
-    public readonly radius = new Float32Array(MAX_ENEMIES);
-    public readonly speed = new Float32Array(MAX_ENEMIES);
-    public readonly damage = new Float32Array(MAX_ENEMIES);
-    public readonly hitFlash = new Float32Array(MAX_ENEMIES);
-
-    public add(id: number, kind: EnemyKind, elite: boolean, boss: boolean, x: number, z: number,
-        definition: EnemyDefinition, scale: number, home: RegionalChunk, region: RegionInfo, level: number): boolean {
-        if (this.count === MAX_ENEMIES) return false;
-        const index = this.count++;
-        this.ids[index] = id;
-        this.kinds[index] = kind;
-        this.elite[index] = Number(elite);
-        this.boss[index] = Number(boss);
-        this.homes[index] = home;
-        this.regions[index] = region;
-        this.level[index] = level;
-        this.homeX[index] = x;
-        this.homeZ[index] = z;
-        this.x[index] = this.previousX[index] = x;
-        this.z[index] = this.previousZ[index] = z;
-        this.health[index] = this.maxHealth[index] = definition.health * scale * (boss ? 16 : elite ? 4 : 1);
-        this.radius[index] = definition.radius * (boss ? 2.5 : elite ? 1.28 : 1);
-        this.speed[index] = definition.speed * Math.min(1.35, 1 + (scale - 1) * 0.08);
-        this.damage[index] = definition.damage * Math.sqrt(scale) * (boss ? 2.5 : elite ? 1.55 : 1);
-        this.hitFlash[index] = 0;
-        return true;
-    }
-
-    public remove(index: number): void {
-        const last = --this.count;
-        if (index === last) { this.homes[last] = this.regions[last] = undefined; return; }
-        this.ids[index] = this.ids[last];
-        this.kinds[index] = this.kinds[last];
-        this.elite[index] = this.elite[last];
-        this.boss[index] = this.boss[last];
-        this.maxHealth[index] = this.maxHealth[last];
-        this.homes[index] = this.homes[last];
-        this.homes[last] = undefined;
-        this.regions[index] = this.regions[last];
-        this.regions[last] = undefined;
-        this.level[index] = this.level[last];
-        this.homeX[index] = this.homeX[last];
-        this.homeZ[index] = this.homeZ[last];
-        this.x[index] = this.x[last];
-        this.z[index] = this.z[last];
-        this.previousX[index] = this.previousX[last];
-        this.previousZ[index] = this.previousZ[last];
-        this.health[index] = this.health[last];
-        this.radius[index] = this.radius[last];
-        this.speed[index] = this.speed[last];
-        this.damage[index] = this.damage[last];
-        this.hitFlash[index] = this.hitFlash[last];
-    }
-}
-
-class ProjectilePool implements ProjectileRenderBuffer {
-    public count = 0;
-    public readonly critical = new Uint8Array(MAX_PROJECTILES);
-    public readonly x = new Float32Array(MAX_PROJECTILES);
-    public readonly z = new Float32Array(MAX_PROJECTILES);
-    public readonly previousX = new Float32Array(MAX_PROJECTILES);
-    public readonly previousZ = new Float32Array(MAX_PROJECTILES);
-    public readonly velocityX = new Float32Array(MAX_PROJECTILES);
-    public readonly velocityZ = new Float32Array(MAX_PROJECTILES);
-    public readonly damage = new Float32Array(MAX_PROJECTILES);
-    public readonly lifetime = new Float32Array(MAX_PROJECTILES);
-
-    public add(x: number, z: number, velocityX: number, velocityZ: number, damage: number, lifetime: number, critical: boolean): boolean {
-        if (this.count === MAX_PROJECTILES) return false;
-        const index = this.count++;
-        this.x[index] = this.previousX[index] = x;
-        this.z[index] = this.previousZ[index] = z;
-        this.velocityX[index] = velocityX;
-        this.velocityZ[index] = velocityZ;
-        this.damage[index] = damage;
-        this.lifetime[index] = lifetime;
-        this.critical[index] = Number(critical);
-        return true;
-    }
-
-    public remove(index: number): void {
-        const last = --this.count;
-        if (index === last) return;
-        this.critical[index] = this.critical[last];
-        this.x[index] = this.x[last];
-        this.z[index] = this.z[last];
-        this.previousX[index] = this.previousX[last];
-        this.previousZ[index] = this.previousZ[last];
-        this.velocityX[index] = this.velocityX[last];
-        this.velocityZ[index] = this.velocityZ[last];
-        this.damage[index] = this.damage[last];
-        this.lifetime[index] = this.lifetime[last];
-    }
-}
-
-class ExperiencePool implements ExperienceRenderBuffer {
-    public count = 0;
-    public readonly x = new Float32Array(MAX_EXPERIENCE_ORBS);
-    public readonly z = new Float32Array(MAX_EXPERIENCE_ORBS);
-    public readonly previousX = new Float32Array(MAX_EXPERIENCE_ORBS);
-    public readonly previousZ = new Float32Array(MAX_EXPERIENCE_ORBS);
-    public readonly value = new Float32Array(MAX_EXPERIENCE_ORBS);
-
-    public add(x: number, z: number, value: number): void {
-        if (this.count === MAX_EXPERIENCE_ORBS) {
-            // Capacity never deletes earned XP: overflow coalesces into the first active orb.
-            this.value[0] += value;
-            return;
-        }
-        const index = this.count++;
-        this.x[index] = this.previousX[index] = x;
-        this.z[index] = this.previousZ[index] = z;
-        this.value[index] = value;
-    }
-
-    public remove(index: number): void {
-        const last = --this.count;
-        if (index === last) return;
-        this.x[index] = this.x[last];
-        this.z[index] = this.z[last];
-        this.previousX[index] = this.previousX[last];
-        this.previousZ[index] = this.previousZ[last];
-        this.value[index] = this.value[last];
-    }
-}
-
-class LootPool implements LootRenderBuffer {
-    public count = 0;
-    public readonly itemIds = new Uint32Array(MAX_GROUND_EQUIPMENT);
-    public readonly rarities = new Uint8Array(MAX_GROUND_EQUIPMENT);
-    public readonly kinds = new Uint8Array(MAX_GROUND_EQUIPMENT);
-    public readonly x = new Float32Array(MAX_GROUND_EQUIPMENT);
-    public readonly z = new Float32Array(MAX_GROUND_EQUIPMENT);
-
-    public add(item: InventoryItem, x: number, z: number): boolean {
-        if (this.count === MAX_GROUND_EQUIPMENT) return false;
-        const index = this.count++;
-        this.itemIds[index] = item.id;
-        this.rarities[index] = RARITIES.indexOf(item.rarity);
-        this.kinds[index] = item.kind === "orb" ? 1 : item.kind === "consumable" ? 2 : 0;
-        this.x[index] = x;
-        this.z[index] = z;
-        return true;
-    }
-
-    public remove(index: number): void {
-        const last = --this.count;
-        if (index === last) return;
-        this.itemIds[index] = this.itemIds[last];
-        this.rarities[index] = this.rarities[last];
-        this.kinds[index] = this.kinds[last];
-        this.x[index] = this.x[last];
-        this.z[index] = this.z[last];
-    }
-}
-
 export function experienceForLevel(level: number): number {
     return Math.round(20 + level * 18 + level * level);
-}
-
-function segmentDistanceSquared(
-    pointX: number,
-    pointZ: number,
-    startX: number,
-    startZ: number,
-    endX: number,
-    endZ: number
-): number {
-    const dx = endX - startX;
-    const dz = endZ - startZ;
-    const lengthSquared = dx * dx + dz * dz;
-    const amount = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
-        ((pointX - startX) * dx + (pointZ - startZ) * dz) / lengthSquared));
-    const x = startX + dx * amount - pointX;
-    const z = startZ + dz * amount - pointZ;
-    return x * x + z * z;
 }
 
 function validatePosition(x: number, z: number): void {
@@ -389,15 +43,13 @@ function validatePosition(x: number, z: number): void {
 }
 
 /**
- * Authoritative deterministic combat. High-cardinality entities stay in
- * packed typed arrays; equipment remains object data because it changes rarely.
+ * Authoritative session facade and fixed system order. Combat entities live in
+ * the ECS; inventory and progression remain low-frequency domain data.
  */
 export class CombatSimulation {
     private random: DeterministicRandom;
-    private readonly enemies = new EnemyPool();
-    private readonly projectiles = new ProjectilePool();
-    private readonly experienceOrbs = new ExperiencePool();
-    private readonly loot = new LootPool();
+    private readonly entities: CombatWorld;
+    private readonly behavior: EnemyBehavior;
     private readonly groundItems = new Map<number, InventoryItem>();
     private readonly world: RegionalWorld;
     private readonly chests = new ChestPool();
@@ -413,7 +65,6 @@ export class CombatSimulation {
     private tickValue = 0;
     private killsValue = 0;
     private revision = 0;
-    private nextEntityId = 1;
     private nextItemId = 2;
     private nextNoticeId = 1;
     private notices: CombatNotice[] = [];
@@ -428,13 +79,20 @@ export class CombatSimulation {
     private openedChests = 0;
     private damageImmunity = 0;
     private inventoryFullNotified = false;
-    private playerX: number;
-    private playerZ: number;
-    private previousPlayerX: number;
-    private previousPlayerZ: number;
-    private heading = 0;
-    private health: number;
-    private mana: number;
+    private get playerX(): number { return this.entities.position.x[this.entities.player]; }
+    private set playerX(value: number) { this.entities.position.x[this.entities.player] = value; }
+    private get playerZ(): number { return this.entities.position.z[this.entities.player]; }
+    private set playerZ(value: number) { this.entities.position.z[this.entities.player] = value; }
+    private get previousPlayerX(): number { return this.entities.position.previousX[this.entities.player]; }
+    private set previousPlayerX(value: number) { this.entities.position.previousX[this.entities.player] = value; }
+    private get previousPlayerZ(): number { return this.entities.position.previousZ[this.entities.player]; }
+    private set previousPlayerZ(value: number) { this.entities.position.previousZ[this.entities.player] = value; }
+    private get heading(): number { return this.entities.position.heading[this.entities.player]; }
+    private set heading(value: number) { this.entities.position.heading[this.entities.player] = value; }
+    private get health(): number { return this.entities.vitals.health[this.entities.player]; }
+    private set health(value: number) { this.entities.vitals.health[this.entities.player] = value; }
+    private get mana(): number { return this.entities.vitals.mana[this.entities.player]; }
+    private set mana(value: number) { this.entities.vitals.mana[this.entities.player] = value; }
     private level = 1;
     private experience = 0;
     private unspentAttributePoints = 0;
@@ -452,24 +110,24 @@ export class CombatSimulation {
         pulse: 0,
         gameOver: false
     };
-    private readonly renderState: CombatRenderState = {
-        player: this.playerRenderState,
-        enemies: this.enemies,
-        projectiles: this.projectiles,
-        experience: this.experienceOrbs,
-        loot: this.loot,
-        chests: this.chests
-    };
+    private readonly renderState: CombatRenderState;
 
     constructor(seed: string | number, start = { x: 0, z: 0 }) {
         validatePosition(start.x, start.z);
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
         this.world = new RegionalWorld(seed, start);
+        this.entities = new CombatWorld(start.x, start.z);
+        this.behavior = new EnemyBehavior(this.entities, this.world);
+        this.renderState = { player: this.playerRenderState, chests: this.chests,
+            entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
+                experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
+                vitals: this.entities.vitals, enemy: this.entities.enemy, action: this.entities.action,
+                projectile: this.entities.projectile, experienceValue: this.entities.experienceValue, item: this.entities.item } };
         this.currentRegion = this.world.regionAt(start.x, start.z);
         this.playerX = this.previousPlayerX = start.x;
         this.playerZ = this.previousPlayerZ = start.z;
         this.stats = this.calculateStats();
-        this.health = this.stats.maxHealth;
+        this.health = this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.mana = this.stats.maxMana;
         this.world.synchronize(start.x, start.z);
         this.spawnEnemies();
@@ -501,9 +159,14 @@ export class CombatSimulation {
         if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
         this.updateCurrentRegion();
         this.fireWeapon();
-        this.advanceProjectiles();
+        advanceProjectiles(this.entities);
+        this.resolveImpacts();
+        if (this.gameOverValue) return;
         if (this.autoCast) this.castSkill();
-        this.advanceEnemies();
+        this.behavior.update(this.tickValue);
+        moveEnemies(this.entities, this.tickValue);
+        advanceEnemyActions(this.entities, this.tickValue);
+        this.resolveImpacts();
         if (this.gameOverValue) return;
         this.advanceExperience();
         this.collectEquipment();
@@ -547,10 +210,11 @@ export class CombatSimulation {
         for (const chunk of this.world.chunks.values()) if (chunk.lod !== "unloaded") chunks[chunk.lod] += 1;
         let boss: CombatSnapshot["boss"];
         const nearbyRegions = this.world.nearbyRegions(this.currentRegion);
-        for (let index = 0; index < this.enemies.count; index += 1) {
-            const region = this.enemies.regions[index]!;
-            if (this.enemies.boss[index] && region.x === this.currentRegion.x && region.z === this.currentRegion.z) {
-                boss = Object.freeze({ x: this.enemies.x[index], z: this.enemies.z[index], health: this.enemies.health[index], maxHealth: this.enemies.maxHealth[index] });
+        for (let cursor = 0; cursor < this.entities.enemies.count; cursor += 1) {
+            const index = this.entities.enemies.slots[cursor];
+            const region = this.entities.enemy.regions[index]!;
+            if (this.entities.enemy.boss[index] && region.x === this.currentRegion.x && region.z === this.currentRegion.z) {
+                boss = Object.freeze({ x: this.entities.position.x[index], z: this.entities.position.z[index], health: this.entities.vitals.health[index], maxHealth: this.entities.vitals.maxHealth[index] });
                 break;
             }
         }
@@ -559,8 +223,8 @@ export class CombatSimulation {
             tick: this.tickValue,
             elapsedMs: this.tickValue * COMBAT_STEP_MS,
             kills: this.killsValue,
-            livingEnemies: this.enemies.count,
-            groundEquipment: this.loot.count,
+            livingEnemies: this.entities.enemies.count,
+            groundEquipment: this.entities.loot.count,
             region: this.currentRegion,
             nearbyRegions: Object.freeze(nearbyRegions),
             chunks: Object.freeze(chunks),
@@ -743,32 +407,31 @@ export class CombatSimulation {
                 home.spawned[slot] = 1;
                 const spawn = home.spawns[slot];
                 if (Math.hypot(spawn.x - this.playerX, spawn.z - this.playerZ) < 3) continue;
-                const scale = REGION_RULES[spawn.region.difficulty].scale * (1 + (spawn.level - 1) * 0.15);
-                if (!this.enemies.add(this.nextEntityId++, spawn.kind, spawn.elite, spawn.boss, spawn.x, spawn.z,
-                    ENEMY_DEFINITIONS[spawn.kind], scale, home, spawn.region, spawn.level)) {
-                    throw new Error("Regional population exceeds the enemy pool budget");
-                }
+                this.entities.spawnEnemy(spawn, home);
             }
         }
     }
 
     private reconcileRegions(): void {
-        let index = 0;
-        while (index < this.enemies.count) {
-            if (!this.enemies.homes[index]!.resident) this.enemies.remove(index);
-            else index += 1;
+        const { enemies, experience, loot, enemy, position, item } = this.entities;
+        let cursor = 0;
+        while (cursor < enemies.count) {
+            const slot = enemies.slots[cursor];
+            if (!enemy.homes[slot]!.resident) this.entities.remove(slot);
+            else cursor++;
         }
-        index = 0;
-        while (index < this.experienceOrbs.count) {
-            if (this.world.lodAt(this.experienceOrbs.x[index], this.experienceOrbs.z[index]) === "unloaded") this.experienceOrbs.remove(index);
-            else index += 1;
+        cursor = 0;
+        while (cursor < experience.count) {
+            const slot = experience.slots[cursor];
+            if (this.world.lodAt(position.x[slot], position.z[slot]) === "unloaded") this.entities.remove(slot);
+            else cursor++;
         }
-        index = 0;
-        while (index < this.loot.count) {
-            if (this.world.lodAt(this.loot.x[index], this.loot.z[index]) === "unloaded") {
-                this.groundItems.delete(this.loot.itemIds[index]);
-                this.loot.remove(index);
-            } else index += 1;
+        cursor = 0;
+        while (cursor < loot.count) {
+            const slot = loot.slots[cursor];
+            if (this.world.lodAt(position.x[slot], position.z[slot]) === "unloaded") {
+                this.groundItems.delete(item.id[slot]); this.entities.remove(slot);
+            } else cursor++;
         }
     }
 
@@ -834,14 +497,15 @@ export class CombatSimulation {
 
     private fireWeapon(): void {
         this.attackCooldown -= STEP_SECONDS;
-        if (this.attackCooldown > 0 || this.projectiles.count === MAX_PROJECTILES) return;
+        if (this.attackCooldown > 0 || this.entities.projectiles.count === MAX_PROJECTILES) return;
         let target = -1;
         let nearest = this.stats.attackRange * this.stats.attackRange;
-        for (let index = 0; index < this.enemies.count; index += 1) {
-            const dx = this.enemies.x[index] - this.playerX;
-            const dz = this.enemies.z[index] - this.playerZ;
+        for (let cursor = 0; cursor < this.entities.enemies.count; cursor += 1) {
+            const index = this.entities.enemies.slots[cursor];
+            const dx = this.entities.position.x[index] - this.playerX;
+            const dz = this.entities.position.z[index] - this.playerZ;
             const distance = dx * dx + dz * dz;
-            if (distance < nearest) {
+            if (distance < nearest || (distance === nearest && target >= 0 && this.entities.world.ids[index] < this.entities.world.ids[target])) {
                 nearest = distance;
                 target = index;
             }
@@ -851,11 +515,11 @@ export class CombatSimulation {
             return;
         }
         const distance = Math.sqrt(nearest);
-        const directionX = distance > 0 ? (this.enemies.x[target] - this.playerX) / distance : 0;
-        const directionZ = distance > 0 ? (this.enemies.z[target] - this.playerZ) / distance : 1;
+        const directionX = distance > 0 ? (this.entities.position.x[target] - this.playerX) / distance : 0;
+        const directionZ = distance > 0 ? (this.entities.position.z[target] - this.playerZ) / distance : 1;
         const { critical, damage } = rollAttack(this.stats, this.random);
         const projectileSpeed = 10.5;
-        if (this.projectiles.add(
+        if (this.entities.spawnProjectile(this.entities.world.ids[this.entities.player], Faction.Player,
             this.playerX + directionX * 0.38,
             this.playerZ + directionZ * 0.38,
             directionX * projectileSpeed,
@@ -866,104 +530,17 @@ export class CombatSimulation {
         )) this.attackCooldown += 1 / this.stats.attackRate;
     }
 
-    private advanceProjectiles(): void {
-        let projectile = 0;
-        while (projectile < this.projectiles.count) {
-            const startX = this.projectiles.x[projectile];
-            const startZ = this.projectiles.z[projectile];
-            this.projectiles.previousX[projectile] = startX;
-            this.projectiles.previousZ[projectile] = startZ;
-            const endX = startX + this.projectiles.velocityX[projectile] * STEP_SECONDS;
-            const endZ = startZ + this.projectiles.velocityZ[projectile] * STEP_SECONDS;
-            this.projectiles.x[projectile] = endX;
-            this.projectiles.z[projectile] = endZ;
-            this.projectiles.lifetime[projectile] -= STEP_SECONDS;
-            let hit = -1;
-            for (let enemy = 0; enemy < this.enemies.count; enemy += 1) {
-                const radius = this.enemies.radius[enemy] + 0.11;
-                if (segmentDistanceSquared(this.enemies.x[enemy], this.enemies.z[enemy], startX, startZ, endX, endZ) <= radius * radius) {
-                    hit = enemy;
-                    break;
-                }
-            }
-            if (hit >= 0) {
-                this.hitEnemy(hit, this.projectiles.damage[projectile]);
-                this.projectiles.remove(projectile);
-                continue;
-            }
-            if (this.projectiles.lifetime[projectile] <= 0) {
-                this.projectiles.remove(projectile);
-                continue;
-            }
-            projectile += 1;
-        }
-    }
-
-    private advanceEnemies(): void {
-        const seconds = this.tickValue * STEP_SECONDS;
-        let index = 0;
-        while (index < this.enemies.count && !this.gameOverValue) {
-            const x = this.enemies.x[index];
-            const z = this.enemies.z[index];
-            this.enemies.previousX[index] = x;
-            this.enemies.previousZ[index] = z;
-            this.enemies.hitFlash[index] = Math.max(0, this.enemies.hitFlash[index] - STEP_SECONDS);
-            const lod = this.world.lodAt(x, z);
-            if (lod === "unloaded") {
-                this.retireEnemy(index);
-                continue;
-            }
-            if (lod === "static" || (lod === "low" && this.tickValue % LOW_FREQUENCY_TICKS !== this.enemies.ids[index] % LOW_FREQUENCY_TICKS)) {
-                index += 1;
-                continue;
-            }
-            const homeX = this.enemies.homeX[index];
-            const homeZ = this.enemies.homeZ[index];
-            const pursuing = lod === "active" && Math.hypot(this.playerX - homeX, this.playerZ - homeZ) <= ENEMY_LEASH_DISTANCE;
-            let dx = (pursuing ? this.playerX : homeX) - x;
-            let dz = (pursuing ? this.playerZ : homeZ) - z;
-            const distance = Math.hypot(dx, dz);
-            if (distance > 0) {
-                dx /= distance;
-                dz /= distance;
-                const weave = pursuing ? Math.sin(seconds * 1.2 + this.enemies.ids[index] * 0.73) * 0.08 : 0;
-                const delta = STEP_SECONDS * (lod === "low" ? LOW_FREQUENCY_TICKS : 1);
-                const speed = Math.min(distance, this.enemies.speed[index] * delta);
-                this.enemies.x[index] += (dx - dz * weave) * speed;
-                this.enemies.z[index] += (dz + dx * weave) * speed;
-            }
-            if (lod === "low") {
-                this.enemies.previousX[index] = this.enemies.x[index];
-                this.enemies.previousZ[index] = this.enemies.z[index];
-            }
-            const contact = this.enemies.radius[index] + PLAYER_RADIUS;
-            if (pursuing && Math.hypot(this.playerX - this.enemies.x[index], this.playerZ - this.enemies.z[index]) <= contact) {
-                if (this.damageImmunity <= 0 && this.damagePlayer(index)) continue;
-                this.enemies.x[index] -= dx * 0.12;
-                this.enemies.z[index] -= dz * 0.12;
-            }
-            index += 1;
-        }
-    }
-
-    private retireEnemy(index: number): void {
-        // A consumed population slot stays empty until its whole chunk is unloaded.
-        this.enemies.remove(index);
-    }
-
     private castSkill(force = false): boolean {
         if (this.skillCooldown > 0 || this.mana < PULSE_MANA_COST) return false;
+        const { enemies, position, impacts, world, player } = this.entities;
         let hit = false;
-        let index = 0;
-        while (index < this.enemies.count) {
-            const radius = 3.2 + this.enemies.radius[index];
-            if (Math.hypot(this.enemies.x[index] - this.playerX, this.enemies.z[index] - this.playerZ) > radius) {
-                index += 1;
-                continue;
-            }
+        for (let cursor = 0; cursor < enemies.count; cursor++) {
+            const slot = enemies.slots[cursor];
+            if (Math.hypot(position.x[slot] - this.playerX, position.z[slot] - this.playerZ) > 3.2 + position.radius[slot]) continue;
             hit = true;
-            if (!this.hitEnemy(index, rollAttack(this.stats, this.random, 1.3).damage)) index += 1;
+            impacts.add(world.ids[player], world.ids[slot], rollAttack(this.stats, this.random, 1.3).damage);
         }
+        this.resolveImpacts();
         if (hit || force) {
             this.mana -= PULSE_MANA_COST;
             this.skillCooldown = this.stats.skillInterval;
@@ -973,29 +550,41 @@ export class CombatSimulation {
         return false;
     }
 
-    private hitEnemy(index: number, rolledDamage: number): boolean {
-        const elite = this.enemies.elite[index] !== 0;
-        const evasion = this.enemies.boss[index] ? 0.08 : elite ? 0.05 : 0.02;
-        if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return false;
-        const damage = outgoingDamage(this.stats, rolledDamage, this.enemies.maxHealth[index], elite, this.random.chance(this.stats.lethalChance));
-        const healthLost = Math.min(this.enemies.health[index], damage);
-        this.enemies.health[index] -= damage;
-        this.enemies.hitFlash[index] = 0.1;
-        this.health = Math.min(this.stats.maxHealth, this.health + healthLost * this.stats.lifesteal * (1 + this.stats.regenBonus));
-        if (this.enemies.health[index] <= 0) {
-            this.killEnemy(index);
-            return true;
+    private resolveImpacts(): void {
+        const { impacts, world, player } = this.entities;
+        for (let i = 0; i < impacts.count; i++) {
+            if (this.gameOverValue) break;
+            const target = world.resolve(impacts.target[i]);
+            if (target < 0) continue;
+            if (target === player) {
+                if (this.damageImmunity <= 0) this.damagePlayer(world.resolve(impacts.source[i]), impacts.damage[i], impacts.elite[i] !== 0, impacts.boss[i] !== 0);
+            } else this.hitEnemy(target, impacts.damage[i]);
         }
-        return false;
+        impacts.count = 0;
+    }
+
+    private hitEnemy(index: number, rolledDamage: number): void {
+        const elite = this.entities.enemy.elite[index] !== 0;
+        const evasion = this.entities.enemy.boss[index] ? 0.08 : elite ? 0.05 : 0.02;
+        if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return;
+        const damage = outgoingDamage(this.stats, rolledDamage, this.entities.vitals.maxHealth[index], elite, this.random.chance(this.stats.lethalChance));
+        const healthLost = Math.min(this.entities.vitals.health[index], damage);
+        this.entities.vitals.health[index] -= damage;
+        this.entities.vitals.hitFlash[index] = 0.1;
+        this.health = Math.min(this.stats.maxHealth, this.health + healthLost * this.stats.lifesteal * (1 + this.stats.regenBonus));
+        if (this.entities.vitals.health[index] <= 0) {
+            this.killEnemy(index);
+        }
     }
 
     private advanceExperience(): void {
-        let index = 0;
-        while (index < this.experienceOrbs.count) {
-            const x = this.experienceOrbs.x[index];
-            const z = this.experienceOrbs.z[index];
-            this.experienceOrbs.previousX[index] = x;
-            this.experienceOrbs.previousZ[index] = z;
+        let cursor = 0;
+        while (cursor < this.entities.experience.count) {
+            const index = this.entities.experience.slots[cursor];
+            const x = this.entities.position.x[index];
+            const z = this.entities.position.z[index];
+            this.entities.position.previousX[index] = x;
+            this.entities.position.previousZ[index] = z;
             let dx = this.playerX - x;
             let dz = this.playerZ - z;
             let distance = Math.hypot(dx, dz);
@@ -1004,99 +593,93 @@ export class CombatSimulation {
                     dx /= distance;
                     dz /= distance;
                     const travel = Math.min(distance, (5 + (this.stats.pickupRadius - distance) * 2.2) * STEP_SECONDS);
-                    this.experienceOrbs.x[index] += dx * travel;
-                    this.experienceOrbs.z[index] += dz * travel;
+                    this.entities.position.x[index] += dx * travel;
+                    this.entities.position.z[index] += dz * travel;
                     distance -= travel;
                 }
                 if (distance <= 0.25) {
-                    this.gainExperience(this.experienceOrbs.value[index]);
-                    this.experienceOrbs.remove(index);
+                    this.gainExperience(this.entities.experienceValue[index]);
+                    this.entities.remove(index);
                     continue;
                 }
             }
-            index += 1;
+            cursor += 1;
         }
     }
 
     private collectEquipment(): void {
-        let index = 0;
-        while (index < this.loot.count) {
-            const dx = this.playerX - this.loot.x[index];
-            const dz = this.playerZ - this.loot.z[index];
+        let cursor = 0;
+        while (cursor < this.entities.loot.count) {
+            const index = this.entities.loot.slots[cursor];
+            const dx = this.playerX - this.entities.position.x[index];
+            const dz = this.playerZ - this.entities.position.z[index];
             if (dx * dx + dz * dz > 0.75 * 0.75) {
-                index += 1;
+                cursor += 1;
                 continue;
             }
-            const id = this.loot.itemIds[index];
+            const id = this.entities.item.id[index];
             const item = this.groundItems.get(id);
             if (!item) throw new Error(`Ground equipment ${id} is missing`);
             const clear = this.shouldAutoClear(item);
             if (!clear && this.inventory.length === INVENTORY_CAPACITY) {
                 this.notifyInventoryFull();
-                index += 1;
+                cursor += 1;
                 continue;
             }
             this.groundItems.delete(id);
             this.storeInventoryItem(item);
-            this.loot.remove(index);
+            this.entities.remove(index);
             this.inventoryFullNotified = false;
             if (!clear) this.pushNotice("loot", `拾取 ${item.name}`, item.kind === "equipment" ? item.id : undefined);
             this.markChanged();
         }
     }
 
-    /** Returns true when reflection removes the attacker from the packed pool. */
-    private damagePlayer(index: number): boolean {
-        this.damageImmunity = 0.55;
-        if (this.random.chance(this.stats.evasion)) return false;
-        if (this.shieldCooldown === 0) {
-            this.shieldCooldown = this.stats.shieldRecovery;
-            return false;
-        }
-        const elite = this.enemies.elite[index] !== 0;
-        const criticalChance = this.enemies.boss[index] ? 0.22 : elite ? 0.14 : 0.06;
+    private damagePlayer(source: number, baseDamage: number, elite: boolean, boss: boolean): void {
+        this.damageImmunity = .55;
+        if (this.random.chance(this.stats.evasion)) return;
+        if (this.shieldCooldown === 0) { this.shieldCooldown = this.stats.shieldRecovery; return; }
+        const criticalChance = boss ? .22 : elite ? .14 : .06;
         const critical = this.random.chance(Math.max(0, criticalChance - this.stats.criticalResistance));
-        const damage = incomingDamage(this.stats, this.enemies.damage[index], elite, critical, this.random.chance(this.stats.blockChance));
+        const damage = incomingDamage(this.stats, baseDamage, elite, critical, this.random.chance(this.stats.blockChance));
         const healthLost = Math.min(this.health, damage);
         this.health = Math.max(0, this.health - damage);
         this.markChanged();
-        const reflection = reflectedDamage(this.stats, healthLost, this.enemies.maxHealth[index]);
-        this.enemies.health[index] -= reflection;
-        const killed = this.enemies.health[index] <= 0;
-        if (killed) this.killEnemy(index);
-        if (this.health === 0) {
-            this.gameOverValue = true;
-            this.pushNotice("danger", "你倒在了荒原上");
+        // A released bolt survives its caster. Reflection requires that same living caster.
+        if (source >= 0) {
+            const reflection = reflectedDamage(this.stats, healthLost, this.entities.vitals.maxHealth[source]);
+            this.entities.vitals.health[source] -= reflection;
+            if (this.entities.vitals.health[source] <= 0) this.killEnemy(source);
         }
-        return killed;
+        if (this.health === 0) { this.gameOverValue = true; this.pushNotice("danger", "你倒在了荒原上"); }
     }
 
     private killEnemy(index: number): void {
-        const x = this.enemies.x[index], z = this.enemies.z[index];
-        const kind = this.enemies.kinds[index] as EnemyKind;
-        const elite = this.enemies.elite[index] !== 0;
-        const boss = this.enemies.boss[index] !== 0;
-        const level = this.enemies.level[index];
+        const x = this.entities.position.x[index], z = this.entities.position.z[index];
+        const kind = this.entities.enemy.kind[index] as EnemyKind;
+        const elite = this.entities.enemy.elite[index] !== 0;
+        const boss = this.entities.enemy.boss[index] !== 0;
+        const level = this.entities.enemy.level[index];
         const experience = ENEMY_DEFINITIONS[kind].experience * (1 + (level - 1) * 0.15) * (boss ? 15 : elite ? 2 : 1);
-        this.retireEnemy(index);
+        this.entities.remove(index);
         this.killsValue += 1;
         this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * level * (1 + this.stats.goldBonus));
-        this.experienceOrbs.add(x, z, experience);
-        if (boss && this.loot.count < MAX_GROUND_EQUIPMENT) {
+        this.entities.spawnExperience(x, z, experience);
+        if (boss && this.entities.loot.count < MAX_GROUND_EQUIPMENT) {
             this.dropItem(generateOrb(this.random, this.nextItemId++, level, "rare"), x, z);
         }
         const chance = boss ? 1 : elite ? this.lootProfile.eliteDropChance : this.lootProfile.normalDropChance;
-        if (this.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(chance)) {
+        if (this.entities.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(chance)) {
             this.dropItem(generateEquipment(this.random, this.nextItemId++, level, this.lootProfile, boss ? "legendary" : "common"), x, z);
         }
-        if (this.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(0.14)) {
+        if (this.entities.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(0.14)) {
             this.dropItem(createConsumable(this.nextItemId++, level, this.random.chance(0.6) ? "health" : "mana"), x, z);
         }
         this.markChanged();
     }
 
     private dropItem(item: InventoryItem, x: number, z: number): void {
-        if (!this.loot.add(item, x, z)) throw new Error("Ground loot capacity changed during creation");
+        this.entities.spawnLoot(item, x, z);
         this.groundItems.set(item.id, item);
     }
 
@@ -1149,6 +732,7 @@ export class CombatSimulation {
         const previousMaximum = this.stats.maxHealth;
         const previousMana = this.stats.maxMana;
         this.stats = this.calculateStats();
+        this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         // Preserve health ratio when switching gear: low-health swaps cannot manufacture healing.
         this.health = Math.min(this.stats.maxHealth, (previousMaximum === this.stats.maxHealth ? this.health : this.health / previousMaximum * this.stats.maxHealth)
             + (healGrowth ? this.stats.maxHealth * 0.12 * (1 + this.stats.regenBonus) : 0));

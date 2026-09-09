@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { INVENTORY_CAPACITY, type PlayerSnapshot } from "../core/CombatSimulation";
+import type { PlayerSnapshot } from "../core/CombatState";
+import { INVENTORY_CAPACITY } from "../core/CombatConfig";
 import { compareEquipment } from "../core/EquipmentEvaluation";
 import type { InventoryItem } from "../core/InventoryItem";
 import { SLOT_NAMES } from "../core/Equipment";

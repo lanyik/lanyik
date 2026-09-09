@@ -1,5 +1,8 @@
+import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
-import { CombatSimulation, MAX_ENEMIES, type MovementInput } from "../src/core/CombatSimulation";
+import { CombatSimulation } from "../src/core/CombatSimulation";
+import type { MovementInput } from "../src/core/CombatState";
+import { MAX_ENEMIES } from "../src/core/CombatConfig";
 import { MAX_COMBAT_CHUNKS, RegionalWorld } from "../src/core/RegionalWorld";
 
 const movementAt = (step: number): MovementInput => {
@@ -8,7 +11,7 @@ const movementAt = (step: number): MovementInput => {
 };
 
 describe("CombatSimulation", () => {
-    test("continuously spawns enemies and resolves automatic combat in fixed steps", () => {
+    test("resolves automatic combat against resident enemies in fixed steps", () => {
         const combat = new CombatSimulation("combat-loop");
         for (let step = 0; step < 900; step += 1) combat.step(movementAt(step));
         const snapshot = combat.getSnapshot();
@@ -17,7 +20,7 @@ describe("CombatSimulation", () => {
         expect(snapshot.livingEnemies).toBeLessThanOrEqual(MAX_ENEMIES);
         expect(snapshot.kills).toBeGreaterThan(0);
         expect(snapshot.player.x).not.toBe(0);
-        expect(combat.getRenderState().enemies.count).toBe(snapshot.livingEnemies);
+        expect(combat.getRenderState().entities.enemies.count).toBe(snapshot.livingEnemies);
     });
 
     test("replays combat and loot state exactly for the same seed and inputs", () => {
@@ -31,10 +34,10 @@ describe("CombatSimulation", () => {
         expect(first.getSnapshot()).toEqual(second.getSnapshot());
         const firstRender = first.getRenderState();
         const secondRender = second.getRenderState();
-        expect(Array.from(firstRender.enemies.ids.slice(0, firstRender.enemies.count)))
-            .toEqual(Array.from(secondRender.enemies.ids.slice(0, secondRender.enemies.count)));
-        expect(Array.from(firstRender.loot.itemIds.slice(0, firstRender.loot.count)))
-            .toEqual(Array.from(secondRender.loot.itemIds.slice(0, secondRender.loot.count)));
+        expect(enemySamples(firstRender)).toEqual(enemySamples(secondRender));
+        const firstLoot = firstRender.entities, secondLoot = secondRender.entities;
+        expect(Array.from(firstLoot.loot.slots.slice(0, firstLoot.loot.count), slot => firstLoot.item.id[slot]))
+            .toEqual(Array.from(secondLoot.loot.slots.slice(0, secondLoot.loot.count), slot => secondLoot.item.id[slot]));
     });
 
     test("collects XP, allocates a level point, and atomically equips dropped loot", () => {
@@ -43,19 +46,19 @@ describe("CombatSimulation", () => {
             const render = combat.getRenderState();
             let targetX: number | undefined;
             let targetZ: number | undefined;
-            if (render.loot.count > 0) {
-                targetX = render.loot.x[0];
-                targetZ = render.loot.z[0];
-            } else if (render.experience.count > 0) {
+            if (render.entities.loot.count > 0) {
+                targetX = render.entities.position.x[render.entities.loot.slots[0]];
+                targetZ = render.entities.position.z[render.entities.loot.slots[0]];
+            } else if (render.entities.experience.count > 0) {
                 let nearest = Infinity;
-                for (let index = 0; index < render.experience.count; index += 1) {
-                    const dx = render.experience.x[index] - render.player.x;
-                    const dz = render.experience.z[index] - render.player.z;
+                for (let index = 0; index < render.entities.experience.count; index += 1) {
+                    const dx = render.entities.position.x[render.entities.experience.slots[index]] - render.player.x;
+                    const dz = render.entities.position.z[render.entities.experience.slots[index]] - render.player.z;
                     const distance = dx * dx + dz * dz;
                     if (distance < nearest) {
                         nearest = distance;
-                        targetX = render.experience.x[index];
-                        targetZ = render.experience.z[index];
+                        targetX = render.entities.position.x[render.entities.experience.slots[index]];
+                        targetZ = render.entities.position.z[render.entities.experience.slots[index]];
                     }
                 }
             }
@@ -100,25 +103,25 @@ describe("CombatSimulation", () => {
 
     test("keeps fresh threats ahead and releases old entities during sustained straight travel", () => {
         const combat = new CombatSimulation("forward-pressure");
-        const initial = combat.getRenderState().enemies;
-        const oldIds = new Set(initial.ids.slice(0, initial.count));
+        const initial = enemySamples(combat.getRenderState());
+        const oldIds = new Set(initial.map(enemy => enemy.id));
         let checkpointsWithThreats = 0;
         for (let tick = 0; tick < 2500 && !combat.gameOver; tick += 1) {
             combat.step({ x: 1, z: 0, active: true });
             if (tick < 600 || tick % 200 !== 0) continue;
-            const { player, enemies } = combat.getRenderState();
+            const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state);
             let ahead = 0;
-            for (let index = 0; index < enemies.count; index += 1) {
-                if (enemies.x[index] > player.x && enemies.x[index] < player.x + 14
-                    && Math.abs(enemies.z[index] - player.z) < 10) ahead += 1;
+            for (let index = 0; index < enemies.length; index += 1) {
+                if (enemies[index].x > player.x && enemies[index].x < player.x + 14
+                    && Math.abs(enemies[index].z - player.z) < 10) ahead += 1;
             }
             if (ahead > 0) checkpointsWithThreats += 1;
             expect(combat.getSnapshot().chunks.total).toBe(MAX_COMBAT_CHUNKS);
-            expect(enemies.count).toBeLessThanOrEqual(MAX_ENEMIES);
+            expect(enemies.length).toBeLessThanOrEqual(MAX_ENEMIES);
         }
         expect(checkpointsWithThreats).toBeGreaterThanOrEqual(4);
-        const { enemies } = combat.getRenderState();
-        expect(Array.from(enemies.ids.slice(0, enemies.count)).filter(id => oldIds.has(id))).toHaveLength(0);
+        const enemies = enemySamples(combat.getRenderState());
+        expect(Array.from(enemies.map(enemy => enemy.id)).filter(id => oldIds.has(id))).toHaveLength(0);
     });
 
     test("opens a world chest once and commits its equipment and coins", () => {
@@ -152,24 +155,24 @@ describe("CombatSimulation", () => {
         let lowUpdates = 0;
         let staticChecks = 0;
         for (let tick = 0; tick < 600; tick += 1) {
-            const before = combat.getRenderState().enemies;
-            const positions = new Map(Array.from({ length: before.count }, (_, index) =>
-                [before.ids[index], { x: before.x[index], z: before.z[index] }] as const));
+            const before = enemySamples(combat.getRenderState());
+            const positions = new Map(Array.from({ length: before.length }, (_, index) =>
+                [before[index].id, { x: before[index].x, z: before[index].z }] as const));
             combat.step({ x: 1, z: 0, active: true });
             const player = combat.getRenderState().player;
             world.synchronize(player.x, player.z);
-            const after = combat.getRenderState().enemies;
-            for (let index = 0; index < after.count; index += 1) {
-                const previous = positions.get(after.ids[index]);
+            const after = enemySamples(combat.getRenderState());
+            for (let index = 0; index < after.length; index += 1) {
+                const previous = positions.get(after[index].id);
                 if (!previous) continue;
                 const lod = world.lodAt(previous.x, previous.z);
                 if (lod === "static") {
-                    expect(after.x[index]).toBe(previous.x);
-                    expect(after.z[index]).toBe(previous.z);
+                    expect(after[index].x).toBe(previous.x);
+                    expect(after[index].z).toBe(previous.z);
                     staticChecks += 1;
                 }
-                if (lod === "low" && (after.x[index] !== previous.x || after.z[index] !== previous.z)) {
-                    expect(combat.tick % 10).toBe(after.ids[index] % 10);
+                if (lod === "low" && (after[index].x !== previous.x || after[index].z !== previous.z)) {
+                    expect(combat.tick % 10).toBe(after[index].id % 10);
                     lowUpdates += 1;
                 }
             }

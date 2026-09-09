@@ -45,8 +45,10 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 - [Hierarchical pathfinding](./hierarchical-pathfinding.md): long routes over
   unloaded source chunks.
 - [Combat, progression and equipment](./game/combat-and-progression.md): the
-  implemented fixed-step battle, spawn pressure, XP, attributes, generated loot
+  implemented fixed-step battle, regional populations, XP, attributes, generated loot
   and capacity contracts.
+- [Combat ECS and behavior trees](./game/simulation-and-ai.md): bounded SoA
+  storage, entity identity, system order, interruptible monster actions and CPU gates.
 - [Survivor interface design](./game/interface-design.md): HUD information
   hierarchy, character and inventory workspaces, item cards and responsive layout.
 

@@ -1,5 +1,7 @@
+import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
-import { CombatSimulation, PULSE_MANA_COST } from "../src/core/CombatSimulation";
+import { CombatSimulation } from "../src/core/CombatSimulation";
+import { PULSE_MANA_COST } from "../src/core/CombatConfig";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } from "../src/core/Loot";
 import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
@@ -30,9 +32,9 @@ function reachNextLevel(combat: CombatSimulation): void {
     for (let tick = 0; tick < 3000 && combat.getSnapshot().player.level === level && !combat.gameOver; tick++) {
         const state = combat.getRenderState(); let x = Math.cos(tick / 450) * 13, z = Math.sin(tick / 450) * 13;
         let nearest = Infinity;
-        for (let index = 0; index < state.experience.count; index++) {
-            const distance = Math.hypot(state.experience.x[index] - state.player.x, state.experience.z[index] - state.player.z);
-            if (distance < nearest) { nearest = distance; x = state.experience.x[index]; z = state.experience.z[index]; }
+        for (let index = 0; index < state.entities.experience.count; index++) {
+            const distance = Math.hypot(state.entities.position.x[state.entities.experience.slots[index]] - state.player.x, state.entities.position.z[state.entities.experience.slots[index]] - state.player.z);
+            if (distance < nearest) { nearest = distance; x = state.entities.position.x[state.entities.experience.slots[index]]; z = state.entities.position.z[state.entities.experience.slots[index]]; }
         }
         combat.step({ x: x - state.player.x, z: z - state.player.z, active: true });
     }
@@ -181,12 +183,12 @@ describe("loot and orb progression", () => {
         expect(potion).toBeDefined();
         if (potion.effect === "mana") combat.castPulse();
         else for (let tick = 0; tick < 500 && combat.getSnapshot().player.health === combat.getSnapshot().player.stats.maxHealth; tick++) {
-            const { player, enemies } = combat.getRenderState(); let nearest = -1, distance = Infinity;
-            for (let index = 0; index < enemies.count; index++) {
-                const d = Math.hypot(enemies.x[index] - player.x, enemies.z[index] - player.z);
+            const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state); let nearest = -1, distance = Infinity;
+            for (let index = 0; index < enemies.length; index++) {
+                const d = Math.hypot(enemies[index].x - player.x, enemies[index].z - player.z);
                 if (d < distance) { distance = d; nearest = index; }
             }
-            combat.step({ x: enemies.x[nearest] - player.x, z: enemies.z[nearest] - player.z, active: true });
+            combat.step({ x: enemies[nearest].x - player.x, z: enemies[nearest].z - player.z, active: true });
         }
         const before = combat.getSnapshot().player;
         expect(potion.effect === "health" ? before.health < before.stats.maxHealth : before.mana < before.stats.maxMana).toBe(true);
@@ -200,12 +202,12 @@ describe("loot and orb progression", () => {
     });
 
     test("staying in place cannot replace defeated enemies on a timer", () => {
-        const combat = new CombatSimulation("camping"); const initial = combat.getRenderState().enemies;
-        const ids = new Set(initial.ids.slice(0, initial.count));
+        const combat = new CombatSimulation("camping"); const initial = enemySamples(combat.getRenderState());
+        const ids = new Set(initial.map(enemy => enemy.id));
         for (let tick = 0; tick < 12_000 && !combat.gameOver; tick++) combat.step({ x: 0, z: 0, active: false });
-        const result = combat.getRenderState().enemies;
+        const result = enemySamples(combat.getRenderState());
         expect(combat.getSnapshot().kills).toBeGreaterThan(0);
-        expect(Array.from(result.ids.slice(0, result.count)).every(id => ids.has(id))).toBe(true);
+        expect(Array.from(result.map(enemy => enemy.id)).every(id => ids.has(id))).toBe(true);
     });
 
     test("a minute of normal combat reaches about level six through real XP pickups", () => {
@@ -213,9 +215,9 @@ describe("loot and orb progression", () => {
         for (let tick = 0; tick < 3000; tick++) {
             const state = combat.getRenderState(); let x = Math.cos(tick / 450) * 13, z = Math.sin(tick / 450) * 13;
             let nearest = 16;
-            for (let index = 0; index < state.experience.count; index++) {
-                const dx = state.experience.x[index] - state.player.x, dz = state.experience.z[index] - state.player.z;
-                if (dx * dx + dz * dz < nearest) { nearest = dx * dx + dz * dz; x = state.experience.x[index]; z = state.experience.z[index]; }
+            for (let index = 0; index < state.entities.experience.count; index++) {
+                const dx = state.entities.position.x[state.entities.experience.slots[index]] - state.player.x, dz = state.entities.position.z[state.entities.experience.slots[index]] - state.player.z;
+                if (dx * dx + dz * dz < nearest) { nearest = dx * dx + dz * dz; x = state.entities.position.x[state.entities.experience.slots[index]]; z = state.entities.position.z[state.entities.experience.slots[index]]; }
             }
             combat.step({ x: x - state.player.x, z: z - state.player.z, active: true });
         }

@@ -10,9 +10,10 @@ test("resident enemies remain visible when crossing the active simulation bounda
     world.synchronize(0, 0);
     const state = combat.getRenderState();
     let visibleOutsideActive = 0;
-    for (let i = 0; i < state.enemies.count; i++) {
-        const distance = Math.hypot(state.enemies.x[i], state.enemies.z[i]);
-        if (world.lodAt(state.enemies.x[i], state.enemies.z[i]) !== "active" && actorVisibility(distance) === 1) visibleOutsideActive++;
+    for (let cursor = 0; cursor < state.entities.enemies.count; cursor++) {
+        const i = state.entities.enemies.slots[cursor];
+        const distance = Math.hypot(state.entities.position.x[i], state.entities.position.z[i]);
+        if (world.lodAt(state.entities.position.x[i], state.entities.position.z[i]) !== "active" && actorVisibility(distance) === 1) visibleOutsideActive++;
     }
     expect(visibleOutsideActive).toBeGreaterThan(0);
     expect(actorVisibility(ACTOR_FADE_START)).toBe(1);

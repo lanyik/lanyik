@@ -9,10 +9,10 @@ import { actorPoser, disposeActorSource, loadActorSource, sourceReader } from ".
 const FRAMES = 8;
 const ACTORS = [
     { name: "Ranger", model: "ranger/Male_Ranger.gltf", height: 1.6, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", head: true },
-    { name: "Puglin", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", color: "bestiary/T_Puglin_BaseColor_2.png" },
-    { name: "Imp", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", omit: ["Imp_Mace", "Imp_Chains"] },
-    { name: "Puglin_Brute", model: "bestiary/Puglin.glb", height: 1, idle: "Sword_Idle", walk: "Walk_Loop" },
-    { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Spell_Simple_Idle_Loop", walk: "Jog_Fwd_Loop", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
+    { name: "Puglin", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", attack: "Punch_Cross", color: "bestiary/T_Puglin_BaseColor_2.png" },
+    { name: "Imp", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Punch_Jab", omit: ["Imp_Mace", "Imp_Chains"] },
+    { name: "Puglin_Brute", model: "bestiary/Puglin.glb", height: 1, idle: "Sword_Idle", walk: "Walk_Loop", attack: "Sword_Attack" },
+    { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Spell_Simple_Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Spell_Simple_Shoot", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
 ];
 const HEAD_IMAGES = { "T_Hair_1_Normal_png.png": "T_Hair_1_Normal.png", "T_Eye_Normal_png.png": "T_Eye_Normal.png" };
 class NodeFileReader {
@@ -110,7 +110,7 @@ function capture(parts) {
     return { positions, normals };
 }
 
-/** Offline source rigs become one PBR primitive and eight GPU morph poses per actor. */
+/** Offline source rigs become one PBR primitive with movement and non-looping attack poses. */
 export async function prepareSurvivorActors(source, output) {
     globalThis.FileReader = NodeFileReader;
     await MeshoptSimplifier.ready;
@@ -153,14 +153,24 @@ export async function prepareSurvivorActors(source, output) {
                     geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
                     geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
                 }
+                if (descriptor.attack) {
+                    const attack = animation.animations.find(clip => clip.name === descriptor.attack);
+                    if (!attack) throw new Error(`${descriptor.name}: missing attack ${descriptor.attack}`);
+                    for (let frame = 0; frame < FRAMES; frame++) {
+                        poser.pose(descriptor.attack, attack.duration * frame / (FRAMES - 1));
+                        const target = capture(parts);
+                        geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
+                        geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
+                    }
+                }
                 const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 1, emissive: 0xffffff, emissiveIntensity: 2, side: DoubleSide });
                 material.name = descriptor.name;
                 const mesh = new Mesh(geometry, material); mesh.name = descriptor.name;
                 // Gameplay supplies phase from the real clip duration, independently for each actor type.
-                mesh.userData = { cycle: walk.duration, frames: FRAMES, height: descriptor.height };
+                mesh.userData = { cycle: walk.duration, frames: descriptor.attack ? FRAMES * 2 : FRAMES, attack: descriptor.attack, height: descriptor.height };
                 const exported = await new GLTFExporter().parseAsync(mesh, { binary: true });
                 await writeFile(resolve(output, `${descriptor.name}.glb`), Buffer.from(exported));
-                manifest.actors.push({ name: descriptor.name, frames: FRAMES, cycle: walk.duration, height: descriptor.height,
+                manifest.actors.push({ name: descriptor.name, frames: descriptor.attack ? FRAMES * 2 : FRAMES, attack: descriptor.attack, cycle: walk.duration, height: descriptor.height,
                     vertices: offset, triangles: indices.length / 3, primitives: 1, atlasSize: atlas.size, bytes: exported.byteLength + atlas.bytes });
                 geometry.dispose(); material.dispose();
             } finally { poser?.dispose(); for (const rig of rigs) disposeActorSource(rig); }

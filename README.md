@@ -25,7 +25,7 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | Demo | Finite toroidal and infinite modes share one page and one remembered mode selector |
 | Foundation | Infrastructure v1 is frozen; lifecycle, ownership, scheduling, persistence and resource-budget contracts are covered by automated gates |
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
-| Game application | A survivor RPG with radial hex regions, four residency rings, animated KayKit actors, separate character/bag windows, mana skills, eleven equipment slots and six level-unlocked treasure-orb sockets |
+| Game application | A survivor RPG with bounded ECS, monster behavior trees, animated Quaternius actors, radial hex regions, four residency rings, character/bag windows, mana skills, eleven equipment slots and six level-unlocked treasure-orb sockets |
 
 Runtime requirements are Node.js 20 or newer for development and `three`
 `^0.185.0` as a peer dependency for library consumers.
@@ -245,7 +245,8 @@ It provides unit controls rather than a complete Civilization ruleset. New
 large-world gameplay owns its authoritative state in the application and uses
 the persistence and pathfinding services independently of camera residency.
 The survivor application's boundaries are defined in
-[App development](docs/app-development.md).
+[App development](docs/app-development.md). Entity storage and monster decisions
+are documented in [Combat ECS and behavior trees](docs/game/simulation-and-ai.md).
 
 ## Development and verification
 
@@ -258,6 +259,7 @@ The survivor application's boundaries are defined in
 | `npm run app:build` | Type-check and build the production survivor application |
 | `npm run test:app` | Run deterministic survivor core tests |
 | `npm run test:app:e2e` | Run the survivor browser acceptance flow |
+| `npm run benchmark:app` | Check survivor simulation CPU budgets |
 | `npm start` | Build, then serve the demo |
 | `npm test` | Run deterministic Vitest contract and stability tests |
 | `npm run typecheck` | Run TypeScript without emitting files |

@@ -19,16 +19,18 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
         const session = window.survivorApplication!.session;
         session.frame(performance.now());
         const runtime = session as unknown as { simulation: CombatSimulation; view: { layer: { actors: { enemies: { count: number }[][] } } } };
-        const { enemies, player } = runtime.simulation.getRenderState();
+        const { entities, player } = runtime.simulation.getRenderState();
+        const { enemies, position, enemy } = entities;
         const world = (runtime.simulation as unknown as { world: RegionalWorld }).world;
         const expected = [0, 0, 0, 0];
         let outsideActive = 0;
-        for (let i = 0; i < enemies.count; i++) {
-            const distance = Math.hypot(enemies.x[i] - player.x, enemies.z[i] - player.z);
-            const homeDistance = Math.hypot(enemies.homeX[i] - player.x, enemies.homeZ[i] - player.z);
-            if (Math.max(distance - enemies.radius[i] * 2, homeDistance) >= 30) continue;
-            expected[enemies.kinds[i]]++;
-            if (distance <= 24 && world.lodAt(enemies.x[i], enemies.z[i]) !== "active") outsideActive++;
+        for (let cursor = 0; cursor < enemies.count; cursor++) {
+            const i = enemies.slots[cursor];
+            const distance = Math.hypot(position.x[i] - player.x, position.z[i] - player.z);
+            const homeDistance = Math.hypot(enemy.homeX[i] - player.x, enemy.homeZ[i] - player.z);
+            if (Math.max(distance - position.radius[i] * 2, homeDistance) >= 30) continue;
+            expected[enemy.kind[i]]++;
+            if (distance <= 24 && world.lodAt(position.x[i], position.z[i]) !== "active") outsideActive++;
         }
         return { expected, actual: runtime.view.layer.actors.enemies.map(pool => pool.map(mesh => mesh.count)), outsideActive };
     });

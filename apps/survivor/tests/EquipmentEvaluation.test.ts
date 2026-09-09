@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { CombatSimulation, INVENTORY_CAPACITY } from "../src/core/CombatSimulation";
+import { CombatSimulation } from "../src/core/CombatSimulation";
+import { INVENTORY_CAPACITY } from "../src/core/CombatConfig";
 import { battlePower, compareEquipment } from "../src/core/EquipmentEvaluation";
 import { deriveStats } from "../src/core/CombatStats";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment, type EquipmentBonuses } from "../src/core/Equipment";

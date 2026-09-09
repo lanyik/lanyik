@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession } from "../app/CombatSession";
-import { PULSE_MANA_COST } from "../core/CombatSimulation";
+import { PULSE_MANA_COST } from "../core/CombatConfig";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";

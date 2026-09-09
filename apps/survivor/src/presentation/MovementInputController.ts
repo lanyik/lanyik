@@ -1,5 +1,5 @@
 import { Vector3, type Camera } from "three";
-import type { MovementInput } from "../core/CombatSimulation";
+import type { MovementInput } from "../core/CombatState";
 
 const MOVEMENT_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD"]);
 

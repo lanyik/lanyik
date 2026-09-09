@@ -20,6 +20,8 @@ of keeping a test-only runtime path alive.
 | Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
+| Game simulation | Entity identity, behavior interruption, attack timing, damage and progression | `apps/survivor/tests` |
+| Game benchmark | Fixed-seed combat and full-capacity enemy/projectile traversal | `scripts/benchmark-survivor.mjs` |
 | Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
@@ -53,6 +55,23 @@ resource accounting must additionally run:
 ```powershell
 $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
+
+Survivor changes additionally run `npm run test:app`, `npm run app:build`,
+`npm run test:app:e2e` and `npm run benchmark:app`. Build the library before
+the standalone app typecheck or tests; do not race those commands with a build
+that replaces `dist`. CI includes the app typecheck, tests, benchmark and browser
+suite. Browser checks exercise actual attack morph weights, telegraphs and
+hostile projectile colors from fixed simulation ticks, including pause.
+
+The app benchmark uses one warmup and five measured runs. It gates median
+CPU time per tick at 0.5 ms for 24 seconds of real travel combat, and 3 ms for
+640 enemies plus 128 projectiles whose paths require scanning every enemy.
+The travel workload must remain alive for every measured tick; the full-capacity
+workload retains all targets without damage resolution. Reports include runtime,
+CPU, raw samples and entity counts. These bounds do not measure browser/GPU time.
+Optional `--baseline=<module path>` compares an independently bundled previous
+simulation on the same travel seed and input; differing combat rules can change
+entity counts, so this comparison does not isolate ECS overhead.
 
 A release or infrastructure freeze also runs `npm run benchmark:check`. CI
 runs the normal gates for pushes and pull requests and enables the 500-iteration
