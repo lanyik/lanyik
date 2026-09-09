@@ -3,13 +3,16 @@ import { createRoot } from "react-dom/client";
 import { HexCombatView } from "../adapters/HexCombatView";
 import { App } from "../presentation/App";
 import { CombatSession } from "./CombatSession";
+import { CombatWorkerClient } from "../worker/CombatWorkerClient";
+import { workerBudget } from "../worker/WorkerBudget";
 
 export function bootstrap(): { readonly session: CombatSession; dispose(): Promise<void> } {
     const element = document.getElementById("survivor-ui");
     if (!element) throw new Error("Survivor UI element is missing");
     let session: CombatSession;
-    const view = new HexCombatView(error => session?.fail(error));
-    session = new CombatSession(view);
+    const budget = workerBudget(navigator.hardwareConcurrency);
+    const view = new HexCombatView(error => session?.fail(error), budget.terrain);
+    session = new CombatSession(view, onFailure => new CombatWorkerClient(budget.queries, onFailure));
     const root = createRoot(element);
     root.render(<StrictMode><App session={session} /></StrictMode>);
 

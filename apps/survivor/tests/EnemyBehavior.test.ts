@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { ActorAction, CombatWorld, Faction } from "../src/core/CombatWorld";
 import { EnemyBehavior } from "../src/core/EnemyBehavior";
-import { advanceEnemyActions, advanceProjectiles, moveEnemies, segmentCircleHit } from "../src/core/CombatSystems";
+import { advanceEnemyActions, advanceProjectiles, moveEnemies } from "../src/core/CombatSystems";
+import { segmentCircleHit } from "../src/core/ProjectileBatch";
 import { ENEMY_DEFINITIONS, type EnemyKind } from "../src/core/EnemyDefinitions";
 import { MAX_HOSTILE_PROJECTILES } from "../src/core/CombatConfig";
 import { RegionalWorld } from "../src/core/RegionalWorld";

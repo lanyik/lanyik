@@ -84,9 +84,9 @@ export interface CombatRenderEntities {
     readonly experience: EntityView;
     readonly loot: EntityView;
     readonly position: Readonly<CombatWorld["position"]>;
-    readonly vitals: Readonly<CombatWorld["vitals"]>;
+    readonly vitals: Readonly<Pick<CombatWorld["vitals"], "hitFlash">>;
     readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "level" | "homeX" | "homeZ" | "active">>;
-    readonly action: Readonly<CombatWorld["action"]>;
+    readonly action: Readonly<Pick<CombatWorld["action"], "kind" | "reach" | "progress">>;
     readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction">>;
     readonly experienceValue: Float64Array;
     readonly item: Readonly<CombatWorld["item"]>;
@@ -99,7 +99,7 @@ export interface ChestRenderBuffer {
     readonly z: Float32Array;
 }
 
-/** Borrowed until the next simulation mutation; never retained as a detached snapshot. */
+/** Core views borrow ECS storage; presentation views borrow a RenderFrame until its buffer is recycled. */
 export interface CombatRenderState {
     readonly player: PlayerRenderState;
     readonly entities: CombatRenderEntities;

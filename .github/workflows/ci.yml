@@ -27,6 +27,7 @@ jobs:
       - run: npm run typecheck --workspace @preview/survivor
       - run: npm run test:app
       - run: npm run benchmark:app
+      - run: npm run benchmark:app:workers
       - run: npm run check:generated:built
       - run: npm run check:package-boundaries:built
       - run: npm run benchmark:check:built

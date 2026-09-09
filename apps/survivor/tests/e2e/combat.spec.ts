@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 test("plays with baked actors, independent character/bag windows and complete keyboard HUD", async ({ page }) => {
-    test.setTimeout(240_000);
+    // This assembled UI journey includes several full-resolution software-rendered captures.
+    test.setTimeout(300_000);
     const errors: string[] = [];
     const loadedActors = new Set<string>();
     const loadedAtlases = new Set<string>();

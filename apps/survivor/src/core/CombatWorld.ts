@@ -1,4 +1,5 @@
 import { EntityWorld } from "./EntityWorld";
+import { ProjectileBatch } from "./ProjectileBatch";
 import {
     ENTITY_CAPACITY, MAX_ENEMIES, MAX_PROJECTILES, MAX_HOSTILE_PROJECTILES,
     MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, PLAYER_RADIUS
@@ -39,6 +40,8 @@ export class CombatWorld {
     public readonly loot = this.world.query(Component.GroundItem);
     public readonly player: number;
     public readonly impacts = new DamageBuffer();
+    public readonly projectileBatch = new ProjectileBatch();
+    public readonly projectileBatchIndices = new Uint16Array(ENTITY_CAPACITY);
     public readonly position = {
         x: new Float64Array(ENTITY_CAPACITY), z: new Float64Array(ENTITY_CAPACITY),
         previousX: new Float64Array(ENTITY_CAPACITY), previousZ: new Float64Array(ENTITY_CAPACITY),

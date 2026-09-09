@@ -4,7 +4,8 @@ import { DeterministicRandom } from "../../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE } from "../../src/core/Loot";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { InventoryItem } from "../../src/core/InventoryItem";
-import type { RegionalWorld } from "../../src/core/RegionalWorld";
+import type { CombatRenderState } from "../../src/core/CombatState";
+import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 import type { HexMap } from "three-hex-map";
 
 test("compares gear on hover, protects upgrades during cleanup and equips a real pickup from the HUD", async ({ page }) => {
@@ -12,16 +13,16 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
-    await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "toggle-pause" }));
+    await pauseCombat(page);
     const rendered = await page.evaluate(() => {
         const session = window.survivorApplication!.session;
         session.frame(performance.now());
-        const runtime = session as unknown as { simulation: CombatSimulation; view: { layer: { actors: { enemies: { count: number }[][] } } } };
-        const { entities, player } = runtime.simulation.getRenderState();
+        const runtime = session as unknown as { renderState: CombatRenderState; view: { layer: { actors: { enemies: { count: number }[][] } } } };
+        const { entities, player } = runtime.renderState;
         const { enemies, position, enemy } = entities;
-        const world = (runtime.simulation as unknown as { world: RegionalWorld }).world;
         const expected = [0, 0, 0, 0];
         let outsideActive = 0;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
@@ -30,7 +31,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
             const homeDistance = Math.hypot(enemy.homeX[i] - player.x, enemy.homeZ[i] - player.z);
             if (Math.max(distance - position.radius[i] * 2, homeDistance) >= 30) continue;
             expected[enemy.kind[i]]++;
-            if (distance <= 24 && world.lodAt(position.x[i], position.z[i]) !== "active") outsideActive++;
+            if (distance <= 24 && !enemy.active[i]) outsideActive++;
         }
         return { expected, actual: runtime.view.layer.actors.enemies.map(pool => pool.map(mesh => mesh.count)), outsideActive };
     });
@@ -48,12 +49,15 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     const random = new DeterministicRandom("dense-inventory");
     const inventory = [better, weaker, ...Array.from({ length: 16 }, (_, i) => generateEquipment(random, 9010 + i, 5 + i, BASE_LOOT_PROFILE))];
     // Arrange inventory data only; comparisons, cleanup, pickup and equip use production commands.
-    await page.evaluate(items => {
-        const session = window.survivorApplication!.session;
-        const simulation = (session as unknown as { simulation: CombatSimulation }).simulation;
+    await combatWorker(page).evaluate(items => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         (simulation as unknown as { inventory: InventoryItem[] }).inventory = items;
-        session.dispatch({ type: "sort-inventory" });
     }, inventory);
+    await page.evaluate(async () => {
+        const session = window.survivorApplication!.session;
+        session.dispatch({ type: "sort-inventory" });
+        await session.settled;
+    });
     await page.keyboard.press("KeyC");
     const equipped = page.locator('.equipment-slot[data-slot="weapon"]');
     await equipped.hover();
@@ -97,14 +101,17 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await page.getByRole("button", { name: "关闭角色", exact: true }).click();
 
     const pickup = { ...better, id: 9100, name: "破晓猎弩" };
-    await page.evaluate(item => {
-        const session = window.survivorApplication!.session;
-        const simulation = (session as unknown as { simulation: CombatSimulation }).simulation;
+    await combatWorker(page).evaluate(item => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const player = simulation.getSnapshot().player;
         const source = simulation as unknown as { dropItem(item: Equipment, x: number, z: number): void; collectEquipment(): void };
         source.dropItem(item, player.x, player.z); source.collectEquipment();
-        session.frame(performance.now());
     }, pickup);
+    await page.evaluate(async () => {
+        const session = window.survivorApplication!.session;
+        session.dispatch({ type: "sort-inventory" });
+        await session.settled;
+    });
     const prompt = page.getByRole("complementary", { name: "更好装备" });
     await expect(prompt).toContainText("破晓猎弩");
     const powerBefore = Number(await page.getByTestId("battle-power").textContent());

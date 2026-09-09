@@ -66,7 +66,7 @@ export class HexCombatView implements CombatView {
     private readonly canvas: HTMLCanvasElement;
     private attempt: { readonly controller: AbortController; source: ProceduralWorldSource | undefined } | undefined;
 
-    constructor(onError: (error: Error) => void) {
+    constructor(onError: (error: Error) => void, private readonly terrainWorkers: number) {
         this.map = new HexMap({
             element: "#survivor-world",
             size: 34,
@@ -109,6 +109,7 @@ export class HexCombatView implements CombatView {
         const source = new ProceduralWorldSource({
             seed,
             workerUrl,
+            workerCount: this.terrainWorkers,
             chunkSize: 24,
             waterStyle: COMBAT_WATER_STYLE,
             workCoordinator: this.map.workCoordinator

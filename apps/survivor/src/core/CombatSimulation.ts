@@ -20,6 +20,7 @@ import { compareInventoryItems, createConsumable, isLowLevelEquipment, type Inve
 
 import { CombatWorld, Faction } from "./CombatWorld";
 import { EnemyBehavior } from "./EnemyBehavior";
+import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { ENEMY_DEFINITIONS, type EnemyKind } from "./EnemyDefinitions";
 import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, INVENTORY_CAPACITY, PULSE_MANA_COST, CONSUMABLE_COOLDOWN } from "./CombatConfig";
@@ -137,11 +138,13 @@ export class CombatSimulation {
     public get tick(): number { return this.tickValue; }
     public get gameOver(): boolean { return this.gameOverValue; }
 
-    public step(input: MovementInput): void {
+    public step(input: MovementInput): void;
+    public step(input: MovementInput, executor: ProjectileExecutor): Promise<void>;
+    public step(input: MovementInput, executor?: ProjectileExecutor): void | Promise<void> {
         if (!input || !Number.isFinite(input.x) || !Number.isFinite(input.z)) {
             throw new RangeError("Movement input must contain finite coordinates");
         }
-        if (this.gameOverValue) return;
+        if (this.gameOverValue) return executor ? Promise.resolve() : undefined;
         if (!Number.isSafeInteger((this.tickValue + 1) * COMBAT_STEP_MS)) {
             throw new RangeError("Combat time exceeds the supported range");
         }
@@ -159,7 +162,12 @@ export class CombatSimulation {
         if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
         this.updateCurrentRegion();
         this.fireWeapon();
+        if (executor) return advanceProjectiles(this.entities, executor).then(() => this.finishStep());
         advanceProjectiles(this.entities);
+        this.finishStep();
+    }
+
+    private finishStep(): void {
         this.resolveImpacts();
         if (this.gameOverValue) return;
         if (this.autoCast) this.castSkill();

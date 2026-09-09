@@ -1,28 +1,25 @@
 import { ActorAction, CombatWorld, Faction, MoveIntent } from "./CombatWorld";
 import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES } from "./CombatConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
+import { resolveProjectileRange, type ProjectileExecutor } from "./ProjectileBatch";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
 
-/** Earliest intersection, including a projectile beginning inside a target. */
-export function segmentCircleHit(sx: number, sz: number, ex: number, ez: number, x: number, z: number, radius: number): number {
-    const ox = sx - x, oz = sz - z, dx = ex - sx, dz = ez - sz;
-    const c = ox * ox + oz * oz - radius * radius;
-    if (c <= 0) return 0;
-    const a = dx * dx + dz * dz;
-    if (a === 0) return Infinity;
-    const b = ox * dx + oz * dz;
-    const discriminant = b * b - a * c;
-    if (discriminant < 0) return Infinity;
-    const t = (-b - Math.sqrt(discriminant)) / a;
-    return t >= 0 && t <= 1 ? t : Infinity;
-}
-
 /** Projectiles remove only their own query members and defer damage to a phase boundary. */
-export function advanceProjectiles(entities: CombatWorld): void {
-    const { position: p, projectile: b, projectiles, enemies, player, impacts, world } = entities;
-    let cursor = 0;
-    while (cursor < projectiles.count) {
+export function advanceProjectiles(entities: CombatWorld): void;
+export function advanceProjectiles(entities: CombatWorld, executor: ProjectileExecutor): Promise<void>;
+export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileExecutor): void | Promise<void> {
+    const { position: p, projectile: b, projectiles, enemies, player, world, projectileBatch: batch } = entities;
+    if (projectiles.count === 0) return executor ? Promise.resolve() : undefined;
+    batch.enemyCount = projectiles.count === entities.hostileProjectiles.count ? 0 : enemies.count;
+    batch.count = projectiles.count;
+    batch.setPlayer(world.ids[player], p.x[player], p.z[player], p.radius[player]);
+    for (let cursor = 0; cursor < batch.enemyCount; cursor++) {
+        const slot = enemies.slots[cursor];
+        batch.enemyIds[cursor] = world.ids[slot]; batch.enemyX[cursor] = p.x[slot];
+        batch.enemyZ[cursor] = p.z[slot]; batch.enemyRadius[cursor] = p.radius[slot];
+    }
+    for (let cursor = 0; cursor < projectiles.count; cursor++) {
         const slot = projectiles.slots[cursor];
         const sx = p.x[slot], sz = p.z[slot];
         p.previousX[slot] = sx; p.previousZ[slot] = sz;
@@ -30,18 +27,22 @@ export function advanceProjectiles(entities: CombatWorld): void {
         const ex = p.x[slot] = sx + b.velocityX[slot] * dt;
         const ez = p.z[slot] = sz + b.velocityZ[slot] * dt;
         b.lifetime[slot] -= SECONDS;
-        let target = -1, nearest = Infinity;
-        if (b.faction[slot] === Faction.Player) {
-            for (let i = 0; i < enemies.count; i++) {
-                const enemy = enemies.slots[i];
-                const t = segmentCircleHit(sx, sz, ex, ez, p.x[enemy], p.z[enemy], p.radius[slot] + p.radius[enemy]);
-                if (t < nearest || (t !== Infinity && t === nearest && (target < 0 || world.ids[enemy] < world.ids[target]))) {
-                    nearest = t; target = enemy;
-                }
-            }
-        } else if (segmentCircleHit(sx, sz, ex, ez, p.x[player], p.z[player], p.radius[slot] + p.radius[player]) !== Infinity) target = player;
-        if (target >= 0) impacts.add(b.source[slot], world.ids[target], b.damage[slot], b.elite[slot], b.boss[slot]);
-        if (target >= 0 || b.lifetime[slot] <= 0) { entities.remove(slot); continue; }
+        entities.projectileBatchIndices[slot] = cursor;
+        batch.startX[cursor] = sx; batch.startZ[cursor] = sz; batch.endX[cursor] = ex; batch.endZ[cursor] = ez;
+        batch.radius[cursor] = p.radius[slot]; batch.hostile[cursor] = Number(b.faction[slot] === Faction.Enemy);
+    }
+    if (executor) return executor.resolve(batch).then(() => commitProjectiles(entities));
+    resolveProjectileRange(batch);
+    commitProjectiles(entities);
+}
+
+function commitProjectiles(entities: CombatWorld): void {
+    const { projectiles, projectile: b, impacts, projectileBatch: batch } = entities;
+    let cursor = 0;
+    while (cursor < projectiles.count) {
+        const slot = projectiles.slots[cursor], target = batch.targets[entities.projectileBatchIndices[slot]];
+        if (target !== 0) impacts.add(b.source[slot], target, b.damage[slot], b.elite[slot], b.boss[slot]);
+        if (target !== 0 || b.lifetime[slot] <= 0) { entities.remove(slot); continue; }
         cursor++;
     }
 }

@@ -57,11 +57,27 @@ $env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
 ```
 
 Survivor changes additionally run `npm run test:app`, `npm run app:build`,
-`npm run test:app:e2e` and `npm run benchmark:app`. Build the library before
+`npm run test:app:e2e`, `npm run benchmark:app` and `npm run benchmark:app:workers`. Build the library before
 the standalone app typecheck or tests; do not race those commands with a build
 that replaces `dist`. CI includes the app typecheck, tests, benchmark and browser
 suite. Browser checks exercise actual attack morph weights, telegraphs and
 hostile projectile colors from fixed simulation ticks, including pause.
+
+Combat Worker tests run the browser query entry on real Node threads and compare
+hits, commit order and deterministic replay with the serial numerical kernel.
+Transfer tests detach actual ArrayBuffers; controlled transports cover backpressure,
+ordered commands, pause acknowledgment and stale-session rejection. Browser fixtures
+use an inspectable test Worker entry with the production host and protocol; no debug
+simulation is added to the main thread or production Worker. The assembled browser
+suite exercises parallel collision queries, twenty restarts, query-worker failure,
+recovery and final termination of both combat and terrain workers.
+The assembled HUD/equipment/keyboard journey has a 300-second total budget for
+software rendering and captures; its individual assertion timeouts remain unchanged.
+
+The worker benchmark measures actual copy, transfer and join costs at four bounded
+projectile counts, with 100 warmup batches and five samples of 200 batches. It reports
+the scheduling threshold and fixed packet sizes, and gates the full-capacity scheduled
+query at 3 ms. It measures Node worker threads, not browser rendering or input latency.
 
 The app benchmark uses one warmup and five measured runs. It gates median
 CPU time per tick at 0.5 ms for 24 seconds of real travel combat, and 3 ms for
