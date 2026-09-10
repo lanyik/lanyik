@@ -45,6 +45,7 @@
     "app:typecheck": "npm run build:lib && npm run typecheck --workspace @preview/survivor",
     "test:app": "npm run test --workspace @preview/survivor",
     "test:app:e2e": "playwright test --config playwright.app.config.ts",
+    "check:app:dev": "node scripts/check-survivor-dev.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",

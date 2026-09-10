@@ -85,6 +85,12 @@ including successful idle leaves. Inventory tests protect independent category l
 atomic chest rewards, stable stack IDs, quantity/potency conservation and one-dose consumption.
 Browser checks exercise icon-only hover, immediate dismissal, Alt pinning, one active item
 tooltip, keyboard focus, narrow-screen bounds and explicit potion merging.
+Before handing off an active development URL, run `npm run check:app:dev` against
+the already-running server on port 5173. It loads the real page and generates and
+picks up equipment, an orb and a potion stack using Vite-served modules inside
+the actual unbundled Worker. It does not intercept the Worker entry or rebuild
+the server, so stale development modules remain observable. Restart development
+after item-schema or cross-worker contract refactors, refresh, and rerun this check.
 The assembled HUD/equipment/keyboard journey has a 300-second total budget for
 software rendering and captures; its individual assertion timeouts remain unchanged.
 
