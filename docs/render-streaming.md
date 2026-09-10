@@ -48,8 +48,10 @@ chunk is admitted synchronously for first-frame feedback; peripheral mounts go
 through a priority queue capped by `frameBudgetMs` and `maxMountsPerFrame`.
 Toroidal images are diffed by source-object UUID and physical offset; repeated
 chunk/model completion notices coalesce into one queued synchronization instead
-of clearing and recloning every image. This backpressure prevents a batch of
-completed workers from creating a long main-thread frame.
+of clearing and recloning every image. This backpressure limits how many mounts
+a batch of completed workers admits in one frame. The time budget is checked
+between tasks and cannot preempt a running mount, so an individual expensive
+task can still exceed it; this is not a hard bound on whole-frame duration.
 
 Vegetation option setters ignore unchanged values and coalesce changes made in
 one JavaScript turn. Replacement operations serialize, discard obsolete world
