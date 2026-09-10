@@ -17504,6 +17504,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           });
           if (profile) this.applyAdaptiveStreamingProfile(profile);
         }
+        this.emit("beforeframe", { t, dtS });
+        if (this.disposed) return;
         this.interactions.update(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
@@ -17524,7 +17526,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         });
         this.rendererHost.render();
         this.lastCpuFrameMs = performance.now() - cpuFrameStart;
-        this.animationFrameId = window.requestAnimationFrame(this.animate);
+        this.emit("afterframe", {
+          t,
+          dtS,
+          cpuFrameMs: this.lastCpuFrameMs,
+          gpuFrameMs,
+          frameTaskMs: this.frameTasks.stats.lastFrameDurationMs,
+          gpuSupported: gpuTiming.supported,
+          gpuSampleAgeMs: gpuTiming.lastSampleAgeMs
+        });
+        if (!this.disposed) this.animationFrameId = window.requestAnimationFrame(this.animate);
       };
       this.options = resolveHexMapOptions(options);
       this.worldChunkMountQueue = new WorldChunkMountQueue({

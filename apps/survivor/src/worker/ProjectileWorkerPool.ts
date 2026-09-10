@@ -51,6 +51,7 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
     private readonly lanes: QueryLane[];
     public parallelBatches = 0;
     public localBatches = 0;
+    public waitMs = 0;
     constructor(ports: readonly MessagePort[]) { this.lanes = ports.map((port, id) => new QueryLane(port, id)); }
     public get size(): number { return this.lanes.length; }
     public get workerActivity() { return this.lanes.map(lane => lane.activity.snapshot); }
@@ -62,7 +63,7 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
         }
         this.parallelBatches++;
         let cursor = 0, assignedPairs = 0;
-        await Promise.all(this.lanes.map((lane, index) => {
+        const pending = this.lanes.map((lane, index) => {
             const begin = cursor, boundary = pairs * (index + 1) / this.lanes.length;
             // A hostile bolt checks one player; a friendly bolt scans the whole enemy query.
             while (cursor < batch.count && (index === this.lanes.length - 1 || assignedPairs < boundary)) {
@@ -70,7 +71,10 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
                 cursor++;
             }
             return lane.run(batch, begin, cursor);
-        }));
+        });
+        const started = performance.now();
+        try { await Promise.all(pending); }
+        finally { this.waitMs += performance.now() - started; }
     }
     public dispose(): void { for (const lane of this.lanes) lane.dispose(); }
 }

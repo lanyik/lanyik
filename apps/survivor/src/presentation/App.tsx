@@ -75,7 +75,7 @@ export function App({ session }: { readonly session: CombatSession }) {
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>荒原<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : "探索中"}</span></header>
                 <div className="run-metrics"><div><span>生存时间</span><strong data-testid="elapsed-time" data-tick={combat.tick}>{formatTime(combat.elapsedMs)}</strong></div>
                     <div><span>击杀</span><b data-testid="kill-count">{combat.kills}</b></div><div><span>区域怪物</span><b data-testid="enemy-count">{combat.livingEnemies}</b></div></div>
-                <WorkerLoadPanel workers={snapshot.workerLoads} />
+                <WorkerLoadPanel workers={snapshot.workerLoads} performance={snapshot.performance} />
             </section>
             <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} />
             {combat.boss && <section className="boss-status panel"><strong>裂爪领主</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>

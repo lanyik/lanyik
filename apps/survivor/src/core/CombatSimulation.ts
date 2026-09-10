@@ -20,6 +20,7 @@ import { compareInventoryItems, createConsumable, isLowLevelEquipment, type Inve
 
 import { CombatWorld, Faction } from "./CombatWorld";
 import { EnemyBehavior } from "./EnemyBehavior";
+import { SimulationTasks } from "./SimulationTasks";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { ENEMY_DEFINITIONS, type EnemyKind } from "./EnemyDefinitions";
@@ -48,6 +49,7 @@ function validatePosition(x: number, z: number): void {
  * the ECS; inventory and progression remain low-frequency domain data.
  */
 export class CombatSimulation {
+    public readonly tasks: SimulationTasks;
     private random: DeterministicRandom;
     private readonly entities: CombatWorld;
     private readonly behavior: EnemyBehavior;
@@ -131,16 +133,20 @@ export class CombatSimulation {
         this.health = this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.mana = this.stats.maxMana;
         this.world.synchronize(start.x, start.z);
+        this.tasks = new SimulationTasks(entity => this.entities.world.resolve(entity) >= 0);
+        this.tasks.commitReady(0, this.world.revision);
         this.spawnEnemies();
         this.refreshChests();
     }
 
     public get tick(): number { return this.tickValue; }
     public get gameOver(): boolean { return this.gameOverValue; }
+    public dispose(): void { this.tasks.dispose(); }
 
     public step(input: MovementInput): void;
     public step(input: MovementInput, executor: ProjectileExecutor): Promise<void>;
     public step(input: MovementInput, executor?: ProjectileExecutor): void | Promise<void> {
+        this.tasks.assertCanStep();
         if (!input || !Number.isFinite(input.x) || !Number.isFinite(input.z)) {
             throw new RangeError("Movement input must contain finite coordinates");
         }
@@ -160,9 +166,13 @@ export class CombatSimulation {
         this.movePlayer(input);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
         if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
+        this.tasks.commitReady(this.tickValue, this.world.revision);
         this.updateCurrentRegion();
         this.fireWeapon();
-        if (executor) return advanceProjectiles(this.entities, executor).then(() => this.finishStep());
+        if (executor) return this.tasks.require(async () => {
+            await advanceProjectiles(this.entities, executor);
+            this.finishStep();
+        });
         advanceProjectiles(this.entities);
         this.finishStep();
     }

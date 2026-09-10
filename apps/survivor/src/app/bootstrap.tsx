@@ -17,15 +17,15 @@ export function bootstrap(): { readonly session: CombatSession; dispose(): Promi
     root.render(<StrictMode><App session={session} /></StrictMode>);
 
     const visibilityChanged = () => session.setHidden(document.hidden);
-    const frame = (timestamp: number) => {
-        frameId = requestAnimationFrame(frame);
-        session.frame(timestamp);
-    };
-    let frameId = requestAnimationFrame(frame);
+    const disconnectFrame = view.onFrame(frame => {
+        try { session.frame(frame.t, frame.dtS === 0); } catch (error) { session.fail(error); }
+    }, frame => session.afterFrame(frame));
+    const disconnectPerformance = session.observeLongFrames();
     let closing: Promise<void> | undefined;
     const dispose = () => {
         if (closing) return closing;
-        cancelAnimationFrame(frameId);
+        disconnectFrame();
+        disconnectPerformance();
         document.removeEventListener("visibilitychange", visibilityChanged);
         window.removeEventListener("pagehide", pageHidden);
         window.removeEventListener("pageshow", visibilityChanged);

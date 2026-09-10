@@ -41,6 +41,7 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     advanceProjectiles(serial); await advanceProjectiles(parallel, pool);
     expect(pool.parallelBatches).toBe(1);
     expect(pool.workerActivity).toHaveLength(2);
+    expect(pool.waitMs).toBeGreaterThan(0);
     for (const worker of pool.workerActivity) {
         expect(worker.completed).toBe(1);
         expect(worker.busy).toBe(false);

@@ -25,6 +25,7 @@ export class CombatWorkerHost {
             if (this.busy || request.id !== this.sequence + 1) throw new Error("Combat requests must be serial and ordered");
             this.sequence = request.id; this.busy = true;
             const started = performance.now();
+            const waitBefore = this.pool?.waitMs ?? 0;
             let forceSnapshot = false;
             if (request.type === "init") {
                 if (this.simulation) throw new Error("Combat Worker already initialized");
@@ -54,17 +55,23 @@ export class CombatWorkerHost {
             if (publish) this.lastSnapshotTick = simulation.tick;
             const frame = this.frame;
             if (!frame) throw new Error("Presentation did not return its render buffer");
-            const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver,
-                render: frame.write(simulation.getRenderState()), snapshot: publish ? simulation.getSnapshot() : undefined, notices,
+            const render = frame.write(simulation.getRenderState()), snapshot = publish ? simulation.getSnapshot() : undefined;
+            const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
+            const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
-                    computeMs: performance.now() - started, frameBytes: RenderFrame.bytes } };
+                    batchMs, executeMs: Math.max(0, batchMs - queryWaitMs), queryWaitMs,
+                    deferred: simulation.tasks.stats, frameBytes: RenderFrame.bytes } };
             this.frame = request.type === "init" ? new RenderFrame() : undefined;
             this.send({ type: "state", id: request.id, update }, [update.render.buffer]);
         } catch (reason) {
+            if (this.closed) return;
             this.send({ type: "error", id: request.id, message: reason instanceof Error ? reason.message : String(reason) }, []);
             this.dispose();
         } finally { this.busy = false; }
     }
 
-    public dispose(): void { this.closed = true; this.pool?.dispose(); this.pool = undefined; this.simulation = undefined; this.frame = undefined; }
+    public dispose(): void {
+        this.closed = true; this.pool?.dispose(); this.simulation?.dispose();
+        this.pool = undefined; this.simulation = undefined; this.frame = undefined;
+    }
 }

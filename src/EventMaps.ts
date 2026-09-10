@@ -13,6 +13,15 @@ export interface HexMapFrameEvent {
     gpuFrameMs: number | undefined;
 }
 
+export interface HexMapFrameStartEvent { readonly t: number; readonly dtS: number }
+/** Current main-loop time; GPU measurements arrive asynchronously from earlier draws. */
+export interface HexMapFrameEndEvent extends HexMapFrameEvent {
+    readonly cpuFrameMs: number;
+    readonly frameTaskMs: number;
+    readonly gpuSupported: boolean;
+    readonly gpuSampleAgeMs: number | undefined;
+}
+
 export interface HexMapSurfaceChangeEvent {
     revision: number;
     surface: WorldSurfaceView;
@@ -40,6 +49,8 @@ export interface HexMapEventMap {
     load: void;
     error: Error;
     frame: HexMapFrameEvent;
+    beforeframe: HexMapFrameStartEvent;
+    afterframe: HexMapFrameEndEvent;
     contextlost: Readonly<WebGlContextStats>;
     contextrestored: Readonly<WebGlContextStats>;
     surfacechange: HexMapSurfaceChangeEvent;

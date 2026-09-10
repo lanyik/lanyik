@@ -13,6 +13,7 @@ export class CombatWorkerClient implements CombatTransport {
     private recycle: ArrayBuffer | undefined;
     private closed = false;
     private simulationStats: CombatWorkerStats | undefined;
+    private receiveMs = 0;
 
     constructor(private readonly queryWorkers: number, private readonly onFailure: (error: Error) => void) {
         if (!Number.isInteger(queryWorkers) || queryWorkers < 0 || queryWorkers > 2) throw new Error("Invalid collision Worker count");
@@ -20,7 +21,7 @@ export class CombatWorkerClient implements CombatTransport {
     public get stats() {
         const activity = this.activity.snapshot;
         return Object.freeze({ workers: this.workers.length, pending: Number(Boolean(this.pending)),
-            completed: activity.completed, roundTripMs: activity.lastTaskMs, simulation: this.simulationStats,
+            completed: activity.completed, roundTripMs: activity.lastTaskMs, receiveMs: this.receiveMs, simulation: this.simulationStats,
             activity: this.authority ? activity : undefined });
     }
 
@@ -64,6 +65,7 @@ export class CombatWorkerClient implements CombatTransport {
         });
     }
     private receive(message: CombatResponse): void {
+        const started = performance.now();
         if (this.closed) return;
         const pending = this.pending;
         if (!pending || message.id !== pending.id) { this.fail(new Error("Combat response sequence mismatch")); return; }
@@ -72,6 +74,7 @@ export class CombatWorkerClient implements CombatTransport {
         this.activity.end();
         this.recycle = this.currentBuffer; this.currentBuffer = message.update.render.buffer;
         this.simulationStats = message.update.stats;
+        this.receiveMs = performance.now() - started;
         pending.resolve(message.update);
     }
     private fail(error: Error): void { if (!this.closed) { this.close(error); this.onFailure(error); } }

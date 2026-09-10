@@ -19,6 +19,8 @@ export type {
     HexMapEventMap,
     HexMapEventName,
     HexMapFrameEvent,
+    HexMapFrameStartEvent,
+    HexMapFrameEndEvent,
     HexMapSurfaceChangeEvent,
     HexMapTileEvent,
     UnitEventMap,

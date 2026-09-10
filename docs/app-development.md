@@ -21,6 +21,7 @@ apps/survivor/
     CombatState.ts              # UI 快照、输入与表现数据合同
     CombatCommand.ts            # 战斗命令及确定顺序的提交入口
     ProjectileBatch.ts          # 数值碰撞快照、可分区计算核与执行端口
+    SimulationTasks.ts          # 当前 tick 屏障与有界延后结果提交
     BehaviorTree.ts             # 响应式组合、Running 与 halt 语义
     EnemyDefinitions.ts         # 怪物基础属性与攻击时序
     EnemyBehavior.ts            # 感知、共享行为树、目标与移动意图
@@ -40,6 +41,7 @@ apps/survivor/
     CombatSession.ts            # 帧节奏、有限队列、暂停屏障、可见性与 UI 发布
     CombatTransport.ts          # 会话使用的异步传输端口
     WorkerLoadSampler.ts         # 每个活跃 Worker 的一秒负载窗口，无历史积累
+    FramePerformance.ts          # 帧窗口、阶段耗时与输入采样到绘制的延迟
     bootstrap.tsx               # 组合与生命周期
   src/worker/
     WorkerBudget.ts             # 地形、模拟和查询线程的应用预算
@@ -84,14 +86,16 @@ React 只读取冻结的低频快照和提交命令，不直接修改战斗；�
 
 固定步长 20ms，主线程单帧最多接受 250ms 墙钟时间，后台时间不追赶。
 最多一个在途批次，另有至多 13 个待执行 tick 和 64 条待提交命令；慢 Worker 下移动输入合并为最新值，
-超过 tick 上限的墙钟积压计入 diagnostics 并丢弃，命令溢出明确失败。表现持续绘制最近收到的完整帧，按前后 tick 插值。
+超过 tick 上限的积压计入 diagnostics 并丢弃；时钟另外累计帧间隔超过 250ms 追赶上限而裁掉的时间，命令溢出明确失败。
+表现持续绘制最近收到的完整帧，按前后 tick 插值。
 弹道查询达到工作量门槛时由两个查询 Worker 并行执行；其余系统都在模拟 Worker，见[线程职责与协议](./game/simulation-and-ai.md#多-worker-职责与执行协议)。
-`bootstrap` 与 `HexMap` 当前分别驱动战斗表现和地图绘制的 RAF 回调，共享主线程；没有独立的渲染 Worker。
-计算隔离不等于帧率或业务结果隔离，现有保证、扩展限制和待办见[渲染隔离与扩展边界](./game/simulation-and-ai.md#渲染隔离与扩展边界)。
+`HexMap` 独占 RAF：`beforeframe` 驱动输入、角色与镜头更新，然后更新地图并绘制；`afterframe` 采集当前帧并发布诊断。
+`bootstrap` 只注册与释放监听器和浏览器长帧观察器。计算隔离与任务提交边界见[渲染隔离与扩展边界](./game/simulation-and-ai.md#渲染隔离与扩展边界)。
 单 tick 顺序：
 
 1. 保存前一位置，递减受击保护、盾、脉冲、药剂与技能冷却，应用移动；
 2. 同步区块窗口，跨区块时释放失效实体、初始化新人口，独立判断六边形地域边界；
+   随后提交已完成且实体、驻留版本、请求时效仍有效的延后任务；
 3. 自动索敌并创建弹道，扫掠取最早交点，收集命中后批量结算；玩家死亡则结束 tick；
 4. 自动施法开启时尝试脉冲并结算，死亡怪物退出后续行为更新；
 5. 按圈层感知与运行行为树，执行移动和攻击时序，再批量结算伤害与反伤；

@@ -5,6 +5,7 @@ const MAX_FRAME_MICROSECONDS = 250_000;
 export interface ClockSample {
     readonly steps: number;
     readonly alpha: number;
+    readonly clampedMs: number;
 }
 
 /** Fixed gameplay time with a bounded catch-up window and render interpolation. */
@@ -29,14 +30,15 @@ export class FixedStepClock {
         if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
             throw new RangeError("Frame timestamp must be a non-negative finite time");
         }
-        if (!this.running) return { steps: 0, alpha: 0 };
+        if (!this.running) return { steps: 0, alpha: 0, clampedMs: 0 };
         const previous = this.previousTimestamp;
         if (previous !== undefined && timestamp < previous) throw new RangeError("Frame timestamps must be monotonic");
         this.previousTimestamp = timestamp;
-        if (previous === undefined) return { steps: 0, alpha: this.remainder / STEP_MICROSECONDS };
-        this.remainder += Math.min(timestamp - previous, MAX_FRAME_MICROSECONDS);
+        if (previous === undefined) return { steps: 0, alpha: this.remainder / STEP_MICROSECONDS, clampedMs: 0 };
+        const elapsed = timestamp - previous, accepted = Math.min(elapsed, MAX_FRAME_MICROSECONDS);
+        this.remainder += accepted;
         const steps = Math.floor(this.remainder / STEP_MICROSECONDS);
         this.remainder -= steps * STEP_MICROSECONDS;
-        return { steps, alpha: this.remainder / STEP_MICROSECONDS };
+        return { steps, alpha: this.remainder / STEP_MICROSECONDS, clampedMs: (elapsed - accepted) / 1000 };
     }
 }

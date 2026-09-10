@@ -20,7 +20,7 @@ export class LoopbackCombatTransport implements CombatTransport {
             else { this.recycle = this.currentBuffer; this.currentBuffer = reply.update.render.buffer; pending.resolve(reply.update); }
         }, (seed, start) => this.simulation = new CombatSimulation(seed, start));
     }
-    public get stats() { return { workers: 0, pending: Number(Boolean(this.pending)), completed: this.sequence, roundTripMs: 0 }; }
+    public get stats() { return { workers: 0, pending: Number(Boolean(this.pending)), completed: this.sequence, roundTripMs: 0, receiveMs: 0 }; }
     public start(seed: string, start: { x: number; z: number }) { return this.send({ type: "init", id: ++this.sequence, seed, start, ports: [] }); }
     public advance(batch: CombatAdvance) {
         const recycle = this.recycle; this.recycle = undefined;

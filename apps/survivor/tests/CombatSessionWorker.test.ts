@@ -15,7 +15,7 @@ class HeldTransport extends LoopbackCombatTransport {
     }
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function view(): CombatView {
     vi.stubGlobal("document", { hidden: false });
     return { workerActivity: [], load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 1, z: 0, active: true }),
@@ -30,7 +30,7 @@ test("slow workers cannot block rendering or grow tick queues; pause acknowledge
     expect(transport.calls).toHaveLength(1);
     expect(session.diagnostics.pendingSteps).toBe(13);
     expect(session.diagnostics.droppedSteps).toBe(86);
-    expect(presentation.render).toHaveBeenCalledTimes(102);
+    expect(presentation.render).toHaveBeenCalledTimes(101);
     session.dispatch({ type: "sort-inventory" });
     session.dispatch({ type: "toggle-autocast" });
     transport.release!();
@@ -49,6 +49,31 @@ test("slow workers cannot block rendering or grow tick queues; pause acknowledge
     expect(transport.calls).toHaveLength(3);
     expect(Object.isFrozen(session.getSnapshot().combat!.player)).toBe(true);
     await session.dispose();
+});
+
+test("frame diagnostics keep updating during a held simulation and exclude hidden-time gaps", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const transport = new HeldTransport(), session = new CombatSession(view(), () => transport);
+    await session.start();
+    const frame = (time: number, dtS = .02) => {
+        now = time; session.frame(time);
+        session.afterFrame({ t: time, dtS, cpuFrameMs: 2, frameTaskMs: .5, gpuFrameMs: undefined, gpuSupported: false, gpuSampleAgeMs: undefined });
+    };
+    for (let tick = 0; tick <= 50; tick++) frame(tick * 20);
+    expect(session.getSnapshot().performance).toMatchObject({ fps: 50, mainMs: 2, gpuMs: undefined,
+        snapshotAgeMs: 1000, pendingSteps: 13, pendingRequests: 1 });
+    expect(transport.calls).toHaveLength(1);
+    session.setHidden(true); now = 100_000; session.setHidden(false);
+    frame(100_000, 99); for (let tick = 1; tick <= 50; tick++) frame(100_000 + tick * 20);
+    expect(session.getSnapshot().performance).toMatchObject({ fps: 50, frameP95Ms: 20, clockClampedMs: 0 });
+    const dropped = session.diagnostics.droppedSteps;
+    now = 200_000; session.frame(now, true);
+    expect(session.diagnostics.droppedSteps).toBe(dropped);
+    expect(session.diagnostics.clockClampedMs).toBe(0);
+    frame(201_000, 1);
+    expect(session.getSnapshot().performance!.clockClampedMs).toBe(750);
+    transport.release!(); await session.dispose();
 });
 
 test("replacement discards stale results and terminates the old owner; idle worker failures end the current session", async () => {

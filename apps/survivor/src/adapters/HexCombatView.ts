@@ -6,6 +6,8 @@ import {
     createWorldSurfaceResolver,
     getHexCenter,
     type Point,
+    type HexMapFrameStartEvent,
+    type HexMapFrameEndEvent,
     type WorldWaterGenerationStyle
 } from "three-hex-map";
 import workerUrl from "three-hex-map/world-generator.worker?url";
@@ -144,6 +146,11 @@ export class HexCombatView implements CombatView {
 
     public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
     public get workerActivity() { return this.map.workerActivity; }
+
+    public onFrame(before: (frame: HexMapFrameStartEvent) => void, after: (frame: HexMapFrameEndEvent) => void): () => void {
+        this.map.on("beforeframe", before).on("afterframe", after);
+        return () => { this.map.off("beforeframe", before).off("afterframe", after); };
+    }
 
     public render(state: CombatRenderState, alpha: number, timestampMs: number): void {
         this.layer.update(state, alpha, timestampMs);

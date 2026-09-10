@@ -82,6 +82,8 @@ function regionCoordinates(x: number, z: number): { x: number; z: number } {
 /** Hexagonal content regions and square residency chunks have separate responsibilities. */
 export class RegionalWorld {
     public readonly chunks = new Map<string, RegionalChunk>();
+    private revisionValue = 0;
+    public get revision(): number { return this.revisionValue; }
     private centerX = Infinity;
     private centerZ = Infinity;
 
@@ -121,6 +123,7 @@ export class RegionalWorld {
         const cx = Math.floor((x - this.origin.x + 6) / COMBAT_CHUNK_SIZE);
         const cz = Math.floor((z - this.origin.z + 6) / COMBAT_CHUNK_SIZE);
         if (cx === this.centerX && cz === this.centerZ) return false;
+        this.revisionValue++;
         this.centerX = cx;
         this.centerZ = cz;
         for (const [key, chunk] of this.chunks) {

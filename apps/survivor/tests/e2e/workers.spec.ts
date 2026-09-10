@@ -3,6 +3,8 @@ import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatTransport } from "../../src/app/CombatTransport";
+import type { HexMap, HexMapFrameEndEvent } from "three-hex-map";
+import type { CombatLayer } from "../../src/presentation/CombatLayer";
 import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 
 async function startCrowdedCombat(page: Page): Promise<void> {
@@ -42,8 +44,29 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
             region: fixture.world.regionAt(player.x, player.z) }, fixture.world.chunks.get("0,0")!);
     });
     await advanceCombat(page);
+    const order = await page.evaluate(async () => {
+        const view = (window.survivorApplication!.session as unknown as { view: { map: HexMap; layer: CombatLayer } }).view;
+        const renderer = (view.map as unknown as { rendererHost: { render(): void } }).rendererHost;
+        const update = view.layer.update, draw = renderer.render, phases: string[] = [];
+        return new Promise<{ phases: string[]; cpuMs: number }>(resolve => {
+            view.layer.update = (...args) => { phases.push("presentation"); update.apply(view.layer, args); };
+            renderer.render = () => { phases.push("draw"); draw.call(renderer); };
+            const after = (frame: HexMapFrameEndEvent) => {
+                phases.push("after"); view.map.off("afterframe", after);
+                view.layer.update = update; renderer.render = draw;
+                resolve({ phases, cpuMs: frame.cpuFrameMs });
+            };
+            view.map.on("afterframe", after);
+        });
+    });
+    expect(order.phases).toEqual(["presentation", "draw", "after"]);
+    expect(order.cpuMs).toBeGreaterThan(0);
     const monitor = page.getByRole("region", { name: "Worker 负载", exact: true });
     await expect(monitor).toBeVisible();
+    await expect.poll(() => monitor.locator("[data-runtime-fps]").getAttribute("data-runtime-fps")).not.toBeNull();
+    const performance = await page.evaluate(() => window.survivorApplication!.session.getSnapshot().performance!);
+    expect(performance.frameP95Ms).toBeGreaterThan(0); expect(performance.mainMs).toBeGreaterThan(0);
+    expect(performance.queryWaitMs).toBeGreaterThanOrEqual(0);
     await expect(monitor.locator("[data-worker]")).toHaveCount(5);
     await expect.poll(() => monitor.locator("[data-worker]").evaluateAll(rows => rows.every(row =>
         Number(row.getAttribute("data-completed")) > 0 && row.querySelector(".worker-load-time")!.textContent!.includes("ms")))).toBe(true);
@@ -60,6 +83,11 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
     expect(boss.x).toBeGreaterThan(bounds.x + bounds.width);
     expect(boss.x + boss.width).toBeLessThanOrEqual(390);
     await page.screenshot({ path: testInfo.outputPath("worker-load-narrow.png") });
+    await monitor.locator("summary").click();
+    expect(await monitor.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await monitor.getByText("超出追赶上限", { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("worker-load-narrow-details.png") });
+    await monitor.locator("summary").click();
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "restart" }));
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready");

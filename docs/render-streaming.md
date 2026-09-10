@@ -526,6 +526,15 @@ grass and forest layers retain their safe layer-remount behavior.
 
 ## Adaptive frame budget
 
+`HexMap` owns the animation loop. `beforeframe` is a synchronous application
+update stage before camera controls, world demand and scene updates. The existing
+`frame` event runs after scene updates and before rendering. `afterframe` reports
+the current loop's CPU wall time (including `beforeframe`), frame-task time and
+new asynchronous GPU samples, support state and sample age. Application consumers
+can update actors and camera targets before the same draw without creating another
+RAF loop. These timings exclude later observer/UI/layout work; frame intervals
+and browser performance entries are needed to observe that work too.
+
 `loadWorld()` enables adaptive streaming by default. The controller now keeps
 independent main-thread, GPU and Worker pressure levels. Each uses an EMA,
 separate overload/recovery thresholds, consecutive-frame gates and a cooldown,

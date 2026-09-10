@@ -74,6 +74,11 @@ recovery and final termination of both combat and terrain workers.
 Browser checks also verify per-worker HUD records, completed query timing,
 paused-window decay and narrow-screen bounds. Controlled-clock unit tests protect
 occupancy accounting across in-flight work, worker replacement and disposal.
+Frame tests check update-before-draw ordering in the real browser and distinguish
+loop, presentation, message, GPU and long-frame samples. Controlled clocks protect
+input acknowledgment at draw time, clock-clamped time and exclusion of hidden-time gaps. Deferred-task
+tests exercise required barriers, nonblocking ticks, latest-request ordering, world
+revision changes, entity reuse, cancellation, capacity, failure and disposal.
 The assembled HUD/equipment/keyboard journey has a 300-second total budget for
 software rendering and captures; its individual assertion timeouts remain unchanged.
 
