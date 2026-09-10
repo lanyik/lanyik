@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession } from "../app/CombatSession";
-import { PULSE_MANA_COST } from "../core/GameConfig";
+import { SKILLS } from "../core/Skills";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";
@@ -10,6 +10,7 @@ import { ItemTooltip, ItemTooltipProvider } from "./ItemTooltip";
 import { UiIcon } from "./UiIcon";
 import { UpgradePrompt } from "./UpgradePrompt";
 import { WorkerLoadPanel } from "./WorkerLoadPanel";
+import { SkillIcon, SkillsPanel } from "./SkillsPanel";
 import "./app.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
@@ -50,9 +51,9 @@ export function App({ session }: { readonly session: CombatSession }) {
             else if (event.code === "Escape") {
                 const open = (["inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
-            } else if (event.code === "Digit1") session.dispatch({ type: "cast-pulse" });
-            else if (event.code === "Digit2") session.dispatch({ type: "use-consumable", effect: "health" });
-            else if (event.code === "Digit3") session.dispatch({ type: "use-consumable", effect: "mana" });
+            } else if (/^Digit[1-4]$/.test(event.code) && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
+            else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
+            else if (event.code === "KeyE") session.dispatch({ type: "use-consumable", effect: "mana" });
             else if (event.code === "KeyF") session.dispatch({ type: "toggle-autocast" });
             else if (event.code === "KeyR" && combat?.gameOver) session.dispatch({ type: "restart" });
             else if (panels.inventory && selectedId !== undefined && !combat?.gameOver && (event.code === "Enter" || event.code === "Delete")) {
@@ -80,7 +81,7 @@ export function App({ session }: { readonly session: CombatSession }) {
                 <WorkerLoadPanel workers={snapshot.workerLoads} performance={snapshot.performance} />
             </section>
             <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} />
-            {combat.boss && <section className="boss-status panel"><strong>裂爪领主</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
+            {combat.boss && <section className="boss-status panel"><strong>裂爪领主{combat.boss.enraged ? " · 狂暴" : ""}</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
                 <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div></section>}
             {(panels.character || panels.inventory) && <div ref={workspace} className={`panel-workspace${panels.character && panels.inventory ? " paired" : ""}`} data-front={frontPanel}>
                 {panels.character && panels.inventory && <nav className="workspace-switcher" aria-label="切换窗口">
@@ -94,33 +95,28 @@ export function App({ session }: { readonly session: CombatSession }) {
                 onMerge={() => session.dispatch({ type: "merge-consumables" })}
                 socket={socket} onSocket={setSocket} disabled={combat.gameOver} paused={snapshot.paused} />}
             </div>}
-            {panels.skills && <section className="skills-window window" role="dialog" aria-label="技能">
-                <header className="window-heading"><div className="window-title"><UiIcon name="skills" /><div><span className="eyebrow">ABILITIES</span><h2>技能</h2></div></div><button className="close-button" aria-label="关闭技能" onClick={() => close("skills")}><UiIcon name="close" /></button></header>
-                <article><UiIcon name="crossbow" /><div><h3>守夜弩击 <span>自动攻击</span></h3><p>攻击最近的敌人，每秒 <b>{player.stats.attackRate.toFixed(2)}</b> 次。可触发暴击、卓越与致命一击。</p></div></article>
-                <article><UiIcon name="pulse" /><div><h3>裂隙脉冲 <kbd>1</kbd></h3><p>对周围 <b>3.2</b> 范围造成 <b>130%</b> 攻击伤害，消耗 <b>{PULSE_MANA_COST}</b> 法力，冷却 <b>{player.stats.skillInterval.toFixed(1)}</b> 秒。</p>
-                    <button onClick={() => session.dispatch({ type: "toggle-autocast" })}>自动施法：{player.autoCast ? "开启" : "关闭"}<kbd>F</kbd></button></div></article>
-                <article><UiIcon name="shield" /><div><h3>免伤盾 <span>被动</span></h3><p>抵挡一次命中后，经过 <b>{player.stats.shieldRecovery.toFixed(1)}</b> 秒恢复。</p></div></article>
-            </section>}
+            {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
                 <div className="status-bar" aria-label="状态栏"><span className={player.shieldRemaining <= 0 ? "ready" : ""}><UiIcon name="shield" />免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}s` : "就绪"}</span>
                     {snapshot.paused && <span className="dock-pause">战斗暂停</span>}
+                    {player.skills.ward > 0 && <span>结界 {Math.ceil(player.skills.ward)}</span>}
                     <button aria-pressed={player.autoCast} onClick={() => session.dispatch({ type: "toggle-autocast" })}><i className={player.autoCast ? "enabled" : ""} />自动施法 {player.autoCast ? "开" : "关"}<kbd>F</kbd></button></div>
                 <div className="vitals"><div className="level-medallion"><small>等级</small><strong data-testid="player-level">{player.level}</strong></div>
                     <div className="vital-bars"><div className={`bar health-bar${player.health / player.stats.maxHealth <= .25 ? " critical" : ""}`} aria-label="生命"><span style={{ width: `${player.health / player.stats.maxHealth * 100}%` }} /><b><em>{player.health / player.stats.maxHealth <= .25 ? "生命危急" : "生命"}</em>{Math.ceil(player.health)} / {player.stats.maxHealth}</b></div>
                         <div className="bar mana-bar" aria-label="法力"><span style={{ width: `${player.mana / player.stats.maxMana * 100}%` }} /><b><em>法力</em>{Math.floor(player.mana)} / {player.stats.maxMana}</b></div>
                         <div className="experience-track" aria-label="经验"><div className="experience-label"><span>经验</span><b>{Math.floor(player.experience)} / {player.experienceToLevel}</b></div><div className="bar experience-bar"><span style={{ width: `${player.experience / player.experienceToLevel * 100}%` }} /></div></div></div></div>
-                <div className="skill-slots"><div className="skill-slot passive"><UiIcon className="skill-symbol" name="crossbow" /><span>守夜弩击</span><small>自动攻击</small></div>
-                    <button className="skill-slot pulse-skill" disabled={combat.gameOver || snapshot.paused || player.skillRemaining > 0 || player.mana < PULSE_MANA_COST} onClick={() => session.dispatch({ type: "cast-pulse" })}>
-                        <kbd>1</kbd><UiIcon className="skill-symbol" name="pulse" /><span>裂隙脉冲</span><small>{player.skillRemaining > 0 ? `${player.skillRemaining.toFixed(1)}s` : `${PULSE_MANA_COST} 法力`}</small></button>
+                <div className="skill-slots">
+                    {player.skills.loadout.map((id, index) => <button key={index} className={`skill-slot ${id}-skill`} aria-label={`${index + 1} ${SKILLS[id].name}`} disabled={combat.gameOver || snapshot.paused || player.skills.dashing || player.skills.remaining[id] > 0 || player.mana < SKILLS[id].mana || id === "ward" && player.skills.ward > 0} onClick={() => session.dispatch({ type: "cast-skill", skill: id })}>
+                        <kbd>{index + 1}</kbd><SkillIcon id={id} /><span>{SKILLS[id].name}</span><small>{player.skills.remaining[id] > 0 ? `${player.skills.remaining[id].toFixed(1)}s` : `${SKILLS[id].mana} 法力`}</small></button>)}
                     {(["health", "mana"] as const).map((effect, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
-                        <kbd>{index + 2}</kbd><ItemTooltip item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
+                        <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || potionCount(effect) === 0 || (effect === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana)}
                         onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${potionCount(effect)}`}</small></div>)}
                 </div>
             </section>
             <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} onClick={() => toggle(menu.id)}>
-                <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}</span><kbd>{menu.key}</kbd></button>)}
+                <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}{menu.id === "skills" && player.skills.points > 0 && <i>{player.skills.points}</i>}</span><kbd>{menu.key}</kbd></button>)}
                 <button onClick={() => session.dispatch({ type: "toggle-pause" })}><UiIcon name={snapshot.paused ? "play" : "pause"} /><span>{snapshot.paused ? "继续" : "暂停"}</span><kbd>P</kbd></button></nav>
             <div className="notices" aria-live="polite">{snapshot.notices.map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}</div>
             {snapshot.upgrades[0] && !combat.gameOver && !Object.values(panels).some(Boolean) && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}

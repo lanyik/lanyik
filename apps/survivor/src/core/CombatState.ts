@@ -6,6 +6,8 @@ import type { InventoryItem } from "./InventoryItem";
 import type { RegionInfo } from "./RegionalWorld";
 import type { CombatWorld } from "./CombatWorld";
 import type { EntityQuery } from "./EntityWorld";
+import type { SkillSnapshot } from "./Skills";
+import type { EffectBuffer } from "./CombatEffects";
 
 export interface MovementInput {
     readonly x: number;
@@ -24,7 +26,7 @@ export interface PlayerSnapshot {
     readonly unspentAttributePoints: number;
     readonly gold: number;
     readonly shieldRemaining: number;
-    readonly skillRemaining: number;
+    readonly skills: SkillSnapshot;
     readonly potionRemaining: number;
     readonly autoCast: boolean;
     readonly orbs: readonly (Orb | undefined)[];
@@ -50,7 +52,7 @@ export interface CombatSnapshot {
     readonly nearbyRegions: readonly RegionInfo[];
     readonly chunks: Readonly<{ active: number; low: number; static: number; total: number }>;
     readonly openedChests: number;
-    readonly boss: Readonly<{ x: number; z: number; health: number; maxHealth: number }> | undefined;
+    readonly boss: Readonly<{ x: number; z: number; health: number; maxHealth: number; enraged: boolean }> | undefined;
     readonly gameOver: boolean;
     readonly player: PlayerSnapshot;
 }
@@ -72,7 +74,8 @@ export interface PlayerRenderState {
     readonly healthRatio: number;
     readonly invulnerable: boolean;
     readonly shieldReady: boolean;
-    readonly pulse: number;
+    readonly ward: number;
+    readonly dashing: boolean;
     readonly gameOver: boolean;
 }
 
@@ -85,7 +88,8 @@ export interface CombatRenderEntities {
     readonly loot: EntityView;
     readonly position: Readonly<CombatWorld["position"]>;
     readonly vitals: Readonly<Pick<CombatWorld["vitals"], "hitFlash">>;
-    readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "level" | "homeX" | "homeZ" | "active">>;
+    readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "level" | "homeX" | "homeZ" | "active" | "enraged">>;
+    readonly status: Readonly<Pick<CombatWorld["status"], "slowUntil">>;
     readonly action: Readonly<Pick<CombatWorld["action"], "kind" | "reach" | "progress">>;
     readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction">>;
     readonly experienceValue: Float64Array;
@@ -104,4 +108,5 @@ export interface CombatRenderState {
     readonly player: PlayerRenderState;
     readonly entities: CombatRenderEntities;
     readonly chests: ChestRenderBuffer;
+    readonly effects: EffectBuffer;
 }

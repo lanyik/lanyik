@@ -1,3 +1,4 @@
+import { skillValues } from "../src/core/Skills";
 import { describe, expect, test } from "vitest";
 import { EMPTY_BONUSES } from "../src/core/Equipment";
 import { deriveStats, incomingDamage, outgoingDamage, reflectedDamage, rollAttack } from "../src/core/CombatStats";
@@ -18,7 +19,7 @@ describe("combat attributes", () => {
         expect(stats.blockChance).toBeCloseTo(0.35);
         expect(stats.lifesteal).toBe(0.3);
         expect(stats.attackRate).toBeCloseTo(4.14);
-        expect(stats.skillInterval).toBeCloseTo(5 / 3);
+        expect(skillValues("pulse", 1, stats).cooldown).toBeCloseTo(5 / 3);
         expect(stats.criticalDamage).toBeCloseTo(2.54);
     });
 

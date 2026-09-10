@@ -43,6 +43,17 @@ try {
     assert.ok(pickedUp.every(item => typeof item.value === "string" && item.value.length > 0));
     assert.equal(pickedUp.find(item => item.type === "consumable").size, 2);
     assert.ok(pickedUp.filter(item => item.type !== "consumable").every(item => item.size === 1));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.keyboard.press("KeyK");
+    await page.locator(".skills-window").waitFor();
+    assert.equal(await page.locator(".skill-catalog article").count(), 5);
+    await page.locator(".skill-management").evaluate(element => { element.scrollTop = element.scrollHeight; });
+    const panel = await page.locator(".skills-window").boundingBox();
+    const close = await page.locator(".skills-window .close-button").boundingBox();
+    assert.ok(panel && close && close.y >= panel.y && close.y + close.height <= panel.y + panel.height,
+        "The skill window close button must remain visible when its catalog scrolls");
+    await page.screenshot({ path: ".browser-artifacts/skills-dev-narrow.png" });
+    await page.locator(".skills-window .close-button").click();
     assert.deepEqual(errors, []);
-    console.log("Development page and unbundled Worker item pickup passed:", pickedUp);
+    console.log("Development page, skill catalog and unbundled Worker item pickup passed:", pickedUp);
 } finally { await browser.close(); }

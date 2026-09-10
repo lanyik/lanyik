@@ -21,17 +21,20 @@ import { insertInventoryItem, mergeInventory } from "./Inventory";
 import type { ItemType } from "./ItemDefinition";
 import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 
-import { CombatWorld, Faction } from "./CombatWorld";
+import { ActorAction, CombatWorld, Faction } from "./CombatWorld";
 import { EnemyBehavior } from "./EnemyBehavior";
 import { SimulationTasks } from "./SimulationTasks";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
-import { ENEMY_DEFINITIONS, type EnemyKind } from "./EnemyDefinitions";
-import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, PULSE_MANA_COST, CONSUMABLE_COOLDOWN } from "./GameConfig";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, type EnemyKind } from "./EnemyDefinitions";
+import { SkillSystem } from "./SkillSystem";
+import { SKILLS, type SkillId } from "./Skills";
+import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
 
 const STEP_SECONDS = COMBAT_STEP_MS / 1000;
 const REGENERATION_TICKS = ticksPerUpdate(GAME_CONFIG.timing.regenerationHz);
+const AUTO_SKILL_TICKS = ticksPerUpdate(GAME_CONFIG.timing.autoSkillHz);
 type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: PlayerRenderState[Key] };
 class ChestPool implements ChestRenderBuffer {
     public count = 0;
@@ -57,6 +60,7 @@ export class CombatSimulation {
     private random: DeterministicRandom;
     private readonly entities: CombatWorld;
     private readonly behavior: EnemyBehavior;
+    private readonly skills: SkillSystem;
     private readonly groundItems = new Map<number, InventoryItem>();
     private readonly world: RegionalWorld;
     private readonly chests = new ChestPool();
@@ -77,9 +81,7 @@ export class CombatSimulation {
     private notices: CombatNotice[] = [];
     private cachedSnapshot: CombatSnapshot | undefined;
     private attackCooldown = 0;
-    private skillCooldown = 0;
     private shieldCooldown = 0;
-    private pulseRemaining = 0;
     private potionCooldown = 0;
     private autoCast = true;
     private gold = 0;
@@ -114,7 +116,8 @@ export class CombatSimulation {
         healthRatio: 1,
         invulnerable: false,
         shieldReady: true,
-        pulse: 0,
+        ward: 0,
+        dashing: false,
         gameOver: false
     };
     private readonly renderState: CombatRenderState;
@@ -125,11 +128,12 @@ export class CombatSimulation {
         this.world = new RegionalWorld(seed, start);
         this.entities = new CombatWorld(start.x, start.z);
         this.behavior = new EnemyBehavior(this.entities, this.world);
-        this.renderState = { player: this.playerRenderState, chests: this.chests,
+        this.skills = new SkillSystem(this.entities);
+        this.renderState = { player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
                 experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
                 vitals: this.entities.vitals, enemy: this.entities.enemy, action: this.entities.action,
-                projectile: this.entities.projectile, experienceValue: this.entities.experienceValue, item: this.entities.item } };
+                projectile: this.entities.projectile, status: this.entities.status, experienceValue: this.entities.experienceValue, item: this.entities.item } };
         this.currentRegion = this.world.regionAt(start.x, start.z);
         this.playerX = this.previousPlayerX = start.x;
         this.playerZ = this.previousPlayerZ = start.z;
@@ -164,10 +168,9 @@ export class CombatSimulation {
         this.previousPlayerZ = this.playerZ;
         this.damageImmunity = Math.max(0, this.damageImmunity - STEP_SECONDS);
         this.shieldCooldown = Math.max(0, this.shieldCooldown - STEP_SECONDS);
-        this.pulseRemaining = Math.max(0, this.pulseRemaining - STEP_SECONDS);
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
-        this.skillCooldown = Math.max(0, this.skillCooldown - STEP_SECONDS);
-        this.movePlayer(input);
+        this.entities.effects.advance(this.tickValue);
+        if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
         if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
         this.tasks.commitReady(this.tickValue, this.world.revision);
@@ -184,7 +187,12 @@ export class CombatSimulation {
     private finishStep(): void {
         this.resolveImpacts();
         if (this.gameOverValue) return;
-        if (this.autoCast) this.castSkill();
+        if (this.autoCast && this.tickValue % AUTO_SKILL_TICKS === 0) {
+            for (const id of this.skills.loadout) {
+                this.skills.cast(id, this.tickValue, this.stats, this.level, this.random, true);
+                this.resolveImpacts();
+            }
+        }
         this.behavior.update(this.tickValue);
         moveEnemies(this.entities, this.tickValue);
         advanceEnemyActions(this.entities, this.tickValue);
@@ -214,7 +222,7 @@ export class CombatSimulation {
             unspentAttributePoints: this.unspentAttributePoints,
             gold: this.gold,
             shieldRemaining: this.shieldCooldown,
-            skillRemaining: this.skillCooldown,
+            skills: this.skills.snapshot(this.tickValue),
             potionRemaining: this.potionCooldown,
             autoCast: this.autoCast,
             orbs: Object.freeze([...this.orbs]),
@@ -236,7 +244,7 @@ export class CombatSimulation {
             const index = this.entities.enemies.slots[cursor];
             const region = this.entities.enemy.regions[index]!;
             if (this.entities.enemy.boss[index] && region.x === this.currentRegion.x && region.z === this.currentRegion.z) {
-                boss = Object.freeze({ x: this.entities.position.x[index], z: this.entities.position.z[index], health: this.entities.vitals.health[index], maxHealth: this.entities.vitals.maxHealth[index] });
+                boss = Object.freeze({ x: this.entities.position.x[index], z: this.entities.position.z[index], health: this.entities.vitals.health[index], maxHealth: this.entities.vitals.maxHealth[index], enraged: this.entities.enemy.enraged[index] !== 0 });
                 break;
             }
         }
@@ -268,7 +276,8 @@ export class CombatSimulation {
         state.healthRatio = this.health / this.stats.maxHealth;
         state.invulnerable = this.damageImmunity > 0;
         state.shieldReady = this.shieldCooldown === 0;
-        state.pulse = this.pulseRemaining / 0.35;
+        state.ward = this.skills.ward;
+        state.dashing = this.skills.dashing(this.tickValue);
         state.gameOver = this.gameOverValue;
         return this.renderState;
     }
@@ -390,9 +399,19 @@ export class CombatSimulation {
         this.markChanged();
     }
 
-    public castPulse(): void {
+    public castSkill(id: SkillId): void {
         if (this.gameOverValue) return;
-        if (this.castSkill(true)) this.markChanged();
+        if (this.skills.cast(id, this.tickValue, this.stats, this.level, this.random)) { this.resolveImpacts(); this.markChanged(); }
+    }
+
+    public equipSkill(id: SkillId, slot: number): void {
+        if (!this.gameOverValue && this.skills.equip(id, slot, this.level)) this.markChanged();
+    }
+
+    public upgradeSkill(id: SkillId): void {
+        if (!this.gameOverValue && this.skills.upgrade(id, this.level)) {
+            this.pushNotice("info", `${SKILLS[id].name}已强化`); this.markChanged();
+        }
     }
 
     public useConsumable(effect: ConsumableEffect, itemId?: number): void {
@@ -555,26 +574,6 @@ export class CombatSimulation {
         )) this.attackCooldown += 1 / this.stats.attackRate;
     }
 
-    private castSkill(force = false): boolean {
-        if (this.skillCooldown > 0 || this.mana < PULSE_MANA_COST) return false;
-        const { enemies, position, impacts, world, player } = this.entities;
-        let hit = false;
-        for (let cursor = 0; cursor < enemies.count; cursor++) {
-            const slot = enemies.slots[cursor];
-            if (Math.hypot(position.x[slot] - this.playerX, position.z[slot] - this.playerZ) > 3.2 + position.radius[slot]) continue;
-            hit = true;
-            impacts.add(world.ids[player], world.ids[slot], rollAttack(this.stats, this.random, 1.3).damage);
-        }
-        this.resolveImpacts();
-        if (hit || force) {
-            this.mana -= PULSE_MANA_COST;
-            this.skillCooldown = this.stats.skillInterval;
-            this.pulseRemaining = 0.35;
-            return true;
-        }
-        return false;
-    }
-
     private resolveImpacts(): void {
         const { impacts, world, player } = this.entities;
         for (let i = 0; i < impacts.count; i++) {
@@ -589,6 +588,11 @@ export class CombatSimulation {
     }
 
     private hitEnemy(index: number, rolledDamage: number): void {
+        const { enemy, action, position } = this.entities;
+        if (enemy.kind[index] === 2 && action.kind[index] < ActorAction.Melee) {
+            const dx = this.playerX - position.x[index], dz = this.playerZ - position.z[index], distance = Math.hypot(dx, dz);
+            if (distance === 0 || (dx * Math.sin(position.heading[index]) + dz * Math.cos(position.heading[index])) / distance > .5) rolledDamage *= 1 - ENEMY_SPECIAL.guardReduction;
+        }
         const elite = this.entities.enemy.elite[index] !== 0;
         const evasion = this.entities.enemy.boss[index] ? 0.08 : elite ? 0.05 : 0.02;
         if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return;
@@ -660,12 +664,13 @@ export class CombatSimulation {
     }
 
     private damagePlayer(source: number, baseDamage: number, elite: boolean, boss: boolean): void {
+        if (this.skills.dashing(this.tickValue)) return;
         this.damageImmunity = .55;
         if (this.random.chance(this.stats.evasion)) return;
         if (this.shieldCooldown === 0) { this.shieldCooldown = this.stats.shieldRecovery; return; }
         const criticalChance = boss ? .22 : elite ? .14 : .06;
         const critical = this.random.chance(Math.max(0, criticalChance - this.stats.criticalResistance));
-        const damage = incomingDamage(this.stats, baseDamage, elite, critical, this.random.chance(this.stats.blockChance));
+        const damage = this.skills.absorb(incomingDamage(this.stats, baseDamage, elite, critical, this.random.chance(this.stats.blockChance)));
         const healthLost = Math.min(this.health, damage);
         this.health = Math.max(0, this.health - damage);
         this.markChanged();
@@ -714,6 +719,7 @@ export class CombatSimulation {
             this.experience -= experienceForLevel(this.level);
             this.level += 1;
             this.unspentAttributePoints += 2;
+            this.skills.points += GAME_CONFIG.skills.pointsPerLevel;
             levels += 1;
         }
         if (levels > 0) {
@@ -762,7 +768,6 @@ export class CombatSimulation {
         this.health = Math.min(this.stats.maxHealth, (previousMaximum === this.stats.maxHealth ? this.health : this.health / previousMaximum * this.stats.maxHealth)
             + (healGrowth ? this.stats.maxHealth * 0.12 * (1 + this.stats.regenBonus) : 0));
         this.shieldCooldown = Math.min(this.shieldCooldown, this.stats.shieldRecovery);
-        this.skillCooldown = Math.min(this.skillCooldown, this.stats.skillInterval);
         this.mana = this.mana / previousMana * this.stats.maxMana;
         this.clearAutoEquipment();
     }

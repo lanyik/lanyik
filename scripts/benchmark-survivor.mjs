@@ -39,8 +39,9 @@ function crowded() {
     const home = regions.chunks.get("0,0"), region = regions.regionAt(0, 0);
     for (let index = 0; index < 640; index++) {
         const angle = index * Math.PI * 2 / 640;
-        entities.spawnEnemy({ x: Math.sin(angle) * 8, z: Math.cos(angle) * 8, kind: index % 4,
+        const slot = entities.spawnEnemy({ x: Math.sin(angle) * 8, z: Math.cos(angle) * 8, kind: index % 6,
             level: 1, elite: false, boss: false, region }, home);
+        entities.vitals.health[slot] *= .4;
     }
     // Misses force every player projectile to scan the complete enemy query.
     for (let index = 0; index < 128; index++) entities.spawnProjectile(entities.world.ids[entities.player], Faction.Player, 100, 100, .01, 0, 1, 1000);

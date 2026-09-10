@@ -1,7 +1,7 @@
 import { ENEMY_DEFINITIONS } from "../src/core/EnemyDefinitions";
 import { expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
-import { CombatWorld, Faction } from "../src/core/CombatWorld";
+import { ActorAction, CombatWorld, Faction } from "../src/core/CombatWorld";
 import type { RegionalWorld } from "../src/core/RegionalWorld";
 import type { DerivedStats } from "../src/core/CombatStats";
 
@@ -56,4 +56,34 @@ test("a lethal melee hit and lethal reflection award the kill while preserving g
     expect(snapshot.player.gold).toBe(2);
     expect(e.enemies.count).toBe(0);
     expect(e.experience.count).toBe(1);
+});
+
+test("dash immunity rejects real impacts without consuming the passive shield", () => {
+    const { combat, fixture, e, home, spawn } = encounter();
+    const source = e.spawnEnemy({ ...spawn, x: 10 }, home);
+    const health = fixture.health; fixture.shieldCooldown = 0;
+    combat.castSkill("dash");
+    for (let tick = 1; tick <= 30; tick++) {
+        e.impacts.add(e.world.ids[source], e.world.ids[e.player], 100);
+        combat.step({ x: 0, z: 0, active: false });
+    }
+    expect(fixture.health).toBe(health); expect(fixture.shieldCooldown).toBe(0);
+    e.impacts.add(e.world.ids[source], e.world.ids[e.player], 100);
+    combat.step({ x: 0, z: 0, active: false });
+    expect(fixture.shieldCooldown).toBeGreaterThan(0);
+});
+
+test("heavy guard reduces frontal damage only outside its committed attack", () => {
+    const damage = (heading: number, action: ActorAction) => {
+        const { combat, e, home, spawn } = encounter();
+        const enemy = e.spawnEnemy({ ...spawn, kind: 2 }, home);
+        e.position.heading[enemy] = heading; e.action.kind[enemy] = action;
+        e.impacts.add(e.world.ids[e.player], e.world.ids[enemy], 10);
+        const before = e.vitals.health[enemy];
+        combat.step({ x: 0, z: 0, active: false });
+        return before - e.vitals.health[enemy];
+    };
+    const unguarded = damage(0, ActorAction.Idle);
+    expect(damage(Math.PI, ActorAction.Idle)).toBeCloseTo(unguarded * .6);
+    expect(damage(Math.PI, ActorAction.Melee)).toBeCloseTo(unguarded);
 });

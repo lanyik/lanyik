@@ -1,6 +1,7 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
 import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
+import type { EnemyKind } from "./EnemyDefinitions";
 
 export const COMBAT_CHUNK_SIZE = 12;
 export const REGION_RADIUS = 24;
@@ -48,7 +49,7 @@ export interface RegionalSpawn {
     readonly z: number;
     readonly region: RegionInfo;
     readonly level: number;
-    readonly kind: 0 | 1 | 2 | 3;
+    readonly kind: EnemyKind;
     readonly elite: boolean;
     readonly boss: boolean;
 }
@@ -150,8 +151,8 @@ export class RegionalWorld {
             const pz = this.chunkZ(z + 0.08 + random.next() * 0.84);
             const ownRegion = this.regionAt(px, pz);
             const elite = random.chance(REGION_RULES[ownRegion.difficulty].eliteChance);
-            const kind = random.pick(ownRegion.difficulty === "normal" ? [0, 0, 1] as const
-                : ownRegion.difficulty === "hard" ? [0, 1, 2] as const : [1, 2, 3] as const);
+            const kind = random.pick(ownRegion.difficulty === "normal" ? [0, 0, 1, 4] as const
+                : ownRegion.difficulty === "hard" ? [0, 1, 2, 4, 5] as const : [1, 2, 3, 4, 5] as const);
             spawns.push(Object.freeze({ x: px, z: pz, region: ownRegion, kind, elite, boss: false,
                 level: Math.max(1, ownRegion.level + random.integer(3) - 1 + Number(elite)) }));
         }

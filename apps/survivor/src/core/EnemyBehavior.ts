@@ -1,10 +1,11 @@
 import { BehaviorTree, BehaviorStatus, type BehaviorNode } from "./BehaviorTree";
 import { ActorAction, CombatWorld, MoveIntent } from "./CombatWorld";
-import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
-import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
+import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { LOW_FREQUENCY_TICKS, type RegionalWorld } from "./RegionalWorld";
 const ACTIVE_AI_TICKS = ticksPerUpdate(GAME_CONFIG.timing.activeAiHz);
+const SUPPORT_SENSE_TICKS = ticksPerUpdate(GAME_CONFIG.timing.supportSenseHz);
 
 type Context = EnemyBehavior;
 const condition = (test: (context: Context, slot: number) => boolean): BehaviorNode<Context> => ({ type: "condition", test });
@@ -12,14 +13,15 @@ const action = (tick: (context: Context, slot: number) => BehaviorStatus): Behav
 const sequence = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> => ({ type: "sequence", children });
 const selector = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> => ({ type: "selector", children });
 
-const TREE = new BehaviorTree<Context>(selector(
+const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Context>(selector(
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.move(s, MoveIntent.Return))),
-    sequence(condition((c, s) => c.entities.enemy.kind[s] === 3 && c.entities.action.kind[s] < ActorAction.Melee && c.distance(s) < 3.5),
-        action((c, s) => c.move(s, MoveIntent.Retreat))),
-    sequence(condition((c, s) => c.entities.action.kind[s] >= ActorAction.Melee || c.distance(s) <= c.entities.action.reach[s]),
-        action((c, s) => c.attack(s))),
-    action((c, s) => c.move(s, MoveIntent.Chase))
-));
+    ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
+        && c.distance(s) < (kind === 5 ? 4 : 3.5) && !c.canNova(s)), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
+    ...(kind === 1 ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
+        && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
+    sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
+    action((c, s) => c.move(s, kind === 1 ? MoveIntent.Flank : MoveIntent.Chase))
+)));
 
 /** Sensing and the shared behavior tree only write intents and action requests. */
 export class EnemyBehavior {
@@ -32,6 +34,7 @@ export class EnemyBehavior {
         let cursor = 0;
         while (cursor < enemies.count) {
             const slot = enemies.slots[cursor];
+            const tree = TREES[e.kind[slot]];
             p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot];
             v.hitFlash[slot] = Math.max(0, v.hitFlash[slot] - COMBAT_STEP_MS / 1000);
             const wasActive = e.active[slot], previousTarget = e.target[slot];
@@ -39,9 +42,11 @@ export class EnemyBehavior {
             e.active[slot] = Number(lod === "active");
             const pursuing = lod === "active" && Math.hypot(p.x[player] - e.homeX[slot], p.z[player] - e.homeZ[slot]) <= ENEMY_LEASH_DISTANCE;
             e.target[slot] = pursuing ? this.entities.world.ids[player] : 0;
+            if (e.boss[slot] && v.health[slot] <= v.maxHealth[slot] * ENEMY_SPECIAL.enrageHealth) e.enraged[slot] = 1;
             if (lod !== "active") {
-                TREE.halt(this, slot, e.runningNode);
+                tree.halt(this, slot, e.runningNode);
                 e.intent[slot] = MoveIntent.None; e.intentSeconds[slot] = 0;
+                e.supportTarget[slot] = 0;
             }
             if (lod === "unloaded") { this.entities.remove(slot); continue; }
             if (lod === "static" || (lod === "low" && tick % LOW_FREQUENCY_TICKS !== this.entities.world.ids[slot] % LOW_FREQUENCY_TICKS)) {
@@ -50,11 +55,15 @@ export class EnemyBehavior {
                 continue;
             }
             e.intentSeconds[slot] = COMBAT_STEP_MS / 1000 * (lod === "low" ? LOW_FREQUENCY_TICKS : 1);
+            if (lod === "active" && e.kind[slot] === 5 && tick >= e.senseAt[slot]) {
+                this.senseAlly(slot);
+                e.senseAt[slot] = tick + SUPPORT_SENSE_TICKS - (tick - this.entities.world.ids[slot] % SUPPORT_SENSE_TICKS + SUPPORT_SENSE_TICKS) % SUPPORT_SENSE_TICKS;
+            }
             // Locomotion and attack release remain 120Hz. Only decisions are staggered.
             // Entering combat, losing a target and finishing an action bypass the decision interval.
             if (lod === "low" || !wasActive || previousTarget !== e.target[slot]
                 || a.kind[slot] >= ActorAction.Melee && tick >= a.endsAt[slot]
-                || tick % ACTIVE_AI_TICKS === this.entities.world.ids[slot] % ACTIVE_AI_TICKS) TREE.tick(this, slot, e.runningNode);
+                || tick % ACTIVE_AI_TICKS === this.entities.world.ids[slot] % ACTIVE_AI_TICKS) tree.tick(this, slot, e.runningNode);
             cursor++;
         }
     }
@@ -67,7 +76,7 @@ export class EnemyBehavior {
     public move(slot: number, intent: MoveIntent): BehaviorStatus {
         const { enemy: e, action: a, position: p } = this.entities;
         a.kind[slot] = ActorAction.Idle;
-        if (intent === MoveIntent.Return && Math.hypot(p.x[slot] - e.homeX[slot], p.z[slot] - e.homeZ[slot]) < .001) return BehaviorStatus.Success;
+        if (intent === MoveIntent.Return && Math.hypot(p.x[slot] - e.homeX[slot], p.z[slot] - e.homeZ[slot]) < .001) { e.intent[slot] = MoveIntent.None; return BehaviorStatus.Success; }
         e.intent[slot] = intent;
         return BehaviorStatus.Running;
     }
@@ -82,13 +91,62 @@ export class EnemyBehavior {
         }
         if (this.tick < a.readyAt[slot]) return BehaviorStatus.Running;
         const definition = ENEMY_DEFINITIONS[e.kind[slot]];
-        a.kind[slot] = e.kind[slot] === 3 ? ActorAction.Cast : ActorAction.Melee;
+        let windup = definition.windupTicks, recovery = definition.recoveryTicks;
+        a.kind[slot] = definition.ranged ? ActorAction.Cast : ActorAction.Melee;
+        a.target[slot] = e.target[slot];
+        if (this.canNova(slot)) {
+            a.kind[slot] = ActorAction.Nova;
+            windup = ticksForSeconds(ENEMY_SPECIAL.nova.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.nova.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.nova.cooldown);
+        } else if (this.canHeal(slot)) {
+            a.kind[slot] = ActorAction.Heal; a.target[slot] = e.supportTarget[slot];
+            windup = ticksForSeconds(ENEMY_SPECIAL.heal.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.heal.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.heal.cooldown);
+        } else if (this.canCharge(slot)) {
+            a.kind[slot] = ActorAction.Charge;
+            windup = ticksForSeconds(ENEMY_SPECIAL.charge.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.charge.duration + ENEMY_SPECIAL.charge.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.charge.cooldown);
+        }
         a.started[slot] = this.tick;
-        a.hitAt[slot] = this.tick + definition.windupTicks;
-        a.endsAt[slot] = a.hitAt[slot] + definition.recoveryTicks;
-        a.readyAt[slot] = a.endsAt[slot]; a.committed[slot] = 0; a.progress[slot] = 0;
+        a.hitAt[slot] = this.tick + windup;
+        a.endsAt[slot] = a.hitAt[slot] + recovery;
+        a.readyAt[slot] = a.endsAt[slot] + definition.cooldownTicks; a.committed[slot] = 0; a.progress[slot] = 0;
+        a.variant[slot] = e.boss[slot] ? (e.enraged[slot] ? 5 : 3) : 1;
         p.heading[slot] = Math.atan2(p.x[player] - p.x[slot], p.z[player] - p.z[slot]);
         return BehaviorStatus.Running;
+    }
+
+    public wantsAction(slot: number): boolean {
+        const a = this.entities.action;
+        return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
+            && (this.canNova(slot) || this.canHeal(slot) || this.canCharge(slot) || this.distance(slot) <= a.reach[slot]);
+    }
+    public canNova(slot: number): boolean {
+        const e = this.entities.enemy;
+        return e.boss[slot] !== 0 && e.enraged[slot] !== 0 && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.nova.radius;
+    }
+    private canCharge(slot: number): boolean {
+        const e = this.entities.enemy;
+        if (e.kind[slot] !== 4 || this.tick < e.specialReadyAt[slot]) return false;
+        const distance = this.distance(slot);
+        return distance >= ENEMY_SPECIAL.charge.minRange && distance <= ENEMY_SPECIAL.charge.maxRange;
+    }
+    private canHeal(slot: number): boolean {
+        const { enemy: e, vitals: v, world, position: p } = this.entities;
+        if (e.kind[slot] !== 5 || this.tick < e.specialReadyAt[slot]) return false;
+        const target = world.resolve(e.supportTarget[slot]);
+        return target >= 0 && v.health[target] < v.maxHealth[target] * ENEMY_SPECIAL.heal.threshold
+            && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius;
+    }
+    private senseAlly(slot: number): void {
+        const { enemy: e, enemies, vitals: v, position: p, world } = this.entities;
+        let target = -1, lowest: number = ENEMY_SPECIAL.heal.threshold;
+        for (let cursor = 0; cursor < enemies.count; cursor++) {
+            const ally = enemies.slots[cursor], ratio = v.health[ally] / v.maxHealth[ally];
+            if (ally === slot || !e.active[ally] || Math.hypot(p.x[ally] - p.x[slot], p.z[ally] - p.z[slot]) > ENEMY_SPECIAL.heal.radius) continue;
+            if (ratio < lowest || ratio === lowest && target >= 0 && world.ids[ally] < world.ids[target]) { target = ally; lowest = ratio; }
+        }
+        e.supportTarget[slot] = target < 0 ? 0 : world.ids[target];
     }
 
     public cancel(slot: number): void {
@@ -97,6 +155,7 @@ export class EnemyBehavior {
             a.readyAt[slot] = Math.max(a.readyAt[slot], this.tick + ENEMY_DEFINITIONS[e.kind[slot]].recoveryTicks);
         }
         a.kind[slot] = ActorAction.Idle; a.progress[slot] = 0; a.committed[slot] = 0;
+        a.target[slot] = 0;
         e.intent[slot] = MoveIntent.None;
     }
 }

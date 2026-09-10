@@ -109,3 +109,20 @@ test("hiding discards unsent ticks and excessive commands fail with bounded memo
     expect(transport.closed).toBe(true);
     transport.release!(); await session.dispose();
 });
+
+test("paused and hidden sessions reject skill casts while loadout edits remain available", async () => {
+    const transport = new LoopbackCombatTransport(), session = new CombatSession(view(), () => transport);
+    await session.start("skill-pause");
+    session.dispatch({ type: "toggle-pause" }); await session.settled;
+    const mana = session.getSnapshot().combat!.player.mana;
+    session.dispatch({ type: "cast-skill", skill: "dash" });
+    session.dispatch({ type: "equip-skill", skill: "dash", slot: 0 }); await session.settled;
+    expect(session.getSnapshot().combat!.player.mana).toBe(mana);
+    expect(session.getSnapshot().combat!.player.skills.loadout[0]).toBe("dash");
+    session.dispatch({ type: "toggle-pause" }); session.setHidden(true);
+    session.dispatch({ type: "cast-skill", skill: "dash" }); await session.settled;
+    expect(session.getSnapshot().combat!.player.skills.dashing).toBe(false);
+    session.setHidden(false); session.dispatch({ type: "cast-skill", skill: "dash" }); await session.settled;
+    expect(session.getSnapshot().combat!.player.skills.dashing).toBe(true);
+    await session.dispose();
+});

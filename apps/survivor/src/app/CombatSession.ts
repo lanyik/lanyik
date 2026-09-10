@@ -275,7 +275,7 @@ export class CombatSession {
                 void this.launch(this.seed, false); return;
             case "dismiss-upgrade": this.upgradeIds.delete(command.itemId); break;
             default: {
-                if ((command.type === "cast-pulse" || command.type === "use-consumable") && (this.paused || this.hidden || this.gameOver)) return;
+                if ((command.type === "cast-skill" || command.type === "use-consumable") && (this.paused || this.hidden || this.gameOver)) return;
                 if (this.pendingCommands.length === MAX_COMMAND_BATCH) { this.fail(new Error("Combat command queue exhausted")); return; }
                 this.pendingCommands.push(command); this.flush(); return;
             }

@@ -2,7 +2,7 @@ import { ticksForSeconds } from "../src/core/GameConfig";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
-import { PULSE_MANA_COST } from "../src/core/GameConfig";
+import { SKILLS, skillValues } from "../src/core/Skills";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } from "../src/core/Loot";
 import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
@@ -162,17 +162,17 @@ describe("loot and orb progression", () => {
         const baseline = deriveStats(1, attributes, EMPTY_BONUSES);
         for (const attribute of ATTRIBUTE_IDS) {
             const next = deriveStats(1, { ...attributes, [attribute]: 100 }, EMPTY_BONUSES);
-            for (const key of ["criticalChance", "criticalDamage", "blockChance", "evasion", "lifesteal", "attackRate", "skillInterval"] as const) expect(next[key]).toBe(baseline[key]);
+            for (const key of ["criticalChance", "criticalDamage", "blockChance", "evasion", "lifesteal", "attackRate", "castSpeed"] as const) expect(next[key]).toBe(baseline[key]);
         }
     });
 
     test("manual pulse spends mana once, respects cooldown, and regeneration uses half-second ticks", () => {
         const combat = new CombatSimulation("mana-rules"); combat.toggleAutoCast();
         const start = combat.getSnapshot().player;
-        combat.castPulse(); const cast = combat.getSnapshot().player;
-        expect(cast.mana).toBe(start.mana - PULSE_MANA_COST);
-        expect(cast.skillRemaining).toBe(cast.stats.skillInterval);
-        combat.castPulse(); expect(combat.getSnapshot().player.mana).toBe(cast.mana);
+        combat.castSkill("pulse"); const cast = combat.getSnapshot().player;
+        expect(cast.mana).toBe(start.mana - SKILLS.pulse.mana);
+        expect(cast.skills.remaining.pulse).toBe(skillValues("pulse", 1, cast.stats).cooldown);
+        combat.castSkill("pulse"); expect(combat.getSnapshot().player.mana).toBe(cast.mana);
         for (let tick = 0; tick < ticksForSeconds(.5) - 1; tick++) combat.step({ x: 1, z: 0, active: true });
         expect(combat.getSnapshot().player.mana).toBe(cast.mana);
         combat.step({ x: 1, z: 0, active: true });
@@ -183,7 +183,7 @@ describe("loot and orb progression", () => {
         const { combat } = openOrbChest();
         const potion = combat.getSnapshot().player.inventory.find(item => item.type === "consumable")!;
         expect(potion).toBeDefined();
-        if (potion.value === "mana") combat.castPulse();
+        if (potion.value === "mana") combat.castSkill("pulse");
         else for (let tick = 0; tick < ticksForSeconds(10) && combat.getSnapshot().player.health === combat.getSnapshot().player.stats.maxHealth; tick++) {
             const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state); let nearest = -1, distance = Infinity;
             for (let index = 0; index < enemies.length; index++) {

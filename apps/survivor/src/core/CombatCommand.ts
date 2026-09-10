@@ -1,6 +1,7 @@
 import type { AttributeId, EquipmentSlot } from "./Equipment";
 import type { ConsumableEffect } from "./InventoryItem";
 import type { CombatSimulation } from "./CombatSimulation";
+import type { SkillId } from "./Skills";
 
 export type CombatCommand =
     | { readonly type: "allocate"; readonly attribute: AttributeId }
@@ -8,7 +9,9 @@ export type CombatCommand =
     | { readonly type: "unequip"; readonly slot: EquipmentSlot }
     | { readonly type: "equip-orb"; readonly itemId: number; readonly socket: number }
     | { readonly type: "remove-orb"; readonly socket: number }
-    | { readonly type: "cast-pulse" }
+    | { readonly type: "cast-skill"; readonly skill: SkillId }
+    | { readonly type: "equip-skill"; readonly skill: SkillId; readonly slot: number }
+    | { readonly type: "upgrade-skill"; readonly skill: SkillId }
     | { readonly type: "toggle-autocast" }
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
     | { readonly type: "discard"; readonly itemId: number }
@@ -24,7 +27,9 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "unequip": simulation.unequip(command.slot); break;
         case "equip-orb": simulation.equipOrb(command.itemId, command.socket); break;
         case "remove-orb": simulation.removeOrb(command.socket); break;
-        case "cast-pulse": simulation.castPulse(); break;
+        case "cast-skill": simulation.castSkill(command.skill); break;
+        case "equip-skill": simulation.equipSkill(command.skill, command.slot); break;
+        case "upgrade-skill": simulation.upgradeSkill(command.skill); break;
         case "toggle-autocast": simulation.toggleAutoCast(); break;
         case "use-consumable": simulation.useConsumable(command.effect, command.itemId); break;
         case "discard": simulation.discard(command.itemId); break;

@@ -10,7 +10,6 @@ export interface DerivedStats extends EquipmentBonuses {
     readonly manaRegen: number;
     readonly baseArmor: number;
     readonly attackRate: number;
-    readonly skillInterval: number;
     readonly attackRange: number;
 }
 
@@ -33,7 +32,6 @@ export function deriveStats(level: number, attributes: Attributes, gear: Equipme
         attackSpeed: Math.min(STAT_LIMITS.speedBonus, attackSpeed),
         castSpeed: Math.min(STAT_LIMITS.speedBonus, gear.castSpeed),
         attackRate: 1.38 * (1 + Math.min(STAT_LIMITS.speedBonus, attackSpeed)),
-        skillInterval: 5 / (1 + Math.min(STAT_LIMITS.speedBonus, gear.castSpeed)),
         criticalChance: Math.min(1, 0.06 + gear.criticalChance),
         criticalDamage: 1.8 + gear.criticalDamage + speedOverflow,
         excellentChance: Math.min(1, gear.excellentChance), excellentDamage: 1.35 + gear.excellentDamage,

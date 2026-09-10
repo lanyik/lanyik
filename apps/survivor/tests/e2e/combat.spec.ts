@@ -152,12 +152,12 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(errors).toEqual([]);
 });
 
-for (const file of ["Imp.glb", "Imp-normal.png"]) test(`reports failed actor resource ${file} and reloads after recovery`, async ({ page }) => {
-    const model = `**/actors/${file}`;
+for (const file of ["actors/Imp.glb", "actors/Imp-normal.png", "effects/skills.png"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
+    const model = `**/${file}`;
     await page.route(model, route => route.fulfill({ status: 503, body: "actor unavailable" }));
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "failed", { timeout: 30_000 });
-    await expect(page.getByRole("alert")).toContainText(file);
+    await expect(page.getByRole("alert")).toContainText(file.split("/").at(-1)!);
     await page.unroute(model);
     await page.getByRole("button", { name: "重新尝试" }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });

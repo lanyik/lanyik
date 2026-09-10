@@ -1,7 +1,9 @@
 import { ActorAction, CombatWorld, Faction, MoveIntent } from "./CombatWorld";
-import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES } from "./GameConfig";
+import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
-import { resolveProjectileRange, type ProjectileExecutor } from "./ProjectileBatch";
+import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
+import { ENEMY_SPECIAL } from "./EnemyDefinitions";
+import { EffectKind } from "./CombatEffects";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
 
@@ -48,7 +50,7 @@ function commitProjectiles(entities: CombatWorld): void {
 }
 
 export function moveEnemies(entities: CombatWorld, tick: number): void {
-    const { enemies, enemy: e, position: p, action: a, world, player } = entities;
+    const { enemies, enemy: e, position: p, action: a, world, player, status } = entities;
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], intent = e.intent[slot];
         if (intent === MoveIntent.None) continue;
@@ -59,10 +61,17 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
         if (distance === 0) { dx = Math.sin(world.ids[slot]); dz = Math.cos(world.ids[slot]); }
         else { dx /= distance; dz /= distance; }
         if (intent === MoveIntent.Retreat) { dx = -dx; dz = -dz; }
-        const stop = intent === MoveIntent.Chase ? a.reach[slot] * .9 : 0;
-        const travel = intent === MoveIntent.Retreat ? e.speed[slot] * e.intentSeconds[slot]
-            : Math.min(Math.max(0, distance - stop), e.speed[slot] * e.intentSeconds[slot]);
-        const weave = intent === MoveIntent.Chase && e.kind[slot] === 1 ? Math.sin(tick * SECONDS * 1.8 + world.ids[slot] * .73) * .14 : 0;
+        const speed = e.speed[slot] * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
+        const stop = intent === MoveIntent.Chase || intent === MoveIntent.Flank ? a.reach[slot] * .9 : 0;
+        if (intent === MoveIntent.Circle) {
+            const direction = world.ids[slot] % 2 ? 1 : -1, radial = Math.max(-.5, Math.min(.5, distance - 1.8));
+            const forwardX = dx, forwardZ = dz;
+            dx = forwardX * radial - forwardZ * direction; dz = forwardZ * radial + forwardX * direction;
+            const norm = Math.hypot(dx, dz); dx /= norm; dz /= norm;
+        }
+        const travel = intent === MoveIntent.Retreat || intent === MoveIntent.Circle ? speed * e.intentSeconds[slot]
+            : Math.min(Math.max(0, distance - stop), speed * e.intentSeconds[slot]);
+        const weave = intent === MoveIntent.Flank ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
         const scale = travel / Math.sqrt(1 + weave * weave);
         p.x[slot] += (dx - dz * weave) * scale; p.z[slot] += (dz + dx * weave) * scale;
         p.heading[slot] = Math.atan2(dx, dz);
@@ -73,16 +82,27 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
 
 /** A committed attack releases once at hitAt; recovery cannot emit a second hit. */
 export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
-    const { enemies, enemy: e, position: p, action: a, world, impacts } = entities;
+    const { enemies, enemy: e, position: p, action: a, world, impacts, vitals: v, effects, status } = entities;
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], kind = a.kind[slot];
         if (kind < ActorAction.Melee || !e.active[slot]) continue;
         a.progress[slot] = tick < a.hitAt[slot]
             ? .5 * (tick - a.started[slot]) / (a.hitAt[slot] - a.started[slot])
             : .5 + .5 * (tick - a.hitAt[slot]) / (a.endsAt[slot] - a.hitAt[slot]);
+        if (kind === ActorAction.Charge) {
+            if (tick < a.hitAt[slot] || tick >= a.hitAt[slot] + ticksForSeconds(ENEMY_SPECIAL.charge.duration)) continue;
+            const target = world.resolve(a.target[slot]), sx = p.x[slot], sz = p.z[slot];
+            const travel = ENEMY_SPECIAL.charge.speed * SECONDS * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
+            p.x[slot] += Math.sin(p.heading[slot]) * travel; p.z[slot] += Math.cos(p.heading[slot]) * travel;
+            if (!a.committed[slot] && target >= 0 && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity) {
+                a.committed[slot] = 1;
+                impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.charge.damage, e.elite[slot], e.boss[slot]);
+            }
+            continue;
+        }
         if (tick < a.hitAt[slot] || a.committed[slot]) continue;
         a.committed[slot] = 1;
-        const target = world.resolve(e.target[slot]);
+        const target = world.resolve(a.target[slot]);
         if (target < 0) continue;
         const dx = p.x[target] - p.x[slot], dz = p.z[target] - p.z[slot];
         if (kind === ActorAction.Melee) {
@@ -90,8 +110,15 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             if (distance <= a.reach[slot] && (distance === 0 || (dx * Math.sin(p.heading[slot]) + dz * Math.cos(p.heading[slot])) / distance >= Math.cos(MELEE_HALF_ARC))) {
                 impacts.add(world.ids[slot], world.ids[target], e.damage[slot], e.elite[slot], e.boss[slot]);
             }
-        } else {
-            const count = e.boss[slot] ? 3 : 1;
+        } else if (kind === ActorAction.Heal) {
+            if (v.faction[target] !== Faction.Enemy || v.health[target] <= 0 || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius) continue;
+            v.health[target] = Math.min(v.maxHealth[target], v.health[target] + Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3));
+            effects.add(EffectKind.Heal, tick, p.x[target], p.z[target], 1.1, .8);
+        } else if (kind === ActorAction.Nova) {
+            if (Math.hypot(dx, dz) <= ENEMY_SPECIAL.nova.radius + p.radius[target]) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.nova.damage, e.elite[slot], e.boss[slot]);
+            effects.add(EffectKind.EnemyNova, tick, p.x[slot], p.z[slot], ENEMY_SPECIAL.nova.radius, .7);
+        } else if (kind === ActorAction.Cast) {
+            const count = a.variant[slot];
             // A volley reserves all its slots; pressure never changes its pattern halfway through.
             if (entities.projectiles.count + count > MAX_PROJECTILES || entities.hostileProjectiles.count + count > MAX_HOSTILE_PROJECTILES) continue;
             for (let bolt = 0; bolt < count; bolt++) {

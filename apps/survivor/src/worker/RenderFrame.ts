@@ -1,6 +1,7 @@
 import { ENTITY_CAPACITY as N, MAX_ENEMIES, MAX_PROJECTILES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT } from "../core/GameConfig";
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 import type { CombatRenderState, PlayerRenderState } from "../core/CombatState";
+import { effectArrays } from "../core/CombatEffects";
 
 type NumericArray = Float64Array | Float32Array | Uint32Array | Uint8Array;
 type ArrayConstructor<T> = { readonly BYTES_PER_ELEMENT: number; new(buffer: ArrayBuffer, offset: number, count: number): T };
@@ -20,19 +21,21 @@ function layout(buffer?: ArrayBuffer) {
         enemies: query(MAX_ENEMIES), projectiles: query(MAX_PROJECTILES), experience: query(MAX_EXPERIENCE_ORBS), loot: query(MAX_GROUND_EQUIPMENT),
         position: { x: f64(), z: f64(), previousX: f64(), previousZ: f64(), heading: f32(), radius: f32() },
         vitals: { hitFlash: f32() },
-        enemy: { kind: u8(), elite: u8(), boss: u8(), level: field(Uint32Array, N), homeX: f64(), homeZ: f64(), active: u8() },
+        enemy: { kind: u8(), elite: u8(), boss: u8(), level: field(Uint32Array, N), homeX: f64(), homeZ: f64(), active: u8(), enraged: u8() },
+        status: { slowUntil: f64() },
         action: { kind: u8(), reach: f32(), progress: f32() },
         projectile: { critical: u8(), faction: u8() },
         experienceValue: f64(), item: { id: f64(), rarity: u8(), kind: u8() }
     };
     const chests = { count: 0, x: field(Float32Array, MAX_COMBAT_CHUNKS), z: field(Float32Array, MAX_COMBAT_CHUNKS), tiers: field(Uint8Array, MAX_COMBAT_CHUNKS) };
-    return { entities, chests, bytes: offset };
+    const effects = { ...effectArrays(field), count: 0 };
+    return { entities, chests, effects, bytes: offset };
 }
 
 export interface RenderPacket {
     readonly buffer: ArrayBuffer;
     readonly player: PlayerRenderState;
-    readonly counts: readonly [number, number, number, number, number];
+    readonly counts: readonly [number, number, number, number, number, number];
 }
 
 /** Two alternating transferable buffers; authoritative ECS storage never leaves its owner. */
@@ -44,21 +47,22 @@ export class RenderFrame {
         this.arrays = layout(buffer);
     }
     public write(source: CombatRenderState): RenderPacket {
-        const { entities: target, chests } = this.arrays, input = source.entities;
+        const { entities: target, chests, effects } = this.arrays, input = source.entities;
         target.ids.set(input.ids); target.experienceValue.set(input.experienceValue);
         for (const name of ["enemies", "projectiles", "experience", "loot"] as const) {
             target[name].slots.set(input[name].slots.subarray(0, input[name].count));
         }
-        for (const name of ["position", "vitals", "enemy", "action", "projectile", "item"] as const) {
+        for (const name of ["position", "vitals", "enemy", "action", "projectile", "item", "status"] as const) {
             const fields = target[name] as Record<string, NumericArray>, values = input[name] as Record<string, NumericArray>;
             for (const key in fields) fields[key].set(values[key]);
         }
         chests.x.set(source.chests.x); chests.z.set(source.chests.z); chests.tiers.set(source.chests.tiers);
+        for (const key of ["kind", "x", "z", "endX", "endZ", "radius", "started", "endsAt"] as const) effects[key].set(source.effects[key].subarray(0, source.effects.count));
         return { buffer: this.buffer, player: { ...source.player },
-            counts: [input.enemies.count, input.projectiles.count, input.experience.count, input.loot.count, source.chests.count] };
+            counts: [input.enemies.count, input.projectiles.count, input.experience.count, input.loot.count, source.chests.count, source.effects.count] };
     }
     public read(packet: RenderPacket): CombatRenderState {
-        const { entities, chests } = this.arrays;
+        const { entities, chests, effects } = this.arrays;
         const queries = [entities.enemies, entities.projectiles, entities.experience, entities.loot];
         for (let i = 0; i < queries.length; i++) {
             const count = packet.counts[i];
@@ -67,6 +71,8 @@ export class RenderFrame {
         }
         chests.count = packet.counts[4];
         if (!Number.isInteger(chests.count) || chests.count < 0 || chests.count > MAX_COMBAT_CHUNKS) throw new Error("Invalid chest count");
-        return { player: packet.player, entities, chests };
+        effects.count = packet.counts[5];
+        if (!Number.isInteger(effects.count) || effects.count < 0 || effects.count > effects.kind.length) throw new Error("Invalid effect count");
+        return { player: packet.player, entities, chests, effects };
     }
 }

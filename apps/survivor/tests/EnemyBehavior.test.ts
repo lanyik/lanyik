@@ -1,10 +1,10 @@
 import { ticksForSeconds } from "../src/core/GameConfig";
 import { expect, test, vi } from "vitest";
-import { ActorAction, CombatWorld, Faction } from "../src/core/CombatWorld";
+import { ActorAction, CombatWorld, Faction, MoveIntent } from "../src/core/CombatWorld";
 import { EnemyBehavior } from "../src/core/EnemyBehavior";
 import { advanceEnemyActions, advanceProjectiles, moveEnemies } from "../src/core/CombatSystems";
 import { segmentCircleHit } from "../src/core/ProjectileBatch";
-import { ENEMY_DEFINITIONS, type EnemyKind } from "../src/core/EnemyDefinitions";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, type EnemyKind } from "../src/core/EnemyDefinitions";
 import { MAX_HOSTILE_PROJECTILES } from "../src/core/GameConfig";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 
@@ -126,4 +126,65 @@ test("projectiles hit the first intersected target and expired targets cannot al
     expect(e.world.resolve(e.world.ids[replacement])).toBe(replacement);
     expect(segmentCircleHit(0, 0, 0, 0, 0, 0, 1)).toBe(0);
     expect(segmentCircleHit(0, 0, 0, 0, 3, 0, 1)).toBe(Infinity);
+});
+
+test("scouts flank on approach and circle during their post-attack cooldown", () => {
+    const { entities: e, enemy, step } = arena(1, 5);
+    step(1); expect(e.enemy.intent[enemy]).toBe(MoveIntent.Flank);
+    expect(e.position.x[enemy]).not.toBe(0);
+    e.position.x[e.player] = e.position.x[enemy]; e.position.z[e.player] = e.position.z[enemy] + .6;
+    for (let tick = 2; tick < 8; tick++) step(tick);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Melee);
+    const end = e.action.endsAt[enemy];
+    for (let tick = 8; tick <= end + 5; tick++) step(tick);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Circle);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Moving);
+});
+
+test.each([false, true])("charger locks a straight path, sweeps once and can be sidestepped: %s", dodge => {
+    const { entities: e, enemy, step } = arena(4, 4);
+    step(1); expect(e.action.kind[enemy]).toBe(ActorAction.Charge);
+    const hit = e.action.hitAt[enemy], end = e.action.endsAt[enemy];
+    if (dodge) e.position.x[e.player] = 2;
+    for (let tick = 2; tick < hit; tick++) step(tick);
+    expect(e.position.z[enemy]).toBe(0); expect(e.impacts.count).toBe(0);
+    for (let tick = hit; tick <= end; tick++) step(tick);
+    expect(e.position.x[enemy]).toBe(0);
+    expect(e.position.z[enemy]).toBeCloseTo(ENEMY_SPECIAL.charge.speed * ENEMY_SPECIAL.charge.duration);
+    expect(e.impacts.count).toBe(dodge ? 0 : 1);
+    expect(e.enemy.specialReadyAt[enemy]).toBeGreaterThan(end);
+});
+
+test.each(["heal", "reused", "out-of-range"])("priest releases a bounded heal only into its original in-range ally: %s", scenario => {
+    const { entities: e, enemy, step, spawn, home } = arena(5, 5);
+    const ally = e.spawnEnemy({ ...spawn, kind: 2, x: 1 }, home);
+    e.enemy.active[ally] = 1; e.enemy.speed[ally] = 0; e.vitals.health[ally] = 10;
+    step(1); expect(e.action.kind[enemy]).toBe(ActorAction.Heal);
+    expect(e.action.target[enemy]).toBe(e.world.ids[ally]);
+    if (scenario === "reused") { e.remove(ally); expect(e.spawnEnemy({ ...spawn, kind: 2, x: 1 }, home)).toBe(ally); e.vitals.health[ally] = 10; e.enemy.speed[ally] = 0; }
+    if (scenario === "out-of-range") e.position.x[ally] = 8;
+    const hit = e.action.hitAt[enemy];
+    for (let tick = 2; tick <= hit + 5; tick++) step(tick);
+    expect(e.vitals.health[ally]).toBe(scenario === "heal" ? 24 : 10);
+    expect(e.effects.buffer.count).toBe(scenario === "heal" ? 1 : 0);
+    expect(e.projectiles.count).toBe(0);
+});
+
+test("boss phase two persists after healing, upgrades the next volley and telegraphs a close nova", () => {
+    const { entities: e, enemy, step } = arena(3, 5, true);
+    e.vitals.health[enemy] = e.vitals.maxHealth[enemy] * .5;
+    step(1); expect(e.enemy.enraged[enemy]).toBe(1);
+    e.vitals.health[enemy] = e.vitals.maxHealth[enemy];
+    const end = e.action.endsAt[enemy];
+    for (let tick = 2; tick <= end; tick++) step(tick);
+    expect(e.projectiles.count).toBe(5); expect(e.enemy.enraged[enemy]).toBe(1);
+    e.position.z[e.player] = 2;
+    let tick = end + 1;
+    for (; tick < end + 200 && e.action.kind[enemy] !== ActorAction.Nova; tick++) step(tick);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Nova);
+    const hit = e.action.hitAt[enemy];
+    e.position.x[e.player] = 5;
+    for (; tick <= hit; tick++) step(tick);
+    expect(e.impacts.count).toBe(0);
+    expect(e.effects.buffer.count).toBe(1);
 });

@@ -36,7 +36,7 @@ test("using a stacked potion consumes exactly one dose and retains the stack ID"
     const simulation = new CombatSimulation("potion-stack");
     const fixture = simulation as unknown as { inventory: InventoryItem[] };
     fixture.inventory = [createConsumable(100, 1, "mana", 3)];
-    simulation.castPulse(); simulation.useConsumable("mana", 100);
+    simulation.castSkill("pulse"); simulation.useConsumable("mana", 100);
     expect(simulation.getSnapshot().player.inventory[0]).toMatchObject({ type: "consumable", value: "mana", size: 2, id: 100 });
     simulation.useConsumable("mana", 100);
     expect(simulation.getSnapshot().player.inventory[0].size).toBe(2);
