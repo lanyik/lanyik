@@ -1,10 +1,11 @@
-import { expect, test } from "vitest";
+import { ticksForSeconds } from "../src/core/GameConfig";
+import { expect, test, vi } from "vitest";
 import { ActorAction, CombatWorld, Faction } from "../src/core/CombatWorld";
 import { EnemyBehavior } from "../src/core/EnemyBehavior";
 import { advanceEnemyActions, advanceProjectiles, moveEnemies } from "../src/core/CombatSystems";
 import { segmentCircleHit } from "../src/core/ProjectileBatch";
 import { ENEMY_DEFINITIONS, type EnemyKind } from "../src/core/EnemyDefinitions";
-import { MAX_HOSTILE_PROJECTILES } from "../src/core/CombatConfig";
+import { MAX_HOSTILE_PROJECTILES } from "../src/core/GameConfig";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 
 function arena(kind: EnemyKind, distance = .8, boss = false) {
@@ -15,7 +16,7 @@ function arena(kind: EnemyKind, distance = .8, boss = false) {
     const enemy = entities.spawnEnemy(spawn, home);
     const behavior = new EnemyBehavior(entities, regions);
     const step = (tick: number) => { behavior.update(tick); moveEnemies(entities, tick); advanceEnemyActions(entities, tick); };
-    return { entities, enemy, regions, spawn, home, step };
+    return { entities, enemy, regions, spawn, home, step, behavior };
 }
 
 test.each([0, 1, 2] as const)("melee kind %i telegraphs, locks facing and commits one hit before recovery", kind => {
@@ -33,10 +34,31 @@ test.each([0, 1, 2] as const)("melee kind %i telegraphs, locks facing and commit
     expect(e.impacts.count).toBe(1);
 });
 
+test("staggered 30Hz decisions retain continuous 120Hz movement", () => {
+    const { entities: e, enemy, step, behavior } = arena(0, 10);
+    const decisions = vi.spyOn(behavior, "move");
+    for (let tick = 1; tick <= 120; tick++) {
+        const previous = e.position.z[enemy]; step(tick);
+        expect(e.position.z[enemy]).toBeGreaterThan(previous);
+    }
+    expect(e.position.z[enemy]).toBeCloseTo(ENEMY_DEFINITIONS[0].speed, 6);
+    expect(decisions.mock.calls.length).toBeGreaterThanOrEqual(30);
+    expect(decisions.mock.calls.length).toBeLessThanOrEqual(31);
+});
+
+test("idle successful behavior leaves also respect the decision rate", () => {
+    const { entities: e, step, behavior } = arena(0, 10);
+    e.position.x[e.player] = 15;
+    const decisions = vi.spyOn(behavior, "move");
+    for (let tick = 1; tick <= 120; tick++) step(tick);
+    expect(decisions.mock.calls.length).toBeGreaterThanOrEqual(30);
+    expect(decisions.mock.calls.length).toBeLessThanOrEqual(31);
+});
+
 test("stepping sideways during a melee windup avoids its locked strike", () => {
     const { entities: e, step } = arena(0);
     step(1); e.position.x[e.player] = .8; e.position.z[e.player] = 0;
-    for (let tick = 2; tick <= 19; tick++) step(tick);
+    for (let tick = 2; tick <= ENEMY_DEFINITIONS[0].windupTicks + 1; tick++) step(tick);
     expect(e.impacts.count).toBe(0);
 });
 
@@ -63,7 +85,7 @@ test("casters retreat when crowded and fire independently of the released projec
     e.position.z[e.player] = 5;
     step(2);
     const caster = e.world.ids[enemy];
-    for (let tick = 3; tick <= 37; tick++) step(tick);
+    for (let tick = 3; tick <= ENEMY_DEFINITIONS[3].windupTicks + 6; tick++) step(tick);
     expect(e.projectiles.count).toBe(1);
     const bolt = e.projectiles.slots[0];
     expect(e.projectile.faction[bolt]).toBe(Faction.Enemy);
@@ -71,7 +93,7 @@ test("casters retreat when crowded and fire independently of the released projec
     const replacement = e.spawnEnemy(spawn, home);
     expect(e.world.resolve(caster)).toBe(-1);
     expect(e.world.ids[replacement]).not.toBe(caster);
-    for (let tick = 0; tick < 80 && e.impacts.count === 0; tick++) advanceProjectiles(e);
+    for (let tick = 0; tick < ticksForSeconds(2) && e.impacts.count === 0; tick++) advanceProjectiles(e);
     expect(e.impacts.count).toBe(1);
     expect(e.impacts.source[0]).toBe(caster);
     expect(e.impacts.target[0]).toBe(e.world.ids[e.player]);
@@ -80,14 +102,14 @@ test("casters retreat when crowded and fire independently of the released projec
 test("boss volleys use a fixed spread and never partially spawn at capacity", () => {
     const { entities: e, enemy, step } = arena(3, 5, true);
     step(1);
-    for (let tick = 2; tick <= 36; tick++) step(tick);
+    for (let tick = 2; tick <= ENEMY_DEFINITIONS[3].windupTicks + 1; tick++) step(tick);
     expect(e.projectiles.count).toBe(3);
     const slots = e.projectiles.slots;
     expect(e.projectile.velocityX[slots[0]]).toBeLessThan(0);
     expect(e.projectile.velocityX[slots[1]]).toBe(0);
     expect(e.projectile.velocityX[slots[2]]).toBeGreaterThan(0);
     while (e.hostileProjectiles.count < MAX_HOSTILE_PROJECTILES - 1) e.spawnProjectile(e.world.ids[enemy], Faction.Enemy, 50, 50, 0, 0, 1, 1);
-    for (let tick = 37; tick < 150; tick++) step(tick);
+    for (let tick = ENEMY_DEFINITIONS[3].windupTicks + 2; tick < ticksForSeconds(3); tick++) step(tick);
     expect(e.hostileProjectiles.count).toBe(MAX_HOSTILE_PROJECTILES - 1);
 });
 

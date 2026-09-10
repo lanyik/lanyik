@@ -3,7 +3,7 @@ import { ProjectileBatch } from "./ProjectileBatch";
 import {
     ENTITY_CAPACITY, MAX_ENEMIES, MAX_PROJECTILES, MAX_HOSTILE_PROJECTILES,
     MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, PLAYER_RADIUS
-} from "./CombatConfig";
+} from "./GameConfig";
 import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
 import { RARITIES } from "./Equipment";
 import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn } from "./RegionalWorld";
@@ -130,7 +130,7 @@ export class CombatWorld {
         const slot = this.world.create(Component.Position | Component.GroundItem);
         this.place(slot, x, z, 0);
         this.item.id[slot] = item.id; this.item.rarity[slot] = RARITIES.indexOf(item.rarity);
-        this.item.kind[slot] = item.kind === "orb" ? 1 : item.kind === "consumable" ? 2 : 0;
+        this.item.kind[slot] = item.type === "orb" ? 1 : item.type === "consumable" ? 2 : 0;
     }
 
     public remove(slot: number): void {

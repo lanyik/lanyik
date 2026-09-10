@@ -35,7 +35,7 @@ export interface PlayerSnapshot {
     readonly equipmentPower: number;
     readonly equipment: EquippedItems;
     readonly inventory: readonly InventoryItem[];
-    readonly autoClearLowLevelEquipment: boolean;
+    readonly autoClearEquipment: boolean;
     readonly clearedEquipment: number;
 }
 

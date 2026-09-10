@@ -1,3 +1,4 @@
+import { ticksForSeconds } from "../../src/core/GameConfig";
 import { expect, test } from "@playwright/test";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
@@ -25,7 +26,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
         e.spawnEnemy({ x: player.x, z: player.z + 5, kind: 3, boss: false, elite: false, level: 1,
             region: fixture.world.regionAt(player.x, player.z + 5) }, home);
     });
-    await advanceCombat(page, 18);
+    await advanceCombat(page, ticksForSeconds(.36));
     const windup = await page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { view: { layer: {
             actors: { enemies: InstancedMesh[][] }; castWarnings: InstancedMesh } } };
@@ -41,7 +42,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     const pausedTick = await combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.tick);
     await page.evaluate(() => window.survivorApplication!.session.frame(performance.now()));
     expect(await combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.tick)).toBe(pausedTick);
-    await advanceCombat(page, 18);
+    await advanceCombat(page, ticksForSeconds(.36));
     const release = await page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { view: { layer: {
             actors: { enemies: InstancedMesh[][] }; castWarnings: InstancedMesh; projectiles: InstancedMesh } } };
@@ -66,7 +67,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
             region: fixture.world.regionAt(x, z) }, fixture.world.chunks.get("0,0")!);
         return enemy;
     });
-    await advanceCombat(page, 20);
+    await advanceCombat(page, ticksForSeconds(.4));
     const melee = await page.evaluate(enemy => {
         const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: { telegraphs: InstancedMesh } } };
         const e = runtime.renderState.entities, p = e.position;

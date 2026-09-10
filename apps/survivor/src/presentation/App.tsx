@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession } from "../app/CombatSession";
-import { PULSE_MANA_COST } from "../core/CombatConfig";
+import { PULSE_MANA_COST } from "../core/GameConfig";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";
 import { RegionMap } from "./RegionMap";
-import { ItemIcon } from "./ItemView";
+import { ItemIcon, QUALITY_CSS } from "./ItemView";
+import { ItemTooltip, ItemTooltipProvider } from "./ItemTooltip";
 import { UiIcon } from "./UiIcon";
 import { UpgradePrompt } from "./UpgradePrompt";
 import { WorkerLoadPanel } from "./WorkerLoadPanel";
@@ -34,9 +35,9 @@ export function App({ session }: { readonly session: CombatSession }) {
     };
     const close = (menu: Menu) => setPanels(current => ({ ...current, [menu]: false }));
     const useItem = (item: InventoryItem) => {
-        if (item.kind === "equipment") session.dispatch({ type: "equip", itemId: item.id });
-        else if (item.kind === "orb") session.dispatch({ type: "equip-orb", itemId: item.id, socket });
-        else session.dispatch({ type: "use-consumable", itemId: item.id, effect: item.effect });
+        if (item.type === "equipment") session.dispatch({ type: "equip", itemId: item.id });
+        else if (item.type === "orb") session.dispatch({ type: "equip-orb", itemId: item.id, socket });
+        else session.dispatch({ type: "use-consumable", itemId: item.id, effect: item.value });
     };
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -69,8 +70,9 @@ export function App({ session }: { readonly session: CombatSession }) {
     }, [panels, selectedId, socket, player, combat?.gameOver, snapshot.status, session]);
 
     const ready = snapshot.status === "ready" && combat && player;
-    const potionCount = (effect: "health" | "mana") => player?.inventory.filter(item => item.kind === "consumable" && item.effect === effect).length ?? 0;
-    return <main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
+    const potionCount = (effect: "health" | "mana") => player?.inventory.reduce((count, item) => count + (item.type === "consumable" && item.value === effect ? item.size : 0), 0) ?? 0;
+    return <ItemTooltipProvider><main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
+        <style>{QUALITY_CSS}</style>
         {ready && <>
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>荒原<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : "探索中"}</span></header>
                 <div className="run-metrics"><div><span>生存时间</span><strong data-testid="elapsed-time" data-tick={combat.tick}>{formatTime(combat.elapsedMs)}</strong></div>
@@ -89,8 +91,8 @@ export function App({ session }: { readonly session: CombatSession }) {
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
                 onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
                 onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={enabled => session.dispatch({ type: "set-auto-clear-equipment", enabled })}
-                onClear={() => session.dispatch({ type: "clear-inferior-equipment" })}
-                socket={socket} onSocket={setSocket} disabled={combat.gameOver} />}
+                onMerge={() => session.dispatch({ type: "merge-consumables" })}
+                socket={socket} onSocket={setSocket} disabled={combat.gameOver} paused={snapshot.paused} />}
             </div>}
             {panels.skills && <section className="skills-window window" role="dialog" aria-label="技能">
                 <header className="window-heading"><div className="window-title"><UiIcon name="skills" /><div><span className="eyebrow">ABILITIES</span><h2>技能</h2></div></div><button className="close-button" aria-label="关闭技能" onClick={() => close("skills")}><UiIcon name="close" /></button></header>
@@ -111,9 +113,10 @@ export function App({ session }: { readonly session: CombatSession }) {
                 <div className="skill-slots"><div className="skill-slot passive"><UiIcon className="skill-symbol" name="crossbow" /><span>守夜弩击</span><small>自动攻击</small></div>
                     <button className="skill-slot pulse-skill" disabled={combat.gameOver || snapshot.paused || player.skillRemaining > 0 || player.mana < PULSE_MANA_COST} onClick={() => session.dispatch({ type: "cast-pulse" })}>
                         <kbd>1</kbd><UiIcon className="skill-symbol" name="pulse" /><span>裂隙脉冲</span><small>{player.skillRemaining > 0 ? `${player.skillRemaining.toFixed(1)}s` : `${PULSE_MANA_COST} 法力`}</small></button>
-                    {(["health", "mana"] as const).map((effect, index) => <button key={effect} className={`skill-slot ${effect}-skill`}
+                    {(["health", "mana"] as const).map((effect, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
+                        <kbd>{index + 2}</kbd><ItemTooltip item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || potionCount(effect) === 0 || (effect === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana)}
-                        onClick={() => session.dispatch({ type: "use-consumable", effect })}><kbd>{index + 2}</kbd><ItemIcon className="skill-symbol" kind="consumable" /><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${potionCount(effect)}`}</small></button>)}
+                        onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${potionCount(effect)}`}</small></div>)}
                 </div>
             </section>
             <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} onClick={() => toggle(menu.id)}>
@@ -128,5 +131,5 @@ export function App({ session }: { readonly session: CombatSession }) {
         </>}
         {snapshot.status === "loading" && <div className="state-overlay loading"><div className="loading-rune" /><div><small>RIFT / 荒原</small><h1>荒原正在苏醒</h1><p>准备地域与角色资源…</p></div></div>}
         {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.start(snapshot.seed)}>重新尝试</button></div></div>}
-    </main>;
+    </main></ItemTooltipProvider>;
 }

@@ -79,6 +79,12 @@ loop, presentation, message, GPU and long-frame samples. Controlled clocks prote
 input acknowledgment at draw time, clock-clamped time and exclusion of hidden-time gaps. Deferred-task
 tests exercise required barriers, nonblocking ticks, latest-request ordering, world
 revision changes, entity reuse, cancellation, capacity, failure and disposal.
+Fixed-clock checks cover 60/120/144/240Hz presentation over one minute, each producing
+exactly 7200 simulation ticks. AI checks protect continuous 120Hz movement with 30Hz decisions,
+including successful idle leaves. Inventory tests protect independent category limits,
+atomic chest rewards, stable stack IDs, quantity/potency conservation and one-dose consumption.
+Browser checks exercise icon-only hover, immediate dismissal, Alt pinning, one active item
+tooltip, keyboard focus, narrow-screen bounds and explicit potion merging.
 The assembled HUD/equipment/keyboard journey has a 300-second total budget for
 software rendering and captures; its individual assertion timeouts remain unchanged.
 

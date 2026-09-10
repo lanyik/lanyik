@@ -1,6 +1,8 @@
-export const COMBAT_STEP_MS = 20;
-const STEP_MICROSECONDS = COMBAT_STEP_MS * 1000;
-const MAX_FRAME_MICROSECONDS = 250_000;
+import { GAME_CONFIG, SIMULATION_STEP_MS } from "./GameConfig";
+export const COMBAT_STEP_MS = SIMULATION_STEP_MS;
+// Accumulate integer microseconds * Hz, avoiding a rounded 8,333us timestep at 120Hz.
+const STEP_PHASE = 1_000_000;
+const MAX_FRAME_MICROSECONDS = GAME_CONFIG.timing.maxCatchUpMs * 1000;
 
 export interface ClockSample {
     readonly steps: number;
@@ -34,11 +36,11 @@ export class FixedStepClock {
         const previous = this.previousTimestamp;
         if (previous !== undefined && timestamp < previous) throw new RangeError("Frame timestamps must be monotonic");
         this.previousTimestamp = timestamp;
-        if (previous === undefined) return { steps: 0, alpha: this.remainder / STEP_MICROSECONDS, clampedMs: 0 };
+        if (previous === undefined) return { steps: 0, alpha: this.remainder / STEP_PHASE, clampedMs: 0 };
         const elapsed = timestamp - previous, accepted = Math.min(elapsed, MAX_FRAME_MICROSECONDS);
-        this.remainder += accepted;
-        const steps = Math.floor(this.remainder / STEP_MICROSECONDS);
-        this.remainder -= steps * STEP_MICROSECONDS;
-        return { steps, alpha: this.remainder / STEP_MICROSECONDS, clampedMs: (elapsed - accepted) / 1000 };
+        this.remainder += accepted * GAME_CONFIG.timing.simulationHz;
+        const steps = Math.floor(this.remainder / STEP_PHASE);
+        this.remainder -= steps * STEP_PHASE;
+        return { steps, alpha: this.remainder / STEP_PHASE, clampedMs: (elapsed - accepted) / 1000 };
     }
 }

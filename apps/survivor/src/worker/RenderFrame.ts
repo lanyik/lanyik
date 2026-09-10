@@ -1,4 +1,4 @@
-import { ENTITY_CAPACITY as N, MAX_ENEMIES, MAX_PROJECTILES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT } from "../core/CombatConfig";
+import { ENTITY_CAPACITY as N, MAX_ENEMIES, MAX_PROJECTILES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT } from "../core/GameConfig";
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 import type { CombatRenderState, PlayerRenderState } from "../core/CombatState";
 

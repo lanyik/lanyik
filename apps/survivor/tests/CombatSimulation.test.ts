@@ -1,19 +1,21 @@
+import { ticksForSeconds } from "../src/core/GameConfig";
+import { LOW_FREQUENCY_TICKS } from "../src/core/RegionalWorld";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import type { MovementInput } from "../src/core/CombatState";
-import { MAX_ENEMIES } from "../src/core/CombatConfig";
+import { MAX_ENEMIES } from "../src/core/GameConfig";
 import { MAX_COMBAT_CHUNKS, RegionalWorld } from "../src/core/RegionalWorld";
 
 const movementAt = (step: number): MovementInput => {
-    const angle = step / 150;
+    const angle = step / ticksForSeconds(3);
     return { x: Math.cos(angle), z: Math.sin(angle), active: true };
 };
 
 describe("CombatSimulation", () => {
     test("resolves automatic combat against resident enemies in fixed steps", () => {
         const combat = new CombatSimulation("combat-loop");
-        for (let step = 0; step < 900; step += 1) combat.step(movementAt(step));
+        for (let step = 0; step < ticksForSeconds(18); step += 1) combat.step(movementAt(step));
         const snapshot = combat.getSnapshot();
         expect(snapshot.elapsedMs).toBe(18_000);
         expect(snapshot.livingEnemies).toBeGreaterThan(0);
@@ -26,7 +28,7 @@ describe("CombatSimulation", () => {
     test("replays combat and loot state exactly for the same seed and inputs", () => {
         const first = new CombatSimulation("replay", { x: 12.5, z: -9.25 });
         const second = new CombatSimulation("replay", { x: 12.5, z: -9.25 });
-        for (let step = 0; step < 1_200; step += 1) {
+        for (let step = 0; step < ticksForSeconds(24); step += 1) {
             const input = movementAt(step);
             first.step(input);
             second.step(input);
@@ -42,7 +44,7 @@ describe("CombatSimulation", () => {
 
     test("collects XP, allocates a level point, and atomically equips dropped loot", () => {
         const combat = new CombatSimulation("progression-loop");
-        for (let step = 0; step < 3_500 && !combat.gameOver; step += 1) {
+        for (let step = 0; step < ticksForSeconds(70) && !combat.gameOver; step += 1) {
             const render = combat.getRenderState();
             let targetX: number | undefined;
             let targetZ: number | undefined;
@@ -62,7 +64,7 @@ describe("CombatSimulation", () => {
                     }
                 }
             }
-            const angle = step / 130;
+            const angle = step / ticksForSeconds(2.6);
             const dx = targetX === undefined ? Math.cos(angle) : targetX - render.player.x;
             const dz = targetZ === undefined ? Math.sin(angle) : targetZ - render.player.z;
             combat.step({ x: dx, z: dz, active: true });
@@ -76,11 +78,11 @@ describe("CombatSimulation", () => {
         expect(before.player.unspentAttributePoints).toBeGreaterThan(0);
         expect(before.player.inventory.length).toBeGreaterThan(0);
 
-        const item = before.player.inventory.find(item => item.kind === "equipment")!;
-        const previous = before.player.equipment[item.slot];
+        const item = before.player.inventory.find(item => item.type === "equipment")!;
+        const previous = before.player.equipment[item.value];
         expect(combat.equip(item.id).ok).toBe(true);
         const equipped = combat.getSnapshot();
-        expect(equipped.player.equipment[item.slot]?.id).toBe(item.id);
+        expect(equipped.player.equipment[item.value]?.id).toBe(item.id);
         expect(equipped.player.inventory.some(candidate => candidate.id === previous?.id)).toBe(Boolean(previous));
 
         const damage = equipped.player.stats.damage;
@@ -106,9 +108,9 @@ describe("CombatSimulation", () => {
         const initial = enemySamples(combat.getRenderState());
         const oldIds = new Set(initial.map(enemy => enemy.id));
         let checkpointsWithThreats = 0;
-        for (let tick = 0; tick < 2500 && !combat.gameOver; tick += 1) {
+        for (let tick = 0; tick < ticksForSeconds(50) && !combat.gameOver; tick += 1) {
             combat.step({ x: 1, z: 0, active: true });
-            if (tick < 600 || tick % 200 !== 0) continue;
+            if (tick < ticksForSeconds(12) || tick % ticksForSeconds(4) !== 0) continue;
             const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state);
             let ahead = 0;
             for (let index = 0; index < enemies.length; index += 1) {
@@ -136,7 +138,7 @@ describe("CombatSimulation", () => {
         expect(nearest).toBeGreaterThanOrEqual(0);
         const x = initial.chests.x[nearest];
         const z = initial.chests.z[nearest];
-        for (let tick = 0; tick < 800 && combat.getSnapshot().openedChests === 0; tick += 1) {
+        for (let tick = 0; tick < ticksForSeconds(16) && combat.getSnapshot().openedChests === 0; tick += 1) {
             const { player } = combat.getRenderState();
             combat.step({ x: x - player.x, z: z - player.z, active: true });
         }
@@ -144,7 +146,7 @@ describe("CombatSimulation", () => {
         expect(opened.openedChests).toBe(1);
         expect(opened.player.gold).toBeGreaterThan(0);
         expect(opened.player.inventory.length).toBeGreaterThan(0);
-        for (let tick = 0; tick < 80; tick += 1) combat.step({ x: 0, z: 0, active: false });
+        for (let tick = 0; tick < ticksForSeconds(1.6); tick += 1) combat.step({ x: 0, z: 0, active: false });
         expect(combat.getSnapshot().openedChests).toBe(1);
         expect(combat.equip(opened.player.inventory[0].id).ok).toBe(true);
     });
@@ -154,7 +156,7 @@ describe("CombatSimulation", () => {
         const world = new RegionalWorld("lod-motion", { x: 0, z: 0 });
         let lowUpdates = 0;
         let staticChecks = 0;
-        for (let tick = 0; tick < 600; tick += 1) {
+        for (let tick = 0; tick < ticksForSeconds(5); tick += 1) {
             const before = enemySamples(combat.getRenderState());
             const positions = new Map(Array.from({ length: before.length }, (_, index) =>
                 [before[index].id, { x: before[index].x, z: before[index].z }] as const));
@@ -172,7 +174,7 @@ describe("CombatSimulation", () => {
                     staticChecks += 1;
                 }
                 if (lod === "low" && (after[index].x !== previous.x || after[index].z !== previous.z)) {
-                    expect(combat.tick % 10).toBe(after[index].id % 10);
+                    expect(combat.tick % LOW_FREQUENCY_TICKS).toBe(after[index].id % LOW_FREQUENCY_TICKS);
                     lowUpdates += 1;
                 }
             }

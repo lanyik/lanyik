@@ -1,0 +1,68 @@
+import { expect, test } from "@playwright/test";
+import { createConsumable, type InventoryItem } from "../../src/core/InventoryItem";
+import { generateOrb } from "../../src/core/Orbs";
+import { DeterministicRandom } from "../../src/core/DeterministicRandom";
+import type { CombatSimulation } from "../../src/core/CombatSimulation";
+import { combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
+
+test("item icons alone show details, Alt pins one tooltip, and potion stacks use their own bag", async ({ page }, testInfo) => {
+    // Desktop and narrow interaction checks run with software WebGL in CI too.
+    test.setTimeout(180_000);
+    await inspectCombatWorker(page);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+    await pauseCombat(page);
+    const items = [createConsumable(9000, 1, "health", 2), createConsumable(9001, 1, "health", 3),
+        createConsumable(9002, 1, "mana", 4), generateOrb(new DeterministicRandom("icon"), 9003, 1)];
+    await combatWorker(page).evaluate(items => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = simulation as unknown as { inventory: InventoryItem[]; mana: number; potionCooldown: number };
+        fixture.inventory = items; fixture.mana = 1; fixture.potionCooldown = 0;
+    }, items);
+    await page.evaluate(async () => { const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled; });
+    await page.keyboard.press("KeyB");
+    const bag = page.getByRole("dialog", { name: "背包", exact: true });
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "装备容量 0 / 40");
+    await bag.getByRole("button", { name: /^药剂/ }).click();
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 3 / 16");
+    await bag.getByRole("button", { name: "合并药剂", exact: true }).click();
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 2 / 16");
+    const health = bag.locator('[data-item-id="9000"]'), mana = bag.locator('[data-item-id="9002"]');
+    await expect(health.locator(".item-icon-badge")).toHaveText("5");
+    await expect(health.locator("[data-item-value]")).toHaveAttribute("data-item-value", "health");
+    await health.locator(".bag-item-heading strong").hover();
+    await expect(page.locator(".equipment-tooltip")).toHaveCount(0);
+    await health.locator(".item-icon-trigger").hover();
+    await expect(page.locator(".equipment-tooltip")).toContainText("数量 5 / 99");
+    await health.locator(".bag-item-heading strong").hover();
+    await expect(page.locator(".equipment-tooltip")).toHaveCount(0);
+    await health.locator(".item-icon-trigger").focus();
+    await page.keyboard.press("Alt");
+    // A pinned, interactive tooltip may cover the next icon. Move the real pointer;
+    // the tooltip must stay pinned whether the pointer reaches the icon or the popup.
+    const manaIcon = (await mana.locator(".item-icon-trigger").boundingBox())!;
+    await page.mouse.move(manaIcon.x + manaIcon.width / 2, manaIcon.y + manaIcon.height / 2);
+    await expect(page.locator(".equipment-tooltip")).toHaveCount(1);
+    await expect(page.locator(".equipment-tooltip")).toContainText("微光生命药剂");
+    // Close away from icons, so uncovering the next icon is not a fresh hover.
+    await bag.getByRole("heading", { name: "行囊" }).hover();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".equipment-tooltip")).toHaveCount(0); await expect(bag).toBeVisible();
+    await expect(mana.getByRole("button", { name: "使用", exact: true })).toBeDisabled();
+    await page.keyboard.press("KeyP");
+    await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "false");
+    await mana.getByRole("button", { name: "使用", exact: true }).click();
+    await expect(mana.locator(".item-icon-badge")).toHaveText("3");
+    await page.keyboard.press("KeyP");
+    await bag.getByRole("button", { name: /^宝珠/ }).click();
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "宝珠容量 1 / 24");
+    await expect(bag.locator("[data-item-icon=orb] .item-icon-base")).toHaveCount(1);
+    await expect(bag.locator("[data-item-icon=orb] .item-icon-border")).toHaveCount(1);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bag.locator(".item-icon-trigger").hover(); await page.keyboard.press("Alt");
+    const tip = page.locator(".equipment-tooltip"), bounds = (await tip.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    await page.screenshot({ path: testInfo.outputPath("item-icons-narrow.png") });
+    await tip.getByRole("button", { name: "关闭物品详情" }).click();
+    await expect(tip).toHaveCount(0);
+});

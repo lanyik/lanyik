@@ -24,13 +24,15 @@ import {
     type WorldRenderLayerHost
 } from "three-hex-map";
 import type { CombatRenderState } from "../core/CombatState";
-import { MAX_ENEMIES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, MAX_PROJECTILES, MELEE_HALF_ARC } from "../core/CombatConfig";
+import { MAX_ENEMIES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, MAX_PROJECTILES, MELEE_HALF_ARC } from "../core/GameConfig";
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
+import { GAME_CONFIG } from "../core/GameConfig";
+import { RARITIES } from "../core/Loot";
 
 import { ActorAction, Faction } from "../core/CombatWorld";
 import { ActorModels } from "./ActorModels";
 import { ACTOR_FADE_END, actorVisibility, installActorFade } from "./ActorVisibility";
-const RARITY_COLORS = [new Color(0xd7d9dc), new Color(0x5fa8ff), new Color(0xc56cff), new Color(0xffa93a), new Color(0x70f5ed), new Color(0xff79dc)] as const;
+const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
 const ELITE = new Color(0xffc857);

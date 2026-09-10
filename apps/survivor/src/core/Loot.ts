@@ -1,10 +1,9 @@
 import type { DeterministicRandom } from "./DeterministicRandom";
+import { GAME_CONFIG } from "./GameConfig";
 
 export const RARITIES = ["common", "magic", "rare", "legendary", "diamond", "rainbow"] as const;
 export type Rarity = typeof RARITIES[number];
-export const RARITY_NAMES: Readonly<Record<Rarity, string>> = Object.freeze({
-    common: "白", magic: "蓝", rare: "紫", legendary: "金", diamond: "钻", rainbow: "彩"
-});
+export const RARITY_NAMES = Object.freeze(Object.fromEntries(RARITIES.map(rarity => [rarity, GAME_CONFIG.quality[rarity].name])) as Record<Rarity, string>);
 export interface FindRatings { readonly quantity: number; readonly quality: number; readonly stars: number }
 export interface LootProfile {
     readonly ratings: FindRatings;

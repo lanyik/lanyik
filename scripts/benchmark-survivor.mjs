@@ -14,6 +14,7 @@ const bundle = await build({ stdin: { contents: `
     export { EnemyBehavior } from './apps/survivor/src/core/EnemyBehavior';
     export { RegionalWorld } from './apps/survivor/src/core/RegionalWorld';
     export { advanceProjectiles, moveEnemies, advanceEnemyActions } from './apps/survivor/src/core/CombatSystems';
+    export { ticksForSeconds, GAME_CONFIG } from './apps/survivor/src/core/GameConfig';
 `, resolveDir: root }, bundle: true, write: false, platform: "node", format: "esm" });
 const current = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 const baseline = baselinePath ? await import(pathToFileURL(baselinePath).href) : undefined;
@@ -21,12 +22,13 @@ const baseline = baselinePath ? await import(pathToFileURL(baselinePath).href) :
 function travel(runtime) {
     const simulation = new runtime.CombatSimulation("forward-pressure");
     const input = { x: 1, z: 0, active: true };
-    const ticks = 1200;
+    const ticks = runtime.ticksForSeconds(24);
     const started = performance.now();
     for (let tick = 0; tick < ticks; tick++) simulation.step(input);
     const elapsed = performance.now() - started;
     assert.equal(simulation.tick, ticks, "Travel must measure live simulation, not a game-over early return");
     const state = simulation.getSnapshot();
+    simulation.dispose();
     return { msPerTick: elapsed / ticks, ticks, enemies: state.livingEnemies, kills: state.kills };
 }
 
@@ -65,6 +67,7 @@ function measure(run, budgetMsPerTick) {
 const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3) };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
+    simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
     gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");

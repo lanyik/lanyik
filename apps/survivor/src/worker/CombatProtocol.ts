@@ -2,10 +2,11 @@ import type { CombatCommand } from "../core/CombatCommand";
 import type { CombatNotice, CombatSnapshot, MovementInput } from "../core/CombatState";
 import type { RenderPacket } from "./RenderFrame";
 import type { WorkerActivitySnapshot } from "three-hex-map";
+import { GAME_CONFIG, MAX_CATCH_UP_TICKS } from "../core/GameConfig";
 
-export const MAX_STEP_BATCH = 13;
-export const MAX_COMMAND_BATCH = 64;
-export const WORKER_TIMEOUT_MS = 15_000;
+export const MAX_STEP_BATCH = MAX_CATCH_UP_TICKS;
+export const MAX_COMMAND_BATCH = GAME_CONFIG.workers.maxCommands;
+export const WORKER_TIMEOUT_MS = GAME_CONFIG.workers.timeoutMs;
 
 export interface CombatAdvance {
     readonly steps: number;
@@ -13,6 +14,8 @@ export interface CombatAdvance {
     readonly commands: readonly CombatCommand[];
 }
 export interface CombatWorkerStats {
+    readonly steps: number;
+    readonly simulationMs: number;
     readonly queries: readonly WorkerActivitySnapshot[];
     readonly queryWorkers: number;
     readonly parallelBatches: number;

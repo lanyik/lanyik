@@ -2,6 +2,11 @@ import { useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BONUS_IDS, BONUS_INFO, RARITY_NAMES, SLOT_NAMES, type BonusId } from "../core/Equipment";
 import type { InventoryItem } from "../core/InventoryItem";
+import type { ItemType } from "../core/ItemDefinition";
+import { GAME_CONFIG } from "../core/GameConfig";
+import { CONSUMABLE_COOLDOWN } from "../core/GameConfig";
+
+export const QUALITY_CSS = Object.entries(GAME_CONFIG.quality).map(([rarity, info]) => `.rarity-${rarity}{--rarity:${info.color}}`).join("");
 
 export function statValue(id: BonusId, value: number): string {
     const unit = BONUS_INFO[id].unit;
@@ -34,17 +39,30 @@ const ICON_PATHS = {
     necklace: "M10 10C9 31 39 31 38 10M24 27L16 35L24 43L32 35Z",
     bracelet: "M10 16C10 5 38 5 38 16V33C38 44 10 44 10 33ZM10 16C10 27 38 27 38 16",
     charm: "M17 8H31L36 17L32 25L36 38L24 43L12 38L16 25L12 17ZM24 16L19 23L24 30L29 23Z",
-    orb: "M24 5L40 15V33L24 43L8 33V15ZM8 15L24 23L40 15M24 23V43M24 5V23",
-    consumable: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM15 31H33"
+    fortune: "M24 5L40 15V33L24 43L8 33V15ZM24 13L31 24L24 35L17 24Z",
+    bounty: "M24 5L40 15V33L24 43L8 33V15ZM31 24A7 7 0 1 1 17 24A7 7 0 1 1 31 24M24 19V29",
+    constellation: "M24 5L40 15V33L24 43L8 33V15ZM24 13L27 20L35 24L27 27L24 35L21 27L13 24L21 20Z",
+    harmony: "M24 5L40 15V33L24 43L8 33V15ZM19 17L29 31M29 17L19 31M16 24H32",
+    health: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM19 33H29M24 28V38",
+    mana: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM24 26C13 39 35 39 24 26Z"
 } as const;
-export function ItemIcon({ kind, className = "" }: { readonly kind: keyof typeof ICON_PATHS; readonly className?: string }) {
-    return <svg className={`item-icon ${className}`} viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON_PATHS[kind]} /></svg>;
+export function ItemIcon({ item, type = "equipment", value = "weapon", className = "" }: {
+    readonly item?: InventoryItem; readonly type?: ItemType; readonly value?: keyof typeof ICON_PATHS; readonly className?: string;
+}) {
+    const category = item?.type ?? type, subtype = item?.value ?? value;
+    return <span className={`item-icon-frame rarity-${item?.rarity ?? "common"} item-type-${category} ${className}`} data-item-icon={category} data-item-value={subtype}>
+        <span className="item-icon-base" />
+        <svg className="item-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON_PATHS[subtype]} /></svg>
+        <span className="item-icon-border" />
+        {item?.type === "equipment" && <span className="item-icon-badge" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>}
+        {item?.type === "consumable" && <span className="item-icon-badge" aria-label={`数量 ${item.size}`}>{item.size}</span>}
+    </span>;
 }
 export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">
         <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b><span>等级 {item.itemLevel}</span></span></header>
-        {item.kind === "equipment" && <>
-            <div className="item-meta"><span>{SLOT_NAMES[item.slot]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
+        {item.type === "equipment" && <>
+            <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
             <h4 className="item-section-title">基础属性</h4>
             <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <div className="property-row" key={id}><span>{BONUS_INFO[id].name}</span><b>+{statValue(id, item.baseBonuses[id])}</b></div>)}</div>
             <h4 className="item-section-title">附加词条</h4>
@@ -53,9 +71,9 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
                 <b>{affix.stat === "shieldRecovery" ? "−" : "+"}{statValue(affix.stat, affix.value)}</b>
             </li>)}</ul>
         </>}
-        {item.kind === "orb" && <><div className="item-meta">寻宝宝珠 · 宝箱 / 领主专属</div>
+        {item.type === "orb" && <><div className="item-meta">寻宝宝珠 · 宝箱 / 领主专属</div>
             <h4 className="item-section-title">嵌入效果</h4><div className="item-properties">{item.ratings.quantity > 0 && <div className="property-row"><span>掉落数量</span><b>+{item.ratings.quantity}</b></div>}
                 {item.ratings.quality > 0 && <div className="property-row"><span>品质寻宝</span><b>+{item.ratings.quality}</b></div>}{item.ratings.stars > 0 && <div className="property-row"><span>星级寻宝</span><b>+{item.ratings.stars}</b></div>}</div></>}
-        {item.kind === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row"><span>恢复{item.effect === "health" ? "生命" : "法力"}</span><b>+{item.restore}</b></div><p>药剂共用 4 秒冷却</p></>}
+        {item.type === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row"><span>恢复{item.value === "health" ? "生命" : "法力"}</span><b>+{item.restore}</b></div><p>数量 {item.size} / {GAME_CONFIG.inventory.consumable.stackSize} · 共用 {CONSUMABLE_COOLDOWN} 秒冷却</p></>}
     </div>;
 }

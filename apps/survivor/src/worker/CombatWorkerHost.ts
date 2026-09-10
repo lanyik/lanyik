@@ -3,6 +3,8 @@ import { applyCombatCommand } from "../core/CombatCommand";
 import { MAX_COMMAND_BATCH, MAX_STEP_BATCH, type CombatRequest, type CombatResponse, type CombatUpdate } from "./CombatProtocol";
 import { ProjectileWorkerPool } from "./ProjectileWorkerPool";
 import { RenderFrame } from "./RenderFrame";
+import { GAME_CONFIG, ticksPerUpdate } from "../core/GameConfig";
+const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
 type SimulationFactory = (seed: string, start: { x: number; z: number }) => CombatSimulation;
 
@@ -27,9 +29,10 @@ export class CombatWorkerHost {
             const started = performance.now();
             const waitBefore = this.pool?.waitMs ?? 0;
             let forceSnapshot = false;
+            let steps = 0, simulationMs = 0;
             if (request.type === "init") {
                 if (this.simulation) throw new Error("Combat Worker already initialized");
-                if (request.ports.length > 2) throw new Error("Collision Worker budget exceeded");
+                if (request.ports.length > GAME_CONFIG.workers.collisionMax) throw new Error("Collision Worker budget exceeded");
                 this.pool = new ProjectileWorkerPool(request.ports);
                 this.simulation = this.createSimulation(request.seed, request.start);
                 // One frame remains here while the other is owned by the presentation thread.
@@ -45,13 +48,16 @@ export class CombatWorkerHost {
                     this.frame = new RenderFrame(request.recycle);
                 }
                 for (const command of batch.commands) applyCombatCommand(this.simulation, command);
+                const tickBefore = this.simulation.tick, simulationStarted = performance.now();
                 for (let step = 0; step < batch.steps && !this.simulation.gameOver; step++) await this.simulation.step(batch.input, this.pool);
+                steps = this.simulation.tick - tickBefore;
+                simulationMs = performance.now() - simulationStarted;
                 forceSnapshot = batch.commands.length > 0 || batch.steps === 0;
             } else throw new Error("Unknown combat request");
             if (this.closed) return;
             const simulation = this.simulation!, pool = this.pool!;
             const notices = simulation.drainNotices();
-            const publish = forceSnapshot || simulation.gameOver || notices.length > 0 || simulation.tick - this.lastSnapshotTick >= 5;
+            const publish = forceSnapshot || simulation.gameOver || notices.length > 0 || simulation.tick - this.lastSnapshotTick >= SNAPSHOT_TICKS;
             if (publish) this.lastSnapshotTick = simulation.tick;
             const frame = this.frame;
             if (!frame) throw new Error("Presentation did not return its render buffer");
@@ -59,7 +65,7 @@ export class CombatWorkerHost {
             const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
-                    batchMs, executeMs: Math.max(0, batchMs - queryWaitMs), queryWaitMs,
+                    steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs), queryWaitMs,
                     deferred: simulation.tasks.stats, frameBytes: RenderFrame.bytes } };
             this.frame = request.type === "init" ? new RenderFrame() : undefined;
             this.send({ type: "state", id: request.id, update }, [update.render.buffer]);

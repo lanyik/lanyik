@@ -1,3 +1,4 @@
+import { ENEMY_DEFINITIONS } from "../src/core/EnemyDefinitions";
 import { expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { CombatWorld, Faction } from "../src/core/CombatWorld";
@@ -47,7 +48,7 @@ test("a lethal melee hit and lethal reflection award the kill while preserving g
     const { combat, fixture, e, home, spawn } = encounter();
     const enemy = e.spawnEnemy(spawn, home);
     e.vitals.health[enemy] = 1; e.enemy.damage[enemy] = 10000; fixture.health = 1;
-    for (let tick = 0; tick < 19; tick++) combat.step({ x: 0, z: 0, active: false });
+    for (let tick = 0; tick <= ENEMY_DEFINITIONS[0].windupTicks; tick++) combat.step({ x: 0, z: 0, active: false });
     const snapshot = combat.getSnapshot();
     expect(snapshot.gameOver).toBe(true);
     expect(snapshot.player.health).toBe(0);

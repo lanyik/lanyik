@@ -9,7 +9,8 @@ import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/brows
 import type { HexMap } from "three-hex-map";
 
 test("compares gear on hover, protects upgrades during cleanup and equips a real pickup from the HUD", async ({ page }) => {
-    test.setTimeout(150_000);
+    // Full desktop/narrow/pickup journey also runs against software WebGL in CI.
+    test.setTimeout(240_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -60,7 +61,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     });
     await page.keyboard.press("KeyC");
     const equipped = page.locator('.equipment-slot[data-slot="weapon"]');
-    await equipped.hover();
+    await equipped.locator(".item-icon-trigger").hover();
     await expect(page.locator(".equipment-tooltip")).toContainText("守夜短弩");
     await expect(page.locator(".equipment-tooltip .affix-list")).toHaveAttribute("aria-label", "2条词条");
     await page.keyboard.press("KeyB");
@@ -68,24 +69,34 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(bag.locator(".bag-tabs button")).toHaveCount(3);
     await expect(bag.getByRole("button", { name: /^全部/ })).toHaveCount(0);
     const candidate = bag.locator('[data-item-id="9001"]');
-    await candidate.hover();
+    await candidate.locator(".bag-item-heading strong").hover();
+    await expect(page.locator(".equipment-tooltip")).toHaveCount(0);
+    const icon = candidate.locator(".item-icon-trigger");
+    await icon.hover();
     const tooltip = page.locator(".equipment-tooltip").filter({ hasText: "晨光试炼弩" });
     await expect(tooltip).toContainText("当前装备");
     await expect(tooltip).toContainText("换装提升");
     await expect(tooltip).toContainText("守夜短弩");
+    await expect(tooltip).toContainText("Alt 固定浮窗");
+    await page.keyboard.press("Alt");
+    await candidate.locator(".bag-item-heading strong").hover();
+    await expect(tooltip).toHaveAttribute("data-pinned", "true");
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toHaveCount(0); await expect(bag).toBeVisible();
+    await icon.hover();
     const delta = Number(await candidate.getAttribute("data-power-delta"));
     expect(delta).toBeGreaterThan(0);
-    const cardBounds = (await candidate.boundingBox())!;
+    const cardBounds = (await icon.boundingBox())!;
     const tooltipBounds = (await tooltip.boundingBox())!;
     expect(cardBounds.height).toBeLessThan(140);
     expect(tooltipBounds.x >= cardBounds.x + cardBounds.width || tooltipBounds.x + tooltipBounds.width <= cardBounds.x
         || tooltipBounds.y >= cardBounds.y + cardBounds.height || tooltipBounds.y + tooltipBounds.height <= cardBounds.y).toBe(true);
     await page.screenshot({ path: ".browser-artifacts/equipment-comparison.png" });
     await page.setViewportSize({ width: 390, height: 844 });
-    await candidate.hover();
-    await candidate.click();
+    await icon.hover();
+    await icon.click();
     await expect(candidate).toHaveClass(/selected/);
-    const narrowCard = (await candidate.boundingBox())!;
+    const narrowCard = (await icon.boundingBox())!;
     const narrowTooltip = (await tooltip.boundingBox())!;
     expect(narrowTooltip.y >= narrowCard.y + narrowCard.height || narrowTooltip.y + narrowTooltip.height <= narrowCard.y).toBe(true);
     expect(narrowTooltip.x + narrowTooltip.width).toBeLessThanOrEqual(390);
@@ -94,7 +105,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(tooltip).toHaveCount(0);
     await expect(bag).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 720 });
-    await bag.getByRole("button", { name: /清理较弱装备/ }).click();
+    await bag.getByRole("checkbox", { name: "自动清理", exact: true }).check();
     await expect(candidate).toBeVisible();
     await expect(bag.locator('[data-item-id="9002"]')).toHaveCount(0);
     await page.getByRole("button", { name: "关闭背包", exact: true }).click();

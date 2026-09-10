@@ -1,4 +1,5 @@
 import { DeterministicRandom } from "./DeterministicRandom";
+import type { ItemDefinition } from "./ItemDefinition";
 import { RARITIES, rollRarity, rollStars, type Rarity, type LootProfile } from "./Loot";
 export { RARITIES, RARITY_NAMES, type Rarity } from "./Loot";
 
@@ -68,14 +69,8 @@ export interface EquipmentAffix {
     readonly value: number;
     readonly rarity: Rarity;
 }
-export interface Equipment {
-    readonly kind: "equipment";
-    readonly id: number;
-    readonly slot: EquipmentSlot;
-    readonly rarity: Rarity;
+export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
     readonly stars: 1 | 2 | 3;
-    readonly itemLevel: number;
-    readonly name: string;
     readonly baseBonuses: EquipmentBonuses;
     readonly affixes: readonly EquipmentAffix[];
     readonly bonuses: EquipmentBonuses;
@@ -118,7 +113,7 @@ function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 
     const baseBonuses = equipmentBase(slot, itemLevel);
     const bonuses = { ...baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ kind: "equipment", id, slot, rarity, stars, itemLevel, name, baseBonuses,
+    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses,
         affixes: Object.freeze(affixes), bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 

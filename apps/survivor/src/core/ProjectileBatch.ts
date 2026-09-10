@@ -1,4 +1,4 @@
-import { MAX_ENEMIES, MAX_PROJECTILES } from "./CombatConfig";
+import { MAX_ENEMIES, MAX_PROJECTILES } from "./GameConfig";
 
 /** Numeric collision snapshot. Outputs contain handles, never query cursors. */
 export class ProjectileBatch {

@@ -10,6 +10,7 @@ import { RenderFrame } from "../worker/RenderFrame";
 import { WorkerLoadSampler, type WorkerLoad, type NamedWorkerActivity } from "./WorkerLoadSampler";
 import { FramePerformance, InputFeedback, type RuntimePerformanceSnapshot } from "./FramePerformance";
 import type { HexMapFrameEndEvent } from "three-hex-map";
+import { GAME_CONFIG } from "../core/GameConfig";
 
 export type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -171,9 +172,9 @@ export class CombatSession {
         this.inputFeedback.draw(now);
         this.framePerformance.frame(this.skipTimingFrame ? { ...frame, dtS: 0 } : frame, this.presentationMs);
         this.skipTimingFrame = false;
-        if (now - this.sampledLoadAt < 1000) return;
+        if (now - this.sampledLoadAt < GAME_CONFIG.timing.diagnosticsMs) return;
         const stats = this.client!.stats, simulation = stats.simulation;
-        this.performanceSnapshot = Object.freeze({ ...this.framePerformance.take(),
+        this.performanceSnapshot = Object.freeze({ ...this.framePerformance.take(now - this.sampledLoadAt),
             windowMs: now - this.sampledLoadAt,
             snapshotAgeMs: Math.max(0, now - this.frameReceivedAt), inputLatencyMs: this.inputFeedback.latencyMs,
             running: !this.paused && !this.gameOver, pendingSteps: this.pendingSteps, droppedSteps: this.droppedSteps,
@@ -244,6 +245,7 @@ export class CombatSession {
             if (revision !== this.loadRevision) return;
             const started = performance.now();
             this.accept(update);
+            this.framePerformance.simulation(update.stats);
             if (steps > 0 && !this.paused && !this.hidden && !this.gameOver) this.inputFeedback.accept(inputSample);
             if (this.paused && steps === 0 && !this.pendingSnapshot && this.pendingCommands.length === 0) this.pauseAcknowledged = true;
             if (update.snapshot || update.notices.length > 0) this.publish();
@@ -330,7 +332,7 @@ export class CombatSession {
         // Re-evaluate on every publication: equipping, discarding or clearing can invalidate a prompt.
         for (const id of this.upgradeIds) {
             const item = combat?.player.inventory.find(candidate => candidate.id === id);
-            if (combat && item?.kind === "equipment" && compareEquipment(item, combat.player).delta > 0) upgrades.push(item);
+            if (combat && item?.type === "equipment" && compareEquipment(item, combat.player).delta > 0) upgrades.push(item);
             else this.upgradeIds.delete(id);
         }
         if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);

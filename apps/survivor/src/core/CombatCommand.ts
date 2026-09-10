@@ -13,7 +13,7 @@ export type CombatCommand =
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
     | { readonly type: "discard"; readonly itemId: number }
     | { readonly type: "sort-inventory" }
-    | { readonly type: "clear-inferior-equipment" }
+    | { readonly type: "merge-consumables" }
     | { readonly type: "set-auto-clear-equipment"; readonly enabled: boolean };
 
 /** Commands commit in arrival order before the next batch of fixed ticks. */
@@ -29,8 +29,8 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "use-consumable": simulation.useConsumable(command.effect, command.itemId); break;
         case "discard": simulation.discard(command.itemId); break;
         case "sort-inventory": simulation.sortInventory(); break;
-        case "clear-inferior-equipment": simulation.clearInferiorEquipment(); break;
-        case "set-auto-clear-equipment": simulation.setAutoClearLowLevelEquipment(command.enabled); break;
+        case "merge-consumables": simulation.mergeConsumables(); break;
+        case "set-auto-clear-equipment": simulation.setAutoClearEquipment(command.enabled); break;
         default:
             command satisfies never;
             throw new Error(`Unknown combat command: ${(command as { type: string }).type}`);

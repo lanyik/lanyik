@@ -30,8 +30,8 @@ export interface EquipmentComparison {
 }
 
 export function compareEquipment(item: Equipment, player: EquipmentContext): EquipmentComparison {
-    const current = player.equipment[item.slot];
-    const stats = deriveStats(player.level, player.attributes, sumEquipment({ ...player.equipment, [item.slot]: item }));
+    const current = player.equipment[item.value];
+    const stats = deriveStats(player.level, player.attributes, sumEquipment({ ...player.equipment, [item.value]: item }));
     const power = battlePower(stats);
     const delta = power - battlePower(player.stats);
     const scoreDelta = item.score - (current?.score ?? 0);

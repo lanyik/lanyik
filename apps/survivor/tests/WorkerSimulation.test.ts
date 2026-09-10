@@ -1,3 +1,4 @@
+import { MAX_STEP_BATCH } from "../src/worker/CombatProtocol";
 import { afterEach, expect, test, vi } from "vitest";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { ProjectileBatch, resolveProjectileRange } from "../src/core/ProjectileBatch";
@@ -135,7 +136,7 @@ test("a missing collision response times out and releases pending lanes", async 
 });
 
 test("authority rejects out-of-order requests and oversized batches before advancing", async () => {
-    for (const invalid of [{ id: 3, steps: 1 }, { id: 2, steps: 14 }]) {
+    for (const invalid of [{ id: 3, steps: 1 }, { id: 2, steps: MAX_STEP_BATCH + 1 }]) {
         const responses: CombatResponse[] = [];
         const host = new CombatWorkerHost(message => responses.push(message));
         await host.receive({ type: "init", id: 1, seed: "protocol", start: { x: 0, z: 0 }, ports: [] });

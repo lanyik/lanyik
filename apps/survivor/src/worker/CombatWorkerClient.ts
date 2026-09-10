@@ -1,5 +1,6 @@
 import type { CombatTransport } from "../app/CombatTransport";
 import { TaskActivity } from "./TaskActivity";
+import { GAME_CONFIG } from "../core/GameConfig";
 import { WORKER_TIMEOUT_MS, type CombatAdvance, type CombatRequest, type CombatResponse, type CombatUpdate, type CombatWorkerStats } from "./CombatProtocol";
 
 /** Main-thread owner of every combat Worker, including query workers connected by MessagePorts. */
@@ -16,7 +17,7 @@ export class CombatWorkerClient implements CombatTransport {
     private receiveMs = 0;
 
     constructor(private readonly queryWorkers: number, private readonly onFailure: (error: Error) => void) {
-        if (!Number.isInteger(queryWorkers) || queryWorkers < 0 || queryWorkers > 2) throw new Error("Invalid collision Worker count");
+        if (!Number.isInteger(queryWorkers) || queryWorkers < 0 || queryWorkers > GAME_CONFIG.workers.collisionMax) throw new Error("Invalid collision Worker count");
     }
     public get stats() {
         const activity = this.activity.snapshot;

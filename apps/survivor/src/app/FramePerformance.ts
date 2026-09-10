@@ -1,4 +1,6 @@
 import type { HexMapFrameEndEvent } from "three-hex-map";
+import { GAME_CONFIG, SIMULATION_STEP_MS } from "../core/GameConfig";
+import type { CombatWorkerStats } from "../worker/CombatProtocol";
 
 class WindowMetric {
     private readonly values = new Float64Array(512);
@@ -17,6 +19,12 @@ class WindowMetric {
 }
 
 export interface FramePerformanceSnapshot {
+    readonly theoreticalFps: number | undefined;
+    readonly logicalHz: number;
+    readonly theoreticalLogicHz: number | undefined;
+    readonly logicStepMs: number | undefined;
+    readonly logicExecuteMs: number | undefined;
+    readonly logicBudgetPercent: number | undefined;
     readonly fps: number | undefined;
     readonly frameP95Ms: number | undefined;
     readonly mainMs: number | undefined;
@@ -59,6 +67,9 @@ export class FramePerformance {
     private readonly mounts = new WindowMetric();
     private readonly gpu = new WindowMetric();
     private readonly messages = new WindowMetric();
+    private steps = 0;
+    private simulationMs = 0;
+    private simulationWaitMs = 0;
     private gpuSupported = false;
     private gpuAge: number | undefined;
     private longFrames = 0;
@@ -74,22 +85,36 @@ export class FramePerformance {
         this.gpu.add(frame.gpuFrameMs);
     }
     public message(ms: number): void { this.messages.add(ms); }
+    public simulation(stats: Pick<CombatWorkerStats, "steps" | "simulationMs" | "queryWaitMs">): void {
+        if (stats.steps === 0) return;
+        this.steps += stats.steps;
+        this.simulationMs += stats.simulationMs;
+        this.simulationWaitMs += stats.queryWaitMs;
+    }
     public longFrame(duration: number, blocking: number, layout: number): void {
         this.longFrames++; this.longMax = Math.max(this.longMax, duration);
         this.blockingMax = Math.max(this.blockingMax, blocking); this.layoutMax = Math.max(this.layoutMax, layout);
     }
-    public take(): FramePerformanceSnapshot {
-        const interval = this.interval.take(), main = this.main.take(), messages = this.messages.take();
+    public take(windowMs: number = GAME_CONFIG.timing.diagnosticsMs): FramePerformanceSnapshot {
+        const interval = this.interval.take(), main = this.main.take(), messages = this.messages.take(), gpu = this.gpu.take();
+        const renderCost = main ? Math.max(main.mean + (messages ? messages.mean * messages.count / main.count : 0), gpu?.mean ?? 0) : 0;
+        const logicStepMs = this.steps > 0 ? this.simulationMs / this.steps : undefined;
         const result = Object.freeze({ fps: interval && interval.mean > 0 ? 1000 / interval.mean : undefined,
+            theoreticalFps: renderCost > 0 ? 1000 / renderCost : undefined,
+            logicalHz: this.steps * 1000 / windowMs,
+            theoreticalLogicHz: logicStepMs !== undefined && logicStepMs > 0 ? 1000 / logicStepMs : undefined,
+            logicStepMs, logicExecuteMs: this.steps > 0 ? Math.max(0, this.simulationMs - this.simulationWaitMs) / this.steps : undefined,
+            logicBudgetPercent: logicStepMs === undefined ? undefined : logicStepMs / SIMULATION_STEP_MS * 100,
             frameP95Ms: interval?.p95, mainMs: main?.mean, mainP95Ms: main?.p95,
             presentationMs: this.presentation.take()?.mean, mountMs: this.mounts.take()?.mean,
-            gpuMs: this.gpu.take()?.mean, gpuSupported: this.gpuSupported, gpuSampleAgeMs: this.gpuAge,
+            gpuMs: gpu?.mean, gpuSupported: this.gpuSupported, gpuSampleAgeMs: this.gpuAge,
             messageMs: messages?.mean, messages: messages?.count ?? 0,
             longFrames: this.longFramesSupported ? this.longFrames : undefined,
             longFrameMaxMs: this.longFramesSupported ? this.longMax : undefined,
             blockingMaxMs: this.longFramesSupported ? this.blockingMax : undefined,
             layoutMaxMs: this.longFramesSupported ? this.layoutMax : undefined });
         this.longFrames = this.longMax = this.blockingMax = this.layoutMax = 0;
+        this.steps = this.simulationMs = this.simulationWaitMs = 0;
         return result;
     }
 }

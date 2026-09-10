@@ -1,3 +1,4 @@
+import { MAX_STEP_BATCH } from "../../src/worker/CombatProtocol";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
@@ -26,15 +27,15 @@ export async function pauseCombat(page: Page): Promise<void> {
 
 /** Advance the production protocol while presentation pacing is paused. */
 export async function advanceCombat(page: Page, ticks = 0): Promise<void> {
-    await page.evaluate(async remaining => {
+    await page.evaluate(async ({ remaining, maxSteps }) => {
         const session = window.survivorApplication!.session;
         await session.settled;
         const runtime = session as unknown as { client: CombatTransport; accept(update: CombatUpdate): void };
         do {
-            const steps = Math.min(13, remaining);
+            const steps = Math.min(maxSteps, remaining);
             runtime.accept(await runtime.client.advance({ steps, commands: [], input: { x: 0, z: 0, active: false } }));
             remaining -= steps;
         } while (remaining > 0);
         session.frame(performance.now());
-    }, ticks);
+    }, { remaining: ticks, maxSteps: MAX_STEP_BATCH });
 }

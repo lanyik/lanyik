@@ -1,9 +1,10 @@
 import { BehaviorTree, BehaviorStatus, type BehaviorNode } from "./BehaviorTree";
 import { ActorAction, CombatWorld, MoveIntent } from "./CombatWorld";
 import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
-import { ENEMY_LEASH_DISTANCE } from "./CombatConfig";
+import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { LOW_FREQUENCY_TICKS, type RegionalWorld } from "./RegionalWorld";
+const ACTIVE_AI_TICKS = ticksPerUpdate(GAME_CONFIG.timing.activeAiHz);
 
 type Context = EnemyBehavior;
 const condition = (test: (context: Context, slot: number) => boolean): BehaviorNode<Context> => ({ type: "condition", test });
@@ -33,12 +34,15 @@ export class EnemyBehavior {
             const slot = enemies.slots[cursor];
             p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot];
             v.hitFlash[slot] = Math.max(0, v.hitFlash[slot] - COMBAT_STEP_MS / 1000);
-            e.intent[slot] = MoveIntent.None; e.intentSeconds[slot] = 0;
+            const wasActive = e.active[slot], previousTarget = e.target[slot];
             const lod = this.regions.lodAt(p.x[slot], p.z[slot]);
             e.active[slot] = Number(lod === "active");
             const pursuing = lod === "active" && Math.hypot(p.x[player] - e.homeX[slot], p.z[player] - e.homeZ[slot]) <= ENEMY_LEASH_DISTANCE;
             e.target[slot] = pursuing ? this.entities.world.ids[player] : 0;
-            if (lod !== "active") TREE.halt(this, slot, e.runningNode);
+            if (lod !== "active") {
+                TREE.halt(this, slot, e.runningNode);
+                e.intent[slot] = MoveIntent.None; e.intentSeconds[slot] = 0;
+            }
             if (lod === "unloaded") { this.entities.remove(slot); continue; }
             if (lod === "static" || (lod === "low" && tick % LOW_FREQUENCY_TICKS !== this.entities.world.ids[slot] % LOW_FREQUENCY_TICKS)) {
                 a.kind[slot] = ActorAction.Idle;
@@ -46,7 +50,11 @@ export class EnemyBehavior {
                 continue;
             }
             e.intentSeconds[slot] = COMBAT_STEP_MS / 1000 * (lod === "low" ? LOW_FREQUENCY_TICKS : 1);
-            TREE.tick(this, slot, e.runningNode);
+            // Locomotion and attack release remain 120Hz. Only decisions are staggered.
+            // Entering combat, losing a target and finishing an action bypass the decision interval.
+            if (lod === "low" || !wasActive || previousTarget !== e.target[slot]
+                || a.kind[slot] >= ActorAction.Melee && tick >= a.endsAt[slot]
+                || tick % ACTIVE_AI_TICKS === this.entities.world.ids[slot] % ACTIVE_AI_TICKS) TREE.tick(this, slot, e.runningNode);
             cursor++;
         }
     }

@@ -1,3 +1,4 @@
+import { MAX_STEP_BATCH } from "../src/worker/CombatProtocol";
 import { afterEach, expect, test, vi } from "vitest";
 import { CombatSession } from "../src/app/CombatSession";
 import type { CombatView } from "../src/app/CombatView";
@@ -28,8 +29,8 @@ test("slow workers cannot block rendering or grow tick queues; pause acknowledge
     await session.start("backpressure"); session.frame(0); session.frame(20);
     for (let i = 2; i <= 100; i++) session.frame(i * 20);
     expect(transport.calls).toHaveLength(1);
-    expect(session.diagnostics.pendingSteps).toBe(13);
-    expect(session.diagnostics.droppedSteps).toBe(86);
+    expect(session.diagnostics.pendingSteps).toBe(MAX_STEP_BATCH);
+    expect(session.diagnostics.droppedSteps).toBe(240 - 2 - MAX_STEP_BATCH);
     expect(presentation.render).toHaveBeenCalledTimes(101);
     session.dispatch({ type: "sort-inventory" });
     session.dispatch({ type: "toggle-autocast" });
@@ -44,7 +45,7 @@ test("slow workers cannot block rendering or grow tick queues; pause acknowledge
     expect(session.getSnapshot().paused).toBe(false);
     transport.release!(); await session.settled;
     expect(session.getSnapshot().paused).toBe(true);
-    expect(session.getSnapshot().combat!.tick).toBe(14);
+    expect(session.getSnapshot().combat!.tick).toBe(2 + MAX_STEP_BATCH);
     session.frame(10000);
     expect(transport.calls).toHaveLength(3);
     expect(Object.isFrozen(session.getSnapshot().combat!.player)).toBe(true);
@@ -62,7 +63,7 @@ test("frame diagnostics keep updating during a held simulation and exclude hidde
     };
     for (let tick = 0; tick <= 50; tick++) frame(tick * 20);
     expect(session.getSnapshot().performance).toMatchObject({ fps: 50, mainMs: 2, gpuMs: undefined,
-        snapshotAgeMs: 1000, pendingSteps: 13, pendingRequests: 1 });
+        snapshotAgeMs: 1000, pendingSteps: MAX_STEP_BATCH, pendingRequests: 1 });
     expect(transport.calls).toHaveLength(1);
     session.setHidden(true); now = 100_000; session.setHidden(false);
     frame(100_000, 99); for (let tick = 1; tick <= 50; tick++) frame(100_000 + tick * 20);

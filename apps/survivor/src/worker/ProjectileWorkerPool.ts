@@ -1,9 +1,10 @@
 import { ProjectileBatch, resolveProjectileRange, type ProjectileExecutor } from "../core/ProjectileBatch";
 import { WORKER_TIMEOUT_MS, type QueryRequest, type QueryResponse } from "./CombatProtocol";
 import { TaskActivity } from "./TaskActivity";
+import { GAME_CONFIG } from "../core/GameConfig";
 
 // Below this work estimate, dispatch costs more than the numerical query itself.
-export const PARALLEL_COLLISION_PAIRS = 49_152;
+export const PARALLEL_COLLISION_PAIRS = GAME_CONFIG.workers.parallelCollisionPairs;
 
 class QueryLane {
     public readonly activity: TaskActivity;

@@ -1,5 +1,6 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
+import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 
 export const COMBAT_CHUNK_SIZE = 12;
 export const REGION_RADIUS = 24;
@@ -7,7 +8,7 @@ export const ACTIVE_CHUNK_RADIUS = 1;
 export const LOW_FREQUENCY_CHUNK_RADIUS = 2;
 export const RETAINED_CHUNK_RADIUS = 3;
 export const MAX_COMBAT_CHUNKS = (RETAINED_CHUNK_RADIUS * 2 + 1) ** 2;
-export const LOW_FREQUENCY_TICKS = 10;
+export const LOW_FREQUENCY_TICKS = ticksPerUpdate(GAME_CONFIG.timing.distantAiHz);
 export type RegionDifficulty = "normal" | "hard" | "horror";
 export type SimulationLod = "active" | "low" | "static" | "unloaded";
 export const REGION_RULES = Object.freeze({

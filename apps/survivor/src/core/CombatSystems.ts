@@ -1,5 +1,5 @@
 import { ActorAction, CombatWorld, Faction, MoveIntent } from "./CombatWorld";
-import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES } from "./CombatConfig";
+import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, type ProjectileExecutor } from "./ProjectileBatch";
 

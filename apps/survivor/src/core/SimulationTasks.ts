@@ -1,3 +1,4 @@
+import { GAME_CONFIG } from "./GameConfig";
 export interface DeferredTaskStamp {
     readonly requestId: number;
     readonly key: string;
@@ -38,7 +39,7 @@ export class SimulationTasks {
     private discarded = 0;
     private rejected = 0;
 
-    constructor(private readonly isAlive: (entity: number) => boolean, private readonly capacity = 64) {
+    constructor(private readonly isAlive: (entity: number) => boolean, private readonly capacity: number = GAME_CONFIG.workers.deferredCapacity) {
         if (!Number.isSafeInteger(capacity) || capacity < 1) throw new RangeError("Invalid deferred task capacity");
     }
     public get stats() {

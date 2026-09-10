@@ -1,7 +1,8 @@
+import { ticksForSeconds } from "../src/core/GameConfig";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
-import { PULSE_MANA_COST } from "../src/core/CombatConfig";
+import { PULSE_MANA_COST } from "../src/core/GameConfig";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } from "../src/core/Loot";
 import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
@@ -17,7 +18,7 @@ function openOrbChest() {
         const chest = [...world.chunks.values()].map(chunk => chunk.chest).find(chest => chest?.hasOrb && Math.hypot(chest.x, chest.z) < 7);
         if (!chest) continue;
         const combat = new CombatSimulation(`orb-chest-${seed}`);
-        for (let tick = 0; tick < 250 && combat.getSnapshot().openedChests === 0; tick++) {
+        for (let tick = 0; tick < ticksForSeconds(5) && combat.getSnapshot().openedChests === 0; tick++) {
             const player = combat.getRenderState().player;
             combat.step({ x: chest.x - player.x, z: chest.z - player.z, active: true });
         }
@@ -29,8 +30,8 @@ function openOrbChest() {
 
 function reachNextLevel(combat: CombatSimulation): void {
     const level = combat.getSnapshot().player.level;
-    for (let tick = 0; tick < 3000 && combat.getSnapshot().player.level === level && !combat.gameOver; tick++) {
-        const state = combat.getRenderState(); let x = Math.cos(tick / 450) * 13, z = Math.sin(tick / 450) * 13;
+    for (let tick = 0; tick < ticksForSeconds(60) && combat.getSnapshot().player.level === level && !combat.gameOver; tick++) {
+        const state = combat.getRenderState(); let x = Math.cos(tick / ticksForSeconds(9)) * 13, z = Math.sin(tick / ticksForSeconds(9)) * 13;
         let nearest = Infinity;
         for (let index = 0; index < state.entities.experience.count; index++) {
             const distance = Math.hypot(state.entities.position.x[state.entities.experience.slots[index]] - state.player.x, state.entities.position.z[state.entities.experience.slots[index]] - state.player.z);
@@ -57,36 +58,36 @@ describe("loot and orb progression", () => {
         combat.sortInventory(); expect(combat.getSnapshot().player.inventory).toEqual(after.inventory);
     });
 
-    test("optional cleanup only removes inferior low-level gear and keeps empty-slot upgrades", () => {
+    test("optional cleanup only removes inferior gear and keeps empty-slot upgrades", () => {
         const { combat } = openOrbChest(); const original = combat.getSnapshot().player;
-        expect(original.autoClearLowLevelEquipment).toBe(false);
+        expect(original.autoClearEquipment).toBe(false);
         reachNextLevel(combat);
         const before = combat.getSnapshot().player;
-        const removed = before.inventory.filter(item => item.kind === "equipment" && item.itemLevel < before.level && compareEquipment(item, before).canClear);
-        expect(before.inventory.some(item => item.kind === "equipment" && item.itemLevel < before.level && !compareEquipment(item, before).canClear)).toBe(true);
-        combat.setAutoClearLowLevelEquipment(true); const after = combat.getSnapshot().player;
+        const removed = before.inventory.filter(item => item.type === "equipment" && compareEquipment(item, before).canClear);
+        expect(before.inventory.some(item => item.type === "equipment" && item.itemLevel < before.level && !compareEquipment(item, before).canClear)).toBe(true);
+        combat.setAutoClearEquipment(true); const after = combat.getSnapshot().player;
         expect(after.inventory).toEqual(before.inventory.filter(item => !removed.includes(item)));
         expect(after.equipment).toEqual(before.equipment); expect(after.stats).toEqual(before.stats);
         expect(after.clearedEquipment).toBe(removed.length);
-        expect(after.inventory.some(item => item.kind === "orb")).toBe(true);
-        expect(after.inventory.some(item => item.kind === "consumable")).toBe(true);
-        combat.setAutoClearLowLevelEquipment(true);
+        expect(after.inventory.some(item => item.type === "orb")).toBe(true);
+        expect(after.inventory.some(item => item.type === "consumable")).toBe(true);
+        combat.setAutoClearEquipment(true);
         expect(combat.getSnapshot().player.clearedEquipment).toBe(removed.length);
-        combat.setAutoClearLowLevelEquipment(false);
+        combat.setAutoClearEquipment(false);
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
-        combat.setAutoClearLowLevelEquipment(true);
+        combat.setAutoClearEquipment(true);
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
     });
 
     test("level-ups and chest pickups preserve upgrades; unequipping never destroys an item", () => {
         const { combat } = openOrbChest();
-        combat.setAutoClearLowLevelEquipment(true);
+        combat.setAutoClearEquipment(true);
         const beforeLevel = combat.getSnapshot().player;
-        expect(beforeLevel.inventory.some(item => item.kind === "equipment" && item.itemLevel === beforeLevel.level)).toBe(true);
+        expect(beforeLevel.inventory.some(item => item.type === "equipment" && item.itemLevel === beforeLevel.level)).toBe(true);
         reachNextLevel(combat);
         const leveled = combat.getSnapshot().player;
-        expect(leveled.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= leveled.level || !compareEquipment(item, leveled).canClear)).toBe(true);
+        expect(leveled.inventory.every(item => item.type !== "equipment" || !compareEquipment(item, leveled).canClear)).toBe(true);
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.clearedEquipment).toBe(leveled.clearedEquipment);
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
@@ -99,14 +100,15 @@ describe("loot and orb progression", () => {
         }
         expect(nearest).toBeGreaterThanOrEqual(0);
         const x = chests.x[nearest], z = chests.z[nearest];
-        for (let tick = 0; tick < 600 && combat.getSnapshot().openedChests === initial.openedChests && !combat.gameOver; tick++) {
+        for (let tick = 0; tick < ticksForSeconds(12) && combat.getSnapshot().openedChests === initial.openedChests && !combat.gameOver; tick++) {
             const player = combat.getRenderState().player;
             combat.step({ x: x - player.x, z: z - player.z, active: true });
         }
         const opened = combat.getSnapshot();
         expect(opened.gameOver).toBe(false); expect(opened.openedChests).toBe(initial.openedChests + 1);
-        expect(opened.player.inventory.every(item => item.kind !== "equipment" || item.itemLevel >= opened.player.level || !compareEquipment(item, opened.player).canClear)).toBe(true);
-        expect(opened.player.inventory.filter(item => item.kind === "consumable").length).toBeGreaterThan(initial.player.inventory.filter(item => item.kind === "consumable").length);
+        expect(opened.player.inventory.every(item => item.type !== "equipment" || !compareEquipment(item, opened.player).canClear)).toBe(true);
+        const potionCount = (items: typeof opened.player.inventory) => items.reduce((sum, item) => sum + (item.type === "consumable" ? item.size : 0), 0);
+        expect(potionCount(opened.player.inventory)).toBeGreaterThan(potionCount(initial.player.inventory));
     });
     test("keeps quantity, stars and quality independent, normalized and diminishing", () => {
         expect(BASE_LOOT_PROFILE.stars).toEqual([.58, .3, .12]);
@@ -135,7 +137,7 @@ describe("loot and orb progression", () => {
 
     test("opens source-level equipment, potion and orb; sockets swap atomically and do not change combat stats", () => {
         const { combat, chest } = openOrbChest(); const before = combat.getSnapshot().player;
-        const orb = before.inventory.find(item => item.kind === "orb")!;
+        const orb = before.inventory.find(item => item.type === "orb")!;
         expect(orb).toBeDefined();
         expect(before.inventory.filter(item => item.itemLevel === chest.region.level).length).toBeGreaterThanOrEqual(3);
         expect(before.orbs).toHaveLength(6);
@@ -171,7 +173,7 @@ describe("loot and orb progression", () => {
         expect(cast.mana).toBe(start.mana - PULSE_MANA_COST);
         expect(cast.skillRemaining).toBe(cast.stats.skillInterval);
         combat.castPulse(); expect(combat.getSnapshot().player.mana).toBe(cast.mana);
-        for (let tick = 0; tick < 24; tick++) combat.step({ x: 1, z: 0, active: true });
+        for (let tick = 0; tick < ticksForSeconds(.5) - 1; tick++) combat.step({ x: 1, z: 0, active: true });
         expect(combat.getSnapshot().player.mana).toBe(cast.mana);
         combat.step({ x: 1, z: 0, active: true });
         expect(combat.getSnapshot().player.mana).toBe(cast.mana + cast.stats.manaRegen);
@@ -179,10 +181,10 @@ describe("loot and orb progression", () => {
 
     test("a chest potion restores its actual resource and consumes one item with shared cooldown", () => {
         const { combat } = openOrbChest();
-        const potion = combat.getSnapshot().player.inventory.find(item => item.kind === "consumable")!;
+        const potion = combat.getSnapshot().player.inventory.find(item => item.type === "consumable")!;
         expect(potion).toBeDefined();
-        if (potion.effect === "mana") combat.castPulse();
-        else for (let tick = 0; tick < 500 && combat.getSnapshot().player.health === combat.getSnapshot().player.stats.maxHealth; tick++) {
+        if (potion.value === "mana") combat.castPulse();
+        else for (let tick = 0; tick < ticksForSeconds(10) && combat.getSnapshot().player.health === combat.getSnapshot().player.stats.maxHealth; tick++) {
             const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state); let nearest = -1, distance = Infinity;
             for (let index = 0; index < enemies.length; index++) {
                 const d = Math.hypot(enemies[index].x - player.x, enemies[index].z - player.z);
@@ -191,20 +193,20 @@ describe("loot and orb progression", () => {
             combat.step({ x: enemies[nearest].x - player.x, z: enemies[nearest].z - player.z, active: true });
         }
         const before = combat.getSnapshot().player;
-        expect(potion.effect === "health" ? before.health < before.stats.maxHealth : before.mana < before.stats.maxMana).toBe(true);
-        combat.useConsumable(potion.effect, potion.id);
+        expect(potion.value === "health" ? before.health < before.stats.maxHealth : before.mana < before.stats.maxMana).toBe(true);
+        combat.useConsumable(potion.value, potion.id);
         const after = combat.getSnapshot().player;
         expect(after.inventory.some(item => item.id === potion.id)).toBe(false);
-        expect(potion.effect === "health" ? after.health : after.mana).toBeGreaterThan(potion.effect === "health" ? before.health : before.mana);
+        expect(potion.value === "health" ? after.health : after.mana).toBeGreaterThan(potion.value === "health" ? before.health : before.mana);
         expect(after.potionRemaining).toBe(4);
-        combat.useConsumable(potion.effect);
+        combat.useConsumable(potion.value);
         expect(combat.getSnapshot().player.inventory).toEqual(after.inventory);
     });
 
     test("staying in place cannot replace defeated enemies on a timer", () => {
         const combat = new CombatSimulation("camping"); const initial = enemySamples(combat.getRenderState());
         const ids = new Set(initial.map(enemy => enemy.id));
-        for (let tick = 0; tick < 12_000 && !combat.gameOver; tick++) combat.step({ x: 0, z: 0, active: false });
+        for (let tick = 0; tick < ticksForSeconds(240) && !combat.gameOver; tick++) combat.step({ x: 0, z: 0, active: false });
         const result = enemySamples(combat.getRenderState());
         expect(combat.getSnapshot().kills).toBeGreaterThan(0);
         expect(Array.from(result.map(enemy => enemy.id)).every(id => ids.has(id))).toBe(true);
@@ -212,8 +214,8 @@ describe("loot and orb progression", () => {
 
     test("a minute of normal combat reaches about level six through real XP pickups", () => {
         const combat = new CombatSimulation("rift-ember-1");
-        for (let tick = 0; tick < 3000; tick++) {
-            const state = combat.getRenderState(); let x = Math.cos(tick / 450) * 13, z = Math.sin(tick / 450) * 13;
+        for (let tick = 0; tick < ticksForSeconds(60); tick++) {
+            const state = combat.getRenderState(); let x = Math.cos(tick / ticksForSeconds(9)) * 13, z = Math.sin(tick / ticksForSeconds(9)) * 13;
             let nearest = 16;
             for (let index = 0; index < state.entities.experience.count; index++) {
                 const dx = state.entities.position.x[state.entities.experience.slots[index]] - state.player.x, dz = state.entities.position.z[state.entities.experience.slots[index]] - state.player.z;
