@@ -22,6 +22,7 @@ try {
         session.dispatch({ type: "toggle-pause" });
         await session.settled;
     });
+    await page.locator('[data-testid="terrain-minimap"][data-state="ready"]').waitFor({ timeout: 45_000 });
     const worker = page.workers().find(candidate => new URL(candidate.url()).pathname === "/src/worker/Combat.worker.ts");
     assert.ok(worker, "Expected the unbundled development Combat Worker");
     const pickedUp = await worker.evaluate(async () => {
@@ -59,5 +60,5 @@ try {
     await page.screenshot({ path: ".browser-artifacts/skills-dev-narrow.png" });
     await page.locator(".skills-window .close-button").click();
     assert.deepEqual(errors, []);
-    console.log("Development page, skill dragging, shaders and unbundled Worker item pickup passed:", pickedUp);
+    console.log("Development page, sampled minimap, skill dragging, shaders and unbundled Worker item pickup passed:", pickedUp);
 } finally { await browser.close(); }

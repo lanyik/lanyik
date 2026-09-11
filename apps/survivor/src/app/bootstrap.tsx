@@ -14,7 +14,7 @@ export function bootstrap(): { readonly session: CombatSession; dispose(): Promi
     const view = new HexCombatView(error => session?.fail(error), budget.terrain);
     session = new CombatSession(view, onFailure => new CombatWorkerClient(budget.queries, onFailure));
     const root = createRoot(element);
-    root.render(<StrictMode><App session={session} /></StrictMode>);
+    root.render(<StrictMode><App session={session} attachRegionMap={view.attachRegionMap} /></StrictMode>);
 
     const visibilityChanged = () => session.setHidden(document.hidden);
     const disconnectFrame = view.onFrame(frame => {

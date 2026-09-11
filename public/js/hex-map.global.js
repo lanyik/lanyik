@@ -20420,7 +20420,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.endPan();
         this.stopZoomAnimation();
         this.resetPageData();
-        if (!this.expanded) this.viewport = void 0;
+        if (!this.expanded || !this.interactive) this.viewport = void 0;
         this.setDestination(void 0);
         this.updateCanvasState();
         this.render();
@@ -20476,15 +20476,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.onDestinationChange = options.onDestinationChange;
       this.onExpandedChange = options.onExpandedChange;
       this.onError = options.onError;
-      this.canvas.addEventListener("pointerdown", this.handlePointerDown);
-      this.canvas.addEventListener("pointermove", this.handlePointerMove);
-      this.canvas.addEventListener("pointerup", this.handlePointerEnd);
-      this.canvas.addEventListener("pointercancel", this.handlePointerEnd);
-      this.canvas.addEventListener("lostpointercapture", this.handlePointerCaptureLost);
-      this.canvas.addEventListener("contextmenu", this.handleContextMenu);
-      this.canvas.addEventListener("click", this.handleClick);
-      this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
-      window.addEventListener("keydown", this.handleKeyDown);
+      this.interactive = options.interactive ?? true;
+      this.drawOverlay = options.drawOverlay;
+      if (this.interactive) {
+        this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+        this.canvas.addEventListener("pointermove", this.handlePointerMove);
+        this.canvas.addEventListener("pointerup", this.handlePointerEnd);
+        this.canvas.addEventListener("pointercancel", this.handlePointerEnd);
+        this.canvas.addEventListener("lostpointercapture", this.handlePointerCaptureLost);
+        this.canvas.addEventListener("contextmenu", this.handleContextMenu);
+        this.canvas.addEventListener("click", this.handleClick);
+        this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
+        window.addEventListener("keydown", this.handleKeyDown);
+      }
       this.map.on("loadstart", this.handleWorldLoadStart);
       this.map.on("load", this.handleWorldLoad);
       this.map.on("frame", this.handleFrame);
@@ -20545,7 +20549,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.zoomAnchor = void 0;
       const cameraTarget = this.map.getCameraTargetTile();
       this.viewport = cameraTarget ? this.createViewport(cameraTarget) : void 0;
-      this.setDestination(expanded && cameraTarget ? cameraTarget : void 0);
+      this.setDestination(this.interactive && expanded && cameraTarget ? cameraTarget : void 0);
       this.canvas.dataset.expanded = String(expanded);
       this.canvas.setAttribute("aria-expanded", String(expanded));
       this.onExpandedChange?.(expanded);
@@ -20553,6 +20557,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     toggleExpanded() {
       this.setExpanded(!this.expanded);
+    }
+    /** Repaint host-owned overlay data without invalidating or requesting terrain. */
+    redraw() {
+      this.render();
     }
     refresh(force = false) {
       if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
@@ -21020,7 +21028,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return Promise.race(active).then(() => this.waitForVisiblePages(generation));
     }
     updateViewportFollow(target, dtS) {
-      if (this.expanded) return false;
+      if (this.expanded && this.interactive) return false;
       const spans = this.viewSpans();
       if (!spans) return false;
       if (!this.viewport || this.viewport.tileSpanX !== spans.tileSpanX || this.viewport.tileSpanY !== spans.tileSpanY) {
@@ -21147,9 +21155,21 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
       const pagesDrawn = extent ? this.drawPages(context, rect, extent) : 0;
       if (extent) {
-        this.drawCameraOverlay(context, rect, extent);
-        this.drawDestination(context, rect, extent);
-        this.drawPosition(context, rect);
+        if (this.drawOverlay) {
+          context.save();
+          context.beginPath();
+          context.rect(rect.x, rect.y, rect.width, rect.height);
+          context.clip();
+          try {
+            this.drawOverlay(context, { content: rect, extent });
+          } finally {
+            context.restore();
+          }
+        } else {
+          this.drawCameraOverlay(context, rect, extent);
+          this.drawDestination(context, rect, extent);
+          this.drawPosition(context, rect);
+        }
       }
       context.strokeStyle = "rgba(124, 235, 211, 0.42)";
       context.lineWidth = 1;

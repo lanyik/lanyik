@@ -7,8 +7,9 @@ export const GAME_CONFIG = Object.freeze({
     timing: Object.freeze({ simulationHz: 120, activeAiHz: 30, distantAiHz: 5, regenerationHz: 2,
         snapshotHz: 10, supportSenseHz: 5, autoSkillHz: 10, diagnosticsMs: 1000, maxCatchUpMs: 250 }),
     skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
-    presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 14, mistOuterRadius: 42,
-        horizonFogStart: 820, horizonFogEnd: 1425, horizonFogColor: 0x849b9f }),
+    presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 14, mistDenseRadius: 26, mistFadeRadius: 44, mistOuterRadius: 52,
+        horizonFogStart: 620, horizonFogEnd: 1100, horizonFogColor: 0x849b9f,
+        minimap: Object.freeze({ tileSpan: 96, rasterSize: 192, cacheEntries: 64 }) }),
     workers: Object.freeze({ maxCommands: 64, deferredCapacity: 64, timeoutMs: 15_000,
         parallelCollisionPairs: 49_152, terrainMax: 2, collisionMax: 2, terrainCores: 6, collisionCores: 8 }),
     inventory: Object.freeze({

@@ -19,7 +19,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(worldBounds?.width).toBe(page.viewportSize()!.width);
     expect(worldBounds?.height).toBe(page.viewportSize()!.height);
     await expect(page.getByTestId("region-status")).toHaveAttribute("data-difficulty", "normal");
-    await expect(page.locator(".region-cell polygon")).toHaveCount(19);
+    await expect(page.getByTestId("terrain-minimap")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     const mapBounds = await page.getByTestId("region-status").boundingBox();
     expect(mapBounds!.x).toBeGreaterThan(page.viewportSize()!.width / 2);
     expect(mapBounds!.y).toBeLessThan(40);

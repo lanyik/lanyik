@@ -1,0 +1,19 @@
+import { expect, test } from "vitest";
+import { getHexCenter } from "three-hex-map";
+import { overviewPoint } from "../src/adapters/HexRegionMap";
+
+test("terrain overview markers align with positive and negative even-column tile centres", () => {
+    for (let x = -12; x <= 12; x++) for (let y = -12; y <= 12; y++) {
+        const center = getHexCenter(x, y, 1), point = overviewPoint(center.x, center.y);
+        expect(point.x).toBeCloseTo(x + .5, 10);
+        expect(point.y).toBeCloseTo(y + .5, 10);
+    }
+});
+
+test("moving across a terrain column keeps the marker continuous", () => {
+    for (let column = -4; column <= 4; column++) {
+        const before = overviewPoint(column * 1.5 - 1e-7, 7), after = overviewPoint(column * 1.5 + 1e-7, 7);
+        expect(before.x).toBeCloseTo(after.x, 6);
+        expect(before.y).toBeCloseTo(after.y, 6);
+    }
+});

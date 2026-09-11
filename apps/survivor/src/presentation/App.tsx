@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession } from "../app/CombatSession";
+import type { AttachRegionMap } from "../app/RegionMapBinding";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";
@@ -22,7 +23,7 @@ function formatTime(ms: number): string {
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function App({ session }: { readonly session: CombatSession }) {
+export function App({ session, attachRegionMap }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap }) {
     const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false });
     const [socket, setSocket] = useState(0);
@@ -81,7 +82,7 @@ export function App({ session }: { readonly session: CombatSession }) {
                     <div><span>击杀</span><b data-testid="kill-count">{combat.kills}</b></div><div><span>区域怪物</span><b data-testid="enemy-count">{combat.livingEnemies}</b></div></div>
                 <WorkerLoadPanel workers={snapshot.workerLoads} performance={snapshot.performance} />
             </section>
-            <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} />
+            <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} attach={attachRegionMap} />
             {combat.boss && <section className="boss-status panel"><strong>裂爪领主{combat.boss.enraged ? " · 狂暴" : ""}</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
                 <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div></section>}
             {(panels.character || panels.inventory) && <div ref={workspace} className={`panel-workspace${panels.character && panels.inventory ? " paired" : ""}`} data-front={frontPanel}>

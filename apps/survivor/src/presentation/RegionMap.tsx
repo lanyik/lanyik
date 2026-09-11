@@ -1,26 +1,29 @@
-import { REGION_RADIUS, REGION_RULES } from "../core/RegionalWorld";
+import { useEffect, useRef } from "react";
+import { REGION_RULES } from "../core/RegionalWorld";
 import type { CombatSnapshot } from "../core/CombatState";
+import type { AttachRegionMap, RegionMapBinding } from "../app/RegionMapBinding";
 import { UiIcon } from "./UiIcon";
 
-const HEX_POINTS = Array.from({ length: 6 }, (_, index) => `${Math.cos(index * Math.PI / 3) * 20},${Math.sin(index * Math.PI / 3) * 20}`).join(" ");
-export function RegionMap({ combat, expanded, onToggle }: { readonly combat: CombatSnapshot; readonly expanded: boolean; readonly onToggle: () => void }) {
-    const scale = 20 / REGION_RADIUS;
+export function RegionMap({ combat, expanded, onToggle, attach }: { readonly combat: CombatSnapshot;
+    readonly expanded: boolean; readonly onToggle: () => void; readonly attach: AttachRegionMap }) {
+    const canvas = useRef<HTMLCanvasElement>(null), binding = useRef<RegionMapBinding | undefined>(undefined);
+    useEffect(() => {
+        const map = attach(canvas.current!); binding.current = map;
+        return () => { binding.current = undefined; map.dispose(); };
+    }, [attach]);
+    useEffect(() => { binding.current?.update(combat); }, [attach, combat]);
+    useEffect(() => { binding.current?.setExpanded(expanded); }, [attach, expanded]);
     const region = combat.region;
     return <section className={`region-map-panel panel${expanded ? " expanded" : ""}`} aria-label="地域地图" data-testid="region-status" data-difficulty={region.difficulty}>
         <header><div><span className="eyebrow">THE WILDS / 地域</span><strong>{REGION_RULES[region.difficulty].name}</strong></div>
-            <button aria-label={expanded ? "收起地图" : "展开地图"} onClick={onToggle}><UiIcon name={expanded ? "close" : "map"} /><kbd>M</kbd></button></header>
+            <button aria-label={expanded ? "收起地图" : "展开地图"} aria-expanded={expanded} onClick={onToggle}><UiIcon name={expanded ? "close" : "map"} /><kbd>M</kbd></button></header>
         <div className="region-meta"><span>第 {region.ring} 环</span><span>等级带 <b>{region.bandMin}–{region.bandMax}</b></span></div>
-        <svg className="region-map" viewBox="-112 -96 224 192" role="img" aria-label="六边形地域地图">
-            {combat.nearbyRegions.map(candidate => <g className={`region-cell region-${candidate.difficulty}${candidate.x === region.x && candidate.z === region.z ? " current" : ""}`}
-                key={`${candidate.x},${candidate.z}`} transform={`translate(${(candidate.centerX - region.centerX) * scale},${(candidate.centerZ - region.centerZ) * scale})`}>
-                <title>{REGION_RULES[candidate.difficulty].name} · 等级 {candidate.level} · 第 {candidate.ring} 环</title>
-                <polygon points={HEX_POINTS} /><text textAnchor="middle" dominantBaseline="middle">{candidate.level}</text>
-                {candidate.difficulty === "horror" && <text className="boss-map-mark" y="11" textAnchor="middle">◆</text>}
-            </g>)}
-            <g transform={`translate(${(combat.player.x - region.centerX) * scale},${(combat.player.z - region.centerZ) * scale})`}>
-                <circle className="player-map-halo" r="5" /><circle className="player-map-dot" r="2.5" />
-            </g>
-        </svg>
+        <div className="region-map-surface">
+            <canvas ref={canvas} className="region-map" role="img" aria-label="山川水域与地域难度地图" data-testid="terrain-minimap" />
+            <span className="map-north" aria-hidden="true">N<i /></span>
+            <span className="map-caption" aria-hidden="true">荒原 · 地貌</span>
+        </div>
         <footer><span className="normal-dot">常规</span><span className="hard-dot">困难</span><span className="horror-dot">恐怖</span><b>Lv.{region.level}</b></footer>
+        {expanded && <p className="map-reading-tip">色晕表示邻近地域难度 · ◆ 恐怖地域</p>}
     </section>;
 }

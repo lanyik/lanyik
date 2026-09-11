@@ -5,7 +5,7 @@
 export { HexMap } from "./HexMap";
 export type { HexMapOptions, WorldLoadOptions } from "./HexMap";
 export { WorldMinimap } from "./WorldMinimap";
-export type { WorldMinimapOptions, WorldMinimapView } from "./WorldMinimap";
+export type { WorldMinimapOptions, WorldMinimapView, WorldMinimapOverlayFrame } from "./WorldMinimap";
 export type { LandformDebugMode } from "./objects/TerrainMesh";
 
 export { GameEngine } from "./gameengine";

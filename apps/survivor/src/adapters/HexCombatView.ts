@@ -16,6 +16,8 @@ import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import { CombatLayer } from "../presentation/CombatLayer";
 import { MovementInputController } from "../presentation/MovementInputController";
 import { GAME_CONFIG } from "../core/GameConfig";
+import { HexRegionMap } from "./HexRegionMap";
+import type { AttachRegionMap } from "../app/RegionMapBinding";
 
 export const COMBAT_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.freeze({
     ...DEFAULT_WORLD_WATER_STYLE,
@@ -67,9 +69,10 @@ export class HexCombatView implements CombatView {
     private readonly layerReady: Promise<void>;
     private readonly input: MovementInputController;
     private readonly canvas: HTMLCanvasElement;
+    private readonly regionMaps = new Set<HexRegionMap>();
     private attempt: { readonly controller: AbortController; source: ProceduralWorldSource | undefined } | undefined;
 
-    constructor(onError: (error: Error) => void, private readonly terrainWorkers: number) {
+    constructor(private readonly onError: (error: Error) => void, private readonly terrainWorkers: number) {
         this.map = new HexMap({
             element: "#survivor-world",
             size: 34,
@@ -79,6 +82,7 @@ export class HexCombatView implements CombatView {
             treesPerTile: 3,
             grassDensity: 10,
             gridVisible: false,
+            skyVisible: false,
             pointerColor: 0x658287,
             selectorColor: 0xffbf69,
             renderDistance: 1500,
@@ -148,6 +152,15 @@ export class HexCombatView implements CombatView {
     public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
     public get workerActivity() { return this.map.workerActivity; }
 
+    public attachRegionMap: AttachRegionMap = canvas => {
+        const minimap = new HexRegionMap(this.map, canvas, this.onError);
+        this.regionMaps.add(minimap);
+        return {
+            update: combat => minimap.update(combat), setExpanded: expanded => minimap.setExpanded(expanded),
+            dispose: () => { minimap.dispose(); this.regionMaps.delete(minimap); }
+        };
+    };
+
     public onFrame(before: (frame: HexMapFrameStartEvent) => void, after: (frame: HexMapFrameEndEvent) => void): () => void {
         this.map.on("beforeframe", before).on("afterframe", after);
         return () => { this.map.off("beforeframe", before).off("afterframe", after); };
@@ -167,6 +180,8 @@ export class HexCombatView implements CombatView {
     public dispose(): Promise<void> {
         this.cancelLoad();
         this.input.dispose();
+        for (const minimap of this.regionMaps) minimap.dispose();
+        this.regionMaps.clear();
         return this.map.disposeAsync();
     }
 

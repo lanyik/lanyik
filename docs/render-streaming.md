@@ -639,6 +639,17 @@ terrain requests. A minimap request never calls
 `loadChunk()` and therefore does not alter source, render, CPU, or GPU chunk
 residency.
 
+Hosts can supply `drawOverlay(context, frame)` to replace the built-in camera,
+destination and coordinate overlay. `WorldMinimapOverlayFrame` exposes the
+content rectangle in CSS pixels and the exact logical tile extent; drawing is
+clipped and Canvas state is restored after the callback. `redraw()` only paints
+the current cache and overlay, without rebuilding demand or invalidating pages.
+`interactive: false` installs no pointer/wheel/keyboard navigation handlers;
+the host controls expansion through `setExpanded()`. Both sizes then follow the
+camera, never select a teleport destination, and reset the viewport on world
+replacement. This lets the Survivor HUD add regional difficulty without
+duplicating the raster pipeline or competing with its application shortcuts.
+
 The overview payload is a bounded RGBA raster plus its logical tile extent.
 Pixels sample the authoritative `WorldSurfaceResolver`, so seed, topology,
 biome, relief, water, mountain, and climate snow stay aligned with the main
@@ -710,8 +721,9 @@ Static pages are generated only when absent, and viewport movement never copies
 the full cached raster. Wheel input changes a continuous target scale and the
 viewport converges exponentially while preserving the world coordinate under
 the pointer. Page sampling changes only when that continuous scale crosses a
-power-of-two level; compact pages target 256 effective pixels across the view,
-while expanded pages target 512. Revisited levels reuse their existing keys.
+power-of-two level; effective density follows `rasterSize`, with expanded pages
+doubling the compact sampling density up to the per-page limit of 256 pixels.
+Revisited levels reuse their existing keys.
 When a zoom level is still missing pages, intersecting pages from an already
 cached coarser level are drawn underneath it. New pages replace that underlay
 in place, so progressive refinement does not expose empty blocks.

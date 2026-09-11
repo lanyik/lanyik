@@ -19,6 +19,15 @@ export interface WorldMinimapOptions {
     onDestinationChange?: (tile: Readonly<Point> | undefined) => void;
     onExpandedChange?: (expanded: boolean) => void;
     onError?: (error: Error) => void;
+    /** Disable inspection/navigation input when the host owns map controls. */
+    interactive?: boolean;
+    /** Replaces the default camera/destination overlay, clipped to the terrain extent. */
+    drawOverlay?: (context: CanvasRenderingContext2D, frame: WorldMinimapOverlayFrame) => void;
+}
+
+export interface WorldMinimapOverlayFrame {
+    readonly content: Readonly<ContentRect>;
+    readonly extent: Readonly<MinimapExtent>;
 }
 
 export interface WorldMinimapView {
@@ -181,6 +190,8 @@ export class WorldMinimap {
     private readonly onDestinationChange: ((tile: Readonly<Point> | undefined) => void) | undefined;
     private readonly onExpandedChange: ((expanded: boolean) => void) | undefined;
     private readonly onError: ((error: Error) => void) | undefined;
+    private readonly interactive: boolean;
+    private readonly drawOverlay: WorldMinimapOptions["drawOverlay"];
     private readonly pageCache = new Map<string, CachedPage>();
     private readonly pageDemand = new Map<string, PageDemand>();
     private readonly pendingPages = new Map<string, PendingPage>();
@@ -249,16 +260,20 @@ export class WorldMinimap {
         this.onDestinationChange = options.onDestinationChange;
         this.onExpandedChange = options.onExpandedChange;
         this.onError = options.onError;
+        this.interactive = options.interactive ?? true;
+        this.drawOverlay = options.drawOverlay;
 
-        this.canvas.addEventListener("pointerdown", this.handlePointerDown);
-        this.canvas.addEventListener("pointermove", this.handlePointerMove);
-        this.canvas.addEventListener("pointerup", this.handlePointerEnd);
-        this.canvas.addEventListener("pointercancel", this.handlePointerEnd);
-        this.canvas.addEventListener("lostpointercapture", this.handlePointerCaptureLost);
-        this.canvas.addEventListener("contextmenu", this.handleContextMenu);
-        this.canvas.addEventListener("click", this.handleClick);
-        this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
-        window.addEventListener("keydown", this.handleKeyDown);
+        if (this.interactive) {
+            this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+            this.canvas.addEventListener("pointermove", this.handlePointerMove);
+            this.canvas.addEventListener("pointerup", this.handlePointerEnd);
+            this.canvas.addEventListener("pointercancel", this.handlePointerEnd);
+            this.canvas.addEventListener("lostpointercapture", this.handlePointerCaptureLost);
+            this.canvas.addEventListener("contextmenu", this.handleContextMenu);
+            this.canvas.addEventListener("click", this.handleClick);
+            this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
+            window.addEventListener("keydown", this.handleKeyDown);
+        }
         this.map.on("loadstart", this.handleWorldLoadStart);
         this.map.on("load", this.handleWorldLoad);
         this.map.on("frame", this.handleFrame);
@@ -323,7 +338,7 @@ export class WorldMinimap {
         this.zoomAnchor = undefined;
         const cameraTarget = this.map.getCameraTargetTile();
         this.viewport = cameraTarget ? this.createViewport(cameraTarget) : undefined;
-        this.setDestination(expanded && cameraTarget ? cameraTarget : undefined);
+        this.setDestination(this.interactive && expanded && cameraTarget ? cameraTarget : undefined);
         this.canvas.dataset.expanded = String(expanded);
         this.canvas.setAttribute("aria-expanded", String(expanded));
         this.onExpandedChange?.(expanded);
@@ -333,6 +348,9 @@ export class WorldMinimap {
     public toggleExpanded(): void {
         this.setExpanded(!this.expanded);
     }
+
+    /** Repaint host-owned overlay data without invalidating or requesting terrain. */
+    public redraw(): void { this.render(); }
 
     public refresh(force = false): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
@@ -858,7 +876,7 @@ export class WorldMinimap {
     }
 
     private updateViewportFollow(target: Readonly<Point>, dtS: number): boolean {
-        if (this.expanded) return false;
+        if (this.expanded && this.interactive) return false;
         const spans = this.viewSpans();
         if (!spans) return false;
         if (!this.viewport || this.viewport.tileSpanX !== spans.tileSpanX || this.viewport.tileSpanY !== spans.tileSpanY) {
@@ -990,9 +1008,18 @@ export class WorldMinimap {
         context.fillRect(rect.x, rect.y, rect.width, rect.height);
         const pagesDrawn = extent ? this.drawPages(context, rect, extent) : 0;
         if (extent) {
-            this.drawCameraOverlay(context, rect, extent);
-            this.drawDestination(context, rect, extent);
-            this.drawPosition(context, rect);
+            if (this.drawOverlay) {
+                context.save();
+                context.beginPath();
+                context.rect(rect.x, rect.y, rect.width, rect.height);
+                context.clip();
+                try { this.drawOverlay(context, { content: rect, extent }); }
+                finally { context.restore(); }
+            } else {
+                this.drawCameraOverlay(context, rect, extent);
+                this.drawDestination(context, rect, extent);
+                this.drawPosition(context, rect);
+            }
         }
         context.strokeStyle = "rgba(124, 235, 211, 0.42)";
         context.lineWidth = 1;
@@ -1314,7 +1341,7 @@ export class WorldMinimap {
         this.endPan();
         this.stopZoomAnimation();
         this.resetPageData();
-        if (!this.expanded) this.viewport = undefined;
+        if (!this.expanded || !this.interactive) this.viewport = undefined;
         this.setDestination(undefined);
         this.updateCanvasState();
         this.render();

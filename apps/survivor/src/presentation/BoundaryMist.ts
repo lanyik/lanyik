@@ -16,12 +16,12 @@ export class BoundaryMist {
                 return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
             void main() {
                 float distance = length(vGround.xz - center);
-                float boundary = smoothstep(${POLICY.mistInnerRadius.toFixed(1)}, 29., distance)
-                    * (1. - smoothstep(36., ${POLICY.mistOuterRadius.toFixed(1)}, distance));
+                float boundary = smoothstep(${POLICY.mistInnerRadius.toFixed(1)}, ${POLICY.mistDenseRadius.toFixed(1)}, distance)
+                    * (1. - smoothstep(${POLICY.mistFadeRadius.toFixed(1)}, ${POLICY.mistOuterRadius.toFixed(1)}, distance));
                 vec2 p = vGround.xz * .23 + vec2(time * .035, time * -.022) + vGround.y * .4;
                 float billow = noise(p) * .57 + noise(p * 2.07 + 8.) * .29 + noise(p * 4.13) * .14;
                 float strands = smoothstep(.26, .73, billow);
-                gl_FragColor = vec4(tint * (.85 + strands * .3), boundary * (.14 + strands * .42));
+                gl_FragColor = vec4(tint * (.85 + strands * .3), boundary * (.23 + strands * .48));
                 #include <tonemapping_fragment>
                 #include <colorspace_fragment>
             }`
