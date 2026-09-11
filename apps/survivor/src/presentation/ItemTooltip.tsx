@@ -21,8 +21,8 @@ export function ItemTooltipProvider({ children }: { readonly children: ReactNode
             setActive(current => event.key === "Alt" && current && !current.pinned ? { ...current, pinned: true } : undefined);
         };
         const blur = () => setActive(undefined);
-        window.addEventListener("keydown", key, true); window.addEventListener("blur", blur);
-        return () => { window.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur); };
+        window.addEventListener("keydown", key, true); window.addEventListener("blur", blur); window.addEventListener("icon-drag-start", blur);
+        return () => { window.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur); window.removeEventListener("icon-drag-start", blur); };
     }, [Boolean(active)]);
     return <TooltipContext.Provider value={{ active, setActive }}>{children}</TooltipContext.Provider>;
 }
@@ -53,6 +53,15 @@ export function ItemTooltip({ item, player, className = "", children }: {
     readonly item: InventoryItem | undefined; readonly player: EquipmentContext;
     readonly className?: string; readonly children: ReactElement<{ "aria-describedby"?: string }>;
 }) {
+    return <IconTooltip identity={item?.id} className={className}
+        comparing={item?.type === "equipment" && !!player.equipment[item.value] && player.equipment[item.value]?.id !== item.id}
+        content={item && <EquipmentDetails item={item} player={player} />}>{children}</IconTooltip>;
+}
+
+export function IconTooltip({ identity, content, comparing = false, className = "", children }: {
+    readonly identity: number | string | undefined; readonly content: ReactNode; readonly comparing?: boolean;
+    readonly className?: string; readonly children: ReactElement<{ "aria-describedby"?: string }>;
+}) {
     const id = useId();
     const context = useContext(TooltipContext);
     if (!context) throw new Error("Item tooltip requires its application provider");
@@ -64,9 +73,9 @@ export function ItemTooltip({ item, player, className = "", children }: {
         ? current?.pinned ? current : { id, pinned: false }
         : current?.id === id ? undefined : current);
     const [position, setPosition] = useState({ left: 8, top: 8, maxHeight: window.innerHeight - 16 });
-    const show = () => { if (item) setOpen(true); };
+    const show = () => { if (identity !== undefined && !document.documentElement.hasAttribute("data-skill-dragging")) setOpen(true); };
     const hide = () => setActive(current => current?.id === id && !current.pinned ? undefined : current);
-    useEffect(() => () => setActive(current => current?.id === id ? undefined : current), [id, setActive]);
+    useEffect(() => () => setActive(current => current?.id === id ? undefined : current), [id, identity, setActive]);
     useEffect(() => {
         if (!open) return;
         const outside = (event: PointerEvent) => {
@@ -76,7 +85,7 @@ export function ItemTooltip({ item, player, className = "", children }: {
         return () => document.removeEventListener("pointerdown", outside, true);
     }, [open]);
     useLayoutEffect(() => {
-        if (!open || !item || !anchor.current || !popup.current) return;
+        if (!open || identity === undefined || !anchor.current || !popup.current) return;
         const place = () => {
             const box = anchor.current!.getBoundingClientRect();
             if (!box.width || !box.height) { setOpen(false); return; }
@@ -110,13 +119,13 @@ export function ItemTooltip({ item, player, className = "", children }: {
         const scroll = (event: Event) => { if (!pinned && (!(event.target instanceof Node) || !popup.current?.contains(event.target))) setOpen(false); };
         window.addEventListener("scroll", scroll, true);
         return () => { observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", scroll, true); };
-    }, [open, pinned, item?.id]);
+    }, [open, pinned, identity]);
     return <span ref={anchor} className={`item-tooltip-anchor ${className}`} onPointerEnter={show} onPointerLeave={hide}
-        onFocus={show} onBlur={hide} onPointerDown={event => { if (event.pointerType === "touch" && item) setActive({ id, pinned: true }); }}>
-        {cloneElement(children, { "aria-describedby": open && item ? id : undefined })}
-        {open && item && createPortal(<div ref={popup} id={id} role="tooltip" className={`equipment-tooltip${item.type === "equipment" && player.equipment[item.value] && player.equipment[item.value]?.id !== item.id ? " comparing" : ""}`}
+        onFocus={show} onBlur={hide} onPointerDown={event => { if (event.pointerType === "touch" && identity !== undefined) setActive({ id, pinned: true }); }}>
+        {cloneElement(children, { "aria-describedby": open && identity !== undefined ? id : undefined })}
+        {open && identity !== undefined && createPortal(<div ref={popup} id={id} role="tooltip" className={`equipment-tooltip${comparing ? " comparing" : ""}`}
             data-pinned={pinned} style={{ ...position, pointerEvents: pinned ? "auto" : "none" }}>
-            <EquipmentDetails item={item} player={player} />
+            {content}
             <footer className="item-tooltip-tip">{pinned ? <><span>已固定 · <kbd>Alt</kbd> / <kbd>Esc</kbd> 关闭</span><button aria-label="关闭物品详情" onClick={() => setOpen(false)}>关闭</button></>
                 : <span><kbd>Alt</kbd> 固定浮窗 · 移开图标关闭</span>}</footer>
         </div>, document.body)}

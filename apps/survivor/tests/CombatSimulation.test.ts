@@ -1,11 +1,10 @@
 import { ticksForSeconds } from "../src/core/GameConfig";
-import { LOW_FREQUENCY_TICKS } from "../src/core/RegionalWorld";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import type { MovementInput } from "../src/core/CombatState";
-import { MAX_ENEMIES } from "../src/core/GameConfig";
-import { MAX_COMBAT_CHUNKS, RegionalWorld } from "../src/core/RegionalWorld";
+import { GAME_CONFIG, MAX_ENEMIES } from "../src/core/GameConfig";
+import { MAX_COMBAT_CHUNKS } from "../src/core/RegionalWorld";
 
 const movementAt = (step: number): MovementInput => {
     const angle = step / ticksForSeconds(3);
@@ -151,9 +150,8 @@ describe("CombatSimulation", () => {
         expect(combat.equip(opened.player.inventory[0].id).ok).toBe(true);
     });
 
-    test("freezes the static ring and updates returning middle-ring enemies only on their scheduled ticks", () => {
+    test("visible distant residents move continuously; only actors beyond the sleep distance freeze", () => {
         const combat = new CombatSimulation("lod-motion");
-        const world = new RegionalWorld("lod-motion", { x: 0, z: 0 });
         let lowUpdates = 0;
         let staticChecks = 0;
         for (let tick = 0; tick < ticksForSeconds(5); tick += 1) {
@@ -162,19 +160,18 @@ describe("CombatSimulation", () => {
                 [before[index].id, { x: before[index].x, z: before[index].z }] as const));
             combat.step({ x: 1, z: 0, active: true });
             const player = combat.getRenderState().player;
-            world.synchronize(player.x, player.z);
             const after = enemySamples(combat.getRenderState());
             for (let index = 0; index < after.length; index += 1) {
                 const previous = positions.get(after[index].id);
                 if (!previous) continue;
-                const lod = world.lodAt(previous.x, previous.z);
-                if (lod === "static") {
+                const distance = Math.hypot(previous.x - player.x, previous.z - player.z);
+                if (distance > GAME_CONFIG.enemies.sleepDistance) {
                     expect(after[index].x).toBe(previous.x);
                     expect(after[index].z).toBe(previous.z);
                     staticChecks += 1;
                 }
-                if (lod === "low" && (after[index].x !== previous.x || after[index].z !== previous.z)) {
-                    expect(combat.tick % LOW_FREQUENCY_TICKS).toBe(after[index].id % LOW_FREQUENCY_TICKS);
+                if (distance > 22 && distance < 29 && (after[index].x !== previous.x || after[index].z !== previous.z)) {
+                    expect(Math.hypot(after[index].x - previous.x, after[index].z - previous.z)).toBeLessThan(.03);
                     lowUpdates += 1;
                 }
             }

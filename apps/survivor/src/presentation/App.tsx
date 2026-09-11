@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession } from "../app/CombatSession";
-import { SKILLS } from "../core/Skills";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";
@@ -10,7 +9,9 @@ import { ItemTooltip, ItemTooltipProvider } from "./ItemTooltip";
 import { UiIcon } from "./UiIcon";
 import { UpgradePrompt } from "./UpgradePrompt";
 import { WorkerLoadPanel } from "./WorkerLoadPanel";
-import { SkillIcon, SkillsPanel } from "./SkillsPanel";
+import { SkillsPanel } from "./SkillsPanel";
+import { SkillDragProvider } from "./SkillDrag";
+import { SkillSlot } from "./SkillSlot";
 import "./app.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
@@ -72,7 +73,7 @@ export function App({ session }: { readonly session: CombatSession }) {
 
     const ready = snapshot.status === "ready" && combat && player;
     const potionCount = (effect: "health" | "mana") => player?.inventory.reduce((count, item) => count + (item.type === "consumable" && item.value === effect ? item.size : 0), 0) ?? 0;
-    return <ItemTooltipProvider><main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
+    return <ItemTooltipProvider><SkillDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
         <style>{QUALITY_CSS}</style>
         {ready && <>
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>荒原<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : "探索中"}</span></header>
@@ -107,8 +108,7 @@ export function App({ session }: { readonly session: CombatSession }) {
                         <div className="bar mana-bar" aria-label="法力"><span style={{ width: `${player.mana / player.stats.maxMana * 100}%` }} /><b><em>法力</em>{Math.floor(player.mana)} / {player.stats.maxMana}</b></div>
                         <div className="experience-track" aria-label="经验"><div className="experience-label"><span>经验</span><b>{Math.floor(player.experience)} / {player.experienceToLevel}</b></div><div className="bar experience-bar"><span style={{ width: `${player.experience / player.experienceToLevel * 100}%` }} /></div></div></div></div>
                 <div className="skill-slots">
-                    {player.skills.loadout.map((id, index) => <button key={index} className={`skill-slot ${id}-skill`} aria-label={`${index + 1} ${SKILLS[id].name}`} disabled={combat.gameOver || snapshot.paused || player.skills.dashing || player.skills.remaining[id] > 0 || player.mana < SKILLS[id].mana || id === "ward" && player.skills.ward > 0} onClick={() => session.dispatch({ type: "cast-skill", skill: id })}>
-                        <kbd>{index + 1}</kbd><SkillIcon id={id} /><span>{SKILLS[id].name}</span><small>{player.skills.remaining[id] > 0 ? `${player.skills.remaining[id].toFixed(1)}s` : `${SKILLS[id].mana} 法力`}</small></button>)}
+                    {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={combat.gameOver || snapshot.paused} cast={() => session.dispatch({ type: "cast-skill", skill: id })} />)}
                     {(["health", "mana"] as const).map((effect, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
                         <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || potionCount(effect) === 0 || (effect === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana)}
@@ -127,5 +127,5 @@ export function App({ session }: { readonly session: CombatSession }) {
         </>}
         {snapshot.status === "loading" && <div className="state-overlay loading"><div className="loading-rune" /><div><small>RIFT / 荒原</small><h1>荒原正在苏醒</h1><p>准备地域与角色资源…</p></div></div>}
         {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.start(snapshot.seed)}>重新尝试</button></div></div>}
-    </main></ItemTooltipProvider>;
+    </main></SkillDragProvider></ItemTooltipProvider>;
 }

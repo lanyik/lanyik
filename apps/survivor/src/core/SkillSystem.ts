@@ -100,7 +100,7 @@ export class SkillSystem {
                 hits++;
             }
             if (!hits && automatic) return false;
-            effects.add(id === "pulse" ? EffectKind.Pulse : EffectKind.Frost, tick, x, z, values.radius, .7);
+            effects.add(id === "pulse" ? EffectKind.Pulse : EffectKind.Frost, tick, x, z, values.radius, 1);
         }
         v.mana[player] -= definition.mana;
         this.readyAt[i] = tick + ticksForSeconds(values.cooldown);

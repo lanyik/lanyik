@@ -3,9 +3,11 @@ import { ActorAction, CombatWorld, MoveIntent } from "./CombatWorld";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
 import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
-import { LOW_FREQUENCY_TICKS, type RegionalWorld } from "./RegionalWorld";
+import type { RegionalWorld } from "./RegionalWorld";
 const ACTIVE_AI_TICKS = ticksPerUpdate(GAME_CONFIG.timing.activeAiHz);
+const DISTANT_AI_TICKS = ticksPerUpdate(GAME_CONFIG.timing.distantAiHz);
 const SUPPORT_SENSE_TICKS = ticksPerUpdate(GAME_CONFIG.timing.supportSenseHz);
+const ACTIVITY = GAME_CONFIG.enemies;
 
 type Context = EnemyBehavior;
 const condition = (test: (context: Context, slot: number) => boolean): BehaviorNode<Context> => ({ type: "condition", test });
@@ -14,7 +16,7 @@ const sequence = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> =
 const selector = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> => ({ type: "selector", children });
 
 const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Context>(selector(
-    sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.move(s, MoveIntent.Return))),
+    sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.distance(s) < (kind === 5 ? 4 : 3.5) && !c.canNova(s)), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
     ...(kind === 1 ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
@@ -37,33 +39,36 @@ export class EnemyBehavior {
             const tree = TREES[e.kind[slot]];
             p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot];
             v.hitFlash[slot] = Math.max(0, v.hitFlash[slot] - COMBAT_STEP_MS / 1000);
-            const wasActive = e.active[slot], previousTarget = e.target[slot];
-            const lod = this.regions.lodAt(p.x[slot], p.z[slot]);
-            e.active[slot] = Number(lod === "active");
-            const pursuing = lod === "active" && Math.hypot(p.x[player] - e.homeX[slot], p.z[player] - e.homeZ[slot]) <= ENEMY_LEASH_DISTANCE;
+            if (this.regions.residencyAt(p.x[slot], p.z[slot]) === "unloaded") { this.entities.remove(slot); continue; }
+            const wasActive = e.active[slot], wasAwake = e.awake[slot], previousTarget = e.target[slot];
+            const distance = this.distance(slot);
+            // Residency is chunk based; behavior is radial and follows the player every tick.
+            e.active[slot] = Number(distance <= (wasActive ? ACTIVITY.activeExitDistance : ACTIVITY.activeDistance));
+            e.awake[slot] = Number(distance <= (wasAwake ? ACTIVITY.sleepDistance : ACTIVITY.awakeDistance));
+            const pursuing = !e.returning[slot] && e.active[slot]
+                && distance <= (previousTarget ? ACTIVITY.pursuitDistance : ACTIVITY.aggroDistance)
+                && Math.hypot(p.x[player] - e.homeX[slot], p.z[player] - e.homeZ[slot]) <= ENEMY_LEASH_DISTANCE;
             e.target[slot] = pursuing ? this.entities.world.ids[player] : 0;
+            if (previousTarget && !pursuing) e.returning[slot] = 1;
             if (e.boss[slot] && v.health[slot] <= v.maxHealth[slot] * ENEMY_SPECIAL.enrageHealth) e.enraged[slot] = 1;
-            if (lod !== "active") {
+            if (!e.awake[slot]) {
                 tree.halt(this, slot, e.runningNode);
-                e.intent[slot] = MoveIntent.None; e.intentSeconds[slot] = 0;
+                e.intent[slot] = MoveIntent.None;
                 e.supportTarget[slot] = 0;
-            }
-            if (lod === "unloaded") { this.entities.remove(slot); continue; }
-            if (lod === "static" || (lod === "low" && tick % LOW_FREQUENCY_TICKS !== this.entities.world.ids[slot] % LOW_FREQUENCY_TICKS)) {
                 a.kind[slot] = ActorAction.Idle;
                 cursor++;
                 continue;
             }
-            e.intentSeconds[slot] = COMBAT_STEP_MS / 1000 * (lod === "low" ? LOW_FREQUENCY_TICKS : 1);
-            if (lod === "active" && e.kind[slot] === 5 && tick >= e.senseAt[slot]) {
+            if (e.active[slot] && e.kind[slot] === 5 && tick >= e.senseAt[slot]) {
                 this.senseAlly(slot);
                 e.senseAt[slot] = tick + SUPPORT_SENSE_TICKS - (tick - this.entities.world.ids[slot] % SUPPORT_SENSE_TICKS + SUPPORT_SENSE_TICKS) % SUPPORT_SENSE_TICKS;
             }
             // Locomotion and attack release remain 120Hz. Only decisions are staggered.
             // Entering combat, losing a target and finishing an action bypass the decision interval.
-            if (lod === "low" || !wasActive || previousTarget !== e.target[slot]
+            const interval = e.active[slot] ? ACTIVE_AI_TICKS : DISTANT_AI_TICKS;
+            if (!wasAwake || wasActive !== e.active[slot] || previousTarget !== e.target[slot]
                 || a.kind[slot] >= ActorAction.Melee && tick >= a.endsAt[slot]
-                || tick % ACTIVE_AI_TICKS === this.entities.world.ids[slot] % ACTIVE_AI_TICKS) tree.tick(this, slot, e.runningNode);
+                || tick % interval === this.entities.world.ids[slot] % interval) tree.tick(this, slot, e.runningNode);
             cursor++;
         }
     }
@@ -73,10 +78,32 @@ export class EnemyBehavior {
         return Math.hypot(p.x[this.entities.player] - p.x[slot], p.z[this.entities.player] - p.z[slot]);
     }
 
+    public idle(slot: number): BehaviorStatus {
+        const { enemy: e, position: p, world } = this.entities;
+        if (e.returning[slot]) {
+            if (Math.hypot(p.x[slot] - e.homeX[slot], p.z[slot] - e.homeZ[slot]) > .05) return this.move(slot, MoveIntent.Return);
+            e.returning[slot] = 0;
+            e.patrolX[slot] = p.x[slot]; e.patrolZ[slot] = p.z[slot]; e.patrolWaitUntil[slot] = 0;
+        }
+        if (Math.hypot(p.x[slot] - e.patrolX[slot], p.z[slot] - e.patrolZ[slot]) < .05) {
+            if (e.patrolWaitUntil[slot] === 0 && e.patrolStep[slot] > 0) {
+                e.patrolWaitUntil[slot] = this.tick + ticksForSeconds(.7 + (world.ids[slot] % 7) * .15);
+            }
+            if (this.tick < e.patrolWaitUntil[slot]) return this.move(slot, MoveIntent.None);
+            // Stable waypoints do not consume the combat/loot random stream.
+            const step = ++e.patrolStep[slot];
+            const angle = world.ids[slot] * 2.399963 + step * 2.094395;
+            const radius = ACTIVITY.patrolRadius * (e.boss[slot] ? .5 : e.kind[slot] === 1 ? 1.3 : 1);
+            e.patrolX[slot] = e.homeX[slot] + Math.sin(angle) * radius;
+            e.patrolZ[slot] = e.homeZ[slot] + Math.cos(angle) * radius;
+            e.patrolWaitUntil[slot] = 0;
+        }
+        return this.move(slot, MoveIntent.Patrol);
+    }
+
     public move(slot: number, intent: MoveIntent): BehaviorStatus {
-        const { enemy: e, action: a, position: p } = this.entities;
+        const { enemy: e, action: a } = this.entities;
         a.kind[slot] = ActorAction.Idle;
-        if (intent === MoveIntent.Return && Math.hypot(p.x[slot] - e.homeX[slot], p.z[slot] - e.homeZ[slot]) < .001) { e.intent[slot] = MoveIntent.None; return BehaviorStatus.Success; }
         e.intent[slot] = intent;
         return BehaviorStatus.Running;
     }

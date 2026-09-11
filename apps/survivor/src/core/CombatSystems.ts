@@ -1,5 +1,5 @@
 import { ActorAction, CombatWorld, Faction, MoveIntent } from "./CombatWorld";
-import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
+import { GAME_CONFIG, MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
 import { ENEMY_SPECIAL } from "./EnemyDefinitions";
@@ -54,14 +54,15 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], intent = e.intent[slot];
         if (intent === MoveIntent.None) continue;
-        let dx = (intent === MoveIntent.Return ? e.homeX[slot] : p.x[player]) - p.x[slot];
-        let dz = (intent === MoveIntent.Return ? e.homeZ[slot] : p.z[player]) - p.z[slot];
+        let dx = (intent === MoveIntent.Patrol ? e.patrolX[slot] : intent === MoveIntent.Return ? e.homeX[slot] : p.x[player]) - p.x[slot];
+        let dz = (intent === MoveIntent.Patrol ? e.patrolZ[slot] : intent === MoveIntent.Return ? e.homeZ[slot] : p.z[player]) - p.z[slot];
         const distance = Math.hypot(dx, dz);
         if (distance === 0 && intent !== MoveIntent.Retreat) continue;
         if (distance === 0) { dx = Math.sin(world.ids[slot]); dz = Math.cos(world.ids[slot]); }
         else { dx /= distance; dz /= distance; }
         if (intent === MoveIntent.Retreat) { dx = -dx; dz = -dz; }
-        const speed = e.speed[slot] * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
+        const speed = e.speed[slot] * (intent === MoveIntent.Patrol ? GAME_CONFIG.enemies.patrolSpeed : 1)
+            * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
         const stop = intent === MoveIntent.Chase || intent === MoveIntent.Flank ? a.reach[slot] * .9 : 0;
         if (intent === MoveIntent.Circle) {
             const direction = world.ids[slot] % 2 ? 1 : -1, radial = Math.max(-.5, Math.min(.5, distance - 1.8));
@@ -69,14 +70,13 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
             dx = forwardX * radial - forwardZ * direction; dz = forwardZ * radial + forwardX * direction;
             const norm = Math.hypot(dx, dz); dx /= norm; dz /= norm;
         }
-        const travel = intent === MoveIntent.Retreat || intent === MoveIntent.Circle ? speed * e.intentSeconds[slot]
-            : Math.min(Math.max(0, distance - stop), speed * e.intentSeconds[slot]);
+        const travel = intent === MoveIntent.Retreat || intent === MoveIntent.Circle ? speed * SECONDS
+            : Math.min(Math.max(0, distance - stop), speed * SECONDS);
         const weave = intent === MoveIntent.Flank ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
         const scale = travel / Math.sqrt(1 + weave * weave);
         p.x[slot] += (dx - dz * weave) * scale; p.z[slot] += (dz + dx * weave) * scale;
         p.heading[slot] = Math.atan2(dx, dz);
-        if (travel > 0) a.kind[slot] = ActorAction.Moving;
-        if (!e.active[slot]) { p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot]; }
+        a.kind[slot] = travel > 0 ? ActorAction.Moving : ActorAction.Idle;
     }
 }
 

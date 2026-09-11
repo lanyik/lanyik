@@ -5,6 +5,7 @@ import type { InventoryItem } from "../core/InventoryItem";
 import type { ItemType } from "../core/ItemDefinition";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { CONSUMABLE_COOLDOWN } from "../core/GameConfig";
+import { IconFrame } from "./IconFrame";
 
 export const QUALITY_CSS = Object.entries(GAME_CONFIG.quality).map(([rarity, info]) => `.rarity-${rarity}{--rarity:${info.color}}`).join("");
 
@@ -50,13 +51,11 @@ export function ItemIcon({ item, type = "equipment", value = "weapon", className
     readonly item?: InventoryItem; readonly type?: ItemType; readonly value?: keyof typeof ICON_PATHS; readonly className?: string;
 }) {
     const category = item?.type ?? type, subtype = item?.value ?? value;
-    return <span className={`item-icon-frame rarity-${item?.rarity ?? "common"} item-type-${category} ${className}`} data-item-icon={category} data-item-value={subtype}>
-        <span className="item-icon-base" />
+    return <IconFrame type={category} value={subtype} rarity={item?.rarity} className={className}
+        badge={item?.type === "equipment" ? <span aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>
+            : item?.type === "consumable" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
         <svg className="item-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON_PATHS[subtype]} /></svg>
-        <span className="item-icon-border" />
-        {item?.type === "equipment" && <span className="item-icon-badge" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>}
-        {item?.type === "consumable" && <span className="item-icon-badge" aria-label={`数量 ${item.size}`}>{item.size}</span>}
-    </span>;
+    </IconFrame>;
 }
 export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">

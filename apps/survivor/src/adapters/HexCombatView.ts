@@ -15,6 +15,7 @@ import type { CombatStart, CombatView } from "../app/CombatView";
 import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import { CombatLayer } from "../presentation/CombatLayer";
 import { MovementInputController } from "../presentation/MovementInputController";
+import { GAME_CONFIG } from "../core/GameConfig";
 
 export const COMBAT_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.freeze({
     ...DEFAULT_WORLD_WATER_STYLE,
@@ -81,9 +82,9 @@ export class HexCombatView implements CombatView {
             pointerColor: 0x658287,
             selectorColor: 0xffbf69,
             renderDistance: 1500,
-            horizonFogStart: 1050,
-            horizonFogEnd: 1425,
-            horizonFogColor: 0x172126,
+            horizonFogStart: GAME_CONFIG.presentation.horizonFogStart,
+            horizonFogEnd: GAME_CONFIG.presentation.horizonFogEnd,
+            horizonFogColor: GAME_CONFIG.presentation.horizonFogColor,
             lodNearDistance: 420,
             lodFarDistance: 780,
             vegetationRenderDistance: 950

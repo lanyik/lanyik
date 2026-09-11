@@ -70,7 +70,7 @@ test("frost halves movement until the exact expiry tick and reused slots lose th
     const enemy = spawn(3, 0);
     expect(skills.cast("frost", 0, stats, 1, random)).toBe(true);
     const expiry = ticksForSeconds(skillValues("frost", 1, stats).slowSeconds);
-    e.enemy.intent[enemy] = MoveIntent.Chase; e.enemy.intentSeconds[enemy] = 1 / 120; e.enemy.active[enemy] = 1;
+    e.enemy.intent[enemy] = MoveIntent.Chase; e.enemy.active[enemy] = 1;
     const start = e.position.x[enemy]; moveEnemies(e, expiry - 1);
     const slowed = start - e.position.x[enemy], before = e.position.x[enemy]; moveEnemies(e, expiry);
     expect(before - e.position.x[enemy]).toBeCloseTo(slowed * 2);

@@ -236,8 +236,8 @@ export class CombatSimulation {
             autoClearEquipment: this.autoClearEquipment,
             clearedEquipment: this.clearedEquipment
         });
-        const chunks = { active: 0, low: 0, static: 0, total: this.world.chunks.size };
-        for (const chunk of this.world.chunks.values()) if (chunk.lod !== "unloaded") chunks[chunk.lod] += 1;
+        const chunks = { near: 0, buffer: 0, retained: 0, total: this.world.chunks.size };
+        for (const chunk of this.world.chunks.values()) if (chunk.band !== "unloaded") chunks[chunk.band] += 1;
         let boss: CombatSnapshot["boss"];
         const nearbyRegions = this.world.nearbyRegions(this.currentRegion);
         for (let cursor = 0; cursor < this.entities.enemies.count; cursor += 1) {
@@ -464,13 +464,13 @@ export class CombatSimulation {
         cursor = 0;
         while (cursor < experience.count) {
             const slot = experience.slots[cursor];
-            if (this.world.lodAt(position.x[slot], position.z[slot]) === "unloaded") this.entities.remove(slot);
+            if (this.world.residencyAt(position.x[slot], position.z[slot]) === "unloaded") this.entities.remove(slot);
             else cursor++;
         }
         cursor = 0;
         while (cursor < loot.count) {
             const slot = loot.slots[cursor];
-            if (this.world.lodAt(position.x[slot], position.z[slot]) === "unloaded") {
+            if (this.world.residencyAt(position.x[slot], position.z[slot]) === "unloaded") {
                 this.groundItems.delete(item.id[slot]); this.entities.remove(slot);
             } else cursor++;
         }
@@ -500,7 +500,7 @@ export class CombatSimulation {
     private openNearbyChest(): void {
         chestLoop: for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.lod !== "active" || chunk.chestOpened) continue;
+            if (!chest || chunk.band !== "near" || chunk.chestOpened) continue;
             if (Math.hypot(chest.x - this.playerX, chest.z - this.playerZ) > 0.95) continue;
             const rules = CHEST_RULES[chest.tier];
             // Stage all category/stack changes before consuming chest randomness or IDs.

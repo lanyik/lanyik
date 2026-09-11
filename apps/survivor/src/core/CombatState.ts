@@ -50,7 +50,7 @@ export interface CombatSnapshot {
     readonly groundEquipment: number;
     readonly region: RegionInfo;
     readonly nearbyRegions: readonly RegionInfo[];
-    readonly chunks: Readonly<{ active: number; low: number; static: number; total: number }>;
+    readonly chunks: Readonly<{ near: number; buffer: number; retained: number; total: number }>;
     readonly openedChests: number;
     readonly boss: Readonly<{ x: number; z: number; health: number; maxHealth: number; enraged: boolean }> | undefined;
     readonly gameOver: boolean;

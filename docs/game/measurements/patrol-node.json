@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-11",
+  "command": "npm run benchmark:app",
+  "context": {
+    "node": "v22.16.0",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+    "simulationHz": 120,
+    "activeAiHz": 30,
+    "gc": true,
+    "timing": "one warmup, five samples, simulation only; no browser/GPU claim"
+  },
+  "results": {
+    "travel": {
+      "samplesMsPerTick": [0.05756479166666668, 0.05175496527777778, 0.05492756944444442, 0.04960722222222221, 0.05208812500000002],
+      "medianMsPerTick": 0.05208812500000002,
+      "budgetMsPerTick": 0.5,
+      "workload": { "msPerTick": 0.05208812500000002, "ticks": 2880, "enemies": 358, "kills": 23 }
+    },
+    "crowded": {
+      "samplesMsPerTick": [0.5847553333333334, 0.6106246666666667, 0.5946150000000003, 0.5937389999999997, 0.6303316666666675],
+      "medianMsPerTick": 0.5946150000000003,
+      "budgetMsPerTick": 3,
+      "workload": { "msPerTick": 0.6303316666666675, "ticks": 300, "enemies": 640, "projectiles": 128 }
+    }
+  }
+}

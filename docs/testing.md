@@ -90,10 +90,18 @@ slow expiry and entity reuse, dash immunity, ward absorption, visual saturation 
 isolation. AI contracts cover scout circling, charge dodging, invalid healing targets,
 frontal guard and persistent boss phases. Browser checks exercise the shared CC0 effect
 atlas, its failure/retry path, actual shader drawing, six archetypes in four mesh pools,
-and skill loadout/rank commands through the authority Worker.
+and skill loadout/rank commands through the authority Worker. Radial AI checks cover
+chunk crossings, activation hysteresis, 5Hz patrol decisions with continuous 120Hz movement,
+bounded patrol routes and completing the return home before reacquiring a target.
+Skill UI checks cover mouse/touch dragging, slot swaps, outside-drop cancellation,
+keyboard pickup/placement and the shared icon-only Alt tooltip. Visual pool checks fill
+all 128 facts with the largest choreography, verify bounded instances, paused transforms,
+persistent ward tracking, expiration and owned-resource disposal. Browser captures also
+exercise the depth-tested boundary mist and multi-layer skill shaders.
 Before handing off an active development URL, run `npm run check:app:dev` against
-the already-running server on port 5173. It checks the five-skill catalog and its
-narrow-screen close control after scrolling, and verifies the real Worker modules. It generates and
+the already-running server on port 5173. It checks the five-skill type/value icons,
+drag placement, shader console errors and the narrow-screen close control after scrolling,
+and verifies the real Worker modules. It generates and
 picks up equipment, an orb and a potion stack using Vite-served modules inside
 the actual unbundled Worker. It does not intercept the Worker entry or rebuild
 the server, so stale development modules remain observable. Restart development

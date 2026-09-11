@@ -89,7 +89,7 @@ describe("equipment evaluation and safe cleanup", () => {
         const combat = withInventory(Array.from({ length: INVENTORY_CAPACITY }, (_, i) => gear(i + 100, { armor: 1 }, "head")));
         const fixture = combat as unknown as { world: RegionalWorld; playerX: number; playerZ: number;
             random: DeterministicRandom; nextItemId: number; openNearbyChest(): void };
-        const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest && chunk.lod === "active")!;
+        const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest && chunk.band === "near")!;
         fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
         combat.setAutoClearEquipment(true);
         const before = combat.getSnapshot();

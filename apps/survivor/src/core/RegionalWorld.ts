@@ -1,17 +1,15 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
-import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 import type { EnemyKind } from "./EnemyDefinitions";
 
 export const COMBAT_CHUNK_SIZE = 12;
 export const REGION_RADIUS = 24;
-export const ACTIVE_CHUNK_RADIUS = 1;
-export const LOW_FREQUENCY_CHUNK_RADIUS = 2;
+export const NEAR_CHUNK_RADIUS = 1;
+export const BUFFER_CHUNK_RADIUS = 2;
 export const RETAINED_CHUNK_RADIUS = 3;
 export const MAX_COMBAT_CHUNKS = (RETAINED_CHUNK_RADIUS * 2 + 1) ** 2;
-export const LOW_FREQUENCY_TICKS = ticksPerUpdate(GAME_CONFIG.timing.distantAiHz);
 export type RegionDifficulty = "normal" | "hard" | "horror";
-export type SimulationLod = "active" | "low" | "static" | "unloaded";
+export type ResidencyBand = "near" | "buffer" | "retained" | "unloaded";
 export const REGION_RULES = Object.freeze({
     normal: Object.freeze({ name: "常规地域", population: 7, scale: 1, levelOffset: 0, eliteChance: 0.05 }),
     hard: Object.freeze({ name: "困难地域", population: 9, scale: 1.25, levelOffset: 2, eliteChance: 0.2 }),
@@ -62,7 +60,7 @@ export interface RegionalChunk {
     readonly chest: RegionalChest | undefined;
     chestOpened: boolean;
     resident: boolean;
-    lod: SimulationLod;
+    band: ResidencyBand;
 }
 
 export function hexDistance(x: number, z: number): number { return Math.max(Math.abs(x), Math.abs(z), Math.abs(x + z)); }
@@ -115,11 +113,11 @@ export class RegionalWorld {
         }
         return Object.freeze(result);
     }
-    public lodAt(x: number, z: number): SimulationLod {
+    public residencyAt(x: number, z: number): ResidencyBand {
         const distance = Math.max(Math.abs(Math.floor((x - this.origin.x + 6) / COMBAT_CHUNK_SIZE) - this.centerX),
             Math.abs(Math.floor((z - this.origin.z + 6) / COMBAT_CHUNK_SIZE) - this.centerZ));
-        return distance <= ACTIVE_CHUNK_RADIUS ? "active" : distance <= LOW_FREQUENCY_CHUNK_RADIUS ? "low"
-            : distance <= RETAINED_CHUNK_RADIUS ? "static" : "unloaded";
+        return distance <= NEAR_CHUNK_RADIUS ? "near" : distance <= BUFFER_CHUNK_RADIUS ? "buffer"
+            : distance <= RETAINED_CHUNK_RADIUS ? "retained" : "unloaded";
     }
     public synchronize(x: number, z: number): boolean {
         const cx = Math.floor((x - this.origin.x + 6) / COMBAT_CHUNK_SIZE);
@@ -129,8 +127,8 @@ export class RegionalWorld {
         this.centerX = cx;
         this.centerZ = cz;
         for (const [key, chunk] of this.chunks) {
-            chunk.lod = this.lodAt(this.chunkX(chunk.x) + 6, this.chunkZ(chunk.z) + 6);
-            if (chunk.lod === "unloaded") { chunk.resident = false; this.chunks.delete(key); }
+            chunk.band = this.residencyAt(this.chunkX(chunk.x) + 6, this.chunkZ(chunk.z) + 6);
+            if (chunk.band === "unloaded") { chunk.resident = false; this.chunks.delete(key); }
         }
         for (let ring = 0; ring <= RETAINED_CHUNK_RADIUS; ring += 1) {
             for (let dx = -ring; dx <= ring; dx += 1) for (let dz = -ring; dz <= ring; dz += 1) {
@@ -175,6 +173,6 @@ export class RegionalWorld {
             chest = Object.freeze({ x: px, z: pz, region: ownRegion, tier, hasOrb: random.chance(0.35 + CHEST_TIERS.indexOf(tier) * 0.15) });
         }
         return { key, x, z, spawns: Object.freeze(spawns), spawned: new Uint8Array(spawns.length), chest,
-            chestOpened: false, resident: true, lod: this.lodAt(this.chunkX(x) + 6, this.chunkZ(z) + 6) };
+            chestOpened: false, resident: true, band: this.residencyAt(this.chunkX(x) + 6, this.chunkZ(z) + 6) };
     }
 }

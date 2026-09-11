@@ -1,4 +1,4 @@
-import { ticksForSeconds } from "../src/core/GameConfig";
+import { GAME_CONFIG, ticksForSeconds } from "../src/core/GameConfig";
 import { expect, test, vi } from "vitest";
 import { ActorAction, CombatWorld, Faction, MoveIntent } from "../src/core/CombatWorld";
 import { EnemyBehavior } from "../src/core/EnemyBehavior";
@@ -44,6 +44,50 @@ test("staggered 30Hz decisions retain continuous 120Hz movement", () => {
     expect(e.position.z[enemy]).toBeCloseTo(ENEMY_DEFINITIONS[0].speed, 6);
     expect(decisions.mock.calls.length).toBeGreaterThanOrEqual(30);
     expect(decisions.mock.calls.length).toBeLessThanOrEqual(31);
+});
+
+test("distant patrols decide at 5Hz while moving each tick, including the old static ring", () => {
+    const { entities: e, enemy, step, behavior } = arena(0, 29);
+    const decisions = vi.spyOn(behavior, "idle");
+    for (let tick = 1; tick <= 120; tick++) {
+        const x = e.position.x[enemy], z = e.position.z[enemy]; step(tick);
+        expect(Math.hypot(e.position.x[enemy] - x, e.position.z[enemy] - z)).toBeCloseTo(ENEMY_DEFINITIONS[0].speed * GAME_CONFIG.enemies.patrolSpeed / 120, 6);
+    }
+    expect(e.enemy.active[enemy]).toBe(0); expect(e.enemy.target[enemy]).toBe(0);
+    expect(decisions.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(decisions.mock.calls.length).toBeLessThanOrEqual(6);
+});
+
+test("chunk crossings do not change radial activity, which has exit hysteresis", () => {
+    const { entities: e, enemy, regions, step } = arena(0, 0);
+    e.position.x[e.player] = 5.99; e.position.z[e.player] = 16;
+    regions.synchronize(5.99, 16); step(1);
+    expect(e.enemy.active[enemy]).toBe(1);
+    e.position.x[e.player] = 6.01; regions.synchronize(6.01, 16); step(2);
+    expect(e.enemy.active[enemy]).toBe(1); expect(e.enemy.intent[enemy]).toBe(MoveIntent.Patrol);
+    e.position.x[e.player] = 0; e.position.z[e.player] = 19; step(3);
+    expect(e.enemy.active[enemy]).toBe(1);
+    e.position.z[e.player] = 21; step(4); expect(e.enemy.active[enemy]).toBe(0);
+    e.position.z[e.player] = 19; step(5); expect(e.enemy.active[enemy]).toBe(0);
+});
+
+test("patrol stays near home, wakes before visibility and cancels pursuit into a complete return", () => {
+    const { entities: e, enemy, regions, step } = arena(0, 36);
+    step(1); expect(e.enemy.awake[enemy]).toBe(0);
+    e.position.z[e.player] = 29; regions.synchronize(0, 29);
+    for (let tick = 2; tick < 2400; tick++) {
+        step(tick);
+        expect(Math.hypot(e.position.x[enemy], e.position.z[enemy])).toBeLessThanOrEqual(GAME_CONFIG.enemies.patrolRadius + .001);
+    }
+    e.position.x[enemy] = 8; e.position.z[enemy] = 0;
+    e.position.x[e.player] = 9; e.position.z[e.player] = 0; regions.synchronize(9, 0); step(2400);
+    expect(e.enemy.target[enemy]).not.toBe(0);
+    e.position.x[e.player] = 25; regions.synchronize(25, 0); step(2401);
+    expect(e.enemy.returning[enemy]).toBe(1); expect(e.enemy.intent[enemy]).toBe(MoveIntent.Return);
+    e.position.x[e.player] = 9; regions.synchronize(9, 0); step(2402);
+    expect(e.enemy.target[enemy]).toBe(0);
+    for (let tick = 2403; tick < 3400 && e.enemy.returning[enemy]; tick++) step(tick);
+    expect(e.enemy.returning[enemy]).toBe(0);
 });
 
 test("idle successful behavior leaves also respect the decision rate", () => {

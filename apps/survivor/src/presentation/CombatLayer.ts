@@ -33,6 +33,7 @@ import { RARITIES } from "../core/Loot";
 import { ActorAction, Faction } from "../core/CombatWorld";
 import { ActorModels } from "./ActorModels";
 import { SkillEffects } from "./SkillEffects";
+import { BoundaryMist } from "./BoundaryMist";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
 import { ACTOR_FADE_END, actorVisibility, installActorFade } from "./ActorVisibility";
 const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
@@ -68,6 +69,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly shield = new Group();
     private actors: ActorModels | undefined;
     private effects: SkillEffects | undefined;
+    private readonly mist = new BoundaryMist();
     private actorLoading: Promise<void> | undefined;
     private disposed = false;
     private readonly projectiles: InstancedMesh;
@@ -133,7 +135,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.projectiles.count = this.experience.count = 0;
         this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.buildPlayer();
-        this.root.add(this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player);
+        this.root.add(this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player, this.mist.mesh);
         resources.acquireRequired("combat-render-pool", {}, true, collectObject3DResourceAllocations([this.root]));
     }
 
@@ -150,11 +152,11 @@ export class CombatLayer implements WorldRenderLayer {
                 const actors = actorResult.value, effects = effectResult.value;
                 try {
                     this.resources.acquireRequired("combat-actor-models", {}, true,
-                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh]));
+                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ward]));
                 } catch (error) { actors.dispose(); effects.dispose(); throw error; }
                 this.actors = actors;
                 this.effects = effects;
-                this.root.add(effects.mesh);
+                this.root.add(effects.mesh, effects.ward);
                 this.playerBody.add(actors.hero);
                 for (const pool of actors.enemies) this.root.add(...pool);
             }).catch(error => { this.actorLoading = undefined; throw error; });
@@ -180,7 +182,8 @@ export class CombatLayer implements WorldRenderLayer {
         this.playerBody.visible = state.player.dashing || !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
         this.shield.visible = state.player.shieldReady || state.player.ward > 0;
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
-        this.effects!.update(state.effects, state.player.animationTime, this.effectHeight);
+        this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward);
+        this.mist.update(playerX, this.player.position.y, playerZ, state.player.animationTime);
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
@@ -300,7 +303,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.projectiles.count = this.experience.count = 0;
         this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
-        if (this.effects) this.effects.mesh.count = 0;
+        this.effects?.reset();
         this.heightCache.clear();
         if (this.actors) for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         for (const mesh of this.loot) mesh.count = 0;
@@ -322,6 +325,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.host = undefined;
         this.actors?.dispose();
         this.effects?.dispose();
+        this.mist.dispose();
         this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks]) mesh.dispose();
         for (const geometry of this.geometries) geometry.dispose();

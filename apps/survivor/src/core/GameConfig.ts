@@ -1,10 +1,14 @@
 /** Shared, immutable policy. Rates use Hz, time budgets use ms, combat cooldowns use seconds. */
 export const GAME_CONFIG = Object.freeze({
     combat: Object.freeze({ maxEnemies: 640, maxProjectiles: 128, maxHostileProjectiles: 64, maxExperienceOrbs: 768,
-        maxGroundEquipment: 64, playerRadius: .3, enemyLeashDistance: 14, consumableCooldown: 4, meleeHalfArc: 1.1 }),
+        maxGroundEquipment: 64, playerRadius: .3, enemyLeashDistance: 22, consumableCooldown: 4, meleeHalfArc: 1.1 }),
+    enemies: Object.freeze({ aggroDistance: 12, pursuitDistance: 19, activeDistance: 18, activeExitDistance: 20,
+        awakeDistance: 32, sleepDistance: 34, patrolSpeed: .45, patrolRadius: 2.5 }),
     timing: Object.freeze({ simulationHz: 120, activeAiHz: 30, distantAiHz: 5, regenerationHz: 2,
         snapshotHz: 10, supportSenseHz: 5, autoSkillHz: 10, diagnosticsMs: 1000, maxCatchUpMs: 250 }),
     skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
+    presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 14, mistOuterRadius: 42,
+        horizonFogStart: 820, horizonFogEnd: 1425, horizonFogColor: 0x849b9f }),
     workers: Object.freeze({ maxCommands: 64, deferredCapacity: 64, timeoutMs: 15_000,
         parallelCollisionPairs: 49_152, terrainMax: 2, collisionMax: 2, terrainCores: 6, collisionCores: 8 }),
     inventory: Object.freeze({

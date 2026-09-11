@@ -10,9 +10,9 @@ describe("regional ecology", () => {
         for (let step = 1; step <= 60; step++) {
             world.synchronize(10 + step * 12, -8);
             expect(world.chunks.size).toBe(MAX_COMBAT_CHUNKS);
-            expect([...world.chunks.values()].filter(chunk => chunk.lod === "active")).toHaveLength(9);
-            expect([...world.chunks.values()].filter(chunk => chunk.lod === "low")).toHaveLength(16);
-            expect([...world.chunks.values()].filter(chunk => chunk.lod === "static")).toHaveLength(24);
+            expect([...world.chunks.values()].filter(chunk => chunk.band === "near")).toHaveLength(9);
+            expect([...world.chunks.values()].filter(chunk => chunk.band === "buffer")).toHaveLength(16);
+            expect([...world.chunks.values()].filter(chunk => chunk.band === "retained")).toHaveLength(24);
         }
         expect(initial.resident).toBe(false);
         world.synchronize(10, -8);

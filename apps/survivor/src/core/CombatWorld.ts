@@ -13,7 +13,7 @@ import { CombatEffects } from "./CombatEffects";
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
 export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Nova }
-export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank }
+export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol }
 
 export class DamageBuffer {
     public count = 0;
@@ -61,7 +61,9 @@ export class CombatWorld {
         speed: new Float32Array(ENTITY_CAPACITY), damage: new Float32Array(ENTITY_CAPACITY),
         homes: new Array<RegionalChunk | undefined>(ENTITY_CAPACITY), regions: new Array<RegionInfo | undefined>(ENTITY_CAPACITY),
         runningNode: new Int16Array(ENTITY_CAPACITY).fill(-1), target: new Float64Array(ENTITY_CAPACITY),
-        intent: new Uint8Array(ENTITY_CAPACITY), intentSeconds: new Float32Array(ENTITY_CAPACITY),
+        intent: new Uint8Array(ENTITY_CAPACITY), awake: new Uint8Array(ENTITY_CAPACITY), returning: new Uint8Array(ENTITY_CAPACITY),
+        patrolX: new Float64Array(ENTITY_CAPACITY), patrolZ: new Float64Array(ENTITY_CAPACITY),
+        patrolStep: new Uint32Array(ENTITY_CAPACITY), patrolWaitUntil: new Float64Array(ENTITY_CAPACITY),
         active: new Uint8Array(ENTITY_CAPACITY), supportTarget: new Float64Array(ENTITY_CAPACITY),
         senseAt: new Float64Array(ENTITY_CAPACITY), specialReadyAt: new Float64Array(ENTITY_CAPACITY), enraged: new Uint8Array(ENTITY_CAPACITY)
     };
@@ -99,7 +101,8 @@ export class CombatWorld {
         e.homeX[slot] = spawn.x; e.homeZ[slot] = spawn.z;
         e.speed[slot] = definition.speed * Math.min(1.35, 1 + (scale - 1) * .08);
         e.damage[slot] = definition.damage * Math.sqrt(scale) * (spawn.boss ? 2.5 : spawn.elite ? 1.55 : 1);
-        e.runningNode[slot] = -1; e.target[slot] = 0; e.intent[slot] = MoveIntent.None; e.intentSeconds[slot] = 0; e.active[slot] = 0;
+        e.runningNode[slot] = -1; e.target[slot] = 0; e.intent[slot] = MoveIntent.None; e.active[slot] = e.awake[slot] = e.returning[slot] = 0;
+        e.patrolX[slot] = spawn.x; e.patrolZ[slot] = spawn.z; e.patrolStep[slot] = e.patrolWaitUntil[slot] = 0;
         e.supportTarget[slot] = e.senseAt[slot] = e.specialReadyAt[slot] = e.enraged[slot] = 0;
         this.status.slowUntil[slot] = 0; this.status.slowScale[slot] = 1;
         a.target[slot] = a.variant[slot] = 0;

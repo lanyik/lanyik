@@ -50,7 +50,7 @@ test("a blocked chest leaves potion stacks, RNG, gold and all rewards untouched"
     const random = new DeterministicRandom("full-orbs");
     fixture.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i, 1));
     const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest?.hasOrb)!;
-    chunk.lod = "active"; fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
+    chunk.band = "near"; fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
     // A changed region cache must still reach the render buffer when opening is blocked.
     const otherChest = [...fixture.world.chunks.values()].find(other => other !== chunk && other.chest)!;
     otherChest.chestOpened = true;

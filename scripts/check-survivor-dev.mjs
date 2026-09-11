@@ -8,6 +8,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto("http://127.0.0.1:5173/", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => ["ready", "failed"].includes(document.querySelector(".survivor")?.getAttribute("data-state")),
         undefined, { timeout: 45_000 });
@@ -47,6 +48,9 @@ try {
     await page.keyboard.press("KeyK");
     await page.locator(".skills-window").waitFor();
     assert.equal(await page.locator(".skill-catalog article").count(), 5);
+    assert.equal(await page.locator('.skill-catalog [data-item-icon="skill"]').count(), 5);
+    await page.locator('[data-skill="frost"] .skill-icon-trigger').dragTo(page.locator('.skill-loadout [data-skill-slot="0"]'));
+    await page.waitForFunction(() => document.querySelector('.skill-loadout [data-skill-slot="0"] [data-item-icon="skill"]')?.getAttribute("data-item-value") === "frost");
     await page.locator(".skill-management").evaluate(element => { element.scrollTop = element.scrollHeight; });
     const panel = await page.locator(".skills-window").boundingBox();
     const close = await page.locator(".skills-window .close-button").boundingBox();
@@ -55,5 +59,5 @@ try {
     await page.screenshot({ path: ".browser-artifacts/skills-dev-narrow.png" });
     await page.locator(".skills-window .close-button").click();
     assert.deepEqual(errors, []);
-    console.log("Development page, skill catalog and unbundled Worker item pickup passed:", pickedUp);
+    console.log("Development page, skill dragging, shaders and unbundled Worker item pickup passed:", pickedUp);
 } finally { await browser.close(); }
