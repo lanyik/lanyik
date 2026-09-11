@@ -329,6 +329,7 @@ export type {
     WorldStreamingStats
 } from "./world/WorldStreamer";
 export { WorldRenderLayerRegistry } from "./rendering/WorldRenderLayer";
+export { GroundProjection } from "./rendering/GroundProjection";
 export type {
     WorldRenderLayer,
     WorldRenderLayerHost,

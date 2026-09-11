@@ -147,7 +147,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     private mapData!: MapInfo;
     private atlas!: TerrainAtlas;
-    private terrain!: TerrainMesh;
+    private terrain: TerrainMesh | undefined;
     private forest: ForestField | undefined;
     private grass: GrassField | undefined;
     private readonly markerProjections = new SurfaceMarkerProjectionCache();
@@ -869,7 +869,11 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             cpuFrameMs: this.lastCpuFrameMs,
             gpuFrameMs
         });
-        this.rendererHost.render();
+        const projectionLayer = this.worldRenderLayers.projectionLayer;
+        const projection = projectionLayer && this.initializedWorldRenderLayers.has(projectionLayer.id)
+            ? projectionLayer.groundProjection : undefined;
+        this.terrain?.setGroundProjection(projection);
+        this.rendererHost.render(projection);
         this.lastCpuFrameMs = performance.now() - cpuFrameStart;
         this.emit("afterframe", { t, dtS, cpuFrameMs: this.lastCpuFrameMs, gpuFrameMs,
             frameTaskMs: this.frameTasks.stats.lastFrameDurationMs,
@@ -2026,6 +2030,16 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.worldRoot.add(terrain);
         if (deferTiles) {
             for (const record of this.worldChunkLayers.values()) terrain.addTiles(record.points);
+        }
+        try { await terrain.ready; }
+        catch (error) {
+            this.worldRoot.remove(terrain); terrain.dispose();
+            if (this.terrain === terrain) this.terrain = undefined;
+            throw error;
+        }
+        if (this.disposed || expectedRevision !== this.loadRevision || this.terrain !== terrain) {
+            this.worldRoot.remove(terrain); terrain.dispose();
+            return false;
         }
         if (!deferTiles) await terrain.loadCities();
         else if (this.worldStreamer) {

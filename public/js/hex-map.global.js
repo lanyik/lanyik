@@ -1019,7 +1019,7 @@ vec3 applyHorizonFog(vec3 color) {
 // the vertex side of the interpolation.
 precision highp float;
 
-${HORIZON_FOG_VERTEX_VARYING}
+${HORIZON_FOG_VERTEX_VARYING.replace(/varying /g, "out ")}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -1063,60 +1063,58 @@ uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local f
 uniform vec2 worldCenter; // camera target on the ground plane
 uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
-attribute vec3 position;
-attribute vec2 uv;
+in vec3 position;
 
-attribute vec2 offset;       // world-space (x,z) offset of this tile instance
-attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
-attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
-attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
-attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
-attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
-attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
-attribute vec3 neighborsKindB; // NW/N/NE
+in vec2 offset;       // world-space (x,z) offset of this tile instance
+in vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
+in vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
+in vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
+in vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
+in vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
+in vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
+in vec3 neighborsKindB; // NW/N/NE
 // x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
 // mask. Packed to leave two attribute slots for neighbour relief samples.
-attribute vec4 waterEdges;
+in vec4 waterEdges;
 // x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
-// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
-attribute vec4 fogState;
+// as 1 - y - z - w, keeping terrain within 15 attribute locations.
+in vec4 fogState;
 // x elevation, y ridge strength, z valley strength, w roughness. Values are
 // sampled in global tile coordinates by LandformSampler, so chunk order and
 // worker count cannot change the visible macro landform.
-attribute vec4 landform;
+in vec4 landform;
 // Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
 // Together with style.w at this tile centre these define a continuous fan
 // surface whose shared edge endpoints are identical in adjacent instances.
-attribute vec3 reliefNeighborsA;
-attribute vec3 reliefNeighborsB;
+in vec3 reliefNeighborsA;
+in vec3 reliefNeighborsB;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying float vModifiers;
-varying float vPriority;
-varying vec3 vNeighborsA;
-varying vec3 vNeighborsB;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vEdgeFactorsA; // SE, S, SW
-varying vec3 vEdgeFactorsB; // NW, N, NE
-varying vec3 vNormal;
-varying float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
-varying float vFogState;
-varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
-varying float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
-varying float vRiverSeaMouthEdges;
-varying float vRiverLakeMouthEdges;
-varying float vLakeNeighborEdges;
-varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
-varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
-varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
-varying vec3 vNeighborsKindB;
+out float vBorder;
+out float vTerrain;
+out float vModifiers;
+out float vPriority;
+out vec3 vNeighborsA;
+out vec3 vNeighborsB;
+out vec3 vNeighborsPriorityA;
+out vec3 vNeighborsPriorityB;
+out vec3 vEdgeFactorsA; // SE, S, SW
+out vec3 vEdgeFactorsB; // NW, N, NE
+out vec3 vNormal;
+out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
+out float vFogState;
+out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
+out float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
+out float vRiverSeaMouthEdges;
+out float vRiverLakeMouthEdges;
+out float vLakeNeighborEdges;
+out vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
+out vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
+out vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
+out vec3 vNeighborsKindB;
 // x = final normalized macro+detail elevation; y/z/w = generated
 // ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
-varying vec4 vLandform;
-varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
+out vec4 vLandform;
+out vec4 vBiomeWeights; // temperate, dry, cold, alpine
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -1493,7 +1491,6 @@ void main() {
     // (not just at its endpoints), so reusing their max is the correct metric.
     float rimFactor = max(max(max(vEdgeFactorsA.x, vEdgeFactorsA.y), max(vEdgeFactorsA.z, vEdgeFactorsB.x)), max(vEdgeFactorsB.y, vEdgeFactorsB.z));
 
-    vUV = uv;
     vBorder = clamp(rimFactor, 0.0, 1.0);
     vTerrain = style.x;
     vModifiers = style.y;
@@ -4624,7 +4621,7 @@ void main() {
     const mipmapBytes = texture.mipmaps.reduce((bytes, mipmap) => bytes + textureImageBytes(mipmap), 0);
     const generatedMipBytes = texture.generateMipmaps && mipmapBytes === 0 ? Math.ceil(baseBytes / 3) : 0;
     return {
-      cpuBytes: baseBytes + mipmapBytes,
+      cpuBytes: texture.isRenderTargetTexture ? 0 : baseBytes + mipmapBytes,
       gpuBytes: baseBytes + mipmapBytes + generatedMipBytes
     };
   }
@@ -5163,6 +5160,63 @@ void main() {
       y: wrapY ? positiveModulo(best.y, mapHeight) : best.y
     };
   }
+  function terrainArrayLayout(atlas) {
+    const { width, height, cellSize, cellSpacing } = atlas;
+    if (![width, height, cellSize].every((value) => Number.isSafeInteger(value) && value > 0) || !Number.isSafeInteger(cellSpacing) || cellSpacing < 0 || cellSpacing * 2 >= cellSize || width % cellSize !== 0 || height % cellSize !== 0) throw new RangeError("Invalid terrain atlas dimensions");
+    return { size: cellSize - cellSpacing * 2, columns: width / cellSize, layers: width / cellSize * (height / cellSize) };
+  }
+  function copyTerrainArrayPixels(atlas, pixels, output) {
+    const { size, columns, layers } = terrainArrayLayout(atlas);
+    if (pixels.length !== atlas.width * atlas.height * 4 || output.length !== size * size * layers * 4) {
+      throw new RangeError("Terrain atlas pixel dimensions do not match its descriptor");
+    }
+    for (let layer = 0; layer < layers; layer++) {
+      const x = layer % columns * atlas.cellSize + atlas.cellSpacing;
+      const y = Math.floor(layer / columns) * atlas.cellSize + atlas.cellSpacing;
+      for (let row = 0; row < size; row++) {
+        const start = ((y + size - row - 1) * atlas.width + x) * 4;
+        output.set(pixels.subarray(start, start + size * 4), (layer * size * size + row * size) * 4);
+      }
+    }
+  }
+  function loadTerrainArrayTexture(atlas, baseUrl) {
+    const { size, layers } = terrainArrayLayout(atlas);
+    const pixels = new Uint8Array(size * size * layers * 4);
+    const texture = new three.DataArrayTexture(pixels, size, size, layers);
+    texture.name = "terrain-material-layers";
+    texture.generateMipmaps = true;
+    texture.minFilter = three.LinearMipmapLinearFilter;
+    texture.magFilter = three.LinearFilter;
+    texture.wrapS = texture.wrapT = three.MirroredRepeatWrapping;
+    texture.anisotropy = 8;
+    let disposed = false;
+    const ready = new Promise((resolve, reject) => {
+      texture.addEventListener("dispose", () => {
+        disposed = true;
+        resolve();
+      });
+      new three.ImageLoader().setPath(baseUrl).load(atlas.image, (source) => {
+        if (disposed) return;
+        try {
+          if (source.width !== atlas.width || source.height !== atlas.height) throw new RangeError("Terrain atlas image does not match its descriptor");
+          const canvas = document.createElement("canvas");
+          canvas.width = atlas.width;
+          canvas.height = atlas.height;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          if (!context) throw new Error("Terrain atlas decoding requires a 2D canvas");
+          context.drawImage(source, 0, 0);
+          copyTerrainArrayPixels(atlas, context.getImageData(0, 0, atlas.width, atlas.height).data, pixels);
+          texture.needsUpdate = true;
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      }, void 0, () => {
+        if (!disposed) reject(new Error(`Terrain atlas image load failed: ${atlas.image}`));
+      });
+    });
+    return { texture, ready };
+  }
 
   // src/enums.ts
   var Land = /* @__PURE__ */ ((Land2) => {
@@ -5636,6 +5690,22 @@ void main() {
     ctx.stroke();
   }
 
+  // src/shaders/groundProjection.ts
+  var GROUND_PROJECTION_HEADER = `
+uniform sampler2D groundProjectionMap;
+uniform vec4 groundProjectionBounds;
+uniform float groundProjectionEnabled;
+
+vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
+    if (groundProjectionEnabled < 0.5) return color;
+    vec2 uv = (worldXZ - groundProjectionBounds.xy) / groundProjectionBounds.zw;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return color;
+    vec4 decal = texture(groundProjectionMap, vec2(uv.x, 1.0 - uv.y));
+    // Normal stamps accumulate premultiplied colour/coverage. Additive stamps preserve coverage.
+    return color * (1.0 - decal.a) + decal.rgb;
+}
+`;
+
   // src/shaders/terrain.fragment.ts
   var TERRAIN_FRAGMENT_SHADER = `
 // highp, not mediump: the river noise hash (hash21's fract(sin(x) * 43758...))
@@ -5644,10 +5714,14 @@ void main() {
 // highp for the same reason (its foam uses the same hash).
 precision highp float;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-uniform sampler2D map;
-uniform vec4 textureAtlasMeta;
+${GROUND_PROJECTION_HEADER}
+
+uniform highp sampler2DArray map;
+vec2 terrainGradientX;
+vec2 terrainGradientY;
+out vec4 terrainColor;
 uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
@@ -5674,7 +5748,7 @@ uniform vec3 seaColorDeep;      // instances as the water layer's
 // read as patchy growth instead of straight strips parallel to hex edges.
 uniform float landBlendCurvature; // 0..1
 
-uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV (not atlas-indexed)
+uniform sampler2D fogMap;        // war-fog.jpg, continuous world-space UVs
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
 
 uniform float showGrid;
@@ -5711,31 +5785,30 @@ uniform vec3 riverColorShallow; // water color at the banks
 uniform vec3 riverColorDeep;    // water color over the channel centerline / lake body
 uniform vec3 riverBankColor;    // vegetation strip hugging the waterline
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying float vModifiers;
-varying float vPriority;
-varying vec3 vNeighborsA;
-varying vec3 vNeighborsB;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec3 vNormal;
-varying float vBeachT;
-varying float vFogState;
-varying vec2 vFogUV;
-varying float vRiverEdges;
-varying float vRiverSeaMouthEdges;
-varying float vRiverLakeMouthEdges;
-varying float vLakeNeighborEdges;
-varying vec2 vLocal;
-varying vec2 vWorldXZ;
-varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
-varying vec3 vNeighborsKindB; // (NW,N,NE)
-varying vec4 vLandform;       // final elevation, generated ridge, valley, roughness
-varying vec4 vBiomeWeights;   // temperate, dry, cold, alpine
+in float vBorder;
+in float vTerrain;
+in float vModifiers;
+in float vPriority;
+in vec3 vNeighborsA;
+in vec3 vNeighborsB;
+in vec3 vNeighborsPriorityA;
+in vec3 vNeighborsPriorityB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec3 vNormal;
+in float vBeachT;
+in float vFogState;
+in vec2 vFogUV;
+in float vRiverEdges;
+in float vRiverSeaMouthEdges;
+in float vRiverLakeMouthEdges;
+in float vLakeNeighborEdges;
+in vec2 vLocal;
+in vec2 vWorldXZ;
+in vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
+in vec3 vNeighborsKindB; // (NW,N,NE)
+in vec4 vLandform;       // final elevation, generated ridge, valley, roughness
+in vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -5868,31 +5941,11 @@ vec3 terrainPattern() {
     float macro = valueNoise(macroP);
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
-    // Mirrored repeat joins the same source edge to itself at every regional
-    // boundary, even when the atlas cell was not authored as tileable.
-    vec2 regionUV = 1.0 - abs(phase - 1.0);
-    return vec3(regionUV, macro);
-}
-
-// Select one atlas cell by terrain type, then reuse the shared, warped phase.
-vec2 cellIndexToUV(float idx, vec2 regionUV) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float inset = max(textureAtlasMeta.w, 0.5);
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
-    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
-    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
-        / vec2(atlasWidth, atlasHeight);
+    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
     float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
     vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
     color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
@@ -5929,7 +5982,7 @@ vec3 applyBiomeMaterial(vec3 color) {
 // one-directional transition.
 //
 // bend (world-space noise, shared by all 6 calls) shifts the band's position
-// so the border meanders instead of running parallel to the hex edge; patch
+// so the border meanders instead of running parallel to the hex edge; patchStrength
 // modulates its strength so the mixed-in texture reads as patchy growth.
 vec4 blendEdge(
     vec4 inputColor,
@@ -5937,7 +5990,7 @@ vec4 blendEdge(
     float neighborPriority,
     float factor,
     float bend,
-    float patch,
+    float patchStrength,
     vec3 pattern
 ) {
     if (neighborTerrain < 0.0 || neighborTerrain == vTerrain) return inputColor;
@@ -5946,7 +5999,7 @@ vec4 blendEdge(
     vec4 neighborColor = sampleTerrainCell(neighborTerrain, pattern);
 
     float e0 = 1.0 - clamp(landBlendWidth, 0.001, 1.0);
-    float t = smoothstep(e0, 1.0, factor + bend) * patch;
+    float t = smoothstep(e0, 1.0, factor + bend) * patchStrength;
     return mix(inputColor, neighborColor, t);
 }
 
@@ -6064,18 +6117,20 @@ float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
 }
 
 void main() {
+    vec3 materialPattern = terrainPattern();
+    terrainGradientX = dFdx(materialPattern.xy);
+    terrainGradientY = dFdy(materialPattern.xy);
     // Unseen: replace the tile outright with the war-fog texture, skipping
     // every other layer/lighting/grid computation below. vFogUV is computed
     // from *world* position (see terrain.vertex.ts), so one repeat of the
     // texture spans several tiles and flows seamlessly across every fogged
     // hex - no per-tile square-texture-in-a-hex seams.
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        terrainColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         return;
     }
 
-    vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     if (landBlendEnabled > 0.5) {
@@ -6268,12 +6323,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     // keep every feature visible, just darker - the "remembered" Civ-style look.
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
-    gl_FragColor = vec4(color, 1.0);
+    terrainColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        terrainColor = mix(vec4(gridColor, 1.0), terrainColor, 1.0 - gridOpacity);
     }
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) terrainColor.rgb = applyGroundProjection(terrainColor.rgb, vWorldXZ);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 }
 `;
 
@@ -6281,11 +6337,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var TERRAIN_FAST_FRAGMENT_SHADER = `
 precision highp float;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-uniform sampler2D map;
+${GROUND_PROJECTION_HEADER}
+
+uniform highp sampler2DArray map;
+vec2 terrainGradientX;
+vec2 terrainGradientY;
+out vec4 terrainColor;
 uniform sampler2D fogMap;
-uniform vec4 textureAtlasMeta;
 uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
@@ -6303,21 +6363,20 @@ uniform vec3 riverColorShallow;
 uniform vec3 riverColorDeep;
 uniform vec3 riverBankColor;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying vec3 vNormal;
-varying float vFogState;
-varying vec2 vFogUV;
-varying float vRiverEdges;
-varying vec2 vLocal;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec4 vLandform;
-varying vec4 vBiomeWeights;
-varying vec2 vWorldXZ;
+in float vBorder;
+in float vTerrain;
+in vec3 vNormal;
+in float vFogState;
+in vec2 vFogUV;
+in float vRiverEdges;
+in vec2 vLocal;
+in vec3 vNeighborsKindA;
+in vec3 vNeighborsKindB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec4 vLandform;
+in vec4 vBiomeWeights;
+in vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -6359,27 +6418,11 @@ vec3 terrainPattern() {
     );
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
-    return vec3(1.0 - abs(phase - 1.0), macro);
-}
-
-vec2 cellIndexToUV(float idx, vec2 regionUV) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float inset = max(textureAtlasMeta.w, 0.5);
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
-    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
-    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
-        / vec2(atlasWidth, atlasHeight);
+    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
     float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
     color.rgb *= tone;
     return color;
@@ -6427,13 +6470,15 @@ float straightCoastField() {
 }
 
 void main() {
+    vec3 materialPattern = terrainPattern();
+    terrainGradientX = dFdx(materialPattern.xy);
+    terrainGradientY = dFdy(materialPattern.xy);
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        terrainColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         return;
     }
 
-    vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
@@ -6478,12 +6523,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ? landformDebugColor() * (0.72 + lambertian * 0.28)
         : texColor.rgb * (0.55 + 0.55 * lambertian);
     if (vFogState < 1.5) color *= fogDarkenFactor;
-    gl_FragColor = vec4(color, 1.0);
+    terrainColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        terrainColor = mix(vec4(gridColor, 1.0), terrainColor, 1.0 - gridOpacity);
     }
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) terrainColor.rgb = applyGroundProjection(terrainColor.rgb, vWorldXZ);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 }
 `;
 
@@ -6723,8 +6769,6 @@ precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
 
-uniform vec4 textureAtlasMeta;
-
 // Curved coastline (see terrain.fragment.ts's coast block - this is its water
 // side): the shore-distance field is recomputed per-pixel and bent by the SAME
 // static world-space noise the land layer uses. The bend is one-sided (inland
@@ -6737,6 +6781,8 @@ uniform vec4 textureAtlasMeta;
 uniform float waterCornerRounding;
 uniform float coastCurvature;
 uniform float beachWidth;
+
+${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
 
 uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
@@ -6993,6 +7039,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
 ${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
@@ -7002,6 +7049,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
+
+${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
 
 uniform sampler2D fogMap;
 uniform float fogDarkenFactor;
@@ -7016,6 +7065,7 @@ uniform vec3 waterColorShallow;
 varying float vBorder;
 varying float vPriority;
 varying vec3 vNormal;
+varying vec3 vWorldPos;
 varying float vShoreT;
 varying float vFogState;
 varying vec2 vFogUV;
@@ -7038,6 +7088,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
 ${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
@@ -7079,7 +7130,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.modelAssets = options.modelAssets ?? new ModelAssetCache();
       this.buildAtlasCellIndex();
       this.fogTexture = this.loadFogTexture();
-      this.atlasTexture = this.loadAtlasTexture();
+      const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl);
+      this.atlasTexture = atlas.texture;
+      this.ready = atlas.ready;
       this.waterShallow = new three.Color(options.waterColorShallow ?? LandColor["coastal" /* coastal */]);
       this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
       const landTiles = [];
@@ -7237,11 +7290,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return geometry;
     }
     commonUniforms() {
-      const atlas = this.options.atlas;
       const size = this.options.size;
       const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
       return {
-        textureAtlasMeta: { value: new three.Vector4(atlas.width, atlas.height, atlas.cellSize, atlas.cellSpacing) },
         // One atlas cell spans a configurable world region (two hexes by
         // default) instead of restarting inside every tile. The unequal
         // axes match the flat-top hex lattice's column/row spacing.
@@ -7249,6 +7300,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           size * 1.5 * textureRegionSize,
           size * Math.sqrt(3) * textureRegionSize
         ) },
+        groundProjectionMap: { value: null },
+        groundProjectionBounds: { value: new three.Vector4(0, 0, 1, 1) },
+        groundProjectionEnabled: { value: 0 },
         hexSize: { value: size },
         map: { value: this.atlasTexture },
         sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] ?? 0 },
@@ -7278,23 +7332,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         landformDebugMode: { value: LANDFORM_DEBUG_VALUE[this.options.landformDebugMode ?? "off"] }
       };
     }
-    //Mipmapping a multi-cell texture atlas bleeds neighboring cells into each
-    //other at lower mip levels. Regional world-space sampling stays inset by
-    //atlas.cellSpacing, but lower mip texels would still cross a cell boundary,
-    //so keep plain bilinear filtering and accept modest distant shimmer.
-    loadAtlasTexture() {
-      const loader = new three.TextureLoader().setPath(this.options.texturesBaseUrl);
-      const atlasTexture = loader.load(this.options.atlas.image);
-      atlasTexture.wrapS = atlasTexture.wrapT = three.RepeatWrapping;
-      atlasTexture.generateMipmaps = false;
-      atlasTexture.minFilter = three.LinearFilter;
-      return atlasTexture;
-    }
     //war-fog.jpg (see FogOfWar.ts) - a single, non-atlased image sampled with
     //world-space UVs (see terrain/water vertex shaders' vFogUV), so one repeat
     //spans several tiles. RepeatWrapping is required for that (world UVs run
-    //far past 0..1); mipmaps are fine here, unlike the atlas (a standalone
-    //image has no neighboring cells to bleed into).
+    //far past 0..1); the standalone image uses the normal mip chain.
     loadFogTexture() {
       const loader = new three.TextureLoader().setPath(this.options.texturesBaseUrl);
       const texture = loader.load(this.options.fogTexture ?? "war-fog.jpg");
@@ -7333,6 +7374,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //interpolates between those 2 fixed extremes no matter the configured width.
     buildLandLayer(tiles) {
       this.landMaterial ?? (this.landMaterial = new three.RawShaderMaterial({
+        glslVersion: three.GLSL3,
         fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
@@ -7822,6 +7864,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     get lodBuildCount() {
       return this.lodBuilds;
+    }
+    setGroundProjection(projection) {
+      this.setMaterialProjection(this.landMaterial, projection);
+      this.setMaterialProjection(this.waterMaterial, projection);
+    }
+    setMaterialProjection(material, projection) {
+      if (!material) return;
+      const uniforms = material.uniforms;
+      uniforms.groundProjectionEnabled.value = projection ? 1 : 0;
+      uniforms.groundProjectionMap.value = projection?.target.texture ?? null;
+      if (projection) uniforms.groundProjectionBounds.value = projection.bounds;
     }
     disposeChunkGeometries(record) {
       const geometries = /* @__PURE__ */ new Set([record.mesh.geometry, ...record.lodGeometries.values()]);
@@ -10633,6 +10686,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         throw new TypeError("world render layer id must be a non-empty string");
       }
       if (this.layers.has(layer.id)) throw new Error(`world render layer "${layer.id}" is already registered`);
+      if (layer.groundProjection && this.projectionLayer) throw new Error("A ground projection layer is already registered");
       if (typeof layer.mountChunk !== "function" || typeof layer.unmountChunk !== "function" || typeof layer.dispose !== "function") {
         throw new TypeError("world render layer must implement mountChunk(), unmountChunk() and dispose()");
       }
@@ -10656,6 +10710,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     get(id) {
       return this.layers.get(id);
+    }
+    get projectionLayer() {
+      for (const layer of this.layers.values()) if (layer.groundProjection) return layer;
+      return void 0;
     }
     forKind(kind) {
       return this.kinds.get(kind);
@@ -16092,12 +16150,17 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         restores: this.contextRestores
       };
     }
-    render() {
+    render(projection) {
       if (this.disposed || this.contextState !== "ready") return;
       const measured = this.gpuTimer.begin();
+      const autoReset = this.renderer.info.autoReset;
       try {
+        this.renderer.info.autoReset = false;
+        this.renderer.info.reset();
+        projection?.render(this.renderer);
         this.renderer.render(this.scene, this.camera);
       } finally {
+        this.renderer.info.autoReset = autoReset;
         if (measured) this.gpuTimer.end();
       }
     }
@@ -17524,7 +17587,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           cpuFrameMs: this.lastCpuFrameMs,
           gpuFrameMs
         });
-        this.rendererHost.render();
+        const projectionLayer = this.worldRenderLayers.projectionLayer;
+        const projection = projectionLayer && this.initializedWorldRenderLayers.has(projectionLayer.id) ? projectionLayer.groundProjection : void 0;
+        this.terrain?.setGroundProjection(projection);
+        this.rendererHost.render(projection);
         this.lastCpuFrameMs = performance.now() - cpuFrameStart;
         this.emit("afterframe", {
           t,
@@ -19052,6 +19118,19 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldRoot.add(terrain);
       if (deferTiles) {
         for (const record of this.worldChunkLayers.values()) terrain.addTiles(record.points);
+      }
+      try {
+        await terrain.ready;
+      } catch (error) {
+        this.worldRoot.remove(terrain);
+        terrain.dispose();
+        if (this.terrain === terrain) this.terrain = void 0;
+        throw error;
+      }
+      if (this.disposed || expectedRevision !== this.loadRevision || this.terrain !== terrain) {
+        this.worldRoot.remove(terrain);
+        terrain.dispose();
+        return false;
       }
       if (!deferTiles) await terrain.loadCities();
       else if (this.worldStreamer) {
@@ -22090,6 +22169,56 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     return { data, w: width, h: height, wrapX: toroidal, wrapY: toroidal };
   }
+  var GroundProjection = class {
+    constructor(span, resolution) {
+      this.span = span;
+      this.root = new three.Group();
+      this.bounds = new three.Vector4();
+      this.scene = new three.Scene();
+      this.camera = new three.OrthographicCamera();
+      this.clearColor = new three.Color();
+      if (!Number.isFinite(span) || span <= 0 || !Number.isSafeInteger(resolution) || resolution < 1) {
+        throw new RangeError("Ground projection requires a positive span and integer resolution");
+      }
+      this.target = new three.WebGLRenderTarget(resolution, resolution, { depthBuffer: false, stencilBuffer: false });
+      this.target.texture.name = "ground-projection";
+      this.scene.add(this.root);
+      this.camera.up.set(0, 0, -1);
+      this.camera.near = 0.1;
+      this.camera.far = 2;
+      this.camera.left = this.camera.bottom = -span / 2;
+      this.camera.right = this.camera.top = span / 2;
+      this.camera.rotation.x = -Math.PI / 2;
+      this.camera.updateProjectionMatrix();
+      this.setCenter(0, 0, 1);
+    }
+    /** Source objects use logical tile-size units; bounds use the terrain's logical world units. */
+    setCenter(x, z, tileSize) {
+      if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError("Invalid ground projection coordinates");
+      const half = this.span / 2;
+      this.bounds.set((x - half) * tileSize, (z - half) * tileSize, this.span * tileSize, this.span * tileSize);
+      this.camera.position.set(x, 1, z);
+    }
+    render(renderer) {
+      const target = renderer.getRenderTarget(), alpha = renderer.getClearAlpha(), autoClear = renderer.autoClear;
+      const face = renderer.getActiveCubeFace(), level = renderer.getActiveMipmapLevel();
+      renderer.getClearColor(this.clearColor);
+      try {
+        renderer.setRenderTarget(this.target);
+        renderer.setClearColor(0, 0);
+        renderer.autoClear = true;
+        renderer.render(this.scene, this.camera);
+      } finally {
+        renderer.setRenderTarget(target, face, level);
+        renderer.setClearColor(this.clearColor, alpha);
+        renderer.autoClear = autoClear;
+      }
+    }
+    dispose() {
+      this.target.dispose();
+      this.root.clear();
+    }
+  };
 
   exports.AdaptiveStreamingController = AdaptiveStreamingController;
   exports.ChunkResidencyCoordinator = ChunkResidencyCoordinator;
@@ -22101,6 +22230,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.FogState = FogState;
   exports.FrameTaskScheduler = FrameTaskScheduler;
   exports.GameEngine = GameEngine;
+  exports.GroundProjection = GroundProjection;
   exports.HEXPolygon = HEXPolygon;
   exports.HexMap = HexMap;
   exports.HexMapInteractionController = HexMapInteractionController;

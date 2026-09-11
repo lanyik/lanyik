@@ -287,6 +287,35 @@ materials. Both quality paths use the same climate/elevation snowline; fast mode
 reuses its existing material macro instead of sampling extra noise. The
 continuous biome tint and summit snow add no terrain-atlas lookup.
 
+Terrain atlas PNGs remain the asset format, but `TerrainArrayTexture` strips each
+cell's gutter into an independent 252x252 layer for the default atlas. WebGL2 array
+textures generate a complete mip chain per layer, so distant minification no
+longer requires disabling mipmaps to avoid neighbouring material colours.
+Trilinear minification and requested 8x anisotropy (clamped by the renderer to
+hardware support) filter oblique views. Both land shaders use GLSL 3 and compute
+UV gradients before terrain/fog branches; `textureGrad` receives unwrapped
+world-space UVs and the sampler applies mirrored repeat. There is one array
+lookup site per material sample; full-quality biome edge blending still samples
+its contributing neighbours. Decode validates dimensions; image/decode failures
+reject terrain readiness and world loading, and disposed owners ignore late
+images. CPU layer storage and generated mip levels enter resource accounting.
+
+`GroundProjection` is an optional, single-owner `WorldRenderLayer` capability.
+Its owner supplies flat source objects and logical XZ bounds. `HexMapRendererHost`
+draws the bounded orthographic pass before the world and includes both passes in
+GPU timing and draw statistics. Full/fast terrain and water sample its
+premultiplied colour/coverage at actual surface fragments before horizon fog;
+ordinary objects are not receivers and preserve normal depth occlusion. Normal
+transparent stamps accumulate coverage; additive stamps preserve destination
+alpha. Unseen/explored terrain does not reveal current gameplay decals. A world
+only uses an initialized layer's projection; unregister/unload disconnects the
+receiver and the layer disposes its target. The pass restores the previous
+render target, clear colour/alpha and auto-clear setting even after an error.
+Render-target textures have GPU storage but no CPU pixel backing, and shared
+allocation identity prevents double charging the owner and terrain materials.
+See [skill presentation](game/skills-and-effects.md) for the survivor's 16 MiB
+projection budget and division between ground and airborne effects.
+
 Mountain height and lighting have separate continuity contracts. Heights still
 use the symmetric three-cell corner average. Lighting derives one slope from the
 same three tile-centre contributions at every shared corner, then interpolates

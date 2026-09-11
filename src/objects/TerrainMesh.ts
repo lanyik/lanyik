@@ -5,19 +5,22 @@ import {
     BufferGeometry,
     RawShaderMaterial,
     TextureLoader,
-    Vector4,
     Vector3,
     Vector2,
+    Vector4,
     Box3,
     Color,
     Group,
     Sprite,
     ColorRepresentation,
     RepeatWrapping,
-    LinearFilter,
+    GLSL3,
     Texture,
     Material
 } from "three";
+
+import { loadTerrainArrayTexture } from "../rendering/TerrainArrayTexture";
+import type { GroundProjection } from "../rendering/GroundProjection";
 
 import { MapInfo, TileInfo, Point } from "../interfaces";
 import { Land, LandPriority, LandColor } from "../enums";
@@ -282,6 +285,7 @@ interface TerrainChunkRecord {
 //"what to blend towards" decision.
 //----------------------------------------------------------------------------------
 export class TerrainMesh extends Group {
+    public readonly ready: Promise<void>;
     private landChunks: Mesh[] = [];
     private landMaterial: RawShaderMaterial | undefined;
     private waterChunks: Mesh[] = [];
@@ -322,10 +326,9 @@ export class TerrainMesh extends Group {
         this.modelAssets = options.modelAssets ?? new ModelAssetCache();
         this.buildAtlasCellIndex();
         this.fogTexture = this.loadFogTexture();
-        //One shared texture for both layers (via commonUniforms) - only the
-        //land shader samples it today, but it's shared so a water-side use
-        //never duplicates the load.
-        this.atlasTexture = this.loadAtlasTexture();
+        const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl);
+        this.atlasTexture = atlas.texture;
+        this.ready = atlas.ready;
         this.waterShallow = new Color(options.waterColorShallow ?? LandColor[Land.coastal]);
         this.waterDeep = new Color(options.waterColorDeep ?? LandColor[Land.sea]);
 
@@ -518,11 +521,9 @@ export class TerrainMesh extends Group {
     }
 
     private commonUniforms() {
-        const atlas = this.options.atlas;
         const size = this.options.size;
         const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
         return {
-            textureAtlasMeta: { value: new Vector4(atlas.width, atlas.height, atlas.cellSize, atlas.cellSpacing) },
             // One atlas cell spans a configurable world region (two hexes by
             // default) instead of restarting inside every tile. The unequal
             // axes match the flat-top hex lattice's column/row spacing.
@@ -530,6 +531,9 @@ export class TerrainMesh extends Group {
                 size * 1.5 * textureRegionSize,
                 size * Math.sqrt(3) * textureRegionSize
             ) },
+            groundProjectionMap: { value: null },
+            groundProjectionBounds: { value: new Vector4(0, 0, 1, 1) },
+            groundProjectionEnabled: { value: 0 },
             hexSize: { value: size },
             map: { value: this.atlasTexture },
             sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] ?? 0 },
@@ -560,24 +564,10 @@ export class TerrainMesh extends Group {
         };
     }
 
-    //Mipmapping a multi-cell texture atlas bleeds neighboring cells into each
-    //other at lower mip levels. Regional world-space sampling stays inset by
-    //atlas.cellSpacing, but lower mip texels would still cross a cell boundary,
-    //so keep plain bilinear filtering and accept modest distant shimmer.
-    private loadAtlasTexture() {
-        const loader = new TextureLoader().setPath(this.options.texturesBaseUrl);
-        const atlasTexture = loader.load(this.options.atlas.image);
-        atlasTexture.wrapS = atlasTexture.wrapT = RepeatWrapping;
-        atlasTexture.generateMipmaps = false;
-        atlasTexture.minFilter = LinearFilter;
-        return atlasTexture;
-    }
-
     //war-fog.jpg (see FogOfWar.ts) - a single, non-atlased image sampled with
     //world-space UVs (see terrain/water vertex shaders' vFogUV), so one repeat
     //spans several tiles. RepeatWrapping is required for that (world UVs run
-    //far past 0..1); mipmaps are fine here, unlike the atlas (a standalone
-    //image has no neighboring cells to bleed into).
+    //far past 0..1); the standalone image uses the normal mip chain.
     private loadFogTexture(): Texture {
         const loader = new TextureLoader().setPath(this.options.texturesBaseUrl);
         const texture = loader.load(this.options.fogTexture ?? "war-fog.jpg");
@@ -621,6 +611,7 @@ export class TerrainMesh extends Group {
     //interpolates between those 2 fixed extremes no matter the configured width.
     private buildLandLayer(tiles: Point[]): void {
         this.landMaterial ??= new RawShaderMaterial({
+            glslVersion: GLSL3,
             fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
@@ -1162,6 +1153,19 @@ export class TerrainMesh extends Group {
 
     public get lodBuildCount(): number {
         return this.lodBuilds;
+    }
+
+    public setGroundProjection(projection: GroundProjection | undefined): void {
+        this.setMaterialProjection(this.landMaterial, projection);
+        this.setMaterialProjection(this.waterMaterial, projection);
+    }
+
+    private setMaterialProjection(material: RawShaderMaterial | undefined, projection: GroundProjection | undefined): void {
+        if (!material) return;
+        const uniforms = material.uniforms;
+        uniforms.groundProjectionEnabled.value = projection ? 1 : 0;
+        uniforms.groundProjectionMap.value = projection?.target.texture ?? null;
+        if (projection) uniforms.groundProjectionBounds.value = projection.bounds;
     }
 
     private disposeChunkGeometries(record: TerrainChunkRecord): void {

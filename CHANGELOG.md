@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Terrain-received ground projections for survivor skill rings, path warnings,
+  player auras and contact shadows, with one bounded render target. Actors and
+  pickups now interpolate the terrain surface instead of using one height per hex.
+- Bounded spatial grids for targeting, area skills, healing, pickups and swept
+  projectile candidates; collision Workers dispatch by actual candidate count.
+- Independent mipmapped terrain texture-array layers, trilinear minification
+  and anisotropic sampling to remove atlas minification aliasing without colour bleed.
+
 - Bounded SoA ECS for survivor entities with generation-safe handles, stable
   component slots, cached queries and staged damage resolution. Shared reactive
   behavior trees drive territorial pursuit, interruptible melee windup/recovery,

@@ -9,6 +9,7 @@ import { RARITIES } from "./Equipment";
 import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn } from "./RegionalWorld";
 import type { InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
+import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
@@ -40,6 +41,8 @@ export class CombatWorld {
     public readonly experience = this.world.query(Component.Experience);
     public readonly loot = this.world.query(Component.GroundItem);
     public readonly player: number;
+    public readonly spatial = new SpatialGrid(ENTITY_CAPACITY);
+    private readonly nearby = new SpatialQuery(ENTITY_CAPACITY);
     public readonly impacts = new DamageBuffer();
     public readonly effects = new CombatEffects();
     public readonly status = { slowUntil: new Float64Array(ENTITY_CAPACITY), slowScale: new Float32Array(ENTITY_CAPACITY) };
@@ -108,7 +111,7 @@ export class CombatWorld {
         a.target[slot] = a.variant[slot] = 0;
         a.kind[slot] = ActorAction.Idle; a.started[slot] = a.hitAt[slot] = a.endsAt[slot] = a.readyAt[slot] = a.progress[slot] = a.committed[slot] = 0;
         const radius = definition.radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
-        this.place(slot, spawn.x, spawn.z, radius);
+        this.place(slot, spawn.x, spawn.z, radius, Component.Enemy);
         a.reach[slot] = definition.ranged ? (spawn.boss ? 9 : definition.reach) : radius + PLAYER_RADIUS + definition.reach;
         v.health[slot] = v.maxHealth[slot] = definition.health * scale * (spawn.boss ? 16 : spawn.elite ? 4 : 1);
         v.mana[slot] = v.hitFlash[slot] = 0; v.faction[slot] = Faction.Enemy;
@@ -132,19 +135,20 @@ export class CombatWorld {
             return;
         }
         const slot = this.world.create(Component.Position | Component.Experience);
-        this.place(slot, x, z, 0);
+        this.place(slot, x, z, 0, Component.Experience);
         this.experienceValue[slot] = value;
     }
 
     public spawnLoot(item: InventoryItem, x: number, z: number): void {
         if (this.loot.count === MAX_GROUND_EQUIPMENT) throw new Error("Ground loot capacity changed during creation");
         const slot = this.world.create(Component.Position | Component.GroundItem);
-        this.place(slot, x, z, 0);
+        this.place(slot, x, z, 0, Component.GroundItem);
         this.item.id[slot] = item.id; this.item.rarity[slot] = RARITIES.indexOf(item.rarity);
         this.item.kind[slot] = item.type === "orb" ? 1 : item.type === "consumable" ? 2 : 0;
     }
 
     public remove(slot: number): void {
+        this.spatial.remove(slot);
         this.enemy.homes[slot] = this.enemy.regions[slot] = undefined;
         this.enemy.target[slot] = this.projectile.source[slot] = 0;
         this.enemy.supportTarget[slot] = this.action.target[slot] = 0;
@@ -153,9 +157,29 @@ export class CombatWorld {
         this.world.destroy(this.world.ids[slot]);
     }
 
-    private place(slot: number, x: number, z: number, radius: number): void {
+    public updateSpatial(slot: number, category: number): void {
+        const p = this.position;
+        this.spatial.update(slot, p.x[slot], p.z[slot], p.radius[slot], category);
+    }
+
+    public queryNearby(category: number, x: number, z: number, radius: number, includeBody = false, ordered = false): SpatialQuery {
+        const extent = radius + (includeBody ? this.spatial.maximumRadius : 0), result = this.nearby, p = this.position;
+        this.spatial.query(x - extent, z - extent, x + extent, z + extent, category, result);
+        let count = 0;
+        for (let i = 0; i < result.count; i++) {
+            const slot = result.slots[i], reach = radius + (includeBody ? p.radius[slot] : 0);
+            if ((p.x[slot] - x) ** 2 + (p.z[slot] - z) ** 2 <= reach * reach) result.slots[count++] = slot;
+        }
+        result.count = count;
+        // Side effects consume RNG/inventory in stable handle order, independent of hash-chain order.
+        if (ordered) result.slots.subarray(0, count).sort((a, b) => this.world.ids[a] - this.world.ids[b]);
+        return result;
+    }
+
+    private place(slot: number, x: number, z: number, radius: number, category = 0): void {
         const p = this.position;
         p.x[slot] = p.previousX[slot] = x; p.z[slot] = p.previousZ[slot] = z;
         p.radius[slot] = radius; p.heading[slot] = 0;
+        if (category) this.updateSpatial(slot, category);
     }
 }

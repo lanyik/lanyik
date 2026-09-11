@@ -1,4 +1,4 @@
-import { CombatWorld } from "./CombatWorld";
+import { CombatWorld, Component } from "./CombatWorld";
 import { EffectKind } from "./CombatEffects";
 import { rollAttack, type DerivedStats } from "./CombatStats";
 import type { DeterministicRandom } from "./DeterministicRandom";
@@ -56,7 +56,7 @@ export class SkillSystem {
 
     public cast(id: SkillId, tick: number, stats: DerivedStats, level: number, random: DeterministicRandom, automatic = false): boolean {
         const i = skillIndex(id), definition = SKILLS[id];
-        const { position: p, vitals: v, player, enemies, impacts, world, effects, status } = this.entities;
+        const { position: p, vitals: v, player, impacts, world, effects, status } = this.entities;
         if (!this.loadout.includes(id) || level < definition.unlock || tick < this.readyAt[i] || this.dashing(tick)
             || v.mana[player] < definition.mana || automatic && !definition.automatic) return false;
         const values = skillValues(id, this.ranks[i], stats), x = p.x[player], z = p.z[player];
@@ -75,6 +75,7 @@ export class SkillSystem {
             let fromX = x, fromZ = z, hits = 0;
             for (; hits < values.targets; hits++) {
                 let nearest = hits === 0 ? 7 * 7 : 4 * 4, target = -1;
+                const enemies = this.entities.queryNearby(Component.Enemy, fromX, fromZ, Math.sqrt(nearest));
                 for (let cursor = 0; cursor < enemies.count; cursor++) {
                     const slot = enemies.slots[cursor];
                     let visited = false;
@@ -92,9 +93,9 @@ export class SkillSystem {
             if (!hits) return false;
         } else {
             let hits = 0;
+            const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius, true, true);
             for (let cursor = 0; cursor < enemies.count; cursor++) {
                 const slot = enemies.slots[cursor];
-                if (Math.hypot(p.x[slot] - x, p.z[slot] - z) > values.radius + p.radius[slot]) continue;
                 impacts.add(world.ids[player], world.ids[slot], rollAttack(stats, random, values.damage).damage);
                 if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = .5; }
                 hits++;

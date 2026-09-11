@@ -501,6 +501,11 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 - 生成渲染属性。
 - 管理 LOD、材质、迷雾和资源生命周期。
 
+运行时将原图集去边距后拆成独立纹理层，启用逐层 mipmap、三线性缩小过滤和 8× 各向异性请求。
+full/fast 土地材质使用 GLSL 3，在材质分支前计算未折叠世界 UV 的梯度，以 textureGrad 配合采样器镜像重复，避免缩小混叠与跨地形串色。
+可选的 GroundProjection 在独立俯视通道绘制地面印记，由土地/水面实际片元接收；不改变地形几何、surface authority 或生成输入。
+纹理加载、资源预算和投影所有权见[渲染合同](render-streaming.md)。
+
 每次渲染块构建使用自己的短命采样窗口。区块卸载、地形编辑或 WebGL 上下文恢复后，从当前 MapInfo 和解析器重建。
 
 ### 9.2 顶点属性限制
@@ -514,7 +519,7 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 - style 扩为 vec4 已完成。
 - fogState 已扩为 vec4：x 存迷雾，y/z/w 存 dry/cold/alpine，temperate 由总和推导。
 - landform attribute 继续保存四种生成器调试字段；顶点阶段把最终有效 elevation 写入 vLandform.x，并保留 y/z/w 的 ridge/valley/roughness，已删除重复的 vElevation varying。
-- full/fast 材质都使用同一组连续 biome 权重做色调、冷暖和高山去饱和混合，不增加 atlas 采样；每个 fragment 仍只有一次地形纹理读取。
+- full/fast 材质都使用同一组连续 biome 权重做色调、冷暖和高山去饱和混合，biome 权重本身不增加地形采样；每次材质采样只读一个纹理层，full 路径在边界另外读取参与混合的邻居材质。
 
 硬门槛：
 

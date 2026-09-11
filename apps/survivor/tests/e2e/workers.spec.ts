@@ -3,7 +3,7 @@ import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatTransport } from "../../src/app/CombatTransport";
-import type { HexMap, HexMapFrameEndEvent } from "three-hex-map";
+import type { HexMap, HexMapFrameEndEvent, GroundProjection } from "three-hex-map";
 import type { CombatLayer } from "../../src/presentation/CombatLayer";
 import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 
@@ -20,9 +20,9 @@ async function startCrowdedCombat(page: Page): Promise<void> {
         while (e.enemies.count) e.remove(e.enemies.slots[0]);
         while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
         fixture.attackCooldown = 1000; fixture.autoCast = false;
-        for (let i = 0; i < 640; i++) e.spawnEnemy({ x: player.x + 6, z: player.z + i / 640, kind: 0,
+        for (let i = 0; i < 640; i++) e.spawnEnemy({ x: player.x + 6, z: player.z + i / 64000, kind: 0,
             level: 1, elite: false, boss: false, region: fixture.world.regionAt(player.x, player.z) }, fixture.world.chunks.get("0,0")!);
-        for (let i = 0; i < 128; i++) e.spawnProjectile(e.world.ids[e.player], 0, player.x + 100, player.z + 100, .01, 0, 1, 1000);
+        for (let i = 0; i < 128; i++) e.spawnProjectile(e.world.ids[e.player], 0, player.x + 5.61, player.z + .39, .01, 0, 1, 1000);
     });
     await advanceCombat(page, 1);
     const stats = await page.evaluate(() => window.survivorApplication!.session.diagnostics);
@@ -46,11 +46,11 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
     await advanceCombat(page);
     const order = await page.evaluate(async () => {
         const view = (window.survivorApplication!.session as unknown as { view: { map: HexMap; layer: CombatLayer } }).view;
-        const renderer = (view.map as unknown as { rendererHost: { render(): void } }).rendererHost;
+        const renderer = (view.map as unknown as { rendererHost: { render(projection?: GroundProjection): void } }).rendererHost;
         const update = view.layer.update, draw = renderer.render, phases: string[] = [];
         return new Promise<{ phases: string[]; cpuMs: number }>(resolve => {
             view.layer.update = (...args) => { phases.push("presentation"); update.apply(view.layer, args); };
-            renderer.render = () => { phases.push("draw"); draw.call(renderer); };
+            renderer.render = (...args) => { phases.push("draw"); draw.apply(renderer, args); };
             const after = (frame: HexMapFrameEndEvent) => {
                 phases.push("after"); view.map.off("afterframe", after);
                 view.layer.update = update; renderer.render = draw;

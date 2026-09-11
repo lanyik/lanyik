@@ -16,6 +16,7 @@ import {
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 
 import { WebGlGpuTimer, WebGlGpuTimerStats } from "./WebGlGpuTimer";
+import type { GroundProjection } from "./GroundProjection";
 
 export interface HexMapRendererHostOptions {
     canvas: HTMLCanvasElement;
@@ -114,12 +115,17 @@ export class HexMapRendererHost {
         };
     }
 
-    public render(): void {
+    public render(projection?: GroundProjection): void {
         if (this.disposed || this.contextState !== "ready") return;
         const measured = this.gpuTimer.begin();
+        const autoReset = this.renderer.info.autoReset;
         try {
+            this.renderer.info.autoReset = false;
+            this.renderer.info.reset();
+            projection?.render(this.renderer);
             this.renderer.render(this.scene, this.camera);
         } finally {
+            this.renderer.info.autoReset = autoReset;
             if (measured) this.gpuTimer.end();
         }
     }

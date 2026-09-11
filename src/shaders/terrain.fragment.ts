@@ -1,3 +1,4 @@
+import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const TERRAIN_FRAGMENT_SHADER = `
@@ -7,10 +8,14 @@ export const TERRAIN_FRAGMENT_SHADER = `
 // highp for the same reason (its foam uses the same hash).
 precision highp float;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-uniform sampler2D map;
-uniform vec4 textureAtlasMeta;
+${GROUND_PROJECTION_HEADER}
+
+uniform highp sampler2DArray map;
+vec2 terrainGradientX;
+vec2 terrainGradientY;
+out vec4 terrainColor;
 uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
@@ -37,7 +42,7 @@ uniform vec3 seaColorDeep;      // instances as the water layer's
 // read as patchy growth instead of straight strips parallel to hex edges.
 uniform float landBlendCurvature; // 0..1
 
-uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV (not atlas-indexed)
+uniform sampler2D fogMap;        // war-fog.jpg, continuous world-space UVs
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
 
 uniform float showGrid;
@@ -74,31 +79,30 @@ uniform vec3 riverColorShallow; // water color at the banks
 uniform vec3 riverColorDeep;    // water color over the channel centerline / lake body
 uniform vec3 riverBankColor;    // vegetation strip hugging the waterline
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying float vModifiers;
-varying float vPriority;
-varying vec3 vNeighborsA;
-varying vec3 vNeighborsB;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec3 vNormal;
-varying float vBeachT;
-varying float vFogState;
-varying vec2 vFogUV;
-varying float vRiverEdges;
-varying float vRiverSeaMouthEdges;
-varying float vRiverLakeMouthEdges;
-varying float vLakeNeighborEdges;
-varying vec2 vLocal;
-varying vec2 vWorldXZ;
-varying vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
-varying vec3 vNeighborsKindB; // (NW,N,NE)
-varying vec4 vLandform;       // final elevation, generated ridge, valley, roughness
-varying vec4 vBiomeWeights;   // temperate, dry, cold, alpine
+in float vBorder;
+in float vTerrain;
+in float vModifiers;
+in float vPriority;
+in vec3 vNeighborsA;
+in vec3 vNeighborsB;
+in vec3 vNeighborsPriorityA;
+in vec3 vNeighborsPriorityB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec3 vNormal;
+in float vBeachT;
+in float vFogState;
+in vec2 vFogUV;
+in float vRiverEdges;
+in float vRiverSeaMouthEdges;
+in float vRiverLakeMouthEdges;
+in float vLakeNeighborEdges;
+in vec2 vLocal;
+in vec2 vWorldXZ;
+in vec3 vNeighborsKindA; // -1 no tile, 0 land, 1 sea, 2 coastal (SE,S,SW)
+in vec3 vNeighborsKindB; // (NW,N,NE)
+in vec4 vLandform;       // final elevation, generated ridge, valley, roughness
+in vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -231,31 +235,11 @@ vec3 terrainPattern() {
     float macro = valueNoise(macroP);
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
-    // Mirrored repeat joins the same source edge to itself at every regional
-    // boundary, even when the atlas cell was not authored as tileable.
-    vec2 regionUV = 1.0 - abs(phase - 1.0);
-    return vec3(regionUV, macro);
-}
-
-// Select one atlas cell by terrain type, then reuse the shared, warped phase.
-vec2 cellIndexToUV(float idx, vec2 regionUV) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float inset = max(textureAtlasMeta.w, 0.5);
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
-    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
-    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
-        / vec2(atlasWidth, atlasHeight);
+    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
     float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
     vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
     color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
@@ -292,7 +276,7 @@ vec3 applyBiomeMaterial(vec3 color) {
 // one-directional transition.
 //
 // bend (world-space noise, shared by all 6 calls) shifts the band's position
-// so the border meanders instead of running parallel to the hex edge; patch
+// so the border meanders instead of running parallel to the hex edge; patchStrength
 // modulates its strength so the mixed-in texture reads as patchy growth.
 vec4 blendEdge(
     vec4 inputColor,
@@ -300,7 +284,7 @@ vec4 blendEdge(
     float neighborPriority,
     float factor,
     float bend,
-    float patch,
+    float patchStrength,
     vec3 pattern
 ) {
     if (neighborTerrain < 0.0 || neighborTerrain == vTerrain) return inputColor;
@@ -309,7 +293,7 @@ vec4 blendEdge(
     vec4 neighborColor = sampleTerrainCell(neighborTerrain, pattern);
 
     float e0 = 1.0 - clamp(landBlendWidth, 0.001, 1.0);
-    float t = smoothstep(e0, 1.0, factor + bend) * patch;
+    float t = smoothstep(e0, 1.0, factor + bend) * patchStrength;
     return mix(inputColor, neighborColor, t);
 }
 
@@ -427,18 +411,20 @@ float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
 }
 
 void main() {
+    vec3 materialPattern = terrainPattern();
+    terrainGradientX = dFdx(materialPattern.xy);
+    terrainGradientY = dFdy(materialPattern.xy);
     // Unseen: replace the tile outright with the war-fog texture, skipping
     // every other layer/lighting/grid computation below. vFogUV is computed
     // from *world* position (see terrain.vertex.ts), so one repeat of the
     // texture spans several tiles and flows seamlessly across every fogged
     // hex - no per-tile square-texture-in-a-hex seams.
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        terrainColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         return;
     }
 
-    vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
 
     if (landBlendEnabled > 0.5) {
@@ -631,11 +617,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     // keep every feature visible, just darker - the "remembered" Civ-style look.
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
-    gl_FragColor = vec4(color, 1.0);
+    terrainColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        terrainColor = mix(vec4(gridColor, 1.0), terrainColor, 1.0 - gridOpacity);
     }
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) terrainColor.rgb = applyGroundProjection(terrainColor.rgb, vWorldXZ);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 }
 `;

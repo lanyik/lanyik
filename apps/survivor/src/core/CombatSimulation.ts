@@ -21,7 +21,7 @@ import { insertInventoryItem, mergeInventory } from "./Inventory";
 import type { ItemType } from "./ItemDefinition";
 import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 
-import { ActorAction, CombatWorld, Faction } from "./CombatWorld";
+import { ActorAction, CombatWorld, Component, Faction } from "./CombatWorld";
 import { EnemyBehavior } from "./EnemyBehavior";
 import { SimulationTasks } from "./SimulationTasks";
 import type { ProjectileExecutor } from "./ProjectileBatch";
@@ -56,6 +56,8 @@ function validatePosition(x: number, z: number): void {
  * the ECS; inventory and progression remain low-frequency domain data.
  */
 export class CombatSimulation {
+    private readonly movingExperience = new Float64Array(GAME_CONFIG.combat.maxExperienceOrbs);
+    private movingExperienceCount = 0;
     public readonly tasks: SimulationTasks;
     private random: DeterministicRandom;
     private readonly entities: CombatWorld;
@@ -544,8 +546,9 @@ export class CombatSimulation {
         if (this.attackCooldown > 0 || this.entities.projectiles.count === MAX_PROJECTILES) return;
         let target = -1;
         let nearest = this.stats.attackRange * this.stats.attackRange;
-        for (let cursor = 0; cursor < this.entities.enemies.count; cursor += 1) {
-            const index = this.entities.enemies.slots[cursor];
+        const enemies = this.entities.queryNearby(Component.Enemy, this.playerX, this.playerZ, this.stats.attackRange);
+        for (let cursor = 0; cursor < enemies.count; cursor += 1) {
+            const index = enemies.slots[cursor];
             const dx = this.entities.position.x[index] - this.playerX;
             const dz = this.entities.position.z[index] - this.playerZ;
             const distance = dx * dx + dz * dz;
@@ -607,54 +610,38 @@ export class CombatSimulation {
     }
 
     private advanceExperience(): void {
-        let cursor = 0;
-        while (cursor < this.entities.experience.count) {
-            const index = this.entities.experience.slots[cursor];
-            const x = this.entities.position.x[index];
-            const z = this.entities.position.z[index];
-            this.entities.position.previousX[index] = x;
-            this.entities.position.previousZ[index] = z;
-            let dx = this.playerX - x;
-            let dz = this.playerZ - z;
-            let distance = Math.hypot(dx, dz);
-            if (distance <= this.stats.pickupRadius) {
-                if (distance > 0) {
-                    dx /= distance;
-                    dz /= distance;
-                    const travel = Math.min(distance, (5 + (this.stats.pickupRadius - distance) * 2.2) * STEP_SECONDS);
-                    this.entities.position.x[index] += dx * travel;
-                    this.entities.position.z[index] += dz * travel;
-                    distance -= travel;
-                }
-                if (distance <= 0.25) {
-                    this.gainExperience(this.entities.experienceValue[index]);
-                    this.entities.remove(index);
-                    continue;
-                }
+        const e = this.entities;
+        // Reset only the previous frame's movers, including orbs that just left pickup range.
+        for (let i = 0; i < this.movingExperienceCount; i++) {
+            const slot = e.world.resolve(this.movingExperience[i]);
+            if (slot >= 0) { e.position.previousX[slot] = e.position.x[slot]; e.position.previousZ[slot] = e.position.z[slot]; }
+        }
+        this.movingExperienceCount = 0;
+        const nearby = e.queryNearby(Component.Experience, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
+        for (let cursor = 0; cursor < nearby.count; cursor++) {
+            const index = nearby.slots[cursor];
+            const x = e.position.x[index], z = e.position.z[index];
+            e.position.previousX[index] = x; e.position.previousZ[index] = z;
+            const dx = this.playerX - x, dz = this.playerZ - z, distance = Math.hypot(dx, dz);
+            const travel = Math.min(distance, (5 + (this.stats.pickupRadius - distance) * 2.2) * STEP_SECONDS);
+            if (distance - travel <= .25) {
+                this.gainExperience(e.experienceValue[index]); e.remove(index);
+            } else {
+                e.position.x[index] += dx / distance * travel; e.position.z[index] += dz / distance * travel;
+                e.updateSpatial(index, Component.Experience);
+                this.movingExperience[this.movingExperienceCount++] = e.world.ids[index];
             }
-            cursor += 1;
         }
     }
 
     private collectEquipment(): void {
-        let cursor = 0;
-        while (cursor < this.entities.loot.count) {
-            const index = this.entities.loot.slots[cursor];
-            const dx = this.playerX - this.entities.position.x[index];
-            const dz = this.playerZ - this.entities.position.z[index];
-            if (dx * dx + dz * dz > 0.75 * 0.75) {
-                cursor += 1;
-                continue;
-            }
-            const id = this.entities.item.id[index];
+        const nearby = this.entities.queryNearby(Component.GroundItem, this.playerX, this.playerZ, .75, false, true);
+        for (let cursor = 0; cursor < nearby.count; cursor++) {
+            const index = nearby.slots[cursor], id = this.entities.item.id[index];
             const item = this.groundItems.get(id);
             if (!item) throw new Error(`Ground equipment ${id} is missing`);
             const clear = this.shouldAutoClear(item);
-            if (!this.storeInventoryItem(item)) {
-                this.notifyInventoryFull(item.type);
-                cursor += 1;
-                continue;
-            }
+            if (!this.storeInventoryItem(item)) { this.notifyInventoryFull(item.type); continue; }
             this.groundItems.delete(id);
             this.entities.remove(index);
             this.inventoryFullNotified = false;

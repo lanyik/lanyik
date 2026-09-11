@@ -9,7 +9,7 @@ export const TERRAIN_VERTEX_SHADER = `
 // the vertex side of the interpolation.
 precision highp float;
 
-${HORIZON_FOG_VERTEX_VARYING}
+${HORIZON_FOG_VERTEX_VARYING.replace(/varying /g, "out ")}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -53,60 +53,58 @@ uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local f
 uniform vec2 worldCenter; // camera target on the ground plane
 uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
-attribute vec3 position;
-attribute vec2 uv;
+in vec3 position;
 
-attribute vec2 offset;       // world-space (x,z) offset of this tile instance
-attribute vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
-attribute vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
-attribute vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
-attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
-attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
-attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
-attribute vec3 neighborsKindB; // NW/N/NE
+in vec2 offset;       // world-space (x,z) offset of this tile instance
+in vec4 style;        // x = atlas cell index, y = modifiers, z = edge priority, w = authoritative center relief
+in vec3 neighborsA;   // atlas cell index of SE/S/SW neighbor (-1 = none)
+in vec3 neighborsB;   // atlas cell index of NW/N/NE neighbor (-1 = none)
+in vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
+in vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
+in vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
+in vec3 neighborsKindB; // NW/N/NE
 // x = river/lake encoding, y/z = sea/lake mouth masks, w = adjacent-lake
 // mask. Packed to leave two attribute slots for neighbour relief samples.
-attribute vec4 waterEdges;
+in vec4 waterEdges;
 // x = fog state; y/z/w = dry/cold/alpine biome weights. Temperate is inferred
-// as 1 - y - z - w, keeping terrain at the existing 15 attribute locations.
-attribute vec4 fogState;
+// as 1 - y - z - w, keeping terrain within 15 attribute locations.
+in vec4 fogState;
 // x elevation, y ridge strength, z valley strength, w roughness. Values are
 // sampled in global tile coordinates by LandformSampler, so chunk order and
 // worker count cannot change the visible macro landform.
-attribute vec4 landform;
+in vec4 landform;
 // Normalized mountain relief sampled at SE/S/SW and NW/N/NE tile centres.
 // Together with style.w at this tile centre these define a continuous fan
 // surface whose shared edge endpoints are identical in adjacent instances.
-attribute vec3 reliefNeighborsA;
-attribute vec3 reliefNeighborsB;
+in vec3 reliefNeighborsA;
+in vec3 reliefNeighborsB;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying float vModifiers;
-varying float vPriority;
-varying vec3 vNeighborsA;
-varying vec3 vNeighborsB;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vEdgeFactorsA; // SE, S, SW
-varying vec3 vEdgeFactorsB; // NW, N, NE
-varying vec3 vNormal;
-varying float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
-varying float vFogState;
-varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
-varying float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
-varying float vRiverSeaMouthEdges;
-varying float vRiverLakeMouthEdges;
-varying float vLakeNeighborEdges;
-varying vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
-varying vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
-varying vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
-varying vec3 vNeighborsKindB;
+out float vBorder;
+out float vTerrain;
+out float vModifiers;
+out float vPriority;
+out vec3 vNeighborsA;
+out vec3 vNeighborsB;
+out vec3 vNeighborsPriorityA;
+out vec3 vNeighborsPriorityB;
+out vec3 vEdgeFactorsA; // SE, S, SW
+out vec3 vEdgeFactorsB; // NW, N, NE
+out vec3 vNormal;
+out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
+out float vFogState;
+out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
+out float vRiverEdges; // riverEdges passed through (flat per tile - every vertex of an instance carries the same value)
+out float vRiverSeaMouthEdges;
+out float vRiverLakeMouthEdges;
+out float vLakeNeighborEdges;
+out vec2 vLocal;       // tile-local (x,z), for the fragment stage's channel distance
+out vec2 vWorldXZ;     // world (x,z), for the fragment stage's world-space bank/ripple noise
+out vec3 vNeighborsKindA; // passed through for the fragment stage's per-pixel curved coastline
+out vec3 vNeighborsKindB;
 // x = final normalized macro+detail elevation; y/z/w = generated
 // ridge/valley/roughness. Reusing x avoids a duplicate elevation varying.
-varying vec4 vLandform;
-varying vec4 vBiomeWeights; // temperate, dry, cold, alpine
+out vec4 vLandform;
+out vec4 vBiomeWeights; // temperate, dry, cold, alpine
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -483,7 +481,6 @@ void main() {
     // (not just at its endpoints), so reusing their max is the correct metric.
     float rimFactor = max(max(max(vEdgeFactorsA.x, vEdgeFactorsA.y), max(vEdgeFactorsA.z, vEdgeFactorsB.x)), max(vEdgeFactorsB.y, vEdgeFactorsB.z));
 
-    vUV = uv;
     vBorder = clamp(rimFactor, 0.0, 1.0);
     vTerrain = style.x;
     vModifiers = style.y;

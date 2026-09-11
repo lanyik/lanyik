@@ -611,7 +611,7 @@ function textureResourceBytes(texture: Texture): BufferGeometryResourceBytes {
         ? Math.ceil(baseBytes / 3)
         : 0;
     return {
-        cpuBytes: baseBytes + mipmapBytes,
+        cpuBytes: texture.isRenderTargetTexture ? 0 : baseBytes + mipmapBytes,
         gpuBytes: baseBytes + mipmapBytes + generatedMipBytes
     };
 }

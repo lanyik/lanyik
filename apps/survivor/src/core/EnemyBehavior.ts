@@ -1,5 +1,5 @@
 import { BehaviorTree, BehaviorStatus, type BehaviorNode } from "./BehaviorTree";
-import { ActorAction, CombatWorld, MoveIntent } from "./CombatWorld";
+import { ActorAction, CombatWorld, Component, MoveIntent } from "./CombatWorld";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
 import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
@@ -166,7 +166,8 @@ export class EnemyBehavior {
             && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius;
     }
     private senseAlly(slot: number): void {
-        const { enemy: e, enemies, vitals: v, position: p, world } = this.entities;
+        const { enemy: e, vitals: v, position: p, world } = this.entities;
+        const enemies = this.entities.queryNearby(Component.Enemy, p.x[slot], p.z[slot], ENEMY_SPECIAL.heal.radius);
         let target = -1, lowest: number = ENEMY_SPECIAL.heal.threshold;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const ally = enemies.slots[cursor], ratio = v.health[ally] / v.maxHealth[ally];

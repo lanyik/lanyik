@@ -6,6 +6,7 @@ import { WorldChunk, WorldSource } from "../world/WorldSource";
 import { WorldChunkActivation } from "./WorldChunkScheduler";
 import type { WorldRenderRefreshKind } from "../world/WorldEditingFacade";
 import type { WorldSurfaceAnchor } from "../world/WorldSurfaceView";
+import type { GroundProjection } from "./GroundProjection";
 
 export interface WorldRenderLayerHost {
     readonly map: MapInfo;
@@ -40,6 +41,8 @@ export interface WorldRenderTileRefreshContext extends WorldRenderLayerHost {
 //those values so scheduler callbacks route back to the layer.
 export interface WorldRenderLayer {
     readonly id: string;
+    /** At most one layer owns the world's ground projection; the layer disposes its resources. */
+    readonly groundProjection?: GroundProjection;
     readonly kinds?: readonly WorldChunkKind[];
     initialize?(host: WorldRenderLayerHost): void | Promise<void>;
     unloadWorld?(host: WorldRenderLayerHost): void;
@@ -80,6 +83,7 @@ export class WorldRenderLayerRegistry {
             throw new TypeError("world render layer id must be a non-empty string");
         }
         if (this.layers.has(layer.id)) throw new Error(`world render layer "${layer.id}" is already registered`);
+        if (layer.groundProjection && this.projectionLayer) throw new Error("A ground projection layer is already registered");
         if (typeof layer.mountChunk !== "function" || typeof layer.unmountChunk !== "function"
             || typeof layer.dispose !== "function") {
             throw new TypeError("world render layer must implement mountChunk(), unmountChunk() and dispose()");
@@ -105,6 +109,10 @@ export class WorldRenderLayerRegistry {
     }
 
     public get(id: string): WorldRenderLayer | undefined { return this.layers.get(id); }
+    public get projectionLayer(): WorldRenderLayer | undefined {
+        for (const layer of this.layers.values()) if (layer.groundProjection) return layer;
+        return undefined;
+    }
     public forKind(kind: WorldChunkKind): WorldRenderLayer | undefined { return this.kinds.get(kind); }
     public values(): readonly WorldRenderLayer[] { return [...this.layers.values()]; }
 

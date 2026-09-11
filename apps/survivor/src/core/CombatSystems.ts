@@ -1,4 +1,4 @@
-import { ActorAction, CombatWorld, Faction, MoveIntent } from "./CombatWorld";
+import { ActorAction, CombatWorld, Component, Faction, MoveIntent } from "./CombatWorld";
 import { GAME_CONFIG, MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
@@ -33,6 +33,7 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         batch.startX[cursor] = sx; batch.startZ[cursor] = sz; batch.endX[cursor] = ex; batch.endZ[cursor] = ez;
         batch.radius[cursor] = p.radius[slot]; batch.hostile[cursor] = Number(b.faction[slot] === Faction.Enemy);
     }
+    batch.prepare();
     if (executor) return executor.resolve(batch).then(() => commitProjectiles(entities));
     resolveProjectileRange(batch);
     commitProjectiles(entities);
@@ -77,6 +78,7 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
         p.x[slot] += (dx - dz * weave) * scale; p.z[slot] += (dz + dx * weave) * scale;
         p.heading[slot] = Math.atan2(dx, dz);
         a.kind[slot] = travel > 0 ? ActorAction.Moving : ActorAction.Idle;
+        entities.updateSpatial(slot, Component.Enemy);
     }
 }
 
@@ -94,6 +96,7 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             const target = world.resolve(a.target[slot]), sx = p.x[slot], sz = p.z[slot];
             const travel = ENEMY_SPECIAL.charge.speed * SECONDS * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
             p.x[slot] += Math.sin(p.heading[slot]) * travel; p.z[slot] += Math.cos(p.heading[slot]) * travel;
+            entities.updateSpatial(slot, Component.Enemy);
             if (!a.committed[slot] && target >= 0 && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity) {
                 a.committed[slot] = 1;
                 impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.charge.damage, e.elite[slot], e.boss[slot]);

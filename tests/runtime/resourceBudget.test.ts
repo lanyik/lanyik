@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BufferAttribute, BufferGeometry, InstancedBufferAttribute, InstancedMesh, Mesh, ShaderMaterial, Texture } from "three";
+import { BufferAttribute, BufferGeometry, InstancedBufferAttribute, InstancedMesh, Mesh, ShaderMaterial, Texture, WebGLRenderTarget } from "three";
 
 import {
     estimateBufferGeometriesBytes,
@@ -10,6 +10,13 @@ import {
 } from "../../src/runtime/ResourceBudget";
 
 describe("ResourceBudgetLedger", () => {
+    test("a projection target shared by its owner and terrain has one GPU allocation and no pixel backing", () => {
+        const target = new WebGLRenderTarget(64, 64, { depthBuffer: false });
+        const mesh = new Mesh(new BufferGeometry(), new ShaderMaterial({ uniforms: { projection: { value: target.texture } } }));
+        const allocations = collectObject3DResourceAllocations([mesh]);
+        expect(allocations).toEqual([{ identity: target.texture, cost: { gpuBytes: 64 * 64 * 4, textureBytes: 64 * 64 * 4 } }]);
+        target.dispose(); mesh.geometry.dispose(); mesh.material.dispose();
+    });
     test("admits by actual bytes and never mutates accounting on rejection", () => {
         const budget = new ResourceBudgetLedger({ cpuBytes: 100, gpuBytes: 80 });
         expect(budget.reserve("terrain", { cpuBytes: 60, gpuBytes: 40 })).toBe(true);

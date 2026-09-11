@@ -1,10 +1,28 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { Texture, TextureLoader } from "three";
+import { Matrix4, Texture, TextureLoader } from "three";
 import { SkillEffects } from "../src/presentation/SkillEffects";
 import { CombatEffects, EffectKind } from "../src/core/CombatEffects";
 import { GAME_CONFIG } from "../src/core/GameConfig";
 
 afterEach(() => vi.restoreAllMocks());
+test("ground rings use the projection pass and lightning ribbons follow their endpoints in height", async () => {
+    vi.spyOn(TextureLoader.prototype, "loadAsync").mockResolvedValue(new Texture());
+    const effects = await SkillEffects.load(), facts = new CombatEffects();
+    try {
+        facts.add(EffectKind.Lightning, 0, 0, 0, .4, 1, 4, 0);
+        effects.update(facts.buffer, .5, x => x * 2, 0, 0, 0);
+        const matrix = new Matrix4(); effects.mesh.getMatrixAt(0, matrix);
+        expect(matrix.elements[5] / matrix.elements[4]).toBeCloseTo(2.005, 5);
+        facts.buffer.count = 0; facts.add(EffectKind.Pulse, 0, 0, 0, 4, 1);
+        effects.update(facts.buffer, .5, () => 10, 0, 0, 0);
+        const styles = effects.ground.geometry.getAttribute("effectStyle");
+        for (let i = 0; i < 3; i++) {
+            expect(styles.getW(i)).toBeGreaterThanOrEqual(8);
+            effects.ground.getMatrixAt(i, matrix); expect(matrix.elements[13]).toBe(0);
+        }
+        expect(effects.ground.instanceMatrix).toBe(effects.mesh.instanceMatrix);
+    } finally { effects.dispose(); }
+});
 test("maximum visual facts fit the instance pool, freeze with simulation and release owned resources", async () => {
     const texture = new Texture<HTMLImageElement>();
     vi.spyOn(TextureLoader.prototype, "loadAsync").mockResolvedValue(texture);

@@ -10,7 +10,8 @@ import {
     MeshLambertMaterial,
     RawShaderMaterial,
     Texture,
-    TextureLoader
+    TextureLoader,
+    ImageLoader
 } from "three";
 
 vi.mock("../../src/helpers/models", () => ({
@@ -222,12 +223,12 @@ describe("streamed render resource sharing", () => {
             expect(shader).toContain("vec3 terrainPattern()");
             expect(shader).toContain("vec3 applyBiomeMaterial(vec3 color)");
             expect(shader).toContain("float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12");
-            expect(shader).toContain("varying vec4 vBiomeWeights");
+            expect(shader).toContain("in vec4 vBiomeWeights");
             expect(shader).not.toContain("varying float vElevation");
-            expect(shader.match(/texture2D\(map,/g)).toHaveLength(1);
+            expect(shader.match(/textureGrad\(map,/g)).toHaveLength(1);
         }
-        expect(TERRAIN_VERTEX_SHADER).toContain("attribute vec4 fogState");
-        expect(TERRAIN_VERTEX_SHADER).toContain("varying vec4 vBiomeWeights");
+        expect(TERRAIN_VERTEX_SHADER).toContain("in vec4 fogState");
+        expect(TERRAIN_VERTEX_SHADER).toContain("out vec4 vBiomeWeights");
         expect(TERRAIN_VERTEX_SHADER).toContain("vec2 sharedCornerSlope(");
         expect(TERRAIN_VERTEX_SHADER).toContain("smoothMountainSlopeAt(local)");
         expect(TERRAIN_VERTEX_SHADER).not.toContain("mountainHeightAt(local + vec2(");
@@ -246,11 +247,12 @@ describe("streamed render resource sharing", () => {
             GRASS_FRAGMENT_SHADER
         ]) {
             expect(shader).toContain("smoothstep(fogNear, fogFar, vHorizonFogDepth)");
-            expect(shader).toContain("gl_FragColor.rgb = applyHorizonFog(gl_FragColor.rgb)");
+            expect(shader).toMatch(/(gl_FragColor|terrainColor)\.rgb = applyHorizonFog\(/);
         }
     });
 
     test("computes terrain instance data once while caching three geometry LODs", async () => {
+        vi.spyOn(ImageLoader.prototype, "load").mockReturnValue({} as HTMLImageElement);
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
         const surface = createWorldSurfaceView({
@@ -342,6 +344,7 @@ describe("streamed render resource sharing", () => {
     });
 
     test("does not publish a city whose terrain owner was disposed while its model loaded", async () => {
+        vi.spyOn(ImageLoader.prototype, "load").mockReturnValue({} as HTMLImageElement);
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
         map.data[4][4].city = { name: "Late city" };

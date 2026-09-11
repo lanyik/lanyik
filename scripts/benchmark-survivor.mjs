@@ -43,7 +43,7 @@ function crowded() {
             level: 1, elite: false, boss: false, region }, home);
         entities.vitals.health[slot] *= .4;
     }
-    // Misses force every player projectile to scan the complete enemy query.
+    // Separated misses exercise broad-phase rejection at maximum resident population.
     for (let index = 0; index < 128; index++) entities.spawnProjectile(entities.world.ids[entities.player], Faction.Player, 100, 100, .01, 0, 1, 1000);
     const behavior = new EnemyBehavior(entities, regions), ticks = 300;
     const started = performance.now();

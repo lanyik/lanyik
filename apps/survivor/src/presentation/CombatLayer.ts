@@ -20,6 +20,7 @@ import {
 } from "three";
 import {
     collectObject3DResourceAllocations,
+    GroundProjection,
     type ResourceBudgetAccount,
     type WorldRenderLayer,
     type WorldRenderLayerHost
@@ -63,6 +64,8 @@ export function groundTile(point: { readonly x: number; readonly z: number }): {
 
 export class CombatLayer implements WorldRenderLayer {
     public readonly id = "survivor-combat";
+    public readonly groundProjection = new GroundProjection(64, 2048);
+    private readonly groundPlayer = new Group();
     private readonly root = new Group();
     private readonly player = new Group();
     private readonly playerBody = new Group();
@@ -97,7 +100,7 @@ export class CombatLayer implements WorldRenderLayer {
         new PlaneGeometry(1, 1)
     ] as const;
     private readonly projectileMaterial = new MeshBasicMaterial({ color: 0xffffff });
-    private readonly warningMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .28, depthWrite: false, side: DoubleSide });
+    private readonly warningMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .28, depthWrite: false, depthTest: false, side: DoubleSide });
     private readonly experienceMaterial = new MeshBasicMaterial({ color: 0x66f5ff });
     private readonly lootMaterial = new MeshStandardMaterial({ color: 0xffffff, emissive: 0x17110a, roughness: 0.3, metalness: 0.55 });
     private readonly emberMaterial = new MeshBasicMaterial({ color: 0xffc35c });
@@ -107,7 +110,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly color = new Color();
     private readonly viewCenter = new Vector2();
     private readonly actorFill = new DirectionalLight(0xe2ebdf, 1.6);
-    private readonly heightCache = new Map<string, number>();
+    private readonly heightCache = new Map<string, Float64Array>();
     private host: WorldRenderLayerHost | undefined;
     private readonly effectHeight = (x: number, z: number) => this.height(x, z);
 
@@ -135,8 +138,12 @@ export class CombatLayer implements WorldRenderLayer {
         this.projectiles.count = this.experience.count = 0;
         this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.buildPlayer();
-        this.root.add(this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player, this.mist.mesh);
-        resources.acquireRequired("combat-render-pool", {}, true, collectObject3DResourceAllocations([this.root]));
+        this.groundProjection.root.add(this.telegraphs, this.castWarnings, this.chargeWarnings, this.groundPlayer);
+        this.root.add(this.projectiles, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player, this.mist.mesh);
+        resources.acquireRequired("combat-render-pool", {}, true, [
+            ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
+            { identity: this.groundProjection.target.texture, cost: { gpuBytes: 2048 * 2048 * 4, textureBytes: 2048 * 2048 * 4 } }
+        ]);
     }
 
     public async initialize(host: WorldRenderLayerHost): Promise<void> {
@@ -152,11 +159,12 @@ export class CombatLayer implements WorldRenderLayer {
                 const actors = actorResult.value, effects = effectResult.value;
                 try {
                     this.resources.acquireRequired("combat-actor-models", {}, true,
-                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ward]));
+                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward]));
                 } catch (error) { actors.dispose(); effects.dispose(); throw error; }
                 this.actors = actors;
                 this.effects = effects;
                 this.root.add(effects.mesh, effects.ward);
+                this.groundProjection.root.add(effects.ground);
                 this.playerBody.add(actors.hero);
                 for (const pool of actors.enemies) this.root.add(...pool);
             }).catch(error => { this.actorLoading = undefined; throw error; });
@@ -176,6 +184,8 @@ export class CombatLayer implements WorldRenderLayer {
         const playerZ = state.player.previousZ + (state.player.z - state.player.previousZ) * blend;
         this.viewCenter.set(playerX, playerZ);
         this.player.position.set(playerX, this.height(playerX, playerZ), playerZ);
+        this.groundPlayer.position.set(playerX, 0, playerZ);
+        this.groundProjection.setCenter(playerX, playerZ, this.host.tileSize);
         this.playerBody.rotation.y = state.player.heading;
         this.actors.animateHero(state.player.animationTime, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
         this.playerBody.rotation.z = state.player.gameOver ? -Math.PI / 2 : 0;
@@ -204,7 +214,7 @@ export class CombatLayer implements WorldRenderLayer {
                 const charge = kind === ActorAction.Charge;
                 const length = ENEMY_SPECIAL.charge.speed * ENEMY_SPECIAL.charge.duration;
                 const centerX = x + (charge ? Math.sin(rotation) * length / 2 : 0), centerZ = z + (charge ? Math.cos(rotation) * length / 2 : 0);
-                this.dummy.position.set(centerX, this.height(centerX, centerZ) + .045, centerZ);
+                this.dummy.position.set(centerX, 0, centerZ);
                 this.dummy.rotation.set(0, rotation, 0);
                 this.dummy.rotateX(-Math.PI / 2);
                 if (charge) this.dummy.scale.set(position.radius[index] * 2, length, 1);
@@ -309,8 +319,8 @@ export class CombatLayer implements WorldRenderLayer {
         for (const mesh of this.loot) mesh.count = 0;
     }
 
-    public mountChunk(): void {}
-    public unmountChunk(): void {}
+    public mountChunk(): void { this.heightCache.clear(); }
+    public unmountChunk(): void { this.heightCache.clear(); }
     public surfaceChanged(): void { this.heightCache.clear(); }
 
     public unloadWorld(host: WorldRenderLayerHost): void {
@@ -325,6 +335,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.host = undefined;
         this.actors?.dispose();
         this.effects?.dispose();
+        this.groundProjection.dispose();
         this.mist.dispose();
         this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks]) mesh.dispose();
@@ -350,13 +361,14 @@ export class CombatLayer implements WorldRenderLayer {
 
     private buildPlayer(): void {
         const aura = new Mesh(this.geometries[3], this.auraMaterial);
-        aura.position.y = 0.035;
+        aura.position.y = 0;
         aura.rotation.x = -Math.PI / 2;
         this.shield.add(aura);
         const shadow = new Mesh(this.geometries[4], this.shadowMaterial);
-        shadow.position.y = 0.02;
+        shadow.position.y = 0;
         shadow.rotation.x = -Math.PI / 2;
-        this.player.add(shadow, this.shield, this.playerBody);
+        this.groundPlayer.add(shadow, this.shield);
+        this.player.add(this.playerBody);
     }
 
     private setInstance(mesh: InstancedMesh, index: number, x: number, y: number, z: number, scale: number, rotation: number): void {
@@ -371,11 +383,25 @@ export class CombatLayer implements WorldRenderLayer {
         const host = this.host!;
         const tile = groundTile({ x, z });
         const key = `${tile.x},${tile.y}`;
-        const cached = this.heightCache.get(key);
-        if (cached !== undefined) return cached;
-        if (this.heightCache.size >= 4096) this.heightCache.clear();
-        const height = host.surface!.getTileCenterHeight(tile.x, tile.y) / host.tileSize + 0.025;
-        this.heightCache.set(key, height);
-        return height;
+        let heights = this.heightCache.get(key);
+        const cx = tile.x * 1.5, cz = Math.sqrt(3) * (tile.y + (tile.x % 2 === 0 ? .5 : 0));
+        if (!heights) {
+            if (this.heightCache.size >= 4096) this.heightCache.clear();
+            heights = new Float64Array(7);
+            for (let corner = 0; corner < 6; corner++) {
+                const angle = corner * Math.PI / 3;
+                heights[corner] = host.surface!.getWorldHeight((cx + Math.cos(angle)) * host.tileSize,
+                    (cz + Math.sin(angle)) * host.tileSize) / host.tileSize;
+                heights[6] += heights[corner] / 6;
+            }
+            this.heightCache.set(key, heights);
+        }
+        const lx = x - cx, lz = z - cz;
+        const angle = (Math.atan2(lz, lx) + Math.PI * 2) % (Math.PI * 2);
+        const corner = Math.min(5, Math.floor(angle / (Math.PI / 3))), next = (corner + 1) % 6;
+        const a = corner * Math.PI / 3, b = (corner + 1) * Math.PI / 3;
+        const wa = (lx * Math.sin(b) - lz * Math.cos(b)) / (Math.sqrt(3) / 2);
+        const wb = (Math.cos(a) * lz - Math.sin(a) * lx) / (Math.sqrt(3) / 2);
+        return Math.max(0, heights[6] * (1 - wa - wb) + heights[corner] * wa + heights[next] * wb) * 1.015 + .025;
     }
 }

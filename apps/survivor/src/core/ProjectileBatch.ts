@@ -1,9 +1,10 @@
 import { MAX_ENEMIES, MAX_PROJECTILES } from "./GameConfig";
+import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 
 /** Numeric collision snapshot. Outputs contain handles, never query cursors. */
 export class ProjectileBatch {
-    public static readonly length = 6 + MAX_ENEMIES * 4 + MAX_PROJECTILES * 7;
-    public static readonly bytes = ProjectileBatch.length * Float64Array.BYTES_PER_ELEMENT;
+    public static readonly length = 6 + MAX_ENEMIES * 4 + MAX_PROJECTILES * 8;
+    public static readonly bytes = ProjectileBatch.length * Float64Array.BYTES_PER_ELEMENT + MAX_ENEMIES * MAX_PROJECTILES * Uint16Array.BYTES_PER_ELEMENT;
     public readonly data: Float64Array;
     public readonly enemyIds: Float64Array;
     public readonly enemyX: Float64Array;
@@ -16,10 +17,15 @@ export class ProjectileBatch {
     public readonly radius: Float64Array;
     public readonly hostile: Float64Array;
     public readonly targets: Float64Array;
+    public readonly candidateCounts: Float64Array;
+    public readonly candidateEnemies: Uint16Array;
+    private grid: SpatialGrid | undefined;
+    private query: SpatialQuery | undefined;
 
     constructor(public readonly buffer = new ArrayBuffer(ProjectileBatch.bytes)) {
         if (buffer.byteLength !== ProjectileBatch.bytes) throw new Error("Invalid projectile batch size");
-        this.data = new Float64Array(buffer);
+        this.data = new Float64Array(buffer, 0, ProjectileBatch.length);
+        this.candidateEnemies = new Uint16Array(buffer, ProjectileBatch.length * 8);
         let offset = 6;
         const field = (length: number) => { const result = this.data.subarray(offset, offset + length); offset += length; return result; };
         this.enemyIds = field(MAX_ENEMIES); this.enemyX = field(MAX_ENEMIES);
@@ -27,6 +33,7 @@ export class ProjectileBatch {
         this.startX = field(MAX_PROJECTILES); this.startZ = field(MAX_PROJECTILES);
         this.endX = field(MAX_PROJECTILES); this.endZ = field(MAX_PROJECTILES);
         this.radius = field(MAX_PROJECTILES); this.hostile = field(MAX_PROJECTILES); this.targets = field(MAX_PROJECTILES);
+        this.candidateCounts = field(MAX_PROJECTILES);
     }
     public get enemyCount(): number { return this.data[0]; }
     public set enemyCount(value: number) { this.data[0] = value; }
@@ -35,6 +42,41 @@ export class ProjectileBatch {
     public setPlayer(id: number, x: number, z: number, radius: number): void {
         this.data[2] = id; this.data[3] = x; this.data[4] = z; this.data[5] = radius;
     }
+
+    /** Broad phase runs once on the authority; Workers receive only candidate indices and facts. */
+    public prepare(): void {
+        if (!Number.isInteger(this.enemyCount) || this.enemyCount < 0 || this.enemyCount > MAX_ENEMIES
+            || !Number.isInteger(this.count) || this.count < 0 || this.count > MAX_PROJECTILES) throw new Error("Invalid projectile batch counts");
+        const grid = this.grid ??= new SpatialGrid(MAX_ENEMIES), query = this.query ??= new SpatialQuery(MAX_ENEMIES);
+        grid.clear();
+        for (let i = 0; i < this.enemyCount; i++) grid.update(i, this.enemyX[i], this.enemyZ[i], this.enemyRadius[i], 1);
+        for (let shot = 0; shot < this.count; shot++) {
+            if (this.hostile[shot]) { this.candidateCounts[shot] = 1; continue; }
+            const reach = this.radius[shot] + grid.maximumRadius;
+            const minX = Math.min(this.startX[shot], this.endX[shot]) - reach, maxX = Math.max(this.startX[shot], this.endX[shot]) + reach;
+            const minZ = Math.min(this.startZ[shot], this.endZ[shot]) - reach, maxZ = Math.max(this.startZ[shot], this.endZ[shot]) + reach;
+            grid.query(minX, minZ, maxX, maxZ, 1, query);
+            let count = 0;
+            for (let cursor = 0; cursor < query.count; cursor++) {
+                const i = query.slots[cursor];
+                if (this.enemyX[i] >= minX && this.enemyX[i] <= maxX && this.enemyZ[i] >= minZ && this.enemyZ[i] <= maxZ) {
+                    this.candidateEnemies[shot * MAX_ENEMIES + count++] = i;
+                }
+            }
+            this.candidateCounts[shot] = count;
+        }
+    }
+
+    public copyRangeTo(buffer: ArrayBuffer, begin: number, end: number): void {
+        new Float64Array(buffer, 0, ProjectileBatch.length).set(this.data);
+        const candidates = new Uint16Array(buffer, ProjectileBatch.length * 8);
+        for (let shot = begin; shot < end; shot++) {
+            if (this.hostile[shot]) continue;
+            const start = shot * MAX_ENEMIES;
+            candidates.set(this.candidateEnemies.subarray(start, start + this.candidateCounts[shot]), start);
+        }
+    }
+
 }
 
 export interface ProjectileExecutor {
@@ -61,11 +103,17 @@ export function resolveProjectileRange(batch: ProjectileBatch, begin = 0, end = 
         || !Number.isInteger(batch.count) || batch.count < 0 || batch.count > MAX_PROJECTILES
         || !Number.isInteger(batch.enemyCount) || batch.enemyCount < 0 || batch.enemyCount > MAX_ENEMIES) throw new Error("Invalid projectile range");
     for (let shot = begin; shot < end; shot++) {
+        const candidates = batch.candidateCounts[shot];
+        if (!Number.isInteger(candidates) || candidates < 0 || candidates > (batch.hostile[shot] ? 1 : batch.enemyCount)) {
+            throw new Error("Invalid projectile candidate count");
+        }
         const sx = batch.startX[shot], sz = batch.startZ[shot], ex = batch.endX[shot], ez = batch.endZ[shot];
         let target = 0, nearest = Infinity;
         if (batch.hostile[shot]) {
             if (segmentCircleHit(sx, sz, ex, ez, batch.data[3], batch.data[4], batch.radius[shot] + batch.data[5]) !== Infinity) target = batch.data[2];
-        } else for (let enemy = 0; enemy < batch.enemyCount; enemy++) {
+        } else for (let cursor = 0; cursor < candidates; cursor++) {
+            const enemy = batch.candidateEnemies[shot * MAX_ENEMIES + cursor];
+            if (enemy >= batch.enemyCount) throw new Error("Invalid projectile candidate index");
             const t = segmentCircleHit(sx, sz, ex, ez, batch.enemyX[enemy], batch.enemyZ[enemy], batch.radius[shot] + batch.enemyRadius[enemy]);
             if (t < nearest || (t !== Infinity && t === nearest && (target === 0 || batch.enemyIds[enemy] < target))) {
                 nearest = t; target = batch.enemyIds[enemy];

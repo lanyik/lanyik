@@ -40,17 +40,18 @@ const measure = async run => {
 };
 try {
     const results = [];
-    for (const count of [16, 32, 64, 128]) {
+    for (const distribution of ["separated", "dense-near-miss"]) for (const count of [16, 32, 64, 128]) {
         const batch = new runtime.ProjectileBatch(); batch.count = count; batch.enemyCount = 640;
-        for (let i = 0; i < 640; i++) { batch.enemyIds[i] = i + 1; batch.enemyX[i] = 10 + i % 20; batch.enemyZ[i] = 10 + Math.floor(i / 20); batch.enemyRadius[i] = .3; }
+        for (let i = 0; i < 640; i++) { batch.enemyIds[i] = i + 1; batch.enemyX[i] = distribution === "separated" ? 10 + i % 20 : .45 + (i % 20) * .001; batch.enemyZ[i] = distribution === "separated" ? 10 + Math.floor(i / 20) : .35 + Math.floor(i / 20) * .001; batch.enemyRadius[i] = .3; }
         batch.endX.fill(.1); batch.radius.fill(.1);
-        const serial = await measure(() => runtime.resolveProjectileRange(batch));
-        const scheduled = await measure(() => pool.resolve(batch));
+        const serial = await measure(() => { batch.prepare(); runtime.resolveProjectileRange(batch); });
+        const beforeParallel = pool.parallelBatches;
+        const scheduled = await measure(() => { batch.prepare(); return pool.resolve(batch); });
         assert.ok(batch.targets.every(id => id === 0));
-        results.push({ enemies: 640, projectiles: count, pairs: count * 640, serial, scheduled });
+        results.push({ distribution, enemies: 640, projectiles: count, naivePairs: count * 640, candidatePairs: batch.candidateCounts.subarray(0, count).reduce((sum, value) => sum + value, 0), parallelBatches: pool.parallelBatches - beforeParallel, serial, scheduled });
     }
     console.log(JSON.stringify({ context: { node: process.version, platform: platform(), cpu: cpus()[0].model,
-        timing: "100 warmup batches, five samples of 200; real Node threads including copy/transfer/join, no browser or GPU claim" },
+        timing: "100 warmup batches, five samples of 200; real Node threads including grid preparation and copy/transfer/join, no browser or GPU claim" },
         queryBytesPerLane: runtime.ProjectileBatch.bytes, renderBytesPerFrame: runtime.RenderFrame.bytes,
         parallelThreshold: runtime.PARALLEL_COLLISION_PAIRS, results }, null, 2));
     if (process.argv.includes("--check")) {

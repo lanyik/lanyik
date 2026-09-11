@@ -1,13 +1,18 @@
+import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const TERRAIN_FAST_FRAGMENT_SHADER = `
 precision highp float;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-uniform sampler2D map;
+${GROUND_PROJECTION_HEADER}
+
+uniform highp sampler2DArray map;
+vec2 terrainGradientX;
+vec2 terrainGradientY;
+out vec4 terrainColor;
 uniform sampler2D fogMap;
-uniform vec4 textureAtlasMeta;
 uniform vec2 terrainTextureWorldSize;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
@@ -25,21 +30,20 @@ uniform vec3 riverColorShallow;
 uniform vec3 riverColorDeep;
 uniform vec3 riverBankColor;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vTerrain;
-varying vec3 vNormal;
-varying float vFogState;
-varying vec2 vFogUV;
-varying float vRiverEdges;
-varying vec2 vLocal;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec4 vLandform;
-varying vec4 vBiomeWeights;
-varying vec2 vWorldXZ;
+in float vBorder;
+in float vTerrain;
+in vec3 vNormal;
+in float vFogState;
+in vec2 vFogUV;
+in float vRiverEdges;
+in vec2 vLocal;
+in vec3 vNeighborsKindA;
+in vec3 vNeighborsKindB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec4 vLandform;
+in vec4 vBiomeWeights;
+in vec2 vWorldXZ;
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -81,27 +85,11 @@ vec3 terrainPattern() {
     );
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    vec2 phase = fract(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)) * 0.5) * 2.0;
-    return vec3(1.0 - abs(phase - 1.0), macro);
-}
-
-vec2 cellIndexToUV(float idx, vec2 regionUV) {
-    float atlasWidth = textureAtlasMeta.x;
-    float atlasHeight = textureAtlasMeta.y;
-    float cellSize = textureAtlasMeta.z;
-    float inset = max(textureAtlasMeta.w, 0.5);
-    float cols = atlasWidth / cellSize;
-    float rows = atlasHeight / cellSize;
-    float x = mod(idx, cols);
-    float y = floor(idx / cols);
-    vec2 cellOriginPx = vec2(x * cellSize, (rows - y - 1.0) * cellSize);
-    vec2 usablePx = vec2(max(cellSize - inset * 2.0, 1.0));
-    return (cellOriginPx + vec2(inset) + regionUV * usablePx)
-        / vec2(atlasWidth, atlasHeight);
+    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = texture2D(map, cellIndexToUV(idx, pattern.xy));
+    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
     float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
     color.rgb *= tone;
     return color;
@@ -149,13 +137,15 @@ float straightCoastField() {
 }
 
 void main() {
+    vec3 materialPattern = terrainPattern();
+    terrainGradientX = dFdx(materialPattern.xy);
+    terrainGradientY = dFdy(materialPattern.xy);
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        terrainColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         return;
     }
 
-    vec3 materialPattern = terrainPattern();
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
@@ -200,11 +190,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ? landformDebugColor() * (0.72 + lambertian * 0.28)
         : texColor.rgb * (0.55 + 0.55 * lambertian);
     if (vFogState < 1.5) color *= fogDarkenFactor;
-    gl_FragColor = vec4(color, 1.0);
+    terrainColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        terrainColor = mix(vec4(gridColor, 1.0), terrainColor, 1.0 - gridOpacity);
     }
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) terrainColor.rgb = applyGroundProjection(terrainColor.rgb, vWorldXZ);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 }
 `;

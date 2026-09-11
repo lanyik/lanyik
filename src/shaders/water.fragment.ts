@@ -1,11 +1,10 @@
+import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const WATER_FRAGMENT_SHADER = `
 precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
-
-uniform vec4 textureAtlasMeta;
 
 // Curved coastline (see terrain.fragment.ts's coast block - this is its water
 // side): the shore-distance field is recomputed per-pixel and bent by the SAME
@@ -19,6 +18,8 @@ uniform vec4 textureAtlasMeta;
 uniform float waterCornerRounding;
 uniform float coastCurvature;
 uniform float beachWidth;
+
+${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
 
 uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
@@ -275,6 +276,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
 ${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;

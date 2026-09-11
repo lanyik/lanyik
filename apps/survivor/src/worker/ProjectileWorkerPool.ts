@@ -27,7 +27,7 @@ class QueryLane {
     public run(batch: ProjectileBatch, begin: number, end: number): Promise<void> {
         if (this.pending || !this.buffer) return Promise.reject(new Error("Collision lane already busy or closed"));
         const buffer = this.buffer; this.buffer = undefined;
-        new Float64Array(buffer).set(batch.data);
+        batch.copyRangeTo(buffer, begin, end);
         const id = ++this.sequence;
         return new Promise<ArrayBuffer>((resolve, reject) => {
             const timer = setTimeout(() => this.dispose(new Error("Collision Worker timed out")), WORKER_TIMEOUT_MS);
@@ -58,7 +58,7 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
     public get workerActivity() { return this.lanes.map(lane => lane.activity.snapshot); }
     public async resolve(batch: ProjectileBatch): Promise<void> {
         let pairs = 0;
-        for (let shot = 0; shot < batch.count; shot++) pairs += batch.hostile[shot] ? 1 : batch.enemyCount;
+        for (let shot = 0; shot < batch.count; shot++) pairs += batch.candidateCounts[shot];
         if (this.lanes.length === 0 || pairs < PARALLEL_COLLISION_PAIRS) {
             this.localBatches++; resolveProjectileRange(batch); return;
         }
@@ -66,9 +66,9 @@ export class ProjectileWorkerPool implements ProjectileExecutor {
         let cursor = 0, assignedPairs = 0;
         const pending = this.lanes.map((lane, index) => {
             const begin = cursor, boundary = pairs * (index + 1) / this.lanes.length;
-            // A hostile bolt checks one player; a friendly bolt scans the whole enemy query.
+            // Partition the actual broad-phase candidates, including one check per hostile bolt.
             while (cursor < batch.count && (index === this.lanes.length - 1 || assignedPairs < boundary)) {
-                assignedPairs += batch.hostile[cursor] ? 1 : batch.enemyCount;
+                assignedPairs += batch.candidateCounts[cursor];
                 cursor++;
             }
             return lane.run(batch, begin, cursor);

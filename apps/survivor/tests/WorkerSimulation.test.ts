@@ -33,9 +33,9 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     const regions = new RegionalWorld("worker-collisions", { x: 0, z: 0 }); regions.synchronize(0, 0);
     const makeWorld = () => {
         const e = new CombatWorld(0, 0), region = regions.regionAt(0, 0), home = regions.chunks.get("0,0")!;
-        for (let i = 0; i < 640; i++) e.spawnEnemy({ x: 4 + i % 16, z: Math.floor(i / 16), kind: (i % 4) as 0 | 1 | 2 | 3, level: 1, elite: false, boss: false, region }, home);
-        for (let i = 0; i < 128; i++) e.spawnProjectile(e.world.ids[e.player], i % 5 ? Faction.Player : Faction.Enemy,
-            i % 3 ? 0 : 100, 0, 1000, 0, i + 1, i % 7 ? 1 : .01);
+        for (let i = 0; i < 640; i++) e.spawnEnemy({ x: 4 + (i % 16) * .005, z: 0, kind: (i % 4) as 0 | 1 | 2 | 3, level: 1, elite: false, boss: false, region }, home);
+        for (let i = 0; i < 128; i++) e.spawnProjectile(e.world.ids[e.player], i >= 5 ? Faction.Player : Faction.Enemy,
+            i % 7 ? 0 : 100, 0, 1000, 0, i + 1, i % 7 ? 1 : .01);
         return e;
     };
     const serial = makeWorld(), parallel = makeWorld(), pool = await createPool();
@@ -57,9 +57,10 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     const batch = new ProjectileBatch(); batch.count = 2; batch.enemyCount = 2;
     batch.enemyIds.set([9002, 9001]); batch.enemyX.fill(2); batch.enemyRadius.fill(.5);
     batch.endX.fill(4); batch.targets.fill(123);
+    batch.prepare();
     resolveProjectileRange(batch, 1, 2); resolveProjectileRange(batch, 0, 1);
     expect(Array.from(batch.targets.slice(0, 2))).toEqual([9001, 9001]);
-    batch.enemyCount = 0; await pool.resolve(batch);
+    batch.enemyCount = 0; batch.prepare(); await pool.resolve(batch);
     expect(Array.from(batch.targets.slice(0, 2))).toEqual([0, 0]);
     expect(pool.localBatches).toBe(1);
 });
@@ -94,6 +95,7 @@ test("the phase barrier waits for both disjoint results even when the second ran
     const pool = new ProjectileWorkerPool(ports); pools.push(pool);
     const batch = new ProjectileBatch(); batch.count = 128; batch.enemyCount = 640;
     batch.enemyIds.fill(100); batch.enemyX.fill(2); batch.enemyRadius.fill(.5); batch.endX.fill(4); batch.targets.fill(123);
+    batch.prepare();
     let committed = false;
     const result = pool.resolve(batch).then(() => { committed = true; });
     expect(replies).toHaveLength(2);
@@ -129,6 +131,7 @@ test("a missing collision response times out and releases pending lanes", async 
     const port = { postMessage: vi.fn(), close } as unknown as MessagePort;
     const pool = new ProjectileWorkerPool([port]); pools.push(pool);
     const batch = new ProjectileBatch(); batch.count = 128; batch.enemyCount = 640;
+    batch.prepare();
     const failure = expect(pool.resolve(batch)).rejects.toThrow("timed out");
     await vi.advanceTimersByTimeAsync(WORKER_TIMEOUT_MS);
     await failure;

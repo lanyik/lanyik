@@ -1,9 +1,12 @@
+import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const WATER_FAST_FRAGMENT_SHADER = `
 precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
+
+${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
 
 uniform sampler2D fogMap;
 uniform float fogDarkenFactor;
@@ -18,6 +21,7 @@ uniform vec3 waterColorShallow;
 varying float vBorder;
 varying float vPriority;
 varying vec3 vNormal;
+varying vec3 vWorldPos;
 varying float vShoreT;
 varying float vFogState;
 varying vec2 vFogUV;
@@ -40,6 +44,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
         gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
     }
+    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
 ${HORIZON_FOG_FRAGMENT_APPLY}
 }
 `;
