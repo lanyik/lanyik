@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { PlayerSnapshot } from "../core/CombatState";
 import type { CombatCommand } from "../core/CombatCommand";
 import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
+import { RARITIES } from "../core/Loot";
 import { useSlotDrag } from "./useSlotDrag";
 import { ItemIcon } from "./ItemView";
 import { ItemTooltip } from "./ItemTooltip";
@@ -34,13 +35,14 @@ export function OrbSockets({ player, disabled, onInspect, onRemove }: {
     const drag = useOrbDrag();
     return <div className="orb-sockets" aria-label="宝珠栏">{ORB_UNLOCK_LEVELS.map((level, index) => {
         const orb = player.orbs[index], locked = player.level < level;
+        const recycledOnReturn = orb && player.autoRecycle.orb !== null && RARITIES.indexOf(orb.rarity) <= RARITIES.indexOf(player.autoRecycle.orb);
         return <div key={index} data-orb-slot={index} className={`orb-socket rarity-${orb?.rarity ?? "common"}${locked ? " locked" : ""}${!locked && drag.dragging !== undefined && drag.over === index ? " drag-over" : ""}`}>
             <ItemTooltip item={orb} player={player}><button className="item-icon-trigger orb-drag-trigger" disabled={disabled || locked}
                 aria-label={`宝珠槽 ${index + 1}${locked ? `，${level}级解锁` : orb ? `，${orb.name}` : "，空"}`}
                 onPointerDown={event => { if (orb) drag.begin(event, orb.id); }} onKeyDown={event => { if (orb) drag.keyboard(event, orb.id); }}
                 onClick={() => onInspect?.(orb?.id)} onDoubleClick={() => onRemove(index)}>
                 {locked ? <UiIcon name="lock" /> : <ItemIcon item={orb} type="orb" value="fortune" />}</button></ItemTooltip>
-            <small>{locked ? `Lv.${level}` : `槽 ${index + 1}`}</small>
+            <small>{locked ? `Lv.${level}` : recycledOnReturn ? `槽 ${index + 1} · 取下分解` : `槽 ${index + 1}`}</small>
         </div>;
     })}</div>;
 }

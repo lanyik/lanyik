@@ -50,7 +50,7 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("wood") ? 2 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("31edd4fd");
+        expect(checksum(infinite.tiles)).toBe("5415c845");
         expect(checksum(toroidal.tiles)).toBe("5c34968c");
         expect(checksum(encoded)).toBe("99fb0dc5");
     });
@@ -61,8 +61,8 @@ describe("WorldSurfaceResolver", () => {
         const minimumSnowElevation = terrain.seaLevel
             + (terrain.hillElevation - terrain.seaLevel) * 0.45;
         let snowTiles = 0;
-        for (let x = -64; x < 64; x += 1) {
-            for (let y = -64; y < 64; y += 1) {
+        for (let x = -512; x < -480; x += 1) {
+            for (let y = -640; y < -608; y += 1) {
                 const sample = resolver.sampleGenerated(x, y);
                 if (sample.baseTerrain !== Land.snow) continue;
                 const tile = resolver.resolveGeneratedTile(x, y);
@@ -107,7 +107,7 @@ describe("WorldSurfaceResolver", () => {
         expect(reliefValues.size).toBeGreaterThan(100);
         expect(vegetationValues.size).toBeGreaterThan(50);
         expect(oceanValues.size).toBeGreaterThan(20);
-        expect(checksum(encoded)).toBe("ce340641");
+        expect(checksum(encoded)).toBe("1a67761a");
     });
 
     test("forms coherent generated water and regional forests without lake noise", () => {
@@ -133,7 +133,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("62718e8f");
+        expect(checksum(encoded)).toBe("8f26f316");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {

@@ -326,7 +326,7 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
     nonNegativeSafeInteger("modelAssetCacheBytes", options.modelAssetCacheBytes);
     positive("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
-    nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
+    if (!Number.isFinite(options.treesPerTile) || options.treesPerTile < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
     nonNegativeSafeInteger("grassDensity", options.grassDensity);
     positive("grassBladeWidth", options.grassBladeWidth);
     positive("grassBladeHeight", options.grassBladeHeight);

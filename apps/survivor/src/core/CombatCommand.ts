@@ -4,6 +4,7 @@ import type { CombatSimulation } from "./CombatSimulation";
 import type { SkillId } from "./Skills";
 import type { Rarity } from "./Loot";
 import type { CraftOperation } from "./Crafting";
+import type { ItemType } from "./ItemDefinition";
 
 export type CombatCommand =
     | { readonly type: "allocate"; readonly attribute: AttributeId }
@@ -16,13 +17,12 @@ export type CombatCommand =
     | { readonly type: "upgrade-skill"; readonly skill: SkillId }
     | { readonly type: "toggle-autocast" }
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
-    | { readonly type: "discard"; readonly itemId: number }
     | { readonly type: "sort-inventory" }
     | { readonly type: "merge-consumables" }
     | { readonly type: "craft"; readonly operation: CraftOperation }
     | { readonly type: "cultivate-spirit"; readonly attribute: AttributeId }
     | { readonly type: "set-equipment-lock"; readonly itemId: number; readonly locked: boolean }
-    | { readonly type: "set-auto-clear-equipment"; readonly maximum: Rarity | null };
+    | { readonly type: "set-auto-recycle"; readonly itemType: ItemType; readonly maximum: Rarity | null };
 
 /** Commands commit in arrival order before the next batch of fixed ticks. */
 export function applyCombatCommand(simulation: CombatSimulation, command: CombatCommand): void {
@@ -37,13 +37,12 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "upgrade-skill": simulation.upgradeSkill(command.skill); break;
         case "toggle-autocast": simulation.toggleAutoCast(); break;
         case "use-consumable": simulation.useConsumable(command.effect, command.itemId); break;
-        case "discard": simulation.discard(command.itemId); break;
         case "sort-inventory": simulation.sortInventory(); break;
         case "merge-consumables": simulation.mergeConsumables(); break;
         case "craft": simulation.craft(command.operation); break;
         case "cultivate-spirit": simulation.cultivateSpirit(command.attribute); break;
         case "set-equipment-lock": simulation.setEquipmentLock(command.itemId, command.locked); break;
-        case "set-auto-clear-equipment": simulation.setAutoClearEquipment(command.maximum); break;
+        case "set-auto-recycle": simulation.setAutoRecycle(command.itemType, command.maximum); break;
         default:
             command satisfies never;
             throw new Error(`Unknown combat command: ${(command as { type: string }).type}`);

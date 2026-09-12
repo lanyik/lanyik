@@ -15,9 +15,9 @@ function riverMask(pixels: Uint8ClampedArray): Uint8Array {
 
 describe("world overview raster", () => {
     it.each([
-        [4096, "0b8f4e74889ff462d3eb07bcc3f2e38b209526bd9d1eb2c568dcc07ee4141ddc"],
-        [8192, "68bfdaa4a5ecebcb43b514b6802e17258c35ebeebdca550861c2d339df388b31"]
-    ] as const)("preserves the v19 raster across bounded water batches at span %i", async (span, checksum) => {
+        [4096, "199b315712e73695ae865e4dd464e0f69c06bfe8e45b1a0015455c2435ca5447"],
+        [8192, "7f8529602ffd2d8583f4013f31f91b1368a0b059321d05af77e9e5a49ae7de2e"]
+    ] as const)("preserves the v20 raster across bounded water batches at span %i", async (span, checksum) => {
         const descriptor = createWorldDescriptor({ seed: "new-world", chunkSize: 24 });
         const resolver = createWorldSurfaceResolver({ seed: descriptor.seed });
         const options = { descriptor, originX: 0, originY: 0, tileSpanX: span, tileSpanY: span,
@@ -59,7 +59,7 @@ describe("world overview raster", () => {
             const extent = { originX: -224, originY: 96, tileSpanX: 32, tileSpanY: 32 };
             const tiles = new Set<string>();
             resolver.visitGeneratedRiverTiles(-224, 96, 32, 32, (x, y) => tiles.add(`${x + 224},${y - 96}`));
-            expect(tiles.size).toBe(142);
+            expect(tiles.size).toBe(200);
             const visit = vi.spyOn(resolver, "generatedRiverTileBatches");
             const resolve = vi.spyOn(resolver, "resolveGeneratedTile");
             const overview = generateWorldOverviewWithResolver({ descriptor, ...extent, pixelWidth, pixelHeight }, resolver);

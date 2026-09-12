@@ -44,8 +44,7 @@ export class SkillSystem {
     public advance(tick: number): boolean {
         if (tick >= this.wardUntil) this.wardValue = 0;
         if (!this.dashing(tick)) return false;
-        const { position: p, player } = this.entities;
-        p.x[player] += this.dashX; p.z[player] += this.dashZ;
+        if (!this.entities.moveActor(this.entities.player, this.dashX, this.dashZ, false)) this.dashUntil = tick;
         return true;
     }
     public absorb(damage: number): number {

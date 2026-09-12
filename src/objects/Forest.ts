@@ -42,6 +42,7 @@ import {
 import { WorldSurfaceView } from "../world/WorldSurfaceView";
 import { collectCpuBufferAllocations, collectGeometryAllocations, ResourceBudgetAccount } from "../runtime/ResourceBudget";
 import { forestLayoutAllocations, VegetationResources } from "../rendering/VegetationResources";
+import { forestInstanceCount } from "../world/generateVegetation";
 
 export interface ForestOptions {
     size: number;
@@ -560,9 +561,7 @@ export class ForestField extends Group {
         const surfaceWindow = this.context.surface.createWindow();
         const counts = prepared.tiles.map((tile, index) => {
             const count = prepared.ranges[index * 2 + 1];
-            return count === 0 ? 0 : Math.max(1, Math.round(
-                count * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-            ));
+            return forestInstanceCount(count, surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y));
         });
         const matrices = new Float32Array(counts.reduce((sum, count) => sum + count, 0) * 16);
         let instanceCount = 0;

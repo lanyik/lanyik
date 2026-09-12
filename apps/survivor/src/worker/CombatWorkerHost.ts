@@ -6,6 +6,7 @@ import { RenderFrame } from "./RenderFrame";
 import { GAME_CONFIG, ticksPerUpdate } from "../core/GameConfig";
 import type { SpiritRealm } from "../core/SpiritRealm";
 import type { SpiritRepository } from "./SpiritRepository";
+import { ProceduralCombatTerrain } from "../adapters/ProceduralCombatTerrain";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
 type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm) => CombatSimulation;
@@ -23,7 +24,7 @@ export class CombatWorkerHost {
 
     constructor(private readonly send: (message: CombatResponse, transfers: Transferable[]) => void,
         private readonly progress: SpiritRepository,
-        private readonly createSimulation: SimulationFactory = (seed, start, realm) => new CombatSimulation(seed, start, realm)) {}
+        private readonly createSimulation: SimulationFactory = (seed, start, realm) => new CombatSimulation(seed, start, realm, new ProceduralCombatTerrain(seed))) {}
 
     public async receive(request: CombatRequest): Promise<void> {
         if (this.closed) return;

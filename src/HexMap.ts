@@ -1465,7 +1465,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             ? Math.max(1, Math.round(this.options.grassDensity * normalizedScale))
             : 0;
         const treesPerTile = this.options.treesPerTile > 0
-            ? Math.max(1, Math.round(this.options.treesPerTile * normalizedScale))
+            ? this.options.treesPerTile * normalizedScale
             : 0;
         return { grassDensity, treesPerTile, signature: `${grassDensity}:${treesPerTile}` };
     }
@@ -3056,7 +3056,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return this.options.treesPerTile;
     }
     public set treesPerTile(value: number) {
-        if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
+        if (!Number.isFinite(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
         if (value === this.options.treesPerTile) return;
         this.options.treesPerTile = value;
         this.scheduleVegetationRefresh("forest");

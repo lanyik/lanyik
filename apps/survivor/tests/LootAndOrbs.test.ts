@@ -60,36 +60,36 @@ describe("loot and orb progression", () => {
 
     test("optional cleanup only removes inferior gear and keeps empty-slot upgrades", () => {
         const { combat } = openOrbChest(); const original = combat.getSnapshot().player;
-        expect(original.autoClearEquipment).toBe(null);
+        expect(original.autoRecycle.equipment).toBe(null);
         reachNextLevel(combat);
         const before = combat.getSnapshot().player;
         const removed = before.inventory.filter(item => item.type === "equipment" && compareEquipment(item, before).canClear);
         expect(before.inventory.some(item => item.type === "equipment" && item.itemLevel < before.level && !compareEquipment(item, before).canClear)).toBe(true);
-        combat.setAutoClearEquipment("rainbow"); const after = combat.getSnapshot().player;
+        combat.setAutoRecycle("equipment", "rainbow"); const after = combat.getSnapshot().player;
         expect(after.inventory).toEqual(before.inventory.filter(item => !removed.includes(item)));
         expect(after.equipment).toEqual(before.equipment); expect(after.stats).toEqual(before.stats);
-        expect(after.clearedEquipment).toBe(removed.length);
+        expect(after.recycled.equipment).toBe(removed.length);
         expect(after.inventory.some(item => item.type === "orb")).toBe(true);
         expect(after.inventory.some(item => item.type === "consumable")).toBe(true);
-        combat.setAutoClearEquipment("rainbow");
-        expect(combat.getSnapshot().player.clearedEquipment).toBe(removed.length);
-        combat.setAutoClearEquipment(null);
+        combat.setAutoRecycle("equipment", "rainbow");
+        expect(combat.getSnapshot().player.recycled.equipment).toBe(removed.length);
+        combat.setAutoRecycle("equipment", null);
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
-        combat.setAutoClearEquipment("rainbow");
+        combat.setAutoRecycle("equipment", "rainbow");
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
     });
 
     test("level-ups and chest pickups preserve upgrades; unequipping never destroys an item", () => {
         const { combat } = openOrbChest();
-        combat.setAutoClearEquipment("rainbow");
+        combat.setAutoRecycle("equipment", "rainbow");
         const beforeLevel = combat.getSnapshot().player;
         expect(beforeLevel.inventory.some(item => item.type === "equipment" && item.itemLevel === beforeLevel.level)).toBe(true);
         reachNextLevel(combat);
         const leveled = combat.getSnapshot().player;
         expect(leveled.inventory.every(item => item.type !== "equipment" || !compareEquipment(item, leveled).canClear)).toBe(true);
         combat.unequip("weapon");
-        expect(combat.getSnapshot().player.clearedEquipment).toBe(leveled.clearedEquipment);
+        expect(combat.getSnapshot().player.recycled.equipment).toBe(leveled.recycled.equipment);
         expect(combat.getSnapshot().player.inventory.some(item => item.id === 1)).toBe(true);
 
         const initial = combat.getSnapshot(); const chests = combat.getRenderState().chests;

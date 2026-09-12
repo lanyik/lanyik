@@ -144,6 +144,8 @@ export type {
     WorldWaterSampleAt
 } from "./world/WorldWaterSampler";
 export type { WorldSurfaceAnchor } from "./world/WorldSurfaceView";
+export { createWorldSurfaceView } from "./world/WorldSurfaceView";
+export { generateWorldTreePositions } from "./world/generateVegetation";
 export { WorldGeneratorClient } from "./world/WorldGeneratorClient";
 export {
     createWorldDescriptor,

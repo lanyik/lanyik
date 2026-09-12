@@ -1,3 +1,4 @@
+import { recycleRef } from "../src/core/Recycling";
 import { afterEach, expect, test, vi } from "vitest";
 import { CombatSession } from "../src/app/CombatSession";
 import type { CombatSimulation } from "../src/core/CombatSimulation";
@@ -39,7 +40,7 @@ test("pickup recommendations rank real upgrades, expire after swaps, and respect
     expect(session.getSnapshot().upgrades).toHaveLength(0);
     expect(session.getSnapshot().combat!.player.inventory.some(item => item.id === 12)).toBe(true);
     await pickup(13, 50);
-    session.dispatch({ type: "discard", itemId: 13 });
+    session.dispatch({ type: "craft", operation: { kind: "recycle", item: recycleRef(session.getSnapshot().combat!.player.inventory.find(item => item.id === 13)!) } });
     await session.settled;
     expect(session.getSnapshot().upgrades).toHaveLength(0);
     await pickup(14, 60);

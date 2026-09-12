@@ -1123,6 +1123,7 @@ out vec3 vNeighborsPriorityB;
 out vec3 vEdgeFactorsA; // SE, S, SW
 out vec3 vEdgeFactorsB; // NW, N, NE
 out vec3 vNormal;
+out float vSurfaceSlope;
 out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
 out float vFogState;
 out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
@@ -1457,6 +1458,7 @@ void main() {
     float xN = clamp((waterEdge - e0) / (1.0 - e0), 0.0, 1.0);
     float dSmooth = waterEdge > 0.0 ? 6.0 * xN * (1.0 - xN) / (1.0 - e0) : 0.0;
     vec2 slope = (waterLevel * 0.5) * 1.2 * dSmooth * (best.yz / apothem) * fogVisible + mountainSlope;
+    vSurfaceSlope = length(slope);
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
 
     // Rim distance for the grid line - NOT radial distance from center
@@ -5798,6 +5800,34 @@ vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
 }
 `;
 
+  // src/shaders/terrainMaterial.ts
+  var TERRAIN_MATERIAL_SAMPLING = `
+uniform float rockAtlasIndex;
+in float vSurfaceSlope;
+
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    float patchPhase = pattern.z * 8.0;
+    float index = floor(patchPhase);
+    vec2 offsetA = sin(vec2(3.17, 6.83) * (index + 1.0)) * 0.43;
+    vec2 offsetB = sin(vec2(3.17, 6.83) * (index + 2.0)) * 0.43;
+    vec4 first = textureGrad(map, vec3(pattern.xy + offsetA, idx), terrainGradientX, terrainGradientY);
+    vec4 second = textureGrad(map, vec3(pattern.xy + offsetB, idx), terrainGradientX, terrainGradientY);
+    // At an integer boundary the outgoing B and incoming A are identical.
+    vec4 color = mix(first, second, smoothstep(0.2, 0.8, fract(patchPhase)));
+    color.rgb *= mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
+    return color;
+}
+
+vec4 applySlopeMaterial(vec4 base, vec3 pattern) {
+    // World-space slope, before normalMatrix: camera orbit cannot change rock coverage.
+    float exposure = smoothstep(0.22, 0.85, vSurfaceSlope) * 0.85;
+    if (exposure > 0.001 && abs(vTerrain - rockAtlasIndex) > 0.1) {
+        base = mix(base, sampleTerrainCell(rockAtlasIndex, pattern), exposure);
+    }
+    return base;
+}
+`;
+
   // src/shaders/terrain.fragment.ts
   var TERRAIN_FRAGMENT_SHADER = `
 // Chunk-local coordinates retain fine material detail; lattice IDs use integer precision.
@@ -5997,9 +6027,8 @@ vec4 riverMouthShape(vec2 p, float mask, float apothem, float bendOff) {
 }
 
 // One continuous low-frequency field bends the world-space UVs and modulates
-// their tone. All terrain types share this pattern, so biome blends stay
-// registered. It deliberately adds ALU only: sampleTerrainCell still performs
-// exactly one atlas lookup, preserving the texture-fetch budget.
+// their tone. All terrain types share the same patch offsets, so biome blends
+// stay registered across tiles and origin rebases.
 vec3 terrainPattern() {
     float macro = worldNoise(vWorldXZ, 2, vec2(13.7, -8.2));
     float warp = (macro - 0.5) * hexSize * 1.15;
@@ -6007,13 +6036,7 @@ vec3 terrainPattern() {
     return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
-    float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
-    vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
-    color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
-    return color;
-}
+${TERRAIN_MATERIAL_SAMPLING}
 
 // Continuous climate material variation without another atlas fetch. The
 // generator supplies normalized weights; recomputing the normalization here
@@ -6211,6 +6234,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
         texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
+    texColor = applySlopeMaterial(texColor, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared
@@ -6470,8 +6494,8 @@ vec3 landformDebugColor() {
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
 }
 
-// Fast mode keeps the same single texture lookup. Two broad sine waves replace
-// full value noise, providing a cheap continuous UV bend and material tint.
+// Two broad sine waves replace full value noise; sampling and slope coverage
+// retain the full material's semantics.
 vec3 terrainPattern() {
     vec2 p = vWorldXZ / (hexSize * 4.0);
     float macro = clamp(
@@ -6486,12 +6510,7 @@ vec3 terrainPattern() {
     return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
-    float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
-    color.rgb *= tone;
-    return color;
-}
+${TERRAIN_MATERIAL_SAMPLING}
 
 vec3 applyBiomeMaterial(vec3 color) {
     vec4 weights = max(vBiomeWeights, 0.0);
@@ -6545,6 +6564,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     }
 
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
+    texColor = applySlopeMaterial(texColor, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Reuse the fast material macro as the snowline warp. This keeps the same
@@ -7346,6 +7366,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         hexSize: { value: size },
         map: { value: this.atlasTexture },
         sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] },
+        rockAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] },
         waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
         beachWidth: { value: this.options.beachWidth ?? 0.35 },
         waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },
@@ -8459,6 +8480,29 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
   var LODS = [0, 1, 2];
   var GRASS_DENSITY = [1, 0.38, 0.14];
   var FOREST_DENSITY = [1, 0.5, 0.2];
+  function forestInstanceCount(count, density) {
+    return count === 0 ? 0 : Math.max(1, Math.round(count * density));
+  }
+  function generateWorldTreePositions(options, surface) {
+    assertOptions(options);
+    const chunks = buildForest(options.map, options, options, options, [0]);
+    const window2 = surface.createWindow(), result = [];
+    try {
+      for (const chunk of chunks) {
+        const origin = getWorldChunkOrigin(chunk.chunkKey, options.size), layout = chunk.lods[0];
+        layout.tiles.forEach((tile, index) => {
+          const count = forestInstanceCount(layout.ranges[index * 2 + 1], window2.getEffectiveVegetationDensity(tile.x, tile.y));
+          for (let i = 0; i < count; i++) {
+            const offset = (layout.ranges[index * 2] + i) * 16;
+            result.push({ x: origin.x + layout.matrices[offset + 12], z: origin.y + layout.matrices[offset + 14], scale: layout.matrices[offset + 5] });
+          }
+        });
+      }
+    } finally {
+      window2.clear();
+    }
+    return result;
+  }
   function cloneTile(tile) {
     return {
       ...tile,
@@ -8500,13 +8544,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
       throw new RangeError("vegetation tile size must be a positive finite number");
     }
     for (const [name, value] of [
-      ["grassDensity", options.grassDensity],
-      ["treesPerTile", options.treesPerTile]
+      ["grassDensity", options.grassDensity]
     ]) {
       if (!Number.isInteger(value) || value < 0) {
         throw new RangeError(`${name} must be a non-negative integer`);
       }
     }
+    if (!Number.isFinite(options.treesPerTile) || options.treesPerTile < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
     if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
       throw new RangeError("treeScale must be a non-negative finite number");
     }
@@ -8684,7 +8728,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     });
     return { lod, instanceCount: instance, tiles, ranges, matrices: matrices.slice(0, instance * 16) };
   }
-  function buildForest(map, options, waterOptions, coastOptions) {
+  function buildForest(map, options, waterOptions, coastOptions, lods = LODS) {
     if (options.treesPerTile <= 0 || options.treeScale === 0) return [];
     const tilesByModel = /* @__PURE__ */ new Map();
     for (const point of options.points) {
@@ -8701,7 +8745,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         layouts.push({
           chunkKey,
           modelPath,
-          lods: LODS.map((lod) => buildForestLod(
+          lods: lods.map((lod) => buildForestLod(
             map,
             chunkKey,
             chunkTiles,
@@ -9212,9 +9256,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
       const surfaceWindow = this.context.surface.createWindow();
       const counts = prepared.tiles.map((tile, index) => {
         const count = prepared.ranges[index * 2 + 1];
-        return count === 0 ? 0 : Math.max(1, Math.round(
-          count * surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y)
-        ));
+        return forestInstanceCount(count, surfaceWindow.getEffectiveVegetationDensity(tile.x, tile.y));
       });
       const matrices = new Float32Array(counts.reduce((sum, count) => sum + count, 0) * 16);
       let instanceCount = 0;
@@ -10789,7 +10831,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 19;
+  var WORLD_GENERATOR_VERSION = 20;
 
   // src/world/WorldStyleProfile.ts
   var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -10838,9 +10880,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     fields: Object.freeze({
       warpX: field(1374496523, 0.018, 0.022, 3, 2),
       warpY: field(1757159915, 0.018, 0.022, 3, 2),
-      continent: field(0, 0.052, 0.052, 5, 2),
+      continent: field(0, 0.014, 0.014, 5, 2),
       detail: field(2738958700, 0.145, 0.145, 3, 3),
-      ridge: field(2654435769, 0.032, 0.032, 4, 2),
+      ridge: field(2654435769, 0.012, 0.012, 4, 2),
       valley: field(2135587861, 0.024, 0.024, 3, 2),
       roughness: field(2496678331, 0.31, 0.31, 3, 4),
       moisture: field(3355524772, 0.08, 0.08, 4, 2),
@@ -16870,7 +16912,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     nonNegativeSafeInteger("cpuChunkCacheBytes", options.cpuChunkCacheBytes);
     nonNegativeSafeInteger("modelAssetCacheBytes", options.modelAssetCacheBytes);
     positive2("worldSessionDrainTimeoutMs", options.worldSessionDrainTimeoutMs);
-    nonNegativeSafeInteger("treesPerTile", options.treesPerTile);
+    if (!Number.isFinite(options.treesPerTile) || options.treesPerTile < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
     nonNegativeSafeInteger("grassDensity", options.grassDensity);
     positive2("grassBladeWidth", options.grassBladeWidth);
     positive2("grassBladeHeight", options.grassBladeHeight);
@@ -18632,7 +18674,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     worldVegetationDensity(scale) {
       const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
       const grassDensity = this.options.grassEnabled && this.options.grassDensity > 0 ? Math.max(1, Math.round(this.options.grassDensity * normalizedScale)) : 0;
-      const treesPerTile = this.options.treesPerTile > 0 ? Math.max(1, Math.round(this.options.treesPerTile * normalizedScale)) : 0;
+      const treesPerTile = this.options.treesPerTile > 0 ? this.options.treesPerTile * normalizedScale : 0;
       return { grassDensity, treesPerTile, signature: `${grassDensity}:${treesPerTile}` };
     }
     unmountForestWorldRenderLayer(context) {
@@ -20065,7 +20107,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return this.options.treesPerTile;
     }
     set treesPerTile(value) {
-      if (!Number.isInteger(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative integer");
+      if (!Number.isFinite(value) || value < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
       if (value === this.options.treesPerTile) return;
       this.options.treesPerTile = value;
       this.scheduleVegetationRefresh("forest");
@@ -22354,6 +22396,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.createWorldChunkCacheKey = createWorldChunkCacheKey;
   exports.createWorldDescriptor = createWorldDescriptor;
   exports.createWorldSurfaceResolver = createWorldSurfaceResolver;
+  exports.createWorldSurfaceView = createWorldSurfaceView;
   exports.createWorldVegetationMapSnapshot = createWorldVegetationMapSnapshot;
   exports.createWorldWaterSampler = createWorldWaterSampler;
   exports.decodeWorldChunkTile = decodeWorldChunkTile;
@@ -22365,6 +22408,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   exports.generateWorld = generateWorld;
   exports.generateWorldChunk = generateWorldChunk;
   exports.generateWorldOverviewWithResolver = generateWorldOverviewWithResolver;
+  exports.generateWorldTreePositions = generateWorldTreePositions;
   exports.generateWorldVegetation = generateWorldVegetation;
   exports.getChunkResidencyCoordinator = getChunkResidencyCoordinator;
   exports.getHexCenter = getHexCenter;

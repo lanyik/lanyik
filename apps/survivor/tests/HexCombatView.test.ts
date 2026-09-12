@@ -1,6 +1,7 @@
+import { COMBAT_WATER_STYLE } from "../src/adapters/CombatEnvironment";
 import { expect, test } from "vitest";
 import { Land, createWorldSurfaceResolver } from "three-hex-map";
-import { COMBAT_WATER_STYLE, findCombatStart } from "../src/adapters/HexCombatView";
+import { findCombatStart } from "../src/adapters/HexCombatView";
 
 test("combat start search is deterministic and produces finite logical coordinates", () => {
     const first = findCombatStart("rift-ember-1");

@@ -53,7 +53,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
         baseBonuses: { ...EMPTY_BONUSES, damage: 49, armor: 10 }, score: equipmentScore(betterBonuses) };
     const weaker: Equipment = { ...starter, id: 9002, name: "磨损短弩", bonuses: weakBonuses, baseBonuses: weakBonuses, affixes: [], score: equipmentScore(weakBonuses) };
     const random = new DeterministicRandom("dense-inventory");
-    const inventory = [better, weaker, ...Array.from({ length: 16 }, (_, i) => generateEquipment(random, 9010 + i, 5 + i, BASE_LOOT_PROFILE))];
+    const inventory = [better, weaker, { ...starter, id: 9990, locked: true }, ...Array.from({ length: 16 }, (_, i) => generateEquipment(random, 9010 + i, 5 + i, BASE_LOOT_PROFILE))];
     // Arrange inventory data only; comparisons, cleanup, pickup and equip use production commands.
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
@@ -72,6 +72,9 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
     await expect(bag.locator(".bag-tabs button")).toHaveCount(4);
+    await expect(bag.locator('[data-item-id="9990"]')).toHaveClass(/item-locked/);
+    await expect(bag.locator('[data-item-id="9990"] .cell-lock-watermark')).toHaveCount(1);
+    await expect(bag.locator('[data-item-id="9990"] .cell-lock-badge')).toContainText("已锁定");
     await expect(bag.getByRole("button", { name: /^全部/ })).toHaveCount(0);
     const candidate = bag.locator('[data-item-id="9001"]');
     await candidate.locator(".bag-item-heading strong").hover();
@@ -110,7 +113,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(tooltip).toHaveCount(0);
     await expect(bag).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 720 });
-    const autoClear = bag.getByRole("combobox", { name: "自动清理装备品质" });
+    const autoClear = bag.getByRole("combobox", { name: "自动售出装备品质" });
     await autoClear.selectOption("rainbow"); await expect(autoClear).toHaveValue("rainbow");
     await expect(candidate).toBeVisible();
     await expect(bag.locator('[data-item-id="9002"]')).toHaveCount(0);

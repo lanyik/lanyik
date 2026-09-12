@@ -103,7 +103,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect(page.locator(".equipment-slot[data-slot=weapon] .item-icon-trigger")).not.toHaveAttribute("aria-label", "武器：空");
     expect(await slotLayout()).toEqual(slotBefore);
     const beforeClear = await itemOrder();
-    const cleanup = bag.getByRole("combobox", { name: "自动清理装备品质" });
+    const cleanup = bag.getByRole("combobox", { name: "自动售出装备品质" });
     await expect(cleanup).toHaveValue("off");
     await cleanup.selectOption("rainbow");
     await expect(cleanup).toHaveValue("rainbow");

@@ -3,14 +3,16 @@ import { createAffixItem } from "./AffixItem";
 import { insertInventoryItem } from "./Inventory";
 import type { InventoryItem } from "./InventoryItem";
 import { RARITIES, type Rarity } from "./Loot";
-import { createOrb, orbDust, orbRefineCost, orbResonance, type Orb } from "./Orbs";
+import { createOrb, orbRefineCost, orbResonance, type Orb } from "./Orbs";
+import { recycleReward, recyclingName, type RecycleRef } from "./Recycling";
 
 export interface EquipmentRef { readonly id: number; readonly revision: number }
 export type CraftOperation =
+    | { readonly kind: "recycle"; readonly item: RecycleRef }
     | { readonly kind: "extract"; readonly source: EquipmentRef; readonly affix: number }
     | { readonly kind: "imbue"; readonly target: EquipmentRef; readonly affixId: number; readonly slot: number }
     | { readonly kind: "inherit"; readonly source: EquipmentRef; readonly target: EquipmentRef }
-    | { readonly kind: "salvage-orb" | "refine-orb"; readonly orbId: number; readonly rarity: Rarity };
+    | { readonly kind: "refine-orb"; readonly orbId: number; readonly rarity: Rarity };
 export interface CraftContext {
     readonly inventory: readonly InventoryItem[];
     readonly equipment: EquippedItems;
@@ -23,6 +25,7 @@ export interface CraftPlan {
     readonly title: string;
     readonly description: string;
     readonly gold: number;
+    readonly goldGain?: number;
     readonly dust: number;
     readonly dustGain: number;
     readonly remove: readonly number[];
@@ -43,7 +46,15 @@ function findEquipment(context: CraftContext, ref: EquipmentRef, source: boolean
 export function quoteCraft(context: CraftContext, operation: CraftOperation): CraftQuote {
     const discount = 1 - orbResonance(context.orbs).craftDiscount;
     let plan: CraftPlan;
-    if (operation.kind === "extract" || operation.kind === "inherit") {
+    if (operation.kind === "recycle") {
+        const item = context.inventory.find(item => item.id === operation.item.id), ref = operation.item;
+        if (!item || item.rarity !== ref.rarity || item.size !== ref.size
+            || (item.type === "equipment" ? item.revision : undefined) !== ref.revision) return reject("物品已变化，请重新选择");
+        if (item.type === "equipment" && item.locked) return reject("装备已锁定，请先解锁");
+        const reward = recycleReward(item);
+        plan = { ok: true, title: `${recyclingName(item.type)}物品`, description: `${recyclingName(item.type)}「${item.name}」×${item.size}，整格物品消失。`,
+            gold: 0, goldGain: reward.gold, dust: 0, dustGain: reward.dust, remove: [item.id] };
+    } else if (operation.kind === "extract" || operation.kind === "inherit") {
         const source = findEquipment(context, operation.source, true);
         if (!source) return reject("来源装备已变化，请重新选择背包中的装备");
         if (source.locked) return reject("来源装备已锁定，请先在背包解锁");
@@ -77,16 +88,13 @@ export function quoteCraft(context: CraftContext, operation: CraftOperation): Cr
     } else {
         const orb = context.inventory.find(item => item.id === operation.orbId);
         if (!orb || orb.type !== "orb" || orb.rarity !== operation.rarity) return reject("宝珠已变化，请重新选择背包中的宝珠");
-        if (operation.kind === "salvage-orb") {
-            plan = { ok: true, title: "分解宝珠", description: `销毁「${orb.name}」，获得宝珠粉尘。`, gold: 0, dust: 0, dustGain: orbDust(orb), remove: [orb.id] };
-        } else {
-            const tier = RARITIES.indexOf(orb.rarity);
-            if (tier === RARITIES.length - 1) return reject("已达彩色品质上限");
-            plan = { ok: true, title: "精炼宝珠", description: `提升「${orb.name}」的品质，类型保持不变，精炼必定成功。`,
-                gold: 0, dust: Math.ceil(orbRefineCost(orb) * discount), dustGain: 0, remove: [], replacement: createOrb(orb.id, RARITIES[tier + 1], orb.value) };
-        }
+        const tier = RARITIES.indexOf(orb.rarity);
+        if (tier === RARITIES.length - 1) return reject("已达彩色品质上限");
+        plan = { ok: true, title: "精炼宝珠", description: `提升「${orb.name}」的品质，类型保持不变，精炼必定成功。`,
+            gold: 0, dust: Math.ceil(orbRefineCost(orb) * discount), dustGain: 0, remove: [], replacement: createOrb(orb.id, RARITIES[tier + 1], orb.value) };
     }
     if (context.gold < plan.gold) return reject(`金币不足，需要 ${plan.gold}，当前 ${context.gold}`);
+    if (!Number.isSafeInteger(context.gold + (plan.goldGain ?? 0))) return reject("金币已达可保存上限");
     if (context.orbDust < plan.dust) return reject(`宝珠粉尘不足，需要 ${plan.dust}，当前 ${context.orbDust}`);
     if (!Number.isSafeInteger(context.orbDust + plan.dustGain)) return reject("宝珠粉尘已达可保存上限");
     return plan;

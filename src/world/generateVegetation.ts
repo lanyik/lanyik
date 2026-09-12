@@ -19,6 +19,7 @@ import { getMapNeighbors, getMapTile } from "../helpers/topology";
 import { MapInfo, MapInfoData, Point, TileInfo } from "../interfaces";
 
 import { VegetationSampling, vegetationRandom as stableRandom } from "./VegetationSampling";
+import type { WorldSurfaceView } from "./WorldSurfaceView";
 
 export const WORLD_VEGETATION_FORMAT_VERSION = 1;
 
@@ -92,6 +93,30 @@ const LODS: readonly WorldChunkLod[] = [0, 1, 2];
 const GRASS_DENSITY = [1, 0.38, 0.14] as const;
 const FOREST_DENSITY = [1, 0.5, 0.2] as const;
 
+export function forestInstanceCount(count: number, density: number): number {
+    return count === 0 ? 0 : Math.max(1, Math.round(count * density));
+}
+
+/** The exact near-LOD trunk positions, including shoreline clearance and surface density. */
+export function generateWorldTreePositions(options: WorldVegetationGenerationOptions, surface: WorldSurfaceView): readonly { x: number; z: number; scale: number }[] {
+    assertOptions(options);
+    const chunks = buildForest(options.map, options, options, options, [0]);
+    const window = surface.createWindow(), result: { x: number; z: number; scale: number }[] = [];
+    try {
+        for (const chunk of chunks) {
+            const origin = getWorldChunkOrigin(chunk.chunkKey, options.size), layout = chunk.lods[0];
+            layout.tiles.forEach((tile, index) => {
+                const count = forestInstanceCount(layout.ranges[index * 2 + 1], window.getEffectiveVegetationDensity(tile.x, tile.y));
+                for (let i = 0; i < count; i++) {
+                    const offset = (layout.ranges[index * 2] + i) * 16;
+                    result.push({ x: origin.x + layout.matrices[offset + 12], z: origin.y + layout.matrices[offset + 14], scale: layout.matrices[offset + 5] });
+                }
+            });
+        }
+    } finally { window.clear(); }
+    return result;
+}
+
 function cloneTile(tile: TileInfo): TileInfo {
     return {
         ...tile,
@@ -140,13 +165,13 @@ function assertOptions(options: WorldVegetationGenerationOptions): void {
         throw new RangeError("vegetation tile size must be a positive finite number");
     }
     for (const [name, value] of [
-        ["grassDensity", options.grassDensity],
-        ["treesPerTile", options.treesPerTile]
+        ["grassDensity", options.grassDensity]
     ] as const) {
         if (!Number.isInteger(value) || value < 0) {
             throw new RangeError(`${name} must be a non-negative integer`);
         }
     }
+    if (!Number.isFinite(options.treesPerTile) || options.treesPerTile < 0) throw new RangeError("treesPerTile must be a non-negative finite density");
     if (!Number.isFinite(options.treeScale) || options.treeScale < 0) {
         throw new RangeError("treeScale must be a non-negative finite number");
     }
@@ -356,7 +381,8 @@ function buildForest(
     map: MapInfo,
     options: WorldVegetationGenerationOptions,
     waterOptions: WaterClearanceOptions,
-    coastOptions: CoastClearanceOptions
+    coastOptions: CoastClearanceOptions,
+    lods: readonly WorldChunkLod[] = LODS
 ): WorldVegetationForestChunkLayout[] {
     if (options.treesPerTile <= 0 || options.treeScale === 0) return [];
     const tilesByModel = new Map<string, Point[]>();
@@ -375,7 +401,7 @@ function buildForest(
             layouts.push({
                 chunkKey,
                 modelPath,
-                lods: LODS.map(lod => buildForestLod(
+                lods: lods.map(lod => buildForestLod(
                     map,
                     chunkKey,
                     chunkTiles,

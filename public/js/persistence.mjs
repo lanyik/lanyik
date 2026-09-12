@@ -27,7 +27,7 @@ function assertToroidalWorldBounds(world) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 19;
+var WORLD_GENERATOR_VERSION = 20;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -76,9 +76,9 @@ var WORLD_STYLE_PROFILE = Object.freeze({
   fields: Object.freeze({
     warpX: field(1374496523, 0.018, 0.022, 3, 2),
     warpY: field(1757159915, 0.018, 0.022, 3, 2),
-    continent: field(0, 0.052, 0.052, 5, 2),
+    continent: field(0, 0.014, 0.014, 5, 2),
     detail: field(2738958700, 0.145, 0.145, 3, 3),
-    ridge: field(2654435769, 0.032, 0.032, 4, 2),
+    ridge: field(2654435769, 0.012, 0.012, 4, 2),
     valley: field(2135587861, 0.024, 0.024, 3, 2),
     roughness: field(2496678331, 0.31, 0.31, 3, 4),
     moisture: field(3355524772, 0.08, 0.08, 4, 2),

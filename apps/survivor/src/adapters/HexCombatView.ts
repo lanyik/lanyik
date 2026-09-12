@@ -1,5 +1,4 @@
 import {
-    DEFAULT_WORLD_WATER_STYLE,
     HexMap,
     Land,
     ProceduralWorldSource,
@@ -8,7 +7,6 @@ import {
     type Point,
     type HexMapFrameStartEvent,
     type HexMapFrameEndEvent,
-    type WorldWaterGenerationStyle
 } from "three-hex-map";
 import workerUrl from "three-hex-map/world-generator.worker?url";
 import type { CombatStart, CombatView } from "../app/CombatView";
@@ -18,13 +16,8 @@ import { MovementInputController } from "../presentation/MovementInputController
 import { GAME_CONFIG } from "../core/GameConfig";
 import { HexRegionMap } from "./HexRegionMap";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
-
-export const COMBAT_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.freeze({
-    ...DEFAULT_WORLD_WATER_STYLE,
-    oceanLevel: 0.32,
-    riverSourcesPerCell: 2,
-    riverLength: 70
-});
+import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
+import { ProceduralCombatTerrain } from "./ProceduralCombatTerrain";
 
 function isArenaGround(type: Land, modifiers: readonly string[] | undefined): boolean {
     return type !== Land.sea
@@ -38,6 +31,7 @@ function isArenaGround(type: Land, modifiers: readonly string[] | undefined): bo
 export function findCombatStart(seed: string): { readonly tile: Point; readonly point: CombatStart } {
     const resolver = createWorldSurfaceResolver({ seed, waterStyle: COMBAT_WATER_STYLE });
     const window = resolver.createWindow();
+    const terrain = new ProceduralCombatTerrain(seed);
     try {
         for (let ring = 0; ring <= 14; ring += 1) {
             for (let x = -ring; x <= ring; x += 1) {
@@ -53,12 +47,14 @@ export function findCombatStart(seed: string): { readonly tile: Point; readonly 
                     }
                     if (!clear) continue;
                     const center = getHexCenter(tile.x, tile.y, 1);
+                    if (!terrain.isClear(center.x, center.y, .6)) continue;
                     return { tile: Object.freeze(tile), point: Object.freeze({ x: center.x, z: center.y }) };
                 }
             }
         }
     } finally {
         window.clear();
+        terrain.dispose();
     }
     throw new Error("当前世界种子在出生搜索范围内没有连续干燥地面");
 }
@@ -75,13 +71,10 @@ export class HexCombatView implements CombatView {
     constructor(private readonly onError: (error: Error) => void, private readonly terrainWorkers: number) {
         this.map = new HexMap({
             element: "#survivor-world",
-            size: 34,
+            ...COMBAT_ENVIRONMENT,
             texturesBaseUrl: `${import.meta.env.BASE_URL}textures/`,
             treeModel: `${import.meta.env.BASE_URL}Assets/models/oak`,
             maxPixelRatio: 1.5,
-            treesPerTile: 1,
-            treeScale: 1,
-            mountainHeight: 220,
             terrainTextureRegionSize: 4,
             grassDensity: 10,
             grassBladeHeight: 3,

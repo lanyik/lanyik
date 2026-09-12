@@ -8,7 +8,8 @@ import type { CombatWorld } from "./CombatWorld";
 import type { EntityQuery } from "./EntityWorld";
 import type { SkillSnapshot } from "./Skills";
 import type { EffectBuffer } from "./CombatEffects";
-import type { Rarity } from "./Loot";
+import type { RecyclingRules } from "./Recycling";
+import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
 import type { OrbResonance } from "./Orbs";
 
@@ -44,8 +45,8 @@ export interface PlayerSnapshot {
     readonly equipmentPower: number;
     readonly equipment: EquippedItems;
     readonly inventory: readonly InventoryItem[];
-    readonly autoClearEquipment: Rarity | null;
-    readonly clearedEquipment: number;
+    readonly autoRecycle: RecyclingRules;
+    readonly recycled: Readonly<Record<ItemType, number>>;
 }
 
 export interface CombatSnapshot {

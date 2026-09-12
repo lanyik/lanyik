@@ -216,9 +216,9 @@ export const WORLD_STYLE_PROFILE: Readonly<WorldStyleProfile> = Object.freeze({
     fields: Object.freeze({
         warpX: field(0x51ed270b, 0.018, 0.022, 3, 2),
         warpY: field(0x68bc21eb, 0.018, 0.022, 3, 2),
-        continent: field(0, 0.052, 0.052, 5, 2),
+        continent: field(0, 0.014, 0.014, 5, 2),
         detail: field(0xa341316c, 0.145, 0.145, 3, 3),
-        ridge: field(0x9e3779b9, 0.032, 0.032, 4, 2),
+        ridge: field(0x9e3779b9, 0.012, 0.012, 4, 2),
         valley: field(0x7f4a7c15, 0.024, 0.024, 3, 2),
         roughness: field(0x94d049bb, 0.31, 0.31, 3, 4),
         moisture: field(0xc8013ea4, 0.08, 0.08, 4, 2),

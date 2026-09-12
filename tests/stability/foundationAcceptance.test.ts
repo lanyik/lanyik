@@ -33,7 +33,7 @@ describe("foundation acceptance invariants", () => {
         expect(checksum(generate("different-seed"))).not.toBe(forward);
         expect(forward).toMatch(/^[0-9a-f]{8}$/);
         // Broad oceans and deterministic drainage are part of world identity.
-        expect(forward).toBe("0e19d5f7");
+        expect(forward).toBe("ef192ad4");
     });
 
     test("admitted resources and queued work stay inside hard limits under random churn", () => {

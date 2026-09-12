@@ -88,8 +88,8 @@ describe("LandformSampler", () => {
         const sampler = createLandformSampler({ seed, domain: { topology: "infinite" } });
         let mountains = 0;
 
-        for (let chunkX = -5; chunkX <= -3; chunkX += 1) {
-            for (let chunkY = -2; chunkY <= 0; chunkY += 1) {
+        for (let chunkX = -6; chunkX <= -4; chunkX += 1) {
+            for (let chunkY = 2; chunkY <= 4; chunkY += 1) {
                 const chunk = generateWorldChunk({ seed, chunkX, chunkY, chunkSize: 24 });
                 for (let localX = 0; localX < chunk.chunkSize; localX += 1) {
                     for (let localY = 0; localY < chunk.chunkSize; localY += 1) {

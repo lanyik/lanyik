@@ -22,6 +22,8 @@ import { quoteCraft, commitCraft, type CraftOperation } from "./Crafting";
 import { compareInventoryItems, generateConsumable, canUseConsumable, selectConsumable, potionRecovery, POTIONS, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
 import { insertInventoryItem, mergeInventory } from "./Inventory";
 import type { ItemType } from "./ItemDefinition";
+import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
+import { EMPTY_RECYCLING, recycleReward, type RecyclingRules } from "./Recycling";
 import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 
 import { ActorAction, CombatWorld, Component, Faction } from "./CombatWorld";
@@ -72,10 +74,10 @@ export class CombatSimulation {
     private currentRegion: RegionInfo;
     private nearbyRegions: readonly RegionInfo[];
     private inventory: InventoryItem[] = [];
-    private autoClearEquipment: Rarity | null = null;
+    private autoRecycle: RecyclingRules = EMPTY_RECYCLING;
     private orbDust = 0;
     private spiritRealm: SpiritRealm;
-    private clearedEquipment = 0;
+    private recycled: Record<ItemType, number> = { equipment: 0, orb: 0, consumable: 0, affix: 0 };
     private readonly orbs: (Orb | undefined)[] = new Array(ORB_UNLOCK_LEVELS.length);
     private orbBonuses = orbResonance(this.orbs);
     private lootProfile = BASE_LOOT_PROFILE;
@@ -131,13 +133,13 @@ export class CombatSimulation {
     };
     private readonly renderState: CombatRenderState;
 
-    constructor(seed: string | number, start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM) {
+    constructor(seed: string | number, start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM, terrain: CombatTerrain = OPEN_TERRAIN) {
         validatePosition(start.x, start.z);
         this.spiritRealm = validateSpiritRealm(spiritRealm);
         for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.spiritRealm.attributes[id];
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
         this.world = new RegionalWorld(seed, start);
-        this.entities = new CombatWorld(start.x, start.z);
+        this.entities = new CombatWorld(start.x, start.z, terrain);
         this.behavior = new EnemyBehavior(this.entities, this.world);
         this.skills = new SkillSystem(this.entities);
         this.renderState = { player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
@@ -160,7 +162,7 @@ export class CombatSimulation {
     public get tick(): number { return this.tickValue; }
     public get gameOver(): boolean { return this.gameOverValue; }
     public get spiritProgress(): SpiritRealm { return this.spiritRealm; }
-    public dispose(): void { this.closed = true; }
+    public dispose(): void { this.closed = true; this.entities.terrain.dispose(); }
 
     public step(input: MovementInput): void;
     public step(input: MovementInput, executor: ProjectileExecutor): Promise<void>;
@@ -256,8 +258,8 @@ export class CombatSimulation {
             equipmentPower: battlePower(this.stats) - battlePower(deriveStats(this.level, this.attributes, sumEquipment({}))),
             equipment,
             inventory: Object.freeze([...this.inventory]),
-            autoClearEquipment: this.autoClearEquipment,
-            clearedEquipment: this.clearedEquipment
+            autoRecycle: this.autoRecycle,
+            recycled: Object.freeze({ ...this.recycled })
         });
         const chunks = { near: 0, buffer: 0, retained: 0, total: this.world.chunks.size };
         for (const chunk of this.world.chunks.values()) if (chunk.band !== "unloaded") chunks[chunk.band] += 1;
@@ -340,32 +342,18 @@ export class CombatSimulation {
         return { ok: true, message: "装备成功" };
     }
 
-    public discard(itemId: number): { readonly ok: boolean; readonly message: string } {
-        if (this.gameOverValue) return { ok: false, message: "战斗已结束" };
-        const index = this.inventory.findIndex(item => item.id === itemId);
-        if (index < 0) return { ok: false, message: "背包中没有这件装备" };
-        const candidate = this.inventory[index];
-        if (candidate.type === "equipment" && candidate.locked) {
-            this.pushNotice("info", "装备已锁定，请先解锁"); return { ok: false, message: "装备已锁定" };
-        }
-        const [item] = this.inventory.splice(index, 1);
-        this.inventoryFullNotified = false;
-        this.pushNotice("info", `丢弃了 ${item.name}`);
-        this.markChanged();
-        return { ok: true, message: "装备已丢弃" };
-    }
-
     public sortInventory(): void {
         if (this.gameOverValue) return;
-        this.inventory.sort(compareInventoryItems);
+        this.inventory = mergeInventory(this.inventory).sort(compareInventoryItems);
         this.markChanged();
     }
 
-    public setAutoClearEquipment(maximum: Rarity | null): void {
+    public setAutoRecycle(type: ItemType, maximum: Rarity | null): void {
+        if (!Object.hasOwn(EMPTY_RECYCLING, type)) throw new RangeError("Unknown recycling category");
         if (maximum !== null && !RARITIES.includes(maximum)) throw new RangeError("Unknown cleanup quality");
-        if (this.gameOverValue || this.autoClearEquipment === maximum) return;
-        this.autoClearEquipment = maximum;
-        this.clearAutoEquipment();
+        if (this.gameOverValue || this.autoRecycle[type] === maximum) return;
+        this.autoRecycle = Object.freeze({ ...this.autoRecycle, [type]: maximum });
+        this.recycleInventory();
         this.markChanged();
     }
 
@@ -383,7 +371,7 @@ export class CombatSimulation {
         const index = this.inventory.findIndex(item => item.id === itemId), item = this.inventory[index];
         if (!item || item.type !== "equipment" || item.locked === locked) return;
         this.inventory[index] = Object.freeze({ ...item, locked, revision: item.revision + 1 });
-        this.clearAutoEquipment(); this.markChanged();
+        this.recycleInventory(); this.markChanged();
     }
 
     public craft(operation: CraftOperation): void {
@@ -394,10 +382,10 @@ export class CombatSimulation {
         const result = commitCraft(context, plan, this.nextItemId);
         this.inventory = result.inventory; this.equipped = result.equipment;
         if (result.usedId) this.nextItemId++;
-        this.gold -= plan.gold; this.orbDust += plan.dustGain - plan.dust;
+        this.gold += (plan.goldGain ?? 0) - plan.gold; this.orbDust += plan.dustGain - plan.dust;
         this.inventoryFullNotified = false;
         this.recalculateStats(false);
-        this.pushNotice("loot", `${plan.title}完成${plan.dustGain ? ` · 获得 ${plan.dustGain} 宝珠粉尘` : ""}`);
+        this.pushNotice("loot", `${plan.title}完成${plan.dustGain ? ` · 获得 ${plan.dustGain} 宝珠粉尘` : plan.goldGain ? ` · 获得 ${plan.goldGain} 金币` : ""}`);
         this.markChanged();
     }
 
@@ -428,7 +416,7 @@ export class CombatSimulation {
         if (!item || item.type !== "orb") return { ok: false, message: "背包中没有这颗宝珠" };
         const previous = this.orbs[socket];
         this.inventory.splice(index, 1);
-        if (previous) this.inventory.push(previous);
+        if (previous && !this.storeInventoryItem(previous)) throw new Error("Orb exchange lost its reserved slot");
         this.orbs[socket] = item;
         this.lootProfile = lootProfile(sumOrbs(this.orbs));
         this.orbBonuses = orbResonance(this.orbs);
@@ -454,9 +442,8 @@ export class CombatSimulation {
     public removeOrb(socket: number): void {
         const orb = this.orbs[socket];
         if (this.gameOverValue || !orb) return;
-        const nextInventory = insertInventoryItem(this.inventory, orb);
-        if (!nextInventory) { this.notifyInventoryFull("orb"); return; }
-        this.inventory = nextInventory;
+        if (!this.storeInventoryItem(orb)) { this.notifyInventoryFull("orb"); return; }
+        this.inventoryFullNotified = false;
         this.orbs[socket] = undefined;
         this.lootProfile = lootProfile(sumOrbs(this.orbs));
         this.orbBonuses = orbResonance(this.orbs);
@@ -506,8 +493,7 @@ export class CombatSimulation {
         const distance = this.stats.moveSpeed * STEP_SECONDS / Math.max(1, length);
         const dx = input.x * distance;
         const dz = input.z * distance;
-        this.playerX += dx;
-        this.playerZ += dz;
+        this.entities.moveActor(this.entities.player, dx, dz);
         this.heading = Math.atan2(dx, dz);
     }
 
@@ -518,6 +504,8 @@ export class CombatSimulation {
                 home.spawned[slot] = 1;
                 const spawn = home.spawns[slot];
                 if (Math.hypot(spawn.x - this.playerX, spawn.z - this.playerZ) < 3) continue;
+                const radius = ENEMY_DEFINITIONS[spawn.kind].radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
+                if (!this.entities.terrain.isClear(spawn.x, spawn.z, radius + .08)) continue;
                 this.entities.spawnEnemy(spawn, home);
             }
         }
@@ -560,7 +548,7 @@ export class CombatSimulation {
         this.chests.count = 0;
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.chestOpened) continue;
+            if (!chest || chunk.chestOpened || !this.entities.terrain.isClear(chest.x, chest.z, .45)) continue;
             const index = this.chests.count++;
             this.chests.x[index] = chest.x;
             this.chests.z[index] = chest.z;
@@ -572,6 +560,7 @@ export class CombatSimulation {
         chestLoop: for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
             if (!chest || chunk.band !== "near" || chunk.chestOpened) continue;
+            if (!this.entities.terrain.isClear(chest.x, chest.z, .45)) continue;
             if (Math.hypot(chest.x - this.playerX, chest.z - this.playerZ) > 0.95) continue;
             const rules = CHEST_RULES[chest.tier];
             // Stage all category/stack changes before consuming chest randomness or IDs.
@@ -579,12 +568,12 @@ export class CombatSimulation {
             const random = this.random.clone();
             let nextId = this.nextItemId;
             const item = generateEquipment(random, nextId++, chest.region.level, this.lootProfile, rules.rarity);
-            const clearEquipment = this.shouldAutoClear(item);
-            const rewards: InventoryItem[] = [generateConsumable(random, nextId++, rules.rarity)];
+            const clearEquipment = this.shouldAutoRecycle(item);
+            const rewards: InventoryItem[] = [item, generateConsumable(random, nextId++, rules.rarity)];
             if (chest.hasOrb) rewards.push(generateOrb(random, nextId++, rules.rarity));
-            if (!clearEquipment) rewards.unshift(item);
             let nextInventory = this.inventory;
             for (const reward of rewards) {
+                if (this.shouldAutoRecycle(reward)) continue;
                 const next = insertInventoryItem(nextInventory, reward);
                 if (!next) { this.notifyInventoryFull(reward.type); break chestLoop; }
                 nextInventory = next;
@@ -592,12 +581,12 @@ export class CombatSimulation {
             this.random = random;
             this.nextItemId = nextId;
             this.inventory = nextInventory;
-            if (clearEquipment) this.clearedEquipment++;
+            for (const reward of rewards) if (this.shouldAutoRecycle(reward)) this.applyAutoRecycle(reward);
             this.gold += Math.round(rules.gold * (1 + this.stats.goldBonus + this.orbBonuses.goldBonus));
             chunk.chestOpened = true;
             this.openedChests += 1;
             this.inventoryFullNotified = false;
-            this.pushNotice("loot", rules.name + " · " + (clearEquipment ? "较弱装备已清理" : item.name), clearEquipment ? undefined : item.id);
+            this.pushNotice("loot", rules.name + " · " + (clearEquipment ? "较弱装备已售出" : item.name), clearEquipment ? undefined : item.id);
             this.markChanged();
             this.refreshChests();
             break;
@@ -710,7 +699,7 @@ export class CombatSimulation {
             const index = nearby.slots[cursor], id = this.entities.item.id[index];
             const item = this.groundItems.get(id);
             if (!item) throw new Error(`Ground equipment ${id} is missing`);
-            const clear = this.shouldAutoClear(item);
+            const clear = this.shouldAutoRecycle(item);
             if (!this.storeInventoryItem(item)) { this.notifyInventoryFull(item.type); continue; }
             this.groundItems.delete(id);
             this.entities.remove(index);
@@ -793,9 +782,10 @@ export class CombatSimulation {
         return deriveStats(this.level, this.attributes, sumEquipment(this.equipped));
     }
 
-    private shouldAutoClear(item: InventoryItem): boolean {
-        return this.autoClearEquipment !== null && item.type === "equipment" && !item.locked
-            && RARITIES.indexOf(item.rarity) <= RARITIES.indexOf(this.autoClearEquipment) && this.canClearEquipment(item);
+    private shouldAutoRecycle(item: InventoryItem): boolean {
+        const maximum = this.autoRecycle[item.type];
+        return maximum !== null && RARITIES.indexOf(item.rarity) <= RARITIES.indexOf(maximum)
+            && (item.type !== "equipment" || this.canClearEquipment(item));
     }
 
     private canClearEquipment(item: InventoryItem): boolean {
@@ -805,19 +795,27 @@ export class CombatSimulation {
     }
 
     private storeInventoryItem(item: InventoryItem): boolean {
-        if (this.shouldAutoClear(item)) { this.clearedEquipment++; return true; }
+        if (this.shouldAutoRecycle(item)) { this.applyAutoRecycle(item); return true; }
         const next = insertInventoryItem(this.inventory, item);
         if (!next) return false;
         this.inventory = next;
         return true;
     }
 
-    private clearAutoEquipment(): void {
-        if (!this.autoClearEquipment) return;
+    private recycleInventory(): void {
+        if (!Object.values(this.autoRecycle).some(value => value !== null)) return;
         const before = this.inventory.length;
-        this.inventory = this.inventory.filter(item => !this.shouldAutoClear(item));
-        this.clearedEquipment += before - this.inventory.length;
+        this.inventory = this.inventory.filter(item => {
+            if (!this.shouldAutoRecycle(item)) return true;
+            this.applyAutoRecycle(item); return false;
+        });
         if (this.inventory.length < before) this.inventoryFullNotified = false;
+    }
+
+    private applyAutoRecycle(item: InventoryItem): void {
+        const reward = recycleReward(item);
+        this.gold += reward.gold; this.orbDust += reward.dust;
+        this.recycled[item.type] += item.size;
     }
 
     private recalculateStats(healGrowth: boolean): void {
@@ -829,7 +827,7 @@ export class CombatSimulation {
         this.health = Math.min(this.stats.maxHealth, (previousMaximum === this.stats.maxHealth ? this.health : this.health / previousMaximum * this.stats.maxHealth)
             + (healGrowth ? this.stats.maxHealth * 0.12 * (1 + this.stats.regenBonus) : 0));
         this.mana = this.mana / previousMana * this.stats.maxMana;
-        this.clearAutoEquipment();
+        this.recycleInventory();
     }
 
     private pushNotice(tone: CombatNotice["tone"], message: string, acquiredEquipmentId?: number): void {

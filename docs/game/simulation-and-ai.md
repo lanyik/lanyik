@@ -1,5 +1,7 @@
 # 战斗 ECS 与怪物行为树
 
+生物的树干、陡坡和水体阻挡由 `CombatTerrain` 注入，普通移动、冲锋/冲刺、刷怪与宝箱净空共用规则，详见[地形通行与刷怪](terrain-navigation.md)。
+
 本设计已实现于 `apps/survivor/src/core/{EntityWorld,CombatWorld,BehaviorTree,EnemyBehavior,CombatSystems,EnemyDefinitions,CombatSimulation,SpatialGrid,ProjectileBatch,CombatCommand}.ts` 及 `src/worker/`。
 应用边界见[应用设计](../app-development.md)，数值与奖励见[战斗合同](combat-and-progression.md)，动作资源见[资产合同](actor-assets.md)，玩家技能与图集见[技能合同](skills-and-effects.md)。
 

@@ -6,6 +6,8 @@ import {
     assertWorldVegetationLayout,
     createWorldVegetationMapSnapshot,
     generateWorldVegetation,
+    generateWorldTreePositions,
+    createWorldSurfaceView,
     getMapTile,
     Land,
     MapInfo,
@@ -54,6 +56,28 @@ function options(map: MapInfo, points: readonly Point[]) {
 }
 
 describe("worker vegetation layout", () => {
+    test("fractional forest density preserves the same rendered trunk prefix for collision queries", () => {
+        const map = testMap(), points: Point[] = [];
+        for (let x = 2; x < 18; x++) for (let y = 2; y < 18; y++) {
+            map.data[x][y] = { type: Land.land, modifiers: ["wood"] }; points.push({ x, y });
+        }
+        const sparse = { ...options(map, points), treesPerTile: .45, grassDensity: 0 };
+        const surface = createWorldSurfaceView({ map, tileSize: sparse.size, mountainHeight: 220 });
+        const trunks = generateWorldTreePositions(sparse, surface);
+        const dense = generateWorldTreePositions({ ...sparse, treesPerTile: 1 }, surface);
+        expect(trunks.length).toBeGreaterThan(50); expect(trunks.length).toBeLessThan(dense.length * .7);
+        const expected = generateWorldVegetation(sparse).forest.flatMap(chunk => {
+            const origin = getWorldChunkOrigin(chunk.chunkKey, sparse.size), lod = chunk.lods[0];
+            return lod.tiles.flatMap((_tile, index) => {
+                const available = lod.ranges[index * 2 + 1], count = available ? Math.max(1, Math.round(available * .45)) : 0;
+                return Array.from({ length: count }, (_, i) => {
+                    const offset = (lod.ranges[index * 2] + i) * 16;
+                    return { x: origin.x + lod.matrices[offset + 12], z: origin.y + lod.matrices[offset + 14], scale: lod.matrices[offset + 5] };
+                });
+            });
+        });
+        expect(trunks).toEqual(expected);
+    });
     test("grass fills every edge band and keeps identical roots across independent requests and LODs", () => {
         const map = testMap();
         const tile = { x: 10, y: 10 };

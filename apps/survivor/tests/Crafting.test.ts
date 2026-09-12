@@ -1,3 +1,4 @@
+import { recycleRef } from "../src/core/Recycling";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { createStarterEquipment, withEquipmentAffixes, type Equipment, type EquipmentAffix } from "../src/core/Equipment";
@@ -63,7 +64,7 @@ describe("crafting transactions", () => {
         simulation.setEquipmentLock(10, true);
         const locked = simulation.getSnapshot().player.inventory[0] as Equipment;
         expect(quoteCraft(simulation.getSnapshot().player, { kind: "extract", source: locked, affix: 0 }).ok).toBe(false);
-        simulation.discard(10); expect(simulation.getSnapshot().player.inventory[0]).toEqual(locked);
+        simulation.craft({ kind: "recycle", item: recycleRef(simulation.getSnapshot().player.inventory.find(item => item.id === 10)!) }); expect(simulation.getSnapshot().player.inventory[0]).toEqual(locked);
         simulation.dispose();
     });
     test("inheritance transfers all source affixes across star counts, preserves target base and recalculates worn gear", () => {
@@ -87,7 +88,7 @@ describe("crafting transactions", () => {
         expect(after.inventory[0]).toMatchObject({ id: 10, value: "fortune", rarity: "magic" }); expect(after.orbDust).toBe(0);
         simulation.craft(op); expect(simulation.getSnapshot().player).toEqual(after);
         simulation.craft({ kind: "refine-orb", orbId: 11, rarity: "rainbow" }); expect(simulation.getSnapshot().player).toEqual(after);
-        simulation.craft({ kind: "salvage-orb", orbId: 11, rarity: "rainbow" });
+        simulation.craft({ kind: "recycle", item: recycleRef(after.inventory[1]) });
         expect(simulation.getSnapshot().player.orbDust).toBe(243); expect(simulation.getSnapshot().player.inventory).toHaveLength(1);
         expect(orbDust(after.inventory[0] as ReturnType<typeof createOrb>)).toBe(3);
         simulation.dispose();

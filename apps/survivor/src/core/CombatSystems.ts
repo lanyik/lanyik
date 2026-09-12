@@ -76,9 +76,17 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
             : Math.min(Math.max(0, distance - stop), speed * SECONDS);
         const weave = intent === MoveIntent.Flank ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
         const scale = travel / Math.sqrt(1 + weave * weave);
-        p.x[slot] += (dx - dz * weave) * scale; p.z[slot] += (dz + dx * weave) * scale;
+        let moved = entities.moveActor(slot, (dx - dz * weave) * scale, (dz + dx * weave) * scale);
+        // Bounded local steering around trunks. Charges keep their committed heading.
+        if (!moved && travel > 0) {
+            const side = world.ids[slot] % 2 ? 1 : -1;
+            for (const direction of [side, -side]) {
+                moved = entities.moveActor(slot, (dx * .5 - dz * .866 * direction) * travel, (dz * .5 + dx * .866 * direction) * travel, false);
+                if (moved) break;
+            }
+        }
         p.heading[slot] = Math.atan2(dx, dz);
-        a.kind[slot] = travel > 0 ? ActorAction.Moving : ActorAction.Idle;
+        a.kind[slot] = moved ? ActorAction.Moving : ActorAction.Idle;
         entities.updateSpatial(slot, Component.Enemy);
     }
 }
@@ -96,7 +104,7 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             if (tick < a.hitAt[slot] || tick >= a.hitAt[slot] + ticksForSeconds(ENEMY_SPECIAL.charge.duration)) continue;
             const target = world.resolve(a.target[slot]), sx = p.x[slot], sz = p.z[slot];
             const travel = ENEMY_SPECIAL.charge.speed * SECONDS * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
-            p.x[slot] += Math.sin(p.heading[slot]) * travel; p.z[slot] += Math.cos(p.heading[slot]) * travel;
+            entities.moveActor(slot, Math.sin(p.heading[slot]) * travel, Math.cos(p.heading[slot]) * travel, false);
             entities.updateSpatial(slot, Component.Enemy);
             if (!a.committed[slot] && target >= 0 && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity) {
                 a.committed[slot] = 1;

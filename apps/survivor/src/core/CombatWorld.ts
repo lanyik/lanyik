@@ -10,6 +10,7 @@ import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn }
 import { groundItemKind, type InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
+import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
@@ -90,9 +91,16 @@ export class CombatWorld {
         id: new Float64Array(ENTITY_CAPACITY), rarity: new Uint8Array(ENTITY_CAPACITY), kind: new Uint8Array(ENTITY_CAPACITY)
     };
 
-    constructor(x: number, z: number) {
+    constructor(x: number, z: number, public readonly terrain: CombatTerrain = OPEN_TERRAIN) {
         this.player = this.world.create(Component.Position | Component.Vitals | Component.Player);
         this.place(this.player, x, z, PLAYER_RADIUS);
+    }
+
+    public moveActor(slot: number, dx: number, dz: number, slide = true): boolean {
+        const p = this.position, x = p.x[slot], z = p.z[slot];
+        const next = this.terrain.move(x, z, dx, dz, p.radius[slot], slide);
+        p.x[slot] = next.x; p.z[slot] = next.z;
+        return next.x !== x || next.z !== z;
     }
 
     public spawnEnemy(spawn: RegionalSpawn, home: RegionalChunk): number {

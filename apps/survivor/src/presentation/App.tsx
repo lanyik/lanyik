@@ -17,6 +17,9 @@ import { OrbDragProvider } from "./OrbDrag";
 import { SkillSlot } from "./SkillSlot";
 import { CraftingPanel } from "./CraftingPanel";
 import { SpiritRealmPanel } from "./SpiritRealmPanel";
+import { CraftConfirmation } from "./CraftConfirmation";
+import type { CraftOperation } from "../core/Crafting";
+import { recycleRef } from "../core/Recycling";
 import "./app.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
@@ -38,17 +41,20 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
 }) {
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false });
     const [craftItemId, setCraftItemId] = useState<number>();
+    const [recycling, setRecycling] = useState<CraftOperation>();
     const [frontPanel, setFrontPanel] = useState<"character" | "inventory">("character");
     const [selectedId, setSelectedId] = useState<number>();
     const workspace = useRef<HTMLDivElement>(null);
     const combat = snapshot.combat;
     const player = combat?.player;
     const toggle = (menu: Menu) => {
+        if (menu === "inventory" && !panels.inventory) session.dispatch({ type: "sort-inventory" });
         if (menu === "character" || menu === "inventory") setFrontPanel(menu);
         setPanels(current => ({ ...current,
             ...(menu === "craft" || menu === "spirit" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
     };
     const close = (menu: Menu) => setPanels(current => ({ ...current, [menu]: false }));
+    const recycle = (item: InventoryItem) => { if (!(item.type === "equipment" && item.locked)) setRecycling({ kind: "recycle", item: recycleRef(item) }); };
     const useItem = (item: InventoryItem) => {
         if (item.type === "equipment") session.dispatch({ type: "equip", itemId: item.id });
         else if (item.type === "consumable") session.dispatch({ type: "use-consumable", itemId: item.id, effect: POTIONS[item.value].resource });
@@ -76,7 +82,7 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
                 // Focused buttons keep their native Enter activation instead of firing two actions.
                 if (event.code === "Enter" && target instanceof HTMLButtonElement) return;
                 const item = player?.inventory.find(candidate => candidate.id === selectedId);
-                if (item) { if (event.code === "Enter") useItem(item); else session.dispatch({ type: "discard", itemId: item.id }); }
+                if (item) { if (event.code === "Enter") useItem(item); else recycle(item); }
             } else return;
             event.preventDefault();
         };
@@ -106,8 +112,8 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
                 </nav>}
             {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} />}
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
-                onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
-                onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={maximum => session.dispatch({ type: "set-auto-clear-equipment", maximum })}
+                onUse={useItem} onRecycle={recycle}
+                onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoRecycle={(itemType, maximum) => session.dispatch({ type: "set-auto-recycle", itemType, maximum })}
                 onMerge={() => session.dispatch({ type: "merge-consumables" })}
                 onLock={(itemId, locked) => session.dispatch({ type: "set-equipment-lock", itemId, locked })}
                 onCraft={item => { setCraftItemId(item.id); toggle("craft"); }} onRemoveOrb={socket => session.dispatch({ type: "remove-orb", socket })}
@@ -116,6 +122,7 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
             {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
+            {recycling && <CraftConfirmation operation={recycling} player={player} disabled={combat.gameOver} close={() => setRecycling(undefined)} confirm={operation => session.dispatch({ type: "craft", operation })} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
                 <div className="status-bar" aria-label="状态栏"><span className={player.shieldRemaining <= 0 ? "ready" : ""}><UiIcon name="shield" />免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}s` : "就绪"}</span>

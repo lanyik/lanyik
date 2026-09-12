@@ -118,7 +118,6 @@ describe("CombatSimulation", () => {
         const combat = new CombatSimulation("commands");
         expect(combat.allocateAttribute("might")).toEqual({ ok: false, message: "没有可分配的属性点" });
         expect(combat.equip(404)).toEqual({ ok: false, message: "背包中没有这件装备" });
-        expect(combat.discard(404)).toEqual({ ok: false, message: "背包中没有这件装备" });
         expect(() => combat.step({ x: NaN, z: 0, active: true })).toThrow("finite");
     });
 

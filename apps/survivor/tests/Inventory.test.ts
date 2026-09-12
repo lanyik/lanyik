@@ -1,3 +1,4 @@
+import { recycleRef } from "../src/core/Recycling";
 import { expect, test } from "vitest";
 import { GAME_CONFIG } from "../src/core/GameConfig";
 import { insertInventoryItem, inventorySlots, mergeInventory } from "../src/core/Inventory";
@@ -61,7 +62,7 @@ test("a blocked chest leaves potion stacks, RNG, gold and all rewards untouched"
     expect(simulation.getSnapshot().player.inventory).toEqual(before.player.inventory);
     expect(simulation.getSnapshot().player.gold).toBe(before.player.gold);
     expect(simulation.getRenderState().chests.count).toBe([...fixture.world.chunks.values()].filter(value => value.chest && !value.chestOpened).length);
-    simulation.discard(100); fixture.openNearbyChest();
+    simulation.craft({ kind: "recycle", item: recycleRef(simulation.getSnapshot().player.inventory.find(item => item.id === 100)!) }); fixture.openNearbyChest();
     expect(chunk.chestOpened).toBe(true);
     expect(inventorySlots(simulation.getSnapshot().player.inventory, "orb")).toBe(GAME_CONFIG.inventory.orb.capacity);
     simulation.dispose();
