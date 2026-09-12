@@ -1,7 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BONUS_IDS, BONUS_INFO, RARITY_NAMES, SLOT_NAMES, type BonusId } from "../core/Equipment";
-import type { InventoryItem } from "../core/InventoryItem";
+import { POTIONS, potionAmount, type Consumable, type InventoryItem } from "../core/InventoryItem";
 import type { ItemType } from "../core/ItemDefinition";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { CONSUMABLE_COOLDOWN } from "../core/GameConfig";
@@ -45,7 +45,9 @@ const ICON_PATHS = {
     constellation: "M24 5L40 15V33L24 43L8 33V15ZM24 13L27 20L35 24L27 27L24 35L21 27L13 24L21 20Z",
     harmony: "M24 5L40 15V33L24 43L8 33V15ZM19 17L29 31M29 17L19 31M16 24H32",
     health: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM19 33H29M24 28V38",
-    mana: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM24 26C13 39 35 39 24 26Z"
+    mana: "M18 6H30V12H27V20L35 31V39L31 43H17L13 39V31L21 20V12H18ZM24 26C13 39 35 39 24 26Z",
+    "health-percent": "M19 5H29V13L39 25V37L24 44L9 37V25L19 13ZM17 26H31M24 19V33M15 37H33",
+    "mana-percent": "M19 5H29V13L39 25V37L24 44L9 37V25L19 13ZM24 19C9 35 39 35 24 19ZM15 37H33"
 } as const;
 export function ItemIcon({ item, type = "equipment", value = "weapon", className = "" }: {
     readonly item?: InventoryItem; readonly type?: ItemType; readonly value?: keyof typeof ICON_PATHS; readonly className?: string;
@@ -54,12 +56,18 @@ export function ItemIcon({ item, type = "equipment", value = "weapon", className
     return <IconFrame type={category} value={subtype} rarity={item?.rarity} className={className}
         badge={item?.type === "equipment" ? <span aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>
             : item?.type === "consumable" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
-        <svg className="item-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON_PATHS[subtype]} /></svg>
+        <svg className={`item-icon icon-${subtype}`} viewBox="0 0 48 48" fill="currentColor" fillOpacity=".16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d={ICON_PATHS[subtype]} />{category === "consumable" && subtype.endsWith("-percent") && <text x="36" y="16" fill="currentColor" fillOpacity="1" stroke="none" fontSize="13" fontWeight="bold">%</text>}
+        </svg>
     </IconFrame>;
+}
+export function potionDescription(item: Consumable): string {
+    const recipe = POTIONS[item.value], amount = potionAmount(item);
+    return `恢复${recipe.resource === "health" ? "生命" : "法力"} ${recipe.percent ? `${Math.round(amount * 100)}% 上限` : `+${amount}`}`;
 }
 export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">
-        <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b><span>等级 {item.itemLevel}</span></span></header>
+        <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b>{item.type === "equipment" && <span>等级 {item.itemLevel}</span>}</span></header>
         {item.type === "equipment" && <>
             <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
             <h4 className="item-section-title">基础属性</h4>
@@ -73,6 +81,8 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
         {item.type === "orb" && <><div className="item-meta">寻宝宝珠 · 宝箱 / 领主专属</div>
             <h4 className="item-section-title">嵌入效果</h4><div className="item-properties">{item.ratings.quantity > 0 && <div className="property-row"><span>掉落数量</span><b>+{item.ratings.quantity}</b></div>}
                 {item.ratings.quality > 0 && <div className="property-row"><span>品质寻宝</span><b>+{item.ratings.quality}</b></div>}{item.ratings.stars > 0 && <div className="property-row"><span>星级寻宝</span><b>+{item.ratings.stars}</b></div>}</div></>}
-        {item.type === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row"><span>恢复{item.value === "health" ? "生命" : "法力"}</span><b>+{item.restore}</b></div><p>数量 {item.size} / {GAME_CONFIG.inventory.consumable.stackSize} · 共用 {CONSUMABLE_COOLDOWN} 秒冷却</p></>}
+        {item.type === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row">{potionDescription(item)}</div>
+            {item.rarity === "legendary" && <div className="property-row">额外恢复{POTIONS[item.value].resource === "health" ? "法力" : "生命"}上限的 15%</div>}
+            <p>生命恢复享受回复加成。数量 {item.size} / {GAME_CONFIG.inventory.consumable.stackSize} · 共用 {CONSUMABLE_COOLDOWN} 秒冷却</p></>}
     </div>;
 }

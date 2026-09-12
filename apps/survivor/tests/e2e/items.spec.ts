@@ -13,8 +13,8 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
-    const items = [createConsumable(9000, 1, "health", 2), createConsumable(9001, 1, "health", 3),
-        createConsumable(9002, 1, "mana", 4), generateOrb(new DeterministicRandom("icon"), 9003, 1)];
+    const items = [createConsumable(9000, "common", "health", 2), createConsumable(9001, "common", "health", 3),
+        createConsumable(9002, "common", "mana", 4), generateOrb(new DeterministicRandom("icon"), 9003)];
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const fixture = simulation as unknown as { inventory: InventoryItem[]; mana: number; potionCooldown: number };
@@ -23,11 +23,11 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await page.evaluate(async () => { const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled; });
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "装备容量 0 / 40");
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "装备容量 0 / 80");
     await bag.getByRole("button", { name: /^药剂/ }).click();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 3 / 16");
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 3 / 32");
     await bag.getByRole("button", { name: "合并药剂", exact: true }).click();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 2 / 16");
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 2 / 32");
     const health = bag.locator('[data-item-id="9000"]'), mana = bag.locator('[data-item-id="9002"]');
     await expect(health.locator(".item-icon-badge")).toHaveText("5");
     await expect(health.locator("[data-item-value]")).toHaveAttribute("data-item-value", "health");
@@ -44,7 +44,7 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     const manaIcon = (await mana.locator(".item-icon-trigger").boundingBox())!;
     await page.mouse.move(manaIcon.x + manaIcon.width / 2, manaIcon.y + manaIcon.height / 2);
     await expect(page.locator(".equipment-tooltip")).toHaveCount(1);
-    await expect(page.locator(".equipment-tooltip")).toContainText("微光生命药剂");
+    await expect(page.locator(".equipment-tooltip")).toContainText("白·生命药剂");
     // Close away from icons, so uncovering the next icon is not a fresh hover.
     await bag.getByRole("heading", { name: "行囊" }).hover();
     await page.keyboard.press("Escape");
@@ -56,11 +56,11 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await expect(mana.locator(".item-icon-badge")).toHaveText("3");
     await page.keyboard.press("KeyP");
     await bag.getByRole("button", { name: /^宝珠/ }).click();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "宝珠容量 1 / 24");
-    await expect(bag.locator("[data-item-icon=orb] .item-icon-base")).toHaveCount(1);
-    await expect(bag.locator("[data-item-icon=orb] .item-icon-border")).toHaveCount(1);
+    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "宝珠容量 1 / 48");
+    await expect(bag.locator(".inventory-card [data-item-icon=orb] .item-icon-base")).toHaveCount(1);
+    await expect(bag.locator(".inventory-card [data-item-icon=orb] .item-icon-border")).toHaveCount(1);
     await page.setViewportSize({ width: 390, height: 844 });
-    await bag.locator(".item-icon-trigger").hover(); await page.keyboard.press("Alt");
+    await bag.locator(".inventory-card .item-icon-trigger").hover(); await page.keyboard.press("Alt");
     const tip = page.locator(".equipment-tooltip"), bounds = (await tip.boundingBox())!;
     expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
     await page.screenshot({ path: testInfo.outputPath("item-icons-narrow.png") });
@@ -91,7 +91,7 @@ test("a new run resets item selection and the selected orb socket before IDs are
     await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "restart" }));
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready"); await pauseCombat(page);
     await expect(bag).toHaveCount(0);
-    const orb = generateOrb(new DeterministicRandom("run-reset"), 3, 1);
+    const orb = generateOrb(new DeterministicRandom("run-reset"), 3);
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         (simulation as unknown as { inventory: InventoryItem[] }).inventory = items;
@@ -100,7 +100,13 @@ test("a new run resets item selection and the selected orb socket before IDs are
     await expect(bag.locator('[data-item-id="2"]')).not.toHaveClass(/selected/);
     await page.keyboard.press("Delete"); await expect(bag.locator('[data-item-id="2"]')).toHaveCount(1);
     await bag.getByRole("button", { name: /^宝珠/ }).click();
-    await expect(bag.getByRole("combobox", { name: "嵌入宝珠槽" })).toHaveValue("0");
-    await expect(bag.getByRole("button", { name: "嵌入槽 1", exact: true })).toBeEnabled();
+    await expect(bag.getByRole("combobox", { name: "嵌入宝珠槽" })).toHaveCount(0);
+    await bag.locator('[data-item-id="3"] .item-icon-trigger').focus();
+    await page.keyboard.press("Space"); await page.keyboard.press("Digit6");
+    await expect(bag.locator('[data-item-id="3"]')).toHaveCount(1);
+    await bag.locator('[data-item-id="3"] .item-icon-trigger').focus();
+    await page.keyboard.press("Space"); await page.keyboard.press("Digit1");
+    await expect(bag.locator('[data-orb-slot="0"] [data-item-icon="orb"]')).toHaveCount(1);
+    await expect(bag.locator('[data-item-id="3"]')).toHaveCount(0);
     await page.evaluate(() => window.survivorApplication!.dispose());
 });

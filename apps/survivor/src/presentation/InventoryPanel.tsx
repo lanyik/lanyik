@@ -3,20 +3,24 @@ import type { PlayerSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { canStack } from "../core/Inventory";
 import { compareEquipment } from "../core/EquipmentEvaluation";
-import type { InventoryItem } from "../core/InventoryItem";
+import { canUseConsumable, type InventoryItem } from "../core/InventoryItem";
 import { SLOT_NAMES } from "../core/Equipment";
-import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
-import { ItemIcon } from "./ItemView";
+import { RARITIES, RARITY_NAMES, type Rarity } from "../core/Loot";
+import { ItemIcon, potionDescription } from "./ItemView";
+import { OrbSockets, useOrbDrag } from "./OrbDrag";
 import { ItemTooltip, powerClass, signed } from "./ItemTooltip";
 import { UiIcon } from "./UiIcon";
 
-export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, onDiscard, onSort, onMerge, onAutoClear, socket, onSocket, disabled, paused }: {
+export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, onDiscard, onSort, onMerge, onAutoClear, onClearQuality, onRemoveOrb, disabled, paused }: {
     readonly player: PlayerSnapshot; readonly selectedId: number | undefined; readonly onSelect: (id: number | undefined) => void;
     readonly onClose: () => void; readonly onUse: (item: InventoryItem) => void; readonly onDiscard: (id: number) => void;
     readonly onSort: () => void; readonly onMerge: () => void; readonly onAutoClear: (enabled: boolean) => void;
-    readonly socket: number; readonly onSocket: (socket: number) => void; readonly disabled: boolean; readonly paused: boolean;
+    readonly onClearQuality: (maximum: Rarity) => void; readonly onRemoveOrb: (socket: number) => void; readonly disabled: boolean; readonly paused: boolean;
 }) {
     const [filter, setFilter] = useState<InventoryItem["type"]>("equipment");
+    const [clearQuality, setClearQuality] = useState<Rarity>("common");
+    const drag = useOrbDrag();
+    const clearCount = player.inventory.filter(item => item.type === "equipment" && RARITIES.indexOf(item.rarity) <= RARITIES.indexOf(clearQuality)).length;
     const evaluations = useMemo(() => new Map(player.inventory.filter(item => item.type === "equipment").map(item => [item.id, compareEquipment(item, player)])), [player.inventory, player.stats, player.equipment]);
     const items = player.inventory.filter(item => item.type === filter);
     const rules = GAME_CONFIG.inventory[filter];
@@ -32,31 +36,33 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
         </div>
         <div className="bag-cleanup">
             <label><input type="checkbox" checked={player.autoClearEquipment} disabled={disabled} onChange={event => onAutoClear(event.target.checked)} />自动清理</label>
-            <small>保留战力提升、评分更高、持平和空部位装备</small><span>已清理 <b>{player.clearedEquipment}</b> 件</span>
+            <small>自动保留战力提升、持平和空部位装备；一键清理按品质移除背包装备</small><span>已清理 <b>{player.clearedEquipment}</b> 件</span>
+            {filter === "equipment" && <><label>清理品质<select aria-label="清理装备品质" value={clearQuality} onChange={event => setClearQuality(event.target.value as Rarity)} disabled={disabled}>
+                {RARITIES.map(rarity => <option key={rarity} value={rarity}>{RARITY_NAMES[rarity]}及以下（含{RARITY_NAMES[rarity]}）</option>)}
+            </select></label><button disabled={disabled || clearCount === 0} onClick={() => onClearQuality(clearQuality)}>一键清理 {clearCount} 件</button></>}
         </div>
+        {filter === "orb" && <div className="bag-orb-slots"><OrbSockets player={player} disabled={disabled} onRemove={onRemoveOrb} /><small>拖到槽位嵌入 / 交换 · 双击槽位取下 · 聚焦图标按空格，再按 1–6</small></div>}
         <div className="bag-cards" aria-label="背包物品">{items.map(item => {
             const comparison = evaluations.get(item.id);
-            const useDisabled = disabled || item.type === "orb" && player.level < ORB_UNLOCK_LEVELS[socket] || item.type === "consumable" && (paused || player.potionRemaining > 0
-                || (item.value === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana));
+            const useDisabled = disabled || item.type === "orb" || item.type === "consumable" && (paused || player.potionRemaining > 0 || !canUseConsumable(item, player));
             return <article key={item.id} tabIndex={0}
                 className={`inventory-card rarity-${item.rarity}${item.id === selectedId ? " selected" : ""}`}
-                aria-label={`${item.name}，等级${item.itemLevel}`} data-testid="inventory-item" data-item-id={item.id} data-kind={item.type} data-rarity={item.rarity} data-level={item.itemLevel}
+                aria-label={`${item.name}${item.type === "equipment" ? `，等级${item.itemLevel}` : ""}`} data-testid="inventory-item" data-item-id={item.id} data-kind={item.type} data-rarity={item.rarity} data-level={item.type === "equipment" ? item.itemLevel : undefined}
                 data-clearable={comparison?.canClear ?? false} data-power-delta={comparison?.delta}
                 onClick={() => onSelect(item.id)} onFocus={() => onSelect(item.id)}
                 onDoubleClick={event => { if (!useDisabled && event.target instanceof Element && !event.target.closest("button")) onUse(item); }}>
-                <header className="bag-item-heading"><ItemTooltip item={item} player={player}><button className="item-icon-trigger" aria-label={`查看${item.name}详情`} onDoubleClick={() => { if (!useDisabled) onUse(item); }}><ItemIcon item={item} /></button></ItemTooltip><div><strong>{item.name}</strong><small>{item.type === "equipment" ? SLOT_NAMES[item.value] : item.type === "orb" ? "寻宝宝珠" : "恢复药剂"} · Lv.{item.itemLevel}</small></div></header>
+                <header className="bag-item-heading"><ItemTooltip item={item} player={player}><button className={`item-icon-trigger${item.type === "orb" ? " orb-drag-trigger" : ""}`} aria-label={`查看${item.name}详情`}
+                    onPointerDown={event => { if (item.type === "orb") drag.begin(event, item.id); }} onKeyDown={event => { if (item.type === "orb") drag.keyboard(event, item.id); }}
+                    onDoubleClick={() => { if (!useDisabled) onUse(item); }}><ItemIcon item={item} /></button></ItemTooltip><div><strong>{item.name}</strong><small>{item.type === "equipment" ? `${SLOT_NAMES[item.value]} · Lv.${item.itemLevel}` : item.type === "orb" ? "寻宝宝珠" : "恢复药剂"}</small></div></header>
                 {comparison && item.type === "equipment" ? <div className="bag-item-rating"><span>评分 <b>{item.score}</b></span><strong className={powerClass(comparison.delta)}>战力 {signed(comparison.delta)}</strong><small>{comparison.canClear ? "可清理" : "保留"}</small></div>
-                    : <div className="bag-item-rating"><span>{item.type === "consumable" ? `恢复${item.value === "health" ? "生命" : "法力"} +${item.restore}` : "嵌入后提升寻宝收益"}</span></div>}
-                <footer className="item-actions"><button className="primary-action" disabled={useDisabled} onClick={() => onUse(item)}>{item.type === "orb" ? `嵌入槽 ${socket + 1}` : item.type === "consumable" ? "使用" : "装备"}</button>
+                    : <div className="bag-item-rating"><span>{item.type === "consumable" ? potionDescription(item) : "嵌入后提升寻宝收益"}</span></div>}
+                <footer className="item-actions">{item.type === "orb" ? <small>拖动图标嵌入</small> : <button className="primary-action" disabled={useDisabled} onClick={() => onUse(item)}>{item.type === "consumable" ? "使用" : "装备"}</button>}
                     <button className="discard-action" disabled={disabled} onClick={() => onDiscard(item.id)}>丢弃</button></footer>
             </article>;
         })}
             {items.length === 0 && <div className="empty-bag"><UiIcon name="inventory" /><strong>此分类暂无物品</strong><p>击败敌人或打开宝箱，靠近战利品自动拾取。</p></div>}
         </div>
         <footer className="bag-footer"><span className="gold-value"><UiIcon name="coins" /><span>金币 <b>{player.gold.toLocaleString("zh-CN")}</b></span></span><span>{items.length} 格 · {items.reduce((sum, item) => sum + item.size, 0)} 件</span>
-            {filter === "orb" && <label>宝珠目标槽<select aria-label="嵌入宝珠槽" value={socket} onChange={event => onSocket(Number(event.target.value))}>
-                {ORB_UNLOCK_LEVELS.map((level, index) => <option key={index} value={index} disabled={player.level < level}>槽 {index + 1}{player.level < level ? ` · Lv.${level}` : ""}</option>)}
-            </select></label>}
             <span className="bag-shortcuts">图标悬停详情 · <kbd>Alt</kbd> 固定 · <kbd>Del</kbd> 丢弃</span>
         </footer>
     </aside>;

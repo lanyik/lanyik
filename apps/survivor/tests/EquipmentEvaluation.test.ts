@@ -76,21 +76,21 @@ describe("equipment evaluation and safe cleanup", () => {
         expect(battlePower(deriveStats(1, player.attributes, { ...EMPTY_BONUSES, goldBonus: 1, experienceBonus: 1, pickupRadius: 9 }))).toBe(battlePower(naked));
     });
 
-    test("automatic cleanup preserves upgrades, ties, specialist scores and empty slots at every item level", () => {
+    test("automatic cleanup preserves upgrades, ties and empty slots while removing high-score combat downgrades at every item level", () => {
         const upgrade = gear(2, { damage: 30 });
         const inferior = gear(3, { damage: 1 }, "weapon", 99);
         const emptySlot = gear(4, { armor: 1 }, "head");
         const specialist = gear(5, { goldBonus: 2 });
         const tie = { ...createStarterEquipment(), id: 6 };
-        const potion = createConsumable(7, 1, "health");
-        const orb = generateOrb(new DeterministicRandom("safe-orb"), 8, 1);
+        const potion = createConsumable(7, "common", "health");
+        const orb = generateOrb(new DeterministicRandom("safe-orb"), 8);
         {
             const combat = withInventory([upgrade, inferior, emptySlot, specialist, tie, potion, orb]);
             combat.setAutoClearEquipment(true);
-            expect(combat.getSnapshot().player.inventory.map(item => item.id)).toEqual([2, 4, 5, 6, 7, 8]);
-            expect(combat.getSnapshot().player.clearedEquipment).toBe(1);
+            expect(combat.getSnapshot().player.inventory.map(item => item.id)).toEqual([2, 4, 6, 7, 8]);
+            expect(combat.getSnapshot().player.clearedEquipment).toBe(2);
             combat.setAutoClearEquipment(true);
-            expect(combat.getSnapshot().player.clearedEquipment).toBe(1);
+            expect(combat.getSnapshot().player.clearedEquipment).toBe(2);
         }
     });
 

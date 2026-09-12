@@ -14,9 +14,9 @@ export const GAME_CONFIG = Object.freeze({
     workers: Object.freeze({ maxCommands: 64, timeoutMs: 15_000,
         parallelCollisionEnabled: false, parallelCollisionPairs: 49_152, terrainMax: 2, collisionMax: 2, terrainCores: 6, collisionCores: 8 }),
     inventory: Object.freeze({
-        equipment: Object.freeze({ name: "装备", capacity: 40, stackSize: 1 }),
-        orb: Object.freeze({ name: "宝珠", capacity: 24, stackSize: 1 }),
-        consumable: Object.freeze({ name: "药剂", capacity: 16, stackSize: 99 })
+        equipment: Object.freeze({ name: "装备", capacity: 80, stackSize: 1 }),
+        orb: Object.freeze({ name: "宝珠", capacity: 48, stackSize: 1 }),
+        consumable: Object.freeze({ name: "药剂", capacity: 32, stackSize: 99 })
     }),
     quality: Object.freeze({
         common: Object.freeze({ name: "白", color: "#c1cbc8" }),

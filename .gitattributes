@@ -5,6 +5,9 @@
 # Preserve the original licenses byte-for-byte, including publisher whitespace.
 apps/survivor/assets/actors/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/effects/*-LICENSE.txt -text -whitespace
+apps/survivor/assets/loot/License.txt -text -whitespace
+# The loot source manifest hashes the publisher's original OBJ bytes as well.
+apps/survivor/assets/loot/*.obj -text -whitespace
 apps/survivor/assets/actors/**/*.gltf -text
 apps/survivor/assets/actors/**/*.bin -text
 

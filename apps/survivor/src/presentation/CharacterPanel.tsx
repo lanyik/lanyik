@@ -6,6 +6,7 @@ import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
 import { RARITIES, RARITY_NAMES } from "../core/Loot";
 import { Hint, ItemDetails, ItemIcon, statValue } from "./ItemView";
 import { UiIcon } from "./UiIcon";
+import { OrbSockets } from "./OrbDrag";
 import { ItemTooltip } from "./ItemTooltip";
 
 const ATTRIBUTE_INFO: Readonly<Record<AttributeId, { name: string; detail: string }>> = {
@@ -18,9 +19,9 @@ const STAT_GROUPS = [
     { name: "回复与探索", ids: ["healthRegen", "regenBonus", "lifesteal", "moveSpeed", "experienceBonus", "goldBonus", "pickupRadius"] },
 ] as const satisfies readonly { readonly name: string; readonly ids: readonly BonusId[] }[];
 
-export function CharacterPanel({ player, disabled, dispatch, onClose, socket, onSocket }: {
+export function CharacterPanel({ player, disabled, dispatch, onClose }: {
     readonly player: PlayerSnapshot; readonly disabled: boolean; readonly dispatch: (command: SessionCommand) => void;
-    readonly onClose: () => void; readonly socket: number; readonly onSocket: (socket: number) => void;
+    readonly onClose: () => void;
 }) {
     const [inspectedId, setInspectedId] = useState<number>();
     const inspected = [...Object.values(player.equipment), ...player.orbs].find(item => item?.id === inspectedId);
@@ -41,14 +42,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose, socket, on
                     })}
                 </div>
                 <div className="section-heading orb-heading"><h3>寻宝宝珠</h3><small>{ORB_UNLOCK_LEVELS.filter(level => player.level >= level).length} / 6 已解锁</small></div>
-                <div className="orb-sockets" aria-label="宝珠栏">{ORB_UNLOCK_LEVELS.map((level, index) => {
-                    const orb = player.orbs[index]; const locked = player.level < level;
-                    return <div key={index} className={`orb-socket rarity-${orb?.rarity ?? "common"}${socket === index ? " selected" : ""}`}><ItemTooltip item={orb} player={player}><button className="item-icon-trigger"
-                        disabled={locked} aria-label={`宝珠槽 ${index + 1}${locked ? `，${level}级解锁` : orb ? `，${orb.name}` : "，空"}`}
-                        onClick={() => { onSocket(index); setInspectedId(orb?.id); }} onDoubleClick={() => !disabled && dispatch({ type: "remove-orb", socket: index })}>
-                        {locked ? <UiIcon name="lock" /> : <ItemIcon item={orb} type="orb" value="fortune" />}</button></ItemTooltip><small>{locked ? `Lv.${level}` : `槽 ${index + 1}`}</small>
-                    </div>;
-                })}</div>
+                <OrbSockets player={player} disabled={disabled} onInspect={setInspectedId} onRemove={socket => dispatch({ type: "remove-orb", socket })} />
                 <div className="equipment-inspector">{inspected ? <><ItemDetails item={inspected} />
                     {inspected.type === "equipment" && <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.value }); setInspectedId(undefined); }}>卸下装备</button>}
                     {inspected.type === "orb" && <button disabled={disabled} onClick={() => { dispatch({ type: "remove-orb", socket: player.orbs.findIndex(orb => orb?.id === inspected.id) }); setInspectedId(undefined); }}>取下宝珠</button>}

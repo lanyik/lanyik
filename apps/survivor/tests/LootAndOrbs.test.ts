@@ -9,7 +9,7 @@ import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 import { deriveStats } from "../src/core/CombatStats";
 import { ATTRIBUTE_IDS, EMPTY_BONUSES, generateEquipment } from "../src/core/Equipment";
-import { compareInventoryItems, createConsumable } from "../src/core/InventoryItem";
+import { compareInventoryItems, createConsumable, POTIONS } from "../src/core/InventoryItem";
 import { compareEquipment } from "../src/core/EquipmentEvaluation";
 
 function openOrbChest() {
@@ -48,8 +48,8 @@ describe("loot and orb progression", () => {
         const random = new DeterministicRandom("inventory-order");
         const gear = (id: number, level: number, rarity: typeof RARITIES[number]) => ({ ...generateEquipment(random, id, level, BASE_LOOT_PROFILE), rarity });
         const items = [gear(8, 100, "common"), gear(6, 5, "legendary"), gear(5, 20, "rare"),
-            gear(4, 25, "rare"), gear(3, 25, "rare"), createConsumable(2, 30, "mana")];
-        expect(items.sort(compareInventoryItems).map(item => item.id)).toEqual([6, 2, 3, 4, 5, 8]);
+            gear(4, 25, "rare"), gear(3, 25, "rare"), createConsumable(2, "rare", "mana")];
+        expect(items.sort(compareInventoryItems).map(item => item.id)).toEqual([6, 3, 4, 5, 2, 8]);
         const { combat } = openOrbChest(); const before = combat.getSnapshot().player;
         combat.sortInventory(); const after = combat.getSnapshot().player;
         expect(after.inventory).toEqual([...before.inventory].sort(compareInventoryItems));
@@ -139,7 +139,8 @@ describe("loot and orb progression", () => {
         const { combat, chest } = openOrbChest(); const before = combat.getSnapshot().player;
         const orb = before.inventory.find(item => item.type === "orb")!;
         expect(orb).toBeDefined();
-        expect(before.inventory.filter(item => item.itemLevel === chest.region.level).length).toBeGreaterThanOrEqual(3);
+        expect(before.inventory.filter(item => item.type === "equipment" && item.itemLevel === chest.region.level).length).toBeGreaterThanOrEqual(1);
+        expect(before.inventory.filter(item => item.type !== "equipment").every(item => !("itemLevel" in item))).toBe(true);
         expect(before.orbs).toHaveLength(6);
         expect(ORB_UNLOCK_LEVELS.filter(level => level <= 1)).toHaveLength(2);
         expect(combat.equipOrb(orb.id, 2).ok).toBe(false);
@@ -183,7 +184,7 @@ describe("loot and orb progression", () => {
         const { combat } = openOrbChest();
         const potion = combat.getSnapshot().player.inventory.find(item => item.type === "consumable")!;
         expect(potion).toBeDefined();
-        if (potion.value === "mana") combat.castSkill("pulse");
+        if (POTIONS[potion.value].resource === "mana") combat.castSkill("pulse");
         else for (let tick = 0; tick < ticksForSeconds(10) && combat.getSnapshot().player.health === combat.getSnapshot().player.stats.maxHealth; tick++) {
             const state = combat.getRenderState(), player = state.player, enemies = enemySamples(state); let nearest = -1, distance = Infinity;
             for (let index = 0; index < enemies.length; index++) {
@@ -193,13 +194,13 @@ describe("loot and orb progression", () => {
             combat.step({ x: enemies[nearest].x - player.x, z: enemies[nearest].z - player.z, active: true });
         }
         const before = combat.getSnapshot().player;
-        expect(potion.value === "health" ? before.health < before.stats.maxHealth : before.mana < before.stats.maxMana).toBe(true);
-        combat.useConsumable(potion.value, potion.id);
+        expect(POTIONS[potion.value].resource === "health" ? before.health < before.stats.maxHealth : before.mana < before.stats.maxMana).toBe(true);
+        combat.useConsumable(POTIONS[potion.value].resource, potion.id);
         const after = combat.getSnapshot().player;
         expect(after.inventory.some(item => item.id === potion.id)).toBe(false);
-        expect(potion.value === "health" ? after.health : after.mana).toBeGreaterThan(potion.value === "health" ? before.health : before.mana);
+        expect(POTIONS[potion.value].resource === "health" ? after.health : after.mana).toBeGreaterThan(POTIONS[potion.value].resource === "health" ? before.health : before.mana);
         expect(after.potionRemaining).toBe(4);
-        combat.useConsumable(potion.value);
+        combat.useConsumable(POTIONS[potion.value].resource);
         expect(combat.getSnapshot().player.inventory).toEqual(after.inventory);
     });
 

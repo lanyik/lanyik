@@ -73,7 +73,7 @@ export function IconTooltip({ identity, content, comparing = false, className = 
         ? current?.pinned ? current : { id, pinned: false }
         : current?.id === id ? undefined : current);
     const [position, setPosition] = useState({ left: 8, top: 8, maxHeight: window.innerHeight - 16 });
-    const show = () => { if (identity !== undefined && !document.documentElement.hasAttribute("data-skill-dragging")) setOpen(true); };
+    const show = () => { if (identity !== undefined && !document.documentElement.matches("[data-skill-dragging], [data-orb-dragging]")) setOpen(true); };
     const hide = () => setActive(current => current?.id === id && !current.pinned ? undefined : current);
     useEffect(() => () => setActive(current => current?.id === id ? undefined : current), [id, identity, setActive]);
     useEffect(() => {

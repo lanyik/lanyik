@@ -1,0 +1,74 @@
+[
+  {
+    "file": "chest.obj",
+    "bytes": 18584,
+    "sha256": "376fa661508ee297e9ab7f0dbcb73a35743d6567e27c2f22f2409b1744969f16",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "Models/OBJ format/chest.obj"
+  },
+  {
+    "file": "colormap.png",
+    "bytes": 10838,
+    "sha256": "bc492d755caf9e64924447f065681be0d5438a33cd0acddc72f3d00fd75893be",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "Models/OBJ format/Textures/colormap.png"
+  },
+  {
+    "file": "License.txt",
+    "bytes": 701,
+    "sha256": "f8b470068a1c043854101c9ff7161d376ba02c36239da3c1dbdfa928b08444b6",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "License.txt"
+  },
+  {
+    "file": "potion.obj",
+    "bytes": 11450,
+    "sha256": "f901648b1f9c95835b51ad80f382c661d73e539d47249919e47ebddd17d45403",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "Models/OBJ format/potion.obj"
+  },
+  {
+    "file": "shield-round.obj",
+    "bytes": 17045,
+    "sha256": "88c8723edb88ce890152648f9e9228f1ef6c714a197bb7bb84631373d270c55d",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "Models/OBJ format/shield-round.obj"
+  },
+  {
+    "file": "weapon-sword.obj",
+    "bytes": 7835,
+    "sha256": "56d70a3087f306286af283d835e1bd4378d584ee474071a0c362f4fe0cd04698",
+    "source": "https://kenney.nl/assets/mini-dungeon",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "pack": "Mini Dungeon 2.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/mini-dungeon/6cd72dc849-1785314274/kenney_mini-dungeon.zip",
+    "archiveSha256": "19c4648680cb1d2e8836cade96cbf9781c0c1f45fbc6d2ce41cee8239a3ec4d8",
+    "archivePath": "Models/OBJ format/weapon-sword.obj"
+  }
+]

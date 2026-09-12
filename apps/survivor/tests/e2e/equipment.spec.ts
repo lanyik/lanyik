@@ -110,7 +110,9 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(tooltip).toHaveCount(0);
     await expect(bag).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 720 });
-    await bag.getByRole("checkbox", { name: "自动清理", exact: true }).check();
+    // The controlled checkbox commits after the authoritative Worker responds.
+    const autoClear = bag.getByRole("checkbox", { name: "自动清理", exact: true });
+    await autoClear.click(); await expect(autoClear).toBeChecked();
     await expect(candidate).toBeVisible();
     await expect(bag.locator('[data-item-id="9002"]')).toHaveCount(0);
     await page.getByRole("button", { name: "关闭背包", exact: true }).click();

@@ -7,7 +7,7 @@ import {
 import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
 import { RARITIES } from "./Equipment";
 import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn } from "./RegionalWorld";
-import type { InventoryItem } from "./InventoryItem";
+import { groundItemKind, type InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 
@@ -146,7 +146,7 @@ export class CombatWorld {
         const slot = this.world.create(Component.Position | Component.GroundItem);
         this.place(slot, x, z, 0, Component.GroundItem);
         this.item.id[slot] = item.id; this.item.rarity[slot] = RARITIES.indexOf(item.rarity);
-        this.item.kind[slot] = item.type === "orb" ? 1 : item.type === "consumable" ? 2 : 0;
+        this.item.kind[slot] = groundItemKind(item);
     }
 
     public remove(slot: number): void {

@@ -16,12 +16,12 @@ const ORB_WEIGHTS: Readonly<Record<OrbType, FindRatings>> = {
 export interface Orb extends ItemDefinition<"orb", OrbType, 1> {
     readonly ratings: FindRatings;
 }
-export function generateOrb(random: DeterministicRandom, id: number, itemLevel: number, minimum: Rarity = "common"): Orb {
+export function generateOrb(random: DeterministicRandom, id: number, minimum: Rarity = "common"): Orb {
     const rarity = rollRarity(random, BASE_LOOT_PROFILE, minimum);
     const orbType = random.pick(ORB_TYPES);
     const power = ORB_POWER[RARITIES.indexOf(rarity)];
     const weights = ORB_WEIGHTS[orbType];
-    return Object.freeze({ type: "orb", value: orbType, size: 1, id, rarity, itemLevel, name: `${RARITY_NAMES[rarity]}·${ORB_NAMES[orbType]}`,
+    return Object.freeze({ type: "orb", value: orbType, size: 1, id, rarity, name: `${RARITY_NAMES[rarity]}·${ORB_NAMES[orbType]}`,
         ratings: Object.freeze({ quantity: power * weights.quantity, quality: power * weights.quality, stars: power * weights.stars }) });
 }
 export function sumOrbs(orbs: readonly (Orb | undefined)[]): FindRatings {

@@ -12,6 +12,5 @@ export interface ItemDefinition<T extends ItemType, V extends string, S extends 
     readonly id: number;
     readonly size: S;
     readonly name: string;
-    readonly itemLevel: number;
     readonly rarity: Rarity;
 }

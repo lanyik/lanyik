@@ -11,20 +11,20 @@ import type { RegionalWorld } from "../src/core/RegionalWorld";
 test("category capacities are independent and a full potion bag can accept matching stack space", () => {
     const gear = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, id) => ({ ...createStarterEquipment(), id: id + 100 }));
     expect(insertInventoryItem(gear, { ...createStarterEquipment(), id: 200 })).toBeUndefined();
-    const potion = createConsumable(300, 1, "health", 98);
+    const potion = createConsumable(300, "common", "health", 98);
     const bag = insertInventoryItem(gear, potion)!;
-    expect(inventorySlots(bag, "equipment")).toBe(40); expect(inventorySlots(bag, "consumable")).toBe(1);
-    for (let id = 1; id < GAME_CONFIG.inventory.consumable.capacity; id++) bag.push(createConsumable(300 + id, id + 1, "mana", 99));
-    const merged = insertInventoryItem(bag, createConsumable(400, 1, "health"))!;
+    expect(inventorySlots(bag, "equipment")).toBe(80); expect(inventorySlots(bag, "consumable")).toBe(1);
+    for (let id = 1; id < GAME_CONFIG.inventory.consumable.capacity; id++) bag.push(createConsumable(300 + id, "common", "mana", 99));
+    const merged = insertInventoryItem(bag, createConsumable(400, "common", "health"))!;
     expect(merged.find(item => item.id === 300)?.size).toBe(99);
     expect(merged).toHaveLength(bag.length); expect(potion.size).toBe(98);
-    expect(insertInventoryItem(merged, createConsumable(401, 1, "health"))).toBeUndefined();
-    expect(insertInventoryItem(merged, generateOrb(new DeterministicRandom("bag"), 500, 1))).toBeDefined();
+    expect(insertInventoryItem(merged, createConsumable(401, "common", "health"))).toBeUndefined();
+    expect(insertInventoryItem(merged, generateOrb(new DeterministicRandom("bag"), 500))).toBeDefined();
 });
 
 test("merge preserves quantity and potency, stable surviving IDs, and stack limits", () => {
-    const potions = [createConsumable(10, 1, "health", 70), createConsumable(11, 1, "health", 50),
-        createConsumable(12, 1, "health", 10), createConsumable(13, 2, "health", 7), createConsumable(14, 1, "mana", 3)];
+    const potions = [createConsumable(10, "common", "health", 70), createConsumable(11, "common", "health", 50),
+        createConsumable(12, "common", "health", 10), createConsumable(13, "magic", "health", 7), createConsumable(14, "common", "mana", 3)];
     const merged = mergeInventory(potions);
     expect(merged.map(item => [item.id, item.size])).toEqual([[10, 99], [11, 31], [13, 7], [14, 3]]);
     expect(merged.reduce((sum, item) => sum + item.size, 0)).toBe(140);
@@ -35,7 +35,7 @@ test("merge preserves quantity and potency, stable surviving IDs, and stack limi
 test("using a stacked potion consumes exactly one dose and retains the stack ID", () => {
     const simulation = new CombatSimulation("potion-stack");
     const fixture = simulation as unknown as { inventory: InventoryItem[] };
-    fixture.inventory = [createConsumable(100, 1, "mana", 3)];
+    fixture.inventory = [createConsumable(100, "common", "mana", 3)];
     simulation.castSkill("pulse"); simulation.useConsumable("mana", 100);
     expect(simulation.getSnapshot().player.inventory[0]).toMatchObject({ type: "consumable", value: "mana", size: 2, id: 100 });
     simulation.useConsumable("mana", 100);
@@ -48,7 +48,7 @@ test("a blocked chest leaves potion stacks, RNG, gold and all rewards untouched"
     const fixture = simulation as unknown as { inventory: InventoryItem[]; world: RegionalWorld; playerX: number; playerZ: number;
         random: DeterministicRandom; nextItemId: number; autoCast: boolean; attackCooldown: number; openNearbyChest(): void };
     const random = new DeterministicRandom("full-orbs");
-    fixture.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i, 1));
+    fixture.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i));
     const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.band !== "near" && chunk.chest?.hasOrb)!;
     fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
     fixture.autoCast = false; fixture.attackCooldown = 1000;

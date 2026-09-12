@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { prepareSurvivorActors } from "./lib/survivor-actors.mjs";
 import { sourceReader } from "./lib/actor-source.mjs";
 import { prepareSurvivorEffects } from "./lib/survivor-effects.mjs";
+import { prepareSurvivorLoot } from "./lib/survivor-loot.mjs";
 import sharp from "sharp";
 
 const root = await realpath(fileURLToPath(new URL("../", import.meta.url)));
@@ -42,4 +43,5 @@ for (const file of ["outfits-LICENSE.txt", "base-characters-LICENSE.txt", "anima
 }
 await cp(resolve(application, "assets/actors/sources.json"), resolve(output, "actors/sources.json"));
 await prepareSurvivorEffects(resolve(application, "assets/effects"), resolve(output, "effects"));
-console.log("Prepared survivor terrain, forest, actor and skill effect assets");
+await prepareSurvivorLoot(resolve(application, "assets/loot"), resolve(output, "loot"));
+console.log("Prepared survivor terrain, forest, actor, loot and skill effect assets");

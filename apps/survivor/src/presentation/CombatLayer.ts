@@ -1,7 +1,5 @@
 import {
-    BoxGeometry,
     CircleGeometry,
-    CylinderGeometry,
     Color,
     DoubleSide,
     DirectionalLight,
@@ -10,7 +8,6 @@ import {
     InstancedMesh,
     Mesh,
     MeshBasicMaterial,
-    MeshStandardMaterial,
     Object3D,
     OctahedronGeometry,
     PlaneGeometry,
@@ -27,8 +24,11 @@ import {
     type WorldRenderLayerHost
 } from "three-hex-map";
 import type { CombatRenderState } from "../core/CombatState";
-import { MAX_ENEMIES, MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, MAX_PROJECTILES, MELEE_HALF_ARC } from "../core/GameConfig";
-import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
+import { MAX_ENEMIES, MAX_EXPERIENCE_ORBS, MAX_PROJECTILES, MELEE_HALF_ARC } from "../core/GameConfig";
+import { CHEST_TIERS, CHEST_RULES } from "../core/RegionalWorld";
+import { GroundItemKind } from "../core/InventoryItem";
+import { LootModels } from "./LootModels";
+import { LootEffects } from "./LootEffects";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { RARITIES } from "../core/Loot";
 
@@ -37,7 +37,7 @@ import { ActorModels } from "./ActorModels";
 import { SkillEffects } from "./SkillEffects";
 import { BoundaryMist } from "./BoundaryMist";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
-import { ACTOR_FADE_END, actorVisibility, installActorFade } from "./ActorVisibility";
+import { ACTOR_FADE_END, actorVisibility } from "./ActorVisibility";
 const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
@@ -95,30 +95,20 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly telegraphs: InstancedMesh;
     private readonly castWarnings: InstancedMesh;
     private readonly chargeWarnings: InstancedMesh;
-    private readonly loot: readonly InstancedMesh[];
-    private readonly chests: InstancedMesh;
-    private readonly chestLids: InstancedMesh;
-    private readonly chestLocks: InstancedMesh;
-    private readonly geometries = [
-        new SphereGeometry(0.09, 8, 6),
-        new OctahedronGeometry(0.11, 0),
-        new BoxGeometry(0.22, 0.22, 0.22),
-        new RingGeometry(0.42, 0.49, 32),
-        new CircleGeometry(0.34, 24),
-        new BoxGeometry(0.65, 0.36, 0.46),
-        new BoxGeometry(0.7, 0.13, 0.5),
-        new BoxGeometry(0.09, 0.16, 0.045),
-        new OctahedronGeometry(0.21, 0),
-        new CylinderGeometry(0.09, 0.13, 0.32, 8),
-        new CircleGeometry(1, 32, -Math.PI / 2 - MELEE_HALF_ARC, MELEE_HALF_ARC * 2),
-        new RingGeometry(.8, 1, 32),
-        new PlaneGeometry(1, 1)
-    ] as const;
+    private lootModels: LootModels | undefined;
+    private readonly lootEffects = new LootEffects();
+    private readonly geometries = {
+        projectile: new SphereGeometry(0.09, 8, 6),
+        experience: new OctahedronGeometry(0.11, 0),
+        shield: new RingGeometry(0.42, 0.49, 32),
+        shadow: new CircleGeometry(0.34, 24),
+        telegraph: new CircleGeometry(1, 32, -Math.PI / 2 - MELEE_HALF_ARC, MELEE_HALF_ARC * 2),
+        cast: new RingGeometry(.8, 1, 32),
+        charge: new PlaneGeometry(1, 1)
+    } as const;
     private readonly projectileMaterial = new MeshBasicMaterial({ color: 0xffffff });
     private readonly warningMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .28, depthWrite: false, depthTest: false, side: DoubleSide });
     private readonly experienceMaterial = new MeshBasicMaterial({ color: 0x66f5ff });
-    private readonly lootMaterial = new MeshStandardMaterial({ color: 0xffffff, emissive: 0x17110a, roughness: 0.3, metalness: 0.55 });
-    private readonly emberMaterial = new MeshBasicMaterial({ color: 0xffc35c });
     private readonly auraMaterial = new MeshBasicMaterial({ color: 0x70ecff, transparent: true, opacity: 0.48, side: DoubleSide, depthWrite: false });
     private readonly shadowMaterial = new MeshBasicMaterial({ color: 0x06090b, transparent: true, opacity: 0.3, side: DoubleSide, depthWrite: false });
     private readonly dummy = new Object3D();
@@ -131,31 +121,21 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly effectHeight = (x: number, z: number) => this.height(x, z);
 
     constructor(private readonly resources: ResourceBudgetAccount) {
-        installActorFade(this.lootMaterial, this.viewCenter);
-        installActorFade(this.emberMaterial, this.viewCenter);
         this.root.name = "survivor-combat";
         // Soft light from the fixed camera direction keeps dark leather and faces readable.
         this.actorFill.position.set(-6, 9, 7);
         this.root.add(this.actorFill, this.actorFill.target);
-        this.projectiles = this.instance(this.geometries[0], this.projectileMaterial, MAX_PROJECTILES);
-        this.telegraphs = this.instance(this.geometries[10], this.warningMaterial, MAX_ENEMIES);
-        this.castWarnings = this.instance(this.geometries[11], this.warningMaterial, MAX_ENEMIES);
-        this.chargeWarnings = this.instance(this.geometries[12], this.warningMaterial, MAX_ENEMIES);
+        this.projectiles = this.instance(this.geometries.projectile, this.projectileMaterial, MAX_PROJECTILES);
+        this.telegraphs = this.instance(this.geometries.telegraph, this.warningMaterial, MAX_ENEMIES);
+        this.castWarnings = this.instance(this.geometries.cast, this.warningMaterial, MAX_ENEMIES);
+        this.chargeWarnings = this.instance(this.geometries.charge, this.warningMaterial, MAX_ENEMIES);
         this.projectiles.setColorAt(0, WHITE);
         for (const warning of [this.telegraphs, this.castWarnings, this.chargeWarnings]) { warning.setColorAt(0, ENRAGED); warning.count = 0; }
-        this.experience = this.instance(this.geometries[1], this.experienceMaterial, MAX_EXPERIENCE_ORBS);
-        this.loot = [2, 8, 9].map(index => this.instance(this.geometries[index], this.lootMaterial, MAX_GROUND_EQUIPMENT));
-        this.chests = this.instance(this.geometries[5], this.lootMaterial, MAX_COMBAT_CHUNKS);
-        this.chestLids = this.instance(this.geometries[6], this.lootMaterial, MAX_COMBAT_CHUNKS);
-        this.chestLocks = this.instance(this.geometries[7], this.emberMaterial, MAX_COMBAT_CHUNKS);
-        for (const mesh of this.loot) { mesh.setColorAt(0, WHITE); mesh.count = 0; }
-        this.chests.setColorAt(0, WHITE);
-        this.chestLids.setColorAt(0, WHITE);
+        this.experience = this.instance(this.geometries.experience, this.experienceMaterial, MAX_EXPERIENCE_ORBS);
         this.projectiles.count = this.experience.count = 0;
-        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.buildPlayer();
-        this.groundProjection.root.add(this.telegraphs, this.castWarnings, this.chargeWarnings, this.groundPlayer);
-        this.root.add(this.projectiles, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player, this.mist.mesh);
+        this.groundProjection.root.add(this.telegraphs, this.castWarnings, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
+        this.root.add(this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
             { identity: this.groundProjection.target.texture, cost: {
@@ -175,21 +155,25 @@ export class CombatLayer implements WorldRenderLayer {
             const reject = (error: unknown): never => { controller.abort(error); throw error; };
             const pending = Promise.allSettled([
                 ActorModels.load(MAX_ENEMIES, this.viewCenter, controller.signal).catch(reject),
-                SkillEffects.load(controller.signal).catch(reject)
+                SkillEffects.load(controller.signal).catch(reject),
+                LootModels.load(this.viewCenter, controller.signal).catch(reject)
             ]).then(results => {
-                const [actorResult, effectResult] = results;
-                if (actorResult.status === "rejected" || effectResult.status === "rejected" || this.disposed || controller.signal.aborted) {
+                const [actorResult, effectResult, lootResult] = results;
+                if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || this.disposed || controller.signal.aborted) {
                     if (actorResult.status === "fulfilled") actorResult.value.dispose();
                     if (effectResult.status === "fulfilled") effectResult.value.dispose();
-                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : controller.signal.reason;
+                    if (lootResult.status === "fulfilled") lootResult.value.dispose();
+                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : controller.signal.reason;
                 }
-                const actors = actorResult.value, effects = effectResult.value;
+                const actors = actorResult.value, effects = effectResult.value, models = lootResult.value;
                 try {
                     this.resources.acquireRequired("combat-actor-models", {}, true,
-                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward]));
-                } catch (error) { actors.dispose(); effects.dispose(); throw error; }
+                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root]));
+                } catch (error) { actors.dispose(); effects.dispose(); models.dispose(); throw error; }
                 this.actors = actors;
                 this.effects = effects;
+                this.lootModels = models;
+                this.root.add(models.root);
                 this.root.add(effects.mesh, effects.ward);
                 this.groundProjection.root.add(effects.ground);
                 this.playerBody.add(actors.hero);
@@ -209,7 +193,7 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     public update(state: CombatRenderState, alpha: number, timestampMs: number): void {
-        if (!this.host || !this.actors) return;
+        if (!this.host || !this.actors || !this.lootModels) return;
         this.root.visible = this.groundProjection.root.visible = true;
         const { position, enemy, vitals, action, projectile, item, ids, enemies, projectiles, experience, loot, experienceValue, status } = state.entities;
         const blend = Math.max(0, Math.min(1, alpha));
@@ -300,47 +284,46 @@ export class CombatLayer implements WorldRenderLayer {
         }
         uploadCombatInstances(this.experience);
 
-        for (const mesh of this.loot) mesh.count = 0;
+        this.lootModels.reset();
+        this.lootEffects.begin(state.player.animationTime);
         for (let cursor = 0; cursor < loot.count; cursor++) {
-            const index = loot.slots[cursor];
-            const x = position.x[index], z = position.z[index];
+            const index = loot.slots[cursor], x = position.x[index], z = position.z[index];
             if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
-            const bob = .24 + Math.sin(timestampMs * .003 + item.id[index]) * .08;
-            const mesh = this.loot[item.kind[index]], instance = mesh.count++;
-            this.setInstance(mesh, instance, x, this.height(x, z) + bob, z, 1, timestampMs * .0015);
-            mesh.setColorAt(instance, RARITY_COLORS[item.rarity[index]]);
+            const kind = item.kind[index], quality = item.rarity[index], y = this.height(x, z);
+            const bob = .16 + Math.sin(state.player.animationTime * 3. + item.id[index]) * .06;
+            const mesh = this.lootModels.loot[kind], instance = mesh.count++;
+            this.setInstance(mesh, instance, x, y + bob, z, kind === GroundItemKind.HealthEssence || kind === GroundItemKind.ManaEssence ? 1.25 : 1, state.player.animationTime * 1.2);
+            if (kind === GroundItemKind.Health || kind === GroundItemKind.HealthEssence) this.color.set(0xff9aa8);
+            else if (kind === GroundItemKind.Mana || kind === GroundItemKind.ManaEssence) this.color.set(0x83baff);
+            else this.color.copy(RARITY_COLORS[quality]);
+            if (quality === 5) this.color.setHSL((state.player.animationTime * .15 + item.id[index] * .13) % 1, .8, .68);
+            mesh.setColorAt(instance, this.color);
+            this.lootEffects.add(x - playerX, y, z - playerZ, quality, item.id[index]);
         }
-        for (const mesh of this.loot) uploadCombatInstances(mesh);
-
-        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
-        for (let index = 0; index < state.chests.count; index += 1) {
-            const x = state.chests.x[index];
-            const z = state.chests.z[index];
+        for (const mesh of this.lootModels.loot) uploadCombatInstances(mesh);
+        const chestMesh = this.lootModels.chest;
+        for (let index = 0; index < state.chests.count; index++) {
+            const x = state.chests.x[index], z = state.chests.z[index], tier = state.chests.tiers[index];
             if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
-            const instance = this.chests.count++;
-            this.chestLids.count++;
-            this.chestLocks.count++;
-            const y = this.height(x, z);
-            this.setInstance(this.chests, instance, x, y + 0.2, z, 1, 0);
-            this.setInstance(this.chestLids, instance, x, y + 0.445, z, 1, 0);
-            this.setInstance(this.chestLocks, instance, x, y + 0.34, z + 0.26, 1, 0);
-            this.color.copy(CHEST_COLORS[state.chests.tiers[index]]);
-            if (state.chests.tiers[index] === 4) this.color.setHSL((timestampMs * 0.00015 + index * 0.13) % 1, 0.85, 0.65);
-            this.chests.setColorAt(instance, this.color);
-            this.chestLids.setColorAt(instance, this.color);
+            const instance = chestMesh.count++, y = this.height(x, z);
+            this.setInstance(chestMesh, instance, x, y + .02, z, 1, 0);
+            this.color.copy(CHEST_COLORS[tier]);
+            if (tier === 4) this.color.setHSL((state.player.animationTime * .15 + index * .13) % 1, .8, .68);
+            chestMesh.setColorAt(instance, this.color);
+            this.lootEffects.add(x - playerX, y, z - playerZ, RARITIES.indexOf(CHEST_RULES[CHEST_TIERS[tier]].rarity), index, true);
         }
-        for (const mesh of [this.chests, this.chestLids, this.chestLocks]) uploadCombatInstances(mesh);
+        uploadCombatInstances(chestMesh); this.lootEffects.upload();
     }
 
     public reset(): void {
         this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;
-        this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
         this.effects?.reset();
         this.heightCache.clear();
         if (this.actors) for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
-        for (const mesh of this.loot) mesh.count = 0;
+        this.lootModels?.reset();
+        this.lootEffects.reset();
     }
 
     public mountChunk(): void { this.heightCache.clear(); }
@@ -360,17 +343,17 @@ export class CombatLayer implements WorldRenderLayer {
         this.host = undefined;
         this.actors?.dispose();
         this.effects?.dispose();
+        this.lootModels?.dispose();
+        this.lootEffects.dispose();
         this.groundProjection.dispose();
         this.mist.dispose();
         this.actorFill.dispose();
-        for (const mesh of [this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks]) mesh.dispose();
-        for (const geometry of this.geometries) geometry.dispose();
+        for (const mesh of [this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience]) mesh.dispose();
+        for (const geometry of Object.values(this.geometries)) geometry.dispose();
         for (const material of [
             this.projectileMaterial,
             this.warningMaterial,
             this.experienceMaterial,
-            this.lootMaterial,
-            this.emberMaterial,
             this.auraMaterial,
             this.shadowMaterial
         ]) material.dispose();
@@ -385,11 +368,11 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     private buildPlayer(): void {
-        const aura = new Mesh(this.geometries[3], this.auraMaterial);
+        const aura = new Mesh(this.geometries.shield, this.auraMaterial);
         aura.position.y = 0;
         aura.rotation.x = -Math.PI / 2;
         this.shield.add(aura);
-        const shadow = new Mesh(this.geometries[4], this.shadowMaterial);
+        const shadow = new Mesh(this.geometries.shadow, this.shadowMaterial);
         shadow.position.y = 0;
         shadow.rotation.x = -Math.PI / 2;
         this.groundPlayer.add(shadow, this.shield);

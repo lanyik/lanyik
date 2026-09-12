@@ -2,6 +2,7 @@ import type { AttributeId, EquipmentSlot } from "./Equipment";
 import type { ConsumableEffect } from "./InventoryItem";
 import type { CombatSimulation } from "./CombatSimulation";
 import type { SkillId } from "./Skills";
+import type { Rarity } from "./Loot";
 
 export type CombatCommand =
     | { readonly type: "allocate"; readonly attribute: AttributeId }
@@ -17,6 +18,7 @@ export type CombatCommand =
     | { readonly type: "discard"; readonly itemId: number }
     | { readonly type: "sort-inventory" }
     | { readonly type: "merge-consumables" }
+    | { readonly type: "clear-equipment-quality"; readonly maximum: Rarity }
     | { readonly type: "set-auto-clear-equipment"; readonly enabled: boolean };
 
 /** Commands commit in arrival order before the next batch of fixed ticks. */
@@ -35,6 +37,7 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "discard": simulation.discard(command.itemId); break;
         case "sort-inventory": simulation.sortInventory(); break;
         case "merge-consumables": simulation.mergeConsumables(); break;
+        case "clear-equipment-quality": simulation.clearEquipmentQuality(command.maximum); break;
         case "set-auto-clear-equipment": simulation.setAutoClearEquipment(command.enabled); break;
         default:
             command satisfies never;

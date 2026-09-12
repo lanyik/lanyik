@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession, SessionSnapshot } from "../app/CombatSession";
 import { GAME_CONFIG } from "../core/GameConfig";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
-import type { InventoryItem } from "../core/InventoryItem";
+import { POTIONS, canUseConsumable, selectConsumable, type InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
 import { InventoryPanel } from "./InventoryPanel";
 import { RegionMap } from "./RegionMap";
@@ -13,6 +13,7 @@ import { UpgradePrompt } from "./UpgradePrompt";
 import { WorkerLoadPanel } from "./WorkerLoadPanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { SkillDragProvider } from "./SkillDrag";
+import { OrbDragProvider } from "./OrbDrag";
 import { SkillSlot } from "./SkillSlot";
 import "./app.css";
 
@@ -33,7 +34,6 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
 }) {
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false });
-    const [socket, setSocket] = useState(0);
     const [frontPanel, setFrontPanel] = useState<"character" | "inventory">("character");
     const [selectedId, setSelectedId] = useState<number>();
     const workspace = useRef<HTMLDivElement>(null);
@@ -46,8 +46,7 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
     const close = (menu: Menu) => setPanels(current => ({ ...current, [menu]: false }));
     const useItem = (item: InventoryItem) => {
         if (item.type === "equipment") session.dispatch({ type: "equip", itemId: item.id });
-        else if (item.type === "orb") session.dispatch({ type: "equip-orb", itemId: item.id, socket });
-        else session.dispatch({ type: "use-consumable", itemId: item.id, effect: item.value });
+        else if (item.type === "consumable") session.dispatch({ type: "use-consumable", itemId: item.id, effect: POTIONS[item.value].resource });
     };
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -77,11 +76,13 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [panels, selectedId, socket, player, combat?.gameOver, snapshot.status, session]);
+    }, [panels, selectedId, player, combat?.gameOver, snapshot.status, session]);
 
     const ready = snapshot.status === "ready" && combat && player;
-    const potionCount = (effect: "health" | "mana") => player?.inventory.reduce((count, item) => count + (item.type === "consumable" && item.value === effect ? item.size : 0), 0) ?? 0;
-    return <ItemTooltipProvider><SkillDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
+    const potionSlots = (["health", "mana"] as const).map(effect => ({ effect,
+        item: player ? selectConsumable(player.inventory, effect, player) : undefined,
+        count: player?.inventory.reduce((count, item) => count + (item.type === "consumable" && POTIONS[item.value].resource === effect ? item.size : 0), 0) ?? 0 }));
+    return <ItemTooltipProvider><SkillDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><OrbDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><main className="survivor" data-state={snapshot.status} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
         <style>{QUALITY_CSS}</style>
         {ready && <>
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>荒原<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : "探索中"}</span></header>
@@ -97,12 +98,13 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
                     <button className={frontPanel === "character" ? "active" : ""} aria-pressed={frontPanel === "character"} onClick={() => setFrontPanel("character")}><UiIcon name="character" />角色装备</button>
                     <button className={frontPanel === "inventory" ? "active" : ""} aria-pressed={frontPanel === "inventory"} onClick={() => setFrontPanel("inventory")}><UiIcon name="inventory" />背包物品</button>
                 </nav>}
-            {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} socket={socket} onSocket={setSocket} />}
+            {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} />}
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
                 onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
                 onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={enabled => session.dispatch({ type: "set-auto-clear-equipment", enabled })}
                 onMerge={() => session.dispatch({ type: "merge-consumables" })}
-                socket={socket} onSocket={setSocket} disabled={combat.gameOver} paused={snapshot.paused} />}
+                onClearQuality={maximum => session.dispatch({ type: "clear-equipment-quality", maximum })} onRemoveOrb={socket => session.dispatch({ type: "remove-orb", socket })}
+                disabled={combat.gameOver} paused={snapshot.paused} />}
             </div>}
             {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             <section className="combat-dock" aria-label="角色状态与技能">
@@ -117,10 +119,10 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
                         <div className="experience-track" aria-label="经验"><div className="experience-label"><span>经验</span><b>{Math.floor(player.experience)} / {player.experienceToLevel}</b></div><div className="bar experience-bar"><span style={{ width: `${player.experience / player.experienceToLevel * 100}%` }} /></div></div></div></div>
                 <div className="skill-slots">
                     {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={combat.gameOver || snapshot.paused} cast={() => session.dispatch({ type: "cast-skill", skill: id })} />)}
-                    {(["health", "mana"] as const).map((effect, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
-                        <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
-                        disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || potionCount(effect) === 0 || (effect === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana)}
-                        onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={player.inventory.find(item => item.type === "consumable" && item.value === effect)} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${potionCount(effect)}`}</small></div>)}
+                    {potionSlots.map(({ effect, item, count }, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
+                        <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={item} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
+                        disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || !item || !canUseConsumable(item, player)}
+                        onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={item} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${count}`}</small></div>)}
                 </div>
             </section>
             <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} onClick={() => toggle(menu.id)}>
@@ -135,5 +137,5 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
         </>}
         {snapshot.status === "loading" && <div className="state-overlay loading"><div className="loading-rune" /><div><small>RIFT / 荒原</small><h1>荒原正在苏醒</h1><p>准备地域与角色资源…</p></div></div>}
         {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.start(snapshot.seed)}>重新尝试</button></div></div>}
-    </main></SkillDragProvider></ItemTooltipProvider>;
+    </main></OrbDragProvider></SkillDragProvider></ItemTooltipProvider>;
 }

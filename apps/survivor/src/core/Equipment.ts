@@ -70,6 +70,7 @@ export interface EquipmentAffix {
     readonly rarity: Rarity;
 }
 export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
+    readonly itemLevel: number;
     readonly stars: 1 | 2 | 3;
     readonly baseBonuses: EquipmentBonuses;
     readonly affixes: readonly EquipmentAffix[];

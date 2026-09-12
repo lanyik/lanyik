@@ -14,9 +14,9 @@ import {
     RegionalWorld, MAX_COMBAT_CHUNKS,
     REGION_RULES, CHEST_RULES, CHEST_TIERS, type RegionInfo
 } from "./RegionalWorld";
-import { lootProfile, BASE_LOOT_PROFILE } from "./Loot";
+import { lootProfile, BASE_LOOT_PROFILE, RARITIES, RARITY_NAMES, type Rarity } from "./Loot";
 import { ORB_UNLOCK_LEVELS, generateOrb, sumOrbs, type Orb } from "./Orbs";
-import { compareInventoryItems, createConsumable, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
+import { compareInventoryItems, generateConsumable, canUseConsumable, selectConsumable, potionRecovery, POTIONS, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
 import { insertInventoryItem, mergeInventory } from "./Inventory";
 import type { ItemType } from "./ItemDefinition";
 import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
@@ -360,10 +360,30 @@ export class CombatSimulation {
         this.markChanged();
     }
 
+    public clearEquipmentQuality(maximum: Rarity): void {
+        if (!RARITIES.includes(maximum)) throw new RangeError("Unknown cleanup quality");
+        if (this.gameOverValue) return;
+        const before = this.inventory.length, limit = RARITIES.indexOf(maximum);
+        this.inventory = this.inventory.filter(item => item.type !== "equipment" || RARITIES.indexOf(item.rarity) > limit);
+        const cleared = before - this.inventory.length;
+        this.clearedEquipment += cleared;
+        this.inventoryFullNotified = false;
+        this.pushNotice("info", `清理${RARITY_NAMES[maximum]}品质及以下装备 · ${cleared} 件`);
+        this.markChanged();
+    }
+
     public equipOrb(itemId: number, socket: number): { readonly ok: boolean; readonly message: string } {
         if (this.gameOverValue) return { ok: false, message: "战斗已结束" };
         if (!Number.isInteger(socket) || socket < 0 || socket >= ORB_UNLOCK_LEVELS.length) return { ok: false, message: "无效宝珠槽" };
         if (this.level < ORB_UNLOCK_LEVELS[socket]) return { ok: false, message: "宝珠槽尚未解锁" };
+        const source = this.orbs.findIndex(item => item?.id === itemId);
+        if (source >= 0) {
+            if (source !== socket) {
+                [this.orbs[source], this.orbs[socket]] = [this.orbs[socket], this.orbs[source]];
+                this.markChanged();
+            }
+            return { ok: true, message: "宝珠槽位已交换" };
+        }
         const index = this.inventory.findIndex(item => item.id === itemId);
         const item = this.inventory[index];
         if (!item || item.type !== "orb") return { ok: false, message: "背包中没有这颗宝珠" };
@@ -425,14 +445,14 @@ export class CombatSimulation {
 
     public useConsumable(effect: ConsumableEffect, itemId?: number): void {
         if (this.gameOverValue || this.potionCooldown > 0) return;
-        if (effect === "health" ? this.health >= this.stats.maxHealth : this.mana >= this.stats.maxMana) return;
-        const index = this.inventory.findIndex(item => item.type === "consumable" && item.value === effect && (itemId === undefined || item.id === itemId));
-        const item = this.inventory[index];
-        if (!item || item.type !== "consumable") return;
+        const context = { health: this.health, mana: this.mana, stats: this.stats };
+        const item = itemId === undefined ? selectConsumable(this.inventory, effect, context) : this.inventory.find(item => item.id === itemId);
+        if (!item || item.type !== "consumable" || POTIONS[item.value].resource !== effect || !canUseConsumable(item, context)) return;
+        const index = this.inventory.indexOf(item), recovery = potionRecovery(item, this.stats);
         if (item.size === 1) this.inventory.splice(index, 1);
         else this.inventory[index] = Object.freeze({ ...item, size: item.size - 1 });
-        if (effect === "health") this.health = Math.min(this.stats.maxHealth, this.health + item.restore * (1 + this.stats.regenBonus));
-        else this.mana = Math.min(this.stats.maxMana, this.mana + item.restore);
+        this.health = Math.min(this.stats.maxHealth, this.health + recovery.health);
+        this.mana = Math.min(this.stats.maxMana, this.mana + recovery.mana);
         this.potionCooldown = CONSUMABLE_COOLDOWN;
         this.inventoryFullNotified = false;
         this.markChanged();
@@ -519,8 +539,8 @@ export class CombatSimulation {
             let nextId = this.nextItemId;
             const item = generateEquipment(random, nextId++, chest.region.level, this.lootProfile, rules.rarity);
             const clearEquipment = this.shouldAutoClear(item);
-            const rewards: InventoryItem[] = [createConsumable(nextId++, chest.region.level, random.chance(0.5) ? "health" : "mana")];
-            if (chest.hasOrb) rewards.push(generateOrb(random, nextId++, chest.region.level, rules.rarity));
+            const rewards: InventoryItem[] = [generateConsumable(random, nextId++, rules.rarity)];
+            if (chest.hasOrb) rewards.push(generateOrb(random, nextId++, rules.rarity));
             if (!clearEquipment) rewards.unshift(item);
             let nextInventory = this.inventory;
             for (const reward of rewards) {
@@ -693,14 +713,14 @@ export class CombatSimulation {
         this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * level * (1 + this.stats.goldBonus));
         this.entities.spawnExperience(x, z, experience);
         if (boss && this.entities.loot.count < MAX_GROUND_EQUIPMENT) {
-            this.dropItem(generateOrb(this.random, this.nextItemId++, level, "rare"), x, z);
+            this.dropItem(generateOrb(this.random, this.nextItemId++, "rare"), x, z);
         }
         const chance = boss ? 1 : elite ? this.lootProfile.eliteDropChance : this.lootProfile.normalDropChance;
         if (this.entities.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(chance)) {
             this.dropItem(generateEquipment(this.random, this.nextItemId++, level, this.lootProfile, boss ? "legendary" : "common"), x, z);
         }
         if (this.entities.loot.count < MAX_GROUND_EQUIPMENT && this.random.chance(0.14)) {
-            this.dropItem(createConsumable(this.nextItemId++, level, this.random.chance(0.6) ? "health" : "mana"), x, z);
+            this.dropItem(generateConsumable(this.random, this.nextItemId++, boss ? "legendary" : elite ? "magic" : "common"), x, z);
         }
         this.markChanged();
     }

@@ -9,7 +9,7 @@ export function inventorySlots(items: readonly InventoryItem[], type: ItemType):
 }
 export function canStack(first: InventoryItem, second: InventoryItem): boolean {
     return first.type === "consumable" && second.type === "consumable" && first.value === second.value
-        && first.itemLevel === second.itemLevel && first.rarity === second.rarity && first.restore === second.restore;
+        && first.rarity === second.rarity;
 }
 
 /** Whole-item transaction: failure changes neither the inventory nor the incoming stack. */

@@ -36,6 +36,6 @@ export function compareEquipment(item: Equipment, player: EquipmentContext): Equ
     const delta = power - battlePower(player.stats);
     const scoreDelta = item.score - (current?.score ?? 0);
     return { current, power, delta, scoreDelta, stats,
-        // Keep empty-slot items, ties, combat upgrades and higher-scoring specialist gear.
-        canClear: current !== undefined && delta < 0 && scoreDelta <= 0 };
+        // Effective combat power already includes caps; raw score must not veto cleanup.
+        canClear: current !== undefined && delta < 0 };
 }
