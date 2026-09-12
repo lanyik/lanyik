@@ -54,8 +54,9 @@ export interface WorldDeltaStore {
         options: WorldDeltaBatchOptions
     ): Promise<WorldChunkDelta | undefined>;
     flush(): Promise<void>;
-    listWorld?(worldId: string): Promise<readonly WorldChunkDelta[]>;
-    replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void>;
+    listWorld?(worldId: string, signal?: AbortSignal): Promise<readonly WorldChunkDelta[]>;
+    /** Cancel before atomic replacement; after commit, resolve successfully. */
+    replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[], signal?: AbortSignal): Promise<void>;
     clear(worldId: string): Promise<void>;
     dispose(): void;
 }

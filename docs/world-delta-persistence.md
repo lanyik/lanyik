@@ -77,6 +77,15 @@ next call. A stale successful write cannot acknowledge a newer edit to the same
 tile. IndexedDB mutations remain serialized. Direct Store users await each
 batch result and use `flush()` as the barrier for all queued writes.
 
+Checkpoint enumeration and atomic `replaceWorld()` accept an `AbortSignal`.
+Replacement checks cancellation before entering its queued transaction and aborts
+an active transaction before commit. Once committed, the replacement promise resolves
+successfully even if cancellation follows. Source recovery first drains previously
+accepted edits, then forwards the signal to replacement. A successful replacement
+is already durable: the source completes its matching live overrides without another
+fallible flush or cancellation check. The generation participant also awaits required
+`afterRestore` synchronization before releasing the authoritative state boundary.
+
 Records carry `WORLD_DELTA_FORMAT_VERSION`. Format 2 records include the source
 `chunkSize`; only format 2 is accepted. Obsolete formats, mismatched chunk
 geometry, cross-Chunk entries and duplicate coordinates fail during load.

@@ -162,8 +162,8 @@ export interface MutableWorldSource extends WorldSource {
     clearTileOverride(x: number, y: number): boolean;
     flushDeltas?(): Promise<void>;
     clearDeltas?(): Promise<void>;
-    createDeltaCheckpointSnapshot?(): Promise<WorldDeltaCheckpoint>;
-    restoreDeltaCheckpointSnapshot?(snapshot: WorldDeltaCheckpoint): Promise<void>;
+    createDeltaCheckpointSnapshot?(signal?: AbortSignal): Promise<WorldDeltaCheckpoint>;
+    restoreDeltaCheckpointSnapshot?(snapshot: WorldDeltaCheckpoint, signal?: AbortSignal): Promise<void>;
 }
 
 export function isMutableWorldSource(source: WorldSource): source is MutableWorldSource {
@@ -603,13 +603,16 @@ class WorldDeltaSession {
         }
     }
 
-    public async createCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
+    public async createCheckpointSnapshot(signal?: AbortSignal): Promise<WorldDeltaCheckpoint> {
+        signal?.throwIfAborted();
         if (this.restoring) throw new Error("world deltas are being restored");
         await this.flush();
+        signal?.throwIfAborted();
         if (!this.deltaStore?.listWorld) {
             throw new Error("WorldDeltaStore does not support checkpoint enumeration");
         }
-        const deltas = await this.deltaStore.listWorld(this.worldId);
+        const deltas = await this.deltaStore.listWorld(this.worldId, signal);
+        signal?.throwIfAborted();
         return {
             version: WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
             worldId: this.worldId,
@@ -624,7 +627,8 @@ class WorldDeltaSession {
         };
     }
 
-    public async restoreCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
+    public async restoreCheckpointSnapshot(snapshot: WorldDeltaCheckpoint, signal?: AbortSignal): Promise<void> {
+        signal?.throwIfAborted();
         if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)
             || snapshot.version !== WORLD_DELTA_CHECKPOINT_FORMAT_VERSION
             || snapshot.worldId !== this.worldId || snapshot.chunkSize !== this.chunkSize
@@ -653,8 +657,10 @@ class WorldDeltaSession {
         this.restoring = true;
         try {
             await this.flush();
-            await this.deltaStore.replaceWorld(this.worldId, deltas);
-            await this.deltaStore.flush();
+            signal?.throwIfAborted();
+            await this.deltaStore.replaceWorld(this.worldId, deltas, signal);
+            // Replacement is durable when it resolves. Complete the matching
+            // in-memory state without a post-commit cancellation check.
             if (this.disposed) throw new Error("world delta session has been disposed");
             this.generation += 1;
             this.chunks.clear();
@@ -1066,12 +1072,12 @@ export class ToroidalWorldSource implements MutableWorldSource {
 
     public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
 
-    public createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
-        return this.deltaSession.createCheckpointSnapshot();
+    public createDeltaCheckpointSnapshot(signal?: AbortSignal): Promise<WorldDeltaCheckpoint> {
+        return this.deltaSession.createCheckpointSnapshot(signal);
     }
 
-    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
-        return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint, signal?: AbortSignal): Promise<void> {
+        return this.deltaSession.restoreCheckpointSnapshot(snapshot, signal);
     }
 
     public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }
@@ -1284,12 +1290,12 @@ export class ProceduralWorldSource implements MutableWorldSource {
 
     public flushDeltas(): Promise<void> { return this.deltaSession.flush(); }
 
-    public createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint> {
-        return this.deltaSession.createCheckpointSnapshot();
+    public createDeltaCheckpointSnapshot(signal?: AbortSignal): Promise<WorldDeltaCheckpoint> {
+        return this.deltaSession.createCheckpointSnapshot(signal);
     }
 
-    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void> {
-        return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    public restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint, signal?: AbortSignal): Promise<void> {
+        return this.deltaSession.restoreCheckpointSnapshot(snapshot, signal);
     }
 
     public clearDeltas(): Promise<void> { return this.deltaSession.clear(); }

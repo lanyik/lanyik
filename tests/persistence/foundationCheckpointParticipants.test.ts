@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
     createWorldDeltaGenerationParticipant
@@ -21,16 +21,97 @@ class DeferredReplaceWorldDeltaStore extends MemoryWorldDeltaStore {
     private readonly released = deferred();
     public readonly replaceEntered = this.entered.promise;
 
-    public override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+    public override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[], signal?: AbortSignal): Promise<void> {
         this.entered.resolve();
         await this.released.promise;
-        return super.replaceWorld(worldId, deltas);
+        return super.replaceWorld(worldId, deltas, signal);
     }
 
     public release(): void { this.released.resolve(); }
 }
 
+function checkpointSource(deltas: MemoryWorldDeltaStore): ProceduralWorldSource {
+    return new ProceduralWorldSource({
+        seed: "checkpoint-cancellation", workerUrl: "unused", chunkSize: 12, worldId: "checkpoint-cancellation"
+    }, {
+        pool: new WorldGeneratorPool("unused", {
+            size: 1, clientFactory: () => ({
+                generateChunk: options => Promise.resolve(generateWorldChunk(options)),
+                dispose() {}, get isDisposed() { return false; }
+            })
+        }), deltaStore: deltas
+    });
+}
+
+afterEach(() => { vi.useRealTimers(); });
+
 describe("foundation generation checkpoint participants", () => {
+    test.each(["abort", "timeout", "dispose"] as const)("%s waits for an entered restore to settle without a late write", async action => {
+        if (action === "timeout") vi.useFakeTimers();
+        const deltas = new DeferredReplaceWorldDeltaStore();
+        const source = checkpointSource(deltas);
+        const afterRestore = vi.fn();
+        const coordinator = new GenerationCheckpointCoordinator({
+            worldId: source.worldId, descriptor: source.descriptor, store: new MemoryGenerationCheckpointStore(),
+            withWorldState: operation => operation(), operationTimeoutMs: 20,
+            participants: [createWorldDeltaGenerationParticipant(source, { afterRestore })]
+        });
+        source.setTileOverride(2, 3, { unit: "saved" });
+        await coordinator.checkpoint();
+        source.setTileOverride(2, 3, { unit: "current" });
+        const controller = new AbortController();
+        const recovery = coordinator.recover(controller.signal);
+        const failed = expect(recovery).rejects.toMatchObject({ name: action === "timeout" ? "TimeoutError" : "AbortError" });
+        await deltas.replaceEntered;
+        if (action === "timeout") await vi.advanceTimersByTimeAsync(20);
+        else if (action === "dispose") coordinator.dispose(false);
+        else controller.abort();
+        let settled = false;
+        void coordinator.settled.then(() => { settled = true; });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(coordinator.stats.running).toBe(true);
+        deltas.release();
+        await failed;
+        await coordinator.settled;
+        expect(source.store.getTileOverride(2, 3)).toEqual({ unit: "current" });
+        expect(afterRestore).not.toHaveBeenCalled();
+        expect(coordinator.stats.running).toBe(false);
+        coordinator.dispose(); source.dispose();
+    });
+
+    test("cancellation after replacement commits finishes memory and view synchronization before success", async () => {
+        const controller = new AbortController();
+        class CommittedStore extends MemoryWorldDeltaStore {
+            override async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[], signal?: AbortSignal) {
+                await super.replaceWorld(worldId, deltas, signal);
+                controller.abort();
+            }
+        }
+        const source = checkpointSource(new CommittedStore());
+        const syncEntered = deferred(), syncReleased = deferred();
+        const coordinator = new GenerationCheckpointCoordinator({
+            worldId: source.worldId, descriptor: source.descriptor, store: new MemoryGenerationCheckpointStore(),
+            withWorldState: operation => operation(),
+            participants: [createWorldDeltaGenerationParticipant(source, { afterRestore: async () => {
+                syncEntered.resolve(); await syncReleased.promise;
+            } })]
+        });
+        source.setTileOverride(2, 3, { unit: "saved" });
+        await coordinator.checkpoint();
+        source.setTileOverride(2, 3, { unit: "current" });
+        const recovery = coordinator.recover(controller.signal);
+        await syncEntered.promise;
+        expect(controller.signal.aborted).toBe(true);
+        expect(coordinator.stats.running).toBe(true);
+        expect(source.store.getTileOverride(2, 3)).toEqual({ unit: "saved" });
+        syncReleased.resolve();
+        await expect(recovery).resolves.toMatchObject({ generation: 1 });
+        await coordinator.settled;
+        expect(coordinator.stats.running).toBe(false);
+        coordinator.dispose(); source.dispose();
+    });
+
     test("rejects terrain edits while a checkpoint restore is replacing durable deltas", async () => {
         const deltas = new DeferredReplaceWorldDeltaStore();
         const source = new ProceduralWorldSource({

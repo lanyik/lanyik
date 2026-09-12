@@ -177,6 +177,12 @@ function stableSnapshotValue(
             return ["set", [...value].map(entry => stableSnapshotValue(entry, context))];
         }
         if (Array.isArray(value)) {
+            for (const key of Object.keys(value)) {
+                const index = Number(key);
+                if (!Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+                    throw new TypeError("checkpoint snapshot arrays cannot contain extra enumerable properties");
+                }
+            }
             return ["array", Array.from({ length: value.length }, (_, index) => Object.prototype.hasOwnProperty.call(value, index)
                 ? ["value", stableSnapshotValue(value[index], context)] : ["hole"])];
         }
@@ -713,7 +719,8 @@ export class GenerationCheckpointCoordinator {
             const captures = await this.runInWorldState(controller, async () => {
                 const results = await Promise.all(this.participants.map(async participant => {
                     try {
-                        const snapshot = await this.runStep(controller, () => participant.capture(context));
+                        throwIfAborted(controller.signal);
+                        const snapshot = await participant.capture(context);
                         const copy = cloneValue(snapshot);
                         return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) } as const;
                     } catch (reason) {
@@ -827,7 +834,8 @@ export class GenerationCheckpointCoordinator {
             };
             await this.runInWorldState(controller, async () => {
                 for (const restore of restores) {
-                    await this.runStep(controller, () => restore.participant.restore(context, restore.snapshot));
+                    throwIfAborted(controller.signal);
+                    await restore.participant.restore(context, restore.snapshot);
                 }
             });
             this.latestGeneration = manifest.generation;
@@ -881,22 +889,35 @@ export class GenerationCheckpointCoordinator {
     }
 
     private async runInWorldState<T>(controller: AbortController, operation: () => Promise<T>): Promise<T> {
+        throwIfAborted(controller.signal);
         let invoked = false;
         let completed = false;
         let active = true;
+        let inFlight: Promise<T> | undefined;
+        const waiting = new AbortController();
+        const cancelWaiting = () => { if (!invoked) waiting.abort(controller.signal.reason); };
+        controller.signal.addEventListener("abort", cancelWaiting, { once: true });
         try {
-            const result = await this.runStep(controller, () => this.withWorldState(async () => {
+            const result = await this.runStep(waiting, () => this.withWorldState(async () => {
                 if (!active || invoked) throw new Error("checkpoint state boundary must invoke its operation exactly once while active");
                 invoked = true;
                 throwIfAborted(controller.signal);
-                const value = await operation();
+                // Once entered, cancellation belongs to the participant's commit
+                // point. Keep the boundary and coordinator alive through its cleanup.
+                inFlight = operation();
+                const value = await inFlight;
                 completed = true;
                 return value;
             }));
             if (!completed) throw new Error("checkpoint state boundary must await its operation");
             return result;
+        } catch (reason) {
+            controller.abort(reason);
+            throw reason;
         } finally {
             active = false;
+            controller.signal.removeEventListener("abort", cancelWaiting);
+            await inFlight?.catch(() => undefined);
         }
     }
 }

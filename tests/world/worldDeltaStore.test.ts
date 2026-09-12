@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { IDBFactory } from "fake-indexeddb";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 
 import {
     IndexedDbWorldDeltaStore,
@@ -95,6 +95,32 @@ describe("MemoryWorldDeltaStore", () => {
 });
 
 describe("IndexedDbWorldDeltaStore", () => {
+    test.each(["before", "during", "after"] as const)("cancellation %s replacement respects the transaction commit point", async when => {
+        const store = new IndexedDbWorldDeltaStore({ databaseName: `replacement-${when}` });
+        const original = (await store.putChunkDelta("world", 0, 0, [
+            { x: 1, y: 1, override: { unit: "current" } }
+        ], CHUNK))!;
+        const replacement = { ...original, entries: [{ x: 1, y: 1, override: { unit: "restored" } }] };
+        const controller = new AbortController();
+        if (when === "before") controller.abort();
+        else {
+            const put = IDBObjectStore.prototype.put;
+            vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args) {
+                const request = put.apply(this, args);
+                if (when === "during") controller.abort();
+                else this.transaction.addEventListener("complete", () => controller.abort(), { once: true });
+                return request;
+            });
+        }
+        const replacing = Promise.resolve().then(() => store.replaceWorld("world", [replacement], controller.signal));
+        if (when === "after") await expect(replacing).resolves.toBeUndefined();
+        else await expect(replacing).rejects.toMatchObject({ name: "AbortError" });
+        await store.flush().catch(() => undefined);
+        expect((await store.loadChunk("world", 0, 0, CHUNK))?.entries[0].override.unit)
+            .toBe(when === "after" ? "restored" : "current");
+        store.dispose();
+    });
+
     test("reads peer commits and can retry a conflict using a fresh revision", async () => {
         const options = { databaseName: "delta-coherence" };
         const first = new IndexedDbWorldDeltaStore(options), second = new IndexedDbWorldDeltaStore(options);
@@ -120,6 +146,7 @@ describe("IndexedDbWorldDeltaStore", () => {
     });
 
     afterEach(() => {
+        vi.restoreAllMocks();
         Reflect.deleteProperty(globalThis, "indexedDB");
     });
 

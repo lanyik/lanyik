@@ -39,7 +39,11 @@ Applications can route mutations and `withWorldState` through one serial queue,
 calling `checkpoint()` outside that queue. If the entire checkpoint already runs
 inside an exclusive application operation, the hook should assert ownership and
 execute directly, avoiding a recursive enqueue. Capture/restore callbacks must
-observe their cancellation signal. The coordinator rejects a missing boundary,
+observe their cancellation signal and settle only after their owned work has stopped
+or completed. Cancellation while waiting for the boundary prevents late invocation.
+Once entered, the coordinator keeps the boundary and its `settled` promise pending
+until the actual participant promises finish; it never races cancellation against
+an in-flight authoritative mutation. The coordinator rejects a missing boundary,
 early return, repeated invocation and late invocation after cancellation.
 
 - A crash before manifest publication leaves the previous generation active.
@@ -58,6 +62,8 @@ early return, repeated invocation and late invocation after cancellation.
   checksum before applying any snapshot. Structured `Map`, `Set`, and `Date`
   values, arrays and plain objects have distinct type-tagged checksums. Manifest
   format 2 is required; obsolete formats/checksums and participant versions are rejected.
+  Arrays may contain indexed elements and holes; extra own enumerable properties
+  are rejected instead of being persisted without checksum coverage.
   Committed records are never rewritten in place.
 
 `createWorldDeltaGenerationParticipant()` adapts the sparse terrain delta
@@ -71,9 +77,21 @@ than being accepted and then silently discarded.
 The generation coordinator is the sole checkpoint protocol; journal/flush compatibility
 APIs and automatic participant migration are removed. Saves and recovery have one
 configurable operation deadline, covering reads, staging, capture and restore.
+The deadline requests cancellation; an entered participant must finish its
+cancellation or commit cleanup before the operation settles.
 Stores accept cancellation and abort pending publication transactions. Once the
 manifest transaction commits, the save returns that committed result; subsequent
 cancellation cannot report an uncommitted save.
+
+The terrain participant forwards cancellation through snapshot enumeration and
+atomic delta replacement. Before replacement commits, cancellation leaves durable
+and live terrain unchanged. After commit, it completes the matching live state and
+required `afterRestore` synchronization before returning success, even if cancellation
+arrives during that cleanup. Recovery checks cancellation before starting each next
+participant. Cancellation before that next participant rejects recovery without
+rolling back already committed participants; if the final participant has committed
+and completes its cleanup, recovery returns the recovered manifest. Applications
+must treat a partially failed recovery as unusable until explicitly recovered again.
 
 Staging is deleted only by the mandatory atomic garbage collector, which checks
 both live generations under the publication transaction fence. A failed or ambiguous

@@ -2,8 +2,8 @@ import { WorldDeltaCheckpoint } from "../world/WorldSource";
 import { GenerationCheckpointParticipant } from "./GenerationCheckpointCoordinator";
 
 export interface WorldDeltaCheckpointSource {
-    createDeltaCheckpointSnapshot(): Promise<WorldDeltaCheckpoint>;
-    restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint): Promise<void>;
+    createDeltaCheckpointSnapshot(signal?: AbortSignal): Promise<WorldDeltaCheckpoint>;
+    restoreDeltaCheckpointSnapshot(snapshot: WorldDeltaCheckpoint, signal?: AbortSignal): Promise<void>;
 }
 
 export interface WorldDeltaGenerationParticipantOptions {
@@ -22,9 +22,11 @@ export function createWorldDeltaGenerationParticipant(
         id: "terrain-deltas",
         version: 1,
         required: true,
-        capture: () => source.createDeltaCheckpointSnapshot(),
-        restore: async (_context, snapshot) => {
-            await source.restoreDeltaCheckpointSnapshot(snapshot);
+        capture: context => source.createDeltaCheckpointSnapshot(context.signal),
+        restore: async (context, snapshot) => {
+            await source.restoreDeltaCheckpointSnapshot(snapshot, context.signal);
+            // A successful replacement has committed. Finish required view/cache
+            // synchronization even when cancellation follows that commit.
             await options.afterRestore?.(snapshot);
         }
     };

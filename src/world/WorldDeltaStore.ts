@@ -150,8 +150,9 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
 
     public flush(): Promise<void> { return Promise.resolve(); }
 
-    public listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
+    public listWorld(worldId: string, signal?: AbortSignal): Promise<readonly WorldChunkDelta[]> {
         if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+        signal?.throwIfAborted();
         const deltas = [...this.chunks.values()]
             .filter(delta => delta.worldId === worldId)
             .sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY)
@@ -159,8 +160,9 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         return Promise.resolve(deltas);
     }
 
-    public async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+    public async replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[], signal?: AbortSignal): Promise<void> {
         if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
+        signal?.throwIfAborted();
         const replacements = new Map<string, WorldChunkDelta>();
         for (const delta of deltas) {
             const normalized = normalizeWorldChunkDelta(
@@ -213,11 +215,21 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
     });
 }
 
-function transactionComplete(transaction: IDBTransaction): Promise<void> {
+function transactionComplete(transaction: IDBTransaction, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-        transaction.addEventListener("complete", () => resolve(), { once: true });
-        transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
-        transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+        const abort = () => {
+            try { transaction.abort(); } catch (error) {
+                if (!(error instanceof DOMException) || error.name !== "InvalidStateError") throw error;
+            }
+        };
+        const cleanup = () => signal?.removeEventListener("abort", abort);
+        signal?.addEventListener("abort", abort, { once: true });
+        transaction.addEventListener("complete", () => { cleanup(); resolve(); }, { once: true });
+        transaction.addEventListener("abort", () => {
+            cleanup();
+            reject(signal?.aborted ? signal.reason : transaction.error ?? new Error("IndexedDB transaction aborted"));
+        }, { once: true });
+        if (signal?.aborted) abort();
     });
 }
 
@@ -304,15 +316,25 @@ export class IndexedDbWorldDeltaStore implements WorldDeltaStore {
         }
     }
 
-    public async listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
+    public async listWorld(worldId: string, signal?: AbortSignal): Promise<readonly WorldChunkDelta[]> {
         if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+        signal?.throwIfAborted();
         await this.flush();
+        signal?.throwIfAborted();
         const database = await this.open();
+        signal?.throwIfAborted();
         const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
-        const records = await requestResult(
-            transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
-        ) as StoredWorldChunkDelta[];
-        await transactionComplete(transaction);
+        const completion = transactionComplete(transaction, signal);
+        let records: StoredWorldChunkDelta[];
+        try {
+            records = await requestResult(
+                transaction.objectStore(DELTA_OBJECT_STORE).index("worldId").getAll(worldId)
+            ) as StoredWorldChunkDelta[];
+            await completion;
+        } catch (reason) {
+            await completion.catch(() => undefined);
+            throw signal?.aborted ? signal.reason : reason;
+        }
         return records.map(record => normalizeWorldChunkDelta(
             record,
             worldId,
@@ -322,8 +344,9 @@ export class IndexedDbWorldDeltaStore implements WorldDeltaStore {
         )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
     }
 
-    public replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+    public replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[], signal?: AbortSignal): Promise<void> {
         if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
+        signal?.throwIfAborted();
         const replacements = new Map<string, WorldChunkDelta>();
         for (const delta of deltas) {
             const normalized = normalizeWorldChunkDelta(
@@ -338,15 +361,25 @@ export class IndexedDbWorldDeltaStore implements WorldDeltaStore {
             replacements.set(key, normalized);
         }
         return this.enqueue(async () => {
+            signal?.throwIfAborted();
             const database = await this.open();
+            signal?.throwIfAborted();
             const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
-            const store = transaction.objectStore(DELTA_OBJECT_STORE);
-            const keys = await requestResult(store.index("worldId").getAllKeys(worldId));
-            for (const key of keys) store.delete(key);
-            for (const [key, delta] of replacements) {
-                store.put({ key, ...cloneDelta(delta) } satisfies StoredWorldChunkDelta);
+            const completion = transactionComplete(transaction, signal);
+            try {
+                const store = transaction.objectStore(DELTA_OBJECT_STORE);
+                const keys = await requestResult(store.index("worldId").getAllKeys(worldId));
+                signal?.throwIfAborted();
+                for (const key of keys) store.delete(key);
+                for (const [key, delta] of replacements) {
+                    store.put({ key, ...cloneDelta(delta) } satisfies StoredWorldChunkDelta);
+                }
+                await completion;
+            } catch (reason) {
+                try { transaction.abort(); } catch { /* transaction already settled */ }
+                await completion.catch(() => undefined);
+                throw signal?.aborted ? signal.reason : reason;
             }
-            await transactionComplete(transaction);
         });
     }
 

@@ -148,6 +148,22 @@ describe("GenerationCheckpointCoordinator", () => {
         expect(() => checksumCheckpointSnapshot(cyclic)).toThrow(/cyclic/);
         expect(() => checksumCheckpointSnapshot(new (class Snapshot { value = 1; })()))
             .toThrow(/unsupported Snapshot/);
+        const extended = Object.assign([1], { label: "saved" });
+        expect(structuredClone(extended).label).toBe("saved");
+        expect(() => checksumCheckpointSnapshot(extended)).toThrow(/extra enumerable properties/);
+    });
+
+    test("rejects array properties before publishing a checkpoint", async () => {
+        const store = new MemoryGenerationCheckpointStore();
+        const coordinator = new GenerationCheckpointCoordinator({
+            worldId: "array-properties", descriptor, store, withWorldState: operation => operation(),
+            participants: [{ id: "state", version: 1,
+                capture: () => Object.assign([1], { label: "unchecked" }), restore() {} }]
+        });
+        await expect(coordinator.checkpoint()).rejects.toThrow(/extra enumerable properties/);
+        expect(await store.loadManifest("array-properties")).toBeUndefined();
+        expect(await store.listStages("array-properties")).toEqual([]);
+        coordinator.dispose();
     });
 
     test("rejects obsolete checksum encoding before restoring", async () => {

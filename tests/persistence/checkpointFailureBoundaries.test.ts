@@ -19,6 +19,26 @@ function coordinator(store: GenerationCheckpointStore, options: { createSaveId?:
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); participant.restore.mockClear(); });
 
 describe("checkpoint failure boundaries", () => {
+    test("cancellation while waiting for the world boundary prevents a late capture", async () => {
+        const entered = deferred(), release = deferred();
+        const capture = vi.fn(() => ({}));
+        const writer = new GenerationCheckpointCoordinator({
+            worldId: "queued-boundary", descriptor, store: new MemoryGenerationCheckpointStore(),
+            participants: [{ id: "state", version: 1, capture, restore() {} }],
+            withWorldState: async operation => { entered.resolve(); await release.promise; return operation(); }
+        });
+        const controller = new AbortController();
+        const failed = expect(writer.checkpoint(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+        await entered.promise;
+        controller.abort();
+        await failed;
+        await writer.settled;
+        release.resolve();
+        await Promise.resolve();
+        expect(capture).not.toHaveBeenCalled();
+        writer.dispose();
+    });
+
     test("keeps a committed generation when acknowledgement and subsequent reads fail", async () => {
         class Store extends MemoryGenerationCheckpointStore {
             unavailable = false;
