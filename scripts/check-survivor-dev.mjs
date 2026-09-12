@@ -34,7 +34,7 @@ try {
         const simulation = new CombatSimulation("development-item-contract");
         try {
             const random = new DeterministicRandom("development-items");
-            const items = [generateEquipment(random, 9000, 1, BASE_LOOT_PROFILE), generateOrb(random, 9001, 1), createConsumable(9002, 1, "mana", 2)];
+            const items = [generateEquipment(random, 9000, 1, BASE_LOOT_PROFILE), generateOrb(random, 9001), createConsumable(9002, "common", "mana", 2)];
             for (const item of items) simulation.dropItem(item, 0, 0);
             simulation.collectEquipment();
             return simulation.getSnapshot().player.inventory.map(item => ({ type: item.type, value: item.value, size: item.size }));
