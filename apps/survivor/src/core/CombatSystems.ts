@@ -20,6 +20,7 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         const slot = enemies.slots[cursor];
         batch.enemyIds[cursor] = world.ids[slot]; batch.enemyX[cursor] = p.x[slot];
         batch.enemyZ[cursor] = p.z[slot]; batch.enemyRadius[cursor] = p.radius[slot];
+        entities.projectileEnemyIndices[slot] = cursor;
     }
     for (let cursor = 0; cursor < projectiles.count; cursor++) {
         const slot = projectiles.slots[cursor];
@@ -33,7 +34,7 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         batch.startX[cursor] = sx; batch.startZ[cursor] = sz; batch.endX[cursor] = ex; batch.endZ[cursor] = ez;
         batch.radius[cursor] = p.radius[slot]; batch.hostile[cursor] = Number(b.faction[slot] === Faction.Enemy);
     }
-    batch.prepare();
+    batch.prepare(entities.spatial, entities.projectileCandidates, Component.Enemy, entities.projectileEnemyIndices);
     if (executor) return executor.resolve(batch).then(() => commitProjectiles(entities));
     resolveProjectileRange(batch);
     commitProjectiles(entities);

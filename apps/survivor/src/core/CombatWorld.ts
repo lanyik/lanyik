@@ -48,6 +48,8 @@ export class CombatWorld {
     public readonly status = { slowUntil: new Float64Array(ENTITY_CAPACITY), slowScale: new Float32Array(ENTITY_CAPACITY) };
     public readonly projectileBatch = new ProjectileBatch();
     public readonly projectileBatchIndices = new Uint16Array(ENTITY_CAPACITY);
+    public readonly projectileEnemyIndices = new Uint16Array(ENTITY_CAPACITY);
+    public readonly projectileCandidates = new SpatialQuery(ENTITY_CAPACITY);
     public readonly position = {
         x: new Float64Array(ENTITY_CAPACITY), z: new Float64Array(ENTITY_CAPACITY),
         previousX: new Float64Array(ENTITY_CAPACITY), previousZ: new Float64Array(ENTITY_CAPACITY),

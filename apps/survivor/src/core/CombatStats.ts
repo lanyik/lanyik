@@ -1,9 +1,13 @@
 import type { Attributes, EquipmentBonuses } from "./Equipment";
 import type { DeterministicRandom } from "./DeterministicRandom";
+import { ENEMY_HIT_RULES } from "./EnemyDefinitions";
 
 export const STAT_LIMITS = Object.freeze({
     evasion: 0.6, blockChance: 0.85, lifesteal: 0.3, speedBonus: 2,
-    damageReduction: 0.75, eliteReduction: 0.75, shieldRecovery: 2
+    damageReduction: 0.75, eliteReduction: 0.75, shieldRecovery: 2,
+    accuracy: 1 + Math.max(...Object.values(ENEMY_HIT_RULES.evasion)),
+    criticalResistance: Math.max(...Object.values(ENEMY_HIT_RULES.criticalChance)),
+    criticalDamageReduction: ENEMY_HIT_RULES.criticalDamageBonus
 });
 export interface DerivedStats extends EquipmentBonuses {
     readonly maxMana: number;
@@ -41,7 +45,9 @@ export function deriveStats(level: number, attributes: Attributes, gear: Equipme
         eliteReduction: Math.min(STAT_LIMITS.eliteReduction, gear.eliteReduction),
         thornsCap: 2 + gear.thornsCap,
         shieldRecovery: Math.max(STAT_LIMITS.shieldRecovery, 12 - gear.shieldRecovery),
-        accuracy: 0.95 + gear.accuracy,
+        accuracy: Math.min(STAT_LIMITS.accuracy, 0.95 + gear.accuracy),
+        criticalResistance: Math.min(STAT_LIMITS.criticalResistance, gear.criticalResistance),
+        criticalDamageReduction: Math.min(STAT_LIMITS.criticalDamageReduction, gear.criticalDamageReduction),
         pickupRadius: 3 + gear.pickupRadius,
         attackRange: 6.4
     });
@@ -60,7 +66,7 @@ export function outgoingDamage(stats: DerivedStats, rolledDamage: number, enemyM
 }
 
 export function incomingDamage(stats: DerivedStats, rawDamage: number, elite: boolean, critical: boolean, blocked: boolean): number {
-    const criticalMultiplier = critical ? 1 + Math.max(0, 0.6 - stats.criticalDamageReduction) : 1;
+    const criticalMultiplier = critical ? 1 + Math.max(0, ENEMY_HIT_RULES.criticalDamageBonus - stats.criticalDamageReduction) : 1;
     const reduced = rawDamage * criticalMultiplier * 100 / (100 + stats.armor * 7)
         * (1 - stats.damageReduction) * (elite ? 1 - stats.eliteReduction : 1);
     return Math.max(0, reduced - (blocked ? stats.block : 0));

@@ -31,6 +31,17 @@ test("multiple impacts commit one death and cannot damage a pickup reusing the v
     expect(e.impacts.count).toBe(0);
 });
 
+test("automatic attacks include the exact range boundary and exclude targets beyond it", () => {
+    for (const beyond of [0, .0001]) {
+        const { combat, fixture, e, home, spawn } = encounter();
+        e.spawnEnemy({ ...spawn, x: fixture.stats.attackRange + beyond, z: 0 }, home);
+        fixture.attackCooldown = 0;
+        combat.step({ x: 0, z: 0, active: false });
+        expect(e.projectiles.count).toBe(beyond === 0 ? 1 : 0);
+        combat.dispose();
+    }
+});
+
 test("a released hostile bolt damages the player without reflecting into a recycled caster slot", () => {
     const { combat, fixture, e, home, spawn } = encounter();
     const caster = e.spawnEnemy({ ...spawn, x: 20, z: 0 }, home), source = e.world.ids[caster];

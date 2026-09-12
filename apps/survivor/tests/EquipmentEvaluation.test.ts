@@ -3,7 +3,7 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import { GAME_CONFIG } from "../src/core/GameConfig";
 const INVENTORY_CAPACITY = GAME_CONFIG.inventory.equipment.capacity;
 import { battlePower, compareEquipment } from "../src/core/EquipmentEvaluation";
-import { deriveStats } from "../src/core/CombatStats";
+import { deriveStats, STAT_LIMITS } from "../src/core/CombatStats";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment, type EquipmentBonuses } from "../src/core/Equipment";
 import { createConsumable, type InventoryItem } from "../src/core/InventoryItem";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
@@ -24,6 +24,45 @@ function withInventory(items: InventoryItem[], level = 10) {
 }
 
 describe("equipment evaluation and safe cleanup", () => {
+    test("counter-stats stop adding power after every current opponent is fully countered", () => {
+        const player = new CombatSimulation("counter-stat-caps").getSnapshot().player;
+        const capped = { ...EMPTY_BONUSES, accuracy: STAT_LIMITS.accuracy - .95,
+            criticalResistance: STAT_LIMITS.criticalResistance, criticalDamageReduction: STAT_LIMITS.criticalDamageReduction };
+        const atLimit = deriveStats(player.level, player.attributes, capped);
+        const overflow = deriveStats(player.level, player.attributes, { ...capped, accuracy: 3, criticalResistance: 3, criticalDamageReduction: 3 });
+        expect(overflow).toEqual(atLimit);
+        expect(battlePower(overflow)).toBe(battlePower(atLimit));
+    });
+
+    test("automatic cleanup retains damage upgrades that replace useless accuracy overflow", () => {
+        const candidate = gear(5, { damage: 1.8 }, "ring");
+        const combat = withInventory([gear(2, { accuracy: .1 }, "ring"), gear(3, { accuracy: .1 }, "head"),
+            gear(4, { accuracy: .1 }, "chest"), candidate]);
+        for (const id of [2, 3, 4]) combat.equip(id);
+        const player = combat.getSnapshot().player;
+        const comparison = compareEquipment(candidate, player);
+        expect(comparison.stats.accuracy).toBe(player.stats.accuracy);
+        expect(comparison.stats.damage).toBeGreaterThan(player.stats.damage);
+        expect(comparison.delta).toBeGreaterThan(0);
+        expect(comparison.scoreDelta).toBeLessThan(0);
+        combat.setAutoClearEquipment(true);
+        expect(combat.getSnapshot().player.inventory.some(item => item.id === candidate.id)).toBe(true);
+        combat.dispose();
+    });
+
+    test("temporary recovery equipment cannot shorten an already triggered passive shield cooldown", () => {
+        const combat = withInventory([gear(2, { shieldRecovery: .532 }, "charm")]);
+        const fixture = combat as unknown as { shieldCooldown: number };
+        fixture.shieldCooldown = 11.9;
+        combat.equip(2);
+        expect(combat.getSnapshot().player.stats.shieldRecovery).toBe(11.468);
+        expect(combat.getSnapshot().player.shieldRemaining).toBe(11.9);
+        combat.unequip("charm");
+        expect(combat.getSnapshot().player.stats.shieldRecovery).toBe(12);
+        expect(combat.getSnapshot().player.shieldRemaining).toBe(11.9);
+        combat.dispose();
+    });
+
     test("uses final equipment bonuses, caps and cooldown direction without scoring multipliers twice", () => {
         const player = new CombatSimulation("rating").getSnapshot().player;
         const naked = deriveStats(player.level, player.attributes, EMPTY_BONUSES);

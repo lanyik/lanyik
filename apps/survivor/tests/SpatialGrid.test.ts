@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
 import { SpatialGrid, SpatialQuery } from "../src/core/SpatialGrid";
 import { ProjectileBatch, resolveProjectileRange, segmentCircleHit } from "../src/core/ProjectileBatch";
-import { CombatWorld, Component } from "../src/core/CombatWorld";
+import { CombatWorld, Component, Faction } from "../src/core/CombatWorld";
 import { RegionalWorld } from "../src/core/RegionalWorld";
+import { prepareProjectileFixture } from "./helpers/ProjectileFixture";
+import { advanceProjectiles } from "../src/core/CombatSystems";
 
 test("unsupported coordinates fail before grid traversal and very long queries stay bounded", () => {
     const grid = new SpatialGrid(4), result = new SpatialQuery(4);
@@ -49,6 +51,27 @@ test("combat target queries include overlapping large bodies and remove recycled
     expect(world.queryNearby(Component.Experience, -4, 0, 2).count).toBe(1);
 });
 
+test("projectile candidates map maintained entity slots into snapshots after swaps, moves and pickup reuse", () => {
+    const entities = new CombatWorld(0, 0), regions = new RegionalWorld("live-spatial", { x: 0, z: 0 });
+    regions.synchronize(0, 0);
+    const home = regions.chunks.get("0,0")!, region = regions.regionAt(0, 0);
+    const spawn = (x: number) => entities.spawnEnemy({ x, z: 0, kind: 0, boss: false, elite: false, level: 1, region }, home);
+    const removed = spawn(1), near = spawn(2), middle = spawn(4);
+    entities.remove(removed); entities.spawnExperience(1, 0, 1);
+    const far = spawn(6);
+    const fire = () => {
+        entities.impacts.count = 0;
+        entities.spawnProjectile(entities.world.ids[entities.player], Faction.Player, 0, 0, 1200, 0, 1, 1);
+        advanceProjectiles(entities);
+        expect(entities.impacts.count).toBe(1);
+        return entities.impacts.target[0];
+    };
+    expect(fire()).toBe(entities.world.ids[near]);
+    entities.position.x[near] = 100; entities.updateSpatial(near, Component.Enemy);
+    entities.remove(middle); entities.spawnExperience(4, 0, 1);
+    expect(fire()).toBe(entities.world.ids[far]);
+});
+
 test("grid collision results equal exhaustive earliest-hit queries over mixed sweeps and radii", () => {
     let seed = 19;
     const random = () => { seed = Math.imul(seed, 1664525) + 1013904223 | 0; return (seed >>> 0) / 2 ** 32; };
@@ -69,7 +92,7 @@ test("grid collision results equal exhaustive earliest-hit queries over mixed sw
             batch.hostile[shot] = shot % 5 === 0 ? 1 : 0; batch.radius[shot] = random() * .5;
         }
         batch.hostile[1] = 0; batch.startX[1] = batch.endX[1] = batch.enemyX[0]; batch.startZ[1] = batch.endZ[1] = batch.enemyZ[0];
-        batch.prepare(); resolveProjectileRange(batch);
+        prepareProjectileFixture(batch); resolveProjectileRange(batch);
         for (let shot = 0; shot < batch.count; shot++) {
             let nearest = Infinity, expected = 0;
             const check = (id: number, x: number, z: number, radius: number) => {
@@ -87,10 +110,10 @@ test("sparse projectile work is proportional to nearby targets, with inclusive t
     const batch = new ProjectileBatch(); batch.enemyCount = 640; batch.count = 128;
     for (let i = 0; i < 640; i++) { batch.enemyX[i] = 20 + i % 20 * 4; batch.enemyZ[i] = 20 + Math.floor(i / 20) * 4; batch.enemyIds[i] = i + 1; }
     batch.enemyRadius.fill(.5); batch.radius.fill(.5); batch.endX.fill(4);
-    batch.prepare();
+    prepareProjectileFixture(batch);
     expect(batch.candidateCounts.every(count => count === 0)).toBe(true);
     batch.enemyX[0] = 2; batch.enemyZ[0] = 1;
-    batch.prepare(); resolveProjectileRange(batch);
+    prepareProjectileFixture(batch); resolveProjectileRange(batch);
     expect(batch.targets.every(target => target === 1)).toBe(true);
     expect(batch.candidateCounts.every(count => count === 1)).toBe(true);
 });

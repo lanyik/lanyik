@@ -59,11 +59,6 @@ export class SpatialGrid {
         this.categories[slot] = 0;
     }
 
-    public clear(): void {
-        this.heads.fill(-1); this.next.fill(-1); this.previous.fill(-1); this.categories.fill(0);
-        this.maximumRadius = 0;
-    }
-
     /** Borrowed slot candidates; callers perform their exact shape test before side effects. */
     public query(minX: number, minZ: number, maxX: number, maxZ: number, category: number, output: SpatialQuery): void {
         output.count = output.visited = 0;

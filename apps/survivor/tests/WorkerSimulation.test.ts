@@ -13,6 +13,8 @@ import { WORKER_TIMEOUT_MS, type CombatResponse, type QueryRequest } from "../sr
 import { startNodeWorker } from "./helpers/nodeWorker";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
 import { workerBudget } from "../src/worker/WorkerBudget";
+import { EffectKind } from "../src/core/CombatEffects";
+import { prepareProjectileFixture } from "./helpers/ProjectileFixture";
 
 const workers: Worker[] = [], pools: ProjectileWorkerPool[] = [];
 afterEach(async () => { vi.useRealTimers(); for (const pool of pools.splice(0)) pool.dispose(); await Promise.all(workers.splice(0).map(worker => worker.terminate())); });
@@ -57,10 +59,10 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     const batch = new ProjectileBatch(); batch.count = 2; batch.enemyCount = 2;
     batch.enemyIds.set([9002, 9001]); batch.enemyX.fill(2); batch.enemyRadius.fill(.5);
     batch.endX.fill(4); batch.targets.fill(123);
-    batch.prepare();
+    prepareProjectileFixture(batch);
     resolveProjectileRange(batch, 1, 2); resolveProjectileRange(batch, 0, 1);
     expect(Array.from(batch.targets.slice(0, 2))).toEqual([9001, 9001]);
-    batch.enemyCount = 0; batch.prepare(); await pool.resolve(batch);
+    batch.enemyCount = 0; prepareProjectileFixture(batch); await pool.resolve(batch);
     expect(Array.from(batch.targets.slice(0, 2))).toEqual([0, 0]);
     expect(pool.localBatches).toBe(1);
 });
@@ -95,7 +97,7 @@ test("the phase barrier waits for both disjoint results even when the second ran
     const pool = new ProjectileWorkerPool(ports); pools.push(pool);
     const batch = new ProjectileBatch(); batch.count = 128; batch.enemyCount = 640;
     batch.enemyIds.fill(100); batch.enemyX.fill(2); batch.enemyRadius.fill(.5); batch.endX.fill(4); batch.targets.fill(123);
-    batch.prepare();
+    prepareProjectileFixture(batch);
     let committed = false;
     const result = pool.resolve(batch).then(() => { committed = true; });
     expect(replies).toHaveLength(2);
@@ -125,13 +127,37 @@ test("render buffers alternate across transfer boundaries without detaching ECS 
     transport.dispose();
 });
 
+test("far-world chest and effect positions survive transfer without moving their gameplay locations", () => {
+    const origin = 2 ** 25;
+    const combat = new CombatSimulation("review-coordinates", { x: origin, z: origin });
+    const fixture = combat as unknown as { entities: CombatWorld; world: RegionalWorld; playerX: number; playerZ: number; openNearbyChest(): void };
+    const chunk = [...fixture.world.chunks.values()].find(value => value.band === "near" && value.chest)!;
+    const chest = chunk.chest!;
+    const { effects } = fixture.entities;
+    effects.add(EffectKind.Lightning, 1, origin + .3, -origin - .7, .45, 1, origin + .9, -origin - .2);
+    const packet = new RenderFrame().write(combat.getRenderState());
+    const transferred = structuredClone(packet, { transfer: [packet.buffer] });
+    const state = new RenderFrame(transferred.buffer).read(transferred);
+    expect(state.effects.x[0]).toBe(origin + .3);
+    expect(state.effects.z[0]).toBe(-origin - .7);
+    expect(state.effects.endX[0]).toBe(origin + .9);
+    expect(state.effects.endZ[0]).toBe(-origin - .2);
+    const index = Array.from(state.chests.x.subarray(0, state.chests.count)).indexOf(chest.x);
+    expect(index).toBeGreaterThanOrEqual(0);
+    fixture.playerX = state.chests.x[index]; fixture.playerZ = state.chests.z[index];
+    fixture.openNearbyChest();
+    expect(chunk.chestOpened).toBe(true);
+    expect(combat.getRenderState().chests.count).toBe(state.chests.count - 1);
+    combat.dispose();
+});
+
 test("a missing collision response times out and releases pending lanes", async () => {
     vi.useFakeTimers();
     const close = vi.fn();
     const port = { postMessage: vi.fn(), close } as unknown as MessagePort;
     const pool = new ProjectileWorkerPool([port]); pools.push(pool);
     const batch = new ProjectileBatch(); batch.count = 128; batch.enemyCount = 640;
-    batch.prepare();
+    prepareProjectileFixture(batch);
     const failure = expect(pool.resolve(batch)).rejects.toThrow("timed out");
     await vi.advanceTimersByTimeAsync(WORKER_TIMEOUT_MS);
     await failure;
@@ -153,6 +179,8 @@ test("authority rejects out-of-order requests and oversized batches before advan
 test("terrain, authority and query workers share one explicit CPU budget", () => {
     expect(workerBudget(2)).toEqual({ terrain: 1, queries: 0 });
     expect(workerBudget(4)).toEqual({ terrain: 1, queries: 0 });
-    expect(workerBudget(8)).toEqual({ terrain: 2, queries: 2 });
+    expect(workerBudget(8)).toEqual({ terrain: 2, queries: 0 });
+    expect(workerBudget(8, true)).toEqual({ terrain: 2, queries: 2 });
+    expect(workerBudget(4, true)).toEqual({ terrain: 1, queries: 0 });
     expect(() => workerBudget(0)).toThrow();
 });

@@ -2,6 +2,16 @@ import { describe, expect, test } from "vitest";
 import { MAX_COMBAT_CHUNKS, RegionalWorld, REGION_RULES, hexDistance } from "../src/core/RegionalWorld";
 
 describe("regional ecology", () => {
+    test("positions within the same hex reuse its immutable region, including negative boundaries", () => {
+        const world = new RegionalWorld("region-cache", { x: 10, z: -8 });
+        const current = world.regionAt(10, -8);
+        expect(world.regionAt(10.1, -8.1, current)).toBe(current);
+        const moved = world.regionAt(-30, -8, current);
+        expect(moved).not.toBe(current);
+        expect(moved).toEqual(world.regionAt(-30, -8));
+        expect(world.regionAt(moved.centerX + .1, moved.centerZ + .1, moved)).toBe(moved);
+    });
+
     test("keeps 49 resident chunks, retires ownership and reconstructs consumed populations on reentry", () => {
         const world = new RegionalWorld("residency", { x: 10, z: -8 });
         world.synchronize(10, -8);

@@ -88,7 +88,7 @@ export interface CombatRenderEntities {
     readonly loot: EntityView;
     readonly position: Readonly<CombatWorld["position"]>;
     readonly vitals: Readonly<Pick<CombatWorld["vitals"], "hitFlash">>;
-    readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "level" | "homeX" | "homeZ" | "active" | "enraged">>;
+    readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "homeX" | "homeZ" | "enraged">>;
     readonly status: Readonly<Pick<CombatWorld["status"], "slowUntil">>;
     readonly action: Readonly<Pick<CombatWorld["action"], "kind" | "reach" | "progress">>;
     readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction">>;
@@ -99,8 +99,8 @@ export interface CombatRenderEntities {
 export interface ChestRenderBuffer {
     readonly count: number;
     readonly tiers: Uint8Array;
-    readonly x: Float32Array;
-    readonly z: Float32Array;
+    readonly x: Float64Array;
+    readonly z: Float64Array;
 }
 
 /** Core views borrow ECS storage; presentation views borrow a RenderFrame until its buffer is recycled. */

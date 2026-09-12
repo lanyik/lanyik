@@ -4,6 +4,16 @@ import type { TypedValue } from "./ItemDefinition";
 
 export const SKILL_IDS = ["pulse", "frost", "chain", "dash", "ward"] as const;
 export type SkillId = typeof SKILL_IDS[number];
+/** Shared gameplay rules consumed by the authority and skill descriptions. */
+export const SKILL_RULES = Object.freeze({
+    chain: Object.freeze({ firstRange: 7, jumpRange: 4, damageRetention: .8, baseTargets: 3, ranksPerTarget: 2 }),
+    dash: Object.freeze({ durationSeconds: .25 }),
+    ward: Object.freeze({ durationSeconds: 6, automaticHealthRatio: .6 }),
+    frost: Object.freeze({ slowScale: .5 })
+});
+export function chainTargets(rank: number): number {
+    return SKILL_RULES.chain.baseTargets + Math.floor(rank / SKILL_RULES.chain.ranksPerTarget);
+}
 export interface SkillDefinition extends TypedValue<"skill", SkillId> {
     readonly school: string; readonly role: string;
     readonly name: string; readonly description: string; readonly color: string;
@@ -34,7 +44,7 @@ export function skillValues(id: SkillId, rank: number, stats: DerivedStats) {
     return { mana: SKILLS[id].mana, cooldown: SKILLS[id].cooldown / (1 + stats.castSpeed),
         damage: id === "pulse" ? 1.3 + .2 * (rank - 1) : id === "frost" ? .8 + .15 * (rank - 1) : 1.6 + .2 * (rank - 1),
         radius: id === "pulse" ? 3.2 + .15 * (rank - 1) : 4,
-        slowSeconds: 2.5 + .3 * (rank - 1), targets: 3 + Math.floor(rank / 2),
+        slowSeconds: 2.5 + .3 * (rank - 1), targets: chainTargets(rank),
         dashDistance: 3.8 + .35 * (rank - 1), ward: Math.round(stats.maxHealth * (.25 + .04 * (rank - 1))) };
 }
 export const DEFAULT_LOADOUT: readonly SkillId[] = Object.freeze(SKILL_IDS.slice(0, GAME_CONFIG.skills.slots));

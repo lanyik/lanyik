@@ -1,10 +1,10 @@
 import { ticksForSeconds } from "../src/core/GameConfig";
 import { enemySamples } from "./helpers/EntitySamples";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import type { MovementInput } from "../src/core/CombatState";
 import { GAME_CONFIG, MAX_ENEMIES } from "../src/core/GameConfig";
-import { MAX_COMBAT_CHUNKS } from "../src/core/RegionalWorld";
+import { MAX_COMBAT_CHUNKS, type RegionalWorld } from "../src/core/RegionalWorld";
 
 const movementAt = (step: number): MovementInput => {
     const angle = step / ticksForSeconds(3);
@@ -12,6 +12,26 @@ const movementAt = (step: number): MovementInput => {
 };
 
 describe("CombatSimulation", () => {
+    test("stationary ticks reuse region and chest presentation data, then publish changed residency", () => {
+        const combat = new CombatSimulation("region-presentation-cache");
+        const fixture = combat as unknown as { world: RegionalWorld; playerX: number; playerZ: number;
+            autoCast: boolean; attackCooldown: number; refreshChests(): void };
+        fixture.autoCast = false; fixture.attackCooldown = 1000;
+        const regionCreation = vi.spyOn(fixture.world, "regionAtHex"), chestRefresh = vi.spyOn(fixture, "refreshChests");
+        const nearby = combat.getSnapshot().nearbyRegions;
+        combat.step({ x: 0, z: 0, active: false });
+        expect(combat.getSnapshot().nearbyRegions).toBe(nearby);
+        expect(regionCreation).not.toHaveBeenCalled();
+        expect(chestRefresh).not.toHaveBeenCalled();
+        fixture.playerX += 60;
+        combat.step({ x: 0, z: 0, active: false });
+        expect(combat.getSnapshot().nearbyRegions).not.toBe(nearby);
+        expect(chestRefresh).toHaveBeenCalledOnce();
+        const expected = [...fixture.world.chunks.values()].filter(chunk => chunk.chest && !chunk.chestOpened);
+        expect(combat.getRenderState().chests.count).toBe(expected.length);
+        combat.dispose();
+    });
+
     test("resolves automatic combat against resident enemies in fixed steps", () => {
         const combat = new CombatSimulation("combat-loop");
         for (let step = 0; step < ticksForSeconds(18); step += 1) combat.step(movementAt(step));

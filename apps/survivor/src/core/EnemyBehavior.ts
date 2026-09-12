@@ -1,6 +1,6 @@
 import { BehaviorTree, BehaviorStatus, type BehaviorNode } from "./BehaviorTree";
 import { ActorAction, CombatWorld, Component, MoveIntent } from "./CombatWorld";
-import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, EnemyKind } from "./EnemyDefinitions";
 import { ENEMY_LEASH_DISTANCE, GAME_CONFIG, ticksPerUpdate, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import type { RegionalWorld } from "./RegionalWorld";
@@ -18,11 +18,11 @@ const selector = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> =
 const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Context>(selector(
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
-        && c.distance(s) < (kind === 5 ? 4 : 3.5) && !c.canNova(s)), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
-    ...(kind === 1 ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
+        && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) && !c.canNova(s)), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
+    ...(kind === EnemyKind.Scout ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
-    action((c, s) => c.move(s, kind === 1 ? MoveIntent.Flank : MoveIntent.Chase))
+    action((c, s) => c.move(s, kind === EnemyKind.Scout ? MoveIntent.Flank : MoveIntent.Chase))
 )));
 
 /** Sensing and the shared behavior tree only write intents and action requests. */
@@ -59,7 +59,7 @@ export class EnemyBehavior {
                 cursor++;
                 continue;
             }
-            if (e.active[slot] && e.kind[slot] === 5 && tick >= e.senseAt[slot]) {
+            if (e.active[slot] && e.kind[slot] === EnemyKind.Healer && tick >= e.senseAt[slot]) {
                 this.senseAlly(slot);
                 e.senseAt[slot] = tick + SUPPORT_SENSE_TICKS - (tick - this.entities.world.ids[slot] % SUPPORT_SENSE_TICKS + SUPPORT_SENSE_TICKS) % SUPPORT_SENSE_TICKS;
             }
@@ -93,7 +93,7 @@ export class EnemyBehavior {
             // Stable waypoints do not consume the combat/loot random stream.
             const step = ++e.patrolStep[slot];
             const angle = world.ids[slot] * 2.399963 + step * 2.094395;
-            const radius = ACTIVITY.patrolRadius * (e.boss[slot] ? .5 : e.kind[slot] === 1 ? 1.3 : 1);
+            const radius = ACTIVITY.patrolRadius * (e.boss[slot] ? .5 : e.kind[slot] === EnemyKind.Scout ? 1.3 : 1);
             e.patrolX[slot] = e.homeX[slot] + Math.sin(angle) * radius;
             e.patrolZ[slot] = e.homeZ[slot] + Math.cos(angle) * radius;
             e.patrolWaitUntil[slot] = 0;
@@ -154,13 +154,13 @@ export class EnemyBehavior {
     }
     private canCharge(slot: number): boolean {
         const e = this.entities.enemy;
-        if (e.kind[slot] !== 4 || this.tick < e.specialReadyAt[slot]) return false;
+        if (e.kind[slot] !== EnemyKind.Charger || this.tick < e.specialReadyAt[slot]) return false;
         const distance = this.distance(slot);
         return distance >= ENEMY_SPECIAL.charge.minRange && distance <= ENEMY_SPECIAL.charge.maxRange;
     }
     private canHeal(slot: number): boolean {
         const { enemy: e, vitals: v, world, position: p } = this.entities;
-        if (e.kind[slot] !== 5 || this.tick < e.specialReadyAt[slot]) return false;
+        if (e.kind[slot] !== EnemyKind.Healer || this.tick < e.specialReadyAt[slot]) return false;
         const target = world.resolve(e.supportTarget[slot]);
         return target >= 0 && v.health[target] < v.maxHealth[target] * ENEMY_SPECIAL.heal.threshold
             && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius;
@@ -171,7 +171,7 @@ export class EnemyBehavior {
         let target = -1, lowest: number = ENEMY_SPECIAL.heal.threshold;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const ally = enemies.slots[cursor], ratio = v.health[ally] / v.maxHealth[ally];
-            if (ally === slot || !e.active[ally] || Math.hypot(p.x[ally] - p.x[slot], p.z[ally] - p.z[slot]) > ENEMY_SPECIAL.heal.radius) continue;
+            if (ally === slot || !e.active[ally]) continue;
             if (ratio < lowest || ratio === lowest && target >= 0 && world.ids[ally] < world.ids[target]) { target = ally; lowest = ratio; }
         }
         e.supportTarget[slot] = target < 0 ? 0 : world.ids[target];

@@ -3,7 +3,7 @@ import { EffectKind } from "./CombatEffects";
 import { rollAttack, type DerivedStats } from "./CombatStats";
 import type { DeterministicRandom } from "./DeterministicRandom";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
-import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, skillIndex, skillValues, type SkillId, type SkillSnapshot } from "./Skills";
+import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, chainTargets, skillIndex, skillValues, type SkillId, type SkillSnapshot } from "./Skills";
 
 /** Player skill state lives with the authority; UI and effects never decide hits. */
 export class SkillSystem {
@@ -11,7 +11,7 @@ export class SkillSystem {
     public readonly loadout = [...DEFAULT_LOADOUT];
     private readonly ranks = new Uint8Array(SKILL_IDS.length).fill(1);
     private readonly readyAt = new Float64Array(SKILL_IDS.length);
-    private readonly chainSlots = new Int32Array(3 + Math.floor(GAME_CONFIG.skills.maxRank / 2));
+    private readonly chainSlots = new Int32Array(chainTargets(GAME_CONFIG.skills.maxRank));
     private wardValue = 0;
     private wardUntil = 0;
     private dashUntil = 0;
@@ -61,11 +61,11 @@ export class SkillSystem {
             || v.mana[player] < definition.mana || automatic && !definition.automatic) return false;
         const values = skillValues(id, this.ranks[i], stats), x = p.x[player], z = p.z[player];
         if (id === "ward") {
-            if (this.wardValue > 0 || automatic && v.health[player] / stats.maxHealth > .6) return false;
-            this.wardValue = values.ward; this.wardUntil = tick + ticksForSeconds(6);
+            if (this.wardValue > 0 || automatic && v.health[player] / stats.maxHealth > SKILL_RULES.ward.automaticHealthRatio) return false;
+            this.wardValue = values.ward; this.wardUntil = tick + ticksForSeconds(SKILL_RULES.ward.durationSeconds);
             effects.add(EffectKind.Ward, tick, x, z, 1.2, .8);
         } else if (id === "dash") {
-            const duration = ticksForSeconds(.25);
+            const duration = ticksForSeconds(SKILL_RULES.dash.durationSeconds);
             // Commands apply between ticks: movement occurs on the next `duration` ticks.
             this.dashUntil = tick + duration + 1;
             this.dashX = Math.sin(p.heading[player]) * values.dashDistance / duration;
@@ -74,8 +74,9 @@ export class SkillSystem {
         } else if (id === "chain") {
             let fromX = x, fromZ = z, hits = 0;
             for (; hits < values.targets; hits++) {
-                let nearest = hits === 0 ? 7 * 7 : 4 * 4, target = -1;
-                const enemies = this.entities.queryNearby(Component.Enemy, fromX, fromZ, Math.sqrt(nearest));
+                const range = hits === 0 ? SKILL_RULES.chain.firstRange : SKILL_RULES.chain.jumpRange;
+                let nearest = range * range, target = -1;
+                const enemies = this.entities.queryNearby(Component.Enemy, fromX, fromZ, range);
                 for (let cursor = 0; cursor < enemies.count; cursor++) {
                     const slot = enemies.slots[cursor];
                     let visited = false;
@@ -86,7 +87,7 @@ export class SkillSystem {
                 }
                 if (target < 0) break;
                 this.chainSlots[hits] = target;
-                impacts.add(world.ids[player], world.ids[target], rollAttack(stats, random, values.damage * .8 ** hits).damage);
+                impacts.add(world.ids[player], world.ids[target], rollAttack(stats, random, values.damage * SKILL_RULES.chain.damageRetention ** hits).damage);
                 effects.add(EffectKind.Lightning, tick, fromX, fromZ, .45, .55, p.x[target], p.z[target]);
                 fromX = p.x[target]; fromZ = p.z[target];
             }
@@ -97,7 +98,7 @@ export class SkillSystem {
             for (let cursor = 0; cursor < enemies.count; cursor++) {
                 const slot = enemies.slots[cursor];
                 impacts.add(world.ids[player], world.ids[slot], rollAttack(stats, random, values.damage).damage);
-                if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = .5; }
+                if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = SKILL_RULES.frost.slowScale; }
                 hits++;
             }
             if (!hits && automatic) return false;

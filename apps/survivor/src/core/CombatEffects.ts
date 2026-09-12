@@ -5,8 +5,8 @@ export function effectArrays(create: <T extends Float32Array | Float64Array | Ui
     readonly BYTES_PER_ELEMENT: number; new(length: number): T; new(buffer: ArrayBuffer, offset: number, count: number): T
 }, count: number) => T) {
     const n = GAME_CONFIG.skills.maxEffects;
-    return { kind: create(Uint8Array, n), x: create(Float32Array, n), z: create(Float32Array, n),
-        endX: create(Float32Array, n), endZ: create(Float32Array, n), radius: create(Float32Array, n),
+    return { kind: create(Uint8Array, n), x: create(Float64Array, n), z: create(Float64Array, n),
+        endX: create(Float64Array, n), endZ: create(Float64Array, n), radius: create(Float32Array, n),
         started: create(Float64Array, n), endsAt: create(Float64Array, n) };
 }
 export type EffectBuffer = ReturnType<typeof effectArrays> & { readonly count: number };

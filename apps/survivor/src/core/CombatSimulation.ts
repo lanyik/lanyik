@@ -26,7 +26,7 @@ import { EnemyBehavior } from "./EnemyBehavior";
 import { SimulationTasks } from "./SimulationTasks";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
-import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, type EnemyKind } from "./EnemyDefinitions";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, ENEMY_HIT_RULES, EnemyKind } from "./EnemyDefinitions";
 import { SkillSystem } from "./SkillSystem";
 import { SKILLS, type SkillId } from "./Skills";
 import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, CONSUMABLE_COOLDOWN } from "./GameConfig";
@@ -39,8 +39,8 @@ type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: Pl
 class ChestPool implements ChestRenderBuffer {
     public count = 0;
     public readonly tiers = new Uint8Array(MAX_COMBAT_CHUNKS);
-    public readonly x = new Float32Array(MAX_COMBAT_CHUNKS);
-    public readonly z = new Float32Array(MAX_COMBAT_CHUNKS);
+    public readonly x = new Float64Array(MAX_COMBAT_CHUNKS);
+    public readonly z = new Float64Array(MAX_COMBAT_CHUNKS);
 }
 
 export function experienceForLevel(level: number): number {
@@ -67,6 +67,7 @@ export class CombatSimulation {
     private readonly world: RegionalWorld;
     private readonly chests = new ChestPool();
     private currentRegion: RegionInfo;
+    private nearbyRegions: readonly RegionInfo[];
     private inventory: InventoryItem[] = [];
     private autoClearEquipment = false;
     private clearedEquipment = 0;
@@ -137,6 +138,7 @@ export class CombatSimulation {
                 vitals: this.entities.vitals, enemy: this.entities.enemy, action: this.entities.action,
                 projectile: this.entities.projectile, status: this.entities.status, experienceValue: this.entities.experienceValue, item: this.entities.item } };
         this.currentRegion = this.world.regionAt(start.x, start.z);
+        this.nearbyRegions = this.world.nearbyRegions(this.currentRegion);
         this.playerX = this.previousPlayerX = start.x;
         this.playerZ = this.previousPlayerZ = start.z;
         this.stats = this.calculateStats();
@@ -174,7 +176,7 @@ export class CombatSimulation {
         this.entities.effects.advance(this.tickValue);
         if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
-        if (shifted) { this.reconcileRegions(); this.spawnEnemies(); }
+        if (shifted) { this.reconcileRegions(); this.spawnEnemies(); this.refreshChests(); }
         this.tasks.commitReady(this.tickValue, this.world.revision);
         this.updateCurrentRegion();
         this.fireWeapon();
@@ -241,7 +243,6 @@ export class CombatSimulation {
         const chunks = { near: 0, buffer: 0, retained: 0, total: this.world.chunks.size };
         for (const chunk of this.world.chunks.values()) if (chunk.band !== "unloaded") chunks[chunk.band] += 1;
         let boss: CombatSnapshot["boss"];
-        const nearbyRegions = this.world.nearbyRegions(this.currentRegion);
         for (let cursor = 0; cursor < this.entities.enemies.count; cursor += 1) {
             const index = this.entities.enemies.slots[cursor];
             const region = this.entities.enemy.regions[index]!;
@@ -258,7 +259,7 @@ export class CombatSimulation {
             livingEnemies: this.entities.enemies.count,
             groundEquipment: this.entities.loot.count,
             region: this.currentRegion,
-            nearbyRegions: Object.freeze(nearbyRegions),
+            nearbyRegions: this.nearbyRegions,
             chunks: Object.freeze(chunks),
             openedChests: this.openedChests,
             boss,
@@ -479,9 +480,10 @@ export class CombatSimulation {
     }
 
     private updateCurrentRegion(): void {
-        const region = this.world.regionAt(this.playerX, this.playerZ);
+        const region = this.world.regionAt(this.playerX, this.playerZ, this.currentRegion);
         if (region.x !== this.currentRegion.x || region.z !== this.currentRegion.z) {
             this.currentRegion = region;
+            this.nearbyRegions = this.world.nearbyRegions(region);
             this.pushNotice(region.difficulty === "horror" ? "danger" : "info",
                 "进入 " + REGION_RULES[region.difficulty].name + " · 地域等级 " + region.level);
         }
@@ -530,9 +532,9 @@ export class CombatSimulation {
             this.inventoryFullNotified = false;
             this.pushNotice("loot", rules.name + " · " + (clearEquipment ? "较弱装备已清理" : item.name), clearEquipment ? undefined : item.id);
             this.markChanged();
+            this.refreshChests();
             break;
         }
-        this.refreshChests();
     }
 
     private notifyInventoryFull(type: ItemType): void {
@@ -552,7 +554,7 @@ export class CombatSimulation {
             const dx = this.entities.position.x[index] - this.playerX;
             const dz = this.entities.position.z[index] - this.playerZ;
             const distance = dx * dx + dz * dz;
-            if (distance < nearest || (distance === nearest && target >= 0 && this.entities.world.ids[index] < this.entities.world.ids[target])) {
+            if (distance < nearest || (distance === nearest && (target < 0 || this.entities.world.ids[index] < this.entities.world.ids[target]))) {
                 nearest = distance;
                 target = index;
             }
@@ -592,12 +594,13 @@ export class CombatSimulation {
 
     private hitEnemy(index: number, rolledDamage: number): void {
         const { enemy, action, position } = this.entities;
-        if (enemy.kind[index] === 2 && action.kind[index] < ActorAction.Melee) {
+        if (enemy.kind[index] === EnemyKind.Guard && action.kind[index] < ActorAction.Melee) {
             const dx = this.playerX - position.x[index], dz = this.playerZ - position.z[index], distance = Math.hypot(dx, dz);
             if (distance === 0 || (dx * Math.sin(position.heading[index]) + dz * Math.cos(position.heading[index])) / distance > .5) rolledDamage *= 1 - ENEMY_SPECIAL.guardReduction;
         }
         const elite = this.entities.enemy.elite[index] !== 0;
-        const evasion = this.entities.enemy.boss[index] ? 0.08 : elite ? 0.05 : 0.02;
+        const evasion = this.entities.enemy.boss[index] ? ENEMY_HIT_RULES.evasion.boss
+            : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
         if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return;
         const damage = outgoingDamage(this.stats, rolledDamage, this.entities.vitals.maxHealth[index], elite, this.random.chance(this.stats.lethalChance));
         const healthLost = Math.min(this.entities.vitals.health[index], damage);
@@ -654,8 +657,10 @@ export class CombatSimulation {
         if (this.skills.dashing(this.tickValue)) return;
         this.damageImmunity = .55;
         if (this.random.chance(this.stats.evasion)) return;
+        // The current equipment determines the next recovery; later swaps preserve this countdown.
         if (this.shieldCooldown === 0) { this.shieldCooldown = this.stats.shieldRecovery; return; }
-        const criticalChance = boss ? .22 : elite ? .14 : .06;
+        const criticalChance = boss ? ENEMY_HIT_RULES.criticalChance.boss
+            : elite ? ENEMY_HIT_RULES.criticalChance.elite : ENEMY_HIT_RULES.criticalChance.normal;
         const critical = this.random.chance(Math.max(0, criticalChance - this.stats.criticalResistance));
         const damage = this.skills.absorb(incomingDamage(this.stats, baseDamage, elite, critical, this.random.chance(this.stats.blockChance)));
         const healthLost = Math.min(this.health, damage);
@@ -754,7 +759,6 @@ export class CombatSimulation {
         // Preserve health ratio when switching gear: low-health swaps cannot manufacture healing.
         this.health = Math.min(this.stats.maxHealth, (previousMaximum === this.stats.maxHealth ? this.health : this.health / previousMaximum * this.stats.maxHealth)
             + (healGrowth ? this.stats.maxHealth * 0.12 * (1 + this.stats.regenBonus) : 0));
-        this.shieldCooldown = Math.min(this.shieldCooldown, this.stats.shieldRecovery);
         this.mana = this.mana / previousMana * this.stats.maxMana;
         this.clearAutoEquipment();
     }

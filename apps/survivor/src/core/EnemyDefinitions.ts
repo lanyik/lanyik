@@ -1,5 +1,12 @@
 import { ticksForSeconds } from "./GameConfig";
-export type EnemyKind = 0 | 1 | 2 | 3 | 4 | 5;
+export enum EnemyKind { Grunt, Scout, Guard, Caster, Charger, Healer }
+
+/** Opponent probabilities also bound the useful range of player counter-stats. */
+export const ENEMY_HIT_RULES = Object.freeze({
+    evasion: Object.freeze({ normal: .02, elite: .05, boss: .08 }),
+    criticalChance: Object.freeze({ normal: .06, elite: .14, boss: .22 }),
+    criticalDamageBonus: .6
+});
 
 export interface EnemyDefinition {
     readonly name: string; readonly model: 0 | 1 | 2 | 3; readonly tint: string; readonly ranged: boolean;

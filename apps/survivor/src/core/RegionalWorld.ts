@@ -1,8 +1,9 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
-import type { EnemyKind } from "./EnemyDefinitions";
+import { EnemyKind } from "./EnemyDefinitions";
 
 export const COMBAT_CHUNK_SIZE = 12;
+const COMBAT_CHUNK_HALF_SIZE = COMBAT_CHUNK_SIZE / 2;
 export const REGION_RADIUS = 24;
 export const NEAR_CHUNK_RADIUS = 1;
 export const BUFFER_CHUNK_RADIUS = 2;
@@ -67,18 +68,6 @@ export function hexDistance(x: number, z: number): number { return Math.max(Math
 export function regionCenter(q: number, r: number): { x: number; z: number } {
     return { x: REGION_RADIUS * 1.5 * q, z: REGION_RADIUS * Math.sqrt(3) * (r + q / 2) };
 }
-function regionCoordinates(x: number, z: number): { x: number; z: number } {
-    const q = x / (REGION_RADIUS * 1.5);
-    const r = z / (REGION_RADIUS * Math.sqrt(3)) - q / 2;
-    let rx = Math.round(q);
-    let rz = Math.round(r);
-    const ry = Math.round(-q - r);
-    const dx = Math.abs(rx - q), dz = Math.abs(rz - r), dy = Math.abs(ry + q + r);
-    if (dx > dy && dx > dz) rx = -ry - rz;
-    else if (dz > dy) rz = -rx - ry;
-    return { x: rx, z: rz };
-}
-
 /** Hexagonal content regions and square residency chunks have separate responsibilities. */
 export class RegionalWorld {
     public readonly chunks = new Map<string, RegionalChunk>();
@@ -88,12 +77,19 @@ export class RegionalWorld {
     private centerZ = Infinity;
 
     constructor(private readonly seed: string | number, private readonly origin: { readonly x: number; readonly z: number }) {}
-    public chunkX(x: number): number { return this.origin.x - COMBAT_CHUNK_SIZE / 2 + x * COMBAT_CHUNK_SIZE; }
-    public chunkZ(z: number): number { return this.origin.z - COMBAT_CHUNK_SIZE / 2 + z * COMBAT_CHUNK_SIZE; }
+    public chunkX(x: number): number { return this.origin.x - COMBAT_CHUNK_HALF_SIZE + x * COMBAT_CHUNK_SIZE; }
+    public chunkZ(z: number): number { return this.origin.z - COMBAT_CHUNK_HALF_SIZE + z * COMBAT_CHUNK_SIZE; }
 
-    public regionAt(x: number, z: number): RegionInfo {
-        const hex = regionCoordinates(x - this.origin.x, z - this.origin.z);
-        return this.regionAtHex(hex.x, hex.z);
+    /** Reuse a region from this world while the position remains inside its hex. */
+    public regionAt(x: number, z: number, current?: RegionInfo): RegionInfo {
+        const q = (x - this.origin.x) / (REGION_RADIUS * 1.5);
+        const r = (z - this.origin.z) / (REGION_RADIUS * Math.sqrt(3)) - q / 2;
+        let rx = Math.round(q), rz = Math.round(r);
+        const ry = Math.round(-q - r);
+        const dx = Math.abs(rx - q), dz = Math.abs(rz - r), dy = Math.abs(ry + q + r);
+        if (dx > dy && dx > dz) rx = -ry - rz;
+        else if (dz > dy) rz = -rx - ry;
+        return current && current.x === rx && current.z === rz ? current : this.regionAtHex(rx, rz);
     }
     public regionAtHex(x: number, z: number): RegionInfo {
         const random = new DeterministicRandom(`${this.seed}:region:${x},${z}`);
@@ -114,20 +110,20 @@ export class RegionalWorld {
         return Object.freeze(result);
     }
     public residencyAt(x: number, z: number): ResidencyBand {
-        const distance = Math.max(Math.abs(Math.floor((x - this.origin.x + 6) / COMBAT_CHUNK_SIZE) - this.centerX),
-            Math.abs(Math.floor((z - this.origin.z + 6) / COMBAT_CHUNK_SIZE) - this.centerZ));
+        const distance = Math.max(Math.abs(Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE) - this.centerX),
+            Math.abs(Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE) - this.centerZ));
         return distance <= NEAR_CHUNK_RADIUS ? "near" : distance <= BUFFER_CHUNK_RADIUS ? "buffer"
             : distance <= RETAINED_CHUNK_RADIUS ? "retained" : "unloaded";
     }
     public synchronize(x: number, z: number): boolean {
-        const cx = Math.floor((x - this.origin.x + 6) / COMBAT_CHUNK_SIZE);
-        const cz = Math.floor((z - this.origin.z + 6) / COMBAT_CHUNK_SIZE);
+        const cx = Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
+        const cz = Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
         if (cx === this.centerX && cz === this.centerZ) return false;
         this.revisionValue++;
         this.centerX = cx;
         this.centerZ = cz;
         for (const [key, chunk] of this.chunks) {
-            chunk.band = this.residencyAt(this.chunkX(chunk.x) + 6, this.chunkZ(chunk.z) + 6);
+            chunk.band = this.residencyAt(this.chunkX(chunk.x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(chunk.z) + COMBAT_CHUNK_HALF_SIZE);
             if (chunk.band === "unloaded") { chunk.resident = false; this.chunks.delete(key); }
         }
         for (let ring = 0; ring <= RETAINED_CHUNK_RADIUS; ring += 1) {
@@ -142,15 +138,16 @@ export class RegionalWorld {
     private createChunk(x: number, z: number): RegionalChunk {
         const key = `${x},${z}`;
         const random = new DeterministicRandom(`${this.seed}:chunk:${key}`);
-        const region = this.regionAt(this.chunkX(x) + 6, this.chunkZ(z) + 6);
+        const region = this.regionAt(this.chunkX(x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(z) + COMBAT_CHUNK_HALF_SIZE);
         const spawns: RegionalSpawn[] = [];
         for (let slot = 0; slot < REGION_RULES[region.difficulty].population; slot += 1) {
             const px = this.chunkX(x + 0.08 + random.next() * 0.84);
             const pz = this.chunkZ(z + 0.08 + random.next() * 0.84);
             const ownRegion = this.regionAt(px, pz);
             const elite = random.chance(REGION_RULES[ownRegion.difficulty].eliteChance);
-            const kind = random.pick(ownRegion.difficulty === "normal" ? [0, 0, 1, 4] as const
-                : ownRegion.difficulty === "hard" ? [0, 1, 2, 4, 5] as const : [1, 2, 3, 4, 5] as const);
+            const kind = random.pick(ownRegion.difficulty === "normal" ? [EnemyKind.Grunt, EnemyKind.Grunt, EnemyKind.Scout, EnemyKind.Charger]
+                : ownRegion.difficulty === "hard" ? [EnemyKind.Grunt, EnemyKind.Scout, EnemyKind.Guard, EnemyKind.Charger, EnemyKind.Healer]
+                : [EnemyKind.Scout, EnemyKind.Guard, EnemyKind.Caster, EnemyKind.Charger, EnemyKind.Healer]);
             spawns.push(Object.freeze({ x: px, z: pz, region: ownRegion, kind, elite, boss: false,
                 level: Math.max(1, ownRegion.level + random.integer(3) - 1 + Number(elite)) }));
         }
@@ -159,7 +156,7 @@ export class RegionalWorld {
             if (candidate.centerX < this.chunkX(x) || candidate.centerX >= this.chunkX(x + 1)
                 || candidate.centerZ < this.chunkZ(z) || candidate.centerZ >= this.chunkZ(z + 1)) continue;
             spawns.push(Object.freeze({ x: candidate.centerX, z: candidate.centerZ, region: candidate,
-                kind: 3, elite: true, boss: true, level: candidate.level + 3 }));
+                kind: EnemyKind.Caster, elite: true, boss: true, level: candidate.level + 3 }));
         }
         let chest: RegionalChest | undefined;
         if (random.chance(0.5)) {
@@ -173,6 +170,6 @@ export class RegionalWorld {
             chest = Object.freeze({ x: px, z: pz, region: ownRegion, tier, hasOrb: random.chance(0.35 + CHEST_TIERS.indexOf(tier) * 0.15) });
         }
         return { key, x, z, spawns: Object.freeze(spawns), spawned: new Uint8Array(spawns.length), chest,
-            chestOpened: false, resident: true, band: this.residencyAt(this.chunkX(x) + 6, this.chunkZ(z) + 6) };
+            chestOpened: false, resident: true, band: this.residencyAt(this.chunkX(x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(z) + COMBAT_CHUNK_HALF_SIZE) };
     }
 }
