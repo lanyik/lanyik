@@ -985,11 +985,37 @@
     }
     return { x: x * size * 1.5, y: y * size * Math.sqrt(3) + space };
   }
-  function wait(ms) {
-    return new Promise(function(resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
+
+  // src/shaders/worldNoise.ts
+  var WORLD_NOISE_SCALES = [0.42, 1.07, 0.1, 3, 7, 8, 1.3, 3.2, 6, 12, 0.48, 1.15, 2.2, 5];
+  var WORLD_NOISE_HEADER = `
+precision highp int;
+uniform uvec2 noiseCell[${WORLD_NOISE_SCALES.length}];
+uniform vec2 noiseFraction[${WORLD_NOISE_SCALES.length}];
+const float noiseScale[${WORLD_NOISE_SCALES.length}] = float[${WORLD_NOISE_SCALES.length}](${WORLD_NOISE_SCALES.map((value) => value.toFixed(2)).join(", ")});
+
+float latticeHash(uvec2 cell) {
+    uint value = cell.x * 0x9e3779b9u ^ cell.y * 0x85ebca6bu;
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return float(value >> 8) / 16777216.0;
+}
+
+float worldNoise(vec2 localXZ, int octave, vec2 shift) {
+    vec2 p = localXZ / hexSize * noiseScale[octave] + noiseFraction[octave] + shift;
+    uvec2 cell = noiseCell[octave] + uvec2(ivec2(floor(p)));
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(latticeHash(cell), latticeHash(cell + uvec2(1u, 0u)), u.x),
+        mix(latticeHash(cell + uvec2(0u, 1u)), latticeHash(cell + uvec2(1u)), u.x),
+        u.y
+    );
+}
+`;
 
   // src/shaders/horizonFog.ts
   var HORIZON_FOG_VERTEX_VARYING = `
@@ -1057,11 +1083,8 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // from world position (not per-tile local UVs) so one copy of the texture
 // flows continuously across every fogged tile - the image tiles seamlessly on
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
+uniform vec2 fogPhase;
 uniform float fogTextureSize;
-uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
-uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
-uniform vec2 worldCenter; // camera target on the ground plane
-uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
 in vec3 position;
 
@@ -1123,33 +1146,7 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
-//Move each logical tile to the nearest toroidal image around the camera. This
-//draws the map exactly once instead of submitting 9 complete copies; crossing
-//a seam only moves far/off-screen instances from one side to the other.
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
-
-// Same cheap value noise as the fragment stages. Mountain relief is sampled
-// exclusively in world-space so its extrema are unrelated to hex centres and
-// adjacent tiles agree at every shared vertex.
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 float centerMountainRelief() {
     return style.w;
@@ -1274,10 +1271,9 @@ float mountainMacroReliefAt(vec2 p) {
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
     float macroRelief = mountainMacroReliefAt(p);
     if (macroRelief <= 0.0) return 0.0;
-    vec2 w = tileOffset + p + worldOffset;
-    vec2 terrainP = w / hexSize;
-    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
-    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
+    vec2 w = tileOffset + p;
+    float broad = worldNoise(w, 0, vec2(37.2, 11.8));
+    float fine = worldNoise(w, 1, vec2(-19.4, 53.1));
     float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
     float detailGate = smoothstep(0.08, 0.32, macroRelief);
     return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
@@ -1358,22 +1354,12 @@ float edgeFieldFromMask(float mask, vec3 efA, vec3 efB) {
 // (one NOT in openMask) - 1.0 exactly on such an edge, falling off towards the
 // far side. 0 on a fully-open tile (lake interior: all water). Mirrors
 // isInTileWater() in helpers/rivers.ts - keep the two in sync.
-float lakeShore(float openMask, vec3 efA, vec3 efB) {
-    float s = 0.0;
-    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
-    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
-    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
-    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
-    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
-    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
-    return s;
-}
 
 void main() {
     float apothem = hexSize * 0.8660254;
     vec2 local = position.xz;
-    vec2 tileOffset = nearestWorldOffset(offset);
-    vec2 logicalTileOffset = tileOffset + chunkOrigin;
+    vec2 tileOffset = offset;
+
     float riverEdges = waterEdges.x;
     float riverSeaMouthEdges = waterEdges.y;
     float riverLakeMouthEdges = waterEdges.z;
@@ -1421,12 +1407,7 @@ void main() {
     if (riverEdges >= 0.0) {
         float bedT = 0.0;
         if (riverEdges >= 2048.0) {
-            float openMask = floor((riverEdges - 4096.0) / 64.0);
-            float channelMask = riverEdges - 4096.0 - openMask * 64.0;
             bedT = 1.0;
-            if (channelMask > 0.5) {
-                bedT = max(bedT, riverMouthBedT(local, channelMask, apothem));
-            }
         } else {
             float dRiver = riverChannelDist(local, riverEdges, apothem) / hexSize;
             bedT = 1.0 - smoothstep(riverWidth * 0.5, riverWidth + riverBankWidth, dRiver);
@@ -1457,7 +1438,7 @@ void main() {
     if (reliefInfluence > 0.001) {
         float gate = fogVisible;
         if (gate > 0.0) {
-            elevation = mountainHeightAt(local, logicalTileOffset) * gate;
+            elevation = mountainHeightAt(local, tileOffset) * gate;
             raiseY = elevation * mountainHeight;
             mountainSlope = smoothMountainSlopeAt(local) * gate;
         }
@@ -1514,15 +1495,14 @@ void main() {
     vRiverLakeMouthEdges = riverLakeMouthEdges;
     vLakeNeighborEdges = lakeNeighborEdges;
     vLocal = local;
-    vec2 logicalWorldXZ = pos.xz + chunkOrigin + worldOffset;
-    vWorldXZ = logicalWorldXZ;
+    vWorldXZ = pos.xz;
     // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
     // upright from this map's camera: the camera's azimuth is locked to ~90deg
     // (see HexMap's setupControls), which puts screen-right along world -Z and
     // screen-up along world -X - mapping u to -z and v to -x orients the
     // texture to the screen and keeps it un-mirrored when viewed from above.
     // Negation is free for a seamlessly wrapping texture (just a phase shift).
-    vFogUV = vec2(-logicalWorldXZ.y, -logicalWorldXZ.x) / fogTextureSize;
+    vFogUV = vec2(-pos.z, -pos.x) / fogTextureSize + fogPhase;
 }
 `;
 
@@ -5160,63 +5140,90 @@ void main() {
       y: wrapY ? positiveModulo(best.y, mapHeight) : best.y
     };
   }
-  function terrainArrayLayout(atlas) {
-    const { width, height, cellSize, cellSpacing } = atlas;
-    if (![width, height, cellSize].every((value) => Number.isSafeInteger(value) && value > 0) || !Number.isSafeInteger(cellSpacing) || cellSpacing < 0 || cellSpacing * 2 >= cellSize || width % cellSize !== 0 || height % cellSize !== 0) throw new RangeError("Invalid terrain atlas dimensions");
-    return { size: cellSize - cellSpacing * 2, columns: width / cellSize, layers: width / cellSize * (height / cellSize) };
+  var nextCoordinateOwner = 1;
+  var TAU = Math.PI * 2;
+  function phaseModulo(value, period = TAU) {
+    return (value % period + period) % period;
   }
-  function copyTerrainArrayPixels(atlas, pixels, output) {
-    const { size, columns, layers } = terrainArrayLayout(atlas);
-    if (pixels.length !== atlas.width * atlas.height * 4 || output.length !== size * size * layers * 4) {
-      throw new RangeError("Terrain atlas pixel dimensions do not match its descriptor");
+  function createTerrainTexturePeriod(size, regionSize) {
+    if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(regionSize) || regionSize <= 0) {
+      throw new RangeError("Terrain texture size and region size must be positive finite numbers");
     }
-    for (let layer = 0; layer < layers; layer++) {
-      const x = layer % columns * atlas.cellSize + atlas.cellSpacing;
-      const y = Math.floor(layer / columns) * atlas.cellSize + atlas.cellSpacing;
-      for (let row = 0; row < size; row++) {
-        const start = ((y + size - row - 1) * atlas.width + x) * 4;
-        output.set(pixels.subarray(start, start + size * 4), (layer * size * size + row * size) * 4);
-      }
+    const period = new three.Vector2(size * 1.5 * regionSize, size * Math.sqrt(3) * regionSize);
+    if (![period.x, period.y].every((value) => Number.isFinite(Math.fround(value)) && Math.fround(value) > 0)) {
+      throw new RangeError("Terrain texture periods must be representable as positive finite GPU floats");
     }
+    return period;
   }
-  function loadTerrainArrayTexture(atlas, baseUrl) {
-    const { size, layers } = terrainArrayLayout(atlas);
-    const pixels = new Uint8Array(size * size * layers * 4);
-    const texture = new three.DataArrayTexture(pixels, size, size, layers);
-    texture.name = "terrain-material-layers";
-    texture.generateMipmaps = true;
-    texture.minFilter = three.LinearMipmapLinearFilter;
-    texture.magFilter = three.LinearFilter;
-    texture.wrapS = texture.wrapT = three.MirroredRepeatWrapping;
-    texture.anisotropy = 8;
-    let disposed = false;
-    const ready = new Promise((resolve, reject) => {
-      texture.addEventListener("dispose", () => {
-        disposed = true;
-        resolve();
-      });
-      new three.ImageLoader().setPath(baseUrl).load(atlas.image, (source) => {
-        if (disposed) return;
-        try {
-          if (source.width !== atlas.width || source.height !== atlas.height) throw new RangeError("Terrain atlas image does not match its descriptor");
-          const canvas = document.createElement("canvas");
-          canvas.width = atlas.width;
-          canvas.height = atlas.height;
-          const context = canvas.getContext("2d", { willReadFrequently: true });
-          if (!context) throw new Error("Terrain atlas decoding requires a 2D canvas");
-          context.drawImage(source, 0, 0);
-          copyTerrainArrayPixels(atlas, context.getImageData(0, 0, atlas.width, atlas.height).data, pixels);
-          texture.needsUpdate = true;
-          resolve();
-        } catch (error) {
-          reject(error);
+  var WorldMaterialCoordinates = class {
+    constructor(size, resources) {
+      this.size = size;
+      this.noiseCell = new Uint32Array(WORLD_NOISE_SCALES.length * 2);
+      this.noiseFraction = new Float32Array(WORLD_NOISE_SCALES.length * 2);
+      this.texturePhase = new three.Vector2();
+      this.fogPhase = new three.Vector2();
+      this.macroPhase = new three.Vector2();
+      this.wavePhase = new three.Vector4();
+      this.x = NaN;
+      this.z = NaN;
+      this.textureX = NaN;
+      this.textureZ = NaN;
+      this.fogSize = NaN;
+      this.waveFrequency = NaN;
+      this.reservation = resources?.acquireRequired(
+        `material-coordinates:${nextCoordinateOwner++}`,
+        {},
+        true,
+        [this.noiseCell, this.noiseFraction].map((array) => ({
+          identity: array.buffer,
+          cost: { cpuBytes: array.byteLength }
+        }))
+      );
+    }
+    dispose() {
+      this.reservation?.release();
+    }
+    apply(material, x, z) {
+      const uniforms = material.uniforms;
+      const textureSize = uniforms.terrainTextureWorldSize.value;
+      const fogSize = uniforms.fogTextureSize.value;
+      const waveFrequency = uniforms.waveFrequency?.value;
+      if (x !== this.x || z !== this.z || textureSize.x !== this.textureX || textureSize.y !== this.textureZ || fogSize !== this.fogSize || waveFrequency !== this.waveFrequency) {
+        for (let index = 0; index < WORLD_NOISE_SCALES.length; index++) {
+          const frequency = WORLD_NOISE_SCALES[index];
+          const nx = x / this.size * frequency, nz = z / this.size * frequency;
+          this.noiseCell[index * 2] = Math.floor(nx) >>> 0;
+          this.noiseCell[index * 2 + 1] = Math.floor(nz) >>> 0;
+          this.noiseFraction[index * 2] = nx - Math.floor(nx);
+          this.noiseFraction[index * 2 + 1] = nz - Math.floor(nz);
         }
-      }, void 0, () => {
-        if (!disposed) reject(new Error(`Terrain atlas image load failed: ${atlas.image}`));
-      });
-    });
-    return { texture, ready };
-  }
+        this.texturePhase.set(phaseModulo(x / textureSize.x, 2), phaseModulo(z / textureSize.y, 2));
+        this.fogPhase.set(phaseModulo(-z / fogSize, 1), phaseModulo(-x / fogSize, 1));
+        const macroSize = this.size * 4;
+        this.macroPhase.set(phaseModulo((x * 0.73 + z * 1.21) / macroSize), phaseModulo((x * -1.37 + z * 0.61) / macroSize + 1.9));
+        if (waveFrequency !== void 0) {
+          let frequency = waveFrequency;
+          for (let index = 0; index < 4; index++) {
+            const angle = 0.4 + index * 2.399963;
+            this.wavePhase.setComponent(index, phaseModulo((Math.cos(angle) * x + Math.sin(angle) * z) * frequency));
+            frequency *= 1.8;
+          }
+        }
+        this.x = x;
+        this.z = z;
+        this.textureX = textureSize.x;
+        this.textureZ = textureSize.y;
+        this.fogSize = fogSize;
+        this.waveFrequency = waveFrequency;
+      }
+      uniforms.noiseCell.value = this.noiseCell;
+      uniforms.noiseFraction.value = this.noiseFraction;
+      uniforms.texturePhase.value = this.texturePhase;
+      uniforms.fogPhase.value = this.fogPhase;
+      uniforms.macroPhase.value = this.macroPhase;
+      uniforms.wavePhase.value = this.wavePhase;
+    }
+  };
 
   // src/enums.ts
   var Land = /* @__PURE__ */ ((Land2) => {
@@ -5256,6 +5263,90 @@ void main() {
     UnitActions2["defence"] = "defence";
     return UnitActions2;
   })(UnitActions || {});
+
+  // src/rendering/TerrainArrayTexture.ts
+  function terrainArrayLayout(atlas) {
+    const { width, height, cellSize, cellSpacing } = atlas;
+    if (![width, height, cellSize].every((value) => Number.isSafeInteger(value) && value > 0) || !Number.isSafeInteger(cellSpacing) || cellSpacing < 0 || cellSpacing * 2 >= cellSize || width % cellSize !== 0 || height % cellSize !== 0) throw new RangeError("Invalid terrain atlas dimensions");
+    return { size: cellSize - cellSpacing * 2, columns: width / cellSize, layers: width / cellSize * (height / cellSize) };
+  }
+  function copyTerrainArrayPixels(atlas, pixels, output) {
+    const { size, columns, layers } = terrainArrayLayout(atlas);
+    if (pixels.length !== atlas.width * atlas.height * 4 || output.length !== size * size * layers * 4) {
+      throw new RangeError("Terrain atlas pixel dimensions do not match its descriptor");
+    }
+    for (let layer = 0; layer < layers; layer++) {
+      const x = layer % columns * atlas.cellSize + atlas.cellSpacing;
+      const y = Math.floor(layer / columns) * atlas.cellSize + atlas.cellSpacing;
+      for (let row = 0; row < size; row++) {
+        const start = ((y + size - row - 1) * atlas.width + x) * 4;
+        output.set(pixels.subarray(start, start + size * 4), (layer * size * size + row * size) * 4);
+      }
+    }
+  }
+  function terrainAtlasCellIndices(atlas) {
+    const { columns, layers } = terrainArrayLayout(atlas);
+    const rows = layers / columns;
+    const indices = {};
+    for (const type of Object.values(Land)) {
+      const cell = atlas.textures?.[type];
+      if (!cell || !Number.isSafeInteger(cell.cellX) || !Number.isSafeInteger(cell.cellY) || cell.cellX < 0 || cell.cellX >= columns || cell.cellY < 0 || cell.cellY >= rows) {
+        throw new RangeError(`Terrain atlas requires a valid cell for ${type}`);
+      }
+      indices[type] = cell.cellY * columns + cell.cellX;
+    }
+    return indices;
+  }
+  function loadTerrainArrayTexture(atlas, baseUrl, anisotropy, signal) {
+    const { size, layers } = terrainArrayLayout(atlas);
+    const pixels = new Uint8Array(size * size * layers * 4);
+    const texture = new three.DataArrayTexture(pixels, size, size, layers);
+    texture.name = "terrain-material-layers";
+    texture.generateMipmaps = true;
+    texture.minFilter = three.LinearMipmapLinearFilter;
+    texture.magFilter = three.LinearFilter;
+    texture.wrapS = texture.wrapT = three.MirroredRepeatWrapping;
+    texture.anisotropy = anisotropy;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal?.reason);
+    const dispose = () => controller.abort(new DOMException("Terrain atlas disposed", "AbortError"));
+    texture.addEventListener("dispose", dispose);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    let rejectAbort;
+    const aborted = new Promise((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    const onAbort = () => rejectAbort(controller.signal.reason);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    if (controller.signal.aborted) onAbort();
+    const decode = async () => {
+      controller.signal.throwIfAborted();
+      const response = await fetch(baseUrl + atlas.image, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Terrain atlas image load failed: ${atlas.image} (HTTP ${response.status})`);
+      const source = await createImageBitmap(await response.blob());
+      try {
+        controller.signal.throwIfAborted();
+        if (source.width !== atlas.width || source.height !== atlas.height) throw new RangeError("Terrain atlas image does not match its descriptor");
+        const canvas = document.createElement("canvas");
+        canvas.width = atlas.width;
+        canvas.height = atlas.height;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) throw new Error("Terrain atlas decoding requires a 2D canvas");
+        context.drawImage(source, 0, 0);
+        copyTerrainArrayPixels(atlas, context.getImageData(0, 0, atlas.width, atlas.height).data, pixels);
+        texture.needsUpdate = true;
+      } finally {
+        source.close();
+      }
+    };
+    const ready = Promise.race([decode(), aborted]).finally(() => {
+      signal?.removeEventListener("abort", cancel);
+      controller.signal.removeEventListener("abort", onAbort);
+      texture.removeEventListener("dispose", dispose);
+    });
+    return { texture, ready };
+  }
   var SharedBaseInstancedBufferGeometry = class extends three.InstancedBufferGeometry {
     constructor(base, attributeNames) {
       super();
@@ -5694,11 +5785,12 @@ void main() {
   var GROUND_PROJECTION_HEADER = `
 uniform sampler2D groundProjectionMap;
 uniform vec4 groundProjectionBounds;
+uniform vec2 groundProjectionChunkOffset;
 uniform float groundProjectionEnabled;
 
 vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
     if (groundProjectionEnabled < 0.5) return color;
-    vec2 uv = (worldXZ - groundProjectionBounds.xy) / groundProjectionBounds.zw;
+    vec2 uv = (worldXZ + groundProjectionChunkOffset - groundProjectionBounds.xy) / groundProjectionBounds.zw;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return color;
     vec4 decal = texture(groundProjectionMap, vec2(uv.x, 1.0 - uv.y));
     // Normal stamps accumulate premultiplied colour/coverage. Additive stamps preserve coverage.
@@ -5708,10 +5800,7 @@ vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
 
   // src/shaders/terrain.fragment.ts
   var TERRAIN_FRAGMENT_SHADER = `
-// highp, not mediump: the river noise hash (hash21's fract(sin(x) * 43758...))
-// is fed world-space coordinates in the hundreds/thousands - at fp16 precision
-// it collapses into structured streak garbage. The water shader already runs
-// highp for the same reason (its foam uses the same hash).
+// Chunk-local coordinates retain fine material detail; lattice IDs use integer precision.
 precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
@@ -5723,6 +5812,8 @@ vec2 terrainGradientX;
 vec2 terrainGradientY;
 out vec4 terrainColor;
 uniform vec2 terrainTextureWorldSize;
+uniform vec2 texturePhase;
+uniform vec2 macroPhase;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
 uniform float landBlendEnabled;
@@ -5845,20 +5936,7 @@ vec3 landformDebugColor() {
 
 // Cheap value noise, same recipe as water.fragment.ts's - keeps the land
 // layer texture-free for rivers too (no extra noise texture to load).
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 // Same channel-centerline distance as terrain.vertex.ts's riverChannelDist()
 // (and helpers/rivers.ts's CPU mirror) - see the comments there. Duplicated
@@ -5918,30 +5996,15 @@ vec4 riverMouthShape(vec2 p, float mask, float apothem, float bendOff) {
     return outShape;
 }
 
-// Lake shore factor - see terrain.vertex.ts's identical helper (and its CPU
-// mirror in helpers/rivers.ts): closeness to the nearest *shored* edge, 1.0
-// exactly on it, 0 on a fully-open lake-interior tile.
-float lakeShore(float openMask, vec3 efA, vec3 efB) {
-    float s = 0.0;
-    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
-    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
-    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
-    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
-    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
-    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
-    return s;
-}
-
 // One continuous low-frequency field bends the world-space UVs and modulates
 // their tone. All terrain types share this pattern, so biome blends stay
 // registered. It deliberately adds ALU only: sampleTerrainCell still performs
 // exactly one atlas lookup, preserving the texture-fetch budget.
 vec3 terrainPattern() {
-    vec2 macroP = vWorldXZ / max(hexSize * 10.0, 1.0) + vec2(13.7, -8.2);
-    float macro = valueNoise(macroP);
+    float macro = worldNoise(vWorldXZ, 2, vec2(13.7, -8.2));
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
+    return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
@@ -6101,8 +6164,8 @@ vec2 coastField() {
 // part of the sea that the land shader paints when a curved coastline pushes
 // water inland onto a land tile.
 float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
-    float n = valueNoise(worldXZ * (3.0 / hexSize) + vec2(0.0, t * 0.2));
-    n = 0.5 * n + 0.5 * valueNoise(worldXZ * (7.0 / hexSize) - vec2(t * 0.15, 0.0));
+    float n = worldNoise(worldXZ, 3, vec2(0.0, t * 0.2));
+    n = 0.5 * n + 0.5 * worldNoise(worldXZ, 4, - vec2(t * 0.15, 0.0));
     float distort = (n - 0.5) * foamDistortion;
 
     float phase = fract(shoreDist * foamCount + t * foamSpeed + distort * 2.0);
@@ -6137,9 +6200,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
         // meanders the border position, a finer one modulates its strength into
         // patches (like the river banks' bankPatchiness below).
-        float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
+        float blendNoise = worldNoise(vWorldXZ, 3, vec2(0.0));
         float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
-        float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
+        float blendPatch = clamp(0.6 + 0.8 * worldNoise(vWorldXZ, 5, vec2(0.0)), 0.0, 1.0);
 
         texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch, materialPattern); // SE
         texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch, materialPattern); // S
@@ -6164,8 +6227,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     vec2 coastFK = coastField();
     float coast = coastFK.x;
     if (coast > 0.0) {
-        float cn = valueNoise(vWorldXZ * (1.3 / hexSize));
-        cn = 0.6 * cn + 0.4 * valueNoise(vWorldXZ * (3.2 / hexSize));
+        float cn = worldNoise(vWorldXZ, 6, vec2(0.0));
+        cn = 0.6 * cn + 0.4 * worldNoise(vWorldXZ, 7, vec2(0.0));
         float f = coast + cn * coastCurvature * 0.5;
 
         // sand beach: replaces the old vBeachT vertex blend with the same
@@ -6195,8 +6258,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             vec3 shoreCol = mix(seaColorShallow, vec3(1.0), 0.5);
             vec3 seaColor = mix(seaBase, shoreCol, shoreT);
             float t = uTime;
-            float ripple = valueNoise(vWorldXZ * (6.0 / hexSize) + vec2(t * 0.35, t * 0.2));
-            ripple = 0.5 * ripple + 0.5 * valueNoise(vWorldXZ * (12.0 / hexSize) - vec2(t * 0.25, t * 0.4));
+            float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
+            ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
             seaColor *= 0.85 + 0.3 * ripple;
             texColor = mix(texColor, vec4(seaColor, 1.0), seaT);
 
@@ -6217,9 +6280,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     // lowers the line without replacing lowland tiles with white hexes. A
     // warped world-space threshold breaks constant-height rings around ridges.
     if (vLandform.x > 0.0) {
-        float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
+        float snowNoise = worldNoise(vWorldXZ, 10, vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
-            + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
+            + 0.3 * worldNoise(vWorldXZ, 11, vec2(-11.4, 9.2));
         float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
         float snowLine = 0.74 - climateDrop + (snowNoise - 0.5) * 0.18;
         float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
@@ -6240,8 +6303,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 
         // static two-octave world-space noise bends the waterline: the curved,
         // "hand-drawn" banks instead of ruler-straight strips/hex-edge rims.
-        float bend = valueNoise(vWorldXZ * (2.2 / hexSize));
-        bend = 0.6 * bend + 0.4 * valueNoise(vWorldXZ * (5.0 / hexSize));
+        float bend = worldNoise(vWorldXZ, 12, vec2(0.0));
+        bend = 0.6 * bend + 0.4 * worldNoise(vWorldXZ, 13, vec2(0.0));
         float bendOff = (bend - 0.5) * riverCurvature * 0.6;
 
         float waterT = 0.0; // 1 = water surface
@@ -6278,8 +6341,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         if (mask < 2048.0 && lakeNeighborMask > 0.5) {
             float lakeField = lakeNeighborField(lakeNeighborMask);
             if (lakeField > 0.0) {
-                float lakeNoise = valueNoise(vWorldXZ * (1.3 / hexSize));
-                lakeNoise = 0.6 * lakeNoise + 0.4 * valueNoise(vWorldXZ * (3.2 / hexSize));
+                float lakeNoise = worldNoise(vWorldXZ, 6, vec2(0.0));
+                lakeNoise = 0.6 * lakeNoise + 0.4 * worldNoise(vWorldXZ, 7, vec2(0.0));
                 float fLake = lakeField + lakeNoise * coastCurvature * 0.5;
                 float s0Lake = 1.0 - clamp(lakeShoreWidth, 0.001, 1.0);
                 float lakeBankT = smoothstep(s0Lake, 1.0, fLake);
@@ -6294,7 +6357,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // waterline, its own strength varied by a finer noise so it reads as
         // patchy growth instead of a uniform outline. The water below
         // overdraws its inner part, leaving the band hugging the waterline.
-        float bankPatchiness = 0.55 + 0.45 * valueNoise(vWorldXZ * (8.0 / hexSize));
+        float bankPatchiness = 0.55 + 0.45 * worldNoise(vWorldXZ, 5, vec2(0.0));
         texColor = mix(texColor, vec4(riverBankColor, 1.0), bankT * bankPatchiness);
 
         // water: shallow color at the waterline deepening inward, brightness
@@ -6305,8 +6368,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             waterColor = mix(waterColor, seaColorShallow, seaMouthT);
 
             float t = uTime * riverFlowSpeed;
-            float ripple = valueNoise(vWorldXZ * (6.0 / hexSize) + vec2(t * 0.35, t * 0.2));
-            ripple = 0.5 * ripple + 0.5 * valueNoise(vWorldXZ * (12.0 / hexSize) - vec2(t * 0.25, t * 0.4));
+            float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
+            ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
             waterColor *= 0.85 + 0.3 * ripple;
 
             texColor = mix(texColor, vec4(waterColor, 1.0), waterT);
@@ -6347,6 +6410,8 @@ vec2 terrainGradientY;
 out vec4 terrainColor;
 uniform sampler2D fogMap;
 uniform vec2 terrainTextureWorldSize;
+uniform vec2 texturePhase;
+uniform vec2 macroPhase;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
 uniform float fogDarkenFactor;
@@ -6408,17 +6473,17 @@ vec3 landformDebugColor() {
 // Fast mode keeps the same single texture lookup. Two broad sine waves replace
 // full value noise, providing a cheap continuous UV bend and material tint.
 vec3 terrainPattern() {
-    vec2 p = vWorldXZ / max(hexSize * 4.0, 1.0);
+    vec2 p = vWorldXZ / (hexSize * 4.0);
     float macro = clamp(
         0.5
-            + 0.25 * sin(dot(p, vec2(0.73, 1.21)))
-            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + 1.9),
+            + 0.25 * sin(dot(p, vec2(0.73, 1.21)) + macroPhase.x)
+            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + macroPhase.y),
         0.0,
         1.0
     );
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
+    return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
@@ -6537,7 +6602,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
   var WATER_VERTEX_SHADER = `
 precision highp float;
 
-${HORIZON_FOG_VERTEX_VARYING}
+${HORIZON_FOG_VERTEX_VARYING.replace(/varying /g, "out ")}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -6551,6 +6616,8 @@ uniform float waterLevel; // rest height of the water plane (usually negative, b
 uniform float waveAmplitude;
 uniform float waveFrequency;
 uniform float waveSpeed;
+uniform vec4 wavePhase;
+uniform vec2 fogPhase;
 
 // Beach: waterLevel is where the water plane sits, waveAmplitude/etc animate it -
 // but near an actual coastline (a land-adjacent edge/corner, see coastalFactor()
@@ -6562,37 +6629,33 @@ uniform float waveSpeed;
 uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
-uniform vec2 worldOffset; // translation of a repeated toroidal world copy
-uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
-uniform vec2 worldCenter;
-uniform vec2 worldPeriod;
 
-attribute vec3 position;
-attribute vec2 uv;
+in vec3 position;
+in vec2 uv;
 
-attribute vec2 offset;
-attribute vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
-attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
-attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
-attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
-attribute vec3 neighborsKindB; // NW/N/NE
-attribute vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
+in vec2 offset;
+in vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
+in vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
+in vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
+in vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
+in vec3 neighborsKindB; // NW/N/NE
+in vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA; // SE, S, SW
-varying vec3 vEdgeFactorsB; // NW, N, NE
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBeachT; // 0 = open water, 1 = right at the shore (see terrain.fragment.ts's vBeachT)
-varying float vShoreT; // like vBeachT but unsquashed by beachWidth: raw 0 (tile center) .. 1 (land edge) coastal distance, 0 on tiles with no land neighbor - drives the foam bands in water.fragment.ts
-varying float vFogState;
-varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
+out vec2 vUV;
+out float vBorder;
+out float vPriority;
+out vec3 vNeighborsPriorityA;
+out vec3 vNeighborsPriorityB;
+out vec3 vNeighborsKindA;
+out vec3 vNeighborsKindB;
+out vec3 vEdgeFactorsA; // SE, S, SW
+out vec3 vEdgeFactorsB; // NW, N, NE
+out vec3 vNormal;
+out vec3 vWorldPos;
+out float vBeachT; // 0 = open water, 1 = right at the shore (see terrain.fragment.ts's vBeachT)
+out float vShoreT; // like vBeachT but unsquashed by beachWidth: raw 0 (tile center) .. 1 (land edge) coastal distance, 0 on tiles with no land neighbor - drives the foam bands in water.fragment.ts
+out float vFogState;
+out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -6603,12 +6666,6 @@ const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
 const float GOLDEN_ANGLE = 2.399963; // ~137.5 deg, keeps summed waves from lining up
 
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
 
 // Sum of sine waves (NVIDIA GPU Gems ocean approach): height is a sum of sines
 // of the world-space position; the *derivative* of a sine is a cosine of the
@@ -6626,7 +6683,7 @@ vec3 waveHeightAndSlope(vec2 worldXZ, float t) {
 
     for (int i = 0; i < 4; i++) {
         vec2 dir = vec2(cos(dirAngle), sin(dirAngle));
-        float phase = dot(dir, worldXZ) * freq + t * speed;
+        float phase = dot(dir, worldXZ) * freq + wavePhase[i] + t * speed;
 
         height += amp * sin(phase);
         slope += dir * (amp * freq * cos(phase));
@@ -6704,8 +6761,8 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 tileOffset = nearestWorldOffset(offset);
-    vec2 worldXZ = tileOffset + chunkOrigin + position.xz + worldOffset;
+    vec2 tileOffset = offset;
+    vec2 worldXZ = tileOffset + position.xz;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -6736,7 +6793,7 @@ void main() {
     vHorizonFogDepth = -mvPosition.z;
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
-    vWorldPos = pos + vec3(chunkOrigin.x + worldOffset.x, 0.0, chunkOrigin.y + worldOffset.y);
+    vWorldPos = pos;
 
     // Rim distance for the grid line - see terrain.vertex.ts's rimFactor
     // comment: radial distance from center is wrong for a hexagon (it dips to
@@ -6759,15 +6816,16 @@ void main() {
     // Same upright-for-the-camera mapping as terrain.vertex.ts's vFogUV -
     // u along world -Z, v along world -X - so land and water sample the fog
     // texture identically and it stays continuous across the two layers.
-    vFogUV = vec2(-worldXZ.y, -worldXZ.x) / fogTextureSize;
+    vFogUV = vec2(-worldXZ.y, -worldXZ.x) / fogTextureSize + fogPhase;
 }
 `;
 
   // src/shaders/water.fragment.ts
   var WATER_FRAGMENT_SHADER = `
 precision highp float;
+out vec4 waterColor;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
 // Curved coastline (see terrain.fragment.ts's coast block - this is its water
 // side): the shore-distance field is recomputed per-pixel and bent by the SAME
@@ -6782,7 +6840,7 @@ uniform float waterCornerRounding;
 uniform float coastCurvature;
 uniform float beachWidth;
 
-${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
+${GROUND_PROJECTION_HEADER}
 
 uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
@@ -6793,8 +6851,7 @@ uniform float gridWidth;
 uniform float gridOpacity;
 
 uniform vec3 lightDir;
-uniform vec3 cameraPosition; // auto-provided by three.js each frame
-uniform vec2 cameraWorldOffset; // floating-origin logical offset (infinite worlds)
+uniform vec3 chunkCameraPosition;
 
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
@@ -6818,21 +6875,21 @@ uniform float foamRange;      // how far out from the shore bands reach (0..1 of
 uniform float foamDistortion; // 0..1, how strongly noise bends/breaks the bands
 uniform float foamOpacity;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBeachT;
-varying float vShoreT;
-varying float vFogState;
-varying vec2 vFogUV;
+in vec2 vUV;
+in float vBorder;
+in float vPriority;
+in vec3 vNeighborsPriorityA;
+in vec3 vNeighborsPriorityB;
+in vec3 vNeighborsKindA;
+in vec3 vNeighborsKindB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec3 vNormal;
+in vec3 vWorldPos;
+in float vBeachT;
+in float vShoreT;
+in float vFogState;
+in vec2 vFogUV;
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -6851,20 +6908,7 @@ vec2 strongestWaterEdge(vec2 best, float kind, float priority, float factor) {
 
 // Cheap value noise - stands in for the article's scrolling noise texture
 // (keeps the shader texture-free like the rest of this water layer).
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 // Same corner treatment as water.vertex.ts's roundedCorner() - duplicated per
 // pixel here so the bent waterline works with the rounded field, not the
@@ -6879,7 +6923,7 @@ float roundedCorner(float isLandA, float isLandB, float dA, float dB) {
 // Per-pixel shore-distance field: mirrors water.vertex.ts's coastal factor
 // (straight per-edge max + rounded corners), 1.0 exactly on an edge shared
 // with land, 0 on tiles without land neighbors. Kinds are re-rounded first -
-// varying interpolation is not exact even for per-instance-constant values.
+// Varying interpolation is not exact even for per-instance-constant values.
 float shoreField() {
     vec3 kA = floor(vNeighborsKindA + 0.5);
     vec3 kB = floor(vNeighborsKindB + 0.5);
@@ -6926,8 +6970,8 @@ float shoreField() {
 float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
     // ~3 noise cells per tile radius; the second, slowly scrolling octave
     // keeps the tear pattern itself alive instead of frozen in world space.
-    float n = valueNoise(worldXZ * (3.0 / hexSize) + vec2(0.0, t * 0.2));
-    n = 0.5 * n + 0.5 * valueNoise(worldXZ * (7.0 / hexSize) - vec2(t * 0.15, 0.0));
+    float n = worldNoise(worldXZ, 3, vec2(0.0, t * 0.2));
+    n = 0.5 * n + 0.5 * worldNoise(worldXZ, 4, - vec2(t * 0.15, 0.0));
     float distort = (n - 0.5) * foamDistortion;
 
     // 1) travelling bands
@@ -6951,8 +6995,8 @@ void main() {
     // (see terrain.vertex.ts's comment), so the texture flows seamlessly
     // across neighboring fogged tiles instead of restarting per hex.
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        waterColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         return;
     }
 
@@ -6984,8 +7028,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     float shore = shoreField();
     float fBent = 0.0;
     if (shore > 0.0) {
-        float cn = valueNoise(vWorldPos.xz * (1.3 / hexSize));
-        cn = 0.6 * cn + 0.4 * valueNoise(vWorldPos.xz * (3.2 / hexSize));
+        float cn = worldNoise(vWorldPos.xz, 6, vec2(0.0));
+        cn = 0.6 * cn + 0.4 * worldNoise(vWorldPos.xz, 7, vec2(0.0));
         fBent = shore - cn * coastCurvature * 0.5;
     }
 
@@ -7004,8 +7048,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
     vec3 normal = normalize(vNormal);
     vec3 light = normalize(lightDir);
-    vec3 logicalCameraPosition = cameraPosition + vec3(cameraWorldOffset.x, 0.0, cameraWorldOffset.y);
-    vec3 viewDir = normalize(logicalCameraPosition - vWorldPos);
+    vec3 viewDir = normalize(chunkCameraPosition - vWorldPos);
 
     float ndotl = max(dot(normal, light), 0.0);
     vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
@@ -7034,23 +7077,24 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     // fogState handling in terrain.fragment.ts.
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
-    gl_FragColor = vec4(color, 1.0);
+    waterColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        waterColor = mix(vec4(gridColor, 1.0), waterColor, 1.0 - gridOpacity);
     }
-    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) waterColor.rgb = applyGroundProjection(waterColor.rgb, vWorldPos.xz);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 }
 `;
 
   // src/shaders/water.fast.fragment.ts
   var WATER_FAST_FRAGMENT_SHADER = `
 precision highp float;
+out vec4 waterColor;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
+${GROUND_PROJECTION_HEADER}
 
 uniform sampler2D fogMap;
 uniform float fogDarkenFactor;
@@ -7062,18 +7106,18 @@ uniform vec3 lightDir;
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
 
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vShoreT;
-varying float vFogState;
-varying vec2 vFogUV;
+in float vBorder;
+in float vPriority;
+in vec3 vNormal;
+in vec3 vWorldPos;
+in float vShoreT;
+in float vFogState;
+in vec2 vFogUV;
 
 void main() {
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        waterColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         return;
     }
 
@@ -7083,13 +7127,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     float lambertian = max(dot(normalize(lightDir), normalize(vNormal)), 0.0);
     color *= 0.55 + 0.55 * lambertian;
     if (vFogState < 1.5) color *= fogDarkenFactor;
-    gl_FragColor = vec4(color, 1.0);
+    waterColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        waterColor = mix(vec4(gridColor, 1.0), waterColor, 1.0 - gridOpacity);
     }
-    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) waterColor.rgb = applyGroundProjection(waterColor.rgb, vWorldPos.xz);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 }
 `;
 
@@ -7117,8 +7161,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.cityFog = /* @__PURE__ */ new Map();
       // "x,y" -> that tile's city model/label
       this.pendingCities = /* @__PURE__ */ new Map();
-      this.atlasCellIndex = {};
       this.clock = 0;
+      this.cameraWorldOffset = new three.Vector2();
       this.lodBuilds = 0;
       this.disposed = false;
       this.map = map;
@@ -7126,36 +7170,36 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         throw new TypeError("terrain surface must match the map and tile size");
       }
       this.surface = options.surface;
+      this.terrainTextureWorldSize = createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize ?? 2);
+      this.atlasCellIndex = terrainAtlasCellIndices(options.atlas);
       this.ownsModelAssets = options.modelAssets === void 0;
       this.modelAssets = options.modelAssets ?? new ModelAssetCache();
-      this.buildAtlasCellIndex();
-      this.fogTexture = this.loadFogTexture();
-      const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl);
-      this.atlasTexture = atlas.texture;
-      this.ready = atlas.ready;
-      this.waterShallow = new three.Color(options.waterColorShallow ?? LandColor["coastal" /* coastal */]);
-      this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
-      const landTiles = [];
-      const waterTiles = [];
-      if (initialTiles) {
-        for (const point of initialTiles) {
-          const tile = getMapTile(this.map, point.x, point.y);
-          if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+      let readiness;
+      try {
+        this.fogTexture = this.loadFogTexture();
+        const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal);
+        this.atlasTexture = atlas.texture;
+        this.ready = readiness = atlas.ready;
+        this.waterShallow = new three.Color(options.waterColorShallow ?? LandColor["coastal" /* coastal */]);
+        this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
+        const landTiles = [];
+        const waterTiles = [];
+        if (initialTiles) {
+          for (const point of initialTiles) {
+            const tile = getMapTile(this.map, point.x, point.y);
+            if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+          }
+        } else {
+          forEachMapTile(this.map, (tile, x, y) => {
+            (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+          });
         }
-      } else {
-        forEachMapTile(this.map, (tile, x, y) => {
-          (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
-        });
-      }
-      this.buildLandLayer(landTiles);
-      this.buildWaterLayer(waterTiles);
-    }
-    buildAtlasCellIndex() {
-      const atlas = this.options.atlas;
-      const cols = atlas.width / atlas.cellSize;
-      for (const name in atlas.textures) {
-        const cell = atlas.textures[name];
-        this.atlasCellIndex[name] = cell.cellY * cols + cell.cellX;
+        this.buildLandLayer(landTiles);
+        this.buildWaterLayer(waterTiles);
+      } catch (reason) {
+        void readiness?.catch(() => void 0);
+        this.dispose();
+        throw reason;
       }
     }
     //Atlas cell index for a tile's terrain type. Returns -1 if the tile doesn't
@@ -7163,8 +7207,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     cellIndexFor(x, y) {
       const tile = getMapTile(this.map, x, y);
       if (!tile) return -1;
-      const cell = this.atlasCellIndex[tile.type];
-      return cell === void 0 ? -1 : cell;
+      return this.atlasCellIndex[tile.type];
     }
     //Edge-blend priority of a tile's terrain type (see enums.ts LandPriority).
     //Returns -Infinity for out-of-map neighbors so a border tile never blends
@@ -7210,7 +7253,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const center = getHexCenter(tile.x, tile.y, size);
         attrs.offset[i * 2 + 0] = center.x - origin.x;
         attrs.offset[i * 2 + 1] = center.y - origin.y;
-        attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type] ?? 0;
+        attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type];
         attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
         attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
         attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y) ? -1 : surface.getEffectiveRelief(tile.x, tile.y);
@@ -7291,21 +7334,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     }
     commonUniforms() {
       const size = this.options.size;
-      const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
       return {
         // One atlas cell spans a configurable world region (two hexes by
         // default) instead of restarting inside every tile. The unequal
         // axes match the flat-top hex lattice's column/row spacing.
-        terrainTextureWorldSize: { value: new three.Vector2(
-          size * 1.5 * textureRegionSize,
-          size * Math.sqrt(3) * textureRegionSize
-        ) },
+        terrainTextureWorldSize: { value: this.terrainTextureWorldSize },
         groundProjectionMap: { value: null },
         groundProjectionBounds: { value: new three.Vector4(0, 0, 1, 1) },
         groundProjectionEnabled: { value: 0 },
+        groundProjectionChunkOffset: { value: new three.Vector2() },
         hexSize: { value: size },
         map: { value: this.atlasTexture },
-        sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] ?? 0 },
+        sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] },
         waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
         beachWidth: { value: this.options.beachWidth ?? 0.35 },
         waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },
@@ -7318,12 +7358,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         fogColor: { value: new three.Color() },
         fogNear: { value: 1 },
         fogFar: { value: 1e3 },
-        //Physical chunk copies now handle toroidal placement. Leaving the
-        //shader period at zero keeps every tile attached to its canonical
-        //chunk, so chunks can be independently culled and streamed.
-        worldCenter: { value: new three.Vector2(0, 0) },
-        worldPeriod: { value: new three.Vector2(0, 0) },
-        chunkOrigin: { value: new three.Vector2(0, 0) },
+        noiseCell: { value: new Uint32Array(0) },
+        noiseFraction: { value: new Float32Array(0) },
+        texturePhase: { value: new three.Vector2() },
+        fogPhase: { value: new three.Vector2() },
+        macroPhase: { value: new three.Vector2() },
+        wavePhase: { value: new three.Vector4() },
         lightDir: { value: { x: 0.4, y: 1, z: 0.3 } },
         showGrid: { value: this.options.gridVisible === true ? 1 : 0 },
         gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
@@ -7414,11 +7454,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const mesh = new three.Mesh(geometry, this.landMaterial);
         const origin = getWorldChunkOrigin(chunkKey, this.options.size);
         mesh.position.set(origin.x, 0, origin.y);
-        mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
-          const shader = material;
-          shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
-          shader.uniformsNeedUpdate = true;
-        };
+        const coordinates = this.prepareChunkCoordinates(mesh, origin);
         mesh.name = `terrain-chunk-land-${chunkKey}`;
         mesh.frustumCulled = false;
         tagWorldChunk(
@@ -7438,6 +7474,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
         this.chunkRecords.set(`land:${chunkKey}`, {
           mesh,
+          coordinates,
           tiles: chunkTiles,
           layer: "land",
           lodGeometries: /* @__PURE__ */ new Map()
@@ -7446,15 +7483,38 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.add(mesh);
       }
     }
+    prepareChunkCoordinates(mesh, origin) {
+      const coordinates = new WorldMaterialCoordinates(this.options.size, this.options.resourceAccount);
+      const owner = this;
+      mesh.onBeforeRender = function(_renderer, _scene, camera, _geometry, material) {
+        const shader = material;
+        const patternOffset = shader.uniforms.worldOffset.value;
+        coordinates.apply(shader, origin.x + patternOffset.x, origin.y + patternOffset.y);
+        const renderX = this.matrixWorld.elements[12], renderZ = this.matrixWorld.elements[14];
+        const projection = owner.groundProjection;
+        if (projection) shader.uniforms.groundProjectionChunkOffset.value.set(
+          renderX + owner.cameraWorldOffset.x - projection.centerWorld.x,
+          renderZ + owner.cameraWorldOffset.y - projection.centerWorld.y
+        );
+        if (shader.uniforms.chunkCameraPosition) shader.uniforms.chunkCameraPosition.value.set(
+          camera.position.x - renderX,
+          camera.position.y,
+          camera.position.z - renderZ
+        );
+        shader.uniformsNeedUpdate = true;
+      };
+      return coordinates;
+    }
     //Water tiles get a subdivided geometry (more vertices than the flat land
     //hex) so the sum-of-sines wave displacement in water.vertex.ts has enough
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     buildWaterLayer(tiles) {
       this.waterMaterial ?? (this.waterMaterial = new three.RawShaderMaterial({
+        glslVersion: three.GLSL3,
         fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
-          cameraWorldOffset: { value: new three.Vector2(0, 0) },
+          chunkCameraPosition: { value: new three.Vector3() },
           uTime: { value: 0 },
           waveAmplitude: { value: this.options.waterWaveAmplitude ?? 1.6 },
           waveFrequency: { value: 0.045 * (this.options.waterWaveFrequency ?? 1) },
@@ -7483,11 +7543,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const mesh = new three.Mesh(geometry, this.waterMaterial);
         const origin = getWorldChunkOrigin(chunkKey, this.options.size);
         mesh.position.set(origin.x, 0, origin.y);
-        mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
-          const shader = material;
-          shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
-          shader.uniformsNeedUpdate = true;
-        };
+        const coordinates = this.prepareChunkCoordinates(mesh, origin);
         mesh.name = `terrain-chunk-water-${chunkKey}`;
         mesh.frustumCulled = false;
         tagWorldChunk(
@@ -7507,6 +7563,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
         this.chunkRecords.set(`water:${chunkKey}`, {
           mesh,
+          coordinates,
           tiles: chunkTiles,
           layer: "water",
           lodGeometries: /* @__PURE__ */ new Map()
@@ -7775,6 +7832,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           if (!record) continue;
           this.disposeChunkGeometries(record);
           this.remove(record.mesh);
+          record.coordinates.dispose();
           this.chunkRecords.delete(id);
           const collection = layer === "land" ? this.landChunks : this.waterChunks;
           const index = collection.indexOf(record.mesh);
@@ -7815,12 +7873,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.waterMaterial) this.waterMaterial.uniforms.uTime.value = this.clock;
       if (this.landMaterial) this.landMaterial.uniforms.uTime.value = this.clock;
     }
-    setWorldCenter(x, y) {
-      this.landMaterial?.uniforms.worldCenter.value.set(x, y);
-      this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
-    }
     setCameraWorldOffset(x, y) {
-      this.waterMaterial?.uniforms.cameraWorldOffset.value.set(x, y);
+      this.cameraWorldOffset.set(x, y);
     }
     //Near terrain keeps the original subdivision counts (land 3 / water 2).
     //Only interior vertices are reduced at middle/far distances; full-detail
@@ -7866,6 +7920,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return this.lodBuilds;
     }
     setGroundProjection(projection) {
+      this.groundProjection = projection;
       this.setMaterialProjection(this.landMaterial, projection);
       this.setMaterialProjection(this.waterMaterial, projection);
     }
@@ -7874,7 +7929,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const uniforms = material.uniforms;
       uniforms.groundProjectionEnabled.value = projection ? 1 : 0;
       uniforms.groundProjectionMap.value = projection?.target.texture ?? null;
-      if (projection) uniforms.groundProjectionBounds.value = projection.bounds;
+      if (projection) uniforms.groundProjectionBounds.value.set(
+        -projection.bounds.z / 2,
+        -projection.bounds.w / 2,
+        projection.bounds.z,
+        projection.bounds.w
+      );
     }
     disposeChunkGeometries(record) {
       const geometries = /* @__PURE__ */ new Set([record.mesh.geometry, ...record.lodGeometries.values()]);
@@ -7902,14 +7962,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return worldSize ? worldSize.x / (this.options.size * 1.5) : this.options.terrainTextureRegionSize ?? 2;
     }
     set terrainTextureRegionSize(value) {
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new RangeError("terrainTextureRegionSize must be a positive finite number");
-      }
-      const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value;
-      worldSize?.set(
-        this.options.size * 1.5 * value,
-        this.options.size * Math.sqrt(3) * value
-      );
+      const period = createTerrainTexturePeriod(this.options.size, value);
+      this.terrainTextureWorldSize.copy(period);
+      this.options.terrainTextureRegionSize = value;
     }
     //-------------------------------------------------------------------------
     //Live shader-uniform tuning knobs, for a GUI to adjust without rebuilding
@@ -8211,13 +8266,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       if (this.disposed) return;
       this.disposed = true;
       this.pendingCities.clear();
-      for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
+      for (const record of this.chunkRecords.values()) {
+        this.disposeChunkGeometries(record);
+        record.coordinates.dispose();
+      }
       for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
       this.baseLodGeometries.clear();
       this.landMaterial?.dispose();
       this.waterMaterial?.dispose();
-      this.atlasTexture.dispose();
-      this.fogTexture.dispose();
+      this.atlasTexture?.dispose();
+      this.fogTexture?.dispose();
       for (const entry of this.cityFog.values()) {
         this.disposeCityResources(entry.materials, entry.sprite);
         entry.asset.release();
@@ -8469,7 +8527,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
     const capacity = tiles.length * sampling.tileCapacity;
     const offsets = new Float32Array(capacity * 2);
-    const tileOffsets = new Float32Array(capacity * 2);
     const angles = new Float32Array(capacity);
     const scales = new Float32Array(capacity * 2);
     const phases = new Float32Array(capacity);
@@ -8502,8 +8559,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (isInCoastalShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions) || isInLakeShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)) return;
         offsets[instance * 2] = center.x + lx - origin.x;
         offsets[instance * 2 + 1] = center.y + ly - origin.y;
-        tileOffsets[instance * 2] = center.x - origin.x;
-        tileOffsets[instance * 2 + 1] = center.y - origin.y;
         angles[instance] = vegetationRandom(sx, sz, 741) * Math.PI * 2;
         const heightJitter = 1 - heightVariation * 0.5 + vegetationRandom(sx, sz, 743) * heightVariation;
         scales[instance * 2] = options.grassBladeWidth * (0.8 + vegetationRandom(sx, sz, 747) * 0.4);
@@ -8521,7 +8576,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       tiles,
       ranges,
       offsets: offsets.slice(0, instance * 2),
-      tileOffsets: tileOffsets.slice(0, instance * 2),
       angles: angles.slice(0, instance),
       scales: scales.slice(0, instance * 2),
       phases: phases.slice(0, instance),
@@ -8691,7 +8745,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         throw new TypeError("world grass layout is invalid");
       }
       for (const lod of chunk.lods) {
-        if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array) || !(lod.tileOffsets instanceof Float32Array) || !(lod.angles instanceof Float32Array) || !(lod.scales instanceof Float32Array) || !(lod.phases instanceof Float32Array) || !(lod.shades instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.offsets.length !== lod.instanceCount * 2 || lod.tileOffsets.length !== lod.instanceCount * 2 || lod.angles.length !== lod.instanceCount || lod.scales.length !== lod.instanceCount * 2 || lod.phases.length !== lod.instanceCount || lod.shades.length !== lod.instanceCount) {
+        if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array) || !(lod.angles instanceof Float32Array) || !(lod.scales instanceof Float32Array) || !(lod.phases instanceof Float32Array) || !(lod.shades instanceof Float32Array) || !Array.isArray(lod.tiles) || lod.ranges.length !== lod.tiles.length * 2 || lod.offsets.length !== lod.instanceCount * 2 || lod.angles.length !== lod.instanceCount || lod.scales.length !== lod.instanceCount * 2 || lod.phases.length !== lod.instanceCount || lod.shades.length !== lod.instanceCount) {
           throw new TypeError("world grass LOD layout is invalid");
         }
       }
@@ -8713,7 +8767,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       for (const array of [
         lod.ranges,
         lod.offsets,
-        lod.tileOffsets,
         lod.angles,
         lod.scales,
         lod.phases,
@@ -8763,7 +8816,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   function grassLayoutAllocations(chunks) {
     const arrays = [];
     for (const chunk of chunks) for (const lod of chunk.lods) {
-      arrays.push(lod.ranges, lod.offsets, lod.tileOffsets, lod.angles, lod.scales, lod.phases, lod.shades);
+      arrays.push(lod.ranges, lod.offsets, lod.angles, lod.scales, lod.phases, lod.shades);
     }
     return collectCpuBufferAllocations(arrays);
   }
@@ -9331,7 +9384,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   // src/shaders/grass.vertex.ts
   var GRASS_VERTEX_SHADER = `
-precision mediump float;
+precision highp float;
 
 ${HORIZON_FOG_VERTEX_VARYING}
 
@@ -9341,10 +9394,7 @@ uniform mat4 projectionMatrix;
 uniform float uTime;
 uniform float windStrength;
 uniform float windSpeed;
-uniform vec2 worldOffset;
-uniform vec2 chunkOrigin;
-uniform vec2 worldCenter;
-uniform vec2 worldPeriod;
+uniform float windOriginPhase;
 
 // Blade shape authored once in local space (see Grass.ts buildBladeGeometry):
 // x spans [-0.5, 0.5] at the root and tapers to 0 at the tip, y is a plain
@@ -9353,7 +9403,6 @@ uniform vec2 worldPeriod;
 attribute vec3 position;
 
 attribute vec2 offset;  // world XZ position of this blade's root
-attribute vec2 tileOffset; // canonical center of the blade's owning hex
 attribute float angle;  // random Y rotation, radians - so blades don't all face the same way
 attribute vec2 scale;   // x = width multiplier, y = height multiplier (world units)
 attribute float phase;  // random wind phase offset, see wave below
@@ -9365,12 +9414,6 @@ varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
 
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
 
 void main() {
     float heightFactor = position.y;
@@ -9383,13 +9426,8 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    //Choose the toroidal image from the owning hex center, then preserve this
-    //blade's local displacement inside that hex. Terrain uses the same center
-    //anchor, so decorations cannot hop to the next image before their ground.
-    vec2 wrappedTileOffset = nearestWorldOffset(tileOffset);
-    vec2 bladeOffset = wrappedTileOffset + (offset - tileOffset);
-    vec2 logicalBladeOffset = bladeOffset + chunkOrigin + worldOffset;
-    float wave = sin(uTime * windSpeed + phase + (logicalBladeOffset.x + logicalBladeOffset.y) * 0.015);
+    vec2 bladeOffset = offset;
+    float wave = sin(uTime * windSpeed + phase + windOriginPhase + (bladeOffset.x + bladeOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
     rotated.z += bend * 0.4;
@@ -9407,7 +9445,7 @@ void main() {
 
   // src/shaders/grass.fragment.ts
   var GRASS_FRAGMENT_SHADER = `
-precision mediump float;
+precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
 
@@ -9446,10 +9484,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
-          worldCenter: { value: new three.Vector2(0, 0) },
-          worldPeriod: { value: new three.Vector2(0, 0) },
-          chunkOrigin: { value: new three.Vector2(0, 0) },
           uTime: { value: 0 },
+          windOriginPhase: { value: 0 },
           windStrength: { value: options.windStrength ?? bladeHeight * 0.35 },
           windSpeed: { value: options.windSpeed ?? 1.2 },
           colorBase: { value: new three.Color(options.colorBase ?? 3960366) },
@@ -9535,9 +9571,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //the previous frame - call this once per frame (see HexMap's render loop).
     update(dtS) {
       this.resources.update(dtS);
-    }
-    setWorldCenter(x, y) {
-      this.resources.material.uniforms.worldCenter.value.set(x, y);
     }
     get windStrength() {
       return this.resources.material.uniforms.windStrength.value;
@@ -9648,7 +9681,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       });
       geometry.instanceCount = prepared.instanceCount;
       geometry.setAttribute("offset", new three.InstancedBufferAttribute(prepared.offsets, 2));
-      geometry.setAttribute("tileOffset", new three.InstancedBufferAttribute(prepared.tileOffsets, 2));
       geometry.setAttribute("angle", new three.InstancedBufferAttribute(prepared.angles, 1));
       geometry.setAttribute("scale", new three.InstancedBufferAttribute(prepared.scales, 2));
       geometry.setAttribute("phase", new three.InstancedBufferAttribute(prepared.phases, 1));
@@ -9741,7 +9773,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       chunk.position.set(origin.x, 0, origin.y);
       chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
         const shader = currentMaterial;
-        shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
+        const patternOffset = shader.uniforms.worldOffset.value;
+        shader.uniforms.windOriginPhase.value = phaseModulo((origin.x + patternOffset.x + origin.y + patternOffset.y) * 0.015);
         shader.uniformsNeedUpdate = true;
       };
       chunk.name = `grass-chunk-${chunkKey}`;
@@ -14031,7 +14064,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
   // src/world/WorldDeltaContract.ts
   var WORLD_DELTA_FORMAT_VERSION = 2;
-  var LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
   var WorldDeltaConflictError = class extends Error {
     constructor(expectedRevision, actualRevision) {
       super(`World delta revision conflict: expected ${expectedRevision}, received ${actualRevision}`);
@@ -14060,7 +14092,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
     assertWorldDeltaChunkSize(options.chunkSize);
     const candidate = value;
-    if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !worldDeltaTileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
+    if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY || candidate.chunkSize !== options.chunkSize || !Number.isSafeInteger(candidate.revision) || candidate.revision < 1 || !Array.isArray(candidate.entries) || candidate.entries.some((entry) => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y) || !worldDeltaTileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize) || !entry.override || typeof entry.override !== "object" || Array.isArray(entry.override))) {
       throw new TypeError("world chunk delta is invalid or incompatible");
     }
     const keys = /* @__PURE__ */ new Set();
@@ -14094,7 +14126,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function isMutableWorldSource(source) {
     const candidate = source;
-    return typeof candidate.setTileOverride === "function" && typeof candidate.clearTileOverride === "function";
+    return typeof candidate.setTileOverride === "function" && typeof candidate.setTileOverrides === "function" && typeof candidate.clearTileOverride === "function";
   }
   var WORLD_DELTA_CHECKPOINT_FORMAT_VERSION = 1;
   function assertWorldSource(source) {
@@ -14254,7 +14286,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
   function assertWorldDeltaStore(store) {
     if (!store || typeof store !== "object") throw new TypeError("world delta store must be an object");
-    for (const method of ["loadChunk", "putTile", "deleteTile", "flush", "clear", "dispose"]) {
+    for (const method of ["loadChunk", "putChunkDelta", "flush", "clear", "dispose"]) {
       if (typeof store[method] !== "function") throw new TypeError(`world delta store must implement ${method}()`);
     }
   }
@@ -14400,13 +14432,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         }
       }
     }
-    async createCheckpointSnapshot() {
+    async createCheckpointSnapshot(signal) {
+      signal?.throwIfAborted();
       if (this.restoring) throw new Error("world deltas are being restored");
       await this.flush();
+      signal?.throwIfAborted();
       if (!this.deltaStore?.listWorld) {
         throw new Error("WorldDeltaStore does not support checkpoint enumeration");
       }
-      const deltas = await this.deltaStore.listWorld(this.worldId);
+      const deltas = await this.deltaStore.listWorld(this.worldId, signal);
+      signal?.throwIfAborted();
       return {
         version: WORLD_DELTA_CHECKPOINT_FORMAT_VERSION,
         worldId: this.worldId,
@@ -14420,7 +14455,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ))
       };
     }
-    async restoreCheckpointSnapshot(snapshot) {
+    async restoreCheckpointSnapshot(snapshot, signal) {
+      signal?.throwIfAborted();
       if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || snapshot.version !== WORLD_DELTA_CHECKPOINT_FORMAT_VERSION || snapshot.worldId !== this.worldId || snapshot.chunkSize !== this.chunkSize || !Array.isArray(snapshot.deltas)) {
         throw new TypeError("world delta checkpoint is invalid or incompatible");
       }
@@ -14446,8 +14482,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.restoring = true;
       try {
         await this.flush();
-        await this.deltaStore.replaceWorld(this.worldId, deltas);
-        await this.deltaStore.flush();
+        signal?.throwIfAborted();
+        await this.deltaStore.replaceWorld(this.worldId, deltas, signal);
         if (this.disposed) throw new Error("world delta session has been disposed");
         this.generation += 1;
         this.chunks.clear();
@@ -14564,36 +14600,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         y: point.y,
         override: this.tileStore.getTileOverride(point.x, point.y) ?? null
       }));
-      if (store.putChunkDelta) {
-        const delta = await store.putChunkDelta(
-          this.worldId,
-          state.chunkX,
-          state.chunkY,
-          changes,
-          { chunkSize: this.chunkSize }
-        );
-        return delta?.revision;
-      }
-      for (const change of changes) {
-        if (change.override) {
-          store.putTile(this.worldId, state.chunkX, state.chunkY, {
-            x: change.x,
-            y: change.y,
-            override: change.override
-          }, { chunkSize: this.chunkSize });
-        } else {
-          store.deleteTile(
-            this.worldId,
-            state.chunkX,
-            state.chunkY,
-            change.x,
-            change.y,
-            { chunkSize: this.chunkSize }
-          );
-        }
-      }
-      await store.flush();
-      return void 0;
+      const delta = await store.putChunkDelta(
+        this.worldId,
+        state.chunkX,
+        state.chunkY,
+        changes,
+        { chunkSize: this.chunkSize }
+      );
+      return delta?.revision;
     }
     pruneState(key, state) {
       if (this.disposed || state.activeTiles.size > 0 || state.restore || state.write || state.pendingTiles.size > 0 || state.modifiedDuringRestore.size > 0) return;
@@ -14816,11 +14830,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     flushDeltas() {
       return this.deltaSession.flush();
     }
-    createDeltaCheckpointSnapshot() {
-      return this.deltaSession.createCheckpointSnapshot();
+    createDeltaCheckpointSnapshot(signal) {
+      return this.deltaSession.createCheckpointSnapshot(signal);
     }
-    restoreDeltaCheckpointSnapshot(snapshot) {
-      return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    restoreDeltaCheckpointSnapshot(snapshot, signal) {
+      return this.deltaSession.restoreCheckpointSnapshot(snapshot, signal);
     }
     clearDeltas() {
       return this.deltaSession.clear();
@@ -14990,11 +15004,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     flushDeltas() {
       return this.deltaSession.flush();
     }
-    createDeltaCheckpointSnapshot() {
-      return this.deltaSession.createCheckpointSnapshot();
+    createDeltaCheckpointSnapshot(signal) {
+      return this.deltaSession.createCheckpointSnapshot(signal);
     }
-    restoreDeltaCheckpointSnapshot(snapshot) {
-      return this.deltaSession.restoreCheckpointSnapshot(snapshot);
+    restoreDeltaCheckpointSnapshot(snapshot, signal) {
+      return this.deltaSession.restoreCheckpointSnapshot(snapshot, signal);
     }
     clearDeltas() {
       return this.deltaSession.clear();
@@ -16113,21 +16127,33 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.worldRoot.name = "hex-map-world-root";
       this.scene.add(this.worldRoot);
       this.renderer = new three.WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
-      this.renderer.toneMapping = three.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 0.65;
-      this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
-      this.camera.position.set(900, 500, 1e3);
-      this.scene.add(this.camera);
-      const primary = new three.DirectionalLight(16774108, 1.65);
-      primary.position.copy(createSunDirection());
-      this.scene.add(primary);
-      this.scene.add(new three.HemisphereLight(13101055, 4412467, 1));
-      this.scene.add(new three.AmbientLight(16777215, 0.18));
-      this.sky = this.createSky(options.skyVisible);
-      this.scene.add(this.sky);
-      this.gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
-      options.canvas.addEventListener("webglcontextlost", this.onContextLost);
-      options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+      let sky;
+      let gpuTimer;
+      try {
+        this.renderer.toneMapping = three.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 0.65;
+        this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
+        this.camera.position.set(900, 500, 1e3);
+        this.scene.add(this.camera);
+        const primary = new three.DirectionalLight(16774108, 1.65);
+        primary.position.copy(createSunDirection());
+        this.scene.add(primary);
+        this.scene.add(new three.HemisphereLight(13101055, 4412467, 1));
+        this.scene.add(new three.AmbientLight(16777215, 0.18));
+        this.sky = sky = this.createSky(options.skyVisible);
+        this.scene.add(this.sky);
+        this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
+        options.canvas.addEventListener("webglcontextlost", this.onContextLost);
+        options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+      } catch (reason) {
+        options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+        options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+        gpuTimer?.dispose();
+        sky?.geometry.dispose();
+        sky?.material.dispose();
+        this.renderer.dispose();
+        throw reason;
+      }
     }
     resize(width, height, pixelRatio) {
       if (this.disposed || this.contextState !== "ready" || width <= 0 || height <= 0) return;
@@ -16501,8 +16527,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (!before.has(key)) before.set(key, this.captureVisualState(point));
         normalized.push({ x: point.x, y: point.y, changes: change.changes });
       }
-      if (source.setTileOverrides) source.setTileOverrides(normalized);
-      else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
+      source.setTileOverrides(normalized);
       return this.completeEdit(source, normalized.length > 0, before.size, before.values());
     }
     clearTileOverride(x, y) {
@@ -16741,6 +16766,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     mountainHeight: 80,
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
+    terrainTextureAnisotropy: 8,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -16817,6 +16843,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     };
     positive2("size", options.size);
     positive2("terrainTextureRegionSize", options.terrainTextureRegionSize);
+    createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize);
+    if (!Number.isSafeInteger(options.terrainTextureAnisotropy) || options.terrainTextureAnisotropy <= 0) {
+      throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");
+    }
     positive2("renderDistance", options.renderDistance);
     if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
       throw new RangeError("horizonFogStart must be a non-negative finite number");
@@ -17604,91 +17634,112 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         if (!this.disposed) this.animationFrameId = window.requestAnimationFrame(this.animate);
       };
       this.options = resolveHexMapOptions(options);
-      this.worldChunkMountQueue = new WorldChunkMountQueue({
-        frameTasks: this.frameTasks,
-        streamer: () => this.worldStreamer,
-        demandKey: () => this.worldDemandChunkKey,
-        signal: () => this.worldController?.lifecycle.signal,
-        mounted: (key) => this.worldChunkLayers.has(key),
-        priority: (chunk) => {
-          const center = this.worldStreamer?.stats;
-          return center && this.worldSource ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY) : 0;
-        },
-        mount: (chunk) => this.mountWorldChunk(chunk)
-      });
-      const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
-      this.chunkScheduler = new WorldChunkScheduler({
-        ...schedulerOptions,
-        renderDistance: this.options.renderDistance,
-        lodEnabled: this.options.lodEnabled,
-        lodDistances: {
-          near: this.options.lodNearDistance,
-          far: this.options.lodFarDistance,
-          vegetation: this.options.vegetationRenderDistance,
-          hysteresis: this.options.chunkLodHysteresis
-        },
-        gpuCacheSize: this.options.gpuChunkCacheSize,
-        cpuCacheSize: this.options.cpuChunkCacheSize,
-        gpuCacheBytes: this.options.gpuChunkCacheBytes,
-        cpuCacheBytes: this.options.cpuChunkCacheBytes
-      });
-      this.modelAssets = new ModelAssetCache({
-        maximumBytes: this.options.modelAssetCacheBytes,
-        resources: this.chunkScheduler.createResourceAccount("model-assets")
-      });
-      this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
-      this.installBuiltinWorldRenderLayers();
-      const el = document.querySelector(this.options.element);
-      if (!(el instanceof HTMLCanvasElement)) {
-        throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
-      }
-      this.canvas = el;
-      this.rendererHost = new HexMapRendererHost({
-        canvas: this.canvas,
-        antialias: this.options.antialias,
-        skyVisible: this.options.skyVisible,
-        horizonFogColor: this.options.horizonFogColor,
-        horizonFogStart: this.options.horizonFogStart,
-        horizonFogEnd: this.options.horizonFogEnd,
-        contextLost: () => {
-          this.lastFrameTime = void 0;
-          this.emit("contextlost", this.rendererHost.contextStats);
-        },
-        contextRestored: () => {
-          this.lastFrameTime = void 0;
-          this.chunkScheduler.invalidateScene();
-          this.handleResize();
-          this.emit("contextrestored", this.rendererHost.contextStats);
+      let modelAssets;
+      let chunkScheduler;
+      try {
+        this.worldChunkMountQueue = new WorldChunkMountQueue({
+          frameTasks: this.frameTasks,
+          streamer: () => this.worldStreamer,
+          demandKey: () => this.worldDemandChunkKey,
+          signal: () => this.worldController?.lifecycle.signal,
+          mounted: (key) => this.worldChunkLayers.has(key),
+          priority: (chunk) => {
+            const center = this.worldStreamer?.stats;
+            return center && this.worldSource ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY) : 0;
+          },
+          mount: (chunk) => this.mountWorldChunk(chunk)
+        });
+        const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
+        this.chunkScheduler = chunkScheduler = new WorldChunkScheduler({
+          ...schedulerOptions,
+          renderDistance: this.options.renderDistance,
+          lodEnabled: this.options.lodEnabled,
+          lodDistances: {
+            near: this.options.lodNearDistance,
+            far: this.options.lodFarDistance,
+            vegetation: this.options.vegetationRenderDistance,
+            hysteresis: this.options.chunkLodHysteresis
+          },
+          gpuCacheSize: this.options.gpuChunkCacheSize,
+          cpuCacheSize: this.options.cpuChunkCacheSize,
+          gpuCacheBytes: this.options.gpuChunkCacheBytes,
+          cpuCacheBytes: this.options.cpuChunkCacheBytes
+        });
+        this.modelAssets = modelAssets = new ModelAssetCache({
+          maximumBytes: this.options.modelAssetCacheBytes,
+          resources: this.chunkScheduler.createResourceAccount("model-assets")
+        });
+        this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
+        this.terrainResourceAccount = this.chunkScheduler.createResourceAccount("terrain-cpu");
+        this.installBuiltinWorldRenderLayers();
+        const el = document.querySelector(this.options.element);
+        if (!(el instanceof HTMLCanvasElement)) {
+          throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
         }
-      });
-      this.renderer = this.rendererHost.renderer;
-      this.scene = this.rendererHost.scene;
-      this.worldRoot = this.rendererHost.worldRoot;
-      this.camera = this.rendererHost.camera;
-      this.setupControls();
-      this.setupMarkers();
-      this.interactions = new HexMapInteractionController({
-        canvas: this.canvas,
-        camera: this.camera,
-        controls: this.controls,
-        pointer: this.pointer,
-        size: this.options.size,
-        map: () => this.mapData,
-        surface: () => this.worldSurface,
-        logicalGround: (point) => {
-          this.logicalGround(point);
-        },
-        tile: (x, y) => this.getTile(x, y),
-        select: (x, y) => this.selectTile(x, y),
-        hover: (x, y, tile) => {
-          this.positionMarker(this.pointer, { x, y });
-          this.emit("hover", { x, y, tile });
-        },
-        click: (x, y, tile) => this.emit("click", { x, y, tile })
-      });
-      this.setupEvents();
-      this.handleResize();
-      this.animationFrameId = window.requestAnimationFrame(this.animate);
+        this.canvas = el;
+        this.rendererHost = new HexMapRendererHost({
+          canvas: this.canvas,
+          antialias: this.options.antialias,
+          skyVisible: this.options.skyVisible,
+          horizonFogColor: this.options.horizonFogColor,
+          horizonFogStart: this.options.horizonFogStart,
+          horizonFogEnd: this.options.horizonFogEnd,
+          contextLost: () => {
+            this.lastFrameTime = void 0;
+            this.emit("contextlost", this.rendererHost.contextStats);
+          },
+          contextRestored: () => {
+            this.lastFrameTime = void 0;
+            this.chunkScheduler.invalidateScene();
+            this.handleResize();
+            this.emit("contextrestored", this.rendererHost.contextStats);
+          }
+        });
+        this.renderer = this.rendererHost.renderer;
+        this.scene = this.rendererHost.scene;
+        this.worldRoot = this.rendererHost.worldRoot;
+        this.camera = this.rendererHost.camera;
+        this.setupControls();
+        this.setupMarkers();
+        this.interactions = new HexMapInteractionController({
+          canvas: this.canvas,
+          camera: this.camera,
+          controls: this.controls,
+          pointer: this.pointer,
+          size: this.options.size,
+          map: () => this.mapData,
+          surface: () => this.worldSurface,
+          logicalGround: (point) => {
+            this.logicalGround(point);
+          },
+          tile: (x, y) => this.getTile(x, y),
+          select: (x, y) => this.selectTile(x, y),
+          hover: (x, y, tile) => {
+            this.positionMarker(this.pointer, { x, y });
+            this.emit("hover", { x, y, tile });
+          },
+          click: (x, y, tile) => this.emit("click", { x, y, tile })
+        });
+        this.setupEvents();
+        this.handleResize();
+        this.animationFrameId = window.requestAnimationFrame(this.animate);
+      } catch (reason) {
+        window.removeEventListener("resize", this.handleResize);
+        this.resizeObserver?.disconnect();
+        this.interactions?.dispose();
+        for (const marker of [this.selector, this.pointer]) {
+          marker?.geometry.dispose();
+          marker?.material?.dispose();
+        }
+        this.controls?.dispose();
+        this.rendererHost?.dispose();
+        modelAssets?.dispose();
+        chunkScheduler?.dispose();
+        this.frameTasks.dispose();
+        this.runtimeWork.dispose();
+        this.worldRenderLayers.dispose();
+        throw reason;
+      }
     }
     get worldSource() {
       return this.worldController?.source;
@@ -18226,7 +18277,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         ]));
         if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
         this.atlas = atlas;
-        if (!await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true))) return;
+        if (!await worldController.lifecycle.run((signal) => this.rebuildTerrain(revision, true, signal))) return;
         if (!await worldController.lifecycle.run(() => this.initializeWorldRenderLayers(source, revision))) return;
         if (!this.isWorldSessionCurrent(source, revision)) return;
         const streamer = worldController.startStreaming({
@@ -18951,6 +19002,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       } catch (reason) {
         errors.push(renderLayerError(reason));
       }
+      if (this.terrain) {
+        this.terrain.removeFromParent();
+        try {
+          this.terrain.dispose();
+        } catch (reason) {
+          errors.push(renderLayerError(reason));
+        }
+        this.terrain = void 0;
+      }
       this.markerProjections.clear();
       this.worldSurface = void 0;
       this.worldController = void 0;
@@ -19054,7 +19114,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     //when the map itself changes (see load()) - everything water/blend-related
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
-    async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)) {
+    async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer), signal) {
       if (!this.worldSurface) throw new Error("No world surface is loaded");
       this.clearWorldCopies();
       this.chunkScheduler.clear();
@@ -19063,6 +19123,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.terrain.dispose();
       }
       const terrain = new TerrainMesh(this.mapData, {
+        signal,
+        resourceAccount: this.terrainResourceAccount,
         size: this.options.size,
         texturesBaseUrl: this.options.texturesBaseUrl,
         atlas: this.atlas,
@@ -19074,6 +19136,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         shaderQuality: this.options.terrainShaderQuality,
         landformDebugMode: this.options.landformDebugMode,
         terrainTextureRegionSize: this.options.terrainTextureRegionSize,
+        terrainTextureAnisotropy: this.options.terrainTextureAnisotropy,
         waterColorShallow: this.options.waterColorShallow,
         waterColorDeep: this.options.waterColorDeep,
         waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -19366,10 +19429,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         return Promise.reject(reason);
       }
     }
-    //Validates an editor-sized change set before dispatching it, then
-    //coalesces all visual invalidation into one render refresh. Sources with a
-    //native setTileOverrides() implementation can additionally make storage
-    //mutation atomic; the per-tile fallback preserves source compatibility.
+    //The editable source validates and commits the complete batch atomically;
+    //only a successful commit produces the coalesced visual invalidation.
     setTileOverrides(changes) {
       if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
       try {
@@ -19887,11 +19948,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       return this.terrain?.terrainTextureRegionSize ?? this.options.terrainTextureRegionSize;
     }
     set terrainTextureRegionSize(value) {
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new RangeError("terrainTextureRegionSize must be a positive finite number");
-      }
-      this.options.terrainTextureRegionSize = value;
       if (this.terrain) this.terrain.terrainTextureRegionSize = value;
+      else createTerrainTexturePeriod(this.options.size, value);
+      this.options.terrainTextureRegionSize = value;
     }
     get beachWidth() {
       return this.terrain?.beachWidth ?? this.options.beachWidth;
@@ -21453,7 +21512,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       super();
       this.needAnimate = false;
       this.animationClips = [];
-      this.pathFraction = 0;
+      this.pathProgress = 0;
+      this.pathPoints = [];
+      this.tangent = new three.Vector3();
+      this.forward = new three.Vector3(0, 0, 1);
       this.movementToken = 0;
       this.modelRevision = 0;
       this.disposed = false;
@@ -21470,8 +21532,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.alignedTileX = Number.NaN;
       this.alignedTileY = Number.NaN;
       this.options = {
-        animateFrameRate: 50,
-        //Framerate: how much per second run animate function
         animateSpeed: 1,
         //Animate speed: how much seconds spend to move from 1 cell to second cell
         size: 40,
@@ -21613,72 +21673,66 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.animationAction = next;
     }
     update(deltaSeconds) {
-      if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) this.animationMixer?.update(deltaSeconds);
+      if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0 || this.disposed) return;
+      this.animationMixer?.update(deltaSeconds);
+      if (!this.needAnimate || !this.movePath) return;
+      const token = this.movementToken;
+      const last = this.movePath.length - 1;
+      const next = Math.min(last, this.pathProgress + deltaSeconds / this.options.animateSpeed);
+      const firstCell = Math.floor(this.pathProgress + 0.5) + 1;
+      const lastCell = Math.floor(next + 0.5);
+      for (let index = firstCell; index <= lastCell; index++) {
+        this.placeOnPath(index - 0.5);
+        this._viewCell = this.movePath[index];
+        this.emit("cell_enter", { id: this.id, cell: this._viewCell });
+        if (token !== this.movementToken || this.disposed) return;
+      }
+      this.pathProgress = next;
+      this.placeOnPath(next);
+      if (next === last) {
+        this.needAnimate = false;
+        this.movePath = null;
+        this.pathPoints = [];
+        this._viewCell = null;
+        this.activate("idle" /* idle */);
+        this.emit("end_move", { id: this.id, position: this.position });
+      }
     }
     get moving() {
       return this.needAnimate;
     }
     moveTo(path) {
+      if (this.disposed) throw new Error("Unit has been disposed");
       if (this.needAnimate || path.length < 2) return false;
+      if (!Number.isFinite(this.options.animateSpeed) || this.options.animateSpeed <= 0) {
+        throw new RangeError("Unit animateSpeed must be positive seconds per cell");
+      }
       const route = path.map((point) => ({ ...point }));
       this.options.x = route[route.length - 1].x;
       this.options.y = route[route.length - 1].y;
-      const pointsPath = new three.CurvePath();
       const points = createContinuousHexPath(route, this.options.size, {
         mapWidth: this.options.mapWidth,
         mapHeight: this.options.mapHeight,
         wrapX: this.options.wrapX,
         wrapY: this.options.wrapY
       }, this.unit.position, this.options.surface);
-      for (let i = 1; i < points.length; i++) {
-        pointsPath.add(new three.LineCurve3(points[i - 1], points[i]));
-      }
-      this.pointsPath = pointsPath;
+      this.pathPoints = points;
       this.movePath = route;
       this._viewCell = route[0];
-      this.pathFraction = 0;
+      this.pathProgress = 0;
       this.needAnimate = true;
       this.activate("walk" /* walk */);
-      const token = ++this.movementToken;
+      ++this.movementToken;
       this.emit("start_move", { id: this.id, from: route[0], to: this.position, path: route });
-      void this.animation(route.length - 1, token);
       return true;
     }
-    async animation(segmentCount, token) {
-      const frameRate = Number.isFinite(this.options.animateFrameRate) && this.options.animateFrameRate > 0 ? this.options.animateFrameRate : 50;
-      const secondsPerCell = Number.isFinite(this.options.animateSpeed) && this.options.animateSpeed > 0 ? this.options.animateSpeed : 1;
-      const fractionStep = 1 / (segmentCount * secondsPerCell * frameRate);
-      const forward = new three.Vector3(0, 0, 1);
-      while (this.needAnimate && token === this.movementToken) {
-        this.pathFraction = Math.min(1, this.pathFraction + fractionStep);
-        const newPosition = this.pointsPath.getPoint(this.pathFraction);
-        newPosition.y = this.options.surface?.getWorldHeight(newPosition.x, newPosition.z) ?? 0;
-        const tangent = this.pointsPath.getTangent(this.pathFraction);
-        tangent.y = 0;
-        tangent.normalize();
-        this.unit.position.copy(newPosition);
-        if (tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(forward, tangent);
-        if (this.movePath && this._viewCell) {
-          const cellIndex = Math.min(
-            this.movePath.length - 1,
-            Math.round(this.pathFraction * (this.movePath.length - 1))
-          );
-          const cell = this.movePath[cellIndex];
-          if (cell && (cell.x !== this._viewCell.x || cell.y !== this._viewCell.y)) {
-            this._viewCell = cell;
-            this.emit("cell_enter", { id: this.id, cell });
-          }
-        }
-        if (this.pathFraction >= 1) break;
-        await wait(Math.max(1, Math.floor(1e3 / frameRate)));
-      }
-      if (token !== this.movementToken) return;
-      this.pathFraction = 0;
-      this.needAnimate = false;
-      this.movePath = null;
-      this._viewCell = null;
-      this.activate("idle" /* idle */);
-      this.emit("end_move", { id: this.id, position: this.position });
+    placeOnPath(progress) {
+      const index = Math.min(this.pathPoints.length - 2, Math.floor(progress));
+      const from = this.pathPoints[index], to = this.pathPoints[index + 1];
+      this.unit.position.lerpVectors(from, to, progress - index);
+      this.unit.position.y = this.options.surface?.getWorldHeight(this.unit.position.x, this.unit.position.z) ?? 0;
+      this.tangent.subVectors(to, from).setY(0).normalize();
+      if (this.tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(this.forward, this.tangent);
     }
     alignToWorldReference(referenceX, referenceZ) {
       if (this.needAnimate || !this._unit) return;
@@ -21714,6 +21768,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.needAnimate = false;
       this.movementToken += 1;
       this.movePath = null;
+      this.pathPoints = [];
       this._viewCell = null;
       this.releaseUnitModel();
       this.ownedModelAssets?.dispose();
@@ -22174,6 +22229,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.span = span;
       this.root = new three.Group();
       this.bounds = new three.Vector4();
+      /** Absolute logical world center retained as JS doubles, never uploaded to a shader. */
+      this.centerWorld = new three.Vector2();
       this.scene = new three.Scene();
       this.camera = new three.OrthographicCamera();
       this.clearColor = new three.Color();
@@ -22192,12 +22249,13 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.camera.updateProjectionMatrix();
       this.setCenter(0, 0, 1);
     }
-    /** Source objects use logical tile-size units; bounds use the terrain's logical world units. */
+    /** Source objects use tile-size units relative to (x,z); absolute bounds are CPU metadata only. */
     setCenter(x, z, tileSize) {
       if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError("Invalid ground projection coordinates");
       const half = this.span / 2;
       this.bounds.set((x - half) * tileSize, (z - half) * tileSize, this.span * tileSize, this.span * tileSize);
-      this.camera.position.set(x, 1, z);
+      this.centerWorld.set(x * tileSize, z * tileSize);
+      this.camera.position.set(0, 1, 0);
     }
     render(renderer) {
       const target = renderer.getRenderTarget(), alpha = renderer.getClearAlpha(), autoClear = renderer.autoClear;

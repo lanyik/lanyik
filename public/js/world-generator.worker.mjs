@@ -2323,7 +2323,6 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOp
   const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
   const capacity = tiles.length * sampling.tileCapacity;
   const offsets = new Float32Array(capacity * 2);
-  const tileOffsets = new Float32Array(capacity * 2);
   const angles = new Float32Array(capacity);
   const scales = new Float32Array(capacity * 2);
   const phases = new Float32Array(capacity);
@@ -2356,8 +2355,6 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOp
       if (isInCoastalShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions) || isInLakeShore(map, tile.x, tile.y, lx, ly, x, z, options.size, coastOptions)) return;
       offsets[instance * 2] = center.x + lx - origin.x;
       offsets[instance * 2 + 1] = center.y + ly - origin.y;
-      tileOffsets[instance * 2] = center.x - origin.x;
-      tileOffsets[instance * 2 + 1] = center.y - origin.y;
       angles[instance] = vegetationRandom(sx, sz, 741) * Math.PI * 2;
       const heightJitter = 1 - heightVariation * 0.5 + vegetationRandom(sx, sz, 743) * heightVariation;
       scales[instance * 2] = options.grassBladeWidth * (0.8 + vegetationRandom(sx, sz, 747) * 0.4);
@@ -2375,7 +2372,6 @@ function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOp
     tiles,
     ranges,
     offsets: offsets.slice(0, instance * 2),
-    tileOffsets: tileOffsets.slice(0, instance * 2),
     angles: angles.slice(0, instance),
     scales: scales.slice(0, instance * 2),
     phases: phases.slice(0, instance),
@@ -2542,7 +2538,6 @@ function worldVegetationTransferables(layout) {
     for (const array of [
       lod.ranges,
       lod.offsets,
-      lod.tileOffsets,
       lod.angles,
       lod.scales,
       lod.phases,

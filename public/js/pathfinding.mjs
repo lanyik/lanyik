@@ -1667,7 +1667,7 @@ var HierarchicalPathfinder = class {
     }
     if (startChunk.x === endChunk.x && startChunk.y === endChunk.y) {
       const local = this.findLocalPath(start, end, startChunk.x, startChunk.y);
-      return this.result(local.path, [startChunk], 0, loadedByPath, options.releaseLoadedChunks);
+      if (local.path.length > 0) return this.result(local.path, [startChunk], 0, loadedByPath, options.releaseLoadedChunks);
     }
     await this.ensureDetailedChunk(endChunk, loadedByPath, options.signal);
     const endTile = getMapTile(this.source.map, end.x, end.y);
