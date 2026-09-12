@@ -37,5 +37,5 @@ export function compareEquipment(item: Equipment, player: EquipmentContext): Equ
     const scoreDelta = item.score - (current?.score ?? 0);
     return { current, power, delta, scoreDelta, stats,
         // Effective combat power already includes caps; raw score must not veto cleanup.
-        canClear: current !== undefined && delta < 0 };
+        canClear: !item.locked && current !== undefined && delta < 0 };
 }

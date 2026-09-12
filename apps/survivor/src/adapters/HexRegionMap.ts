@@ -11,6 +11,11 @@ export function overviewPoint(x: number, z: number): { x: number; y: number } {
     return { x: column + .5, y: z / Math.sqrt(3) - shift + .5 };
 }
 
+/** North-up map: combat heading zero faces +Z (down), independently of camera orbit. */
+export function overviewHeading(heading: number, scaleX: number, scaleY: number): number {
+    return Math.atan2(Math.sin(heading) / 1.5 * scaleX, -Math.cos(heading) / Math.sqrt(3) * scaleY);
+}
+
 export class HexRegionMap implements RegionMapBinding {
     private readonly minimap: WorldMinimap;
     private combat: CombatSnapshot | undefined;
@@ -26,6 +31,7 @@ export class HexRegionMap implements RegionMapBinding {
         const previous = this.combat;
         this.combat = combat;
         if (!previous || previous.player.x !== combat.player.x || previous.player.z !== combat.player.z
+            || previous.player.heading !== combat.player.heading
             || previous.region.x !== combat.region.x || previous.region.z !== combat.region.z) this.minimap.redraw();
     }
     public setExpanded(expanded: boolean): void { this.minimap.setExpanded(expanded); }
@@ -73,5 +79,8 @@ export class HexRegionMap implements RegionMapBinding {
         context.beginPath(); context.arc(player.x, player.y, 3.5, 0, Math.PI * 2);
         context.fillStyle = "#fff5d4"; context.fill();
         context.strokeStyle = "#223334"; context.lineWidth = 1.5; context.stroke();
+        context.save(); context.translate(player.x, player.y); context.rotate(overviewHeading(combat.player.heading, scaleX, scaleY));
+        context.beginPath(); context.moveTo(0, -13); context.lineTo(5, -5); context.lineTo(0, -7); context.lineTo(-5, -5); context.closePath();
+        context.fillStyle = "#fff5d4"; context.strokeStyle = "#172c31"; context.lineWidth = 1.5; context.fill(); context.stroke(); context.restore();
     };
 }

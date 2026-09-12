@@ -94,7 +94,8 @@ test("sub-unit texture periods preserve phase and unwrapped gradients across chu
         expect(source).not.toContain("max(hexSize * 4.0, 1.0)");
         expect(source.indexOf("terrainGradientX = dFdx(materialPattern.xy)"))
             .toBeLessThan(source.indexOf("if (vFogState < 0.5)"));
-        expect(source).toContain("textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY)");
+        expect(source).toContain("textureGrad(map, vec3(pattern.xy + offsetA, idx), terrainGradientX, terrainGradientY)");
+        expect(source).toContain("textureGrad(map, vec3(pattern.xy + offsetB, idx), terrainGradientX, terrainGradientY)");
     }
     shader.dispose();
 });

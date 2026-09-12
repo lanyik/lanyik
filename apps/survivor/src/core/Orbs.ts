@@ -16,20 +16,38 @@ const ORB_WEIGHTS: Readonly<Record<OrbType, FindRatings>> = {
 export interface Orb extends ItemDefinition<"orb", OrbType, 1> {
     readonly ratings: FindRatings;
 }
-export function generateOrb(random: DeterministicRandom, id: number, minimum: Rarity = "common"): Orb {
-    const rarity = rollRarity(random, BASE_LOOT_PROFILE, minimum);
-    const orbType = random.pick(ORB_TYPES);
-    const power = ORB_POWER[RARITIES.indexOf(rarity)];
-    const weights = ORB_WEIGHTS[orbType];
+export function orbDust(orb: Orb): number { return 3 ** RARITIES.indexOf(orb.rarity); }
+export function orbRefineCost(orb: Orb): number { return orbDust(orb) * 12; }
+export function createOrb(id: number, rarity: Rarity, orbType: OrbType): Orb {
+    const power = ORB_POWER[RARITIES.indexOf(rarity)], weights = ORB_WEIGHTS[orbType];
     return Object.freeze({ type: "orb", value: orbType, size: 1, id, rarity, name: `${RARITY_NAMES[rarity]}·${ORB_NAMES[orbType]}`,
         ratings: Object.freeze({ quantity: power * weights.quantity, quality: power * weights.quality, stars: power * weights.stars }) });
 }
+export function generateOrb(random: DeterministicRandom, id: number, minimum: Rarity = "common"): Orb {
+    const rarity = rollRarity(random, BASE_LOOT_PROFILE, minimum);
+    const orbType = random.pick(ORB_TYPES);
+    return createOrb(id, rarity, orbType);
+}
+export interface OrbResonance {
+    readonly pairs: readonly OrbType[];
+    readonly diversity: number;
+    readonly goldBonus: number;
+    readonly craftDiscount: number;
+}
+/** Two of a kind amplify that school's ratings; variety opens distinct economy benefits. */
+export function orbResonance(orbs: readonly (Orb | undefined)[]): OrbResonance {
+    const types = orbs.flatMap(orb => orb ? [orb.value] : []), diversity = new Set(types).size;
+    return Object.freeze({ pairs: Object.freeze(ORB_TYPES.filter(type => types.filter(value => value === type).length >= 2)),
+        diversity, goldBonus: diversity >= 3 ? .25 : 0, craftDiscount: diversity >= 4 ? .15 : 0 });
+}
 export function sumOrbs(orbs: readonly (Orb | undefined)[]): FindRatings {
     const result = { quantity: 0, quality: 0, stars: 0 };
+    const { pairs } = orbResonance(orbs);
     for (const orb of orbs) if (orb) {
-        result.quantity += orb.ratings.quantity;
-        result.quality += orb.ratings.quality;
-        result.stars += orb.ratings.stars;
+        const multiplier = pairs.includes(orb.value) ? 1.25 : 1;
+        result.quantity += orb.ratings.quantity * multiplier;
+        result.quality += orb.ratings.quality * multiplier;
+        result.stars += orb.ratings.stars * multiplier;
     }
     return result;
 }

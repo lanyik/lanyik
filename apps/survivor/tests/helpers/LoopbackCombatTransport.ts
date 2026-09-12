@@ -2,6 +2,7 @@ import type { CombatTransport } from "../../src/app/CombatTransport";
 import { CombatSimulation } from "../../src/core/CombatSimulation";
 import { CombatWorkerHost } from "../../src/worker/CombatWorkerHost";
 import type { CombatAdvance, CombatRequest, CombatUpdate } from "../../src/worker/CombatProtocol";
+import { MemorySpiritRepository } from "./MemorySpiritRepository";
 
 /** Unit-test transport: exercise the real protocol and transfer ownership without browser globals. */
 export class LoopbackCombatTransport implements CombatTransport {
@@ -12,13 +13,13 @@ export class LoopbackCombatTransport implements CombatTransport {
     private recycle: ArrayBuffer | undefined;
     private pending: { resolve: (update: CombatUpdate) => void; reject: (reason: Error) => void } | undefined;
     private readonly host: CombatWorkerHost;
-    constructor() {
+    constructor(progress = new MemorySpiritRepository()) {
         this.host = new CombatWorkerHost((message, transfers) => {
             const reply = structuredClone(message, { transfer: transfers });
             const pending = this.pending!; this.pending = undefined;
             if (reply.type === "error") pending.reject(new Error(reply.message));
             else { this.recycle = this.currentBuffer; this.currentBuffer = reply.update.render.buffer; pending.resolve(reply.update); }
-        }, (seed, start) => this.simulation = new CombatSimulation(seed, start));
+        }, progress, (seed, start, realm) => this.simulation = new CombatSimulation(seed, start, realm));
     }
     public get stats() { return { workers: 0, pending: Number(Boolean(this.pending)), completed: this.sequence, roundTripMs: 0, receiveMs: 0 }; }
     public start(seed: string, start: { x: number; z: number }) { return this.send({ type: "init", id: ++this.sequence, seed, start, ports: [] }); }

@@ -20,7 +20,7 @@ test("pickup recommendations rank real upgrades, expire after swaps, and respect
     const pickup = async (id: number, damage: number) => {
         const starter = createStarterEquipment();
         const bonuses = { ...starter.bonuses, damage };
-        source.dropItem({ ...starter, id, bonuses, score: equipmentScore(bonuses) }, 0, 0);
+        source.dropItem({ ...starter, id, locked: false, bonuses, score: equipmentScore(bonuses) }, 0, 0);
         source.collectEquipment();
         session.dispatch({ type: "sort-inventory" });
         await session.settled;

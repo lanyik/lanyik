@@ -3,6 +3,7 @@ import type { ConsumableEffect } from "./InventoryItem";
 import type { CombatSimulation } from "./CombatSimulation";
 import type { SkillId } from "./Skills";
 import type { Rarity } from "./Loot";
+import type { CraftOperation } from "./Crafting";
 
 export type CombatCommand =
     | { readonly type: "allocate"; readonly attribute: AttributeId }
@@ -18,8 +19,10 @@ export type CombatCommand =
     | { readonly type: "discard"; readonly itemId: number }
     | { readonly type: "sort-inventory" }
     | { readonly type: "merge-consumables" }
-    | { readonly type: "clear-equipment-quality"; readonly maximum: Rarity }
-    | { readonly type: "set-auto-clear-equipment"; readonly enabled: boolean };
+    | { readonly type: "craft"; readonly operation: CraftOperation }
+    | { readonly type: "cultivate-spirit"; readonly attribute: AttributeId }
+    | { readonly type: "set-equipment-lock"; readonly itemId: number; readonly locked: boolean }
+    | { readonly type: "set-auto-clear-equipment"; readonly maximum: Rarity | null };
 
 /** Commands commit in arrival order before the next batch of fixed ticks. */
 export function applyCombatCommand(simulation: CombatSimulation, command: CombatCommand): void {
@@ -37,8 +40,10 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "discard": simulation.discard(command.itemId); break;
         case "sort-inventory": simulation.sortInventory(); break;
         case "merge-consumables": simulation.mergeConsumables(); break;
-        case "clear-equipment-quality": simulation.clearEquipmentQuality(command.maximum); break;
-        case "set-auto-clear-equipment": simulation.setAutoClearEquipment(command.enabled); break;
+        case "craft": simulation.craft(command.operation); break;
+        case "cultivate-spirit": simulation.cultivateSpirit(command.attribute); break;
+        case "set-equipment-lock": simulation.setEquipmentLock(command.itemId, command.locked); break;
+        case "set-auto-clear-equipment": simulation.setAutoClearEquipment(command.maximum); break;
         default:
             command satisfies never;
             throw new Error(`Unknown combat command: ${(command as { type: string }).type}`);

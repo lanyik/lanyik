@@ -3,7 +3,7 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import { compareInventoryItems, createConsumable, generateConsumable, potionRecovery, selectConsumable, POTION_TYPES, type InventoryItem } from "../src/core/InventoryItem";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { generateOrb } from "../src/core/Orbs";
-import { createStarterEquipment } from "../src/core/Equipment";
+import { createStarterEquipment, EMPTY_BONUSES } from "../src/core/Equipment";
 import { canStack } from "../src/core/Inventory";
 import { GAME_CONFIG } from "../src/core/GameConfig";
 import { RARITIES } from "../src/core/Loot";
@@ -61,17 +61,18 @@ test("quick slots choose the smallest sufficient dose, then largest available, i
     expect(selectConsumable(items, "mana", player)).toBeUndefined();
 });
 
-test("manual cleanup includes the chosen quality and only inventory equipment, regardless of the automatic switch", () => {
+test("automatic quality threshold is inclusive and preserves locked equipment and other categories", () => {
     const simulation = new CombatSimulation("quality-clear"), random = new DeterministicRandom("orbs");
     const fixture = simulation as unknown as { inventory: InventoryItem[] };
-    fixture.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment(), id: 100 + index, rarity })),
+    fixture.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment(), id: 100 + index, rarity, locked: index === 1, bonuses: EMPTY_BONUSES })),
         generateOrb(random, 200), ...POTION_TYPES.map((type, i) => createConsumable(300 + i, "common", type))];
-    simulation.clearEquipmentQuality("rare");
+    simulation.setAutoClearEquipment("rare");
     const player = simulation.getSnapshot().player;
-    expect(player.inventory.map(item => item.id)).toEqual([103, 104, 105, 200, 300, 301, 302, 303]);
-    expect(player.clearedEquipment).toBe(3); expect(player.equipment.weapon?.id).toBe(1); expect(player.autoClearEquipment).toBe(false);
-    simulation.clearEquipmentQuality("rainbow"); expect(simulation.getSnapshot().player.inventory).toHaveLength(5);
-    expect(() => simulation.clearEquipmentQuality("missing" as never)).toThrow(RangeError); simulation.dispose();
+    expect(player.inventory.map(item => item.id)).toEqual([101, 103, 104, 105, 200, 300, 301, 302, 303]);
+    expect(player.clearedEquipment).toBe(2); expect(player.equipment.weapon?.id).toBe(1); expect(player.autoClearEquipment).toBe("rare");
+    simulation.setAutoClearEquipment("rainbow"); expect(simulation.getSnapshot().player.inventory).toHaveLength(6);
+    simulation.setEquipmentLock(101, false); expect(simulation.getSnapshot().player.inventory).toHaveLength(5);
+    expect(() => simulation.setAutoClearEquipment("missing" as never)).toThrow(RangeError); simulation.dispose();
 });
 
 test("orb swaps are atomic with a full orb bag, preserve ratings and reject locked sockets", () => {

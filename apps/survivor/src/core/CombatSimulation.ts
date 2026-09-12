@@ -1,5 +1,6 @@
 import {
     ATTRIBUTE_IDS,
+    ATTRIBUTE_NAMES,
     createStarterEquipment,
     generateEquipment,
     sumEquipment,
@@ -14,8 +15,10 @@ import {
     RegionalWorld, MAX_COMBAT_CHUNKS,
     REGION_RULES, CHEST_RULES, CHEST_TIERS, type RegionInfo
 } from "./RegionalWorld";
-import { lootProfile, BASE_LOOT_PROFILE, RARITIES, RARITY_NAMES, type Rarity } from "./Loot";
-import { ORB_UNLOCK_LEVELS, generateOrb, sumOrbs, type Orb } from "./Orbs";
+import { lootProfile, BASE_LOOT_PROFILE, RARITIES, type Rarity } from "./Loot";
+import { ORB_UNLOCK_LEVELS, generateOrb, sumOrbs, orbResonance, type Orb } from "./Orbs";
+import { EMPTY_SPIRIT_REALM, validateSpiritRealm, type SpiritRealm } from "./SpiritRealm";
+import { quoteCraft, commitCraft, type CraftOperation } from "./Crafting";
 import { compareInventoryItems, generateConsumable, canUseConsumable, selectConsumable, potionRecovery, POTIONS, type InventoryItem, type ConsumableEffect } from "./InventoryItem";
 import { insertInventoryItem, mergeInventory } from "./Inventory";
 import type { ItemType } from "./ItemDefinition";
@@ -69,9 +72,12 @@ export class CombatSimulation {
     private currentRegion: RegionInfo;
     private nearbyRegions: readonly RegionInfo[];
     private inventory: InventoryItem[] = [];
-    private autoClearEquipment = false;
+    private autoClearEquipment: Rarity | null = null;
+    private orbDust = 0;
+    private spiritRealm: SpiritRealm;
     private clearedEquipment = 0;
     private readonly orbs: (Orb | undefined)[] = new Array(ORB_UNLOCK_LEVELS.length);
+    private orbBonuses = orbResonance(this.orbs);
     private lootProfile = BASE_LOOT_PROFILE;
     private equipped: EquippedItems = { weapon: createStarterEquipment() };
     private attributes: Record<AttributeId, number> = { might: 5, vitality: 5, agility: 5, spirit: 5 };
@@ -125,8 +131,10 @@ export class CombatSimulation {
     };
     private readonly renderState: CombatRenderState;
 
-    constructor(seed: string | number, start = { x: 0, z: 0 }) {
+    constructor(seed: string | number, start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM) {
         validatePosition(start.x, start.z);
+        this.spiritRealm = validateSpiritRealm(spiritRealm);
+        for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.spiritRealm.attributes[id];
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
         this.world = new RegionalWorld(seed, start);
         this.entities = new CombatWorld(start.x, start.z);
@@ -151,6 +159,7 @@ export class CombatSimulation {
 
     public get tick(): number { return this.tickValue; }
     public get gameOver(): boolean { return this.gameOverValue; }
+    public get spiritProgress(): SpiritRealm { return this.spiritRealm; }
     public dispose(): void { this.closed = true; }
 
     public step(input: MovementInput): void;
@@ -222,6 +231,10 @@ export class CombatSimulation {
         if (this.cachedSnapshot) return this.cachedSnapshot;
         const equipment = Object.freeze({ ...this.equipped });
         const player: PlayerSnapshot = Object.freeze({
+            heading: this.heading,
+            spiritRealm: this.spiritRealm,
+            orbDust: this.orbDust,
+            orbResonance: this.orbBonuses,
             x: this.playerX,
             z: this.playerZ,
             health: this.health,
@@ -318,7 +331,7 @@ export class CombatSimulation {
         if (item.type !== "equipment") return { ok: false, message: "请选择装备" };
         const previous = this.equipped[item.value];
         this.inventory.splice(index, 1);
-        this.equipped = { ...this.equipped, [item.value]: item };
+        this.equipped = { ...this.equipped, [item.value]: Object.freeze({ ...item, locked: true, revision: item.revision + 1 }) };
         this.inventoryFullNotified = false;
         this.recalculateStats(false);
         if (previous && !this.storeInventoryItem(previous)) throw new Error("Equipment exchange lost its reserved slot");
@@ -331,6 +344,10 @@ export class CombatSimulation {
         if (this.gameOverValue) return { ok: false, message: "战斗已结束" };
         const index = this.inventory.findIndex(item => item.id === itemId);
         if (index < 0) return { ok: false, message: "背包中没有这件装备" };
+        const candidate = this.inventory[index];
+        if (candidate.type === "equipment" && candidate.locked) {
+            this.pushNotice("info", "装备已锁定，请先解锁"); return { ok: false, message: "装备已锁定" };
+        }
         const [item] = this.inventory.splice(index, 1);
         this.inventoryFullNotified = false;
         this.pushNotice("info", `丢弃了 ${item.name}`);
@@ -344,9 +361,10 @@ export class CombatSimulation {
         this.markChanged();
     }
 
-    public setAutoClearEquipment(enabled: boolean): void {
-        if (this.gameOverValue || this.autoClearEquipment === enabled) return;
-        this.autoClearEquipment = enabled;
+    public setAutoClearEquipment(maximum: Rarity | null): void {
+        if (maximum !== null && !RARITIES.includes(maximum)) throw new RangeError("Unknown cleanup quality");
+        if (this.gameOverValue || this.autoClearEquipment === maximum) return;
+        this.autoClearEquipment = maximum;
         this.clearAutoEquipment();
         this.markChanged();
     }
@@ -360,16 +378,37 @@ export class CombatSimulation {
         this.markChanged();
     }
 
-    public clearEquipmentQuality(maximum: Rarity): void {
-        if (!RARITIES.includes(maximum)) throw new RangeError("Unknown cleanup quality");
+    public setEquipmentLock(itemId: number, locked: boolean): void {
         if (this.gameOverValue) return;
-        const before = this.inventory.length, limit = RARITIES.indexOf(maximum);
-        this.inventory = this.inventory.filter(item => item.type !== "equipment" || RARITIES.indexOf(item.rarity) > limit);
-        const cleared = before - this.inventory.length;
-        this.clearedEquipment += cleared;
+        const index = this.inventory.findIndex(item => item.id === itemId), item = this.inventory[index];
+        if (!item || item.type !== "equipment" || item.locked === locked) return;
+        this.inventory[index] = Object.freeze({ ...item, locked, revision: item.revision + 1 });
+        this.clearAutoEquipment(); this.markChanged();
+    }
+
+    public craft(operation: CraftOperation): void {
+        if (this.gameOverValue) return;
+        const context = { inventory: this.inventory, equipment: this.equipped, orbs: this.orbs, gold: this.gold, orbDust: this.orbDust };
+        const plan = quoteCraft(context, operation);
+        if (!plan.ok) { this.pushNotice("info", plan.reason); return; }
+        const result = commitCraft(context, plan, this.nextItemId);
+        this.inventory = result.inventory; this.equipped = result.equipment;
+        if (result.usedId) this.nextItemId++;
+        this.gold -= plan.gold; this.orbDust += plan.dustGain - plan.dust;
         this.inventoryFullNotified = false;
-        this.pushNotice("info", `清理${RARITY_NAMES[maximum]}品质及以下装备 · ${cleared} 件`);
+        this.recalculateStats(false);
+        this.pushNotice("loot", `${plan.title}完成${plan.dustGain ? ` · 获得 ${plan.dustGain} 宝珠粉尘` : ""}`);
         this.markChanged();
+    }
+
+    public cultivateSpirit(attribute: AttributeId): void {
+        if (!ATTRIBUTE_IDS.includes(attribute)) throw new RangeError("Unknown spirit attribute");
+        if (this.gameOverValue) return;
+        if (this.spiritRealm.souls < GAME_CONFIG.spiritRealm.soulsPerLevel) { this.pushNotice("info", "灵魂不足，需要 1000 灵魂"); return; }
+        this.spiritRealm = validateSpiritRealm({ souls: this.spiritRealm.souls - GAME_CONFIG.spiritRealm.soulsPerLevel,
+            revision: this.spiritRealm.revision + 1, attributes: { ...this.spiritRealm.attributes, [attribute]: this.spiritRealm.attributes[attribute] + 1 } });
+        this.attributes[attribute]++;
+        this.recalculateStats(false); this.pushNotice("level", `灵境成长 · ${ATTRIBUTE_NAMES[attribute]}永久 +1`); this.markChanged();
     }
 
     public equipOrb(itemId: number, socket: number): { readonly ok: boolean; readonly message: string } {
@@ -392,6 +431,7 @@ export class CombatSimulation {
         if (previous) this.inventory.push(previous);
         this.orbs[socket] = item;
         this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.orbBonuses = orbResonance(this.orbs);
         this.inventoryFullNotified = false;
         this.pushNotice("loot", `已嵌入 ${item.name}`);
         this.markChanged();
@@ -419,6 +459,7 @@ export class CombatSimulation {
         this.inventory = nextInventory;
         this.orbs[socket] = undefined;
         this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.orbBonuses = orbResonance(this.orbs);
         this.markChanged();
     }
 
@@ -552,7 +593,7 @@ export class CombatSimulation {
             this.nextItemId = nextId;
             this.inventory = nextInventory;
             if (clearEquipment) this.clearedEquipment++;
-            this.gold += Math.round(rules.gold * (1 + this.stats.goldBonus));
+            this.gold += Math.round(rules.gold * (1 + this.stats.goldBonus + this.orbBonuses.goldBonus));
             chunk.chestOpened = true;
             this.openedChests += 1;
             this.inventoryFullNotified = false;
@@ -710,7 +751,8 @@ export class CombatSimulation {
         const experience = ENEMY_DEFINITIONS[kind].experience * (1 + (level - 1) * 0.15) * (boss ? 15 : elite ? 2 : 1);
         this.entities.remove(index);
         this.killsValue += 1;
-        this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * level * (1 + this.stats.goldBonus));
+        this.spiritRealm = Object.freeze({ ...this.spiritRealm, souls: this.spiritRealm.souls + 1, revision: this.spiritRealm.revision + 1 });
+        this.gold += Math.round((boss ? 120 : elite ? 12 : 2) * level * (1 + this.stats.goldBonus + this.orbBonuses.goldBonus));
         this.entities.spawnExperience(x, z, experience);
         if (boss && this.entities.loot.count < MAX_GROUND_EQUIPMENT) {
             this.dropItem(generateOrb(this.random, this.nextItemId++, "rare"), x, z);
@@ -752,7 +794,8 @@ export class CombatSimulation {
     }
 
     private shouldAutoClear(item: InventoryItem): boolean {
-        return this.autoClearEquipment && this.canClearEquipment(item);
+        return this.autoClearEquipment !== null && item.type === "equipment" && !item.locked
+            && RARITIES.indexOf(item.rarity) <= RARITIES.indexOf(this.autoClearEquipment) && this.canClearEquipment(item);
     }
 
     private canClearEquipment(item: InventoryItem): boolean {
@@ -798,10 +841,3 @@ export class CombatSimulation {
         this.cachedSnapshot = undefined;
     }
 }
-
-const ATTRIBUTE_NAMES: Readonly<Record<AttributeId, string>> = Object.freeze({
-    might: "力量",
-    vitality: "体魄",
-    agility: "敏捷",
-    spirit: "精神"
-});

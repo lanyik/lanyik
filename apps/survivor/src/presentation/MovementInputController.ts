@@ -24,6 +24,7 @@ export class MovementInputController {
     }
 
     public read(camera: Camera): MovementInput {
+        if (this.isTextInput(document.activeElement)) this.clear();
         camera.getWorldDirection(this.forward);
         const planarLength = Math.hypot(this.forward.x, this.forward.z);
         if (!this.enabled || !this.focused || document.hidden || planarLength <= 1e-9) {
@@ -65,6 +66,6 @@ export class MovementInputController {
         event.preventDefault();
     };
     private isTextInput(target: EventTarget | null): boolean {
-        return target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"));
+        return target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select, dialog[open]"));
     }
 }

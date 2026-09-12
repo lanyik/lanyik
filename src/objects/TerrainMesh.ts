@@ -543,6 +543,7 @@ export class TerrainMesh extends Group {
             hexSize: { value: size },
             map: { value: this.atlasTexture },
             sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] },
+            rockAtlasIndex: { value: this.atlasCellIndex[Land.mountain] },
             waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
             beachWidth: { value: this.options.beachWidth ?? 0.35 },
             waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },

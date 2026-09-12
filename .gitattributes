@@ -8,6 +8,10 @@ apps/survivor/assets/effects/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/loot/License.txt -text -whitespace
 # The loot source manifest hashes the publisher's original OBJ bytes as well.
 apps/survivor/assets/loot/*.obj -text -whitespace
+# Environment manifests also hash the publisher's OBJ/MTL/license bytes.
+apps/survivor/assets/environment/*.obj -text -whitespace
+apps/survivor/assets/environment/*.mtl -text -whitespace
+apps/survivor/assets/environment/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/actors/**/*.gltf -text
 apps/survivor/assets/actors/**/*.bin -text
 

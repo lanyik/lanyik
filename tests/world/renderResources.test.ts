@@ -222,14 +222,16 @@ describe("streamed render resource sharing", () => {
         for (const part of parts) { part.geometry.dispose(); part.material.dispose(); }
     });
 
-    test("de-tiles atlas cells without adding another texture lookup site", () => {
+    test("uses two explicit-gradient atlas samples per material and camera-independent rock coverage", () => {
         for (const shader of [TERRAIN_FRAGMENT_SHADER, TERRAIN_FAST_FRAGMENT_SHADER]) {
             expect(shader).toContain("vec3 terrainPattern()");
             expect(shader).toContain("vec3 applyBiomeMaterial(vec3 color)");
             expect(shader).toContain("float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12");
             expect(shader).toContain("in vec4 vBiomeWeights");
             expect(shader).not.toContain("varying float vElevation");
-            expect(shader.match(/textureGrad\(map,/g)).toHaveLength(1);
+            expect(shader.match(/textureGrad\(map,/g)).toHaveLength(2);
+            expect(shader).toContain("applySlopeMaterial(texColor, materialPattern)");
+            expect(shader).toContain("in float vSurfaceSlope");
         }
         expect(TERRAIN_VERTEX_SHADER).toContain("in vec4 fogState");
         expect(TERRAIN_VERTEX_SHADER).toContain("out vec4 vBiomeWeights");

@@ -8,8 +8,9 @@ export function inventorySlots(items: readonly InventoryItem[], type: ItemType):
     return count;
 }
 export function canStack(first: InventoryItem, second: InventoryItem): boolean {
-    return first.type === "consumable" && second.type === "consumable" && first.value === second.value
-        && first.rarity === second.rarity;
+    return first.value === second.value && first.rarity === second.rarity && (
+        first.type === "consumable" && second.type === "consumable"
+        || first.type === "affix" && second.type === "affix" && first.amount === second.amount);
 }
 
 /** Whole-item transaction: failure changes neither the inventory nor the incoming stack. */
@@ -22,16 +23,16 @@ export function insertInventoryItem(items: readonly InventoryItem[], incoming: I
     let remaining = incoming.size;
     for (let index = 0; index < result.length && remaining > 0; index++) {
         const item = result[index];
-        if (!canStack(item, incoming) || item.type !== "consumable") continue;
+        if (!canStack(item, incoming) || item.type !== "consumable" && item.type !== "affix") continue;
         const moved = Math.min(remaining, rules.stackSize - item.size);
         if (moved) result[index] = Object.freeze({ ...item, size: item.size + moved });
         remaining -= moved;
     }
-    if (remaining > 0) result.push(incoming.type === "consumable" ? Object.freeze({ ...incoming, size: remaining }) : incoming);
+    if (remaining > 0) result.push(incoming.type === "consumable" || incoming.type === "affix" ? Object.freeze({ ...incoming, size: remaining }) : incoming);
     return result;
 }
 
-/** Explicitly compacts existing potion slots. First IDs survive; quantities and potency are conserved. */
+/** Compacts stackable slots. First IDs survive; quantities and potency are conserved. */
 export function mergeInventory(items: readonly InventoryItem[]): InventoryItem[] {
     let merged: InventoryItem[] = [];
     for (const item of items) {

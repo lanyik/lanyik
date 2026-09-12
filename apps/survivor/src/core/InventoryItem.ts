@@ -1,5 +1,6 @@
 import type { Equipment } from "./Equipment";
 import type { Orb } from "./Orbs";
+import type { AffixItem } from "./AffixItem";
 import { RARITIES, RARITY_NAMES, rollRarity, BASE_LOOT_PROFILE, type Rarity } from "./Loot";
 import type { ItemDefinition } from "./ItemDefinition";
 import { GAME_CONFIG } from "./GameConfig";
@@ -19,11 +20,12 @@ export const POTIONS = Object.freeze({
 export interface Consumable extends ItemDefinition<"consumable", PotionType> {
     readonly rarity: PotionRarity;
 }
-export type InventoryItem = Equipment | Orb | Consumable;
+export type InventoryItem = Equipment | Orb | Consumable | AffixItem;
 
 export enum GroundItemKind { Weapon, Orb, Health, Mana, HealthEssence, ManaEssence, Armor, Jewel }
 export function groundItemKind(item: InventoryItem): GroundItemKind {
     if (item.type === "orb") return GroundItemKind.Orb;
+    if (item.type === "affix") return GroundItemKind.Jewel;
     if (item.type === "consumable") return GroundItemKind.Health + POTION_TYPES.indexOf(item.value);
     if (item.value === "weapon") return GroundItemKind.Weapon;
     return ["ring", "necklace", "bracelet", "charm"].includes(item.value) ? GroundItemKind.Jewel : GroundItemKind.Armor;

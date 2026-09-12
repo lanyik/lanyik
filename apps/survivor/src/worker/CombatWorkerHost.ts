@@ -4,9 +4,11 @@ import { MAX_COMMAND_BATCH, MAX_STEP_BATCH, type CombatRequest, type CombatRespo
 import { ProjectileWorkerPool } from "./ProjectileWorkerPool";
 import { RenderFrame } from "./RenderFrame";
 import { GAME_CONFIG, ticksPerUpdate } from "../core/GameConfig";
+import type { SpiritRealm } from "../core/SpiritRealm";
+import type { SpiritRepository } from "./SpiritRepository";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
-type SimulationFactory = (seed: string, start: { x: number; z: number }) => CombatSimulation;
+type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm) => CombatSimulation;
 
 /** Owns all authoritative state. Async query work completes before any next command or tick. */
 export class CombatWorkerHost {
@@ -17,9 +19,11 @@ export class CombatWorkerHost {
     private lastSnapshotTick = -Infinity;
     private busy = false;
     private closed = false;
+    private savedRevision = 0;
 
     constructor(private readonly send: (message: CombatResponse, transfers: Transferable[]) => void,
-        private readonly createSimulation: SimulationFactory = (seed, start) => new CombatSimulation(seed, start)) {}
+        private readonly progress: SpiritRepository,
+        private readonly createSimulation: SimulationFactory = (seed, start, realm) => new CombatSimulation(seed, start, realm)) {}
 
     public async receive(request: CombatRequest): Promise<void> {
         if (this.closed) return;
@@ -29,12 +33,16 @@ export class CombatWorkerHost {
             const started = performance.now();
             const waitBefore = this.pool?.waitMs ?? 0;
             let forceSnapshot = false;
-            let steps = 0, simulationMs = 0;
+            let steps = 0, simulationMs = 0, persistenceMs = 0;
             if (request.type === "init") {
                 if (this.simulation) throw new Error("Combat Worker already initialized");
                 if (request.ports.length > GAME_CONFIG.workers.collisionMax) throw new Error("Collision Worker budget exceeded");
                 this.pool = new ProjectileWorkerPool(request.ports);
-                this.simulation = this.createSimulation(request.seed, request.start);
+                const loading = performance.now(), realm = await this.progress.load();
+                persistenceMs += performance.now() - loading;
+                if (this.closed) return;
+                this.savedRevision = realm.revision;
+                this.simulation = this.createSimulation(request.seed, request.start, realm);
                 // One frame remains here while the other is owned by the presentation thread.
                 this.frame = new RenderFrame();
                 forceSnapshot = true;
@@ -56,6 +64,13 @@ export class CombatWorkerHost {
             } else throw new Error("Unknown combat request");
             if (this.closed) return;
             const simulation = this.simulation!, pool = this.pool!;
+            if (simulation.spiritProgress.revision !== this.savedRevision) {
+                const saving = performance.now();
+                await this.progress.save(simulation.spiritProgress);
+                persistenceMs += performance.now() - saving;
+                this.savedRevision = simulation.spiritProgress.revision;
+                if (this.closed) return;
+            }
             const notices = simulation.drainNotices();
             const publish = forceSnapshot || simulation.gameOver || notices.length > 0 || simulation.tick - this.lastSnapshotTick >= SNAPSHOT_TICKS;
             if (publish) this.lastSnapshotTick = simulation.tick;
@@ -65,7 +80,7 @@ export class CombatWorkerHost {
             const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
-                    steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs), queryWaitMs,
+                    steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs - persistenceMs), queryWaitMs,
                     frameBytes: RenderFrame.bytes } };
             this.frame = request.type === "init" ? new RenderFrame() : undefined;
             this.send({ type: "state", id: request.id, update }, [update.render.buffer]);
@@ -78,6 +93,7 @@ export class CombatWorkerHost {
 
     public dispose(): void {
         this.closed = true; this.pool?.dispose(); this.simulation?.dispose();
+        this.progress.close();
         this.pool = undefined; this.simulation = undefined; this.frame = undefined;
     }
 }

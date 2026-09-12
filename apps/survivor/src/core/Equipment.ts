@@ -11,6 +11,7 @@ export type EquipmentSlot = keyof typeof SLOT_NAMES;
 export const EQUIPMENT_SLOTS = Object.freeze(Object.keys(SLOT_NAMES) as EquipmentSlot[]);
 export const ATTRIBUTE_IDS = ["might", "vitality", "agility", "spirit"] as const;
 export type AttributeId = typeof ATTRIBUTE_IDS[number];
+export const ATTRIBUTE_NAMES: Readonly<Record<AttributeId, string>> = Object.freeze({ might: "力量", vitality: "体魄", agility: "敏捷", spirit: "精神" });
 export type Attributes = Readonly<Record<AttributeId, number>>;
 
 type StatUnit = "flat" | "percent" | "permille" | "seconds" | "regen";
@@ -70,6 +71,8 @@ export interface EquipmentAffix {
     readonly rarity: Rarity;
 }
 export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
+    readonly locked: boolean;
+    readonly revision: number;
     readonly itemLevel: number;
     readonly stars: 1 | 2 | 3;
     readonly baseBonuses: EquipmentBonuses;
@@ -114,8 +117,17 @@ function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 
     const baseBonuses = equipmentBase(slot, itemLevel);
     const bonuses = { ...baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses,
+    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses, locked: id === 1, revision: 0,
         affixes: Object.freeze(affixes), bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
+}
+
+/** Crafting changes affixes only; base stats, quality, level and stars belong to the target. */
+export function withEquipmentAffixes(item: Equipment, affixes: readonly EquipmentAffix[]): Equipment {
+    const bonuses = { ...item.baseBonuses };
+    for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
+    return Object.freeze({ ...item, locked: true, revision: item.revision + 1,
+        affixes: Object.freeze(affixes.map(affix => Object.freeze({ ...affix }))),
+        bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 
 export function createStarterEquipment(): Equipment {

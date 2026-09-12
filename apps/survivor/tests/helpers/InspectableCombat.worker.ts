@@ -1,10 +1,11 @@
 import { CombatSimulation } from "../../src/core/CombatSimulation";
 import { CombatWorkerHost } from "../../src/worker/CombatWorkerHost";
 import type { CombatRequest } from "../../src/worker/CombatProtocol";
+import { IndexedDBSpiritRepository } from "../../src/worker/SpiritRepository";
 
 /** Browser fixture entry. Production workers never expose their simulation. */
-const host = new CombatWorkerHost((message, transfer) => self.postMessage(message, { transfer }), (seed, start) => {
-    const simulation = new CombatSimulation(seed, start);
+const host = new CombatWorkerHost((message, transfer) => self.postMessage(message, { transfer }), new IndexedDBSpiritRepository(), (seed, start, realm) => {
+    const simulation = new CombatSimulation(seed, start, realm);
     (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation = simulation;
     return simulation;
 });

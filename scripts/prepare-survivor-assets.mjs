@@ -1,11 +1,11 @@
-import { cp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareSurvivorActors } from "./lib/survivor-actors.mjs";
 import { sourceReader } from "./lib/actor-source.mjs";
 import { prepareSurvivorEffects } from "./lib/survivor-effects.mjs";
 import { prepareSurvivorLoot } from "./lib/survivor-loot.mjs";
-import sharp from "sharp";
+import { prepareSurvivorEnvironment } from "./lib/survivor-environment.mjs";
 
 const root = await realpath(fileURLToPath(new URL("../", import.meta.url)));
 const expectedApplication = resolve(root, "apps/survivor");
@@ -21,21 +21,7 @@ if (application !== expectedApplication || dirname(output) !== application) {
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp(resolve(root, "public/textures"), resolve(output, "textures"), { recursive: true });
-// App-specific moss palette. Atlas coordinates and the library's original art stay intact.
-const atlasPath = resolve(root, "public/textures/terrain.png");
-const atlas = JSON.parse(await readFile(resolve(root, "public/textures/land-atlas.json"), "utf8"));
-const patches = [];
-for (const name of ["land", "_plains"]) {
-    const { cellX, cellY } = atlas.textures[name];
-    const left = cellX * atlas.cellSize, top = cellY * atlas.cellSize;
-    const input = await sharp(atlasPath).extract({ left, top, width: atlas.cellSize, height: atlas.cellSize })
-        .modulate({ saturation: .42, brightness: .8 }).png().toBuffer();
-    patches.push({ input, left, top });
-}
-await sharp(atlasPath).composite(patches).png().toFile(resolve(output, "textures/terrain.png"));
-for (const tree of ["oak", "palm", "pinia"]) {
-    await cp(resolve(root, "public/Assets/models", tree), resolve(output, "Assets/models", tree), { recursive: true });
-}
+await prepareSurvivorEnvironment(resolve(application, "assets/environment"), output, root);
 await prepareSurvivorActors(resolve(application, "assets/actors"), resolve(output, "actors"));
 const readActor = await sourceReader(resolve(application, "assets/actors"));
 for (const file of ["outfits-LICENSE.txt", "base-characters-LICENSE.txt", "animations-LICENSE.txt", "bestiary-LICENSE.txt"]) {

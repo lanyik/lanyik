@@ -43,6 +43,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 </div>
                 <div className="section-heading orb-heading"><h3>寻宝宝珠</h3><small>{ORB_UNLOCK_LEVELS.filter(level => player.level >= level).length} / 6 已解锁</small></div>
                 <OrbSockets player={player} disabled={disabled} onInspect={setInspectedId} onRemove={socket => dispatch({ type: "remove-orb", socket })} />
+                <p className="orb-resonance-summary">共鸣：{player.orbResonance.pairs.length} 类配对 · {player.orbResonance.diversity} 种类型<br />金币 +{player.orbResonance.goldBonus * 100}% · 打造消耗 −{player.orbResonance.craftDiscount * 100}%</p>
                 <div className="equipment-inspector">{inspected ? <><ItemDetails item={inspected} />
                     {inspected.type === "equipment" && <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.value }); setInspectedId(undefined); }}>卸下装备</button>}
                     {inspected.type === "orb" && <button disabled={disabled} onClick={() => { dispatch({ type: "remove-orb", socket: player.orbs.findIndex(orb => orb?.id === inspected.id) }); setInspectedId(undefined); }}>取下宝珠</button>}
@@ -52,7 +53,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 <div><span>攻击</span><strong>{statValue("damage", player.stats.damage)}</strong></div><div><span>防御</span><strong>{statValue("armor", player.stats.armor)}</strong></div><div><span>生命</span><strong>{player.stats.maxHealth}</strong></div>
             </div><div className="section-heading"><h3>基础属性</h3><span className={`attribute-points${player.unspentAttributePoints > 0 ? " available" : ""}`}>{player.unspentAttributePoints} 点可分配</span></div>
                 <div className="attribute-list">{ATTRIBUTE_IDS.map(id => <div className="attribute-row" key={id}>
-                    <span>{ATTRIBUTE_INFO[id].name}<Hint label={ATTRIBUTE_INFO[id].name}>{ATTRIBUTE_INFO[id].detail}。加点不改变掉落分布或战斗概率。</Hint><small>{ATTRIBUTE_INFO[id].detail}</small></span>
+                    <span>{ATTRIBUTE_INFO[id].name}<Hint label={ATTRIBUTE_INFO[id].name}>{ATTRIBUTE_INFO[id].detail}。包含灵境永久 +{player.spiritRealm.attributes[id]}；加点不改变掉落分布或战斗概率。</Hint><small>{ATTRIBUTE_INFO[id].detail}</small></span>
                     <strong>{player.attributes[id]}</strong><button aria-label={`提升${ATTRIBUTE_INFO[id].name}`} disabled={disabled || !player.unspentAttributePoints} onClick={() => dispatch({ type: "allocate", attribute: id })}>+</button>
                 </div>)}</div>
                 <div className="loot-summary"><span>装备爆率 <Hint label="装备爆率"><strong>寻宝分布</strong>
@@ -65,7 +66,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 <div className="stat-groups">{STAT_GROUPS.map((group, index) => <details className="stat-group" key={group.name} open={index === 0}>
                     <summary>{group.name}<small>{group.ids.length + (index === 2 ? 2 : 0)} 项</small></summary>
                     <dl className="character-stats">{index === 2 && <><div><dt>法力</dt><dd>{player.stats.maxMana}</dd></div><div><dt>法力回复</dt><dd>{player.stats.manaRegen.toFixed(1)}/0.5秒</dd></div></>}
-                        {group.ids.map(id => <div key={id}><dt>{BONUS_INFO[id].name}{BONUS_INFO[id].unit !== "flat" && <Hint label={BONUS_INFO[id].name}>{BONUS_INFO[id].detail}</Hint>}</dt><dd>{statValue(id, player.stats[id])}</dd></div>)}
+                        {group.ids.map(id => <div key={id}><dt>{BONUS_INFO[id].name}{BONUS_INFO[id].unit !== "flat" && <Hint label={BONUS_INFO[id].name}>{BONUS_INFO[id].detail}{id === "goldBonus" && `；含宝珠共鸣 +${player.orbResonance.goldBonus * 100}%`}</Hint>}</dt><dd>{statValue(id, player.stats[id] + (id === "goldBonus" ? player.orbResonance.goldBonus : 0))}</dd></div>)}
                     </dl>
                 </details>)}</div>
             </div>

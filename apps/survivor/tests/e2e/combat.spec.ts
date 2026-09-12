@@ -103,17 +103,17 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect(page.locator(".equipment-slot[data-slot=weapon] .item-icon-trigger")).not.toHaveAttribute("aria-label", "武器：空");
     expect(await slotLayout()).toEqual(slotBefore);
     const beforeClear = await itemOrder();
-    const cleanup = bag.getByRole("checkbox", { name: "自动清理", exact: true });
-    await expect(cleanup).not.toBeChecked();
-    await cleanup.check();
-    await expect(cleanup).toBeChecked();
+    const cleanup = bag.getByRole("combobox", { name: "自动清理装备品质" });
+    await expect(cleanup).toHaveValue("off");
+    await cleanup.selectOption("rainbow");
+    await expect(cleanup).toHaveValue("rainbow");
     await expect.poll(itemOrder).toEqual(beforeClear.filter(item => item.type !== "equipment" || !item.clearable));
     await expect(page.locator(".equipment-slot[data-slot=weapon] .item-icon-trigger")).not.toHaveAttribute("aria-label", "武器：空");
-    // Checkbox focus must keep menu shortcuts available.
+    await cleanup.blur(); // Native select focus keeps typing/navigation keys local.
     await page.keyboard.press("KeyB"); await expect(bag).toHaveCount(0);
-    await page.keyboard.press("KeyB"); await expect(cleanup).toBeChecked();
-    await cleanup.uncheck();
-    await expect(cleanup).not.toBeChecked();
+    await page.keyboard.press("KeyB"); await expect(cleanup).toHaveValue("rainbow");
+    await cleanup.selectOption("off");
+    await expect(cleanup).toHaveValue("off");
     await page.screenshot({ path: "test-results/survivor-app/character-and-bag.png" });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(bag).toBeVisible();

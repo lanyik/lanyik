@@ -1,4 +1,5 @@
 import { GROUND_PROJECTION_HEADER } from "./groundProjection";
+import { TERRAIN_MATERIAL_SAMPLING } from "./terrainMaterial";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const TERRAIN_FAST_FRAGMENT_SHADER = `
@@ -74,8 +75,8 @@ vec3 landformDebugColor() {
     return mix(vec3(0.12, 0.1, 0.18), vec3(0.95, 0.82, 0.34), vLandform.w);
 }
 
-// Fast mode keeps the same single texture lookup. Two broad sine waves replace
-// full value noise, providing a cheap continuous UV bend and material tint.
+// Two broad sine waves replace full value noise; sampling and slope coverage
+// retain the full material's semantics.
 vec3 terrainPattern() {
     vec2 p = vWorldXZ / (hexSize * 4.0);
     float macro = clamp(
@@ -90,12 +91,7 @@ vec3 terrainPattern() {
     return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
-    float tone = mix(0.91, 1.09, smoothstep(0.08, 0.92, pattern.z));
-    color.rgb *= tone;
-    return color;
-}
+${TERRAIN_MATERIAL_SAMPLING}
 
 vec3 applyBiomeMaterial(vec3 color) {
     vec4 weights = max(vBiomeWeights, 0.0);
@@ -149,6 +145,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     }
 
     vec4 texColor = sampleTerrainCell(vTerrain, materialPattern);
+    texColor = applySlopeMaterial(texColor, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Reuse the fast material macro as the snowline warp. This keeps the same

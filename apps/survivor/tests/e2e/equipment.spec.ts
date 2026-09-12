@@ -46,7 +46,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
         expect(rendered.actual[kind].length).toBeGreaterThan(0);
         expect(rendered.actual[kind].every(count => count === rendered.expected[kind])).toBe(true);
     }
-    const starter = createStarterEquipment();
+    const starter = { ...createStarterEquipment(), locked: false };
     const weakBonuses = { ...EMPTY_BONUSES, damage: 1 };
     const betterBonuses = { ...starter.bonuses, damage: 50, armor: 10 };
     const better: Equipment = { ...starter, id: 9001, name: "晨光试炼弩", bonuses: betterBonuses,
@@ -71,7 +71,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(page.locator(".equipment-tooltip .affix-list")).toHaveAttribute("aria-label", "2条词条");
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
-    await expect(bag.locator(".bag-tabs button")).toHaveCount(3);
+    await expect(bag.locator(".bag-tabs button")).toHaveCount(4);
     await expect(bag.getByRole("button", { name: /^全部/ })).toHaveCount(0);
     const candidate = bag.locator('[data-item-id="9001"]');
     await candidate.locator(".bag-item-heading strong").hover();
@@ -110,9 +110,8 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(tooltip).toHaveCount(0);
     await expect(bag).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 720 });
-    // The controlled checkbox commits after the authoritative Worker responds.
-    const autoClear = bag.getByRole("checkbox", { name: "自动清理", exact: true });
-    await autoClear.click(); await expect(autoClear).toBeChecked();
+    const autoClear = bag.getByRole("combobox", { name: "自动清理装备品质" });
+    await autoClear.selectOption("rainbow"); await expect(autoClear).toHaveValue("rainbow");
     await expect(candidate).toBeVisible();
     await expect(bag.locator('[data-item-id="9002"]')).toHaveCount(0);
     await page.getByRole("button", { name: "关闭背包", exact: true }).click();

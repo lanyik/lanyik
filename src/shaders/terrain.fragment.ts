@@ -1,5 +1,6 @@
 import { WORLD_NOISE_HEADER } from "./worldNoise";
 import { GROUND_PROJECTION_HEADER } from "./groundProjection";
+import { TERRAIN_MATERIAL_SAMPLING } from "./terrainMaterial";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const TERRAIN_FRAGMENT_SHADER = `
@@ -200,9 +201,8 @@ vec4 riverMouthShape(vec2 p, float mask, float apothem, float bendOff) {
 }
 
 // One continuous low-frequency field bends the world-space UVs and modulates
-// their tone. All terrain types share this pattern, so biome blends stay
-// registered. It deliberately adds ALU only: sampleTerrainCell still performs
-// exactly one atlas lookup, preserving the texture-fetch budget.
+// their tone. All terrain types share the same patch offsets, so biome blends
+// stay registered across tiles and origin rebases.
 vec3 terrainPattern() {
     float macro = worldNoise(vWorldXZ, 2, vec2(13.7, -8.2));
     float warp = (macro - 0.5) * hexSize * 1.15;
@@ -210,13 +210,7 @@ vec3 terrainPattern() {
     return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
-    vec4 color = textureGrad(map, vec3(pattern.xy, idx), terrainGradientX, terrainGradientY);
-    float tone = mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
-    vec3 tint = mix(vec3(1.03, 0.98, 0.93), vec3(0.96, 1.03, 0.98), pattern.z);
-    color.rgb *= tone * mix(vec3(1.0), tint, 0.18);
-    return color;
-}
+${TERRAIN_MATERIAL_SAMPLING}
 
 // Continuous climate material variation without another atlas fetch. The
 // generator supplies normalized weights; recomputing the normalization here
@@ -414,6 +408,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         texColor = blendEdge(texColor, vNeighborsB.y, vNeighborsPriorityB.y, vEdgeFactorsB.y, blendBend, blendPatch, materialPattern); // N
         texColor = blendEdge(texColor, vNeighborsB.z, vNeighborsPriorityB.z, vEdgeFactorsB.z, blendBend, blendPatch, materialPattern); // NE
     }
+    texColor = applySlopeMaterial(texColor, materialPattern);
     texColor.rgb = applyBiomeMaterial(texColor.rgb);
 
     // Curved coastline. coastField() is 1.0 exactly on the mesh edge shared

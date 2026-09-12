@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createStarterEquipment } from "../../src/core/Equipment";
+import { createStarterEquipment, EMPTY_BONUSES } from "../../src/core/Equipment";
 import { generateOrb } from "../../src/core/Orbs";
 import { createConsumable, type InventoryItem } from "../../src/core/InventoryItem";
 import { RARITIES } from "../../src/core/Loot";
@@ -19,7 +19,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await pauseCombat(page);
     const random = new DeterministicRandom("loot-ui");
     const items: InventoryItem[] = [
-        ...RARITIES.map((rarity, i) => ({ ...createStarterEquipment(), id: 100 + i, rarity })),
+        ...RARITIES.map((rarity, i) => ({ ...createStarterEquipment(), id: 100 + i, rarity, locked: false, bonuses: EMPTY_BONUSES })),
         generateOrb(random, 200, "rainbow"), generateOrb(random, 201, "diamond"),
         createConsumable(300, "rare", "health-percent", 5), createConsumable(301, "legendary", "mana", 3)
     ];
@@ -41,8 +41,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await worldOnly.evaluate(element => element.parentNode!.removeChild(element));
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
-    await bag.getByRole("combobox", { name: "清理装备品质" }).selectOption("rare");
-    await bag.getByRole("button", { name: "一键清理 3 件", exact: true }).click();
+    await bag.getByRole("combobox", { name: "自动清理装备品质" }).selectOption("rare");
     await expect(bag.locator('[data-kind="equipment"]')).toHaveCount(3);
     await expect(bag.locator('[data-item-id="103"]')).toHaveCount(1);
     await bag.getByRole("button", { name: /^宝珠/ }).click();

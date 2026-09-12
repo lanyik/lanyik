@@ -88,6 +88,7 @@ out vec3 vNeighborsPriorityB;
 out vec3 vEdgeFactorsA; // SE, S, SW
 out vec3 vEdgeFactorsB; // NW, N, NE
 out vec3 vNormal;
+out float vSurfaceSlope;
 out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
 out float vFogState;
 out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
@@ -422,6 +423,7 @@ void main() {
     float xN = clamp((waterEdge - e0) / (1.0 - e0), 0.0, 1.0);
     float dSmooth = waterEdge > 0.0 ? 6.0 * xN * (1.0 - xN) / (1.0 - e0) : 0.0;
     vec2 slope = (waterLevel * 0.5) * 1.2 * dSmooth * (best.yz / apothem) * fogVisible + mountainSlope;
+    vSurfaceSlope = length(slope);
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
 
     // Rim distance for the grid line - NOT radial distance from center

@@ -19,11 +19,11 @@ export function RegionMap({ combat, expanded, onToggle, attach }: { readonly com
             <button aria-label={expanded ? "收起地图" : "展开地图"} aria-expanded={expanded} onClick={onToggle}><UiIcon name={expanded ? "close" : "map"} /><kbd>M</kbd></button></header>
         <div className="region-meta"><span>第 {region.ring} 环</span><span>等级带 <b>{region.bandMin}–{region.bandMax}</b></span></div>
         <div className="region-map-surface">
-            <canvas ref={canvas} className="region-map" role="img" aria-label="山川水域与地域难度地图" data-testid="terrain-minimap" />
+            <canvas ref={canvas} className="region-map" role="img" aria-label="山川水域、地域难度与玩家朝向地图" data-testid="terrain-minimap" data-heading={combat.player.heading} />
             <span className="map-north" aria-hidden="true">N<i /></span>
             <span className="map-caption" aria-hidden="true">荒原 · 地貌</span>
         </div>
         <footer><span className="normal-dot">常规</span><span className="hard-dot">困难</span><span className="horror-dot">恐怖</span><b>Lv.{region.level}</b></footer>
-        {expanded && <p className="map-reading-tip">色晕表示邻近地域难度 · ◆ 恐怖地域</p>}
+        {expanded && <p className="map-reading-tip">箭头表示玩家朝向 · 色晕表示邻近地域难度 · ◆ 恐怖地域</p>}
     </section>;
 }

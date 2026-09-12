@@ -7,6 +7,7 @@ export const GAME_CONFIG = Object.freeze({
     timing: Object.freeze({ simulationHz: 120, activeAiHz: 30, distantAiHz: 5, regenerationHz: 2,
         snapshotHz: 10, supportSenseHz: 5, autoSkillHz: 10, diagnosticsMs: 1000, maxCatchUpMs: 250 }),
     skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
+    spiritRealm: Object.freeze({ soulsPerLevel: 1000 }),
     presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 14, mistDenseRadius: 26, mistFadeRadius: 44, mistOuterRadius: 52,
         horizonFogStart: 620, horizonFogEnd: 1100, horizonFogColor: 0x849b9f,
         groundProjection: Object.freeze({ span: 64, resolution: 2048 }), assetLoadConcurrency: 4,
@@ -16,7 +17,8 @@ export const GAME_CONFIG = Object.freeze({
     inventory: Object.freeze({
         equipment: Object.freeze({ name: "装备", capacity: 80, stackSize: 1 }),
         orb: Object.freeze({ name: "宝珠", capacity: 48, stackSize: 1 }),
-        consumable: Object.freeze({ name: "药剂", capacity: 32, stackSize: 99 })
+        consumable: Object.freeze({ name: "药剂", capacity: 32, stackSize: 99 }),
+        affix: Object.freeze({ name: "词条", capacity: 80, stackSize: 99 })
     }),
     quality: Object.freeze({
         common: Object.freeze({ name: "白", color: "#c1cbc8" }),

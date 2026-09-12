@@ -1,6 +1,14 @@
 import { expect, test } from "vitest";
 import { getHexCenter } from "three-hex-map";
-import { overviewPoint } from "../src/adapters/HexRegionMap";
+import { overviewPoint, overviewHeading } from "../src/adapters/HexRegionMap";
+
+test("north-up heading keeps all cardinal directions and compensates map aspect ratio", () => {
+    expect(overviewHeading(0, 1, 1)).toBeCloseTo(Math.PI);
+    expect(overviewHeading(Math.PI / 2, 1, 1)).toBeCloseTo(Math.PI / 2);
+    expect(overviewHeading(Math.PI, 1, 1)).toBeCloseTo(0);
+    expect(overviewHeading(-Math.PI / 2, 1, 1)).toBeCloseTo(-Math.PI / 2);
+    expect(overviewHeading(Math.PI / 4, 1.5, Math.sqrt(3))).toBeCloseTo(Math.PI * .75);
+});
 
 test("terrain overview markers align with positive and negative even-column tile centres", () => {
     for (let x = -12; x <= 12; x++) for (let y = -12; y <= 12; y++) {

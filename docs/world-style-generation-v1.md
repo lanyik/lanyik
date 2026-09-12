@@ -504,6 +504,8 @@ TerrainMesh 不再拥有山地阈值和高度公式，只负责：
 运行时将原图集去边距后拆成独立纹理层，启用逐层 mipmap、三线性缩小过滤和可配置的各向异性请求。
 `HexMapOptions.terrainTextureAnisotropy` 是仅初始化生效的正安全整数配置，默认 8；统一验证后透传 TerrainMesh 和纹理加载器，不设置重复默认或私有 fallback。硬件支持上限仍由 Three.js 原生处理。
 full/fast 土地材质使用 GLSL 3，在材质分支前计算未折叠世界 UV 的梯度，以 textureGrad 配合采样器镜像重复，避免缩小混叠与跨地形串色。
+共享 `terrainMaterial.ts` 每种材质使用两个相位偏移采样，宏观连续场平滑选择相邻偏移；相邻段端点采样一致，降低周期纹理辨识度。
+陡坡额外混合 mountain 岩石材质，已是 mountain 的片元不重复叠加。坡度从顶点世界地表斜率传入，不随镜头旋转；气候色调和雪线随后应用。
 CPU 相位与 full/fast 材质直接使用配置的真实纹理周期，包括小于 1 世界单位的周期；禁止隐式最小尺度钳制。初始化和实时配置更新集中验证实际周期可表示为正有限 GPU Float32，溢出或下溢直接拒绝。fast 宏观材质波动同样按真实 hexSize 缩放；跨块相位仅相差完整镜像周期，不改变未折叠 UV 的梯度。
 可选的 GroundProjection 在独立俯视通道绘制地面印记，由土地/水面实际片元接收；不改变地形几何、surface authority 或生成输入。
 纹理加载、资源预算和投影所有权见[渲染合同](render-streaming.md)。
@@ -527,7 +529,7 @@ CPU 相位与 full/fast 材质直接使用配置的真实纹理周期，包括�
 - style 扩为 vec4 已完成。
 - fogState 已扩为 vec4：x 存迷雾，y/z/w 存 dry/cold/alpine，temperate 由总和推导。
 - landform attribute 继续保存四种生成器调试字段；顶点阶段把最终有效 elevation 写入 vLandform.x，并保留 y/z/w 的 ridge/valley/roughness，已删除重复的 vElevation varying。
-- full/fast 材质都使用同一组连续 biome 权重做色调、冷暖和高山去饱和混合，biome 权重本身不增加地形采样；每次材质采样只读一个纹理层，full 路径在边界另外读取参与混合的邻居材质。
+- full/fast 材质都使用同一组连续 biome 权重做色调、冷暖和高山去饱和混合，biome 权重本身不增加地形采样；每种材质在同一个纹理层做两次偏移读取，full 路径在边界另外读取参与混合的邻居材质。
 
 硬门槛：
 
@@ -851,7 +853,7 @@ v19 默认锚点位置改变了上游水陆覆盖，512 环绕样本 f 的森林
 
 - Shader 山体细节已限制为 CPU 宏观地表的 ±1.5%，并同步裁剪上界。
 - biome 权重已打包进 fogState 的空余分量，Terrain 仍使用 15 个 attribute location。
-- full/fast 共用宏观顶点表面和属性布局，材质混合不增加纹理读取。
+- full/fast 共用宏观顶点表面和属性布局，biome 色调混合本身不增加纹理读取；当前去重复采样与坡度叠岩的预算见第 8 节。
 - 山体光照使用共享顶角坡度；公共边法线不再由各实例分别有限差分。
 - 常驻六边格线默认关闭，仅在调用者明确启用时绘制。
 - 区块、LOD、环绕边界、长距离浮动原点、迷雾局部更新和十轮 WebGL 上下文恢复已通过浏览器验收。

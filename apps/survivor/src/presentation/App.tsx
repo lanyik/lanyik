@@ -15,10 +15,13 @@ import { SkillsPanel } from "./SkillsPanel";
 import { SkillDragProvider } from "./SkillDrag";
 import { OrbDragProvider } from "./OrbDrag";
 import { SkillSlot } from "./SkillSlot";
+import { CraftingPanel } from "./CraftingPanel";
+import { SpiritRealmPanel } from "./SpiritRealmPanel";
 import "./app.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
-    { id: "map", name: "地图", key: "M", code: "KeyM" }, { id: "skills", name: "技能", key: "K", code: "KeyK" }] as const;
+    { id: "map", name: "地图", key: "M", code: "KeyM" }, { id: "skills", name: "技能", key: "K", code: "KeyK" },
+    { id: "craft", name: "打造", key: "J", code: "KeyJ" }, { id: "spirit", name: "灵境", key: "L", code: "KeyL" }] as const;
 type Menu = typeof MENUS[number]["id"];
 function formatTime(ms: number): string {
     const seconds = Math.floor(ms / 1000);
@@ -33,7 +36,8 @@ export function App({ session, attachRegionMap }: { readonly session: CombatSess
 function SessionInterface({ session, snapshot, attachRegionMap }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
 }) {
-    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false });
+    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false });
+    const [craftItemId, setCraftItemId] = useState<number>();
     const [frontPanel, setFrontPanel] = useState<"character" | "inventory">("character");
     const [selectedId, setSelectedId] = useState<number>();
     const workspace = useRef<HTMLDivElement>(null);
@@ -41,7 +45,8 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
     const player = combat?.player;
     const toggle = (menu: Menu) => {
         if (menu === "character" || menu === "inventory") setFrontPanel(menu);
-        setPanels(current => ({ ...current, [menu]: !current[menu] }));
+        setPanels(current => ({ ...current,
+            ...(menu === "craft" || menu === "spirit" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
     };
     const close = (menu: Menu) => setPanels(current => ({ ...current, [menu]: false }));
     const useItem = (item: InventoryItem) => {
@@ -52,12 +57,13 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
         const onKeyDown = (event: KeyboardEvent) => {
             const target = event.target;
             if (snapshot.status !== "ready" || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
+                || document.querySelector("dialog[open]")
                 || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"))) return;
             const menu = MENUS.find(item => item.code === event.code)?.id ?? (event.code === "KeyI" ? "inventory" : undefined);
             if (menu) toggle(menu);
             else if (event.code === "KeyP") session.dispatch({ type: "toggle-pause" });
             else if (event.code === "Escape") {
-                const open = (["inventory", "character", "skills", "map"] as const).find(id => panels[id]);
+                const open = (["craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
             } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
@@ -101,12 +107,15 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
             {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} />}
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
                 onUse={useItem} onDiscard={itemId => session.dispatch({ type: "discard", itemId })}
-                onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={enabled => session.dispatch({ type: "set-auto-clear-equipment", enabled })}
+                onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoClear={maximum => session.dispatch({ type: "set-auto-clear-equipment", maximum })}
                 onMerge={() => session.dispatch({ type: "merge-consumables" })}
-                onClearQuality={maximum => session.dispatch({ type: "clear-equipment-quality", maximum })} onRemoveOrb={socket => session.dispatch({ type: "remove-orb", socket })}
+                onLock={(itemId, locked) => session.dispatch({ type: "set-equipment-lock", itemId, locked })}
+                onCraft={item => { setCraftItemId(item.id); toggle("craft"); }} onRemoveOrb={socket => session.dispatch({ type: "remove-orb", socket })}
                 disabled={combat.gameOver} paused={snapshot.paused} />}
             </div>}
             {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
+            {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
+            {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
                 <div className="status-bar" aria-label="状态栏"><span className={player.shieldRemaining <= 0 ? "ready" : ""}><UiIcon name="shield" />免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}s` : "就绪"}</span>

@@ -1,0 +1,97 @@
+[
+  {
+    "file": "kenney-LICENSE.txt",
+    "bytes": 611,
+    "sha256": "cb96b75e3560ac78d7a53ce6f083f4cdb5c53faea6141b62d63458dcfe1e4b9d",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "License.txt"
+  },
+  {
+    "file": "rocky_terrain_02_diff_1k.jpg",
+    "bytes": 843188,
+    "sha256": "d570c10b1d5302f4fde9e0e94f4cbab0d5e112fc3fe2b3b91c38a98bd3ddaf4b",
+    "source": "https://polyhaven.com/a/rocky_terrain_02",
+    "author": "Amal Kumar / Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_diff_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_diff_1k.jpg",
+    "bytes": 905179,
+    "sha256": "429315865fd89c150272592f6d93def174c6f69804a565ff08e53627a885579b",
+    "source": "https://polyhaven.com/a/rocky_terrain",
+    "author": "Amal Kumar / Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_diff_1k.jpg"
+  },
+  {
+    "file": "tree_detailed.mtl",
+    "bytes": 179,
+    "sha256": "4037993d8d84f1c7528962076bcf796ba368801622874a2bf2960e70d8b8fc99",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_detailed.mtl"
+  },
+  {
+    "file": "tree_detailed.obj",
+    "bytes": 42001,
+    "sha256": "0a67913edf811aabb1c2f54b671c0626eb7c17e6818536484f34d4444030a9c7",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_detailed.obj"
+  },
+  {
+    "file": "tree_palmDetailedTall.mtl",
+    "bytes": 147,
+    "sha256": "2f754b719f8d7902d7940fe5f5216fe24cfaf0f021ce3533cace85cee7d0ce44",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_palmDetailedTall.mtl"
+  },
+  {
+    "file": "tree_palmDetailedTall.obj",
+    "bytes": 27254,
+    "sha256": "ad249552e6802278c61a1101b9331a8a10ef7ad26d083e9f7681d81ed312f7e5",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_palmDetailedTall.obj"
+  },
+  {
+    "file": "tree_pineTallA_detailed.mtl",
+    "bytes": 144,
+    "sha256": "933a40d74e752aa7baf489cd76a1ca36c7fffe95f2c16410772c715c4e102ec6",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_pineTallA_detailed.mtl"
+  },
+  {
+    "file": "tree_pineTallA_detailed.obj",
+    "bytes": 12295,
+    "sha256": "c92abb1eaf23ac94a09ee5f5f9a1adfc183c561c8c76ae3435ac2bbdf254070e",
+    "source": "https://kenney.nl/assets/nature-kit",
+    "author": "Kenney",
+    "license": "CC0-1.0",
+    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
+    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
+    "archivePath": "Models/OBJ format/tree_pineTallA_detailed.obj"
+  }
+]

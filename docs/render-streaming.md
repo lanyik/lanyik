@@ -304,9 +304,14 @@ one world unit; no hidden minimum scale is applied. Configuration and live updat
 validate that the derived periods are positive finite GPU floats and reject
 overflow/underflow instead of clamping. Fast macro variation likewise scales with
 the actual hex radius. Chunk-relative UVs retain their unwrapped gradients even
-when their constant two-cycle sampler phases differ. There is one array
-lookup site per material sample; full-quality biome edge blending still samples
-its contributing neighbours. The descriptor must provide an in-range integer cell
+when their constant two-cycle sampler phases differ. `terrainMaterial.ts` uses two
+offset array lookups per material, smoothly choosing neighbouring offsets from the
+continuous macro field. Adjacent patch endpoints share the same offset; no tile hash
+or absolute large-coordinate float is introduced. Full-quality biome edge blending
+still samples its contributing neighbours. Steep surfaces additionally blend the
+mountain material (except where it is already the base material); the slope varying
+is computed before normalMatrix so camera orbit cannot alter rock coverage.
+The descriptor must provide an in-range integer cell
 for every `Land` material; missing mappings never silently select layer zero.
 Decode validates dimensions; HTTP/image/decode failures reject terrain readiness
 and world loading. The world-session abort signal cancels the atlas fetch and

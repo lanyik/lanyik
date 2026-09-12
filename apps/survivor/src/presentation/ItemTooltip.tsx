@@ -9,6 +9,10 @@ export const powerClass = (value: number): string => value > 0 ? "power-up" : va
 
 type ActiveTooltip = { id: string; pinned: boolean } | undefined;
 const TooltipContext = createContext<{ active: ActiveTooltip; setActive: Dispatch<SetStateAction<ActiveTooltip>> } | undefined>(undefined);
+export function useDismissItemTooltip(): () => void {
+    const context = useContext(TooltipContext);
+    return () => context?.setActive(undefined);
+}
 /** One active item tooltip across inventory, equipment, consumables and pickup prompts. */
 export function ItemTooltipProvider({ children }: { readonly children: ReactNode }) {
     const [active, setActive] = useState<ActiveTooltip>();

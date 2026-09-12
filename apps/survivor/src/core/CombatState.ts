@@ -8,6 +8,9 @@ import type { CombatWorld } from "./CombatWorld";
 import type { EntityQuery } from "./EntityWorld";
 import type { SkillSnapshot } from "./Skills";
 import type { EffectBuffer } from "./CombatEffects";
+import type { Rarity } from "./Loot";
+import type { SpiritRealm } from "./SpiritRealm";
+import type { OrbResonance } from "./Orbs";
 
 export interface MovementInput {
     readonly x: number;
@@ -16,6 +19,10 @@ export interface MovementInput {
 }
 
 export interface PlayerSnapshot {
+    readonly heading: number;
+    readonly spiritRealm: SpiritRealm;
+    readonly orbDust: number;
+    readonly orbResonance: OrbResonance;
     readonly mana: number;
     readonly x: number;
     readonly z: number;
@@ -37,7 +44,7 @@ export interface PlayerSnapshot {
     readonly equipmentPower: number;
     readonly equipment: EquippedItems;
     readonly inventory: readonly InventoryItem[];
-    readonly autoClearEquipment: boolean;
+    readonly autoClearEquipment: Rarity | null;
     readonly clearedEquipment: number;
 }
 

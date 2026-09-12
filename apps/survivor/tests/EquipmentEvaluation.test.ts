@@ -12,7 +12,7 @@ import type { RegionalWorld } from "../src/core/RegionalWorld";
 
 function gear(id: number, bonuses: Partial<EquipmentBonuses>, value: Equipment["value"] = "weapon", itemLevel = 1): Equipment {
     const total = { ...EMPTY_BONUSES, ...bonuses };
-    return { ...createStarterEquipment(), id, value, itemLevel, bonuses: total, baseBonuses: total, affixes: [], score: equipmentScore(total) };
+    return { ...createStarterEquipment(), id, value, itemLevel, locked: false, bonuses: total, baseBonuses: total, affixes: [], score: equipmentScore(total) };
 }
 
 // Arrange precise inventory boundaries; assertions exercise public gameplay transactions.
@@ -45,7 +45,7 @@ describe("equipment evaluation and safe cleanup", () => {
         expect(comparison.stats.damage).toBeGreaterThan(player.stats.damage);
         expect(comparison.delta).toBeGreaterThan(0);
         expect(comparison.scoreDelta).toBeLessThan(0);
-        combat.setAutoClearEquipment(true);
+        combat.setAutoClearEquipment("rainbow");
         expect(combat.getSnapshot().player.inventory.some(item => item.id === candidate.id)).toBe(true);
         combat.dispose();
     });
@@ -86,10 +86,10 @@ describe("equipment evaluation and safe cleanup", () => {
         const orb = generateOrb(new DeterministicRandom("safe-orb"), 8);
         {
             const combat = withInventory([upgrade, inferior, emptySlot, specialist, tie, potion, orb]);
-            combat.setAutoClearEquipment(true);
+            combat.setAutoClearEquipment("rainbow");
             expect(combat.getSnapshot().player.inventory.map(item => item.id)).toEqual([2, 4, 6, 7, 8]);
             expect(combat.getSnapshot().player.clearedEquipment).toBe(2);
-            combat.setAutoClearEquipment(true);
+            combat.setAutoClearEquipment("rainbow");
             expect(combat.getSnapshot().player.clearedEquipment).toBe(2);
         }
     });
@@ -105,7 +105,7 @@ describe("equipment evaluation and safe cleanup", () => {
         expect(after.stats).toEqual(comparison.stats);
         expect(after.battlePower - before.battlePower).toBe(comparison.delta);
         combat.equip(1); // Deliberate downgrade; the returned upgrade must survive cleanup.
-        combat.setAutoClearEquipment(true);
+        combat.setAutoClearEquipment("rainbow");
         expect(combat.getSnapshot().player.inventory.map(item => item.id)).toContain(2);
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.inventory.map(item => item.id)).toContain(1);
@@ -114,14 +114,15 @@ describe("equipment evaluation and safe cleanup", () => {
     test("a full bag supports swaps and rejects unequip without losing equipment", () => {
         const upgrade = gear(2, { damage: 20 });
         const combat = withInventory([upgrade, ...Array.from({ length: INVENTORY_CAPACITY - 1 }, (_, i) => gear(i + 3, { armor: 1 }, "head"))]);
-        combat.setAutoClearEquipment(true);
+        combat.setAutoClearEquipment("rainbow");
         combat.unequip("weapon");
         expect(combat.getSnapshot().player.equipment.weapon?.id).toBe(1);
         expect(combat.getSnapshot().player.inventory).toHaveLength(INVENTORY_CAPACITY);
         combat.equip(2);
         expect(combat.getSnapshot().player.equipment.weapon?.id).toBe(2);
-        expect(combat.getSnapshot().player.inventory).toHaveLength(INVENTORY_CAPACITY - 1);
-        expect(combat.getSnapshot().player.clearedEquipment).toBe(1);
+        expect(combat.getSnapshot().player.inventory).toHaveLength(INVENTORY_CAPACITY);
+        expect(combat.getSnapshot().player.clearedEquipment).toBe(0);
+        expect(combat.getSnapshot().player.inventory.find(item => item.id === 1)).toMatchObject({ locked: true });
     });
 
     test("blocked low-level chest upgrades preserve the chest, RNG and IDs until every reward fits", () => {
@@ -130,7 +131,7 @@ describe("equipment evaluation and safe cleanup", () => {
             random: DeterministicRandom; nextItemId: number; openNearbyChest(): void };
         const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest && chunk.band === "near")!;
         fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
-        combat.setAutoClearEquipment(true);
+        combat.setAutoClearEquipment("rainbow");
         const before = combat.getSnapshot();
         const random = fixture.random.clone();
         const id = fixture.nextItemId;
@@ -153,7 +154,7 @@ describe("equipment evaluation and safe cleanup", () => {
         const player = combat.getSnapshot().player;
         const upgrade = gear(2, { damage: 30 });
         const inferior = gear(3, { damage: 1 });
-        combat.setAutoClearEquipment(true);
+        combat.setAutoClearEquipment("rainbow");
         fixture.dropItem(upgrade, player.x, player.z);
         fixture.dropItem(inferior, player.x, player.z);
         fixture.collectEquipment();

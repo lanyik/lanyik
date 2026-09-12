@@ -6,6 +6,7 @@ import type { ItemType } from "../core/ItemDefinition";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { CONSUMABLE_COOLDOWN } from "../core/GameConfig";
 import { IconFrame } from "./IconFrame";
+import { orbDust } from "../core/Orbs";
 
 export const QUALITY_CSS = Object.entries(GAME_CONFIG.quality).map(([rarity, info]) => `.rarity-${rarity}{--rarity:${info.color}}`).join("");
 
@@ -29,6 +30,7 @@ export function Hint({ label, children }: { readonly label: string; readonly chi
 }
 
 const ICON_PATHS = {
+    affix: "M13 7H35V35L29 41H10V34H28V14H13ZM13 7C7 7 7 15 13 15M17 20H24M17 26H24M19 7V14M29 35V41",
     weapon: "M10 35L32 8L38 6L37 13L17 39M10 29L23 39M8 38L13 43",
     head: "M11 35V22C11 5 37 5 37 22V35L29 40V26H19V40ZM13 22H35",
     chest: "M15 9L22 13H26L33 9L41 21L34 27V40H14V27L7 21Z",
@@ -55,9 +57,9 @@ export function ItemIcon({ item, type = "equipment", value = "weapon", className
     const category = item?.type ?? type, subtype = item?.value ?? value;
     return <IconFrame type={category} value={subtype} rarity={item?.rarity} className={className}
         badge={item?.type === "equipment" ? <span aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>
-            : item?.type === "consumable" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
+            : item?.type === "consumable" || item?.type === "affix" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
         <svg className={`item-icon icon-${subtype}`} viewBox="0 0 48 48" fill="currentColor" fillOpacity=".16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d={ICON_PATHS[subtype]} />{category === "consumable" && subtype.endsWith("-percent") && <text x="36" y="16" fill="currentColor" fillOpacity="1" stroke="none" fontSize="13" fontWeight="bold">%</text>}
+            <path d={ICON_PATHS[category === "affix" ? "affix" : subtype as keyof typeof ICON_PATHS]} />{category === "consumable" && subtype.endsWith("-percent") && <text x="36" y="16" fill="currentColor" fillOpacity="1" stroke="none" fontSize="13" fontWeight="bold">%</text>}
         </svg>
     </IconFrame>;
 }
@@ -69,7 +71,7 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">
         <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b>{item.type === "equipment" && <span>等级 {item.itemLevel}</span>}</span></header>
         {item.type === "equipment" && <>
-            <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span></div>
+            <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span>{item.locked && <span>已锁定 · 自动清理保护</span>}</div>
             <h4 className="item-section-title">基础属性</h4>
             <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <div className="property-row" key={id}><span>{BONUS_INFO[id].name}</span><b>+{statValue(id, item.baseBonuses[id])}</b></div>)}</div>
             <h4 className="item-section-title">附加词条</h4>
@@ -80,7 +82,10 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
         </>}
         {item.type === "orb" && <><div className="item-meta">寻宝宝珠 · 宝箱 / 领主专属</div>
             <h4 className="item-section-title">嵌入效果</h4><div className="item-properties">{item.ratings.quantity > 0 && <div className="property-row"><span>掉落数量</span><b>+{item.ratings.quantity}</b></div>}
-                {item.ratings.quality > 0 && <div className="property-row"><span>品质寻宝</span><b>+{item.ratings.quality}</b></div>}{item.ratings.stars > 0 && <div className="property-row"><span>星级寻宝</span><b>+{item.ratings.stars}</b></div>}</div></>}
+                {item.ratings.quality > 0 && <div className="property-row"><span>品质寻宝</span><b>+{item.ratings.quality}</b></div>}{item.ratings.stars > 0 && <div className="property-row"><span>星级寻宝</span><b>+{item.ratings.stars}</b></div>}</div><p>同类两颗：该类寻宝 +25%。三种类型：金币 +25%。四种类型：打造消耗 −15%。</p><p>可在打造中精炼品质，或分解获得 {orbDust(item)} 宝珠粉尘。</p></>}
+        {item.type === "affix" && <><div className="item-meta">词条精粹 · 数量 {item.size}</div><h4 className="item-section-title">打入效果</h4>
+            <div className="property-row"><span>{BONUS_INFO[item.value].name}</span><b>{item.value === "shieldRecovery" ? "−" : "+"}{statValue(item.value, item.amount)}</b></div>
+            <p>{BONUS_INFO[item.value].detail}</p><p>在打造界面拖到目标装备的某条词条上，确认后消耗一份精粹并覆盖原词条。</p></>}
         {item.type === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row">{potionDescription(item)}</div>
             {item.rarity === "legendary" && <div className="property-row">额外恢复{POTIONS[item.value].resource === "health" ? "法力" : "生命"}上限的 15%</div>}
             <p>生命恢复享受回复加成。数量 {item.size} / {GAME_CONFIG.inventory.consumable.stackSize} · 共用 {CONSUMABLE_COOLDOWN} 秒冷却</p></>}
