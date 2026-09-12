@@ -107,6 +107,7 @@ describe("GenerationCheckpointCoordinator", () => {
         expect(third).toMatchObject({ generation: 3, revision: 3 });
         expect(third.previous).toMatchObject({ generation: 2, saveId: second.saveId });
         expect("previous" in third.previous!).toBe(false);
+        await coordinator.collectGarbage();
         expect(await store.listStages("world")).toHaveLength(2);
 
         const restored: Array<{ coins: number }> = [];
@@ -126,8 +127,11 @@ describe("GenerationCheckpointCoordinator", () => {
     });
 
     test("checksums supported structured snapshots and rejects ambiguous object graphs", () => {
-        // Existing JSON-like snapshots keep their v1 checksum representation.
-        expect(checksumCheckpointSnapshot({ x: 1 })).toBe("8c5c1250");
+        for (const [left, right] of [
+            [{ x: 1 }, [["x", 1]]], [new Date(1), ["date", 1]],
+            [undefined, ["undefined"]], [new Map([["x", 1]]), ["map", [["x", 1]]]],
+            [new Uint8Array([1]), ["Uint8Array", 1]], [new Array(1), [undefined]]
+        ]) expect(checksumCheckpointSnapshot(left)).not.toBe(checksumCheckpointSnapshot(right));
         expect(checksumCheckpointSnapshot({ b: 2, a: 1 }))
             .toBe(checksumCheckpointSnapshot({ a: 1, b: 2 }));
         expect(checksumCheckpointSnapshot(new Map([["value", 1]])))
@@ -146,7 +150,7 @@ describe("GenerationCheckpointCoordinator", () => {
             .toThrow(/unsupported Snapshot/);
     });
 
-    test("recovers an already-published structured snapshot with its legacy v1 checksum", async () => {
+    test("rejects obsolete checksum encoding before restoring", async () => {
         const snapshot = new Map([["value", 7]]);
         const stage: GenerationCheckpointStageRecord = {
             key: "legacy-stage",
@@ -178,7 +182,7 @@ describe("GenerationCheckpointCoordinator", () => {
             loadStage: async () => structuredClone(stage),
             compareAndSetManifest: async () => undefined,
             listStages: async () => [structuredClone(stage)],
-            deleteStages: async () => undefined,
+            collectGarbage: async () => 0,
             dispose() {}
         } satisfies GenerationCheckpointStore;
         const restore = vi.fn();
@@ -188,8 +192,8 @@ describe("GenerationCheckpointCoordinator", () => {
             participants: [{ id: "state", version: 1, capture: () => ({}), restore }]
         });
 
-        await coordinator.recover();
-        expect(restore).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 }), snapshot);
+        await expect(coordinator.recover()).rejects.toThrow(/missing or corrupt/);
+        expect(restore).not.toHaveBeenCalled();
     });
 
     test("never publishes a stage reclaimed between verification and manifest CAS", async () => {
@@ -282,37 +286,23 @@ describe("GenerationCheckpointCoordinator", () => {
         const manifest = await store.loadManifest("concurrent");
         const stage = await store.loadStage(manifest!.participants[0].stageKey!);
         expect(stage?.saveId).toBe(manifest?.saveId);
+        await first.collectGarbage();
         expect((await store.listStages("concurrent")).every(record => record.saveId === manifest?.saveId)).toBe(true);
     });
 
-    test("migrates through a newly published generation instead of rewriting the old one", async () => {
+    test("rejects participant version changes without applying or rewriting saved state", async () => {
         const store = new MemoryGenerationCheckpointStore();
-        let state: { value: number; label?: string } = { value: 3 };
-        const old = new GenerationCheckpointCoordinator({
-            withWorldState: operation => operation(),
-            worldId: "migration", descriptor, store,
-            participants: [{ id: "state", version: 1, capture: () => state, restore() {} }],
-            createSaveId: () => "old-save"
+        const options = { worldId: "version", descriptor, store, withWorldState: <T>(operation: () => Promise<T>) => operation() };
+        await new GenerationCheckpointCoordinator({ ...options,
+            participants: [{ id: "state", version: 1, capture: () => ({ value: 3 }), restore() {} }]
+        }).checkpoint();
+        const restore = vi.fn();
+        const current = new GenerationCheckpointCoordinator({ ...options,
+            participants: [{ id: "state", version: 2, capture: () => ({}), restore }]
         });
-        await old.checkpoint();
-
-        const current = new GenerationCheckpointCoordinator({
-            withWorldState: operation => operation(),
-            worldId: "migration", descriptor, store,
-            participants: [{
-                id: "state",
-                version: 2,
-                capture: () => state,
-                migrate: snapshot => ({ ...(snapshot as { value: number }), label: "migrated" }),
-                restore: (_context, snapshot) => { state = snapshot as typeof state; }
-            }],
-            createSaveId: () => "new-save"
-        });
-        const recovered = await current.recover();
-        expect(recovered).toMatchObject({ generation: 2, saveId: "new-save" });
-        expect(recovered?.previous).toMatchObject({ generation: 1, saveId: "old-save" });
-        expect(recovered?.participants[0].version).toBe(2);
-        expect(state).toEqual({ value: 3, label: "migrated" });
+        await expect(current.recover()).rejects.toThrow(/version does not match/);
+        expect(restore).not.toHaveBeenCalled();
+        expect((await store.loadManifest("version"))?.generation).toBe(1);
     });
 
     test("validates the complete world descriptor before restoring", async () => {

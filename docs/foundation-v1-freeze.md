@@ -56,10 +56,9 @@ early return, repeated invocation and late invocation after cancellation.
   verified stage immediately before publication.
 - Recovery validates the complete world descriptor and every participant
   checksum before applying any snapshot. Structured `Map`, `Set`, and `Date`
-  values have type-aware checksums; recovery still accepts already-published
-  v1 checksums and upgrades them on the next save.
-- A participant migration restores the old snapshot and publishes a new
-  generation. Committed records are never rewritten in place.
+  values, arrays and plain objects have distinct type-tagged checksums. Manifest
+  format 2 is required; obsolete formats/checksums and participant versions are rejected.
+  Committed records are never rewritten in place.
 
 `createWorldDeltaGenerationParticipant()` adapts the sparse terrain delta
 source. Applications supply their own required gameplay-state participants.
@@ -69,12 +68,19 @@ render/cache state is excluded from the authoritative checkpoint. Terrain edits 
 rejected with an explicit recovery-in-progress error during replacement rather
 than being accepted and then silently discarded.
 
-`CheckpointCoordinator` and `createFlushCheckpointParticipant()` remain
-available as compatibility APIs, but a flush participant is not a strict
-point-in-time save and must not become an authoritative gameplay save path. If
-a legacy participant prepares durable staging but its token journal write
-fails, the coordinator verifies whether that write committed; it either keeps
-the referenced staging for recovery or rolls back the unreferenced staging.
+The generation coordinator is the sole checkpoint protocol; journal/flush compatibility
+APIs and automatic participant migration are removed. Saves and recovery have one
+configurable operation deadline, covering reads, staging, capture and restore.
+Stores accept cancellation and abort pending publication transactions. Once the
+manifest transaction commits, the save returns that committed result; subsequent
+cancellation cannot report an uncommitted save.
+
+Staging is deleted only by the mandatory atomic garbage collector, which checks
+both live generations under the publication transaction fence. A failed or ambiguous
+commit acknowledgement never triggers direct staging deletion or a speculative
+manifest reread. Collection runs before save/recovery and through explicit
+`collectGarbage()`; post-commit maintenance cannot turn a successful save into failure.
+Unreferenced stages remain until a collection after their configured grace period.
 
 ## Frozen world-generation protocol
 

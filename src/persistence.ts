@@ -16,16 +16,7 @@ export {
     WorldDeltaConflictError,
     WORLD_DELTA_FORMAT_VERSION
 } from "./world/WorldDeltaStore";
-export {
-    CheckpointCoordinator,
-    CheckpointConflictError,
-    CheckpointRecoveryError,
-    MemoryCheckpointJournalStore,
-    IndexedDbCheckpointJournalStore,
-    createFlushCheckpointParticipant,
-    assertCheckpointJournal,
-    CHECKPOINT_JOURNAL_FORMAT_VERSION
-} from "./persistence/CheckpointCoordinator";
+export { CheckpointConflictError, CheckpointRecoveryError } from "./persistence/CheckpointErrors";
 export {
     GenerationCheckpointCoordinator,
     MemoryGenerationCheckpointStore,
@@ -53,19 +44,6 @@ export type {
     GenerationCheckpointCoordinatorStats,
     IndexedDbGenerationCheckpointStoreOptions
 } from "./persistence/GenerationCheckpointCoordinator";
-export type {
-    CheckpointContext,
-    CheckpointParticipant,
-    CheckpointParticipantRecord,
-    CheckpointParticipantState,
-    CheckpointPhase,
-    CheckpointJournal,
-    CheckpointJournalStore,
-    CheckpointCoordinatorOptions,
-    CheckpointCoordinatorStats,
-    IndexedDbCheckpointJournalStoreOptions,
-    FlushCheckpointParticipantOptions
-} from "./persistence/CheckpointCoordinator";
 export type {
     WorldDeltaStore,
     WorldDeltaEntry,

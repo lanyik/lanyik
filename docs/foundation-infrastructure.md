@@ -34,9 +34,15 @@
 存档校验完整 world descriptor、参与者版本和快照 checksum，保留上一完整世代，
 并通过原子垃圾回收删除未引用的 staging。
 
-`CheckpointCoordinator` 与 `createFlushCheckpointParticipant()` 是独立的 journal/flush
-协议，代码仍然导出，但不具备严格的同一时刻快照保证，不用于游戏的权威存档。
-协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包；这让存档协议可以独立演进，也避免只使用地图渲染的应用承担 IndexedDB/journal 代码体积。
+世代存档是唯一存档协议；旧 journal/flush 入口和自动参与者迁移已经移除。manifest 格式为 2，
+校验编码区分数组、普通对象和特殊类型，旧格式、旧校验及不匹配的参与者版本明确拒绝。
+整个保存或恢复共享一个可配置截止时间，覆盖读取、staging 与参与者调用；存储实现必须响应取消，
+在事务尚未提交时中止发布，提交成功后则返回已提交结果。
+
+所有 staging 删除只经过必需的原子 GC，并同时保护当前和上一世代。提交确认失败时不猜测结果、不直接删除记录。
+GC 在保存/恢复开始前或显式 `collectGarbage()` 调用中执行；提交后不再执行可能将成功变成失败的维护操作。
+未引用记录在配置的保留期之后由下一次 GC 回收。
+协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包。
 
 ## 3. 真实资源预算
 

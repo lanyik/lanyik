@@ -3,9 +3,9 @@ import {
     serializeWorldDescriptor,
     WorldDescriptor
 } from "../world/WorldDescriptor";
-import { CheckpointConflictError, CheckpointRecoveryError } from "./CheckpointCoordinator";
+import { CheckpointConflictError, CheckpointRecoveryError } from "./CheckpointErrors";
 
-export const GENERATION_CHECKPOINT_FORMAT_VERSION = 1;
+export const GENERATION_CHECKPOINT_FORMAT_VERSION = 2;
 
 export interface GenerationCheckpointContext {
     readonly worldId: string;
@@ -22,11 +22,6 @@ export interface GenerationCheckpointParticipant<Snapshot = unknown> {
     readonly required?: boolean;
     capture(context: GenerationCheckpointContext): Promise<Snapshot> | Snapshot;
     restore(context: GenerationCheckpointContext, snapshot: Snapshot): Promise<void> | void;
-    migrate?(
-        snapshot: unknown,
-        fromVersion: number,
-        context: GenerationCheckpointContext
-    ): Promise<Snapshot> | Snapshot;
 }
 
 export interface GenerationCheckpointParticipantRecord {
@@ -67,20 +62,21 @@ export interface GenerationCheckpointStageRecord {
 }
 
 export interface GenerationCheckpointStore {
-    loadManifest(worldId: string): Promise<GenerationCheckpointManifest | undefined>;
-    putStage(record: GenerationCheckpointStageRecord): Promise<void>;
-    loadStage(key: string): Promise<GenerationCheckpointStageRecord | undefined>;
+    loadManifest(worldId: string, signal?: AbortSignal): Promise<GenerationCheckpointManifest | undefined>;
+    putStage(record: GenerationCheckpointStageRecord, signal?: AbortSignal): Promise<void>;
+    loadStage(key: string, signal?: AbortSignal): Promise<GenerationCheckpointStageRecord | undefined>;
+    /** Abort before publication; once committed, resolve successfully even if cancellation follows. */
     compareAndSetManifest(
         worldId: string,
         expectedRevision: number,
-        manifest: GenerationCheckpointManifest
+        manifest: GenerationCheckpointManifest,
+        signal?: AbortSignal
     ): Promise<void>;
-    listStages(worldId: string): Promise<readonly GenerationCheckpointStageRecord[]>;
-    deleteStages(keys: readonly string[]): Promise<void>;
+    listStages(worldId: string, signal?: AbortSignal): Promise<readonly GenerationCheckpointStageRecord[]>;
     // Implementations must read the active manifest and remove unreferenced
     // stages atomically with respect to compareAndSetManifest(). Otherwise a
     // collector can delete a verified stage immediately before it is published.
-    collectGarbage?(worldId: string, cutoffCreatedAt: number): Promise<number>;
+    collectGarbage(worldId: string, cutoffCreatedAt: number, signal?: AbortSignal): Promise<number>;
     dispose(): void;
 }
 
@@ -102,16 +98,13 @@ export interface GenerationCheckpointCoordinatorStats {
     readonly running: boolean;
     readonly completedCheckpoints: number;
     readonly recoveredCheckpoints: number;
-    readonly migratedCheckpoints: number;
     readonly failedOperations: number;
     readonly reclaimedStages: number;
     readonly latestGeneration: number;
 }
 
 function cloneValue<T>(value: T): T {
-    if (value === undefined || value === null) return value;
-    if (typeof structuredClone === "function") return structuredClone(value);
-    return JSON.parse(JSON.stringify(value)) as T;
+    return structuredClone(value);
 }
 
 function errorMessage(reason: unknown): string {
@@ -119,10 +112,23 @@ function errorMessage(reason: unknown): string {
 }
 
 function abortError(message: string): Error {
-    if (typeof DOMException !== "undefined") return new DOMException(message, "AbortError");
-    const error = new Error(message);
-    error.name = "AbortError";
-    return error;
+    return new DOMException(message, "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) throw signal.reason;
+}
+
+function abortable<T>(signal: AbortSignal | undefined, operation: () => Promise<T> | T): Promise<T> {
+    throwIfAborted(signal);
+    return new Promise<T>((resolve, reject) => {
+        const aborted = () => reject(signal!.reason);
+        signal?.addEventListener("abort", aborted, { once: true });
+        Promise.resolve().then(() => {
+            throwIfAborted(signal);
+            return operation();
+        }).then(resolve, reject).finally(() => signal?.removeEventListener("abort", aborted));
+    });
 }
 
 interface StableSnapshotContext {
@@ -170,7 +176,10 @@ function stableSnapshotValue(
         if (value instanceof Set) {
             return ["set", [...value].map(entry => stableSnapshotValue(entry, context))];
         }
-        if (Array.isArray(value)) return value.map(entry => stableSnapshotValue(entry, context));
+        if (Array.isArray(value)) {
+            return ["array", Array.from({ length: value.length }, (_, index) => Object.prototype.hasOwnProperty.call(value, index)
+                ? ["value", stableSnapshotValue(value[index], context)] : ["hole"])];
+        }
 
         const prototype = Object.getPrototypeOf(value);
         if (prototype !== Object.prototype && prototype !== null) {
@@ -178,37 +187,10 @@ function stableSnapshotValue(
             throw new TypeError(`checkpoint snapshot contains unsupported ${name} object`);
         }
         const object = value as Record<string, unknown>;
-        return Object.keys(object).sort().map(key => [key, stableSnapshotValue(object[key], context)]);
+        return ["object", Object.keys(object).sort().map(key => [key, stableSnapshotValue(object[key], context)])];
     } finally {
         context.ancestors.delete(value);
     }
-}
-
-// v1 originally treated object types without enumerable own properties (for
-// example Map, Set, and Date) as the same empty object. Recovery accepts those
-// already-published checksums so an upgrade does not strand an existing save;
-// all newly staged snapshots use the type-aware representation above.
-function legacyStableSnapshotValue(value: unknown): unknown {
-    if (value === undefined) return ["undefined"];
-    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-    if (typeof value === "number") {
-        if (!Number.isFinite(value)) return ["number", String(value)];
-        return Object.is(value, -0) ? ["number", "-0"] : value;
-    }
-    if (typeof value === "bigint") return ["bigint", value.toString()];
-    if (value instanceof ArrayBuffer) return ["bytes", ...new Uint8Array(value)];
-    if (ArrayBuffer.isView(value)) {
-        return [
-            value.constructor.name,
-            ...new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
-        ];
-    }
-    if (Array.isArray(value)) return value.map(legacyStableSnapshotValue);
-    if (typeof value === "object") {
-        const object = value as Record<string, unknown>;
-        return Object.keys(object).sort().map(key => [key, legacyStableSnapshotValue(object[key])]);
-    }
-    throw new TypeError(`checkpoint snapshot contains unsupported ${typeof value} value`);
 }
 
 function checksumStableValue(value: unknown): string {
@@ -226,10 +208,6 @@ function checksumStableValue(value: unknown): string {
 
 export function checksumCheckpointSnapshot(snapshot: unknown): string {
     return checksumStableValue(stableSnapshotValue(snapshot));
-}
-
-function legacyChecksumCheckpointSnapshot(snapshot: unknown): string {
-    return checksumStableValue(legacyStableSnapshotValue(snapshot));
 }
 
 function cloneParticipantRecord(record: GenerationCheckpointParticipantRecord): GenerationCheckpointParticipantRecord {
@@ -273,20 +251,9 @@ function retainedStageKeys(manifest: GenerationCheckpointManifest | undefined): 
 function assertManifestStage(
     stage: GenerationCheckpointStageRecord | undefined,
     manifest: GenerationCheckpointManifest,
-    record: GenerationCheckpointParticipantRecord,
-    allowLegacyChecksum = false
+    record: GenerationCheckpointParticipantRecord
 ): asserts stage is GenerationCheckpointStageRecord {
-    let checksumMatches = false;
-    if (stage) {
-        try {
-            checksumMatches = checksumCheckpointSnapshot(stage.snapshot) === record.checksum;
-        } catch (reason) {
-            if (!allowLegacyChecksum) throw reason;
-        }
-        if (!checksumMatches && allowLegacyChecksum) {
-            checksumMatches = legacyChecksumCheckpointSnapshot(stage.snapshot) === record.checksum;
-        }
-    }
+    const checksumMatches = stage && checksumCheckpointSnapshot(stage.snapshot) === record.checksum;
     if (!stage || stage.key !== record.stageKey || stage.worldId !== manifest.worldId
         || stage.generation !== manifest.generation || stage.saveId !== manifest.saveId
         || stage.participantId !== record.id || stage.participantVersion !== record.version
@@ -349,21 +316,24 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
     private readonly stages = new Map<string, GenerationCheckpointStageRecord>();
     private disposed = false;
 
-    public loadManifest(worldId: string): Promise<GenerationCheckpointManifest | undefined> {
+    public loadManifest(worldId: string, signal?: AbortSignal): Promise<GenerationCheckpointManifest | undefined> {
         this.assertActive();
+        throwIfAborted(signal);
         const manifest = this.manifests.get(worldId);
         return Promise.resolve(manifest ? cloneManifest(manifest) : undefined);
     }
 
-    public putStage(record: GenerationCheckpointStageRecord): Promise<void> {
+    public putStage(record: GenerationCheckpointStageRecord, signal?: AbortSignal): Promise<void> {
         this.assertActive();
+        throwIfAborted(signal);
         if (this.stages.has(record.key)) return Promise.reject(new Error("checkpoint stage key already exists"));
         this.stages.set(record.key, cloneStage(record));
         return Promise.resolve();
     }
 
-    public loadStage(key: string): Promise<GenerationCheckpointStageRecord | undefined> {
+    public loadStage(key: string, signal?: AbortSignal): Promise<GenerationCheckpointStageRecord | undefined> {
         this.assertActive();
+        throwIfAborted(signal);
         const record = this.stages.get(key);
         return Promise.resolve(record ? cloneStage(record) : undefined);
     }
@@ -371,9 +341,11 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
     public compareAndSetManifest(
         worldId: string,
         expectedRevision: number,
-        manifest: GenerationCheckpointManifest
+        manifest: GenerationCheckpointManifest,
+        signal?: AbortSignal
     ): Promise<void> {
         this.assertActive();
+        throwIfAborted(signal);
         assertGenerationCheckpointManifest(manifest, worldId);
         const actualRevision = this.manifests.get(worldId)?.revision ?? 0;
         if (actualRevision !== expectedRevision) {
@@ -391,21 +363,17 @@ export class MemoryGenerationCheckpointStore implements GenerationCheckpointStor
         return Promise.resolve();
     }
 
-    public listStages(worldId: string): Promise<readonly GenerationCheckpointStageRecord[]> {
+    public listStages(worldId: string, signal?: AbortSignal): Promise<readonly GenerationCheckpointStageRecord[]> {
         this.assertActive();
+        throwIfAborted(signal);
         return Promise.resolve([...this.stages.values()]
             .filter(record => record.worldId === worldId)
             .map(cloneStage));
     }
 
-    public deleteStages(keys: readonly string[]): Promise<void> {
+    public collectGarbage(worldId: string, cutoffCreatedAt: number, signal?: AbortSignal): Promise<number> {
         this.assertActive();
-        for (const key of keys) this.stages.delete(key);
-        return Promise.resolve();
-    }
-
-    public collectGarbage(worldId: string, cutoffCreatedAt: number): Promise<number> {
-        this.assertActive();
+        throwIfAborted(signal);
         if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
         const retained = retainedStageKeys(this.manifests.get(worldId));
         let reclaimed = 0;
@@ -445,11 +413,22 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
     });
 }
 
-function transactionComplete(transaction: IDBTransaction): Promise<void> {
+function transactionComplete(transaction: IDBTransaction, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-        transaction.addEventListener("complete", () => resolve(), { once: true });
-        transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), { once: true });
-        transaction.addEventListener("error", () => reject(transaction.error ?? new Error("IndexedDB transaction failed")), { once: true });
+        const abort = () => {
+            // A completed transaction cannot be rolled back; its completion event owns the result.
+            try { transaction.abort(); } catch (error) {
+                if (!(error instanceof DOMException) || error.name !== "InvalidStateError") throw error;
+            }
+        };
+        const cleanup = () => signal?.removeEventListener("abort", abort);
+        signal?.addEventListener("abort", abort, { once: true });
+        transaction.addEventListener("complete", () => { cleanup(); resolve(); }, { once: true });
+        transaction.addEventListener("abort", () => {
+            cleanup();
+            reject(signal?.aborted ? signal.reason : transaction.error ?? new Error("IndexedDB transaction aborted"));
+        }, { once: true });
+        if (signal?.aborted) abort();
     });
 }
 
@@ -468,121 +447,95 @@ export class IndexedDbGenerationCheckpointStore implements GenerationCheckpointS
         }
     }
 
-    public async loadManifest(worldId: string): Promise<GenerationCheckpointManifest | undefined> {
-        this.assertActive();
-        const database = await this.open();
-        const transaction = database.transaction(MANIFEST_STORE, "readonly");
-        const manifest = await requestResult(transaction.objectStore(MANIFEST_STORE).get(worldId)) as GenerationCheckpointManifest | undefined;
-        await transactionComplete(transaction);
-        if (!manifest) return undefined;
-        assertGenerationCheckpointManifest(manifest, worldId);
-        return cloneManifest(manifest);
+    public loadManifest(worldId: string, signal?: AbortSignal): Promise<GenerationCheckpointManifest | undefined> {
+        return this.transact(MANIFEST_STORE, "readonly", signal, async transaction => {
+            const manifest = await requestResult(transaction.objectStore(MANIFEST_STORE).get(worldId)) as GenerationCheckpointManifest | undefined;
+            if (!manifest) return undefined;
+            assertGenerationCheckpointManifest(manifest, worldId);
+            return cloneManifest(manifest);
+        });
     }
 
-    public async putStage(record: GenerationCheckpointStageRecord): Promise<void> {
-        this.assertActive();
-        const database = await this.open();
-        const transaction = database.transaction(STAGING_STORE, "readwrite");
-        transaction.objectStore(STAGING_STORE).add(cloneStage(record));
-        await transactionComplete(transaction);
+    public putStage(record: GenerationCheckpointStageRecord, signal?: AbortSignal): Promise<void> {
+        return this.transact(STAGING_STORE, "readwrite", signal, transaction => {
+            transaction.objectStore(STAGING_STORE).add(cloneStage(record));
+        });
     }
 
-    public async loadStage(key: string): Promise<GenerationCheckpointStageRecord | undefined> {
-        this.assertActive();
-        const database = await this.open();
-        const transaction = database.transaction(STAGING_STORE, "readonly");
-        const record = await requestResult(transaction.objectStore(STAGING_STORE).get(key)) as GenerationCheckpointStageRecord | undefined;
-        await transactionComplete(transaction);
-        return record ? cloneStage(record) : undefined;
+    public loadStage(key: string, signal?: AbortSignal): Promise<GenerationCheckpointStageRecord | undefined> {
+        return this.transact(STAGING_STORE, "readonly", signal, async transaction => {
+            const record = await requestResult(transaction.objectStore(STAGING_STORE).get(key)) as GenerationCheckpointStageRecord | undefined;
+            return record ? cloneStage(record) : undefined;
+        });
     }
 
-    public async compareAndSetManifest(
+    public compareAndSetManifest(
         worldId: string,
         expectedRevision: number,
-        manifest: GenerationCheckpointManifest
+        manifest: GenerationCheckpointManifest,
+        signal?: AbortSignal
     ): Promise<void> {
-        this.assertActive();
         assertGenerationCheckpointManifest(manifest, worldId);
         if (manifest.revision !== expectedRevision + 1) {
-            throw new RangeError("checkpoint manifest revision must advance exactly once");
+            return Promise.reject(new RangeError("checkpoint manifest revision must advance exactly once"));
         }
-        const database = await this.open();
-        const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
-        const completion = transactionComplete(transaction);
-        try {
+        return this.transact([MANIFEST_STORE, STAGING_STORE], "readwrite", signal, async transaction => {
             const store = transaction.objectStore(MANIFEST_STORE);
             const staging = transaction.objectStore(STAGING_STORE);
             const current = await requestResult(store.get(worldId)) as GenerationCheckpointManifest | undefined;
             const actualRevision = current?.revision ?? 0;
-            if (actualRevision !== expectedRevision) {
-                throw new CheckpointConflictError(expectedRevision, actualRevision);
-            }
+            if (actualRevision !== expectedRevision) throw new CheckpointConflictError(expectedRevision, actualRevision);
             for (const record of manifest.participants) {
                 if (record.state !== "staged") continue;
-                const stage = await requestResult(
-                    staging.get(record.stageKey!)
-                ) as GenerationCheckpointStageRecord | undefined;
+                const stage = await requestResult(staging.get(record.stageKey!)) as GenerationCheckpointStageRecord | undefined;
                 assertManifestStage(stage, manifest, record);
             }
+            throwIfAborted(signal);
             store.put(cloneManifest(manifest));
-            await completion;
-        } catch (reason) {
-            try { transaction.abort(); } catch { /* already complete */ }
-            await completion.catch(() => undefined);
-            throw reason;
-        }
+        });
     }
 
-    public async listStages(worldId: string): Promise<readonly GenerationCheckpointStageRecord[]> {
-        this.assertActive();
-        const database = await this.open();
-        const transaction = database.transaction(STAGING_STORE, "readonly");
-        const records = await requestResult(
-            transaction.objectStore(STAGING_STORE).index("worldId").getAll(worldId)
-        ) as GenerationCheckpointStageRecord[];
-        await transactionComplete(transaction);
-        return records.map(cloneStage);
+    public listStages(worldId: string, signal?: AbortSignal): Promise<readonly GenerationCheckpointStageRecord[]> {
+        return this.transact(STAGING_STORE, "readonly", signal, async transaction => {
+            const records = await requestResult(transaction.objectStore(STAGING_STORE).index("worldId").getAll(worldId)) as GenerationCheckpointStageRecord[];
+            return records.map(cloneStage);
+        });
     }
 
-    public async deleteStages(keys: readonly string[]): Promise<void> {
-        this.assertActive();
-        if (keys.length === 0) return;
-        const database = await this.open();
-        const transaction = database.transaction(STAGING_STORE, "readwrite");
-        const store = transaction.objectStore(STAGING_STORE);
-        for (const key of keys) store.delete(key);
-        await transactionComplete(transaction);
-    }
-
-    public async collectGarbage(worldId: string, cutoffCreatedAt: number): Promise<number> {
-        this.assertActive();
-        if (!Number.isFinite(cutoffCreatedAt)) throw new RangeError("checkpoint garbage-collection cutoff must be finite");
-        const database = await this.open();
-        const transaction = database.transaction([MANIFEST_STORE, STAGING_STORE], "readwrite");
-        const completion = transactionComplete(transaction);
-        try {
-            const manifestStore = transaction.objectStore(MANIFEST_STORE);
+    public collectGarbage(worldId: string, cutoffCreatedAt: number, signal?: AbortSignal): Promise<number> {
+        if (!Number.isFinite(cutoffCreatedAt)) return Promise.reject(new RangeError("checkpoint garbage-collection cutoff must be finite"));
+        return this.transact([MANIFEST_STORE, STAGING_STORE], "readwrite", signal, async transaction => {
             const staging = transaction.objectStore(STAGING_STORE);
-            const manifest = await requestResult(
-                manifestStore.get(worldId)
-            ) as GenerationCheckpointManifest | undefined;
+            const manifest = await requestResult(transaction.objectStore(MANIFEST_STORE).get(worldId)) as GenerationCheckpointManifest | undefined;
             if (manifest) assertGenerationCheckpointManifest(manifest, worldId);
             const retained = retainedStageKeys(manifest);
-            const stages = await requestResult(
-                staging.index("worldId").getAll(worldId)
-            ) as GenerationCheckpointStageRecord[];
+            const stages = await requestResult(staging.index("worldId").getAll(worldId)) as GenerationCheckpointStageRecord[];
             let reclaimed = 0;
             for (const stage of stages) {
                 if (retained.has(stage.key) || stage.createdAt > cutoffCreatedAt) continue;
                 staging.delete(stage.key);
-                reclaimed += 1;
+                reclaimed++;
             }
-            await completion;
             return reclaimed;
+        });
+    }
+
+    private async transact<T>(stores: string | string[], mode: IDBTransactionMode, signal: AbortSignal | undefined,
+        operation: (transaction: IDBTransaction) => Promise<T> | T): Promise<T> {
+        this.assertActive();
+        const database = await abortable(signal, () => this.open());
+        this.assertActive();
+        throwIfAborted(signal);
+        const transaction = database.transaction(stores, mode);
+        const completion = transactionComplete(transaction, signal);
+        try {
+            const result = await operation(transaction);
+            await completion;
+            return result;
         } catch (reason) {
-            try { transaction.abort(); } catch { /* already complete */ }
+            try { transaction.abort(); } catch { /* already settled */ }
             await completion.catch(() => undefined);
-            throw reason;
+            throw signal?.aborted ? signal.reason : reason;
         }
     }
 
@@ -638,8 +591,7 @@ export class IndexedDbGenerationCheckpointStore implements GenerationCheckpointS
 }
 
 function randomSaveId(): string {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-    return `save-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return crypto.randomUUID();
 }
 
 export class GenerationCheckpointCoordinator {
@@ -655,11 +607,11 @@ export class GenerationCheckpointCoordinator {
     private readonly createSaveId: () => string;
     private operation: Promise<void> = Promise.resolve();
     private activeController: AbortController | undefined;
+    private operationCleanup: (() => void) | undefined;
     private disposed = false;
     private running = false;
     private completedCheckpoints = 0;
     private recoveredCheckpoints = 0;
-    private migratedCheckpoints = 0;
     private failedOperations = 0;
     private reclaimedStages = 0;
     private latestGeneration = 0;
@@ -708,8 +660,9 @@ export class GenerationCheckpointCoordinator {
 
     public collectGarbage(signal?: AbortSignal): Promise<number> {
         return this.enqueue(async () => {
-            if (signal?.aborted) throw signal.reason ?? abortError("Checkpoint garbage collection was aborted");
-            return this.collectUnreferencedStages(signal);
+            const controller = this.startOperation(signal);
+            try { return await this.collectUnreferencedStages(controller); }
+            finally { this.finishOperation(controller); }
         });
     }
 
@@ -721,7 +674,6 @@ export class GenerationCheckpointCoordinator {
             running: this.running,
             completedCheckpoints: this.completedCheckpoints,
             recoveredCheckpoints: this.recoveredCheckpoints,
-            migratedCheckpoints: this.migratedCheckpoints,
             failedOperations: this.failedOperations,
             reclaimedStages: this.reclaimedStages,
             latestGeneration: this.latestGeneration
@@ -743,30 +695,25 @@ export class GenerationCheckpointCoordinator {
     }
 
     private async createCheckpoint(signal?: AbortSignal): Promise<GenerationCheckpointManifest> {
-        const existing = await this.store.loadManifest(this.worldId);
-        if (existing) {
-            assertGenerationCheckpointManifest(existing, this.worldId);
-            this.assertDescriptor(existing.descriptor);
-        }
-        const generation = (existing?.generation ?? 0) + 1;
-        const saveId = this.createSaveId();
-        if (!saveId.trim()) throw new TypeError("checkpoint saveId must be a non-empty string");
         const controller = this.startOperation(signal);
-        const context: GenerationCheckpointContext = {
-            worldId: this.worldId,
-            generation,
-            saveId,
-            descriptor: cloneValue(this.descriptor),
-            signal: controller.signal,
-            startedAt: this.now()
-        };
-        const stagedKeys: string[] = [];
-        let publishStarted = false;
         try {
+            await this.collectUnreferencedStages(controller);
+            const existing = await this.runStep(controller, () => this.store.loadManifest(this.worldId, controller.signal));
+            if (existing) {
+                assertGenerationCheckpointManifest(existing, this.worldId);
+                this.assertDescriptor(existing.descriptor);
+            }
+            const generation = (existing?.generation ?? 0) + 1;
+            const saveId = this.createSaveId();
+            if (!saveId.trim()) throw new TypeError("checkpoint saveId must be a non-empty string");
+            const context: GenerationCheckpointContext = {
+                worldId: this.worldId, generation, saveId, descriptor: cloneValue(this.descriptor),
+                signal: controller.signal, startedAt: this.now()
+            };
             const captures = await this.runInWorldState(controller, async () => {
                 const results = await Promise.all(this.participants.map(async participant => {
                     try {
-                        const snapshot = await this.runParticipant(controller, () => participant.capture(context));
+                        const snapshot = await this.runStep(controller, () => participant.capture(context));
                         const copy = cloneValue(snapshot);
                         return { participant, snapshot: copy, checksum: checksumCheckpointSnapshot(copy) } as const;
                     } catch (reason) {
@@ -801,9 +748,8 @@ export class GenerationCheckpointCoordinator {
                     checksum: capture.checksum,
                     snapshot: capture.snapshot
                 };
-                await this.store.putStage(stage);
-                stagedKeys.push(key);
-                const verified = await this.store.loadStage(key);
+                await this.runStep(controller, () => this.store.putStage(stage, controller.signal));
+                const verified = await this.runStep(controller, () => this.store.loadStage(key, controller.signal));
                 if (!verified || verified.checksum !== capture.checksum
                     || checksumCheckpointSnapshot(verified.snapshot) !== capture.checksum) {
                     throw new CheckpointRecoveryError(`checkpoint staging verification failed for "${capture.participant.id}"`);
@@ -829,118 +775,75 @@ export class GenerationCheckpointCoordinator {
                 participants: records,
                 ...(existing ? { previous: cloneGeneration(existing) } : {})
             };
-            publishStarted = true;
-            await this.store.compareAndSetManifest(this.worldId, existing?.revision ?? 0, manifest);
+            throwIfAborted(controller.signal);
+            // The store owns cancellation at the atomic commit point. Once it commits,
+            // no later cancellation or maintenance failure may turn success into failure.
+            await this.store.compareAndSetManifest(this.worldId, existing?.revision ?? 0, manifest, controller.signal);
             this.latestGeneration = generation;
             this.completedCheckpoints += 1;
-            await this.collectUnreferencedStages(controller.signal);
             return manifest;
         } catch (reason) {
             this.failedOperations += 1;
-            if (!publishStarted) {
-                await this.store.deleteStages(stagedKeys).catch(() => undefined);
-            } else {
-                // A storage error after the manifest transaction started is
-                // outcome-ambiguous: the manifest may already point at these
-                // stages. Only reclaim them after proving another save won.
-                const published = await this.store.loadManifest(this.worldId).catch(() => undefined);
-                if (published?.saveId !== saveId) {
-                    await this.store.deleteStages(stagedKeys).catch(() => undefined);
-                }
-            }
+            // Do not infer publication from a failed acknowledgement or reread.
+            // Atomic garbage collection is the only staging deletion path.
             throw reason;
         } finally {
-            this.finishOperation(controller, signal);
+            this.finishOperation(controller);
         }
     }
 
     private async recoverLatest(signal?: AbortSignal): Promise<GenerationCheckpointManifest | undefined> {
-        const manifest = await this.store.loadManifest(this.worldId);
-        if (!manifest) {
-            await this.collectUnreferencedStages(signal);
-            return undefined;
-        }
-        assertGenerationCheckpointManifest(manifest, this.worldId);
-        this.assertDescriptor(manifest.descriptor);
-        this.latestGeneration = manifest.generation;
         const controller = this.startOperation(signal);
-        let migrated = false;
         try {
-            const restores: Array<{
-                participant: GenerationCheckpointParticipant;
-                snapshot: unknown;
-            }> = [];
+            await this.collectUnreferencedStages(controller);
+            const manifest = await this.runStep(controller, () => this.store.loadManifest(this.worldId, controller.signal));
+            if (!manifest) return undefined;
+            assertGenerationCheckpointManifest(manifest, this.worldId);
+            this.assertDescriptor(manifest.descriptor);
+            const restores: Array<{ participant: GenerationCheckpointParticipant; snapshot: unknown }> = [];
             for (const record of manifest.participants) {
                 if (record.state === "skipped") continue;
                 const participant = this.participantById.get(record.id);
                 if (!participant) {
-                    if (record.required) throw new CheckpointRecoveryError(`checkpoint participant "${record.id}" is unavailable`);
+                    if (record.required) throw new CheckpointRecoveryError('checkpoint participant "' + record.id + '" is unavailable');
                     continue;
                 }
-                const stage = await this.store.loadStage(record.stageKey!);
-                assertManifestStage(stage, manifest, record, true);
-                let snapshot = stage.snapshot;
                 if (record.version !== participant.version) {
-                    if (record.version > participant.version || !participant.migrate) {
-                        throw new CheckpointRecoveryError(
-                            `participant "${record.id}" checkpoint version ${record.version} cannot migrate to ${participant.version}`
-                        );
-                    }
-                    snapshot = await this.runParticipant(
-                        controller,
-                        () => participant.migrate!(cloneValue(snapshot), record.version, {
-                            worldId: this.worldId,
-                            generation: manifest.generation,
-                            saveId: manifest.saveId,
-                            descriptor: cloneValue(this.descriptor),
-                            signal: controller.signal,
-                            startedAt: this.now()
-                        })
-                    );
-                    migrated = true;
+                    throw new CheckpointRecoveryError('participant "' + record.id + '" checkpoint version does not match ' + participant.version);
                 }
-                restores.push({ participant, snapshot: cloneValue(snapshot) });
+                const stage = await this.runStep(controller, () => this.store.loadStage(record.stageKey!, controller.signal));
+                assertManifestStage(stage, manifest, record);
+                restores.push({ participant, snapshot: cloneValue(stage.snapshot) });
             }
             for (const participant of this.participants) {
                 if ((participant.required ?? true)
                     && !manifest.participants.some(record => record.id === participant.id && record.state === "staged")) {
-                    throw new CheckpointRecoveryError(`required checkpoint participant "${participant.id}" is missing`);
+                    throw new CheckpointRecoveryError('required checkpoint participant "' + participant.id + '" is missing');
                 }
             }
             const context: GenerationCheckpointContext = {
-                worldId: this.worldId,
-                generation: manifest.generation,
-                saveId: manifest.saveId,
-                descriptor: cloneValue(this.descriptor),
-                signal: controller.signal,
-                startedAt: this.now()
+                worldId: this.worldId, generation: manifest.generation, saveId: manifest.saveId,
+                descriptor: cloneValue(this.descriptor), signal: controller.signal, startedAt: this.now()
             };
             await this.runInWorldState(controller, async () => {
                 for (const restore of restores) {
-                    await this.runParticipant(controller, () => restore.participant.restore(context, restore.snapshot));
+                    await this.runStep(controller, () => restore.participant.restore(context, restore.snapshot));
                 }
             });
-            this.recoveredCheckpoints += 1;
-            await this.collectUnreferencedStages(controller.signal);
+            this.latestGeneration = manifest.generation;
+            this.recoveredCheckpoints++;
+            return manifest;
         } catch (reason) {
-            this.failedOperations += 1;
+            this.failedOperations++;
             throw reason;
         } finally {
-            this.finishOperation(controller, signal);
+            this.finishOperation(controller);
         }
-        if (!migrated) return manifest;
-        this.migratedCheckpoints += 1;
-        return this.createCheckpoint(signal);
     }
 
-    private async collectUnreferencedStages(signal?: AbortSignal): Promise<number> {
-        if (signal?.aborted) throw signal.reason ?? abortError("Checkpoint garbage collection was aborted");
-        // Older custom stores do not have an atomic GC primitive. Skipping GC
-        // for them is safe (at worst it retains orphan staging); composing
-        // listStages() + deleteStages() here would reintroduce the publish race.
-        if (!this.store.collectGarbage) return 0;
+    private async collectUnreferencedStages(controller: AbortController): Promise<number> {
         const cutoff = this.now() - this.orphanGraceMs;
-        const reclaimed = await this.store.collectGarbage(this.worldId, cutoff);
+        const reclaimed = await this.runStep(controller, () => this.store.collectGarbage(this.worldId, cutoff, controller.signal));
         this.reclaimedStages += reclaimed;
         return reclaimed;
     }
@@ -956,44 +859,25 @@ export class GenerationCheckpointCoordinator {
         this.running = true;
         const controller = new AbortController();
         this.activeController = controller;
-        const abort = () => controller.abort(signal?.reason ?? abortError("Checkpoint operation was aborted"));
-        (controller as AbortController & { externalAbort?: () => void }).externalAbort = abort;
+        const abort = () => controller.abort(signal!.reason);
         if (signal?.aborted) abort();
         else signal?.addEventListener("abort", abort, { once: true });
+        const timer = setTimeout(() => controller.abort(new DOMException(
+            'checkpoint operation timed out after ' + this.timeoutMs + 'ms', "TimeoutError")), this.timeoutMs);
+        this.operationCleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); };
         return controller;
     }
 
-    private finishOperation(controller: AbortController, signal?: AbortSignal): void {
-        const abort = (controller as AbortController & { externalAbort?: () => void }).externalAbort;
-        if (abort) signal?.removeEventListener("abort", abort);
-        if (this.activeController === controller) this.activeController = undefined;
+    private finishOperation(controller: AbortController): void {
+        if (this.activeController !== controller) return;
+        this.operationCleanup?.();
+        this.operationCleanup = undefined;
+        this.activeController = undefined;
         this.running = false;
     }
 
-    private async runParticipant<T>(controller: AbortController, operation: () => Promise<T> | T): Promise<T> {
-        if (controller.signal.aborted) throw controller.signal.reason ?? abortError("Checkpoint operation was aborted");
-        let task: Promise<T>;
-        try { task = Promise.resolve(operation()); }
-        catch (reason) { task = Promise.reject(reason); }
-        return new Promise<T>((resolve, reject) => {
-            let settled = false;
-            const finish = (callback: (value: T | unknown) => void, value: T | unknown): void => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                controller.signal.removeEventListener("abort", aborted);
-                callback(value);
-            };
-            const aborted = () => finish(reject, controller.signal.reason ?? abortError("Checkpoint operation was aborted"));
-            const timer = setTimeout(() => {
-                const error = new Error(`checkpoint participant operation timed out after ${this.timeoutMs}ms`);
-                error.name = "TimeoutError";
-                controller.abort(error);
-                finish(reject, error);
-            }, this.timeoutMs);
-            controller.signal.addEventListener("abort", aborted, { once: true });
-            void task.then(value => finish(resolve as (value: T | unknown) => void, value), reason => finish(reject, reason));
-        });
+    private runStep<T>(controller: AbortController, operation: () => Promise<T> | T): Promise<T> {
+        return abortable(controller.signal, operation);
     }
 
     private async runInWorldState<T>(controller: AbortController, operation: () => Promise<T>): Promise<T> {
@@ -1001,10 +885,10 @@ export class GenerationCheckpointCoordinator {
         let completed = false;
         let active = true;
         try {
-            const result = await this.runParticipant(controller, () => this.withWorldState(async () => {
+            const result = await this.runStep(controller, () => this.withWorldState(async () => {
                 if (!active || invoked) throw new Error("checkpoint state boundary must invoke its operation exactly once while active");
                 invoked = true;
-                if (controller.signal.aborted) throw controller.signal.reason;
+                throwIfAborted(controller.signal);
                 const value = await operation();
                 completed = true;
                 return value;
