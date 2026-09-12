@@ -21,6 +21,10 @@ export function CraftConfirmation({ operation, player, disabled, close, confirm 
         <span className="eyebrow">操作预览</span><h2>{quote.ok ? quote.title : "操作已失效"}</h2>
         {quote.ok ? <>
             {original && <ItemDetails item={original} />}
+            {operation.kind === "recycle-equipment" && <div className="bulk-preview">{operation.items.map(ref => {
+                const item = player.inventory.find(item => item.id === ref.id);
+                return item?.type === "equipment" && <div key={item.id} className={`rarity-${item.rarity}`}><span>{item.name}</span><b>Lv.{item.itemLevel}</b></div>;
+            })}</div>}
             {quote.replacement && <div className="craft-confirm-affix"><strong>完成后的物品</strong><ItemDetails item={quote.replacement} /></div>}
             {quote.extracted && <div className="craft-confirm-affix"><ItemDetails item={createAffixItem(0, quote.extracted)} /></div>}
             <p className="craft-cost">{quote.gold ? `消耗 ${quote.gold} 金币` : quote.dust ? `消耗 ${quote.dust} 宝珠粉尘` : "无额外费用"}

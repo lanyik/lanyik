@@ -13,6 +13,7 @@ import { ItemTooltip, useDismissItemTooltip } from "./ItemTooltip";
 import { UiIcon } from "./UiIcon";
 import { useSlotDrag } from "./useSlotDrag";
 import { CraftConfirmation, SKIP_EXTRACTION } from "./CraftConfirmation";
+import { VirtualItemGrid } from "./VirtualItemGrid";
 
 type Tab = "extract" | "imbue" | "inherit" | "orbs";
 type BenchSlot = "source" | "target" | "affix" | "orb";
@@ -32,6 +33,7 @@ export function CraftingPanel({ player, disabled, dispatch, onClose, initialItem
     const [targetId, setTargetId] = useState<number>(), [affixIndex, setAffixIndex] = useState(0), [targetSlot, setTargetSlot] = useState(0);
     const [affixId, setAffixId] = useState(initialItem?.type === "affix" ? initialItem.id : undefined), [orbId, setOrbId] = useState(initialItem?.type === "orb" ? initialItem.id : undefined);
     const [search, setSearch] = useState(""), [slotFilter, setSlotFilter] = useState("all"), [rarity, setRarity] = useState("all"), [pending, setPending] = useState<CraftOperation>();
+    const [lockMode, setLockMode] = useState(false);
     const equipment = useMemo(() => [...Object.values(player.equipment).filter((item): item is Equipment => Boolean(item)), ...player.inventory.filter(item => item.type === "equipment")].sort(compareInventoryItems), [player.inventory, player.equipment]);
     const source = player.inventory.find((item): item is Equipment => item.type === "equipment" && item.id === sourceId), target = equipment.find(item => item.id === targetId);
     const affix = player.inventory.find(item => item.type === "affix" && item.id === affixId), orb = player.inventory.find(item => item.type === "orb" && item.id === orbId);
@@ -85,15 +87,17 @@ export function CraftingPanel({ player, disabled, dispatch, onClose, initialItem
                 <input aria-label="搜索打造物品" placeholder="搜索名称" value={search} onChange={event => setSearch(event.target.value)} />
                 <div className="craft-filters">{(activeSlot === "source" || activeSlot === "target") && <select aria-label="筛选装备部位" value={slotFilter} onChange={event => setSlotFilter(event.target.value)}><option value="all">全部部位</option>{EQUIPMENT_SLOTS.map(id => <option key={id} value={id}>{SLOT_NAMES[id]}</option>)}</select>}
                     <select aria-label="筛选物品品质" value={rarity} onChange={event => setRarity(event.target.value)}><option value="all">全部品质</option>{RARITIES.map(id => <option key={id} value={id}>{RARITY_NAMES[id]}</option>)}</select></div>
-                <div className="craft-item-grid">{candidates.map(item => <ItemTooltip key={item.id} item={item} player={player}><button
+                <button aria-pressed={lockMode} onClick={() => setLockMode(!lockMode)}>锁定模式 · Ctrl＋点击也可切换</button>
+                <VirtualItemGrid key={`${activeSlot}:${search}:${slotFilter}:${rarity}`} className="craft-item-grid" label="打造物品格" items={candidates} minWidth={82} rowHeight={130} renderItem={item => <ItemTooltip key={item.id} item={item} player={player}><button
                     className={`craft-cell rarity-${item.rarity}${slots.some(slot => slotItem(slot)?.id === item.id) ? " selected" : ""}${item.type === "equipment" && item.locked ? " item-locked" : ""}`}
-                    aria-label={`放入${slotName(activeSlot)}：${item.name}`} aria-disabled={disabled || !canPlace(item, activeSlot)}
+                    aria-label={`放入${slotName(activeSlot)}：${item.name}`} aria-disabled={disabled} data-unplaceable={!canPlace(item, activeSlot)}
                     data-craft-equipment={item.type === "equipment" ? item.id : undefined} data-craft-affix={item.type === "affix" ? item.id : undefined} data-craft-orb={item.type === "orb" ? item.id : undefined}
-                    onClick={() => { if (!disabled) place(item, activeSlot); }} onPointerDown={event => drag.begin(event, item.id)} onKeyDown={event => drag.keyboard(event, item.id)}>
+                    onClick={event => { if (disabled) return; if (item.type === "equipment" && (event.ctrlKey || lockMode)) { dismissTooltip(); dispatch({ type: "set-equipment-lock", itemId: item.id, locked: !item.locked }); } else place(item, activeSlot); }}
+                    onPointerDown={event => { if (!event.ctrlKey && !lockMode) drag.begin(event, item.id); }} onKeyDown={event => { if (event.ctrlKey && event.code === "Space" && item.type === "equipment" && !event.repeat) { event.preventDefault(); if (!disabled) dispatch({ type: "set-equipment-lock", itemId: item.id, locked: !item.locked }); } else drag.keyboard(event, item.id); }}>
                     {item.type === "equipment" && item.locked && <UiIcon name="lock" className="cell-lock-watermark" />}<ItemIcon item={item} /><b>{item.name}</b>
                     <small>{item.type === "equipment" ? `Lv.${item.itemLevel} · ${"★".repeat(item.stars)}` : item.type === "affix" ? statValue(item.value, item.amount) : item.type === "orb" ? `${orbDust(item)} 粉尘` : ""}</small>
                     {item.type === "equipment" && <small>{player.equipment[item.value]?.id === item.id ? "已穿戴" : item.locked ? "已锁定" : `评分 ${item.score}`}</small>}
-                </button></ItemTooltip>)}{!candidates.length && <p className="craft-empty">暂无符合条件的物品</p>}</div>
+                </button></ItemTooltip>} empty={<p className="craft-empty">暂无符合条件的物品</p>} />
                 <p className="craft-hint">点击台上槽位切换选材。点击物品放入，或拖到槽位；空格拿起后按数字放置。</p>
             </section>
             <section className="craft-workbench" aria-label="打造台"><div className="bench-sockets">{slots.map((slot, index) => <div key={slot} className="bench-socket-wrap">

@@ -11,6 +11,9 @@ import { WorkerLoadSampler, type WorkerLoad, type NamedWorkerActivity } from "./
 import { FramePerformance, InputFeedback, type RuntimePerformanceSnapshot } from "./FramePerformance";
 import type { HexMapFrameEndEvent } from "three-hex-map";
 import { GAME_CONFIG } from "../core/GameConfig";
+import { shareSnapshot } from "./ShareSnapshot";
+import { validateCharacterCheckpoint, type CharacterCheckpoint } from "../core/CharacterCheckpoint";
+import type { CharacterRepository, CharacterSave, SaveSlot } from "./CharacterRepository";
 
 export type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -19,6 +22,7 @@ export interface VisibleNotice extends CombatNotice {
 }
 
 export interface SessionSnapshot {
+    readonly saveStatus: Readonly<{ busy: boolean; savedAt?: number; error?: string }>;
     readonly generation: number;
     readonly performance: RuntimePerformanceSnapshot | undefined;
     readonly workerLoads: readonly WorkerLoad[];
@@ -85,8 +89,12 @@ export class CombatSession {
     private snapshot: SessionSnapshot;
     private loadRevision = 0;
     private closePromise: Promise<void> | undefined;
+    private checkpointRequest: { resolve: (value: CharacterCheckpoint) => void; reject: (reason: unknown) => void } | undefined;
+    private saving: Promise<CharacterSave> | undefined;
+    private saveStatus: SessionSnapshot["saveStatus"] = Object.freeze({ busy: false });
+    private lastCheckpoint: CharacterCheckpoint | undefined;
 
-    constructor(private readonly view: CombatView, private readonly createTransport: CombatTransportFactory) {
+    constructor(private readonly view: CombatView, private readonly createTransport: CombatTransportFactory, private readonly saves?: CharacterRepository) {
         this.snapshot = this.capture();
     }
 
@@ -95,18 +103,36 @@ export class CombatSession {
         return () => this.listeners.delete(listener);
     };
     public getSnapshot = (): SessionSnapshot => this.snapshot;
+    public get isPaused(): boolean { return this.paused; }
 
     public start(seed = this.seed): Promise<void> { return this.launch(seed, true); }
+    public retry(): Promise<void> { return this.launch(this.seed, true, this.lastCheckpoint); }
+    public load(checkpoint: CharacterCheckpoint): Promise<void> { validateCharacterCheckpoint(checkpoint); return this.launch(checkpoint.seed, true, checkpoint); }
+    public listSaves() { if (!this.saves) return Promise.reject(new Error("未配置角色存档")); return this.saves.list(); }
+    public save(slot: SaveSlot): Promise<CharacterSave> {
+        if (this.saving) return Promise.reject(new Error("正在保存，请稍候"));
+        if (!this.saves || this.status !== "ready" || this.gameOver) return Promise.reject(new Error("当前角色无法保存"));
+        this.saveStatus = Object.freeze({ ...this.saveStatus, busy: true, error: undefined }); this.publish();
+        const checkpoint = new Promise<CharacterCheckpoint>((resolve, reject) => { this.checkpointRequest = { resolve, reject }; });
+        this.pendingSnapshot = true; this.flush();
+        this.saving = checkpoint.then(value => this.saves!.save(slot, value)).then(save => {
+            this.saveStatus = Object.freeze({ busy: false, savedAt: save.savedAt }); return save;
+        }, error => { this.saveStatus = Object.freeze({ ...this.saveStatus, busy: false, error: error instanceof Error ? error.message : String(error) }); throw error; })
+            .finally(() => { this.saving = undefined; if (this.status !== "closed") this.publish(); });
+        return this.saving;
+    }
 
     public get diagnostics() { return { ...this.client?.stats, pendingSteps: this.pendingSteps, pendingCommands: this.pendingCommands.length,
         droppedSteps: this.droppedSteps, clockClampedMs: this.clockClampedMs }; }
     public get settled(): Promise<void> { return this.drain(); }
     private async drain(): Promise<void> { while (this.inFlight) await this.inFlight; }
 
-    private async launch(seed: string, reloadWorld: boolean): Promise<void> {
+    private async launch(seed: string, reloadWorld: boolean, checkpoint?: CharacterCheckpoint): Promise<void> {
         if (this.status === "closed") return;
         const revision = ++this.loadRevision;
         this.status = "loading";
+        this.lastCheckpoint = checkpoint;
+        this.checkpointRequest?.reject(new Error("角色已切换，保存取消")); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.seed = seed.trim() || "rift-ember-1";
         this.error = undefined;
@@ -124,16 +150,17 @@ export class CombatSession {
         this.publish();
         try {
             this.view.reset();
-            const start = reloadWorld ? await this.view.load(this.seed) : this.startPosition;
+            const start = reloadWorld ? await this.view.load(this.seed, checkpoint?.player) : this.startPosition;
             if (revision !== this.loadRevision) return;
             if (!start) throw new Error("Combat start position is missing");
-            this.startPosition = start;
+            this.startPosition = checkpoint?.origin ?? start;
             const client = this.createTransport(error => { if (revision === this.loadRevision) this.fail(error); });
             this.client = client;
-            const update = await client.start(this.seed, start);
+            const update = await client.start(this.seed, this.startPosition, checkpoint);
             if (revision !== this.loadRevision) { client.dispose(); return; }
             this.accept(update);
             this.status = "ready";
+            if (checkpoint) { this.paused = true; this.pauseAcknowledged = true; }
             this.performanceStartedAt = performance.now();
             this.sampleWorkerLoad(performance.now());
             this.clock.reset();
@@ -224,7 +251,7 @@ export class CombatSession {
         this.frameReceivedAt = performance.now();
         this.renderState = new RenderFrame(update.render.buffer).read(update.render);
         this.gameOver = update.gameOver;
-        if (update.snapshot) this.combat = freezeSnapshot(update.snapshot);
+        if (update.snapshot) this.combat = freezeSnapshot(shareSnapshot(this.combat, update.snapshot));
         const notices = update.notices;
         if (notices.length > 0) {
             for (const notice of notices) if (notice.acquiredEquipmentId !== undefined) this.upgradeIds.add(notice.acquiredEquipmentId);
@@ -240,10 +267,12 @@ export class CombatSession {
         const client = this.client, revision = this.loadRevision;
         if (this.status !== "ready" || !client || this.inFlight || (this.pendingSteps === 0 && this.pendingCommands.length === 0 && !this.pendingSnapshot)) return;
         const steps = this.pendingSteps, commands = this.pendingCommands;
+        const checkpoint = this.checkpointRequest; this.checkpointRequest = undefined;
         const inputSample = this.inputFeedback.sent();
         this.pendingSteps = 0; this.pendingCommands = []; this.pendingSnapshot = false;
-        this.inFlight = client.advance({ steps, commands, input: this.input }).then(update => {
-            if (revision !== this.loadRevision) return;
+        this.inFlight = client.advance({ steps, commands, input: this.input, checkpoint: Boolean(checkpoint) }).then(update => {
+            if (revision !== this.loadRevision) { checkpoint?.reject(new Error("角色已切换，保存取消")); return; }
+            if (checkpoint) { if (update.checkpoint) checkpoint.resolve(update.checkpoint); else checkpoint.reject(new Error(update.checkpointError ?? "角色已倒下，保留原存档")); }
             const started = performance.now();
             this.accept(update);
             this.framePerformance.simulation(update.stats);
@@ -251,7 +280,7 @@ export class CombatSession {
             if (this.paused && steps === 0 && !this.pendingSnapshot && this.pendingCommands.length === 0) this.pauseAcknowledged = true;
             if (update.snapshot || update.notices.length > 0) this.publish();
             this.framePerformance.message(performance.now() - started + client.stats.receiveMs);
-        }).catch(reason => { if (revision === this.loadRevision) this.fail(reason); }).finally(() => {
+        }).catch(reason => { checkpoint?.reject(reason); if (revision === this.loadRevision) this.fail(reason); }).finally(() => {
             if (revision !== this.loadRevision) return;
             this.inFlight = undefined;
             this.flush();
@@ -297,6 +326,7 @@ export class CombatSession {
         if (this.status === "closed") return;
         this.loadRevision += 1;
         this.status = "failed";
+        this.checkpointRequest?.reject(reason); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.error = reason instanceof Error ? reason.message : String(reason);
         this.clock.setRunning(false);
@@ -310,6 +340,7 @@ export class CombatSession {
         if (this.closePromise) return this.closePromise;
         this.loadRevision += 1;
         this.status = "closed";
+        this.checkpointRequest?.reject(new Error("角色已关闭，保存取消")); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.clock.setRunning(false);
         this.client?.dispose(); this.client = undefined;
@@ -338,6 +369,7 @@ export class CombatSession {
         }
         if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);
         return Object.freeze({
+            saveStatus: this.saveStatus,
             generation: this.loadRevision,
             performance: this.performanceSnapshot,
             workerLoads: this.workerLoads,

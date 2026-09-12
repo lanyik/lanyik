@@ -15,6 +15,7 @@ async function startCrowdedCombat(page: Page): Promise<void> {
     });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {

@@ -1,4 +1,5 @@
 const PATHS = {
+    system: "M4 3h13l3 3v15H4ZM8 3v6h8V3M8 21v-8h8v8",
     rift: "m12 2 8 10-8 10-8-10Zm0 5-4 5 4 5 4-5Z",
     character: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-3a8 8 0 0 1 16 0v3",
     inventory: "M5 8h14l2 13H3ZM8 8V6a4 4 0 0 1 8 0v2M8 13h8M10 13v3h4v-3",

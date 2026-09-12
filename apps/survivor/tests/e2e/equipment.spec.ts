@@ -10,6 +10,7 @@ import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/brows
 import type { HexMap } from "three-hex-map";
 import { ENEMY_DEFINITIONS } from "../../src/core/EnemyDefinitions";
 import { GAME_CONFIG } from "../../src/core/GameConfig";
+test.use({ actionTimeout: 20_000 });
 
 test("compares gear on hover, protects upgrades during cleanup and equips a real pickup from the HUD", async ({ page }) => {
     // Full desktop/narrow/pickup journey also runs against software WebGL in CI.
@@ -21,6 +22,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const rendered = await page.evaluate(({ models, activeExitDistance }) => {
@@ -72,6 +74,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
     await expect(bag.locator(".bag-tabs button")).toHaveCount(4);
+    await bag.locator(".bag-cards").evaluate(node => { node.scrollTop = node.scrollHeight; });
     await expect(bag.locator('[data-item-id="9990"]')).toHaveClass(/item-locked/);
     await expect(bag.locator('[data-item-id="9990"] .cell-lock-watermark')).toHaveCount(1);
     await expect(bag.locator('[data-item-id="9990"] .cell-lock-badge')).toContainText("已锁定");

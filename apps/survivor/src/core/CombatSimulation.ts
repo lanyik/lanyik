@@ -33,6 +33,7 @@ import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSy
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, ENEMY_HIT_RULES, EnemyKind } from "./EnemyDefinitions";
 import { SkillSystem } from "./SkillSystem";
 import { SKILLS, type SkillId } from "./Skills";
+import { validateCharacterCheckpoint, type CharacterCheckpoint } from "./CharacterCheckpoint";
 import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
 
@@ -133,7 +134,7 @@ export class CombatSimulation {
     };
     private readonly renderState: CombatRenderState;
 
-    constructor(seed: string | number, start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM, terrain: CombatTerrain = OPEN_TERRAIN) {
+    constructor(private readonly seed: string | number, private readonly start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM, terrain: CombatTerrain = OPEN_TERRAIN) {
         validatePosition(start.x, start.z);
         this.spiritRealm = validateSpiritRealm(spiritRealm);
         for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.spiritRealm.attributes[id];
@@ -162,6 +163,35 @@ export class CombatSimulation {
     public get tick(): number { return this.tickValue; }
     public get gameOver(): boolean { return this.gameOverValue; }
     public get spiritProgress(): SpiritRealm { return this.spiritRealm; }
+    public checkpoint(): CharacterCheckpoint {
+        if (this.gameOverValue || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
+        const { stats: _stats, skills: _skills, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
+        return validateCharacterCheckpoint({ version: 1, seed: String(this.seed), origin: { ...this.start }, player,
+            tick: this.tickValue, kills: this.killsValue, openedChests: this.openedChests, nextItemId: this.nextItemId, random: this.random.state,
+            attackCooldown: this.attackCooldown, damageImmunity: this.damageImmunity, skills: this.skills.checkpoint() });
+    }
+    public restore(checkpoint: CharacterCheckpoint): void {
+        const state = validateCharacterCheckpoint(checkpoint), p = state.player;
+        if (state.seed !== String(this.seed) || state.origin.x !== this.start.x || state.origin.z !== this.start.z
+            || !this.entities.terrain.isClear(p.x, p.z, GAME_CONFIG.combat.playerRadius)) throw new Error("角色存档世界或位置无效");
+        this.inventory = [...p.inventory]; this.equipped = { ...p.equipment }; this.orbs.splice(0, this.orbs.length, ...p.orbs);
+        this.attributes = { ...p.attributes };
+        for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.spiritRealm.attributes[id] - p.spiritRealm.attributes[id];
+        this.level = p.level; this.experience = p.experience; this.unspentAttributePoints = p.unspentAttributePoints;
+        this.gold = p.gold; this.orbDust = p.orbDust; this.autoRecycle = p.autoRecycle; this.recycled = { ...p.recycled }; this.autoCast = p.autoCast;
+        this.tickValue = state.tick; this.killsValue = state.kills; this.openedChests = state.openedChests; this.nextItemId = state.nextItemId;
+        this.random.restore(state.random); this.skills.restore(state.skills); this.attackCooldown = state.attackCooldown; this.damageImmunity = state.damageImmunity;
+        this.shieldCooldown = p.shieldRemaining; this.potionCooldown = p.potionRemaining;
+        this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
+        this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
+        this.health = Math.min(p.health, this.stats.maxHealth); this.mana = Math.min(p.mana, this.stats.maxMana);
+        this.playerX = this.previousPlayerX = p.x; this.playerZ = this.previousPlayerZ = p.z; this.heading = p.heading;
+        const enemies = Array.from(this.entities.enemies.slots.subarray(0, this.entities.enemies.count));
+        for (const slot of enemies) this.entities.remove(slot);
+        for (const chunk of this.world.chunks.values()) chunk.spawned.fill(0);
+        this.currentRegion = this.world.regionAt(p.x, p.z); this.nearbyRegions = this.world.nearbyRegions(this.currentRegion);
+        this.world.synchronize(p.x, p.z); this.spawnEnemies(); this.refreshChests(); this.markChanged();
+    }
     public dispose(): void { this.closed = true; this.entities.terrain.dispose(); }
 
     public step(input: MovementInput): void;
@@ -368,9 +398,11 @@ export class CombatSimulation {
 
     public setEquipmentLock(itemId: number, locked: boolean): void {
         if (this.gameOverValue) return;
-        const index = this.inventory.findIndex(item => item.id === itemId), item = this.inventory[index];
+        const index = this.inventory.findIndex(item => item.id === itemId), item = this.inventory[index] ?? Object.values(this.equipped).find(item => item?.id === itemId);
         if (!item || item.type !== "equipment" || item.locked === locked) return;
-        this.inventory[index] = Object.freeze({ ...item, locked, revision: item.revision + 1 });
+        const updated = Object.freeze({ ...item, locked, revision: item.revision + 1 });
+        if (index >= 0) this.inventory[index] = updated;
+        else this.equipped = { ...this.equipped, [item.value]: updated };
         this.recycleInventory(); this.markChanged();
     }
 

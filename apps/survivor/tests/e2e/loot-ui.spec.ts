@@ -15,6 +15,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const random = new DeterministicRandom("loot-ui");

@@ -8,7 +8,7 @@ export interface CombatStart {
 
 export interface CombatView {
     readonly workerActivity: readonly WorkerActivitySnapshot[];
-    load(seed: string): Promise<CombatStart>;
+    load(seed: string, position?: CombatStart): Promise<CombatStart>;
     /** Clear the previous run before loading or creating its replacement simulation. */
     reset(): void;
     readMovement(): MovementInput;

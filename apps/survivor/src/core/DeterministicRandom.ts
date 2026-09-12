@@ -17,6 +17,11 @@ export class DeterministicRandom {
         copy.value = this.value;
         return copy;
     }
+    public get state(): number { return this.value; }
+    public restore(state: number): void {
+        if (!Number.isSafeInteger(state) || state <= 0 || state > 0xffffffff) throw new RangeError("Invalid random state");
+        this.value = state;
+    }
 
     public nextUint32(): number {
         let value = this.value;

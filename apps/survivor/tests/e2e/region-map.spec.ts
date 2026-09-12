@@ -12,6 +12,7 @@ test("samples terrain with a region wash, shares cached pages and leaves control
     });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     const canvas = page.getByTestId("terrain-minimap"), panel = page.getByTestId("region-status");

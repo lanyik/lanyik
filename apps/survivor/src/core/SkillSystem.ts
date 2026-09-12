@@ -6,6 +6,8 @@ import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, chainTargets, skillIndex, skillValues, type SkillId, type SkillSnapshot } from "./Skills";
 
 /** Player skill state lives with the authority; UI and effects never decide hits. */
+export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly SkillId[]; readonly ranks: readonly number[]; readonly readyAt: readonly number[];
+    readonly ward: number; readonly wardUntil: number; readonly dashUntil: number; readonly dashX: number; readonly dashZ: number }
 export class SkillSystem {
     public points = 0;
     public readonly loadout = [...DEFAULT_LOADOUT];
@@ -19,6 +21,12 @@ export class SkillSystem {
     private dashZ = 0;
     constructor(private readonly entities: CombatWorld) {}
     public get ward(): number { return this.wardValue; }
+    public checkpoint(): SkillCheckpoint { return { points: this.points, loadout: [...this.loadout], ranks: Array.from(this.ranks), readyAt: Array.from(this.readyAt),
+        ward: this.wardValue, wardUntil: this.wardUntil, dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
+    public restore(state: SkillCheckpoint): void {
+        this.points = state.points; this.loadout.splice(0, this.loadout.length, ...state.loadout); this.ranks.set(state.ranks); this.readyAt.set(state.readyAt);
+        this.wardValue = state.ward; this.wardUntil = state.wardUntil; this.dashUntil = state.dashUntil; this.dashX = state.dashX; this.dashZ = state.dashZ;
+    }
 
     public snapshot(tick: number): SkillSnapshot {
         return Object.freeze({ points: this.points, loadout: Object.freeze([...this.loadout]),

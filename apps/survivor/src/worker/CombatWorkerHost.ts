@@ -7,6 +7,7 @@ import { GAME_CONFIG, ticksPerUpdate } from "../core/GameConfig";
 import type { SpiritRealm } from "../core/SpiritRealm";
 import type { SpiritRepository } from "./SpiritRepository";
 import { ProceduralCombatTerrain } from "../adapters/ProceduralCombatTerrain";
+import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
 type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm) => CombatSimulation;
@@ -44,6 +45,7 @@ export class CombatWorkerHost {
                 if (this.closed) return;
                 this.savedRevision = realm.revision;
                 this.simulation = this.createSimulation(request.seed, request.start, realm);
+                if (request.checkpoint) this.simulation.restore(request.checkpoint);
                 // One frame remains here while the other is owned by the presentation thread.
                 this.frame = new RenderFrame();
                 forceSnapshot = true;
@@ -79,7 +81,12 @@ export class CombatWorkerHost {
             if (!frame) throw new Error("Presentation did not return its render buffer");
             const render = frame.write(simulation.getRenderState()), snapshot = publish ? simulation.getSnapshot() : undefined;
             const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
+            let checkpoint: CharacterCheckpoint | undefined, checkpointError: string | undefined;
+            if (request.type === "advance" && request.batch.checkpoint) {
+                try { checkpoint = simulation.checkpoint(); } catch (error) { checkpointError = error instanceof Error ? error.message : String(error); }
+            }
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
+                checkpoint, checkpointError,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
                     steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs - persistenceMs), queryWaitMs,
                     frameBytes: RenderFrame.bytes } };

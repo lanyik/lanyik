@@ -3,6 +3,7 @@ import { CombatSimulation } from "../../src/core/CombatSimulation";
 import { CombatWorkerHost } from "../../src/worker/CombatWorkerHost";
 import type { CombatAdvance, CombatRequest, CombatUpdate } from "../../src/worker/CombatProtocol";
 import { MemorySpiritRepository } from "./MemorySpiritRepository";
+import type { CharacterCheckpoint } from "../../src/core/CharacterCheckpoint";
 
 /** Unit-test transport: exercise the real protocol and transfer ownership without browser globals. */
 export class LoopbackCombatTransport implements CombatTransport {
@@ -22,7 +23,7 @@ export class LoopbackCombatTransport implements CombatTransport {
         }, progress, (seed, start, realm) => this.simulation = new CombatSimulation(seed, start, realm));
     }
     public get stats() { return { workers: 0, pending: Number(Boolean(this.pending)), completed: this.sequence, roundTripMs: 0, receiveMs: 0 }; }
-    public start(seed: string, start: { x: number; z: number }) { return this.send({ type: "init", id: ++this.sequence, seed, start, ports: [] }); }
+    public start(seed: string, start: { x: number; z: number }, checkpoint?: CharacterCheckpoint) { return this.send({ type: "init", id: ++this.sequence, seed, start, ports: [], checkpoint }); }
     public advance(batch: CombatAdvance) {
         const recycle = this.recycle; this.recycle = undefined;
         return this.send({ type: "advance", id: ++this.sequence, batch, recycle });

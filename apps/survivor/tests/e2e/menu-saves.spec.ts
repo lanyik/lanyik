@@ -1,0 +1,83 @@
+import { expect, test } from "@playwright/test";
+import { createStarterEquipment } from "../../src/core/Equipment";
+import { createConsumable, type InventoryItem } from "../../src/core/InventoryItem";
+import { createOrb } from "../../src/core/Orbs";
+import { createAffixItem } from "../../src/core/AffixItem";
+import type { CombatSimulation } from "../../src/core/CombatSimulation";
+import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
+
+async function inventory(page: Parameters<typeof combatWorker>[0], items: InventoryItem[]) {
+    await combatWorker(page).evaluate(items => {
+        const s = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        Object.assign(s, { inventory: items, nextItemId: 10_000, gold: 12345, orbDust: 321 });
+    }, items);
+    await page.evaluate(async () => { const s = window.survivorApplication!.session; s.dispatch({ type: "sort-inventory" }); await s.settled; });
+}
+test("home previews seeds before graphics starts; manual and auto saves roundtrip all item types after refresh", async ({ page }, info) => {
+    test.setTimeout(150_000); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+    await inspectCombatWorker(page); await page.goto("/");
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "menu");
+    await expect(page.locator(".world-preview")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+    expect(page.workers().some(worker => /Combat\.worker/.test(worker.url()))).toBe(false);
+    const first = await page.locator(".world-preview canvas").evaluate(node => (node as HTMLCanvasElement).toDataURL());
+    await page.getByRole("textbox", { name: "世界种子" }).fill("rift-saves-forest");
+    await expect(page.locator(".world-preview")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+    expect(await page.locator(".world-preview canvas").evaluate(node => (node as HTMLCanvasElement).toDataURL())).not.toBe(first);
+    await page.getByRole("textbox", { name: "世界种子" }).fill("rift-ember-1");
+    await expect(page.locator(".world-preview")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+    await page.screenshot({ path: info.outputPath("start-screen.png") });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
+    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
+    const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" })];
+    await inventory(page, items); await page.keyboard.press("KeyO");
+    const menu = page.getByRole("dialog", { name: "游戏与存档", exact: true });
+    await menu.getByRole("button", { name: "保存到手动存档 1", exact: true }).click();
+    await expect(menu.locator(".save-card").filter({ has: page.getByRole("button", { name: "读取手动存档 1", exact: true }) })).toContainText("12,345");
+    const stored = await page.evaluate(async () => (await window.survivorApplication!.session.listSaves()).find(entry => entry.slot === "manual-1")!.save!.checkpoint);
+    await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: info.outputPath("save-menu-narrow.png") });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await menu.getByRole("button", { name: "关闭存档界面" }).click(); await inventory(page, []); await page.keyboard.press("KeyO");
+    await menu.getByRole("button", { name: "读取手动存档 1", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "确认存档操作" })).toContainText("附近怪物");
+    await page.getByRole("button", { name: "确认读档", exact: true }).click();
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
+    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat?.player.inventory)).toEqual(stored.player.inventory);
+    await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "true");
+    await page.reload(); await page.getByRole("button", { name: "读取手动存档 1", exact: true }).click();
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
+    expect(await page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.gold)).toBe(12345);
+    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
+    await page.keyboard.press("KeyO"); await menu.getByRole("button", { name: "保存并返回主界面" }).click();
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "menu", { timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "继续游戏", exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+});
+
+test("Ctrl toggles bag and forge locks; a single level-batch preview protects locks and grids stay bounded", async ({ page }, info) => {
+    test.setTimeout(100_000); await inspectCombatWorker(page); await page.goto("/");
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
+    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
+    const base = createStarterEquipment();
+    await inventory(page, [{ ...base, id: 10, itemLevel: 4, locked: true }, { ...base, id: 11, itemLevel: 5, locked: false }, { ...base, id: 12, itemLevel: 3, locked: false }, { ...base, id: 13, itemLevel: 4, locked: true }]);
+    await page.keyboard.press("KeyB"); const bag = page.locator(".inventory-window"), cell = bag.locator('[data-item-id="10"]');
+    await cell.click({ modifiers: ["Control"] }); await expect(cell).not.toHaveClass(/item-locked/);
+    await cell.click({ modifiers: ["Control"] }); await expect(cell).toHaveClass(/item-locked/);
+    await cell.click({ modifiers: ["Control"] });
+    await expect(bag.getByRole("button", { name: /^解锁/ })).toHaveCount(0);
+    await bag.getByRole("spinbutton", { name: "批量分解等级" }).fill("5"); await bag.getByRole("button", { name: "一键分解", exact: true }).click();
+    const confirm = page.getByRole("dialog", { name: "确认物品操作" }); await expect(confirm.locator(".bulk-preview > div")).toHaveCount(2);
+    await confirm.getByRole("button", { name: "确认一键分解装备" }).click(); await expect(confirm).toHaveCount(0);
+    await expect(bag.locator('[data-item-id="10"]')).toHaveCount(0); await expect(bag.locator('[data-item-id="11"]')).toBeVisible(); await expect(bag.locator('[data-item-id="13"]')).toHaveClass(/item-locked/);
+    await page.keyboard.press("KeyJ"); const forge = page.locator(".craft-window"), gear = forge.locator('[data-craft-equipment="13"]');
+    await gear.click({ modifiers: ["Control"] }); await expect(gear).not.toHaveClass(/item-locked/);
+    await gear.click(); await expect(forge.locator('[data-bench-slot="source"]')).toContainText(base.name);
+    await gear.click({ modifiers: ["Control"] }); await expect(gear).toHaveClass(/item-locked/);
+    await inventory(page, Array.from({ length: 80 }, (_, i) => ({ ...base, id: 100 + i, itemLevel: i + 1, rarity: "rainbow", locked: false })));
+    await page.keyboard.press("KeyB"); await expect(bag.locator(".bag-cards")).toHaveAttribute("data-total-items", "80");
+    expect(await bag.locator(".inventory-card").count()).toBeLessThan(40);
+    await bag.locator(".bag-cards").evaluate(node => { node.scrollTop = node.scrollHeight; }); await expect(bag.locator('[data-item-id="100"]')).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 }); await expect(bag.locator('[data-item-id="100"]')).toBeVisible();
+    await page.screenshot({ path: info.outputPath("bounded-backpack.png") });
+});

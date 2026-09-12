@@ -8,6 +8,7 @@ import { recycleReward, recyclingName, type RecycleRef } from "./Recycling";
 
 export interface EquipmentRef { readonly id: number; readonly revision: number }
 export type CraftOperation =
+    | { readonly kind: "recycle-equipment"; readonly belowLevel: number; readonly items: readonly EquipmentRef[] }
     | { readonly kind: "recycle"; readonly item: RecycleRef }
     | { readonly kind: "extract"; readonly source: EquipmentRef; readonly affix: number }
     | { readonly kind: "imbue"; readonly target: EquipmentRef; readonly affixId: number; readonly slot: number }
@@ -46,7 +47,15 @@ function findEquipment(context: CraftContext, ref: EquipmentRef, source: boolean
 export function quoteCraft(context: CraftContext, operation: CraftOperation): CraftQuote {
     const discount = 1 - orbResonance(context.orbs).craftDiscount;
     let plan: CraftPlan;
-    if (operation.kind === "recycle") {
+    if (operation.kind === "recycle-equipment") {
+        if (!Number.isSafeInteger(operation.belowLevel) || operation.belowLevel < 2 || !operation.items.length
+            || new Set(operation.items.map(item => item.id)).size !== operation.items.length) return reject("请选择有效的分解等级和装备");
+        const items = operation.items.map(ref => findEquipment(context, ref, true));
+        if (items.some(item => !item || item.locked || item.itemLevel >= operation.belowLevel)) return reject("分解范围内的装备已变化，请重新预览");
+        const equipment = items as Equipment[];
+        plan = { ok: true, title: "一键分解装备", description: `分解 ${equipment.length} 件低于 ${operation.belowLevel} 级的未锁定背包装备，不按战力筛选。锁定及已穿戴装备不处理。`,
+            gold: 0, goldGain: equipment.reduce((sum, item) => sum + recycleReward(item).gold, 0), dust: 0, dustGain: 0, remove: equipment.map(item => item.id) };
+    } else if (operation.kind === "recycle") {
         const item = context.inventory.find(item => item.id === operation.item.id), ref = operation.item;
         if (!item || item.rarity !== ref.rarity || item.size !== ref.size
             || (item.type === "equipment" ? item.revision : undefined) !== ref.revision) return reject("物品已变化，请重新选择");

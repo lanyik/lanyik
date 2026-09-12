@@ -15,6 +15,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const gear = (id: number, name: string, damage: number): Equipment => ({ ...withEquipmentAffixes(createStarterEquipment(), [
@@ -76,6 +77,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     await page.screenshot({ path: testInfo.outputPath("spirit-narrow.png") });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page); await page.keyboard.press("KeyL");
     await expect(spirit).toContainText("灵境 · 1 阶");
@@ -84,6 +86,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     await page.keyboard.press("KeyL"); await expect(spirit).toContainText("灵境 · 1 阶");
     const other = await page.context().newPage();
     await other.goto("/", { waitUntil: "domcontentloaded" });
+    await other.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(other.getByRole("alert")).toContainText("另一个荒原页面正在使用灵境存档", { timeout: 30_000 });
     await other.close();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready");

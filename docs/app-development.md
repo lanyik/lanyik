@@ -1,6 +1,7 @@
 # App 开发设计：生存 RPG
 
 当前 `apps/survivor` 已实现 Worker 战斗模拟、有界 SoA ECS、六种怪物行为树与 Boss 狂暴阶段、近战/远程/冲锋/治疗、六边形地域、四圈驻留生态、角色/背包独立界面、五选四技能及升级、六槽宝珠和寻宝共鸣、词条打造/继承，以及浏览器持久化灵境。
+现在从开始界面进入：种子世界预览、继续游戏、自动/手动角色存读档见[角色存档合同](./game/character-saves.md)。`bootstrap` 在点击开始前不创建图形和战斗资源。
 精确数值见[战斗、成长与寻宝合同](./game/combat-and-progression.md)，模型来源、处理与资源生命周期见
 [角色资产合同](./game/actor-assets.md)，玩家体验见[游戏想法](../游戏想法.md)。
 界面布局、信息层级与响应式规则见[界面设计](./game/interface-design.md)。
@@ -13,6 +14,13 @@ ECS 接入时机、技术取舍、实体身份、系统顺序与怪物行为见[
 
 应用是模块化单体：纯数据战斗核心、地图适配器、批量表现层、React HUD、组合入口。
 核心不导入 React、Three.js、DOM、Worker 或地图内部模块；地形流送不拥有战斗事实。
+
+新增角色存档由 `core/CharacterCheckpoint.ts` 定义和校验，`SkillSystem`/`DeterministicRandom` 导出与恢复自身状态，Worker 批次在前序操作后生成角色记录。
+`app/CharacterRepository.ts` 负责固定 IndexedDB 槽与世界版本；`StartScreen`/`SessionMenu` 负责种子预览和存读档操作，`WorldPreview.worker.ts` 执行一次性地图栅格生成。
+`ShareSnapshot.ts` 在 Worker 克隆快照到达时复用未变化的物品、属性、装备等只读分支，避免每个 10 Hz 快照重新计算全部装备比较。
+`VirtualItemGrid.tsx` 将背包和打造限制为可见行加少量缓冲，离屏格子没有 DOM/动画；格子内品质流光只在悬停/聚焦时播放，稀有度静态底色、描边和星级保持。
+UI 是浏览器 DOM/CSS，由浏览器布局、绘制和合成，不存在应用侧“全部 UI 一个 draw call”的合同。性能检查用 `node scripts/benchmark-survivor-ui.mjs <预览地址>` 的满背包实测。
+实测方法、对比值和适用范围见 [UI 开销](./game/ui-performance.md)。
 
 ```text
 apps/survivor/
@@ -112,7 +120,7 @@ apps/survivor/
 React 只读取冻结的低频快照和提交命令，不直接修改战斗；每 12 tick（10Hz）发布常规 UI 快照，命令、通知和暂停屏障立即带回快照。
 灵境作为显式初始输入注入纯核心。Worker 使用 `SpiritRepository` 端口加载/保存，生产为 IndexedDB 严格事务与 Web Lock 单写者。
 灵境 revision 改变的批次先完成一次保存，再发布状态；保存失败明确停止会话。单位测试注入内存仓库，浏览器测试使用真实存储。
-金币、粉尘和其余局内状态仍在重开时重置；持久化范围与生命周期详见[打造与灵境](game/crafting-and-spirit.md#灵境与持久化)。
+开始新游戏和死亡后重开重置局内状态；读取角色存档恢复金币、粉尘与角色进度，灵境独立永久保留，详见[角色存档](game/character-saves.md)。
 左上 Worker 负载由已有帧循环每秒取样并发布，暂停时仍刷新；原始记录与计算口径见[线程观测](./game/simulation-and-ai.md#逐-worker-负载观测)。
 界面窗口开关、筛选、选中物品 ID 和目标宝珠槽属于本地 UI 状态，不进入模拟。
 会话快照公开加载世代 `generation`，React 按世代重挂载交互区；新局清空窗口、选择、浮窗和目标槽，避免局内物品 ID 重用后继承上一局的操作对象。

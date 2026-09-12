@@ -20,26 +20,30 @@ import { SpiritRealmPanel } from "./SpiritRealmPanel";
 import { CraftConfirmation } from "./CraftConfirmation";
 import type { CraftOperation } from "../core/Crafting";
 import { recycleRef } from "../core/Recycling";
+import { SessionMenu } from "./SessionMenu";
 import "./app.css";
+import "./menus.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
     { id: "map", name: "地图", key: "M", code: "KeyM" }, { id: "skills", name: "技能", key: "K", code: "KeyK" },
-    { id: "craft", name: "打造", key: "J", code: "KeyJ" }, { id: "spirit", name: "灵境", key: "L", code: "KeyL" }] as const;
+    { id: "craft", name: "打造", key: "J", code: "KeyJ" }, { id: "spirit", name: "灵境", key: "L", code: "KeyL" }, { id: "system", name: "存档", key: "O", code: "KeyO" }] as const;
 type Menu = typeof MENUS[number]["id"];
 function formatTime(ms: number): string {
     const seconds = Math.floor(ms / 1000);
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function App({ session, attachRegionMap }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap }) {
+export function App({ session, attachRegionMap, onHome }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap; readonly onHome: () => Promise<void> }) {
     const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
-    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} />;
+    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} onHome={onHome} />;
 }
 
-function SessionInterface({ session, snapshot, attachRegionMap }: {
+function SessionInterface({ session, snapshot, attachRegionMap, onHome }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
+    readonly onHome: () => Promise<void>;
 }) {
-    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false });
+    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false, system: false });
+    const resumeAfterMenu = useRef(false);
     const [craftItemId, setCraftItemId] = useState<number>();
     const [recycling, setRecycling] = useState<CraftOperation>();
     const [frontPanel, setFrontPanel] = useState<"character" | "inventory">("character");
@@ -48,12 +52,21 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
     const combat = snapshot.combat;
     const player = combat?.player;
     const toggle = (menu: Menu) => {
+        if (menu === "system") {
+            if (panels.system) { close("system"); return; }
+            resumeAfterMenu.current = !session.isPaused && !combat?.gameOver;
+            if (resumeAfterMenu.current) session.dispatch({ type: "toggle-pause" });
+        } else if (panels.system) return;
         if (menu === "inventory" && !panels.inventory) session.dispatch({ type: "sort-inventory" });
         if (menu === "character" || menu === "inventory") setFrontPanel(menu);
         setPanels(current => ({ ...current,
-            ...(menu === "craft" || menu === "spirit" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
+            ...(menu === "craft" || menu === "spirit" || menu === "system" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
     };
-    const close = (menu: Menu) => setPanels(current => ({ ...current, [menu]: false }));
+    const close = (menu: Menu) => {
+        if (menu === "system" && resumeAfterMenu.current && session.isPaused) session.dispatch({ type: "toggle-pause" });
+        if (menu === "system") resumeAfterMenu.current = false;
+        setPanels(current => ({ ...current, [menu]: false }));
+    };
     const recycle = (item: InventoryItem) => { if (!(item.type === "equipment" && item.locked)) setRecycling({ kind: "recycle", item: recycleRef(item) }); };
     const useItem = (item: InventoryItem) => {
         if (item.type === "equipment") session.dispatch({ type: "equip", itemId: item.id });
@@ -66,10 +79,11 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
                 || document.querySelector("dialog[open]")
                 || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"))) return;
             const menu = MENUS.find(item => item.code === event.code)?.id ?? (event.code === "KeyI" ? "inventory" : undefined);
+            if (panels.system && event.code !== "Escape" && menu !== "system") return;
             if (menu) toggle(menu);
             else if (event.code === "KeyP") session.dispatch({ type: "toggle-pause" });
             else if (event.code === "Escape") {
-                const open = (["craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
+                const open = (["system", "craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
             } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
@@ -113,6 +127,7 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
             {panels.character && <CharacterPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("character")} />}
             {panels.inventory && <InventoryPanel player={player} selectedId={selectedId} onSelect={setSelectedId} onClose={() => close("inventory")}
                 onUse={useItem} onRecycle={recycle}
+                onBulkRecycle={belowLevel => setRecycling({ kind: "recycle-equipment", belowLevel, items: player.inventory.filter(item => item.type === "equipment" && !item.locked && item.itemLevel < belowLevel).map(item => ({ id: item.id, revision: item.type === "equipment" ? item.revision : 0 })) })}
                 onSort={() => session.dispatch({ type: "sort-inventory" })} onAutoRecycle={(itemType, maximum) => session.dispatch({ type: "set-auto-recycle", itemType, maximum })}
                 onMerge={() => session.dispatch({ type: "merge-consumables" })}
                 onLock={(itemId, locked) => session.dispatch({ type: "set-equipment-lock", itemId, locked })}
@@ -122,6 +137,8 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
             {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
+            {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} />}
+            <span className="save-status" role="status">{snapshot.saveStatus.busy ? "正在保存…" : snapshot.saveStatus.error ? `保存失败：${snapshot.saveStatus.error}` : snapshot.saveStatus.savedAt ? `已保存 ${new Date(snapshot.saveStatus.savedAt).toLocaleTimeString("zh-CN")}` : ""}</span>
             {recycling && <CraftConfirmation operation={recycling} player={player} disabled={combat.gameOver} close={() => setRecycling(undefined)} confirm={operation => session.dispatch({ type: "craft", operation })} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
@@ -148,10 +165,10 @@ function SessionInterface({ session, snapshot, attachRegionMap }: {
             {snapshot.upgrades[0] && !combat.gameOver && !Object.values(panels).some(Boolean) && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}
                 onEquip={() => session.dispatch({ type: "equip", itemId: snapshot.upgrades[0].id })}
                 onDismiss={() => session.dispatch({ type: "dismiss-upgrade", itemId: snapshot.upgrades[0].id })} />}
-            {snapshot.paused && !combat.gameOver && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
-            {combat.gameOver && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>再次踏入荒原<kbd>R</kbd></button></div></div>}
+            {snapshot.paused && !combat.gameOver && !panels.system && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
+            {combat.gameOver && !panels.system && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>再次踏入荒原<kbd>R</kbd></button><button onClick={() => toggle("system")}>读取存档</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
         </>}
         {snapshot.status === "loading" && <div className="state-overlay loading"><div className="loading-rune" /><div><small>RIFT / 荒原</small><h1>荒原正在苏醒</h1><p>准备地域与角色资源…</p></div></div>}
-        {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.start(snapshot.seed)}>重新尝试</button></div></div>}
+        {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.retry()}>重新尝试</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
     </main></OrbDragProvider></SkillDragProvider></ItemTooltipProvider>;
 }

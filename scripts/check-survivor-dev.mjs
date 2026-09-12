@@ -10,6 +10,7 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto("http://127.0.0.1:5173/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await page.waitForFunction(() => ["ready", "failed"].includes(document.querySelector(".survivor")?.getAttribute("data-state")),
         undefined, { timeout: 45_000 });
     const initial = await page.evaluate(() => {

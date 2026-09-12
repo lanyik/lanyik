@@ -1,6 +1,7 @@
 import type { CombatTransport } from "../app/CombatTransport";
 import { TaskActivity } from "./TaskActivity";
 import { GAME_CONFIG } from "../core/GameConfig";
+import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { WORKER_TIMEOUT_MS, type CombatAdvance, type CombatRequest, type CombatResponse, type CombatUpdate, type CombatWorkerStats } from "./CombatProtocol";
 
 /** Main-thread owner of every combat Worker, including query workers connected by MessagePorts. */
@@ -26,7 +27,7 @@ export class CombatWorkerClient implements CombatTransport {
             activity: this.authority ? activity : undefined });
     }
 
-    public async start(seed: string, start: { readonly x: number; readonly z: number }): Promise<CombatUpdate> {
+    public async start(seed: string, start: { readonly x: number; readonly z: number }, checkpoint?: CharacterCheckpoint): Promise<CombatUpdate> {
         if (this.closed || this.authority) throw new Error("Combat Worker client cannot start twice");
         const ports: MessagePort[] = [];
         try {
@@ -38,7 +39,7 @@ export class CombatWorkerClient implements CombatTransport {
                 ports.push(channel.port1);
                 worker.postMessage({ port: channel.port2 }, [channel.port2]);
             }
-            return await this.request({ type: "init", id: ++this.sequence, seed, start, ports }, ports);
+            return await this.request({ type: "init", id: ++this.sequence, seed, start, ports, checkpoint }, ports);
         } catch (reason) {
             for (const port of ports) port.close();
             this.dispose(); throw reason;

@@ -110,7 +110,7 @@ export class HexCombatView implements CombatView {
         }
     }
 
-    public async load(seed: string): Promise<CombatStart> {
+    public async load(seed: string, position?: CombatStart): Promise<CombatStart> {
         this.cancelLoad();
         this.input.setEnabled(false);
         const controller = new AbortController();
@@ -125,7 +125,7 @@ export class HexCombatView implements CombatView {
         const attempt = { controller, source: source as ProceduralWorldSource | undefined };
         this.attempt = attempt;
         try {
-            const start = findCombatStart(seed);
+            const start = position ? { point: { x: position.x, z: position.z }, tile: { x: Math.round(position.x / 1.5), y: Math.round(position.z / Math.sqrt(3)) } } : findCombatStart(seed);
             await this.layerReady;
             controller.signal.throwIfAborted();
             // HexMap takes ownership as soon as loadWorld begins, including failure paths.

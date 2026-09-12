@@ -1,5 +1,10 @@
 # 生存 RPG 界面设计
 
+启动入口为种子预览和存档主界面，点击开始后才创建战斗场景。`O` 打开游戏与存档界面并暂停，自动槽与三个手动槽展示等级、种子、金币、物品格数、保存时间，详见[角色存档](./character-saves.md)。
+快捷菜单现为八项，桌面双栏排列时保持四行，窄屏保持八列单行，避免新增存档入口后挤入背包或状态栏。
+背包和打造使用虚拟化网格，仅挂载可见行及缓冲；Ctrl＋点击/空格快速锁定，触屏使用统一锁定模式，逐格锁定按钮删除。
+手动批量分解按严格低于目标等级筛选，只用一个清单/收益/警示合一的确认窗。格子常驻显示品质，流光只在悬停或聚焦时运行。
+
 对应 `apps/survivor/src/presentation/{App,CharacterPanel,InventoryPanel,CraftingPanel,SpiritRealmPanel,ItemView,RegionMap,UiIcon,WorkerLoadPanel}.tsx`
 与 `app.css`。玩法数值以[战斗与成长合同](./combat-and-progression.md)为准；
 状态发布与命令边界见[应用架构](../app-development.md)。

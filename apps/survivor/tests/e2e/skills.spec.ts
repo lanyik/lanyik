@@ -18,6 +18,7 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
     page.on("response", response => { if (response.url().endsWith("/effects/skills.png") && response.ok()) atlas.push(response.url()); });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     expect(atlas).toHaveLength(1);

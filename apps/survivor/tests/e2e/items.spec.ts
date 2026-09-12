@@ -11,6 +11,7 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     test.setTimeout(180_000);
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const items = [createConsumable(9000, "common", "health", 2), createConsumable(9001, "common", "health", 3),
@@ -25,8 +26,7 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
     await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "装备容量 0 / 80");
     await bag.getByRole("button", { name: /^药剂/ }).click();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 3 / 32");
-    await bag.getByRole("button", { name: "合并药剂", exact: true }).click();
+    await expect(bag.getByRole("button", { name: "合并药剂", exact: true })).toBeDisabled();
     await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 2 / 32");
     const health = bag.locator('[data-item-id="9000"]'), mana = bag.locator('[data-item-id="9002"]');
     await expect(health.locator(".item-icon-badge")).toHaveText("5");
@@ -71,6 +71,7 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
 test("a new run resets item selection and the selected orb socket before IDs are reused", async ({ page }) => {
     test.setTimeout(90_000);
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const equipment = { ...createStarterEquipment(), id: 2 };

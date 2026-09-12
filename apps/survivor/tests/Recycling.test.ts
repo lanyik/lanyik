@@ -14,6 +14,19 @@ function setup(items: InventoryItem[]) {
     return { simulation, fixture };
 }
 describe("category recycling", () => {
+    test("manual level batch is strict, locked-safe, stale-safe and credits only once", () => {
+        const low = { ...weak(10), itemLevel: 4 }, locked = { ...weak(11), itemLevel: 4, locked: true }, boundary = { ...weak(12), itemLevel: 5 };
+        const { simulation } = setup([low, locked, boundary]);
+        simulation.craft({ kind: "recycle-equipment", belowLevel: 5, items: [low, locked] });
+        expect(simulation.getSnapshot().player.inventory).toHaveLength(3);
+        simulation.craft({ kind: "recycle-equipment", belowLevel: 5, items: [boundary] });
+        expect(simulation.getSnapshot().player.gold).toBe(0);
+        simulation.craft({ kind: "recycle-equipment", belowLevel: 5, items: [low] });
+        expect(simulation.getSnapshot().player.inventory).toEqual([locked, boundary]);
+        expect(simulation.getSnapshot().player.gold).toBe(recycleReward(low).gold);
+        simulation.craft({ kind: "recycle-equipment", belowLevel: 5, items: [low] });
+        expect(simulation.getSnapshot().player.gold).toBe(recycleReward(low).gold); simulation.dispose();
+    });
     test("each category has an independent threshold and grants the correct whole-stack reward", () => {
         const items = [weak(10), createOrb(11, "magic", "fortune"), createConsumable(12, "common", "health", 9), createAffixItem(13, { stat: "damage", value: 5, rarity: "rare" })];
         const { simulation } = setup(items);

@@ -13,10 +13,11 @@ test("WebGL creation failure displays its cause and retries after graphics becom
         } as typeof original;
     });
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("Error creating WebGL context");
-    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "failed");
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "menu");
     await page.evaluate(() => { (window as unknown as { graphicsUnavailable: boolean }).graphicsUnavailable = false; });
-    await page.getByRole("button", { name: "重新尝试" }).click();
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     expect(errors).toEqual([]);
     await page.evaluate(() => window.survivorApplication!.dispose());
@@ -27,7 +28,8 @@ test("closing during a stalled actor texture aborts loading and releases the wor
     test.setTimeout(60_000);
     await page.route("**/actors/Imp-normal.png", () => {});
     const requested = page.waitForRequest("**/actors/Imp-normal.png");
-    await page.goto("/", { waitUntil: "domcontentloaded" }); await requested;
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click(); await requested;
     const budget = await page.evaluate(async () => {
         const app = window.survivorApplication!;
         const map = (app.session as unknown as { view: { map: HexMap } }).view.map;
