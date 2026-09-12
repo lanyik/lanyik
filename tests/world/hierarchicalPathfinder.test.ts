@@ -61,6 +61,24 @@ function indexMap(map: MapInfo, chunkSize: number): MemoryWorldNavigationIndex {
 }
 
 describe("HierarchicalPathfinder", () => {
+    test("leaves and re-enters the starting chunk when a local barrier requires a detour", async () => {
+        const map = world(8, 8);
+        for (let y = 0; y < 4; y++) map.data[2][y].type = Land.sea;
+        const source = new StaticWorldSource(map, { chunkSize: 4 });
+        const finder = new HierarchicalPathfinder(source, indexMap(map, 4), tile => tile.type === Land.land);
+        const start = { x: 1, y: 1 }, end = { x: 3, y: 1 };
+        const result = await finder.find(start, end);
+        expect(result.path[0]).toEqual(start);
+        expect(result.path[result.path.length - 1]).toEqual(end);
+        expect(result.path.some(point => point.y >= 4)).toBe(true);
+        for (let index = 1; index < result.path.length; index++) {
+            const before = result.path[index - 1], current = result.path[index];
+            expect(getMapNeighbors(map, before.x, before.y).some(point => point.x === current.x && point.y === current.y)).toBe(true);
+            expect(map.data[current.x][current.y].type).toBe(Land.land);
+        }
+        result.release(); source.dispose();
+    });
+
     test("compacts continuous entrances symmetrically and carries cache revisions", () => {
         const map = world(36, 36);
         const options = {

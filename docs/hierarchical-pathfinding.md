@@ -111,6 +111,9 @@ Chunk summaries, because another hierarchy increases preprocessing,
 invalidation, and storage costs.
 Search is cancellable, has a hard portal-visit limit, validates detailed local
 segments, and releases all path-owned leases automatically when it throws.
+For endpoints in one chunk, a successful local route is used directly. If that
+chunk is locally disconnected, portal search can leave and re-enter it through
+neighboring chunks; a failed local search alone does not prove global disconnection.
 
 The legacy synchronous `PathFinder` is intentionally a finite-map API. It now
 rejects `map.infinite` at construction instead of silently truncating paths via
