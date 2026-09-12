@@ -3,10 +3,11 @@ import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horiz
 
 export const WATER_FAST_FRAGMENT_SHADER = `
 precision highp float;
+out vec4 waterColor;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
-${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
+${GROUND_PROJECTION_HEADER}
 
 uniform sampler2D fogMap;
 uniform float fogDarkenFactor;
@@ -18,18 +19,18 @@ uniform vec3 lightDir;
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
 
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vShoreT;
-varying float vFogState;
-varying vec2 vFogUV;
+in float vBorder;
+in float vPriority;
+in vec3 vNormal;
+in vec3 vWorldPos;
+in float vShoreT;
+in float vFogState;
+in vec2 vFogUV;
 
 void main() {
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        waterColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         return;
     }
 
@@ -39,12 +40,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     float lambertian = max(dot(normalize(lightDir), normalize(vNormal)), 0.0);
     color *= 0.55 + 0.55 * lambertian;
     if (vFogState < 1.5) color *= fogDarkenFactor;
-    gl_FragColor = vec4(color, 1.0);
+    waterColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        waterColor = mix(vec4(gridColor, 1.0), waterColor, 1.0 - gridOpacity);
     }
-    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) waterColor.rgb = applyGroundProjection(waterColor.rgb, vWorldPos.xz);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 }
 `;

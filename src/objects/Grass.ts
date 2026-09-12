@@ -1,3 +1,4 @@
+import { phaseModulo } from "../rendering/WorldMaterialCoordinates";
 import {
     BufferGeometry,
     Float32BufferAttribute,
@@ -113,10 +114,8 @@ export class GrassSharedResources {
             fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
-                worldCenter: { value: new Vector2(0, 0) },
-                worldPeriod: { value: new Vector2(0, 0) },
-                chunkOrigin: { value: new Vector2(0, 0) },
                 uTime: { value: 0 },
+                windOriginPhase: { value: 0 },
                 windStrength: { value: options.windStrength ?? bladeHeight * 0.35 },
                 windSpeed: { value: options.windSpeed ?? 1.2 },
                 colorBase: { value: new Color(options.colorBase ?? 0x3c6e2e) },
@@ -232,10 +231,6 @@ export class GrassField extends Group {
     //the previous frame - call this once per frame (see HexMap's render loop).
     public update(dtS: number): void {
         this.resources.update(dtS);
-    }
-
-    public setWorldCenter(x: number, y: number): void {
-        this.resources.material.uniforms.worldCenter.value.set(x, y);
     }
 
     public get windStrength(): number {
@@ -361,7 +356,6 @@ export class GrassField extends Group {
         });
         geometry.instanceCount = prepared.instanceCount;
         geometry.setAttribute("offset", new InstancedBufferAttribute(prepared.offsets, 2));
-        geometry.setAttribute("tileOffset", new InstancedBufferAttribute(prepared.tileOffsets, 2));
         geometry.setAttribute("angle", new InstancedBufferAttribute(prepared.angles, 1));
         geometry.setAttribute("scale", new InstancedBufferAttribute(prepared.scales, 2));
         geometry.setAttribute("phase", new InstancedBufferAttribute(prepared.phases, 1));
@@ -467,7 +461,8 @@ export function createGrassField(
         chunk.position.set(origin.x, 0, origin.y);
         chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
             const shader = currentMaterial as RawShaderMaterial;
-            shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
+            const patternOffset = shader.uniforms.worldOffset.value as Vector2;
+            shader.uniforms.windOriginPhase.value = phaseModulo((origin.x + patternOffset.x + origin.y + patternOffset.y) * .015);
             shader.uniformsNeedUpdate = true;
         };
         chunk.name = `grass-chunk-${chunkKey}`;

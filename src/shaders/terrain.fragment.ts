@@ -1,11 +1,9 @@
+import { WORLD_NOISE_HEADER } from "./worldNoise";
 import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const TERRAIN_FRAGMENT_SHADER = `
-// highp, not mediump: the river noise hash (hash21's fract(sin(x) * 43758...))
-// is fed world-space coordinates in the hundreds/thousands - at fp16 precision
-// it collapses into structured streak garbage. The water shader already runs
-// highp for the same reason (its foam uses the same hash).
+// Chunk-local coordinates retain fine material detail; lattice IDs use integer precision.
 precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
@@ -17,6 +15,8 @@ vec2 terrainGradientX;
 vec2 terrainGradientY;
 out vec4 terrainColor;
 uniform vec2 terrainTextureWorldSize;
+uniform vec2 texturePhase;
+uniform vec2 macroPhase;
 uniform float sandAtlasIndex;
 uniform float landBlendWidth; // 0..1 fraction of tile radius, land-to-land diffusion size
 uniform float landBlendEnabled;
@@ -139,20 +139,7 @@ vec3 landformDebugColor() {
 
 // Cheap value noise, same recipe as water.fragment.ts's - keeps the land
 // layer texture-free for rivers too (no extra noise texture to load).
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 // Same channel-centerline distance as terrain.vertex.ts's riverChannelDist()
 // (and helpers/rivers.ts's CPU mirror) - see the comments there. Duplicated
@@ -212,30 +199,15 @@ vec4 riverMouthShape(vec2 p, float mask, float apothem, float bendOff) {
     return outShape;
 }
 
-// Lake shore factor - see terrain.vertex.ts's identical helper (and its CPU
-// mirror in helpers/rivers.ts): closeness to the nearest *shored* edge, 1.0
-// exactly on it, 0 on a fully-open lake-interior tile.
-float lakeShore(float openMask, vec3 efA, vec3 efB) {
-    float s = 0.0;
-    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
-    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
-    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
-    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
-    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
-    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
-    return s;
-}
-
 // One continuous low-frequency field bends the world-space UVs and modulates
 // their tone. All terrain types share this pattern, so biome blends stay
 // registered. It deliberately adds ALU only: sampleTerrainCell still performs
 // exactly one atlas lookup, preserving the texture-fetch budget.
 vec3 terrainPattern() {
-    vec2 macroP = vWorldXZ / max(hexSize * 10.0, 1.0) + vec2(13.7, -8.2);
-    float macro = valueNoise(macroP);
+    float macro = worldNoise(vWorldXZ, 2, vec2(13.7, -8.2));
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
+    return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
@@ -395,8 +367,8 @@ vec2 coastField() {
 // part of the sea that the land shader paints when a curved coastline pushes
 // water inland onto a land tile.
 float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
-    float n = valueNoise(worldXZ * (3.0 / hexSize) + vec2(0.0, t * 0.2));
-    n = 0.5 * n + 0.5 * valueNoise(worldXZ * (7.0 / hexSize) - vec2(t * 0.15, 0.0));
+    float n = worldNoise(worldXZ, 3, vec2(0.0, t * 0.2));
+    n = 0.5 * n + 0.5 * worldNoise(worldXZ, 4, - vec2(t * 0.15, 0.0));
     float distort = (n - 0.5) * foamDistortion;
 
     float phase = fract(shoreDist * foamCount + t * foamSpeed + distort * 2.0);
@@ -431,9 +403,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // One noise evaluation shared by all 6 blendEdge calls: a coarse octave
         // meanders the border position, a finer one modulates its strength into
         // patches (like the river banks' bankPatchiness below).
-        float blendNoise = valueNoise(vWorldXZ * (3.0 / hexSize));
+        float blendNoise = worldNoise(vWorldXZ, 3, vec2(0.0));
         float blendBend = (blendNoise - 0.5) * landBlendCurvature * 0.5;
-        float blendPatch = clamp(0.6 + 0.8 * valueNoise(vWorldXZ * (8.0 / hexSize)), 0.0, 1.0);
+        float blendPatch = clamp(0.6 + 0.8 * worldNoise(vWorldXZ, 5, vec2(0.0)), 0.0, 1.0);
 
         texColor = blendEdge(texColor, vNeighborsA.x, vNeighborsPriorityA.x, vEdgeFactorsA.x, blendBend, blendPatch, materialPattern); // SE
         texColor = blendEdge(texColor, vNeighborsA.y, vNeighborsPriorityA.y, vEdgeFactorsA.y, blendBend, blendPatch, materialPattern); // S
@@ -458,8 +430,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     vec2 coastFK = coastField();
     float coast = coastFK.x;
     if (coast > 0.0) {
-        float cn = valueNoise(vWorldXZ * (1.3 / hexSize));
-        cn = 0.6 * cn + 0.4 * valueNoise(vWorldXZ * (3.2 / hexSize));
+        float cn = worldNoise(vWorldXZ, 6, vec2(0.0));
+        cn = 0.6 * cn + 0.4 * worldNoise(vWorldXZ, 7, vec2(0.0));
         float f = coast + cn * coastCurvature * 0.5;
 
         // sand beach: replaces the old vBeachT vertex blend with the same
@@ -489,8 +461,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             vec3 shoreCol = mix(seaColorShallow, vec3(1.0), 0.5);
             vec3 seaColor = mix(seaBase, shoreCol, shoreT);
             float t = uTime;
-            float ripple = valueNoise(vWorldXZ * (6.0 / hexSize) + vec2(t * 0.35, t * 0.2));
-            ripple = 0.5 * ripple + 0.5 * valueNoise(vWorldXZ * (12.0 / hexSize) - vec2(t * 0.25, t * 0.4));
+            float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
+            ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
             seaColor *= 0.85 + 0.3 * ripple;
             texColor = mix(texColor, vec4(seaColor, 1.0), seaT);
 
@@ -511,9 +483,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     // lowers the line without replacing lowland tiles with white hexes. A
     // warped world-space threshold breaks constant-height rings around ridges.
     if (vLandform.x > 0.0) {
-        float snowNoise = valueNoise(vWorldXZ * (0.48 / hexSize) + vec2(7.1, -3.6));
+        float snowNoise = worldNoise(vWorldXZ, 10, vec2(7.1, -3.6));
         snowNoise = 0.7 * snowNoise
-            + 0.3 * valueNoise(vWorldXZ * (1.15 / hexSize) + vec2(-11.4, 9.2));
+            + 0.3 * worldNoise(vWorldXZ, 11, vec2(-11.4, 9.2));
         float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
         float snowLine = 0.74 - climateDrop + (snowNoise - 0.5) * 0.18;
         float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
@@ -534,8 +506,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 
         // static two-octave world-space noise bends the waterline: the curved,
         // "hand-drawn" banks instead of ruler-straight strips/hex-edge rims.
-        float bend = valueNoise(vWorldXZ * (2.2 / hexSize));
-        bend = 0.6 * bend + 0.4 * valueNoise(vWorldXZ * (5.0 / hexSize));
+        float bend = worldNoise(vWorldXZ, 12, vec2(0.0));
+        bend = 0.6 * bend + 0.4 * worldNoise(vWorldXZ, 13, vec2(0.0));
         float bendOff = (bend - 0.5) * riverCurvature * 0.6;
 
         float waterT = 0.0; // 1 = water surface
@@ -572,8 +544,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         if (mask < 2048.0 && lakeNeighborMask > 0.5) {
             float lakeField = lakeNeighborField(lakeNeighborMask);
             if (lakeField > 0.0) {
-                float lakeNoise = valueNoise(vWorldXZ * (1.3 / hexSize));
-                lakeNoise = 0.6 * lakeNoise + 0.4 * valueNoise(vWorldXZ * (3.2 / hexSize));
+                float lakeNoise = worldNoise(vWorldXZ, 6, vec2(0.0));
+                lakeNoise = 0.6 * lakeNoise + 0.4 * worldNoise(vWorldXZ, 7, vec2(0.0));
                 float fLake = lakeField + lakeNoise * coastCurvature * 0.5;
                 float s0Lake = 1.0 - clamp(lakeShoreWidth, 0.001, 1.0);
                 float lakeBankT = smoothstep(s0Lake, 1.0, fLake);
@@ -588,7 +560,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // waterline, its own strength varied by a finer noise so it reads as
         // patchy growth instead of a uniform outline. The water below
         // overdraws its inner part, leaving the band hugging the waterline.
-        float bankPatchiness = 0.55 + 0.45 * valueNoise(vWorldXZ * (8.0 / hexSize));
+        float bankPatchiness = 0.55 + 0.45 * worldNoise(vWorldXZ, 5, vec2(0.0));
         texColor = mix(texColor, vec4(riverBankColor, 1.0), bankT * bankPatchiness);
 
         // water: shallow color at the waterline deepening inward, brightness
@@ -599,8 +571,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             waterColor = mix(waterColor, seaColorShallow, seaMouthT);
 
             float t = uTime * riverFlowSpeed;
-            float ripple = valueNoise(vWorldXZ * (6.0 / hexSize) + vec2(t * 0.35, t * 0.2));
-            ripple = 0.5 * ripple + 0.5 * valueNoise(vWorldXZ * (12.0 / hexSize) - vec2(t * 0.25, t * 0.4));
+            float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
+            ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
             waterColor *= 0.85 + 0.3 * ripple;
 
             texColor = mix(texColor, vec4(waterColor, 1.0), waterT);

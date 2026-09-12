@@ -111,6 +111,7 @@ import {
 } from "./HexMapOptions";
 import { WorldSurfaceAnchor, WorldSurfaceView } from "./world/WorldSurfaceView";
 import { createWorldLoadPlan } from "./rendering/WorldLoadPlan";
+import { createTerrainTexturePeriod } from "./rendering/WorldMaterialCoordinates";
 
 export type { HexMapOptions, WorldLoadOptions } from "./HexMapOptions";
 
@@ -164,6 +165,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private chunkScheduler: WorldChunkScheduler;
     private readonly modelAssets: ModelAssetCache;
     private readonly vegetationResourceAccount: ResourceBudgetAccount;
+    private readonly terrainResourceAccount: ResourceBudgetAccount;
     private readonly chunkSchedulerHooks: WorldChunkSchedulerHooks = {
         enabled: metadata => {
             const layer = this.worldRenderLayers?.forKind(metadata.kind);
@@ -252,94 +254,117 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     constructor(options: HexMapOptions) {
         super();
         this.options = resolveHexMapOptions(options);
-        this.worldChunkMountQueue = new WorldChunkMountQueue({
-            frameTasks: this.frameTasks,
-            streamer: () => this.worldStreamer,
-            demandKey: () => this.worldDemandChunkKey,
-            signal: () => this.worldController?.lifecycle.signal,
-            mounted: key => this.worldChunkLayers.has(key),
-            priority: chunk => {
-                const center = this.worldStreamer?.stats;
-                return center && this.worldSource
-                    ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY)
-                    : 0;
-            },
-            mount: chunk => this.mountWorldChunk(chunk)
-        });
-        const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
-        this.chunkScheduler = new WorldChunkScheduler({
-            ...schedulerOptions,
-            renderDistance: this.options.renderDistance,
-            lodEnabled: this.options.lodEnabled,
-            lodDistances: {
-                near: this.options.lodNearDistance,
-                far: this.options.lodFarDistance,
-                vegetation: this.options.vegetationRenderDistance,
-                hysteresis: this.options.chunkLodHysteresis
-            },
-            gpuCacheSize: this.options.gpuChunkCacheSize,
-            cpuCacheSize: this.options.cpuChunkCacheSize,
-            gpuCacheBytes: this.options.gpuChunkCacheBytes,
-            cpuCacheBytes: this.options.cpuChunkCacheBytes
-        });
-        this.modelAssets = new ModelAssetCache({
-            maximumBytes: this.options.modelAssetCacheBytes,
-            resources: this.chunkScheduler.createResourceAccount("model-assets")
-        });
-        this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
-        this.installBuiltinWorldRenderLayers();
+        let modelAssets: ModelAssetCache | undefined;
+        let chunkScheduler: WorldChunkScheduler | undefined;
+        try {
+            this.worldChunkMountQueue = new WorldChunkMountQueue({
+                frameTasks: this.frameTasks,
+                streamer: () => this.worldStreamer,
+                demandKey: () => this.worldDemandChunkKey,
+                signal: () => this.worldController?.lifecycle.signal,
+                mounted: key => this.worldChunkLayers.has(key),
+                priority: chunk => {
+                    const center = this.worldStreamer?.stats;
+                    return center && this.worldSource
+                        ? this.worldSource.chunkDistance(chunk.chunkX, chunk.chunkY, center.centerChunkX, center.centerChunkY)
+                        : 0;
+                },
+                mount: chunk => this.mountWorldChunk(chunk)
+            });
+            const schedulerOptions = createDefaultWorldChunkSchedulerOptions();
+            this.chunkScheduler = chunkScheduler = new WorldChunkScheduler({
+                ...schedulerOptions,
+                renderDistance: this.options.renderDistance,
+                lodEnabled: this.options.lodEnabled,
+                lodDistances: {
+                    near: this.options.lodNearDistance,
+                    far: this.options.lodFarDistance,
+                    vegetation: this.options.vegetationRenderDistance,
+                    hysteresis: this.options.chunkLodHysteresis
+                },
+                gpuCacheSize: this.options.gpuChunkCacheSize,
+                cpuCacheSize: this.options.cpuChunkCacheSize,
+                gpuCacheBytes: this.options.gpuChunkCacheBytes,
+                cpuCacheBytes: this.options.cpuChunkCacheBytes
+            });
+            this.modelAssets = modelAssets = new ModelAssetCache({
+                maximumBytes: this.options.modelAssetCacheBytes,
+                resources: this.chunkScheduler.createResourceAccount("model-assets")
+            });
+            this.vegetationResourceAccount = this.chunkScheduler.createResourceAccount("vegetation-cpu");
+            this.terrainResourceAccount = this.chunkScheduler.createResourceAccount("terrain-cpu");
+            this.installBuiltinWorldRenderLayers();
 
-        const el = document.querySelector(this.options.element);
-        if (!(el instanceof HTMLCanvasElement)) {
-            throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
-        }
-        this.canvas = el;
-
-        this.rendererHost = new HexMapRendererHost({
-            canvas: this.canvas,
-            antialias: this.options.antialias,
-            skyVisible: this.options.skyVisible,
-            horizonFogColor: this.options.horizonFogColor,
-            horizonFogStart: this.options.horizonFogStart,
-            horizonFogEnd: this.options.horizonFogEnd,
-            contextLost: () => {
-                this.lastFrameTime = undefined;
-                this.emit("contextlost", this.rendererHost.contextStats);
-            },
-            contextRestored: () => {
-                this.lastFrameTime = undefined;
-                this.chunkScheduler.invalidateScene();
-                this.handleResize();
-                this.emit("contextrestored", this.rendererHost.contextStats);
+            const el = document.querySelector(this.options.element);
+            if (!(el instanceof HTMLCanvasElement)) {
+                throw new Error(`HexMap: element "${this.options.element}" is not a <canvas>`);
             }
-        });
-        this.renderer = this.rendererHost.renderer;
-        this.scene = this.rendererHost.scene;
-        this.worldRoot = this.rendererHost.worldRoot;
-        this.camera = this.rendererHost.camera;
-        this.setupControls();
-        this.setupMarkers();
-        this.interactions = new HexMapInteractionController({
-            canvas: this.canvas,
-            camera: this.camera,
-            controls: this.controls,
-            pointer: this.pointer,
-            size: this.options.size,
-            map: () => this.mapData,
-            surface: () => this.worldSurface,
-            logicalGround: point => { this.logicalGround(point); },
-            tile: (x, y) => this.getTile(x, y),
-            select: (x, y) => this.selectTile(x, y),
-            hover: (x, y, tile) => {
-                this.positionMarker(this.pointer, { x, y });
-                this.emit("hover", { x, y, tile });
-            },
-            click: (x, y, tile) => this.emit("click", { x, y, tile })
-        });
-        this.setupEvents();
-        this.handleResize();
+            this.canvas = el;
 
-        this.animationFrameId = window.requestAnimationFrame(this.animate);
+            this.rendererHost = new HexMapRendererHost({
+                canvas: this.canvas,
+                antialias: this.options.antialias,
+                skyVisible: this.options.skyVisible,
+                horizonFogColor: this.options.horizonFogColor,
+                horizonFogStart: this.options.horizonFogStart,
+                horizonFogEnd: this.options.horizonFogEnd,
+                contextLost: () => {
+                    this.lastFrameTime = undefined;
+                    this.emit("contextlost", this.rendererHost.contextStats);
+                },
+                contextRestored: () => {
+                    this.lastFrameTime = undefined;
+                    this.chunkScheduler.invalidateScene();
+                    this.handleResize();
+                    this.emit("contextrestored", this.rendererHost.contextStats);
+                }
+            });
+            this.renderer = this.rendererHost.renderer;
+            this.scene = this.rendererHost.scene;
+            this.worldRoot = this.rendererHost.worldRoot;
+            this.camera = this.rendererHost.camera;
+            this.setupControls();
+            this.setupMarkers();
+            this.interactions = new HexMapInteractionController({
+                canvas: this.canvas,
+                camera: this.camera,
+                controls: this.controls,
+                pointer: this.pointer,
+                size: this.options.size,
+                map: () => this.mapData,
+                surface: () => this.worldSurface,
+                logicalGround: point => { this.logicalGround(point); },
+                tile: (x, y) => this.getTile(x, y),
+                select: (x, y) => this.selectTile(x, y),
+                hover: (x, y, tile) => {
+                    this.positionMarker(this.pointer, { x, y });
+                    this.emit("hover", { x, y, tile });
+                },
+                click: (x, y, tile) => this.emit("click", { x, y, tile })
+            });
+            this.setupEvents();
+            this.handleResize();
+
+            this.animationFrameId = window.requestAnimationFrame(this.animate);
+        } catch (reason) {
+            // Construction has not published an instance to the caller. Release every
+            // resource acquired before the failed renderer/control/event setup.
+            window.removeEventListener("resize", this.handleResize);
+            this.resizeObserver?.disconnect();
+            this.interactions?.dispose();
+            for (const marker of [this.selector, this.pointer]) {
+                marker?.geometry.dispose();
+                (marker?.material as Material | undefined)?.dispose();
+            }
+            this.controls?.dispose();
+            this.rendererHost?.dispose();
+            modelAssets?.dispose();
+            chunkScheduler?.dispose();
+            this.frameTasks.dispose();
+            this.runtimeWork.dispose();
+            this.worldRenderLayers.dispose();
+            throw reason;
+        }
     }
 
     private installBuiltinWorldRenderLayers(): void {
@@ -587,8 +612,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const cached = this.worldCopyMaterialCache.get(cacheKey);
         if (cached) return cached;
         const copy = material.clone();
-        //Share every live uniform object with the primary material except the
-        //per-copy translation used by the water shader's camera calculations.
+        //Share live uniforms; per-copy pattern translation stays CPU metadata
+        //and is reduced to local material phases immediately before drawing.
         copy.uniforms = {
             ...material.uniforms,
             worldOffset: { value: new Vector2(
@@ -1023,7 +1048,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             ]));
             if (!this.isWorldSessionCurrent(source, revision) || !worldController.lifecycle.active) return;
             this.atlas = atlas;
-            if (!(await worldController.lifecycle.run(() => this.rebuildTerrain(revision, true)))) return;
+            if (!(await worldController.lifecycle.run(signal => this.rebuildTerrain(revision, true, signal)))) return;
             if (!(await worldController.lifecycle.run(() => this.initializeWorldRenderLayers(source, revision)))) return;
             if (!this.isWorldSessionCurrent(source, revision)) return;
 
@@ -1872,6 +1897,11 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         } catch (reason) {
             errors.push(renderLayerError(reason));
         }
+        if (this.terrain) {
+            this.terrain.removeFromParent();
+            try { this.terrain.dispose(); } catch (reason) { errors.push(renderLayerError(reason)); }
+            this.terrain = undefined;
+        }
         this.markerProjections.clear();
         this.worldSurface = undefined;
         this.worldController = undefined;
@@ -1965,7 +1995,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     //when the map itself changes (see load()) - everything water/blend-related
     //is a live uniform, see TerrainMesh's own getters/setters, forwarded below
     //(waterWaveAmplitude, beachWidth, etc.)
-    private async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer)): Promise<boolean> {
+    private async rebuildTerrain(expectedRevision = this.loadRevision, deferTiles = Boolean(this.worldStreamer), signal?: AbortSignal): Promise<boolean> {
         if (!this.worldSurface) throw new Error("No world surface is loaded");
         this.clearWorldCopies();
         this.chunkScheduler.clear();
@@ -1975,6 +2005,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         }
 
         const terrain = new TerrainMesh(this.mapData, {
+            signal,
+            resourceAccount: this.terrainResourceAccount,
             size: this.options.size,
             texturesBaseUrl: this.options.texturesBaseUrl,
             atlas: this.atlas,
@@ -1986,6 +2018,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             shaderQuality: this.options.terrainShaderQuality,
             landformDebugMode: this.options.landformDebugMode,
             terrainTextureRegionSize: this.options.terrainTextureRegionSize,
+            terrainTextureAnisotropy: this.options.terrainTextureAnisotropy,
             waterColorShallow: this.options.waterColorShallow,
             waterColorDeep: this.options.waterColorDeep,
             waterWaveAmplitude: this.options.waterWaveAmplitude,
@@ -2304,10 +2337,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         }
     }
 
-    //Validates an editor-sized change set before dispatching it, then
-    //coalesces all visual invalidation into one render refresh. Sources with a
-    //native setTileOverrides() implementation can additionally make storage
-    //mutation atomic; the per-tile fallback preserves source compatibility.
+    //The editable source validates and commits the complete batch atomically;
+    //only a successful commit produces the coalesced visual invalidation.
     public setTileOverrides(changes: readonly WorldTileOverrideChange[]): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("HexMap has been disposed"));
         try {
@@ -2895,11 +2926,9 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         return this.terrain?.terrainTextureRegionSize ?? this.options.terrainTextureRegionSize;
     }
     public set terrainTextureRegionSize(value: number) {
-        if (!Number.isFinite(value) || value <= 0) {
-            throw new RangeError("terrainTextureRegionSize must be a positive finite number");
-        }
-        this.options.terrainTextureRegionSize = value;
         if (this.terrain) this.terrain.terrainTextureRegionSize = value;
+        else createTerrainTexturePeriod(this.options.size, value);
+        this.options.terrainTextureRegionSize = value;
     }
 
     public get beachWidth(): number {

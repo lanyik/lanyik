@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { Color, WebGLRenderTarget, type WebGLRenderer } from "three";
+import { Color, WebGLRenderTarget, type OrthographicCamera, type WebGLRenderer } from "three";
 import { GroundProjection } from "../../src/rendering/GroundProjection";
 import { WorldRenderLayerRegistry } from "../../src/rendering/WorldRenderLayer";
 
@@ -23,4 +23,18 @@ test("projection restores the renderer on failure and keeps logical bounds indep
     registry.unregister(first.id);
     expect(registry.projectionLayer).toBeUndefined();
     projection.dispose(); previousTarget.dispose();
+});
+
+test("remote projections keep the source camera at a local origin", () => {
+    const projection = new GroundProjection(64, 32);
+    projection.setCenter(2 ** 30 + .25, -(2 ** 30) - .5, 34);
+    expect(projection.centerWorld.x).toBe((2 ** 30 + .25) * 34);
+    let camera: OrthographicCamera | undefined;
+    const renderer = { autoClear: true, getRenderTarget: () => null, getClearAlpha: () => 0,
+        getActiveCubeFace: () => 0, getActiveMipmapLevel: () => 0,
+        getClearColor: () => {}, setRenderTarget: () => {}, setClearColor: () => {},
+        render: (_scene: unknown, current: OrthographicCamera) => { camera = current; } };
+    projection.render(renderer as unknown as WebGLRenderer);
+    expect(camera!.position.toArray()).toEqual([0, 1, 0]);
+    projection.dispose();
 });

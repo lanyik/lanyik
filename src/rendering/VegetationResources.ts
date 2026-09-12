@@ -50,7 +50,7 @@ export class VegetationResources {
 export function grassLayoutAllocations(chunks: Iterable<WorldVegetationGrassChunkLayout>): ResourceAllocation[] {
     const arrays: ArrayBufferView[] = [];
     for (const chunk of chunks) for (const lod of chunk.lods) {
-        arrays.push(lod.ranges, lod.offsets, lod.tileOffsets, lod.angles, lod.scales, lod.phases, lod.shades);
+        arrays.push(lod.ranges, lod.offsets, lod.angles, lod.scales, lod.phases, lod.shades);
     }
     return collectCpuBufferAllocations(arrays);
 }

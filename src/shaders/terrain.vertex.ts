@@ -1,3 +1,4 @@
+import { WORLD_NOISE_HEADER } from "./worldNoise";
 import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
 
 export const TERRAIN_SURFACE_DETAIL_AMPLITUDE = 0.015;
@@ -47,11 +48,8 @@ uniform float lakeShoreWidth; // grass rim inset from a lake's shored edges
 // from world position (not per-tile local UVs) so one copy of the texture
 // flows continuously across every fogged tile - the image tiles seamlessly on
 // each side, so neighboring repeats merge with no visible hex-shaped seams.
+uniform vec2 fogPhase;
 uniform float fogTextureSize;
-uniform vec2 worldOffset; // repeated-world translation used by procedural patterns
-uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
-uniform vec2 worldCenter; // camera target on the ground plane
-uniform vec2 worldPeriod; // 0 on bounded axes, map span on wrapped axes
 
 in vec3 position;
 
@@ -113,33 +111,7 @@ const vec2 DIR_NW = vec2(-0.8660254, -0.5);
 const vec2 DIR_N  = vec2(0.0, -1.0);
 const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
-//Move each logical tile to the nearest toroidal image around the camera. This
-//draws the map exactly once instead of submitting 9 complete copies; crossing
-//a seam only moves far/off-screen instances from one side to the other.
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
-
-// Same cheap value noise as the fragment stages. Mountain relief is sampled
-// exclusively in world-space so its extrema are unrelated to hex centres and
-// adjacent tiles agree at every shared vertex.
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 float centerMountainRelief() {
     return style.w;
@@ -264,10 +236,9 @@ float mountainMacroReliefAt(vec2 p) {
 float mountainHeightAt(vec2 p, vec2 tileOffset) {
     float macroRelief = mountainMacroReliefAt(p);
     if (macroRelief <= 0.0) return 0.0;
-    vec2 w = tileOffset + p + worldOffset;
-    vec2 terrainP = w / hexSize;
-    float broad = valueNoise(terrainP * 0.42 + vec2(37.2, 11.8));
-    float fine = valueNoise(terrainP * 1.07 + vec2(-19.4, 53.1));
+    vec2 w = tileOffset + p;
+    float broad = worldNoise(w, 0, vec2(37.2, 11.8));
+    float fine = worldNoise(w, 1, vec2(-19.4, 53.1));
     float signedDetail = (broad * 0.7 + fine * 0.3) * 2.0 - 1.0;
     float detailGate = smoothstep(0.08, 0.32, macroRelief);
     return macroRelief * (1.0 + signedDetail * ${TERRAIN_SURFACE_DETAIL_AMPLITUDE.toFixed(3)} * detailGate);
@@ -348,22 +319,12 @@ float edgeFieldFromMask(float mask, vec3 efA, vec3 efB) {
 // (one NOT in openMask) - 1.0 exactly on such an edge, falling off towards the
 // far side. 0 on a fully-open tile (lake interior: all water). Mirrors
 // isInTileWater() in helpers/rivers.ts - keep the two in sync.
-float lakeShore(float openMask, vec3 efA, vec3 efB) {
-    float s = 0.0;
-    if (mod(floor(openMask /  1.0), 2.0) < 0.5) s = max(s, efA.x);
-    if (mod(floor(openMask /  2.0), 2.0) < 0.5) s = max(s, efA.y);
-    if (mod(floor(openMask /  4.0), 2.0) < 0.5) s = max(s, efA.z);
-    if (mod(floor(openMask /  8.0), 2.0) < 0.5) s = max(s, efB.x);
-    if (mod(floor(openMask / 16.0), 2.0) < 0.5) s = max(s, efB.y);
-    if (mod(floor(openMask / 32.0), 2.0) < 0.5) s = max(s, efB.z);
-    return s;
-}
 
 void main() {
     float apothem = hexSize * 0.8660254;
     vec2 local = position.xz;
-    vec2 tileOffset = nearestWorldOffset(offset);
-    vec2 logicalTileOffset = tileOffset + chunkOrigin;
+    vec2 tileOffset = offset;
+
     float riverEdges = waterEdges.x;
     float riverSeaMouthEdges = waterEdges.y;
     float riverLakeMouthEdges = waterEdges.z;
@@ -411,12 +372,7 @@ void main() {
     if (riverEdges >= 0.0) {
         float bedT = 0.0;
         if (riverEdges >= 2048.0) {
-            float openMask = floor((riverEdges - 4096.0) / 64.0);
-            float channelMask = riverEdges - 4096.0 - openMask * 64.0;
             bedT = 1.0;
-            if (channelMask > 0.5) {
-                bedT = max(bedT, riverMouthBedT(local, channelMask, apothem));
-            }
         } else {
             float dRiver = riverChannelDist(local, riverEdges, apothem) / hexSize;
             bedT = 1.0 - smoothstep(riverWidth * 0.5, riverWidth + riverBankWidth, dRiver);
@@ -447,7 +403,7 @@ void main() {
     if (reliefInfluence > 0.001) {
         float gate = fogVisible;
         if (gate > 0.0) {
-            elevation = mountainHeightAt(local, logicalTileOffset) * gate;
+            elevation = mountainHeightAt(local, tileOffset) * gate;
             raiseY = elevation * mountainHeight;
             mountainSlope = smoothMountainSlopeAt(local) * gate;
         }
@@ -504,14 +460,13 @@ void main() {
     vRiverLakeMouthEdges = riverLakeMouthEdges;
     vLakeNeighborEdges = lakeNeighborEdges;
     vLocal = local;
-    vec2 logicalWorldXZ = pos.xz + chunkOrigin + worldOffset;
-    vWorldXZ = logicalWorldXZ;
+    vWorldXZ = pos.xz;
     // Axes swapped/negated (not a plain pos.xz mapping) so the image reads
     // upright from this map's camera: the camera's azimuth is locked to ~90deg
     // (see HexMap's setupControls), which puts screen-right along world -Z and
     // screen-up along world -X - mapping u to -z and v to -x orients the
     // texture to the screen and keeps it un-mirrored when viewed from above.
     // Negation is free for a seamlessly wrapping texture (just a phase shift).
-    vFogUV = vec2(-logicalWorldXZ.y, -logicalWorldXZ.x) / fogTextureSize;
+    vFogUV = vec2(-pos.z, -pos.x) / fogTextureSize + fogPhase;
 }
 `;

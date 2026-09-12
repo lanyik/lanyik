@@ -1,4 +1,6 @@
-import { describe, expect, test, vi } from "vitest";
+import { DEFAULT_HEX_MAP_OPTIONS, resolveHexMapOptions } from "../../src/HexMapOptions";
+import { pickTile } from "../../src/helpers/picking";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
     BoxGeometry,
     Group,
@@ -11,8 +13,10 @@ import {
     RawShaderMaterial,
     Texture,
     TextureLoader,
-    ImageLoader
+    Vector3
 } from "three";
+
+afterEach(() => vi.restoreAllMocks());
 
 vi.mock("../../src/helpers/models", () => ({
     ModelAssetCache: class {
@@ -247,12 +251,12 @@ describe("streamed render resource sharing", () => {
             GRASS_FRAGMENT_SHADER
         ]) {
             expect(shader).toContain("smoothstep(fogNear, fogFar, vHorizonFogDepth)");
-            expect(shader).toMatch(/(gl_FragColor|terrainColor)\.rgb = applyHorizonFog\(/);
+            expect(shader).toMatch(/(gl_FragColor|terrainColor|waterColor)\.rgb = applyHorizonFog\(/);
         }
     });
 
     test("computes terrain instance data once while caching three geometry LODs", async () => {
-        vi.spyOn(ImageLoader.prototype, "load").mockReturnValue({} as HTMLImageElement);
+        vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
         const surface = createWorldSurfaceView({
@@ -265,16 +269,18 @@ describe("streamed render resource sharing", () => {
             mountainHeight: 6
         });
         map.data[4][4].city = { name: "Anchored" };
+        const configured = resolveHexMapOptions({ element: "canvas", terrainTextureAnisotropy: 4 });
         const terrain = new TerrainMesh(map, {
             size: 10,
             texturesBaseUrl: "textures/",
+            terrainTextureAnisotropy: configured.terrainTextureAnisotropy,
             atlas: {
                 image: "terrain.png",
                 width: 1,
                 height: 1,
                 cellSize: 1,
                 cellSpacing: 0,
-                textures: { [Land.land]: { cellX: 0, cellY: 0 } }
+                textures: Object.fromEntries(Object.values(Land).map(type => [type, { cellX: 0, cellY: 0 }]))
             },
             surface
         }, []);
@@ -283,6 +289,7 @@ describe("streamed render resource sharing", () => {
         const meshes = terrain.children.filter(child => getWorldChunkMetadata(child)) as Mesh[];
         const mesh = meshes[0];
         expect((mesh.material as RawShaderMaterial).fog).toBe(true);
+        expect((mesh.material as RawShaderMaterial).uniforms.map.value.anisotropy).toBe(4);
         const metadata = getWorldChunkMetadata(mesh)!;
         expect(metadata.bounds.minY).toBe(-2.5);
         expect(metadata.bounds.maxY).toBeCloseTo(6 * 1.25 * TERRAIN_SURFACE_DETAIL_MAX_MULTIPLIER, 10);
@@ -339,12 +346,14 @@ describe("streamed render resource sharing", () => {
         expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toContain("land:0,0");
         expect(terrain.children).not.toContain(firstMesh);
 
+        const readiness = expect(terrain.ready).rejects.toMatchObject({ name: "AbortError" });
         terrain.dispose();
+        await readiness;
         texture.mockRestore();
     });
 
     test("does not publish a city whose terrain owner was disposed while its model loaded", async () => {
-        vi.spyOn(ImageLoader.prototype, "load").mockReturnValue({} as HTMLImageElement);
+        vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
         const texture = vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
         const map = mapWithVegetation();
         map.data[4][4].city = { name: "Late city" };
@@ -361,20 +370,23 @@ describe("streamed render resource sharing", () => {
         const terrain = new TerrainMesh(map, {
             size: 10,
             texturesBaseUrl: "textures/",
+            terrainTextureAnisotropy: DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy,
             atlas: {
                 image: "terrain.png",
                 width: 1,
                 height: 1,
                 cellSize: 1,
                 cellSpacing: 0,
-                textures: { [Land.land]: { cellX: 0, cellY: 0 } }
+                textures: Object.fromEntries(Object.values(Land).map(type => [type, { cellX: 0, cellY: 0 }]))
             },
             surface,
             modelAssets
         }, []);
 
         const cityBuild = terrain.loadCities([{ x: 4, y: 4 }]);
+        const readiness = expect(terrain.ready).rejects.toMatchObject({ name: "AbortError" });
         terrain.dispose();
+        await readiness;
         const scene = new Group();
         scene.add(new Mesh(new BoxGeometry(1, 2, 1), new MeshBasicMaterial()));
         scene.updateMatrixWorld(true);
@@ -430,9 +442,12 @@ describe("streamed render resource sharing", () => {
             { x: 0, y: 0, state: 0 },
             { x: 0, y: 1, state: 0 }
         ]);
-        const owner = lod0.getAttribute("tileOffset");
-        const owned = (y: number) => Array.from({ length: owner.count }, (_, index) => index)
-            .filter(index => owner.getX(index) === 0 && Math.abs(owner.getY(index) - y * 10 * Math.sqrt(3)) < 1e-4);
+        const offsets = lod0.getAttribute("offset");
+        const owned = (y: number) => Array.from({ length: offsets.count }, (_, index) => index)
+            .filter(index => {
+                const cell = pickTile(new Vector3(offsets.getX(index) + leftMesh.position.x, 0, offsets.getY(index) + leftMesh.position.z), 10)!;
+                return cell.x === 0 && cell.y === y;
+            });
         const hidden = [...owned(0), ...owned(1)];
         expect(hidden.length).toBeGreaterThan(0);
         expect(fog.updateRanges).toEqual([{ start: hidden[0], count: hidden.length }]);

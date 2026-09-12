@@ -1,10 +1,12 @@
+import { WORLD_NOISE_HEADER } from "./worldNoise";
 import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const WATER_FRAGMENT_SHADER = `
 precision highp float;
+out vec4 waterColor;
 
-${HORIZON_FOG_FRAGMENT_HEADER}
+${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
 // Curved coastline (see terrain.fragment.ts's coast block - this is its water
 // side): the shore-distance field is recomputed per-pixel and bent by the SAME
@@ -19,7 +21,7 @@ uniform float waterCornerRounding;
 uniform float coastCurvature;
 uniform float beachWidth;
 
-${GROUND_PROJECTION_HEADER.replace(/texture\(/g, "texture2D(")}
+${GROUND_PROJECTION_HEADER}
 
 uniform sampler2D fogMap;        // war-fog.jpg, tiled per-tile via vUV
 uniform float fogDarkenFactor;   // color multiplier for Explored (fogState 1) tiles
@@ -30,8 +32,7 @@ uniform float gridWidth;
 uniform float gridOpacity;
 
 uniform vec3 lightDir;
-uniform vec3 cameraPosition; // auto-provided by three.js each frame
-uniform vec2 cameraWorldOffset; // floating-origin logical offset (infinite worlds)
+uniform vec3 chunkCameraPosition;
 
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
@@ -55,21 +56,21 @@ uniform float foamRange;      // how far out from the shore bands reach (0..1 of
 uniform float foamDistortion; // 0..1, how strongly noise bends/breaks the bands
 uniform float foamOpacity;
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA;
-varying vec3 vEdgeFactorsB;
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBeachT;
-varying float vShoreT;
-varying float vFogState;
-varying vec2 vFogUV;
+in vec2 vUV;
+in float vBorder;
+in float vPriority;
+in vec3 vNeighborsPriorityA;
+in vec3 vNeighborsPriorityB;
+in vec3 vNeighborsKindA;
+in vec3 vNeighborsKindB;
+in vec3 vEdgeFactorsA;
+in vec3 vEdgeFactorsB;
+in vec3 vNormal;
+in vec3 vWorldPos;
+in float vBeachT;
+in float vShoreT;
+in float vFogState;
+in vec2 vFogUV;
 
 const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
 const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
@@ -88,20 +89,7 @@ vec2 strongestWaterEdge(vec2 best, float kind, float priority, float factor) {
 
 // Cheap value noise - stands in for the article's scrolling noise texture
 // (keeps the shader texture-free like the rest of this water layer).
-float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-        mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
-        u.y
-    );
-}
+${WORLD_NOISE_HEADER}
 
 // Same corner treatment as water.vertex.ts's roundedCorner() - duplicated per
 // pixel here so the bent waterline works with the rounded field, not the
@@ -116,7 +104,7 @@ float roundedCorner(float isLandA, float isLandB, float dA, float dB) {
 // Per-pixel shore-distance field: mirrors water.vertex.ts's coastal factor
 // (straight per-edge max + rounded corners), 1.0 exactly on an edge shared
 // with land, 0 on tiles without land neighbors. Kinds are re-rounded first -
-// varying interpolation is not exact even for per-instance-constant values.
+// Varying interpolation is not exact even for per-instance-constant values.
 float shoreField() {
     vec3 kA = floor(vNeighborsKindA + 0.5);
     vec3 kB = floor(vNeighborsKindB + 0.5);
@@ -163,8 +151,8 @@ float shoreField() {
 float coastalFoam(vec2 worldXZ, float t, float shoreDist) {
     // ~3 noise cells per tile radius; the second, slowly scrolling octave
     // keeps the tear pattern itself alive instead of frozen in world space.
-    float n = valueNoise(worldXZ * (3.0 / hexSize) + vec2(0.0, t * 0.2));
-    n = 0.5 * n + 0.5 * valueNoise(worldXZ * (7.0 / hexSize) - vec2(t * 0.15, 0.0));
+    float n = worldNoise(worldXZ, 3, vec2(0.0, t * 0.2));
+    n = 0.5 * n + 0.5 * worldNoise(worldXZ, 4, - vec2(t * 0.15, 0.0));
     float distort = (n - 0.5) * foamDistortion;
 
     // 1) travelling bands
@@ -188,8 +176,8 @@ void main() {
     // (see terrain.vertex.ts's comment), so the texture flows seamlessly
     // across neighboring fogged tiles instead of restarting per hex.
     if (vFogState < 0.5) {
-        gl_FragColor = vec4(texture2D(fogMap, vFogUV).rgb, 1.0);
-${HORIZON_FOG_FRAGMENT_APPLY}
+        waterColor = vec4(texture(fogMap, vFogUV).rgb, 1.0);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         return;
     }
 
@@ -221,8 +209,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     float shore = shoreField();
     float fBent = 0.0;
     if (shore > 0.0) {
-        float cn = valueNoise(vWorldPos.xz * (1.3 / hexSize));
-        cn = 0.6 * cn + 0.4 * valueNoise(vWorldPos.xz * (3.2 / hexSize));
+        float cn = worldNoise(vWorldPos.xz, 6, vec2(0.0));
+        cn = 0.6 * cn + 0.4 * worldNoise(vWorldPos.xz, 7, vec2(0.0));
         fBent = shore - cn * coastCurvature * 0.5;
     }
 
@@ -241,8 +229,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
 
     vec3 normal = normalize(vNormal);
     vec3 light = normalize(lightDir);
-    vec3 logicalCameraPosition = cameraPosition + vec3(cameraWorldOffset.x, 0.0, cameraWorldOffset.y);
-    vec3 viewDir = normalize(logicalCameraPosition - vWorldPos);
+    vec3 viewDir = normalize(chunkCameraPosition - vWorldPos);
 
     float ndotl = max(dot(normal, light), 0.0);
     vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
@@ -271,12 +258,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     // fogState handling in terrain.fragment.ts.
     if (vFogState < 1.5) color *= fogDarkenFactor;
 
-    gl_FragColor = vec4(color, 1.0);
+    waterColor = vec4(color, 1.0);
 
     if (showGrid > 0.0 && vBorder > 1.0 - gridWidth) {
-        gl_FragColor = mix(vec4(gridColor, 1.0), gl_FragColor, 1.0 - gridOpacity);
+        waterColor = mix(vec4(gridColor, 1.0), waterColor, 1.0 - gridOpacity);
     }
-    if (vFogState > 1.5) gl_FragColor.rgb = applyGroundProjection(gl_FragColor.rgb, vWorldPos.xz);
-${HORIZON_FOG_FRAGMENT_APPLY}
+    if (vFogState > 1.5) waterColor.rgb = applyGroundProjection(waterColor.rgb, vWorldPos.xz);
+${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 }
 `;

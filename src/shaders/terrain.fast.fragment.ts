@@ -14,6 +14,8 @@ vec2 terrainGradientY;
 out vec4 terrainColor;
 uniform sampler2D fogMap;
 uniform vec2 terrainTextureWorldSize;
+uniform vec2 texturePhase;
+uniform vec2 macroPhase;
 uniform float sandAtlasIndex;
 uniform float beachWidth;
 uniform float fogDarkenFactor;
@@ -75,17 +77,17 @@ vec3 landformDebugColor() {
 // Fast mode keeps the same single texture lookup. Two broad sine waves replace
 // full value noise, providing a cheap continuous UV bend and material tint.
 vec3 terrainPattern() {
-    vec2 p = vWorldXZ / max(hexSize * 4.0, 1.0);
+    vec2 p = vWorldXZ / (hexSize * 4.0);
     float macro = clamp(
         0.5
-            + 0.25 * sin(dot(p, vec2(0.73, 1.21)))
-            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + 1.9),
+            + 0.25 * sin(dot(p, vec2(0.73, 1.21)) + macroPhase.x)
+            + 0.25 * sin(dot(p, vec2(-1.37, 0.61)) + macroPhase.y),
         0.0,
         1.0
     );
     float warp = (macro - 0.5) * hexSize * 1.15;
     vec2 sampleWorld = vWorldXZ + vec2(warp, -warp * 0.73);
-    return vec3(sampleWorld / max(terrainTextureWorldSize, vec2(1.0)), macro);
+    return vec3(sampleWorld / terrainTextureWorldSize + texturePhase, macro);
 }
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {

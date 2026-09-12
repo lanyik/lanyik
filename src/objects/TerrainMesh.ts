@@ -1,3 +1,5 @@
+import { createTerrainTexturePeriod, WorldMaterialCoordinates } from "../rendering/WorldMaterialCoordinates";
+import type { ResourceBudgetAccount } from "../runtime/ResourceBudget";
 import {
     InstancedBufferGeometry,
     InstancedBufferAttribute,
@@ -19,7 +21,7 @@ import {
     Material
 } from "three";
 
-import { loadTerrainArrayTexture } from "../rendering/TerrainArrayTexture";
+import { loadTerrainArrayTexture, terrainAtlasCellIndices } from "../rendering/TerrainArrayTexture";
 import type { GroundProjection } from "../rendering/GroundProjection";
 
 import { MapInfo, TileInfo, Point } from "../interfaces";
@@ -82,6 +84,8 @@ const LANDFORM_DEBUG_VALUE: Readonly<Record<LandformDebugMode, number>> = {
 
 export interface TerrainMeshOptions {
     size: number;
+    signal?: AbortSignal;
+    resourceAccount?: ResourceBudgetAccount;
     texturesBaseUrl: string;   // folder containing terrain.png / land-atlas.json
     atlas: TerrainAtlas;
     /** Authoritative effective terrain and height view for this world session. */
@@ -95,6 +99,8 @@ export interface TerrainMeshOptions {
     landformDebugMode?: LandformDebugMode;
     /** Number of hex rows/columns covered by one repeat of an atlas cell. */
     terrainTextureRegionSize?: number;
+    /** Validated initialization setting supplied by HexMapOptions. */
+    terrainTextureAnisotropy: number;
 
     //Sea/coastal tiles render on their own animated layer with solid colors
     //(waterColorShallow/Deep) - see shaders/water.*.ts.
@@ -244,6 +250,7 @@ export const CITY_FOG_TILE_KEY = "hexMapCityFogTile";
 
 interface TerrainChunkRecord {
     mesh: Mesh<InstancedBufferGeometry, RawShaderMaterial>;
+    coordinates: WorldMaterialCoordinates;
     tiles: Point[];
     layer: "land" | "water";
     lod?: WorldChunkLod;
@@ -302,8 +309,11 @@ export class TerrainMesh extends Group {
     private fogTexture: Texture;
     private atlasTexture: Texture;
     private map: MapInfo;
-    private atlasCellIndex: { [type: string]: number } = {};
+    private readonly atlasCellIndex: Record<Land, number>;
+    private readonly terrainTextureWorldSize: Vector2;
     private clock = 0;
+    private readonly cameraWorldOffset = new Vector2();
+    private groundProjection: GroundProjection | undefined;
     private lodBuilds = 0;
     private disposed = false;
     private readonly surface: WorldSurfaceView;
@@ -322,38 +332,38 @@ export class TerrainMesh extends Group {
             throw new TypeError("terrain surface must match the map and tile size");
         }
         this.surface = options.surface;
+        this.terrainTextureWorldSize = createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize ?? 2);
+        this.atlasCellIndex = terrainAtlasCellIndices(options.atlas);
         this.ownsModelAssets = options.modelAssets === undefined;
         this.modelAssets = options.modelAssets ?? new ModelAssetCache();
-        this.buildAtlasCellIndex();
-        this.fogTexture = this.loadFogTexture();
-        const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl);
-        this.atlasTexture = atlas.texture;
-        this.ready = atlas.ready;
-        this.waterShallow = new Color(options.waterColorShallow ?? LandColor[Land.coastal]);
-        this.waterDeep = new Color(options.waterColorDeep ?? LandColor[Land.sea]);
+        let readiness: Promise<void> | undefined;
+        try {
+            this.fogTexture = this.loadFogTexture();
+            const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal);
+            this.atlasTexture = atlas.texture;
+            this.ready = readiness = atlas.ready;
+            this.waterShallow = new Color(options.waterColorShallow ?? LandColor[Land.coastal]);
+            this.waterDeep = new Color(options.waterColorDeep ?? LandColor[Land.sea]);
 
-        const landTiles: Point[] = [];
-        const waterTiles: Point[] = [];
-        if (initialTiles) {
-            for (const point of initialTiles) {
-                const tile = getMapTile(this.map, point.x, point.y);
-                if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+            const landTiles: Point[] = [];
+            const waterTiles: Point[] = [];
+            if (initialTiles) {
+                for (const point of initialTiles) {
+                    const tile = getMapTile(this.map, point.x, point.y);
+                    if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+                }
+            } else {
+                forEachMapTile(this.map, (tile, x, y) => {
+                    (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+                });
             }
-        } else {
-            forEachMapTile(this.map, (tile, x, y) => {
-                (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
-            });
-        }
-        this.buildLandLayer(landTiles);
-        this.buildWaterLayer(waterTiles);
-    }
-
-    private buildAtlasCellIndex(): void {
-        const atlas = this.options.atlas;
-        const cols = atlas.width / atlas.cellSize;
-        for (const name in atlas.textures) {
-            const cell = atlas.textures[name];
-            this.atlasCellIndex[name] = cell.cellY * cols + cell.cellX;
+            this.buildLandLayer(landTiles);
+            this.buildWaterLayer(waterTiles);
+        } catch (reason) {
+            // A failed constructor has no caller-owned instance to dispose.
+            void readiness?.catch(() => undefined);
+            this.dispose();
+            throw reason;
         }
     }
 
@@ -362,8 +372,7 @@ export class TerrainMesh extends Group {
     private cellIndexFor(x: number, y: number): number {
         const tile: TileInfo | undefined = getMapTile(this.map, x, y);
         if (!tile) return -1;
-        const cell = this.atlasCellIndex[tile.type];
-        return cell === undefined ? -1 : cell;
+        return this.atlasCellIndex[tile.type];
     }
 
     //Edge-blend priority of a tile's terrain type (see enums.ts LandPriority).
@@ -417,7 +426,7 @@ export class TerrainMesh extends Group {
             attrs.offset[i * 2 + 0] = center.x - origin.x;
             attrs.offset[i * 2 + 1] = center.y - origin.y; // chunk-local Z
 
-            attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type] ?? 0;
+            attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type];
             attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
             attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
             attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y)
@@ -522,21 +531,18 @@ export class TerrainMesh extends Group {
 
     private commonUniforms() {
         const size = this.options.size;
-        const textureRegionSize = this.options.terrainTextureRegionSize ?? 2;
         return {
             // One atlas cell spans a configurable world region (two hexes by
             // default) instead of restarting inside every tile. The unequal
             // axes match the flat-top hex lattice's column/row spacing.
-            terrainTextureWorldSize: { value: new Vector2(
-                size * 1.5 * textureRegionSize,
-                size * Math.sqrt(3) * textureRegionSize
-            ) },
+            terrainTextureWorldSize: { value: this.terrainTextureWorldSize },
             groundProjectionMap: { value: null },
             groundProjectionBounds: { value: new Vector4(0, 0, 1, 1) },
             groundProjectionEnabled: { value: 0 },
+            groundProjectionChunkOffset: { value: new Vector2() },
             hexSize: { value: size },
             map: { value: this.atlasTexture },
-            sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] ?? 0 },
+            sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] },
             waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
             beachWidth: { value: this.options.beachWidth ?? 0.35 },
             waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },
@@ -549,12 +555,12 @@ export class TerrainMesh extends Group {
             fogColor: { value: new Color() },
             fogNear: { value: 1 },
             fogFar: { value: 1000 },
-            //Physical chunk copies now handle toroidal placement. Leaving the
-            //shader period at zero keeps every tile attached to its canonical
-            //chunk, so chunks can be independently culled and streamed.
-            worldCenter: { value: new Vector2(0, 0) },
-            worldPeriod: { value: new Vector2(0, 0) },
-            chunkOrigin: { value: new Vector2(0, 0) },
+            noiseCell: { value: new Uint32Array(0) },
+            noiseFraction: { value: new Float32Array(0) },
+            texturePhase: { value: new Vector2() },
+            fogPhase: { value: new Vector2() },
+            macroPhase: { value: new Vector2() },
+            wavePhase: { value: new Vector4() },
             lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
             showGrid: { value: this.options.gridVisible === true ? 1.0 : 0.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
@@ -657,11 +663,7 @@ export class TerrainMesh extends Group {
             const mesh = new Mesh(geometry, this.landMaterial);
             const origin = getWorldChunkOrigin(chunkKey, this.options.size);
             mesh.position.set(origin.x, 0, origin.y);
-            mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
-                const shader = material as RawShaderMaterial;
-                shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
-                shader.uniformsNeedUpdate = true;
-            };
+            const coordinates = this.prepareChunkCoordinates(mesh, origin);
             mesh.name = `terrain-chunk-land-${chunkKey}`;
             mesh.frustumCulled = false;
             tagWorldChunk(
@@ -681,6 +683,7 @@ export class TerrainMesh extends Group {
             chunkTiles.forEach((tile, index) => this.tileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
             this.chunkRecords.set(`land:${chunkKey}`, {
                 mesh,
+                coordinates,
                 tiles: chunkTiles,
                 layer: "land",
                 lodGeometries: new Map()
@@ -690,15 +693,40 @@ export class TerrainMesh extends Group {
         }
     }
 
+    private prepareChunkCoordinates(mesh: Mesh, origin: Point): WorldMaterialCoordinates {
+        const coordinates = new WorldMaterialCoordinates(this.options.size, this.options.resourceAccount);
+        const owner = this;
+        // The callback is also used by physical toroidal copies: read the drawn
+        // object's matrix for projection/camera placement, and its pattern metadata
+        // separately so texture continuity never shifts a ground decal.
+        mesh.onBeforeRender = function (this: Mesh, _renderer, _scene, camera, _geometry, material) {
+            const shader = material as RawShaderMaterial;
+            const patternOffset = shader.uniforms.worldOffset.value as Vector2;
+            coordinates.apply(shader, origin.x + patternOffset.x, origin.y + patternOffset.y);
+            const renderX = this.matrixWorld.elements[12], renderZ = this.matrixWorld.elements[14];
+            const projection = owner.groundProjection;
+            if (projection) shader.uniforms.groundProjectionChunkOffset.value.set(
+                renderX + owner.cameraWorldOffset.x - projection.centerWorld.x,
+                renderZ + owner.cameraWorldOffset.y - projection.centerWorld.y
+            );
+            if (shader.uniforms.chunkCameraPosition) shader.uniforms.chunkCameraPosition.value.set(
+                camera.position.x - renderX, camera.position.y, camera.position.z - renderZ
+            );
+            shader.uniformsNeedUpdate = true;
+        };
+        return coordinates;
+    }
+
     //Water tiles get a subdivided geometry (more vertices than the flat land
     //hex) so the sum-of-sines wave displacement in water.vertex.ts has enough
     //resolution to look like a smooth, rounded surface instead of a faceted tent.
     private buildWaterLayer(tiles: Point[]): void {
         this.waterMaterial ??= new RawShaderMaterial({
+            glslVersion: GLSL3,
             fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
-                cameraWorldOffset: { value: new Vector2(0, 0) },
+                chunkCameraPosition: { value: new Vector3() },
                 uTime: { value: 0 },
                 waveAmplitude: { value: this.options.waterWaveAmplitude ?? 1.6 },
                 waveFrequency: { value: 0.045 * (this.options.waterWaveFrequency ?? 1.0) },
@@ -730,11 +758,7 @@ export class TerrainMesh extends Group {
             const mesh = new Mesh(geometry, this.waterMaterial);
             const origin = getWorldChunkOrigin(chunkKey, this.options.size);
             mesh.position.set(origin.x, 0, origin.y);
-            mesh.onBeforeRender = (_renderer, _scene, _camera, _geometry, material) => {
-                const shader = material as RawShaderMaterial;
-                shader.uniforms.chunkOrigin.value.set(origin.x, origin.y);
-                shader.uniformsNeedUpdate = true;
-            };
+            const coordinates = this.prepareChunkCoordinates(mesh, origin);
             mesh.name = `terrain-chunk-water-${chunkKey}`;
             mesh.frustumCulled = false;
             tagWorldChunk(
@@ -754,6 +778,7 @@ export class TerrainMesh extends Group {
             chunkTiles.forEach((tile, index) => this.waterTileIndex.set(`${tile.x},${tile.y}`, { mesh, index }));
             this.chunkRecords.set(`water:${chunkKey}`, {
                 mesh,
+                coordinates,
                 tiles: chunkTiles,
                 layer: "water",
                 lodGeometries: new Map()
@@ -1050,6 +1075,7 @@ export class TerrainMesh extends Group {
                 if (!record) continue;
                 this.disposeChunkGeometries(record);
                 this.remove(record.mesh);
+                record.coordinates.dispose();
                 this.chunkRecords.delete(id);
                 const collection = layer === "land" ? this.landChunks : this.waterChunks;
                 const index = collection.indexOf(record.mesh);
@@ -1095,13 +1121,8 @@ export class TerrainMesh extends Group {
         if (this.landMaterial) this.landMaterial.uniforms.uTime.value = this.clock;
     }
 
-    public setWorldCenter(x: number, y: number): void {
-        this.landMaterial?.uniforms.worldCenter.value.set(x, y);
-        this.waterMaterial?.uniforms.worldCenter.value.set(x, y);
-    }
-
     public setCameraWorldOffset(x: number, y: number): void {
-        this.waterMaterial?.uniforms.cameraWorldOffset.value.set(x, y);
+        this.cameraWorldOffset.set(x, y);
     }
 
     //Near terrain keeps the original subdivision counts (land 3 / water 2).
@@ -1156,6 +1177,7 @@ export class TerrainMesh extends Group {
     }
 
     public setGroundProjection(projection: GroundProjection | undefined): void {
+        this.groundProjection = projection;
         this.setMaterialProjection(this.landMaterial, projection);
         this.setMaterialProjection(this.waterMaterial, projection);
     }
@@ -1165,7 +1187,9 @@ export class TerrainMesh extends Group {
         const uniforms = material.uniforms;
         uniforms.groundProjectionEnabled.value = projection ? 1 : 0;
         uniforms.groundProjectionMap.value = projection?.target.texture ?? null;
-        if (projection) uniforms.groundProjectionBounds.value = projection.bounds;
+        if (projection) uniforms.groundProjectionBounds.value.set(
+            -projection.bounds.z / 2, -projection.bounds.w / 2, projection.bounds.z, projection.bounds.w
+        );
     }
 
     private disposeChunkGeometries(record: TerrainChunkRecord): void {
@@ -1201,14 +1225,9 @@ export class TerrainMesh extends Group {
     }
 
     public set terrainTextureRegionSize(value: number) {
-        if (!Number.isFinite(value) || value <= 0) {
-            throw new RangeError("terrainTextureRegionSize must be a positive finite number");
-        }
-        const worldSize = this.landMaterial?.uniforms.terrainTextureWorldSize.value as Vector2 | undefined;
-        worldSize?.set(
-            this.options.size * 1.5 * value,
-            this.options.size * Math.sqrt(3) * value
-        );
+        const period = createTerrainTexturePeriod(this.options.size, value);
+        this.terrainTextureWorldSize.copy(period);
+        this.options.terrainTextureRegionSize = value;
     }
 
     //-------------------------------------------------------------------------
@@ -1559,13 +1578,16 @@ export class TerrainMesh extends Group {
         if (this.disposed) return;
         this.disposed = true;
         this.pendingCities.clear();
-        for (const record of this.chunkRecords.values()) this.disposeChunkGeometries(record);
+        for (const record of this.chunkRecords.values()) {
+            this.disposeChunkGeometries(record);
+            record.coordinates.dispose();
+        }
         for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
         this.baseLodGeometries.clear();
         this.landMaterial?.dispose();
         this.waterMaterial?.dispose();
-        this.atlasTexture.dispose(); // shared by both materials - dispose once
-        this.fogTexture.dispose();
+        this.atlasTexture?.dispose(); // shared by both materials - dispose once
+        this.fogTexture?.dispose();
         for (const entry of this.cityFog.values()) {
             this.disposeCityResources(entry.materials, entry.sprite);
             entry.asset.release();

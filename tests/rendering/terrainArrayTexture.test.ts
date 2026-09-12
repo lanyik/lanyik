@@ -1,26 +1,63 @@
+import { DEFAULT_HEX_MAP_OPTIONS, resolveHexMapOptions } from "../../src/HexMapOptions";
 import { afterEach, expect, test, vi } from "vitest";
-import { ImageLoader } from "three";
-import { copyTerrainArrayPixels, loadTerrainArrayTexture, terrainArrayLayout } from "../../src/rendering/TerrainArrayTexture";
+import { Land } from "../../src/enums";
+import { copyTerrainArrayPixels, loadTerrainArrayTexture, terrainArrayLayout, terrainAtlasCellIndices } from "../../src/rendering/TerrainArrayTexture";
+import { deferred } from "../helpers/deferred";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-test("image failure and invalid image dimensions reject readiness; disposal ignores late results", async () => {
-    let loaded: (image: HTMLImageElement) => void = () => {}, failed: () => void = () => {};
-    vi.spyOn(ImageLoader.prototype, "load").mockImplementation((_url, onLoad, _progress, onError) => {
-        loaded = onLoad!; failed = () => onError!(new Event("error"));
-        return {} as HTMLImageElement;
-    });
-    const atlas = { image: "missing.png", width: 4, height: 4, cellSize: 4, cellSpacing: 1, textures: {} };
-    const failure = loadTerrainArrayTexture(atlas, "/");
-    const rejected = expect(failure.ready).rejects.toThrow("load failed");
-    failed(); await rejected; failure.texture.dispose();
-    const mismatch = loadTerrainArrayTexture(atlas, "/");
-    const invalid = expect(mismatch.ready).rejects.toThrow("descriptor");
-    loaded({ width: 3, height: 4 } as HTMLImageElement); await invalid; mismatch.texture.dispose();
-    const disposed = loadTerrainArrayTexture(atlas, "/");
-    disposed.texture.dispose(); await disposed.ready;
-    loaded({ width: 4, height: 4 } as HTMLImageElement);
-    expect(disposed.texture.version).toBe(0);
+const atlas = { image: "terrain.png", width: 4, height: 4, cellSize: 4, cellSpacing: 1, textures: {} };
+
+test("HTTP errors and invalid decoded dimensions reject readiness", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+    const failure = loadTerrainArrayTexture(atlas, "/", DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy);
+    await expect(failure.ready).rejects.toThrow("HTTP 404");
+    failure.texture.dispose();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob() }));
+    const bitmap = { width: 3, height: 4, close: vi.fn() };
+    vi.stubGlobal("createImageBitmap", vi.fn().mockResolvedValue(bitmap));
+    const mismatch = loadTerrainArrayTexture(atlas, "/", DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy);
+    await expect(mismatch.ready).rejects.toThrow("descriptor");
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    mismatch.texture.dispose();
+});
+
+test("session cancellation aborts the request and settles readiness even while decoding is pending", async () => {
+    const decoding = deferred<ImageBitmap>();
+    const decodeStarted = deferred<void>();
+    const fetchImage = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob() });
+    vi.stubGlobal("fetch", fetchImage);
+    vi.stubGlobal("createImageBitmap", () => { decodeStarted.resolve(); return decoding.promise; });
+    const controller = new AbortController();
+    const result = loadTerrainArrayTexture(atlas, "/", DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy, controller.signal);
+    await decodeStarted.promise;
+    controller.abort();
+    await expect(result.ready).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchImage.mock.calls[0][1].signal?.aborted).toBe(true);
+    const bitmap = { width: 4, height: 4, close: vi.fn() };
+    decoding.resolve(bitmap as unknown as ImageBitmap);
+    await Promise.resolve();
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(result.texture.version).toBe(0);
+    result.texture.dispose();
+});
+
+test("disposing a pending owner rejects readiness and aborts its outstanding request", async () => {
+    const fetchImage = vi.fn((_url: string, _options: RequestInit) => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchImage);
+    const result = loadTerrainArrayTexture(atlas, "/", DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy);
+    result.texture.dispose();
+    await expect(result.ready).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchImage.mock.calls[0][1].signal?.aborted).toBe(true);
+});
+
+test("the complete atlas palette rejects missing, fractional and out-of-bounds mappings", () => {
+    const textures = Object.fromEntries(Object.values(Land).map(type => [type, { cellX: 0, cellY: 0 }]));
+    expect(terrainAtlasCellIndices({ ...atlas, textures })[Land.land]).toBe(0);
+    expect(() => terrainAtlasCellIndices(atlas)).toThrow("sea");
+    for (const cell of [{ cellX: -1, cellY: 0 }, { cellX: .5, cellY: 0 }, { cellX: 1, cellY: 0 }, { cellX: 0, cellY: 1 }]) {
+        expect(() => terrainAtlasCellIndices({ ...atlas, textures: { ...textures, sand: cell } })).toThrow("sand");
+    }
 });
 
 test("atlas layers exclude gutters and adjacent colours, preserving bottom-up source orientation", () => {
@@ -36,4 +73,14 @@ test("atlas layers exclude gutters and adjacent colours, preserving bottom-up so
     for (let layer = 0; layer < 4; layer++) for (let pixel = 0; pixel < 4; pixel++) expect(output[layer * 16 + pixel * 4 + 2]).toBe(layer);
     expect(() => terrainArrayLayout({ ...atlas, width: 7 })).toThrow();
     expect(() => copyTerrainArrayPixels(atlas, pixels, new Uint8Array(4))).toThrow();
+});
+
+
+test("terrain anisotropy has one public default and rejects non-positive or non-integer requests", () => {
+    expect(resolveHexMapOptions({ element: "canvas" }).terrainTextureAnisotropy).toBe(8);
+    expect(resolveHexMapOptions({ element: "canvas", terrainTextureAnisotropy: 4 }).terrainTextureAnisotropy).toBe(4);
+    for (const value of [0, -1, .5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => resolveHexMapOptions({ element: "canvas", terrainTextureAnisotropy: value }))
+            .toThrow("terrainTextureAnisotropy must be a positive safe integer");
+    }
 });

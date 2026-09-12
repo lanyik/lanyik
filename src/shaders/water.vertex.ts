@@ -3,7 +3,7 @@ import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
 export const WATER_VERTEX_SHADER = `
 precision highp float;
 
-${HORIZON_FOG_VERTEX_VARYING}
+${HORIZON_FOG_VERTEX_VARYING.replace(/varying /g, "out ")}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
@@ -17,6 +17,8 @@ uniform float waterLevel; // rest height of the water plane (usually negative, b
 uniform float waveAmplitude;
 uniform float waveFrequency;
 uniform float waveSpeed;
+uniform vec4 wavePhase;
+uniform vec2 fogPhase;
 
 // Beach: waterLevel is where the water plane sits, waveAmplitude/etc animate it -
 // but near an actual coastline (a land-adjacent edge/corner, see coastalFactor()
@@ -28,37 +30,33 @@ uniform float waveSpeed;
 uniform float beachWidth;
 uniform float waterCornerRounding;
 uniform float fogTextureSize; // world units one repeat of the fog texture spans (see terrain.vertex.ts)
-uniform vec2 worldOffset; // translation of a repeated toroidal world copy
-uniform vec2 chunkOrigin; // logical origin; instance offsets stay chunk-local for float precision
-uniform vec2 worldCenter;
-uniform vec2 worldPeriod;
 
-attribute vec3 position;
-attribute vec2 uv;
+in vec3 position;
+in vec2 uv;
 
-attribute vec2 offset;
-attribute vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
-attribute vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
-attribute vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
-attribute vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
-attribute vec3 neighborsKindB; // NW/N/NE
-attribute vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
+in vec2 offset;
+in vec4 style;        // x = atlas cell index (unused here), y = modifiers, z = priority, w = surface relief
+in vec3 neighborsPriorityA; // edge-blend priority of SE/S/SW neighbor
+in vec3 neighborsPriorityB; // edge-blend priority of NW/N/NE neighbor
+in vec3 neighborsKindA; // SE/S/SW: -1 no tile, 0 non-water, 1 sea, 2 coastal
+in vec3 neighborsKindB; // NW/N/NE
+in vec4 fogState; // x = fog state; y/z/w are terrain-only biome weights
 
-varying vec2 vUV;
-varying float vBorder;
-varying float vPriority;
-varying vec3 vNeighborsPriorityA;
-varying vec3 vNeighborsPriorityB;
-varying vec3 vNeighborsKindA;
-varying vec3 vNeighborsKindB;
-varying vec3 vEdgeFactorsA; // SE, S, SW
-varying vec3 vEdgeFactorsB; // NW, N, NE
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vBeachT; // 0 = open water, 1 = right at the shore (see terrain.fragment.ts's vBeachT)
-varying float vShoreT; // like vBeachT but unsquashed by beachWidth: raw 0 (tile center) .. 1 (land edge) coastal distance, 0 on tiles with no land neighbor - drives the foam bands in water.fragment.ts
-varying float vFogState;
-varying vec2 vFogUV; // world-space fog texture coords, continuous across tiles
+out vec2 vUV;
+out float vBorder;
+out float vPriority;
+out vec3 vNeighborsPriorityA;
+out vec3 vNeighborsPriorityB;
+out vec3 vNeighborsKindA;
+out vec3 vNeighborsKindB;
+out vec3 vEdgeFactorsA; // SE, S, SW
+out vec3 vEdgeFactorsB; // NW, N, NE
+out vec3 vNormal;
+out vec3 vWorldPos;
+out float vBeachT; // 0 = open water, 1 = right at the shore (see terrain.fragment.ts's vBeachT)
+out float vShoreT; // like vBeachT but unsquashed by beachWidth: raw 0 (tile center) .. 1 (land edge) coastal distance, 0 on tiles with no land neighbor - drives the foam bands in water.fragment.ts
+out float vFogState;
+out vec2 vFogUV; // world-space fog texture coords, continuous across tiles
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -69,12 +67,6 @@ const vec2 DIR_NE = vec2(0.8660254, -0.5);
 
 const float GOLDEN_ANGLE = 2.399963; // ~137.5 deg, keeps summed waves from lining up
 
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
 
 // Sum of sine waves (NVIDIA GPU Gems ocean approach): height is a sum of sines
 // of the world-space position; the *derivative* of a sine is a cosine of the
@@ -92,7 +84,7 @@ vec3 waveHeightAndSlope(vec2 worldXZ, float t) {
 
     for (int i = 0; i < 4; i++) {
         vec2 dir = vec2(cos(dirAngle), sin(dirAngle));
-        float phase = dot(dir, worldXZ) * freq + t * speed;
+        float phase = dot(dir, worldXZ) * freq + wavePhase[i] + t * speed;
 
         height += amp * sin(phase);
         slope += dir * (amp * freq * cos(phase));
@@ -170,8 +162,8 @@ void main() {
     float e0 = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float beachT = smoothstep(e0, 1.0, clamp(coastal, 0.0, 1.0));
 
-    vec2 tileOffset = nearestWorldOffset(offset);
-    vec2 worldXZ = tileOffset + chunkOrigin + position.xz + worldOffset;
+    vec2 tileOffset = offset;
+    vec2 worldXZ = tileOffset + position.xz;
     vec3 hs = waveHeightAndSlope(worldXZ, uTime);
 
     // Unseen (fog of war, see FogOfWar.ts): freeze the waves AND raise the
@@ -202,7 +194,7 @@ void main() {
     vHorizonFogDepth = -mvPosition.z;
 
     vNormal = normalize(normalMatrix * normalize(vec3(-slope.x, 1.0, -slope.y)));
-    vWorldPos = pos + vec3(chunkOrigin.x + worldOffset.x, 0.0, chunkOrigin.y + worldOffset.y);
+    vWorldPos = pos;
 
     // Rim distance for the grid line - see terrain.vertex.ts's rimFactor
     // comment: radial distance from center is wrong for a hexagon (it dips to
@@ -225,6 +217,6 @@ void main() {
     // Same upright-for-the-camera mapping as terrain.vertex.ts's vFogUV -
     // u along world -Z, v along world -X - so land and water sample the fog
     // texture identically and it stays continuous across the two layers.
-    vFogUV = vec2(-worldXZ.y, -worldXZ.x) / fogTextureSize;
+    vFogUV = vec2(-worldXZ.y, -worldXZ.x) / fogTextureSize + fogPhase;
 }
 `;

@@ -1,4 +1,5 @@
-import { DataArrayTexture, ImageLoader, LinearFilter, LinearMipmapLinearFilter, MirroredRepeatWrapping } from "three";
+import { DataArrayTexture, LinearFilter, LinearMipmapLinearFilter, MirroredRepeatWrapping } from "three";
+import { Land } from "../enums";
 import type { TerrainAtlas } from "../objects/TerrainMesh";
 
 /** Each source cell becomes an isolated layer, including its own complete mip chain. */
@@ -26,7 +27,23 @@ export function copyTerrainArrayPixels(atlas: TerrainAtlas, pixels: Uint8Clamped
     }
 }
 
-export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string): { texture: DataArrayTexture; ready: Promise<void> } {
+/** Validate the complete material palette before allocating or starting any asset requests. */
+export function terrainAtlasCellIndices(atlas: TerrainAtlas): Record<Land, number> {
+    const { columns, layers } = terrainArrayLayout(atlas);
+    const rows = layers / columns;
+    const indices = {} as Record<Land, number>;
+    for (const type of Object.values(Land)) {
+        const cell = atlas.textures?.[type];
+        if (!cell || !Number.isSafeInteger(cell.cellX) || !Number.isSafeInteger(cell.cellY)
+            || cell.cellX < 0 || cell.cellX >= columns || cell.cellY < 0 || cell.cellY >= rows) {
+            throw new RangeError(`Terrain atlas requires a valid cell for ${type}`);
+        }
+        indices[type] = cell.cellY * columns + cell.cellX;
+    }
+    return indices;
+}
+
+export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string, anisotropy: number, signal?: AbortSignal): { texture: DataArrayTexture; ready: Promise<void> } {
     const { size, layers } = terrainArrayLayout(atlas);
     const pixels = new Uint8Array(size * size * layers * 4);
     const texture = new DataArrayTexture(pixels, size, size, layers);
@@ -35,26 +52,41 @@ export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string): {
     texture.minFilter = LinearMipmapLinearFilter;
     texture.magFilter = LinearFilter;
     texture.wrapS = texture.wrapT = MirroredRepeatWrapping;
-    texture.anisotropy = 8;
-    let disposed = false;
-    const ready = new Promise<void>((resolve, reject) => {
-        texture.addEventListener("dispose", () => { disposed = true; resolve(); });
-        new ImageLoader().setPath(baseUrl).load(atlas.image, source => {
-            if (disposed) return;
-            try {
-                if (source.width !== atlas.width || source.height !== atlas.height) throw new RangeError("Terrain atlas image does not match its descriptor");
-                const canvas = document.createElement("canvas");
-                canvas.width = atlas.width; canvas.height = atlas.height;
-                const context = canvas.getContext("2d", { willReadFrequently: true });
-                if (!context) throw new Error("Terrain atlas decoding requires a 2D canvas");
-                context.drawImage(source, 0, 0);
-                copyTerrainArrayPixels(atlas, context.getImageData(0, 0, atlas.width, atlas.height).data, pixels);
-                texture.needsUpdate = true;
-                resolve();
-            } catch (error) { reject(error); }
-        }, undefined, () => {
-            if (!disposed) reject(new Error(`Terrain atlas image load failed: ${atlas.image}`));
-        });
+    texture.anisotropy = anisotropy;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal?.reason);
+    const dispose = () => controller.abort(new DOMException("Terrain atlas disposed", "AbortError"));
+    texture.addEventListener("dispose", dispose);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    let rejectAbort: (reason: unknown) => void;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const onAbort = () => rejectAbort(controller.signal.reason);
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    if (controller.signal.aborted) onAbort();
+    const decode = async () => {
+        controller.signal.throwIfAborted();
+        const response = await fetch(baseUrl + atlas.image, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Terrain atlas image load failed: ${atlas.image} (HTTP ${response.status})`);
+        const source = await createImageBitmap(await response.blob());
+        try {
+            controller.signal.throwIfAborted();
+            if (source.width !== atlas.width || source.height !== atlas.height) throw new RangeError("Terrain atlas image does not match its descriptor");
+            const canvas = document.createElement("canvas");
+            canvas.width = atlas.width; canvas.height = atlas.height;
+            const context = canvas.getContext("2d", { willReadFrequently: true });
+            if (!context) throw new Error("Terrain atlas decoding requires a 2D canvas");
+            context.drawImage(source, 0, 0);
+            copyTerrainArrayPixels(atlas, context.getImageData(0, 0, atlas.width, atlas.height).data, pixels);
+            texture.needsUpdate = true;
+        } finally { source.close(); }
+    };
+    // Bitmap decoding cannot itself be interrupted. Readiness still settles on cancellation,
+    // and a late decoder result is closed without uploading it.
+    const ready = Promise.race([decode(), aborted]).finally(() => {
+        signal?.removeEventListener("abort", cancel);
+        controller.signal.removeEventListener("abort", onAbort);
+        texture.removeEventListener("dispose", dispose);
     });
     return { texture, ready };
 }

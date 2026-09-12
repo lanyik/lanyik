@@ -4,6 +4,7 @@ import { Land, LandColor } from "./enums";
 import type { Point } from "./interfaces";
 import type { LandformDebugMode } from "./objects/TerrainMesh";
 import type { WorldSource } from "./world/WorldSource";
+import { createTerrainTexturePeriod } from "./rendering/WorldMaterialCoordinates";
 
 export interface HexMapOptions {
     /** CSS selector for the canvas owned by this map. */
@@ -56,6 +57,8 @@ export interface HexMapOptions {
     landformDebugMode?: LandformDebugMode;
     /** Atlas texture detail span in hex rows/columns. Defaults to 2. */
     terrainTextureRegionSize?: number;
+    /** Initialization-only anisotropy request for terrain textures. Positive integer; defaults to 8. */
+    terrainTextureAnisotropy?: number;
 
     // Rivers and lakes use normalized width/curvature controls. River colours
     // inherit the corresponding sea colours when omitted.
@@ -211,6 +214,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     mountainHeight: 80,
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
+    terrainTextureAnisotropy: 8,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -293,6 +297,10 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     };
     positive("size", options.size);
     positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
+    createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize);
+    if (!Number.isSafeInteger(options.terrainTextureAnisotropy) || options.terrainTextureAnisotropy <= 0) {
+        throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");
+    }
     positive("renderDistance", options.renderDistance);
     if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
         throw new RangeError("horizonFogStart must be a non-negative finite number");

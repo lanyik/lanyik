@@ -1,11 +1,10 @@
-import { wait } from "../helpers/helpers";
 import { setOptions } from "../helpers/setoptions";
 import { ModelAssetCache, ModelAssetLease } from "../helpers/models";
 
 import { Point } from "../interfaces";
 
 import { getHexCenter } from "../helpers/helpers";
-import { AnimationAction, AnimationClip, AnimationMixer, CurvePath, LoopOnce, Object3D, Vector3, LineCurve3 } from "three";
+import { AnimationAction, AnimationClip, AnimationMixer, LoopOnce, Object3D, Vector3 } from "three";
 import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Land, UnitActions } from "../enums";
 import { EventEmitter } from "../EventEmitter";
@@ -33,8 +32,10 @@ export class Unit extends EventEmitter<UnitEventMap> {
     private animationMixer: AnimationMixer | undefined;
     private animationAction: AnimationAction | undefined;
     private animationClips: AnimationClip[] = [];
-    private pathFraction:number = 0;
-    private pointsPath!:CurvePath<Vector3>;
+    private pathProgress = 0;
+    private pathPoints: Vector3[] = [];
+    private readonly tangent = new Vector3();
+    private readonly forward = new Vector3(0, 0, 1);
     private movementToken = 0;
     private modelRevision = 0;
     private modelLease: ModelAssetLease | undefined;
@@ -54,7 +55,6 @@ export class Unit extends EventEmitter<UnitEventMap> {
     private alignedTileY = Number.NaN;
 
     private options = {
-        animateFrameRate: 50,        //Framerate: how much per second run animate function
         animateSpeed: 1,             //Animate speed: how much seconds spend to move from 1 cell to second cell
         size: 40,                    //Map size to calculate unit position on map
         type: "Assets/units/viking_boat", //Model folder path (model.glb + info.json), same convention as city.model/treeModel
@@ -105,7 +105,7 @@ export class Unit extends EventEmitter<UnitEventMap> {
             setOptions(this, info);
 
             //Model's own offset/rotation/scale fine-tuning (info.json) applies to a
-            //child, not this._unit itself - moveTo()/animation() drive this._unit's
+            //child, not this._unit itself - moveTo()/update() drive this._unit's
             //position/quaternion directly for path movement, so it must stay a plain
             //placement transform (hex position only), not also carry the asset fixup.
             const model = cloneSkeleton(scene);
@@ -216,7 +216,32 @@ export class Unit extends EventEmitter<UnitEventMap> {
     }
 
     public update(deltaSeconds: number): void {
-        if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) this.animationMixer?.update(deltaSeconds);
+        if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0 || this.disposed) return;
+        this.animationMixer?.update(deltaSeconds);
+        if (!this.needAnimate || !this.movePath) return;
+        const token = this.movementToken;
+        const last = this.movePath.length - 1;
+        const next = Math.min(last, this.pathProgress + deltaSeconds / this.options.animateSpeed);
+        // Route progress and XZ interpolation share the same per-cell clock. Height
+        // does not change segment duration or advance fog ahead of the model.
+        const firstCell = Math.floor(this.pathProgress + 0.5) + 1;
+        const lastCell = Math.floor(next + 0.5);
+        for (let index = firstCell; index <= lastCell; index++) {
+            this.placeOnPath(index - 0.5);
+            this._viewCell = this.movePath[index];
+            this.emit("cell_enter", { id: this.id, cell: this._viewCell });
+            if (token !== this.movementToken || this.disposed) return;
+        }
+        this.pathProgress = next;
+        this.placeOnPath(next);
+        if (next === last) {
+            this.needAnimate = false;
+            this.movePath = null;
+            this.pathPoints = [];
+            this._viewCell = null;
+            this.activate(UnitActions.idle);
+            this.emit("end_move", { id: this.id, position: this.position });
+        }
     }
 
     public get moving(): boolean {
@@ -224,7 +249,11 @@ export class Unit extends EventEmitter<UnitEventMap> {
     }
 
     public moveTo(path:Point[]): boolean {
+        if (this.disposed) throw new Error("Unit has been disposed");
         if (this.needAnimate || path.length < 2) return false;
+        if (!Number.isFinite(this.options.animateSpeed) || this.options.animateSpeed <= 0) {
+            throw new RangeError("Unit animateSpeed must be positive seconds per cell");
+        }
 
         const route = path.map(point => ({ ...point }));
 
@@ -232,70 +261,30 @@ export class Unit extends EventEmitter<UnitEventMap> {
         this.options.x = route[route.length - 1].x;
         this.options.y = route[route.length - 1].y;
 
-        const pointsPath = new CurvePath<Vector3>();
         const points = createContinuousHexPath(route, this.options.size, {
             mapWidth: this.options.mapWidth,
             mapHeight: this.options.mapHeight,
             wrapX: this.options.wrapX,
             wrapY: this.options.wrapY
         }, this.unit.position, this.options.surface);
-        for (let i = 1; i < points.length; i++) {
-            pointsPath.add(new LineCurve3(points[i - 1], points[i]));
-        }
-
-        this.pointsPath = pointsPath;
+        this.pathPoints = points;
         this.movePath = route;
         this._viewCell = route[0];
-        this.pathFraction = 0;
+        this.pathProgress = 0;
         this.needAnimate = true;
         this.activate(UnitActions.walk);
-        const token = ++this.movementToken;
+        ++this.movementToken;
         this.emit("start_move", { id: this.id, from: route[0], to: this.position, path: route });
-        void this.animation(route.length - 1, token);
         return true;
     }
 
-    private async animation(segmentCount:number, token: number):Promise<void> {
-        const frameRate = Number.isFinite(this.options.animateFrameRate) && this.options.animateFrameRate > 0
-            ? this.options.animateFrameRate : 50;
-        const secondsPerCell = Number.isFinite(this.options.animateSpeed) && this.options.animateSpeed > 0
-            ? this.options.animateSpeed : 1;
-        const fractionStep = 1 / (segmentCount * secondsPerCell * frameRate);
-        const forward = new Vector3(0, 0, 1);
-
-        while (this.needAnimate && token === this.movementToken) {
-            this.pathFraction = Math.min(1, this.pathFraction + fractionStep);
-            const newPosition = this.pointsPath.getPoint(this.pathFraction);
-            newPosition.y = this.options.surface?.getWorldHeight(newPosition.x, newPosition.z) ?? 0;
-            const tangent = this.pointsPath.getTangent(this.pathFraction);
-            tangent.y = 0;
-            tangent.normalize();
-            this.unit.position.copy(newPosition);
-            if (tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(forward, tangent);
-
-            if (this.movePath && this._viewCell) {
-                const cellIndex = Math.min(
-                    this.movePath.length - 1,
-                    Math.round(this.pathFraction * (this.movePath.length - 1))
-                );
-                const cell = this.movePath[cellIndex];
-                if (cell && (cell.x !== this._viewCell.x || cell.y !== this._viewCell.y)) {
-                    this._viewCell = cell;
-                    this.emit("cell_enter", { id: this.id, cell });
-                }
-            }
-
-            if (this.pathFraction >= 1) break;
-            await wait(Math.max(1, Math.floor(1000 / frameRate)));
-        }
-
-        if (token !== this.movementToken) return;
-        this.pathFraction = 0;
-        this.needAnimate = false;
-        this.movePath = null;
-        this._viewCell = null;
-        this.activate(UnitActions.idle);
-        this.emit("end_move", { id: this.id, position: this.position });
+    private placeOnPath(progress: number): void {
+        const index = Math.min(this.pathPoints.length - 2, Math.floor(progress));
+        const from = this.pathPoints[index], to = this.pathPoints[index + 1];
+        this.unit.position.lerpVectors(from, to, progress - index);
+        this.unit.position.y = this.options.surface?.getWorldHeight(this.unit.position.x, this.unit.position.z) ?? 0;
+        this.tangent.subVectors(to, from).setY(0).normalize();
+        if (this.tangent.lengthSq() > 0) this.unit.quaternion.setFromUnitVectors(this.forward, this.tangent);
     }
 
     public alignToWorldReference(referenceX: number, referenceZ: number): void {
@@ -335,6 +324,7 @@ export class Unit extends EventEmitter<UnitEventMap> {
         this.needAnimate = false;
         this.movementToken += 1;
         this.movePath = null;
+        this.pathPoints = [];
         this._viewCell = null;
         this.releaseUnitModel();
         this.ownedModelAssets?.dispose();

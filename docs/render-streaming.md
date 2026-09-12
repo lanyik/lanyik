@@ -291,17 +291,51 @@ Terrain atlas PNGs remain the asset format, but `TerrainArrayTexture` strips eac
 cell's gutter into an independent 252x252 layer for the default atlas. WebGL2 array
 textures generate a complete mip chain per layer, so distant minification no
 longer requires disabling mipmaps to avoid neighbouring material colours.
-Trilinear minification and requested 8x anisotropy (clamped by the renderer to
-hardware support) filter oblique views. Both land shaders use GLSL 3 and compute
+Trilinear minification and configurable anisotropy filter oblique views.
+`HexMapOptions.terrainTextureAnisotropy` is an initialization setting with a single
+default of 8 and centralized positive-safe-integer validation. Its requested value
+passes unchanged through TerrainMesh to the array texture; Three.js retains its
+native hardware-cap handling. There is no live setter or loader-specific default.
+Both land shaders use GLSL 3 and compute
 UV gradients before terrain/fog branches; `textureGrad` receives unwrapped
-world-space UVs and the sampler applies mirrored repeat. There is one array
+world-space UVs and the sampler applies mirrored repeat. CPU phases and both
+shaders divide by the actual configured texture periods, including periods below
+one world unit; no hidden minimum scale is applied. Configuration and live updates
+validate that the derived periods are positive finite GPU floats and reject
+overflow/underflow instead of clamping. Fast macro variation likewise scales with
+the actual hex radius. Chunk-relative UVs retain their unwrapped gradients even
+when their constant two-cycle sampler phases differ. There is one array
 lookup site per material sample; full-quality biome edge blending still samples
-its contributing neighbours. Decode validates dimensions; image/decode failures
-reject terrain readiness and world loading, and disposed owners ignore late
-images. CPU layer storage and generated mip levels enter resource accounting.
+its contributing neighbours. The descriptor must provide an in-range integer cell
+for every `Land` material; missing mappings never silently select layer zero.
+Decode validates dimensions; HTTP/image/decode failures reject terrain readiness
+and world loading. The world-session abort signal cancels the atlas fetch and
+settles readiness immediately, including while bitmap decoding is pending. Late
+decoded bitmaps are closed without uploading. Source replacement releases the old
+terrain before starting the next load. CPU layer storage and generated mip levels
+enter resource accounting. Failed HexMap/renderer/terrain construction releases
+already acquired resources before propagating the original failure.
+
+Material shaders receive chunk-local positions. `WorldMaterialCoordinates` caches
+the global noise lattice as integer IDs plus small fractional offsets, mirrored
+texture phases, fog phases and wave phases on the CPU; no absolute world position
+is converted to a float shader uniform or varying. Noise uses a deterministic
+32-bit integer lattice hash shared by land and water. Floating-origin rebases do
+not move patterns or change this lattice. This replaces the old sine hash only in
+visual material noise and bounded micro detail; generation and the authoritative
+CPU surface are unchanged. The per-chunk noise buffers are charged to the terrain
+CPU resource account until that chunk is removed. Fast material sine patterns and
+grass wind likewise receive reduced phases. Toroidal placement uses physical
+chunk copies; shaders have no second `worldPeriod` wrapping branch. Grass no longer
+generates, transfers or uploads the redundant per-blade owning-tile offset (eight
+bytes per instance per LOD).
 
 `GroundProjection` is an optional, single-owner `WorldRenderLayer` capability.
-Its owner supplies flat source objects and logical XZ bounds. `HexMapRendererHost`
+Its owner supplies flat source objects in tile-size units relative to
+`setCenter(x, z, tileSize)`. Its orthographic camera stays at a local origin;
+absolute bounds and center remain CPU double-precision metadata. Before drawing
+each receiver chunk, the CPU subtracts the projection center from its logical
+origin and supplies only that nearby difference to the shader. `HexMapRendererHost`
 draws the bounded orthographic pass before the world and includes both passes in
 GPU timing and draw statistics. Full/fast terrain and water sample its
 premultiplied colour/coverage at actual surface fragments before horizon fog;
@@ -315,6 +349,13 @@ Render-target textures have GPU storage but no CPU pixel backing, and shared
 allocation identity prevents double charging the owner and terrain materials.
 See [skill presentation](game/skills-and-effects.md) for the survivor's 16 MiB
 projection budget and division between ground and airborne effects.
+
+Library `Unit` movement and model clips share `update(deltaSeconds)`. Each route
+segment consumes `animateSpeed` seconds regardless of its slope. XZ interpolation,
+surface-height sampling and `cell_enter` use the same progress, and a long update
+reports every crossed cell in route order. The model is positioned at each crossed
+boundary before that event fires. Movement has no independent timer or frame-rate
+option; pausing the host update also pauses movement.
 
 Mountain height and lighting have separate continuity contracts. Heights still
 use the symmetric three-cell corner average. Lighting derives one slope from the

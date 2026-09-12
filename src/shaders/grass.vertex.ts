@@ -1,7 +1,7 @@
 import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
 
 export const GRASS_VERTEX_SHADER = `
-precision mediump float;
+precision highp float;
 
 ${HORIZON_FOG_VERTEX_VARYING}
 
@@ -11,10 +11,7 @@ uniform mat4 projectionMatrix;
 uniform float uTime;
 uniform float windStrength;
 uniform float windSpeed;
-uniform vec2 worldOffset;
-uniform vec2 chunkOrigin;
-uniform vec2 worldCenter;
-uniform vec2 worldPeriod;
+uniform float windOriginPhase;
 
 // Blade shape authored once in local space (see Grass.ts buildBladeGeometry):
 // x spans [-0.5, 0.5] at the root and tapers to 0 at the tip, y is a plain
@@ -23,7 +20,6 @@ uniform vec2 worldPeriod;
 attribute vec3 position;
 
 attribute vec2 offset;  // world XZ position of this blade's root
-attribute vec2 tileOffset; // canonical center of the blade's owning hex
 attribute float angle;  // random Y rotation, radians - so blades don't all face the same way
 attribute vec2 scale;   // x = width multiplier, y = height multiplier (world units)
 attribute float phase;  // random wind phase offset, see wave below
@@ -35,12 +31,6 @@ varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
 
-vec2 nearestWorldOffset(vec2 canonical) {
-    vec2 wrapped = canonical;
-    if (worldPeriod.x > 0.5) wrapped.x += floor((worldCenter.x - canonical.x) / worldPeriod.x + 0.5) * worldPeriod.x;
-    if (worldPeriod.y > 0.5) wrapped.y += floor((worldCenter.y - canonical.y) / worldPeriod.y + 0.5) * worldPeriod.y;
-    return wrapped;
-}
 
 void main() {
     float heightFactor = position.y;
@@ -53,13 +43,8 @@ void main() {
     // Wind bends the blade towards its tip only (heightFactor^2 keeps the root
     // planted) - phase is offset by world position so a gust visibly travels
     // across the field instead of every blade swaying in lockstep.
-    //Choose the toroidal image from the owning hex center, then preserve this
-    //blade's local displacement inside that hex. Terrain uses the same center
-    //anchor, so decorations cannot hop to the next image before their ground.
-    vec2 wrappedTileOffset = nearestWorldOffset(tileOffset);
-    vec2 bladeOffset = wrappedTileOffset + (offset - tileOffset);
-    vec2 logicalBladeOffset = bladeOffset + chunkOrigin + worldOffset;
-    float wave = sin(uTime * windSpeed + phase + (logicalBladeOffset.x + logicalBladeOffset.y) * 0.015);
+    vec2 bladeOffset = offset;
+    float wave = sin(uTime * windSpeed + phase + windOriginPhase + (bladeOffset.x + bladeOffset.y) * 0.015);
     float bend = wave * windStrength * heightFactor * heightFactor;
     rotated.x += bend;
     rotated.z += bend * 0.4;

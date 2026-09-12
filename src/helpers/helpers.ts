@@ -29,9 +29,3 @@ export function getHexCenter(x:number, y:number, size:number):Point {
 
     return {x: x * size * 1.5, y: y * size * Math.sqrt(3) + space}
 }
-
-export function wait(ms:number):Promise<void> {
-    return new Promise(function(resolve) {
-        setTimeout(resolve, ms);
-    });
-}

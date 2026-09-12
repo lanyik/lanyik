@@ -81,7 +81,6 @@ describe("unit movement path", () => {
             y: 0,
             size: 40,
             animateSpeed: 0.2,
-            animateFrameRate: 10,
             surface
         });
         await unit.setUnit();
@@ -91,7 +90,7 @@ describe("unit movement path", () => {
         expect(unit.activate(UnitActions.idle)).toBe(true);
         expect(unit.moveTo([{ x: 0, y: 0 }, { x: 1, y: 0 }])).toBe(true);
         expect(unit.moveTo([{ x: 1, y: 0 }, { x: 2, y: 0 }])).toBe(false);
-        await vi.runAllTimersAsync();
+        unit.update(0.2);
 
         expect(unit.moving).toBe(false);
         expect(unit.unit.position.x).toBeCloseTo(60, 8);
@@ -100,6 +99,28 @@ describe("unit movement path", () => {
         expect(unit.unit.quaternion.x).toBeCloseTo(0, 8);
         expect(unit.unit.quaternion.z).toBeCloseTo(0, 8);
         expect(ended).toHaveBeenCalledOnce();
+        unit.dispose();
+    });
+
+    test("uneven heights share the cell clock and a large update reports every crossed cell", async () => {
+        const spacing = 40 * Math.sqrt(3);
+        const surface = { revision: 0, minimumHeight: 0, maximumHeight: 500,
+            getTileCenterHeight: (_x: number, y: number) => y >= 2 ? 500 : 0,
+            getWorldHeight: (_x: number, z: number) => Math.max(0, z / spacing - 1.5) * 500 };
+        const unit = new Unit({ id: "steep", x: 0, y: 0, size: 40, animateSpeed: 1, surface });
+        await unit.setUnit();
+        const crossed: { cell: number; z: number }[] = [];
+        unit.on("cell_enter", ({ cell }) => crossed.push({ cell: cell.y, z: unit.unit.position.z }));
+        unit.moveTo([{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 0, y: 2 }]);
+        unit.update(.4);
+        expect(unit.viewPosition.y).toBe(0);
+        expect(unit.unit.position.z).toBeCloseTo(spacing * .9);
+        unit.update(1.6);
+        expect(crossed.map(entry => entry.cell)).toEqual([1, 2]);
+        expect(crossed[0].z).toBeCloseTo(spacing);
+        expect(crossed[1].z).toBeCloseTo(spacing * 2);
+        expect(unit.unit.position.z).toBeCloseTo(spacing * 2.5);
+        expect(unit.moving).toBe(false);
         unit.dispose();
     });
 

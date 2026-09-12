@@ -70,28 +70,40 @@ export class HexMapRendererHost {
         this.scene.add(this.worldRoot);
 
         this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
-        this.renderer.toneMapping = ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 0.65;
+        let sky: Sky | undefined;
+        let gpuTimer: WebGlGpuTimer | undefined;
+        try {
+            this.renderer.toneMapping = ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = 0.65;
 
-        this.camera = new PerspectiveCamera(60, 1, 10, 100000);
-        this.camera.position.set(900, 500, 1000);
-        this.scene.add(this.camera);
+            this.camera = new PerspectiveCamera(60, 1, 10, 100000);
+            this.camera.position.set(900, 500, 1000);
+            this.scene.add(this.camera);
 
-        // Keep direct lighting aligned with the visible sky sun. A natural
-        // hemisphere fill preserves normal-dependent shading on untextured
-        // vegetation without the below-ground blue directional light that
-        // previously left most tree faces nearly black.
-        const primary = new DirectionalLight(0xfff3dc, 1.65);
-        primary.position.copy(createSunDirection());
-        this.scene.add(primary);
-        this.scene.add(new HemisphereLight(0xc7e7ff, 0x435433, 1));
-        this.scene.add(new AmbientLight(0xffffff, 0.18));
+            // Keep direct lighting aligned with the visible sky sun. A natural
+            // hemisphere fill preserves normal-dependent shading on untextured
+            // vegetation without the below-ground blue directional light that
+            // previously left most tree faces nearly black.
+            const primary = new DirectionalLight(0xfff3dc, 1.65);
+            primary.position.copy(createSunDirection());
+            this.scene.add(primary);
+            this.scene.add(new HemisphereLight(0xc7e7ff, 0x435433, 1));
+            this.scene.add(new AmbientLight(0xffffff, 0.18));
 
-        this.sky = this.createSky(options.skyVisible);
-        this.scene.add(this.sky);
-        this.gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
-        options.canvas.addEventListener("webglcontextlost", this.onContextLost);
-        options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+            this.sky = sky = this.createSky(options.skyVisible);
+            this.scene.add(this.sky);
+            this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
+            options.canvas.addEventListener("webglcontextlost", this.onContextLost);
+            options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+        } catch (reason) {
+            options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+            options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+            gpuTimer?.dispose();
+            sky?.geometry.dispose();
+            sky?.material.dispose();
+            this.renderer.dispose();
+            throw reason;
+        }
     }
 
     public resize(width: number, height: number, pixelRatio: number): void {

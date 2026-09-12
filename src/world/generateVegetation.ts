@@ -57,7 +57,6 @@ export interface WorldVegetationGrassLodLayout {
     tiles: Point[];
     ranges: Uint32Array;
     offsets: Float32Array;
-    tileOffsets: Float32Array;
     angles: Float32Array;
     scales: Float32Array;
     phases: Float32Array;
@@ -178,7 +177,6 @@ export function buildGrassLod(
     const sampling = new VegetationSampling(map, options.size, Math.sqrt(area / options.grassDensity), 0.49, 701);
     const capacity = tiles.length * sampling.tileCapacity;
     const offsets = new Float32Array(capacity * 2);
-    const tileOffsets = new Float32Array(capacity * 2);
     const angles = new Float32Array(capacity);
     const scales = new Float32Array(capacity * 2);
     const phases = new Float32Array(capacity);
@@ -207,8 +205,6 @@ export function buildGrassLod(
 
             offsets[instance * 2] = center.x + lx - origin.x;
             offsets[instance * 2 + 1] = center.y + ly - origin.y;
-            tileOffsets[instance * 2] = center.x - origin.x;
-            tileOffsets[instance * 2 + 1] = center.y - origin.y;
             angles[instance] = stableRandom(sx, sz, 741) * Math.PI * 2;
             const heightJitter = 1 - heightVariation * 0.5
                 + stableRandom(sx, sz, 743) * heightVariation;
@@ -229,7 +225,6 @@ export function buildGrassLod(
         tiles,
         ranges,
         offsets: offsets.slice(0, instance * 2),
-        tileOffsets: tileOffsets.slice(0, instance * 2),
         angles: angles.slice(0, instance),
         scales: scales.slice(0, instance * 2),
         phases: phases.slice(0, instance),
@@ -427,13 +422,11 @@ export function assertWorldVegetationLayout(layout: WorldVegetationLayout): void
             throw new TypeError("world grass layout is invalid");
         }
         for (const lod of chunk.lods) {
-            if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array)
-                || !(lod.tileOffsets instanceof Float32Array) || !(lod.angles instanceof Float32Array)
+            if (!(lod.ranges instanceof Uint32Array) || !(lod.offsets instanceof Float32Array) || !(lod.angles instanceof Float32Array)
                 || !(lod.scales instanceof Float32Array) || !(lod.phases instanceof Float32Array)
                 || !(lod.shades instanceof Float32Array) || !Array.isArray(lod.tiles)
                 || lod.ranges.length !== lod.tiles.length * 2
                 || lod.offsets.length !== lod.instanceCount * 2
-                || lod.tileOffsets.length !== lod.instanceCount * 2
                 || lod.angles.length !== lod.instanceCount
                 || lod.scales.length !== lod.instanceCount * 2
                 || lod.phases.length !== lod.instanceCount
@@ -463,7 +456,6 @@ export function worldVegetationTransferables(layout: WorldVegetationLayout): Tra
         for (const array of [
             lod.ranges,
             lod.offsets,
-            lod.tileOffsets,
             lod.angles,
             lod.scales,
             lod.phases,

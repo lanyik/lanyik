@@ -1,7 +1,7 @@
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const GRASS_FRAGMENT_SHADER = `
-precision mediump float;
+precision highp float;
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
 

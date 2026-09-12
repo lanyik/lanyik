@@ -109,7 +109,11 @@ describe("toroidal render copies", () => {
         map.disposed = false;
         map.mapData = { data: {}, w: 20, h: 17, wrapX: true, wrapY: true, tileAt: () => currentTile };
         map.worldController = {
-            source: { setTileOverride, clearTileOverride } as unknown as WorldSource
+            source: { setTileOverride, clearTileOverride,
+                setTileOverrides: (changes: readonly { x: number; y: number; changes: Partial<TileInfo> }[]) => {
+                    for (const change of changes) setTileOverride(change.x, change.y, change.changes);
+                }
+            } as unknown as WorldSource
         };
         map.enqueueTileRenderRefresh = refresh;
 

@@ -1,9 +1,11 @@
-import { Color, Group, OrthographicCamera, Scene, Vector4, WebGLRenderer, WebGLRenderTarget } from "three";
+import { Color, Group, OrthographicCamera, Scene, Vector2, Vector4, WebGLRenderer, WebGLRenderTarget } from "three";
 
 /** One bounded, top-down decal pass, sampled by the terrain at its actual surface fragments. */
 export class GroundProjection {
     public readonly root = new Group();
     public readonly bounds = new Vector4();
+    /** Absolute logical world center retained as JS doubles, never uploaded to a shader. */
+    public readonly centerWorld = new Vector2();
     public readonly target: WebGLRenderTarget;
     private readonly scene = new Scene();
     private readonly camera = new OrthographicCamera();
@@ -25,12 +27,13 @@ export class GroundProjection {
         this.setCenter(0, 0, 1);
     }
 
-    /** Source objects use logical tile-size units; bounds use the terrain's logical world units. */
+    /** Source objects use tile-size units relative to (x,z); absolute bounds are CPU metadata only. */
     public setCenter(x: number, z: number, tileSize: number): void {
         if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(tileSize) || tileSize <= 0) throw new RangeError("Invalid ground projection coordinates");
         const half = this.span / 2;
         this.bounds.set((x - half) * tileSize, (z - half) * tileSize, this.span * tileSize, this.span * tileSize);
-        this.camera.position.set(x, 1, z);
+        this.centerWorld.set(x * tileSize, z * tileSize);
+        this.camera.position.set(0, 1, 0);
     }
 
     public render(renderer: WebGLRenderer): void {
