@@ -21,7 +21,7 @@ of keeping a test-only runtime path alive.
 | World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
 | Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
 | Game simulation | Entity identity, behavior interruption, attack timing, damage and progression | `apps/survivor/tests` |
-| Game benchmark | Fixed-seed combat and full-capacity enemy/projectile traversal | `scripts/benchmark-survivor.mjs` |
+| Game benchmark | Fixed-seed combat and full-capacity population with spatial-query rejection | `scripts/benchmark-survivor.mjs` |
 | Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
 
 Prefer the lowest layer that can observe the contract. Escalate to browser E2E
@@ -69,16 +69,18 @@ Transfer tests detach actual ArrayBuffers; controlled transports cover backpress
 ordered commands, pause acknowledgment and stale-session rejection. Browser fixtures
 use an inspectable test Worker entry with the production host and protocol; no debug
 simulation is added to the main thread or production Worker. The assembled browser
-suite exercises parallel collision queries, twenty restarts, query-worker failure,
+suite explicitly enables parallel collision queries in its query-worker fixture;
+production leaves them disabled by default. Checks cover twenty restarts, query-worker failure,
 recovery and final termination of both combat and terrain workers.
 Browser checks also verify per-worker HUD records, completed query timing,
 paused-window decay and narrow-screen bounds. Controlled-clock unit tests protect
 occupancy accounting across in-flight work, worker replacement and disposal.
 Frame tests check update-before-draw ordering in the real browser and distinguish
 loop, presentation, message, GPU and long-frame samples. Controlled clocks protect
-input acknowledgment at draw time, clock-clamped time and exclusion of hidden-time gaps. Deferred-task
-tests exercise required barriers, nonblocking ticks, latest-request ordering, world
-revision changes, entity reuse, cancellation, capacity, failure and disposal.
+input acknowledgment at draw time, clock-clamped time and exclusion of hidden-time gaps.
+Collision barrier tests protect ordered commits, entity identity, capacity, failure
+and disposal. Current AI runs synchronously within each fixed tick; there is no
+deferred AI task queue or world-revision submission protocol to test.
 Fixed-clock checks cover 60/120/144/240Hz presentation over one minute, each producing
 exactly 7200 simulation ticks. AI checks protect continuous 120Hz movement with 30Hz decisions,
 including successful idle leaves. Inventory tests protect independent category limits,
@@ -109,14 +111,19 @@ after item-schema or cross-worker contract refactors, refresh, and rerun this ch
 The assembled HUD/equipment/keyboard journey has a 300-second total budget for
 software rendering and captures; its individual assertion timeouts remain unchanged.
 
-The worker benchmark measures actual copy, transfer and join costs at four bounded
-projectile counts, with 100 warmup batches and five samples of 200 batches. It reports
-the scheduling threshold and fixed packet sizes, and gates the full-capacity scheduled
-query at 3 ms. It measures Node worker threads, not browser rendering or input latency.
+The worker benchmark measures separated and dense near-miss inputs at four bounded
+projectile counts, with 100 warmup batches and five samples of 200 batches. The
+stationary target index is built before timing; candidate preparation and actual
+copy, transfer and join costs remain timed. It reports actual candidate counts,
+the scheduling threshold, production parallel-query configuration and fixed packet
+sizes. Both full-capacity serial and scheduled queries must stay below 3 ms;
+when production enables parallel queries, dispatched cases must also improve on
+their serial counterparts. It measures Node worker threads, not browser rendering
+or input latency.
 
 The app benchmark uses one warmup and five measured runs. It gates median
 CPU time per tick at 0.5 ms for 24 seconds of real travel combat, and 3 ms for
-640 enemies plus 128 projectiles whose paths require scanning every enemy.
+640 enemies plus 128 distant projectiles rejected by the spatial broad phase.
 The travel workload must remain alive for every measured tick; the full-capacity
 workload retains all targets without damage resolution. Reports include runtime,
 CPU, raw samples and entity counts. These bounds do not measure browser/GPU time.

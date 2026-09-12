@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 import type { InstancedMesh } from "three";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
@@ -12,7 +13,7 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
     const errors: string[] = [], atlas: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     page.on("response", response => { if (response.url().endsWith("/effects/skills.png") && response.ok()) atlas.push(response.url()); });
     await inspectCombatWorker(page);

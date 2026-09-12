@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, generateEquipment, type Equipment } from "../../src/core/Equipment";
 import { DeterministicRandom } from "../../src/core/DeterministicRandom";
@@ -16,7 +17,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });

@@ -268,6 +268,7 @@ Vite 保持 React、Three.js、世界运行时的明确分组，生成文件不�
 `benchmark:app:workers` 测量真实查询线程的拷贝、转移和等待成本；测试额外覆盖并行一致性、缓冲所有权、背压和暂停边界。
 浏览器检查满载并行查询、20 次重开、查询线程崩溃与恢复，以及最终所有 Worker 退出。
 图形验收同时采集 console error 与 WebGL/GL/Three warning，覆盖真实纹理上传失败；重开逐次检查旧怪物池和投影已清空。
+各用例共用消息分类，仅排除 Chromium 截图/录像读回时明确报告的 `GL Driver Message (OpenGL, Performance, ...): GPU stall due to ReadPixels` 警告；该提示仍保留在 trace。其他图形 warning、全部 console error 和 pageerror 均失败。
 专门的 Worker 浏览器用例显式启用查询线程；另覆盖 WebGL 创建失败后重试、挂起贴图时关闭，以及新局物品 ID 重用和宝珠目标槽重置。
 应用类型、核心测试、两种基准与浏览器测试进入 CI。遵守仓库标准 gate，生命周期与驻留相关修改增加 500 次世界替换 soak。
 `region-map.spec.ts` 检查地形像素、难度叠层、展开/收起的分页复用、静止无重复请求/重绘、快捷键归属、窄屏边界以及最终缓存和请求释放；坐标单测覆盖正负列格心与跨列连续性。

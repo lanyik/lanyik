@@ -1,0 +1,16 @@
+import { expect, test } from "vitest";
+import { isBrowserConsoleFailure } from "./helpers/browserConsole";
+
+test("only the explicit screenshot readback performance warning is excluded from graphics failures", () => {
+    const readback = "[.WebGL-0x123]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels";
+    expect(isBrowserConsoleFailure("warning", readback)).toBe(false);
+    expect(isBrowserConsoleFailure("warning", `${readback} (this message will no longer repeat)`)).toBe(false);
+    expect(isBrowserConsoleFailure("error", readback)).toBe(true);
+    for (const message of [
+        "GL_INVALID_OPERATION : glTexSubImage2D: invalid unpack params combination",
+        "GL_OUT_OF_MEMORY", "WebGL context lost", "THREE.WebGLProgram: Shader Error",
+        "THREE.WebGLRenderer: Unknown texture format",
+        "GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): Another performance warning"
+    ]) expect(isBrowserConsoleFailure("warning", message)).toBe(true);
+    expect(isBrowserConsoleFailure("error", "Unrelated runtime failure")).toBe(true);
+});

@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 
 test("plays with baked actors, independent character/bag windows and complete keyboard HUD", async ({ page }) => {
@@ -8,7 +9,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     const loadedAtlases = new Set<string>();
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     page.on("response", response => { if (/\/actors\/.*\.glb$/.test(response.url()) && response.ok()) loadedActors.add(response.url()); });
     page.on("response", response => { if (/\/actors\/.*\.png$/.test(response.url()) && response.ok()) loadedAtlases.add(response.url()); });

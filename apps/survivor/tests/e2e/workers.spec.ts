@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test, type Page } from "@playwright/test";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
@@ -100,12 +101,13 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
 
 test("parallel queries run in real workers and repeated restart, crash and disposal release every owner", async ({ page }) => {
     test.setTimeout(150_000);
-    const graphicsErrors: string[] = [];
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if ((message.type() === "warning" || message.type() === "error") && /WebGL|GL_|THREE\./i.test(message.text())) graphicsErrors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     await startCrowdedCombat(page);
-    expect(graphicsErrors).toEqual([]);
+    expect(errors).toEqual([]);
     const liveCombatWorkers = () => page.workers().filter(worker => /\/(Combat|Projectile)\.worker-/.test(worker.url()));
     for (let i = 0; i < 20; i++) {
         const previous = liveCombatWorkers();
@@ -134,5 +136,5 @@ test("parallel queries run in real workers and repeated restart, crash and dispo
     });
     expect(disposal.workers).toBe(0); expect(disposal.pending).toBe(0);
     await expect.poll(() => page.workers().length).toBe(0);
-    expect(graphicsErrors).toEqual([]);
+    expect(errors).toEqual([]);
 });

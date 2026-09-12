@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 import type { HexMap, WorldMinimap } from "three-hex-map";
 import { pauseCombat } from "../helpers/browserCombat";
@@ -7,7 +8,7 @@ test("samples terrain with a region wash, shares cached pages and leaves control
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/", { waitUntil: "domcontentloaded" });

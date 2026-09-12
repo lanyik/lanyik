@@ -1,3 +1,4 @@
+import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { ticksForSeconds } from "../../src/core/GameConfig";
 import { expect, test } from "@playwright/test";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
@@ -11,7 +12,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => {
-        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+        if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
