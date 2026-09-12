@@ -81,29 +81,40 @@ describe("MemoryWorldDeltaStore", () => {
         expect(withoutCity).toMatchObject({ revision: 2, entries: [] });
     });
 
-    test("rejects entries outside their declared chunk and upgrades valid v1 data", async () => {
+    test("rejects foreign entries and obsolete delta formats", async () => {
         const store = new MemoryWorldDeltaStore();
         await expect(store.putChunkDelta("world", 0, 0, [
             { x: 128, y: 0, override: { unit: "foreign" } }
         ], CHUNK)).rejects.toThrow(/declared chunk/);
 
-        const migrated = normalizeWorldChunkDelta({
-            version: 1,
-            worldId: "world",
-            chunkX: 0,
-            chunkY: 0,
-            revision: 3,
-            entries: [{ x: 2, y: 3, override: { unit: "legacy" } }]
-        }, "world", 0, 0, CHUNK);
-        expect(migrated).toMatchObject({
-            version: WORLD_DELTA_FORMAT_VERSION,
-            chunkSize: 128,
-            revision: 3
-        });
+        expect(() => normalizeWorldChunkDelta({ version: 1, worldId: "world", chunkX: 0, chunkY: 0,
+            revision: 3, entries: [{ x: 2, y: 3, override: { unit: "obsolete" } }]
+        }, "world", 0, 0, CHUNK)).toThrow(/incompatible/);
+        expect(WORLD_DELTA_FORMAT_VERSION).toBe(2);
     });
 });
 
 describe("IndexedDbWorldDeltaStore", () => {
+    test("reads peer commits and can retry a conflict using a fresh revision", async () => {
+        const options = { databaseName: "delta-coherence" };
+        const first = new IndexedDbWorldDeltaStore(options), second = new IndexedDbWorldDeltaStore(options);
+        const initial = await first.putChunkDelta("world", 0, 0, [{ x: 1, y: 1, override: { unit: "first" } }], CHUNK);
+        await second.putChunkDelta("world", 0, 0, [{ x: 1, y: 1, override: { unit: "second" } }],
+            { ...CHUNK, expectedRevision: initial!.revision });
+        await expect(first.putChunkDelta("world", 0, 0, [{ x: 2, y: 2, override: { unit: "stale" } }],
+            { ...CHUNK, expectedRevision: initial!.revision })).rejects.toBeInstanceOf(WorldDeltaConflictError);
+        await expect(first.flush()).rejects.toBeInstanceOf(WorldDeltaConflictError);
+        const fresh = await first.loadChunk("world", 0, 0, CHUNK);
+        expect(fresh).toMatchObject({ revision: 2, entries: [{ override: { unit: "second" } }] });
+        const retried = await first.putChunkDelta("world", 0, 0, [{ x: 2, y: 2, override: { unit: "retried" } }],
+            { ...CHUNK, expectedRevision: fresh!.revision });
+        expect(retried?.revision).toBe(3);
+        expect((await second.loadChunk("world", 0, 0, CHUNK))?.revision).toBe(3);
+        await first.clear("world");
+        expect(await second.loadChunk("world", 0, 0, CHUNK)).toBeUndefined();
+        first.dispose(); second.dispose();
+    });
+
     beforeEach(() => {
         Object.defineProperty(globalThis, "indexedDB", { configurable: true, writable: true, value: new IDBFactory() });
     });
@@ -115,8 +126,8 @@ describe("IndexedDbWorldDeltaStore", () => {
     test("persists writes and deletions across store instances", async () => {
         const options = { databaseName: "delta-persistence" };
         const first = new IndexedDbWorldDeltaStore(options);
-        first.putTile("world", 0, 0, { x: 2, y: 3, override: { unit: "scout" } }, CHUNK);
-        first.putTile("world", 0, 0, { x: 4, y: 5, override: { city: { name: "Port" } } }, CHUNK);
+        await first.putChunkDelta("world", 0, 0, [{ x: 2, y: 3, override: { unit: "scout" } }], CHUNK);
+        await first.putChunkDelta("world", 0, 0, [{ x: 4, y: 5, override: { city: { name: "Port" } } }], CHUNK);
         await first.flush();
 
         const second = new IndexedDbWorldDeltaStore(options);
@@ -127,7 +138,7 @@ describe("IndexedDbWorldDeltaStore", () => {
             { x: 4, y: 5, override: { city: { name: "Port" } } }
         ]);
 
-        second.deleteTile("world", 0, 0, 2, 3, CHUNK);
+        await second.putChunkDelta("world", 0, 0, [{ x: 2, y: 3, override: null }], CHUNK);
         await second.flush();
         const third = new IndexedDbWorldDeltaStore(options);
         expect((await third.loadChunk("world", 0, 0, CHUNK))?.entries).toHaveLength(1);
@@ -139,8 +150,8 @@ describe("IndexedDbWorldDeltaStore", () => {
 
     test("clears one world without deleting another", async () => {
         const store = new IndexedDbWorldDeltaStore({ databaseName: "delta-clear" });
-        store.putTile("first", 0, 0, { x: 1, y: 1, override: { unit: "one" } }, CHUNK);
-        store.putTile("second", 0, 0, { x: 2, y: 2, override: { unit: "two" } }, CHUNK);
+        await store.putChunkDelta("first", 0, 0, [{ x: 1, y: 1, override: { unit: "one" } }], CHUNK);
+        await store.putChunkDelta("second", 0, 0, [{ x: 2, y: 2, override: { unit: "two" } }], CHUNK);
         await store.flush();
         await store.clear("first");
 
@@ -161,7 +172,7 @@ describe("IndexedDbWorldDeltaStore", () => {
         await first.flush();
 
         const reopened = new IndexedDbWorldDeltaStore(options);
-        reopened.putTile("world", 0, 0, { x: 3, y: 3, override: { unit: "three" } }, CHUNK);
+        await reopened.putChunkDelta("world", 0, 0, [{ x: 3, y: 3, override: { unit: "three" } }], CHUNK);
         await reopened.flush();
         const restored = await reopened.loadChunk("world", 0, 0, CHUNK);
         expect(restored?.revision).toBe(2);
@@ -181,7 +192,7 @@ describe("IndexedDbWorldDeltaStore", () => {
         await expect(second.putChunkDelta("world", 0, 0, [
             { x: 2, y: 2, override: { unit: "stale" } }
         ], { ...CHUNK, expectedRevision: 0 })).rejects.toBeInstanceOf(WorldDeltaConflictError);
-        // The save barrier reports background/legacy write failures too.
+        // The save barrier reports queued write failures too.
         await expect(second.flush()).rejects.toBeInstanceOf(WorldDeltaConflictError);
 
         const updated = await second.putChunkDelta("world", 0, 0, [

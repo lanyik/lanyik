@@ -14,7 +14,7 @@ import { IndexedDbWorldDeltaStore } from "three-hex-map/persistence";
 
 const deltas = new IndexedDbWorldDeltaStore({ databaseName: "world-deltas" });
 const current = await deltas.loadChunk(worldId, chunkX, chunkY, { chunkSize: 24 });
-const saved = await deltas.putChunkDelta?.(
+const saved = await deltas.putChunkDelta(
     worldId,
     chunkX,
     chunkY,
@@ -40,9 +40,11 @@ duplicate coordinates in stored data are rejected before overrides are
 installed. Getters and persisted records deep-copy nested modifiers, rivers and
 city data, so callers cannot mutate source state without a revisioned setter.
 
-`putTile()` and `deleteTile()` remain compatibility shims. They are safe across
-reopened IndexedDB store instances, but each call is still an individual batch.
-Use `putChunkDelta()` or a source batch for editor-sized work.
+`putChunkDelta()` is the required write interface; single-tile edits use a
+one-entry batch. The old void single-tile compatibility methods are removed.
+Mutable world sources must implement atomic `setTileOverrides()`: either the
+complete batch commits or no tile changes. The editing facade rejects sources
+without this capability before making any change; there is no per-tile fallback.
 
 ## Revisions and conflicts
 
@@ -51,6 +53,12 @@ with `WorldDeltaConflictError`, which reports both revisions. The IndexedDB
 implementation performs the check and write in the same read/write
 transaction, so two store instances cannot both commit the same expected
 revision.
+
+IndexedDB is the read authority. `loadChunk()` waits for this instance's queued
+writes, then opens a fresh read transaction; it does not retain an independent
+memory mirror that could hide another instance's commit or deletion. After a
+conflict and the failed-write flush barrier, callers can read the current revision
+and explicitly retry their edit. This does not add automatic conflict merging.
 
 Deleting the final entry retains an empty revisioned record. This avoids an ABA
 problem where a deleted chunk would otherwise appear to return to revision 0.
@@ -66,13 +74,12 @@ tile epoch until its write succeeds. Await `flushDeltas()` at save barriers and
 before ending a session: it waits for Session-owned writes as well as the Store
 barrier, rejects on a failed write, and retries still-pending coordinates on the
 next call. A stale successful write cannot acknowledge a newer edit to the same
-tile. IndexedDB mutations remain serialized, and direct Store users should
-likewise await `flush()` for compatibility methods whose return type is `void`.
+tile. IndexedDB mutations remain serialized. Direct Store users await each
+batch result and use `flush()` as the barrier for all queued writes.
 
 Records carry `WORLD_DELTA_FORMAT_VERSION`. Format 2 records include the source
-`chunkSize`; format 1 records are validated against the caller's chunk geometry
-and normalized to format 2 on their next IndexedDB write. Incompatible,
-cross-Chunk or duplicate data fails closed during load.
+`chunkSize`; only format 2 is accepted. Obsolete formats, mismatched chunk
+geometry, cross-Chunk entries and duplicate coordinates fail during load.
 
 Sources keep state for chunks with live overrides plus transient tile protection
 while a restore or persistence acknowledgement is outstanding. Recently emptied

@@ -92,8 +92,7 @@ class DeferredDeltaStore implements WorldDeltaStore {
     loadChunk(): Promise<WorldChunkDelta | undefined> {
         return new Promise(resolve => { this.resolveLoad = resolve; });
     }
-    putTile(): void {}
-    deleteTile(): void {}
+    putChunkDelta(): Promise<undefined> { return Promise.resolve(undefined); }
     flush(): Promise<void> { return Promise.resolve(); }
     clear(): Promise<void> { return Promise.resolve(); }
     dispose(): void {}
@@ -1005,7 +1004,7 @@ describe("procedural world source", () => {
         source.dispose();
     });
 
-    test("disposes persistence resources passed through source options", () => {
+    test("disposes persistence resources passed through source options", async () => {
         const cache = new MemoryChunkCache();
         const deltas = new MemoryWorldDeltaStore();
         const source = new ProceduralWorldSource({
@@ -1021,13 +1020,13 @@ describe("procedural world source", () => {
         source.dispose();
 
         expect(cache.disposed).toBe(true);
-        expect(() => deltas.putTile(
+        await expect(deltas.putChunkDelta(
             source.worldId,
             0,
             0,
-            { x: 0, y: 0, override: { unit: "disposed" } },
+            [{ x: 0, y: 0, override: { unit: "disposed" } }],
             { chunkSize: 12 }
-        )).toThrow(/disposed/);
+        )).rejects.toThrow(/disposed/);
     });
 
     test("reuses cached chunks and exposes an explicit clear operation", async () => {

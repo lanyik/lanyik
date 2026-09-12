@@ -5,7 +5,6 @@ import {
 } from "./generateWorldChunk";
 
 export const WORLD_DELTA_FORMAT_VERSION = 2;
-const LEGACY_WORLD_DELTA_FORMAT_VERSION = 1;
 
 export interface WorldDeltaEntry {
     x: number;
@@ -47,22 +46,13 @@ export interface WorldDeltaStore {
         chunkY: number,
         options: WorldDeltaReadOptions
     ): Promise<WorldChunkDelta | undefined>;
-    putChunkDelta?(
+    putChunkDelta(
         worldId: string,
         chunkX: number,
         chunkY: number,
         changes: readonly WorldDeltaChange[],
         options: WorldDeltaBatchOptions
     ): Promise<WorldChunkDelta | undefined>;
-    putTile(worldId: string, chunkX: number, chunkY: number, entry: WorldDeltaEntry, options: WorldDeltaReadOptions): void;
-    deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void;
     flush(): Promise<void>;
     listWorld?(worldId: string): Promise<readonly WorldChunkDelta[]>;
     replaceWorld?(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void>;
@@ -116,10 +106,9 @@ export function normalizeWorldChunkDelta(
     assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
     assertWorldDeltaChunkSize(options.chunkSize);
     const candidate = value as Partial<WorldChunkDelta> & { version?: number; entries?: readonly WorldDeltaEntry[] };
-    if (!candidate || (candidate.version !== WORLD_DELTA_FORMAT_VERSION
-        && candidate.version !== LEGACY_WORLD_DELTA_FORMAT_VERSION) || candidate.worldId !== worldId
+    if (!candidate || candidate.version !== WORLD_DELTA_FORMAT_VERSION || candidate.worldId !== worldId
         || candidate.chunkX !== chunkX || candidate.chunkY !== chunkY
-        || (candidate.version === WORLD_DELTA_FORMAT_VERSION && candidate.chunkSize !== options.chunkSize)
+        || candidate.chunkSize !== options.chunkSize
         || !Number.isSafeInteger(candidate.revision) || candidate.revision! < 1 || !Array.isArray(candidate.entries)
         || candidate.entries.some(entry => !entry || !Number.isSafeInteger(entry.x) || !Number.isSafeInteger(entry.y)
             || !worldDeltaTileBelongsToChunk(entry.x, entry.y, chunkX, chunkY, options.chunkSize)

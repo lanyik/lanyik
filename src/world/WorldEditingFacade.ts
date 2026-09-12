@@ -116,8 +116,7 @@ export class WorldEditingFacade {
             if (!before.has(key)) before.set(key, this.captureVisualState(point));
             normalized.push({ x: point.x, y: point.y, changes: change.changes });
         }
-        if (source.setTileOverrides) source.setTileOverrides(normalized);
-        else for (const change of normalized) source.setTileOverride(change.x, change.y, change.changes);
+        source.setTileOverrides(normalized);
         return this.completeEdit(source, normalized.length > 0, before.size, before.values());
     }
 

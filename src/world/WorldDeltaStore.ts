@@ -14,7 +14,6 @@ import {
     type WorldChunkDelta,
     type WorldDeltaBatchOptions,
     type WorldDeltaChange,
-    type WorldDeltaEntry,
     type WorldDeltaReadOptions,
     type WorldDeltaStore
 } from "./WorldDeltaContract";
@@ -106,6 +105,14 @@ function mergeChunkDelta(
     };
 }
 
+function cloneDelta(delta: WorldChunkDelta): WorldChunkDelta {
+    if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
+    return {
+        ...delta,
+        entries: delta.entries.map(entry => ({ ...entry, override: cloneWorldTileOverride(entry.override) }))
+    };
+}
+
 export class MemoryWorldDeltaStore implements WorldDeltaStore {
     protected readonly chunks = new Map<string, WorldChunkDelta>();
     protected disposed = false;
@@ -118,9 +125,10 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
     ): Promise<WorldChunkDelta | undefined> {
         if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
         assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
+        assertWorldDeltaChunkSize(options.chunkSize);
         const delta = this.chunks.get(chunkKey(worldId, chunkX, chunkY));
         return Promise.resolve(delta
-            ? this.cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options))
+            ? cloneDelta(normalizeWorldChunkDelta(delta, worldId, chunkX, chunkY, options))
             : undefined);
     }
 
@@ -134,33 +142,10 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         if (this.disposed) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
         try {
             const result = this.applyChunkDelta(worldId, chunkX, chunkY, changes, options);
-            return Promise.resolve(result ? this.cloneDelta(result) : undefined);
+            return Promise.resolve(result ? cloneDelta(result) : undefined);
         } catch (reason) {
             return Promise.reject(reason);
         }
-    }
-
-    public putTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        entry: WorldDeltaEntry,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-        this.applyChunkDelta(worldId, chunkX, chunkY, [entry], options);
-    }
-
-    public deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed) throw new Error("WorldDeltaStore has been disposed");
-        this.applyChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options);
     }
 
     public flush(): Promise<void> { return Promise.resolve(); }
@@ -170,7 +155,7 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         const deltas = [...this.chunks.values()]
             .filter(delta => delta.worldId === worldId)
             .sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY)
-            .map(delta => this.cloneDelta(delta));
+            .map(delta => cloneDelta(delta));
         return Promise.resolve(deltas);
     }
 
@@ -189,8 +174,8 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
             if (replacements.has(key)) throw new TypeError("world delta checkpoint contains duplicate chunks");
             replacements.set(key, normalized);
         }
-        await this.clear(worldId);
-        for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
+        for (const [key, delta] of this.chunks) if (delta.worldId === worldId) this.chunks.delete(key);
+        for (const [key, delta] of replacements) this.chunks.set(key, cloneDelta(delta));
     }
 
     public async clear(worldId: string): Promise<void> {
@@ -201,14 +186,6 @@ export class MemoryWorldDeltaStore implements WorldDeltaStore {
         if (this.disposed) return;
         this.disposed = true;
         this.chunks.clear();
-    }
-
-    protected cloneDelta(delta: WorldChunkDelta): WorldChunkDelta {
-        if (delta.version !== WORLD_DELTA_FORMAT_VERSION) throw new Error(`Unsupported world delta version: ${delta.version}`);
-        return {
-            ...delta,
-            entries: delta.entries.map(entry => ({ ...entry, override: cloneWorldTileOverride(entry.override) }))
-        };
     }
 
     protected applyChunkDelta(
@@ -249,16 +226,16 @@ interface StoredWorldChunkDelta extends WorldChunkDelta { key: string }
 //Durable gameplay deltas intentionally use a database separate from the
 //rebuildable base-terrain cache. Writes are serialized; flush() is the save
 //barrier applications should await before ending a session.
-export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
+export class IndexedDbWorldDeltaStore implements WorldDeltaStore {
     private readonly databaseName: string;
     private readonly openTimeoutMs: number;
     private databasePromise: Promise<IDBDatabase> | undefined;
     private pending: Promise<void> = Promise.resolve();
     private pendingError: unknown;
     private closing = false;
+    private disposed = false;
 
     constructor(options: IndexedDbWorldDeltaStoreOptions = {}) {
-        super();
         this.databaseName = options.databaseName ?? DEFAULT_DELTA_DATABASE_NAME;
         this.openTimeoutMs = options.openTimeoutMs ?? 2000;
         if (!this.databaseName.trim()) throw new TypeError("delta databaseName must be a non-empty string");
@@ -267,27 +244,26 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         }
     }
 
-    public override async loadChunk(
+    public async loadChunk(
         worldId: string,
         chunkX: number,
         chunkY: number,
         options: WorldDeltaReadOptions
     ): Promise<WorldChunkDelta | undefined> {
-        if (this.disposed || this.closing) return undefined;
+        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
+        assertWorldDeltaChunkIdentity(worldId, chunkX, chunkY);
+        assertWorldDeltaChunkSize(options.chunkSize);
         await this.flush();
-        const memory = await super.loadChunk(worldId, chunkX, chunkY, options);
-        if (memory) return memory;
         const database = await this.open();
         const transaction = database.transaction(DELTA_OBJECT_STORE, "readonly");
         const record = await requestResult(transaction.objectStore(DELTA_OBJECT_STORE).get(chunkKey(worldId, chunkX, chunkY))) as StoredWorldChunkDelta | undefined;
         await transactionComplete(transaction);
         if (!record) return undefined;
         const delta = normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options);
-        this.chunks.set(record.key, delta);
-        return this.cloneDelta(delta);
+        return cloneDelta(delta);
     }
 
-    public override putChunkDelta(
+    public putChunkDelta(
         worldId: string,
         chunkX: number,
         chunkY: number,
@@ -307,13 +283,10 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
                     ? normalizeWorldChunkDelta(record, worldId, chunkX, chunkY, options)
                     : undefined;
                 const result = mergeChunkDelta(current, worldId, chunkX, chunkY, changes, options);
-                const requiresWrite = result !== undefined && (record?.version !== WORLD_DELTA_FORMAT_VERSION
-                    || result.revision !== current?.revision);
-                if (requiresWrite) store.put({ key, ...this.cloneDelta(result) } satisfies StoredWorldChunkDelta);
+                const requiresWrite = result !== undefined && result.revision !== current?.revision;
+                if (requiresWrite) store.put({ key, ...cloneDelta(result) } satisfies StoredWorldChunkDelta);
                 await completion;
-                if (result) this.chunks.set(key, this.cloneDelta(result));
-                else this.chunks.delete(key);
-                return result ? this.cloneDelta(result) : undefined;
+                return result ? cloneDelta(result) : undefined;
             } catch (reason) {
                 try { transaction.abort(); } catch { /* transaction already settled */ }
                 await completion.catch(() => undefined);
@@ -322,30 +295,7 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         });
     }
 
-    public override putTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        entry: WorldDeltaEntry,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        void this.putChunkDelta(worldId, chunkX, chunkY, [entry], options).catch(() => undefined);
-    }
-
-    public override deleteTile(
-        worldId: string,
-        chunkX: number,
-        chunkY: number,
-        x: number,
-        y: number,
-        options: WorldDeltaReadOptions
-    ): void {
-        if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
-        void this.putChunkDelta(worldId, chunkX, chunkY, [{ x, y, override: null }], options).catch(() => undefined);
-    }
-
-    public override async flush(): Promise<void> {
+    public async flush(): Promise<void> {
         await this.pending;
         if (this.pendingError !== undefined) {
             const error = this.pendingError;
@@ -354,7 +304,7 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         }
     }
 
-    public override async listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
+    public async listWorld(worldId: string): Promise<readonly WorldChunkDelta[]> {
         if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
         await this.flush();
         const database = await this.open();
@@ -372,7 +322,7 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         )).sort((first, second) => first.chunkX - second.chunkX || first.chunkY - second.chunkY);
     }
 
-    public override replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
+    public replaceWorld(worldId: string, deltas: readonly WorldChunkDelta[]): Promise<void> {
         if (this.disposed || this.closing) return Promise.reject(new Error("WorldDeltaStore has been disposed"));
         const replacements = new Map<string, WorldChunkDelta>();
         for (const delta of deltas) {
@@ -394,18 +344,15 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
             const keys = await requestResult(store.index("worldId").getAllKeys(worldId));
             for (const key of keys) store.delete(key);
             for (const [key, delta] of replacements) {
-                store.put({ key, ...this.cloneDelta(delta) } satisfies StoredWorldChunkDelta);
+                store.put({ key, ...cloneDelta(delta) } satisfies StoredWorldChunkDelta);
             }
             await transactionComplete(transaction);
-            await super.clear(worldId);
-            for (const [key, delta] of replacements) this.chunks.set(key, this.cloneDelta(delta));
         });
     }
 
-    public override async clear(worldId: string): Promise<void> {
+    public async clear(worldId: string): Promise<void> {
         if (this.disposed || this.closing) throw new Error("WorldDeltaStore has been disposed");
         await this.enqueue(async () => {
-            await super.clear(worldId);
             const database = await this.open();
             const transaction = database.transaction(DELTA_OBJECT_STORE, "readwrite");
             const index = transaction.objectStore(DELTA_OBJECT_STORE).index("worldId");
@@ -416,11 +363,11 @@ export class IndexedDbWorldDeltaStore extends MemoryWorldDeltaStore {
         await this.flush();
     }
 
-    public override dispose(): void {
+    public dispose(): void {
         if (this.disposed || this.closing) return;
         this.closing = true;
         void this.flush().finally(() => {
-            super.dispose();
+            this.disposed = true;
             void this.databasePromise?.then(database => database.close(), () => undefined);
         }).catch(() => undefined);
     }

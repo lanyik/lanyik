@@ -21,11 +21,26 @@ class EditableSource implements MutableWorldSource {
     public setTileOverride(x: number, y: number, changes: Record<string, unknown>): void {
         Object.assign(this.map.data[x][y], changes);
     }
+    public setTileOverrides(changes: readonly { x: number; y: number; changes: Record<string, unknown> }[]): void {
+        for (const change of changes) this.setTileOverride(change.x, change.y, change.changes);
+    }
     public clearTileOverride(): boolean { return false; }
     public dispose(): void {}
 }
 
 describe("WorldEditingFacade", () => {
+    test("rejects single-tile-only sources before mutating a batch", () => {
+        const source = new EditableSource(world());
+        Object.defineProperty(source, "setTileOverrides", { value: undefined });
+        const editing = new WorldEditingFacade(source, source.map);
+        expect(() => editing.setTileOverrides([
+            { x: 0, y: 0, changes: { type: Land.snow } },
+            { x: 1, y: 0, changes: { type: Land.snow } }
+        ])).toThrow(/support/);
+        expect(source.map.data[0][0].type).toBe(Land.land);
+        expect(editing.stats.editBatches).toBe(0);
+    });
+
     test("canonicalizes a batch and returns only visually dirty coordinates", () => {
         const source = new EditableSource(world());
         const editing = new WorldEditingFacade(source, source.map, {

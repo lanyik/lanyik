@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { IDBObjectStore } from "fake-indexeddb";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createWorldDescriptor } from "../../src/world/WorldDescriptor";
 import {
@@ -15,7 +16,7 @@ function coordinator(store: GenerationCheckpointStore, options: { createSaveId?:
         participants: [participant], withWorldState: operation => operation(), ...options });
 }
 
-afterEach(() => { vi.useRealTimers(); participant.restore.mockClear(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); participant.restore.mockClear(); });
 
 describe("checkpoint failure boundaries", () => {
     test("keeps a committed generation when acknowledgement and subsequent reads fail", async () => {
@@ -104,12 +105,20 @@ describe("checkpoint failure boundaries", () => {
         await expect(coordinator(new Store()).checkpoint(controller.signal)).resolves.toMatchObject({ generation: 1 });
     });
 
-    test("an aborted IndexedDB publication leaves the old manifest unchanged", async () => {
+    test.each(["before", "during"] as const)("cancelling %s IndexedDB publication leaves the old manifest unchanged", async when => {
         const store = new IndexedDbGenerationCheckpointStore({ databaseName: crypto.randomUUID() });
         const writer = coordinator(store);
         const saved = await writer.checkpoint();
         const controller = new AbortController();
-        controller.abort();
+        if (when === "before") controller.abort();
+        else {
+            const put = IDBObjectStore.prototype.put;
+            vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, ...args) {
+                const request = put.apply(this, args);
+                if (this.name === "manifests") controller.abort();
+                return request;
+            });
+        }
         await expect(store.compareAndSetManifest("world", saved.revision,
             { ...saved, revision: saved.revision + 1 }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
         expect((await store.loadManifest("world"))?.revision).toBe(saved.revision);

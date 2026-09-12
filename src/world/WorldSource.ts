@@ -157,7 +157,8 @@ export function isWorldOverviewSource(source: WorldSource): source is WorldOverv
 
 export interface MutableWorldSource extends WorldSource {
     setTileOverride(x: number, y: number, changes: WorldTileOverride): void;
-    setTileOverrides?(changes: readonly WorldTileOverrideChange[]): void;
+    /** Commits the complete batch atomically, or throws without mutation. */
+    setTileOverrides(changes: readonly WorldTileOverrideChange[]): void;
     clearTileOverride(x: number, y: number): boolean;
     flushDeltas?(): Promise<void>;
     clearDeltas?(): Promise<void>;
@@ -168,6 +169,7 @@ export interface MutableWorldSource extends WorldSource {
 export function isMutableWorldSource(source: WorldSource): source is MutableWorldSource {
     const candidate = source as Partial<MutableWorldSource>;
     return typeof candidate.setTileOverride === "function"
+        && typeof candidate.setTileOverrides === "function"
         && typeof candidate.clearTileOverride === "function";
 }
 
@@ -411,7 +413,7 @@ function assertWorldChunkCache(cache: WorldChunkCache): void {
 
 function assertWorldDeltaStore(store: WorldDeltaStore): void {
     if (!store || typeof store !== "object") throw new TypeError("world delta store must be an object");
-    for (const method of ["loadChunk", "putTile", "deleteTile", "flush", "clear", "dispose"] as const) {
+    for (const method of ["loadChunk", "putChunkDelta", "flush", "clear", "dispose"] as const) {
         if (typeof store[method] !== "function") throw new TypeError(`world delta store must implement ${method}()`);
     }
 }
@@ -781,36 +783,10 @@ class WorldDeltaSession {
             y: point.y,
             override: this.tileStore.getTileOverride(point.x, point.y) ?? null
         }));
-        if (store.putChunkDelta) {
-            const delta = await store.putChunkDelta(
-                this.worldId,
-                state.chunkX,
-                state.chunkY,
-                changes,
-                { chunkSize: this.chunkSize }
-            );
-            return delta?.revision;
-        }
-        for (const change of changes) {
-            if (change.override) {
-                store.putTile(this.worldId, state.chunkX, state.chunkY, {
-                    x: change.x,
-                    y: change.y,
-                    override: change.override
-                }, { chunkSize: this.chunkSize });
-            } else {
-                store.deleteTile(
-                    this.worldId,
-                    state.chunkX,
-                    state.chunkY,
-                    change.x,
-                    change.y,
-                    { chunkSize: this.chunkSize }
-                );
-            }
-        }
-        await store.flush();
-        return undefined;
+        const delta = await store.putChunkDelta(
+            this.worldId, state.chunkX, state.chunkY, changes, { chunkSize: this.chunkSize }
+        );
+        return delta?.revision;
     }
 
     private pruneState(key: string, state: WorldDeltaChunkState): void {
