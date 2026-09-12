@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { CombatSession } from "../app/CombatSession";
+import type { CombatSession, SessionSnapshot } from "../app/CombatSession";
+import { GAME_CONFIG } from "../core/GameConfig";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
 import type { InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
@@ -25,6 +26,12 @@ function formatTime(ms: number): string {
 
 export function App({ session, attachRegionMap }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap }) {
     const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
+    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} />;
+}
+
+function SessionInterface({ session, snapshot, attachRegionMap }: {
+    readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
+}) {
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false });
     const [socket, setSocket] = useState(0);
     const [frontPanel, setFrontPanel] = useState<"character" | "inventory">("character");
@@ -53,7 +60,7 @@ export function App({ session, attachRegionMap }: { readonly session: CombatSess
             else if (event.code === "Escape") {
                 const open = (["inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
-            } else if (/^Digit[1-4]$/.test(event.code) && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
+            } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
             else if (event.code === "KeyE") session.dispatch({ type: "use-consumable", effect: "mana" });
             else if (event.code === "KeyF") session.dispatch({ type: "toggle-autocast" });

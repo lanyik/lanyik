@@ -55,8 +55,6 @@ export interface RuntimePerformanceSnapshot extends FramePerformanceSnapshot {
     readonly queryWaitMs: number | undefined;
     readonly roundTripMs: number | undefined;
     readonly transportMs: number | undefined;
-    readonly deferredPending: number;
-    readonly deferredDiscarded: number;
 }
 
 /** One sampling window; no per-frame snapshots or unbounded performance history. */

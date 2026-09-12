@@ -19,6 +19,7 @@ export interface VisibleNotice extends CombatNotice {
 }
 
 export interface SessionSnapshot {
+    readonly generation: number;
     readonly performance: RuntimePerformanceSnapshot | undefined;
     readonly workerLoads: readonly WorkerLoad[];
     readonly status: SessionStatus;
@@ -181,8 +182,7 @@ export class CombatSession {
             clockClampedMs: this.clockClampedMs,
             pendingRequests: Number(Boolean(this.inFlight)), executeMs: simulation?.executeMs, queryWaitMs: simulation?.queryWaitMs,
             roundTripMs: stats.completed ? stats.roundTripMs : undefined,
-            transportMs: simulation ? Math.max(0, stats.roundTripMs - simulation.batchMs) : undefined,
-            deferredPending: simulation?.deferred.pending ?? 0, deferredDiscarded: simulation?.deferred.discarded ?? 0 });
+            transportMs: simulation ? Math.max(0, stats.roundTripMs - simulation.batchMs) : undefined });
         this.sampleWorkerLoad(now); this.publish();
     }
 
@@ -337,6 +337,7 @@ export class CombatSession {
         }
         if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);
         return Object.freeze({
+            generation: this.loadRevision,
             performance: this.performanceSnapshot,
             workerLoads: this.workerLoads,
             status: this.status,

@@ -8,7 +8,10 @@ import type { CombatLayer } from "../../src/presentation/CombatLayer";
 import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 
 async function startCrowdedCombat(page: Page): Promise<void> {
-    await page.addInitScript(() => Object.defineProperty(navigator, "hardwareConcurrency", { value: 8 }));
+    await page.addInitScript(() => {
+        Object.defineProperty(navigator, "hardwareConcurrency", { value: 8 });
+        window.survivorOptions = { collisionQueries: true };
+    });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });

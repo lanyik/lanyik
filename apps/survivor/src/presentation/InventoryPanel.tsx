@@ -36,7 +36,7 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
         </div>
         <div className="bag-cards" aria-label="背包物品">{items.map(item => {
             const comparison = evaluations.get(item.id);
-            const useDisabled = disabled || item.type === "consumable" && (paused || player.potionRemaining > 0
+            const useDisabled = disabled || item.type === "orb" && player.level < ORB_UNLOCK_LEVELS[socket] || item.type === "consumable" && (paused || player.potionRemaining > 0
                 || (item.value === "health" ? player.health >= player.stats.maxHealth : player.mana >= player.stats.maxMana));
             return <article key={item.id} tabIndex={0}
                 className={`inventory-card rarity-${item.rarity}${item.id === selectedId ? " selected" : ""}`}

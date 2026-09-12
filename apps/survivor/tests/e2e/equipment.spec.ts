@@ -8,6 +8,7 @@ import type { CombatRenderState } from "../../src/core/CombatState";
 import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 import type { HexMap } from "three-hex-map";
 import { ENEMY_DEFINITIONS } from "../../src/core/EnemyDefinitions";
+import { GAME_CONFIG } from "../../src/core/GameConfig";
 
 test("compares gear on hover, protects upgrades during cleanup and equips a real pickup from the HUD", async ({ page }) => {
     // Full desktop/narrow/pickup journey also runs against software WebGL in CI.
@@ -19,7 +20,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
-    const rendered = await page.evaluate(models => {
+    const rendered = await page.evaluate(({ models, activeExitDistance }) => {
         const session = window.survivorApplication!.session;
         session.frame(performance.now());
         const runtime = session as unknown as { renderState: CombatRenderState; view: { layer: { actors: { enemies: { count: number }[][] } } } };
@@ -33,10 +34,10 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
             const homeDistance = Math.hypot(enemy.homeX[i] - player.x, enemy.homeZ[i] - player.z);
             if (Math.max(distance - position.radius[i] * 2, homeDistance) >= 30) continue;
             expected[models[enemy.kind[i]]]++;
-            if (distance <= 24 && !enemy.active[i]) outsideActive++;
+            if (distance <= 24 && distance > activeExitDistance) outsideActive++;
         }
         return { expected, actual: runtime.view.layer.actors.enemies.map(pool => pool.map(mesh => mesh.count)), outsideActive };
-    }, ENEMY_DEFINITIONS.map(definition => definition.model));
+    }, { models: ENEMY_DEFINITIONS.map(definition => definition.model), activeExitDistance: GAME_CONFIG.enemies.activeExitDistance });
     expect(rendered.outsideActive).toBeGreaterThan(0);
     for (let kind = 0; kind < 4; kind++) {
         expect(rendered.actual[kind].length).toBeGreaterThan(0);

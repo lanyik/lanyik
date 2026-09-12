@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createConsumable, type InventoryItem } from "../../src/core/InventoryItem";
 import { generateOrb } from "../../src/core/Orbs";
 import { DeterministicRandom } from "../../src/core/DeterministicRandom";
+import { createStarterEquipment } from "../../src/core/Equipment";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import { combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
@@ -65,4 +66,41 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await page.screenshot({ path: testInfo.outputPath("item-icons-narrow.png") });
     await tip.getByRole("button", { name: "关闭物品详情" }).click();
     await expect(tip).toHaveCount(0);
+});
+
+test("a new run resets item selection and the selected orb socket before IDs are reused", async ({ page }) => {
+    test.setTimeout(90_000);
+    await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+    await pauseCombat(page);
+    const equipment = { ...createStarterEquipment(), id: 2 };
+    await combatWorker(page).evaluate(item => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = simulation as unknown as { level: number; inventory: InventoryItem[] };
+        fixture.level = 200; fixture.inventory = [item];
+    }, equipment);
+    const publish = async () => page.evaluate(async () => {
+        const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled;
+    });
+    await publish(); await page.keyboard.press("KeyC");
+    await page.getByRole("button", { name: "宝珠槽 6，空", exact: true }).click();
+    await page.keyboard.press("KeyB");
+    const bag = page.getByRole("dialog", { name: "背包", exact: true });
+    await bag.locator('[data-item-id="2"]').click();
+    await expect(bag.locator('[data-item-id="2"]')).toHaveClass(/selected/);
+    await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "restart" }));
+    await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready"); await pauseCombat(page);
+    await expect(bag).toHaveCount(0);
+    const orb = generateOrb(new DeterministicRandom("run-reset"), 3, 1);
+    await combatWorker(page).evaluate(items => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        (simulation as unknown as { inventory: InventoryItem[] }).inventory = items;
+    }, [equipment, orb]);
+    await publish(); await page.keyboard.press("KeyB");
+    await expect(bag.locator('[data-item-id="2"]')).not.toHaveClass(/selected/);
+    await page.keyboard.press("Delete"); await expect(bag.locator('[data-item-id="2"]')).toHaveCount(1);
+    await bag.getByRole("button", { name: /^宝珠/ }).click();
+    await expect(bag.getByRole("combobox", { name: "嵌入宝珠槽" })).toHaveValue("0");
+    await expect(bag.getByRole("button", { name: "嵌入槽 1", exact: true })).toBeEnabled();
+    await page.evaluate(() => window.survivorApplication!.dispose());
 });

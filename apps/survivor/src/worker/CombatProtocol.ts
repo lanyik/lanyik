@@ -23,7 +23,6 @@ export interface CombatWorkerStats {
     readonly batchMs: number;
     readonly executeMs: number;
     readonly queryWaitMs: number;
-    readonly deferred: { readonly pending: number; readonly ready: number; readonly committed: number; readonly discarded: number; readonly rejected: number };
     readonly frameBytes: number;
 }
 export interface CombatUpdate {

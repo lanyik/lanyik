@@ -40,7 +40,6 @@ export const WorkerLoadPanel = memo(function WorkerLoadPanel({ workers, performa
                 <div><dt>在途批次 / 积压 tick</dt><dd>{perf ? `${perf.pendingRequests} / ${perf.pendingSteps}` : "—"}</dd></div>
                 <div><dt>积压丢弃 tick</dt><dd>{perf?.droppedSteps ?? "—"}</dd></div>
                 <div title={`本局累计：帧间隔超过 ${GAME_CONFIG.timing.maxCatchUpMs}ms 追赶上限而裁掉的时间；暂停和隐藏时间不计入`}><dt>超出追赶上限</dt><dd>{ms(perf?.clockClampedMs)}</dd></div>
-                <div><dt>延后任务 / 累计失效</dt><dd>{perf ? `${perf.deferredPending} / ${perf.deferredDiscarded}` : "—"}</dd></div>
             </dl>
             <p className="worker-load-note">浏览器长帧覆盖超过 50ms 的页面工作；不可用时显示 —。</p>
         </details>

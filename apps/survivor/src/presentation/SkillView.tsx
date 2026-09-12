@@ -1,7 +1,7 @@
 import { useId, type ReactElement } from "react";
 import type { CombatSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
-import { SKILLS, skillValues, type SkillId } from "../core/Skills";
+import { SKILLS, SKILL_RULES, skillValues, type SkillId } from "../core/Skills";
 import { IconFrame } from "./IconFrame";
 import { IconTooltip } from "./ItemTooltip";
 
@@ -24,7 +24,7 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
 
 export function skillSummary(id: SkillId, player: CombatSnapshot["player"]): string {
     const v = skillValues(id, player.skills.ranks[id], player.stats);
-    return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 疾行免伤` : id === "ward" ? `${v.ward} 护盾 · 持续 6 秒`
+    return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 疾行免伤` : id === "ward" ? `${v.ward} 护盾 · 持续 ${SKILL_RULES.ward.durationSeconds} 秒`
         : `${Math.round(v.damage * 100)}% 伤害 · ${id === "chain" ? `${v.targets} 个目标` : `${v.radius.toFixed(1)} 范围`}`;
 }
 
@@ -35,12 +35,12 @@ function SkillDetails({ id, player }: { readonly id: SkillId; readonly player: C
         <p>{d.description}</p>
         <div className="skill-tooltip-cost"><span>法力 <b>{v.mana}</b></span><span>冷却 <b>{v.cooldown.toFixed(1)} 秒</b></span></div>
         <strong className="skill-tooltip-power">{skillSummary(id, player)}</strong>
-        {id === "frost" && <p>移动速度降低 50%，持续 {v.slowSeconds.toFixed(1)} 秒。重复施放延长减速时间。</p>}
-        {id === "chain" && <p>首跳距离 7，连跳 4；每跳保留 80% 伤害，每个目标只命中一次。</p>}
-        {id === "dash" && <p>沿施放时朝向穿行，0.25 秒内免伤。疾行期间不能转向或施放其他技能。</p>}
-        {id === "ward" && <p>护盾优先承受伤害，耗尽或 6 秒后消失；护盾存在时不能刷新。</p>}
-        <p className="skill-tooltip-rule">{!d.automatic ? "仅手动施放" : id === "ward" ? "自动：生命不高于 60% 且没有结界" : "自动：攻击范围内存在敌人"}</p>
-        <footer>{player.level < d.unlock ? `角色 ${d.unlock} 级解锁` : "拖动图标到技能槽装配；已有技能自动交换位置。"}<br />键盘：空格拿起，1–4 放入，Esc 取消。</footer>
+        {id === "frost" && <p>移动速度降低 {(1 - SKILL_RULES.frost.slowScale) * 100}%，持续 {v.slowSeconds.toFixed(1)} 秒。重复施放延长减速时间。</p>}
+        {id === "chain" && <p>首跳距离 {SKILL_RULES.chain.firstRange}，连跳 {SKILL_RULES.chain.jumpRange}；每跳保留 {SKILL_RULES.chain.damageRetention * 100}% 伤害，每个目标只命中一次。</p>}
+        {id === "dash" && <p>沿施放时朝向穿行，{SKILL_RULES.dash.durationSeconds} 秒内免伤。疾行期间不能转向或施放其他技能。</p>}
+        {id === "ward" && <p>护盾优先承受伤害，耗尽或 {SKILL_RULES.ward.durationSeconds} 秒后消失；护盾存在时不能刷新。</p>}
+        <p className="skill-tooltip-rule">{!d.automatic ? "仅手动施放" : id === "ward" ? `自动：生命不高于 ${SKILL_RULES.ward.automaticHealthRatio * 100}% 且没有结界` : "自动：攻击范围内存在敌人"}</p>
+        <footer>{player.level < d.unlock ? `角色 ${d.unlock} 级解锁` : "拖动图标到技能槽装配；已有技能自动交换位置。"}<br />键盘：空格拿起，1–{GAME_CONFIG.skills.slots} 放入，Esc 取消。</footer>
     </div>;
 }
 

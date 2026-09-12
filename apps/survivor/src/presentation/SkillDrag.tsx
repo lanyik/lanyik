@@ -3,9 +3,10 @@ import { createPortal } from "react-dom";
 import type { CombatCommand } from "../core/CombatCommand";
 import type { CombatSnapshot } from "../core/CombatState";
 import { SKILLS, type SkillId } from "../core/Skills";
+import { GAME_CONFIG } from "../core/GameConfig";
 import { SkillIcon } from "./SkillView";
 
-interface Drag { readonly type: "skill"; readonly value: SkillId; readonly source: HTMLElement; readonly pointer: number;
+interface Drag { readonly value: SkillId; readonly source: HTMLElement; readonly pointer: number;
     readonly x: number; readonly y: number; started: boolean }
 interface DragContext {
     readonly dragging: SkillId | undefined; readonly over: number;
@@ -32,7 +33,7 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
     const show = (current: Drag) => {
         current.started = true; document.documentElement.setAttribute("data-skill-dragging", "");
         window.dispatchEvent(new Event("icon-drag-start"));
-        setDragging(current.value); setAnnouncement(`已拿起${SKILLS[current.value].name}，拖到槽位，或按 1 到 4 装配`);
+        setDragging(current.value); setAnnouncement(`已拿起${SKILLS[current.value].name}，拖到槽位，或按 1 到 ${GAME_CONFIG.skills.slots} 装配`);
     };
     const finish = (slot = -1, suppress = false) => {
         const current = drag.current;
@@ -42,7 +43,7 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
         setDragging(undefined); setOver(-1);
         if (!current?.started) return;
         suppressClick.current = suppress && current.pointer >= 0;
-        if (slot >= 0 && slot < 4 && canEquip(current.value) && current.source.isConnected) {
+        if (slot >= 0 && slot < GAME_CONFIG.skills.slots && canEquip(current.value) && current.source.isConnected) {
             latest.current.dispatch({ type: "equip-skill", skill: current.value, slot });
             setAnnouncement(`${SKILLS[current.value].name}已放入槽位 ${slot + 1}`);
         } else setAnnouncement("已取消装配");
@@ -68,9 +69,9 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
         const lost = (event: PointerEvent) => { if (drag.current?.pointer === event.pointerId) finish(); };
         const key = (event: KeyboardEvent) => {
             if (!drag.current?.started || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
-            if (event.code !== "Escape" && !/^Digit[1-4]$/.test(event.code)) return;
+            if (event.code !== "Escape" && (!/^Digit[1-9]$/.test(event.code) || Number(event.code.slice(-1)) > GAME_CONFIG.skills.slots)) return;
             event.preventDefault(); event.stopImmediatePropagation();
-            finish(event.code === "Escape" ? -1 : Number(event.code.slice(-1)) - 1);
+            finish(event.code === "Escape" ? -1 : Number(event.code.slice(-1)) - 1, true);
         };
         const click = (event: MouseEvent) => {
             if (!suppressClick.current) return;
@@ -94,7 +95,7 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
             if (event.button !== 0 || !canEquip(id)) return;
             if (drag.current) finish();
             suppressClick.current = false;
-            drag.current = { type: SKILLS[id].type, value: SKILLS[id].value, source: event.currentTarget, pointer: event.pointerId,
+            drag.current = { value: SKILLS[id].value, source: event.currentTarget, pointer: event.pointerId,
                 x: event.clientX, y: event.clientY, started: false };
             ghostPosition.current = { x: event.clientX, y: event.clientY };
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -104,7 +105,7 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
             event.preventDefault(); event.stopPropagation();
             const box = event.currentTarget.getBoundingClientRect();
             ghostPosition.current = { x: box.right, y: box.top };
-            drag.current = { type: "skill", value: id, source: event.currentTarget, pointer: -1, x: box.right, y: box.top, started: false };
+            drag.current = { value: id, source: event.currentTarget, pointer: -1, x: box.right, y: box.top, started: false };
             show(drag.current);
         }
     }}>

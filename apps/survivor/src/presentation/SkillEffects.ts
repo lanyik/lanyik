@@ -1,6 +1,7 @@
-import { AdditiveBlending, AddEquation, CustomBlending, OneFactor, SrcAlphaFactor, ZeroFactor, Color, DoubleSide, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, ShaderMaterial, SphereGeometry, TextureLoader } from "three";
+import { AdditiveBlending, AddEquation, CustomBlending, OneFactor, SrcAlphaFactor, ZeroFactor, Color, DoubleSide, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, ShaderMaterial, SphereGeometry } from "three";
 import { EffectKind, type EffectBuffer } from "../core/CombatEffects";
 import { GAME_CONFIG } from "../core/GameConfig";
+import { AssetLoader } from "./AssetLoader";
 
 const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#8bffbb", "#ff526f"].map(color => new Color(color));
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
@@ -15,6 +16,8 @@ export class SkillEffects {
     private readonly geometry = new PlaneGeometry(1, 1);
     private readonly material = new MeshBasicMaterial({ transparent: true, blending: AdditiveBlending, depthWrite: false, side: DoubleSide, toneMapped: false });
     private readonly dummy = new Object3D();
+    private originX = 0;
+    private originZ = 0;
     private readonly styles = new InstancedBufferAttribute(new Float32Array(GAME_CONFIG.presentation.effectInstances * 4), 4).setUsage(DynamicDrawUsage);
     private readonly wardGeometry = new SphereGeometry(1, 24, 16);
     private readonly wardMaterial = new ShaderMaterial({
@@ -38,14 +41,15 @@ export class SkillEffects {
         this.geometry.setAttribute("effectStyle", this.styles);
         this.material.onBeforeCompile = shader => {
             shader.vertexShader = "attribute vec4 effectStyle; varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.vertexShader;
-            shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", "#include <uv_vertex>\nvShapeUv = uv * 2. - 1.; vEffectStyle = effectStyle; vMapUv = vMapUv * .5 + effectStyle.xy * .5;");
+            shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", "#include <uv_vertex>\nvShapeUv = uv * 2. - 1.; vEffectStyle = effectStyle; vMapUv.x = (vMapUv.x + effectStyle.x) * .5;");
+            shader.vertexShader = shader.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
+                #ifdef GROUND_PASS
+                    if (effectStyle.w < 8.) gl_Position = vec4(2., 2., 2., 1.);
+                #else
+                    if (effectStyle.w >= 8.) gl_Position = vec4(2., 2., 2., 1.);
+                #endif`);
             shader.fragmentShader = "varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.fragmentShader;
             shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", `
-                #ifdef GROUND_PASS
-                    if (vEffectStyle.w < 8.) discard;
-                #else
-                    if (vEffectStyle.w >= 8.) discard;
-                #endif
                 float shape = mod(vEffectStyle.w, 8.);
                 vec2 q = vShapeUv;
                 float radius = length(q);
@@ -66,7 +70,7 @@ export class SkillEffects {
                 diffuseColor.a *= mask * vEffectStyle.z;
             `);
         };
-        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v3";
+        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v4";
         this.mesh = new InstancedMesh(this.geometry, this.material, GAME_CONFIG.presentation.effectInstances);
         this.mesh.name = "skill-effects"; this.mesh.renderOrder = 3;
         this.mesh.instanceMatrix.setUsage(DynamicDrawUsage); this.mesh.setColorAt(0, COLORS[0]);
@@ -87,18 +91,21 @@ export class SkillEffects {
         this.ward = new Mesh(this.wardGeometry, this.wardMaterial);
         this.ward.name = "player-ward"; this.ward.renderOrder = 2; this.ward.visible = false;
     }
-    public static async load(): Promise<SkillEffects> {
+    public static async load(signal: AbortSignal): Promise<SkillEffects> {
         const effects = new SkillEffects();
+        const loader = new AssetLoader(signal);
         try {
-            effects.material.map = await new TextureLoader().loadAsync(`${import.meta.env.BASE_URL}effects/skills.png`);
+            effects.material.map = await loader.texture(`${import.meta.env.BASE_URL}effects/skills.png`, true);
             effects.groundMaterial.map = effects.material.map;
             effects.material.needsUpdate = effects.groundMaterial.needsUpdate = true;
             return effects;
         } catch (error) { effects.dispose(); throw new Error("Skill effect atlas load failed: effects/skills.png", { cause: error }); }
+        finally { loader.dispose(); }
     }
 
     public update(b: EffectBuffer, seconds: number, height: (x: number, z: number) => number, playerX: number, playerZ: number, ward: number): void {
         this.mesh.count = 0;
+        this.originX = playerX; this.originZ = playerZ;
         const tick = seconds * GAME_CONFIG.timing.simulationHz;
         for (let i = 0; i < b.count; i++) {
             const kind = b.kind[i], t = clamp((tick - b.started[i]) / (b.endsAt[i] - b.started[i]));
@@ -123,7 +130,7 @@ export class SkillEffects {
                     sx = ex; sz = ez; sy = ey;
                 }
                 this.stamp(sx, endY, sz, 1.5, 1.5, t, kind, fade, 2);
-                this.stamp(sx, endY + .05, sz, .8, .8, t, -1, fade, 0, 3);
+                this.stamp(sx, endY + .05, sz, .8, .8, t, -1, fade, 0, 1);
             } else if (kind === EffectKind.Dash) {
                 const dx = b.endX[i] - x, dz = b.endZ[i] - z, rotation = Math.atan2(dx, dz);
                 this.beam(x, y + .1, z, b.endX[i], height(b.endX[i], b.endZ[i]) + .23, b.endZ[i], .7, kind, fade * .65, true);
@@ -131,8 +138,8 @@ export class SkillEffects {
                     const at = j / 8, age = clamp((t - at * .35) / .65);
                     if (t < at * .35) continue;
                     const px = x + dx * at, pz = z + dz * at, py = height(px, pz);
-                    this.stamp(px, py + .65, pz, .55 * (1 - age), 1.35, rotation, kind, (1 - age) * .65, 0, 1, true);
-                    this.stamp(px, py + .14, pz, .8, .8, rotation + t, kind, (1 - age) * .65, 0, 3, false, true);
+                    this.stamp(px, py + .65, pz, .55 * (1 - age), 1.35, rotation, kind, (1 - age) * .65, 0, 0, true);
+                    this.stamp(px, py + .14, pz, .8, .8, rotation + t, kind, (1 - age) * .65, 0, 1, false, true);
                 }
             } else {
                 const radius = r * (kind === EffectKind.Ward ? .85 + t * .3 : .18 + .82 * burst);
@@ -153,19 +160,19 @@ export class SkillEffects {
                     const angle = j / particles * TAU + seed, spread = radius * (.5 + (j % 4) * .17);
                     const px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread;
                     const lift = Math.sin(Math.PI * t) * (.3 + (j % 3) * .3);
-                    this.stamp(px, height(px, pz) + .2 + lift, pz, .17 + fade * .2, .17 + fade * .2, angle, kind, fade, 0, 3);
+                    this.stamp(px, height(px, pz) + .2 + lift, pz, .17 + fade * .2, .17 + fade * .2, angle, kind, fade, 0, 1);
                 }
             }
         }
         this.ward.visible = ward > 0;
         if (ward > 0) {
             const y = height(playerX, playerZ);
-            this.ward.position.set(playerX, y + .65, playerZ); this.ward.scale.set(1.05, 1.25, 1.05);
+            this.ward.position.set(0, y + .65, 0); this.ward.scale.set(1.05, 1.25, 1.05);
             this.wardMaterial.uniforms.time.value = seconds;
             this.stamp(playerX, y + .1, playerZ, 2.3, 2.3, seconds * .2, EffectKind.Ward, .7, 5, 0, false, true);
             for (let j = 0; j < 6; j++) {
                 const angle = seconds * .7 + j * TAU / 6;
-                this.stamp(playerX + Math.sin(angle), y + .4 + Math.sin(angle * 2) * .25, playerZ + Math.cos(angle), .22, .22, angle, -1, .8, 0, 3);
+                this.stamp(playerX + Math.sin(angle), y + .4 + Math.sin(angle * 2) * .25, playerZ + Math.cos(angle), .22, .22, angle, -1, .8, 0, 1);
             }
         }
         this.ground.count = this.mesh.count;
@@ -183,11 +190,11 @@ export class SkillEffects {
     private stamp(x: number, y: number, z: number, width: number, length: number, rotation: number, kind: number, alpha: number, shape: number, tile = 0, vertical = false, projected = false, pitch = 0): void {
         if (this.mesh.count === GAME_CONFIG.presentation.effectInstances || alpha <= 0) return;
         const i = this.mesh.count++;
-        this.dummy.position.set(x, projected ? 0 : y, z); this.dummy.rotation.set(0, rotation, 0);
+        this.dummy.position.set(x - this.originX, projected ? 0 : y, z - this.originZ); this.dummy.rotation.set(0, rotation, 0);
         if (!vertical) this.dummy.rotateX(-Math.PI / 2 - pitch);
         this.dummy.scale.set(width, length, 1); this.dummy.updateMatrix(); this.mesh.setMatrixAt(i, this.dummy.matrix);
         this.mesh.setColorAt(i, kind < 0 ? WHITE : COLORS[kind]);
-        this.styles.setXYZW(i, tile % 2, 1 - Math.floor(tile / 2), alpha, shape + (projected ? 8 : 0));
+        this.styles.setXYZW(i, tile, 0, alpha, shape + (projected ? 8 : 0));
     }
     public reset(): void { this.mesh.count = this.ground.count = 0; this.ward.visible = false; }
     public dispose(): void {

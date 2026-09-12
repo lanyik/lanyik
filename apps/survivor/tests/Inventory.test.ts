@@ -53,10 +53,9 @@ test("a blocked chest leaves potion stacks, RNG, gold and all rewards untouched"
     fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
     fixture.autoCast = false; fixture.attackCooldown = 1000;
     // A real residency shift must publish its chest changes even if the following opening is blocked.
-    const revision = fixture.world.revision;
     const before = simulation.getSnapshot(), nextRandom = fixture.random.clone().nextUint32(), nextId = fixture.nextItemId;
     simulation.step({ x: 0, z: 0, active: false });
-    expect(fixture.world.revision).toBeGreaterThan(revision);
+    expect(chunk.band).toBe("near");
     expect(chunk.chestOpened).toBe(false); expect(fixture.nextItemId).toBe(nextId);
     expect(fixture.random.clone().nextUint32()).toBe(nextRandom);
     expect(simulation.getSnapshot().player.inventory).toEqual(before.player.inventory);

@@ -18,6 +18,7 @@ import {
     SphereGeometry,
     Vector2
 } from "three";
+import type { BufferAttribute } from "three";
 import {
     collectObject3DResourceAllocations,
     GroundProjection,
@@ -46,6 +47,24 @@ const ENEMY_COLORS = ENEMY_DEFINITIONS.map(definition => new Color(definition.ti
 const FROST = new Color(0x72dcff);
 const ENRAGED = new Color(0xff526f);
 const HEAL = new Color(0x8bffbb);
+const HEX_CORNERS = Array.from({ length: 6 }, (_, corner) => ({ x: Math.cos(corner * Math.PI / 3), z: Math.sin(corner * Math.PI / 3) }));
+
+/** Upload the visible prefix; fixed pool capacity is not the amount changed this frame. */
+export function uploadCombatInstances(mesh: InstancedMesh): void {
+    const home = mesh.geometry.getAttribute("actorHome") as BufferAttribute | undefined;
+    for (const attribute of [mesh.instanceMatrix, mesh.instanceColor, home]) {
+        if (!attribute) continue;
+        attribute.clearUpdateRanges();
+        if (mesh.count) { attribute.addUpdateRange(0, mesh.count * attribute.itemSize); attribute.needsUpdate = true; }
+    }
+    if (mesh.morphTexture) {
+        mesh.morphTexture.clearUpdateRanges();
+        if (mesh.count) {
+            mesh.morphTexture.addUpdateRange(0, mesh.count * mesh.morphTexture.image.width);
+            mesh.morphTexture.needsUpdate = true;
+        }
+    }
+}
 
 /** Converts the map's flat-top even-q layout back from logical ground coordinates. */
 export function groundTile(point: { readonly x: number; readonly z: number }): { readonly x: number; readonly y: number } {
@@ -64,7 +83,7 @@ export function groundTile(point: { readonly x: number; readonly z: number }): {
 
 export class CombatLayer implements WorldRenderLayer {
     public readonly id = "survivor-combat";
-    public readonly groundProjection = new GroundProjection(64, 2048);
+    public readonly groundProjection = new GroundProjection(GAME_CONFIG.presentation.groundProjection.span, GAME_CONFIG.presentation.groundProjection.resolution);
     private readonly groundPlayer = new Group();
     private readonly root = new Group();
     private readonly player = new Group();
@@ -74,6 +93,7 @@ export class CombatLayer implements WorldRenderLayer {
     private effects: SkillEffects | undefined;
     private readonly mist = new BoundaryMist();
     private actorLoading: Promise<void> | undefined;
+    private assetAbort: AbortController | undefined;
     private disposed = false;
     private readonly projectiles: InstancedMesh;
     private readonly experience: InstancedMesh;
@@ -109,6 +129,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly dummy = new Object3D();
     private readonly color = new Color();
     private readonly viewCenter = new Vector2();
+    private readonly renderOrigin = new Vector2();
     private readonly actorFill = new DirectionalLight(0xe2ebdf, 1.6);
     private readonly heightCache = new Map<string, Float64Array>();
     private host: WorldRenderLayerHost | undefined;
@@ -140,21 +161,32 @@ export class CombatLayer implements WorldRenderLayer {
         this.buildPlayer();
         this.groundProjection.root.add(this.telegraphs, this.castWarnings, this.chargeWarnings, this.groundPlayer);
         this.root.add(this.projectiles, this.experience, ...this.loot, this.chests, this.chestLids, this.chestLocks, this.player, this.mist.mesh);
-        resources.acquireRequired("combat-render-pool", {}, true, [
+        try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
-            { identity: this.groundProjection.target.texture, cost: { gpuBytes: 2048 * 2048 * 4, textureBytes: 2048 * 2048 * 4 } }
-        ]);
+            { identity: this.groundProjection.target.texture, cost: {
+                gpuBytes: this.groundProjection.target.width * this.groundProjection.target.height * 4,
+                textureBytes: this.groundProjection.target.width * this.groundProjection.target.height * 4 } }
+        ]); } catch (error) { this.dispose(); throw error; }
     }
 
     public async initialize(host: WorldRenderLayerHost): Promise<void> {
         if (!host.surface) throw new Error("Combat rendering requires a world surface");
-        if (!this.actorLoading) {
-            this.actorLoading = Promise.allSettled([ActorModels.load(MAX_ENEMIES, this.viewCenter), SkillEffects.load()]).then(results => {
+        if (!this.actorLoading || this.assetAbort?.signal.aborted) {
+            const controller = new AbortController();
+            const abort = () => controller.abort(host.signal.reason);
+            this.assetAbort = controller;
+            if (host.signal.aborted) abort();
+            else host.signal.addEventListener("abort", abort, { once: true });
+            const reject = (error: unknown): never => { controller.abort(error); throw error; };
+            const pending = Promise.allSettled([
+                ActorModels.load(MAX_ENEMIES, this.viewCenter, controller.signal).catch(reject),
+                SkillEffects.load(controller.signal).catch(reject)
+            ]).then(results => {
                 const [actorResult, effectResult] = results;
-                if (actorResult.status === "rejected" || effectResult.status === "rejected" || this.disposed) {
+                if (actorResult.status === "rejected" || effectResult.status === "rejected" || this.disposed || controller.signal.aborted) {
                     if (actorResult.status === "fulfilled") actorResult.value.dispose();
                     if (effectResult.status === "fulfilled") effectResult.value.dispose();
-                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : new Error("Combat layer disposed during loading");
+                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : controller.signal.reason;
                 }
                 const actors = actorResult.value, effects = effectResult.value;
                 try {
@@ -167,7 +199,12 @@ export class CombatLayer implements WorldRenderLayer {
                 this.groundProjection.root.add(effects.ground);
                 this.playerBody.add(actors.hero);
                 for (const pool of actors.enemies) this.root.add(...pool);
-            }).catch(error => { this.actorLoading = undefined; throw error; });
+            }).catch(error => { if (this.actorLoading === pending) this.actorLoading = undefined; throw error; })
+                .finally(() => {
+                    host.signal.removeEventListener("abort", abort);
+                    if (this.assetAbort === controller) this.assetAbort = undefined;
+                });
+            this.actorLoading = pending;
         }
         await this.actorLoading;
         host.signal.throwIfAborted();
@@ -182,9 +219,10 @@ export class CombatLayer implements WorldRenderLayer {
         const blend = Math.max(0, Math.min(1, alpha));
         const playerX = state.player.previousX + (state.player.x - state.player.previousX) * blend;
         const playerZ = state.player.previousZ + (state.player.z - state.player.previousZ) * blend;
-        this.viewCenter.set(playerX, playerZ);
-        this.player.position.set(playerX, this.height(playerX, playerZ), playerZ);
-        this.groundPlayer.position.set(playerX, 0, playerZ);
+        this.renderOrigin.set(playerX, playerZ);
+        this.root.position.set(playerX * this.host.tileSize, 0, playerZ * this.host.tileSize);
+        this.player.position.set(0, this.height(playerX, playerZ), 0);
+        this.groundPlayer.position.set(0, 0, 0);
         this.groundProjection.setCenter(playerX, playerZ, this.host.tileSize);
         this.playerBody.rotation.y = state.player.heading;
         this.actors.animateHero(state.player.animationTime, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
@@ -193,7 +231,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.shield.visible = state.player.shieldReady || state.player.ward > 0;
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
         this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward);
-        this.mist.update(playerX, this.player.position.y, playerZ, state.player.animationTime);
+        this.mist.update(0, this.player.position.y, 0, state.player.animationTime, playerX, playerZ);
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
@@ -214,7 +252,7 @@ export class CombatLayer implements WorldRenderLayer {
                 const charge = kind === ActorAction.Charge;
                 const length = ENEMY_SPECIAL.charge.speed * ENEMY_SPECIAL.charge.duration;
                 const centerX = x + (charge ? Math.sin(rotation) * length / 2 : 0), centerZ = z + (charge ? Math.cos(rotation) * length / 2 : 0);
-                this.dummy.position.set(centerX, 0, centerZ);
+                this.dummy.position.set(centerX - playerX, 0, centerZ - playerZ);
                 this.dummy.rotation.set(0, rotation, 0);
                 this.dummy.rotateX(-Math.PI / 2);
                 if (charge) this.dummy.scale.set(position.radius[index] * 2, length, 1);
@@ -234,19 +272,14 @@ export class CombatLayer implements WorldRenderLayer {
                 const instance = mesh.count++;
                 this.setInstance(mesh, instance, x, this.height(x, z), z, position.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
-                mesh.geometry.getAttribute("actorHome").setXY(instance, homeX, homeZ);
+                mesh.geometry.getAttribute("actorHome").setXY(instance, homeX - playerX, homeZ - playerZ);
                 this.actors.animateEnemy(mesh, instance, state.player.animationTime, ids[index] * .37, action.kind[index], action.progress[index]);
             }
         }
-        for (const pool of this.actors.enemies) for (const mesh of pool) {
-            mesh.instanceMatrix.needsUpdate = true;
-            mesh.instanceColor!.needsUpdate = true;
-            mesh.morphTexture!.needsUpdate = true;
-            mesh.geometry.getAttribute("actorHome").needsUpdate = true;
-        }
+        for (const pool of this.actors.enemies) for (const mesh of pool) uploadCombatInstances(mesh);
 
         for (const warning of [this.telegraphs, this.castWarnings, this.chargeWarnings]) {
-            warning.instanceMatrix.needsUpdate = warning.instanceColor!.needsUpdate = true;
+            uploadCombatInstances(warning);
         }
         this.projectiles.count = projectiles.count;
         for (let cursor = 0; cursor < projectiles.count; cursor += 1) {
@@ -258,8 +291,7 @@ export class CombatLayer implements WorldRenderLayer {
             this.color.set(projectile.faction[index] === Faction.Enemy ? 0xff526f : 0xffe79a);
             this.projectiles.setColorAt(cursor, this.color);
         }
-        this.projectiles.instanceMatrix.needsUpdate = true;
-        this.projectiles.instanceColor!.needsUpdate = true;
+        uploadCombatInstances(this.projectiles);
 
         this.experience.count = experience.count;
         for (let cursor = 0; cursor < experience.count; cursor += 1) {
@@ -270,7 +302,7 @@ export class CombatLayer implements WorldRenderLayer {
             const scale = Math.min(1.8, 0.85 + Math.log2(Math.max(1, experienceValue[index])) * 0.1);
             this.setInstance(this.experience, cursor, x, this.height(x, z) + bob, z, scale, timestampMs * 0.002);
         }
-        this.experience.instanceMatrix.needsUpdate = true;
+        uploadCombatInstances(this.experience);
 
         for (const mesh of this.loot) mesh.count = 0;
         for (let cursor = 0; cursor < loot.count; cursor++) {
@@ -282,10 +314,7 @@ export class CombatLayer implements WorldRenderLayer {
             this.setInstance(mesh, instance, x, this.height(x, z) + bob, z, 1, timestampMs * .0015);
             mesh.setColorAt(instance, RARITY_COLORS[item.rarity[index]]);
         }
-        for (const mesh of this.loot) {
-            mesh.instanceMatrix.needsUpdate = true;
-            mesh.instanceColor!.needsUpdate = true;
-        }
+        for (const mesh of this.loot) uploadCombatInstances(mesh);
 
         this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         for (let index = 0; index < state.chests.count; index += 1) {
@@ -304,9 +333,7 @@ export class CombatLayer implements WorldRenderLayer {
             this.chests.setColorAt(instance, this.color);
             this.chestLids.setColorAt(instance, this.color);
         }
-        for (const mesh of [this.chests, this.chestLids, this.chestLocks]) mesh.instanceMatrix.needsUpdate = true;
-        this.chests.instanceColor!.needsUpdate = true;
-        this.chestLids.instanceColor!.needsUpdate = true;
+        for (const mesh of [this.chests, this.chestLids, this.chestLocks]) uploadCombatInstances(mesh);
     }
 
     public reset(): void {
@@ -331,6 +358,7 @@ export class CombatLayer implements WorldRenderLayer {
 
     public dispose(): void {
         this.disposed = true;
+        this.assetAbort?.abort(new DOMException("Combat layer closed", "AbortError"));
         this.host?.removeObject(this.root);
         this.host = undefined;
         this.actors?.dispose();
@@ -372,7 +400,7 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     private setInstance(mesh: InstancedMesh, index: number, x: number, y: number, z: number, scale: number, rotation: number): void {
-        this.dummy.position.set(x, y, z);
+        this.dummy.position.set(x - this.renderOrigin.x, y, z - this.renderOrigin.y);
         this.dummy.rotation.set(0, rotation, 0);
         this.dummy.scale.setScalar(scale);
         this.dummy.updateMatrix();
@@ -389,9 +417,9 @@ export class CombatLayer implements WorldRenderLayer {
             if (this.heightCache.size >= 4096) this.heightCache.clear();
             heights = new Float64Array(7);
             for (let corner = 0; corner < 6; corner++) {
-                const angle = corner * Math.PI / 3;
-                heights[corner] = host.surface!.getWorldHeight((cx + Math.cos(angle)) * host.tileSize,
-                    (cz + Math.sin(angle)) * host.tileSize) / host.tileSize;
+                const offset = HEX_CORNERS[corner];
+                heights[corner] = host.surface!.getWorldHeight((cx + offset.x) * host.tileSize,
+                    (cz + offset.z) * host.tileSize) / host.tileSize;
                 heights[6] += heights[corner] / 6;
             }
             this.heightCache.set(key, heights);
@@ -399,9 +427,9 @@ export class CombatLayer implements WorldRenderLayer {
         const lx = x - cx, lz = z - cz;
         const angle = (Math.atan2(lz, lx) + Math.PI * 2) % (Math.PI * 2);
         const corner = Math.min(5, Math.floor(angle / (Math.PI / 3))), next = (corner + 1) % 6;
-        const a = corner * Math.PI / 3, b = (corner + 1) * Math.PI / 3;
-        const wa = (lx * Math.sin(b) - lz * Math.cos(b)) / (Math.sqrt(3) / 2);
-        const wb = (Math.cos(a) * lz - Math.sin(a) * lx) / (Math.sqrt(3) / 2);
+        const a = HEX_CORNERS[corner], b = HEX_CORNERS[next];
+        const wa = (lx * b.z - lz * b.x) / (Math.sqrt(3) / 2);
+        const wb = (a.x * lz - a.z * lx) / (Math.sqrt(3) / 2);
         return Math.max(0, heights[6] * (1 - wa - wb) + heights[corner] * wa + heights[next] * wb) * 1.015 + .025;
     }
 }

@@ -93,19 +93,24 @@ export class HexCombatView implements CombatView {
             lodFarDistance: 780,
             vegetationRenderDistance: 950
         });
-        const camera = this.map.getCamera();
-        camera.position.set(-230, 330, 250);
-        camera.fov = 47;
-        camera.updateProjectionMatrix();
-        camera.lookAt(0, 0, 0);
-        this.map.cameraPanEnabled = false;
-        this.map.on("error", onError);
-        this.layer = new CombatLayer(this.map.createResourceAccount("survivor-combat-assets"));
-        this.layerReady = this.map.registerWorldRenderLayer(this.layer);
-        const canvas = document.querySelector<HTMLCanvasElement>("#survivor-world");
-        if (!canvas) throw new Error("Survivor world canvas is missing");
-        this.canvas = canvas;
-        this.input = new MovementInputController(canvas);
+        try {
+            const camera = this.map.getCamera();
+            camera.position.set(-230, 330, 250);
+            camera.fov = 47;
+            camera.updateProjectionMatrix();
+            camera.lookAt(0, 0, 0);
+            this.map.cameraPanEnabled = false;
+            this.map.on("error", onError);
+            this.layer = new CombatLayer(this.map.createResourceAccount("survivor-combat-assets"));
+            this.layerReady = this.map.registerWorldRenderLayer(this.layer);
+            const canvas = document.querySelector<HTMLCanvasElement>("#survivor-world");
+            if (!canvas) throw new Error("Survivor world canvas is missing");
+            this.canvas = canvas;
+            this.input = new MovementInputController(canvas);
+        } catch (error) {
+            this.map.dispose();
+            throw error;
+        }
     }
 
     public async load(seed: string): Promise<CombatStart> {

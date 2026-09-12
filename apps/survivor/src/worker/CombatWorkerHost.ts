@@ -66,7 +66,7 @@ export class CombatWorkerHost {
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
                     steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs), queryWaitMs,
-                    deferred: simulation.tasks.stats, frameBytes: RenderFrame.bytes } };
+                    frameBytes: RenderFrame.bytes } };
             this.frame = request.type === "init" ? new RenderFrame() : undefined;
             this.send({ type: "state", id: request.id, update }, [update.render.buffer]);
         } catch (reason) {
