@@ -29,6 +29,7 @@ import { CHEST_TIERS, CHEST_RULES } from "../core/RegionalWorld";
 import { GroundItemKind } from "../core/InventoryItem";
 import { LootModels } from "./LootModels";
 import { LootEffects } from "./LootEffects";
+import { ChestGrounding } from "./ChestGrounding";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { RARITIES } from "../core/Loot";
 
@@ -96,6 +97,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly castWarnings: InstancedMesh;
     private readonly chargeWarnings: InstancedMesh;
     private lootModels: LootModels | undefined;
+    private chestGrounding: ChestGrounding | undefined;
     private readonly lootEffects = new LootEffects();
     private readonly geometries = {
         projectile: new SphereGeometry(0.09, 8, 6),
@@ -173,6 +175,7 @@ export class CombatLayer implements WorldRenderLayer {
                 this.actors = actors;
                 this.effects = effects;
                 this.lootModels = models;
+                this.chestGrounding = new ChestGrounding(models.chest.geometry, this.effectHeight);
                 this.root.add(models.root);
                 this.root.add(effects.mesh, effects.ward);
                 this.groundProjection.root.add(effects.ground);
@@ -306,7 +309,9 @@ export class CombatLayer implements WorldRenderLayer {
             const x = state.chests.x[index], z = state.chests.z[index], tier = state.chests.tiers[index];
             if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
             const instance = chestMesh.count++, y = this.height(x, z);
-            this.setInstance(chestMesh, instance, x, y + .02, z, 1, 0);
+            this.dummy.matrix.copy(this.chestGrounding!.at(x, z));
+            this.dummy.matrix.elements[12] -= playerX; this.dummy.matrix.elements[14] -= playerZ;
+            chestMesh.setMatrixAt(instance, this.dummy.matrix);
             this.color.copy(CHEST_COLORS[tier]);
             if (tier === 4) this.color.setHSL((state.player.animationTime * .15 + index * .13) % 1, .8, .68);
             chestMesh.setColorAt(instance, this.color);
@@ -321,19 +326,21 @@ export class CombatLayer implements WorldRenderLayer {
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
         this.effects?.reset();
         this.heightCache.clear();
+        this.chestGrounding?.clear();
         if (this.actors) for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.lootModels?.reset();
         this.lootEffects.reset();
     }
 
-    public mountChunk(): void { this.heightCache.clear(); }
-    public unmountChunk(): void { this.heightCache.clear(); }
-    public surfaceChanged(): void { this.heightCache.clear(); }
+    public mountChunk(): void { this.surfaceChanged(); }
+    public unmountChunk(): void { this.surfaceChanged(); }
+    public surfaceChanged(): void { this.heightCache.clear(); this.chestGrounding?.clear(); }
 
     public unloadWorld(host: WorldRenderLayerHost): void {
         host.removeObject(this.root);
         this.host = undefined;
         this.heightCache.clear();
+        this.chestGrounding?.clear();
     }
 
     public dispose(): void {
