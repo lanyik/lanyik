@@ -4,6 +4,9 @@ import { CombatSession } from "../src/app/CombatSession";
 import type { CombatView } from "../src/app/CombatView";
 import type { CombatAdvance } from "../src/worker/CombatProtocol";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
+import { ResourceBudgetLedger } from "three-hex-map";
+import { CombatLayer } from "../src/presentation/CombatLayer";
+import type { Group, InstancedMesh } from "three";
 
 class HeldTransport extends LoopbackCombatTransport {
     public readonly calls: CombatAdvance[] = [];
@@ -20,8 +23,38 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function view(): CombatView {
     vi.stubGlobal("document", { hidden: false });
     return { workerActivity: [], load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 1, z: 0, active: true }),
-        render: vi.fn(), clearMovement: vi.fn(), dispose: async () => {} };
+        reset: vi.fn(), render: vi.fn(), clearMovement: vi.fn(), dispose: async () => {} };
 }
+
+test("restart clears real instance pools before the replacement worker starts and while it is loading", async () => {
+    const ledger = new ResourceBudgetLedger({ cpuBytes: 64 * 1024 * 1024, gpuBytes: 64 * 1024 * 1024 });
+    const layer = new CombatLayer(ledger.createAccount("restart-presentation"));
+    const rendered = layer as unknown as { projectiles: InstancedMesh; telegraphs: InstancedMesh; root: Group };
+    const presentation = view(); presentation.reset = () => layer.reset();
+    let release!: () => void;
+    const initialized = new Promise<void>(resolve => { release = resolve; });
+    class LoadingTransport extends LoopbackCombatTransport {
+        public override async start(seed: string, start: { x: number; z: number }) {
+            expect(rendered.projectiles.count).toBe(0); expect(rendered.telegraphs.count).toBe(0);
+            expect(rendered.root.visible).toBe(false); expect(layer.groundProjection.root.visible).toBe(false);
+            await initialized; return super.start(seed, start);
+        }
+    }
+    let clients = 0;
+    const session = new CombatSession(presentation, () => ++clients === 1 ? new LoopbackCombatTransport() : new LoadingTransport());
+    try {
+        await session.start();
+        rendered.projectiles.count = 128; rendered.telegraphs.count = 640;
+        rendered.root.visible = layer.groundProjection.root.visible = true;
+        session.dispatch({ type: "restart" });
+        expect(session.getSnapshot().status).toBe("loading");
+        expect(clients).toBe(2);
+        expect(rendered.projectiles.count).toBe(0); expect(rendered.telegraphs.count).toBe(0);
+        expect(rendered.root.visible).toBe(false); expect(layer.groundProjection.root.visible).toBe(false);
+        release(); await vi.waitFor(() => expect(session.getSnapshot().status).toBe("ready"));
+    } finally { release(); await session.dispose(); layer.dispose(); }
+    expect(ledger.stats.gpuBytes).toBe(0);
+});
 
 test("slow workers cannot block rendering or grow tick queues; pause acknowledges the final committed tick", async () => {
     const transport = new HeldTransport(), presentation = view();

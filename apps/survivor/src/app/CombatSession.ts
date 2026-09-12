@@ -123,6 +123,7 @@ export class CombatSession {
         this.view.clearMovement();
         this.publish();
         try {
+            this.view.reset();
             const start = reloadWorld ? await this.view.load(this.seed) : this.startPosition;
             if (revision !== this.loadRevision) return;
             if (!start) throw new Error("Combat start position is missing");

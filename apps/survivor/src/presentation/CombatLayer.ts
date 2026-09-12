@@ -57,13 +57,8 @@ export function uploadCombatInstances(mesh: InstancedMesh): void {
         attribute.clearUpdateRanges();
         if (mesh.count) { attribute.addUpdateRange(0, mesh.count * attribute.itemSize); attribute.needsUpdate = true; }
     }
-    if (mesh.morphTexture) {
-        mesh.morphTexture.clearUpdateRanges();
-        if (mesh.count) {
-            mesh.morphTexture.addUpdateRange(0, mesh.count * mesh.morphTexture.image.width);
-            mesh.morphTexture.needsUpdate = true;
-        }
-    }
+    // Three's texture update ranges only support RGBA rows; morph weights use RedFormat.
+    if (mesh.morphTexture && mesh.count) mesh.morphTexture.needsUpdate = true;
 }
 
 /** Converts the map's flat-top even-q layout back from logical ground coordinates. */
@@ -215,6 +210,7 @@ export class CombatLayer implements WorldRenderLayer {
 
     public update(state: CombatRenderState, alpha: number, timestampMs: number): void {
         if (!this.host || !this.actors) return;
+        this.root.visible = this.groundProjection.root.visible = true;
         const { position, enemy, vitals, action, projectile, item, ids, enemies, projectiles, experience, loot, experienceValue, status } = state.entities;
         const blend = Math.max(0, Math.min(1, alpha));
         const playerX = state.player.previousX + (state.player.x - state.player.previousX) * blend;
@@ -337,6 +333,7 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     public reset(): void {
+        this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;
         this.chests.count = this.chestLids.count = this.chestLocks.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;

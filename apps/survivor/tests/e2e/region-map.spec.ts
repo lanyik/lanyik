@@ -6,7 +6,9 @@ test("samples terrain with a region wash, shares cached pages and leaves control
     test.setTimeout(240_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("console", message => {
+        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+    });
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });

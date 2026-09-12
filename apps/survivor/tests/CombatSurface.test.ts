@@ -25,7 +25,7 @@ test("actors interpolate within a hex and across negative-coordinate edges, refr
     expect(ledger.stats.gpuBytes).toBe(0);
 });
 
-test("instance uploads cover the visible prefix and skip empty pools", () => {
+test("attributes upload the visible prefix, RedFormat morph weights upload whole, and empty pools skip uploads", () => {
     const geometry = new BoxGeometry(), material = new MeshBasicMaterial();
     const mesh = new InstancedMesh(geometry, material, 640);
     mesh.setColorAt(0, new Color());
@@ -35,9 +35,11 @@ test("instance uploads cover the visible prefix and skip empty pools", () => {
     expect(mesh.instanceMatrix.updateRanges).toEqual([{ start: 0, count: 48 }]);
     expect(mesh.instanceColor!.updateRanges).toEqual([{ start: 0, count: 9 }]);
     expect(home.updateRanges).toEqual([{ start: 0, count: 6 }]);
-    expect(mesh.morphTexture.updateRanges).toEqual([{ start: 0, count: 51 }]);
-    const version = mesh.instanceMatrix.version;
+    expect(mesh.morphTexture.updateRanges).toEqual([]);
+    expect(mesh.morphTexture.version).toBe(1);
+    const version = mesh.instanceMatrix.version, morphVersion = mesh.morphTexture.version;
     mesh.count = 0; uploadCombatInstances(mesh);
     expect(mesh.instanceMatrix.version).toBe(version); expect(mesh.instanceMatrix.updateRanges).toEqual([]);
+    expect(mesh.morphTexture.version).toBe(morphVersion);
     mesh.dispose(); geometry.dispose(); material.dispose();
 });

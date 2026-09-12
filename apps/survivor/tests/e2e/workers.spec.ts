@@ -100,11 +100,23 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
 
 test("parallel queries run in real workers and repeated restart, crash and disposal release every owner", async ({ page }) => {
     test.setTimeout(150_000);
+    const graphicsErrors: string[] = [];
+    page.on("console", message => {
+        if ((message.type() === "warning" || message.type() === "error") && /WebGL|GL_|THREE\./i.test(message.text())) graphicsErrors.push(message.text());
+    });
     await startCrowdedCombat(page);
+    expect(graphicsErrors).toEqual([]);
     const liveCombatWorkers = () => page.workers().filter(worker => /\/(Combat|Projectile)\.worker-/.test(worker.url()));
     for (let i = 0; i < 20; i++) {
         const previous = liveCombatWorkers();
-        await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "restart" }));
+        const cleared = await page.evaluate(() => {
+            const session = window.survivorApplication!.session;
+            const layer = (session as unknown as { view: { layer: CombatLayer } }).view.layer;
+            const actors = (layer as unknown as { actors: { enemies: { count: number }[][] } }).actors;
+            session.dispatch({ type: "restart" });
+            return { enemies: actors.enemies.flat().reduce((count, mesh) => count + mesh.count, 0), projectionVisible: layer.groundProjection.root.visible };
+        });
+        expect(cleared).toEqual({ enemies: 0, projectionVisible: false });
         await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready");
         await expect.poll(() => liveCombatWorkers().length).toBe(3);
         expect(previous.every(worker => !page.workers().includes(worker))).toBe(true);
@@ -122,4 +134,5 @@ test("parallel queries run in real workers and repeated restart, crash and dispo
     });
     expect(disposal.workers).toBe(0); expect(disposal.pending).toBe(0);
     await expect.poll(() => page.workers().length).toBe(0);
+    expect(graphicsErrors).toEqual([]);
 });

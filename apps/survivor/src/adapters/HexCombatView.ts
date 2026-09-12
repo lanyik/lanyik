@@ -115,7 +115,6 @@ export class HexCombatView implements CombatView {
 
     public async load(seed: string): Promise<CombatStart> {
         this.cancelLoad();
-        this.layer.reset();
         this.input.setEnabled(false);
         const controller = new AbortController();
         const source = new ProceduralWorldSource({
@@ -181,6 +180,7 @@ export class HexCombatView implements CombatView {
     }
 
     public clearMovement(): void { this.input.clear(); }
+    public reset(): void { this.layer.reset(); }
 
     public dispose(): Promise<void> {
         this.cancelLoad();

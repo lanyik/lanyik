@@ -15,7 +15,9 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     test.setTimeout(240_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("console", message => {
+        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+    });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });

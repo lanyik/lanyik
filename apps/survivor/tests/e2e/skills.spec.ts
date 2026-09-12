@@ -11,7 +11,9 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
     test.setTimeout(180_000);
     const errors: string[] = [], atlas: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("console", message => {
+        if (message.type() === "error" || message.type() === "warning" && /WebGL|GL_|THREE\./i.test(message.text())) errors.push(message.text());
+    });
     page.on("response", response => { if (response.url().endsWith("/effects/skills.png") && response.ok()) atlas.push(response.url()); });
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
