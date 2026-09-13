@@ -8,8 +8,8 @@ export const WORLD_VIEW = Object.freeze({
     maxEnemies: Math.ceil(residentChunks * 11 / 64) * 64,
     actorFadeStart: 34, actorFadeEnd: (residentRadius - .5) * chunkSize,
     awakeRadius: 44, sleepRadius: 46,
-    mistInner: 20, mistDense: 34, mistFade: 52, mistOuter: 62,
-    terrainFogStart: 34, terrainFogEnd: 62, terrainEnd, vegetationEnd: 50,
+    mistInner: 20, mistDense: 34, mistFade: 44, mistOuter: 50,
+    terrainFogStart: 34, terrainFogEnd: 50, terrainEnd, vegetationEnd: 50,
     terrainChunkSize, terrainLoadRadius, terrainRetentionRadius: terrainLoadRadius + 1,
     navigationChunks: (residentRadius * 2 + 3) ** 2
 });

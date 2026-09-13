@@ -25,7 +25,9 @@ function travel(runtime) {
     const input = { x: 1, z: 0, active: true };
     const ticks = runtime.ticksForSeconds(24);
     const started = performance.now();
-    for (let tick = 0; tick < ticks; tick++) simulation.step(input);
+    // This scenario measures regional residency and full hit settlement, not survival with starter gear.
+    // Restore health between ticks so stronger outer-region enemies cannot turn later samples into no-ops.
+    for (let tick = 0; tick < ticks; tick++) { simulation.health = simulation.stats.maxHealth; simulation.step(input); }
     const elapsed = performance.now() - started;
     assert.equal(simulation.tick, ticks, "Travel must measure live simulation, not a game-over early return");
     const state = simulation.getSnapshot();
@@ -86,7 +88,7 @@ const results = { travel: measure(() => travel(current), .5), crowded: measure(c
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
-    gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; no browser/GPU claim" }, results }, null, 2));
+    gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel restores health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
     for (const result of [results.travel, results.crowded, results.terrain]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");

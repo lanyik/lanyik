@@ -213,9 +213,15 @@ describe("loot and orb progression", () => {
         expect(Array.from(result.map(enemy => enemy.id)).every(id => ids.has(id))).toBe(true);
     });
 
-    test("a minute of normal combat reaches about level six through real XP pickups", () => {
+    test("a minute of combat with earned upgrades reaches about level six through real XP pickups", () => {
         const combat = new CombatSimulation("rift-ember-1");
         for (let tick = 0; tick < ticksForSeconds(60); tick++) {
+            if (tick % 120 === 0) {
+                const player = combat.getSnapshot().player;
+                for (const item of player.inventory) if (item.type === "equipment" && item.score > (combat.getSnapshot().player.equipment[item.value]?.score ?? 0)) combat.equip(item.id);
+                for (let point = 0; point < player.unspentAttributePoints; point++) combat.allocateAttribute(point % 2 ? "might" : "vitality");
+                if (player.health < player.stats.maxHealth * .5) combat.useConsumable("health");
+            }
             const state = combat.getRenderState(); let x = Math.cos(tick / ticksForSeconds(9)) * 13, z = Math.sin(tick / ticksForSeconds(9)) * 13;
             let nearest = 16;
             for (let index = 0; index < state.entities.experience.count; index++) {
@@ -228,7 +234,7 @@ describe("loot and orb progression", () => {
         expect(snapshot.elapsedMs).toBe(60_000); expect(snapshot.gameOver).toBe(false);
         expect(snapshot.player.level).toBeGreaterThanOrEqual(6); expect(snapshot.player.level).toBeLessThanOrEqual(7);
         expect(snapshot.kills).toBeGreaterThan(40);
-        expect(snapshot.player.unspentAttributePoints).toBe((snapshot.player.level - 1) * 2);
+        expect(snapshot.player.unspentAttributePoints).toBeLessThanOrEqual(2);
         expect(ORB_UNLOCK_LEVELS.filter(level => level <= snapshot.player.level)).toHaveLength(2);
     });
 });

@@ -59,6 +59,7 @@
     "benchmark:built": "node --expose-gc scripts/benchmark-hot-paths.mjs",
     "benchmark:render-backends": "node scripts/benchmark-render-backends.mjs",
     "benchmark:app": "node --expose-gc scripts/benchmark-survivor.mjs --check",
+    "report:combat-balance": "node scripts/report-combat-balance.mjs",
     "benchmark:app:workers": "node --expose-gc scripts/benchmark-survivor-workers.mjs --check",
     "benchmark:check": "npm run build:lib && npm run benchmark:check:built",
     "benchmark:check:built": "node --expose-gc scripts/benchmark-hot-paths.mjs --check",

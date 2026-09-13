@@ -19,6 +19,9 @@ class WindowMetric {
 }
 
 export interface FramePerformanceSnapshot {
+    readonly drawCalls: number | undefined;
+    readonly drawCallsP95: number | undefined;
+    readonly triangles: number | undefined;
     readonly theoreticalFps: number | undefined;
     readonly logicalHz: number;
     readonly theoreticalLogicHz: number | undefined;
@@ -63,6 +66,8 @@ export class FramePerformance {
     private readonly main = new WindowMetric();
     private readonly presentation = new WindowMetric();
     private readonly mounts = new WindowMetric();
+    private readonly draws = new WindowMetric();
+    private readonly triangles = new WindowMetric();
     private readonly gpu = new WindowMetric();
     private readonly messages = new WindowMetric();
     private steps = 0;
@@ -78,6 +83,7 @@ export class FramePerformance {
     public frame(frame: HexMapFrameEndEvent, presentationMs: number): void {
         if (frame.dtS > 0) this.interval.add(frame.dtS * 1000);
         this.main.add(frame.cpuFrameMs); this.presentation.add(presentationMs); this.mounts.add(frame.frameTaskMs);
+        this.draws.add(frame.drawCalls); this.triangles.add(frame.triangles);
         this.gpuSupported = frame.gpuSupported; this.gpuAge = frame.gpuSampleAgeMs;
         // HexMap publishes only newly available GPU samples, never duplicates the last measurement.
         this.gpu.add(frame.gpuFrameMs);
@@ -95,9 +101,11 @@ export class FramePerformance {
     }
     public take(windowMs: number = GAME_CONFIG.timing.diagnosticsMs): FramePerformanceSnapshot {
         const interval = this.interval.take(), main = this.main.take(), messages = this.messages.take(), gpu = this.gpu.take();
+        const draws = this.draws.take(), triangles = this.triangles.take();
         const renderCost = main ? Math.max(main.mean + (messages ? messages.mean * messages.count / main.count : 0), gpu?.mean ?? 0) : 0;
         const logicStepMs = this.steps > 0 ? this.simulationMs / this.steps : undefined;
         const result = Object.freeze({ fps: interval && interval.mean > 0 ? 1000 / interval.mean : undefined,
+            drawCalls: draws?.mean, drawCallsP95: draws?.p95, triangles: triangles?.mean,
             theoreticalFps: renderCost > 0 ? 1000 / renderCost : undefined,
             logicalHz: this.steps * 1000 / windowMs,
             theoreticalLogicHz: logicStepMs !== undefined && logicStepMs > 0 ? 1000 / logicStepMs : undefined,

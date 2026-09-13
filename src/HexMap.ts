@@ -905,9 +905,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const projection = projectionLayer && this.initializedWorldRenderLayers.has(projectionLayer.id)
             ? projectionLayer.groundProjection : undefined;
         this.terrain?.setGroundProjection(projection);
-        this.rendererHost.render(projection);
+        this.rendererHost.render(projection, this.controls.target);
         this.lastCpuFrameMs = performance.now() - cpuFrameStart;
         this.emit("afterframe", { t, dtS, cpuFrameMs: this.lastCpuFrameMs, gpuFrameMs,
+            drawCalls: this.rendererHost.renderer.info.render.calls, triangles: this.rendererHost.renderer.info.render.triangles,
             frameTaskMs: this.frameTasks.stats.lastFrameDurationMs,
             gpuSupported: gpuTiming.supported, gpuSampleAgeMs: gpuTiming.lastSampleAgeMs });
         if (!this.disposed) this.animationFrameId = window.requestAnimationFrame(this.animate);

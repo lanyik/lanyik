@@ -261,7 +261,7 @@ test.each(["heal", "reused", "out-of-range"])("priest releases a bounded heal on
     if (scenario === "out-of-range") e.position.x[ally] = 8;
     const hit = e.action.hitAt[enemy];
     for (let tick = 2; tick <= hit + 5; tick++) step(tick);
-    expect(e.vitals.health[ally]).toBe(scenario === "heal" ? 24 : 10);
+    expect(e.vitals.health[ally]).toBe(scenario === "heal" ? 25.6 : 10);
     expect(e.effects.buffer.count).toBe(scenario === "heal" ? 1 : 0);
     expect(e.projectiles.count).toBe(0);
 });

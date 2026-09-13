@@ -38,6 +38,7 @@ import { ActorAction, Faction } from "../core/CombatWorld";
 import { ActorModels } from "./ActorModels";
 import { SkillEffects } from "./SkillEffects";
 import { EnemyPresentation } from "./EnemyPresentation";
+import { DamageNumbers } from "./DamageNumbers";
 import { BoundaryMist } from "./BoundaryMist";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
 import { ACTOR_FADE_END, actorVisibility } from "./ActorVisibility";
@@ -95,6 +96,7 @@ export class CombatLayer implements WorldRenderLayer {
     private disposed = false;
     private readonly projectiles: InstancedMesh;
     private readonly enemyEffects = new EnemyPresentation();
+    private damageNumbers?: DamageNumbers;
     private readonly hand = new Vector3();
     private presentationTime = -1;
     private readonly experience: InstancedMesh;
@@ -170,12 +172,15 @@ export class CombatLayer implements WorldRenderLayer {
                     throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : controller.signal.reason;
                 }
                 const actors = actorResult.value, effects = effectResult.value, models = lootResult.value;
+                let numbers: DamageNumbers | undefined;
                 try {
+                    numbers = new DamageNumbers(document.createElement("canvas"));
                     this.resources.acquireRequired("combat-actor-models", {}, true, [
-                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root]),
-                        ...actors.poseBuffers.map(array => ({ identity: array.buffer, cost: { cpuBytes: array.byteLength } }))
+                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root, numbers.mesh]),
+                        ...[...actors.poseBuffers, ...numbers.buffers].map(array => ({ identity: array.buffer, cost: { cpuBytes: array.byteLength } }))
                     ]);
-                } catch (error) { actors.dispose(); effects.dispose(); models.dispose(); throw error; }
+                    this.damageNumbers = numbers; this.root.add(numbers.mesh);
+                } catch (error) { numbers?.dispose(); actors.dispose(); effects.dispose(); models.dispose(); throw error; }
                 this.actors = actors;
                 this.effects = effects;
                 this.lootModels = models;
@@ -222,6 +227,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
         this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward);
         this.enemyEffects.begin(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ);
+        this.damageNumbers!.update(state.combatText, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.mist.update(0, this.player.position.y, 0, state.player.animationTime, playerX, playerZ);
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
@@ -340,6 +346,7 @@ export class CombatLayer implements WorldRenderLayer {
 
     public reset(): void {
         this.actors?.reset(); this.presentationTime = -1; this.enemyEffects.reset();
+        this.damageNumbers?.reset();
         this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;
         this.telegraphs.count = this.chargeWarnings.count = 0;
@@ -369,6 +376,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.host = undefined;
         this.actors?.dispose();
         this.effects?.dispose(); this.enemyEffects.dispose();
+        this.damageNumbers?.dispose();
         this.lootModels?.dispose();
         this.lootEffects.dispose();
         this.groundProjection.dispose();

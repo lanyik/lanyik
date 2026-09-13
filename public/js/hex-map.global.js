@@ -16168,6 +16168,89 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.sky.material.dispose();
     }
   };
+  var HEADER = `
+precision highp float;
+uniform highp samplerCube skyFogMap;
+uniform mat4 skyFogCamera;
+uniform vec2 skyFogCenter;
+uniform float skyFogExposure;
+vec3 skyFogColor(vec3 direction) {
+    #if __VERSION__ >= 300
+        vec3 c = texture(skyFogMap, normalize(direction)).rgb;
+    #else
+        vec3 c = textureCube(skyFogMap, normalize(direction)).rgb;
+    #endif
+    c = mat3(.59719,.07600,.02840, .35458,.90834,.13383, .04823,.01566,.83777) * (c * skyFogExposure / .6);
+    c = (c * (c + .0245786) - .000090537) / (c * (.983729 * c + .4329510) + .238081);
+    c = clamp(mat3(1.60475,-.10208,-.00327, -.53108,1.10813,-.07276, -.07367,-.00605,1.07602) * c, 0., 1.);
+    return mix(c * 12.92, 1.055 * pow(c, vec3(.41666)) - .055, step(vec3(.0031308), c));
+}
+vec3 skyFogBlend(vec3 color, vec3 viewPoint, float nearDistance, float farDistance) {
+    vec3 worldPoint = (skyFogCamera * vec4(viewPoint, 1.)).xyz;
+    float amount = smoothstep(nearDistance, farDistance, length(worldPoint.xz - skyFogCenter));
+    if (amount <= 0.) return color;
+    return mix(color, skyFogColor(mat3(skyFogCamera) * viewPoint), amount);
+}
+`;
+  var SkyFog = class {
+    constructor(sky, camera) {
+      this.materials = /* @__PURE__ */ new Map();
+      this.visit = (object) => {
+        const material = object.material;
+        if (Array.isArray(material)) {
+          for (const item of material) this.install(item);
+        } else if (material) this.install(material);
+      };
+      this.uniforms = {
+        skyFogMap: { value: sky },
+        skyFogCamera: { value: camera.matrixWorld },
+        skyFogCenter: { value: new three.Vector2() },
+        skyFogExposure: { value: 0.65 }
+      };
+    }
+    prepare(root, focus, exposure) {
+      this.uniforms.skyFogCenter.value.set(focus.x, focus.z);
+      this.uniforms.skyFogExposure.value = exposure;
+      root.traverseVisible(this.visit);
+    }
+    install(material) {
+      if (this.materials.has(material)) return;
+      const raw = material instanceof three.RawShaderMaterial;
+      if (raw ? !material.fragmentShader.includes("vec3 applyHorizonFog(") : !material.fog) return;
+      const compile = material.onBeforeCompile, key = material.customProgramCacheKey, originalKey = key.call(material);
+      material.onBeforeCompile = (shader, renderer) => {
+        compile.call(material, shader, renderer);
+        Object.assign(shader.uniforms, this.uniforms);
+        const glsl3 = raw && material.glslVersion === "300 es";
+        shader.vertexShader = `${glsl3 ? "out" : "varying"} highp vec3 vSkyFogPoint;
+` + shader.vertexShader;
+        shader.fragmentShader = `${glsl3 ? "in" : "varying"} highp vec3 vSkyFogPoint;
+${HEADER}
+` + shader.fragmentShader;
+        if (raw) {
+          shader.vertexShader = shader.vertexShader.replace("vHorizonFogDepth = -mvPosition.z;", "vHorizonFogDepth = -mvPosition.z; vSkyFogPoint = mvPosition.xyz;");
+          shader.fragmentShader = shader.fragmentShader.replace("return mix(color, fogColor, fogFactor);", "return skyFogBlend(color, vSkyFogPoint, fogNear, fogFar);");
+        } else {
+          shader.vertexShader = shader.vertexShader.replace("#include <fog_vertex>", "#include <fog_vertex>\nvSkyFogPoint = mvPosition.xyz;");
+          shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", "#ifdef USE_FOG\ngl_FragColor.rgb = skyFogBlend(gl_FragColor.rgb, vSkyFogPoint, fogNear, fogFar);\n#endif");
+        }
+      };
+      material.customProgramCacheKey = () => `${originalKey}:radial-sky-fog-v1`;
+      material.needsUpdate = true;
+      const release = () => {
+        material.removeEventListener("dispose", release);
+        this.materials.delete(material);
+        material.onBeforeCompile = compile;
+        material.customProgramCacheKey = key;
+        material.needsUpdate = true;
+      };
+      material.addEventListener("dispose", release);
+      this.materials.set(material, release);
+    }
+    dispose() {
+      for (const release of this.materials.values()) release();
+    }
+  };
 
   // src/rendering/WebGlGpuTimer.ts
   var WebGlGpuTimer = class {
@@ -16392,6 +16475,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           sky.bake(this.renderer);
           this.scene.background = sky.target.texture;
         }
+        this.skyFog = sky ? new SkyFog(sky.target.texture, this.camera) : void 0;
         this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
         options.canvas.addEventListener("webglcontextlost", this.onContextLost);
         options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -16425,7 +16509,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         restores: this.contextRestores
       };
     }
-    render(projection) {
+    render(projection, focus = this.worldRoot.position) {
       if (this.disposed || this.contextState !== "ready") return;
       const measured = this.gpuTimer.begin();
       const autoReset = this.renderer.info.autoReset;
@@ -16433,6 +16517,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.renderer.info.autoReset = false;
         this.renderer.info.reset();
         projection?.render(this.renderer);
+        this.skyFog?.prepare(this.worldRoot, focus, this.renderer.toneMappingExposure);
         this.renderer.render(this.scene, this.camera);
       } finally {
         this.renderer.info.autoReset = autoReset;
@@ -16446,6 +16531,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
       this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
       this.gpuTimer.dispose();
+      this.skyFog?.dispose();
       this.sky?.dispose();
       this.renderer.renderLists.dispose();
       this.renderer.dispose();
@@ -17867,13 +17953,15 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         const projectionLayer = this.worldRenderLayers.projectionLayer;
         const projection = projectionLayer && this.initializedWorldRenderLayers.has(projectionLayer.id) ? projectionLayer.groundProjection : void 0;
         this.terrain?.setGroundProjection(projection);
-        this.rendererHost.render(projection);
+        this.rendererHost.render(projection, this.controls.target);
         this.lastCpuFrameMs = performance.now() - cpuFrameStart;
         this.emit("afterframe", {
           t,
           dtS,
           cpuFrameMs: this.lastCpuFrameMs,
           gpuFrameMs,
+          drawCalls: this.rendererHost.renderer.info.render.calls,
+          triangles: this.rendererHost.renderer.info.render.triangles,
           frameTaskMs: this.frameTasks.stats.lastFrameDurationMs,
           gpuSupported: gpuTiming.supported,
           gpuSampleAgeMs: gpuTiming.lastSampleAgeMs

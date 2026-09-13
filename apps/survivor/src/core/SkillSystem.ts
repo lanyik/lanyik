@@ -94,7 +94,8 @@ export class SkillSystem {
                 }
                 if (target < 0) break;
                 this.chainSlots[hits] = target;
-                impacts.add(world.ids[player], world.ids[target], rollAttack(stats, random, values.damage * SKILL_RULES.chain.damageRetention ** hits).damage);
+                const hit = rollAttack(stats, random, values.damage * SKILL_RULES.chain.damageRetention ** hits);
+                impacts.add(world.ids[player], world.ids[target], hit.damage, 0, 0, Number(hit.critical));
                 effects.add(EffectKind.Lightning, tick, fromX, fromZ, .45, .55, p.x[target], p.z[target]);
                 fromX = p.x[target]; fromZ = p.z[target];
             }
@@ -104,7 +105,8 @@ export class SkillSystem {
             const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius, true, true);
             for (let cursor = 0; cursor < enemies.count; cursor++) {
                 const slot = enemies.slots[cursor];
-                impacts.add(world.ids[player], world.ids[slot], rollAttack(stats, random, values.damage).damage);
+                const hit = rollAttack(stats, random, values.damage);
+                impacts.add(world.ids[player], world.ids[slot], hit.damage, 0, 0, Number(hit.critical));
                 if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = SKILL_RULES.frost.slowScale; }
                 hits++;
             }

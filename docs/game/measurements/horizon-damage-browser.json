@@ -1,0 +1,41 @@
+{
+  "fog": [
+    {
+      "type": "terrain",
+      "altitude": 100,
+      "fogDifference": 0,
+      "controlDifference": 768
+    },
+    {
+      "type": "terrain",
+      "altitude": 1100,
+      "fogDifference": 0,
+      "controlDifference": 768
+    },
+    {
+      "type": "standard",
+      "altitude": 100,
+      "fogDifference": 0,
+      "controlDifference": 3072
+    },
+    {
+      "type": "standard",
+      "altitude": 1100,
+      "fogDifference": 0,
+      "controlDifference": 3072
+    }
+  ],
+  "damage": {
+    "visible": true,
+    "glyphs": 832,
+    "draws": 1,
+    "triangles": 1664
+  },
+  "context": {
+    "date": "2026-09-13",
+    "renderer": "Chromium native ANGLE D3D11, NVIDIA RTX 3060 Ti",
+    "viewport": "1280x720",
+    "fog": "32x32 RGBA8 center pixel comparison; maximum channel difference",
+    "damage": "256 facts, same-frame text visibility toggle; production render path"
+  }
+}

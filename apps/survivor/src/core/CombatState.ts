@@ -8,6 +8,7 @@ import type { CombatWorld } from "./CombatWorld";
 import type { EntityQuery } from "./EntityWorld";
 import type { SkillSnapshot } from "./Skills";
 import type { EffectBuffer } from "./CombatEffects";
+import type { CombatTextBuffer } from "./CombatText";
 import type { RecyclingRules } from "./Recycling";
 import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
@@ -113,6 +114,7 @@ export interface ChestRenderBuffer {
 
 /** Core views borrow ECS storage; presentation views borrow a RenderFrame until its buffer is recycled. */
 export interface CombatRenderState {
+    readonly combatText: CombatTextBuffer;
     readonly player: PlayerRenderState;
     readonly entities: CombatRenderEntities;
     readonly chests: ChestRenderBuffer;

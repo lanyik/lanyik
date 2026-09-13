@@ -92,7 +92,7 @@ test("frame diagnostics keep updating during a held simulation and exclude hidde
     await session.start();
     const frame = (time: number, dtS = .02) => {
         now = time; session.frame(time);
-        session.afterFrame({ t: time, dtS, cpuFrameMs: 2, frameTaskMs: .5, gpuFrameMs: undefined, gpuSupported: false, gpuSampleAgeMs: undefined });
+        session.afterFrame({ t: time, dtS, drawCalls: 64, triangles: 120000, cpuFrameMs: 2, frameTaskMs: .5, gpuFrameMs: undefined, gpuSupported: false, gpuSampleAgeMs: undefined });
     };
     for (let tick = 0; tick <= 50; tick++) frame(tick * 20);
     expect(session.getSnapshot().performance).toMatchObject({ fps: 50, mainMs: 2, gpuMs: undefined,

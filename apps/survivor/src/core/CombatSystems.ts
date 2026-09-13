@@ -52,7 +52,7 @@ function commitProjectiles(entities: CombatWorld): void {
     let cursor = 0;
     while (cursor < projectiles.count) {
         const slot = projectiles.slots[cursor], target = batch.targets[entities.projectileBatchIndices[slot]];
-        if (target !== 0) impacts.add(b.source[slot], target, b.damage[slot], b.elite[slot], b.boss[slot]);
+        if (target !== 0) impacts.add(b.source[slot], target, b.damage[slot], b.elite[slot], b.boss[slot], b.critical[slot]);
         if (target !== 0 || b.lifetime[slot] <= 0) { entities.remove(slot); continue; }
         cursor++;
     }

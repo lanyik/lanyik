@@ -2,6 +2,7 @@ import { ENTITY_CAPACITY as N, MAX_ENEMIES, MAX_PROJECTILES, MAX_EXPERIENCE_ORBS
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 import type { CombatRenderState, PlayerRenderState } from "../core/CombatState";
 import { effectArrays } from "../core/CombatEffects";
+import { combatTextArrays } from "../core/CombatText";
 
 type NumericArray = Float64Array | Float32Array | Uint32Array | Uint8Array;
 type ArrayConstructor<T> = { readonly BYTES_PER_ELEMENT: number; new(buffer: ArrayBuffer, offset: number, count: number): T };
@@ -29,13 +30,14 @@ function layout(buffer?: ArrayBuffer) {
     };
     const chests = { count: 0, x: field(Float64Array, MAX_COMBAT_CHUNKS), z: field(Float64Array, MAX_COMBAT_CHUNKS), tiers: field(Uint8Array, MAX_COMBAT_CHUNKS) };
     const effects = { ...effectArrays(field), count: 0 };
-    return { entities, chests, effects, bytes: offset };
+    const combatText = { ...combatTextArrays(field), count: 0 };
+    return { entities, chests, effects, combatText, bytes: offset };
 }
 
 export interface RenderPacket {
     readonly buffer: ArrayBuffer;
     readonly player: PlayerRenderState;
-    readonly counts: readonly [number, number, number, number, number, number];
+    readonly counts: readonly [number, number, number, number, number, number, number];
 }
 
 /** Two alternating transferable buffers; authoritative ECS storage never leaves its owner. */
@@ -47,7 +49,7 @@ export class RenderFrame {
         this.arrays = layout(buffer);
     }
     public write(source: CombatRenderState): RenderPacket {
-        const { entities: target, chests, effects } = this.arrays, input = source.entities;
+        const { entities: target, chests, effects, combatText } = this.arrays, input = source.entities;
         target.ids.set(input.ids); target.experienceValue.set(input.experienceValue);
         for (const name of ["enemies", "projectiles", "experience", "loot"] as const) {
             target[name].slots.set(input[name].slots.subarray(0, input[name].count));
@@ -58,11 +60,12 @@ export class RenderFrame {
         }
         chests.x.set(source.chests.x); chests.z.set(source.chests.z); chests.tiers.set(source.chests.tiers);
         for (const key of ["kind", "x", "z", "endX", "endZ", "radius", "started", "endsAt"] as const) effects[key].set(source.effects[key].subarray(0, source.effects.count));
+        for (const key of ["id", "x", "z", "value", "started", "kind"] as const) combatText[key].set(source.combatText[key].subarray(0, source.combatText.count));
         return { buffer: this.buffer, player: { ...source.player },
-            counts: [input.enemies.count, input.projectiles.count, input.experience.count, input.loot.count, source.chests.count, source.effects.count] };
+            counts: [input.enemies.count, input.projectiles.count, input.experience.count, input.loot.count, source.chests.count, source.effects.count, source.combatText.count] };
     }
     public read(packet: RenderPacket): CombatRenderState {
-        const { entities, chests, effects } = this.arrays;
+        const { entities, chests, effects, combatText } = this.arrays;
         const queries = [entities.enemies, entities.projectiles, entities.experience, entities.loot];
         for (let i = 0; i < queries.length; i++) {
             const count = packet.counts[i];
@@ -73,6 +76,8 @@ export class RenderFrame {
         if (!Number.isInteger(chests.count) || chests.count < 0 || chests.count > MAX_COMBAT_CHUNKS) throw new Error("Invalid chest count");
         effects.count = packet.counts[5];
         if (!Number.isInteger(effects.count) || effects.count < 0 || effects.count > effects.kind.length) throw new Error("Invalid effect count");
-        return { player: packet.player, entities, chests, effects };
+        combatText.count = packet.counts[6];
+        if (!Number.isInteger(combatText.count) || combatText.count < 0 || combatText.count > combatText.kind.length) throw new Error("Invalid combat text count");
+        return { player: packet.player, entities, chests, effects, combatText };
     }
 }

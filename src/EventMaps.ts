@@ -16,6 +16,8 @@ export interface HexMapFrameEvent {
 export interface HexMapFrameStartEvent { readonly t: number; readonly dtS: number }
 /** Current main-loop time; GPU measurements arrive asynchronously from earlier draws. */
 export interface HexMapFrameEndEvent extends HexMapFrameEvent {
+    readonly drawCalls: number;
+    readonly triangles: number;
     readonly cpuFrameMs: number;
     readonly frameTaskMs: number;
     readonly gpuSupported: boolean;

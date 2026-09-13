@@ -68,6 +68,22 @@ hostile projectile colors from fixed simulation ticks, including pause. They als
 load the baked idle clip metadata and verify that relaxed breathing changes only
 idle weights and freezes with the simulation.
 
+`npm run report:combat-balance` regenerates the deterministic 64-set, level 1–100
+blue-equipment calibration in `docs/game/measurements/combat-balance.json`.
+`CombatBalance.test.ts` gates role-specific incoming-hit percentages and basic
+attack kill times. `CombatText.test.ts` checks actual overkill, lifetime, merging,
+capacity and transfer ownership; `DamageNumbers.test.ts` covers glyph budgets,
+pause and resource release. The travel benchmark restores health between ticks
+to keep all 2880 ticks live while still exercising hit settlement. It is a
+residency workload, not a starter-character survival claim.
+
+`fog-and-damage.spec.ts` compares rendered distant terrain/standard materials with
+geometry absent at two heights, including a fog-disabled visibility control.
+It then fills 256 hit facts and checks the actual GPU call/triangle delta against
+the same frame with the text mesh hidden. Screenshots and pixel/counter JSON are
+saved as browser artifacts; these checks exercise production shaders and Worker
+publication rather than inferring batching from scene object counts.
+
 Combat Worker tests run the browser query entry on real Node threads and compare
 hits, commit order and deterministic replay with the serial numerical kernel.
 Transfer tests detach actual ArrayBuffers; controlled transports cover backpressure,

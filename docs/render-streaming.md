@@ -939,9 +939,32 @@ the same sky pixels must return after a real WebGL context loss and restoration.
 
 The survivor application derives its terrain, vegetation, fog and actor limits from
 `apps/survivor/src/core/WorldView.ts`. At 34 display units per game unit, terrain
-extends to 2312, vegetation to 1700, and view-depth terrain fog spans 1156–2108.
+extends to 2312, vegetation to 1700, and radial terrain fog spans 1156–1700.
 Terrain load/retention radii remain two/three chunks. Gameplay retains four rings
 (81 chunks); actors fade at 34–42 game units, ahead of the 44/46 wake/sleep limits
 and the minimum 48-unit unloading boundary. Far actors keep low-frequency patrol
 decisions while combat aggro stays local. This changes application policy without
 introducing another terrain source or changing the engine's streaming ownership.
+
+When the sky is enabled, `SkyFog` samples the existing HDR cube along the camera
+ray, then applies the host's ACES tone mapping and sRGB output before blending.
+The distance is horizontal world distance from the orbit focus; elevated terrain
+and oblique camera angles cannot escape fog through a short view-depth value.
+Fully fogged geometry therefore matches the sky at the same pixel instead of
+leaving a flat-color silhouette when a streamed chunk arrives. The host prepares
+visible materials after projection and before the world draw. Standard fog chunks
+and raw terrain/water/grass horizon hooks use the same uniforms. Without a sky,
+the configured linear color fog remains in effect.
+
+This adds one cube lookup to fogged fragments, no target, texture allocation or
+extra draw. Camera and focus uniforms are shared. Existing material compile/cache
+hooks are chained and restored on material or host disposal; disposed chunk
+materials leave the tracking map. The cube remains owned by `Skybox` and is rebaked
+after context recovery. The browser regression compares actual terrain and standard
+material pixels with geometry present/absent at two heights, requiring at most one
+8-bit channel step; moving the fog away must make the geometry clearly visible.
+
+`HexMapFrameEndEvent.drawCalls` and `.triangles` report Three's current frame counters,
+including ground projection, world and sky. They measure WebGL work, not browser
+DOM painting. The survivor performance window displays mean draws, P95 draws and
+mean triangles without adding another renderer pass.

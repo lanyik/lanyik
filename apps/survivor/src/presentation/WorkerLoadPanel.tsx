@@ -24,6 +24,8 @@ export const WorkerLoadPanel = memo(function WorkerLoadPanel({ workers, performa
         </dl>
         <details className="frame-details"><summary>阶段耗时与积压</summary>
             <dl>
+                <div title="包含地面投影、世界、天空与飘字；浏览器 DOM 界面单独统计布局和长帧"><dt>三维绘制批次 / P95</dt><dd>{perf?.drawCalls?.toFixed(0) ?? "—"} / {perf?.drawCallsP95?.toFixed(0) ?? "—"}</dd></div>
+                <div><dt>三维三角形</dt><dd>{perf?.triangles === undefined ? "—" : `${(perf.triangles / 1000).toFixed(1)}k`}</dd></div>
                 <div><dt>主循环 P95</dt><dd>{ms(perf?.mainP95Ms)}</dd></div>
                 <div><dt>每 tick / 执行段</dt><dd>{ms(perf?.logicStepMs)} / {ms(perf?.logicExecuteMs)}</dd></div>
                 <div><dt>AI 近 / 远 / UI</dt><dd>{GAME_CONFIG.timing.activeAiHz} / {GAME_CONFIG.timing.distantAiHz} / {GAME_CONFIG.timing.snapshotHz} Hz</dd></div>

@@ -2,14 +2,14 @@
 
 生物的树干、陡坡和水体阻挡由 `CombatTerrain` 注入，普通移动、冲锋/冲刺、刷怪与宝箱净空共用规则，详见[地形通行与刷怪](terrain-navigation.md)。
 
-本设计已实现于 `apps/survivor/src/core/{EntityWorld,CombatWorld,BehaviorTree,EnemyBehavior,EnemyActions,EnemyStrikes,CombatSystems,EnemyDefinitions,CombatSimulation,SpatialGrid,ProjectileBatch,CombatCommand,WorldView}.ts` 及 `src/worker/`。
+本设计已实现于 `apps/survivor/src/core/{EntityWorld,CombatWorld,BehaviorTree,EnemyBehavior,EnemyActions,EnemyStrikes,CombatSystems,EnemyDefinitions,CombatSimulation,CombatText,SpatialGrid,ProjectileBatch,CombatCommand,WorldView}.ts` 及 `src/worker/`。
 应用边界见[应用设计](../app-development.md)，数值与奖励见[战斗合同](combat-and-progression.md)，动作资源见[资产合同](actor-assets.md)，玩家技能与图集见[技能合同](skills-and-effects.md)。
 
 ## 技术选择与接入时机
 
 在扩展怪物攻击前统一实体模型，并直接采用行为树。原有按类型分开的实体池已经采用 SoA，
 但数组下标、玩家专用字段与同步删除贯穿战斗和表现；若新行为继续引用这些结构，后续迁移会同时涉及
-目标记忆、持续动作、弹道归属、伤害和表现接口。当前尚无存档格式，适合一次完成边界调整。
+目标记忆、持续动作、弹道归属、伤害和表现接口。统一时尚未引入存档；当前 `CharacterCheckpoint` 保存角色进度，恢复时重建地域人口，不序列化 ECS 槽或飘字。
 
 现在接入的主要成本是统一实体生命周期、改写系统遍历和表现读取，并验证原有成长/装备行为。
 地图运行时、地域内容、会话命令和 React 界面结构可以沿用，不需要重新设计整套引擎。
@@ -79,7 +79,7 @@ UI 读取独立的低频快照，并在结构化克隆后重新递归冻结。�
 6. 玩家存活时处理经验、地面物品、宝箱，以及每 60 tick 的血蓝回复。
 
 行为树决策和怪物动作执行期间不销毁怪物；感知阶段可以先移除已经卸载的实体。
-伤害先写入有界缓冲，在其所属阶段之后统一提交。
+伤害先写入有界缓冲，在其所属阶段之后统一提交。攻击暴击结果随缓冲传递，最终生命损失和防御结果写入 `CombatText`；事实在 Worker 发布期间保留，表现不重算伤害。成长与同级装备压力门槛见[数值校准](combat-balance.md)，飘字生命周期和批次见[技能合同](skills-and-effects.md#伤害飘字)。
 销毁立即从 ECS 查询与空间索引移除；驻留和弹道系统使用“不递增当前游标”的交换删除循环。
 范围技能与拾取先取得独立的空间候选槽列表，再按完整句柄升序提交，不受哈希链顺序或 ECS 末项交换影响。
 创建/销毁不会隐式触发其他系统或重入用户代码。
@@ -321,7 +321,7 @@ Worker 上下文与转移所有权的浏览器语义见 [MDN Worker](https://dev
 模拟先收集全部弹道的起止位置，记下槽到批次游标的映射；所有区间完成后，再按原查询的交换删除顺序提交命中，
 保持奖励与随机数消费顺序。平局仍比较完整句柄。线程完成顺序不会改变结果。
 
-表现缓冲包含减速/狂暴标记、祝福截止 tick、动作锁定目标 XZ 和 128 项效果，大小由 `RenderFrame.bytes` 按布局和对齐计算，当前每份 307,168 字节，共两份：
+表现缓冲包含减速/狂暴标记、祝福截止 tick、动作锁定目标 XZ、128 项效果和 256 项伤害飘字事实，大小由 `RenderFrame.bytes` 按布局和对齐计算，当前每份 317,664 字节，共两份：
 初始模拟端与主线程各持一份，收到新帧后，下一请求才归还旧帧。
 所有实体、宝箱和效果的绝对 XZ 坐标均为 Float64，避免远处世界的表现位置与命中、拾取位置不一致；
 提交 GPU 时才转换为相对表现原点的局部 Float32。怪物等级与 AI active 标记没有表现消费者，留在权威端，不再复制到表现帧。

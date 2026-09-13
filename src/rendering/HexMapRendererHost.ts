@@ -13,6 +13,7 @@ import {
     WebGLRenderer
 } from "three";
 import { Skybox } from "./Skybox";
+import { SkyFog } from "./SkyFog";
 
 import { WebGlGpuTimer, WebGlGpuTimerStats } from "./WebGlGpuTimer";
 import type { GroundProjection } from "./GroundProjection";
@@ -46,6 +47,7 @@ export class HexMapRendererHost {
     public readonly worldRoot: Group;
     public readonly camera: PerspectiveCamera;
     private readonly sky: Skybox | undefined;
+    private readonly skyFog: SkyFog | undefined;
     private readonly gpuTimer: WebGlGpuTimer;
     private contextState: WebGlContextState = "ready";
     private contextGeneration = 1;
@@ -85,6 +87,7 @@ export class HexMapRendererHost {
 
             this.sky = sky = options.skyVisible ? new Skybox() : undefined;
             if (sky) { sky.bake(this.renderer); this.scene.background = sky.target.texture; }
+            this.skyFog = sky ? new SkyFog(sky.target.texture, this.camera) : undefined;
             this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
             options.canvas.addEventListener("webglcontextlost", this.onContextLost);
             options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -119,7 +122,7 @@ export class HexMapRendererHost {
         };
     }
 
-    public render(projection?: GroundProjection): void {
+    public render(projection?: GroundProjection, focus = this.worldRoot.position): void {
         if (this.disposed || this.contextState !== "ready") return;
         const measured = this.gpuTimer.begin();
         const autoReset = this.renderer.info.autoReset;
@@ -127,6 +130,7 @@ export class HexMapRendererHost {
             this.renderer.info.autoReset = false;
             this.renderer.info.reset();
             projection?.render(this.renderer);
+            this.skyFog?.prepare(this.worldRoot, focus, this.renderer.toneMappingExposure);
             this.renderer.render(this.scene, this.camera);
         } finally {
             this.renderer.info.autoReset = autoReset;
@@ -141,6 +145,7 @@ export class HexMapRendererHost {
         this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
         this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         this.gpuTimer.dispose();
+        this.skyFog?.dispose();
         this.sky?.dispose();
         this.renderer.renderLists.dispose();
         this.renderer.dispose();

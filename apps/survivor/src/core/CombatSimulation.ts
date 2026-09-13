@@ -1,3 +1,4 @@
+import { CombatTextKind } from "./CombatText";
 import {
     ATTRIBUTE_IDS,
     ATTRIBUTE_NAMES,
@@ -149,7 +150,7 @@ export class CombatSimulation {
         this.entities = new CombatWorld(start.x, start.z, terrain);
         this.behavior = new EnemyBehavior(this.entities, this.world);
         this.skills = new SkillSystem(this.entities);
-        this.renderState = { player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
+        this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
                 experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
                 vitals: this.entities.vitals, enemy: this.entities.enemy, action: this.entities.action,
@@ -219,7 +220,7 @@ export class CombatSimulation {
         this.damageImmunity = Math.max(0, this.damageImmunity - STEP_SECONDS);
         this.shieldCooldown = Math.max(0, this.shieldCooldown - STEP_SECONDS);
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
-        this.entities.effects.advance(this.tickValue);
+        this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
         if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
         if (shifted) { this.reconcileRegions(); this.spawnEnemies(); this.refreshChests(); }
@@ -686,12 +687,12 @@ export class CombatSimulation {
             if (target < 0) continue;
             if (target === player) {
                 if (this.damageImmunity <= 0) this.damagePlayer(world.resolve(impacts.source[i]), impacts.damage[i], impacts.elite[i] !== 0, impacts.boss[i] !== 0);
-            } else this.hitEnemy(target, impacts.damage[i]);
+            } else this.hitEnemy(target, impacts.damage[i], impacts.critical[i] !== 0);
         }
         impacts.count = 0;
     }
 
-    private hitEnemy(index: number, rolledDamage: number): void {
+    private hitEnemy(index: number, rolledDamage: number, critical = false): void {
         const { enemy, action, position } = this.entities;
         if (enemy.kind[index] === EnemyKind.Guard && action.kind[index] < ActorAction.Melee) {
             const dx = this.playerX - position.x[index], dz = this.playerZ - position.z[index], distance = Math.hypot(dx, dz);
@@ -700,10 +701,11 @@ export class CombatSimulation {
         const elite = this.entities.enemy.elite[index] !== 0;
         const evasion = this.entities.enemy.boss[index] ? ENEMY_HIT_RULES.evasion.boss
             : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
-        if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return;
+        if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) { this.showHit(index, CombatTextKind.Dodge); return; }
         const damage = outgoingDamage(this.stats, rolledDamage, this.entities.vitals.maxHealth[index], elite, this.random.chance(this.stats.lethalChance))
             * (this.entities.status.wardUntil[index] > this.tickValue ? 1 - ENEMY_SPECIAL.healingWard.reduction : 1);
         const healthLost = Math.min(this.entities.vitals.health[index], damage);
+        this.showHit(index, critical ? CombatTextKind.EnemyCritical : CombatTextKind.EnemyDamage, healthLost);
         this.entities.vitals.health[index] -= damage;
         this.entities.vitals.hitFlash[index] = 0.1;
         this.health = Math.min(this.stats.maxHealth, this.health + healthLost * this.stats.lifesteal * (1 + this.stats.regenBonus));
@@ -770,23 +772,32 @@ export class CombatSimulation {
     private damagePlayer(source: number, baseDamage: number, elite: boolean, boss: boolean): void {
         if (this.skills.dashing(this.tickValue)) return;
         this.damageImmunity = .55;
-        if (this.random.chance(this.stats.evasion)) return;
+        if (this.random.chance(this.stats.evasion)) { this.showHit(this.entities.player, CombatTextKind.Dodge); return; }
         // The current equipment determines the next recovery; later swaps preserve this countdown.
-        if (this.shieldCooldown === 0) { this.shieldCooldown = this.stats.shieldRecovery; return; }
+        if (this.shieldCooldown === 0) { this.shieldCooldown = this.stats.shieldRecovery; this.showHit(this.entities.player, CombatTextKind.Shield); return; }
         const criticalChance = boss ? ENEMY_HIT_RULES.criticalChance.boss
             : elite ? ENEMY_HIT_RULES.criticalChance.elite : ENEMY_HIT_RULES.criticalChance.normal;
         const critical = this.random.chance(Math.max(0, criticalChance - this.stats.criticalResistance));
-        const damage = this.skills.absorb(incomingDamage(this.stats, baseDamage, elite, critical, this.random.chance(this.stats.blockChance)));
+        const blocked = this.random.chance(this.stats.blockChance), reduced = incomingDamage(this.stats, baseDamage, elite, critical, blocked);
+        const damage = this.skills.absorb(reduced);
         const healthLost = Math.min(this.health, damage);
+        this.showHit(this.entities.player, healthLost > 0 ? (critical ? CombatTextKind.PlayerCritical : CombatTextKind.PlayerDamage)
+            : reduced === 0 && blocked ? CombatTextKind.Block : CombatTextKind.Shield, healthLost);
         this.health = Math.max(0, this.health - damage);
         this.markChanged();
         // A released bolt survives its caster. Reflection requires that same living caster.
         if (source >= 0) {
             const reflection = reflectedDamage(this.stats, healthLost, this.entities.vitals.maxHealth[source]);
+            if (reflection > 0) this.showHit(source, CombatTextKind.Reflection, Math.min(this.entities.vitals.health[source], reflection));
             this.entities.vitals.health[source] -= reflection;
             if (this.entities.vitals.health[source] <= 0) this.killEnemy(source);
         }
         if (this.health === 0) { this.gameOverValue = true; this.pushNotice("danger", "你倒在了荒原上"); }
+    }
+
+    private showHit(slot: number, kind: CombatTextKind, value = 0): void {
+        const e = this.entities;
+        e.combatText.add(e.world.ids[slot], kind, value, e.position.x[slot], e.position.z[slot], this.tickValue);
     }
 
     private killEnemy(index: number): void {

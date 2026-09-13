@@ -4,11 +4,12 @@ import {
     ENTITY_CAPACITY, MAX_ENEMIES, MAX_PROJECTILES, MAX_HOSTILE_PROJECTILES,
     MAX_EXPERIENCE_ORBS, MAX_GROUND_EQUIPMENT, PLAYER_RADIUS
 } from "./GameConfig";
-import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
+import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 import { RARITIES } from "./Equipment";
 import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn } from "./RegionalWorld";
 import { groundItemKind, type InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
+import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 
@@ -24,17 +25,20 @@ export class DamageBuffer {
     public readonly damage = new Float64Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly elite = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly boss = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly critical = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
 
-    public add(source: number, target: number, damage: number, elite = 0, boss = 0): void {
+    public add(source: number, target: number, damage: number, elite = 0, boss = 0, critical = 0): void {
         if (this.count === this.source.length) throw new Error("Damage event capacity exhausted");
         const i = this.count++;
         this.source[i] = source; this.target[i] = target; this.damage[i] = damage;
         this.elite[i] = elite; this.boss[i] = boss;
+        this.critical[i] = critical;
     }
 }
 
 /** One application-owned ECS. Components are indexed by stable slots, queries by dense cursors. */
 export class CombatWorld {
+    public readonly combatText = new CombatText();
     public readonly world = new EntityWorld(ENTITY_CAPACITY);
     public readonly enemies = this.world.query(Component.Enemy);
     public readonly projectiles = this.world.query(Component.Projectile);
@@ -110,13 +114,12 @@ export class CombatWorld {
         if (this.enemies.count === MAX_ENEMIES) throw new Error("Regional population exceeds the enemy budget");
         const slot = this.world.create(Component.Position | Component.Vitals | Component.Enemy);
         const definition = ENEMY_DEFINITIONS[spawn.kind];
-        const scale = REGION_RULES[spawn.region.difficulty].scale * (1 + (spawn.level - 1) * .15);
+        const stats = enemyStats(spawn.kind, spawn.level, REGION_RULES[spawn.region.difficulty].scale, spawn.elite, spawn.boss);
         const { enemy: e, action: a, vitals: v } = this;
         e.kind[slot] = spawn.kind; e.elite[slot] = Number(spawn.elite); e.boss[slot] = Number(spawn.boss);
         e.level[slot] = spawn.level; e.homes[slot] = home; e.regions[slot] = spawn.region;
         e.homeX[slot] = spawn.x; e.homeZ[slot] = spawn.z;
-        e.speed[slot] = definition.speed * Math.min(1.35, 1 + (scale - 1) * .08);
-        e.damage[slot] = definition.damage * Math.sqrt(scale) * (spawn.boss ? 2.5 : spawn.elite ? 1.55 : 1);
+        e.speed[slot] = stats.speed; e.damage[slot] = stats.damage;
         e.runningNode[slot] = -1; e.target[slot] = 0; e.intent[slot] = MoveIntent.None; e.active[slot] = e.awake[slot] = e.returning[slot] = 0;
         e.patrolX[slot] = spawn.x; e.patrolZ[slot] = spawn.z; e.patrolStep[slot] = e.patrolWaitUntil[slot] = 0;
         e.supportTarget[slot] = e.senseAt[slot] = e.specialReadyAt[slot] = e.enraged[slot] = 0;
@@ -127,7 +130,7 @@ export class CombatWorld {
         const radius = definition.radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
         this.place(slot, spawn.x, spawn.z, radius, Component.Enemy);
         a.reach[slot] = definition.ranged ? (spawn.boss ? 9 : definition.reach) : radius + PLAYER_RADIUS + definition.reach;
-        v.health[slot] = v.maxHealth[slot] = definition.health * scale * (spawn.boss ? 16 : spawn.elite ? 4 : 1);
+        v.health[slot] = v.maxHealth[slot] = stats.health;
         v.mana[slot] = v.hitFlash[slot] = 0; v.faction[slot] = Faction.Enemy;
         return slot;
     }

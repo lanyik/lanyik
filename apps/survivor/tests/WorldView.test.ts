@@ -9,7 +9,7 @@ test("fog, living populations, vegetation and streamed terrain share an ordered 
     expect(view.awakeRadius).toBeGreaterThan(view.actorFadeEnd);
     expect(view.sleepRadius).toBeLessThan(view.residentRadius * view.chunkSize);
     expect(view.actorFadeEnd).toBeLessThan(view.vegetationEnd);
-    expect(view.vegetationEnd).toBeLessThan(view.mistFade);
+    expect(view.vegetationEnd).toBeLessThanOrEqual(view.mistOuter);
     expect(view.terrainFogEnd).toBe(view.mistOuter); expect(view.terrainEnd).toBeGreaterThan(view.terrainFogEnd);
     expect(view.terrainLoadRadius * view.terrainChunkSize * 1.5).toBeGreaterThanOrEqual(view.terrainEnd);
     expect(GAME_CONFIG.enemies.aggroDistance).toBe(12);
