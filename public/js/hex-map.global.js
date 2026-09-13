@@ -21371,8 +21371,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       context.clip();
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = "high";
-      const visibleKeys = new Set(this.visiblePageDemands().map((demand) => demand.key));
-      const pages = [...this.pageCache.entries()].filter(([, page]) => rangesIntersect(
+      const visible = this.visiblePageDemands();
+      const complete = visible.every((demand) => this.hasCachedPage(demand));
+      const visibleKeys = new Set(visible.map((demand) => demand.key));
+      const pages = [...this.pageCache.entries()].filter(([key, page]) => (!complete || visibleKeys.has(key)) && rangesIntersect(
         extent.originX,
         extent.tileSpanX,
         page.extent.originX,
@@ -21385,7 +21387,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       )).sort(([firstKey, first], [secondKey, second]) => {
         const firstDensity = first.extent.tileSpanX / first.extent.pixelWidth;
         const secondDensity = second.extent.tileSpanX / second.extent.pixelWidth;
-        return secondDensity - firstDensity || Number(visibleKeys.has(firstKey)) - Number(visibleKeys.has(secondKey));
+        return secondDensity - firstDensity || Number(visibleKeys.has(firstKey)) - Number(visibleKeys.has(secondKey)) || first.extent.originY - second.extent.originY || first.extent.originX - second.extent.originX;
       });
       for (const [key, page] of pages) {
         const pageExtent = page.extent;

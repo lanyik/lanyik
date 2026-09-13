@@ -38,7 +38,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
         return { weights: Array.from((mesh.morphTexture!.image.data as Float32Array).slice(1, 17)),
             frames: mesh.geometry.morphAttributes.position?.length, warnings: runtime.view.layer.castWarnings.count };
     });
-    expect(windup.frames).toBe(16);
+    expect(windup.frames).toBe(20);
     expect(windup.weights.slice(0, 8).every(weight => weight === 0)).toBe(true);
     expect(windup.weights.slice(8).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
     expect(windup.warnings).toBe(1);
@@ -88,5 +88,30 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     expect(melee.alignment).toBeCloseTo(1);
     expect(melee.radius).toBeCloseTo(melee.reach);
     await page.screenshot({ path: testInfo.outputPath("melee-windup.png") });
+    const manifest = await (await page.request.get("/actors/manifest.json")).json();
+    expect(manifest.actors.every((actor: { idle: string; idleCycle: number }) => actor.idle === "Idle_Loop" && actor.idleCycle === 2.5)).toBe(true);
+    await combatWorker(page).evaluate(() => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = simulation as unknown as { entities: CombatWorld; world: RegionalWorld };
+        const e = fixture.entities, player = simulation.getRenderState().player;
+        while (e.enemies.count) e.remove(e.enemies.slots[0]);
+        const slot = e.spawnEnemy({ x: player.x, z: player.z + 14, kind: 3, elite: false, boss: false, level: 1,
+            region: fixture.world.regionAt(player.x, player.z + 14) }, fixture.world.chunks.get("0,0")!);
+        e.enemy.patrolStep[slot] = 1; e.enemy.patrolWaitUntil[slot] = simulation.tick + 1000;
+    });
+    const idleWeights = () => page.evaluate(() => {
+        const runtime = window.survivorApplication!.session as unknown as { view: { layer: { actors: { enemies: InstancedMesh[][] } } } };
+        return Array.from((runtime.view.layer.actors.enemies[3][0].morphTexture!.image.data as Float32Array).slice(1, 21));
+    });
+    await advanceCombat(page, 1);
+    const idle = await idleWeights();
+    expect(idle.slice(0, 16).every(weight => weight === 0)).toBe(true);
+    expect(idle.slice(16).reduce((sum, weight) => sum + weight, 0)).toBeCloseTo(1);
+    await advanceCombat(page, ticksForSeconds(.4));
+    expect(await idleWeights()).not.toEqual(idle);
+    const frozenIdle = await idleWeights();
+    await page.evaluate(() => window.survivorApplication!.session.frame(performance.now()));
+    expect(await idleWeights()).toEqual(frozenIdle);
+    await page.screenshot({ path: testInfo.outputPath("relaxed-caster-idle.png") });
     expect(errors).toEqual([]);
 });

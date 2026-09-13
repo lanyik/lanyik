@@ -1,18 +1,21 @@
 import { ActorAction } from "../core/CombatWorld";
 
 export const MOVEMENT_POSES = 8;
-export const ACTOR_POSES = 16;
+export const IDLE_POSES = 4;
+export const HERO_POSES = MOVEMENT_POSES + IDLE_POSES;
+export const ACTOR_POSES = MOVEMENT_POSES * 2 + IDLE_POSES;
 
-/** Movement loops; attacks include both endpoints and must never wrap back to windup. */
-export function writeActorPose(weights: number[], movementPhase: number, action: ActorAction, progress: number): void {
+/** Idle and movement loop; attacks include both endpoints and never wrap back to windup. */
+export function writeActorPose(weights: number[], cyclePhase: number, action: ActorAction, progress: number): void {
     weights.fill(0);
-    if (action === ActorAction.Idle) return;
+    const idle = action === ActorAction.Idle;
     const attacking = action >= ActorAction.Melee;
-    const frame = attacking ? Math.max(0, Math.min(1, progress)) * (MOVEMENT_POSES - 1)
-        : ((movementPhase % 1) + 1) % 1 * MOVEMENT_POSES;
+    const count = idle ? IDLE_POSES : MOVEMENT_POSES;
+    const frame = attacking ? Math.max(0, Math.min(1, progress)) * (count - 1)
+        : ((cyclePhase % 1) + 1) % 1 * count;
     const current = Math.floor(frame), fraction = frame - current;
-    const next = attacking ? Math.min(MOVEMENT_POSES - 1, current + 1) : (current + 1) % MOVEMENT_POSES;
-    const offset = attacking ? MOVEMENT_POSES : 0;
+    const next = attacking ? Math.min(count - 1, current + 1) : (current + 1) % count;
+    const offset = idle ? weights.length - IDLE_POSES : attacking ? MOVEMENT_POSES : 0;
     weights[offset + current] += 1 - fraction;
     weights[offset + next] += fraction;
 }

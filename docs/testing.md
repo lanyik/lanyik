@@ -28,7 +28,10 @@ Prefer the lowest layer that can observe the contract. Escalate to browser E2E
 only for browser-owned behavior such as module Workers, WebGL context recovery,
 focus/input routing, or the assembled demo. Capability reporting by itself is
 not an acceptance test; a feature test must perform the operation and verify
-the resulting state.
+the resulting state. Near-zoom minimap coverage is compared with the current
+authoritative river cells, including fractional viewport edges, rather than a
+percentage from an older generator. WebGL recovery checks wait for independent
+Worker work to drain within the assertion deadline after drawing resumes.
 
 Use controlled promises for race tests so each interleaving is explicit and
 deterministic. Avoid timers as synchronization, random stress without a fixed
@@ -61,7 +64,9 @@ Survivor changes additionally run `npm run test:app`, `npm run app:build`,
 the standalone app typecheck or tests; do not race those commands with a build
 that replaces `dist`. CI includes the app typecheck, tests, benchmark and browser
 suite. Browser checks exercise actual attack morph weights, telegraphs and
-hostile projectile colors from fixed simulation ticks, including pause.
+hostile projectile colors from fixed simulation ticks, including pause. They also
+load the baked idle clip metadata and verify that relaxed breathing changes only
+idle weights and freezes with the simulation.
 
 Combat Worker tests run the browser query entry on real Node threads and compare
 hits, commit order and deterministic replay with the serial numerical kernel.
@@ -72,8 +77,9 @@ simulation is added to the main thread or production Worker. The assembled brows
 suite explicitly enables parallel collision queries in its query-worker fixture;
 production leaves them disabled by default. Checks cover twenty restarts, query-worker failure,
 recovery and final termination of both combat and terrain workers.
-Browser checks also verify per-worker HUD records, completed query timing,
-paused-window decay and narrow-screen bounds. Controlled-clock unit tests protect
+Browser checks open the initially collapsed performance diagnostics and verify
+per-worker HUD records, completed query timing, paused-window decay and
+narrow-screen bounds. Controlled-clock unit tests protect
 occupancy accounting across in-flight work, worker replacement and disposal.
 Frame tests check update-before-draw ordering in the real browser and distinguish
 loop, presentation, message, GPU and long-frame samples. Controlled clocks protect
@@ -83,7 +89,9 @@ and disposal. Current AI runs synchronously within each fixed tick; there is no
 deferred AI task queue or world-revision submission protocol to test.
 Fixed-clock checks cover 60/120/144/240Hz presentation over one minute, each producing
 exactly 7200 simulation ticks. AI checks protect continuous 120Hz movement with 30Hz decisions,
-including successful idle leaves. Inventory tests protect independent category limits,
+including successful idle leaves, bounded blocked-patrol replanning, ranged retreat
+hysteresis and cooldown movement, ally-facing healing and actual slide heading.
+Inventory tests protect independent category limits,
 atomic chest rewards, stable stack IDs, quantity/potency conservation and one-dose consumption.
 Browser checks exercise icon-only hover, immediate dismissal, Alt pinning, one active item
 tooltip, keyboard focus, narrow-screen bounds and explicit potion merging.

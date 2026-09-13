@@ -18,10 +18,12 @@ const selector = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> =
 const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Context>(selector(
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
-        && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) && !c.canNova(s)), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
+        && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) + (c.entities.enemy.intent[s] === MoveIntent.Retreat ? .8 : 0)
+        && !c.canNova(s) && !(c.tick >= c.entities.action.readyAt[s] && c.canHeal(s))), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
     ...(kind === EnemyKind.Scout ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
+    ...(definition.ranged ? [sequence(condition((c, s) => c.distance(s) <= c.entities.action.reach[s]), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     action((c, s) => c.move(s, kind === EnemyKind.Scout ? MoveIntent.Flank : MoveIntent.Chase))
 )));
 
@@ -79,24 +81,32 @@ export class EnemyBehavior {
     }
 
     public idle(slot: number): BehaviorStatus {
-        const { enemy: e, position: p, world } = this.entities;
+        const { enemy: e, position: p, action: a, world, terrain } = this.entities;
         if (e.returning[slot]) {
             if (Math.hypot(p.x[slot] - e.homeX[slot], p.z[slot] - e.homeZ[slot]) > .05) return this.move(slot, MoveIntent.Return);
             e.returning[slot] = 0;
             e.patrolX[slot] = p.x[slot]; e.patrolZ[slot] = p.z[slot]; e.patrolWaitUntil[slot] = 0;
         }
-        if (Math.hypot(p.x[slot] - e.patrolX[slot], p.z[slot] - e.patrolZ[slot]) < .05) {
-            if (e.patrolWaitUntil[slot] === 0 && e.patrolStep[slot] > 0) {
+        const blocked = e.intent[slot] === MoveIntent.Patrol && a.kind[slot] === ActorAction.Idle;
+        if (blocked || Math.hypot(p.x[slot] - e.patrolX[slot], p.z[slot] - e.patrolZ[slot]) < .05) {
+            if (!blocked && e.patrolWaitUntil[slot] === 0 && e.patrolStep[slot] > 0) {
                 e.patrolWaitUntil[slot] = this.tick + ticksForSeconds(.7 + (world.ids[slot] % 7) * .15);
             }
-            if (this.tick < e.patrolWaitUntil[slot]) return this.move(slot, MoveIntent.None);
+            if (!blocked && this.tick < e.patrolWaitUntil[slot]) return this.move(slot, MoveIntent.None);
             // Stable waypoints do not consume the combat/loot random stream.
-            const step = ++e.patrolStep[slot];
-            const angle = world.ids[slot] * 2.399963 + step * 2.094395;
             const radius = ACTIVITY.patrolRadius * (e.boss[slot] ? .5 : e.kind[slot] === EnemyKind.Scout ? 1.3 : 1);
-            e.patrolX[slot] = e.homeX[slot] + Math.sin(angle) * radius;
-            e.patrolZ[slot] = e.homeZ[slot] + Math.cos(angle) * radius;
-            e.patrolWaitUntil[slot] = 0;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const step = ++e.patrolStep[slot];
+                const angle = world.ids[slot] * 2.399963 + step * 2.094395;
+                const x = e.homeX[slot] + Math.sin(angle) * radius, z = e.homeZ[slot] + Math.cos(angle) * radius;
+                if (!terrain.isClear(x, z, p.radius[slot])) continue;
+                e.patrolX[slot] = x; e.patrolZ[slot] = z; e.patrolWaitUntil[slot] = 0;
+                return this.move(slot, MoveIntent.Patrol);
+            }
+            // A closed patch rests and tries the next bounded set; it never walks into a wall forever.
+            e.patrolX[slot] = p.x[slot]; e.patrolZ[slot] = p.z[slot];
+            e.patrolWaitUntil[slot] = this.tick + ticksForSeconds(1.5);
+            return this.move(slot, MoveIntent.None);
         }
         return this.move(slot, MoveIntent.Patrol);
     }
@@ -109,7 +119,7 @@ export class EnemyBehavior {
     }
 
     public attack(slot: number): BehaviorStatus {
-        const { action: a, enemy: e, position: p, player } = this.entities;
+        const { action: a, enemy: e, position: p, world } = this.entities;
         e.intent[slot] = MoveIntent.None;
         if (a.kind[slot] >= ActorAction.Melee) {
             if (this.tick < a.endsAt[slot]) return BehaviorStatus.Running;
@@ -139,7 +149,8 @@ export class EnemyBehavior {
         a.endsAt[slot] = a.hitAt[slot] + recovery;
         a.readyAt[slot] = a.endsAt[slot] + definition.cooldownTicks; a.committed[slot] = 0; a.progress[slot] = 0;
         a.variant[slot] = e.boss[slot] ? (e.enraged[slot] ? 5 : 3) : 1;
-        p.heading[slot] = Math.atan2(p.x[player] - p.x[slot], p.z[player] - p.z[slot]);
+        const target = world.resolve(a.target[slot]);
+        if (target >= 0) p.heading[slot] = Math.atan2(p.x[target] - p.x[slot], p.z[target] - p.z[slot]);
         return BehaviorStatus.Running;
     }
 
@@ -158,7 +169,7 @@ export class EnemyBehavior {
         const distance = this.distance(slot);
         return distance >= ENEMY_SPECIAL.charge.minRange && distance <= ENEMY_SPECIAL.charge.maxRange;
     }
-    private canHeal(slot: number): boolean {
+    public canHeal(slot: number): boolean {
         const { enemy: e, vitals: v, world, position: p } = this.entities;
         if (e.kind[slot] !== EnemyKind.Healer || this.tick < e.specialReadyAt[slot]) return false;
         const target = world.resolve(e.supportTarget[slot]);

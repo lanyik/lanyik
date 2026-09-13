@@ -1042,9 +1042,11 @@ export class WorldMinimap {
         context.clip();
         context.imageSmoothingEnabled = true;
         context.imageSmoothingQuality = "high";
-        const visibleKeys = new Set(this.visiblePageDemands().map(demand => demand.key));
+        const visible = this.visiblePageDemands();
+        const complete = visible.every(demand => this.hasCachedPage(demand));
+        const visibleKeys = new Set(visible.map(demand => demand.key));
         const pages = [...this.pageCache.entries()]
-            .filter(([, page]) => rangesIntersect(
+            .filter(([key, page]) => (!complete || visibleKeys.has(key)) && rangesIntersect(
                 extent.originX,
                 extent.tileSpanX,
                 page.extent.originX,
@@ -1058,11 +1060,15 @@ export class WorldMinimap {
             // Coarser cached levels are a temporary underlay while a new zoom
             // level streams in. Current-level pages land last and replace them
             // without exposing empty rectangles or changing logical position.
+            // Once complete, discard that underlay from drawing: filtered page edges
+            // must not depend on which older zoom levels happen to remain cached.
             .sort(([firstKey, first], [secondKey, second]) => {
                 const firstDensity = first.extent.tileSpanX / first.extent.pixelWidth;
                 const secondDensity = second.extent.tileSpanX / second.extent.pixelWidth;
                 return secondDensity - firstDensity
-                    || Number(visibleKeys.has(firstKey)) - Number(visibleKeys.has(secondKey));
+                    || Number(visibleKeys.has(firstKey)) - Number(visibleKeys.has(secondKey))
+                    || first.extent.originY - second.extent.originY
+                    || first.extent.originX - second.extent.originX;
             });
         for (const [key, page] of pages) {
             const pageExtent = page.extent;

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Survivor actors use independent relaxed breathing loops instead of frozen
+  sword/casting-ready poses. Ranged enemies circle during cooldowns and leave
+  retreat with distance hysteresis; healers face their allies, blocked patrols
+  choose clear waypoints, and locomotion faces its actual terrain slide.
+- Survivor uses a shared 480-unit relief amplitude for rendering/navigation,
+  deeper horizon visibility within its existing render distance, and
+  a source-verified CC0 scanned forest-floor texture. Graphite HUD surfaces and
+  collapsed-by-default performance diagnostics improve battlefield visibility.
+  The visual assessment distinguishes these changes from pending tree/monster
+  replacements and full material/lighting work.
+- Browser acceptance compares river visibility with the current authoritative
+  map and waits for independent Worker work after WebGL recovery.
+- Completed minimap views draw only the requested zoom pages, so filtered page
+  edges keep the same colors before and after clearing cached overview levels.
+
 ### Added
 
 - Terrain-received ground projections for survivor skill rings, path warnings,

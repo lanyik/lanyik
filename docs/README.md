@@ -51,6 +51,9 @@ plans. Start with the root [README](../README.md) for setup and public API usage
   storage, entity identity, system order, interruptible monster actions and CPU gates.
 - [Survivor interface design](./game/interface-design.md): HUD information
   hierarchy, character and inventory workspaces, item cards and responsive layout.
+- [Visual modernization assessment](./game/visual-modernization.md): current
+  art limitations, implemented idle/AI/HUD/relief fixes, verified asset candidates
+  and the remaining dark-fantasy sample-scene work.
 
 ## Decisions and roadmap
 

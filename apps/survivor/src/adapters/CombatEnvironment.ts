@@ -5,7 +5,7 @@ export const COMBAT_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.fr
 });
 /** Rendering and authority share every setting that changes ground or trunk positions. */
 export const COMBAT_ENVIRONMENT = Object.freeze({
-    size: 34, mountainHeight: 220, treesPerTile: .45, treeScale: 1,
+    size: 34, mountainHeight: 480, treesPerTile: .45, treeScale: 1,
     riverWidth: .28, riverBankWidth: .14, riverCurvature: .5, lakeShoreWidth: .18,
     beachWidth: .35, waterCornerRounding: .4, coastCurvature: .5
 });

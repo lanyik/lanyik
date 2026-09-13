@@ -802,6 +802,12 @@ Revisited levels reuse their existing keys.
 When a zoom level is still missing pages, intersecting pages from an already
 cached coarser level are drawn underneath it. New pages replace that underlay
 in place, so progressive refinement does not expose empty blocks.
+Once every visible page at the requested level is cached, only that visible set
+is drawn in stable row/column order. Older levels remain available for later zooms but stop contributing
+through filtered page edges, so a completed view has the same colors before and
+after a forced refresh, independent of request completion or LRU insertion order.
+This changes drawing selection, not cache residency,
+request scheduling or resource accounting.
 
 Open-world river enumeration uses a separate bounded coarse-page cache inside
 each persistent `WorldSurfaceResolver`. Adjacent 256-tile overview pages reuse a

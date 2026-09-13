@@ -67,6 +67,8 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
     expect(order.phases).toEqual(["presentation", "draw", "after"]);
     expect(order.cpuMs).toBeGreaterThan(0);
     const monitor = page.getByRole("region", { name: "Worker 负载", exact: true });
+    await expect(monitor).toBeHidden();
+    await page.locator(".runtime-diagnostics > summary").click();
     await expect(monitor).toBeVisible();
     await expect.poll(() => monitor.locator("[data-runtime-fps]").getAttribute("data-runtime-fps")).not.toBeNull();
     const performance = await page.evaluate(() => window.survivorApplication!.session.getSnapshot().performance!);
@@ -96,6 +98,7 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.evaluate(() => window.survivorApplication!.session.dispatch({ type: "restart" }));
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready");
+    await page.locator(".runtime-diagnostics > summary").click();
     await expect(monitor.locator("[data-worker]")).toHaveCount(5);
     await expect(monitor.locator('[data-worker="query-0"]')).toHaveAttribute("data-completed", "0");
 });

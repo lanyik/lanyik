@@ -3,7 +3,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { InstancedBufferAttribute, type Vector2 } from "three";
 import { installActorFade } from "./ActorVisibility";
 import { ActorAction } from "../core/CombatWorld";
-import { ACTOR_POSES, MOVEMENT_POSES, writeActorPose } from "./ActorPose";
+import { ACTOR_POSES, HERO_POSES, writeActorPose } from "./ActorPose";
 import { AssetLoader } from "./AssetLoader";
 import { GAME_CONFIG } from "../core/GameConfig";
 
@@ -29,6 +29,7 @@ export class ActorModels {
     private readonly textures = new Set<Texture>();
     private readonly heroMeshes: Mesh[] = [];
     private heroCycle = 0;
+    private heroIdleCycle = 0;
     private readonly pose = new Mesh();
 
     private constructor() { this.pose.morphTargetInfluences = new Array(ACTOR_POSES).fill(0); }
@@ -66,19 +67,22 @@ export class ActorModels {
                 if (kind > 0) actors.enemies.push(pool);
                 for (const mesh of parts[kind]) {
                     const cycle: unknown = mesh.userData.cycle;
-                    if (!(mesh.material instanceof MeshStandardMaterial) || mesh.geometry.morphAttributes.position?.length !== (kind === 0 ? MOVEMENT_POSES : ACTOR_POSES)
-                        || mesh.geometry.morphAttributes.normal?.length !== (kind === 0 ? MOVEMENT_POSES : ACTOR_POSES)
-                        || typeof cycle !== "number" || !Number.isFinite(cycle) || cycle <= 0) throw new Error(`${NAMES[kind]}: invalid baked actor`);
+                    const idleCycle: unknown = mesh.userData.idleCycle;
+                    if (!(mesh.material instanceof MeshStandardMaterial) || mesh.geometry.morphAttributes.position?.length !== (kind === 0 ? HERO_POSES : ACTOR_POSES)
+                        || mesh.geometry.morphAttributes.normal?.length !== (kind === 0 ? HERO_POSES : ACTOR_POSES)
+                        || typeof cycle !== "number" || !Number.isFinite(cycle) || cycle <= 0
+                        || typeof idleCycle !== "number" || !Number.isFinite(idleCycle) || idleCycle <= 0) throw new Error(`${NAMES[kind]}: invalid baked actor`);
                     mesh.material.map = atlases[kind][0]; mesh.material.normalMap = atlases[kind][1];
                     mesh.material.roughnessMap = atlases[kind][2]; mesh.material.metalnessMap = atlases[kind][2];
                     mesh.material.emissiveMap = atlases[kind][3];
                     mesh.material.needsUpdate = true;
-                    if (kind === 0) { actors.hero.add(mesh); actors.heroMeshes.push(mesh); actors.heroCycle = cycle; }
+                    if (kind === 0) { actors.hero.add(mesh); actors.heroMeshes.push(mesh); actors.heroCycle = cycle; actors.heroIdleCycle = idleCycle; }
                     else {
                         installActorFade(mesh.material, viewCenter, true);
                         mesh.geometry.setAttribute("actorHome", new InstancedBufferAttribute(new Float32Array(capacity * 2), 2).setUsage(DynamicDrawUsage));
                         const instance = new InstancedMesh(mesh.geometry, mesh.material, capacity);
                         instance.userData.cycle = cycle;
+                        instance.userData.idleCycle = idleCycle;
                         instance.name = NAMES[kind];
                         instance.instanceMatrix.setUsage(DynamicDrawUsage);
                         instance.setColorAt(0, mesh.material.color.clone().set(0xffffff));
@@ -95,11 +99,11 @@ export class ActorModels {
     }
 
     public animateHero(seconds: number, moving: boolean): void {
-        writeActorPose(this.pose.morphTargetInfluences!, seconds / this.heroCycle, moving ? ActorAction.Moving : ActorAction.Idle, 0);
-        for (const mesh of this.heroMeshes) for (let index = 0; index < MOVEMENT_POSES; index++) mesh.morphTargetInfluences![index] = this.pose.morphTargetInfluences![index];
+        for (const mesh of this.heroMeshes) writeActorPose(mesh.morphTargetInfluences!, seconds / (moving ? this.heroCycle : this.heroIdleCycle), moving ? ActorAction.Moving : ActorAction.Idle, 0);
     }
     public animateEnemy(mesh: InstancedMesh, index: number, seconds: number, phaseOffset: number, action: ActorAction, progress: number): void {
-        writeActorPose(this.pose.morphTargetInfluences!, seconds / mesh.userData.cycle + phaseOffset, action, progress);
+        const cycle = action === ActorAction.Idle ? mesh.userData.idleCycle : mesh.userData.cycle;
+        writeActorPose(this.pose.morphTargetInfluences!, seconds / cycle + phaseOffset, action, progress);
         mesh.setMorphAt(index, this.pose);
     }
     public dispose(): void {

@@ -1,14 +1,14 @@
 :root {
     font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
-    color: #edf0ed;
-    background: #111719;
+    color: #e9e5dc;
+    background: #101217;
     font-synthesis: none;
     color-scheme: dark;
-    --muted: #a2afaf;
-    --gold: #e0bf80;
-    --edge: #354145;
-    --surface: #182124;
-    --inset: #11191c;
+    --muted: #a3a9b0;
+    --gold: #cdb182;
+    --edge: #363a43;
+    --surface: #191c24;
+    --inset: #10141b;
     --green: #92d1b5;
 }
 * { box-sizing: border-box; }
@@ -42,7 +42,7 @@ canvas { display: block; }
 #survivor-ui { position: fixed; inset: 0; pointer-events: none; }
 .survivor { position: absolute; inset: 0; pointer-events: none; font-size: 13px; line-height: 1.5; }
 .panel, .window, .combat-dock, .pause-banner, .state-overlay button, .workspace-switcher { pointer-events: auto; }
-.panel { background: #141d20f5; border: 1px solid var(--edge); box-shadow: 0 8px 28px #0004; border-radius: 8px; }
+.panel { background: linear-gradient(145deg, #20242bf5, #13171df5); border: 1px solid var(--edge); box-shadow: 0 8px 28px #0004, inset 0 1px #ffffff06; border-radius: 6px; }
 .eyebrow { display: block; color: var(--gold); font-size: 10px; letter-spacing: 2.5px; margin-bottom: 3px; }
 
 /* Exploration HUD */
@@ -59,6 +59,11 @@ canvas { display: block; }
 .run-metrics > div:first-child { padding-left: 0; border: 0; }
 .run-metrics span { color: var(--muted); font-size: 11px; }
 .run-metrics strong, .run-metrics b { font-size: 23px; font-weight: 500; line-height: 1.2; }
+.runtime-diagnostics > summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--edge); cursor: pointer; color: var(--muted); font-size: 11px; list-style: none; }
+.runtime-diagnostics > summary::before { content: '+'; color: var(--gold); }
+.runtime-diagnostics[open] > summary::before { content: '−'; }
+.runtime-diagnostics > summary > span { margin-left: auto; font-size: 10px; }
+.runtime-diagnostics > summary:hover { color: var(--gold); background: #ffffff05; }
 .worker-load { flex-basis: 100%; width: 100%; padding: 10px 12px; border-top: 1px solid var(--edge); font-variant-numeric: tabular-nums; max-height: calc(100dvh - 180px); overflow-y: auto; scrollbar-width: thin; }
 .frame-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0 0 8px; }
 .frame-summary > div { padding: 5px 6px; background: var(--inset); border-radius: 3px; }
@@ -319,7 +324,7 @@ canvas { display: block; }
 .upgrade-prompt footer button { color: #c8efca; border-color: #63875b; background: #304632; font-size: 12px; padding: 6px 10px; }
 
 /* Combat resources remain legible over both bright and dark terrain. */
-.combat-dock { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 444px; padding: 12px 16px; background: #131d20fa; border: 1px solid #526058; border-top: 2px solid #a98e5d; border-radius: 9px; box-shadow: 0 10px 30px #0006; }
+.combat-dock { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 444px; padding: 12px 16px; background: linear-gradient(155deg, #222630fa, #12161dfa); border: 1px solid var(--edge); border-top: 2px solid #a98e5d; border-radius: 6px; box-shadow: 0 10px 30px #0006; }
 .status-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 11px; }
 .status-bar > span, .status-bar button { display: flex; align-items: center; gap: 6px; }
 .status-bar button { padding: 0; border: none; background: transparent; font-size: 11px; }

@@ -80,9 +80,10 @@ export async function prepareSurvivorEnvironment(input, output, root) {
         let image;
         if (name === "mountain" || name === "_plains") {
             image = sharp(await read(name === "mountain" ? "rocky_terrain_diff_1k.jpg" : "rocky_terrain_02_diff_1k.jpg")).resize(cell, cell).modulate({ saturation: .6, brightness: .85 });
+        } else if (name === "land") {
+            image = sharp(await read("forest_ground_04_diff_1k.jpg")).resize(cell, cell).modulate({ saturation: .65, brightness: .9 });
         } else {
             image = sharp(atlasPath).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
-            if (name === "land") image = image.modulate({ saturation: .42, brightness: .8 });
         }
         patches.push({ input: await image.png().toBuffer(), left: position.cellX * cell, top: position.cellY * cell });
     }

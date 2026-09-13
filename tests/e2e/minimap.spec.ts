@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { WORLD_WATER_STYLE_RANGES } from "../../src/world/WorldStyleProfile";
+import { WORLD_WATER_STYLE_RANGES, type WorldWaterGenerationStyle } from "../../src/world/WorldStyleProfile";
+import { createWorldSurfaceResolver } from "../../src/world/WorldSurfaceResolver";
 
 interface MinimapView {
     generation: number;
@@ -63,7 +64,7 @@ test("near minimap zoom fills river cells instead of fading them into isolated p
         const view = (window as unknown as { worldMinimap: { view: MinimapView } }).worldMinimap.view;
         return {
             riverRatio: riverPixels / (canvas.width * canvas.height),
-            extent: [view.originX, view.originY, view.tileSpanX, view.tileSpanY, view.zoom]
+            extent: [view.originX!, view.originY!, view.tileSpanX!, view.tileSpanY!, view.zoom]
         };
     });
     const near = await snapshot();
@@ -71,10 +72,26 @@ test("near minimap zoom fills river cells instead of fading them into isolated p
     expect(near.extent[0]).toBeCloseTo(-238.5, 10);
     expect(near.extent[1]).toBeCloseTo(77.5, 10);
     expect(near.extent.slice(2)).toEqual([64, 64, 8]);
-    // The authoritative window contains about 6.25% river tiles. A dot per
-    // tile used to leave effectively no visible blue at this zoom.
-    expect(near.riverRatio).toBeGreaterThan(0.04);
-    expect(near.riverRatio).toBeLessThan(0.08);
+    const source = await page.evaluate(() => {
+        const api = window as unknown as {
+            worldControls: { seed: string };
+            getWorldDiagnostics(): { waterStyle: WorldWaterGenerationStyle };
+        };
+        return { seed: api.worldControls.seed, waterStyle: api.getWorldDiagnostics().waterStyle };
+    });
+    const resolver = createWorldSurfaceResolver(source);
+    const [x, y, width, height] = near.extent;
+    let riverArea = 0;
+    resolver.visitGeneratedRiverTiles(Math.floor(x), Math.floor(y), Math.ceil(x + width) - Math.floor(x), Math.ceil(y + height) - Math.floor(y), (tileX, tileY) => {
+        riverArea += (Math.min(tileX + 1, x + width) - Math.max(tileX, x))
+            * (Math.min(tileY + 1, y + height) - Math.max(tileY, y));
+    });
+    const riverRatio = riverArea / (width * height);
+    expect(riverRatio).toBeGreaterThan(.02);
+    // Compare against current authoritative cells, allowing the canvas border,
+    // overlay and edge filtering. One dot per tile loses most of this coverage.
+    expect(near.riverRatio).toBeGreaterThan(riverRatio * .85);
+    expect(near.riverRatio).toBeLessThan(riverRatio * 1.05);
     await page.locator("[data-minimap-refresh]").click();
     await waitForMinimap(page);
     const refreshed = await snapshot();

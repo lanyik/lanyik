@@ -7,9 +7,10 @@ import { segmentCircleHit } from "../src/core/ProjectileBatch";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL, type EnemyKind } from "../src/core/EnemyDefinitions";
 import { MAX_HOSTILE_PROJECTILES } from "../src/core/GameConfig";
 import { RegionalWorld } from "../src/core/RegionalWorld";
+import { OPEN_TERRAIN, type CombatTerrain } from "../src/core/CombatTerrain";
 
-function arena(kind: EnemyKind, distance = .8, boss = false) {
-    const entities = new CombatWorld(0, distance);
+function arena(kind: EnemyKind, distance = .8, boss = false, terrain: CombatTerrain = OPEN_TERRAIN) {
+    const entities = new CombatWorld(0, distance, terrain);
     const regions = new RegionalWorld("behavior", { x: 0, z: 0 }); regions.synchronize(0, distance);
     const home = regions.chunks.get("0,0")!;
     const spawn = { x: 0, z: 0, kind, elite: boss, boss, level: 1, region: regions.regionAt(0, 0) };
@@ -32,6 +33,57 @@ test.each([0, 1, 2] as const)("melee kind %i telegraphs, locks facing and commit
     expect(e.action.progress[enemy]).toBeCloseTo(.5);
     for (let tick = definition.windupTicks + 2; tick <= definition.windupTicks + definition.recoveryTicks; tick++) step(tick);
     expect(e.impacts.count).toBe(1);
+});
+
+test("ranged cooldowns circle at casting distance and retreat has a stable exit distance", () => {
+    const { entities: e, enemy, step } = arena(3, 5);
+    e.action.readyAt[enemy] = 1000;
+    for (let tick = 1; tick < 60; tick++) step(tick);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Circle);
+    expect(Math.abs(e.position.x[enemy])).toBeGreaterThan(.2);
+    expect(Math.hypot(e.position.x[enemy], e.position.z[enemy] - 5)).toBeGreaterThan(4.5);
+    e.position.z[e.player] = e.position.z[enemy] + 3.4; e.position.x[e.player] = e.position.x[enemy];
+    for (let tick = 60; tick < 65; tick++) step(tick);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Retreat);
+    e.position.z[e.player] = e.position.z[enemy] + 3.7;
+    for (let tick = 65; tick < 70; tick++) step(tick);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Retreat);
+    e.position.z[e.player] = e.position.z[enemy] + 4.5;
+    for (let tick = 70; tick < 75; tick++) step(tick);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Circle);
+});
+
+test("a healer can rescue an ally under pressure and faces the actual healing target", () => {
+    const { entities: e, enemy, step, spawn, home } = arena(5, 3);
+    const ally = e.spawnEnemy({ ...spawn, kind: 2, x: 1 }, home);
+    e.enemy.active[ally] = 1; e.vitals.health[ally] = 10;
+    step(1);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Heal);
+    expect(e.action.target[enemy]).toBe(e.world.ids[ally]);
+    expect(e.position.heading[enemy]).toBeCloseTo(Math.PI / 2);
+});
+
+test("blocked patrols choose another clear waypoint without unbounded searching", () => {
+    const isClear = vi.fn(() => false);
+    const { entities: e, enemy, step } = arena(0, 29, false, { isClear, move: (x, z) => ({ x, z }), dispose() {} });
+    step(1);
+    expect(isClear).toHaveBeenCalledTimes(3);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.None);
+    for (let tick = 2; tick <= 120; tick++) step(tick);
+    expect(isClear).toHaveBeenCalledTimes(3);
+    isClear.mockReturnValue(true);
+    for (let tick = 121; tick <= 205; tick++) step(tick);
+    expect(e.enemy.patrolStep[enemy]).toBeGreaterThan(3);
+    expect(e.position.x[enemy]).toBe(0); expect(e.position.z[enemy]).toBe(0);
+});
+
+test("locomotion faces the actual slide displacement instead of the obstructed intention", () => {
+    const { entities: e, enemy, step } = arena(0, 10, false, {
+        isClear: () => true, move: (x, z, dx, dz) => ({ x: x + Math.hypot(dx, dz), z }), dispose() {}
+    });
+    step(1);
+    expect(e.position.x[enemy]).toBeGreaterThan(0);
+    expect(e.position.heading[enemy]).toBeCloseTo(Math.PI / 2);
 });
 
 test("staggered 30Hz decisions retain continuous 120Hz movement", () => {

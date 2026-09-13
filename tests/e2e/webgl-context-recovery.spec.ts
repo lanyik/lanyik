@@ -61,7 +61,7 @@ test("recovers repeatedly from real WebGL context loss with bounded resources", 
         }, { restores: cycle, generation: (baseline.webglContext?.generation ?? 1) + cycle });
     }
 
-    const result = await page.evaluate(() => (window as unknown as {
+    const diagnostics = () => page.evaluate(() => (window as unknown as {
         getWorldDiagnostics(): {
             rendererMemory?: { geometries: number; textures: number };
             gpuTiming?: { pendingQueries: number };
@@ -69,6 +69,9 @@ test("recovers repeatedly from real WebGL context loss with bounded resources", 
             work?: { pendingTasks: number; busyTasks: number };
         };
     }).getWorldDiagnostics());
+    // A restored renderer can draw before the minimap's independent Worker finishes.
+    await expect.poll(async () => (await diagnostics()).work).toMatchObject({ pendingTasks: 0, busyTasks: 0 });
+    const result = await diagnostics();
     await testInfo.attach("context-recovery.json", {
         body: JSON.stringify({ baseline, result }, null, 2),
         contentType: "application/json"
@@ -78,5 +81,4 @@ test("recovers repeatedly from real WebGL context loss with bounded resources", 
     expect(result.rendererMemory?.geometries ?? 0).toBeLessThanOrEqual((baseline.rendererMemory?.geometries ?? 0) + 24);
     expect(result.rendererMemory?.textures ?? 0).toBeLessThanOrEqual((baseline.rendererMemory?.textures ?? 0) + 4);
     expect(result.gpuTiming?.pendingQueries ?? 0).toBeLessThanOrEqual(4);
-    expect(result.work).toMatchObject({ pendingTasks: 0, busyTasks: 0 });
 });

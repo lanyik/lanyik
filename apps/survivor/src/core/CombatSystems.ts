@@ -2,7 +2,7 @@ import { ActorAction, CombatWorld, Component, Faction, MoveIntent } from "./Comb
 import { GAME_CONFIG, MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
-import { ENEMY_SPECIAL } from "./EnemyDefinitions";
+import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
 import { EffectKind } from "./CombatEffects";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
@@ -67,7 +67,8 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
             * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
         const stop = intent === MoveIntent.Chase || intent === MoveIntent.Flank ? a.reach[slot] * .9 : 0;
         if (intent === MoveIntent.Circle) {
-            const direction = world.ids[slot] % 2 ? 1 : -1, radial = Math.max(-.5, Math.min(.5, distance - 1.8));
+            const preferred = ENEMY_DEFINITIONS[e.kind[slot]].ranged ? a.reach[slot] * .8 : 1.8;
+            const direction = world.ids[slot] % 2 ? 1 : -1, radial = Math.max(-.5, Math.min(.5, distance - preferred));
             const forwardX = dx, forwardZ = dz;
             dx = forwardX * radial - forwardZ * direction; dz = forwardZ * radial + forwardX * direction;
             const norm = Math.hypot(dx, dz); dx /= norm; dz /= norm;
@@ -76,16 +77,18 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
             : Math.min(Math.max(0, distance - stop), speed * SECONDS);
         const weave = intent === MoveIntent.Flank ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
         const scale = travel / Math.sqrt(1 + weave * weave);
+        const startX = p.x[slot], startZ = p.z[slot];
         let moved = entities.moveActor(slot, (dx - dz * weave) * scale, (dz + dx * weave) * scale);
         // Bounded local steering around trunks. Charges keep their committed heading.
         if (!moved && travel > 0) {
             const side = world.ids[slot] % 2 ? 1 : -1;
-            for (const direction of [side, -side]) {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                const direction = attempt === 0 ? side : -side;
                 moved = entities.moveActor(slot, (dx * .5 - dz * .866 * direction) * travel, (dz * .5 + dx * .866 * direction) * travel, false);
                 if (moved) break;
             }
         }
-        p.heading[slot] = Math.atan2(dx, dz);
+        if (moved) p.heading[slot] = Math.atan2(p.x[slot] - startX, p.z[slot] - startZ);
         a.kind[slot] = moved ? ActorAction.Moving : ActorAction.Idle;
         entities.updateSpatial(slot, Component.Enemy);
     }

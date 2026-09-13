@@ -13,7 +13,7 @@
 |---|---|---|
 | `ranger/Male_Ranger.gltf` 与配套文件 | 游侠服装、护肩、兜帽 | [Fantasy Outfits](https://quaternius.itch.io/modular-character-outfits-fantasy) / CC0 |
 | `head/Superhero_Male_FullBody.gltf` 与配套文件 | 仅保留头部、眼睛与眉毛，移除衣服内部身体 | [Universal Base Characters](https://quaternius.itch.io/universal-base-characters) / CC0 |
-| `animation/UAL1_Standard.glb` | Idle、Jog、Walk、Sword Idle、Spell Idle、Punch、Sword Attack、Spell Shoot | [Universal Animation Library](https://quaternius.itch.io/universal-animation-library) / CC0 |
+| `animation/UAL1_Standard.glb` | Idle、Jog、Walk、Punch、Sword Attack、Spell Shoot | [Universal Animation Library](https://quaternius.itch.io/universal-animation-library) / CC0 |
 | `bestiary/Imp.glb`、`Puglin.glb` 与两张原版配色 | 两种怪物及持械、体型、施法姿势的试装变体 | [Bestiary](https://quaternius.itch.io/bestiary-dungeon-monsters-kit) / QAL 1.0 |
 
 实际输入位于 `apps/survivor/assets/actors`，`sources.json` 对每个文件记录作者页面、
@@ -35,31 +35,31 @@
    误差上限 `.008`，实际数量由保真约束决定。头部按颈部高度裁掉隐藏身体，再压紧索引与顶点。
 3. 用通用动作骨架的世界旋转增量映射到目标绑定姿势；保留目标肢体长度，只按髋骨高度比例传递上下起伏，
    不导入水平根运动。所有旋转归一化，缺动作或缺骨骼明确失败，不让局部身体静默留在 T 姿势。
-4. 分别生成静止基准和八帧循环移动姿势，怪物再生成八帧非循环攻击姿势（包含首尾）。位置与作者法线都经过蒙皮，保留跨 UV 接缝的平滑明暗。
+4. 分别生成放松待机基准和八帧循环移动姿势，怪物再生成八帧非循环攻击姿势（包含首尾），最后追加四帧循环呼吸待机。所有角色待机只取 `Idle_Loop`，不使用持剑/施法准备姿势。位置与作者法线都经过蒙皮，保留跨 UV 接缝的平滑明暗。
    离线求值使用 LoopOnce 并锁定末帧，防止恰好采样 duration 时回到第一帧；移动片段不重复采样终点。
 5. 主角四张 1024² 图集，怪物各四张 512² 图集；材质区域有四像素边缘延展。
    UV 随图集重新映射，金属与粗糙度因子写入 ORM 通道，保留法线和眼睛发光。
-6. 每组模型导出一个材质 primitive，删除运行时骨架与其他动作；生产五组模型及纹理约 14.5 MiB。
+6. 每组模型导出一个材质 primitive，删除运行时骨架与其他动作；生产五组模型及纹理约 17.05 MiB。主角 12 帧，敌人 20 帧；四帧待机为平缓呼吸保留独立循环，不增加模型池或运行时骨架。
 
 | 生产模型 / 用途 | 基准身高 | 静止 / 移动 | 移动周期 | 攻击片段 | 三角形 |
 |---|---:|---|---:|---|---:|
 | Ranger / 守夜人 | 1.60 | Idle / Jog | 0.9333 秒 | — | 14,084 |
 | Puglin / 地精仆从 | 1.00 | Idle / Walk | 1.3333 秒 | Punch_Cross | 3,096 |
 | Imp / 小恶魔斥候，移除武器与锁链 | 1.25 | Idle / Jog | 0.9333 秒 | Punch_Jab | 5,340 |
-| Puglin_Brute / 持棍地精重卫 | 1.00 | Sword Idle / Walk | 1.3333 秒 | Sword_Attack | 3,096 |
-| Imp_Shaman / 蓝色小恶魔术士，保留锁链、移除狼牙棒 | 1.25 | Spell Idle / Jog | 0.9333 秒 | Spell_Simple_Shoot | 6,576 |
+| Puglin_Brute / 持棍地精重卫 | 1.00 | Idle / Walk | 1.3333 秒 | Sword_Attack | 3,096 |
+| Imp_Shaman / 蓝色小恶魔术士，保留锁链、移除狼牙棒 | 1.25 | Idle / Jog | 0.9333 秒 | Spell_Simple_Shoot | 6,576 |
 
 赤脊冲锋者复用 Puglin_Brute 并染橙红，幽光祭司复用 Imp_Shaman 并染绿。
 玩法 kind 与生产模型索引分离，由 `EnemyDefinitions.model` 映射；不会按六种玩法额外复制两组 GPU 资源。
 
 运行时仍按核心半径缩放敌人，重卫、精英和领主因此具有更大轮廓。
 领主采用术士变体，HUD 名称为裂爪领主。基础数值与新增攻击时序由 `EnemyDefinitions.ts` 决定。
-生成 manifest 顶层 frames 记录八帧移动；各模型记录总帧数、攻击名称、真实周期、身高、顶点/三角形数、primitive 数、图集尺寸与产物字节数。
+生成 manifest 顶层 frames / idleFrames 记录八帧移动和四帧待机；各模型记录总帧数、待机/攻击名称、移动/待机周期、身高、顶点/三角形数、primitive 数、图集尺寸与产物字节数。
 模型 extras 携带周期，运行时按模型自己的周期播放，不再固定假定全部为 0.8 秒。
 
 ## 场景协调
 
-应用的树木、岩地贴图与统一比例由[场景资产合同](environment-assets.md)定义；`land` 保持饱和度 `.42`、亮度 `.8` 的苔绿处理。
+应用的树木、岩地贴图与统一比例由[场景资产合同](environment-assets.md)定义；`land` 使用扫描林地，饱和度 `.65`、亮度 `.9`。
 草地碎石与山岩采用两个独立 CC0 材质，图集格位语义和引擎原始资产保留。
 战斗层添加固定相机方向的柔和补光（`0xe2ebdf`、强度 `1.6`、方向 `-6,9,7`），
 让皮革、面部与深色怪物在当前灯光下可读。补光与目标对象一起归战斗层所有。
@@ -71,7 +71,7 @@
 矩阵、颜色和出生锚的 GPU 更新范围仅为可见前缀；morphTexture 使用 RedFormat，按 Three 支持的整张纹理上传权重，空池不上传。
 每局开始先清空实例池、技能和投影，并隐藏整个角色/雾根节点；等新局首个表现状态到达再显示，避免加载期间继续绘制上一局满载角色。
 事实位置保留双精度，实例与出生锚写入相对插值玩家位置的局部坐标；根节点负责世界平移，避免远行时 Float32 位置量化。
-移动相位由模拟动画时间、真实周期和实体 ID 确定，静止使用独立 Idle 基准。
+移动和待机相位由模拟动画时间、各自真实周期和实体 ID 确定；待机周期为 2.5 秒，四帧不重复采样终点。切换至待机清空移动/攻击权重，再只写待机区段；主角和敌人的待机区段分别从 8 / 16 开始，加载时严格校验帧数和两种周期。
 攻击权重由 ECS 动作进度确定，前摇与后摇各映射到动画一半，末帧不循环回首帧；切换动作清除另一组权重，暂停时随模拟冻结。
 预警扇形/圆环及敌方弹道颜色读取同一动作与阵营组件，具体规则见[战斗 ECS 与行为树](simulation-and-ai.md)。
 颜色与发光图用 sRGB，法线与 ORM 保持线性数据。贴图使用无颜色转换、无预乘、无翻转的 ImageBitmap 解码，关闭 Texture.flipY 以匹配 glTF UV。
@@ -87,7 +87,7 @@
 五个 GLB 与二十张角色贴图共用有界并发队列，上限由 `GAME_CONFIG.presentation.assetLoadConcurrency` 指定，默认 4；技能图集单独加载。
 初始化信号传入 fetch；取消或失败会停止队列和在途请求，立即释放已完成的半成品。
 GLTF/ImageBitmap 解码任务取消时停止等待，晚到结果自行释放；已建立 Texture 的像素位图随 texture.dispose 关闭。
-实例 morphTexture 按最大容量预分配，每只怪物一行含基准权重及十六个 morph 权重，使资源账本覆盖真实容量。
+实例 morphTexture 按最大容量预分配，每只怪物一行含基准权重及二十个 morph 权重，使资源账本覆盖真实容量。
 应用关闭时释放几何、材质、四类贴图、实例 morphTexture、补光、三类攻击预警池、技能图集实例池、持续护罩、边缘雾与资源账本。
 没有更改引擎的生命周期、资源核算、流送或调度语义。
 

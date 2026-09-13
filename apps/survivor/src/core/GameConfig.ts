@@ -9,7 +9,7 @@ export const GAME_CONFIG = Object.freeze({
     skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
     spiritRealm: Object.freeze({ soulsPerLevel: 1000 }),
     presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 14, mistDenseRadius: 26, mistFadeRadius: 44, mistOuterRadius: 52,
-        horizonFogStart: 620, horizonFogEnd: 1100, horizonFogColor: 0x849b9f,
+        horizonFogStart: 820, horizonFogEnd: 1450, horizonFogColor: 0x849b9f,
         groundProjection: Object.freeze({ span: 64, resolution: 2048 }), assetLoadConcurrency: 4,
         minimap: Object.freeze({ tileSpan: 96, rasterSize: 192, cacheEntries: 64 }) }),
     workers: Object.freeze({ maxCommands: 64, timeoutMs: 15_000,

@@ -93,5 +93,14 @@
     "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
     "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
     "archivePath": "Models/OBJ format/tree_pineTallA_detailed.obj"
+  },
+  {
+    "file": "forest_ground_04_diff_1k.jpg",
+    "bytes": 1113899,
+    "sha256": "50a4dda30875020c64385261aa7e00e2155b592302fa6794165f58fae73cbd2c",
+    "source": "https://polyhaven.com/a/forest_ground_04",
+    "author": "Rob Tuytel / Rico Cilliers / Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_diff_1k.jpg"
   }
 ]
