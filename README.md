@@ -56,7 +56,13 @@ Runtime requirements are Node.js 20 or newer for development and `three`
 - English and Simplified Chinese demo UI, live visual controls and runtime
   diagnostics for frame, Worker, cache and residency state.
 
-Run the game application with `npm run app:dev`, then open
+On Windows, double-click [`run.bat`](run.bat) to install locked dependencies when
+`node_modules` is missing, prepare assets, start the server and open the game menu.
+It requires Node.js `^20.19.0 || >=22.12.0` and npm. Keep the terminal open while
+playing; press Ctrl+C to stop. Startup errors remain visible. If port 5173 is
+already occupied, stop the existing server first.
+
+Alternatively, run the game application with `npm run app:dev`, then open
 <http://127.0.0.1:5173>. Use WASD to move; attacks target the nearest monster
 automatically, `I` opens equipment and `P` pauses combat. Architecture and
 implemented gameplay contracts are documented in
