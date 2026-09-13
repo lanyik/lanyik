@@ -11,6 +11,15 @@ export const RETAINED_CHUNK_RADIUS = 3;
 export const MAX_COMBAT_CHUNKS = (RETAINED_CHUNK_RADIUS * 2 + 1) ** 2;
 export type RegionDifficulty = "normal" | "hard" | "horror";
 export type ResidencyBand = "near" | "buffer" | "retained" | "unloaded";
+/** Explicit ecological groups: wildlife does not randomly share a cult's camp. */
+export const SETTLEMENTS = Object.freeze({
+    brood: Object.freeze({ name: "蛛兽巢群", members: Object.freeze([EnemyKind.Scout, EnemyKind.Scout, EnemyKind.Scout]) }),
+    raiders: Object.freeze({ name: "地精营地", members: Object.freeze([EnemyKind.Charger, EnemyKind.Grunt, EnemyKind.Grunt]) }),
+    cult: Object.freeze({ name: "祭司据点", members: Object.freeze([EnemyKind.Caster, EnemyKind.Guard, EnemyKind.Healer, EnemyKind.Guard]) }),
+    warband: Object.freeze({ name: "混合掠夺营", members: Object.freeze([EnemyKind.Charger, EnemyKind.Grunt, EnemyKind.Caster, EnemyKind.Grunt, EnemyKind.Healer]) })
+});
+export type SettlementKind = keyof typeof SETTLEMENTS;
+export interface Settlement { readonly kind: SettlementKind; readonly x: number; readonly z: number }
 export const REGION_RULES = Object.freeze({
     normal: Object.freeze({ name: "常规地域", population: 7, scale: 1, levelOffset: 0, eliteChance: 0.05 }),
     hard: Object.freeze({ name: "困难地域", population: 9, scale: 1.25, levelOffset: 2, eliteChance: 0.2 }),
@@ -44,6 +53,7 @@ export interface RegionalChest {
     readonly hasOrb: boolean;
 }
 export interface RegionalSpawn {
+    readonly settlement?: Settlement;
     readonly x: number;
     readonly z: number;
     readonly region: RegionInfo;
@@ -137,34 +147,40 @@ export class RegionalWorld {
         const random = new DeterministicRandom(`${this.seed}:chunk:${key}`);
         const region = this.regionAt(this.chunkX(x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(z) + COMBAT_CHUNK_HALF_SIZE);
         const spawns: RegionalSpawn[] = [];
+        const bossRegion = this.nearbyRegions(region, 1).find(candidate => candidate.difficulty === "horror"
+            && candidate.centerX >= this.chunkX(x) && candidate.centerX < this.chunkX(x + 1)
+            && candidate.centerZ >= this.chunkZ(z) && candidate.centerZ < this.chunkZ(z + 1));
+        const choices: readonly SettlementKind[] = region.difficulty === "normal" ? ["brood", "raiders"] : ["brood", "raiders", "cult", "warband"];
+        const settlement: Settlement = Object.freeze({ kind: bossRegion ? "cult" : random.pick(choices),
+            x: bossRegion?.centerX ?? this.chunkX(x + .35 + random.next() * .3),
+            z: bossRegion?.centerZ ?? this.chunkZ(z + .35 + random.next() * .3) });
+        const members = SETTLEMENTS[settlement.kind].members, orientation = random.next() * Math.PI * 2;
         for (let slot = 0; slot < REGION_RULES[region.difficulty].population; slot += 1) {
-            const px = this.chunkX(x + 0.08 + random.next() * 0.84);
-            const pz = this.chunkZ(z + 0.08 + random.next() * 0.84);
+            const angle = orientation + slot * 2.399963 + (random.next() - .5) * .35;
+            const radius = .9 + Math.sqrt(slot / REGION_RULES[region.difficulty].population) * 2.1;
+            const px = Math.max(this.chunkX(x) + .6, Math.min(this.chunkX(x + 1) - .6, settlement.x + Math.sin(angle) * radius));
+            const pz = Math.max(this.chunkZ(z) + .6, Math.min(this.chunkZ(z + 1) - .6, settlement.z + Math.cos(angle) * radius));
             const ownRegion = this.regionAt(px, pz);
             const elite = random.chance(REGION_RULES[ownRegion.difficulty].eliteChance);
-            const kind = random.pick(ownRegion.difficulty === "normal" ? [EnemyKind.Grunt, EnemyKind.Grunt, EnemyKind.Scout, EnemyKind.Charger]
-                : ownRegion.difficulty === "hard" ? [EnemyKind.Grunt, EnemyKind.Scout, EnemyKind.Guard, EnemyKind.Charger, EnemyKind.Healer]
-                : [EnemyKind.Scout, EnemyKind.Guard, EnemyKind.Caster, EnemyKind.Charger, EnemyKind.Healer]);
-            spawns.push(Object.freeze({ x: px, z: pz, region: ownRegion, kind, elite, boss: false,
+            const kind = members[slot % members.length];
+            spawns.push(Object.freeze({ x: px, z: pz, region: ownRegion, settlement, kind, elite, boss: false,
                 level: Math.max(1, ownRegion.level + random.integer(3) - 1 + Number(elite)) }));
         }
-        for (const candidate of this.nearbyRegions(region, 1)) {
-            if (candidate.difficulty !== "horror") continue;
-            if (candidate.centerX < this.chunkX(x) || candidate.centerX >= this.chunkX(x + 1)
-                || candidate.centerZ < this.chunkZ(z) || candidate.centerZ >= this.chunkZ(z + 1)) continue;
-            spawns.push(Object.freeze({ x: candidate.centerX, z: candidate.centerZ, region: candidate,
-                kind: EnemyKind.Caster, elite: true, boss: true, level: candidate.level + 3 }));
+        if (bossRegion) {
+            spawns.push(Object.freeze({ x: bossRegion.centerX, z: bossRegion.centerZ, region: bossRegion, settlement,
+                kind: EnemyKind.Caster, elite: true, boss: true, level: bossRegion.level + 3 }));
         }
         let chest: RegionalChest | undefined;
-        if (random.chance(0.5)) {
-            const px = this.chunkX(x + 0.2 + random.next() * 0.6);
-            const pz = this.chunkZ(z + 0.2 + random.next() * 0.6);
+        const treasure = new DeterministicRandom(`${this.seed}:chest:${key}`);
+        if (treasure.chance(0.5)) {
+            const px = this.chunkX(x + 0.2 + treasure.next() * 0.6);
+            const pz = this.chunkZ(z + 0.2 + treasure.next() * 0.6);
             const ownRegion = this.regionAt(px, pz);
             const danger = ownRegion.difficulty === "horror" ? 2 : ownRegion.difficulty === "hard" ? 1 : 0;
-            const roll = random.next();
+            const roll = treasure.next();
             const tier = roll < 0.004 + danger * 0.008 ? "rainbow" : roll < 0.025 + danger * 0.025 ? "diamond"
                 : roll < 0.14 + danger * 0.08 ? "gold" : roll < 0.45 + danger * 0.1 ? "silver" : "bronze";
-            chest = Object.freeze({ x: px, z: pz, region: ownRegion, tier, hasOrb: random.chance(0.35 + CHEST_TIERS.indexOf(tier) * 0.15) });
+            chest = Object.freeze({ x: px, z: pz, region: ownRegion, tier, hasOrb: treasure.chance(0.35 + CHEST_TIERS.indexOf(tier) * 0.15) });
         }
         return { key, x, z, spawns: Object.freeze(spawns), spawned: new Uint8Array(spawns.length), chest,
             chestOpened: false, resident: true, band: this.residencyAt(this.chunkX(x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(z) + COMBAT_CHUNK_HALF_SIZE) };

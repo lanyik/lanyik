@@ -914,6 +914,37 @@
     }
   }
 
+  // src/rendering/TerrainCamera.ts
+  function constrainTerrainCamera(position, target, height, clearance) {
+    const dx = position.x - target.x, dz = position.z - target.z;
+    const horizontal = Math.hypot(dx, dz), distance = position.distanceTo(target);
+    if (distance < 1e-6 || horizontal < 1e-6) return;
+    const ux = dx / horizontal, uz = dz / horizontal;
+    let angle = Math.atan2(horizontal, position.y - target.y);
+    const clear = (phi) => {
+      const h = Math.sin(phi) * distance, y = Math.cos(phi) * distance;
+      const samples = Math.max(8, Math.min(64, Math.ceil(h / Math.max(1, clearance))));
+      for (let i = 1; i <= samples; i++) {
+        const t = i / samples, margin = Math.min(clearance, h * t * 0.18);
+        if (target.y + y * t < height(target.x + ux * h * t, target.z + uz * h * t) + margin) return false;
+      }
+      return true;
+    };
+    if (clear(angle)) return;
+    let low = 0, high = angle;
+    for (let i = 0; i < 9; i++) {
+      const mid = (low + high) / 2;
+      if (clear(mid)) low = mid;
+      else high = mid;
+    }
+    angle = low;
+    position.set(
+      target.x + ux * Math.sin(angle) * distance,
+      target.y + Math.cos(angle) * distance,
+      target.z + uz * Math.sin(angle) * distance
+    );
+  }
+
   // src/EventEmitter.ts
   var EventEmitter = class {
     constructor() {
@@ -5818,6 +5849,8 @@ vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
   // src/shaders/terrainMaterial.ts
   var TERRAIN_MATERIAL_SAMPLING = `
 uniform float rockAtlasIndex;
+uniform float grassAtlasIndex;
+uniform float soilAtlasIndex;
 in float vSurfaceSlope;
 in vec3 vViewPosition;
 uniform mat3 normalMatrix;
@@ -5860,7 +5893,7 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
 }
 #endif
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
+vec4 sampleTerrainLayer(float idx, vec3 pattern) {
     float patchPhase = pattern.z * 8.0;
     float index = floor(patchPhase);
     vec2 offsetA = sin(vec2(3.17, 6.83) * (index + 1.0)) * 0.43;
@@ -5877,6 +5910,15 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     color.rgb = lightTerrainSurface(color.rgb, surface);
 #endif
     return color;
+}
+
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 base = sampleTerrainLayer(idx, pattern);
+    if (soilAtlasIndex >= 0.0 && abs(idx - grassAtlasIndex) < 0.1) {
+        float soil = smoothstep(.48, .78, pattern.z) * .72;
+        if (soil > .001) base = mix(base, sampleTerrainLayer(soilAtlasIndex, pattern), soil);
+    }
+    return base;
 }
 
 vec4 applySlopeMaterial(vec4 base, vec3 pattern) {
@@ -7452,6 +7494,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         surfaceMap: { value: this.surfaceTexture ?? null },
         sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] },
         rockAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] },
+        grassAtlasIndex: { value: this.atlasCellIndex["land" /* land */] },
+        soilAtlasIndex: { value: this.options.atlas.textures.soil ? this.options.atlas.textures.soil.cellY * (this.options.atlas.width / this.options.atlas.cellSize) + this.options.atlas.textures.soil.cellX : -1 },
         waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
         beachWidth: { value: this.options.beachWidth ?? 0.35 },
         waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },
@@ -8960,6 +9004,30 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     return [...grassLayoutAllocations(layout.grass), ...forestLayoutAllocations(layout.forest)];
   }
 
+  // src/rendering/ForestOcclusion.ts
+  function installForestOcclusion(material, focus) {
+    const compile = material.onBeforeCompile, key = material.customProgramCacheKey();
+    material.onBeforeCompile = (shader, renderer) => {
+      compile.call(material, shader, renderer);
+      shader.uniforms.forestFocus = focus;
+      shader.fragmentShader = "uniform vec4 forestFocus;\n" + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace("#include <alphatest_fragment>", `
+            #include <alphatest_fragment>
+            if (forestFocus.w > 0.0 && forestFocus.z < -0.01) {
+                vec3 fragment = -vViewPosition;
+                float ratio = fragment.z / forestFocus.z;
+                float radius = forestFocus.w * max(.01, ratio);
+                float radial = length(fragment.xy - forestFocus.xy * ratio) / radius;
+                float foreground = smoothstep(forestFocus.z, forestFocus.z + forestFocus.w * .5, fragment.z);
+                float opacity = 1.0 - (1.0 - smoothstep(.3, 1.0, radial)) * foreground * .84;
+                float coverage = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(.06711056, .00583715))));
+                if (coverage > opacity) discard;
+            }
+        `);
+    };
+    material.customProgramCacheKey = () => `${key}:foreground-dither-v1`;
+  }
+
   // src/objects/Forest.ts
   var HIDDEN_TREE_MATRIX = new Float32Array([
     0,
@@ -9054,11 +9122,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     }
     return material;
   }
-  function prepareForestMaterials(source, albedoScale, cache, created) {
+  function prepareForestMaterials(source, albedoScale, cache, created, focus) {
     const prepare = (material) => {
       const cached = cache.get(material);
       if (cached) return cached;
       const lit = createForestMaterial(material, albedoScale);
+      if (focus) installForestOcclusion(lit, focus);
       cache.set(material, lit);
       created.add(lit);
       return lit;
@@ -9066,7 +9135,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     return Array.isArray(source) ? source.map(prepare) : prepare(source);
   }
   var ForestSharedResources = class {
-    constructor(modelAssets, resourceAccount) {
+    constructor(modelAssets, resourceAccount, focus) {
+      this.focus = focus;
       this.models = /* @__PURE__ */ new Map();
       this.geometries = /* @__PURE__ */ new Set();
       this.materials = /* @__PURE__ */ new Set();
@@ -9117,7 +9187,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
             });
             const materialCache = /* @__PURE__ */ new Map();
             const baseMaterials = meshesByLod[0].map(
-              (mesh) => prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials)
+              (mesh) => prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials, this.focus)
             );
             const lods = meshesByLod.map((meshes, lod) => meshes.map((mesh, part) => {
               const geometry = mesh.geometry.clone();
@@ -9440,7 +9510,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     };
     const tileRanges = /* @__PURE__ */ new Map();
     const chunkRecords = /* @__PURE__ */ new Map();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus);
     let modelIndex = 0;
     try {
       for (const [modelPath, tiles] of tilesByModel) {
@@ -10930,7 +11000,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 20;
+  var WORLD_GENERATOR_VERSION = 21;
 
   // src/world/WorldStyleProfile.ts
   var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -11040,14 +11110,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       valleyDepth: 0.035,
       hillElevationStart: 0.55,
       hillElevationEnd: 0.72,
-      hillScale: 0.22,
+      hillScale: 0.18,
       hillMinimum: 0.13,
       hillMaximum: 0.38,
       mountainElevationStart: 0.66,
       mountainElevationSpan: 0.25,
       mountainMinimum: 0.36,
       mountainPower: 1.35,
-      mountainScale: 0.78,
+      mountainScale: 1.05,
       mountainRidgeScale: 0.22,
       mountainMaximum: 1.25
     }),
@@ -12442,11 +12512,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       0,
       (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
     );
-    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale;
-    return Math.max(
-      relief.shoreline,
-      Math.min(relief.mountainMaximum, plain + hill + mountain)
-    );
+    const pass = 1 - smoothstep3(0.48, 0.9, sample.valley) * 0.78;
+    const mountain = (Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale) * pass;
+    const height = Math.max(relief.shoreline, plain + hill + mountain);
+    const knee = relief.mountainMaximum * 0.7, span = relief.mountainMaximum - knee;
+    return height <= knee ? height : relief.mountainMaximum - span * Math.exp(-(height - knee) / span);
   }
   function biomeWeightsFor(type, sample, profile) {
     if (isWater2(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });
@@ -16903,6 +16973,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
     terrainTextureAnisotropy: 8,
+    foregroundFadeRadius: 0,
+    foregroundFadeHeight: 0,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -16979,6 +17051,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     };
     positive2("size", options.size);
     positive2("terrainTextureRegionSize", options.terrainTextureRegionSize);
+    for (const key of ["foregroundFadeRadius", "foregroundFadeHeight"]) {
+      if (!Number.isFinite(options[key]) || options[key] < 0) throw new RangeError(`${key} must be finite and non-negative`);
+    }
     createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize);
     if (!Number.isSafeInteger(options.terrainTextureAnisotropy) || options.terrainTextureAnisotropy <= 0) {
       throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");
@@ -17412,6 +17487,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
       if (isShoreline(tile)) {
         contribution = { shoreline: true, relief: 0 };
+      } else if (sample && tile && tile.type === this.resolveGeneratedTile(x, y)?.type && Boolean(tile.modifiers?.includes("hill")) === Boolean(this.resolveGeneratedTile(x, y)?.modifiers?.includes("hill"))) {
+        contribution = { shoreline: false, relief: sample.relief };
       } else if (tile?.type === "mountain" /* mountain */) {
         contribution = {
           shoreline: false,
@@ -17621,6 +17698,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   var HexMap = class extends EventEmitter {
     constructor(options) {
       super();
+      this.forestFocus = { value: new three.Vector4() };
+      this.cameraSurfaceAnchor = new three.Vector3(Infinity, Infinity, Infinity);
+      this.cameraSurfaceRevision = -1;
+      this.cameraSurfaceWorldRevision = -1;
       this.markerProjections = new SurfaceMarkerProjectionCache();
       this.worldCopies = [];
       this.worldCopyGroups = /* @__PURE__ */ new Map();
@@ -17739,6 +17820,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.rebaseWorld();
+        this.updateCameraClearance();
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
         this.worldChunkMountQueue.retryOne();
@@ -18284,6 +18366,33 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.resizeObserver.observe(this.canvas);
       }
     }
+    updateCameraClearance() {
+      const surface = this.worldSurface;
+      if (!surface) return;
+      const camera = this.camera;
+      if (!camera.position.equals(this.cameraSurfaceAnchor) || this.cameraSurfaceRevision !== surface.revision || this.cameraSurfaceWorldRevision !== this.worldLayerRevision) {
+        const window2 = surface.createWindow();
+        try {
+          constrainTerrainCamera(
+            camera.position,
+            this.controls.target,
+            (x, z) => window2.getWorldHeight(x + this.renderOrigin.x, z + this.renderOrigin.y),
+            this.options.size * 0.45
+          );
+        } finally {
+          window2.clear();
+        }
+        camera.lookAt(this.controls.target);
+        this.cameraSurfaceAnchor.copy(camera.position);
+        this.cameraSurfaceRevision = surface.revision;
+        this.cameraSurfaceWorldRevision = this.worldLayerRevision;
+      }
+      camera.updateMatrixWorld();
+      const focus = this.forestFocus.value;
+      focus.set(this.controls.target.x, this.controls.target.y + (this.options.foregroundFadeHeight ?? 0), this.controls.target.z, 1);
+      focus.applyMatrix4(camera.matrixWorldInverse);
+      focus.w = this.options.foregroundFadeRadius ?? 0;
+    }
     updateWorldChunkVisibility() {
       if (!this.mapData) return;
       this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks);
@@ -18384,6 +18493,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.streamingVelocity.set(0, 0);
       this.mapData = source.map;
       this.worldSurface = worldSurface;
+      this.cameraSurfaceAnchor.set(Infinity, Infinity, Infinity);
       this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
       this.fogStates = new FogStateStore(source.map);
       this.floatingOriginThreshold = floatingOriginThreshold;
@@ -18648,7 +18758,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const record = this.worldChunkLayers.get(context.key);
       if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
       const forestBuildRevision = record.forestBuildRevision ?? (record.forestBuildRevision = 0);
-      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount));
+      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus));
       const preparation = this.prepareWorldVegetation(context, record);
       const vegetationSignature = record.vegetationSignature;
       const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -19360,6 +19470,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       }
       if (!this.mapData) return false;
       const forest = await createForest(this.mapData, {
+        foregroundFocus: this.forestFocus,
         resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         surface: this.worldSurface,

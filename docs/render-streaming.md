@@ -908,3 +908,21 @@ and uploaded by CI.
 
 The backend/culling crossover benchmark and migration decision are recorded in
 [`render-backend-evaluation.md`](./render-backend-evaluation.md).
+
+Foreground forest visibility is an optional shared material uniform controlled by
+`foregroundFadeRadius` and `foregroundFadeHeight` (non-negative world units, zero
+by default). The application uses 44.2/30.6. `ForestOcclusion` applies a stable
+screen coverage dither after foliage alpha testing, only between camera and focus,
+with a soft radial boundary and 16% minimum coverage. Bark and foliage retain
+their instance batches, fog state and depth writes; no per-tree material or
+transparent sorting is introduced. The focus is transformed to view space after
+camera correction, so orbit, zoom, world replacement and floating origins agree.
+
+`TerrainCamera` corrects the orbit on its current sphere using shared CPU surface
+heights, retaining zoom distance and checking the sightline as well as the lens.
+The temporary height window caches the bounded search (at most 64 samples per
+angle and nine refinements). Position, surface revision and mount revision gate
+stationary-frame work; world replacement invalidates the anchor. Camera-side
+collision does not request another world or create a physics scene. Browser
+coverage tests compare center and outside pixels with forest fade on/off, then
+orbit a real generated ridge and check the camera sightline against CPU heights.

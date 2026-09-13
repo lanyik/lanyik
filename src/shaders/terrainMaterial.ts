@@ -1,6 +1,8 @@
 /** Continuous patch offsets break atlas repetition while preserving explicit mip gradients. */
 export const TERRAIN_MATERIAL_SAMPLING = `
 uniform float rockAtlasIndex;
+uniform float grassAtlasIndex;
+uniform float soilAtlasIndex;
 in float vSurfaceSlope;
 in vec3 vViewPosition;
 uniform mat3 normalMatrix;
@@ -43,7 +45,7 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
 }
 #endif
 
-vec4 sampleTerrainCell(float idx, vec3 pattern) {
+vec4 sampleTerrainLayer(float idx, vec3 pattern) {
     float patchPhase = pattern.z * 8.0;
     float index = floor(patchPhase);
     vec2 offsetA = sin(vec2(3.17, 6.83) * (index + 1.0)) * 0.43;
@@ -60,6 +62,15 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     color.rgb = lightTerrainSurface(color.rgb, surface);
 #endif
     return color;
+}
+
+vec4 sampleTerrainCell(float idx, vec3 pattern) {
+    vec4 base = sampleTerrainLayer(idx, pattern);
+    if (soilAtlasIndex >= 0.0 && abs(idx - grassAtlasIndex) < 0.1) {
+        float soil = smoothstep(.48, .78, pattern.z) * .72;
+        if (soil > .001) base = mix(base, sampleTerrainLayer(soilAtlasIndex, pattern), soil);
+    }
+    return base;
 }
 
 vec4 applySlopeMaterial(vec4 base, vec3 pattern) {

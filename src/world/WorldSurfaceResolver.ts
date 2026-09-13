@@ -132,12 +132,13 @@ function generatedRelief(
         0,
         (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
     );
-    const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale
-        + sample.ridge * clamp01(mountainT) * relief.mountainRidgeScale;
-    return Math.max(
-        relief.shoreline,
-        Math.min(relief.mountainMaximum, plain + hill + mountain)
-    );
+    const pass = 1 - smoothstep(.48, .9, sample.valley) * .78;
+    const mountain = (Math.pow(mountainT, relief.mountainPower) * relief.mountainScale
+        + sample.ridge * clamp01(mountainT) * relief.mountainRidgeScale) * pass;
+    const height = Math.max(relief.shoreline, plain + hill + mountain);
+    // Compress extreme peaks smoothly; a hard cap turns a range into a flat mesa.
+    const knee = relief.mountainMaximum * .7, span = relief.mountainMaximum - knee;
+    return height <= knee ? height : relief.mountainMaximum - span * Math.exp(-(height - knee) / span);
 }
 
 function biomeWeightsFor(

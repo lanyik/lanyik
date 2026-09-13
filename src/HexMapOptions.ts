@@ -59,6 +59,9 @@ export interface HexMapOptions {
     terrainTextureRegionSize?: number;
     /** Initialization-only anisotropy request for terrain textures. Positive integer; defaults to 8. */
     terrainTextureAnisotropy?: number;
+    /** Optional foreground forest cutout around the camera target, in world units. */
+    foregroundFadeRadius?: number;
+    foregroundFadeHeight?: number;
 
     // Rivers and lakes use normalized width/curvature controls. River colours
     // inherit the corresponding sea colours when omitted.
@@ -215,6 +218,8 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     landformDebugMode: "off",
     terrainTextureRegionSize: 2,
     terrainTextureAnisotropy: 8,
+    foregroundFadeRadius: 0,
+    foregroundFadeHeight: 0,
     riverWidth: 0.28,
     riverBankWidth: 0.14,
     riverCurvature: 0.5,
@@ -297,6 +302,9 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
     };
     positive("size", options.size);
     positive("terrainTextureRegionSize", options.terrainTextureRegionSize);
+    for (const key of ["foregroundFadeRadius", "foregroundFadeHeight"] as const) {
+        if (!Number.isFinite(options[key]) || options[key] < 0) throw new RangeError(`${key} must be finite and non-negative`);
+    }
     createTerrainTexturePeriod(options.size, options.terrainTextureRegionSize);
     if (!Number.isSafeInteger(options.terrainTextureAnisotropy) || options.terrainTextureAnisotropy <= 0) {
         throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");

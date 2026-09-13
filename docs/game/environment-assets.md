@@ -14,7 +14,7 @@
 
 路径是既有气候槽位；干地槽现在明确使用白蜡树，未声称它是棕榈。游戏资源覆盖应用生成目录，库演示资产独立保留。每棵树两部件：枝干和 alpha-test 叶片；区块同物种共享两份材质，各档 LOD 使用同一套骨架位置，不重新抽取随机分枝。
 
-山体幅度为 480，实际海拔由连续 relief 决定。v20 陆地高低场 .014、山脊场 .012；渲染、刷怪和通行共用权威高度。远景雾 820–1450，地形绘制距离 1500，植被 950，LOD 距离 420/780。本轮材质升级不改变生成器版本、水系、存档地形身份或通行参数。
+山体幅度为 480，实际海拔由连续 relief 决定。v21 保留陆地场 .014、山脊场 .012，调整连续丘陵、谷地山口与峰顶压缩，详见[地形通行](terrain-navigation.md)。渲染、刷怪和通行共用权威高度。远景雾 820–1450，地形绘制距离 1500，植被 950，LOD 距离 420/780。
 
 ## 免费森林构建
 
@@ -28,7 +28,11 @@
 
 ## 地表数据和着色
 
-[Forest Ground 04](https://polyhaven.com/a/forest_ground_04) 用于 land，[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) 用于 mountain，[Rocky Terrain 02](https://polyhaven.com/a/rocky_terrain_02) 用于 `_plains`；均为 Poly Haven CC0。固定 1K 颜色、OpenGL 法线、粗糙度、AO 输入，颜色饱和度 .7、亮度 .95，缩至 512 格。其余五格保留原语义。
+[ambientCG Grass005](https://ambientcg.com/view?id=Grass005) 用于 land，[Forest Ground 04](https://polyhaven.com/a/forest_ground_04) 用于 soil，[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) 用于 mountain；均为 CC0，Grass005 是 bitmap 元素与程序化混合制作的草坪。原先无地类引用的 `_plains` 槽明确改为 soil，移除未使用 Rocky Terrain 02 源文件。固定 1K 颜色、OpenGL 法线、粗糙度、AO 输入，颜色饱和度 .7、亮度 .95，缩至 512 格；其余五格保留原语义。26 份源文件固定字节数与 SHA-256，Grass005 还记录原压缩包 SHA-256 与包内路径。
+
+草地按原有连续宏观噪声 .48–.78 混入最多 72% 林地土壤，颜色和表面通道使用同一权重；坡面再混合裸岩。不增加数组层数，土壤混合活跃时多读取两次颜色和两次表面纹理。通用图集可以省略 soil，此时不执行草土混合。full/fast 共用该代码。
+
+`ForestOcclusion` 在共享枝干和叶片材质的 alpha-test 后插入局部覆盖抖动。`HexMapOptions.foregroundFadeRadius/Height` 是非负世界单位，默认为零（普通地图不启用观察目标虚影），游戏取 44.2/30.6。观察中心每帧变换到视图空间，适配轨道旋转、缩放、世界替换与浮动原点；没有逐树透明排序或额外 draw call。
 
 八个语义格紧凑排入 2048×1024 图集，间距 4，运行时每层 504²。颜色与表面各八层 RGBA8，加 mip 共约 20.67 MiB；此前 2048² 图集含八个空槽，一份十六层颜色数组已占同等显存。
 

@@ -15,11 +15,13 @@ import {
     InstancedMesh,
     RawShaderMaterial,
     Vector2,
-    Material
+    Material,
+    Vector4
 } from "three";
 // MapControls was removed from three.js's examples; OrbitControls configured
 // with swapped mouse buttons (left=pan, right=rotate) reproduces it.
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { constrainTerrainCamera } from "./rendering/TerrainCamera";
 
 import { EventEmitter } from "./EventEmitter";
 import { MapInfo, Point, TileInfo } from "./interfaces";
@@ -150,6 +152,10 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private atlas!: TerrainAtlas;
     private terrain: TerrainMesh | undefined;
     private forest: ForestField | undefined;
+    private readonly forestFocus = { value: new Vector4() };
+    private readonly cameraSurfaceAnchor = new Vector3(Infinity, Infinity, Infinity);
+    private cameraSurfaceRevision = -1;
+    private cameraSurfaceWorldRevision = -1;
     private grass: GrassField | undefined;
     private readonly markerProjections = new SurfaceMarkerProjectionCache();
     private selector!: SurfaceHexMarker;
@@ -880,6 +886,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.controls.update(dtS);
         this.wrapCameraToWorld();
         this.rebaseWorld();
+        this.updateCameraClearance();
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
         this.worldChunkMountQueue.retryOne();
@@ -905,6 +912,28 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             gpuSupported: gpuTiming.supported, gpuSampleAgeMs: gpuTiming.lastSampleAgeMs });
         if (!this.disposed) this.animationFrameId = window.requestAnimationFrame(this.animate);
     };
+
+    private updateCameraClearance(): void {
+        const surface = this.worldSurface;
+        if (!surface) return;
+        const camera = this.camera;
+        if (!camera.position.equals(this.cameraSurfaceAnchor) || this.cameraSurfaceRevision !== surface.revision
+            || this.cameraSurfaceWorldRevision !== this.worldLayerRevision) {
+            const window = surface.createWindow();
+            try {
+                constrainTerrainCamera(camera.position, this.controls.target,
+                    (x, z) => window.getWorldHeight(x + this.renderOrigin.x, z + this.renderOrigin.y), this.options.size * .45);
+            } finally { window.clear(); }
+            camera.lookAt(this.controls.target);
+            this.cameraSurfaceAnchor.copy(camera.position); this.cameraSurfaceRevision = surface.revision;
+            this.cameraSurfaceWorldRevision = this.worldLayerRevision;
+        }
+        camera.updateMatrixWorld();
+        const focus = this.forestFocus.value;
+        focus.set(this.controls.target.x, this.controls.target.y + (this.options.foregroundFadeHeight ?? 0), this.controls.target.z, 1);
+        focus.applyMatrix4(camera.matrixWorldInverse);
+        focus.w = this.options.foregroundFadeRadius ?? 0;
+    }
 
     private updateWorldChunkVisibility(): void {
         if (!this.mapData) return;
@@ -1016,6 +1045,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.streamingVelocity.set(0, 0);
         this.mapData = source.map;
         this.worldSurface = worldSurface;
+        this.cameraSurfaceAnchor.set(Infinity, Infinity, Infinity);
         this.worldEditing = new WorldEditingFacade(source, source.map, { visualSignature: worldTileVisualSignature });
         this.fogStates = new FogStateStore(source.map);
         this.floatingOriginThreshold = floatingOriginThreshold;
@@ -1319,7 +1349,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
         const forestBuildRevision = record.forestBuildRevision ??= 0;
-        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount);
+        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus);
         const preparation = this.prepareWorldVegetation(context, record);
         const vegetationSignature = record.vegetationSignature!;
         const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -2105,6 +2135,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         if (!this.mapData) return false;
 
         const forest = (await createForest(this.mapData, {
+            foregroundFocus: this.forestFocus,
             resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             surface: this.worldSurface!,

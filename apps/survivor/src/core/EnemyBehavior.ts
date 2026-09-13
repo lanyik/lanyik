@@ -182,7 +182,7 @@ export class EnemyBehavior {
         let target = -1, lowest: number = ENEMY_SPECIAL.heal.threshold;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const ally = enemies.slots[cursor], ratio = v.health[ally] / v.maxHealth[ally];
-            if (ally === slot || !e.active[ally]) continue;
+            if (ally === slot || !e.active[ally] || e.homes[ally] !== e.homes[slot]) continue;
             if (ratio < lowest || ratio === lowest && target >= 0 && world.ids[ally] < world.ids[target]) { target = ally; lowest = ratio; }
         }
         e.supportTarget[slot] = target < 0 ? 0 : world.ids[target];

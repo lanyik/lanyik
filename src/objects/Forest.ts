@@ -10,7 +10,8 @@ import {
     Material,
     MeshStandardMaterial,
     Color,
-    Texture
+    Texture,
+    Vector4
 } from "three";
 
 import { forEachMapTile } from "../helpers/mapData";
@@ -43,8 +44,10 @@ import { WorldSurfaceView } from "../world/WorldSurfaceView";
 import { collectCpuBufferAllocations, collectGeometryAllocations, ResourceBudgetAccount } from "../runtime/ResourceBudget";
 import { forestLayoutAllocations, VegetationResources } from "../rendering/VegetationResources";
 import { forestInstanceCount } from "../world/generateVegetation";
+import { installForestOcclusion } from "../rendering/ForestOcclusion";
 
 export interface ForestOptions {
+    foregroundFocus?: { value: Vector4 };
     size: number;
     surface: WorldSurfaceView;
     resourceAccount?: ResourceBudgetAccount;
@@ -231,12 +234,14 @@ function prepareForestMaterials(
     source: Material | Material[],
     albedoScale: number,
     cache: Map<Material, Material>,
-    created: Set<Material>
+    created: Set<Material>,
+    focus?: { value: Vector4 }
 ): Material | Material[] {
     const prepare = (material: Material): Material => {
         const cached = cache.get(material);
         if (cached) return cached;
         const lit = createForestMaterial(material, albedoScale);
+        if (focus) installForestOcclusion(lit, focus);
         cache.set(material, lit);
         created.add(lit);
         return lit;
@@ -257,7 +262,7 @@ export class ForestSharedResources {
     private disposed = false;
     private readonly retained: VegetationResources;
 
-    constructor(modelAssets?: ModelAssetCache, resourceAccount?: ResourceBudgetAccount) {
+    constructor(modelAssets?: ModelAssetCache, resourceAccount?: ResourceBudgetAccount, private readonly focus?: { value: Vector4 }) {
         this.retained = new VegetationResources(resourceAccount);
         this.ownsModelAssets = modelAssets === undefined;
         this.modelAssets = modelAssets ?? new ModelAssetCache();
@@ -305,7 +310,7 @@ export class ForestSharedResources {
                     });
                     const materialCache = new Map<Material, Material>();
                     const baseMaterials = meshesByLod[0].map(mesh =>
-                        prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials)
+                        prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials, this.focus)
                     );
                     const lods = meshesByLod.map((meshes, lod) => meshes.map((mesh, part) => {
                         const geometry = mesh.geometry.clone();
@@ -694,7 +699,7 @@ export async function createForest(
 
     const tileRanges = new Map<string, TileTreeRange>();
     const chunkRecords = new Map<string, ForestChunkRecord>();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus);
     let modelIndex = 0;
 
     try {

@@ -1,5 +1,6 @@
 import { createWorldSurfaceResolver, createWorldSurfaceView, generateWorldTreePositions, getHexCenter, Land, type MapInfo, type TileInfo } from "three-hex-map";
 import type { CombatTerrain } from "../core/CombatTerrain";
+import { SurfaceMotion, type SurfaceContact } from "../core/SurfaceMotion";
 import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
 
 const CHUNK = 12, CELL = .5, EDGE = CHUNK / CELL, MAX_CHUNKS = 100;
@@ -11,12 +12,19 @@ const isWater = (tile: TileInfo) => tile.type === Land.sea || tile.type === Land
 export class ProceduralCombatTerrain implements CombatTerrain {
     private readonly resolver;
     private readonly chunks = new Map<string, TerrainChunk>();
-    private readonly result = { x: 0, z: 0 };
+    private readonly contactResult: SurfaceContact = { x: 0, z: 0, round: false };
+    private contactDepth = -Infinity;
+    private readonly motion = new SurfaceMotion((x, z, radius) => this.contact(x, z, radius));
     constructor(seed: string | number) { this.resolver = createWorldSurfaceResolver({ seed, waterStyle: COMBAT_WATER_STYLE }); }
     public get cachedChunks(): number { return this.chunks.size; }
     public dispose(): void { this.chunks.clear(); }
 
     public isClear(x: number, z: number, radius: number): boolean {
+        return !this.contact(x, z, radius);
+    }
+
+    private contact(x: number, z: number, radius: number): SurfaceContact | undefined {
+        this.contactDepth = -Infinity;
         const minX = Math.floor((x - radius) / CHUNK), maxX = Math.floor((x + radius) / CHUNK);
         const minZ = Math.floor((z - radius) / CHUNK), maxZ = Math.floor((z + radius) / CHUNK);
         for (let cx = minX; cx <= maxX; cx++) for (let cz = minZ; cz <= maxZ; cz++) {
@@ -27,23 +35,34 @@ export class ProceduralCombatTerrain implements CombatTerrain {
                 if (!chunk.blocked[iz * EDGE + ix]) continue;
                 const dx = x - Math.max(ox + ix * CELL, Math.min(ox + (ix + 1) * CELL, x));
                 const dz = z - Math.max(oz + iz * CELL, Math.min(oz + (iz + 1) * CELL, z));
-                if (dx * dx + dz * dz <= radius * radius) return false;
+                if (dx * dx + dz * dz > radius * radius) continue;
+                const distance = Math.hypot(dx, dz);
+                if (distance > 0) this.recordContact(dx / distance, dz / distance, radius - distance, false);
+                else {
+                    const lx = x - (ox + ix * CELL), lz = z - (oz + iz * CELL);
+                    const edge = Math.min(lx, CELL - lx, lz, CELL - lz);
+                    this.recordContact(edge === lx ? -1 : edge === CELL - lx ? 1 : 0,
+                        edge === lx || edge === CELL - lx ? 0 : edge === lz ? -1 : 1, radius + edge, false);
+                }
             }
-            for (const tree of chunk.trees) if ((tree.x - x) ** 2 + (tree.z - z) ** 2 < (radius + .2 * tree.scale) ** 2) return false;
+            for (const tree of chunk.trees) {
+                const dx = x - tree.x, dz = z - tree.z, combined = radius + .2 * tree.scale;
+                if (dx * dx + dz * dz > combined * combined) continue;
+                const distance = Math.hypot(dx, dz);
+                this.recordContact(distance > 0 ? dx / distance : 1, distance > 0 ? dz / distance : 0, combined - distance, true);
+            }
         }
-        return true;
+        return this.contactDepth >= 0 ? this.contactResult : undefined;
+    }
+
+    private recordContact(nx: number, nz: number, penetration: number, round: boolean): void {
+        if (penetration < 0 || penetration <= this.contactDepth) return;
+        this.contactDepth = penetration;
+        this.contactResult.x = nx; this.contactResult.z = nz; this.contactResult.round = round;
     }
 
     public move(x: number, z: number, dx: number, dz: number, radius: number, slide: boolean) {
-        const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / .15)), sx = dx / steps, sz = dz / steps;
-        for (let step = 0; step < steps; step++) {
-            if (this.isClear(x + sx, z + sz, radius)) { x += sx; z += sz; }
-            else if (slide) {
-                if (sx !== 0 && this.isClear(x + sx, z, radius)) x += sx;
-                if (sz !== 0 && this.isClear(x, z + sz, radius)) z += sz;
-            } else break;
-        }
-        this.result.x = x; this.result.z = z; return this.result;
+        return this.motion.move(x, z, dx, dz, radius, slide);
     }
 
     private chunk(cx: number, cz: number): TerrainChunk {

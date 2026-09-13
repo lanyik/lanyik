@@ -146,6 +146,8 @@ describe("CombatSimulation", () => {
 
     test("opens a world chest once and commits its equipment and coins", () => {
         const combat = new CombatSimulation("chest-walk");
+        const entities = (combat as unknown as { entities: import("../src/core/CombatWorld").CombatWorld }).entities;
+        while (entities.enemies.count) entities.remove(entities.enemies.slots[0]);
         const initial = combat.getRenderState();
         let nearest = -1;
         let distance = Infinity;
@@ -166,7 +168,7 @@ describe("CombatSimulation", () => {
         expect(opened.player.inventory.length).toBeGreaterThan(0);
         for (let tick = 0; tick < ticksForSeconds(1.6); tick += 1) combat.step({ x: 0, z: 0, active: false });
         expect(combat.getSnapshot().openedChests).toBe(1);
-        expect(combat.equip(opened.player.inventory[0].id).ok).toBe(true);
+        expect(combat.equip(opened.player.inventory.find(item => item.type === "equipment")!.id).ok).toBe(true);
     });
 
     test("visible distant residents move continuously; only actors beyond the sleep distance freeze", () => {

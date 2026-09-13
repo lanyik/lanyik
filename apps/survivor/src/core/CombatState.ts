@@ -99,7 +99,7 @@ export interface CombatRenderEntities {
     readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "homeX" | "homeZ" | "enraged">>;
     readonly status: Readonly<Pick<CombatWorld["status"], "slowUntil">>;
     readonly action: Readonly<Pick<CombatWorld["action"], "kind" | "reach" | "progress">>;
-    readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction">>;
+    readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction" | "launchHeight" | "age" | "groundX" | "groundZ">>;
     readonly experienceValue: Float64Array;
     readonly item: Readonly<CombatWorld["item"]>;
 }

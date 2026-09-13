@@ -27,7 +27,7 @@ function assertToroidalWorldBounds(world) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 20;
+var WORLD_GENERATOR_VERSION = 21;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -137,14 +137,14 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     valleyDepth: 0.035,
     hillElevationStart: 0.55,
     hillElevationEnd: 0.72,
-    hillScale: 0.22,
+    hillScale: 0.18,
     hillMinimum: 0.13,
     hillMaximum: 0.38,
     mountainElevationStart: 0.66,
     mountainElevationSpan: 0.25,
     mountainMinimum: 0.36,
     mountainPower: 1.35,
-    mountainScale: 0.78,
+    mountainScale: 1.05,
     mountainRidgeScale: 0.22,
     mountainMaximum: 1.25
   }),

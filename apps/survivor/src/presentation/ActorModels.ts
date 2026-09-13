@@ -1,11 +1,11 @@
 import { DynamicDrawUsage, Group, InstancedMesh, Mesh, MeshStandardMaterial, SRGBColorSpace, type Texture, type BufferGeometry, type Material } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { InstancedBufferAttribute, type Vector2 } from "three";
+import { InstancedBufferAttribute, type Vector2, type Vector3 } from "three";
 import { installActorFade } from "./ActorVisibility";
 import { ActorAction } from "../core/CombatWorld";
-import { ACTOR_POSES, HERO_POSES, writeActorPose } from "./ActorPose";
+import { ACTOR_POSES, HERO_POSES, ActorPoseMixer } from "./ActorPose";
 import { AssetLoader } from "./AssetLoader";
-import { GAME_CONFIG } from "../core/GameConfig";
+import { GAME_CONFIG, ENTITY_CAPACITY } from "../core/GameConfig";
 
 const NAMES = ["Ranger", "Puglin", "Puglin_Brute", "Imp_Shaman", "RiftSpider", "StoneSentinel"] as const;
 
@@ -31,6 +31,7 @@ export class ActorModels {
     private heroCycle = 0;
     private heroIdleCycle = 0;
     private readonly pose = new Mesh();
+    private readonly mixer = new ActorPoseMixer(ENTITY_CAPACITY);
 
     private constructor() { this.pose.morphTargetInfluences = new Array(ACTOR_POSES).fill(0); }
 
@@ -83,6 +84,11 @@ export class ActorModels {
                         const instance = new InstancedMesh(mesh.geometry, mesh.material, capacity);
                         instance.userData.cycle = cycle;
                         instance.userData.idleCycle = idleCycle;
+                        if (kind === 3) {
+                            const socket = mesh.userData.castingHand;
+                            if (!Array.isArray(socket) || socket.length !== ACTOR_POSES * 3 || !socket.every(Number.isFinite)) throw new Error("Imp_Shaman: invalid casting hand curve");
+                            instance.userData.castingHand = socket;
+                        }
                         instance.name = NAMES[kind];
                         instance.instanceMatrix.setUsage(DynamicDrawUsage);
                         instance.setColorAt(0, mesh.material.color.clone().set(0xffffff));
@@ -99,13 +105,26 @@ export class ActorModels {
     }
 
     public animateHero(seconds: number, moving: boolean): void {
-        for (const mesh of this.heroMeshes) writeActorPose(mesh.morphTargetInfluences!, seconds / (moving ? this.heroCycle : this.heroIdleCycle), moving ? ActorAction.Moving : ActorAction.Idle, 0);
+        for (const mesh of this.heroMeshes) this.mixer.write(mesh.morphTargetInfluences!, 0, 1, seconds,
+            seconds / (moving ? this.heroCycle : this.heroIdleCycle), moving ? ActorAction.Moving : ActorAction.Idle, 0);
     }
-    public animateEnemy(mesh: InstancedMesh, index: number, seconds: number, phaseOffset: number, action: ActorAction, progress: number): void {
+    public animateEnemy(mesh: InstancedMesh, index: number, slot: number, id: number, seconds: number, action: ActorAction, progress: number): void {
         const cycle = action === ActorAction.Idle ? mesh.userData.idleCycle : mesh.userData.cycle;
-        writeActorPose(this.pose.morphTargetInfluences!, seconds / cycle + phaseOffset, action, progress);
+        this.mixer.write(this.pose.morphTargetInfluences!, slot, id, seconds, seconds / cycle + id * .37, action, progress);
         mesh.setMorphAt(index, this.pose);
     }
+    public castingHand(mesh: InstancedMesh, result: Vector3): boolean {
+        const socket: number[] | undefined = mesh.userData.castingHand;
+        if (!socket) return false;
+        result.set(0, 0, 0);
+        for (let i = 0; i < ACTOR_POSES; i++) {
+            const weight = this.pose.morphTargetInfluences![i];
+            result.x += socket[i * 3] * weight; result.y += socket[i * 3 + 1] * weight; result.z += socket[i * 3 + 2] * weight;
+        }
+        return true;
+    }
+    public reset(): void { this.mixer.reset(); }
+    public get poseBuffers(): readonly ArrayBufferView[] { return this.mixer.buffers; }
     public dispose(): void {
         for (const pool of this.enemies) for (const mesh of pool) mesh.dispose();
         for (const geometry of this.geometries) geometry.dispose();

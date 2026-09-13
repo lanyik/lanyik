@@ -109,7 +109,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 20;
+var WORLD_GENERATOR_VERSION = 21;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -219,14 +219,14 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     valleyDepth: 0.035,
     hillElevationStart: 0.55,
     hillElevationEnd: 0.72,
-    hillScale: 0.22,
+    hillScale: 0.18,
     hillMinimum: 0.13,
     hillMaximum: 0.38,
     mountainElevationStart: 0.66,
     mountainElevationSpan: 0.25,
     mountainMinimum: 0.36,
     mountainPower: 1.35,
-    mountainScale: 0.78,
+    mountainScale: 1.05,
     mountainRidgeScale: 0.22,
     mountainMaximum: 1.25
   }),
@@ -1528,11 +1528,11 @@ function generatedRelief(sample, profile) {
     0,
     (sample.elevation - relief.mountainElevationStart) / relief.mountainElevationSpan
   );
-  const mountain = Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale;
-  return Math.max(
-    relief.shoreline,
-    Math.min(relief.mountainMaximum, plain + hill + mountain)
-  );
+  const pass = 1 - smoothstep3(0.48, 0.9, sample.valley) * 0.78;
+  const mountain = (Math.pow(mountainT, relief.mountainPower) * relief.mountainScale + sample.ridge * clamp013(mountainT) * relief.mountainRidgeScale) * pass;
+  const height = Math.max(relief.shoreline, plain + hill + mountain);
+  const knee = relief.mountainMaximum * 0.7, span = relief.mountainMaximum - knee;
+  return height <= knee ? height : relief.mountainMaximum - span * Math.exp(-(height - knee) / span);
 }
 function biomeWeightsFor(type, sample, profile) {
   if (isWater(type)) return Object.freeze({ temperate: 0, dry: 0, cold: 0, alpine: 0 });

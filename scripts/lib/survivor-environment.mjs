@@ -100,23 +100,26 @@ export async function prepareSurvivorEnvironment(input, output, root) {
     const atlasPath = resolve(root, "public/textures/terrain.png"), cell = 512, patches = [];
     // Pack the eight semantic cells, removing the source atlas's eight holes.
     // Two 8-layer arrays now cost the same GPU memory as the old 16-layer color array.
-    const names = Object.keys(atlas.textures);
+    const names = Object.keys(atlas.textures).map(name => name === "_plains" ? "soil" : name);
     const textures = Object.fromEntries(names.map((name, index) => [name, { cellX: index % 4, cellY: Math.floor(index / 4) }]));
     const surfacePixels = Buffer.alloc(504 * 504 * names.length * 4);
-    const scanned = { mountain: "rocky_terrain", _plains: "rocky_terrain_02", land: "forest_ground_04" };
-    for (const [name, position] of Object.entries(atlas.textures)) {
+    const polyHaven = name => ["diff", "nor_gl", "rough", "ao"].map(channel => `${name}_${channel}_1k.jpg`);
+    const scanned = { mountain: polyHaven("rocky_terrain"), soil: polyHaven("forest_ground_04"),
+        land: ["Color", "NormalGL", "Roughness", "AmbientOcclusion"].map(channel => `Grass005_1K-JPG_${channel}.jpg`) };
+    for (const [originalName, position] of Object.entries(atlas.textures)) {
+        const name = originalName === "_plains" ? "soil" : originalName;
         const source = scanned[name];
         const image = source
-            ? sharp(await read(`${source}_diff_1k.jpg`)).resize(cell, cell).modulate({ saturation: .7, brightness: .95 })
+            ? sharp(await read(source[0])).resize(cell, cell).modulate({ saturation: .7, brightness: .95 })
             : sharp(atlasPath).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
         const location = { left: textures[name].cellX * cell, top: textures[name].cellY * cell };
         patches.push({ input: await image.png().toBuffer(), ...location });
         // RG normal XY, B perceptual roughness, A occlusion. Unscanned entries
         // explicitly describe a smooth, matte, unoccluded surface.
         const packed = Buffer.alloc(cell * cell * 4);
-        const normal = source ? await sharp(await read(`${source}_nor_gl_1k.jpg`)).resize(cell, cell).removeAlpha().raw().toBuffer() : null;
-        const rough = source ? await sharp(await read(`${source}_rough_1k.jpg`)).resize(cell, cell).greyscale().raw().toBuffer() : null;
-        const ao = source ? await sharp(await read(`${source}_ao_1k.jpg`)).resize(cell, cell).greyscale().raw().toBuffer() : null;
+        const normal = source ? await sharp(await read(source[1])).resize(cell, cell).removeAlpha().raw().toBuffer() : null;
+        const rough = source ? await sharp(await read(source[2])).resize(cell, cell).greyscale().raw().toBuffer() : null;
+        const ao = source ? await sharp(await read(source[3])).resize(cell, cell).greyscale().raw().toBuffer() : null;
         for (let i = 0; i < cell * cell; i++) {
             packed[i * 4] = normal ? normal[i * 3] : 128; packed[i * 4 + 1] = normal ? normal[i * 3 + 1] : 128;
             packed[i * 4 + 2] = rough ? rough[i] : 255; packed[i * 4 + 3] = ao ? ao[i] : 255;

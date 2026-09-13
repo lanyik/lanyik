@@ -82,6 +82,8 @@ export class CombatWorld {
     };
     public readonly projectile = {
         source: new Float64Array(ENTITY_CAPACITY), faction: new Uint8Array(ENTITY_CAPACITY),
+        launchHeight: new Float32Array(ENTITY_CAPACITY), age: new Float32Array(ENTITY_CAPACITY),
+        groundX: new Float64Array(ENTITY_CAPACITY), groundZ: new Float64Array(ENTITY_CAPACITY),
         velocityX: new Float32Array(ENTITY_CAPACITY), velocityZ: new Float32Array(ENTITY_CAPACITY),
         damage: new Float64Array(ENTITY_CAPACITY), lifetime: new Float32Array(ENTITY_CAPACITY),
         critical: new Uint8Array(ENTITY_CAPACITY), elite: new Uint8Array(ENTITY_CAPACITY), boss: new Uint8Array(ENTITY_CAPACITY)
@@ -129,11 +131,13 @@ export class CombatWorld {
     }
 
     public spawnProjectile(source: number, faction: Faction, x: number, z: number, vx: number, vz: number,
-        damage: number, lifetime: number, critical = false, elite = 0, boss = 0): boolean {
+        damage: number, lifetime: number, critical = false, elite = 0, boss = 0, launchHeight = .42, groundX = x, groundZ = z): boolean {
         if (this.projectiles.count === MAX_PROJECTILES || (faction === Faction.Enemy && this.hostileProjectiles.count === MAX_HOSTILE_PROJECTILES)) return false;
         const slot = this.world.create(Component.Position | Component.Projectile | (faction === Faction.Enemy ? Component.Hostile : 0));
         this.place(slot, x, z, faction === Faction.Enemy ? .14 : .11);
         const p = this.projectile;
+        p.launchHeight[slot] = launchHeight; p.age[slot] = 0;
+        p.groundX[slot] = groundX; p.groundZ[slot] = groundZ;
         p.source[slot] = source; p.faction[slot] = faction; p.velocityX[slot] = vx; p.velocityZ[slot] = vz;
         p.damage[slot] = damage; p.lifetime[slot] = lifetime; p.critical[slot] = Number(critical); p.elite[slot] = elite; p.boss[slot] = boss;
         return true;

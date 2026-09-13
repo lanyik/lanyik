@@ -12,7 +12,7 @@ const ACTORS = [
     { name: "Ranger", model: "ranger/Male_Ranger.gltf", height: 1.6, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", head: true },
     { name: "Puglin", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", attack: "Punch_Cross", color: "bestiary/T_Puglin_BaseColor_2.png" },
     { name: "Puglin_Brute", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", attack: "Sword_Attack" },
-    { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Spell_Simple_Shoot", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
+    { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Spell_Simple_Shoot", socket: "hand_l", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
 ];
 const HEAD_IMAGES = { "T_Hair_1_Normal_png.png": "T_Hair_1_Normal.png", "T_Eye_Normal_png.png": "T_Eye_Normal.png" };
 class NodeFileReader {
@@ -111,7 +111,7 @@ function capture(parts) {
 }
 
 /** Offline rigs become one PBR primitive with separate locomotion, attack and relaxed idle clips. */
-export async function prepareSurvivorActors(source, output) {
+export async function prepareSurvivorActors(source, output, socketOutput) {
     globalThis.FileReader = NodeFileReader;
     await MeshoptSimplifier.ready;
     await mkdir(output, { recursive: true });
@@ -132,6 +132,9 @@ export async function prepareSurvivorActors(source, output) {
                 const scale = descriptor.height / (bounds.max.y - bounds.min.y);
                 if (!Number.isFinite(scale) || scale <= 0) throw new Error(`${descriptor.name}: invalid pose bounds`);
                 const normalize = values => values.map((value, i) => (value - (i % 3 === 1 ? bounds.min.y : 0)) * scale);
+                const castingHand = [], socket = descriptor.socket && rigs[0].scene.getObjectByName(descriptor.socket);
+                if (descriptor.socket && !socket?.isBone) throw new Error(`${descriptor.name}: missing casting bone`);
+                const captureSocket = () => { if (socket) castingHand.push(...normalize(socket.getWorldPosition(new Vector3()).toArray())); };
                 const geometry = new BufferGeometry(), uv = [], indices = [];
                 let offset = 0;
                 for (const part of parts) {
@@ -150,6 +153,7 @@ export async function prepareSurvivorActors(source, output) {
                 if (!walk) throw new Error(`${descriptor.name}: missing movement ${descriptor.walk}`);
                 for (let frame = 0; frame < FRAMES; frame++) {
                     poser.pose(descriptor.walk, walk.duration * frame / FRAMES);
+                    captureSocket();
                     const target = capture(parts);
                     geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
                     geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
@@ -158,7 +162,15 @@ export async function prepareSurvivorActors(source, output) {
                     const attack = animation.animations.find(clip => clip.name === descriptor.attack);
                     if (!attack) throw new Error(`${descriptor.name}: missing attack ${descriptor.attack}`);
                     for (let frame = 0; frame < FRAMES; frame++) {
-                        poser.pose(descriptor.attack, attack.duration * frame / (FRAMES - 1));
+                        const progress = frame / (FRAMES - 1);
+                        if (descriptor.socket) {
+                            const name = progress < .43 ? "Spell_Simple_Enter" : progress < .64 ? descriptor.attack : "Spell_Simple_Exit";
+                            const phase = progress < .43 ? progress / .43 : progress < .64 ? (progress - .43) / .21 : (progress - .64) / .36;
+                            const clip = animation.animations.find(candidate => candidate.name === name);
+                            if (!clip) throw new Error(`Missing casting sequence clip ${name}`);
+                            poser.pose(name, phase * clip.duration);
+                        } else poser.pose(descriptor.attack, attack.duration * progress);
+                        captureSocket();
                         const target = capture(parts);
                         geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
                         geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
@@ -167,6 +179,7 @@ export async function prepareSurvivorActors(source, output) {
                 const idle = animation.animations.find(clip => clip.name === descriptor.idle);
                 for (let frame = 0; frame < IDLE_FRAMES; frame++) {
                     poser.pose(descriptor.idle, idle.duration * frame / IDLE_FRAMES);
+                    captureSocket();
                     const target = capture(parts);
                     geometry.morphAttributes.position.push(new Float32BufferAttribute(normalize(target.positions), 3));
                     geometry.morphAttributes.normal.push(new Float32BufferAttribute(target.normals, 3));
@@ -177,6 +190,12 @@ export async function prepareSurvivorActors(source, output) {
                 // Gameplay supplies phase from the real clip duration, independently for each actor type.
                 const frames = geometry.morphAttributes.position.length;
                 mesh.userData = { cycle: walk.duration, idleCycle: idle.duration, frames, idle: descriptor.idle, attack: descriptor.attack, height: descriptor.height };
+                if (socket) {
+                    mesh.userData.castingHand = castingHand;
+                    const release = [0, 1, 2].map(axis => (castingHand[(FRAMES + 3) * 3 + axis] + castingHand[(FRAMES + 4) * 3 + axis]) / 2);
+                    await writeFile(socketOutput,
+                        `// Generated by scripts/lib/survivor-actors.mjs; same normalized hand as the baked release pose.\nexport const SHAMAN_CAST_SOCKET = ${JSON.stringify(release)} as const;\n`);
+                }
                 const exported = await new GLTFExporter().parseAsync(mesh, { binary: true });
                 await writeFile(resolve(output, `${descriptor.name}.glb`), Buffer.from(exported));
                 manifest.actors.push({ name: descriptor.name, frames, idle: descriptor.idle, idleCycle: idle.duration, attack: descriptor.attack, cycle: walk.duration, height: descriptor.height,

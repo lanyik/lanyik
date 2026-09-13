@@ -4,6 +4,7 @@ import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
 import { EffectKind } from "./CombatEffects";
+import { SHAMAN_CAST_SOCKET } from "./ActorSockets.generated";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
 
@@ -30,6 +31,7 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         const ex = p.x[slot] = sx + b.velocityX[slot] * dt;
         const ez = p.z[slot] = sz + b.velocityZ[slot] * dt;
         b.lifetime[slot] -= SECONDS;
+        b.age[slot] += dt;
         entities.projectileBatchIndices[slot] = cursor;
         batch.startX[cursor] = sx; batch.startZ[cursor] = sz; batch.endX[cursor] = ex; batch.endZ[cursor] = ez;
         batch.radius[cursor] = p.radius[slot]; batch.hostile[cursor] = Number(b.faction[slot] === Faction.Enemy);
@@ -136,12 +138,15 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             const count = a.variant[slot];
             // A volley reserves all its slots; pressure never changes its pattern halfway through.
             if (entities.projectiles.count + count > MAX_PROJECTILES || entities.hostileProjectiles.count + count > MAX_HOSTILE_PROJECTILES) continue;
+            const scale = p.radius[slot] / .3, sin = Math.sin(p.heading[slot]), cos = Math.cos(p.heading[slot]);
+            const launchX = p.x[slot] + (SHAMAN_CAST_SOCKET[0] * cos + SHAMAN_CAST_SOCKET[2] * sin) * scale;
+            const launchZ = p.z[slot] + (SHAMAN_CAST_SOCKET[2] * cos - SHAMAN_CAST_SOCKET[0] * sin) * scale;
             for (let bolt = 0; bolt < count; bolt++) {
                 const heading = p.heading[slot] + (bolt - (count - 1) / 2) * .24;
                 const x = Math.sin(heading), z = Math.cos(heading), speed = e.boss[slot] ? 5.5 : 4.5;
                 entities.spawnProjectile(world.ids[slot], Faction.Enemy,
-                    p.x[slot] + x * p.radius[slot], p.z[slot] + z * p.radius[slot],
-                    x * speed, z * speed, e.damage[slot], a.reach[slot] / speed + .3, false, e.elite[slot], e.boss[slot]);
+                    launchX, launchZ, x * speed, z * speed, e.damage[slot], a.reach[slot] / speed + .3,
+                    false, e.elite[slot], e.boss[slot], SHAMAN_CAST_SOCKET[1] * scale, p.x[slot], p.z[slot]);
             }
         }
     }

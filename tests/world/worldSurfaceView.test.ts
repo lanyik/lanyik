@@ -16,6 +16,28 @@ function staticMap(type: Land = Land.mountain): MapInfo {
 }
 
 describe("WorldSurfaceView", () => {
+    test("generated plains, hills and mountains retain continuous relief instead of class plateaus", () => {
+        const resolver = createWorldSurfaceResolver({ seed: "rift-ember-1" });
+        const map: MapInfo = { w: 1, h: 1, infinite: true, data: {} };
+        const window = resolver.createWindow(), categories = new Set<string>();
+        for (let x = -60; x <= 60; x++) {
+            map.data[x] = {};
+            for (let y = -12; y <= 12; y++) map.data[x][y] = window.resolveGeneratedTile(x, y);
+        }
+        const surface = createWorldSurfaceView({ map, resolver, tileSize: 34, mountainHeight: 480 }).createWindow();
+        let high = 0, previousPeak = -1, differentPeaks = 0;
+        try {
+            for (let x = -59; x < 60; x++) for (let y = -11; y < 12; y++) {
+                const tile = map.data[x][y];
+                if (tile.type !== Land.land && tile.type !== Land.mountain || surface.isShoreline(x, y)) continue;
+                const sample = window.sampleGenerated(x, y)!;
+                categories.add(tile.type === Land.mountain ? "mountain" : tile.modifiers?.includes("hill") ? "hill" : "plain");
+                expect(surface.getEffectiveRelief(x, y)).toBe(sample.relief);
+                if (sample.relief > 1) { high++; if (sample.relief !== previousPeak) differentPeaks++; previousPeak = sample.relief; }
+            }
+            expect(categories.size).toBe(3); expect(high).toBeGreaterThan(10); expect(differentPeaks).toBe(high);
+        } finally { window.clear(); surface.clear(); }
+    });
     test("uses neutral static mountains and the shared six-corner center", () => {
         const map = staticMap();
         const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6 });

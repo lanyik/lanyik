@@ -78,6 +78,8 @@ export class HexCombatView implements CombatView {
             terrainTextureRegionSize: 4,
             grassDensity: 10,
             grassBladeHeight: 3,
+            foregroundFadeRadius: COMBAT_ENVIRONMENT.size * 1.3,
+            foregroundFadeHeight: COMBAT_ENVIRONMENT.size * .9,
             gridVisible: false,
             skyVisible: false,
             pointerColor: 0x658287,

@@ -554,6 +554,9 @@ export class TerrainMesh extends Group {
             surfaceMap: { value: this.surfaceTexture ?? null },
             sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] },
             rockAtlasIndex: { value: this.atlasCellIndex[Land.mountain] },
+            grassAtlasIndex: { value: this.atlasCellIndex[Land.land] },
+            soilAtlasIndex: { value: this.options.atlas.textures.soil
+                ? this.options.atlas.textures.soil.cellY * (this.options.atlas.width / this.options.atlas.cellSize) + this.options.atlas.textures.soil.cellX : -1 },
             waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
             beachWidth: { value: this.options.beachWidth ?? 0.35 },
             waterCornerRounding: { value: this.options.waterCornerRounding ?? 0.4 },

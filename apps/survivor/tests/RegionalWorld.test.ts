@@ -1,7 +1,24 @@
 import { describe, expect, test } from "vitest";
-import { MAX_COMBAT_CHUNKS, RegionalWorld, REGION_RULES, hexDistance } from "../src/core/RegionalWorld";
+import { MAX_COMBAT_CHUNKS, RegionalWorld, REGION_RULES, hexDistance, SETTLEMENTS } from "../src/core/RegionalWorld";
 
 describe("regional ecology", () => {
+    test("camps have compatible members, compact homes and boss support instead of random species", () => {
+        const world = new RegionalWorld("ecology", { x: 0, z: 0 }), kinds = new Set<string>();
+        for (let x = -120; x <= 120; x += 60) {
+            world.synchronize(x, 30);
+            for (const chunk of world.chunks.values()) {
+                const camp = chunk.spawns[0].settlement!;
+                kinds.add(camp.kind);
+                for (const spawn of chunk.spawns) {
+                    expect(spawn.settlement).toBe(camp);
+                    expect(SETTLEMENTS[camp.kind].members).toContain(spawn.kind);
+                    expect(Math.hypot(spawn.x - camp.x, spawn.z - camp.z)).toBeLessThan(3.1);
+                    if (spawn.boss) expect(camp.kind).toBe("cult");
+                }
+            }
+        }
+        expect(kinds.size).toBe(4);
+    });
     test("positions within the same hex reuse its immutable region, including negative boundaries", () => {
         const world = new RegionalWorld("region-cache", { x: 10, z: -8 });
         const current = world.regionAt(10, -8);

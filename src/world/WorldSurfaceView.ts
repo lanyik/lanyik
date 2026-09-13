@@ -241,6 +241,11 @@ export class WorldSurfaceWindow {
         const profile = this.surface.resolver?.profile ?? WORLD_STYLE_PROFILE;
         if (isShoreline(tile)) {
             contribution = { shoreline: true, relief: 0 };
+        } else if (sample && tile && tile.type === this.resolveGeneratedTile(x, y)?.type
+            && Boolean(tile.modifiers?.includes("hill")) === Boolean(this.resolveGeneratedTile(x, y)?.modifiers?.includes("hill"))) {
+            // Generated height is continuous through plains, foothills and ranges.
+            // Classification limits apply only to explicitly edited terrain.
+            contribution = { shoreline: false, relief: sample.relief };
         } else if (tile?.type === Land.mountain) {
             contribution = {
                 shoreline: false,

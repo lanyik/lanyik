@@ -1,14 +1,5 @@
 [
   {
-    "file": "rocky_terrain_02_diff_1k.jpg",
-    "bytes": 843188,
-    "sha256": "d570c10b1d5302f4fde9e0e94f4cbab0d5e112fc3fe2b3b91c38a98bd3ddaf4b",
-    "source": "https://polyhaven.com/a/rocky_terrain_02",
-    "author": "Amal Kumar / Poly Haven",
-    "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_diff_1k.jpg"
-  },
-  {
     "file": "rocky_terrain_diff_1k.jpg",
     "bytes": 905179,
     "sha256": "429315865fd89c150272592f6d93def174c6f69804a565ff08e53627a885579b",
@@ -193,30 +184,47 @@
     "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_ao_1k.jpg"
   },
   {
-    "file": "rocky_terrain_02_nor_gl_1k.jpg",
-    "bytes": 993692,
-    "sha256": "f4f9d9671c660f4e509e96d5da3091887dfd557e1353e313fa2d1dc789499ffd",
-    "source": "https://polyhaven.com/a/rocky_terrain_02",
-    "author": "Poly Haven",
+    "file": "Grass005_1K-JPG_Color.jpg",
+    "bytes": 1875015,
+    "sha256": "5fd8edc1a04e2b9b093229dd0ec41f29668dda9fc698f6610b12cdd83b7690cb",
+    "source": "https://ambientcg.com/view?id=Grass005",
+    "author": "Lennart Demes / ambientCG",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_nor_gl_1k.jpg"
+    "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
+    "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
+    "archivePath": "Grass005_1K-JPG_Color.jpg"
   },
   {
-    "file": "rocky_terrain_02_rough_1k.jpg",
-    "bytes": 437094,
-    "sha256": "8652ee05de206888eb77f84df7c8080f6ffef27afadb7917127726570b66c45d",
-    "source": "https://polyhaven.com/a/rocky_terrain_02",
-    "author": "Poly Haven",
+    "file": "Grass005_1K-JPG_NormalGL.jpg",
+    "bytes": 2137845,
+    "sha256": "f89e3a1701511d379a9772774ec6b9d7b7ccf3e944fdcc2b98c09dee4cfd804f",
+    "source": "https://ambientcg.com/view?id=Grass005",
+    "author": "Lennart Demes / ambientCG",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_rough_1k.jpg"
+    "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
+    "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
+    "archivePath": "Grass005_1K-JPG_NormalGL.jpg"
   },
   {
-    "file": "rocky_terrain_02_ao_1k.jpg",
-    "bytes": 442891,
-    "sha256": "2535ae5c736915751aa957aa80bcda719e9b882f900e891584be5d1eab18c4e2",
-    "source": "https://polyhaven.com/a/rocky_terrain_02",
-    "author": "Poly Haven",
+    "file": "Grass005_1K-JPG_Roughness.jpg",
+    "bytes": 851896,
+    "sha256": "04ca3a66eee6105cac9754ac773ffd4ee63ca2222984554c4c04b0cdca80da26",
+    "source": "https://ambientcg.com/view?id=Grass005",
+    "author": "Lennart Demes / ambientCG",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_ao_1k.jpg"
+    "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
+    "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
+    "archivePath": "Grass005_1K-JPG_Roughness.jpg"
+  },
+  {
+    "file": "Grass005_1K-JPG_AmbientOcclusion.jpg",
+    "bytes": 981258,
+    "sha256": "1e574ee1aebfeb797e115f579454a317faa770d15169baf4cfe91371074ccffd",
+    "source": "https://ambientcg.com/view?id=Grass005",
+    "author": "Lennart Demes / ambientCG",
+    "license": "CC0-1.0",
+    "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
+    "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
+    "archivePath": "Grass005_1K-JPG_AmbientOcclusion.jpg"
   }
 ]

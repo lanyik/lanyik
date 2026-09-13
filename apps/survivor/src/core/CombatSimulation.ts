@@ -64,6 +64,8 @@ export class CombatSimulation {
     private readonly movingExperience = new Float64Array(GAME_CONFIG.combat.maxExperienceOrbs);
     private movingExperienceCount = 0;
     private awaitingQueries = false;
+    private movementX = 0;
+    private movementZ = 0;
     private closed = false;
     private random: DeterministicRandom;
     private readonly entities: CombatWorld;
@@ -181,6 +183,7 @@ export class CombatSimulation {
         this.gold = p.gold; this.orbDust = p.orbDust; this.autoRecycle = p.autoRecycle; this.recycled = { ...p.recycled }; this.autoCast = p.autoCast;
         this.tickValue = state.tick; this.killsValue = state.kills; this.openedChests = state.openedChests; this.nextItemId = state.nextItemId;
         this.random.restore(state.random); this.skills.restore(state.skills); this.attackCooldown = state.attackCooldown; this.damageImmunity = state.damageImmunity;
+        this.movementX = this.movementZ = 0;
         this.shieldCooldown = p.shieldRemaining; this.potionCooldown = p.potionRemaining;
         this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
         this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
@@ -519,14 +522,18 @@ export class CombatSimulation {
     }
 
     private movePlayer(input: MovementInput): void {
-        if (!input.active) return;
-        const length = Math.hypot(input.x, input.z);
-        if (length <= 0) return;
-        const distance = this.stats.moveSpeed * STEP_SECONDS / Math.max(1, length);
-        const dx = input.x * distance;
-        const dz = input.z * distance;
-        this.entities.moveActor(this.entities.player, dx, dz);
-        this.heading = Math.atan2(dx, dz);
+        const length = Math.max(1, Math.hypot(input.x, input.z));
+        const speed = input.active ? this.stats.moveSpeed / length : 0;
+        const response = 1 - Math.exp(-36 * STEP_SECONDS);
+        this.movementX += (input.x * speed - this.movementX) * response;
+        this.movementZ += (input.z * speed - this.movementZ) * response;
+        if (Math.hypot(this.movementX, this.movementZ) < .002) { this.movementX = this.movementZ = 0; return; }
+        const x = this.playerX, z = this.playerZ;
+        this.entities.moveActor(this.entities.player, this.movementX * STEP_SECONDS, this.movementZ * STEP_SECONDS);
+        const dx = this.playerX - x, dz = this.playerZ - z;
+        if (Math.hypot(dx, dz) > 1e-6) this.heading = Math.atan2(dx, dz);
+        // Retain only achieved velocity: pushing a wall cannot accumulate stored motion.
+        this.movementX = dx / STEP_SECONDS; this.movementZ = dz / STEP_SECONDS;
     }
 
     private spawnEnemies(): void {

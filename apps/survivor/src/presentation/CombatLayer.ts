@@ -13,7 +13,8 @@ import {
     PlaneGeometry,
     RingGeometry,
     SphereGeometry,
-    Vector2
+    Vector2,
+    Vector3
 } from "three";
 import type { BufferAttribute } from "three";
 import {
@@ -92,6 +93,9 @@ export class CombatLayer implements WorldRenderLayer {
     private assetAbort: AbortController | undefined;
     private disposed = false;
     private readonly projectiles: InstancedMesh;
+    private readonly castingOrbs: InstancedMesh;
+    private readonly hand = new Vector3();
+    private presentationTime = -1;
     private readonly experience: InstancedMesh;
     private readonly telegraphs: InstancedMesh;
     private readonly castWarnings: InstancedMesh;
@@ -128,6 +132,8 @@ export class CombatLayer implements WorldRenderLayer {
         this.actorFill.position.set(-6, 9, 7);
         this.root.add(this.actorFill, this.actorFill.target);
         this.projectiles = this.instance(this.geometries.projectile, this.projectileMaterial, MAX_PROJECTILES);
+        this.castingOrbs = this.instance(this.geometries.projectile, this.projectileMaterial, MAX_ENEMIES);
+        this.castingOrbs.setColorAt(0, WHITE); this.castingOrbs.count = 0;
         this.telegraphs = this.instance(this.geometries.telegraph, this.warningMaterial, MAX_ENEMIES);
         this.castWarnings = this.instance(this.geometries.cast, this.warningMaterial, MAX_ENEMIES);
         this.chargeWarnings = this.instance(this.geometries.charge, this.warningMaterial, MAX_ENEMIES);
@@ -137,7 +143,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.projectiles.count = this.experience.count = 0;
         this.buildPlayer();
         this.groundProjection.root.add(this.telegraphs, this.castWarnings, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
-        this.root.add(this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
+        this.root.add(this.projectiles, this.castingOrbs, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
             { identity: this.groundProjection.target.texture, cost: {
@@ -169,8 +175,10 @@ export class CombatLayer implements WorldRenderLayer {
                 }
                 const actors = actorResult.value, effects = effectResult.value, models = lootResult.value;
                 try {
-                    this.resources.acquireRequired("combat-actor-models", {}, true,
-                        collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root]));
+                    this.resources.acquireRequired("combat-actor-models", {}, true, [
+                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root]),
+                        ...actors.poseBuffers.map(array => ({ identity: array.buffer, cost: { cpuBytes: array.byteLength } }))
+                    ]);
                 } catch (error) { actors.dispose(); effects.dispose(); models.dispose(); throw error; }
                 this.actors = actors;
                 this.effects = effects;
@@ -207,7 +215,10 @@ export class CombatLayer implements WorldRenderLayer {
         this.player.position.set(0, this.height(playerX, playerZ), 0);
         this.groundPlayer.position.set(0, 0, 0);
         this.groundProjection.setCenter(playerX, playerZ, this.host.tileSize);
-        this.playerBody.rotation.y = state.player.heading;
+        const dt = this.presentationTime < 0 ? 1 : Math.max(0, state.player.animationTime - this.presentationTime);
+        this.presentationTime = state.player.animationTime;
+        const turn = state.player.heading - this.playerBody.rotation.y;
+        this.playerBody.rotation.y += Math.atan2(Math.sin(turn), Math.cos(turn)) * (1 - Math.exp(-24 * dt));
         this.actors.animateHero(state.player.animationTime, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
         this.playerBody.rotation.z = state.player.gameOver ? -Math.PI / 2 : 0;
         this.playerBody.visible = state.player.dashing || !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
@@ -218,6 +229,7 @@ export class CombatLayer implements WorldRenderLayer {
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
+        this.castingOrbs.count = 0;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const index = enemies.slots[cursor];
             const x = position.previousX[index] + (position.x[index] - position.previousX[index]) * blend;
@@ -256,10 +268,21 @@ export class CombatLayer implements WorldRenderLayer {
                 this.setInstance(mesh, instance, x, this.height(x, z), z, position.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
                 mesh.geometry.getAttribute("actorHome").setXY(instance, homeX - playerX, homeZ - playerZ);
-                this.actors.animateEnemy(mesh, instance, state.player.animationTime, ids[index] * .37, action.kind[index], action.progress[index]);
+                this.actors.animateEnemy(mesh, instance, index, ids[index], state.player.animationTime, action.kind[index], action.progress[index]);
+                if (action.kind[index] >= ActorAction.Cast && action.kind[index] !== ActorAction.Charge
+                    && action.progress[index] < .5 && this.actors.castingHand(mesh, this.hand)) {
+                    const scale = position.radius[index] / .3, sin = Math.sin(rotation), cos = Math.cos(rotation);
+                    const hx = x + (this.hand.x * cos + this.hand.z * sin) * scale;
+                    const hz = z + (this.hand.z * cos - this.hand.x * sin) * scale;
+                    const orb = this.castingOrbs.count++;
+                    this.setInstance(this.castingOrbs, orb, hx, this.height(x, z) + this.hand.y * scale, hz,
+                        (.35 + action.progress[index] * 3) * scale, 0);
+                    this.castingOrbs.setColorAt(orb, action.kind[index] === ActorAction.Heal ? HEAL : ENRAGED);
+                }
             }
         }
         for (const pool of this.actors.enemies) for (const mesh of pool) uploadCombatInstances(mesh);
+        uploadCombatInstances(this.castingOrbs);
 
         for (const warning of [this.telegraphs, this.castWarnings, this.chargeWarnings]) {
             uploadCombatInstances(warning);
@@ -269,7 +292,10 @@ export class CombatLayer implements WorldRenderLayer {
             const index = projectiles.slots[cursor];
             const x = position.previousX[index] + (position.x[index] - position.previousX[index]) * blend;
             const z = position.previousZ[index] + (position.z[index] - position.previousZ[index]) * blend;
-            this.setInstance(this.projectiles, cursor, x, this.height(x, z) + .42, z,
+            const flight = Math.min(1, Math.max(0, projectile.age[index] - (1 - blend) / GAME_CONFIG.timing.simulationHz) / .45);
+            const launchY = this.height(projectile.groundX[index], projectile.groundZ[index]) + projectile.launchHeight[index];
+            const elevation = launchY * (1 - flight) + (this.height(x, z) + .42) * flight;
+            this.setInstance(this.projectiles, cursor, x, elevation, z,
                 projectile.faction[index] === Faction.Enemy ? 1.55 : projectile.critical[index] ? 1.65 : 1, 0);
             this.color.set(projectile.faction[index] === Faction.Enemy ? 0xff526f : 0xffe79a);
             this.projectiles.setColorAt(cursor, this.color);
@@ -321,6 +347,7 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     public reset(): void {
+        this.actors?.reset(); this.presentationTime = -1; this.castingOrbs.count = 0;
         this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;
         this.telegraphs.count = this.castWarnings.count = this.chargeWarnings.count = 0;
@@ -355,7 +382,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.groundProjection.dispose();
         this.mist.dispose();
         this.actorFill.dispose();
-        for (const mesh of [this.projectiles, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience]) mesh.dispose();
+        for (const mesh of [this.projectiles, this.castingOrbs, this.telegraphs, this.castWarnings, this.chargeWarnings, this.experience]) mesh.dispose();
         for (const geometry of Object.values(this.geometries)) geometry.dispose();
         for (const material of [
             this.projectileMaterial,

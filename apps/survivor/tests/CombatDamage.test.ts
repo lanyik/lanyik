@@ -10,6 +10,7 @@ function encounter() {
     const fixture = combat as unknown as { entities: CombatWorld; world: RegionalWorld; stats: DerivedStats;
         autoCast: boolean; attackCooldown: number; shieldCooldown: number; health: number };
     const e = fixture.entities;
+    for (const chunk of fixture.world.chunks.values()) chunk.chestOpened = true;
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
     fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.shieldCooldown = 1000;
     fixture.stats = { ...fixture.stats, evasion: 0, blockChance: 0, accuracy: 1.1, thorns: 1, thornsCap: 2 };
