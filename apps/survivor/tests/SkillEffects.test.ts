@@ -24,7 +24,7 @@ test("ground rings use the projection pass and lightning ribbons follow their en
         expect(effects.ground.instanceMatrix).toBe(effects.mesh.instanceMatrix);
     } finally { effects.dispose(); }
 });
-test("maximum visual facts fit the instance pool, freeze with simulation and release owned resources", async () => {
+test.each([EffectKind.Frost, EffectKind.EnemySlam])("maximum visual facts %i fit the instance pool, freeze with simulation and release owned resources", async kind => {
     const texture = new Texture<HTMLImageElement>();
     vi.spyOn(AssetLoader.prototype, "texture").mockResolvedValue(texture);
     const effects = await SkillEffects.load(new AbortController().signal), facts = new CombatEffects();
@@ -33,8 +33,8 @@ test("maximum visual facts fit the instance pool, freeze with simulation and rel
     effects.mesh.geometry.addEventListener("dispose", geometryDisposed);
     effects.ward.geometry.addEventListener("dispose", wardDisposed);
     try {
-        // Frost is the largest choreography: 31 instances per fact, plus the persistent ward.
-        for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) facts.add(EffectKind.Frost, 0, i % 8, Math.floor(i / 8), 4, 1);
+        // Frost and rock slam share the largest choreography: 31 instances per fact.
+        for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) facts.add(kind, 0, i % 8, Math.floor(i / 8), 4, 1);
         const height = () => 0;
         effects.update(facts.buffer, .5, height, 2, 3, 20);
         expect(effects.mesh.count).toBe(31 * GAME_CONFIG.skills.maxEffects + 7);

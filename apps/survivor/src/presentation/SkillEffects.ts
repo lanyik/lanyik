@@ -3,7 +3,7 @@ import { EffectKind, type EffectBuffer } from "../core/CombatEffects";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { AssetLoader } from "./AssetLoader";
 
-const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#8bffbb", "#ff526f"].map(color => new Color(color));
+const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#8bffbb", "#ff526f", "#ff9d45", "#d4af80"].map(color => new Color(color));
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
@@ -146,7 +146,12 @@ export class SkillEffects {
                 this.stamp(x, y, z, radius * 2.45, radius * 2.45, 0, kind, fade * .55, 2, 0, false, true);
                 this.stamp(x, y + .03, z, radius * 2.42, radius * 2.42, t, kind, fade * 1.1, 1, 0, false, true);
                 this.stamp(x, y + .06, z, r * 1.65, r * 1.65, (kind === EffectKind.Frost ? -1 : 1) * t * .6, kind, fade * .8, 5, 0, false, true);
-                if (kind === EffectKind.Frost) {
+                if (kind === EffectKind.EnemyEruption) {
+                    const column = Math.sin(Math.PI * t) * 3.4;
+                    this.stamp(x, y + column / 2, z, r * 1.3, column, seed, kind, fade, 3, 0, true);
+                    this.stamp(x, y + column / 2, z, r * .65, column, seed + Math.PI / 2, -1, fade * .85, 3, 0, true);
+                }
+                if (kind === EffectKind.Frost || kind === EffectKind.EnemySlam) {
                     for (let j = 0; j < 10; j++) {
                         const angle = j / 10 * TAU + seed, spread = radius * (.76 + (j % 3) * .08);
                         const px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread;
@@ -155,7 +160,7 @@ export class SkillEffects {
                         this.stamp(px, height(px, pz) + h / 2, pz, .3, h, angle + Math.PI / 2, -1, fade * .5, 4, 0, true);
                     }
                 }
-                const particles = kind === EffectKind.Frost ? 8 : 16;
+                const particles = kind === EffectKind.Frost || kind === EffectKind.EnemySlam ? 8 : 16;
                 for (let j = 0; j < particles; j++) {
                     const angle = j / particles * TAU + seed, spread = radius * (.5 + (j % 4) * .17);
                     const px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread;

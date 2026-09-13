@@ -12,7 +12,7 @@ import {
     Texture,
     WebGLRenderer
 } from "three";
-import { Sky } from "three/examples/jsm/objects/Sky.js";
+import { Skybox } from "./Skybox";
 
 import { WebGlGpuTimer, WebGlGpuTimerStats } from "./WebGlGpuTimer";
 import type { GroundProjection } from "./GroundProjection";
@@ -45,7 +45,7 @@ export class HexMapRendererHost {
     public readonly scene: Scene;
     public readonly worldRoot: Group;
     public readonly camera: PerspectiveCamera;
-    private readonly sky: Sky;
+    private readonly sky: Skybox | undefined;
     private readonly gpuTimer: WebGlGpuTimer;
     private contextState: WebGlContextState = "ready";
     private contextGeneration = 1;
@@ -63,7 +63,7 @@ export class HexMapRendererHost {
         this.scene.add(this.worldRoot);
 
         this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
-        let sky: Sky | undefined;
+        let sky: Skybox | undefined;
         let gpuTimer: WebGlGpuTimer | undefined;
         try {
             this.renderer.toneMapping = ACESFilmicToneMapping;
@@ -83,8 +83,8 @@ export class HexMapRendererHost {
             this.scene.add(new HemisphereLight(0xc7e7ff, 0x435433, 1));
             this.scene.add(new AmbientLight(0xffffff, 0.18));
 
-            this.sky = sky = this.createSky(options.skyVisible);
-            this.scene.add(this.sky);
+            this.sky = sky = options.skyVisible ? new Skybox() : undefined;
+            if (sky) { sky.bake(this.renderer); this.scene.background = sky.target.texture; }
             this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
             options.canvas.addEventListener("webglcontextlost", this.onContextLost);
             options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -92,8 +92,7 @@ export class HexMapRendererHost {
             options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
             options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
             gpuTimer?.dispose();
-            sky?.geometry.dispose();
-            sky?.material.dispose();
+            sky?.dispose();
             this.renderer.dispose();
             throw reason;
         }
@@ -142,24 +141,9 @@ export class HexMapRendererHost {
         this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
         this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         this.gpuTimer.dispose();
-        this.sky.geometry.dispose();
-        this.sky.material.dispose();
+        this.sky?.dispose();
         this.renderer.renderLists.dispose();
         this.renderer.dispose();
-    }
-
-    private createSky(visible: boolean): Sky {
-        const sky = new Sky();
-        sky.visible = visible;
-        sky.scale.setScalar(450000);
-        sky.frustumCulled = false;
-        const uniforms = sky.material.uniforms;
-        uniforms.turbidity.value = 4;
-        uniforms.rayleigh.value = 1.7;
-        uniforms.mieCoefficient.value = 0.002;
-        uniforms.mieDirectionalG.value = 0.76;
-        uniforms.sunPosition.value.copy(createSunDirection());
-        return sky;
     }
 
     private onContextLost = (event: Event): void => {
@@ -177,6 +161,7 @@ export class HexMapRendererHost {
         this.gpuTimer.handleContextRestored();
         this.renderer.resetState();
         this.invalidateManagedResources();
+        this.sky?.bake(this.renderer);
         this.contextGeneration += 1;
         this.contextRestores += 1;
         this.contextState = "ready";

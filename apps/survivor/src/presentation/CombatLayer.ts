@@ -135,7 +135,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.castingOrbs = this.instance(this.geometries.projectile, this.projectileMaterial, MAX_ENEMIES);
         this.castingOrbs.setColorAt(0, WHITE); this.castingOrbs.count = 0;
         this.telegraphs = this.instance(this.geometries.telegraph, this.warningMaterial, MAX_ENEMIES);
-        this.castWarnings = this.instance(this.geometries.cast, this.warningMaterial, MAX_ENEMIES);
+        this.castWarnings = this.instance(this.geometries.cast, this.warningMaterial, MAX_ENEMIES * 3);
         this.chargeWarnings = this.instance(this.geometries.charge, this.warningMaterial, MAX_ENEMIES);
         this.projectiles.setColorAt(0, WHITE);
         for (const warning of [this.telegraphs, this.castWarnings, this.chargeWarnings]) { warning.setColorAt(0, ENRAGED); warning.count = 0; }
@@ -243,25 +243,33 @@ export class CombatLayer implements WorldRenderLayer {
             if (action.kind[index] >= ActorAction.Melee && action.progress[index] < .5) {
                 const warning = action.kind[index] === ActorAction.Melee ? this.telegraphs : this.castWarnings;
                 const kind = action.kind[index];
-                const scale = kind === ActorAction.Melee ? action.reach[index] : kind === ActorAction.Nova ? ENEMY_SPECIAL.nova.radius : position.radius[index] + .45;
+                const eruption = kind === ActorAction.Eruption;
+                const scale = kind === ActorAction.Melee ? action.reach[index] : kind === ActorAction.Nova ? ENEMY_SPECIAL.nova.radius
+                    : eruption ? ENEMY_SPECIAL.eruption.radius : kind === ActorAction.Slam ? ENEMY_SPECIAL.slam.radius : position.radius[index] + .45;
                 const charge = kind === ActorAction.Charge;
                 const length = ENEMY_SPECIAL.charge.speed * ENEMY_SPECIAL.charge.duration;
-                const centerX = x + (charge ? Math.sin(rotation) * length / 2 : 0), centerZ = z + (charge ? Math.cos(rotation) * length / 2 : 0);
-                this.dummy.position.set(centerX - playerX, 0, centerZ - playerZ);
-                this.dummy.rotation.set(0, rotation, 0);
-                this.dummy.rotateX(-Math.PI / 2);
-                if (charge) this.dummy.scale.set(position.radius[index] * 2, length, 1);
-                else this.dummy.scale.setScalar(scale);
-                this.dummy.updateMatrix();
-                const mesh = charge ? this.chargeWarnings : warning, instance = mesh.count++;
-                mesh.setMatrixAt(instance, this.dummy.matrix);
-                mesh.setColorAt(instance, kind === ActorAction.Heal ? HEAL : ENRAGED);
+                const count = eruption && enemy.boss[index] ? 3 : 1;
+                for (let mark = 0; mark < count; mark++) {
+                    const offset = (mark - (count - 1) / 2) * ENEMY_SPECIAL.eruption.spacing;
+                    const centerX = eruption ? action.targetX[index] + Math.cos(rotation) * offset : x + (charge ? Math.sin(rotation) * length / 2 : 0);
+                    const centerZ = eruption ? action.targetZ[index] - Math.sin(rotation) * offset : z + (charge ? Math.cos(rotation) * length / 2 : 0);
+                    this.dummy.position.set(centerX - playerX, 0, centerZ - playerZ);
+                    this.dummy.rotation.set(0, rotation, 0);
+                    this.dummy.rotateX(-Math.PI / 2);
+                    if (charge) this.dummy.scale.set(position.radius[index] * 2, length, 1);
+                    else this.dummy.scale.setScalar(scale);
+                    this.dummy.updateMatrix();
+                    const mesh = charge ? this.chargeWarnings : warning, instance = mesh.count++;
+                    mesh.setMatrixAt(instance, this.dummy.matrix);
+                    mesh.setColorAt(instance, kind === ActorAction.Heal ? HEAL : ENRAGED);
+                }
             }
             this.color.copy(ENEMY_COLORS[enemy.kind[index]]);
             if (enemy.elite[index]) this.color.lerp(ELITE, .38);
             if (enemy.boss[index]) this.color.lerp(BOSS, .5);
             if (enemy.enraged[index]) this.color.lerp(ENRAGED, .6);
             if (status.slowUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(FROST, .65);
+            if (status.wardUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(HEAL, .45);
             if (vitals.hitFlash[index] > 0) this.color.setRGB(2, 2, 2);
             for (const mesh of this.actors.enemies[ENEMY_DEFINITIONS[enemy.kind[index]].model]) {
                 const instance = mesh.count++;
@@ -316,7 +324,9 @@ export class CombatLayer implements WorldRenderLayer {
         this.lootModels.reset();
         this.lootEffects.begin(state.player.animationTime);
         for (let cursor = 0; cursor < loot.count; cursor++) {
-            const index = loot.slots[cursor], x = position.x[index], z = position.z[index];
+            const index = loot.slots[cursor];
+            const x = position.previousX[index] + (position.x[index] - position.previousX[index]) * blend;
+            const z = position.previousZ[index] + (position.z[index] - position.previousZ[index]) * blend;
             if (Math.hypot(x - playerX, z - playerZ) > ACTOR_FADE_END + 1) continue;
             const kind = item.kind[index], quality = item.rarity[index], y = this.height(x, z);
             const bob = .16 + Math.sin(state.player.animationTime * 3. + item.id[index]) * .06;

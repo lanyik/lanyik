@@ -911,7 +911,7 @@ The backend/culling crossover benchmark and migration decision are recorded in
 
 Foreground forest visibility is an optional shared material uniform controlled by
 `foregroundFadeRadius` and `foregroundFadeHeight` (non-negative world units, zero
-by default). The application uses 44.2/30.6. `ForestOcclusion` applies a stable
+by default). The application uses 68/30.6. `ForestOcclusion` applies a stable
 screen coverage dither after foliage alpha testing, only between camera and focus,
 with a soft radial boundary and 16% minimum coverage. Bark and foliage retain
 their instance batches, fog state and depth writes; no per-tree material or
@@ -926,3 +926,13 @@ stationary-frame work; world replacement invalidates the anchor. Camera-side
 collision does not request another world or create a physics scene. Browser
 coverage tests compare center and outside pixels with forest fade on/off, then
 orbit a real generated ridge and check the camera sightline against CPU heights.
+
+With `skyVisible`, the renderer host owns a `Skybox`: six 256-square RGBA16F faces
+and mipmaps (about 4 MiB, no depth attachments), baked from the existing Three.js daylight/cloud shader
+at initialization and after context restoration. Baking is linear, and final tone
+mapping happens in the main render. `Scene.background` samples this cube without
+terrain fog or floating-origin translation. Per-frame sky noise work and the old
+oversized world-space skydome are removed; host disposal releases the render target,
+temporary sky geometry and material. A framebuffer regression verifies that changing
+terrain fog leaves sky pixels unchanged while rotating the view changes them;
+the same sky pixels must return after a real WebGL context loss and restoration.

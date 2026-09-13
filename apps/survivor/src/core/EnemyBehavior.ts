@@ -143,21 +143,43 @@ export class EnemyBehavior {
             a.kind[slot] = ActorAction.Charge;
             windup = ticksForSeconds(ENEMY_SPECIAL.charge.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.charge.duration + ENEMY_SPECIAL.charge.recovery);
             e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.charge.cooldown);
+        } else if (this.canEruption(slot)) {
+            a.kind[slot] = ActorAction.Eruption;
+            windup = ticksForSeconds(ENEMY_SPECIAL.eruption.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.eruption.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.eruption.cooldown);
+        } else if (this.canSlam(slot)) {
+            a.kind[slot] = ActorAction.Slam;
+            windup = ticksForSeconds(ENEMY_SPECIAL.slam.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.slam.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.slam.cooldown);
         }
+        e.attackStep[slot]++;
         a.started[slot] = this.tick;
         a.hitAt[slot] = this.tick + windup;
         a.endsAt[slot] = a.hitAt[slot] + recovery;
         a.readyAt[slot] = a.endsAt[slot] + definition.cooldownTicks; a.committed[slot] = 0; a.progress[slot] = 0;
         a.variant[slot] = e.boss[slot] ? (e.enraged[slot] ? 5 : 3) : 1;
         const target = world.resolve(a.target[slot]);
-        if (target >= 0) p.heading[slot] = Math.atan2(p.x[target] - p.x[slot], p.z[target] - p.z[slot]);
+        if (target >= 0) {
+            p.heading[slot] = Math.atan2(p.x[target] - p.x[slot], p.z[target] - p.z[slot]);
+            a.targetX[slot] = p.x[target]; a.targetZ[slot] = p.z[target];
+        }
         return BehaviorStatus.Running;
     }
 
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canNova(slot) || this.canHeal(slot) || this.canCharge(slot) || this.distance(slot) <= a.reach[slot]);
+            && (this.canNova(slot) || this.canHeal(slot) || this.canCharge(slot) || this.canSlam(slot) || this.distance(slot) <= a.reach[slot]);
+    }
+    private canEruption(slot: number): boolean {
+        const e = this.entities.enemy;
+        return e.kind[slot] === EnemyKind.Caster && e.attackStep[slot] % 2 === 1
+            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= this.entities.action.reach[slot];
+    }
+    private canSlam(slot: number): boolean {
+        const e = this.entities.enemy;
+        return e.kind[slot] === EnemyKind.Guard && e.attackStep[slot] > 0
+            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.slam.radius;
     }
     public canNova(slot: number): boolean {
         const e = this.entities.enemy;

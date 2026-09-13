@@ -130,7 +130,21 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
         } else if (kind === ActorAction.Heal) {
             if (v.faction[target] !== Faction.Enemy || v.health[target] <= 0 || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius) continue;
             v.health[target] = Math.min(v.maxHealth[target], v.health[target] + Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3));
+            status.wardUntil[target] = tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration);
             effects.add(EffectKind.Heal, tick, p.x[target], p.z[target], 1.1, .8);
+        } else if (kind === ActorAction.Eruption) {
+            const count = e.boss[slot] ? 3 : 1, rule = ENEMY_SPECIAL.eruption;
+            let hit = false;
+            for (let i = 0; i < count; i++) {
+                const offset = (i - (count - 1) / 2) * rule.spacing;
+                const x = a.targetX[slot] + Math.cos(p.heading[slot]) * offset, z = a.targetZ[slot] - Math.sin(p.heading[slot]) * offset;
+                hit ||= Math.hypot(p.x[target] - x, p.z[target] - z) <= rule.radius + p.radius[target];
+                effects.add(EffectKind.EnemyEruption, tick, x, z, rule.radius, .85);
+            }
+            if (hit) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * rule.damage, e.elite[slot], e.boss[slot]);
+        } else if (kind === ActorAction.Slam) {
+            if (Math.hypot(dx, dz) <= ENEMY_SPECIAL.slam.radius + p.radius[target]) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.slam.damage, e.elite[slot], e.boss[slot]);
+            effects.add(EffectKind.EnemySlam, tick, p.x[slot], p.z[slot], ENEMY_SPECIAL.slam.radius, .8);
         } else if (kind === ActorAction.Nova) {
             if (Math.hypot(dx, dz) <= ENEMY_SPECIAL.nova.radius + p.radius[target]) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.nova.damage, e.elite[slot], e.boss[slot]);
             effects.add(EffectKind.EnemyNova, tick, p.x[slot], p.z[slot], ENEMY_SPECIAL.nova.radius, .7);

@@ -11000,7 +11000,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   }
 
   // src/world/WorldGeneratorVersion.ts
-  var WORLD_GENERATOR_VERSION = 21;
+  var WORLD_GENERATOR_VERSION = 22;
 
   // src/world/WorldStyleProfile.ts
   var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -11049,10 +11049,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     fields: Object.freeze({
       warpX: field(1374496523, 0.018, 0.022, 3, 2),
       warpY: field(1757159915, 0.018, 0.022, 3, 2),
-      continent: field(0, 0.014, 0.014, 5, 2),
-      detail: field(2738958700, 0.145, 0.145, 3, 3),
-      ridge: field(2654435769, 0.012, 0.012, 4, 2),
-      valley: field(2135587861, 0.024, 0.024, 3, 2),
+      continent: field(0, 0.014, 0.014, 3, 2),
+      detail: field(2738958700, 0.045, 0.045, 2, 3),
+      ridge: field(2654435769, 0.012, 0.012, 2, 2),
+      valley: field(2135587861, 0.024, 0.024, 2, 2),
       roughness: field(2496678331, 0.31, 0.31, 3, 4),
       moisture: field(3355524772, 0.08, 0.08, 4, 2),
       temperature: field(2911926141, 0.035, 0.035, 3, 2),
@@ -11062,8 +11062,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       ocean: oceanField(DEFAULT_WORLD_WATER_STYLE.oceanScale),
       openWarpAmplitude: 15,
       toroidalWarpAmplitude: 0.12,
-      continentWeight: 0.72,
-      detailWeight: 0.16,
+      continentWeight: 0.845,
+      detailWeight: 0.035,
       landMaskStart: 0.38,
       landMaskEnd: 0.68,
       ridgeExponent: 2.35,
@@ -11106,7 +11106,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       plainMinimum: 0.018,
       plainMaximum: 0.11,
       plainElevationScale: 0.1,
-      plainRoughnessScale: 0.025,
+      plainRoughnessScale: 4e-3,
       valleyDepth: 0.035,
       hillElevationStart: 0.55,
       hillElevationEnd: 0.72,
@@ -16129,6 +16129,46 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     )
   };
 
+  // src/rendering/Skybox.ts
+  var Skybox = class {
+    constructor() {
+      this.target = new three.WebGLCubeRenderTarget(256, { type: three.HalfFloatType, depthBuffer: false, generateMipmaps: true, minFilter: three.LinearMipmapLinearFilter });
+      this.scene = new three.Scene();
+      this.sky = new Sky();
+      this.camera = new three.CubeCamera(1, 2e3, this.target);
+      this.target.texture.name = "procedural-daylight-skybox";
+      this.sky.scale.setScalar(1e3);
+      this.sky.frustumCulled = false;
+      const uniforms = this.sky.material.uniforms;
+      uniforms.turbidity.value = 2.2;
+      uniforms.rayleigh.value = 1.7;
+      uniforms.mieCoefficient.value = 2e-3;
+      uniforms.mieDirectionalG.value = 0.76;
+      uniforms.sunPosition.value.copy(createSunDirection());
+      uniforms.cloudCoverage.value = 0.48;
+      uniforms.cloudDensity.value = 0.65;
+      uniforms.cloudElevation.value = 0.35;
+      this.scene.add(this.sky);
+    }
+    bake(renderer) {
+      const target = renderer.getRenderTarget(), face = renderer.getActiveCubeFace(), mip = renderer.getActiveMipmapLevel();
+      const toneMapping = renderer.toneMapping, xr = renderer.xr.enabled;
+      try {
+        renderer.toneMapping = three.NoToneMapping;
+        this.camera.update(renderer, this.scene);
+      } finally {
+        renderer.toneMapping = toneMapping;
+        renderer.xr.enabled = xr;
+        renderer.setRenderTarget(target, face, mip);
+      }
+    }
+    dispose() {
+      this.target.dispose();
+      this.sky.geometry.dispose();
+      this.sky.material.dispose();
+    }
+  };
+
   // src/rendering/WebGlGpuTimer.ts
   var WebGlGpuTimer = class {
     constructor(gl, options = {}) {
@@ -16320,6 +16360,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.gpuTimer.handleContextRestored();
         this.renderer.resetState();
         this.invalidateManagedResources();
+        this.sky?.bake(this.renderer);
         this.contextGeneration += 1;
         this.contextRestores += 1;
         this.contextState = "ready";
@@ -16346,8 +16387,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         this.scene.add(primary);
         this.scene.add(new three.HemisphereLight(13101055, 4412467, 1));
         this.scene.add(new three.AmbientLight(16777215, 0.18));
-        this.sky = sky = this.createSky(options.skyVisible);
-        this.scene.add(this.sky);
+        this.sky = sky = options.skyVisible ? new Skybox() : void 0;
+        if (sky) {
+          sky.bake(this.renderer);
+          this.scene.background = sky.target.texture;
+        }
         this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
         options.canvas.addEventListener("webglcontextlost", this.onContextLost);
         options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -16355,8 +16399,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
         options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
         options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         gpuTimer?.dispose();
-        sky?.geometry.dispose();
-        sky?.material.dispose();
+        sky?.dispose();
         this.renderer.dispose();
         throw reason;
       }
@@ -16403,23 +16446,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
       this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
       this.gpuTimer.dispose();
-      this.sky.geometry.dispose();
-      this.sky.material.dispose();
+      this.sky?.dispose();
       this.renderer.renderLists.dispose();
       this.renderer.dispose();
-    }
-    createSky(visible) {
-      const sky = new Sky();
-      sky.visible = visible;
-      sky.scale.setScalar(45e4);
-      sky.frustumCulled = false;
-      const uniforms = sky.material.uniforms;
-      uniforms.turbidity.value = 4;
-      uniforms.rayleigh.value = 1.7;
-      uniforms.mieCoefficient.value = 2e-3;
-      uniforms.mieDirectionalG.value = 0.76;
-      uniforms.sunPosition.value.copy(createSunDirection());
-      return sky;
     }
     invalidateManagedResources() {
       this.scene.traverse((object) => {

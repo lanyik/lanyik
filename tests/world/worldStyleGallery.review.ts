@@ -52,9 +52,9 @@ describe("world style hydrology review", () => {
                 // forest region; forest placement rules themselves are unchanged.
                 ? { water: [0.45, 0.88], mountain: [0, 0.05], forest: [0.002, 0.09] }
                 : sample.group === "toroidal-512"
-                    // Broader v20 ranges vary more between seeds (d: 2.54%).
-                    // Require a large connected range as well as total coverage.
-                    ? { water: [0.15, 0.58], mountain: [0.02, 0.11], forest: [0.035, 0.075] }
+                    // v22 removes short-scale roughness while retaining broad ranges:
+                    // reviewed coverage 2.69–11.44%, with connected ranges below.
+                    ? { water: [0.15, 0.58], mountain: [0.02, 0.12], forest: [0.035, 0.075] }
                     : undefined;
             if (sample.group === "toroidal-512") {
                 expect(metrics.mountains.maximumSize, `${sample.id} continuous mountain range`).toBeGreaterThanOrEqual(2000);

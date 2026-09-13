@@ -1,6 +1,6 @@
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 
-export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Heal, EnemyNova }
+export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Heal, EnemyNova, EnemyEruption, EnemySlam }
 export function effectArrays(create: <T extends Float32Array | Float64Array | Uint8Array>(type: {
     readonly BYTES_PER_ELEMENT: number; new(length: number): T; new(buffer: ArrayBuffer, offset: number, count: number): T
 }, count: number) => T) {

@@ -179,7 +179,7 @@ describe("generated water network", () => {
                 for (const character of [...cells].sort().join(";")) {
                     hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193);
                 }
-                expect((hash >>> 0).toString(16)).toBe(riverLength === 100 ? "c56bfc11" : "3502bb1a");
+                expect((hash >>> 0).toString(16)).toBe(riverLength === 100 ? "c6b7667b" : "e3209c85");
             }
             for (const cell of previous) expect(cells.has(cell)).toBe(true);
             expect(cells.size).toBeGreaterThan(previous.size + 50);

@@ -14,7 +14,7 @@ import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
-export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Nova }
+export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Nova, Eruption, Slam }
 export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol }
 
 export class DamageBuffer {
@@ -46,7 +46,7 @@ export class CombatWorld {
     private readonly nearby = new SpatialQuery(ENTITY_CAPACITY);
     public readonly impacts = new DamageBuffer();
     public readonly effects = new CombatEffects();
-    public readonly status = { slowUntil: new Float64Array(ENTITY_CAPACITY), slowScale: new Float32Array(ENTITY_CAPACITY) };
+    public readonly status = { slowUntil: new Float64Array(ENTITY_CAPACITY), slowScale: new Float32Array(ENTITY_CAPACITY), wardUntil: new Float64Array(ENTITY_CAPACITY) };
     public readonly projectileBatch = new ProjectileBatch();
     public readonly projectileBatchIndices = new Uint16Array(ENTITY_CAPACITY);
     public readonly projectileEnemyIndices = new Uint16Array(ENTITY_CAPACITY);
@@ -71,14 +71,14 @@ export class CombatWorld {
         patrolX: new Float64Array(ENTITY_CAPACITY), patrolZ: new Float64Array(ENTITY_CAPACITY),
         patrolStep: new Uint32Array(ENTITY_CAPACITY), patrolWaitUntil: new Float64Array(ENTITY_CAPACITY),
         active: new Uint8Array(ENTITY_CAPACITY), supportTarget: new Float64Array(ENTITY_CAPACITY),
-        senseAt: new Float64Array(ENTITY_CAPACITY), specialReadyAt: new Float64Array(ENTITY_CAPACITY), enraged: new Uint8Array(ENTITY_CAPACITY)
+        senseAt: new Float64Array(ENTITY_CAPACITY), specialReadyAt: new Float64Array(ENTITY_CAPACITY), enraged: new Uint8Array(ENTITY_CAPACITY), attackStep: new Uint32Array(ENTITY_CAPACITY)
     };
     public readonly action = {
         kind: new Uint8Array(ENTITY_CAPACITY), started: new Float64Array(ENTITY_CAPACITY),
         hitAt: new Float64Array(ENTITY_CAPACITY), endsAt: new Float64Array(ENTITY_CAPACITY),
         readyAt: new Float64Array(ENTITY_CAPACITY), committed: new Uint8Array(ENTITY_CAPACITY),
         reach: new Float32Array(ENTITY_CAPACITY), progress: new Float32Array(ENTITY_CAPACITY),
-        target: new Float64Array(ENTITY_CAPACITY), variant: new Uint8Array(ENTITY_CAPACITY)
+        target: new Float64Array(ENTITY_CAPACITY), variant: new Uint8Array(ENTITY_CAPACITY), targetX: new Float64Array(ENTITY_CAPACITY), targetZ: new Float64Array(ENTITY_CAPACITY)
     };
     public readonly projectile = {
         source: new Float64Array(ENTITY_CAPACITY), faction: new Uint8Array(ENTITY_CAPACITY),
@@ -119,7 +119,8 @@ export class CombatWorld {
         e.runningNode[slot] = -1; e.target[slot] = 0; e.intent[slot] = MoveIntent.None; e.active[slot] = e.awake[slot] = e.returning[slot] = 0;
         e.patrolX[slot] = spawn.x; e.patrolZ[slot] = spawn.z; e.patrolStep[slot] = e.patrolWaitUntil[slot] = 0;
         e.supportTarget[slot] = e.senseAt[slot] = e.specialReadyAt[slot] = e.enraged[slot] = 0;
-        this.status.slowUntil[slot] = 0; this.status.slowScale[slot] = 1;
+        this.status.slowUntil[slot] = this.status.wardUntil[slot] = e.attackStep[slot] = 0; this.status.slowScale[slot] = 1;
+        a.targetX[slot] = spawn.x; a.targetZ[slot] = spawn.z;
         a.target[slot] = a.variant[slot] = 0;
         a.kind[slot] = ActorAction.Idle; a.started[slot] = a.hitAt[slot] = a.endsAt[slot] = a.readyAt[slot] = a.progress[slot] = a.committed[slot] = 0;
         const radius = definition.radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
@@ -166,7 +167,7 @@ export class CombatWorld {
         this.enemy.homes[slot] = this.enemy.regions[slot] = undefined;
         this.enemy.target[slot] = this.projectile.source[slot] = 0;
         this.enemy.supportTarget[slot] = this.action.target[slot] = 0;
-        this.status.slowUntil[slot] = 0;
+        this.status.slowUntil[slot] = this.status.wardUntil[slot] = 0;
         this.enemy.runningNode[slot] = -1;
         this.world.destroy(this.world.ids[slot]);
     }

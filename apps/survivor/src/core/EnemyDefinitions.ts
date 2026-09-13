@@ -47,5 +47,8 @@ export const ENEMY_SPECIAL = Object.freeze({
     charge: Object.freeze({ windup: .75, duration: .55, recovery: .7, speed: 12, minRange: 3, maxRange: 6.5, cooldown: 5, damage: 1.3 }),
     heal: Object.freeze({ radius: 6, threshold: .65, fraction: .2, windup: .9, recovery: .6, cooldown: 5 }),
     nova: Object.freeze({ radius: 3.4, windup: .9, recovery: .7, cooldown: 5, damage: 1.2 }),
+    eruption: Object.freeze({ radius: 1.55, spacing: 3.4, windup: 1.05, recovery: .85, cooldown: 6, damage: 1.45 }),
+    slam: Object.freeze({ radius: 2.4, windup: 1.05, recovery: 1.1, cooldown: 5, damage: 1.5 }),
+    healingWard: Object.freeze({ duration: 3, reduction: .25 }),
     guardReduction: .4, enrageHealth: .5
 });

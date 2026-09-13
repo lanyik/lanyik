@@ -78,19 +78,19 @@ export class HexCombatView implements CombatView {
             terrainTextureRegionSize: 4,
             grassDensity: 10,
             grassBladeHeight: 3,
-            foregroundFadeRadius: COMBAT_ENVIRONMENT.size * 1.3,
+            foregroundFadeRadius: COMBAT_ENVIRONMENT.size * 2,
             foregroundFadeHeight: COMBAT_ENVIRONMENT.size * .9,
             gridVisible: false,
-            skyVisible: false,
+            skyVisible: true,
             pointerColor: 0x658287,
             selectorColor: 0xffbf69,
-            renderDistance: 1500,
+            renderDistance: 1900,
             horizonFogStart: GAME_CONFIG.presentation.horizonFogStart,
             horizonFogEnd: GAME_CONFIG.presentation.horizonFogEnd,
             horizonFogColor: GAME_CONFIG.presentation.horizonFogColor,
             lodNearDistance: 420,
             lodFarDistance: 780,
-            vegetationRenderDistance: 950
+            vegetationRenderDistance: 1200
         });
         try {
             const camera = this.map.getCamera();

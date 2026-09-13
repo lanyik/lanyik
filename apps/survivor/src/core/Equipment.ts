@@ -58,7 +58,7 @@ export const BONUS_INFO = Object.freeze({
     goldBonus: stat("金币加成", "percent", 0.08, 70, "提高击杀与宝箱金币"),
     attackSpeed: stat("攻击速度", "percent", 0.06, 150, "最高基础攻速 3 倍，溢出转暴伤"),
     castSpeed: stat("技能释放速度", "percent", 0.08, 120, "最高基础施法速度 3 倍，溢出转暴伤"),
-    pickupRadius: stat("拾取范围", "flat", 0.3, 8, "扩大经验球吸附范围")
+    pickupRadius: stat("拾取范围", "flat", 0.3, 8, "扩大经验、装备与道具的吸附范围")
 });
 export type BonusId = keyof typeof BONUS_INFO;
 export const BONUS_IDS = Object.freeze(Object.keys(BONUS_INFO) as BonusId[]);

@@ -38,6 +38,8 @@ import { MAX_PROJECTILES, MAX_GROUND_EQUIPMENT, CONSUMABLE_COOLDOWN } from "./Ga
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
 
 const STEP_SECONDS = COMBAT_STEP_MS / 1000;
+const PICKUP_ARRIVAL = .25;
+const pickupTravel = (distance: number, radius: number) => Math.min(distance, (5 + (radius - distance) * 2.2) * STEP_SECONDS);
 const REGENERATION_TICKS = ticksPerUpdate(GAME_CONFIG.timing.regenerationHz);
 const AUTO_SKILL_TICKS = ticksPerUpdate(GAME_CONFIG.timing.autoSkillHz);
 type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: PlayerRenderState[Key] };
@@ -63,6 +65,8 @@ function validatePosition(x: number, z: number): void {
 export class CombatSimulation {
     private readonly movingExperience = new Float64Array(GAME_CONFIG.combat.maxExperienceOrbs);
     private movingExperienceCount = 0;
+    private readonly movingLoot = new Float64Array(GAME_CONFIG.combat.maxGroundEquipment);
+    private movingLootCount = 0;
     private awaitingQueries = false;
     private movementX = 0;
     private movementZ = 0;
@@ -697,7 +701,8 @@ export class CombatSimulation {
         const evasion = this.entities.enemy.boss[index] ? ENEMY_HIT_RULES.evasion.boss
             : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
         if (!this.random.chance(Math.max(0, Math.min(1, this.stats.accuracy - evasion)))) return;
-        const damage = outgoingDamage(this.stats, rolledDamage, this.entities.vitals.maxHealth[index], elite, this.random.chance(this.stats.lethalChance));
+        const damage = outgoingDamage(this.stats, rolledDamage, this.entities.vitals.maxHealth[index], elite, this.random.chance(this.stats.lethalChance))
+            * (this.entities.status.wardUntil[index] > this.tickValue ? 1 - ENEMY_SPECIAL.healingWard.reduction : 1);
         const healthLost = Math.min(this.entities.vitals.health[index], damage);
         this.entities.vitals.health[index] -= damage;
         this.entities.vitals.hitFlash[index] = 0.1;
@@ -721,8 +726,8 @@ export class CombatSimulation {
             const x = e.position.x[index], z = e.position.z[index];
             e.position.previousX[index] = x; e.position.previousZ[index] = z;
             const dx = this.playerX - x, dz = this.playerZ - z, distance = Math.hypot(dx, dz);
-            const travel = Math.min(distance, (5 + (this.stats.pickupRadius - distance) * 2.2) * STEP_SECONDS);
-            if (distance - travel <= .25) {
+            const travel = pickupTravel(distance, this.stats.pickupRadius);
+            if (distance - travel <= PICKUP_ARRIVAL) {
                 this.gainExperience(e.experienceValue[index]); e.remove(index);
             } else {
                 e.position.x[index] += dx / distance * travel; e.position.z[index] += dz / distance * travel;
@@ -733,9 +738,23 @@ export class CombatSimulation {
     }
 
     private collectEquipment(): void {
-        const nearby = this.entities.queryNearby(Component.GroundItem, this.playerX, this.playerZ, .75, false, true);
+        const e = this.entities, p = e.position;
+        for (let i = 0; i < this.movingLootCount; i++) {
+            const slot = e.world.resolve(this.movingLoot[i]);
+            if (slot >= 0) { p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot]; }
+        }
+        this.movingLootCount = 0;
+        const nearby = e.queryNearby(Component.GroundItem, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
         for (let cursor = 0; cursor < nearby.count; cursor++) {
             const index = nearby.slots[cursor], id = this.entities.item.id[index];
+            const dx = this.playerX - p.x[index], dz = this.playerZ - p.z[index], distance = Math.hypot(dx, dz);
+            const travel = pickupTravel(distance, this.stats.pickupRadius);
+            p.previousX[index] = p.x[index]; p.previousZ[index] = p.z[index];
+            if (distance - travel > PICKUP_ARRIVAL) {
+                p.x[index] += dx / distance * travel; p.z[index] += dz / distance * travel;
+                e.updateSpatial(index, Component.GroundItem); this.movingLoot[this.movingLootCount++] = e.world.ids[index];
+                continue;
+            }
             const item = this.groundItems.get(id);
             if (!item) throw new Error(`Ground equipment ${id} is missing`);
             const clear = this.shouldAutoRecycle(item);

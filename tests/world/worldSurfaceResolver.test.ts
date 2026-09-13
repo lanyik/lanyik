@@ -50,9 +50,7 @@ describe("WorldSurfaceResolver", () => {
                     | (tile.modifiers?.includes("wood") ? 2 : 0));
             }
         }
-        expect(checksum(infinite.tiles)).toBe("5415c845");
-        expect(checksum(toroidal.tiles)).toBe("5c34968c");
-        expect(checksum(encoded)).toBe("99fb0dc5");
+        expect([checksum(infinite.tiles), checksum(toroidal.tiles), checksum(encoded)]).toEqual(["91cab50d", "4974324f", "99fb0dc5"]);
     });
 
     test("keeps generated permanent snow on elevated hill relief", () => {
@@ -107,7 +105,7 @@ describe("WorldSurfaceResolver", () => {
         expect(reliefValues.size).toBeGreaterThan(100);
         expect(vegetationValues.size).toBeGreaterThan(50);
         expect(oceanValues.size).toBeGreaterThan(20);
-        expect(checksum(encoded)).toBe("1a67761a");
+        expect(checksum(encoded)).toBe("a786043c");
     });
 
     test("forms coherent generated water and regional forests without lake noise", () => {
@@ -133,7 +131,7 @@ describe("WorldSurfaceResolver", () => {
         ));
         expect(woods.length).toBeGreaterThan(100);
         expect(adjacentWoods.length / woods.length).toBeGreaterThan(0.65);
-        expect(checksum(encoded)).toBe("8f26f316");
+        expect(checksum(encoded)).toBe("bad08ad5");
     });
 
     test("deduplicates canonical samples inside a short-lived toroidal window", () => {

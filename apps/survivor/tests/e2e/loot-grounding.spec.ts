@@ -9,6 +9,7 @@ import { advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from ".
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 type RenderFixture = {
+    load(seed: string, point: { x: number; z: number }): Promise<unknown>;
     map: Pick<HexMap, "getCamera"> & { rendererHost: { renderer: WebGLRenderer; scene: Scene } };
     layer: { groundProjection: GroundProjection; lootEffects: LootEffects; lootModels: LootModels;
         root: Group; dummy: Object3D; height(x: number, z: number): number };
@@ -60,7 +61,7 @@ test("loot rings survive subtexel motion and a chest seats on a real terrain slo
         const effects = layer.lootEffects, parent = effects.beam.parent!;
         const target = layer.groundProjection.target.clone(); target.samples = 4; target.setSize(256, 256);
         const savedTarget = renderer.getRenderTarget(), savedAlpha = renderer.getClearAlpha();
-        const savedColor = renderer.getClearColor((scene.background as Color).clone());
+        const savedColor = renderer.getClearColor((scene.fog as { color: Color }).color.clone());
         scene.background = null; scene.add(effects.beam);
         camera.aspect = 1; camera.fov = 47; camera.near = .1; camera.far = 10; camera.updateProjectionMatrix();
         const pixels = new Uint8Array(256 * 256 * 4), measurements: { energy: number; outside: number }[] = [];
@@ -89,6 +90,31 @@ test("loot rings survive subtexel motion and a chest seats on a real terrain slo
         expect(Math.max(...energies) / Math.min(...energies)).toBeLessThan(1.02);
     }
 
+    // v22's spawn plain is intentionally almost flat; inspect chest grounding on a real ridge instead.
+    const ridge = await page.evaluate(() => {
+        const { layer } = (window.survivorApplication!.session as unknown as { view: RenderFixture }).view;
+        let best = { x: -69, z: 7.794228634, slope: 0 };
+        for (let dx = -30; dx <= 30; dx++) for (let dz = -30; dz <= 30; dz++) {
+            const x = -69 + dx, z = 7.794228634 + dz;
+            const slope = Math.hypot(layer.height(x + .4, z) - layer.height(x - .4, z), layer.height(x, z + .4) - layer.height(x, z - .4)) / .8;
+            if (slope > best.slope && slope < .65) best = { x, z, slope };
+        }
+        return best;
+    });
+    expect(ridge.slope).toBeGreaterThan(.4);
+    await combatWorker(page).evaluate(({ x, z }) => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = simulation as unknown as { playerX: number; playerZ: number; previousPlayerX: number; previousPlayerZ: number; entities: CombatWorld };
+        fixture.playerX = fixture.previousPlayerX = x; fixture.playerZ = fixture.previousPlayerZ = z;
+        const { position, player } = fixture.entities;
+        position.x[player] = position.previousX[player] = x; position.z[player] = position.previousZ[player] = z;
+    }, ridge);
+    await page.evaluate(async point => {
+        const session = window.survivorApplication!.session;
+        session.dispatch({ type: "sort-inventory" }); await session.settled;
+        await (session as unknown as { view: RenderFixture }).view.load("rift-ember-1", point);
+    }, ridge);
+    await advanceCombat(page);
     const placement = await page.evaluate(() => {
         const session = window.survivorApplication!.session, player = session.getSnapshot().combat!.player;
         const { map, layer } = (session as unknown as { view: RenderFixture }).view;

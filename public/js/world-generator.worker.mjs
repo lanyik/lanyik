@@ -109,7 +109,7 @@ function randomAt(seed, x, y, salt) {
 }
 
 // src/world/WorldGeneratorVersion.ts
-var WORLD_GENERATOR_VERSION = 21;
+var WORLD_GENERATOR_VERSION = 22;
 
 // src/world/WorldStyleProfile.ts
 var DEFAULT_WORLD_WATER_STYLE = Object.freeze({
@@ -158,10 +158,10 @@ var WORLD_STYLE_PROFILE = Object.freeze({
   fields: Object.freeze({
     warpX: field(1374496523, 0.018, 0.022, 3, 2),
     warpY: field(1757159915, 0.018, 0.022, 3, 2),
-    continent: field(0, 0.014, 0.014, 5, 2),
-    detail: field(2738958700, 0.145, 0.145, 3, 3),
-    ridge: field(2654435769, 0.012, 0.012, 4, 2),
-    valley: field(2135587861, 0.024, 0.024, 3, 2),
+    continent: field(0, 0.014, 0.014, 3, 2),
+    detail: field(2738958700, 0.045, 0.045, 2, 3),
+    ridge: field(2654435769, 0.012, 0.012, 2, 2),
+    valley: field(2135587861, 0.024, 0.024, 2, 2),
     roughness: field(2496678331, 0.31, 0.31, 3, 4),
     moisture: field(3355524772, 0.08, 0.08, 4, 2),
     temperature: field(2911926141, 0.035, 0.035, 3, 2),
@@ -171,8 +171,8 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     ocean: oceanField(DEFAULT_WORLD_WATER_STYLE.oceanScale),
     openWarpAmplitude: 15,
     toroidalWarpAmplitude: 0.12,
-    continentWeight: 0.72,
-    detailWeight: 0.16,
+    continentWeight: 0.845,
+    detailWeight: 0.035,
     landMaskStart: 0.38,
     landMaskEnd: 0.68,
     ridgeExponent: 2.35,
@@ -215,7 +215,7 @@ var WORLD_STYLE_PROFILE = Object.freeze({
     plainMinimum: 0.018,
     plainMaximum: 0.11,
     plainElevationScale: 0.1,
-    plainRoughnessScale: 0.025,
+    plainRoughnessScale: 4e-3,
     valleyDepth: 0.035,
     hillElevationStart: 0.55,
     hillElevationEnd: 0.72,

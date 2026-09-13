@@ -282,7 +282,8 @@ Windows 一键入口为根目录 `run.bat`，工作目录固定为脚本所在�
 缺少 `node_modules` 时先执行 `npm ci`，随后顺序执行 `npm run app:prepare` 和 `npm run dev --workspace @preview/survivor -- --open`。
 Vite 就绪后打开默认浏览器；服务在同一命令窗口运行，Ctrl+C 停止。依赖安装、资源准备或端口绑定失败立即停止并保留错误信息，不终止占用 5173 的其他进程。
 批处理使用 CRLF 行尾，控制台文字使用 ASCII，避免 Windows 代码页影响执行或错误展示。
-地形生成器 v21 衔接平原、丘陵与山脉，压低谷地山口、平滑限制峰顶；生产 Worker 使用与渲染同种子的 `ProceduralCombatTerrain`。玩家采用接触切线滑行，树林局部虚影和镜头净空在渲染端处理，规则和性能见[地形通行](game/terrain-navigation.md)。
+地形生成器 v22 保留平原、丘陵与山脉的连续高度，降低高频噪声和小坡包，压低谷地山口、平滑限制峰顶；生产 Worker 使用与渲染同种子的 `ProceduralCombatTerrain`。玩家采用接触切线滑行，树林局部虚影和镜头净空在渲染端处理，规则和性能见[地形通行](game/terrain-navigation.md)。
+装备、药剂与经验共用拾取半径和吸附速度，模型/光圈按固定 tick 插值；背包满保留地面物品。天空使用一次烘焙的 HDR 立方体，不受地面雾影响，主视距 1900、植被视距 1200。新增术士/领主定点喷发、岩卫砸地和祭司减伤祝福；单测检查释放/取消/槽复用，浏览器检查真实 Worker 落点预警、效果实例和天空像素，见 `world-spells.spec.ts`。
 构建脚本先校验 realpath 与父目录，只替换 `apps/survivor/.assets`；不下载网络资产或删除源文件。
 Vite 保持 React、Three.js、世界运行时的明确分组，生成文件不入 Git。
 
