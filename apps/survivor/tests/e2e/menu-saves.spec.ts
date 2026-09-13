@@ -54,7 +54,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     expect(errors).toEqual([]);
 });
 
-test("Ctrl toggles bag and forge locks; a single level-batch preview protects locks and grids stay bounded", async ({ page }, info) => {
+test("Shift toggles bag and forge locks; a single level-batch preview protects locks and grids stay bounded", async ({ page }, info) => {
     test.setTimeout(100_000); await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
@@ -62,18 +62,18 @@ test("Ctrl toggles bag and forge locks; a single level-batch preview protects lo
     const base = createStarterEquipment();
     await inventory(page, [{ ...base, id: 10, itemLevel: 4, locked: true }, { ...base, id: 11, itemLevel: 5, locked: false }, { ...base, id: 12, itemLevel: 3, locked: false }, { ...base, id: 13, itemLevel: 4, locked: true }]);
     await page.keyboard.press("KeyB"); const bag = page.locator(".inventory-window"), cell = bag.locator('[data-item-id="10"]');
-    await cell.click({ modifiers: ["Control"] }); await expect(cell).not.toHaveClass(/item-locked/);
-    await cell.click({ modifiers: ["Control"] }); await expect(cell).toHaveClass(/item-locked/);
-    await cell.click({ modifiers: ["Control"] });
+    await cell.click({ modifiers: ["Shift"] }); await expect(cell).not.toHaveClass(/item-locked/);
+    await cell.click({ modifiers: ["Shift"] }); await expect(cell).toHaveClass(/item-locked/);
+    await cell.click({ modifiers: ["Shift"] });
     await expect(bag.getByRole("button", { name: /^解锁/ })).toHaveCount(0);
     await bag.getByRole("spinbutton", { name: "批量分解等级" }).fill("5"); await bag.getByRole("button", { name: "一键分解", exact: true }).click();
     const confirm = page.getByRole("dialog", { name: "确认物品操作" }); await expect(confirm.locator(".bulk-preview > div")).toHaveCount(2);
     await confirm.getByRole("button", { name: "确认一键分解装备" }).click(); await expect(confirm).toHaveCount(0);
     await expect(bag.locator('[data-item-id="10"]')).toHaveCount(0); await expect(bag.locator('[data-item-id="11"]')).toBeVisible(); await expect(bag.locator('[data-item-id="13"]')).toHaveClass(/item-locked/);
     await page.keyboard.press("KeyJ"); const forge = page.locator(".craft-window"), gear = forge.locator('[data-craft-equipment="13"]');
-    await gear.click({ modifiers: ["Control"] }); await expect(gear).not.toHaveClass(/item-locked/);
+    await gear.click({ modifiers: ["Shift"] }); await expect(gear).not.toHaveClass(/item-locked/);
     await gear.click(); await expect(forge.locator('[data-bench-slot="source"]')).toContainText(base.name);
-    await gear.click({ modifiers: ["Control"] }); await expect(gear).toHaveClass(/item-locked/);
+    await gear.click({ modifiers: ["Shift"] }); await expect(gear).toHaveClass(/item-locked/);
     await inventory(page, Array.from({ length: 80 }, (_, i) => ({ ...base, id: 100 + i, itemLevel: i + 1, rarity: "rainbow", locked: false })));
     await page.keyboard.press("KeyB"); await expect(bag.locator(".bag-cards")).toHaveAttribute("data-total-items", "80");
     expect(await bag.locator(".inventory-card").count()).toBeLessThan(40);

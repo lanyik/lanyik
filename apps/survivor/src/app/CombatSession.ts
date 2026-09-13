@@ -14,6 +14,7 @@ import { GAME_CONFIG } from "../core/GameConfig";
 import { shareSnapshot } from "./ShareSnapshot";
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import type { CharacterRepository, CharacterSave, SaveSlot } from "./CharacterRepository";
+import type { RuntimeLog } from "./RuntimeLog";
 
 export type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -94,7 +95,8 @@ export class CombatSession {
     private saveStatus: SessionSnapshot["saveStatus"] = Object.freeze({ busy: false });
     private lastCheckpoint: CharacterCheckpoint | undefined;
 
-    constructor(private readonly view: CombatView, private readonly createTransport: CombatTransportFactory, private readonly saves?: CharacterRepository) {
+    constructor(private readonly view: CombatView, private readonly createTransport: CombatTransportFactory, private readonly saves?: CharacterRepository,
+        private readonly runtimeLog?: RuntimeLog) {
         this.snapshot = this.capture();
     }
 
@@ -117,7 +119,7 @@ export class CombatSession {
         this.pendingSnapshot = true; this.flush();
         this.saving = checkpoint.then(value => this.saves!.save(slot, value)).then(save => {
             this.saveStatus = Object.freeze({ busy: false, savedAt: save.savedAt }); return save;
-        }, error => { this.saveStatus = Object.freeze({ ...this.saveStatus, busy: false, error: error instanceof Error ? error.message : String(error) }); throw error; })
+        }, error => { this.runtimeLog?.error("save-failed", error); this.saveStatus = Object.freeze({ ...this.saveStatus, busy: false, error: error instanceof Error ? error.message : String(error) }); throw error; })
             .finally(() => { this.saving = undefined; if (this.status !== "closed") this.publish(); });
         return this.saving;
     }
@@ -289,6 +291,9 @@ export class CombatSession {
 
     public dispatch(command: SessionCommand): void {
         if (this.status !== "ready" || !this.client) return;
+        if (["set-equipment-lock", "set-auto-recycle", "sort-inventory", "equip", "craft"].includes(command.type)) {
+            this.runtimeLog?.record("inventory-command", JSON.stringify({ seed: this.seed, tick: this.combat?.tick, command }));
+        }
         switch (command.type) {
             case "toggle-pause":
                 this.inputFeedback.reset();
@@ -324,6 +329,7 @@ export class CombatSession {
 
     public fail(reason: unknown): void {
         if (this.status === "closed") return;
+        this.runtimeLog?.error("session-failed", reason);
         this.loadRevision += 1;
         this.status = "failed";
         this.checkpointRequest?.reject(reason); this.checkpointRequest = undefined;

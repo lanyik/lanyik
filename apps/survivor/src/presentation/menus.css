@@ -43,4 +43,6 @@
 .session-menu > header, .session-menu > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .session-menu h2 { margin: 0 0 16px; }.session-menu > footer { margin-top: 18px; }
 .save-status { position: absolute; right: 22px; top: 14px; font-size: 10px; color: #b9c5ab; pointer-events: none; }
+.runtime-log-tools { display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: 14px; font-size: 11px; }
+.runtime-log-tools small { color: #a5b6ab; }.runtime-log-tools [role=alert] { flex-basis: 100%; color: #f4b5a3; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .start-shell { width: calc(100% - 24px); margin: 24px auto; }.start-columns { grid-template-columns: 1fr; gap: 16px; }.start-brand { gap: 12px; margin-bottom: 20px; }.start-brand > .ui-icon { width: 42px; height: 42px; }.world-setup, .start-saves { padding: 16px; }.world-preview { max-height: 270px; }.save-card { padding: 10px; }.session-menu { padding: 16px; }.save-status { display: none; }.bag-bulk small { flex-basis: 100%; } }

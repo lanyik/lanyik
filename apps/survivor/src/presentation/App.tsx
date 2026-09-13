@@ -21,6 +21,8 @@ import { CraftConfirmation } from "./CraftConfirmation";
 import type { CraftOperation } from "../core/Crafting";
 import { recycleRef } from "../core/Recycling";
 import { SessionMenu } from "./SessionMenu";
+import type { RuntimeLog } from "../app/RuntimeLog";
+import { RuntimeLogExport } from "./RuntimeLogExport";
 import "./app.css";
 import "./menus.css";
 
@@ -33,14 +35,14 @@ function formatTime(ms: number): string {
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function App({ session, attachRegionMap, onHome }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap; readonly onHome: () => Promise<void> }) {
+export function App({ session, attachRegionMap, onHome, log }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap; readonly onHome: () => Promise<void>; readonly log: RuntimeLog }) {
     const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
-    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} onHome={onHome} />;
+    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} onHome={onHome} log={log} />;
 }
 
-function SessionInterface({ session, snapshot, attachRegionMap, onHome }: {
+function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
-    readonly onHome: () => Promise<void>;
+    readonly onHome: () => Promise<void>; readonly log: RuntimeLog;
 }) {
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false, system: false });
     const resumeAfterMenu = useRef(false);
@@ -139,7 +141,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome }: {
             {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
-            {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} />}
+            {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} log={log} />}
             <span className="save-status" role="status">{snapshot.saveStatus.busy ? "正在保存…" : snapshot.saveStatus.error ? `保存失败：${snapshot.saveStatus.error}` : snapshot.saveStatus.savedAt ? `已保存 ${new Date(snapshot.saveStatus.savedAt).toLocaleTimeString("zh-CN")}` : ""}</span>
             {recycling && <CraftConfirmation operation={recycling} player={player} disabled={combat.gameOver} close={() => setRecycling(undefined)} confirm={operation => session.dispatch({ type: "craft", operation })} />}
             <section className="combat-dock" aria-label="角色状态与技能">
@@ -171,6 +173,6 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome }: {
             {combat.gameOver && !panels.system && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>再次踏入荒原<kbd>R</kbd></button><button onClick={() => toggle("system")}>读取存档</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
         </>}
         {snapshot.status === "loading" && <div className="state-overlay loading"><div className="loading-rune" /><div><small>RIFT / 荒原</small><h1>荒原正在苏醒</h1><p>准备地域与角色资源…</p></div></div>}
-        {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.retry()}>重新尝试</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
+        {snapshot.status === "failed" && <div className="state-overlay failed" role="alert"><div><h1>无法进入荒原</h1><p>{snapshot.error}</p><button onClick={() => void session.retry()}>重新尝试</button><button onClick={() => void onHome()}>返回主界面</button><RuntimeLogExport log={log} /></div></div>}
     </main></OrbDragProvider></SkillDragProvider></ItemTooltipProvider>;
 }

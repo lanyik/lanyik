@@ -17,6 +17,8 @@
 
 实现合同：[环境资产](environment-assets.md)、[角色资产](actor-assets.md)、[行为](simulation-and-ai.md)、[界面](interface-design.md)。
 
+操作稳定性补充（2026-09-13）：背包/打造快速锁定改为 Shift＋点击或 Shift＋空格，避开 Ctrl 与移动 W 组合关闭浏览器标签页；保留锁定模式。主界面、存档与失败界面可导出最近 64 条本地诊断，支持刷新后排查，详见[运行诊断](../app-development.md#本地运行诊断)。
+
 ## 免费来源与选型
 
 | 来源 | 许可 | 使用方式 |

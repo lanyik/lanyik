@@ -17,7 +17,10 @@ import { bootstrap } from "../src/app/bootstrap";
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 function setup() {
     vi.stubGlobal("document", Object.assign(new EventTarget(), { getElementById: () => ({}), hidden: false }));
-    vi.stubGlobal("window", new EventTarget()); vi.stubGlobal("navigator", { hardwareConcurrency: 4 });
+    const records = new Map<string, string>();
+    vi.stubGlobal("window", Object.assign(new EventTarget(), { localStorage: { getItem: (key: string) => records.get(key) ?? null,
+        setItem: (key: string, value: string) => { records.set(key, value); } } }));
+    vi.stubGlobal("navigator", { hardwareConcurrency: 4, userAgent: "bootstrap-test" });
 }
 function home() {
     const root = mocks.render.mock.calls.at(-1)![0] as ReactElement<{ children: ReactElement<{ start(seed: string): Promise<void>; error?: string; blocked: boolean }> }>;
@@ -33,11 +36,27 @@ test("home creates no graphics; failed launch remains retryable and repeated sta
     expect(mocks.view).not.toHaveBeenCalled();
     await home().start("seed");
     expect(home().error).toBe("Error creating WebGL context.");
+    expect(app.runtimeLog.export()).toContain("launch-failed");
+    expect(app.runtimeLog.export()).toContain("Error creating WebGL context.");
     const retry = home().start("seed"); void home().start("seed"); await retry;
     expect(mocks.start).toHaveBeenCalledTimes(1); expect(mocks.view).toHaveBeenCalledTimes(2);
     const closing = app.dispose(); expect(app.dispose()).toBe(closing); await closing;
     expect(disconnect).toHaveBeenCalledTimes(1); expect(dispose).toHaveBeenCalledTimes(1);
     expect(mocks.unmount).toHaveBeenCalledTimes(1);
+});
+
+test("window, promise and context errors persist; disposal detaches diagnostic listeners", async () => {
+    setup(); const app = bootstrap();
+    window.dispatchEvent(Object.assign(new Event("error"), { error: new Error("window fixture") }));
+    window.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("promise fixture") }));
+    document.dispatchEvent(new Event("webglcontextlost"));
+    const report = JSON.parse(app.runtimeLog.export());
+    expect(report.entries.map((entry: { event: string }) => entry.event)).toEqual(["page-start", "window-error", "unhandled-rejection", "webgl-context-lost"]);
+    await app.dispose();
+    const after = app.runtimeLog.export();
+    window.dispatchEvent(Object.assign(new Event("error"), { message: "after dispose" }));
+    document.dispatchEvent(new Event("webglcontextlost"));
+    expect(JSON.parse(app.runtimeLog.export()).entries).toEqual(JSON.parse(after).entries);
 });
 test("invalid host options fail visibly when starting without creating graphics resources", async () => {
     setup();

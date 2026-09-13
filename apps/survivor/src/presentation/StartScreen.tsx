@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { SAVE_NAMES, type CharacterRepository, type CharacterSave, type SaveEntry } from "../app/CharacterRepository";
 import { UiIcon } from "./UiIcon";
+import type { RuntimeLog } from "../app/RuntimeLog";
+import { RuntimeLogExport } from "./RuntimeLogExport";
 import "./app.css";
 import "./menus.css";
 
@@ -11,7 +13,7 @@ export function SaveSummary({ save }: { save: CharacterSave }) {
         <small>金币 {p.gold.toLocaleString("zh-CN")} · 背包 {p.inventory.length} 格</small><time>{new Date(save.savedAt).toLocaleString("zh-CN")}</time></>;
 }
 
-export function StartScreen({ repository, start, error, blocked = false }: { repository: CharacterRepository; start: (seed: string, checkpoint?: CharacterCheckpoint) => Promise<void>; error?: string; blocked?: boolean }) {
+export function StartScreen({ repository, start, error, blocked = false, log }: { repository: CharacterRepository; start: (seed: string, checkpoint?: CharacterCheckpoint) => Promise<void>; error?: string; blocked?: boolean; log: RuntimeLog }) {
     const [seed, setSeed] = useState("rift-ember-1"), [entries, setEntries] = useState<readonly SaveEntry[]>([]), [failure, setFailure] = useState(error);
     const [busy, setBusy] = useState(blocked), [preview, setPreview] = useState<"loading" | "ready" | "failed">("loading"), [previewError, setPreviewError] = useState("");
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -57,5 +59,6 @@ export function StartScreen({ repository, start, error, blocked = false }: { rep
                     {entry.save ? <><SaveSummary save={entry.save} /><button disabled={busy} onClick={() => void launch(entry.save!.checkpoint)}>读取{SAVE_NAMES[entry.slot]}</button></> : <p>{entry.error ?? "暂无存档"}</p>}</article>)}</div>
                 <p className="save-note">自动存档每 60 秒更新，也会在切出页面和返回主界面时保存。角色进度存于当前浏览器；灵境成长永久保留。</p>
             </section></div>{failure && <p className="menu-error" role="alert">{failure}</p>}
+        <RuntimeLogExport log={log} />
     </div></main>;
 }

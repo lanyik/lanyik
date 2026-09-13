@@ -2,7 +2,10 @@
 
 启动入口为种子预览和存档主界面，点击开始后才创建战斗场景。`O` 打开游戏与存档界面并暂停，自动槽与三个手动槽展示等级、种子、金币、物品格数、保存时间，详见[角色存档](./character-saves.md)。
 快捷菜单现为八项，桌面双栏排列时保持四行，窄屏保持八列单行，避免新增存档入口后挤入背包或状态栏。
-背包和打造使用虚拟化网格，仅挂载可见行及缓冲；Ctrl＋点击/空格快速锁定，触屏使用统一锁定模式，逐格锁定按钮删除。
+背包和打造使用虚拟化网格，仅挂载可见行及缓冲；Shift＋点击/空格快速锁定，触屏使用统一锁定模式，逐格锁定按钮删除。
+快速锁定不再绑定 Ctrl，避免与移动 W 组合为浏览器关闭标签页的 Ctrl+W；最后一个标签页关闭时窗口也会关闭。
+这是浏览器保留快捷键，不能依靠页面的 preventDefault 可靠接管，见 [Chrome 快捷键](https://support.google.com/chrome/answer/157179)与 [Chromium 预处理逻辑](https://chromium.googlesource.com/chromium/src/+/2592adf6c41bc0753c814e3747ab49d67f31075c/chrome/browser/ui/views/frame/browser_view.cc)。
+Shift＋空格长按只切换一次，不触发原生按钮二次点击或打造拖拽；锁定操作关闭详情浮窗，解锁后自动售出导致物品卸载也保持界面有效。
 手动批量分解按严格低于目标等级筛选，只用一个清单/收益/警示合一的确认窗。格子常驻显示品质，流光只在悬停或聚焦时运行。
 
 对应 `apps/survivor/src/presentation/{App,CharacterPanel,InventoryPanel,CraftingPanel,SpiritRealmPanel,ItemView,RegionMap,UiIcon,WorkerLoadPanel}.tsx`
@@ -135,3 +138,4 @@
 Worker 浏览器验收还检查角色更新→绘制→采样的真实顺序、帧指标、五条线程记录、满载查询的完成数与耗时、暂停归零、重开不累积行，以及窄屏无横向溢出、不与领主血条重叠。
 五条线程的专门验收显式启用碰撞 Worker；默认界面只列实际拥有的模拟/地形线程。
 同步 WebGL 创建失败须显示原因和重试按钮，资源清理失败时显示刷新提示；新局回归验证旧 ID 不会选中新物品、旧拖拽状态不会带入新局且低等级锁定槽拒绝装配。
+主界面、O 存档界面和失败界面提供“导出诊断日志”，显示记录范围和存储不可用原因；日志跨刷新保留，详细事件和空间上限见[本地运行诊断](../app-development.md#本地运行诊断)。

@@ -4,6 +4,8 @@ import type { CombatSession, SessionSnapshot } from "../app/CombatSession";
 import { SAVE_NAMES, type CharacterSave, type SaveEntry, type SaveSlot } from "../app/CharacterRepository";
 import { SaveSummary } from "./StartScreen";
 import { UiIcon } from "./UiIcon";
+import type { RuntimeLog } from "../app/RuntimeLog";
+import { RuntimeLogExport } from "./RuntimeLogExport";
 
 function SaveConfirmation({ pending, close, act }: { pending: { load?: CharacterSave; slot: SaveSlot }; close: () => void; act: () => void }) {
     const dialog = useRef<HTMLDialogElement>(null);
@@ -16,7 +18,7 @@ function SaveConfirmation({ pending, close, act }: { pending: { load?: Character
     </dialog>, document.body);
 }
 
-export function SessionMenu({ session, snapshot, close, home }: { session: CombatSession; snapshot: SessionSnapshot; close: () => void; home: () => Promise<void> }) {
+export function SessionMenu({ session, snapshot, close, home, log }: { session: CombatSession; snapshot: SessionSnapshot; close: () => void; home: () => Promise<void>; log: RuntimeLog }) {
     const [entries, setEntries] = useState<readonly SaveEntry[]>([]), [error, setError] = useState<string>();
     const [busy, setBusy] = useState(false), [pending, setPending] = useState<{ load?: CharacterSave; slot: SaveSlot }>();
     useEffect(() => { let alive = true; void session.listSaves().then(value => { if (alive) setEntries(value); }, reason => { if (alive) setError(String(reason)); }); return () => { alive = false; }; }, [session, snapshot.saveStatus.savedAt]);
@@ -34,6 +36,7 @@ export function SessionMenu({ session, snapshot, close, home }: { session: Comba
         </article>)}</div>
         {(error || snapshot.saveStatus.error) && <p className="menu-error" role="alert">{error || snapshot.saveStatus.error}</p>}
         <footer><button disabled={blocked} onClick={() => void run(home)}>保存并返回主界面</button><button disabled={blocked} onClick={close}>继续游戏</button></footer>
+        <RuntimeLogExport log={log} />
         {pending && <SaveConfirmation pending={pending} close={() => setPending(undefined)} act={() => void run(() => pending.load ? session.load(pending.load.checkpoint) : session.save(pending.slot))} />}
     </aside>;
 }
