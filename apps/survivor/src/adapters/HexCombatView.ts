@@ -14,6 +14,7 @@ import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import { CombatLayer } from "../presentation/CombatLayer";
 import { MovementInputController } from "../presentation/MovementInputController";
 import { GAME_CONFIG } from "../core/GameConfig";
+import { WORLD_VIEW } from "../core/WorldView";
 import { HexRegionMap } from "./HexRegionMap";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
 import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
@@ -84,13 +85,13 @@ export class HexCombatView implements CombatView {
             skyVisible: true,
             pointerColor: 0x658287,
             selectorColor: 0xffbf69,
-            renderDistance: 1900,
+            renderDistance: WORLD_VIEW.terrainEnd * WORLD_VIEW.unitScale,
             horizonFogStart: GAME_CONFIG.presentation.horizonFogStart,
             horizonFogEnd: GAME_CONFIG.presentation.horizonFogEnd,
             horizonFogColor: GAME_CONFIG.presentation.horizonFogColor,
             lodNearDistance: 420,
-            lodFarDistance: 780,
-            vegetationRenderDistance: 1200
+            lodFarDistance: 1000,
+            vegetationRenderDistance: WORLD_VIEW.vegetationEnd * WORLD_VIEW.unitScale
         });
         try {
             const camera = this.map.getCamera();
@@ -120,7 +121,7 @@ export class HexCombatView implements CombatView {
             seed,
             workerUrl,
             workerCount: this.terrainWorkers,
-            chunkSize: 24,
+            chunkSize: WORLD_VIEW.terrainChunkSize,
             waterStyle: COMBAT_WATER_STYLE,
             workCoordinator: this.map.workCoordinator
         });
@@ -135,8 +136,8 @@ export class HexCombatView implements CombatView {
             await this.map.loadWorld({
                 source,
                 initialTile: start.tile,
-                loadRadius: 2,
-                retentionRadius: 3,
+                loadRadius: WORLD_VIEW.terrainLoadRadius,
+                retentionRadius: WORLD_VIEW.terrainRetentionRadius,
                 maxResidentChunks: 64,
                 adaptiveStreaming: false
             });

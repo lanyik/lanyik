@@ -131,7 +131,7 @@ or input latency.
 
 The app benchmark uses one warmup and five measured runs. It gates median
 CPU time per tick at 0.5 ms for 24 seconds of real travel combat, and 3 ms for
-640 enemies plus 128 distant projectiles rejected by the spatial broad phase.
+`MAX_ENEMIES` (896) enemies plus 128 distant projectiles rejected by the spatial broad phase.
 The travel workload must remain alive for every measured tick; the full-capacity
 workload retains all targets without damage resolution. Reports include runtime,
 CPU, raw samples and entity counts. These bounds do not measure browser/GPU time.

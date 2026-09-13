@@ -33,26 +33,26 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     await advanceCombat(page, ticksForSeconds(.36));
     const windup = await page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { view: { layer: {
-            actors: { enemies: InstancedMesh[][] }; castWarnings: InstancedMesh } } };
+            actors: { enemies: InstancedMesh[][] }; enemyEffects: { warnings: InstancedMesh; blades: InstancedMesh } } } };
         const mesh = runtime.view.layer.actors.enemies.flat().find(mesh => mesh.name === "Imp_Shaman")!;
         return { weights: Array.from((mesh.morphTexture!.image.data as Float32Array).slice(1, 17)),
-            frames: mesh.geometry.morphAttributes.position?.length, warnings: runtime.view.layer.castWarnings.count };
+            frames: mesh.geometry.morphAttributes.position?.length, warnings: runtime.view.layer.enemyEffects.warnings.count, blades: runtime.view.layer.enemyEffects.blades.count };
     });
     expect(windup.frames).toBe(20);
     expect(windup.weights.slice(0, 8).every(weight => weight === 0)).toBe(true);
     expect(windup.weights.slice(8).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
-    expect(windup.warnings).toBe(1);
+    expect(windup.warnings).toBe(0); expect(windup.blades).toBe(1);
     await page.screenshot({ path: testInfo.outputPath("caster-windup.png") });
     const pausedTick = await combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.tick);
     await page.evaluate(() => window.survivorApplication!.session.frame(performance.now()));
     expect(await combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.tick)).toBe(pausedTick);
     await advanceCombat(page, ticksForSeconds(.36));
     const release = await page.evaluate(() => {
-        const runtime = window.survivorApplication!.session as unknown as { view: { layer: {
-            actors: { enemies: InstancedMesh[][] }; castWarnings: InstancedMesh; projectiles: InstancedMesh } } };
+        const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: {
+            actors: { enemies: InstancedMesh[][] }; enemyEffects: { warnings: InstancedMesh; blades: InstancedMesh }; projectiles: InstancedMesh } } };
         const layer = runtime.view.layer;
-        return { warnings: layer.castWarnings.count, bolts: layer.projectiles.count,
-            color: Array.from(layer.projectiles.instanceColor!.array.slice(0, 3)),
+        return { warnings: layer.enemyEffects.warnings.count, bolts: runtime.renderState.entities.projectiles.count,
+            color: Array.from(layer.enemyEffects.blades.instanceColor!.array.slice(0, 3)),
             weights: Array.from((layer.actors.enemies.flat().find(mesh => mesh.name === "Imp_Shaman")!.morphTexture!.image.data as Float32Array).slice(1, 17)) };
     });
     expect(release.warnings).toBe(0);

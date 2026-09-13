@@ -19,7 +19,7 @@ const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Conte
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) + (c.entities.enemy.intent[s] === MoveIntent.Retreat ? .8 : 0)
-        && !c.canNova(s) && !(c.tick >= c.entities.action.readyAt[s] && c.canHeal(s))), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
+        && !c.canReave(s) && !(c.tick >= c.entities.action.readyAt[s] && c.canHeal(s))), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
     ...(kind === EnemyKind.Scout ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
@@ -131,10 +131,10 @@ export class EnemyBehavior {
         let windup = definition.windupTicks, recovery = definition.recoveryTicks;
         a.kind[slot] = definition.ranged ? ActorAction.Cast : ActorAction.Melee;
         a.target[slot] = e.target[slot];
-        if (this.canNova(slot)) {
-            a.kind[slot] = ActorAction.Nova;
-            windup = ticksForSeconds(ENEMY_SPECIAL.nova.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.nova.recovery);
-            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.nova.cooldown);
+        if (this.canReave(slot)) {
+            a.kind[slot] = ActorAction.Reave;
+            windup = ticksForSeconds(ENEMY_SPECIAL.reave.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.reave.duration + ENEMY_SPECIAL.reave.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.reave.cooldown);
         } else if (this.canHeal(slot)) {
             a.kind[slot] = ActorAction.Heal; a.target[slot] = e.supportTarget[slot];
             windup = ticksForSeconds(ENEMY_SPECIAL.heal.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.heal.recovery);
@@ -143,14 +143,16 @@ export class EnemyBehavior {
             a.kind[slot] = ActorAction.Charge;
             windup = ticksForSeconds(ENEMY_SPECIAL.charge.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.charge.duration + ENEMY_SPECIAL.charge.recovery);
             e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.charge.cooldown);
-        } else if (this.canEruption(slot)) {
-            a.kind[slot] = ActorAction.Eruption;
-            windup = ticksForSeconds(ENEMY_SPECIAL.eruption.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.eruption.recovery);
-            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.eruption.cooldown);
-        } else if (this.canSlam(slot)) {
-            a.kind[slot] = ActorAction.Slam;
-            windup = ticksForSeconds(ENEMY_SPECIAL.slam.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.slam.recovery);
-            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.slam.cooldown);
+        } else if (this.canVolley(slot)) {
+            a.kind[slot] = e.boss[slot] ? ActorAction.Jaws : ActorAction.Volley;
+            const rule = e.boss[slot] ? ENEMY_SPECIAL.jaws : ENEMY_SPECIAL.volley;
+            windup = ticksForSeconds(rule.windup);
+            recovery = ticksForSeconds(rule.recovery + (e.boss[slot] ? ENEMY_SPECIAL.jaws.duration : 0));
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(rule.cooldown);
+        } else if (this.canFault(slot)) {
+            a.kind[slot] = ActorAction.Fault;
+            windup = ticksForSeconds(ENEMY_SPECIAL.fault.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.fault.duration + ENEMY_SPECIAL.fault.recovery);
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.fault.cooldown);
         }
         e.attackStep[slot]++;
         a.started[slot] = this.tick;
@@ -169,21 +171,21 @@ export class EnemyBehavior {
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canNova(slot) || this.canHeal(slot) || this.canCharge(slot) || this.canSlam(slot) || this.distance(slot) <= a.reach[slot]);
+            && (this.canReave(slot) || this.canHeal(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot]);
     }
-    private canEruption(slot: number): boolean {
+    private canVolley(slot: number): boolean {
         const e = this.entities.enemy;
         return e.kind[slot] === EnemyKind.Caster && e.attackStep[slot] % 2 === 1
             && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= this.entities.action.reach[slot];
     }
-    private canSlam(slot: number): boolean {
+    private canFault(slot: number): boolean {
         const e = this.entities.enemy;
         return e.kind[slot] === EnemyKind.Guard && e.attackStep[slot] > 0
-            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.slam.radius;
+            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.fault.length;
     }
-    public canNova(slot: number): boolean {
+    public canReave(slot: number): boolean {
         const e = this.entities.enemy;
-        return e.boss[slot] !== 0 && e.enraged[slot] !== 0 && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.nova.radius;
+        return e.boss[slot] !== 0 && e.enraged[slot] !== 0 && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.reave.radius;
     }
     private canCharge(slot: number): boolean {
         const e = this.entities.enemy;
@@ -193,7 +195,8 @@ export class EnemyBehavior {
     }
     public canHeal(slot: number): boolean {
         const { enemy: e, vitals: v, world, position: p } = this.entities;
-        if (e.kind[slot] !== EnemyKind.Healer || this.tick < e.specialReadyAt[slot]) return false;
+        if (e.kind[slot] !== EnemyKind.Healer || this.tick < e.specialReadyAt[slot]
+            || v.health[slot] <= v.maxHealth[slot] * ENEMY_SPECIAL.heal.sacrifice + 1) return false;
         const target = world.resolve(e.supportTarget[slot]);
         return target >= 0 && v.health[target] < v.maxHealth[target] * ENEMY_SPECIAL.heal.threshold
             && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius;
@@ -211,6 +214,7 @@ export class EnemyBehavior {
     }
 
     public cancel(slot: number): void {
+        if (this.entities.action.kind[slot] >= ActorAction.Melee) this.entities.effects.cancelSource(this.entities.world.ids[slot]);
         const { action: a, enemy: e } = this.entities;
         if (a.kind[slot] >= ActorAction.Melee) {
             a.readyAt[slot] = Math.max(a.readyAt[slot], this.tick + ENEMY_DEFINITIONS[e.kind[slot]].recoveryTicks);

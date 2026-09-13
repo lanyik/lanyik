@@ -45,10 +45,11 @@ export const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
 ]);
 export const ENEMY_SPECIAL = Object.freeze({
     charge: Object.freeze({ windup: .75, duration: .55, recovery: .7, speed: 12, minRange: 3, maxRange: 6.5, cooldown: 5, damage: 1.3 }),
-    heal: Object.freeze({ radius: 6, threshold: .65, fraction: .2, windup: .9, recovery: .6, cooldown: 5 }),
-    nova: Object.freeze({ radius: 3.4, windup: .9, recovery: .7, cooldown: 5, damage: 1.2 }),
-    eruption: Object.freeze({ radius: 1.55, spacing: 3.4, windup: 1.05, recovery: .85, cooldown: 6, damage: 1.45 }),
-    slam: Object.freeze({ radius: 2.4, windup: 1.05, recovery: 1.1, cooldown: 5, damage: 1.5 }),
+    heal: Object.freeze({ radius: 6, threshold: .65, fraction: .2, sacrifice: .12, windup: 1.1, recovery: .6, cooldown: 5 }),
+    reave: Object.freeze({ radius: 3.4, halfArc: 1.4, width: .3, windup: .9, duration: .55, recovery: .6, cooldown: 5, damage: 1.2 }),
+    volley: Object.freeze({ spread: .48, turnRate: .65, turnSeconds: .8, windup: 1.05, recovery: .85, cooldown: 6, damage: .8 }),
+    jaws: Object.freeze({ halfLength: 2.8, halfGap: 3.2, width: .35, windup: 1.15, duration: .9, recovery: .7, cooldown: 7, damage: 1.45 }),
+    fault: Object.freeze({ length: 6, width: .6, windup: 1.05, duration: .75, recovery: .8, cooldown: 5, damage: 1.5 }),
     healingWard: Object.freeze({ duration: 3, reduction: .25 }),
     guardReduction: .4, enrageHealth: .5
 });

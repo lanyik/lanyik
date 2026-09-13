@@ -9,7 +9,7 @@ import { EffectKind } from "../../src/core/CombatEffects";
 import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
-test("the HDR skybox rotates beyond terrain fog; boss and guard spells render their committed ground areas", async ({ page }, info) => {
+test("the HDR skybox rotates beyond terrain fog; enemy weapons close, travel and sweep without player rune effects", async ({ page }, info) => {
     test.setTimeout(120_000); const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
@@ -74,22 +74,43 @@ test("the HDR skybox rotates beyond terrain fog; boss and guard spells render th
         return slot;
     }, { kind, boss, distance });
     const readSpell = () => page.evaluate(() => {
-        const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: { castWarnings: InstancedMesh; effects: { mesh: InstancedMesh } } } };
-        const state = runtime.renderState, slot = state.entities.enemies.slots[0];
-        return { action: state.entities.action.kind[slot], warnings: runtime.view.layer.castWarnings.count,
-            effects: Array.from(state.effects.kind.slice(0, state.effects.count)),
-            verticesFinite: Array.from(runtime.view.layer.effects.mesh.instanceMatrix.array).every(Number.isFinite) };
+        const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: {
+            enemyEffects: { warnings: InstancedMesh; rocks: InstancedMesh; blades: InstancedMesh; threads: InstancedMesh }; effects: { mesh: InstancedMesh } } } };
+        const state = runtime.renderState, slot = state.entities.enemies.slots[0], display = runtime.view.layer.enemyEffects;
+        return { action: state.entities.action.kind[slot], warnings: display.warnings.count, rocks: display.rocks.count,
+            blades: display.blades.count, threads: display.threads.count, playerEffects: runtime.view.layer.effects.mesh.count,
+            projectiles: state.entities.projectiles.count, effects: Array.from(state.effects.kind.slice(0, state.effects.count)),
+            verticesFinite: [display.rocks, display.blades, display.threads].every(mesh => Array.from(mesh.instanceMatrix.array).every(Number.isFinite)) };
     });
     await spawn(3, true, 5); await advanceCombat(page, 55);
-    expect(await readSpell()).toMatchObject({ action: ActorAction.Eruption, warnings: 3 });
-    await page.screenshot({ path: info.outputPath("boss-eruption-warning.png") });
-    await advanceCombat(page, 90);
-    expect(await readSpell()).toMatchObject({ warnings: 0, effects: [EffectKind.EnemyEruption, EffectKind.EnemyEruption, EffectKind.EnemyEruption], verticesFinite: true });
-    await page.screenshot({ path: info.outputPath("boss-eruption-release.png") });
-    await spawn(2, false, 2); await advanceCombat(page, 55);
-    expect(await readSpell()).toMatchObject({ action: ActorAction.Slam, warnings: 1 });
-    await advanceCombat(page, 90);
-    expect(await readSpell()).toMatchObject({ warnings: 0, effects: [EffectKind.EnemySlam], verticesFinite: true });
-    await page.screenshot({ path: info.outputPath("guard-slam.png") });
+    expect(await readSpell()).toMatchObject({ action: ActorAction.Jaws, warnings: 4, playerEffects: 0 });
+    await page.screenshot({ path: info.outputPath("boss-jaws-warning.png") });
+    await advanceCombat(page, 100);
+    expect(await readSpell()).toMatchObject({ warnings: 0, effects: [EffectKind.EnemyJaws], blades: 14, playerEffects: 0, verticesFinite: true });
+    await page.screenshot({ path: info.outputPath("boss-jaws-open.png") });
+    await advanceCombat(page, 45);
+    await page.screenshot({ path: info.outputPath("boss-jaws-closing.png") });
+    await spawn(2, false, 5); await advanceCombat(page, 55);
+    expect(await readSpell()).toMatchObject({ action: ActorAction.Fault, warnings: 6 });
+    await advanceCombat(page, 120);
+    const fault = await readSpell();
+    expect(fault).toMatchObject({ warnings: 0, effects: [EffectKind.EnemyFault], playerEffects: 0, verticesFinite: true });
+    expect(fault.rocks).toBeGreaterThan(3);
+    await page.screenshot({ path: info.outputPath("guard-advancing-stones.png") });
+    await spawn(3, false, 5); await advanceCombat(page, 55);
+    expect(await readSpell()).toMatchObject({ action: ActorAction.Volley, warnings: 0, blades: 3, playerEffects: 0 });
+    await advanceCombat(page, 100);
+    expect(await readSpell()).toMatchObject({ warnings: 0, projectiles: 3, blades: 6, threads: 3, playerEffects: 0, verticesFinite: true });
+    await page.screenshot({ path: info.outputPath("caster-curving-blades.png") });
+    const lord = await spawn(3, true, 2);
+    await combatWorker(page).evaluate(slot => {
+        const e = (self as unknown as { fixtureSimulation: { entities: CombatWorld } }).fixtureSimulation.entities;
+        e.vitals.health[slot] *= .4;
+    }, lord);
+    await advanceCombat(page, 55);
+    expect(await readSpell()).toMatchObject({ action: ActorAction.Reave, warnings: 2, playerEffects: 0 });
+    await advanceCombat(page, 85);
+    expect(await readSpell()).toMatchObject({ warnings: 0, effects: [EffectKind.EnemyReave], blades: 3, playerEffects: 0, verticesFinite: true });
+    await page.screenshot({ path: info.outputPath("boss-frontal-reave.png") });
     expect(errors).toEqual([]);
 });

@@ -124,7 +124,7 @@ test("chunk crossings do not change radial activity, which has exit hysteresis",
 });
 
 test("patrol stays near home, wakes before visibility and cancels pursuit into a complete return", () => {
-    const { entities: e, enemy, regions, step } = arena(0, 36);
+    const { entities: e, enemy, regions, step } = arena(0, GAME_CONFIG.enemies.sleepDistance + 2);
     step(1); expect(e.enemy.awake[enemy]).toBe(0);
     e.position.z[e.player] = 29; regions.synchronize(0, 29);
     for (let tick = 2; tick < 2400; tick++) {
@@ -266,7 +266,7 @@ test.each(["heal", "reused", "out-of-range"])("priest releases a bounded heal on
     expect(e.projectiles.count).toBe(0);
 });
 
-test("boss phase two persists after healing, upgrades the next volley and telegraphs a close nova", () => {
+test("boss phase two persists after healing, upgrades the next volley and telegraphs a frontal reave", () => {
     const { entities: e, enemy, step } = arena(3, 5, true);
     e.vitals.health[enemy] = e.vitals.maxHealth[enemy] * .5;
     step(1); expect(e.enemy.enraged[enemy]).toBe(1);
@@ -276,8 +276,8 @@ test("boss phase two persists after healing, upgrades the next volley and telegr
     expect(e.projectiles.count).toBe(5); expect(e.enemy.enraged[enemy]).toBe(1);
     e.position.z[e.player] = 2;
     let tick = end + 1;
-    for (; tick < end + 200 && e.action.kind[enemy] !== ActorAction.Nova; tick++) step(tick);
-    expect(e.action.kind[enemy]).toBe(ActorAction.Nova);
+    for (; tick < end + 200 && e.action.kind[enemy] !== ActorAction.Reave; tick++) step(tick);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Reave);
     const hit = e.action.hitAt[enemy];
     e.position.x[e.player] = 5;
     for (; tick <= hit; tick++) step(tick);

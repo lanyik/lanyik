@@ -1,15 +1,17 @@
+import { WORLD_VIEW } from "./WorldView";
 /** Shared, immutable policy. Rates use Hz, time budgets use ms, combat cooldowns use seconds. */
 export const GAME_CONFIG = Object.freeze({
-    combat: Object.freeze({ maxEnemies: 640, maxProjectiles: 128, maxHostileProjectiles: 64, maxExperienceOrbs: 768,
+    combat: Object.freeze({ maxEnemies: WORLD_VIEW.maxEnemies, maxProjectiles: 128, maxHostileProjectiles: 64, maxExperienceOrbs: 768,
         maxGroundEquipment: 64, playerRadius: .3, enemyLeashDistance: 22, consumableCooldown: 4, meleeHalfArc: 1.1 }),
     enemies: Object.freeze({ aggroDistance: 12, pursuitDistance: 19, activeDistance: 18, activeExitDistance: 20,
-        awakeDistance: 32, sleepDistance: 34, patrolSpeed: .45, patrolRadius: 2.5 }),
+        awakeDistance: WORLD_VIEW.awakeRadius, sleepDistance: WORLD_VIEW.sleepRadius, patrolSpeed: .45, patrolRadius: 2.5 }),
     timing: Object.freeze({ simulationHz: 120, activeAiHz: 30, distantAiHz: 5, regenerationHz: 2,
         snapshotHz: 10, supportSenseHz: 5, autoSkillHz: 10, diagnosticsMs: 1000, maxCatchUpMs: 250 }),
     skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
     spiritRealm: Object.freeze({ soulsPerLevel: 1000 }),
-    presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: 20, mistDenseRadius: 34, mistFadeRadius: 52, mistOuterRadius: 62,
-        horizonFogStart: 1100, horizonFogEnd: 1850, horizonFogColor: 0x849b9f,
+    presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: WORLD_VIEW.mistInner, mistDenseRadius: WORLD_VIEW.mistDense,
+        mistFadeRadius: WORLD_VIEW.mistFade, mistOuterRadius: WORLD_VIEW.mistOuter,
+        horizonFogStart: WORLD_VIEW.terrainFogStart * WORLD_VIEW.unitScale, horizonFogEnd: WORLD_VIEW.terrainFogEnd * WORLD_VIEW.unitScale, horizonFogColor: 0x849b9f,
         groundProjection: Object.freeze({ span: 64, resolution: 2048 }), assetLoadConcurrency: 4,
         minimap: Object.freeze({ tileSpan: 96, rasterSize: 192, cacheEntries: 64 }) }),
     workers: Object.freeze({ maxCommands: 64, timeoutMs: 15_000,

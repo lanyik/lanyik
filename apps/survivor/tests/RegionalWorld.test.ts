@@ -29,7 +29,7 @@ describe("regional ecology", () => {
         expect(world.regionAt(moved.centerX + .1, moved.centerZ + .1, moved)).toBe(moved);
     });
 
-    test("keeps 49 resident chunks, retires ownership and reconstructs consumed populations on reentry", () => {
+    test("keeps 81 resident chunks, retires ownership and reconstructs consumed populations on reentry", () => {
         const world = new RegionalWorld("residency", { x: 10, z: -8 });
         world.synchronize(10, -8);
         const initial = world.chunks.get("0,0")!;
@@ -39,7 +39,7 @@ describe("regional ecology", () => {
             expect(world.chunks.size).toBe(MAX_COMBAT_CHUNKS);
             expect([...world.chunks.values()].filter(chunk => chunk.band === "near")).toHaveLength(9);
             expect([...world.chunks.values()].filter(chunk => chunk.band === "buffer")).toHaveLength(16);
-            expect([...world.chunks.values()].filter(chunk => chunk.band === "retained")).toHaveLength(24);
+            expect([...world.chunks.values()].filter(chunk => chunk.band === "retained")).toHaveLength(56);
         }
         expect(initial.resident).toBe(false);
         world.synchronize(10, -8);

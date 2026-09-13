@@ -101,15 +101,15 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
     await advanceCombat(page, 15);
     const rendered = await page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: {
-            actors: { enemies: InstancedMesh[][] }; effects: { mesh: InstancedMesh; ward: { visible: boolean } }; mist: { mesh: InstancedMesh }; chargeWarnings: InstancedMesh; castWarnings: InstancedMesh } } };
+            actors: { enemies: InstancedMesh[][] }; effects: { mesh: InstancedMesh; ward: { visible: boolean } }; mist: { mesh: InstancedMesh }; chargeWarnings: InstancedMesh; enemyEffects: { warnings: InstancedMesh; blades: InstancedMesh; threads: InstancedMesh } } } };
         const layer = runtime.view.layer;
         return { pools: layer.actors.enemies.map(pool => pool[0].count), effects: layer.effects.mesh.count, ward: layer.effects.ward.visible, mist: layer.mist.mesh.count,
-            charge: layer.chargeWarnings.count, spells: layer.castWarnings.count, kinds: Array.from(runtime.renderState.effects.kind.slice(0, runtime.renderState.effects.count)) };
+            charge: layer.chargeWarnings.count, spells: layer.enemyEffects.warnings.count, blades: layer.enemyEffects.blades.count, threads: layer.enemyEffects.threads.count, kinds: Array.from(runtime.renderState.effects.kind.slice(0, runtime.renderState.effects.count)) };
     });
     expect(rendered.pools).toEqual([1, 1, 2, 1, 1]);
     expect(rendered.effects).toBeGreaterThan(60);
     expect(rendered.ward).toBe(true); expect(rendered.mist).toBe(3);
-    expect(rendered.charge).toBe(1); expect(rendered.spells).toBe(2);
+    expect(rendered.charge).toBe(1); expect(rendered.spells).toBe(0); expect(rendered.blades).toBeGreaterThan(0); expect(rendered.threads).toBeGreaterThan(0);
     expect(rendered.kinds).toContain(4); expect(rendered.kinds).toContain(1); expect(rendered.kinds).toContain(2);
     await page.screenshot({ path: testInfo.outputPath("skills-and-monsters.png") });
     await page.mouse.move(980, 380); await page.mouse.wheel(0, 1800);

@@ -1,3 +1,4 @@
+import { WORLD_VIEW } from "../src/core/WorldView";
 import { expect, test } from "vitest";
 import { ProceduralCombatTerrain } from "../src/adapters/ProceduralCombatTerrain";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -37,6 +38,6 @@ test("trunks stop movement and long straight dashes cannot tunnel across their f
 test("terrain cache has a fixed cap and regenerated negative chunks give identical results", () => {
     const terrain = new ProceduralCombatTerrain("cache-terrain"), first = terrain.isClear(-12.25, -12.25, .3);
     for (let i = 0; i < 106; i++) terrain.isClear(i * 12 + 3, 2, .3);
-    expect(terrain.cachedChunks).toBeLessThanOrEqual(100);
+    expect(terrain.cachedChunks).toBeLessThanOrEqual(WORLD_VIEW.navigationChunks);
     expect(terrain.isClear(-12.25, -12.25, .3)).toBe(first); terrain.dispose();
 });

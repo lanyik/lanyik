@@ -1,10 +1,9 @@
 import { ActorAction, CombatWorld, Component, Faction, MoveIntent } from "./CombatWorld";
-import { GAME_CONFIG, MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, ticksForSeconds } from "./GameConfig";
+import { GAME_CONFIG } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
-import { resolveProjectileRange, segmentCircleHit, type ProjectileExecutor } from "./ProjectileBatch";
+import { resolveProjectileRange, type ProjectileExecutor } from "./ProjectileBatch";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
-import { EffectKind } from "./CombatEffects";
-import { SHAMAN_CAST_SOCKET } from "./ActorSockets.generated";
+export { advanceEnemyActions } from "./EnemyActions";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
 
@@ -28,6 +27,12 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         const sx = p.x[slot], sz = p.z[slot];
         p.previousX[slot] = sx; p.previousZ[slot] = sz;
         const dt = Math.min(SECONDS, Math.max(0, b.lifetime[slot]));
+        if (b.turnRate[slot] && b.age[slot] < ENEMY_SPECIAL.volley.turnSeconds) {
+            const angle = b.turnRate[slot] * Math.min(dt, ENEMY_SPECIAL.volley.turnSeconds - b.age[slot]);
+            const cos = Math.cos(angle), sin = Math.sin(angle), vx = b.velocityX[slot], vz = b.velocityZ[slot];
+            b.velocityX[slot] = vx * cos + vz * sin; b.velocityZ[slot] = vz * cos - vx * sin;
+            p.heading[slot] = Math.atan2(b.velocityX[slot], b.velocityZ[slot]);
+        }
         const ex = p.x[slot] = sx + b.velocityX[slot] * dt;
         const ez = p.z[slot] = sz + b.velocityZ[slot] * dt;
         b.lifetime[slot] -= SECONDS;
@@ -93,75 +98,5 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
         if (moved) p.heading[slot] = Math.atan2(p.x[slot] - startX, p.z[slot] - startZ);
         a.kind[slot] = moved ? ActorAction.Moving : ActorAction.Idle;
         entities.updateSpatial(slot, Component.Enemy);
-    }
-}
-
-/** A committed attack releases once at hitAt; recovery cannot emit a second hit. */
-export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
-    const { enemies, enemy: e, position: p, action: a, world, impacts, vitals: v, effects, status } = entities;
-    for (let cursor = 0; cursor < enemies.count; cursor++) {
-        const slot = enemies.slots[cursor], kind = a.kind[slot];
-        if (kind < ActorAction.Melee || !e.active[slot]) continue;
-        a.progress[slot] = tick < a.hitAt[slot]
-            ? .5 * (tick - a.started[slot]) / (a.hitAt[slot] - a.started[slot])
-            : .5 + .5 * (tick - a.hitAt[slot]) / (a.endsAt[slot] - a.hitAt[slot]);
-        if (kind === ActorAction.Charge) {
-            if (tick < a.hitAt[slot] || tick >= a.hitAt[slot] + ticksForSeconds(ENEMY_SPECIAL.charge.duration)) continue;
-            const target = world.resolve(a.target[slot]), sx = p.x[slot], sz = p.z[slot];
-            const travel = ENEMY_SPECIAL.charge.speed * SECONDS * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
-            entities.moveActor(slot, Math.sin(p.heading[slot]) * travel, Math.cos(p.heading[slot]) * travel, false);
-            entities.updateSpatial(slot, Component.Enemy);
-            if (!a.committed[slot] && target >= 0 && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity) {
-                a.committed[slot] = 1;
-                impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.charge.damage, e.elite[slot], e.boss[slot]);
-            }
-            continue;
-        }
-        if (tick < a.hitAt[slot] || a.committed[slot]) continue;
-        a.committed[slot] = 1;
-        const target = world.resolve(a.target[slot]);
-        if (target < 0) continue;
-        const dx = p.x[target] - p.x[slot], dz = p.z[target] - p.z[slot];
-        if (kind === ActorAction.Melee) {
-            const distance = Math.hypot(dx, dz);
-            if (distance <= a.reach[slot] && (distance === 0 || (dx * Math.sin(p.heading[slot]) + dz * Math.cos(p.heading[slot])) / distance >= Math.cos(MELEE_HALF_ARC))) {
-                impacts.add(world.ids[slot], world.ids[target], e.damage[slot], e.elite[slot], e.boss[slot]);
-            }
-        } else if (kind === ActorAction.Heal) {
-            if (v.faction[target] !== Faction.Enemy || v.health[target] <= 0 || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius) continue;
-            v.health[target] = Math.min(v.maxHealth[target], v.health[target] + Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3));
-            status.wardUntil[target] = tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration);
-            effects.add(EffectKind.Heal, tick, p.x[target], p.z[target], 1.1, .8);
-        } else if (kind === ActorAction.Eruption) {
-            const count = e.boss[slot] ? 3 : 1, rule = ENEMY_SPECIAL.eruption;
-            let hit = false;
-            for (let i = 0; i < count; i++) {
-                const offset = (i - (count - 1) / 2) * rule.spacing;
-                const x = a.targetX[slot] + Math.cos(p.heading[slot]) * offset, z = a.targetZ[slot] - Math.sin(p.heading[slot]) * offset;
-                hit ||= Math.hypot(p.x[target] - x, p.z[target] - z) <= rule.radius + p.radius[target];
-                effects.add(EffectKind.EnemyEruption, tick, x, z, rule.radius, .85);
-            }
-            if (hit) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * rule.damage, e.elite[slot], e.boss[slot]);
-        } else if (kind === ActorAction.Slam) {
-            if (Math.hypot(dx, dz) <= ENEMY_SPECIAL.slam.radius + p.radius[target]) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.slam.damage, e.elite[slot], e.boss[slot]);
-            effects.add(EffectKind.EnemySlam, tick, p.x[slot], p.z[slot], ENEMY_SPECIAL.slam.radius, .8);
-        } else if (kind === ActorAction.Nova) {
-            if (Math.hypot(dx, dz) <= ENEMY_SPECIAL.nova.radius + p.radius[target]) impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.nova.damage, e.elite[slot], e.boss[slot]);
-            effects.add(EffectKind.EnemyNova, tick, p.x[slot], p.z[slot], ENEMY_SPECIAL.nova.radius, .7);
-        } else if (kind === ActorAction.Cast) {
-            const count = a.variant[slot];
-            // A volley reserves all its slots; pressure never changes its pattern halfway through.
-            if (entities.projectiles.count + count > MAX_PROJECTILES || entities.hostileProjectiles.count + count > MAX_HOSTILE_PROJECTILES) continue;
-            const scale = p.radius[slot] / .3, sin = Math.sin(p.heading[slot]), cos = Math.cos(p.heading[slot]);
-            const launchX = p.x[slot] + (SHAMAN_CAST_SOCKET[0] * cos + SHAMAN_CAST_SOCKET[2] * sin) * scale;
-            const launchZ = p.z[slot] + (SHAMAN_CAST_SOCKET[2] * cos - SHAMAN_CAST_SOCKET[0] * sin) * scale;
-            for (let bolt = 0; bolt < count; bolt++) {
-                const heading = p.heading[slot] + (bolt - (count - 1) / 2) * .24;
-                const x = Math.sin(heading), z = Math.cos(heading), speed = e.boss[slot] ? 5.5 : 4.5;
-                entities.spawnProjectile(world.ids[slot], Faction.Enemy,
-                    launchX, launchZ, x * speed, z * speed, e.damage[slot], a.reach[slot] / speed + .3,
-                    false, e.elite[slot], e.boss[slot], SHAMAN_CAST_SOCKET[1] * scale, p.x[slot], p.z[slot]);
-            }
-        }
     }
 }

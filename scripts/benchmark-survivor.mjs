@@ -14,7 +14,7 @@ const bundle = await build({ stdin: { contents: `
     export { EnemyBehavior } from './apps/survivor/src/core/EnemyBehavior';
     export { RegionalWorld } from './apps/survivor/src/core/RegionalWorld';
     export { advanceProjectiles, moveEnemies, advanceEnemyActions } from './apps/survivor/src/core/CombatSystems';
-    export { ticksForSeconds, GAME_CONFIG } from './apps/survivor/src/core/GameConfig';
+    export { ticksForSeconds, GAME_CONFIG, MAX_ENEMIES } from './apps/survivor/src/core/GameConfig';
     export { ProceduralCombatTerrain } from './apps/survivor/src/adapters/ProceduralCombatTerrain';
 `, resolveDir: root }, bundle: true, write: false, platform: "node", format: "esm" });
 const current = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
@@ -38,8 +38,8 @@ function crowded() {
     const entities = new CombatWorld(0, 0), regions = new RegionalWorld("crowd", { x: 0, z: 0 });
     regions.synchronize(0, 0);
     const home = regions.chunks.get("0,0"), region = regions.regionAt(0, 0);
-    for (let index = 0; index < 640; index++) {
-        const angle = index * Math.PI * 2 / 640;
+    for (let index = 0; index < current.MAX_ENEMIES; index++) {
+        const angle = index * Math.PI * 2 / current.MAX_ENEMIES;
         const slot = entities.spawnEnemy({ x: Math.sin(angle) * 8, z: Math.cos(angle) * 8, kind: index % 6,
             level: 1, elite: false, boss: false, region }, home);
         entities.vitals.health[slot] *= .4;
@@ -53,8 +53,8 @@ function crowded() {
         entities.impacts.count = 0;
     }
     const elapsed = performance.now() - started;
-    assert.equal(entities.enemies.count, 640); assert.equal(entities.projectiles.count, 128);
-    return { msPerTick: elapsed / ticks, ticks, enemies: 640, projectiles: 128 };
+    assert.equal(entities.enemies.count, current.MAX_ENEMIES); assert.equal(entities.projectiles.count, 128);
+    return { msPerTick: elapsed / ticks, ticks, enemies: current.MAX_ENEMIES, projectiles: 128 };
 }
 
 function measure(run, budgetMsPerTick) {

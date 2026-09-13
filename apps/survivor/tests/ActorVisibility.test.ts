@@ -26,6 +26,8 @@ test("resident enemies remain visible when crossing the active simulation bounda
 
 test("fading retains opaque depth writes and shares an interpolated view-center uniform", () => {
     const material = new MeshStandardMaterial();
+    material.onBeforeCompile = shader => { shader.fragmentShader = "// custom rock surface\n" + shader.fragmentShader; };
+    material.customProgramCacheKey = () => "rock-surface";
     const center = new Vector2(100, -200);
     installActorFade(material, center, true);
     const shader = { vertexShader: ShaderLib.standard.vertexShader, fragmentShader: ShaderLib.standard.fragmentShader, uniforms: {} };
@@ -33,6 +35,8 @@ test("fading retains opaque depth writes and shares an interpolated view-center 
     expect(material.transparent).toBe(false);
     expect(material.depthWrite).toBe(true);
     expect(material.alphaHash).toBe(true);
+    expect(shader.fragmentShader).toContain("// custom rock surface");
+    expect(material.customProgramCacheKey()).toContain("rock-surface:");
     const uniform = (shader.uniforms as Record<string, { value: Vector2 }>).actorViewCenter;
     expect(uniform.value).toBe(center);
     center.set(-400, 800);

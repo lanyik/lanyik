@@ -10,6 +10,7 @@ import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/brows
 import type { HexMap } from "three-hex-map";
 import { ENEMY_DEFINITIONS } from "../../src/core/EnemyDefinitions";
 import { GAME_CONFIG } from "../../src/core/GameConfig";
+import { WORLD_VIEW } from "../../src/core/WorldView";
 test.use({ actionTimeout: 20_000 });
 
 test("compares gear on hover, protects upgrades during cleanup and equips a real pickup from the HUD", async ({ page }) => {
@@ -25,26 +26,26 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
-    const rendered = await page.evaluate(({ models, activeExitDistance }) => {
+    const rendered = await page.evaluate(({ models, activeExitDistance, fadeStart, fadeEnd }) => {
         const session = window.survivorApplication!.session;
         session.frame(performance.now());
         const runtime = session as unknown as { renderState: CombatRenderState; view: { layer: { actors: { enemies: { count: number }[][] } } } };
         const { entities, player } = runtime.renderState;
         const { enemies, position, enemy } = entities;
-        const expected = [0, 0, 0, 0];
+        const expected = new Array(Math.max(...models) + 1).fill(0);
         let outsideActive = 0;
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const i = enemies.slots[cursor];
             const distance = Math.hypot(position.x[i] - player.x, position.z[i] - player.z);
             const homeDistance = Math.hypot(enemy.homeX[i] - player.x, enemy.homeZ[i] - player.z);
-            if (Math.max(distance - position.radius[i] * 2, homeDistance) >= 30) continue;
+            if (Math.max(distance - position.radius[i] * 2, homeDistance) >= fadeEnd) continue;
             expected[models[enemy.kind[i]]]++;
-            if (distance <= 24 && distance > activeExitDistance) outsideActive++;
+            if (distance <= fadeStart && distance > activeExitDistance) outsideActive++;
         }
         return { expected, actual: runtime.view.layer.actors.enemies.map(pool => pool.map(mesh => mesh.count)), outsideActive };
-    }, { models: ENEMY_DEFINITIONS.map(definition => definition.model), activeExitDistance: GAME_CONFIG.enemies.activeExitDistance });
+    }, { models: ENEMY_DEFINITIONS.map(definition => definition.model), activeExitDistance: GAME_CONFIG.enemies.activeExitDistance, fadeStart: WORLD_VIEW.actorFadeStart, fadeEnd: WORLD_VIEW.actorFadeEnd });
     expect(rendered.outsideActive).toBeGreaterThan(0);
-    for (let kind = 0; kind < 4; kind++) {
+    for (let kind = 0; kind < rendered.actual.length; kind++) {
         expect(rendered.actual[kind].length).toBeGreaterThan(0);
         expect(rendered.actual[kind].every(count => count === rendered.expected[kind])).toBe(true);
     }

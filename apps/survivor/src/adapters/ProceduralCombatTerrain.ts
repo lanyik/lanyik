@@ -3,7 +3,8 @@ import type { CombatTerrain } from "../core/CombatTerrain";
 import { SurfaceMotion, type SurfaceContact } from "../core/SurfaceMotion";
 import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
 
-const CHUNK = 12, CELL = .5, EDGE = CHUNK / CELL, MAX_CHUNKS = 100;
+import { WORLD_VIEW } from "../core/WorldView";
+const CHUNK = WORLD_VIEW.chunkSize, CELL = .5, EDGE = CHUNK / CELL, MAX_CHUNKS = WORLD_VIEW.navigationChunks;
 const MAX_SLOPE = Math.tan(40 * Math.PI / 180);
 interface TerrainChunk { readonly blocked: Uint8Array; readonly trees: readonly { x: number; z: number; scale: number }[] }
 const isWater = (tile: TileInfo) => tile.type === Land.sea || tile.type === Land.coastal || tile.modifiers?.includes("lake") || tile.modifiers?.includes("river");

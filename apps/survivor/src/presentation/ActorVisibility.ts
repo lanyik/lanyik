@@ -1,9 +1,9 @@
 import type { Material, Vector2 } from "three";
-import { COMBAT_CHUNK_SIZE, RETAINED_CHUNK_RADIUS } from "../core/RegionalWorld";
+import { WORLD_VIEW } from "../core/WorldView";
 
 // The outermost resident ring is invisible before its chunks enter or leave residency.
-export const ACTOR_FADE_END = COMBAT_CHUNK_SIZE * (RETAINED_CHUNK_RADIUS - 0.5);
-export const ACTOR_FADE_START = ACTOR_FADE_END - COMBAT_CHUNK_SIZE / 2;
+export const ACTOR_FADE_END = WORLD_VIEW.actorFadeEnd;
+export const ACTOR_FADE_START = WORLD_VIEW.actorFadeStart;
 
 export function actorVisibility(distance: number): number {
     const t = Math.max(0, Math.min(1, (distance - ACTOR_FADE_START) / (ACTOR_FADE_END - ACTOR_FADE_START)));
@@ -12,8 +12,10 @@ export function actorVisibility(distance: number): number {
 
 /** Alpha hashing keeps instance depth writes and avoids transparent-instance sorting. */
 export function installActorFade(material: Material, center: Vector2, homeAnchor = false): void {
+    const compile = material.onBeforeCompile.bind(material), programKey = material.customProgramCacheKey();
     material.alphaHash = true;
-    material.onBeforeCompile = shader => {
+    material.onBeforeCompile = (shader, renderer) => {
+        compile(shader, renderer);
         shader.uniforms.actorViewCenter = { value: center };
         shader.vertexShader = `${homeAnchor ? "attribute vec2 actorHome;" : ""}\nuniform vec2 actorViewCenter; varying float actorDistance;\n${shader.vertexShader}`
             .replace("#include <project_vertex>", `#include <project_vertex>
@@ -27,6 +29,6 @@ export function installActorFade(material: Material, center: Vector2, homeAnchor
             .replace("#include <alphahash_fragment>", `diffuseColor.a *= 1.0 - smoothstep(${ACTOR_FADE_START.toFixed(1)}, ${ACTOR_FADE_END.toFixed(1)}, actorDistance);
                 #include <alphahash_fragment>`);
     };
-    material.customProgramCacheKey = () => `survivor-distance-fade-v1-${homeAnchor}`;
+    material.customProgramCacheKey = () => `${programKey}:survivor-distance-fade-v1-${homeAnchor}`;
     material.needsUpdate = true;
 }

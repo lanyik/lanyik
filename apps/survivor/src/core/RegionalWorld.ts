@@ -1,13 +1,14 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
 import { EnemyKind } from "./EnemyDefinitions";
+import { WORLD_VIEW } from "./WorldView";
 
-export const COMBAT_CHUNK_SIZE = 12;
+export const COMBAT_CHUNK_SIZE = WORLD_VIEW.chunkSize;
 const COMBAT_CHUNK_HALF_SIZE = COMBAT_CHUNK_SIZE / 2;
 export const REGION_RADIUS = 24;
 export const NEAR_CHUNK_RADIUS = 1;
 export const BUFFER_CHUNK_RADIUS = 2;
-export const RETAINED_CHUNK_RADIUS = 3;
+export const RETAINED_CHUNK_RADIUS = WORLD_VIEW.residentRadius;
 export const MAX_COMBAT_CHUNKS = (RETAINED_CHUNK_RADIUS * 2 + 1) ** 2;
 export type RegionDifficulty = "normal" | "hard" | "horror";
 export type ResidencyBand = "near" | "buffer" | "retained" | "unloaded";

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { ActorAction, CombatWorld } from "../src/core/CombatWorld";
 import { EnemyBehavior } from "../src/core/EnemyBehavior";
 import { EnemyKind, ENEMY_SPECIAL } from "../src/core/EnemyDefinitions";
-import { advanceEnemyActions } from "../src/core/CombatSystems";
+import { advanceEnemyActions, advanceProjectiles } from "../src/core/CombatSystems";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 import { EffectKind } from "../src/core/CombatEffects";
 import { ticksForSeconds } from "../src/core/GameConfig";
@@ -16,44 +16,65 @@ function arena(kind: EnemyKind, boss = false, distance = 5) {
     return { world, enemy, home, region, behavior: new EnemyBehavior(world, regions) };
 }
 
-test.each([false, true])("eruption locks its telegraphed locations and permits dodging (boss %s)", boss => {
-    const { world: e, enemy, behavior } = arena(EnemyKind.Caster, boss);
+test("casters release a reserved fan of blades that curve without retargeting", () => {
+    const { world: e, enemy, behavior } = arena(EnemyKind.Caster);
     e.enemy.attackStep[enemy] = 1; behavior.update(1);
-    expect(e.action.kind[enemy]).toBe(ActorAction.Eruption);
-    expect(e.action.targetX[enemy]).toBe(0); expect(e.action.targetZ[enemy]).toBe(5);
-    const release = e.action.hitAt[enemy]; advanceEnemyActions(e, release - 1);
-    expect(e.effects.buffer.count).toBe(0); expect(e.impacts.count).toBe(0);
-    e.position.z[e.player] = 8;
-    advanceEnemyActions(e, release); advanceEnemyActions(e, release + 1);
-    expect(e.impacts.count).toBe(0); expect(e.projectiles.count).toBe(0);
-    const effects = e.effects.buffer;
-    expect(effects.count).toBe(boss ? 3 : 1);
-    for (let i = 0; i < effects.count; i++) {
-        expect(effects.kind[i]).toBe(EffectKind.EnemyEruption); expect(effects.z[i]).toBe(5);
-        expect(effects.x[i]).toBeCloseTo((i - (effects.count - 1) / 2) * ENEMY_SPECIAL.eruption.spacing);
-    }
+    expect(e.action.kind[enemy]).toBe(ActorAction.Volley);
+    advanceEnemyActions(e, e.action.hitAt[enemy] - 1); expect(e.projectiles.count).toBe(0);
+    advanceEnemyActions(e, e.action.hitAt[enemy]); advanceEnemyActions(e, e.action.hitAt[enemy] + 1);
+    expect(e.projectiles.count).toBe(3); expect(e.effects.buffer.count).toBe(0);
+    const slots = Array.from(e.projectiles.slots.slice(0, 3)), before = slots.map(slot => e.position.heading[slot]);
+    expect(slots.map(slot => Math.sign(e.projectile.turnRate[slot]))).toEqual([1, 0, -1]);
+    e.position.x[e.player] = 50;
+    for (let tick = 0; tick < 60; tick++) advanceProjectiles(e);
+    expect(e.position.heading[slots[0]]).toBeGreaterThan(before[0]);
+    expect(e.position.heading[slots[2]]).toBeLessThan(before[2]);
+    for (const slot of slots) expect(Math.hypot(e.projectile.velocityX[slot], e.projectile.velocityZ[slot])).toBeCloseTo(4.5, 4);
 });
 
-test("boss overlapping eruption edges commit a single damage event, and lost targets cancel windup", () => {
+test("boss jaws converge on a locked point and hit only when their moving blades reach the player", () => {
     const { world: e, enemy, behavior } = arena(EnemyKind.Caster, true);
     e.enemy.attackStep[enemy] = 1; behavior.update(1);
-    e.position.x[e.player] = ENEMY_SPECIAL.eruption.spacing / 2;
-    advanceEnemyActions(e, e.action.hitAt[enemy]); advanceEnemyActions(e, e.action.hitAt[enemy] + 1);
-    expect(e.impacts.count).toBe(1); expect(e.impacts.damage[0]).toBeCloseTo(e.enemy.damage[enemy] * ENEMY_SPECIAL.eruption.damage);
-    const second = arena(EnemyKind.Caster); second.world.enemy.attackStep[second.enemy] = 1; second.behavior.update(1);
-    second.world.position.z[second.world.player] = 25; second.behavior.update(2);
-    advanceEnemyActions(second.world, 200);
-    expect(second.world.effects.buffer.count).toBe(0); expect(second.world.action.kind[second.enemy]).toBeLessThan(ActorAction.Melee);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Jaws);
+    const release = e.action.hitAt[enemy];
+    for (let tick = release; tick < release + 50; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(0); expect(e.effects.buffer.kind[0]).toBe(EffectKind.EnemyJaws);
+    for (let tick = release + 50; tick <= e.action.endsAt[enemy]; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(1); expect(e.impacts.damage[0]).toBeCloseTo(e.enemy.damage[enemy] * ENEMY_SPECIAL.jaws.damage);
+    expect(e.action.targetX[enemy]).toBe(0); expect(e.action.targetZ[enemy]).toBe(5);
 });
 
-test("rock guards follow their normal attack with a warned area slam", () => {
-    const { world: e, enemy, behavior } = arena(EnemyKind.Guard, false, 2);
+test("jaws leave the ends open for escape; interruption removes the continuing attack", () => {
+    const { world: e, enemy, behavior } = arena(EnemyKind.Caster, true);
     e.enemy.attackStep[enemy] = 1; behavior.update(1);
-    expect(e.action.kind[enemy]).toBe(ActorAction.Slam);
-    advanceEnemyActions(e, e.action.hitAt[enemy] - 1); expect(e.impacts.count).toBe(0);
-    advanceEnemyActions(e, e.action.hitAt[enemy]); advanceEnemyActions(e, e.action.hitAt[enemy] + 1);
-    expect(e.impacts.count).toBe(1); expect(e.effects.buffer.kind[0]).toBe(EffectKind.EnemySlam);
+    e.position.z[e.player] = e.position.previousZ[e.player] = 9;
+    for (let tick = e.action.hitAt[enemy]; tick <= e.action.endsAt[enemy]; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(0);
+    expect(e.effects.buffer.count).toBe(1); behavior.cancel(enemy);
+    expect(e.effects.buffer.count).toBe(0);
+});
+
+test.each([0, 2])("the guard's fault travels forward, leaving lateral space to dodge (offset %s)", offset => {
+    const { world: e, enemy, behavior } = arena(EnemyKind.Guard, false, 5);
+    e.enemy.attackStep[enemy] = 1; behavior.update(1);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Fault);
+    e.position.x[e.player] = e.position.previousX[e.player] = offset;
+    const release = e.action.hitAt[enemy]; advanceEnemyActions(e, release); expect(e.impacts.count).toBe(0);
+    for (let tick = release + 1; tick <= e.action.endsAt[enemy]; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(offset ? 0 : 1); expect(e.effects.buffer.kind[0]).toBe(EffectKind.EnemyFault);
     expect(e.enemy.specialReadyAt[enemy]).toBeGreaterThan(e.action.endsAt[enemy]);
+});
+
+test("a close enraged boss reaves across its front while its back remains safe", () => {
+    for (const behind of [false, true]) {
+        const { world: e, enemy, behavior } = arena(EnemyKind.Caster, true, 2);
+        e.vitals.health[enemy] *= .4; behavior.update(1);
+        expect(e.action.kind[enemy]).toBe(ActorAction.Reave);
+        if (behind) e.position.z[e.player] = e.position.previousZ[e.player] = -2;
+        const release = e.action.hitAt[enemy]; advanceEnemyActions(e, release); expect(e.impacts.count).toBe(0);
+        for (let tick = release + 1; tick <= e.action.endsAt[enemy]; tick++) advanceEnemyActions(e, tick);
+        expect(e.impacts.count).toBe(behind ? 0 : 1);
+    }
 });
 
 test("healing grants a timed protective blessing and a reused entity slot cannot inherit it", () => {
@@ -61,7 +82,9 @@ test("healing grants a timed protective blessing and a reused entity slot cannot
     const ally = e.spawnEnemy({ x: 1, z: 0, kind: EnemyKind.Grunt, elite: false, boss: false, level: 1, region }, home);
     e.enemy.active[ally] = 1; e.vitals.health[ally] = 1; behavior.update(1);
     expect(e.action.kind[enemy]).toBe(ActorAction.Heal);
+    const healthBefore = e.vitals.health[enemy];
     const hit = e.action.hitAt[enemy]; advanceEnemyActions(e, hit);
+    expect(e.vitals.health[enemy]).toBeCloseTo(healthBefore - e.vitals.maxHealth[enemy] * ENEMY_SPECIAL.heal.sacrifice);
     expect(e.vitals.health[ally]).toBeGreaterThan(1);
     expect(e.status.wardUntil[ally]).toBe(hit + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration));
     e.remove(ally);
@@ -86,4 +109,18 @@ test("a protective blessing reduces committed damage by 25 percent and expires o
         runtime.tickValue = e.status.wardUntil[slot];
         expect(damage()).toBeCloseTo(normal);
     } finally { simulation.dispose(); }
+});
+
+test.each(["cancel", "target-lost", "owner-killed"])("blood pact interruption (%s) transfers no health", reason => {
+    const { world: e, enemy, home, region, behavior } = arena(EnemyKind.Healer);
+    const ally = e.spawnEnemy({ x: 1, z: 0, kind: EnemyKind.Grunt, elite: false, boss: false, level: 1, region }, home);
+    e.enemy.active[ally] = 1; e.vitals.health[ally] = 1; behavior.update(1);
+    expect(e.action.kind[enemy]).toBe(ActorAction.Heal);
+    const release = e.action.hitAt[enemy], health = e.vitals.health[enemy];
+    if (reason === "cancel") behavior.cancel(enemy);
+    else e.remove(reason === "target-lost" ? ally : enemy);
+    advanceEnemyActions(e, release);
+    if (reason !== "owner-killed") expect(e.vitals.health[enemy]).toBe(health);
+    if (reason !== "target-lost") expect(e.vitals.health[ally]).toBe(1);
+    expect(e.effects.buffer.count).toBe(0);
 });

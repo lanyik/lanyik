@@ -936,3 +936,12 @@ oversized world-space skydome are removed; host disposal releases the render tar
 temporary sky geometry and material. A framebuffer regression verifies that changing
 terrain fog leaves sky pixels unchanged while rotating the view changes them;
 the same sky pixels must return after a real WebGL context loss and restoration.
+
+The survivor application derives its terrain, vegetation, fog and actor limits from
+`apps/survivor/src/core/WorldView.ts`. At 34 display units per game unit, terrain
+extends to 2312, vegetation to 1700, and view-depth terrain fog spans 1156–2108.
+Terrain load/retention radii remain two/three chunks. Gameplay retains four rings
+(81 chunks); actors fade at 34–42 game units, ahead of the 44/46 wake/sleep limits
+and the minimum 48-unit unloading boundary. Far actors keep low-frequency patrol
+decisions while combat aggro stays local. This changes application policy without
+introducing another terrain source or changing the engine's streaming ownership.

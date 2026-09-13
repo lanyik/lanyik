@@ -14,7 +14,7 @@ import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
-export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Nova, Eruption, Slam }
+export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Reave, Volley, Fault, Jaws }
 export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol }
 
 export class DamageBuffer {
@@ -81,6 +81,7 @@ export class CombatWorld {
         target: new Float64Array(ENTITY_CAPACITY), variant: new Uint8Array(ENTITY_CAPACITY), targetX: new Float64Array(ENTITY_CAPACITY), targetZ: new Float64Array(ENTITY_CAPACITY)
     };
     public readonly projectile = {
+        turnRate: new Float32Array(ENTITY_CAPACITY),
         source: new Float64Array(ENTITY_CAPACITY), faction: new Uint8Array(ENTITY_CAPACITY),
         launchHeight: new Float32Array(ENTITY_CAPACITY), age: new Float32Array(ENTITY_CAPACITY),
         groundX: new Float64Array(ENTITY_CAPACITY), groundZ: new Float64Array(ENTITY_CAPACITY),
@@ -132,11 +133,12 @@ export class CombatWorld {
     }
 
     public spawnProjectile(source: number, faction: Faction, x: number, z: number, vx: number, vz: number,
-        damage: number, lifetime: number, critical = false, elite = 0, boss = 0, launchHeight = .42, groundX = x, groundZ = z): boolean {
+        damage: number, lifetime: number, critical = false, elite = 0, boss = 0, launchHeight = .42, groundX = x, groundZ = z, turnRate = 0): boolean {
         if (this.projectiles.count === MAX_PROJECTILES || (faction === Faction.Enemy && this.hostileProjectiles.count === MAX_HOSTILE_PROJECTILES)) return false;
         const slot = this.world.create(Component.Position | Component.Projectile | (faction === Faction.Enemy ? Component.Hostile : 0));
         this.place(slot, x, z, faction === Faction.Enemy ? .14 : .11);
         const p = this.projectile;
+        p.turnRate[slot] = turnRate; this.position.heading[slot] = Math.atan2(vx, vz);
         p.launchHeight[slot] = launchHeight; p.age[slot] = 0;
         p.groundX[slot] = groundX; p.groundZ[slot] = groundZ;
         p.source[slot] = source; p.faction[slot] = faction; p.velocityX[slot] = vx; p.velocityZ[slot] = vz;
@@ -163,6 +165,7 @@ export class CombatWorld {
     }
 
     public remove(slot: number): void {
+        if (this.enemy.homes[slot]) this.effects.cancelSource(this.world.ids[slot]);
         this.spatial.remove(slot);
         this.enemy.homes[slot] = this.enemy.regions[slot] = undefined;
         this.enemy.target[slot] = this.projectile.source[slot] = 0;
