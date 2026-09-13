@@ -8,7 +8,7 @@ import {
     Object3D,
     BufferGeometry,
     Material,
-    MeshLambertMaterial,
+    MeshStandardMaterial,
     Color,
     Texture
 } from "three";
@@ -175,13 +175,12 @@ function readForestAlbedoScale(modelPath: string, value: unknown): number {
     return value;
 }
 
-function createForestMaterial(source: Material, albedoScale: number): MeshLambertMaterial {
+function createForestMaterial(source: Material, albedoScale: number): MeshStandardMaterial {
     const input = source as ForestMaterialSource;
     if (!(input.color instanceof Color)) {
         throw new TypeError(`Forest material ${source.name || source.type} must expose a base color`);
     }
-    const material = new MeshLambertMaterial({
-        color: input.color.clone().multiplyScalar(albedoScale),
+    const material = source instanceof MeshStandardMaterial ? source.clone() : new MeshStandardMaterial({
         map: input.map ?? null,
         lightMap: input.lightMap ?? null,
         lightMapIntensity: input.lightMapIntensity ?? 1,
@@ -203,6 +202,7 @@ function createForestMaterial(source: Material, albedoScale: number): MeshLamber
         fog: input.fog ?? true,
         vertexColors: input.vertexColors ?? false
     });
+    material.color.copy(input.color).multiplyScalar(albedoScale);
     material.name = source.name ? `${source.name}:forest-lit` : "forest-lit";
     material.alphaHash = source.alphaHash;
     material.alphaToCoverage = source.alphaToCoverage;
@@ -210,6 +210,20 @@ function createForestMaterial(source: Material, albedoScale: number): MeshLamber
     material.dithering = source.dithering;
     material.toneMapped = source.toneMapped;
     material.visible = source.visible;
+    if (source.userData.forestFoliage === true) {
+        // Thin leaves transmit some sunlight from the back. Keep alpha-tested
+        // silhouettes and the same standard-material light/fog/instance paths.
+        material.onBeforeCompile = shader => {
+            shader.fragmentShader = shader.fragmentShader.replace("#include <lights_fragment_end>", `
+                #include <lights_fragment_end>
+                #if NUM_DIR_LIGHTS > 0
+                    float transmitted = pow(max(dot(-normal, directionalLights[0].direction), 0.0), 2.0);
+                    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * transmitted * 0.22;
+                #endif
+            `);
+        };
+        material.customProgramCacheKey = () => "forest-thin-leaf-v1";
+    }
     return material;
 }
 
@@ -353,7 +367,7 @@ export class ForestSharedResources {
 //original matrices around to restore, since InstancedMesh has no "get the
 //matrix I set earlier" API once overwritten); darkening uses each
 //InstancedMesh's own instanceColor attribute, which the shared light-reactive
-//Lambert forest materials multiply without per-chunk shader variants.
+//Standard forest materials multiply without per-chunk shader variants.
 //----------------------------------------------------------------------------------
 export class ForestField extends Group {
     private readonly fogStates = new Map<string, number>();

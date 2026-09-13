@@ -1123,6 +1123,7 @@ out vec3 vNeighborsPriorityB;
 out vec3 vEdgeFactorsA; // SE, S, SW
 out vec3 vEdgeFactorsB; // NW, N, NE
 out vec3 vNormal;
+out vec3 vViewPosition;
 out float vSurfaceSlope;
 out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
 out float vFogState;
@@ -1448,6 +1449,7 @@ void main() {
     vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mvPosition;
+    vViewPosition = -mvPosition.xyz;
     vHorizonFogDepth = -mvPosition.z;
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through
@@ -5299,11 +5301,13 @@ void main() {
     }
     return indices;
   }
-  function loadTerrainArrayTexture(atlas, baseUrl, anisotropy, signal) {
+  function loadTerrainArrayTexture(atlas, baseUrl, anisotropy, signal, channel = "color") {
     const { size, layers } = terrainArrayLayout(atlas);
+    const image = channel === "surface" ? atlas.surfaceBuffer : atlas.image;
+    if (!image) throw new TypeError("Terrain surface channel requires surfaceBuffer");
     const pixels = new Uint8Array(size * size * layers * 4);
     const texture = new three.DataArrayTexture(pixels, size, size, layers);
-    texture.name = "terrain-material-layers";
+    texture.name = `terrain-${channel}-layers`;
     texture.generateMipmaps = true;
     texture.minFilter = three.LinearMipmapLinearFilter;
     texture.magFilter = three.LinearFilter;
@@ -5324,8 +5328,16 @@ void main() {
     if (controller.signal.aborted) onAbort();
     const decode = async () => {
       controller.signal.throwIfAborted();
-      const response = await fetch(baseUrl + atlas.image, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Terrain atlas image load failed: ${atlas.image} (HTTP ${response.status})`);
+      const response = await fetch(baseUrl + image, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Terrain atlas image load failed: ${image} (HTTP ${response.status})`);
+      if (channel === "surface") {
+        const data = new Uint8Array(await response.arrayBuffer());
+        controller.signal.throwIfAborted();
+        if (data.length !== pixels.length) throw new RangeError("Terrain surface byte length does not match its descriptor");
+        pixels.set(data);
+        texture.needsUpdate = true;
+        return;
+      }
       const source = await createImageBitmap(await response.blob());
       try {
         controller.signal.throwIfAborted();
@@ -5348,6 +5360,9 @@ void main() {
       texture.removeEventListener("dispose", dispose);
     });
     return { texture, ready };
+  }
+  function createSunDirection() {
+    return new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 24 * Math.PI / 180, 205 * Math.PI / 180);
   }
   var SharedBaseInstancedBufferGeometry = class extends three.InstancedBufferGeometry {
     constructor(base, attributeNames) {
@@ -5804,6 +5819,46 @@ vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
   var TERRAIN_MATERIAL_SAMPLING = `
 uniform float rockAtlasIndex;
 in float vSurfaceSlope;
+in vec3 vViewPosition;
+uniform mat3 normalMatrix;
+#ifdef TERRAIN_SURFACE_MAP
+uniform highp sampler2DArray surfaceMap;
+
+vec4 sampleTerrainSurface(float idx, vec2 uv) {
+    vec4 detail = textureGrad(surfaceMap, vec3(uv, idx), terrainGradientX, terrainGradientY);
+    // Mirrored wrapping reverses the tangent-space normal on alternate repeats.
+    detail.xy = (detail.xy * 2.0 - 1.0) * (1.0 - 2.0 * mod(floor(uv), 2.0));
+    return detail;
+}
+
+vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
+    vec3 n = normalize(vNormal);
+    vec3 axis = normalize(normalMatrix * vec3(1.0, 0.0, 0.0));
+    vec3 t = normalize(axis - n * dot(n, axis));
+    vec3 b = normalize(cross(t, n));
+    vec2 xy = surface.xy * .7;
+    n = normalize(t * xy.x + b * xy.y + n * sqrt(max(.01, 1.0 - dot(xy, xy))));
+    vec3 l = normalize(normalMatrix * lightDir);
+    vec3 v = normalize(vViewPosition);
+    vec3 h = normalize(l + v);
+    float nl = max(dot(n, l), 0.0), nv = max(dot(n, v), .001);
+    float nh = max(dot(n, h), 0.0), vh = max(dot(v, h), 0.0);
+    float roughness = clamp(surface.z, .32, 1.0);
+    float a2 = pow(roughness, 4.0);
+    float denom = nh * nh * (a2 - 1.0) + 1.0;
+    float distribution = a2 / (3.141593 * denom * denom);
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    float geometry = nl * nv / max(.001, (nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
+    float fresnel = .04 + .96 * pow(1.0 - vh, 5.0);
+    float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
+    vec3 linear = pow(max(albedo, vec3(0.0)), vec3(2.2));
+    vec3 ambient = vec3(.28, .34, .40) * mix(.45, 1.0, surface.w);
+    vec3 lit = linear * ambient + (linear * .96 + vec3(specular)) * vec3(1.0, .91, .77) * nl * 1.1;
+    // The custom terrain pass writes display-referred colors, as do its water,
+    // fog and projection passes. Standard-material trees use renderer ACES.
+    return pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+#endif
 
 vec4 sampleTerrainCell(float idx, vec3 pattern) {
     float patchPhase = pattern.z * 8.0;
@@ -5815,6 +5870,12 @@ vec4 sampleTerrainCell(float idx, vec3 pattern) {
     // At an integer boundary the outgoing B and incoming A are identical.
     vec4 color = mix(first, second, smoothstep(0.2, 0.8, fract(patchPhase)));
     color.rgb *= mix(0.9, 1.1, smoothstep(0.08, 0.92, pattern.z));
+#ifdef TERRAIN_SURFACE_MAP
+    vec4 surface = mix(sampleTerrainSurface(idx, pattern.xy + offsetA), sampleTerrainSurface(idx, pattern.xy + offsetB), smoothstep(0.2, 0.8, fract(patchPhase)));
+    // Shade before material blending: color, normals, roughness and AO use
+    // exactly the same slope, biome-border and patch contributions.
+    color.rgb = lightTerrainSurface(color.rgb, surface);
+#endif
     return color;
 }
 
@@ -5825,6 +5886,16 @@ vec4 applySlopeMaterial(vec4 base, vec3 pattern) {
         base = mix(base, sampleTerrainCell(rockAtlasIndex, pattern), exposure);
     }
     return base;
+}
+
+vec3 applySnowMaterial(vec3 base, float coverage) {
+    // Snow accumulates on shelves; steep faces retain their rock structure.
+    coverage *= 1.0 - smoothstep(0.35, 0.8, vSurfaceSlope) * 0.85;
+    vec3 snow = vec3(0.93, 0.95, 0.98);
+#ifdef TERRAIN_SURFACE_MAP
+    snow = lightTerrainSurface(snow, vec4(0.0, 0.0, 0.92, 1.0));
+#endif
+    return mix(base, snow, coverage * 0.78);
 }
 `;
 
@@ -6310,7 +6381,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
         float snowLine = 0.74 - climateDrop + (snowNoise - 0.5) * 0.18;
         float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
-        texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
+        texColor.rgb = applySnowMaterial(texColor.rgb, snowT);
     }
 
     // Rivers/lakes (see the uniform block's comment above). Drawn before
@@ -6401,10 +6472,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     }
 
     vec3 normal = normalize(vNormal);
-    float lambertian = max(dot(normalize(lightDir), normal), 0.0);
+    float lambertian = max(dot(normalize(normalMatrix * lightDir), normal), 0.0);
     vec3 color = landformDebugMode > 0.5
         ? landformDebugColor() * (0.72 + lambertian * 0.28)
+#ifdef TERRAIN_SURFACE_MAP
+        : texColor.rgb;
+#else
         : lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
+#endif
 
     // Explored (previously seen, currently outside every unit's view range):
     // keep every feature visible, just darker - the "remembered" Civ-style look.
@@ -6573,7 +6648,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
     float snowLine = 0.74 - climateDrop + (materialPattern.z - 0.5) * 0.18;
     float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
-    texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
+    texColor.rgb = applySnowMaterial(texColor.rgb, snowT);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
@@ -6603,10 +6678,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     }
 
     vec3 normal = normalize(vNormal);
-    float lambertian = max(dot(normalize(lightDir), normal), 0.0);
+    float lambertian = max(dot(normalize(normalMatrix * lightDir), normal), 0.0);
     vec3 color = landformDebugMode > 0.5
         ? landformDebugColor() * (0.72 + lambertian * 0.28)
+#ifdef TERRAIN_SURFACE_MAP
+        : texColor.rgb;
+#else
         : texColor.rgb * (0.55 + 0.55 * lambertian);
+#endif
     if (vFogState < 1.5) color *= fogDarkenFactor;
     terrainColor = vec4(color, 1.0);
 
@@ -6871,6 +6950,7 @@ uniform float gridWidth;
 uniform float gridOpacity;
 
 uniform vec3 lightDir;
+uniform mat3 normalMatrix;
 uniform vec3 chunkCameraPosition;
 
 uniform vec3 waterColorDeep;
@@ -7067,8 +7147,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     }
 
     vec3 normal = normalize(vNormal);
-    vec3 light = normalize(lightDir);
-    vec3 viewDir = normalize(chunkCameraPosition - vWorldPos);
+    vec3 light = normalize(normalMatrix * lightDir);
+    vec3 viewDir = normalize(normalMatrix * (chunkCameraPosition - vWorldPos));
 
     float ndotl = max(dot(normal, light), 0.0);
     vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
@@ -7123,6 +7203,7 @@ uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
 uniform vec3 lightDir;
+uniform mat3 normalMatrix;
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
 
@@ -7144,7 +7225,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
     vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
     color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
-    float lambertian = max(dot(normalize(lightDir), normalize(vNormal)), 0.0);
+    float lambertian = max(dot(normalize(normalMatrix * lightDir), normalize(vNormal)), 0.0);
     color *= 0.55 + 0.55 * lambertian;
     if (vFogState < 1.5) color *= fogDarkenFactor;
     waterColor = vec4(color, 1.0);
@@ -7199,7 +7280,10 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         this.fogTexture = this.loadFogTexture();
         const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal);
         this.atlasTexture = atlas.texture;
-        this.ready = readiness = atlas.ready;
+        readiness = atlas.ready;
+        const surface = options.atlas.surfaceBuffer ? loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal, "surface") : void 0;
+        this.surfaceTexture = surface?.texture;
+        this.ready = readiness = Promise.all([atlas.ready, surface?.ready]).then(() => void 0);
         this.waterShallow = new three.Color(options.waterColorShallow ?? LandColor["coastal" /* coastal */]);
         this.waterDeep = new three.Color(options.waterColorDeep ?? LandColor["sea" /* sea */]);
         const landTiles = [];
@@ -7365,6 +7449,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         groundProjectionChunkOffset: { value: new three.Vector2() },
         hexSize: { value: size },
         map: { value: this.atlasTexture },
+        surfaceMap: { value: this.surfaceTexture ?? null },
         sandAtlasIndex: { value: this.atlasCellIndex["sand" /* sand */] },
         rockAtlasIndex: { value: this.atlasCellIndex["mountain" /* mountain */] },
         waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
@@ -7385,7 +7470,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         fogPhase: { value: new three.Vector2() },
         macroPhase: { value: new three.Vector2() },
         wavePhase: { value: new three.Vector4() },
-        lightDir: { value: { x: 0.4, y: 1, z: 0.3 } },
+        lightDir: { value: createSunDirection() },
         showGrid: { value: this.options.gridVisible === true ? 1 : 0 },
         gridColor: { value: new three.Color(this.options.gridColor ?? 0) },
         gridWidth: { value: this.options.gridWidth ?? 0.04 },
@@ -7466,6 +7551,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           ...this.commonUniforms()
         },
         vertexShader: TERRAIN_VERTEX_SHADER,
+        defines: this.surfaceTexture ? { TERRAIN_SURFACE_MAP: 1 } : {},
         fragmentShader: this.options.shaderQuality === "fast" ? TERRAIN_FAST_FRAGMENT_SHADER : TERRAIN_FRAGMENT_SHADER
       }));
       if (tiles.length === 0) return;
@@ -8296,6 +8382,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
       this.landMaterial?.dispose();
       this.waterMaterial?.dispose();
       this.atlasTexture?.dispose();
+      this.surfaceTexture?.dispose();
       this.fogTexture?.dispose();
       for (const entry of this.cityFog.values()) {
         this.disposeCityResources(entry.materials, entry.sprite);
@@ -8923,8 +9010,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     if (!(input.color instanceof three.Color)) {
       throw new TypeError(`Forest material ${source.name || source.type} must expose a base color`);
     }
-    const material = new three.MeshLambertMaterial({
-      color: input.color.clone().multiplyScalar(albedoScale),
+    const material = source instanceof three.MeshStandardMaterial ? source.clone() : new three.MeshStandardMaterial({
       map: input.map ?? null,
       lightMap: input.lightMap ?? null,
       lightMapIntensity: input.lightMapIntensity ?? 1,
@@ -8946,6 +9032,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
       fog: input.fog ?? true,
       vertexColors: input.vertexColors ?? false
     });
+    material.color.copy(input.color).multiplyScalar(albedoScale);
     material.name = source.name ? `${source.name}:forest-lit` : "forest-lit";
     material.alphaHash = source.alphaHash;
     material.alphaToCoverage = source.alphaToCoverage;
@@ -8953,6 +9040,18 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     material.dithering = source.dithering;
     material.toneMapped = source.toneMapped;
     material.visible = source.visible;
+    if (source.userData.forestFoliage === true) {
+      material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <lights_fragment_end>", `
+                #include <lights_fragment_end>
+                #if NUM_DIR_LIGHTS > 0
+                    float transmitted = pow(max(dot(-normal, directionalLights[0].direction), 0.0), 2.0);
+                    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * transmitted * 0.22;
+                #endif
+            `);
+      };
+      material.customProgramCacheKey = () => "forest-thin-leaf-v1";
+    }
     return material;
   }
   function prepareForestMaterials(source, albedoScale, cache, created) {
@@ -16129,11 +16228,6 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   };
 
   // src/rendering/HexMapRendererHost.ts
-  var SUN_ELEVATION = 24 * Math.PI / 180;
-  var SUN_AZIMUTH = 205 * Math.PI / 180;
-  function createSunDirection() {
-    return new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - SUN_ELEVATION, SUN_AZIMUTH);
-  }
   var HexMapRendererHost = class {
     constructor(options) {
       this.options = options;

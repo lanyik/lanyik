@@ -26,8 +26,8 @@ test("WebGL creation failure displays its cause and retries after graphics becom
 
 test("closing during a stalled actor texture aborts loading and releases the world", async ({ page }) => {
     test.setTimeout(60_000);
-    await page.route("**/actors/Imp-normal.png", () => {});
-    const requested = page.waitForRequest("**/actors/Imp-normal.png");
+    await page.route("**/actors/RiftSpider-normal.png", () => {});
+    const requested = page.waitForRequest("**/actors/RiftSpider-normal.png");
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click(); await requested;
     const budget = await page.evaluate(async () => {

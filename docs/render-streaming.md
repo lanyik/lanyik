@@ -201,11 +201,14 @@ a valid optimization. Instance-density LOD, chunk culling and distance cutoff
 remain active. More aggressive savings require silhouette-preserving authored
 LODs or impostors with separate visual validation, not larger deletion quotas.
 
-Tree glTF materials are reduced to shared `MeshLambertMaterial`s when prepared.
-The shipped assets have no useful specular response, so running their former
-Physical shader added fragment work without adding information. Base colour,
-maps, alpha state, fog and instance fog tint are preserved, while the
-asset-owned albedo scale corrects unusually dark authored colours. The scene's
+Tree glTF standard/physical materials are cloned as shared PBR materials when
+prepared, retaining normal/roughness/metalness channels, UV transforms, alpha
+state and instance fog tint. Basic-colour sources become Standard materials.
+The asset-owned albedo scale is applied once without mutating source materials.
+The near asset owns materials for every LOD; textured application LODs therefore
+omit unused texture references in middle/far assets. The optional material extra
+`forestFoliage: true` adds thin-leaf backlighting through the existing directional
+light, with one shared shader variant and no transparent sorting. The scene's
 directional light uses the same sun vector as the sky and a hemisphere plus
 small ambient term keeps normal-dependent foliage readable. Dense forests do
 not enable per-tree realtime shadows: that would add another geometry pass and
@@ -311,6 +314,20 @@ or absolute large-coordinate float is introduced. Full-quality biome edge blendi
 still samples its contributing neighbours. Steep surfaces additionally blend the
 mountain material (except where it is already the base material); the slope varying
 is computed before normalMatrix so camera orbit cannot alter rock coverage.
+An atlas may additionally declare `surfaceBuffer`, a linear RGBA8 file containing
+normal XY, roughness and ambient occlusion in the same bottom-up layer order,
+already stripped of gutters. Its exact byte length is validated and bytes go
+directly to a second DataArrayTexture, avoiding image alpha premultiplication.
+It shares the colour channel's cancellation, ownership and resource accounting.
+Full and fast land materials both shade each sampled contribution using normal
+detail, GGX highlights and ambient occlusion before applying material blends;
+mirrored repeats reverse normal XY consistently. Both material variants use
+the same snow-coverage rule: steep slopes shed up to 85% of snow
+between slopes .35 and .8. Surface-enabled snow uses the same lighting as rock.
+Descriptors without surface data compile the colour-lighting variant and
+allocate no second array.
+`SunLight` supplies the shared world-space sun. Terrain/water shaders transform
+it into the interpolated normal's space; water's view vector is transformed too.
 The descriptor must provide an in-range integer cell
 for every `Land` material; missing mappings never silently select layer zero.
 Decode validates dimensions; HTTP/image/decode failures reject terrain readiness

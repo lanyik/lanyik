@@ -9,7 +9,7 @@ import {
     Matrix4,
     Mesh,
     MeshBasicMaterial,
-    MeshLambertMaterial,
+    MeshStandardMaterial,
     RawShaderMaterial,
     Texture,
     TextureLoader,
@@ -466,6 +466,42 @@ describe("streamed render resource sharing", () => {
         resources.dispose();
     });
 
+    test("forest preparation preserves authored PBR channels and shares them across LODs", async () => {
+        const map = mapWithVegetation();
+        const surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 6 });
+        const normalMap = new Texture(), roughnessMap = new Texture();
+        const source = new MeshStandardMaterial({ normalMap, roughnessMap, roughness: .73, alphaTest: .42 });
+        source.normalScale.set(.8, .6);
+        source.color.setRGB(.3, .4, .5);
+        const scene = new Group(), geometry = new BoxGeometry(1, 2, 1);
+        scene.add(new Mesh(geometry, source)); scene.updateMatrixWorld(true);
+        const release = vi.fn(() => true);
+        const assets = { acquire: async (path: string) => ({ path, released: false, release,
+            model: { scene, animations: [], fixup: new Matrix4(), info: {
+                offset: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1,
+                forestAlbedoScale: 1.5, forestLods: { middle: "test-tree/lod1", far: "test-tree/lod2" }
+            } } }) } as unknown as ModelAssetCache;
+        const resources = new ForestSharedResources(assets);
+        const forest = (await createForest(map, { size: 10, treesPerTile: 2, surface }, points(0), resources))!;
+        const root = forest.children[0] as Group, mesh = root.children[0] as Mesh;
+        const material = mesh.material as MeshStandardMaterial;
+        expect(material).not.toBe(source);
+        expect(material.normalMap).toBe(normalMap);
+        expect(material.roughnessMap).toBe(roughnessMap);
+        expect(material.normalScale.toArray()).toEqual([.8, .6]);
+        expect(material.roughness).toBe(.73);
+        expect(material.alphaTest).toBe(.42);
+        expect(material.color.r).toBeCloseTo(.45);
+        expect(source.color.r).toBeCloseTo(.3);
+        const metadata = getWorldChunkMetadata(root)!;
+        for (const lod of [0, 1, 2] as const) { forest.activateChunk(metadata, lod, [root]); expect(mesh.material).toBe(material); }
+        const textureDisposed = vi.fn(); normalMap.addEventListener("dispose", textureDisposed);
+        forest.dispose(); resources.dispose();
+        expect(release).toHaveBeenCalledTimes(3);
+        expect(textureDisposed).not.toHaveBeenCalled(); // The model leases own source textures.
+        source.dispose(); geometry.dispose(); normalMap.dispose(); roughnessMap.dispose();
+    });
+
     test("prepares each tree model once and reuses cached LOD transforms", async () => {
         const map = mapWithVegetation();
         const surface = createWorldSurfaceView({
@@ -487,7 +523,7 @@ describe("streamed render resource sharing", () => {
         const leftRoot = left.children[0] as Group;
         const rightRoot = right.children[0] as Group;
         expect((leftRoot.children[0] as Mesh).geometry).toBe((rightRoot.children[0] as Mesh).geometry);
-        expect((leftRoot.children[0] as Mesh).material).toBeInstanceOf(MeshLambertMaterial);
+        expect((leftRoot.children[0] as Mesh).material).toBeInstanceOf(MeshStandardMaterial);
         const metadata = getWorldChunkMetadata(leftRoot)!;
         const largerBounds = getWorldChunkMetadata(rightRoot)!.bounds;
         expect(largerBounds.maxY).toBeCloseTo(surface.maximumHeight + 3.6);

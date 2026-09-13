@@ -43,11 +43,13 @@ export function terrainAtlasCellIndices(atlas: TerrainAtlas): Record<Land, numbe
     return indices;
 }
 
-export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string, anisotropy: number, signal?: AbortSignal): { texture: DataArrayTexture; ready: Promise<void> } {
+export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string, anisotropy: number, signal?: AbortSignal, channel: "color" | "surface" = "color"): { texture: DataArrayTexture; ready: Promise<void> } {
     const { size, layers } = terrainArrayLayout(atlas);
+    const image = channel === "surface" ? atlas.surfaceBuffer : atlas.image;
+    if (!image) throw new TypeError("Terrain surface channel requires surfaceBuffer");
     const pixels = new Uint8Array(size * size * layers * 4);
     const texture = new DataArrayTexture(pixels, size, size, layers);
-    texture.name = "terrain-material-layers";
+    texture.name = `terrain-${channel}-layers`;
     texture.generateMipmaps = true;
     texture.minFilter = LinearMipmapLinearFilter;
     texture.magFilter = LinearFilter;
@@ -66,8 +68,15 @@ export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string, an
     if (controller.signal.aborted) onAbort();
     const decode = async () => {
         controller.signal.throwIfAborted();
-        const response = await fetch(baseUrl + atlas.image, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Terrain atlas image load failed: ${atlas.image} (HTTP ${response.status})`);
+        const response = await fetch(baseUrl + image, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Terrain atlas image load failed: ${image} (HTTP ${response.status})`);
+        if (channel === "surface") {
+            const data = new Uint8Array(await response.arrayBuffer());
+            controller.signal.throwIfAborted();
+            if (data.length !== pixels.length) throw new RangeError("Terrain surface byte length does not match its descriptor");
+            pixels.set(data); texture.needsUpdate = true;
+            return;
+        }
         const source = await createImageBitmap(await response.blob());
         try {
             controller.signal.throwIfAborted();

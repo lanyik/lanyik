@@ -106,7 +106,7 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
         return { pools: layer.actors.enemies.map(pool => pool[0].count), effects: layer.effects.mesh.count, ward: layer.effects.ward.visible, mist: layer.mist.mesh.count,
             charge: layer.chargeWarnings.count, spells: layer.castWarnings.count, kinds: Array.from(runtime.renderState.effects.kind.slice(0, runtime.renderState.effects.count)) };
     });
-    expect(rendered.pools).toEqual([1, 1, 2, 2]);
+    expect(rendered.pools).toEqual([1, 1, 2, 1, 1]);
     expect(rendered.effects).toBeGreaterThan(60);
     expect(rendered.ward).toBe(true); expect(rendered.mist).toBe(3);
     expect(rendered.charge).toBe(1); expect(rendered.spells).toBe(2);

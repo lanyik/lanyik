@@ -17,7 +17,7 @@ test("cancelling a partially loaded model set disposes its decoded textures and 
     });
     let waiting = false;
     vi.stubGlobal("fetch", vi.fn(async (url: string, { signal }: { signal: AbortSignal }) => {
-        if (url.endsWith("Imp-normal.png")) {
+        if (url.endsWith("RiftSpider-normal.png")) {
             waiting = true;
             return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
         }

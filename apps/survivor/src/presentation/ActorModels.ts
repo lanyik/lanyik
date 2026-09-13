@@ -7,7 +7,7 @@ import { ACTOR_POSES, HERO_POSES, writeActorPose } from "./ActorPose";
 import { AssetLoader } from "./AssetLoader";
 import { GAME_CONFIG } from "../core/GameConfig";
 
-const NAMES = ["Ranger", "Puglin", "Imp", "Puglin_Brute", "Imp_Shaman"] as const;
+const NAMES = ["Ranger", "Puglin", "Puglin_Brute", "Imp_Shaman", "RiftSpider", "StoneSentinel"] as const;
 
 function disposeDecodedActor(gltf: Awaited<ReturnType<GLTFLoader["parseAsync"]>>): void {
     const geometries = new Set<BufferGeometry>(), materials = new Set<Material>();

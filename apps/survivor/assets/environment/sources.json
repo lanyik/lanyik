@@ -1,16 +1,5 @@
 [
   {
-    "file": "kenney-LICENSE.txt",
-    "bytes": 611,
-    "sha256": "cb96b75e3560ac78d7a53ce6f083f4cdb5c53faea6141b62d63458dcfe1e4b9d",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "License.txt"
-  },
-  {
     "file": "rocky_terrain_02_diff_1k.jpg",
     "bytes": 843188,
     "sha256": "d570c10b1d5302f4fde9e0e94f4cbab0d5e112fc3fe2b3b91c38a98bd3ddaf4b",
@@ -29,72 +18,6 @@
     "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_diff_1k.jpg"
   },
   {
-    "file": "tree_detailed.mtl",
-    "bytes": 179,
-    "sha256": "4037993d8d84f1c7528962076bcf796ba368801622874a2bf2960e70d8b8fc99",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_detailed.mtl"
-  },
-  {
-    "file": "tree_detailed.obj",
-    "bytes": 42001,
-    "sha256": "0a67913edf811aabb1c2f54b671c0626eb7c17e6818536484f34d4444030a9c7",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_detailed.obj"
-  },
-  {
-    "file": "tree_palmDetailedTall.mtl",
-    "bytes": 147,
-    "sha256": "2f754b719f8d7902d7940fe5f5216fe24cfaf0f021ce3533cace85cee7d0ce44",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_palmDetailedTall.mtl"
-  },
-  {
-    "file": "tree_palmDetailedTall.obj",
-    "bytes": 27254,
-    "sha256": "ad249552e6802278c61a1101b9331a8a10ef7ad26d083e9f7681d81ed312f7e5",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_palmDetailedTall.obj"
-  },
-  {
-    "file": "tree_pineTallA_detailed.mtl",
-    "bytes": 144,
-    "sha256": "933a40d74e752aa7baf489cd76a1ca36c7fffe95f2c16410772c715c4e102ec6",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_pineTallA_detailed.mtl"
-  },
-  {
-    "file": "tree_pineTallA_detailed.obj",
-    "bytes": 12295,
-    "sha256": "c92abb1eaf23ac94a09ee5f5f9a1adfc183c561c8c76ae3435ac2bbdf254070e",
-    "source": "https://kenney.nl/assets/nature-kit",
-    "author": "Kenney",
-    "license": "CC0-1.0",
-    "archiveUrl": "https://kenney.nl/media/pages/assets/nature-kit/37ac38a37b-1677698939/kenney_nature-kit.zip",
-    "archiveSha256": "fa7974a0d342bfe63c38664ba9f8ec1a4aab8ea25f099bdc56870e33588c4d9d",
-    "archivePath": "Models/OBJ format/tree_pineTallA_detailed.obj"
-  },
-  {
     "file": "forest_ground_04_diff_1k.jpg",
     "bytes": 1113899,
     "sha256": "50a4dda30875020c64385261aa7e00e2155b592302fa6794165f58fae73cbd2c",
@@ -102,5 +25,198 @@
     "author": "Rob Tuytel / Rico Cilliers / Poly Haven",
     "license": "CC0-1.0",
     "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_diff_1k.jpg"
+  },
+  {
+    "file": "ez-tree-LICENSE.txt",
+    "bytes": 1094,
+    "sha256": "dfcc723b09e99427663fb35ad5a86a39667255d3d6ea35a1efe0d8235d24cb40",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/LICENSE",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "texture-attribution.md",
+    "bytes": 1402,
+    "sha256": "3f17468025e37e51b22533c48fb7a9a893ddf115dd6a837315afc68148282ce2",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/LICENSE.md",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "oak-leaves.png",
+    "bytes": 238115,
+    "sha256": "24451223cf396d22910a4932b8bb996a7274e63d81e24128c96a430ab67822b1",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/leaves/oak.png",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "pine-leaves.png",
+    "bytes": 303684,
+    "sha256": "88be36a2387554ac4b7c7d1549eae454a37ad896e8e33a7d6ae5956bd169ab08",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/leaves/pine.png",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "ash-leaves.png",
+    "bytes": 181423,
+    "sha256": "5ec987db3829a839856c32c79b18a33a78f209e911cad55c65abfb77f30e2d29",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/leaves/ash.png",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "bark001-Color.jpg",
+    "bytes": 831490,
+    "sha256": "2a7e8c742aa0110057d7a3ff0e8ec193c26ef23b77bc778fb9258c0e41b29474",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_Color.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "bark001-NormalGL.jpg",
+    "bytes": 1270807,
+    "sha256": "d7a275aa573a701d8814d7378abd8ea227f651ae6da33f8c57a6b862419e621e",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_NormalGL.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "bark001-Roughness.jpg",
+    "bytes": 397062,
+    "sha256": "2c0829e7a04b78234357ac6eb93173667fab9191c4340343ce88dddfcca1e6fd",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_Roughness.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "bark014-Color.jpg",
+    "bytes": 1673314,
+    "sha256": "da297aff93460d294a6a7b2976fbf1029de27127a66ba56a3cf0ef21ac77c493",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark014_1K-JPG/Bark014_1K-JPG_Color.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "bark014-NormalGL.jpg",
+    "bytes": 1739655,
+    "sha256": "04c449835e79c8829190ea07af41efec46655e347da4048c49b3b0f0d8538a2e",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark014_1K-JPG/Bark014_1K-JPG_NormalGL.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "bark014-Roughness.jpg",
+    "bytes": 802004,
+    "sha256": "a7e174d0e65de45a397fecf23d0a62a228bf3589fcf79eb0428b231db5e26a05",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark014_1K-JPG/Bark014_1K-JPG_Roughness.jpg",
+    "author": "ambientCG",
+    "license": "CC0-1.0"
+  },
+  {
+    "file": "oak_medium.json",
+    "bytes": 1517,
+    "sha256": "9f453d122c733b58a3f5d57e152e3dc025528074d1a563ffb642f3756450a174",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/lib/presets/oak_medium.json",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "pine_medium.json",
+    "bytes": 1504,
+    "sha256": "f5273e48b006b93e6a93307ddd92134936481df54ce0d97ae936d79317daa435",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/lib/presets/pine_medium.json",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "ash_medium.json",
+    "bytes": 1510,
+    "sha256": "9c469ca75282a219eea2ee34bd7b7b8daed4df2d1c3ad1e62596e312ceff1218",
+    "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/lib/presets/ash_medium.json",
+    "author": "Daniel Greenheck",
+    "license": "MIT"
+  },
+  {
+    "file": "forest_ground_04_nor_gl_1k.jpg",
+    "bytes": 1326812,
+    "sha256": "9c3a0200e02ce40edffbbf9f5f623ef08ea9b1b7812b556182ec978f88887151",
+    "source": "https://polyhaven.com/a/forest_ground_04",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_nor_gl_1k.jpg"
+  },
+  {
+    "file": "forest_ground_04_rough_1k.jpg",
+    "bytes": 627507,
+    "sha256": "89d4d50395eb92824a64132c4bc8a5a09009071e0b325ab66dc3104c7a3090ed",
+    "source": "https://polyhaven.com/a/forest_ground_04",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_rough_1k.jpg"
+  },
+  {
+    "file": "forest_ground_04_ao_1k.jpg",
+    "bytes": 831864,
+    "sha256": "d948c7578a122fdb592d9fda5de01746a9f567e0f2981bc7f89d3358422d0ad1",
+    "source": "https://polyhaven.com/a/forest_ground_04",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_ao_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_nor_gl_1k.jpg",
+    "bytes": 1059194,
+    "sha256": "a6556e1220c6e6c822e68ceeb9589719e4db8c87340199657cc705fea6ecf391",
+    "source": "https://polyhaven.com/a/rocky_terrain",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_nor_gl_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_rough_1k.jpg",
+    "bytes": 439748,
+    "sha256": "b37dfff29fff10a219bfe73886940625df63b345289ea6b71ec5f6ddadc8adcb",
+    "source": "https://polyhaven.com/a/rocky_terrain",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_rough_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_ao_1k.jpg",
+    "bytes": 585716,
+    "sha256": "dfa28db589585f799d5904adda6ba394bf998f54cb8be1eef2a822e589cd7e1a",
+    "source": "https://polyhaven.com/a/rocky_terrain",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain/rocky_terrain_ao_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_02_nor_gl_1k.jpg",
+    "bytes": 993692,
+    "sha256": "f4f9d9671c660f4e509e96d5da3091887dfd557e1353e313fa2d1dc789499ffd",
+    "source": "https://polyhaven.com/a/rocky_terrain_02",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_nor_gl_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_02_rough_1k.jpg",
+    "bytes": 437094,
+    "sha256": "8652ee05de206888eb77f84df7c8080f6ffef27afadb7917127726570b66c45d",
+    "source": "https://polyhaven.com/a/rocky_terrain_02",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_rough_1k.jpg"
+  },
+  {
+    "file": "rocky_terrain_02_ao_1k.jpg",
+    "bytes": 442891,
+    "sha256": "2535ae5c736915751aa957aa80bcda719e9b882f900e891584be5d1eab18c4e2",
+    "source": "https://polyhaven.com/a/rocky_terrain_02",
+    "author": "Poly Haven",
+    "license": "CC0-1.0",
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rocky_terrain_02/rocky_terrain_02_ao_1k.jpg"
   }
 ]

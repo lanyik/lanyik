@@ -9,7 +9,7 @@ export const ENEMY_HIT_RULES = Object.freeze({
 });
 
 export interface EnemyDefinition {
-    readonly name: string; readonly model: 0 | 1 | 2 | 3; readonly tint: string; readonly ranged: boolean;
+    readonly name: string; readonly model: 0 | 1 | 2 | 3 | 4; readonly tint: string; readonly ranged: boolean;
     readonly health: number;
     readonly speed: number;
     readonly damage: number;
@@ -28,19 +28,19 @@ function enemy({ windup, recovery, cooldown, ...definition }: EnemyConfig): Enem
     return Object.freeze({ ...definition,
         windupTicks: ticksForSeconds(windup), recoveryTicks: ticksForSeconds(recovery), cooldownTicks: ticksForSeconds(cooldown) });
 }
-/** Gameplay archetypes share four baked mesh pools; no extra per-archetype GPU allocation. */
+/** Six behavior archetypes select fixed baked mesh pools. */
 export const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
     enemy({ name: "地精仆从", model: 0, tint: "#ffffff", health: 22, speed: 1.18, damage: 7,
         radius: .3, experience: 6, reach: .45, ranged: false, windup: .36, recovery: .64, cooldown: .15 }),
-    enemy({ name: "小恶魔斥候", model: 1, tint: "#ffffff", health: 17, speed: 1.72, damage: 6,
+    enemy({ name: "裂隙蛛兽", model: 3, tint: "#ffffff", health: 17, speed: 1.72, damage: 6,
         radius: .25, experience: 7, reach: .35, ranged: false, windup: .24, recovery: .46, cooldown: .7 }),
-    enemy({ name: "地精重卫", model: 2, tint: "#ffe1aa", health: 70, speed: .72, damage: 15,
+    enemy({ name: "裂岩守卫", model: 4, tint: "#ffffff", health: 70, speed: .72, damage: 15,
         radius: .46, experience: 16, reach: 1, ranged: false, windup: .8, recovery: 1, cooldown: .5 }),
-    enemy({ name: "小恶魔术士", model: 3, tint: "#ffffff", health: 44, speed: 1.34, damage: 11,
+    enemy({ name: "小恶魔术士", model: 2, tint: "#ffffff", health: 44, speed: 1.34, damage: 11,
         radius: .34, experience: 12, reach: 7, ranged: true, windup: .7, recovery: 1.3, cooldown: .6 }),
-    enemy({ name: "赤脊冲锋者", model: 2, tint: "#ff9370", health: 52, speed: 1.05, damage: 13,
+    enemy({ name: "赤脊冲锋者", model: 1, tint: "#ff9370", health: 52, speed: 1.05, damage: 13,
         radius: .4, experience: 14, reach: .55, ranged: false, windup: .5, recovery: .8, cooldown: .5 }),
-    enemy({ name: "幽光祭司", model: 3, tint: "#8bffbb", health: 38, speed: 1.12, damage: 7,
+    enemy({ name: "幽光祭司", model: 2, tint: "#8bffbb", health: 38, speed: 1.12, damage: 7,
         radius: .31, experience: 16, reach: 6, ranged: true, windup: .9, recovery: 1, cooldown: 1 })
 ]);
 export const ENEMY_SPECIAL = Object.freeze({

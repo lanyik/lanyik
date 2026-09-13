@@ -154,7 +154,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     float climateDrop = vBiomeWeights.z * 0.08 + vBiomeWeights.w * 0.12;
     float snowLine = 0.74 - climateDrop + (materialPattern.z - 0.5) * 0.18;
     float snowT = smoothstep(snowLine, snowLine + 0.17, vLandform.x);
-    texColor.rgb = mix(texColor.rgb, vec3(0.93, 0.95, 0.98), snowT * 0.78);
+    texColor.rgb = applySnowMaterial(texColor.rgb, snowT);
 
     float coast = straightCoastField();
     if (coast > 0.0) {
@@ -184,10 +184,14 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
     }
 
     vec3 normal = normalize(vNormal);
-    float lambertian = max(dot(normalize(lightDir), normal), 0.0);
+    float lambertian = max(dot(normalize(normalMatrix * lightDir), normal), 0.0);
     vec3 color = landformDebugMode > 0.5
         ? landformDebugColor() * (0.72 + lambertian * 0.28)
+#ifdef TERRAIN_SURFACE_MAP
+        : texColor.rgb;
+#else
         : texColor.rgb * (0.55 + 0.55 * lambertian);
+#endif
     if (vFogState < 1.5) color *= fogDarkenFactor;
     terrainColor = vec4(color, 1.0);
 

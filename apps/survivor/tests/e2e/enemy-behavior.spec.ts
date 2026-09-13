@@ -34,7 +34,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     const windup = await page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { view: { layer: {
             actors: { enemies: InstancedMesh[][] }; castWarnings: InstancedMesh } } };
-        const mesh = runtime.view.layer.actors.enemies[3][0];
+        const mesh = runtime.view.layer.actors.enemies.flat().find(mesh => mesh.name === "Imp_Shaman")!;
         return { weights: Array.from((mesh.morphTexture!.image.data as Float32Array).slice(1, 17)),
             frames: mesh.geometry.morphAttributes.position?.length, warnings: runtime.view.layer.castWarnings.count };
     });
@@ -53,7 +53,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
         const layer = runtime.view.layer;
         return { warnings: layer.castWarnings.count, bolts: layer.projectiles.count,
             color: Array.from(layer.projectiles.instanceColor!.array.slice(0, 3)),
-            weights: Array.from((layer.actors.enemies[3][0].morphTexture!.image.data as Float32Array).slice(1, 17)) };
+            weights: Array.from((layer.actors.enemies.flat().find(mesh => mesh.name === "Imp_Shaman")!.morphTexture!.image.data as Float32Array).slice(1, 17)) };
     });
     expect(release.warnings).toBe(0);
     expect(release.bolts).toBe(1);
@@ -89,7 +89,11 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     expect(melee.radius).toBeCloseTo(melee.reach);
     await page.screenshot({ path: testInfo.outputPath("melee-windup.png") });
     const manifest = await (await page.request.get("/actors/manifest.json")).json();
-    expect(manifest.actors.every((actor: { idle: string; idleCycle: number }) => actor.idle === "Idle_Loop" && actor.idleCycle === 2.5)).toBe(true);
+    expect(manifest.actors.filter((actor: { name: string }) => !["RiftSpider", "StoneSentinel"].includes(actor.name))
+        .every((actor: { idle: string; idleCycle: number }) => actor.idle === "Idle_Loop" && actor.idleCycle === 2.5)).toBe(true);
+    for (const name of ["RiftSpider", "StoneSentinel"]) {
+        expect(manifest.actors.find((actor: { name: string }) => actor.name === name)).toMatchObject({ idle: "Breathing", idleCycle: 3, frames: 20 });
+    }
     await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const fixture = simulation as unknown as { entities: CombatWorld; world: RegionalWorld };
@@ -101,7 +105,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     });
     const idleWeights = () => page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { view: { layer: { actors: { enemies: InstancedMesh[][] } } } };
-        return Array.from((runtime.view.layer.actors.enemies[3][0].morphTexture!.image.data as Float32Array).slice(1, 21));
+        return Array.from((runtime.view.layer.actors.enemies.flat().find(mesh => mesh.name === "Imp_Shaman")!.morphTexture!.image.data as Float32Array).slice(1, 21));
     });
     await advanceCombat(page, 1);
     const idle = await idleWeights();

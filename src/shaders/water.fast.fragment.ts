@@ -16,6 +16,7 @@ uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
 uniform vec3 lightDir;
+uniform mat3 normalMatrix;
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
 
@@ -37,7 +38,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
     vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
     color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
-    float lambertian = max(dot(normalize(lightDir), normalize(vNormal)), 0.0);
+    float lambertian = max(dot(normalize(normalMatrix * lightDir), normalize(vNormal)), 0.0);
     color *= 0.55 + 0.55 * lambertian;
     if (vFogState < 1.5) color *= fogDarkenFactor;
     waterColor = vec4(color, 1.0);

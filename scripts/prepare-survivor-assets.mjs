@@ -6,6 +6,7 @@ import { sourceReader } from "./lib/actor-source.mjs";
 import { prepareSurvivorEffects } from "./lib/survivor-effects.mjs";
 import { prepareSurvivorLoot } from "./lib/survivor-loot.mjs";
 import { prepareSurvivorEnvironment } from "./lib/survivor-environment.mjs";
+import { prepareSurvivorCreatures } from "./lib/survivor-creatures.mjs";
 
 const root = await realpath(fileURLToPath(new URL("../", import.meta.url)));
 const expectedApplication = resolve(root, "apps/survivor");
@@ -23,6 +24,7 @@ await mkdir(output, { recursive: true });
 await cp(resolve(root, "public/textures"), resolve(output, "textures"), { recursive: true });
 await prepareSurvivorEnvironment(resolve(application, "assets/environment"), output, root);
 await prepareSurvivorActors(resolve(application, "assets/actors"), resolve(output, "actors"));
+await prepareSurvivorCreatures(resolve(application, "assets/environment"), resolve(output, "actors"));
 const readActor = await sourceReader(resolve(application, "assets/actors"));
 for (const file of ["outfits-LICENSE.txt", "base-characters-LICENSE.txt", "animations-LICENSE.txt", "bestiary-LICENSE.txt"]) {
     await writeFile(resolve(output, "actors", file), await readActor(file));

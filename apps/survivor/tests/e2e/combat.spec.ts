@@ -17,8 +17,8 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     const application = page.locator(".survivor");
     await expect(application).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
-    expect(loadedActors.size).toBe(5);
-    expect(loadedAtlases.size).toBe(20);
+    expect(loadedActors.size).toBe(6);
+    expect(loadedAtlases.size).toBe(24);
     const worldBounds = await page.locator("#survivor-world").boundingBox();
     expect(worldBounds?.width).toBe(page.viewportSize()!.width);
     expect(worldBounds?.height).toBe(page.viewportSize()!.height);
@@ -45,7 +45,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
         return { weights: actors.hero.children[0].morphTargetInfluences, primitives: actors.enemies.map(pool => pool.length) };
     });
     expect(pose.weights.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1);
-    expect(pose.primitives).toEqual([1, 1, 1, 1]);
+    expect(pose.primitives).toEqual([1, 1, 1, 1, 1]);
     await page.keyboard.up("KeyW");
     await page.keyboard.press("KeyP");
     await expect(application).toHaveAttribute("data-paused", "true");
@@ -156,7 +156,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(errors).toEqual([]);
 });
 
-for (const file of ["actors/Imp.glb", "actors/Imp-normal.png", "effects/skills.png"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
+for (const file of ["actors/RiftSpider.glb", "actors/RiftSpider-normal.png", "effects/skills.png"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
     const model = `**/${file}`;
     await page.route(model, route => route.fulfill({ status: 503, body: "actor unavailable" }));
     await page.goto("/", { waitUntil: "domcontentloaded" });

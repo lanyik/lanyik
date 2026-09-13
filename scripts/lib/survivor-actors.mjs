@@ -11,7 +11,6 @@ const IDLE_FRAMES = 4;
 const ACTORS = [
     { name: "Ranger", model: "ranger/Male_Ranger.gltf", height: 1.6, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", head: true },
     { name: "Puglin", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", attack: "Punch_Cross", color: "bestiary/T_Puglin_BaseColor_2.png" },
-    { name: "Imp", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Punch_Jab", omit: ["Imp_Mace", "Imp_Chains"] },
     { name: "Puglin_Brute", model: "bestiary/Puglin.glb", height: 1, idle: "Idle_Loop", walk: "Walk_Loop", attack: "Sword_Attack" },
     { name: "Imp_Shaman", model: "bestiary/Imp.glb", height: 1.25, idle: "Idle_Loop", walk: "Jog_Fwd_Loop", attack: "Spell_Simple_Shoot", color: "bestiary/T_Imp_BaseColor_3.png", omit: ["Imp_Mace"] }
 ];

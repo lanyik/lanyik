@@ -22,6 +22,7 @@ import {
 } from "three";
 
 import { loadTerrainArrayTexture, terrainAtlasCellIndices } from "../rendering/TerrainArrayTexture";
+import { createSunDirection } from "../rendering/SunLight";
 import type { GroundProjection } from "../rendering/GroundProjection";
 
 import { MapInfo, TileInfo, Point } from "../interfaces";
@@ -64,6 +65,8 @@ import { WorldSurfaceView } from "../world/WorldSurfaceView";
 
 export interface TerrainAtlasCell { cellX: number, cellY: number }
 export interface TerrainAtlas {
+    /** Linear RGBA8 array: normal XY, roughness, ambient occlusion, bottom-up per layer. */
+    surfaceBuffer?: string;
     image: string;
     width: number;
     height: number;
@@ -308,6 +311,7 @@ export class TerrainMesh extends Group {
     private readonly ownsModelAssets: boolean;
     private fogTexture: Texture;
     private atlasTexture: Texture;
+    private surfaceTexture?: Texture;
     private map: MapInfo;
     private readonly atlasCellIndex: Record<Land, number>;
     private readonly terrainTextureWorldSize: Vector2;
@@ -341,7 +345,12 @@ export class TerrainMesh extends Group {
             this.fogTexture = this.loadFogTexture();
             const atlas = loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal);
             this.atlasTexture = atlas.texture;
-            this.ready = readiness = atlas.ready;
+            readiness = atlas.ready;
+            const surface = options.atlas.surfaceBuffer
+                ? loadTerrainArrayTexture(options.atlas, options.texturesBaseUrl, options.terrainTextureAnisotropy, options.signal, "surface")
+                : undefined;
+            this.surfaceTexture = surface?.texture;
+            this.ready = readiness = Promise.all([atlas.ready, surface?.ready]).then(() => undefined);
             this.waterShallow = new Color(options.waterColorShallow ?? LandColor[Land.coastal]);
             this.waterDeep = new Color(options.waterColorDeep ?? LandColor[Land.sea]);
 
@@ -542,6 +551,7 @@ export class TerrainMesh extends Group {
             groundProjectionChunkOffset: { value: new Vector2() },
             hexSize: { value: size },
             map: { value: this.atlasTexture },
+            surfaceMap: { value: this.surfaceTexture ?? null },
             sandAtlasIndex: { value: this.atlasCellIndex[Land.sand] },
             rockAtlasIndex: { value: this.atlasCellIndex[Land.mountain] },
             waterLevel: { value: -(this.options.waterDepth ?? size * 0.25) },
@@ -562,7 +572,7 @@ export class TerrainMesh extends Group {
             fogPhase: { value: new Vector2() },
             macroPhase: { value: new Vector2() },
             wavePhase: { value: new Vector4() },
-            lightDir: { value: { x: 0.4, y: 1.0, z: 0.3 } },
+            lightDir: { value: createSunDirection() },
             showGrid: { value: this.options.gridVisible === true ? 1.0 : 0.0 },
             gridColor: { value: new Color(this.options.gridColor ?? 0x000000) },
             gridWidth: { value: this.options.gridWidth ?? 0.04 },
@@ -649,6 +659,7 @@ export class TerrainMesh extends Group {
                 ...this.commonUniforms()
             },
             vertexShader: TERRAIN_VERTEX_SHADER,
+            defines: this.surfaceTexture ? { TERRAIN_SURFACE_MAP: 1 } : {},
             fragmentShader: this.options.shaderQuality === "fast"
                 ? TERRAIN_FAST_FRAGMENT_SHADER
                 : TERRAIN_FRAGMENT_SHADER
@@ -1588,6 +1599,7 @@ export class TerrainMesh extends Group {
         this.landMaterial?.dispose();
         this.waterMaterial?.dispose();
         this.atlasTexture?.dispose(); // shared by both materials - dispose once
+        this.surfaceTexture?.dispose();
         this.fogTexture?.dispose();
         for (const entry of this.cityFog.values()) {
             this.disposeCityResources(entry.materials, entry.sprite);

@@ -10,13 +10,13 @@ import {
     PerspectiveCamera,
     Scene,
     Texture,
-    Vector3,
     WebGLRenderer
 } from "three";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
 
 import { WebGlGpuTimer, WebGlGpuTimerStats } from "./WebGlGpuTimer";
 import type { GroundProjection } from "./GroundProjection";
+import { createSunDirection } from "./SunLight";
 
 export interface HexMapRendererHostOptions {
     canvas: HTMLCanvasElement;
@@ -30,13 +30,6 @@ export interface HexMapRendererHostOptions {
 }
 
 export type WebGlContextState = "ready" | "lost" | "restoring" | "disposed";
-
-const SUN_ELEVATION = 24 * Math.PI / 180;
-const SUN_AZIMUTH = 205 * Math.PI / 180;
-
-function createSunDirection(): Vector3 {
-    return new Vector3().setFromSphericalCoords(1, Math.PI / 2 - SUN_ELEVATION, SUN_AZIMUTH);
-}
 
 export interface WebGlContextStats {
     readonly state: WebGlContextState;

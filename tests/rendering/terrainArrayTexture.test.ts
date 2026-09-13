@@ -8,6 +8,35 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const atlas = { image: "terrain.png", width: 4, height: 4, cellSize: 4, cellSpacing: 1, textures: {} };
 
+test("surface data preserves low-alpha normal channels byte-for-byte without image decoding", async () => {
+    const data = Uint8Array.from([128, 217, 190, 0, 255, 128, 200, 1, 29, 138, 175, 32, 128, 128, 255, 255]);
+    const request = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => data.buffer });
+    vi.stubGlobal("fetch", request);
+    const result = loadTerrainArrayTexture({ ...atlas, surfaceBuffer: "surface.bin" }, "/", 8, undefined, "surface");
+    await result.ready;
+    expect(request.mock.calls[0][0]).toBe("/surface.bin");
+    expect(Array.from(result.texture.image.data!)).toEqual(Array.from(data));
+    expect(result.texture.colorSpace).toBe("");
+    result.texture.dispose();
+});
+
+test("malformed and cancelled surface buffers never upload", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) }));
+    const invalid = loadTerrainArrayTexture({ ...atlas, surfaceBuffer: "surface.bin" }, "/", 8, undefined, "surface");
+    await expect(invalid.ready).rejects.toThrow("byte length");
+    expect(invalid.texture.version).toBe(0);
+    invalid.texture.dispose();
+    const bytes = deferred<ArrayBuffer>();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, arrayBuffer: () => bytes.promise }));
+    const cancelled = loadTerrainArrayTexture({ ...atlas, surfaceBuffer: "surface.bin" }, "/", 8, undefined, "surface");
+    await Promise.resolve();
+    cancelled.texture.dispose();
+    await expect(cancelled.ready).rejects.toMatchObject({ name: "AbortError" });
+    bytes.resolve(new ArrayBuffer(16));
+    await Promise.resolve();
+    expect(cancelled.texture.version).toBe(0);
+});
+
 test("HTTP errors and invalid decoded dimensions reject readiness", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
     const failure = loadTerrainArrayTexture(atlas, "/", DEFAULT_HEX_MAP_OPTIONS.terrainTextureAnisotropy);

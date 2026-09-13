@@ -1,15 +1,11 @@
 import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Color, Float32BufferAttribute, Group, Mesh, MeshStandardMaterial, Vector3 } from "three";
-import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
-import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader.js";
+import { Box3, Group, Mesh, MeshStandardMaterial } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { FOREST_LOD_LEVELS, simplifyForestGeometry } from "./forest-lod-geometry.mjs";
+import { Tree } from "../vendor/ez-tree.mjs";
 import { sourceReader } from "./actor-source.mjs";
 import sharp from "sharp";
 
-// Binary GLTF export only needs this browser API; textures are baked offline.
 class BinaryFileReader {
     async readAsArrayBuffer(blob) {
         try { this.result = await blob.arrayBuffer(); this.onloadend?.(); }
@@ -17,76 +13,121 @@ class BinaryFileReader {
     }
 }
 
-async function treeGeometry(read, name, height) {
-    const materials = new MTLLoader().parse((await read(`${name}.mtl`)).toString("utf8"), "");
-    const tree = new OBJLoader().setMaterials(materials).parse((await read(`${name}.obj`)).toString("utf8"));
-    tree.updateMatrixWorld(true);
-    const parts = [], color = new Color();
-    tree.traverse(mesh => {
-        if (!mesh.isMesh) return;
-        const geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld), positions = geometry.getAttribute("position");
-        const colors = new Float32Array(positions.count * 3), sources = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        const groups = geometry.groups.length ? geometry.groups : [{ start: 0, count: positions.count, materialIndex: 0 }];
-        for (const group of groups) {
-            const material = sources[group.materialIndex];
-            // A restrained woodland palette retains the authored leaf/bark separation.
-            color.copy(material.color);
-            if (material.name.startsWith("leafs")) color.set("#52745c");
-            else if (material.name === "woodBark") color.set("#71533c");
-            for (let vertex = group.start; vertex < group.start + group.count; vertex++) color.toArray(colors, vertex * 3);
-        }
-        geometry.setAttribute("color", new Float32BufferAttribute(colors, 3)); geometry.deleteAttribute("uv"); geometry.clearGroups();
-        parts.push(geometry); mesh.geometry.dispose();
-        for (const material of sources) material.dispose();
-    });
-    const merged = mergeGeometries(parts), geometry = mergeVertices(merged);
-    for (const part of parts) part.dispose(); merged.dispose();
-    geometry.computeBoundingBox();
-    const center = geometry.boundingBox.getCenter(new Vector3()), scale = height / (geometry.boundingBox.max.y - geometry.boundingBox.min.y);
-    geometry.translate(-center.x, -geometry.boundingBox.min.y, -center.z).scale(scale, scale, scale);
-    return geometry;
+// All LODs use the near asset's materials. Middle/far GLBs have no texture
+// references, avoiding duplicate images and unused GPU textures in asset leases.
+function texturedTreeGlb(binary, bark, leaves) {
+    const source = Buffer.from(binary), jsonLength = source.readUInt32LE(12);
+    const gltf = JSON.parse(source.subarray(20, 20 + jsonLength).toString());
+    gltf.images = [bark + "-Color.jpg", bark + "-NormalGL.jpg", bark + "-orm.png", leaves + "-leaves.png"]
+        .map(uri => ({ uri: `../../../environment/${uri}` }));
+    gltf.samplers = [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }];
+    gltf.textures = gltf.images.map((_, source) => ({ source, sampler: 0 }));
+    const trunk = gltf.materials[0], foliage = gltf.materials[1];
+    trunk.pbrMetallicRoughness.baseColorTexture = { index: 0 };
+    trunk.normalTexture = { index: 1, scale: .8 };
+    trunk.pbrMetallicRoughness.metallicRoughnessTexture = { index: 2 };
+    foliage.pbrMetallicRoughness.baseColorTexture = { index: 3 };
+    foliage.alphaMode = "MASK"; foliage.alphaCutoff = .42; foliage.doubleSided = true;
+    const json = Buffer.from(JSON.stringify(gltf)), padded = Buffer.alloc(Math.ceil(json.length / 4) * 4, 32);
+    json.copy(padded);
+    const tail = source.subarray(20 + jsonLength), result = Buffer.alloc(20 + padded.length + tail.length);
+    source.copy(result, 0, 0, 20); result.writeUInt32LE(result.length, 8); result.writeUInt32LE(padded.length, 12);
+    padded.copy(result, 20); tail.copy(result, 20 + padded.length);
+    return result;
 }
 
-/** App-only environment assets, normalized to world units with one material per forest LOD. */
-export async function prepareSurvivorEnvironment(input, output, root) {
-    const read = await sourceReader(input), models = [
-        ["oak", "tree_detailed", 155], ["pinia", "tree_pineTallA_detailed", 185], ["palm", "tree_palmDetailedTall", 175]
+const TREE_LODS = [
+    { directory: "", detail: { sectionStride: 2, segmentFactor: .85, leafStride: 2, leafScale: 1.15 } },
+    { directory: "lod1", detail: { sectionStride: 3, segmentFactor: .6, leafStride: 4, leafScale: 1.4 } },
+    { directory: "lod2", detail: { sectionStride: 6, segmentFactor: .4, leafStride: 8, leafScale: 1.8, billboard: "single" } }
+];
+
+async function prepareTrees(read, output) {
+    const models = [
+        ["oak", "oak_medium", "oak", "bark001", 155, 0xdee4c3],
+        ["pinia", "pine_medium", "pine", "bark014", 185, 0xc8d8ca],
+        ["palm", "ash_medium", "ash", "bark001", 165, 0xe0d4af]
     ];
     globalThis.FileReader = BinaryFileReader;
-    for (const [species, source, height] of models) {
-        const original = await treeGeometry(read, source, height), material = new MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+    for (const [species, preset, leaves, bark, height, tint] of models) {
+        const tree = new Tree(); tree.options.copy(JSON.parse((await read(`${preset}.json`)).toString("utf8")));
+        const parts = TREE_LODS.map(level => tree.createGeometry(level.detail));
+        const bounds = new Box3();
+        for (const geometry of Object.values(parts[0])) { geometry.computeBoundingBox(); bounds.union(geometry.boundingBox); }
+        const scale = height / (bounds.max.y - bounds.min.y);
+        const materials = [new MeshStandardMaterial({ color: 0xb4aca0, roughness: 1 }), new MeshStandardMaterial({ color: tint, roughness: .9 })];
+        materials[0].name = "bark"; materials[1].name = "foliage";
+        materials[1].userData.forestFoliage = true;
         const metadata = { offset: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, forestAlbedoScale: 1,
             forestLods: { middle: `Assets/models/${species}/lod1`, far: `Assets/models/${species}/lod2` } };
         const triangles = [];
-        for (const level of [{ directory: "", name: "near" }, ...FOREST_LOD_LEVELS]) {
-            const geometry = level.name === "near" ? original.clone() : (await simplifyForestGeometry(original, level)).geometry;
-            const scene = new Group(), mesh = new Mesh(geometry, material); mesh.name = "tree"; scene.add(mesh);
-            const directory = resolve(output, "Assets/models", species, level.directory); await mkdir(directory, { recursive: true });
+        for (let lod = 0; lod < parts.length; lod++) {
+            const scene = new Group();
+            for (const [part, geometry] of Object.values(parts[lod]).entries()) {
+                // The generator's root is XZ=0, matching the navigation trunk.
+                // Centering the asymmetric canopy would move that trunk off its collider.
+                geometry.translate(0, -bounds.min.y, 0).scale(scale, scale, scale);
+                const mesh = new Mesh(geometry, materials[part]); mesh.name = part === 0 ? "branches" : "leaves"; scene.add(mesh);
+            }
+            const directory = resolve(output, "Assets/models", species, TREE_LODS[lod].directory); await mkdir(directory, { recursive: true });
             const binary = await new GLTFExporter().parseAsync(scene, { binary: true });
-            await writeFile(resolve(directory, "model.glb"), Buffer.from(binary));
+            await writeFile(resolve(directory, "model.glb"), lod === 0 ? texturedTreeGlb(binary, bark, leaves) : Buffer.from(binary));
             await writeFile(resolve(directory, "info.json"), JSON.stringify(metadata));
-            triangles.push(geometry.index.count / 3); geometry.dispose();
+            triangles.push(Object.values(parts[lod]).reduce((sum, geometry) => sum + geometry.index.count / 3, 0));
+            for (const geometry of Object.values(parts[lod])) geometry.dispose();
         }
+        for (const material of materials) material.dispose();
         console.log(`${species}: height ${height}, LOD triangles ${triangles.join(" / ")}`);
-        original.dispose(); material.dispose();
     }
-    await read("kenney-LICENSE.txt");
-    await mkdir(resolve(output, "environment"), { recursive: true });
-    for (const file of ["kenney-LICENSE.txt", "sources.json"]) await cp(resolve(input, file), resolve(output, "environment", file));
+    const directory = resolve(output, "environment"); await mkdir(directory, { recursive: true });
+    for (const species of ["oak", "pine", "ash"]) await writeFile(resolve(directory, `${species}-leaves.png`), await read(`${species}-leaves.png`));
+    for (const bark of ["bark001", "bark014"]) {
+        for (const channel of ["Color", "NormalGL"]) await writeFile(resolve(directory, `${bark}-${channel}.jpg`), await read(`${bark}-${channel}.jpg`));
+        const { data: rough, info } = await sharp(await read(`${bark}-Roughness.jpg`)).greyscale().raw().toBuffer({ resolveWithObject: true });
+        const orm = Buffer.alloc(rough.length * 3);
+        for (let i = 0; i < rough.length; i++) { orm[i * 3] = 255; orm[i * 3 + 1] = rough[i]; }
+        await sharp(orm, { raw: { width: info.width, height: info.height, channels: 3 } }).png().toFile(resolve(directory, `${bark}-orm.png`));
+    }
+}
 
+/** Fixed offline inputs; runtime receives instanced PBR trees and two terrain arrays. */
+export async function prepareSurvivorEnvironment(input, output, root) {
+    const read = await sourceReader(input);
+    await prepareTrees(read, output);
+    for (const file of ["ez-tree-LICENSE.txt", "texture-attribution.md"]) await writeFile(resolve(output, "environment", file), await read(file));
+    await cp(resolve(input, "sources.json"), resolve(output, "environment/sources.json"));
     const atlas = JSON.parse(await readFile(resolve(root, "public/textures/land-atlas.json"), "utf8"));
     const atlasPath = resolve(root, "public/textures/terrain.png"), cell = 512, patches = [];
+    // Pack the eight semantic cells, removing the source atlas's eight holes.
+    // Two 8-layer arrays now cost the same GPU memory as the old 16-layer color array.
+    const names = Object.keys(atlas.textures);
+    const textures = Object.fromEntries(names.map((name, index) => [name, { cellX: index % 4, cellY: Math.floor(index / 4) }]));
+    const surfacePixels = Buffer.alloc(504 * 504 * names.length * 4);
+    const scanned = { mountain: "rocky_terrain", _plains: "rocky_terrain_02", land: "forest_ground_04" };
     for (const [name, position] of Object.entries(atlas.textures)) {
-        let image;
-        if (name === "mountain" || name === "_plains") {
-            image = sharp(await read(name === "mountain" ? "rocky_terrain_diff_1k.jpg" : "rocky_terrain_02_diff_1k.jpg")).resize(cell, cell).modulate({ saturation: .6, brightness: .85 });
-        } else if (name === "land") {
-            image = sharp(await read("forest_ground_04_diff_1k.jpg")).resize(cell, cell).modulate({ saturation: .65, brightness: .9 });
-        } else {
-            image = sharp(atlasPath).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
+        const source = scanned[name];
+        const image = source
+            ? sharp(await read(`${source}_diff_1k.jpg`)).resize(cell, cell).modulate({ saturation: .7, brightness: .95 })
+            : sharp(atlasPath).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
+        const location = { left: textures[name].cellX * cell, top: textures[name].cellY * cell };
+        patches.push({ input: await image.png().toBuffer(), ...location });
+        // RG normal XY, B perceptual roughness, A occlusion. Unscanned entries
+        // explicitly describe a smooth, matte, unoccluded surface.
+        const packed = Buffer.alloc(cell * cell * 4);
+        const normal = source ? await sharp(await read(`${source}_nor_gl_1k.jpg`)).resize(cell, cell).removeAlpha().raw().toBuffer() : null;
+        const rough = source ? await sharp(await read(`${source}_rough_1k.jpg`)).resize(cell, cell).greyscale().raw().toBuffer() : null;
+        const ao = source ? await sharp(await read(`${source}_ao_1k.jpg`)).resize(cell, cell).greyscale().raw().toBuffer() : null;
+        for (let i = 0; i < cell * cell; i++) {
+            packed[i * 4] = normal ? normal[i * 3] : 128; packed[i * 4 + 1] = normal ? normal[i * 3 + 1] : 128;
+            packed[i * 4 + 2] = rough ? rough[i] : 255; packed[i * 4 + 3] = ao ? ao[i] : 255;
         }
-        patches.push({ input: await image.png().toBuffer(), left: position.cellX * cell, top: position.cellY * cell });
+        const layer = textures[name].cellY * 4 + textures[name].cellX;
+        for (let row = 0; row < 504; row++) {
+            const start = ((4 + 503 - row) * cell + 4) * 4;
+            packed.copy(surfacePixels, (layer * 504 * 504 + row * 504) * 4, start, start + 504 * 4);
+        }
     }
-    await sharp({ create: { width: 2048, height: 2048, channels: 4, background: "#000" } }).composite(patches).png().toFile(resolve(output, "textures/terrain.png"));
-    await writeFile(resolve(output, "textures/land-atlas.json"), JSON.stringify({ ...atlas, width: 2048, height: 2048, cellSize: cell, cellSpacing: 4 }));
+    await sharp({ create: { width: 2048, height: 1024, channels: 4, background: "#000" } }).composite(patches).png().toFile(resolve(output, "textures/terrain.png"));
+    await writeFile(resolve(output, "textures/terrain-surface.bin"), surfacePixels);
+    await writeFile(resolve(output, "textures/land-atlas.json"), JSON.stringify({ ...atlas, textures, surfaceBuffer: "terrain-surface.bin", width: 2048, height: 1024, cellSize: cell, cellSpacing: 4 }));
 }

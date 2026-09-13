@@ -88,6 +88,7 @@ out vec3 vNeighborsPriorityB;
 out vec3 vEdgeFactorsA; // SE, S, SW
 out vec3 vEdgeFactorsB; // NW, N, NE
 out vec3 vNormal;
+out vec3 vViewPosition;
 out float vSurfaceSlope;
 out float vBeachT; // 0 = normal land color, 1 = fully sand (see terrain.fragment.ts)
 out float vFogState;
@@ -413,6 +414,7 @@ void main() {
     vec3 pos = vec3(tileOffset.x + position.x, position.y + sinkY + raiseY, tileOffset.y + position.z);
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mvPosition;
+    vViewPosition = -mvPosition.xyz;
     vHorizonFogDepth = -mvPosition.z;
 
     // analytic slope of sinkY w.r.t. local (x,z), via the chain rule through

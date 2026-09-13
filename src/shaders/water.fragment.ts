@@ -32,6 +32,7 @@ uniform float gridWidth;
 uniform float gridOpacity;
 
 uniform vec3 lightDir;
+uniform mat3 normalMatrix;
 uniform vec3 chunkCameraPosition;
 
 uniform vec3 waterColorDeep;
@@ -228,8 +229,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     }
 
     vec3 normal = normalize(vNormal);
-    vec3 light = normalize(lightDir);
-    vec3 viewDir = normalize(chunkCameraPosition - vWorldPos);
+    vec3 light = normalize(normalMatrix * lightDir);
+    vec3 viewDir = normalize(normalMatrix * (chunkCameraPosition - vWorldPos));
 
     float ndotl = max(dot(normal, light), 0.0);
     vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
