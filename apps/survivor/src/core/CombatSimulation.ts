@@ -146,7 +146,7 @@ export class CombatSimulation {
         this.spiritRealm = validateSpiritRealm(spiritRealm);
         for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.spiritRealm.attributes[id];
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
-        this.world = new RegionalWorld(seed, start);
+        this.world = new RegionalWorld(seed, start, terrain);
         this.entities = new CombatWorld(start.x, start.z, terrain);
         this.behavior = new EnemyBehavior(this.entities, this.world);
         this.skills = new SkillSystem(this.entities);
@@ -163,6 +163,7 @@ export class CombatSimulation {
         this.health = this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.mana = this.stats.maxMana;
         this.world.synchronize(start.x, start.z);
+        this.world.updateAccess(start.x, start.z);
         this.spawnEnemies();
         this.refreshChests();
     }
@@ -198,7 +199,8 @@ export class CombatSimulation {
         for (const slot of enemies) this.entities.remove(slot);
         for (const chunk of this.world.chunks.values()) chunk.spawned.fill(0);
         this.currentRegion = this.world.regionAt(p.x, p.z); this.nearbyRegions = this.world.nearbyRegions(this.currentRegion);
-        this.world.synchronize(p.x, p.z); this.spawnEnemies(); this.refreshChests(); this.markChanged();
+        this.world.synchronize(p.x, p.z); this.world.resetAccess(); this.world.updateAccess(p.x, p.z);
+        this.spawnEnemies(); this.refreshChests(); this.markChanged();
     }
     public dispose(): void { this.closed = true; this.entities.terrain.dispose(); }
 
@@ -223,7 +225,8 @@ export class CombatSimulation {
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
         if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
-        if (shifted) { this.reconcileRegions(); this.spawnEnemies(); this.refreshChests(); }
+        if (shifted) this.reconcileRegions();
+        if (this.world.updateAccess(this.playerX, this.playerZ)) { this.spawnEnemies(); this.refreshChests(); }
         this.updateCurrentRegion();
         this.fireWeapon();
         if (executor) return this.finishAsyncStep(executor);
@@ -545,12 +548,11 @@ export class CombatSimulation {
         for (const home of this.world.chunks.values()) {
             for (let slot = 0; slot < home.spawns.length; slot += 1) {
                 if (home.spawned[slot]) continue;
-                home.spawned[slot] = 1;
                 const spawn = home.spawns[slot];
+                if (!home.navigation.isReached(spawn.x, spawn.z)) continue;
                 if (Math.hypot(spawn.x - this.playerX, spawn.z - this.playerZ) < 3) continue;
-                const radius = ENEMY_DEFINITIONS[spawn.kind].radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
-                if (!this.entities.terrain.isClear(spawn.x, spawn.z, radius + .08)) continue;
                 this.entities.spawnEnemy(spawn, home);
+                home.spawned[slot] = 1;
             }
         }
     }
@@ -592,7 +594,7 @@ export class CombatSimulation {
         this.chests.count = 0;
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
-            if (!chest || chunk.chestOpened || !this.entities.terrain.isClear(chest.x, chest.z, .45)) continue;
+            if (!chest || chunk.chestOpened || !chunk.navigation.isReached(chest.x, chest.z)) continue;
             const index = this.chests.count++;
             this.chests.x[index] = chest.x;
             this.chests.z[index] = chest.z;
@@ -604,8 +606,10 @@ export class CombatSimulation {
         chestLoop: for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
             if (!chest || chunk.band !== "near" || chunk.chestOpened) continue;
-            if (!this.entities.terrain.isClear(chest.x, chest.z, .45)) continue;
+            if (!chunk.navigation.isReached(chest.x, chest.z)) continue;
             if (Math.hypot(chest.x - this.playerX, chest.z - this.playerZ) > 0.95) continue;
+            const approach = this.entities.terrain.move(this.playerX, this.playerZ, chest.x - this.playerX, chest.z - this.playerZ, GAME_CONFIG.combat.playerRadius, false);
+            if (Math.hypot(approach.x - chest.x, approach.z - chest.z) > 1e-5) continue;
             const rules = CHEST_RULES[chest.tier];
             // Stage all category/stack changes before consuming chest randomness or IDs.
             // A blocked chest must not consume random state or item IDs.
@@ -654,7 +658,8 @@ export class CombatSimulation {
             const dx = this.entities.position.x[index] - this.playerX;
             const dz = this.entities.position.z[index] - this.playerZ;
             const distance = dx * dx + dz * dz;
-            if (distance < nearest || (distance === nearest && (target < 0 || this.entities.world.ids[index] < this.entities.world.ids[target]))) {
+            if ((distance < nearest || (distance === nearest && (target < 0 || this.entities.world.ids[index] < this.entities.world.ids[target])))
+                && this.entities.canSee(this.entities.player, index, .11)) {
                 nearest = distance;
                 target = index;
             }
@@ -668,14 +673,16 @@ export class CombatSimulation {
         const directionZ = distance > 0 ? (this.entities.position.z[target] - this.playerZ) / distance : 1;
         const { critical, damage } = rollAttack(this.stats, this.random);
         const projectileSpeed = 10.5;
+        const launchOffset = Math.min(.38, distance * .5);
         if (this.entities.spawnProjectile(this.entities.world.ids[this.entities.player], Faction.Player,
-            this.playerX + directionX * 0.38,
-            this.playerZ + directionZ * 0.38,
+            this.playerX + directionX * launchOffset,
+            this.playerZ + directionZ * launchOffset,
             directionX * projectileSpeed,
             directionZ * projectileSpeed,
             damage,
             this.stats.attackRange / projectileSpeed + 0.25,
-            critical
+            { critical, height: .8, groundX: this.playerX, groundZ: this.playerZ,
+                velocityY: distance > 0 ? (this.entities.aimHeight(target) - this.entities.aimHeight(this.entities.player)) * projectileSpeed / (distance - launchOffset) : 0 }
         )) this.attackCooldown += 1 / this.stats.attackRate;
     }
 

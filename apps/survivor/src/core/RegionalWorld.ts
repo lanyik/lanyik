@@ -1,7 +1,9 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
-import { EnemyKind } from "./EnemyDefinitions";
+import { ENEMY_DEFINITIONS, EnemyKind } from "./EnemyDefinitions";
 import { WORLD_VIEW } from "./WorldView";
+import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
+import { ENCOUNTER_CELL, ENCOUNTER_EDGE, EncounterNavigation } from "./EncounterNavigation";
 
 export const COMBAT_CHUNK_SIZE = WORLD_VIEW.chunkSize;
 const COMBAT_CHUNK_HALF_SIZE = COMBAT_CHUNK_SIZE / 2;
@@ -69,6 +71,7 @@ export interface RegionalChunk {
     readonly z: number;
     readonly spawns: readonly RegionalSpawn[];
     readonly spawned: Uint8Array;
+    readonly navigation: EncounterNavigation;
     readonly chest: RegionalChest | undefined;
     chestOpened: boolean;
     resident: boolean;
@@ -84,8 +87,11 @@ export class RegionalWorld {
     public readonly chunks = new Map<string, RegionalChunk>();
     private centerX = Infinity;
     private centerZ = Infinity;
+    private accessCell = "";
+    private topologyChanged = true;
 
-    constructor(private readonly seed: string | number, private readonly origin: { readonly x: number; readonly z: number }) {}
+    constructor(private readonly seed: string | number, private readonly origin: { readonly x: number; readonly z: number },
+        private readonly terrain: CombatTerrain = OPEN_TERRAIN) {}
     public chunkX(x: number): number { return this.origin.x - COMBAT_CHUNK_HALF_SIZE + x * COMBAT_CHUNK_SIZE; }
     public chunkZ(z: number): number { return this.origin.z - COMBAT_CHUNK_HALF_SIZE + z * COMBAT_CHUNK_SIZE; }
 
@@ -101,6 +107,7 @@ export class RegionalWorld {
         return current && current.x === rx && current.z === rz ? current : this.regionAtHex(rx, rz);
     }
     public regionAtHex(x: number, z: number): RegionInfo {
+        x = x === 0 ? 0 : x; z = z === 0 ? 0 : z;
         const random = new DeterministicRandom(`${this.seed}:region:${x},${z}`);
         const roll = random.next();
         const ring = hexDistance(x, z);
@@ -130,6 +137,7 @@ export class RegionalWorld {
         if (cx === this.centerX && cz === this.centerZ) return false;
         this.centerX = cx;
         this.centerZ = cz;
+        this.topologyChanged = true;
         for (const [key, chunk] of this.chunks) {
             chunk.band = this.residencyAt(this.chunkX(chunk.x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(chunk.z) + COMBAT_CHUNK_HALF_SIZE);
             if (chunk.band === "unloaded") { chunk.resident = false; this.chunks.delete(key); }
@@ -139,6 +147,48 @@ export class RegionalWorld {
                 if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
                 const key = `${cx + dx},${cz + dz}`;
                 if (!this.chunks.has(key)) this.chunks.set(key, this.createChunk(cx + dx, cz + dz));
+            }
+        }
+        return true;
+    }
+
+    public resetAccess(): void {
+        for (const chunk of this.chunks.values()) chunk.navigation.reached.fill(0);
+        this.topologyChanged = true; this.accessCell = "";
+    }
+
+    /** Propagate proven access through adjacent chunk portals. Locations never depend on the player's route. */
+    public updateAccess(x: number, z: number): boolean {
+        const cell = `${Math.floor((x - this.origin.x) / ENCOUNTER_CELL)},${Math.floor((z - this.origin.z) / ENCOUNTER_CELL)}`;
+        if (cell === this.accessCell && !this.topologyChanged) return false;
+        this.accessCell = cell;
+        const queue: { chunk: RegionalChunk; component: number }[] = [];
+        if (this.topologyChanged) for (const chunk of this.chunks.values()) {
+            for (let component = 1; component < chunk.navigation.reached.length; component++) {
+                if (chunk.navigation.reached[component]) queue.push({ chunk, component });
+            }
+        }
+        this.topologyChanged = false;
+        const current = this.chunks.get(`${Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE)},${Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE)}`);
+        if (current) {
+            const component = current.navigation.entry(x, z);
+            if (component && !current.navigation.reached[component]) { current.navigation.reached[component] = 1; queue.push({ chunk: current, component }); }
+        }
+        for (let head = 0; head < queue.length; head++) {
+            const { chunk, component } = queue[head];
+            for (const border of chunk.navigation.borders[component]) {
+                const cx = border % ENCOUNTER_EDGE, cz = Math.floor(border / ENCOUNTER_EDGE);
+                for (let direction = 0; direction < 4; direction++) {
+                    const dx = direction === 0 && cx === 0 ? -1 : direction === 1 && cx === ENCOUNTER_EDGE - 1 ? 1 : 0;
+                    const dz = direction === 2 && cz === 0 ? -1 : direction === 3 && cz === ENCOUNTER_EDGE - 1 ? 1 : 0;
+                    if (!dx && !dz) continue;
+                    const neighbor = this.chunks.get(`${chunk.x + dx},${chunk.z + dz}`);
+                    if (!neighbor) continue;
+                    const next = border - dx * (ENCOUNTER_EDGE - 1) - dz * (ENCOUNTER_EDGE - 1) * ENCOUNTER_EDGE;
+                    const label = neighbor.navigation.labels[next];
+                    if (!label || neighbor.navigation.reached[label]) continue;
+                    neighbor.navigation.reached[label] = 1; queue.push({ chunk: neighbor, component: label });
+                }
             }
         }
         return true;
@@ -183,7 +233,30 @@ export class RegionalWorld {
                 : roll < 0.14 + danger * 0.08 ? "gold" : roll < 0.45 + danger * 0.1 ? "silver" : "bronze";
             chest = Object.freeze({ x: px, z: pz, region: ownRegion, tier, hasOrb: treasure.chance(0.35 + CHEST_TIERS.indexOf(tier) * 0.15) });
         }
-        return { key, x, z, spawns: Object.freeze(spawns), spawned: new Uint8Array(spawns.length), chest,
+        const navigation = new EncounterNavigation(this.terrain, this.chunkX(x), this.chunkZ(z));
+        const placed: RegionalSpawn[] = [], occupied: { x: number; z: number; radius: number }[] = [];
+        const boss = spawns.find(spawn => spawn.boss);
+        const bodyRadius = (spawn: RegionalSpawn) => ENEMY_DEFINITIONS[spawn.kind].radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1) + .08;
+        const anchor = navigation.nearest(settlement.x, settlement.z, boss ? bodyRadius(boss) : .55, 0, [],
+            boss ? (px, pz) => this.regionAt(px, pz, boss.region) === boss.region : undefined);
+        if (anchor) {
+            const camp = Object.freeze({ kind: settlement.kind, x: anchor.x, z: anchor.z });
+            // Reserve the boss's full body first, then fit its support within the same connected camp.
+            for (const spawn of boss ? [boss, ...spawns.filter(candidate => !candidate.boss)] : spawns) {
+                const radius = bodyRadius(spawn), px = anchor.x + spawn.x - settlement.x, pz = anchor.z + spawn.z - settlement.z;
+                const point = navigation.nearest(px, pz, radius, anchor.component, occupied,
+                    (tx, tz) => Math.hypot(tx - anchor.x, tz - anchor.z) <= 3 && this.regionAt(tx, tz, spawn.region) === spawn.region);
+                if (!point) continue;
+                placed.push(Object.freeze({ ...spawn, x: point.x, z: point.z, settlement: camp }));
+                occupied.push({ x: point.x, z: point.z, radius });
+            }
+        }
+        if (chest) {
+            const ownRegion = chest.region;
+            const point = navigation.nearest(chest.x, chest.z, .45, 0, occupied, (px, pz) => this.regionAt(px, pz, ownRegion) === ownRegion);
+            chest = point ? Object.freeze({ ...chest, x: point.x, z: point.z }) : undefined;
+        }
+        return { key, x, z, spawns: Object.freeze(placed), spawned: new Uint8Array(placed.length), navigation, chest,
             chestOpened: false, resident: true, band: this.residencyAt(this.chunkX(x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(z) + COMBAT_CHUNK_HALF_SIZE) };
     }
 }

@@ -16,6 +16,7 @@ import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
 import { workerBudget } from "../src/worker/WorkerBudget";
 import { EffectKind } from "../src/core/CombatEffects";
 import { prepareProjectileFixture } from "./helpers/ProjectileFixture";
+import { OPEN_TERRAIN } from "../src/core/CombatTerrain";
 
 const workers: Worker[] = [], pools: ProjectileWorkerPool[] = [];
 afterEach(async () => { vi.useRealTimers(); for (const pool of pools.splice(0)) pool.dispose(); await Promise.all(workers.splice(0).map(worker => worker.terminate())); });
@@ -35,10 +36,12 @@ async function createPool(): Promise<ProjectileWorkerPool> {
 test("real query threads match serial hits, misses, hostile targets and ties; commit order remains identical", async () => {
     const regions = new RegionalWorld("worker-collisions", { x: 0, z: 0 }); regions.synchronize(0, 0);
     const makeWorld = () => {
-        const e = new CombatWorld(0, 0), region = regions.regionAt(0, 0), home = regions.chunks.get("0,0")!;
+        const e = new CombatWorld(0, 0, { ...OPEN_TERRAIN, height: x => x >= 3 ? 2 : 0,
+            traceAttack: (sx, _sy, _sz, ex) => sx < 5 && ex >= 5 ? (5 - sx) / (ex - sx) : Infinity }),
+            region = regions.regionAt(0, 0), home = regions.chunks.get("0,0")!;
         for (let i = 0; i < 640; i++) e.spawnEnemy({ x: 4 + (i % 16) * .005, z: 0, kind: (i % 4) as 0 | 1 | 2 | 3, level: 1, elite: false, boss: false, region }, home);
         for (let i = 0; i < 128; i++) e.spawnProjectile(e.world.ids[e.player], i >= 5 ? Faction.Player : Faction.Enemy,
-            i % 7 ? 0 : 100, 0, 1000, 0, i + 1, i % 7 ? 1 : .01);
+            i % 7 ? 0 : 100, 0, 1000, 0, i + 1, i % 7 ? 1 : .01, { height: i % 3 === 0 ? 7 : i % 3 === 1 ? 3.2 : .8, velocityY: -3 });
         return e;
     };
     const serial = makeWorld(), parallel = makeWorld(), pool = await createPool();
@@ -56,6 +59,7 @@ test("real query threads match serial hits, misses, hostile targets and ties; co
     expect(parallel.impacts).toEqual(serial.impacts);
     expect(parallel.position).toEqual(serial.position);
     expect(parallel.world.ids).toEqual(serial.world.ids);
+    expect(serial.impacts.count).toBeGreaterThan(0); expect(serial.impacts.count).toBeLessThan(100);
     // Recycled handles and empty batches cannot inherit a previous result.
     const batch = new ProjectileBatch(); batch.count = 2; batch.enemyCount = 2;
     batch.enemyIds.set([9002, 9001]); batch.enemyX.fill(2); batch.enemyRadius.fill(.5);

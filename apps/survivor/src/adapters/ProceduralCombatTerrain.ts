@@ -2,11 +2,13 @@ import { createWorldSurfaceResolver, createWorldSurfaceView, generateWorldTreePo
 import type { CombatTerrain } from "../core/CombatTerrain";
 import { SurfaceMotion, type SurfaceContact } from "../core/SurfaceMotion";
 import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
+import { segmentCylinderHit } from "../core/AttackGeometry";
 
 import { WORLD_VIEW } from "../core/WorldView";
 const CHUNK = WORLD_VIEW.chunkSize, CELL = .5, EDGE = CHUNK / CELL, MAX_CHUNKS = WORLD_VIEW.navigationChunks;
 const MAX_SLOPE = Math.tan(40 * Math.PI / 180);
-interface TerrainChunk { readonly blocked: Uint8Array; readonly trees: readonly { x: number; z: number; scale: number }[] }
+interface TerrainChunk { readonly blocked: Uint8Array; readonly heights: Float64Array; readonly waters: Uint8Array;
+    readonly trees: readonly { x: number; z: number; scale: number }[] }
 const isWater = (tile: TileInfo) => tile.type === Land.sea || tile.type === Land.coastal || tile.modifiers?.includes("lake") || tile.modifiers?.includes("river");
 
 /** Bounded CPU cache. Generation runs once per chunk; movement only reads masks and nearby trunks. */
@@ -19,6 +21,52 @@ export class ProceduralCombatTerrain implements CombatTerrain {
     constructor(seed: string | number) { this.resolver = createWorldSurfaceResolver({ seed, waterStyle: COMBAT_WATER_STYLE }); }
     public get cachedChunks(): number { return this.chunks.size; }
     public dispose(): void { this.chunks.clear(); }
+
+    public height(x: number, z: number): number {
+        const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), chunk = this.chunk(cx, cz);
+        const gx = (x - cx * CHUNK) / CELL, gz = (z - cz * CHUNK) / CELL;
+        const ix = Math.min(EDGE - 1, Math.floor(gx)), iz = Math.min(EDGE - 1, Math.floor(gz));
+        const fx = gx - ix, fz = gz - iz, a = iz * (EDGE + 1) + ix, h = chunk.heights;
+        return (h[a] * (1 - fx) + h[a + 1] * fx) * (1 - fz) + (h[a + EDGE + 1] * (1 - fx) + h[a + EDGE + 2] * fx) * fz;
+    }
+
+    public traceAttack(sx: number, sy: number, sz: number, ex: number, ey: number, ez: number, radius: number): number {
+        let first = Infinity;
+        // Exact trunk sweep: short per-tick segments cannot tunnel through a thin trunk.
+        for (let cx = Math.floor((Math.min(sx, ex) - radius) / CHUNK); cx <= Math.floor((Math.max(sx, ex) + radius) / CHUNK); cx++) {
+            for (let cz = Math.floor((Math.min(sz, ez) - radius) / CHUNK); cz <= Math.floor((Math.max(sz, ez) + radius) / CHUNK); cz++) {
+                for (const tree of this.chunk(cx, cz).trees) {
+                    const reach = radius + .2 * tree.scale;
+                    if (tree.x < Math.min(sx, ex) - reach || tree.x > Math.max(sx, ex) + reach
+                        || tree.z < Math.min(sz, ez) - reach || tree.z > Math.max(sz, ez) + reach) continue;
+                    const bottom = this.height(tree.x, tree.z);
+                    first = Math.min(first, segmentCylinderHit(sx, sy, sz, ex, ey, ez, tree.x, tree.z, bottom - radius, bottom + 2.5 * tree.scale + radius, reach));
+                }
+            }
+        }
+        const steps = Math.max(1, Math.ceil(Math.hypot(ex - sx, ez - sz) / (CELL / 4)));
+        for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            if (t > first) break;
+            const x = sx + (ex - sx) * t, z = sz + (ez - sz) * t, y = sy + (ey - sy) * t;
+            if (this.aboveGround(x, y, z, radius)) continue;
+            let low = Math.max(0, (i - 1) / steps), high = t;
+            for (let search = 0; search < 8; search++) {
+                const mid = (low + high) / 2;
+                if (this.aboveGround(sx + (ex - sx) * mid, sy + (ey - sy) * mid, sz + (ez - sz) * mid, radius)) low = mid; else high = mid;
+            }
+            first = Math.min(first, high); break;
+        }
+        return first;
+    }
+
+    private aboveGround(x: number, y: number, z: number, radius: number): boolean {
+        const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), c = this.chunk(cx, cz);
+        const ix = Math.min(EDGE - 1, Math.floor((x - cx * CHUNK) / CELL)), iz = Math.min(EDGE - 1, Math.floor((z - cz * CHUNK) / CELL));
+        const a = iz * (EDGE + 1) + ix;
+        const water = c.waters[a] && c.waters[a + 1] && c.waters[a + EDGE + 1] && c.waters[a + EDGE + 2];
+        return Boolean(water) || y - radius > this.height(x, z);
+    }
 
     public isClear(x: number, z: number, radius: number): boolean {
         return !this.contact(x, z, radius);
@@ -108,7 +156,7 @@ export class ProceduralCombatTerrain implements CombatTerrain {
             const trees = generateWorldTreePositions({ ...COMBAT_ENVIRONMENT, map, points, size: 1, grassDensity: 0, grassBladeWidth: 0, grassBladeHeight: 0, treeModel: "Assets/models/oak" }, surface)
                 .filter(tree => tree.x >= ox - .25 && tree.x <= ox + CHUNK + .25 && tree.z >= oz - .25 && tree.z <= oz + CHUNK + .25);
             if (this.chunks.size === MAX_CHUNKS) this.chunks.delete(this.chunks.keys().next().value!);
-            const chunk = { blocked, trees }; this.chunks.set(key, chunk); return chunk;
+            const chunk = { blocked, trees, heights, waters }; this.chunks.set(key, chunk); return chunk;
         } finally { window.clear(); }
     }
 }

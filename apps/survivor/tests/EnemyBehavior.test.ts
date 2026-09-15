@@ -65,7 +65,7 @@ test("a healer can rescue an ally under pressure and faces the actual healing ta
 
 test("blocked patrols choose another clear waypoint without unbounded searching", () => {
     const isClear = vi.fn(() => false);
-    const { entities: e, enemy, step } = arena(0, 29, false, { isClear, move: (x, z) => ({ x, z }), dispose() {} });
+    const { entities: e, enemy, step } = arena(0, 29, false, { ...OPEN_TERRAIN, isClear, move: (x, z) => ({ x, z }), dispose() {} });
     step(1);
     expect(isClear).toHaveBeenCalledTimes(3);
     expect(e.enemy.intent[enemy]).toBe(MoveIntent.None);
@@ -79,7 +79,7 @@ test("blocked patrols choose another clear waypoint without unbounded searching"
 
 test("locomotion faces the actual slide displacement instead of the obstructed intention", () => {
     const { entities: e, enemy, step } = arena(0, 10, false, {
-        isClear: () => true, move: (x, z, dx, dz) => ({ x: x + Math.hypot(dx, dz), z }), dispose() {}
+        ...OPEN_TERRAIN, isClear: () => true, move: (x, z, dx, dz) => ({ x: x + Math.hypot(dx, dz), z }), dispose() {}
     });
     step(1);
     expect(e.position.x[enemy]).toBeGreaterThan(0);

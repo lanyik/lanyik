@@ -16,7 +16,12 @@ import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
 export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Reave, Volley, Fault, Jaws }
-export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol }
+export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol, Seek }
+export interface ProjectileLaunch {
+    readonly critical?: boolean; readonly elite?: number; readonly boss?: number;
+    readonly height?: number; readonly groundX?: number; readonly groundZ?: number;
+    readonly turnRate?: number; readonly velocityY?: number;
+}
 
 export class DamageBuffer {
     public count = 0;
@@ -87,8 +92,8 @@ export class CombatWorld {
     public readonly projectile = {
         turnRate: new Float32Array(ENTITY_CAPACITY),
         source: new Float64Array(ENTITY_CAPACITY), faction: new Uint8Array(ENTITY_CAPACITY),
-        launchHeight: new Float32Array(ENTITY_CAPACITY), age: new Float32Array(ENTITY_CAPACITY),
-        groundX: new Float64Array(ENTITY_CAPACITY), groundZ: new Float64Array(ENTITY_CAPACITY),
+        y: new Float64Array(ENTITY_CAPACITY), previousY: new Float64Array(ENTITY_CAPACITY), age: new Float32Array(ENTITY_CAPACITY),
+        velocityY: new Float32Array(ENTITY_CAPACITY),
         velocityX: new Float32Array(ENTITY_CAPACITY), velocityZ: new Float32Array(ENTITY_CAPACITY),
         damage: new Float64Array(ENTITY_CAPACITY), lifetime: new Float32Array(ENTITY_CAPACITY),
         critical: new Uint8Array(ENTITY_CAPACITY), elite: new Uint8Array(ENTITY_CAPACITY), boss: new Uint8Array(ENTITY_CAPACITY)
@@ -136,17 +141,28 @@ export class CombatWorld {
     }
 
     public spawnProjectile(source: number, faction: Faction, x: number, z: number, vx: number, vz: number,
-        damage: number, lifetime: number, critical = false, elite = 0, boss = 0, launchHeight = .42, groundX = x, groundZ = z, turnRate = 0): boolean {
+        damage: number, lifetime: number, launch: ProjectileLaunch = {}): boolean {
         if (this.projectiles.count === MAX_PROJECTILES || (faction === Faction.Enemy && this.hostileProjectiles.count === MAX_HOSTILE_PROJECTILES)) return false;
         const slot = this.world.create(Component.Position | Component.Projectile | (faction === Faction.Enemy ? Component.Hostile : 0));
         this.place(slot, x, z, faction === Faction.Enemy ? .14 : .11);
         const p = this.projectile;
-        p.turnRate[slot] = turnRate; this.position.heading[slot] = Math.atan2(vx, vz);
-        p.launchHeight[slot] = launchHeight; p.age[slot] = 0;
-        p.groundX[slot] = groundX; p.groundZ[slot] = groundZ;
+        p.turnRate[slot] = launch.turnRate ?? 0; this.position.heading[slot] = Math.atan2(vx, vz);
+        p.y[slot] = p.previousY[slot] = this.terrain.height(launch.groundX ?? x, launch.groundZ ?? z) + (launch.height ?? .42); p.age[slot] = 0;
+        p.velocityY[slot] = launch.velocityY ?? 0;
         p.source[slot] = source; p.faction[slot] = faction; p.velocityX[slot] = vx; p.velocityZ[slot] = vz;
-        p.damage[slot] = damage; p.lifetime[slot] = lifetime; p.critical[slot] = Number(critical); p.elite[slot] = elite; p.boss[slot] = boss;
+        p.damage[slot] = damage; p.lifetime[slot] = lifetime; p.critical[slot] = Number(launch.critical ?? false); p.elite[slot] = launch.elite ?? 0; p.boss[slot] = launch.boss ?? 0;
         return true;
+    }
+
+    public bodyHeight(slot: number): number {
+        return slot === this.player ? 1.6 : ENEMY_DEFINITIONS[this.enemy.kind[slot]].height * this.position.radius[slot] / .3;
+    }
+    public aimHeight(slot: number): number {
+        return this.terrain.height(this.position.x[slot], this.position.z[slot]) + this.bodyHeight(slot) * .5;
+    }
+    public canSee(source: number, target: number, radius = .04): boolean {
+        const p = this.position;
+        return this.terrain.traceAttack(p.x[source], this.aimHeight(source), p.z[source], p.x[target], this.aimHeight(target), p.z[target], radius) === Infinity;
     }
 
     public spawnExperience(x: number, z: number, value: number): void {

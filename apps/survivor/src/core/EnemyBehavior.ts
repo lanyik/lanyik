@@ -19,12 +19,13 @@ const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Conte
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) + (c.entities.enemy.intent[s] === MoveIntent.Retreat ? .8 : 0)
+        && c.entities.canSee(s, c.entities.player)
         && !c.canReave(s) && !(c.tick >= c.entities.action.readyAt[s] && c.canHeal(s))), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
     ...(kind === EnemyKind.Scout ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
         && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
-    ...(definition.ranged ? [sequence(condition((c, s) => c.distance(s) <= c.entities.action.reach[s]), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
-    action((c, s) => c.move(s, kind === EnemyKind.Scout ? MoveIntent.Flank : MoveIntent.Chase))
+    ...(definition.ranged ? [sequence(condition((c, s) => c.distance(s) <= c.entities.action.reach[s] && c.entities.canSee(s, c.entities.player)), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
+    action((c, s) => c.move(s, kind === EnemyKind.Scout ? MoveIntent.Flank : definition.ranged ? MoveIntent.Seek : MoveIntent.Chase))
 )));
 
 /** Sensing and the shared behavior tree only write intents and action requests. */
@@ -171,7 +172,8 @@ export class EnemyBehavior {
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canReave(slot) || this.canHeal(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot]);
+            && (this.canHeal(slot) || (this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot])
+                && this.entities.canSee(slot, this.entities.player));
     }
     private canVolley(slot: number): boolean {
         const e = this.entities.enemy;
@@ -199,7 +201,7 @@ export class EnemyBehavior {
             || v.health[slot] <= v.maxHealth[slot] * ENEMY_SPECIAL.heal.sacrifice + 1) return false;
         const target = world.resolve(e.supportTarget[slot]);
         return target >= 0 && v.health[target] < v.maxHealth[target] * ENEMY_SPECIAL.heal.threshold
-            && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius;
+            && Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) <= ENEMY_SPECIAL.heal.radius && this.entities.canSee(slot, target);
     }
     private senseAlly(slot: number): void {
         const { enemy: e, vitals: v, position: p, world } = this.entities;
@@ -208,7 +210,7 @@ export class EnemyBehavior {
         for (let cursor = 0; cursor < enemies.count; cursor++) {
             const ally = enemies.slots[cursor], ratio = v.health[ally] / v.maxHealth[ally];
             if (ally === slot || !e.active[ally] || e.homes[ally] !== e.homes[slot]) continue;
-            if (ratio < lowest || ratio === lowest && target >= 0 && world.ids[ally] < world.ids[target]) { target = ally; lowest = ratio; }
+            if ((ratio < lowest || ratio === lowest && target >= 0 && world.ids[ally] < world.ids[target]) && this.entities.canSee(slot, ally)) { target = ally; lowest = ratio; }
         }
         e.supportTarget[slot] = target < 0 ? 0 : world.ids[target];
     }

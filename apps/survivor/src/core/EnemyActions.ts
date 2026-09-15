@@ -36,7 +36,7 @@ function advanceStrike(entities: CombatWorld, slot: number, target: number, tick
         }
         if (hit || kind !== ActorAction.Jaws) break;
     }
-    if (hit) {
+    if (hit && entities.canSee(slot, target)) {
         a.committed[slot] |= 2;
         entities.impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * rule.damage, e.elite[slot], e.boss[slot]);
     }
@@ -63,7 +63,7 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             const travel = ENEMY_SPECIAL.charge.speed * SIMULATION_STEP_MS / 1000 * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
             entities.moveActor(slot, Math.sin(p.heading[slot]) * travel, Math.cos(p.heading[slot]) * travel, false);
             entities.updateSpatial(slot, Component.Enemy);
-            if (!a.committed[slot] && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity) {
+            if (!a.committed[slot] && segmentCircleHit(sx, sz, p.x[slot], p.z[slot], p.x[target], p.z[target], p.radius[slot] + p.radius[target]) !== Infinity && entities.canSee(slot, target)) {
                 a.committed[slot] = 1;
                 impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * ENEMY_SPECIAL.charge.damage, e.elite[slot], e.boss[slot]);
             }
@@ -74,29 +74,35 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
         const dx = p.x[target] - p.x[slot], dz = p.z[target] - p.z[slot];
         if (kind === ActorAction.Melee) {
             const distance = Math.hypot(dx, dz);
-            if (distance <= a.reach[slot] && (distance === 0 || (dx * Math.sin(p.heading[slot]) + dz * Math.cos(p.heading[slot])) / distance >= Math.cos(MELEE_HALF_ARC))) {
+            if (distance <= a.reach[slot] && (distance === 0 || (dx * Math.sin(p.heading[slot]) + dz * Math.cos(p.heading[slot])) / distance >= Math.cos(MELEE_HALF_ARC)) && entities.canSee(slot, target)) {
                 impacts.add(world.ids[slot], world.ids[target], e.damage[slot], e.elite[slot], e.boss[slot]);
             }
         } else if (kind === ActorAction.Heal) {
             const cost = v.maxHealth[slot] * ENEMY_SPECIAL.heal.sacrifice;
             if (v.faction[target] !== Faction.Enemy || v.health[target] <= 0 || v.health[target] >= v.maxHealth[target]
-                || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius || v.health[slot] <= cost + 1) continue;
+                || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius || v.health[slot] <= cost + 1 || !entities.canSee(slot, target)) continue;
             v.health[slot] -= cost;
             v.health[target] = Math.min(v.maxHealth[target], v.health[target] + Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3));
             status.wardUntil[target] = tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration);
             effects.add(EffectKind.Heal, tick, p.x[slot], p.z[slot], 1, .8, p.x[target], p.z[target]);
         } else if (kind === ActorAction.Cast || kind === ActorAction.Volley) {
+            if (!entities.canSee(slot, target)) continue;
             const curved = kind === ActorAction.Volley, count = curved ? 3 : a.variant[slot];
             if (entities.projectiles.count + count > MAX_PROJECTILES || entities.hostileProjectiles.count + count > MAX_HOSTILE_PROJECTILES) continue;
             const scale = p.radius[slot] / .3, sin = Math.sin(p.heading[slot]), cos = Math.cos(p.heading[slot]);
             const launchX = p.x[slot] + (SHAMAN_CAST_SOCKET[0] * cos + SHAMAN_CAST_SOCKET[2] * sin) * scale;
             const launchZ = p.z[slot] + (SHAMAN_CAST_SOCKET[2] * cos - SHAMAN_CAST_SOCKET[0] * sin) * scale;
+            const launchY = entities.terrain.height(p.x[slot], p.z[slot]) + SHAMAN_CAST_SOCKET[1] * scale;
+            if (entities.terrain.traceAttack(p.x[slot], launchY, p.z[slot], launchX, launchY, launchZ, .14) !== Infinity) continue;
             for (let bolt = 0; bolt < count; bolt++) {
                 const offset = bolt - (count - 1) / 2, heading = p.heading[slot] + offset * (curved ? ENEMY_SPECIAL.volley.spread : .24);
                 const speed = e.boss[slot] ? 5.5 : 4.5;
                 entities.spawnProjectile(world.ids[slot], Faction.Enemy, launchX, launchZ, Math.sin(heading) * speed, Math.cos(heading) * speed,
                     e.damage[slot] * (curved ? ENEMY_SPECIAL.volley.damage : 1), a.reach[slot] / speed + .3,
-                    false, e.elite[slot], e.boss[slot], SHAMAN_CAST_SOCKET[1] * scale, p.x[slot], p.z[slot], curved && offset !== 0 ? -offset * ENEMY_SPECIAL.volley.turnRate : 0);
+                    { elite: e.elite[slot], boss: e.boss[slot], height: SHAMAN_CAST_SOCKET[1] * scale, groundX: p.x[slot], groundZ: p.z[slot],
+                        turnRate: curved && offset !== 0 ? -offset * ENEMY_SPECIAL.volley.turnRate : 0,
+                        velocityY: (entities.aimHeight(target) - launchY)
+                            * speed / Math.max(.1, Math.hypot(p.x[target] - launchX, p.z[target] - launchZ)) });
             }
         }
     }

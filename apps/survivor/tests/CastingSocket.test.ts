@@ -22,7 +22,7 @@ test("the committed volley shares the rotated and scaled baked casting hand", ()
             const bolt = world.projectiles.slots[i];
             expect(world.position.x[bolt]).toBeCloseTo(3 + (SHAMAN_CAST_SOCKET[0] * Math.cos(rotation) + SHAMAN_CAST_SOCKET[2] * Math.sin(rotation)) * scale);
             expect(world.position.z[bolt]).toBeCloseTo(4 + (SHAMAN_CAST_SOCKET[2] * Math.cos(rotation) - SHAMAN_CAST_SOCKET[0] * Math.sin(rotation)) * scale);
-            expect(world.projectile.launchHeight[bolt]).toBeCloseTo(SHAMAN_CAST_SOCKET[1] * scale);
+            expect(world.projectile.y[bolt]).toBeCloseTo(SHAMAN_CAST_SOCKET[1] * scale);
         }
     }
 });

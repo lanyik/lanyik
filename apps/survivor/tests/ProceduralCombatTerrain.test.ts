@@ -29,10 +29,43 @@ test("trunks stop movement and long straight dashes cannot tunnel across their f
             if (!terrain.isClear(tree.x - 1, tree.z, .3) || !terrain.isClear(tree.x + 1, tree.z, .3)) continue;
             expect(terrain.isClear(tree.x, tree.z, .3)).toBe(false);
             const result = terrain.move(tree.x - 1, tree.z, 2, 0, .3, false);
+            const height = terrain.height(tree.x, tree.z);
+            expect(terrain.traceAttack(tree.x - 1, height + .8, tree.z, tree.x + 1, height + .8, tree.z, .1)).toBeLessThan(.5);
+            expect(terrain.traceAttack(tree.x - 1, height + 10, tree.z, tree.x + 1, height + 10, tree.z, .1)).toBe(Infinity);
             expect(result.x).toBeLessThan(tree.x); expect(terrain.isClear(result.x, result.z, .3)).toBe(true); checked = true; break;
         }
     }
     expect(checked).toBe(true); terrain.dispose();
+});
+
+test("terrain height and solid cover survive negative-coordinate eviction; water blocks walking but not an airborne shot", () => {
+    const terrain = new ProceduralCombatTerrain("rift-ember-1"), original = terrain.height(-12.25, -12.25);
+    const chunks = (terrain as unknown as { chunks: Map<string, { waters: Uint8Array; heights: Float64Array; trees: { x: number; z: number; scale: number }[] }> }).chunks;
+    let waterChecked = false, mountainChecked = false;
+    // Fixed ocean and inland fixtures under COMBAT_WATER_STYLE (the lower ocean level makes the origin dry).
+    for (const [cx, cz] of [[-64, 53], [0, 0]]) {
+        terrain.height(cx * 12, cz * 12);
+        const chunk = chunks.get(`${cx},${cz}`)!;
+        for (let z = 0; z < 24; z++) for (let x = 0; x < 24; x++) {
+            const a = z * 25 + x, px = cx * 12 + (x + .5) * .5, pz = cz * 12 + (z + .5) * .5;
+            if (!waterChecked && chunk.waters[a] && chunk.waters[a + 1] && chunk.waters[a + 25] && chunk.waters[a + 26]) {
+                expect(terrain.isClear(px, pz, .3)).toBe(false);
+                const y = terrain.height(px, pz) + 4;
+                expect(terrain.traceAttack(px - .1, y, pz, px + .1, y, pz, .1)).toBe(Infinity);
+                waterChecked = true;
+            }
+            if (!mountainChecked && !chunk.waters[a] && terrain.height(px, pz) > 1
+                && chunk.trees.every(tree => Math.hypot(tree.x - px, tree.z - pz) > .2 * tree.scale + .1)) {
+                const y = terrain.height(px, pz);
+                expect(terrain.traceAttack(px, y + 2, pz, px, y - 1, pz, .1)).toBeCloseTo(1.9 / 3, 2);
+                mountainChecked = true;
+            }
+        }
+    }
+    expect(waterChecked).toBe(true); expect(mountainChecked).toBe(true);
+    for (let i = 0; i < 130; i++) terrain.height(240 + i * 12, 100);
+    expect(terrain.cachedChunks).toBeLessThanOrEqual(WORLD_VIEW.navigationChunks);
+    expect(terrain.height(-12.25, -12.25)).toBe(original); terrain.dispose();
 });
 
 test("terrain cache has a fixed cap and regenerated negative chunks give identical results", () => {

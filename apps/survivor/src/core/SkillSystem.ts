@@ -79,7 +79,7 @@ export class SkillSystem {
             this.dashZ = Math.cos(p.heading[player]) * values.dashDistance / duration;
             effects.add(EffectKind.Dash, tick, x, z, .5, .6, x + this.dashX * duration, z + this.dashZ * duration);
         } else if (id === "chain") {
-            let fromX = x, fromZ = z, hits = 0;
+            let fromX = x, fromZ = z, from = player, hits = 0;
             for (; hits < values.targets; hits++) {
                 const range = hits === 0 ? SKILL_RULES.chain.firstRange : SKILL_RULES.chain.jumpRange;
                 let nearest = range * range, target = -1;
@@ -90,14 +90,14 @@ export class SkillSystem {
                     for (let j = 0; j < hits; j++) if (this.chainSlots[j] === slot) visited = true;
                     if (visited) continue;
                     const distance = (p.x[slot] - fromX) ** 2 + (p.z[slot] - fromZ) ** 2;
-                    if (distance < nearest || distance === nearest && (target < 0 || world.ids[slot] < world.ids[target])) { nearest = distance; target = slot; }
+                    if ((distance < nearest || distance === nearest && (target < 0 || world.ids[slot] < world.ids[target])) && this.entities.canSee(from, slot)) { nearest = distance; target = slot; }
                 }
                 if (target < 0) break;
                 this.chainSlots[hits] = target;
                 const hit = rollAttack(stats, random, values.damage * SKILL_RULES.chain.damageRetention ** hits);
                 impacts.add(world.ids[player], world.ids[target], hit.damage, 0, 0, Number(hit.critical));
                 effects.add(EffectKind.Lightning, tick, fromX, fromZ, .45, .55, p.x[target], p.z[target]);
-                fromX = p.x[target]; fromZ = p.z[target];
+                fromX = p.x[target]; fromZ = p.z[target]; from = target;
             }
             if (!hits) return false;
         } else {
@@ -105,6 +105,7 @@ export class SkillSystem {
             const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius, true, true);
             for (let cursor = 0; cursor < enemies.count; cursor++) {
                 const slot = enemies.slots[cursor];
+                if (!this.entities.canSee(player, slot)) continue;
                 const hit = rollAttack(stats, random, values.damage);
                 impacts.add(world.ids[player], world.ids[slot], hit.damage, 0, 0, Number(hit.critical));
                 if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = SKILL_RULES.frost.slowScale; }

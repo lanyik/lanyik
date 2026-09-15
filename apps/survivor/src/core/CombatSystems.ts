@@ -3,6 +3,7 @@ import { GAME_CONFIG } from "./GameConfig";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { resolveProjectileRange, type ProjectileExecutor } from "./ProjectileBatch";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "./EnemyDefinitions";
+import { segmentCylinderHit } from "./AttackGeometry";
 export { advanceEnemyActions } from "./EnemyActions";
 
 const SECONDS = COMBAT_STEP_MS / 1000;
@@ -15,17 +16,20 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
     if (projectiles.count === 0) return executor ? Promise.resolve() : undefined;
     batch.enemyCount = projectiles.count === entities.hostileProjectiles.count ? 0 : enemies.count;
     batch.count = projectiles.count;
-    batch.setPlayer(world.ids[player], p.x[player], p.z[player], p.radius[player]);
+    const playerGround = entities.terrain.height(p.x[player], p.z[player]);
+    batch.setPlayer(world.ids[player], p.x[player], p.z[player], p.radius[player], playerGround, playerGround + entities.bodyHeight(player));
     for (let cursor = 0; cursor < batch.enemyCount; cursor++) {
         const slot = enemies.slots[cursor];
         batch.enemyIds[cursor] = world.ids[slot]; batch.enemyX[cursor] = p.x[slot];
         batch.enemyZ[cursor] = p.z[slot]; batch.enemyRadius[cursor] = p.radius[slot];
+        batch.enemyBottom[cursor] = entities.terrain.height(p.x[slot], p.z[slot]);
+        batch.enemyTop[cursor] = batch.enemyBottom[cursor] + entities.bodyHeight(slot);
         entities.projectileEnemyIndices[slot] = cursor;
     }
     for (let cursor = 0; cursor < projectiles.count; cursor++) {
         const slot = projectiles.slots[cursor];
         const sx = p.x[slot], sz = p.z[slot];
-        p.previousX[slot] = sx; p.previousZ[slot] = sz;
+        p.previousX[slot] = sx; p.previousZ[slot] = sz; b.previousY[slot] = b.y[slot];
         const dt = Math.min(SECONDS, Math.max(0, b.lifetime[slot]));
         if (b.turnRate[slot] && b.age[slot] < ENEMY_SPECIAL.volley.turnSeconds) {
             const angle = b.turnRate[slot] * Math.min(dt, ENEMY_SPECIAL.volley.turnSeconds - b.age[slot]);
@@ -35,11 +39,13 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
         }
         const ex = p.x[slot] = sx + b.velocityX[slot] * dt;
         const ez = p.z[slot] = sz + b.velocityZ[slot] * dt;
+        b.y[slot] += b.velocityY[slot] * dt;
         b.lifetime[slot] -= SECONDS;
         b.age[slot] += dt;
         entities.projectileBatchIndices[slot] = cursor;
         batch.startX[cursor] = sx; batch.startZ[cursor] = sz; batch.endX[cursor] = ex; batch.endZ[cursor] = ez;
         batch.radius[cursor] = p.radius[slot]; batch.hostile[cursor] = Number(b.faction[slot] === Faction.Enemy);
+        batch.startY[cursor] = b.previousY[slot]; batch.endY[cursor] = b.y[slot];
     }
     batch.prepare(entities.spatial, entities.projectileCandidates, Component.Enemy, entities.projectileEnemyIndices);
     if (executor) return executor.resolve(batch).then(() => commitProjectiles(entities));
@@ -48,12 +54,24 @@ export function advanceProjectiles(entities: CombatWorld, executor?: ProjectileE
 }
 
 function commitProjectiles(entities: CombatWorld): void {
-    const { projectiles, projectile: b, impacts, projectileBatch: batch } = entities;
+    const { projectiles, projectile: b, impacts, projectileBatch: batch, position: p, terrain } = entities;
     let cursor = 0;
     while (cursor < projectiles.count) {
         const slot = projectiles.slots[cursor], target = batch.targets[entities.projectileBatchIndices[slot]];
-        if (target !== 0) impacts.add(b.source[slot], target, b.damage[slot], b.elite[slot], b.boss[slot], b.critical[slot]);
-        if (target !== 0 || b.lifetime[slot] <= 0) { entities.remove(slot); continue; }
+        const victim = entities.world.resolve(target), radius = p.radius[slot];
+        let end = 1;
+        if (victim >= 0) {
+            const bottom = terrain.height(p.x[victim], p.z[victim]);
+            end = segmentCylinderHit(p.previousX[slot], b.previousY[slot], p.previousZ[slot], p.x[slot], b.y[slot], p.z[slot],
+                p.x[victim], p.z[victim], bottom - radius, bottom + entities.bodyHeight(victim) + radius, p.radius[victim] + radius);
+            // Reconstructing the clipped endpoint can round just before a shared surface contact.
+            end = Math.min(1, end + Number.EPSILON * 32);
+        }
+        const blocked = terrain.traceAttack(p.previousX[slot], b.previousY[slot], p.previousZ[slot],
+            p.previousX[slot] + (p.x[slot] - p.previousX[slot]) * end, b.previousY[slot] + (b.y[slot] - b.previousY[slot]) * end,
+            p.previousZ[slot] + (p.z[slot] - p.previousZ[slot]) * end, radius) !== Infinity;
+        if (target !== 0 && !blocked) impacts.add(b.source[slot], target, b.damage[slot], b.elite[slot], b.boss[slot], b.critical[slot]);
+        if (target !== 0 || blocked || b.lifetime[slot] <= 0) { entities.remove(slot); continue; }
         cursor++;
     }
 }

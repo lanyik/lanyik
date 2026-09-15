@@ -50,7 +50,8 @@ test("equipment and potions attract through the Worker and interpolate together 
     await advanceCombat(page, 120);
     const authoritative = await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        return { inventory: simulation.getSnapshot().player.inventory.map(item => item.id), loot: simulation.getRenderState().entities.loot.count };
+        // Arrival order follows full ECS handles, whose generations depend on live ticks before pausing.
+        return { inventory: simulation.getSnapshot().player.inventory.map(item => item.id).sort((a, b) => a - b), loot: simulation.getRenderState().entities.loot.count };
     });
     expect(authoritative).toEqual({ inventory: [900, 901], loot: 0 });
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.inventory.map(item => item.id)))

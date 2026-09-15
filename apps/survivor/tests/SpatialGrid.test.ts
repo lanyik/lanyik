@@ -76,7 +76,7 @@ test("grid collision results equal exhaustive earliest-hit queries over mixed sw
     let seed = 19;
     const random = () => { seed = Math.imul(seed, 1664525) + 1013904223 | 0; return (seed >>> 0) / 2 ** 32; };
     const batch = new ProjectileBatch();
-    batch.enemyCount = 640; batch.count = 128; batch.setPlayer(700, -2, 5, .3);
+    batch.enemyCount = 640; batch.count = 128; batch.setPlayer(700, -2, 5, .3, 0, 1.6);
     for (let round = 0; round < 12; round++) {
         for (let i = 0; i < batch.enemyCount; i++) {
             batch.enemyIds[i] = 2 ** 33 + 640 - i;

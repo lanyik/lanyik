@@ -286,9 +286,7 @@ export class CombatLayer implements WorldRenderLayer {
             const index = projectiles.slots[cursor];
             const x = position.previousX[index] + (position.x[index] - position.previousX[index]) * blend;
             const z = position.previousZ[index] + (position.z[index] - position.previousZ[index]) * blend;
-            const flight = Math.min(1, Math.max(0, projectile.age[index] - (1 - blend) / GAME_CONFIG.timing.simulationHz) / .45);
-            const launchY = this.height(projectile.groundX[index], projectile.groundZ[index]) + projectile.launchHeight[index];
-            const elevation = launchY * (1 - flight) + (this.height(x, z) + .42) * flight;
+            const elevation = projectile.previousY[index] + (projectile.y[index] - projectile.previousY[index]) * blend;
             if (projectile.faction[index] === Faction.Enemy) this.enemyEffects.projectile(x, elevation, z, position.heading[index], projectile.age[index]);
             else {
                 const instance = this.projectiles.count++;

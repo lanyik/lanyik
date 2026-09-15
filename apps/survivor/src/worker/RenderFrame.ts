@@ -25,7 +25,7 @@ function layout(buffer?: ArrayBuffer) {
         enemy: { kind: u8(), elite: u8(), boss: u8(), homeX: f64(), homeZ: f64(), enraged: u8() },
         status: { slowUntil: f64(), wardUntil: f64() },
         action: { kind: u8(), reach: f32(), progress: f32(), targetX: f64(), targetZ: f64() },
-        projectile: { critical: u8(), faction: u8(), launchHeight: f32(), age: f32(), groundX: f64(), groundZ: f64() },
+        projectile: { critical: u8(), faction: u8(), age: f32(), y: f64(), previousY: f64() },
         experienceValue: f64(), item: { id: f64(), rarity: u8(), kind: u8() }
     };
     const chests = { count: 0, x: field(Float64Array, MAX_COMBAT_CHUNKS), z: field(Float64Array, MAX_COMBAT_CHUNKS), tiers: field(Uint8Array, MAX_COMBAT_CHUNKS) };
