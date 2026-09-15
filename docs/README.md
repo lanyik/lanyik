@@ -57,6 +57,9 @@ plans. Start with the root [README](../README.md) for setup and public API usage
 
 ## Decisions and roadmap
 
+- [Survivor development priorities](./game/development-priorities.md): code-backed
+  gaps in combat obstruction, navigation, progression, exploration, presentation
+  and target-device validation, with proposed acceptance boundaries.
 - [App development](./app-development.md): implemented survivor application
   boundaries, authoritative fixed-step state, batched rendering, UI snapshots,
   lifecycle and verification commands.

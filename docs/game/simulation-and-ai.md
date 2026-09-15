@@ -297,10 +297,10 @@ Worker 按批次发布表现，每 12 tick（10Hz）发布常规 UI 快照；初
 增加内容种类与增加同屏工作量需要分别评估：技能、状态效果、Boss 阶段可以在现有权威端增加领域系统，
 由 `CombatSimulation` 明确编排提交顺序；寻路/群体感知需要只读任务输入与结果有效性规则；
 成倍增加人口会同时影响全量表现复制、弹道候选密度、实例动画更新和 GPU 成本，不能只增加 Worker 数量。
-地形通行尚未进入战斗规则，接入寻路前需要明确地图与模拟共享的通行数据及版本，不能由 AI 读取 Three.js 场景作为事实。
+地形通行已经通过 `CombatTerrain` 接入移动、冲锋和出生/宝箱净空检查，`ProceduralCombatTerrain` 从同源表面生成有界阻挡缓存；尚无连通路径搜索、群体占位和攻击环境遮挡。进一步接入寻路应复用权威表面与阻挡语义，不能由 AI 读取 Three.js 场景作为事实。
 
 保留当前单一事实写入者与有界数值任务的骨架；进一步索引细化、快照布局调整或新增并行阶段的优先级，
-由代表性实机场景与具体功能的工作量决定。下述提交入口已经接入模拟；具体寻路算法、通行数据和独立渲染 Worker 尚未实现。
+由代表性实机场景与具体功能的工作量决定。下述提交入口已经接入模拟；通行数据已有实现，完整寻路算法和独立渲染 Worker 尚未实现。
 Worker 上下文与转移所有权的浏览器语义见 [MDN Worker](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers)
 与 [MDN 转移对象](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Transferable_objects)。
 
