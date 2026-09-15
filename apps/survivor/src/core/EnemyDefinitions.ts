@@ -8,7 +8,7 @@ export const ENEMY_HIT_RULES = Object.freeze({
     criticalDamageBonus: .6
 });
 
-export interface EnemyDefinition {
+interface EnemyDefinition {
     readonly name: string; readonly model: 0 | 1 | 2 | 3 | 4; readonly tint: string; readonly ranged: boolean;
     readonly health: number;
     readonly healthGrowth: number;
@@ -49,7 +49,7 @@ export const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
 ]);
 
 /** Fixed regional level curves, calibrated against same-level equipment; never read the player's loadout. */
-export const ENEMY_GROWTH = Object.freeze({ armorPressure: .077, eliteHealth: 4, eliteDamage: 1.4, bossHealth: 16, bossDamage: 1.8 });
+const ENEMY_GROWTH = Object.freeze({ armorPressure: .077, eliteHealth: 4, eliteDamage: 1.4, bossHealth: 16, bossDamage: 1.8 });
 export function enemyStats(kind: EnemyKind, level: number, regionScale: number, elite: boolean, boss: boolean) {
     const d = ENEMY_DEFINITIONS[kind], levels = level - 1;
     return {

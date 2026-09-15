@@ -8,9 +8,9 @@ import type { DeterministicRandom } from "./DeterministicRandom";
 
 export type ConsumableEffect = "health" | "mana";
 export const POTION_RARITIES = ["common", "magic", "rare", "legendary"] as const;
-export type PotionRarity = typeof POTION_RARITIES[number];
+type PotionRarity = typeof POTION_RARITIES[number];
 export const POTION_TYPES = ["health", "mana", "health-percent", "mana-percent"] as const;
-export type PotionType = typeof POTION_TYPES[number];
+type PotionType = typeof POTION_TYPES[number];
 export const POTIONS = Object.freeze({
     health: Object.freeze({ name: "生命药剂", resource: "health", percent: false, amounts: [60, 140, 300, 600] as const }),
     mana: Object.freeze({ name: "法力药剂", resource: "mana", percent: false, amounts: [40, 90, 180, 360] as const }),

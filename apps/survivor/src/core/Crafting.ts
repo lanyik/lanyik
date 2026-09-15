@@ -6,7 +6,7 @@ import { RARITIES, type Rarity } from "./Loot";
 import { createOrb, orbRefineCost, orbResonance, type Orb } from "./Orbs";
 import { recycleReward, recyclingName, type RecycleRef } from "./Recycling";
 
-export interface EquipmentRef { readonly id: number; readonly revision: number }
+interface EquipmentRef { readonly id: number; readonly revision: number }
 export type CraftOperation =
     | { readonly kind: "recycle-equipment"; readonly belowLevel: number; readonly items: readonly EquipmentRef[] }
     | { readonly kind: "recycle"; readonly item: RecycleRef }
@@ -14,14 +14,14 @@ export type CraftOperation =
     | { readonly kind: "imbue"; readonly target: EquipmentRef; readonly affixId: number; readonly slot: number }
     | { readonly kind: "inherit"; readonly source: EquipmentRef; readonly target: EquipmentRef }
     | { readonly kind: "refine-orb"; readonly orbId: number; readonly rarity: Rarity };
-export interface CraftContext {
+interface CraftContext {
     readonly inventory: readonly InventoryItem[];
     readonly equipment: EquippedItems;
     readonly orbs: readonly (Orb | undefined)[];
     readonly gold: number;
     readonly orbDust: number;
 }
-export interface CraftPlan {
+interface CraftPlan {
     readonly ok: true;
     readonly title: string;
     readonly description: string;

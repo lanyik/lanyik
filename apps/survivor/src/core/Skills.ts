@@ -14,7 +14,7 @@ export const SKILL_RULES = Object.freeze({
 export function chainTargets(rank: number): number {
     return SKILL_RULES.chain.baseTargets + Math.floor(rank / SKILL_RULES.chain.ranksPerTarget);
 }
-export interface SkillDefinition extends TypedValue<"skill", SkillId> {
+interface SkillDefinition extends TypedValue<"skill", SkillId> {
     readonly school: string; readonly role: string;
     readonly name: string; readonly description: string; readonly color: string;
     readonly mana: number; readonly cooldown: number; readonly unlock: number; readonly automatic: boolean;

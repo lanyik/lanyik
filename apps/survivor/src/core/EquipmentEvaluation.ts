@@ -20,7 +20,7 @@ export interface EquipmentContext {
     readonly stats: DerivedStats;
 }
 
-export interface EquipmentComparison {
+interface EquipmentComparison {
     readonly current: Equipment | undefined;
     readonly power: number;
     readonly delta: number;

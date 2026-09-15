@@ -1,7 +1,7 @@
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { WORLD_GENERATOR_VERSION } from "three-hex-map";
 
-export const SAVE_SLOTS = ["auto", "manual-1", "manual-2", "manual-3"] as const;
+const SAVE_SLOTS = ["auto", "manual-1", "manual-2", "manual-3"] as const;
 export type SaveSlot = typeof SAVE_SLOTS[number];
 export const SAVE_NAMES: Record<SaveSlot, string> = { auto: "自动存档", "manual-1": "手动存档 1", "manual-2": "手动存档 2", "manual-3": "手动存档 3" };
 export interface CharacterSave { readonly slot: SaveSlot; readonly savedAt: number; readonly generator: number; readonly checkpoint: CharacterCheckpoint }

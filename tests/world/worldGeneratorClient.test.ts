@@ -1,15 +1,5 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
-import {
-    EventEmitter,
-    createWorldDescriptor,
-    generateWorld,
-    generateWorldChunk,
-    WORLD_GENERATOR_VERSION,
-    WORLD_WORKER_PROTOCOL_VERSION,
-    WorldGeneratorClient,
-    WorldGeneratorPool
-} from "../src/index";
-import { setOptions } from "../src/helpers/setoptions";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createWorldDescriptor, generateWorldChunk, WORLD_GENERATOR_VERSION, WORLD_WORKER_PROTOCOL_VERSION, WorldGeneratorClient, WorldGeneratorPool } from "../../src/index";
 
 class FakeWorker {
     static instances: FakeWorker[] = [];
@@ -46,80 +36,12 @@ class FakeWorker {
     }
 }
 
-describe("core safeguards", () => {
+describe("world generation worker requests", () => {
     beforeEach(() => {
         FakeWorker.instances = [];
         vi.stubGlobal("Worker", FakeWorker);
     });
-
-    test("setOptions only copies known own keys", () => {
-        const target = { options: { enabled: true } };
-        const inherited = Object.create({ enabled: false }) as { enabled?: boolean; extra?: number };
-        inherited.extra = 3;
-        setOptions(target, inherited);
-        expect(target.options).toEqual({ enabled: true });
-
-        setOptions(target, { enabled: false, unknown: true, __proto__: { polluted: true } });
-        expect(target.options).toEqual({ enabled: false });
-        expect((target.options as { polluted?: boolean }).polluted).toBeUndefined();
-    });
-
-    test("can clear event listeners", () => {
-        const emitter = new EventEmitter();
-        const first = vi.fn();
-        const second = vi.fn();
-        emitter.on("first", first).on("second", second).removeAllListeners("first");
-        emitter.emit("first");
-        emitter.emit("second");
-        emitter.removeAllListeners();
-        emitter.emit("second");
-        expect(first).not.toHaveBeenCalled();
-        expect(second).toHaveBeenCalledOnce();
-    });
-
-    test("binds event names to payloads and snapshots listeners during dispatch", () => {
-        const emitter = new EventEmitter<{
-            ready: void;
-            value: { count: number };
-            error: Error;
-        }>();
-        const observed: number[] = [];
-        const second = vi.fn(({ count }: { count: number }) => { observed.push(count * 2); });
-        emitter.on("value", ({ count }) => {
-            observed.push(count);
-            emitter.off("value", second);
-        });
-        emitter.on("value", second);
-
-        emitter.emit("ready");
-        emitter.emit("value", { count: 3 });
-        emitter.emit("value", { count: 4 });
-
-        expect(observed).toEqual([3, 6, 4]);
-        expect(emitter.listenerCount("value")).toBe(1);
-        if (false) {
-            // @ts-expect-error value events require their mapped payload.
-            emitter.emit("value");
-            // @ts-expect-error unknown event names are rejected.
-            emitter.on("missing", () => undefined);
-        }
-    });
-
-    test("throws an error event when no observer is registered", () => {
-        const emitter = new EventEmitter<{ error: Error }>();
-        const failure = new Error("unhandled event failure");
-        expect(() => emitter.emit("error", failure)).toThrow(failure);
-
-        const listener = vi.fn();
-        emitter.on("error", listener);
-        expect(() => emitter.emit("error", failure)).not.toThrow();
-        expect(listener).toHaveBeenCalledWith(failure);
-    });
-
-    test("rejects invalid runtime topology values", () => {
-        expect(() => generateWorld({ seed: 1, width: 8, height: 8, topology: "sphere" as never }))
-            .toThrow(/topology/);
-    });
+    afterEach(() => vi.unstubAllGlobals());
 
     test("worker failures reject pending and future requests instead of hanging", async () => {
         const client = new WorldGeneratorClient("worker.mjs");

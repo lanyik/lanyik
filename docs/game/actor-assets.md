@@ -5,9 +5,9 @@
 
 ## 当前试装与许可
 
-本轮采用 Quaternius 的 Fantasy Outfits 游侠与 Bestiary 免费怪物。
+当前采用 Quaternius 的 Fantasy Outfits 游侠与 Bestiary 免费怪物。
 已有怪物导出三组模型，另有程序化蛛兽与岩石守卫；六种玩法共享五个敌人池，未购买资源。
-原来的 KayKit 模型与未使用许可已移除。候选比较见 [角色美术调研](actor-art-research.md)。
+原来的 KayKit 模型与未使用许可已移除。早期候选比较保留在 [2026-09-08 角色美术调研归档](../archive/2026-09-08-actor-art-research.md)，不作为当前资产推荐。
 
 | 输入 | 用途 | 作者来源 / 许可 |
 |---|---|---|

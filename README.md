@@ -273,24 +273,21 @@ are documented in [Combat ECS and behavior trees](docs/game/simulation-and-ai.md
 | `npm run test:soak` | Run the replacement/resource soak with `FOUNDATION_SOAK_ITERATIONS` configured |
 | `npm run benchmark:check` | Build and enforce hot-path regression thresholds |
 | `npm run check:generated` | Rebuild and verify committed files under `public/js` |
+| `npm run check:docs` | Check local documentation links, heading anchors and index reachability |
 
-An ordinary change should pass:
-
-```bash
-npm test
-npm run typecheck
-npm run build
-npm run test:e2e
-```
-
-Lifecycle, Worker, WebGL recovery, scheduling, residency or resource-accounting
-changes also require the 500-iteration soak. See
-[docs/testing.md](docs/testing.md) for the exact policy and CI behavior.
+Choose local checks by the changed contract using the
+[test matrix](docs/testing.md#change-based-local-validation). It distinguishes
+documentation, library, gameplay, browser, lifecycle and performance work;
+CI still runs the complete regression gates.
 
 ## Documentation and roadmap
 
 The [documentation index](docs/README.md) separates current architecture,
 frozen contracts, focused subsystem guides, decisions and future designs.
+Before changing code, read [CONTRIBUTING](CONTRIBUTING.md), then the owning
+contract from the [game index](docs/game/README.md) or
+[library source guide](src/README.md). The [app directory guide](apps/survivor/README.md)
+maps source layers to those contracts.
 
 Current deliberate boundaries:
 

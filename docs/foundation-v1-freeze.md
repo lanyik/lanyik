@@ -14,8 +14,9 @@ The current package no longer includes the chunk-based simulation runtime or
 the persistent campaign demo. This removes those consumers and their package
 entry; the ownership, checkpoint and rendering contracts below remain in force.
 The application-owned survivor combat and progression runtime is specified in
-[App development](./app-development.md). It remains outside `HexMap`; the
-current vertical slice deliberately does not persist a run.
+[App development](./app-development.md). It remains outside `HexMap` and now
+persists character checkpoints and separate permanent spirit progression, not
+the complete battlefield; see [character saves](./game/character-saves.md).
 
 ## Strict generation checkpoints
 

@@ -14,6 +14,11 @@ const allowedModifiers = new Set(["hill", "wood"]);
 const isWater = (type: Land): boolean => type === Land.sea || type === Land.coastal;
 
 describe("generateWorld", () => {
+    test("rejects invalid runtime topology values", () => {
+        expect(() => generateWorld({ seed: 1, width: 8, height: 8, topology: "sphere" as never }))
+            .toThrow(/topology/);
+    });
+
     test("supports world dimensions up to 512", () => {
         expect(MAX_WORLD_SIZE).toBe(512);
         expect(() => generateWorld({ seed: "limit", width: 512, height: MIN_WORLD_SIZE }))

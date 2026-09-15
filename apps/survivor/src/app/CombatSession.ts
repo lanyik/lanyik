@@ -16,9 +16,9 @@ import { validateCharacterCheckpoint, type CharacterCheckpoint } from "../core/C
 import type { CharacterRepository, CharacterSave, SaveSlot } from "./CharacterRepository";
 import type { RuntimeLog } from "./RuntimeLog";
 
-export type SessionStatus = "loading" | "ready" | "failed" | "closed";
+type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
-export interface VisibleNotice extends CombatNotice {
+interface VisibleNotice extends CombatNotice {
     readonly expiresAt: number;
 }
 

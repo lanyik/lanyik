@@ -1,80 +1,36 @@
-# Documentation
+# 项目文档入口
 
-This directory documents the current repository rather than transient work
-plans. Start with the root [README](../README.md) for setup and public API usage.
+仓库包含 `three-hex-map` 地图基础库和「荒原 Survivor」游戏。它们共享地图服务，但战斗、物品和角色存档属于游戏；查阅设计时先确认改动所属层。
 
-## Current state
+## 从这里开始
 
-| Area | Status | Source of truth |
-|---|---|---|
-| Package metadata | `0.5.0`; current `main` also contains unreleased work | [CHANGELOG](../CHANGELOG.md) |
-| Rendering and world streaming | Implemented; WebGL2, source chunks, 12x12 render chunks, LOD and bounded residency | [render-streaming.md](./render-streaming.md) |
-| Runtime foundation | Infrastructure v1 frozen on 2026-08-27 | [foundation-v1-freeze.md](./foundation-v1-freeze.md) |
-| Persistence and pathfinding | Implemented as optional package subpaths | [package-boundaries.md](./package-boundaries.md) |
-| Survivor RPG application | Playable vertical slice with combat, levels, attributes and generated equipment | [app-development.md](./app-development.md) |
-| World-style generation v1 | Broad connected oceans and deterministic coarse-drainage rivers, with elevated climate snow and seam-free mountain lighting | [world-style-generation-v1.md](./world-style-generation-v1.md) |
-| WebGPU/GPU culling | Evaluated and deferred until measurements justify a prototype | [render-backend-evaluation.md](./render-backend-evaluation.md) |
-| Deferred optimization register | Machine-checked triggers, evidence and approval states | [optimization-gates.md](./optimization-gates.md) |
+| 任务 | 阅读顺序 |
+|---|---|
+| 安装、运行与操作 | [根 README](../README.zh-CN.md) → [游戏目录说明](../apps/survivor/README.md) |
+| 开发、清理或评审 | [协作指南](../CONTRIBUTING.md) → 所属模块合同 → [验证选择](testing.md) |
+| 扩展技能、Buff、被动、套装或任务 | [游戏设计索引](game/README.md) → [战斗架构](game/combat-architecture.md) → 对应玩法合同 → [开发优先级](game/development-priorities.md) |
+| 修改地图与渲染基础设施 | [基础库目录说明](../src/README.md) → 下表对应合同 → [测试策略](testing.md) |
+| 查阅历史决策和测量 | [历史归档](archive/README.md)、[游戏测量记录](game/measurements/README.md)、[基础库证据](evidence/README.md) |
 
-## Architecture and contracts
+## 当前实现与设计归属
 
-- [Runtime foundation architecture](./foundation-infrastructure.md): lifecycle,
-  recovery, resource budgets, scheduling and module ownership.
-- [Infrastructure v1 freeze contract](./foundation-v1-freeze.md): boundaries that
-  new gameplay and content systems must consume rather than reopen.
-- [Package boundaries](./package-boundaries.md): main entry and optional
-  `persistence` and `pathfinding` subpaths.
-- [Event contracts](./event-contracts.md): typed HexMap, Unit and GameEngine
-  payload maps plus synchronous dispatch and unhandled-error policy.
-- [Test strategy](./testing.md): contract tests, browser E2E, soak tests and
-  benchmark gates.
+| 领域 | 合同与边界 |
+|---|---|
+| 游戏集成与玩法 | [应用边界](app-development.md)、[游戏设计索引](game/README.md)、[玩法概念](../游戏想法.md) |
+| 生命周期、调度与资源预算 | [基础设施](foundation-infrastructure.md)、[v1 冻结合同](foundation-v1-freeze.md) |
+| 包入口和依赖方向 | [包边界](package-boundaries.md)、[源码目录](../src/README.md) |
+| 基础库事件 | [事件合同](event-contracts.md)；游戏事实流另见 [CombatEvents](game/combat-architecture.md) |
+| 地图渲染、加载与驻留 | [渲染与流式加载](render-streaming.md)、[渲染会话控制器](render-world-controller.md)、[区块驻留](chunk-residency.md) |
+| 地形生成与水系 | [世界风格生成](world-style-generation-v1.md)、[粗粒度排水网络决策](decisions/coarse-drainage-water-network.md) |
+| 持久化 | [地图增量](world-delta-persistence.md)；游戏另有 [角色存档](game/character-saves.md) |
+| 导航 | [基础库分层寻路](hierarchical-pathfinding.md)、[游戏地形通行](game/terrain-navigation.md) |
+| 验证与性能决策 | [测试策略](testing.md)、[优化门槛](optimization-gates.md)、[渲染后端评估](render-backend-evaluation.md) |
 
-## World and rendering
+## 文档如何使用
 
-- [Rendering and streaming](./render-streaming.md): the end-to-end source,
-  render-chunk, Worker, LOD, cache, editing and custom-layer pipeline.
-- [Render world controller](./render-world-controller.md): ownership of one
-  streamed rendering session.
-- [Chunk residency](./chunk-residency.md): shared leases across rendering,
-  navigation and application consumers.
-- [World delta persistence](./world-delta-persistence.md): sparse mutable
-  overrides kept separate from reproducible base terrain.
+- **实现合同**说明当前代码的行为、边界和验证方法；改动必须同步所属合同。游戏的具体归属见 [游戏索引](game/README.md)。
+- **后续计划**集中在 [开发优先级](game/development-priorities.md)，其中未完成的内容不能当作已实现功能。
+- **冻结合同和设计决策**仍约束当前实现；日期较早不代表失效。
+- **归档和测量**保留当时的结论、条件与证据，不代表当前性能或资产推荐。发布变化记入 [CHANGELOG](../CHANGELOG.md)。
 
-## Gameplay-side services
-
-- [Hierarchical pathfinding](./hierarchical-pathfinding.md): long routes over
-  unloaded source chunks.
-- [Combat, progression and equipment](./game/combat-and-progression.md): the
-  implemented fixed-step battle, regional populations, XP, attributes, generated loot
-  and capacity contracts.
-- [Combat ECS and behavior trees](./game/simulation-and-ai.md): bounded SoA
-  storage, entity identity, system order, interruptible monster actions and CPU gates.
-- [Survivor interface design](./game/interface-design.md): HUD information
-  hierarchy, character and inventory workspaces, item cards and responsive layout.
-- [Visual modernization assessment](./game/visual-modernization.md): current
-  art limitations, implemented idle/AI/HUD/relief fixes, verified asset candidates
-  and the remaining dark-fantasy sample-scene work.
-
-## Decisions and roadmap
-
-- [Survivor development priorities](./game/development-priorities.md): code-backed
-  gaps in combat obstruction, navigation, progression, exploration, presentation
-  and target-device validation, with proposed acceptance boundaries.
-- [App development](./app-development.md): implemented survivor application
-  boundaries, authoritative fixed-step state, batched rendering, UI snapshots,
-  lifecycle and verification commands.
-- [Survivor RPG concept](../游戏想法.md): player-facing loop, current playable
-  scope and explicitly deferred progression layers.
-- [Deferred optimization gates](./optimization-gates.md): measurable triggers,
-  evidence format and approval state for intentionally postponed work.
-- [Render backend evaluation](./render-backend-evaluation.md): why WebGL2 and
-  chunk-level CPU culling remain the production path.
-- [World-style generation v1](./world-style-generation-v1.md): implemented
-  terrain generation, surface authority, rendering contracts and freeze gates.
-- [Coarse drainage water network](./decisions/coarse-drainage-water-network.md):
-  why the water mask and bounded drainage sampler replace detail-noise water.
-
-When updating documentation, keep current behavior in the README or the owning
-architecture document, release deltas in the changelog, and future work in an
-explicitly marked design document. Do not commit agent instructions, task
-checklists, exact test counts or temporary investigation notes as product docs.
+新增文档应从本索引或所属子索引可达。`npm run check:docs` 检查仓库内 Markdown 链接、标题锚点和 `docs/` 文档可达性；代码与设计的语义一致性仍需结合调用关系和测试审查。维护规则见 [协作指南](../CONTRIBUTING.md)。

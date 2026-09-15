@@ -31,7 +31,7 @@ export function ItemTooltipProvider({ children }: { readonly children: ReactNode
     return <TooltipContext.Provider value={{ active, setActive }}>{children}</TooltipContext.Provider>;
 }
 
-export function EquipmentDetails({ item, player }: { readonly item: InventoryItem; readonly player: EquipmentContext }) {
+function EquipmentDetails({ item, player }: { readonly item: InventoryItem; readonly player: EquipmentContext }) {
     const comparison = item.type === "equipment" ? compareEquipment(item, player) : undefined;
     const equipped = comparison?.current?.id === item.id;
     return <>

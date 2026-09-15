@@ -1,237 +1,130 @@
 # Test strategy
 
-The test suite protects observable contracts and failure boundaries. Test
-counts are not an acceptance target: adding or removing a case is useful only
-when it changes the defects the suite can detect.
-
-The standard TypeScript gate enables `noUnusedLocals` and
-`noUnusedParameters`. Remove dead declarations and unreachable compatibility
-branches; test fixtures must initialize the production layer registry instead
-of keeping a test-only runtime path alive.
+Tests protect observable behavior and failure boundaries. Counts are not acceptance
+targets. Read the owning contract from the [documentation index](README.md) before
+choosing checks; cleanup criteria are in [CONTRIBUTING](../CONTRIBUTING.md).
 
 ## Test layers
 
-| Layer | Purpose | Typical location |
+| Layer | What it proves | Location / owning contract |
 |---|---|---|
-| Contract tests | Deterministic algorithms, validation, state transitions and public API results | `tests/world`, `tests/runtime`, `tests/rendering`, `tests/persistence` |
-| Fault/interleaving tests | Crashes, cancellation, paused asynchronous operations and competing writers | Tests beside the owning contract |
-| Foundation acceptance | A small set of cross-component invariants that do not duplicate detailed contract tests | `tests/stability` |
-| Browser E2E | Real Worker, WebGL, input and application wiring that DOM or fake implementations cannot prove | `tests/e2e` |
-| Browser soak | Repeated world-session replacement and resource-bound sampling | `tests/e2e/foundation-soak.spec.ts` |
-| World-style review | Fixed topology-aware metrics plus far/middle/near/debug browser artifacts | `tests/world/worldStyleGallery.review.ts`, `tests/gallery` |
-| Benchmark | Reproducible hot-path regression thresholds | `scripts/benchmark-hot-paths.mjs` |
-| Game simulation | Entity identity, behavior interruption, attack timing, damage and progression | `apps/survivor/tests` |
-| Game benchmark | Fixed-seed combat and full-capacity population with spatial-query rejection | `scripts/benchmark-survivor.mjs` |
-| Optimization decision | Deferred-work trigger declarations and evidence integrity | `docs/optimization-gates.json` |
+| Unit and contract | Deterministic rules, validation, state transitions and public API results | `tests/helpers`, `tests/world`, `tests/runtime`, `tests/rendering`, `tests/persistence` |
+| Fault and interleaving | Cancellation, competing writers, failure, stale publication and resource ownership | Tests beside the owning contract; [foundation](foundation-infrastructure.md) |
+| Foundation acceptance | Cross-component invariants beyond individual contract tests | `tests/stability` |
+| Browser | Real Workers, WebGL, input routing, recovery and assembled application behavior | `tests/e2e`, `apps/survivor/tests/e2e` |
+| Soak | Repeated world replacement and bounded retained resources | `tests/e2e/foundation-soak.spec.ts` |
+| World-style review | Topology metrics and far/middle/near/debug captures | `tests/world/worldStyleGallery.review.ts`, `tests/gallery`; [world style](world-style-generation-v1.md) |
+| Game simulation | ECS identity, action timing, settlement, status, items and progression | `apps/survivor/tests`; [game contracts](game/README.md) |
+| Benchmarks | Reproducible hot-path, simulation and query-worker budgets | [benchmark scope](#benchmark-scope) |
+| Documentation | Local links, heading anchors and documentation index reachability | `scripts/check-docs.mjs`, `tests/helpers/documentation.test.js` |
+| Optimization decisions | Trigger declarations and committed evidence integrity | [optimization gates](optimization-gates.md) |
 
-Prefer the lowest layer that can observe the contract. Escalate to browser E2E
-only for browser-owned behavior such as module Workers, WebGL context recovery,
-focus/input routing, or the assembled demo. Capability reporting by itself is
-not an acceptance test; a feature test must perform the operation and verify
-the resulting state. Near-zoom minimap coverage is compared with the current
-authoritative river cells, including fractional viewport edges, rather than a
-percentage from an older generator. WebGL recovery checks wait for independent
-Worker work to drain within the assertion deadline after drawing resumes.
+Use the lowest layer that observes the contract. Similar-looking tests stay when
+they protect different commit points, protocol versions or ownership boundaries.
+Use controlled promises for interleavings and fixed seeds for stochastic rules;
+do not replace behavior assertions with capability flags or implementation-shaped
+expectations. Keep compile-time negative assertions: `tsc` checks their
+`@ts-expect-error` contracts even when runtime execution is intentionally skipped.
 
-Use controlled promises for race tests so each interleaving is explicit and
-deterministic. Avoid timers as synchronization, random stress without a fixed
-seed, and assertions against private implementation shape when the same result
-is visible through a public contract.
+Root tests are grouped by domain: option merging belongs in `tests/helpers`, event
+dispatch in `tests/runtime`, and generation/Worker requests in `tests/world`.
+Worker mocks are scoped to their own suite and restored after each test.
+Regional ecology checks keep the full coordinate sweep but validate each immutable
+chunk layout once while it remains resident; reconstructed chunk instances are
+checked again. Residency, population consumption and reentry have separate checks.
+Both TypeScript gates enable unused-declaration checks. Remove dead declarations
+instead of preserving test-only production branches or compatibility scaffolding.
 
-## Required gates
+## Change-based local validation
 
-For an ordinary change, run:
+Run `npm run check:docs` and `git diff --check` for every change. Add the applicable
+rows below; a documentation-only edit does not require a browser soak or CPU benchmark.
+Multiple changed boundaries require the union of their checks.
 
-```powershell
-npm test
-npm run typecheck
-npm run check:optimization-gates
-npm run build
-npm run test:e2e
-```
+| Changed boundary | Required local checks |
+|---|---|
+| Documentation, links, navigation only | Documentation gate; manually compare changed behavior descriptions with code |
+| Documentation checker | `npm test -- tests/helpers/documentation.test.js` plus the documentation gate against this repository |
+| Test organization or application export visibility only, without runtime behavior changes | Affected unit suite(s), corresponding typecheck; app export changes also build the app |
+| Library algorithms or public types | `npm test`, `npm run typecheck`, `npm run build`; public exports/package changes also `npm run check:package-boundaries:built` |
+| Pure gameplay rules, settlement, status, inventory or saves | `npm run test:app`, app typecheck/build; also the relevant browser flows if a published state, command, schema or UI contract changes |
+| Input, UI, animation, shaders, asset loading or browser wiring | Affected unit suites and build; `npm run test:e2e` for library behavior or `npm run test:app:e2e` for game behavior |
+| Lifecycle ownership, world replacement, Worker/WebGL recovery, scheduling, residency or resource accounting | Affected unit and browser suites plus the 500-iteration soak below |
+| Terrain classification, modifiers, vegetation, climate or surface semantics | Library checks and `npm run review:world-style`; game checks when collision or game visuals also change |
+| Simulation hot paths, AI, spatial queries or capacities | Game checks plus `npm run benchmark:app`; query scheduling/transport/kernel changes also `npm run benchmark:app:workers` |
+| Library hot paths or memory layout | Library checks plus `npm run benchmark:check` |
+| Enemy stats or combat formulas | Game checks and `npm run report:combat-balance`; review the regenerated calibration against [balance rules](game/combat-balance.md) |
+| Inventory/HUD rendering performance | UI/browser checks and the full-inventory measurement described in [UI performance](game/ui-performance.md) |
+| Build, generation inputs, package outputs or optimization register | Owning checks plus `check:generated`, `check:package-boundaries` or `check:optimization-gates` as applicable |
 
-`npm run test:e2e` skips the opt-in soak unless
-`FOUNDATION_SOAK_ITERATIONS` is positive. Changes to lifecycle ownership,
-world replacement, Worker recovery, WebGL recovery, scheduling, residency, or
-resource accounting must additionally run:
+Game tests consume the built library. After a clean install or changes to library
+code/assets, first run `npm run app:prepare`. Thereafter
+`npm run build --workspace @preview/survivor` typechecks and builds the app without
+rebuilding unchanged inputs. `npm run app:build` includes the preparation step.
+Do not race tests or typechecks against a command that replaces their `dist` inputs.
 
-```powershell
-$env:FOUNDATION_SOAK_ITERATIONS='500'; npm run test:soak
-```
-
-Survivor changes additionally run `npm run test:app`, `npm run app:build`,
-`npm run test:app:e2e`, `npm run benchmark:app` and `npm run benchmark:app:workers`. Build the library before
-the standalone app typecheck or tests; do not race those commands with a build
-that replaces `dist`. CI includes the app typecheck, tests, benchmark and browser
-suite. Browser checks exercise actual attack morph weights, telegraphs and
-hostile projectile colors from fixed simulation ticks, including pause. They also
-load the baked idle clip metadata and verify that relaxed breathing changes only
-idle weights and freezes with the simulation.
-
-`npm run report:combat-balance` regenerates the deterministic 64-set, level 1–100
-blue-equipment calibration in `docs/game/measurements/combat-balance.json`.
-`CombatBalance.test.ts` gates role-specific incoming-hit percentages and basic
-attack kill times. `CombatText.test.ts` checks actual overkill, lifetime, merging,
-capacity and transfer ownership; `DamageNumbers.test.ts` covers glyph budgets,
-pause and resource release. The travel benchmark restores health between ticks
-to keep all 2880 ticks live while still exercising hit settlement. It is a
-residency workload, not a starter-character survival claim.
-
-`fog-and-damage.spec.ts` compares rendered distant terrain/standard materials with
-geometry absent at two heights, including a fog-disabled visibility control.
-It then fills 256 hit facts and checks the actual GPU call/triangle delta against
-the same frame with the text mesh hidden. Screenshots and pixel/counter JSON are
-saved as browser artifacts; these checks exercise production shaders and Worker
-publication rather than inferring batching from scene object counts.
-
-Combat Worker tests run the browser query entry on real Node threads and compare
-hits, commit order and deterministic replay with the serial numerical kernel.
-Transfer tests detach actual ArrayBuffers; controlled transports cover backpressure,
-ordered commands, pause acknowledgment and stale-session rejection. Browser fixtures
-use an inspectable test Worker entry with the production host and protocol; no debug
-simulation is added to the main thread or production Worker. The assembled browser
-suite explicitly enables parallel collision queries in its query-worker fixture;
-production leaves them disabled by default. Checks cover twenty restarts, query-worker failure,
-recovery and final termination of both combat and terrain workers.
-Browser checks open the initially collapsed performance diagnostics and verify
-per-worker HUD records, completed query timing, paused-window decay and
-narrow-screen bounds. Controlled-clock unit tests protect
-occupancy accounting across in-flight work, worker replacement and disposal.
-Frame tests check update-before-draw ordering in the real browser and distinguish
-loop, presentation, message, GPU and long-frame samples. Controlled clocks protect
-input acknowledgment at draw time, clock-clamped time and exclusion of hidden-time gaps.
-Collision barrier tests protect ordered commits, entity identity, capacity, failure
-and disposal. Current AI runs synchronously within each fixed tick; there is no
-deferred AI task queue or world-revision submission protocol to test.
-Fixed-clock checks cover 60/120/144/240Hz presentation over one minute, each producing
-exactly 7200 simulation ticks. AI checks protect continuous 120Hz movement with 30Hz decisions,
-including successful idle leaves, bounded blocked-patrol replanning, ranged retreat
-hysteresis and cooldown movement, ally-facing healing and actual slide heading.
-Inventory tests protect independent category limits,
-atomic chest rewards, stable stack IDs, quantity/potency conservation and one-dose consumption.
-Browser checks exercise icon-only hover, immediate dismissal, Alt pinning, one active item
-tooltip, keyboard focus, narrow-screen bounds and explicit potion merging.
-Skill contracts cover rank/slot constraints, cooldown preservation, unique chain targets,
-slow expiry and entity reuse, dash immunity, ward absorption, visual saturation and transfer
-isolation. AI contracts cover scout circling, charge dodging, invalid healing targets,
-frontal guard and persistent boss phases. Browser checks exercise the shared CC0 effect
-atlas, its failure/retry path, actual shader drawing, six archetypes in four mesh pools,
-and skill loadout/rank commands through the authority Worker. Radial AI checks cover
-chunk crossings, activation hysteresis, 5Hz patrol decisions with continuous 120Hz movement,
-bounded patrol routes and completing the return home before reacquiring a target.
-Skill UI checks cover mouse/touch dragging, slot swaps, outside-drop cancellation,
-keyboard pickup/placement and the shared icon-only Alt tooltip. Visual pool checks fill
-all 128 facts with the largest choreography, verify bounded instances, paused transforms,
-persistent ward tracking, expiration and owned-resource disposal. Browser captures also
-exercise the depth-tested boundary mist and multi-layer skill shaders.
-Before handing off an active development URL, run `npm run check:app:dev` against
-the already-running server on port 5173. It checks the five-skill type/value icons,
-drag placement, shader console errors and the narrow-screen close control after scrolling,
-and verifies the real Worker modules. It generates and
-picks up equipment, an orb and a potion stack using Vite-served modules inside
-the actual unbundled Worker. It does not intercept the Worker entry or rebuild
-the server, so stale development modules remain observable. Restart development
-after item-schema or cross-worker contract refactors, refresh, and rerun this check.
-The assembled HUD/equipment/keyboard journey has a 300-second total budget for
-software rendering and captures; its individual assertion timeouts remain unchanged.
-
-The worker benchmark measures separated and dense near-miss inputs at four bounded
-projectile counts, with 100 warmup batches and five samples of 200 batches. The
-stationary target index is built before timing; candidate preparation and actual
-copy, transfer and join costs remain timed. It reports actual candidate counts,
-the scheduling threshold, production parallel-query configuration and fixed packet
-sizes. Both full-capacity serial and scheduled queries must stay below 3 ms;
-when production enables parallel queries, dispatched cases must also improve on
-their serial counterparts. It measures Node worker threads, not browser rendering
-or input latency.
-
-The app benchmark uses one warmup and five measured runs. It gates median
-CPU time per tick at 0.5 ms for 24 seconds of real travel combat, and 3 ms for
-`MAX_ENEMIES` (896) enemies plus 128 distant projectiles rejected by the spatial broad phase.
-The travel workload must remain alive for every measured tick; the full-capacity
-workload retains all targets without damage resolution. Reports include runtime,
-CPU, raw samples and entity counts. These bounds do not measure browser/GPU time.
-Optional `--baseline=<module path>` compares an independently bundled previous
-simulation on the same travel seed and input; differing combat rules can change
-entity counts, so this comparison does not isolate ECS overhead.
-
-A release or infrastructure freeze also runs `npm run benchmark:check`. CI
-runs the normal gates for pushes and pull requests and enables the 500-iteration
-soak on its scheduled job. The verify job builds once, checks committed demo
-artifacts with `check:generated:built`, and benchmarks that exact output with
-`benchmark:check:built`. It also runs `check:package-boundaries:built` against
-the same outputs so IndexedDB implementations cannot drift back into the root
-bundle. The public `check:generated`, `check:package-boundaries` and
-`benchmark:check` commands remain self-contained for local use.
-
-`check:optimization-gates` validates the deferred-optimization register on
-every CI run. It does not substitute CI software rendering for physical GPU
-evidence: moving a gate out of `deferred` requires committed structured
-measurements and raw artifacts that satisfy the recorded trigger expression.
-
-The hot-path benchmark performs one untimed warmup followed by five timed runs
-for every case and gates the median, not a single cold sample. Its JSON records
-Node/V8, OS, architecture, CPU model, logical CPU count, GC availability, every
-sample, min/max and spread. `--check` requires `--expose-gc`. For controlled
-diagnostics, `FOUNDATION_BENCHMARK_WARMUPS` accepts 1–5 and
-`FOUNDATION_BENCHMARK_SAMPLES` accepts an odd value from 3–15;
-`FOUNDATION_BENCHMARK_SCALE` must be a positive finite threshold multiplier.
-Invalid environment values fail explicitly instead of silently using defaults.
-
-Changes to generator classification, modifiers, vegetation placement, climate
-or surface semantics additionally run:
+For lifecycle changes, in PowerShell:
 
 ```powershell
-npm run review:world-style
+$env:FOUNDATION_SOAK_ITERATIONS='500'
+npm run test:soak
+Remove-Item Env:FOUNDATION_SOAK_ITERATIONS
 ```
 
-Vegetation placement contracts cover coverage of all six edge bands, stable
-LOD subsets, independent request equivalence and scale-dependent trunk spacing
-across model/chunk/toroidal seams. `surfaceHexMarker.test.ts` checks sloped rims,
-bounded projection reuse and invalidation, ray picking and translated worlds.
-`surface-markers.spec.ts` exercises real hover/click wiring with grass and trees
-enabled, captures `vegetation-and-slope-marker.png`, and changes mountain height
-to verify both markers refresh. This complements the standard gallery, whose
-grass is disabled for software-rendering cost.
+Before handing off a running development URL, run `npm run check:app:dev` against
+the existing server on port 5173. This checks actual Vite modules and the unbundled
+Worker, including item generation/pickup, skill dragging, map sampling, narrow
+layouts and shader errors. A production build or HTTP 200 does not prove that the
+development server is serving the current modules. Item-schema or cross-Worker
+contract refactors require a development restart and refresh before this check.
 
-The metrics pass covers four bounded seeds, six 512×512 toroidal seeds, four
-infinite seeds at positive and negative windows, water/land extreme seeds and
-minimum dimensions. It measures water-component dominance and isolation in
-addition to terrain and forest structure. The gallery pass uses
-`quality=gallery`: full terrain materials and
-trees remain enabled, while grass, sky and antialiasing are disabled and tree
-instance density is reduced so all four fixed views remain practical under CI
-software rendering. Per-sample JSON and images are artifacts; topology,
-connectivity and broad composition ranges are the stable gates.
+## CI and release gates
+
+[CI](../.github/workflows/ci.yml) runs the complete verification set on pushes and
+pull requests: documentation, root tests/types, optimization register, library
+build, app types/tests, both game benchmarks, generated artifact consistency,
+package boundaries and library hot-path budgets. Browser jobs then run library
+and game E2E; the scheduled job additionally enables the 500-iteration soak.
+The local matrix selects relevant checks without weakening this CI coverage.
+
+The verify job checks and benchmarks its already-built outputs using
+`check:generated:built`, `check:package-boundaries:built` and `benchmark:check:built`.
+The unsuffixed commands build first and are self-contained for local use.
+Release or infrastructure freeze acceptance runs the complete set and the soak;
+the [freeze contract](foundation-v1-freeze.md) defines the protected invariants.
+
+`check:optimization-gates` validates structured evidence and trigger states; CI
+software rendering does not substitute for physical GPU evidence. Gallery captures,
+pixel comparisons and WebGL counters prove different things from Node CPU timing.
+See [evidence](evidence/README.md) and [game measurements](game/measurements/README.md)
+for historical results with their original conditions.
+
+## Benchmark scope
+
+The library benchmark performs an untimed warmup and five measured runs and gates
+the median. JSON includes runtime, CPU, raw samples and spread. `--check` requires
+`--expose-gc`; warmups accept 1–5, samples an odd 3–15 and threshold scale a positive
+finite value through the `FOUNDATION_BENCHMARK_*` variables. Invalid values fail.
+
+Game timing separates real travel combat, full-capacity AI/movement/attack generation
+and procedural-terrain combat. Travel health is restored between ticks to measure
+the complete route with actual hit settlement; crowded input discards hits so all
+targets remain available. Neither establishes starter-character survival or GPU
+frame rate. Exact scene construction and budgets belong to
+[simulation and AI](game/simulation-and-ai.md) and [terrain navigation](game/terrain-navigation.md).
+
+The query benchmark includes candidate preparation, copy, transfer and join costs,
+with the stationary index built before timing. It measures real Node threads, not
+browser input latency. Serial and scheduled full-capacity queries have budget gates;
+enabling production parallel queries additionally requires an improvement over
+serial execution. Configuration and thresholds belong to the simulation contract.
 
 ## Meaning of the 500-iteration soak
 
-One iteration is one call to `HexMap.loadWorld()` with a new procedural source;
-it is not a simulation turn or a generated terrain tile. Every twenty-fifth
-iteration starts three competing loads to exercise cancellation and stale
-publication, with the last load required to win.
-
-The test waits for the winning render world to settle and samples lifecycle
-work, shared work domains, resident chunks, WebGL resources, pending GPU
-queries, and JavaScript heap use. The active world's minimap may retain its
-designed maximum of two non-critical overview requests with one configured
-Worker busy; the work-domain count must remain fixed so superseded source pools
-cannot accumulate. All other values remain within fixed bounds. Final disposal
-first releases the minimap consumer and then the map, after which no queued
-work or resource-budget reservations may remain. Five hundred iterations are a
-freeze/release confidence gate, not a replacement for the deterministic tests
-that identify a specific failing interleaving.
-
-## Keeping the suite focused
-
-A test should normally be removed or merged when all of the following hold:
-
-- another test exercises the same observable contract through an equal or more
-  realistic path;
-- it does not cover a distinct failure point, version rule, or boundary value;
-- deleting it does not make a regression materially harder to diagnose.
-
-Keep tests that look similar when they isolate different commit points,
-ownership transitions, protocol versions, or resource types. Do not record an
-exact suite count in contracts or release documentation; counts change as
-coverage becomes more precise.
+One iteration is one `HexMap.loadWorld()` replacement, not a tick or terrain tile.
+Every twenty-fifth iteration starts competing loads and requires the last to win.
+The settled session is sampled for lifecycle work, shared work domains, residency,
+WebGL resources, GPU queries and heap bounds. The active minimap may retain its
+designed two non-critical overview requests; superseded work domains cannot accumulate.
+Final disposal releases the minimap and map, leaving no queued work or budget
+reservations. Deterministic interleaving tests remain necessary to diagnose failures.

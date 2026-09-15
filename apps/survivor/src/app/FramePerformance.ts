@@ -18,7 +18,7 @@ class WindowMetric {
     }
 }
 
-export interface FramePerformanceSnapshot {
+interface FramePerformanceSnapshot {
     readonly drawCalls: number | undefined;
     readonly drawCallsP95: number | undefined;
     readonly triangles: number | undefined;

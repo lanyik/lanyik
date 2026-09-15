@@ -106,7 +106,7 @@ export function equipmentScore(bonuses: EquipmentBonuses): number {
     return Math.round(BONUS_IDS.reduce((score, id) => score + bonuses[id] * BONUS_INFO[id].weight, 0));
 }
 
-export function equipmentBase(slot: EquipmentSlot, itemLevel: number): EquipmentBonuses {
+function equipmentBase(slot: EquipmentSlot, itemLevel: number): EquipmentBonuses {
     const bonuses = { ...EMPTY_BONUSES };
     for (const [id, base, growth] of BASES[slot]) bonuses[id] = round(base + itemLevel * growth);
     return Object.freeze(bonuses);

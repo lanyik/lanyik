@@ -20,13 +20,13 @@ export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enem
 export enum Faction { Player, Enemy }
 export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Reave, Volley, Fault, Jaws }
 export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol, Seek }
-export interface ProjectileLaunch {
+interface ProjectileLaunch {
     readonly critical?: boolean; readonly elite?: number; readonly boss?: number;
     readonly height?: number; readonly groundX?: number; readonly groundZ?: number;
     readonly turnRate?: number; readonly velocityY?: number;
 }
 
-export class DamageBuffer {
+class DamageBuffer {
     public count = 0;
     public readonly source = new Float64Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly target = new Float64Array(MAX_ENEMIES + MAX_PROJECTILES);

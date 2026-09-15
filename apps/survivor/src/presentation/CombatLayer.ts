@@ -66,7 +66,7 @@ export function uploadCombatInstances(mesh: InstancedMesh): void {
 }
 
 /** Converts the map's flat-top even-q layout back from logical ground coordinates. */
-export function groundTile(point: { readonly x: number; readonly z: number }): { readonly x: number; readonly y: number } {
+function groundTile(point: { readonly x: number; readonly z: number }): { readonly x: number; readonly y: number } {
     const q = point.x * 2 / 3;
     const r = (point.z - Math.sqrt(3) / 2) / Math.sqrt(3) - q / 2;
     let x = Math.round(q);

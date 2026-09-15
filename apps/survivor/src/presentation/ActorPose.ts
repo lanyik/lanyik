@@ -1,6 +1,6 @@
 import { ActorAction } from "../core/CombatWorld";
 
-export const MOVEMENT_POSES = 8;
+const MOVEMENT_POSES = 8;
 export const IDLE_POSES = 4;
 export const HERO_POSES = MOVEMENT_POSES + IDLE_POSES;
 export const ACTOR_POSES = MOVEMENT_POSES * 2 + IDLE_POSES;

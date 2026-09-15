@@ -56,6 +56,7 @@ describe("regional ecology", () => {
 
     test("uses true hex regions, outward level bands and each spawn's own region at boundaries", () => {
         const world = new RegionalWorld("hex-regions", { x: 20, z: -10 });
+        const checkedChunks = new WeakSet();
         const difficulties = new Set<string>(); let bosses = 0;
         for (let q = -5; q <= 5; q++) for (let r = -5; r <= 5; r++) {
             const region = world.regionAtHex(q, r); difficulties.add(region.difficulty);
@@ -65,9 +66,13 @@ describe("regional ecology", () => {
             expect(region.level).toBeLessThanOrEqual(region.ring * 5 + 5);
             world.synchronize(region.centerX, region.centerZ);
             for (const chunk of world.chunks.values()) {
+                for (const spawn of chunk.spawns) if (spawn.boss && spawn.region.x === q && spawn.region.z === r) bosses++;
+                // Overlapping windows retain immutable spawn/chest layouts. Check each instance once;
+                // reconstructed chunks are new objects and must be validated again.
+                if (checkedChunks.has(chunk)) continue;
+                checkedChunks.add(chunk);
                 for (const spawn of chunk.spawns) {
                     expect(world.regionAt(spawn.x, spawn.z)).toEqual(spawn.region);
-                    if (spawn.boss && spawn.region.x === q && spawn.region.z === r) bosses++;
                     expect(spawn.level).toBeGreaterThanOrEqual(Math.max(1, spawn.region.level - 1));
                 }
                 if (chunk.chest) expect(world.regionAt(chunk.chest.x, chunk.chest.z)).toEqual(chunk.chest.region);

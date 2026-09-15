@@ -23,102 +23,8 @@ ECS 接入时机、技术取舍、实体身份、系统顺序与怪物行为见[
 UI 是浏览器 DOM/CSS，由浏览器布局、绘制和合成，不存在应用侧“全部 UI 一个 draw call”的合同。性能检查用 `node scripts/benchmark-survivor-ui.mjs <预览地址>` 的满背包实测。
 实测方法、对比值和适用范围见 [UI 开销](./game/ui-performance.md)。
 
-```text
-apps/survivor/
-  assets/actors/                 # 固定来源的 CC0/QAL 原始模型、许可证和哈希
-  assets/effects/                # Kenney CC0 透明粒子原图、许可证和哈希
-  assets/environment/            # Kenney 树木、Poly Haven 岩地、许可证与哈希
-  src/core/
-    EntityWorld.ts              # 稳定槽、代际句柄、组件掩码与缓存交集查询
-    CombatWorld.ts              # 玩家/怪物/弹道/经验/物品共享 SoA 与伤害缓冲
-    GameConfig.ts               # 逻辑/AI/UI 频率、线程预算、分类容量、堆叠与品质色
-    CombatState.ts              # UI 快照、输入与表现数据合同
-    CombatCommand.ts            # 战斗命令及确定顺序的提交入口
-    ProjectileBatch.ts          # 数值碰撞快照、可分区计算核与执行端口
-    BehaviorTree.ts             # 响应式组合、Running 与 halt 语义
-    EnemyDefinitions.ts         # 怪物基础属性与攻击时序
-    EnemyBehavior.ts            # 感知、共享行为树、目标与移动意图
-    EnemyActions.ts             # 近战、血契、弯刃及持续实体攻击结算
-    EnemyStrikes.ts             # 权威碰撞与实体表现共用的轨迹/胶囊求交
-    WorldView.ts                # 地形、植被、雾、怪物驻留与显示距离合同
-    CombatSystems.ts            # 移动、扫掠弹道与攻击系统导出
-    AttackGeometry.ts           # 有高度的线段/圆柱首次接触
-    EncounterNavigation.ts      # 随驻留释放的遭遇连通域与合法落点
-    Skills.ts                   # 玩家技能目录、解锁与等级数值
-    SkillSystem.ts              # 四槽装配、技能点、独立冷却、疾行与施放
-    StatusSystem.ts             # 活跃状态、来源、强度、刷新/到期、结界吸收
-    CombatResolution.ts         # 伤害规则、吸血/反伤、受击保护/被动盾冷却
-    CombatVitality.ts           # 实际生命变化与死亡提交
-    CombatEvents.ts             # 有界同步结算事实，不发送给表现端
-    CombatFeedback.ts           # 结算事实转受击闪白与飘字
-    CombatRewards.ts            # 击杀奖励、金币/灵境、物品 ID 与地面物品
-    CombatEffects.ts            # 有界表现事实，不参与伤害判定
-    CombatSimulation.ts         # 固定系统顺序、事件消费编排、物品与成长命令
-    RegionalWorld.ts            # 六边形地域、径向等级带、四圈驻留与单次人口
-    Equipment.ts                # 11 部位、44 基础名称、三轴装备和 38 种词条
-    EquipmentEvaluation.ts      # 最终属性战力、同部位换装比较与安全清理判定
-    CombatStats.ts              # 加点派生、上限转换、攻击/防御公式
-    Loot.ts                     # 品质目录、收益递减和概率分布
-    Orbs.ts                     # 六槽解锁、品质强度、精炼/分解与寻宝共鸣
-    Crafting.ts                 # 共用预检、费用与原子库存事务
-    Recycling.ts                # 分类自动回收品质、售出与粉尘收益
-    CombatTerrain.ts            # 生物通行端口与开放测试场
-    AffixItem.ts                # 可堆叠词条精粹
-    SpiritRealm.ts              # 永久灵魂/属性与严格验证
-    ItemDefinition.ts           # type / value / size 通用物品合同
-    InventoryItem.ts            # 装备/宝珠/药剂/词条联合类型、排序与药剂构造
-    Inventory.ts                # 分类容量与不可变堆叠事务
-    DeterministicRandom.ts       # 可重放随机流
-    FixedStepClock.ts            # 有界固定时钟
-  src/app/
-    CombatView.ts               # 最小表现端口
-    CombatSession.ts            # 帧节奏、有限队列、暂停屏障、可见性与 UI 发布
-    CombatTransport.ts          # 会话使用的异步传输端口
-    WorkerLoadSampler.ts         # 每个活跃 Worker 的一秒负载窗口，无历史积累
-    FramePerformance.ts          # 帧窗口、阶段耗时与输入采样到绘制的延迟
-    bootstrap.tsx               # 组合与生命周期
-  src/worker/
-    WorkerBudget.ts             # 地形、模拟和查询线程的应用预算
-    TaskActivity.ts             # 请求在途时间、完成数与最近耗时
-    CombatWorkerClient.ts       # 主线程统一拥有、连接和销毁战斗 Workers
-    CombatProtocol.ts           # 初始化、批次、快照、错误及容量约束
-    Combat.worker.ts            # 权威模拟 Worker 入口
-    CombatWorkerHost.ts         # 有序命令、固定 tick、阶段等待和快照发布
-    Projectile.worker.ts        # 只计算弹道区间的查询 Worker 入口
-    ProjectileWorkerPool.ts     # 按工作量选择本地计算或双 Worker 分区合并
-    RenderFrame.ts              # 两份循环转移的表现缓冲
-  src/adapters/HexCombatView.ts  # 世界、出生搜索、镜头和输入组合
-  src/adapters/HexRegionMap.ts   # 地形采样分页与地域叠层的适配
-  src/adapters/CombatEnvironment.ts # 渲染与权威共享地形/森林参数
-  src/adapters/ProceduralCombatTerrain.ts # 有界阻挡格与树干足迹缓存
-  src/app/RegionMapBinding.ts    # UI Canvas 装载、展开和释放端口
-  src/presentation/
-    CombatLayer.ts              # 表现层所有权、地形高度和固定实例池
-    ActorModels.ts              # 预烘焙主角/怪物模型、实例动画和释放
-    AssetLoader.ts              # 可取消加载、解码晚到释放和有界角色资源并发
-    SkillEffects.ts             # 单图集实例特效，读取模拟时间
-    SkillsPanel.tsx             # 技能图鉴、固定装配区与升级
-    SkillView.tsx               # 彩色技能图标、详情和主效果摘要
-    SkillSlot.tsx               # HUD/面板共用技能槽、冷却遮罩
-    SkillDrag.tsx               # Pointer Capture 拖拽、键盘装配与取消
-    IconFrame.tsx               # 物品/技能共用四层图标框
-    BoundaryMist.ts             # 边缘三层世界空间流动雾
-    ActorPose.ts                # 循环移动与非循环攻击姿势权重
-    MovementInputController.ts  # 相对镜头 WASD 输入
-    App.tsx / app.css           # 窗口组合、快捷键、战斗 HUD
-    CharacterPanel.tsx          # 固定体位装备、宝珠、加点和概率属性
-    InventoryPanel.tsx          # 紧凑评分物品格、分类、整理、安全清理和物品操作
-    CraftingPanel.tsx           # 格子物品库、四页签打造台与拖拽
-    CraftConfirmation.tsx      # 单次模态：结果预览、费用/收益与危险提示
-    SpiritRealmPanel.tsx        # 灵魂进度和永久属性注入
-    ItemTooltip.tsx             # 图标详情、Alt 固定与单浮窗协调
-    UpgradePrompt.tsx           # 新拾取提升装备的一键穿戴提示
-    WorkerLoadPanel.tsx         # 左上逐 Worker 负载、任务频率与最近耗时
-    ActorVisibility.ts         # 与 AI 圈层解耦的距离淡入淡出
-    RegionMap.tsx               # 右上地形采样地图，柔和难度叠层与玩家坐标
-    ItemView.tsx                # 共用物品图标/详情/感叹号提示
-    UiIcon.tsx                  # 共用界面 SVG 图标
-```
+源码分层及设计归属统一维护在[应用目录说明](../apps/survivor/README.md#源码分层)；玩法合同从[游戏设计索引](game/README.md)查阅。
+应用模块只导出被其他模块或独立行为测试消费的接口；存档槽数、内部返回类型、空间哈希辅助和姿势集合等实现细节保持模块私有。基础库公开 API 按包合同维护，不按应用内部引用数量裁剪。
 
 根包的 `cameraPanEnabled`、`setCameraTarget(worldX,worldZ)` 是通用公开能力，应用不访问 HexMap 私有控制器。
 地形线程观测通过公开的 `HexMap.workerActivity` 读取，不访问地图的私有 Worker 池。
@@ -320,7 +226,6 @@ Vite 保持 React、Three.js、世界运行时的明确分组，生成文件不�
 
 `RuntimeLog.test.ts` 验证跨页保留、条数/字符预算、存储拒绝/配额/损坏；`Bootstrap.test.ts` 验证异常接线及监听清理。
 `inventory-shortcuts.spec.ts` 在真实 Worker 页面检查 Shift+W、连续锁定、Shift+空格长按、解锁自动售出时的浮窗卸载，并通过真实未捕获错误、刷新、下载验证日志保留。
-2026-09-13 验证：应用 193 项单测、类型检查和生产构建通过；装备/快捷键/存档/启动失败与中途关闭共六项浏览器回归通过，500 次世界替换检查通过。
 
 交付正在运行的开发地址前，执行 `npm run check:app:dev`，检查 5173 的实际页面、地形小地图采样完成、五技能 type/value 图标、拖拽装配、着色器错误与窄屏滚动后的关闭按钮，以及未打包模拟 Worker 中三类物品的生成与入包。
 该检查复用正在运行的服务，不替换 Worker 或预先重建服务，能够发现开发服务返回旧模块而磁盘源码已更新的情况。
@@ -338,7 +243,7 @@ Vite 保持 React、Three.js、世界运行时的明确分组，生成文件不�
 图形验收同时采集 console error 与 WebGL/GL/Three warning，覆盖真实纹理上传失败；重开逐次检查旧怪物池和投影已清空。
 各用例共用消息分类，仅排除 Chromium 截图/录像读回时明确报告的 `GL Driver Message (OpenGL, Performance, ...): GPU stall due to ReadPixels` 警告；该提示仍保留在 trace。其他图形 warning、全部 console error 和 pageerror 均失败。
 专门的 Worker 浏览器用例显式启用查询线程；另覆盖 WebGL 创建失败后重试、挂起贴图时关闭，以及新局物品 ID 重用和宝珠拖拽状态重置。
-应用类型、核心测试、两种基准与浏览器测试进入 CI。遵守仓库标准 gate，生命周期与驻留相关修改增加 500 次世界替换 soak。
+应用类型、核心测试、两种基准与浏览器测试进入 CI。本地按[测试策略](testing.md#change-based-local-validation)选择对应验证，生命周期与驻留相关修改增加 500 次世界替换 soak。
 `region-map.spec.ts` 检查地形像素、难度叠层、展开/收起的分页复用、静止无重复请求/重绘、快捷键归属、窄屏边界以及最终缓存和请求释放；坐标单测覆盖正负列格心与跨列连续性。
 
 ## 尚未实现

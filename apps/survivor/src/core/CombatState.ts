@@ -88,8 +88,8 @@ export interface PlayerRenderState {
     readonly gameOver: boolean;
 }
 
-export type EntityView = Readonly<Pick<EntityQuery, "count" | "slots">>;
-export interface CombatRenderEntities {
+type EntityView = Readonly<Pick<EntityQuery, "count" | "slots">>;
+interface CombatRenderEntities {
     readonly ids: Float64Array;
     readonly enemies: EntityView;
     readonly projectiles: EntityView;

@@ -66,6 +66,7 @@
     "check:package-boundaries": "npm run build:lib && npm run check:package-boundaries:built",
     "check:package-boundaries:built": "node scripts/check-package-boundaries.mjs",
     "check:optimization-gates": "node scripts/check-optimization-gates.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:generated": "npm run build && npm run check:generated:built",
     "check:generated:built": "git diff --exit-code -- public/js"
   },

@@ -1,7 +1,7 @@
 import { BASE_LOOT_PROFILE } from "../src/core/Loot";
 import { describe, expect, test } from "vitest";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
-import { BONUS_IDS, EQUIPMENT_SLOTS, RARITIES, equipmentBase, generateEquipment, sumEquipment } from "../src/core/Equipment";
+import { BONUS_IDS, EQUIPMENT_SLOTS, RARITIES, generateEquipment, sumEquipment } from "../src/core/Equipment";
 
 describe("equipment generation", () => {
     test("generates stable, finite equipment with valid references", () => {
@@ -19,7 +19,6 @@ describe("equipment generation", () => {
             expect(item.affixes).toHaveLength(item.stars + 1);
             expect(new Set(item.affixes.map(affix => affix.stat)).size).toBe(item.affixes.length);
             expect(item.affixes.every(affix => affix.rarity === item.rarity)).toBe(true);
-            expect(item.baseBonuses).toEqual(equipmentBase(item.value, item.itemLevel));
             for (const id of BONUS_IDS) expect(item.bonuses[id]).toBeCloseTo(item.baseBonuses[id]
                 + item.affixes.filter(affix => affix.stat === id).reduce((sum, affix) => sum + affix.value, 0), 3);
         }

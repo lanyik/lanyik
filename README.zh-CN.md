@@ -236,22 +236,14 @@ game.dispose();
 | `npm run test:soak` | 按 `FOUNDATION_SOAK_ITERATIONS` 运行替换/资源 soak |
 | `npm run benchmark:check` | 构建并执行热路径回归阈值检查 |
 | `npm run check:generated` | 重建并验证 `public/js` 中提交的生成物 |
+| `npm run check:docs` | 检查本地文档链接、标题锚点与索引可达性 |
 
-普通改动应通过：
-
-```bash
-npm test
-npm run typecheck
-npm run build
-npm run test:e2e
-```
-
-涉及生命周期、Worker、WebGL 恢复、调度、驻留或资源计费的改动还必须运行
-500 次 soak。准确策略和 CI 行为见 [docs/testing.md](docs/testing.md)。
+本地按[变更验证矩阵](docs/testing.md#change-based-local-validation)选择检查，区分文档、基础库、玩法、浏览器、生命周期和性能改动；CI 仍运行完整回归门槛。
 
 ## 文档与路线
 
 [文档索引](docs/README.md) 已按当前架构、冻结合同、专项说明、技术决策和未来设计分类。
+修改前先读[协作指南](CONTRIBUTING.md)，再从[游戏设计索引](docs/game/README.md)或[基础库源码说明](src/README.md)定位所属合同；[应用目录说明](apps/survivor/README.md)提供分层与设计的对应关系。
 
 当前有意保留的边界：
 

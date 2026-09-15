@@ -4,7 +4,7 @@ export const COMBAT_STEP_MS = SIMULATION_STEP_MS;
 const STEP_PHASE = 1_000_000;
 const MAX_FRAME_MICROSECONDS = GAME_CONFIG.timing.maxCatchUpMs * 1000;
 
-export interface ClockSample {
+interface ClockSample {
     readonly steps: number;
     readonly alpha: number;
     readonly clampedMs: number;

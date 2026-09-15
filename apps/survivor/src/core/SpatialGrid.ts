@@ -1,9 +1,9 @@
 /** Logical X/Z cells; hash collisions are checked against full cell coordinates. */
-export const SPATIAL_CELL_SIZE = 4;
-export function spatialBucket(x: number, z: number, mask: number): number {
+const SPATIAL_CELL_SIZE = 4;
+function spatialBucket(x: number, z: number, mask: number): number {
     return (Math.imul(x, 73856093) ^ Math.imul(z, 19349663)) & mask;
 }
-export function spatialBucketCount(capacity: number): number { return 2 ** Math.ceil(Math.log2(capacity * 2)); }
+function spatialBucketCount(capacity: number): number { return 2 ** Math.ceil(Math.log2(capacity * 2)); }
 
 export class SpatialQuery {
     public count = 0;

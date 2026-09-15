@@ -8,12 +8,12 @@ import { ENCOUNTER_CELL, ENCOUNTER_EDGE, EncounterNavigation } from "./Encounter
 export const COMBAT_CHUNK_SIZE = WORLD_VIEW.chunkSize;
 const COMBAT_CHUNK_HALF_SIZE = COMBAT_CHUNK_SIZE / 2;
 export const REGION_RADIUS = 24;
-export const NEAR_CHUNK_RADIUS = 1;
-export const BUFFER_CHUNK_RADIUS = 2;
-export const RETAINED_CHUNK_RADIUS = WORLD_VIEW.residentRadius;
+const NEAR_CHUNK_RADIUS = 1;
+const BUFFER_CHUNK_RADIUS = 2;
+const RETAINED_CHUNK_RADIUS = WORLD_VIEW.residentRadius;
 export const MAX_COMBAT_CHUNKS = (RETAINED_CHUNK_RADIUS * 2 + 1) ** 2;
-export type RegionDifficulty = "normal" | "hard" | "horror";
-export type ResidencyBand = "near" | "buffer" | "retained" | "unloaded";
+type RegionDifficulty = "normal" | "hard" | "horror";
+type ResidencyBand = "near" | "buffer" | "retained" | "unloaded";
 /** Explicit ecological groups: wildlife does not randomly share a cult's camp. */
 export const SETTLEMENTS = Object.freeze({
     brood: Object.freeze({ name: "蛛兽巢群", members: Object.freeze([EnemyKind.Scout, EnemyKind.Scout, EnemyKind.Scout]) }),
@@ -21,15 +21,15 @@ export const SETTLEMENTS = Object.freeze({
     cult: Object.freeze({ name: "祭司据点", members: Object.freeze([EnemyKind.Caster, EnemyKind.Guard, EnemyKind.Healer, EnemyKind.Guard]) }),
     warband: Object.freeze({ name: "混合掠夺营", members: Object.freeze([EnemyKind.Charger, EnemyKind.Grunt, EnemyKind.Caster, EnemyKind.Grunt, EnemyKind.Healer]) })
 });
-export type SettlementKind = keyof typeof SETTLEMENTS;
-export interface Settlement { readonly kind: SettlementKind; readonly x: number; readonly z: number }
+type SettlementKind = keyof typeof SETTLEMENTS;
+interface Settlement { readonly kind: SettlementKind; readonly x: number; readonly z: number }
 export const REGION_RULES = Object.freeze({
     normal: Object.freeze({ name: "常规地域", population: 7, scale: 1, levelOffset: 0, eliteChance: 0.05 }),
     hard: Object.freeze({ name: "困难地域", population: 9, scale: 1.25, levelOffset: 2, eliteChance: 0.2 }),
     horror: Object.freeze({ name: "恐怖地域", population: 10, scale: 1.6, levelOffset: 4, eliteChance: 0.35 })
 });
 export const CHEST_TIERS = ["bronze", "silver", "gold", "diamond", "rainbow"] as const;
-export type ChestTier = typeof CHEST_TIERS[number];
+type ChestTier = typeof CHEST_TIERS[number];
 export const CHEST_RULES: Readonly<Record<ChestTier, { readonly name: string; readonly rarity: Rarity; readonly gold: number }>> = Object.freeze({
     bronze: Object.freeze({ name: "青铜宝箱", rarity: "common", gold: 15 }),
     silver: Object.freeze({ name: "白银宝箱", rarity: "magic", gold: 35 }),
@@ -48,7 +48,7 @@ export interface RegionInfo {
     readonly centerX: number;
     readonly centerZ: number;
 }
-export interface RegionalChest {
+interface RegionalChest {
     readonly x: number;
     readonly z: number;
     readonly tier: ChestTier;
@@ -79,7 +79,7 @@ export interface RegionalChunk {
 }
 
 export function hexDistance(x: number, z: number): number { return Math.max(Math.abs(x), Math.abs(z), Math.abs(x + z)); }
-export function regionCenter(q: number, r: number): { x: number; z: number } {
+function regionCenter(q: number, r: number): { x: number; z: number } {
     return { x: REGION_RADIUS * 1.5 * q, z: REGION_RADIUS * Math.sqrt(3) * (r + q / 2) };
 }
 /** Hexagonal content regions and square residency chunks have separate responsibilities. */
