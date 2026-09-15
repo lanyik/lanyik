@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../src/core/CombatRewards";
 import { afterEach, expect, test, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -14,9 +15,9 @@ import { shareSnapshot } from "../src/app/ShareSnapshot";
 afterEach(() => vi.unstubAllGlobals());
 function fixture() {
     const simulation = new CombatSimulation("character-save");
-    const state = simulation as unknown as { inventory: InventoryItem[]; nextItemId: number; gold: number; orbDust: number };
+    const state = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; orbDust: number };
     state.inventory = [{ ...createStarterEquipment(), id: 2, locked: false }, createOrb(3, "magic", "bounty"), createConsumable(4, "legendary", "mana-percent", 7), createAffixItem(5, { stat: "damage", value: 30, rarity: "rare" })];
-    state.nextItemId = 6; state.gold = 4567; state.orbDust = 89;
+    state.rewards.nextItemId = 6; state.rewards.gold = 4567; state.orbDust = 89;
     simulation.equipOrb(3, 0); simulation.setAutoRecycle("consumable", "common");
     return simulation;
 }

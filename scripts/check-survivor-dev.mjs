@@ -36,7 +36,7 @@ try {
         try {
             const random = new DeterministicRandom("development-items");
             const items = [generateEquipment(random, 9000, 1, BASE_LOOT_PROFILE), generateOrb(random, 9001), createConsumable(9002, "common", "mana", 2)];
-            for (const item of items) simulation.dropItem(item, 0, 0);
+            for (const item of items) simulation.rewards.drop(item, 0, 0);
             simulation.collectEquipment();
             return simulation.getSnapshot().player.inventory.map(item => ({ type: item.type, value: item.value, size: item.size }));
         } finally { simulation.dispose(); }

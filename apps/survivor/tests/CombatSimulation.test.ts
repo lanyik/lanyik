@@ -1,3 +1,4 @@
+import type { CombatResolution } from "../src/core/CombatResolution";
 import { ticksForSeconds } from "../src/core/GameConfig";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test, vi } from "vitest";
@@ -123,7 +124,7 @@ describe("CombatSimulation", () => {
 
     test("keeps fresh threats ahead and releases old entities during sustained straight travel", () => {
         const combat = new CombatSimulation("forward-pressure");
-        (combat as unknown as { damageImmunity: number }).damageImmunity = 60; // Isolate residency from higher-region damage.
+        (combat as unknown as { resolution: CombatResolution; }).resolution.damageImmunity = 60; // Isolate residency from higher-region damage.
         const initial = enemySamples(combat.getRenderState());
         const oldIds = new Set(initial.map(enemy => enemy.id));
         let checkpointsWithThreats = 0;

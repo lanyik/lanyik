@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, generateEquipment, type Equipment } from "../../src/core/Equipment";
@@ -128,8 +129,8 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await combatWorker(page).evaluate(item => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const player = simulation.getSnapshot().player;
-        const source = simulation as unknown as { dropItem(item: Equipment, x: number, z: number): void; collectEquipment(): void };
-        source.dropItem(item, player.x, player.z); source.collectEquipment();
+        const source = simulation as unknown as { rewards: CombatRewards; collectEquipment(): void };
+        source.rewards.drop(item, player.x, player.z); source.collectEquipment();
     }, pickup);
     await page.evaluate(async () => {
         const session = window.survivorApplication!.session;

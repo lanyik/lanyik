@@ -3,7 +3,7 @@
 生物的树干、陡坡和水体阻挡由 `CombatTerrain` 注入，普通移动、冲锋/冲刺、刷怪与宝箱净空共用规则，详见[地形通行与刷怪](terrain-navigation.md)。
 
 本设计已实现于 `apps/survivor/src/core/{EntityWorld,CombatWorld,BehaviorTree,EnemyBehavior,EnemyActions,EnemyStrikes,CombatSystems,EnemyDefinitions,CombatSimulation,CombatText,SpatialGrid,ProjectileBatch,CombatCommand,WorldView}.ts` 及 `src/worker/`。
-应用边界见[应用设计](../app-development.md)，数值与奖励见[战斗合同](combat-and-progression.md)，动作资源见[资产合同](actor-assets.md)，玩家技能与图集见[技能合同](skills-and-effects.md)。
+应用边界见[应用设计](../app-development.md)，数值与奖励见[战斗合同](combat-and-progression.md)，动作资源见[资产合同](actor-assets.md)，玩家技能与图集见[技能合同](skills-and-effects.md)。伤害、生命提交、状态、奖励和反馈已拆为独立模块，所有权和后续系统接入见[战斗架构](combat-architecture.md)。
 
 ## 技术选择与接入时机
 
@@ -71,7 +71,7 @@ UI 读取独立的低频快照，并在结构化克隆后重新递归冻结。�
 
 逻辑固定 120Hz，每 tick 为 1000/120ms，顺序固定：
 
-1. 保存玩家上一位置、推进冷却、护盾期限与表现效果，执行疾行或普通移动；
+1. 保存玩家上一位置、推进冷却、`StatusSystem` 活跃状态与表现效果，执行疾行或普通移动；
 2. 同步地域驻留，先卸载失效实体；玩家通行格或窗口改变时传播可达性、启用符合条件的待出生人口并刷新宝箱；
 3. 玩家索敌与发射，推进已有弹道，批量结算命中；若玩家死亡立即结束 tick；
 4. 每 12 tick 按槽顺序尝试自动技能，逐技能结算，死亡怪物不再参与本 tick 的行为决策；
@@ -79,7 +79,7 @@ UI 读取独立的低频快照，并在结构化克隆后重新递归冻结。�
 6. 玩家存活时处理经验、地面物品、宝箱，以及每 60 tick 的血蓝回复。
 
 行为树决策和怪物动作执行期间不销毁怪物；感知阶段可以先移除已经卸载的实体。
-伤害先写入有界缓冲，在其所属阶段之后统一提交。攻击暴击结果随缓冲传递，最终生命损失和防御结果写入 `CombatText`；事实在 Worker 发布期间保留，表现不重算伤害。成长与同级装备压力门槛见[数值校准](combat-balance.md)，飘字生命周期和批次见[技能合同](skills-and-effects.md#伤害飘字)。
+伤害先写入有界缓冲，在其所属阶段之后由 `CombatResolution` 提交。攻击暴击结果随缓冲传递，实际生命损失、防御与死亡进入 `CombatEvents`；每笔命中及派生效果完成后同步消费，再处理下一笔。`CombatFeedback` 生成跨 Worker 发布保留的 `CombatText`，`CombatRewards` 消费死亡事实并保持原掉落随机顺序。表现不重算伤害。成长与同级装备压力门槛见[数值校准](combat-balance.md)，飘字生命周期和批次见[技能合同](skills-and-effects.md#伤害飘字)。
 销毁立即从 ECS 查询与空间索引移除；驻留和弹道系统使用“不递增当前游标”的交换删除循环。
 范围技能与拾取先取得独立的空间候选槽列表，再按完整句柄升序提交，不受哈希链顺序或 ECS 末项交换影响。
 创建/销毁不会隐式触发其他系统或重入用户代码。

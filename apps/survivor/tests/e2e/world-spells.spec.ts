@@ -1,3 +1,4 @@
+import type { CombatResolution } from "../../src/core/CombatResolution";
 import { expect, test } from "@playwright/test";
 import type { Group, PerspectiveCamera, WebGLRenderer, Scene, Fog, CubeTexture, InstancedMesh } from "three";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
@@ -63,8 +64,8 @@ test("the HDR skybox rotates beyond terrain fog; enemy weapons close, travel and
     expect(await readSky()).toEqual(sky);
     const spawn = async (kind: number, boss: boolean, distance: number) => combatWorker(page).evaluate(({ kind, boss, distance }) => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number; damageImmunity: number };
-        fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.damageImmunity = 1000;
+        const fixture = simulation as unknown as { resolution: CombatResolution; entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number; };
+        fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.resolution.damageImmunity = 1000;
         const e = fixture.entities, p = e.position, player = e.player;
         while (e.enemies.count) e.remove(e.enemies.slots[0]); while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
         e.effects.buffer.count = 0;

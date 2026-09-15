@@ -1,6 +1,6 @@
 # 玩家技能与战斗特效
 
-对应 `core/Skills.ts`、`SkillSystem.ts`、`CombatEffects.ts`、`CombatSimulation.ts`、
+对应 `core/Skills.ts`、`SkillSystem.ts`、`StatusSystem.ts`、`CombatEffects.ts`、`CombatSimulation.ts`、
 `worker/RenderFrame.ts`、`presentation/{SkillsPanel,SkillView,SkillSlot,SkillDrag}.tsx`、`SkillEffects.ts` 与 `scripts/lib/survivor-effects.mjs`。
 怪物行为与攻击见[模拟合同](simulation-and-ai.md)，装备派生属性见[战斗数值](combat-and-progression.md)。
 
@@ -53,7 +53,7 @@ F 开关自动施法：每 12 tick（10Hz）按槽顺序检查，逐技能结算
 
 结界在被动免伤盾、闪避、防御与格挡之后吸收剩余伤害，生命损失和反伤仅使用穿透结界的部分。
 已有结界时不允许刷新；到期后清零，吸收耗尽则立即归零。结界是施放时最大生命的快照，换装不重算已有值。
-这些状态均归 `SkillSystem` 所有，没有逐技能计时器或额外 Worker；怪物减速直接使用 ECS 数组。
+减速、保护减伤和吸收结界统一归 `StatusSystem` 所有，`SkillSystem` 保留技能装配、等级、冷却与疾行。状态采用活跃项列表推进，来源和刷新语义见[结算与状态边界](combat-architecture.md#状态合同)；结界耗尽时剩余值和期限同时清零。
 
 ## 免费资源与批量表现
 
@@ -119,7 +119,8 @@ F 开关自动施法：每 12 tick（10Hz）按槽顺序检查，逐技能结算
 
 ## 伤害飘字
 
-`CombatText` 在权威结算中记录实际生命损失，包含普攻、技能、反伤，暴击标记从攻击结果经弹道/命中缓冲传入，不在表现端重新掷骰。过量伤害只显示剩余生命；闪避、免伤盾、结界全吸收和零伤格挡显示对应文字，受击免疫期内未结算的攻击不刷字。
+`CombatVitality` 记录实际生命损失到模拟内部 `CombatEvents`，`CombatFeedback` 再写入 `CombatText`，包含普攻、技能、反伤。暴击标记从攻击结果经弹道/命中缓冲传入，不在表现端重新掷骰。过量伤害只显示剩余生命；闪避、免伤盾、结界全吸收和零伤格挡显示对应文字，受击免疫期内未结算的攻击不刷字。献血、治疗和死亡事实不直接生成飘字；奖励不依赖飘字是否显示。
+表现时间与飘字出生时间统一使用 `tick / simulationHz` 换算；不使用累计或乘法近似，避免部分 tick 出现极小负年龄，使暂停在命中时的新飘字一直隐藏。
 
 最多 256 条事实保留 .95 秒，同一完整实体句柄和类型在首击后 .08 秒内合并；普通与暴击不合并，实体槽复用不会串字。死亡不清掉已有飘字；容量满覆盖最旧的显示事实，不影响任何战斗结算。暂停冻结模拟时间，重开清空表现缓存。
 

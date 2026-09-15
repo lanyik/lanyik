@@ -1,0 +1,65 @@
+{
+  "context": {
+    "node": "v22.16.0",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+    "simulationHz": 120,
+    "activeAiHz": 30,
+    "gc": true,
+    "timing": "one warmup, five samples, simulation only; travel restores health between ticks while retaining hit settlement; no browser/GPU claim"
+  },
+  "results": {
+    "travel": {
+      "samplesMsPerTick": [
+        0.08135461805555558,
+        0.08019288194444442,
+        0.0824470486111111,
+        0.07731065972222224,
+        0.07683749999999998
+      ],
+      "medianMsPerTick": 0.08019288194444442,
+      "budgetMsPerTick": 0.5,
+      "workload": {
+        "msPerTick": 0.07683749999999998,
+        "ticks": 2880,
+        "enemies": 620,
+        "kills": 23
+      }
+    },
+    "crowded": {
+      "samplesMsPerTick": [
+        0.3120689999999998,
+        0.31221666666666653,
+        0.3127423333333339,
+        0.3134936666666666,
+        0.310921999999999
+      ],
+      "medianMsPerTick": 0.31221666666666653,
+      "budgetMsPerTick": 3,
+      "workload": {
+        "msPerTick": 0.310921999999999,
+        "ticks": 300,
+        "enemies": 896,
+        "projectiles": 128
+      }
+    },
+    "terrain": {
+      "samplesMsPerTick": [
+        0.28309083333333396,
+        0.2794881666666667,
+        0.28258416666666564,
+        0.28184033333333447,
+        0.2805231666666668
+      ],
+      "medianMsPerTick": 0.28184033333333447,
+      "budgetMsPerTick": 3,
+      "workload": {
+        "msPerTick": 0.2805231666666668,
+        "coldStartMs": 257.34349999999995,
+        "ticks": 600,
+        "chunks": 110
+      }
+    }
+  }
+}

@@ -9,6 +9,9 @@ import { RARITIES } from "./Equipment";
 import { REGION_RULES, type RegionalChunk, type RegionInfo, type RegionalSpawn } from "./RegionalWorld";
 import { groundItemKind, type InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
+import { CombatEvents } from "./CombatEvents";
+import { CombatVitality } from "./CombatVitality";
+import { StatusSystem } from "./StatusSystem";
 import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
@@ -55,7 +58,9 @@ export class CombatWorld {
     private readonly nearby = new SpatialQuery(ENTITY_CAPACITY);
     public readonly impacts = new DamageBuffer();
     public readonly effects = new CombatEffects();
-    public readonly status = { slowUntil: new Float64Array(ENTITY_CAPACITY), slowScale: new Float32Array(ENTITY_CAPACITY), wardUntil: new Float64Array(ENTITY_CAPACITY) };
+    public readonly status = new StatusSystem(this.world);
+    public readonly events = new CombatEvents();
+    public readonly vitality = new CombatVitality(this);
     public readonly projectileBatch = new ProjectileBatch();
     public readonly projectileBatchIndices = new Uint16Array(ENTITY_CAPACITY);
     public readonly projectileEnemyIndices = new Uint16Array(ENTITY_CAPACITY);
@@ -128,7 +133,7 @@ export class CombatWorld {
         e.runningNode[slot] = -1; e.target[slot] = 0; e.intent[slot] = MoveIntent.None; e.active[slot] = e.awake[slot] = e.returning[slot] = 0;
         e.patrolX[slot] = spawn.x; e.patrolZ[slot] = spawn.z; e.patrolStep[slot] = e.patrolWaitUntil[slot] = 0;
         e.supportTarget[slot] = e.senseAt[slot] = e.specialReadyAt[slot] = e.enraged[slot] = 0;
-        this.status.slowUntil[slot] = this.status.wardUntil[slot] = e.attackStep[slot] = 0; this.status.slowScale[slot] = 1;
+        this.status.clear(slot); e.attackStep[slot] = 0;
         a.targetX[slot] = spawn.x; a.targetZ[slot] = spawn.z;
         a.target[slot] = a.variant[slot] = 0;
         a.kind[slot] = ActorAction.Idle; a.started[slot] = a.hitAt[slot] = a.endsAt[slot] = a.readyAt[slot] = a.progress[slot] = a.committed[slot] = 0;
@@ -189,7 +194,7 @@ export class CombatWorld {
         this.enemy.homes[slot] = this.enemy.regions[slot] = undefined;
         this.enemy.target[slot] = this.projectile.source[slot] = 0;
         this.enemy.supportTarget[slot] = this.action.target[slot] = 0;
-        this.status.slowUntil[slot] = this.status.wardUntil[slot] = 0;
+        this.status.clear(slot);
         this.enemy.runningNode[slot] = -1;
         this.world.destroy(this.world.ids[slot]);
     }

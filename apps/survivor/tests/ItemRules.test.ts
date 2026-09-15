@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../src/core/CombatRewards";
 import { expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { compareInventoryItems, createConsumable, generateConsumable, potionRecovery, selectConsumable, POTION_TYPES, type InventoryItem } from "../src/core/InventoryItem";
@@ -94,16 +95,15 @@ test("orb swaps are atomic with a full orb bag, preserve ratings and reject lock
 
 test("unloading permanently removes all ground item categories and XP; revisiting does not resurrect their identities", () => {
     const simulation = new CombatSimulation("ground-expiry"), random = new DeterministicRandom("orb-expiry");
-    const fixture = simulation as unknown as { world: RegionalWorld; entities: CombatWorld; groundItems: Map<number, InventoryItem>;
-        dropItem(item: InventoryItem, x: number, z: number): void; reconcileRegions(): void };
+    const fixture = simulation as unknown as { rewards: CombatRewards; world: RegionalWorld; entities: CombatWorld; reconcileRegions(): void };
     const { x, z } = simulation.getSnapshot().player;
-    for (const item of [createStarterEquipment(), createConsumable(10, "common", "mana"), generateOrb(random, 11)]) fixture.dropItem(item, x, z);
+    for (const item of [createStarterEquipment(), createConsumable(10, "common", "mana"), generateOrb(random, 11)]) fixture.rewards.drop(item, x, z);
     fixture.entities.spawnExperience(x, z, 5);
     fixture.world.synchronize(x + 12, z); fixture.reconcileRegions();
-    expect(fixture.groundItems.size).toBe(3);
+    expect(fixture.rewards.groundItems.size).toBe(3);
     fixture.world.synchronize(x + 120, z); fixture.reconcileRegions();
-    expect(fixture.groundItems.size).toBe(0); expect(fixture.entities.loot.count).toBe(0); expect(fixture.entities.experience.count).toBe(0);
+    expect(fixture.rewards.groundItems.size).toBe(0); expect(fixture.entities.loot.count).toBe(0); expect(fixture.entities.experience.count).toBe(0);
     fixture.world.synchronize(x, z); fixture.reconcileRegions();
-    expect(fixture.groundItems.size).toBe(0); expect(fixture.entities.loot.count).toBe(0); expect(fixture.entities.experience.count).toBe(0);
+    expect(fixture.rewards.groundItems.size).toBe(0); expect(fixture.entities.loot.count).toBe(0); expect(fixture.entities.experience.count).toBe(0);
     simulation.dispose();
 });

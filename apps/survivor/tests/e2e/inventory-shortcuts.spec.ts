@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment } from "../../src/core/Equipment";
@@ -17,7 +18,8 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     const weak: Equipment = { ...base, id: 901, name: "解锁回收测试弩", locked: true, bonuses, baseBonuses: bonuses, affixes: [], score: equipmentScore(bonuses) };
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        Object.assign(simulation, { inventory: items, nextItemId: 10_000 });
+        Object.assign(simulation, { inventory: items });
+        (simulation as unknown as { rewards: CombatRewards }).rewards.nextItemId = 10_000;
     }, [{ ...base, id: 900, locked: true }, weak]);
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true }), cell = bag.locator('[data-item-id="900"]');

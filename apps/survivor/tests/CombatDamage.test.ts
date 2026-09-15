@@ -1,3 +1,4 @@
+import type { CombatResolution } from "../src/core/CombatResolution";
 import { ENEMY_DEFINITIONS } from "../src/core/EnemyDefinitions";
 import { expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -7,12 +8,12 @@ import type { DerivedStats } from "../src/core/CombatStats";
 
 function encounter() {
     const combat = new CombatSimulation("damage-boundary");
-    const fixture = combat as unknown as { entities: CombatWorld; world: RegionalWorld; stats: DerivedStats;
-        autoCast: boolean; attackCooldown: number; shieldCooldown: number; health: number };
+    const fixture = combat as unknown as { resolution: CombatResolution; entities: CombatWorld; world: RegionalWorld; stats: DerivedStats;
+        autoCast: boolean; attackCooldown: number; health: number };
     const e = fixture.entities;
     for (const chunk of fixture.world.chunks.values()) chunk.chestOpened = true;
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
-    fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.shieldCooldown = 1000;
+    fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.resolution.shieldCooldown = 1000;
     fixture.stats = { ...fixture.stats, evasion: 0, blockChance: 0, accuracy: 1.1, thorns: 1, thornsCap: 2 };
     const home = fixture.world.chunks.get("0,0")!;
     const spawn = { x: 0, z: .8, kind: 0 as const, level: 1, elite: false, boss: false, region: fixture.world.regionAt(0, .8) };
@@ -73,16 +74,16 @@ test("a lethal melee hit and lethal reflection award the kill while preserving g
 test("dash immunity rejects real impacts without consuming the passive shield", () => {
     const { combat, fixture, e, home, spawn } = encounter();
     const source = e.spawnEnemy({ ...spawn, x: 10 }, home);
-    const health = fixture.health; fixture.shieldCooldown = 0;
+    const health = fixture.health; fixture.resolution.shieldCooldown = 0;
     combat.castSkill("dash");
     for (let tick = 1; tick <= 30; tick++) {
         e.impacts.add(e.world.ids[source], e.world.ids[e.player], 100);
         combat.step({ x: 0, z: 0, active: false });
     }
-    expect(fixture.health).toBe(health); expect(fixture.shieldCooldown).toBe(0);
+    expect(fixture.health).toBe(health); expect(fixture.resolution.shieldCooldown).toBe(0);
     e.impacts.add(e.world.ids[source], e.world.ids[e.player], 100);
     combat.step({ x: 0, z: 0, active: false });
-    expect(fixture.shieldCooldown).toBeGreaterThan(0);
+    expect(fixture.resolution.shieldCooldown).toBeGreaterThan(0);
 });
 
 test("heavy guard reduces frontal damage only outside its committed attack", () => {

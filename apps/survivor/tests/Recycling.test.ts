@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../src/core/CombatRewards";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { createStarterEquipment, EMPTY_BONUSES, type Equipment } from "../src/core/Equipment";
@@ -9,7 +10,7 @@ import { recycleRef, recycleReward } from "../src/core/Recycling";
 const weak = (id: number): Equipment => ({ ...createStarterEquipment(), id, locked: false, bonuses: EMPTY_BONUSES });
 function setup(items: InventoryItem[]) {
     const simulation = new CombatSimulation("recycling");
-    const fixture = simulation as unknown as { inventory: InventoryItem[]; dropItem(item: InventoryItem, x: number, z: number): void; collectEquipment(): void };
+    const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; collectEquipment(): void };
     fixture.inventory = items;
     return { simulation, fixture };
 }
@@ -62,7 +63,7 @@ describe("category recycling", () => {
         const { simulation, fixture } = setup([createOrb(10, "common", "fortune")]);
         simulation.equipOrb(10, 0); simulation.setAutoRecycle("orb", "rainbow");
         fixture.inventory = Array.from({ length: 48 }, (_, i) => createOrb(100 + i, "rainbow", "bounty"));
-        fixture.dropItem(createOrb(999, "rare", "fortune"), 0, 0); fixture.collectEquipment();
+        fixture.rewards.drop(createOrb(999, "rare", "fortune"), 0, 0); fixture.collectEquipment();
         const after = simulation.getSnapshot().player;
         expect(after.orbDust).toBe(9); expect(after.orbs[0]?.id).toBe(10); expect(after.inventory).toHaveLength(48);
         simulation.removeOrb(0);

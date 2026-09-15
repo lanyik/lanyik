@@ -1,3 +1,4 @@
+import { defeatEnemy } from "./helpers/settleCombat";
 import { expect, test, vi } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { EMPTY_SPIRIT_REALM, spiritLevel, validateSpiritRealm } from "../src/core/SpiritRealm";
@@ -8,11 +9,11 @@ import type { CombatWorld } from "../src/core/CombatWorld";
 
 test("every normal, elite and boss kill grants exactly one soul; persistent points add to a fresh run", () => {
     const simulation = new CombatSimulation("souls", { x: 0, z: 0 }, { ...EMPTY_SPIRIT_REALM, souls: 999 });
-    const fixture = simulation as unknown as { entities: CombatWorld; killEnemy(index: number): void };
+    const fixture = simulation as unknown as { entities: CombatWorld };
     for (let i = 0; i < 3; i++) {
         const slot = fixture.entities.enemies.slots[0];
         fixture.entities.enemy.elite[slot] = i > 0 ? 1 : 0; fixture.entities.enemy.boss[slot] = i === 2 ? 1 : 0;
-        fixture.killEnemy(slot);
+        defeatEnemy(simulation, slot);
     }
     expect(simulation.spiritProgress.souls).toBe(1002); expect(simulation.getSnapshot().kills).toBe(3);
     const before = simulation.getSnapshot().player;
@@ -37,14 +38,14 @@ test("authority publishes soul changes only after durable save, batches saves an
     let simulation!: CombatSimulation, release!: () => void;
     const host = new CombatWorkerHost(response => responses.push(response), repository, (seed, start, realm) => simulation = new CombatSimulation(seed, start, realm));
     await host.receive({ type: "init", id: 1, seed: "save-order", start: { x: 0, z: 0 }, ports: [] });
-    const fixture = simulation as unknown as { entities: CombatWorld; killEnemy(index: number): void };
-    fixture.killEnemy(fixture.entities.enemies.slots[0]); fixture.killEnemy(fixture.entities.enemies.slots[0]);
+    const fixture = simulation as unknown as { entities: CombatWorld };
+    defeatEnemy(simulation, fixture.entities.enemies.slots[0]); defeatEnemy(simulation, fixture.entities.enemies.slots[0]);
     const save = vi.spyOn(repository, "save").mockImplementationOnce(async realm => { await new Promise<void>(resolve => release = resolve); repository.realm = realm; });
     const advance = host.receive({ type: "advance", id: 2, batch: { steps: 0, commands: [], input: { x: 0, z: 0, active: false } } });
     expect(save).toHaveBeenCalledOnce(); expect(responses).toHaveLength(1);
     release(); await advance; expect(repository.realm.souls).toBe(2);
     expect(responses[1]).toMatchObject({ type: "state", update: { snapshot: { player: { spiritRealm: { souls: 2 } } } } });
-    fixture.killEnemy(fixture.entities.enemies.slots[0]);
+    defeatEnemy(simulation, fixture.entities.enemies.slots[0]);
     save.mockRejectedValueOnce(new Error("磁盘保存失败"));
     const previous = responses[1]; if (previous.type !== "state") throw new Error("Missing state");
     await host.receive({ type: "advance", id: 3, recycle: previous.update.render.buffer, batch: { steps: 0, commands: [], input: { x: 0, z: 0, active: false } } });

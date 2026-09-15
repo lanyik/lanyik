@@ -1,8 +1,8 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { expect, test } from "@playwright/test";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { CombatRenderState } from "../../src/core/CombatState";
-import type { InventoryItem } from "../../src/core/InventoryItem";
 import type { CombatLayer } from "../../src/presentation/CombatLayer";
 import type { LootModels } from "../../src/presentation/LootModels";
 import type { LootEffects } from "../../src/presentation/LootEffects";
@@ -18,13 +18,13 @@ test("equipment and potions attract through the Worker and interpolate together 
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     const distance = await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { entities: CombatWorld; autoCast: boolean; attackCooldown: number;
-            dropItem(item: InventoryItem, x: number, z: number): void };
+        const fixture = simulation as unknown as { rewards: CombatRewards; entities: CombatWorld; autoCast: boolean; attackCooldown: number;
+            };
         fixture.autoCast = false; fixture.attackCooldown = 1000;
         const e = fixture.entities; while (e.enemies.count) e.remove(e.enemies.slots[0]);
         const player = simulation.getSnapshot().player, distance = player.stats.pickupRadius * .9;
-        fixture.dropItem({ ...player.equipment.weapon!, id: 900 }, player.x + distance, player.z);
-        fixture.dropItem({ type: "consumable", value: "mana", name: "Test potion", rarity: "common", id: 901, size: 2 }, player.x + distance, player.z);
+        fixture.rewards.drop({ ...player.equipment.weapon!, id: 900 }, player.x + distance, player.z);
+        fixture.rewards.drop({ type: "consumable", value: "mana", name: "Test potion", rarity: "common", id: 901, size: 2 }, player.x + distance, player.z);
         return distance;
     });
     expect(distance).toBeGreaterThan(.75); await advanceCombat(page, 10);

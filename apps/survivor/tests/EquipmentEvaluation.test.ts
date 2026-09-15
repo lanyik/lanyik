@@ -1,3 +1,5 @@
+import type { CombatResolution } from "../src/core/CombatResolution";
+import type { CombatRewards } from "../src/core/CombatRewards";
 import { recycleRef } from "../src/core/Recycling";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -53,8 +55,8 @@ describe("equipment evaluation and safe cleanup", () => {
 
     test("temporary recovery equipment cannot shorten an already triggered passive shield cooldown", () => {
         const combat = withInventory([gear(2, { shieldRecovery: .532 }, "charm")]);
-        const fixture = combat as unknown as { shieldCooldown: number };
-        fixture.shieldCooldown = 11.9;
+        const fixture = combat as unknown as { resolution: CombatResolution; };
+        fixture.resolution.shieldCooldown = 11.9;
         combat.equip(2);
         expect(combat.getSnapshot().player.stats.shieldRecovery).toBe(11.468);
         expect(combat.getSnapshot().player.shieldRemaining).toBe(11.9);
@@ -128,17 +130,17 @@ describe("equipment evaluation and safe cleanup", () => {
 
     test("blocked low-level chest upgrades preserve the chest, RNG and IDs until every reward fits", () => {
         const combat = withInventory(Array.from({ length: INVENTORY_CAPACITY }, (_, i) => gear(i + 100, { armor: 1 }, "head")));
-        const fixture = combat as unknown as { world: RegionalWorld; playerX: number; playerZ: number;
-            random: DeterministicRandom; nextItemId: number; openNearbyChest(): void };
+        const fixture = combat as unknown as { rewards: CombatRewards; world: RegionalWorld; playerX: number; playerZ: number;
+            random: DeterministicRandom; openNearbyChest(): void };
         const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest && chunk.band === "near")!;
         fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
         combat.setAutoRecycle("equipment", "rainbow");
         const before = combat.getSnapshot();
         const random = fixture.random.clone();
-        const id = fixture.nextItemId;
+        const id = fixture.rewards.nextItemId;
         fixture.openNearbyChest();
         expect(chunk.chestOpened).toBe(false);
-        expect(fixture.nextItemId).toBe(id);
+        expect(fixture.rewards.nextItemId).toBe(id);
         expect(fixture.random.clone().nextUint32()).toBe(random.clone().nextUint32());
         expect(combat.getSnapshot().player.inventory).toEqual(before.player.inventory);
         expect(combat.getSnapshot().player.gold).toBe(before.player.gold);
@@ -146,18 +148,18 @@ describe("equipment evaluation and safe cleanup", () => {
         fixture.openNearbyChest();
         expect(chunk.chestOpened).toBe(true);
         expect(combat.getSnapshot().player.inventory.length).toBeLessThanOrEqual(INVENTORY_CAPACITY);
-        expect(fixture.nextItemId).toBe(id + (chunk.chest!.hasOrb ? 3 : 2));
+        expect(fixture.rewards.nextItemId).toBe(id + (chunk.chest!.hasOrb ? 3 : 2));
     });
 
     test("ground pickups preserve stronger gear even at a lower level and issue acquisition IDs only on success", () => {
         const combat = withInventory(Array.from({ length: INVENTORY_CAPACITY }, (_, i) => gear(i + 100, { armor: 1 }, "head")));
-        const fixture = combat as unknown as { dropItem(item: InventoryItem, x: number, z: number): void; collectEquipment(): void };
+        const fixture = combat as unknown as { rewards: CombatRewards; collectEquipment(): void };
         const player = combat.getSnapshot().player;
         const upgrade = gear(2, { damage: 30 });
         const inferior = gear(3, { damage: 1 });
         combat.setAutoRecycle("equipment", "rainbow");
-        fixture.dropItem(upgrade, player.x, player.z);
-        fixture.dropItem(inferior, player.x, player.z);
+        fixture.rewards.drop(upgrade, player.x, player.z);
+        fixture.rewards.drop(inferior, player.x, player.z);
         fixture.collectEquipment();
         expect(combat.getSnapshot().groundEquipment).toBe(1);
         expect(combat.getSnapshot().player.recycled.equipment).toBe(1);

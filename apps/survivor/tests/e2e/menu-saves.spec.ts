@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment } from "../../src/core/Equipment";
 import { createConsumable, type InventoryItem } from "../../src/core/InventoryItem";
@@ -9,7 +10,8 @@ import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/brows
 async function inventory(page: Parameters<typeof combatWorker>[0], items: InventoryItem[]) {
     await combatWorker(page).evaluate(items => {
         const s = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        Object.assign(s, { inventory: items, nextItemId: 10_000, gold: 12345, orbDust: 321 });
+        Object.assign(s, { inventory: items, orbDust: 321 });
+        Object.assign((s as unknown as { rewards: CombatRewards }).rewards, { nextItemId: 10_000, gold: 12345 });
     }, items);
     await page.evaluate(async () => { const s = window.survivorApplication!.session; s.dispatch({ type: "sort-inventory" }); await s.settled; });
 }

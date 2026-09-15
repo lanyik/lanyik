@@ -1,3 +1,4 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, EMPTY_BONUSES } from "../../src/core/Equipment";
 import { generateOrb } from "../../src/core/Orbs";
@@ -26,11 +27,11 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     ];
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { inventory: InventoryItem[]; entities: CombatWorld; dropItem(item: InventoryItem, x: number, z: number): void };
+        const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; entities: CombatWorld; };
         fixture.inventory = items;
         fixture.entities.effects.buffer.count = 0;
         const { x, z } = simulation.getSnapshot().player;
-        items.forEach((item, i) => fixture.dropItem({ ...item, id: item.id + 1000 }, x - 4 + i * .9, z + 3));
+        items.forEach((item, i) => fixture.rewards.drop({ ...item, id: item.id + 1000 }, x - 4 + i * .9, z + 3));
     }, items);
     await page.evaluate(async () => {
         const session = window.survivorApplication!.session;

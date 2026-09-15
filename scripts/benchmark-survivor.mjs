@@ -49,10 +49,12 @@ function crowded() {
     // Separated misses exercise broad-phase rejection at maximum resident population.
     for (let index = 0; index < 128; index++) entities.spawnProjectile(entities.world.ids[entities.player], Faction.Player, 100, 100, .01, 0, 1, 1000);
     const behavior = new EnemyBehavior(entities, regions), ticks = 300;
+    const discardEvents = () => {};
     const started = performance.now();
     for (let tick = 1; tick <= ticks; tick++) {
+        entities.status.advance(tick);
         advanceProjectiles(entities); behavior.update(tick); moveEnemies(entities, tick); advanceEnemyActions(entities, tick);
-        entities.impacts.count = 0;
+        entities.impacts.count = 0; entities.events.drain(discardEvents);
     }
     const elapsed = performance.now() - started;
     assert.equal(entities.enemies.count, current.MAX_ENEMIES); assert.equal(entities.projectiles.count, 128);

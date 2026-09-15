@@ -1,3 +1,4 @@
+import { StatusKind } from "./StatusSystem";
 import { CombatWorld, Component } from "./CombatWorld";
 import { EffectKind } from "./CombatEffects";
 import { rollAttack, type DerivedStats } from "./CombatStats";
@@ -14,25 +15,27 @@ export class SkillSystem {
     private readonly ranks = new Uint8Array(SKILL_IDS.length).fill(1);
     private readonly readyAt = new Float64Array(SKILL_IDS.length);
     private readonly chainSlots = new Int32Array(chainTargets(GAME_CONFIG.skills.maxRank));
-    private wardValue = 0;
-    private wardUntil = 0;
     private dashUntil = 0;
     private dashX = 0;
     private dashZ = 0;
     constructor(private readonly entities: CombatWorld) {}
-    public get ward(): number { return this.wardValue; }
+    public get ward(): number { return this.entities.status.amount(StatusKind.Barrier, this.entities.player, 0); }
+    private get wardUntil(): number { return this.entities.status.deadline(StatusKind.Barrier, this.entities.player); }
     public checkpoint(): SkillCheckpoint { return { points: this.points, loadout: [...this.loadout], ranks: Array.from(this.ranks), readyAt: Array.from(this.readyAt),
-        ward: this.wardValue, wardUntil: this.wardUntil, dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
-    public restore(state: SkillCheckpoint): void {
+        ward: this.ward, wardUntil: this.wardUntil, dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
+    public restore(state: SkillCheckpoint, tick: number): void {
         this.points = state.points; this.loadout.splice(0, this.loadout.length, ...state.loadout); this.ranks.set(state.ranks); this.readyAt.set(state.readyAt);
-        this.wardValue = state.ward; this.wardUntil = state.wardUntil; this.dashUntil = state.dashUntil; this.dashX = state.dashX; this.dashZ = state.dashZ;
+        const { status, world, player } = this.entities;
+        status.clear(player);
+        if (state.ward > 0 && state.wardUntil > tick) status.apply(StatusKind.Barrier, world.ids[player], world.ids[player], state.ward, state.wardUntil, tick);
+        this.dashUntil = state.dashUntil; this.dashX = state.dashX; this.dashZ = state.dashZ;
     }
 
     public snapshot(tick: number): SkillSnapshot {
         return Object.freeze({ points: this.points, loadout: Object.freeze([...this.loadout]),
             ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, this.ranks[i]])) as Record<SkillId, number>),
             remaining: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, Math.max(0, this.readyAt[i] - tick) / GAME_CONFIG.timing.simulationHz])) as Record<SkillId, number>),
-            ward: this.wardValue, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick) });
+            ward: this.ward, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick) });
     }
     public equip(id: SkillId, slot: number, level: number): boolean {
         skillIndex(id);
@@ -50,17 +53,10 @@ export class SkillSystem {
     }
     public dashing(tick: number): boolean { return tick < this.dashUntil; }
     public advance(tick: number): boolean {
-        if (tick >= this.wardUntil) this.wardValue = 0;
         if (!this.dashing(tick)) return false;
         if (!this.entities.moveActor(this.entities.player, this.dashX, this.dashZ, false)) this.dashUntil = tick;
         return true;
     }
-    public absorb(damage: number): number {
-        const absorbed = Math.min(this.wardValue, damage);
-        this.wardValue -= absorbed;
-        return damage - absorbed;
-    }
-
     public cast(id: SkillId, tick: number, stats: DerivedStats, level: number, random: DeterministicRandom, automatic = false): boolean {
         const i = skillIndex(id), definition = SKILLS[id];
         const { position: p, vitals: v, player, impacts, world, effects, status } = this.entities;
@@ -68,8 +64,8 @@ export class SkillSystem {
             || v.mana[player] < definition.mana || automatic && !definition.automatic) return false;
         const values = skillValues(id, this.ranks[i], stats), x = p.x[player], z = p.z[player];
         if (id === "ward") {
-            if (this.wardValue > 0 || automatic && v.health[player] / stats.maxHealth > SKILL_RULES.ward.automaticHealthRatio) return false;
-            this.wardValue = values.ward; this.wardUntil = tick + ticksForSeconds(SKILL_RULES.ward.durationSeconds);
+            if (status.amount(StatusKind.Barrier, player, tick) > 0 || automatic && v.health[player] / stats.maxHealth > SKILL_RULES.ward.automaticHealthRatio) return false;
+            status.apply(StatusKind.Barrier, world.ids[player], world.ids[player], values.ward, tick + ticksForSeconds(SKILL_RULES.ward.durationSeconds), tick);
             effects.add(EffectKind.Ward, tick, x, z, 1.2, .8);
         } else if (id === "dash") {
             const duration = ticksForSeconds(SKILL_RULES.dash.durationSeconds);
@@ -108,7 +104,7 @@ export class SkillSystem {
                 if (!this.entities.canSee(player, slot)) continue;
                 const hit = rollAttack(stats, random, values.damage);
                 impacts.add(world.ids[player], world.ids[slot], hit.damage, 0, 0, Number(hit.critical));
-                if (id === "frost") { status.slowUntil[slot] = Math.max(status.slowUntil[slot], tick + ticksForSeconds(values.slowSeconds)); status.slowScale[slot] = SKILL_RULES.frost.slowScale; }
+                if (id === "frost") status.apply(StatusKind.Slow, world.ids[player], world.ids[slot], 1 - SKILL_RULES.frost.slowScale, tick + ticksForSeconds(values.slowSeconds), tick);
                 hits++;
             }
             if (!hits && automatic) return false;

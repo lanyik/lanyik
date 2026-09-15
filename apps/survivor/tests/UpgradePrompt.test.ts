@@ -1,9 +1,10 @@
+import type { CombatRewards } from "../src/core/CombatRewards";
 import { recycleRef } from "../src/core/Recycling";
 import { afterEach, expect, test, vi } from "vitest";
 import { CombatSession } from "../src/app/CombatSession";
 import type { CombatSimulation } from "../src/core/CombatSimulation";
 import type { CombatView } from "../src/app/CombatView";
-import { createStarterEquipment, equipmentScore, type Equipment } from "../src/core/Equipment";
+import { createStarterEquipment, equipmentScore } from "../src/core/Equipment";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -17,11 +18,11 @@ test("pickup recommendations rank real upgrades, expire after swaps, and respect
     await session.start("prompt-events");
     session.dispatch({ type: "toggle-pause" });
     const simulation: CombatSimulation = transport!.simulation;
-    const source = simulation as unknown as { dropItem(item: Equipment, x: number, z: number): void; collectEquipment(): void };
+    const source = simulation as unknown as { rewards: CombatRewards; collectEquipment(): void };
     const pickup = async (id: number, damage: number) => {
         const starter = createStarterEquipment();
         const bonuses = { ...starter.bonuses, damage };
-        source.dropItem({ ...starter, id, locked: false, bonuses, score: equipmentScore(bonuses) }, 0, 0);
+        source.rewards.drop({ ...starter, id, locked: false, bonuses, score: equipmentScore(bonuses) }, 0, 0);
         source.collectEquipment();
         session.dispatch({ type: "sort-inventory" });
         await session.settled;

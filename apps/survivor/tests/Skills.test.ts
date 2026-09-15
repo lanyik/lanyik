@@ -94,12 +94,12 @@ test("dash advances exactly 30 ticks without steering and ward absorbs then expi
     e.vitals.health[e.player] = stats.maxHealth * .5;
     expect(skills.cast("ward", 31, stats, 2, random, true)).toBe(true);
     const ward = skills.ward;
-    expect(skills.absorb(5)).toBe(0); expect(skills.ward).toBe(ward - 5);
-    expect(skills.absorb(ward)).toBe(5); expect(skills.ward).toBe(0);
+    expect(e.status.absorb(e.player, 5, 31)).toBe(0); expect(skills.ward).toBe(ward - 5);
+    expect(e.status.absorb(e.player, ward, 31)).toBe(5); expect(skills.ward).toBe(0);
     e.vitals.mana[e.player] = 100;
     expect(skills.cast("ward", 2000, stats, 2, random)).toBe(true);
-    skills.advance(2000 + ticksForSeconds(6) - 1); expect(skills.ward).toBeGreaterThan(0);
-    skills.advance(2000 + ticksForSeconds(6)); expect(skills.ward).toBe(0);
+    e.status.advance(2000 + ticksForSeconds(6) - 1); expect(skills.ward).toBeGreaterThan(0);
+    e.status.advance(2000 + ticksForSeconds(6)); expect(skills.ward).toBe(0);
 });
 
 test("saturated visual buffers preserve gameplay and transfer without exposing authority arrays", () => {

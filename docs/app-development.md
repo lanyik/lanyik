@@ -6,6 +6,7 @@
 [角色资产合同](./game/actor-assets.md)，玩家体验见[游戏想法](../游戏想法.md)。
 界面布局、信息层级与响应式规则见[界面设计](./game/interface-design.md)。
 ECS 接入时机、技术取舍、实体身份、系统顺序与怪物行为见[战斗 ECS 与行为树](./game/simulation-and-ai.md)。
+结算、状态、奖励与表现的所有权，以及技能树/Buff/被动/套装/任务的后续接入边界见[战斗架构](./game/combat-architecture.md)。
 技能目录、装配/成长、状态效果和免费特效图集见[技能与特效](./game/skills-and-effects.md)。
 打造费用、销毁规则、词条物品、宝珠粉尘和永久成长见[打造与灵境](./game/crafting-and-spirit.md)。
 树木模型、地形贴图、相对尺寸与构建流程见[环境资产](./game/environment-assets.md)。
@@ -44,9 +45,15 @@ apps/survivor/
     AttackGeometry.ts           # 有高度的线段/圆柱首次接触
     EncounterNavigation.ts      # 随驻留释放的遭遇连通域与合法落点
     Skills.ts                   # 玩家技能目录、解锁与等级数值
-    SkillSystem.ts              # 四槽装配、技能点、独立冷却、疾行/结界与施放
+    SkillSystem.ts              # 四槽装配、技能点、独立冷却、疾行与施放
+    StatusSystem.ts             # 活跃状态、来源、强度、刷新/到期、结界吸收
+    CombatResolution.ts         # 伤害规则、吸血/反伤、受击保护/被动盾冷却
+    CombatVitality.ts           # 实际生命变化与死亡提交
+    CombatEvents.ts             # 有界同步结算事实，不发送给表现端
+    CombatFeedback.ts           # 结算事实转受击闪白与飘字
+    CombatRewards.ts            # 击杀奖励、金币/灵境、物品 ID 与地面物品
     CombatEffects.ts            # 有界表现事实，不参与伤害判定
-    CombatSimulation.ts         # 固定系统顺序、伤害结算、物品与成长命令
+    CombatSimulation.ts         # 固定系统顺序、事件消费编排、物品与成长命令
     RegionalWorld.ts            # 六边形地域、径向等级带、四圈驻留与单次人口
     Equipment.ts                # 11 部位、44 基础名称、三轴装备和 38 种词条
     EquipmentEvaluation.ts      # 最终属性战力、同部位换装比较与安全清理判定

@@ -1,3 +1,5 @@
+import { StatusKind } from "./StatusSystem";
+import { EffectCause } from "./CombatEvents";
 import { ActorAction, CombatWorld, Component, Faction } from "./CombatWorld";
 import { MELEE_HALF_ARC, MAX_HOSTILE_PROJECTILES, MAX_PROJECTILES, SIMULATION_STEP_MS, ticksForSeconds } from "./GameConfig";
 import { ENEMY_SPECIAL } from "./EnemyDefinitions";
@@ -81,9 +83,9 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             const cost = v.maxHealth[slot] * ENEMY_SPECIAL.heal.sacrifice;
             if (v.faction[target] !== Faction.Enemy || v.health[target] <= 0 || v.health[target] >= v.maxHealth[target]
                 || Math.hypot(dx, dz) > ENEMY_SPECIAL.heal.radius || v.health[slot] <= cost + 1 || !entities.canSee(slot, target)) continue;
-            v.health[slot] -= cost;
-            v.health[target] = Math.min(v.maxHealth[target], v.health[target] + Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3));
-            status.wardUntil[target] = tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration);
+            entities.vitality.damage(world.ids[slot], world.ids[slot], cost, tick, EffectCause.Sacrifice);
+            entities.vitality.heal(world.ids[slot], world.ids[target], Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3), tick, EffectCause.ShamanHeal);
+            status.apply(StatusKind.Protection, world.ids[slot], world.ids[target], ENEMY_SPECIAL.healingWard.reduction, tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration), tick);
             effects.add(EffectKind.Heal, tick, p.x[slot], p.z[slot], 1, .8, p.x[target], p.z[target]);
         } else if (kind === ActorAction.Cast || kind === ActorAction.Volley) {
             if (!entities.canSee(slot, target)) continue;

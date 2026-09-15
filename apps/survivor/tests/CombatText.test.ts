@@ -1,3 +1,5 @@
+import { hitEnemy } from "./helpers/settleCombat";
+import type { CombatResolution } from "../src/core/CombatResolution";
 import { expect, test, vi } from "vitest";
 import { CombatText, CombatTextKind as Kind, COMBAT_TEXT_CAPACITY } from "../src/core/CombatText";
 import { ticksForSeconds } from "../src/core/GameConfig";
@@ -26,11 +28,11 @@ test("rapid hits merge only by full victim handle and kind, expire on simulation
 
 test("critical overkill reports actual lost health after death and remains isolated across Worker transfer", () => {
     const combat = new CombatSimulation("combat-text-facts");
-    const fixture = combat as unknown as { entities: CombatWorld; hitEnemy(slot: number, amount: number, critical: boolean): void };
+    const fixture = combat as unknown as { entities: CombatWorld };
     const e = fixture.entities, slot = e.enemies.slots[0], x = e.position.x[slot];
     e.vitals.health[slot] = 1;
     // Repeat the deterministic impacts if the enemy dodges.
-    for (let i = 0; i < 20 && e.vitals.health[slot] > 0; i++) fixture.hitEnemy(slot, 10000, true);
+    for (let i = 0; i < 20 && e.vitals.health[slot] > 0; i++) hitEnemy(combat, slot, 10000, true);
     const packet = new RenderFrame().write(combat.getRenderState());
     const received = structuredClone(packet, { transfer: [packet.buffer] });
     const read = new RenderFrame(received.buffer).read(received).combatText;
@@ -44,16 +46,16 @@ test("critical overkill reports actual lost health after death and remains isola
 test("incoming feedback follows dodge, shield, block, critical damage and reflected health loss", () => {
     for (const outcome of [Kind.Dodge, Kind.Shield, Kind.Block, Kind.PlayerCritical]) {
         const combat = new CombatSimulation("incoming-feedback");
-        const f = combat as unknown as { entities: CombatWorld; random: DeterministicRandom; stats: DerivedStats; health: number; shieldCooldown: number;
-            damagePlayer(source: number, amount: number, elite: boolean, boss: boolean): void };
+        const f = combat as unknown as { resolution: CombatResolution; entities: CombatWorld; random: DeterministicRandom; stats: DerivedStats; health: number; resolveImpacts(): void };
         const slot = f.entities.enemies.slots[0], b = f.entities.combatText.buffer;
         const chance = vi.spyOn(f.random, "chance").mockReturnValue(false);
         if (outcome === Kind.Dodge) chance.mockReturnValueOnce(true);
         if (outcome === Kind.Block) chance.mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValueOnce(true);
         if (outcome === Kind.PlayerCritical) chance.mockReturnValueOnce(false).mockReturnValueOnce(true).mockReturnValueOnce(false);
-        f.shieldCooldown = outcome === Kind.Shield ? 0 : 1;
+        f.resolution.shieldCooldown = outcome === Kind.Shield ? 0 : 1;
         f.health = 10; f.entities.vitals.health[slot] = 2; f.stats = { ...f.stats, thorns: 1 };
-        f.damagePlayer(slot, outcome === Kind.Block ? 1 : 10000, false, false);
+        f.entities.impacts.add(f.entities.world.ids[slot], f.entities.world.ids[f.entities.player], outcome === Kind.Block ? 1 : 10000);
+        f.resolveImpacts();
         expect(b.kind[0]).toBe(outcome);
         expect(f.health).toBe(outcome === Kind.PlayerCritical ? 0 : 10);
         if (outcome === Kind.PlayerCritical) {

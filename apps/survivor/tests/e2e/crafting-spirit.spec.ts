@@ -1,8 +1,9 @@
+import type { CombatRewards } from "../../src/core/CombatRewards";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, withEquipmentAffixes, type Equipment } from "../../src/core/Equipment";
 import { createAffixItem } from "../../src/core/AffixItem";
 import { createOrb } from "../../src/core/Orbs";
-import { EMPTY_SPIRIT_REALM, type SpiritRealm } from "../../src/core/SpiritRealm";
+import { EMPTY_SPIRIT_REALM } from "../../src/core/SpiritRealm";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { InventoryItem } from "../../src/core/InventoryItem";
 import type { CombatWorld } from "../../src/core/CombatWorld";
@@ -25,9 +26,12 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     const items: InventoryItem[] = [source, target, inheritance, { ...createAffixItem(20, { stat: "goldBonus", value: .5, rarity: "rare" }), size: 2 }, createOrb(30, "rare", "fortune")];
     await combatWorker(page).evaluate(({ items, realm }) => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { inventory: InventoryItem[]; gold: number; orbDust: number; nextItemId: number; spiritRealm: SpiritRealm; entities: CombatWorld; killEnemy(index: number): void };
-        fixture.inventory = items; fixture.gold = 100_000; fixture.orbDust = 1000; fixture.nextItemId = 1000; fixture.spiritRealm = realm;
-        fixture.killEnemy(fixture.entities.enemies.slots[0]);
+        const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; orbDust: number; entities: CombatWorld; resolveImpacts(): void };
+        fixture.inventory = items; fixture.rewards.gold = 100_000; fixture.orbDust = 1000; fixture.rewards.nextItemId = 1000; fixture.rewards.spiritRealm = realm;
+        const e = fixture.entities, slot = e.enemies.slots[0], source = e.world.ids[e.player], target = e.world.ids[slot];
+        e.vitality.damage(source, target, e.vitals.health[slot], simulation.tick, 0);
+        e.vitality.defeat(source, target, simulation.tick, 0);
+        fixture.resolveImpacts();
     }, { items, realm: { ...EMPTY_SPIRIT_REALM, souls: 999, revision: 1 } });
     await advanceCombat(page);
     await page.keyboard.press("KeyJ");
