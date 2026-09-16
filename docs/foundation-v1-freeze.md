@@ -128,10 +128,11 @@ and packed format. Browser E2E uses a
 real module Worker crash and verifies that the bounded pool replaces it before
 serving the next request.
 
-The data-driven overview request added after the freeze uses worker protocol
-v3. It transfers a versioned, bounded RGBA raster and does not change generated
-tile semantics, packed chunks, descriptors, checkpoints, or the generator
-version. Work already accepted by a Worker client or pool rejects with
+The data-driven overview request transfers a versioned, bounded RGBA raster.
+Current generation/descriptor/Worker/chunk versions belong to the
+[world-style version contract](world-style-generation-v1.md#104-当前版本与基线).
+An overview transport change alone does not change generated tile semantics.
+Work already accepted by a Worker client or pool rejects with
 `AbortError` when its owning source is disposed; Worker crashes, invalid
 protocol data and other operational failures remain ordinary errors.
 

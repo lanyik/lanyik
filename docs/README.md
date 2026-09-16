@@ -54,7 +54,7 @@ docs/
   game/measurements/*.json     游戏原始测量和回放证据
   *.md                        地图库设计、验证策略和优化决策
   decisions/*.md              仍约束当前实现的算法决策
-  evidence/                   优化门槛引用的观察和测量
+  evidence/                   优化决策与验收阈值引用的历史观察和测量
 ```
 
 各份设计的完整文件名、职责和代码位置见下方游戏、基础库与验证表格。`scripts/vendor/README.md` 记录离线生成器的来源与复现方式，资产原始归属另见[许可章节](#assets)，它们是实质资料。
@@ -126,6 +126,8 @@ flowchart TB
     visual --> actor["角色与动作<br/>actor-assets.md"]
     visual --> env["环境与雾<br/>environment-assets.md"]
     visual --> ui["界面设计<br/>interface-design.md"]
+    app -. 命令与快照 .-> ui
+    item -. 图标、事务与比较 .-> ui
     ui --> perf["UI 性能<br/>ui-performance.md"]
     combat -. 后续扩展 .-> plan["开发重点：计划<br/>development-priorities.md"]
     skill -. 动作与反馈 .-> actor
@@ -138,12 +140,12 @@ flowchart TB
 |---|---|---|
 | [app-development.md](app-development.md) | 会话、主线程/Worker 边界、输入、暂停、快照、生命周期和诊断 | [CombatSession](../apps/survivor/src/app/CombatSession.ts)、[CombatWorkerHost](../apps/survivor/src/worker/CombatWorkerHost.ts)、[bootstrap](../apps/survivor/src/app/bootstrap.tsx) |
 | [combat-architecture.md](game/combat-architecture.md) | 结算、实际生命提交、状态、奖励、表现分离；后续领域接入边界 | [CombatResolution](../apps/survivor/src/core/CombatResolution.ts)、[CombatVitality](../apps/survivor/src/core/CombatVitality.ts)、[CombatEvents](../apps/survivor/src/core/CombatEvents.ts)、[StatusSystem](../apps/survivor/src/core/StatusSystem.ts) |
-| [simulation-and-ai.md](game/simulation-and-ai.md) | ECS 身份、固定步骤、AI、行动中断、查询线程与性能预算 | [EntityWorld](../apps/survivor/src/core/EntityWorld.ts)、[CombatWorld](../apps/survivor/src/core/CombatWorld.ts)、[EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[worker](../apps/survivor/src/worker/) |
-| [combat-and-progression.md](game/combat-and-progression.md) | 当前战斗循环、区域人口、经验、属性、奖励和容量 | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
+| [simulation-and-ai.md](game/simulation-and-ai.md) | ECS 身份与容量、固定步骤、AI、行动中断、查询线程与性能预算 | [EntityWorld](../apps/survivor/src/core/EntityWorld.ts)、[CombatWorld](../apps/survivor/src/core/CombatWorld.ts)、[EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[worker](../apps/survivor/src/worker/) |
+| [combat-and-progression.md](game/combat-and-progression.md) | 地域、玩法驻留、奖励来源、寻宝算法、经验与属性公式 | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
 | [combat-balance.md](game/combat-balance.md) | 参考装备、承伤与击杀时间的数值期望及校准局限 | [EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[CombatBalance 测试](../apps/survivor/tests/CombatBalance.test.ts)、[报告脚本](../scripts/report-combat-balance.mjs) |
 | [skills-and-effects.md](game/skills-and-effects.md) | 技能装配、等级、释放、怪物攻击特性、特效与飘字 | [SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts)、[CombatFeedback](../apps/survivor/src/core/CombatFeedback.ts)、[SkillEffects](../apps/survivor/src/presentation/SkillEffects.ts) |
-| [items.md](game/items.md) | 道具身份、背包、穿戴、比较、堆叠、拾取与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts) |
-| [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条、宝珠、回收、打造事务和永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
+| [items.md](game/items.md) | 装备生成与比较、物品身份、背包/穿戴/入包事务、分类回收、图标与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts) |
+| [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条打造、宝珠精炼/共鸣、打造事务与确认窗、永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
 | [character-saves.md](game/character-saves.md) | 角色检查点、自动/手动槽、灵境独立存储及读档重建边界 | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
 | [terrain-navigation.md](game/terrain-navigation.md) | 坡度、水体、树干、滑移、攻击遮挡、营地落点与可达性 | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts)、[EncounterNavigation](../apps/survivor/src/core/EncounterNavigation.ts) |
 | [interface-design.md](game/interface-design.md) | HUD 与页面职责、背包/技能交互、快捷键、窄屏布局 | [presentation](../apps/survivor/src/presentation/)、[app.css](../apps/survivor/src/presentation/app.css) |
@@ -152,6 +154,8 @@ flowchart TB
 | [actor-assets.md](game/actor-assets.md) | 角色来源、动作烘焙、手部轨迹、材质、实例池和预算 | [ActorModels](../apps/survivor/src/presentation/ActorModels.ts)、[ActorPose](../apps/survivor/src/presentation/ActorPose.ts)、[角色生成](../scripts/lib/survivor-actors.mjs) |
 | [environment-assets.md](game/environment-assets.md) | 树木、地表材质、天空、雾、前景透视及离线构建 | [CombatEnvironment](../apps/survivor/src/adapters/CombatEnvironment.ts)、[环境生成](../scripts/lib/survivor-environment.mjs)、[渲染模块](../src/rendering/) |
 | [development-priorities.md](game/development-priorities.md) | **计划**：现有基础、未完成能力、建议顺序与验收方向 | 不对应一个“已实现功能”模块；实现后同步相应领域合同 |
+
+应用集成只定义命令、快照和生命周期边界；实体容量与执行阶段归模拟设计，地域驻留归战斗与成长，物品事务归物品设计，窗口布局与快捷键归界面设计。相邻设计引用所属规则，不重复维护数值表或完整操作流程。
 
 游戏单元测试在 [apps/survivor/tests](../apps/survivor/tests/)，浏览器集成测试在 [tests/e2e](../apps/survivor/tests/e2e/)。具体需要运行哪些检查直接看[验证矩阵](testing.md#change-based-local-validation)。
 
@@ -172,6 +176,7 @@ flowchart TB
     owner --> resident["区块驻留<br/>chunk-residency.md"]
     stream --> world["世界生成<br/>world-style-generation-v1.md"]
     world --> water["水系设计决策<br/>coarse-drainage-water-network.md"]
+    world -. 历史观测与阈值调整 .-> measurements["世界风格证据<br/>evidence/world-style-generation.md"]
     infra --> delta["地图增量持久化<br/>world-delta-persistence.md"]
     pkg --> events["基础库事件<br/>event-contracts.md"]
     pkg --> path["分层寻路<br/>hierarchical-pathfinding.md"]
@@ -228,6 +233,7 @@ flowchart TB
 | [user-observation.md](evidence/automatic-river-generation/user-observation.md) | 历史河流问题观察；当前规则读[世界生成](world-style-generation-v1.md) |
 | [natural-course-followup.md](evidence/automatic-river-generation/natural-course-followup.md) | 河道和概览改进的历史跟进；当前决策读[水系设计](decisions/coarse-drainage-water-network.md) |
 | [2026-09-04.json](evidence/automatic-river-generation/2026-09-04.json) | 自动河流优化门槛的结构化证据；状态归[优化门槛](optimization-gates.md) |
+| [world-style-generation.md](evidence/world-style-generation.md) | v19/v21/v22 历史测量与森林、山地阈值调整依据；当前版本与验收规则归[世界生成](world-style-generation-v1.md) |
 
 ### 游戏原始测量
 

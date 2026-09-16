@@ -10,11 +10,6 @@
       "triggerGroups": [
         {
           "all": [
-            { "metric": "gameplayRequiresNavigableOrEditableRiverNetwork", "operator": "==", "threshold": true }
-          ]
-        },
-        {
-          "all": [
             { "metric": "renderSubmissionOrCullingP95Ms", "operator": ">=", "threshold": 2 }
           ]
         },
@@ -52,6 +47,11 @@
       "measurementScript": "review:world-style",
       "triggerMode": "any",
       "triggerGroups": [
+        {
+          "all": [
+            { "metric": "gameplayRequiresNavigableOrEditableRiverNetwork", "operator": "==", "threshold": true }
+          ]
+        },
         {
           "all": [
             { "metric": "explicitUserHydrologyRequirement", "operator": "==", "threshold": true }

@@ -71,7 +71,7 @@ basin can saturate earlier. It neither triples every river nor triples water are
 The reviewed default warp frequency/amplitude are 0.08 / 3.75, source-region
 spacing is 16, ocean frequency multiplier is 1.4 and ocean threshold is 0.46.
 `WORLD_WATER_STYLE_RANGES` supplies both the panel and API validation; the full
-bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数v19).
+bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数).
 Tributary/main radius intervals are disjoint so every slider combination is valid.
 Warp amplitude remains below half a coarse step, with a 3.90 authoring ceiling;
 the old hidden 3.5 clamp is removed. Reduced lattices in small toroidal worlds
@@ -123,17 +123,13 @@ valid and unchanged.
 - Toroidal domains enumerate canonical sources once and build one
   `width × height` bit mask. All reads normalize coordinates before indexing.
 - Failed inland paths are discarded rather than converted into random ponds.
-- Generator v14 corrected raster coordinate parity; v15 added upstream extension,
-  continuous flow widths and tapered mouths; v16 rounds the actual centreline.
-  V17 changes the water defaults and adds required `waterStyle.riverLength`.
-  V18 changed that field from extension tiles to a retained arc-length percentage.
-  V19 changes it to an anchor-relative target with actual upstream exploration;
-  descriptor v5 and Worker protocol v7 reject earlier meanings and missing fields.
-  There is no migration or per-field defaulting. Normalization,
-  equality and serialization include length, partitioning chunks, overview
-  resolvers, persistence and navigation through the existing fingerprint.
-  Packed chunk encoding remains v1. Existing small tile/surface fixtures happen
-  to retain their checksums; new whole river-window goldens lock both 100 and 300%.
+- Normalization, equality and serialization include the anchor-relative
+  `waterStyle.riverLength`, partitioning chunks, overview resolvers, persistence
+  and navigation through the descriptor fingerprint. Earlier meanings and
+  missing fields are rejected without migration or per-field defaulting.
+  Current generator, descriptor, Worker and chunk versions belong to the
+  [version contract](../world-style-generation-v1.md#104-当前版本与基线).
+  Whole river-window tests protect both baseline and extended-length results.
 
 ## Overview path and budget
 

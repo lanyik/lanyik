@@ -15,6 +15,8 @@ npm run check:optimization-gates
 
 The check validates each owner-document marker, measurement command, trigger
 expression, evidence path and decision record. CI runs it before building.
+The checker validates structure and evidence evaluation; changes must also be
+reviewed against the owner document to verify metric ownership and meaning.
 This is a decision-integrity check, not a synthetic claim that browser GPU or
 visual-quality thresholds have been measured on CI hardware.
 
@@ -68,8 +70,12 @@ local decision record.
 - [Automatic river generation](./decisions/coarse-drainage-water-network.md) is
   implemented after direct 2048×2048 overview review exposed fragmented
   detail-noise water, unnatural sampled channels and excessive overview cost.
-  The implementation uses a low-frequency ocean mask plus bounded coarse-grid
-  drainage with deterministic continuity and explicit overview/cache budgets.
+  Its trigger groups are an explicit user hydrology requirement; at least three
+  recurring defect samples across at least two topology groups and two consecutive
+  fixed-corpus runs; or a gameplay requirement for a navigable/editable river
+  network. These are river-design triggers, not WebGPU migration triggers. The
+  implemented low-frequency ocean mask and bounded coarse drainage do not claim
+  to provide a navigable/editable river graph.
 
 Adding a new deferred optimization means adding one register entry, an owner
 marker and a reproducible measurement command. Keep speculative implementation
