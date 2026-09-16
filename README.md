@@ -287,8 +287,8 @@ CI still runs the complete regression gates.
 The [complete documentation map](docs/README.md) provides relationship diagrams,
 task-based reading routes, direct links to every design, source entry points and
 historical evidence on one page. Before changing code, read
-[CONTRIBUTING](CONTRIBUTING.md), then select the owning contract and implementation
-from the [task routes](docs/README.md#routes); directory READMEs are local references.
+[AGENTS](AGENTS.md) for development rules, then select the owning contract and
+implementation from the [task routes](docs/README.md#routes). This is the single design index.
 
 Current deliberate boundaries:
 

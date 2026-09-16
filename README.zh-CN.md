@@ -245,7 +245,7 @@ game.dispose();
 ## 文档与路线
 
 [文档总导航](docs/README.md)在一页提供完整关系图、任务阅读路线、所有设计直达链接、代码位置和历史证据。
-修改前先读[协作指南](CONTRIBUTING.md)，再从[任务路线](docs/README.md#routes)打开所属设计与实现，无需在多份 README 之间逐级查找。
+开发基准统一在 [AGENTS.md](AGENTS.md)；随后从唯一索引中的[任务路线](docs/README.md#routes)直接打开所属设计与实现。
 
 当前有意保留的边界：
 

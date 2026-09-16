@@ -4,7 +4,7 @@
 
 Tests protect observable behavior and failure boundaries. Counts are not acceptance
 targets. Read the owning contract from the [documentation index](README.md) before
-choosing checks; cleanup criteria are in [CONTRIBUTING](../CONTRIBUTING.md).
+choosing checks; development and cleanup criteria are in [AGENTS](../AGENTS.md).
 
 ## Test layers
 
@@ -16,7 +16,7 @@ choosing checks; cleanup criteria are in [CONTRIBUTING](../CONTRIBUTING.md).
 | Browser | Real Workers, WebGL, input routing, recovery and assembled application behavior | `tests/e2e`, `apps/survivor/tests/e2e` |
 | Soak | Repeated world replacement and bounded retained resources | `tests/e2e/foundation-soak.spec.ts` |
 | World-style review | Topology metrics and far/middle/near/debug captures | `tests/world/worldStyleGallery.review.ts`, `tests/gallery`; [world style](world-style-generation-v1.md) |
-| Game simulation | ECS identity, action timing, settlement, status, items and progression | `apps/survivor/tests`; [game contracts](game/README.md) |
+| Game simulation | ECS identity, action timing, settlement, status, items and progression | `apps/survivor/tests`; [game contracts](README.md#game) |
 | Benchmarks | Reproducible hot-path, simulation and query-worker budgets | [benchmark scope](#benchmark-scope) |
 | Documentation | Local links, heading anchors and documentation index reachability | `scripts/check-docs.mjs`, `tests/helpers/documentation.test.js` |
 | Optimization decisions | Trigger declarations and committed evidence integrity | [optimization gates](optimization-gates.md) |
@@ -98,8 +98,8 @@ the [freeze contract](foundation-v1-freeze.md) defines the protected invariants.
 `check:optimization-gates` validates structured evidence and trigger states; CI
 software rendering does not substitute for physical GPU evidence. Gallery captures,
 pixel comparisons and WebGL counters prove different things from Node CPU timing.
-See [evidence](evidence/README.md) and [game measurements](game/measurements/README.md)
-for historical results with their original conditions.
+See the [evidence and measurement catalog](README.md#evidence) for historical
+results with their original conditions.
 
 ## Benchmark scope
 

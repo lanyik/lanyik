@@ -25,7 +25,7 @@ ECS 接入时机、技术取舍、实体身份、系统顺序与怪物行为见[
 UI 是浏览器 DOM/CSS，由浏览器布局、绘制和合成，不存在应用侧“全部 UI 一个 draw call”的合同。性能检查用 `node scripts/benchmark-survivor-ui.mjs <预览地址>` 的满背包实测。
 实测方法、对比值和适用范围见 [UI 开销](./game/ui-performance.md)。
 
-源码分层及设计归属统一维护在[应用目录说明](../apps/survivor/README.md#源码分层)；玩法合同从[游戏设计索引](game/README.md)查阅。
+源码分层及设计归属统一维护在[设计索引·游戏分层](README.md#game-structure)，各玩法合同直接从同一页查阅。
 应用模块只导出被其他模块或独立行为测试消费的接口；存档槽数、内部返回类型、空间哈希辅助和姿势集合等实现细节保持模块私有。基础库公开 API 按包合同维护，不按应用内部引用数量裁剪。
 
 根包的 `cameraPanEnabled`、`setCameraTarget(worldX,worldZ)` 是通用公开能力，应用不访问 HexMap 私有控制器。
