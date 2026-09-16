@@ -1,5 +1,7 @@
 # 角色资产与动画构建
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 对应 `scripts/lib/actor-source.mjs`、`scripts/lib/survivor-actors.mjs`、
 `scripts/lib/survivor-creatures.mjs`、`scripts/prepare-survivor-assets.mjs`、`presentation/ActorModels.ts`、`ActorPose.ts` 与 `CombatLayer.ts`。
 

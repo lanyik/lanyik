@@ -1,5 +1,7 @@
 # 地形通行与刷怪
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 `CombatEnvironment.ts` 固定渲染与权威模拟共享的高度、格子尺度、森林密度和水岸参数。
 生产模拟 Worker 注入 `ProceduralCombatTerrain`；独立单测/数值基准的开放战斗场使用 `OPEN_TERRAIN`，生产不存在查询失败后放行的降级路径。
 

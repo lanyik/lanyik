@@ -1,5 +1,7 @@
 # EZ-Tree offline generator
 
+导航：[总导航 · 资产来源与许可](../../docs/README.md#assets) · [按任务阅读](../../docs/README.md#routes)
+
 `ez-tree.mjs` is the unminified, build-only ESM bundle of Daniel Greenheck's MIT
 licensed [EZ-Tree](https://github.com/dgreenheck/ez-tree) at commit
 `dcf309bd86bd521083d9c70f01f2de45fdc7c457` (license alongside the bundle).

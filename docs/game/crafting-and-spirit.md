@@ -1,5 +1,7 @@
 # 打造、寻宝共鸣与永久灵境
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 核心为 `Crafting.ts`、`AffixItem.ts`、`Orbs.ts`、`SpiritRealm.ts`；事务由 `CombatSimulation` 执行，界面为
 `CraftingPanel.tsx` 和 `SpiritRealmPanel.tsx`。通用物品和自动清理见[物品合同](items.md)。
 

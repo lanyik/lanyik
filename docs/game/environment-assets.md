@@ -1,5 +1,7 @@
 # 荒原环境资产与表面渲染
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 
 ## 比例与实例化

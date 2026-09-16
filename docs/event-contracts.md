@@ -1,5 +1,7 @@
 # Event contracts
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 `EventEmitter<Events>` binds each event name to one payload type. `HexMap`,
 `Unit` and `GameEngine` publish separate maps instead of sharing one union:
 

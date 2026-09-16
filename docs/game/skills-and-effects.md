@@ -1,5 +1,7 @@
 # 玩家技能与战斗特效
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 对应 `core/Skills.ts`、`SkillSystem.ts`、`StatusSystem.ts`、`CombatEffects.ts`、`CombatSimulation.ts`、
 `worker/RenderFrame.ts`、`presentation/{SkillsPanel,SkillView,SkillSlot,SkillDrag}.tsx`、`SkillEffects.ts` 与 `scripts/lib/survivor-effects.mjs`。
 怪物行为与攻击见[模拟合同](simulation-and-ai.md)，装备派生属性见[战斗数值](combat-and-progression.md)。

@@ -1,5 +1,7 @@
 # 怪物数值期望与校准
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 代码对应 `EnemyDefinitions.enemyStats`、`CombatStats`、`tests/helpers/balanceReference.ts`。执行 `npm run report:combat-balance` 可重建[完整采样](measurements/combat-balance.json)；`CombatBalance.test.ts` 对同级装备的承伤与击杀时间设置回归门槛。
 
 ## 参考角色

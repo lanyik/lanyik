@@ -1,5 +1,7 @@
 # 战斗、地域、成长与寻宝合同
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 对应 `apps/survivor/src/core/{CombatSimulation,CombatResolution,CombatVitality,CombatRewards,StatusSystem,CombatWorld,CombatSystems,EnemyDefinitions,EnemyBehavior,RegionalWorld,Equipment,EquipmentEvaluation,CombatStats,Loot,Orbs,InventoryItem}.ts`。结算事实、状态刷新和奖励消费顺序见[战斗架构](combat-architecture.md)。
 数值、状态转换和 UI 概率说明必须同步修改；不保留旧的方形地域、定时补怪、寻宝加点或轮次消费记录。
 

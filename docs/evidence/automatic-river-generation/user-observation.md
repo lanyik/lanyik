@@ -1,5 +1,7 @@
 # Automatic river generation trigger observation
 
+导航：[总导航 · 历史与测量](../../README.md#evidence) · [按任务阅读](../../README.md#routes)
+
 On 2026-09-04 the user reviewed a 2048×2048 world overview and reported three
 recurring defects across the recent water-generation iterations:
 

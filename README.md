@@ -1,5 +1,7 @@
 # three-hex-map
 
+导航：[总导航 · 入口与协作](docs/README.md#entrypoints) · [按任务阅读](docs/README.md#routes)
+
 English | [简体中文](README.zh-CN.md)
 
 A browser-first 3D hex-world renderer and streamed-world runtime built on
@@ -282,12 +284,11 @@ CI still runs the complete regression gates.
 
 ## Documentation and roadmap
 
-The [documentation index](docs/README.md) separates current architecture,
-frozen contracts, focused subsystem guides, decisions and future designs.
-Before changing code, read [CONTRIBUTING](CONTRIBUTING.md), then the owning
-contract from the [game index](docs/game/README.md) or
-[library source guide](src/README.md). The [app directory guide](apps/survivor/README.md)
-maps source layers to those contracts.
+The [complete documentation map](docs/README.md) provides relationship diagrams,
+task-based reading routes, direct links to every design, source entry points and
+historical evidence on one page. Before changing code, read
+[CONTRIBUTING](CONTRIBUTING.md), then select the owning contract and implementation
+from the [task routes](docs/README.md#routes); directory READMEs are local references.
 
 Current deliberate boundaries:
 

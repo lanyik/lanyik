@@ -1,5 +1,7 @@
 # Runtime foundation architecture
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 当前运行时基础设施把“世界渲染能跑”提升为“可替换、可恢复、资源有界、可验收”。核心原则不是让所有子系统使用同一个执行循环，而是让它们共享同一组所有权、世代、预算、取消与验收语义。冻结边界见 [foundation-v1-freeze.md](./foundation-v1-freeze.md)，测试分层与执行策略见 [testing.md](./testing.md)。
 
 ## 1. 生命周期与故障恢复

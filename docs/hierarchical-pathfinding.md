@@ -1,5 +1,7 @@
 # Hierarchical pathfinding
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 `HierarchicalPathfinder` finds long routes without making the rendering window
 resident along every high-level search branch.
 

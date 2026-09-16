@@ -1,8 +1,10 @@
 # 荒原 Survivor 应用
 
+导航：[总导航 · 游戏设计](../../docs/README.md#game) · [按任务阅读](../../docs/README.md#routes)
+
 安装与环境要求见 [根 README](../../README.zh-CN.md)。在仓库根执行 `npm ci` 后，用 `run.bat` 或 `npm run app:dev` 启动。
 
-修改前先读 [游戏设计索引](../../docs/game/README.md)；当前实现与后续计划分别由领域合同和 [开发优先级](../../docs/game/development-priorities.md) 维护。
+本页说明应用启动与目录职责。修改前从[总导航的任务路线](../../docs/README.md#routes)直接选择领域设计；本页不承担另一层必经索引。当前实现与后续计划分别由领域合同和 [开发优先级](../../docs/game/development-priorities.md) 维护。
 
 ## 源码分层
 

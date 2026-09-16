@@ -1,6 +1,8 @@
 # 地图基础库源码
 
-公开使用见 [根 README](../README.md)，开发先读 [协作指南](../CONTRIBUTING.md) 和 [文档入口](../docs/README.md)。Survivor 的战斗和成长逻辑位于 [独立应用](../apps/survivor/README.md)。
+导航：[总导航 · 地图基础库](../docs/README.md#foundation) · [按任务阅读](../docs/README.md#routes)
+
+本页只说明基础库源码分层。公开使用见 [根 README](../README.md)，开发遵守 [协作指南](../CONTRIBUTING.md)，具体设计可从[总导航·地图基础库](../docs/README.md#foundation)直接打开。Survivor 的战斗和成长逻辑归[游戏设计](../docs/README.md#game)。
 
 ## 模块归属
 

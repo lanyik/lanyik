@@ -8,7 +8,7 @@
 
 ## 项目阅读入口
 
-- 开始修改前阅读 [协作指南](CONTRIBUTING.md)，从 [文档总索引](docs/README.md) 定位所属合同并对照实现。
-- 游戏代码先读 [游戏设计索引](docs/game/README.md) 和 [应用目录](apps/survivor/README.md)；战斗、技能、Buff、被动、套装和任务扩展先读 [战斗架构](docs/game/combat-architecture.md)。
-- 基础库代码从 [源码目录](src/README.md) 定位设计，避免将游戏状态放入地图基础设施。
-- 修改后按 [测试策略](docs/testing.md) 选择验证，并运行 `npm run check:docs`。新增文档必须进入索引；当前合同、未来计划与历史证据分开维护。
+- 开始修改前阅读 [协作指南](CONTRIBUTING.md)，从[文档总导航的任务路线](docs/README.md#routes)直接定位所属设计和代码，无需串行经过多个 README。
+- 游戏文档与实现入口集中在[总导航·游戏设计](docs/README.md#game)；战斗、技能、Buff、被动、套装和任务扩展先读 [战斗架构](docs/game/combat-architecture.md)。[游戏局部索引](docs/game/README.md)和[应用目录](apps/survivor/README.md)用于就近速查。
+- 基础库代码从[总导航·地图基础库](docs/README.md#foundation)定位设计，[源码目录](src/README.md)提供局部分层，避免将游戏状态放入地图基础设施。
+- 修改后按 [测试策略](docs/testing.md) 选择验证，并运行 `npm run check:docs`。新增或移动文档同步总导航直达链接，关系变化同步图；当前合同、未来计划与历史证据分开维护。

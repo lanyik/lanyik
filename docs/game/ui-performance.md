@@ -1,5 +1,7 @@
 # 背包与打造 UI 开销
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 当前 HUD 是 React DOM、SVG 图标与 CSS 品质样式，由浏览器执行布局、绘制和合成，不是 WebGL 中统一材质的 UI 实例批次。
 游戏实体已有独立实例批次；减少 UI 开销的边界是减少 DOM、重复组件计算和持续动画，不能用游戏 draw call 数代表 UI 成本。
 

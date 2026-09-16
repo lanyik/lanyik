@@ -1,5 +1,7 @@
 # Package boundaries
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 The runtime foundation types (`LifecycleScope`, `ResourceBudgetLedger`,
 `PriorityTaskQueue`, and `RuntimeWorkCoordinator`) are exported from the main
 entry. Recoverable checkpoint infrastructure is also available from the

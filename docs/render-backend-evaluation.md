@@ -1,5 +1,7 @@
 # Render backend and GPU-culling evaluation
 
+导航：[总导航 · 验证与决策](README.md#verification) · [按任务阅读](README.md#routes)
+
 ## Decision
 
 Keep `WebGLRenderer` and the existing 12×12 render-chunk culling path as the

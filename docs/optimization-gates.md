@@ -1,5 +1,7 @@
 # Deferred optimization gates
 
+导航：[总导航 · 验证与决策](README.md#verification) · [按任务阅读](README.md#routes)
+
 `optimization-gates.json` is the machine-checked decision register for costly
 work that is deliberately outside the current foundation. It prevents a vague
 roadmap item from becoming an implementation merely because it sounds useful,

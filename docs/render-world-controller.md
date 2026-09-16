@@ -1,5 +1,7 @@
 # Render world controller
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 `RenderWorldController` is the lifecycle boundary between the interactive
 `HexMap` shell and a streamed world session. It owns the session's
 `WorldSource`, shared `ChunkResidencyCoordinator`, and `WorldStreamer`.

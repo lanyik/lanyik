@@ -1,5 +1,7 @@
 # Test strategy
 
+导航：[总导航 · 验证与决策](README.md#verification) · [按任务阅读](README.md#routes)
+
 Tests protect observable behavior and failure boundaries. Counts are not acceptance
 targets. Read the owning contract from the [documentation index](README.md) before
 choosing checks; cleanup criteria are in [CONTRIBUTING](../CONTRIBUTING.md).

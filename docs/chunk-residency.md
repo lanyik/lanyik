@@ -1,5 +1,7 @@
 # Chunk residency and ownership
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 `WorldSource` is the storage and I/O boundary. It intentionally retains the
 low-level `loadChunk()` / `releaseChunk()` contract, while
 `ChunkResidencyCoordinator` owns the cross-system lifetime of materialized

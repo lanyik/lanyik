@@ -1,5 +1,7 @@
 # 通用物品与图标规范
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 物品定义、背包事务与所有界面图标使用同一合同。固定参数由 `apps/survivor/src/core/GameConfig.ts` 定义，
 `ItemDefinition.ts` 约束公共字段，`InventoryItem.ts` 提供可辨别联合类型，`Inventory.ts` 执行分类容量和堆叠事务。
 

@@ -1,5 +1,7 @@
 # 战斗结算、状态与后续系统边界
 
+导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
+
 2026-09-15 实施。对应 `core/{CombatResolution,CombatVitality,CombatEvents,CombatFeedback,CombatRewards,StatusSystem}.ts` 及 `CombatSimulation`、`CombatWorld`、`SkillSystem`、`EnemyActions` 的接入。
 本文的“当前”均指已经接入的代码；最后一节是后续开发顺序。
 

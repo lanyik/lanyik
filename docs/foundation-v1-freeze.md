@@ -1,5 +1,7 @@
 # Infrastructure v1 freeze contract
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 Status: frozen on 2026-08-27. The acceptance commands at the end of this
 document passed together on the freeze revision. Exact test counts are not part
 of the contract; the protected invariants and test-layer policy are documented

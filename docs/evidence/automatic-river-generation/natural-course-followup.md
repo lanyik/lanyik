@@ -1,5 +1,7 @@
 # Natural-course follow-up
 
+导航：[总导航 · 历史与测量](../../README.md#evidence) · [按任务阅读](../../README.md#routes)
+
 Captured on 2026-09-04 after direct user review of the generated world.
 
 The broad seas and overall water balance were accepted. The remaining defects

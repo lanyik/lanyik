@@ -1,5 +1,7 @@
 # Coarse-drainage water network
 
+导航：[总导航 · 地图基础库](../README.md#foundation) · [按任务阅读](../README.md#routes)
+
 Status: implemented; upstream source growth beyond the baseline on 2026-09-05 (generator v19).
 
 ## Context

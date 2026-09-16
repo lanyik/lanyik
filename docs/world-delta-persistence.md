@@ -1,5 +1,7 @@
 # World delta persistence
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 Generated terrain remains rebuildable. `WorldDeltaStore` persists only sparse
 gameplay/editor overrides and keeps them in a database separate from the base
 terrain cache.

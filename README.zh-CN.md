@@ -1,5 +1,7 @@
 # three-hex-map
 
+导航：[总导航 · 入口与协作](docs/README.md#entrypoints) · [按任务阅读](docs/README.md#routes)
+
 [English](README.md) | 简体中文
 
 一个基于 [three.js](https://threejs.org/) 的浏览器端 3D 六边形世界渲染器与
@@ -242,8 +244,8 @@ game.dispose();
 
 ## 文档与路线
 
-[文档索引](docs/README.md) 已按当前架构、冻结合同、专项说明、技术决策和未来设计分类。
-修改前先读[协作指南](CONTRIBUTING.md)，再从[游戏设计索引](docs/game/README.md)或[基础库源码说明](src/README.md)定位所属合同；[应用目录说明](apps/survivor/README.md)提供分层与设计的对应关系。
+[文档总导航](docs/README.md)在一页提供完整关系图、任务阅读路线、所有设计直达链接、代码位置和历史证据。
+修改前先读[协作指南](CONTRIBUTING.md)，再从[任务路线](docs/README.md#routes)打开所属设计与实现，无需在多份 README 之间逐级查找。
 
 当前有意保留的边界：
 

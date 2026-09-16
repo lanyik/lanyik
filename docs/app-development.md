@@ -1,5 +1,7 @@
 # App 开发设计：生存 RPG
 
+导航：[总导航 · 游戏设计](README.md#game) · [按任务阅读](README.md#routes)
+
 当前 `apps/survivor` 已实现 Worker 战斗模拟、有界 SoA ECS、六种怪物行为树与 Boss 狂暴阶段、近战/远程/冲锋/治疗、六边形地域、四圈驻留生态、角色/背包独立界面、五选四技能及升级、六槽宝珠和寻宝共鸣、词条打造/继承，以及浏览器持久化灵境。
 现在从开始界面进入：种子世界预览、继续游戏、自动/手动角色存读档见[角色存档合同](./game/character-saves.md)。`bootstrap` 在点击开始前不创建图形和战斗资源。
 精确数值见[战斗、成长与寻宝合同](./game/combat-and-progression.md)，模型来源、处理与资源生命周期见

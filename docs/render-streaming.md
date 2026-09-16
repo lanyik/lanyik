@@ -1,5 +1,7 @@
 # World rendering and streaming
 
+导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+
 ## Pipeline
 
 Every map runs through two intentionally separate chunk layers:
