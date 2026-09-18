@@ -56,6 +56,22 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
         const target = world.resolve(a.target[slot]);
         if (target < 0) continue;
         if (kind === ActorAction.Heal) { a.targetX[slot] = p.x[target]; a.targetZ[slot] = p.z[target]; }
+        if (kind === ActorAction.Quake) {
+            const rule = ENEMY_SPECIAL.quake, duration = ticksForSeconds(rule.duration), age = tick - a.hitAt[slot];
+            if (age < 0 || age > duration) continue;
+            if (!(a.committed[slot] & 1)) {
+                effects.add(EffectKind.EnemyQuake, a.hitAt[slot], p.x[slot], p.z[slot], rule.radius, rule.duration, p.x[slot], p.z[slot], world.ids[slot]);
+                a.committed[slot] |= 1;
+            }
+            const before = Math.hypot(p.previousX[target] - p.x[slot], p.previousZ[target] - p.z[slot]) - rule.radius * Math.max(0, age - 1) / duration;
+            const now = Math.hypot(p.x[target] - p.x[slot], p.z[target] - p.z[slot]) - rule.radius * age / duration;
+            const width = rule.width + p.radius[target];
+            if (!(a.committed[slot] & 2) && Math.min(before, now) <= width && Math.max(before, now) >= -width && entities.canSee(slot, target)) {
+                a.committed[slot] |= 2;
+                impacts.add(world.ids[slot], world.ids[target], e.damage[slot] * rule.damage, e.elite[slot], e.boss[slot]);
+            }
+            continue;
+        }
         if (kind === ActorAction.Fault || kind === ActorAction.Jaws || kind === ActorAction.Reave) {
             advanceStrike(entities, slot, target, tick); continue;
         }
@@ -71,8 +87,11 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             }
             continue;
         }
-        if (tick < a.hitAt[slot] || a.committed[slot]) continue;
-        a.committed[slot] = 1;
+        const storm = kind === ActorAction.Storm;
+        const wave = storm ? a.committed[slot] : 0;
+        if (tick < a.hitAt[slot] + (storm ? wave * ticksForSeconds(ENEMY_SPECIAL.storm.interval) : 0)
+            || (storm ? wave >= ENEMY_SPECIAL.storm.waves : a.committed[slot] !== 0)) continue;
+        a.committed[slot]++;
         const dx = p.x[target] - p.x[slot], dz = p.z[target] - p.z[slot];
         if (kind === ActorAction.Melee) {
             const distance = Math.hypot(dx, dz);
@@ -87,7 +106,7 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             entities.vitality.heal(world.ids[slot], world.ids[target], Math.min(v.maxHealth[target] * ENEMY_SPECIAL.heal.fraction, e.damage[slot] * 3), tick, EffectCause.ShamanHeal);
             status.apply(StatusKind.Protection, world.ids[slot], world.ids[target], ENEMY_SPECIAL.healingWard.reduction, tick + ticksForSeconds(ENEMY_SPECIAL.healingWard.duration), tick);
             effects.add(EffectKind.Heal, tick, p.x[slot], p.z[slot], 1, .8, p.x[target], p.z[target]);
-        } else if (kind === ActorAction.Cast || kind === ActorAction.Volley) {
+        } else if (kind === ActorAction.Cast || kind === ActorAction.Volley || storm) {
             if (!entities.canSee(slot, target)) continue;
             const curved = kind === ActorAction.Volley, count = curved ? 3 : a.variant[slot];
             if (entities.projectiles.count + count > MAX_PROJECTILES || entities.hostileProjectiles.count + count > MAX_HOSTILE_PROJECTILES) continue;
@@ -97,10 +116,12 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
             const launchY = entities.terrain.height(p.x[slot], p.z[slot]) + SHAMAN_CAST_SOCKET[1] * scale;
             if (entities.terrain.traceAttack(p.x[slot], launchY, p.z[slot], launchX, launchY, launchZ, .14) !== Infinity) continue;
             for (let bolt = 0; bolt < count; bolt++) {
-                const offset = bolt - (count - 1) / 2, heading = p.heading[slot] + offset * (curved ? ENEMY_SPECIAL.volley.spread : .24);
+                const offset = bolt - (count - 1) / 2, heading = p.heading[slot]
+                    + offset * (storm ? ENEMY_SPECIAL.storm.spread : curved ? ENEMY_SPECIAL.volley.spread : .24)
+                    + (storm ? (wave - 1) * .2 : 0);
                 const speed = e.boss[slot] ? 5.5 : 4.5;
                 entities.spawnProjectile(world.ids[slot], Faction.Enemy, launchX, launchZ, Math.sin(heading) * speed, Math.cos(heading) * speed,
-                    e.damage[slot] * (curved ? ENEMY_SPECIAL.volley.damage : 1), a.reach[slot] / speed + .3,
+                    e.damage[slot] * (storm ? ENEMY_SPECIAL.storm.damage : curved ? ENEMY_SPECIAL.volley.damage : 1), a.reach[slot] / speed + .3,
                     { elite: e.elite[slot], boss: e.boss[slot], height: SHAMAN_CAST_SOCKET[1] * scale, groundX: p.x[slot], groundZ: p.z[slot],
                         turnRate: curved && offset !== 0 ? -offset * ENEMY_SPECIAL.volley.turnRate : 0,
                         velocityY: (entities.aimHeight(target) - launchY)

@@ -126,3 +126,44 @@ test.each(["cancel", "target-lost", "owner-killed"])("blood pact interruption (%
     if (reason !== "target-lost") expect(e.vitals.health[ally]).toBe(1);
     expect(e.effects.buffer.count).toBe(0);
 });
+
+test("stone sovereign warns then sweeps an expanding wave, hits once and cancels on interruption", () => {
+    const { world: e, enemy, behavior } = arena(EnemyKind.StoneSovereign, true, 4);
+    behavior.update(1); expect(e.action.kind[enemy]).toBe(ActorAction.Quake);
+    const release = e.action.hitAt[enemy];
+    advanceEnemyActions(e, release - 1); expect(e.effects.buffer.count).toBe(0);
+    for (let tick = release; tick < release + 60; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(0);
+    for (let tick = release + 60; tick <= e.action.endsAt[enemy]; tick++) advanceEnemyActions(e, tick);
+    expect(e.impacts.count).toBe(1); expect(e.effects.buffer.kind[0]).toBe(EffectKind.EnemyQuake);
+    behavior.cancel(enemy); expect(e.effects.buffer.count).toBe(0);
+});
+
+test("storm oracle releases three staggered locked fans and cancellation prevents remaining waves", () => {
+    const { world: e, enemy, behavior } = arena(EnemyKind.StormOracle, true);
+    behavior.update(1); expect(e.action.kind[enemy]).toBe(ActorAction.Storm);
+    const release = e.action.hitAt[enemy];
+    advanceEnemyActions(e, release); expect(e.projectiles.count).toBe(3);
+    const heading = e.position.heading[e.projectiles.slots[1]];
+    e.position.x[e.player] = 3;
+    advanceEnemyActions(e, release + 38); expect(e.projectiles.count).toBe(3);
+    advanceEnemyActions(e, release + 39); expect(e.projectiles.count).toBe(6);
+    expect(e.position.heading[e.projectiles.slots[4]] - heading).toBeCloseTo(.2);
+    advanceEnemyActions(e, release + 78); expect(e.projectiles.count).toBe(9);
+    advanceEnemyActions(e, release + 100); expect(e.projectiles.count).toBe(9);
+    behavior.cancel(enemy); expect(e.projectiles.count).toBe(9);
+    e.action.readyAt[enemy] = e.enemy.specialReadyAt[enemy] = 0;
+    behavior.tick = 1000; behavior.attack(enemy); const second = e.action.hitAt[enemy];
+    advanceEnemyActions(e, second); expect(e.projectiles.count).toBe(12);
+    behavior.cancel(enemy); advanceEnemyActions(e, second + 39); expect(e.projectiles.count).toBe(12);
+});
+
+test("ember champion chooses a committed charge at range and a directional sweep up close", () => {
+    for (const distance of [2, 5]) {
+        const { world: e, enemy, behavior } = arena(EnemyKind.EmberChampion, true, distance);
+        behavior.update(1);
+        expect(e.action.kind[enemy]).toBe(distance === 2 ? ActorAction.Reave : ActorAction.Charge);
+        const release = e.action.hitAt[enemy]; behavior.cancel(enemy); advanceEnemyActions(e, release);
+        expect(e.impacts.count).toBe(0); expect(e.position.z[enemy]).toBe(0);
+    }
+});

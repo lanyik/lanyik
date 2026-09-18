@@ -10,7 +10,7 @@ test("enemy facts never generate player rune instances", async () => {
     vi.spyOn(AssetLoader.prototype, "texture").mockResolvedValue(new Texture());
     const effects = await SkillEffects.load(new AbortController().signal), facts = new CombatEffects();
     try {
-        for (const kind of [EffectKind.Heal, EffectKind.EnemyReave, EffectKind.EnemyJaws, EffectKind.EnemyFault]) facts.add(kind, 0, 0, 0, 4, 1);
+        for (const kind of [EffectKind.Heal, EffectKind.EnemyReave, EffectKind.EnemyJaws, EffectKind.EnemyFault, EffectKind.EnemyQuake]) facts.add(kind, 0, 0, 0, 4, 1);
         effects.update(facts.buffer, .5, () => 0, 0, 0, 0);
         expect(effects.mesh.count).toBe(0); expect(effects.ward.visible).toBe(false);
     } finally { effects.dispose(); }
@@ -72,5 +72,24 @@ test("effect matrices retain sub-tile motion at large logical coordinates", asyn
         const matrix = new Matrix4(); effects.ground.getMatrixAt(0, matrix);
         expect(matrix.elements[12]).toBe(.125);
         expect(matrix.elements[14]).toBe(.25);
+    } finally { effects.dispose(); }
+});
+
+test.each([EffectKind.Meteor, EffectKind.MeteorImpact, EffectKind.Vortex, EffectKind.Blades, EffectKind.Shatter])("new choreography %i is bounded, deterministic and uses finite local transforms", async kind => {
+    vi.spyOn(AssetLoader.prototype, "texture").mockResolvedValue(new Texture());
+    const effects = await SkillEffects.load(new AbortController().signal), facts = new CombatEffects();
+    try {
+        for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) facts.add(kind, 0, 1, 2, 3, 4);
+        effects.update(facts.buffer, .5, () => 0, 10, 20, 1);
+        expect(effects.mesh.count).toBeGreaterThan(7);
+        expect(effects.mesh.count).toBeLessThan(GAME_CONFIG.presentation.effectInstances);
+        const before = effects.mesh.instanceMatrix.array.slice();
+        expect(before.every(Number.isFinite)).toBe(true);
+        effects.update(facts.buffer, .5, () => 0, 10, 20, 1);
+        expect(effects.mesh.instanceMatrix.array).toEqual(before);
+        if (kind === EffectKind.Blades) {
+            const matrix = new Matrix4(); effects.mesh.getMatrixAt(0, matrix);
+            expect(matrix.elements[12]).toBe(0); expect(matrix.elements[14]).toBe(0);
+        }
     } finally { effects.dispose(); }
 });

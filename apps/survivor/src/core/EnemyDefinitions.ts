@@ -1,5 +1,9 @@
 import { ticksForSeconds } from "./GameConfig";
-export enum EnemyKind { Grunt, Scout, Guard, Caster, Charger, Healer }
+export enum EnemyKind { Grunt, Scout, Guard, Caster, Charger, Healer, StoneSovereign, StormOracle, EmberChampion }
+export const BOSS_KINDS = Object.freeze([EnemyKind.Caster, EnemyKind.StoneSovereign, EnemyKind.StormOracle, EnemyKind.EmberChampion]);
+export function enemyName(kind: EnemyKind, boss: boolean): string {
+    return boss && kind === EnemyKind.Caster ? "裂爪领主" : ENEMY_DEFINITIONS[kind].name;
+}
 
 /** Opponent probabilities also bound the useful range of player counter-stats. */
 export const ENEMY_HIT_RULES = Object.freeze({
@@ -32,7 +36,7 @@ function enemy({ windup, recovery, cooldown, ...definition }: EnemyConfig): Enem
     return Object.freeze({ ...definition,
         windupTicks: ticksForSeconds(windup), recoveryTicks: ticksForSeconds(recovery), cooldownTicks: ticksForSeconds(cooldown) });
 }
-/** Six behavior archetypes select fixed baked mesh pools. */
+/** Enemy and boss archetypes share the existing baked mesh pools. */
 export const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
     enemy({ name: "地精仆从", model: 0, tint: "#ffffff", height: 1, health: 28, healthGrowth: .18, speed: 1.18, damage: 20, damageGrowth: .105,
         radius: .3, experience: 6, reach: .45, ranged: false, windup: .36, recovery: .64, cooldown: .15 }),
@@ -45,7 +49,13 @@ export const ENEMY_DEFINITIONS: readonly EnemyDefinition[] = Object.freeze([
     enemy({ name: "赤脊冲锋者", model: 1, tint: "#ff9370", height: 1, health: 56, healthGrowth: .20, speed: 1.05, damage: 34, damageGrowth: .11,
         radius: .4, experience: 14, reach: .55, ranged: false, windup: .5, recovery: .8, cooldown: .5 }),
     enemy({ name: "幽光祭司", model: 2, tint: "#8bffbb", height: 1.25, health: 48, healthGrowth: .21, speed: 1.12, damage: 12, damageGrowth: .095,
-        radius: .31, experience: 16, reach: 6, ranged: true, windup: .9, recovery: 1, cooldown: 1 })
+        radius: .31, experience: 16, reach: 6, ranged: true, windup: .9, recovery: 1, cooldown: 1 }),
+    enemy({ name: "断层岩王", model: 4, tint: "#b9ccff", height: 1.5, health: 48, healthGrowth: .20, speed: .65, damage: 28, damageGrowth: .11,
+        radius: .46, experience: 18, reach: 1, ranged: false, windup: .9, recovery: 1.1, cooldown: .6 }),
+    enemy({ name: "风暴先知", model: 2, tint: "#b3a0ff", height: 1.25, health: 36, healthGrowth: .20, speed: 1.15, damage: 22, damageGrowth: .11,
+        radius: .34, experience: 18, reach: 8, ranged: true, windup: .85, recovery: 1.3, cooldown: .6 }),
+    enemy({ name: "烬刃斗王", model: 1, tint: "#ffb85f", height: 1, health: 44, healthGrowth: .20, speed: 1.25, damage: 27, damageGrowth: .11,
+        radius: .4, experience: 18, reach: .8, ranged: false, windup: .6, recovery: .9, cooldown: .4 })
 ]);
 
 /** Fixed regional level curves, calibrated against same-level equipment; never read the player's loadout. */
@@ -66,6 +76,8 @@ export const ENEMY_SPECIAL = Object.freeze({
     volley: Object.freeze({ spread: .48, turnRate: .65, turnSeconds: .8, windup: 1.05, recovery: .85, cooldown: 6, damage: .8 }),
     jaws: Object.freeze({ halfLength: 2.8, halfGap: 3.2, width: .35, windup: 1.15, duration: .9, recovery: .7, cooldown: 7, damage: 1.45 }),
     fault: Object.freeze({ length: 6, width: .6, windup: 1.05, duration: .75, recovery: .8, cooldown: 5, damage: 1.5 }),
+    quake: Object.freeze({ radius: 6, width: .35, windup: 1.25, duration: 1.1, recovery: .9, cooldown: 6, damage: 1.25 }),
+    storm: Object.freeze({ waves: 3, interval: .32, spread: .42, windup: 1.1, recovery: 1.1, cooldown: 5, damage: .65 }),
     healingWard: Object.freeze({ duration: 3, reduction: .25 }),
     guardReduction: .4, enrageHealth: .5
 });

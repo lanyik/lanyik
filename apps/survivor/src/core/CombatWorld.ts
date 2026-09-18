@@ -18,7 +18,7 @@ import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
-export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Reave, Volley, Fault, Jaws }
+export enum ActorAction { Idle, Moving, Melee, Cast, Charge, Heal, Reave, Volley, Fault, Jaws, Quake, Storm }
 export enum MoveIntent { None, Chase, Return, Retreat, Circle, Flank, Patrol, Seek }
 interface ProjectileLaunch {
     readonly critical?: boolean; readonly elite?: number; readonly boss?: number;

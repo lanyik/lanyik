@@ -132,7 +132,14 @@ export class EnemyBehavior {
         let windup = definition.windupTicks, recovery = definition.recoveryTicks;
         a.kind[slot] = definition.ranged ? ActorAction.Cast : ActorAction.Melee;
         a.target[slot] = e.target[slot];
-        if (this.canReave(slot)) {
+        if (this.canBossSpell(slot)) {
+            const stone = e.kind[slot] === EnemyKind.StoneSovereign;
+            a.kind[slot] = stone ? ActorAction.Quake : ActorAction.Storm;
+            const rule = stone ? ENEMY_SPECIAL.quake : ENEMY_SPECIAL.storm;
+            windup = ticksForSeconds(rule.windup);
+            recovery = ticksForSeconds(rule.recovery + (stone ? ENEMY_SPECIAL.quake.duration : (ENEMY_SPECIAL.storm.waves - 1) * ENEMY_SPECIAL.storm.interval));
+            e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(rule.cooldown);
+        } else if (this.canReave(slot)) {
             a.kind[slot] = ActorAction.Reave;
             windup = ticksForSeconds(ENEMY_SPECIAL.reave.windup); recovery = ticksForSeconds(ENEMY_SPECIAL.reave.duration + ENEMY_SPECIAL.reave.recovery);
             e.specialReadyAt[slot] = this.tick + windup + recovery + ticksForSeconds(ENEMY_SPECIAL.reave.cooldown);
@@ -172,13 +179,19 @@ export class EnemyBehavior {
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canHeal(slot) || (this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot])
+            && (this.canHeal(slot) || (this.canBossSpell(slot) || this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot])
                 && this.entities.canSee(slot, this.entities.player));
     }
     private canVolley(slot: number): boolean {
         const e = this.entities.enemy;
         return e.kind[slot] === EnemyKind.Caster && e.attackStep[slot] % 2 === 1
             && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= this.entities.action.reach[slot];
+    }
+    private canBossSpell(slot: number): boolean {
+        const e = this.entities.enemy;
+        return e.boss[slot] !== 0 && this.tick >= e.specialReadyAt[slot]
+            && (e.kind[slot] === EnemyKind.StoneSovereign && this.distance(slot) <= ENEMY_SPECIAL.quake.radius
+                || e.kind[slot] === EnemyKind.StormOracle && this.distance(slot) <= this.entities.action.reach[slot]);
     }
     private canFault(slot: number): boolean {
         const e = this.entities.enemy;
@@ -187,11 +200,12 @@ export class EnemyBehavior {
     }
     public canReave(slot: number): boolean {
         const e = this.entities.enemy;
-        return e.boss[slot] !== 0 && e.enraged[slot] !== 0 && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.reave.radius;
+        return e.boss[slot] !== 0 && (e.enraged[slot] !== 0 || e.kind[slot] === EnemyKind.EmberChampion)
+            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.reave.radius;
     }
     private canCharge(slot: number): boolean {
         const e = this.entities.enemy;
-        if (e.kind[slot] !== EnemyKind.Charger || this.tick < e.specialReadyAt[slot]) return false;
+        if (e.kind[slot] !== EnemyKind.Charger && e.kind[slot] !== EnemyKind.EmberChampion || this.tick < e.specialReadyAt[slot]) return false;
         const distance = this.distance(slot);
         return distance >= ENEMY_SPECIAL.charge.minRange && distance <= ENEMY_SPECIAL.charge.maxRange;
     }

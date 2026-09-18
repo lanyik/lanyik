@@ -1,11 +1,11 @@
 import { expect, test, vi } from "vitest";
 import { CombatSimulation, experienceForLevel } from "../src/core/CombatSimulation";
-import { CombatWorld, ActorAction, MoveIntent } from "../src/core/CombatWorld";
+import { CombatWorld, ActorAction, MoveIntent, Component } from "../src/core/CombatWorld";
 import { SkillSystem } from "../src/core/SkillSystem";
 import { SKILLS, skillValues } from "../src/core/Skills";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { RegionalWorld } from "../src/core/RegionalWorld";
-import { GAME_CONFIG, ticksForSeconds } from "../src/core/GameConfig";
+import { GAME_CONFIG, MAX_ENEMIES, ticksForSeconds } from "../src/core/GameConfig";
 import { EffectKind } from "../src/core/CombatEffects";
 import { RenderFrame } from "../src/worker/RenderFrame";
 import { moveEnemies } from "../src/core/CombatSystems";
@@ -118,4 +118,90 @@ test("saturated visual buffers preserve gameplay and transfer without exposing a
     rendered.effects.x[0] = -1; rendered.entities.status.slowUntil[enemy] = 0;
     expect(e.effects.buffer.x[0]).toBe(0); expect(e.status.slowUntil[enemy]).toBeGreaterThan(0);
     e.effects.advance(120); expect(e.effects.buffer.count).toBe(0);
+});
+
+test("meteor commits at the locked location and exact deadline using cast-time stats despite full visuals", () => {
+    const { skills, e, stats, random, spawn } = arena();
+    const target = spawn(4, 0), bystander = spawn(4, 1);
+    skills.equip("meteor", 0, 2); e.vitals.mana[e.player] = 100;
+    for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) e.effects.add(EffectKind.Heal, 0, 0, 0, 1, 10);
+    const castingStats = { ...stats, damage: 10, criticalChance: 0, excellentChance: 0, lethalChance: 0 };
+    vi.spyOn(random, "next").mockReturnValue(.5);
+    expect(skills.cast("meteor", 0, castingStats, 2, random)).toBe(true);
+    castingStats.damage = 1000;
+    expect(e.impacts.count).toBe(0);
+    e.position.x[target] = 15; e.updateSpatial(target, Component.Enemy);
+    e.position.x[e.player] = -15;
+    skills.advanceOngoing(107, random, () => {}); expect(e.impacts.count).toBe(0);
+    skills.advanceOngoing(108, random, () => {});
+    expect(e.impacts.count).toBe(1); expect(e.impacts.target[0]).toBe(e.world.ids[bystander]);
+    expect(e.impacts.damage[0]).toBe(28);
+    skills.advanceOngoing(109, random, () => {}); expect(e.impacts.count).toBe(1);
+    expect(e.effects.buffer.count).toBe(GAME_CONFIG.skills.maxEffects);
+});
+
+test("vortex pulls only visible targets through terrain, settles each cast and expires after eight pulses", () => {
+    const { skills, e, stats, random, spawn } = arena();
+    spawn(4, 0); const normal = spawn(6, 0), boss = spawn(4, 2), covered = spawn(4, -2);
+    e.enemy.boss[boss] = 1;
+    skills.equip("vortex", 0, 3); e.vitals.mana[e.player] = 100;
+    expect(skills.cast("vortex", 0, stats, 3, random)).toBe(true);
+    const trace = vi.spyOn(e.terrain, "traceAttack").mockImplementation((_x, _y, _z, _ex, _ey, ez) => ez < 0 ? 0 : Infinity);
+    const settle = vi.fn(() => { e.impacts.count = 0; });
+    skills.advanceOngoing(59, random, settle); expect(settle).not.toHaveBeenCalled();
+    skills.advanceOngoing(60, random, settle);
+    expect(e.position.x[normal]).toBeCloseTo(5.35);
+    expect(e.position.z[boss]).toBeCloseTo(1.87);
+    expect(e.position.z[covered]).toBe(-2);
+    for (let tick = 61; tick <= 481; tick++) skills.advanceOngoing(tick, random, settle);
+    expect(settle).toHaveBeenCalledTimes(8);
+    trace.mockRestore();
+});
+
+test("blade ring follows the player, leaves an inner gap and cannot overlap itself at high cast speed", () => {
+    const { skills, e, stats, random, spawn } = arena();
+    const inner = spawn(.5, 0), rim = spawn(2.5, 0);
+    skills.equip("blades", 0, 2); e.vitals.mana[e.player] = 100;
+    expect(skills.cast("blades", 0, { ...stats, castSpeed: 100 }, 2, random)).toBe(true);
+    skills.advanceOngoing(30, random, () => {});
+    expect(Array.from(e.impacts.target.slice(0, e.impacts.count))).toEqual([e.world.ids[rim]]);
+    expect(e.impacts.target[0]).not.toBe(e.world.ids[inner]);
+    expect(skills.cast("blades", 31, stats, 2, random)).toBe(false);
+    e.impacts.count = 0; e.position.x[e.player] = 10;
+    skills.advanceOngoing(60, random, () => {}); expect(e.impacts.count).toBe(0);
+    skills.restore(skills.checkpoint(), 60);
+    expect(e.effects.buffer.count).toBe(0);
+    skills.advanceOngoing(90, random, () => {}); expect(e.impacts.count).toBe(0);
+});
+
+test("all three ongoing skills share a full population without overflowing the per-stage damage capacity", () => {
+    const { skills, e, stats, random, spawn } = arena();
+    for (let i = 0; i < MAX_ENEMIES; i++) spawn(2.5, 0);
+    for (const [slot, id] of (["meteor", "vortex", "blades"] as const).entries()) {
+        skills.equip(id, slot, 3); e.vitals.mana[e.player] = 100;
+        expect(skills.cast(id, 0, { ...stats, castSpeed: 100 }, 3, random)).toBe(true);
+    }
+    let stages = 0, peak = 0;
+    for (let tick = 1; tick <= 480; tick++) skills.advanceOngoing(tick, random, () => {
+        stages++; peak = Math.max(peak, e.impacts.count); e.impacts.count = 0;
+    });
+    expect(stages).toBe(25); expect(peak).toBe(MAX_ENEMIES);
+    e.vitals.mana[e.player] = 100;
+    expect(skills.cast("blades", 480, stats, 3, random)).toBe(true);
+});
+
+test("new targeted skills reject empty casts and pulse gains independent 50 percent damage against chilled enemies", () => {
+    const { skills, e, stats, random, spawn } = arena();
+    skills.equip("meteor", 0, 3); skills.equip("vortex", 1, 3);
+    const mana = e.vitals.mana[e.player];
+    for (const id of ["meteor", "vortex"] as const) expect(skills.cast(id, 0, stats, 3, random)).toBe(false);
+    expect(e.vitals.mana[e.player]).toBe(mana);
+    skills.equip("pulse", 0, 3); skills.equip("frost", 1, 3);
+    spawn(2, 0); vi.spyOn(random, "next").mockReturnValue(.5);
+    skills.cast("pulse", 0, stats, 3, random); const normal = e.impacts.damage[0];
+    e.vitals.mana[e.player] = 100; e.impacts.count = 0;
+    skills.cast("frost", 600, stats, 3, random); e.impacts.count = 0;
+    skills.cast("pulse", 601, stats, 3, random);
+    expect(e.impacts.damage[0]).toBeCloseTo(normal * 1.5);
+    expect(Array.from(e.effects.buffer.kind.slice(0, e.effects.buffer.count))).toContain(EffectKind.Shatter);
 });

@@ -5,13 +5,14 @@ import { writeFile } from "node:fs/promises";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const result = await build({ stdin: { resolveDir: root, contents: `
     export { balanceEncounter } from './apps/survivor/tests/helpers/balanceReference';
-    export { ENEMY_DEFINITIONS } from './apps/survivor/src/core/EnemyDefinitions';
+    export { BOSS_KINDS, enemyName } from './apps/survivor/src/core/EnemyDefinitions';
 ` }, bundle: true, write: false, platform: "node", format: "esm" });
-const { balanceEncounter, ENEMY_DEFINITIONS } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+const { balanceEncounter, BOSS_KINDS, enemyName } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
 const rows = [];
-for (const level of [1, 5, 10, 25, 50, 100]) for (let kind = 0; kind <= 6; kind++) {
-    const boss = kind === 6, samples = Array.from({ length: 64 }, (_, i) => balanceEncounter(level, i, boss ? 3 : kind, boss, boss, boss ? 1.6 : 1));
-    const row = { level, enemy: boss ? "裂爪领主" : ENEMY_DEFINITIONS[kind].name };
+const opponents = [...Array.from({ length: 6 }, (_, kind) => ({ kind, boss: false })), ...BOSS_KINDS.map(kind => ({ kind, boss: true }))];
+for (const level of [1, 5, 10, 25, 50, 100]) for (const { kind, boss } of opponents) {
+    const samples = Array.from({ length: 64 }, (_, i) => balanceEncounter(level, i, kind, boss, boss, boss ? 1.6 : 1));
+    const row = { level, enemy: enemyName(kind, boss) };
     for (const key of Object.keys(samples[0])) {
         const values = samples.map(sample => sample[key]).sort((a, b) => a - b);
         row[key] = { p10: +values[6].toFixed(2), median: +values[32].toFixed(2), p90: +values[57].toFixed(2) };

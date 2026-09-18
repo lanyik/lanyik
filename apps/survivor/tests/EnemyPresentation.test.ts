@@ -20,16 +20,16 @@ test("enemy signatures use different solid geometry and the blood pact has a bod
     } finally { display.dispose(); }
 });
 
-test("maximum enemy facts, blessed casters and darts remain bounded, freeze and release all owned buffers", () => {
+test.each([EffectKind.EnemyJaws, EffectKind.EnemyQuake])("maximum enemy facts %i, blessed casters and darts remain bounded, freeze and release all owned buffers", kind => {
     const display = new EnemyPresentation(), effects = new CombatEffects(), height = () => 0;
     const disposed = vi.fn(); for (const mesh of [display.blades, display.rocks, display.threads, display.warnings]) mesh.geometry.addEventListener("dispose", disposed);
     try {
-        for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) effects.add(EffectKind.EnemyJaws, 0, 0, 0, .35, 1.2, 0, 1);
+        for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) effects.add(kind, 0, 0, 0, .35, 1.2, 0, 1);
         const render = () => {
             display.begin(effects.buffer, .4, height, 0, 0);
             for (let i = 0; i < MAX_ENEMIES; i++) {
-                display.actor(ActorAction.Fault, .25, 0, 0, 0, 0, 0, 5, true);
-                display.hand(ActorAction.Volley, .25, 0, 1, 0, 0, 5, 0, height);
+                display.actor(kind === EffectKind.EnemyQuake ? ActorAction.Quake : ActorAction.Fault, .25, 0, 0, 0, 0, 0, 5, true);
+                display.hand(kind === EffectKind.EnemyQuake ? ActorAction.Heal : ActorAction.Volley, .25, 0, 1, 0, 0, 5, 0, height);
             }
             for (let i = 0; i < MAX_PROJECTILES; i++) display.projectile(0, 1, 0, i, 1);
             display.upload();

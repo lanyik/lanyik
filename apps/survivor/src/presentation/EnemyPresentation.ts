@@ -117,7 +117,15 @@ export class EnemyPresentation {
             const age = seconds - facts.started[i] / GAME_CONFIG.timing.simulationHz;
             if (age < 0 || seconds * GAME_CONFIG.timing.simulationHz >= facts.endsAt[i]) continue;
             const x = facts.x[i], z = facts.z[i], heading = Math.atan2(facts.endX[i] - x, facts.endZ[i] - z);
-            if (kind === EffectKind.EnemyFault) {
+            if (kind === EffectKind.EnemyQuake) {
+                const radius = facts.radius[i] * age / ENEMY_SPECIAL.quake.duration;
+                for (let j = 0; j < 12; j++) {
+                    const angle = j * Math.PI / 6, px = x + Math.sin(angle) * radius, pz = z + Math.cos(angle) * radius;
+                    this.stamp(this.rocks, px, height(px, pz) + .25, pz, .4, .65, .4, angle, j % 2 ? STONE : EDGE);
+                    const next = angle + Math.PI / 6;
+                    this.thread(px, height(px, pz) + .18, pz, x + Math.sin(next) * radius, height(px, pz) + .18, z + Math.cos(next) * radius, .07, WARNING);
+                }
+            } else if (kind === EffectKind.EnemyFault) {
                 for (let j = 0; j < 12; j++) {
                     const front = j === 0;
                     if (front && age >= ENEMY_SPECIAL.fault.duration) continue;
@@ -163,7 +171,20 @@ export class EnemyPresentation {
             this.stamp(this.blades, x + Math.sin(angle) * .55, y + .7, z + Math.cos(angle) * .55, .35, .6, .6, angle, LIFE);
         }
         if (progress >= .5) return;
-        if (kind === ActorAction.Fault) {
+        if (kind === ActorAction.Quake) {
+            // Radial arrows communicate an outward wave and leave the centre readable.
+            for (let j = 0; j < 6; j++) {
+                const angle = j * Math.PI / 3;
+                this.line(x + Math.sin(angle) * 1.5, z + Math.cos(angle) * 1.5,
+                    x + Math.sin(angle) * ENEMY_SPECIAL.quake.radius, z + Math.cos(angle) * ENEMY_SPECIAL.quake.radius, .11);
+            }
+            this.stamp(this.rocks, x, y + .25, z, 1.2, .4 + progress, 1.2, heading, EDGE);
+        } else if (kind === ActorAction.Storm) {
+            for (let j = -2; j <= 2; j++) {
+                const angle = heading + j * ENEMY_SPECIAL.storm.spread;
+                this.line(x + Math.sin(angle), z + Math.cos(angle), x + Math.sin(angle) * 7, z + Math.cos(angle) * 7, .1);
+            }
+        } else if (kind === ActorAction.Fault) {
             for (let j = 0; j < 6; j++) {
                 const from = j / 6 * ENEMY_SPECIAL.fault.length, to = (j + .8) / 6 * ENEMY_SPECIAL.fault.length;
                 this.line(x + Math.sin(heading) * from, z + Math.cos(heading) * from, x + Math.sin(heading) * to, z + Math.cos(heading) * to, .16);

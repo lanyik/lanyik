@@ -121,7 +121,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 </details>
             </section>
             <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} attach={attachRegionMap} />
-            {combat.boss && <section className="boss-status panel"><strong>裂爪领主{combat.boss.enraged ? " · 狂暴" : ""}</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
+            {combat.boss && <section className="boss-status panel"><strong>{combat.boss.name}{combat.boss.enraged ? " · 狂暴" : ""}</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
                 <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div></section>}
             {(panels.character || panels.inventory) && <div ref={workspace} className={`panel-workspace${panels.character && panels.inventory ? " paired" : ""}`} data-front={frontPanel}>
                 {panels.character && panels.inventory && <nav className="workspace-switcher" aria-label="切换窗口">

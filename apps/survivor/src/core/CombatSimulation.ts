@@ -1,3 +1,4 @@
+import { enemyName } from "./EnemyDefinitions";
 import { CombatResolution } from "./CombatResolution";
 import { CombatRewards } from "./CombatRewards";
 import { CombatEventKind, type CombatEventConsumer } from "./CombatEvents";
@@ -78,6 +79,7 @@ export class CombatSimulation {
     private readonly entities: CombatWorld;
     private readonly behavior: EnemyBehavior;
     private readonly skills: SkillSystem;
+    private readonly settleOngoing = () => this.resolveImpacts();
     private readonly resolution: CombatResolution;
     private readonly rewards: CombatRewards;
     private readonly world: RegionalWorld;
@@ -173,7 +175,7 @@ export class CombatSimulation {
     public checkpoint(): CharacterCheckpoint {
         if (this.gameOverValue || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
         const { stats: _stats, skills: _skills, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
-        return validateCharacterCheckpoint({ version: 1, seed: String(this.seed), origin: { ...this.start }, player,
+        return validateCharacterCheckpoint({ version: 2, seed: String(this.seed), origin: { ...this.start }, player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
             attackCooldown: this.attackCooldown, damageImmunity: this.resolution.damageImmunity, skills: this.skills.checkpoint() });
     }
@@ -248,6 +250,7 @@ export class CombatSimulation {
     private finishStep(): void {
         this.resolveImpacts();
         if (this.gameOverValue) return;
+        this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
         if (this.autoCast && this.tickValue % AUTO_SKILL_TICKS === 0) {
             for (const id of this.skills.loadout) {
                 this.skills.cast(id, this.tickValue, this.stats, this.level, this.random, true);
@@ -308,7 +311,7 @@ export class CombatSimulation {
             const index = this.entities.enemies.slots[cursor];
             const region = this.entities.enemy.regions[index]!;
             if (this.entities.enemy.boss[index] && region.x === this.currentRegion.x && region.z === this.currentRegion.z) {
-                boss = Object.freeze({ x: this.entities.position.x[index], z: this.entities.position.z[index], health: this.entities.vitals.health[index], maxHealth: this.entities.vitals.maxHealth[index], enraged: this.entities.enemy.enraged[index] !== 0 });
+                boss = Object.freeze({ name: enemyName(this.entities.enemy.kind[index], true), x: this.entities.position.x[index], z: this.entities.position.z[index], health: this.entities.vitals.health[index], maxHealth: this.entities.vitals.maxHealth[index], enraged: this.entities.enemy.enraged[index] !== 0 });
                 break;
             }
         }

@@ -1,23 +1,25 @@
 import { describe, expect, test } from "vitest";
 import { MAX_COMBAT_CHUNKS, RegionalWorld, REGION_RULES, hexDistance, SETTLEMENTS } from "../src/core/RegionalWorld";
+import { BOSS_KINDS } from "../src/core/EnemyDefinitions";
 
 describe("regional ecology", () => {
     test("camps have compatible members, compact homes and boss support instead of random species", () => {
-        const world = new RegionalWorld("ecology", { x: 0, z: 0 }), kinds = new Set<string>();
-        for (let x = -120; x <= 120; x += 60) {
+        const world = new RegionalWorld("ecology", { x: 0, z: 0 }), kinds = new Set<string>(), bosses = new Set<number>();
+        for (let x = -600; x <= 600; x += 60) {
             world.synchronize(x, 30);
             for (const chunk of world.chunks.values()) {
                 const camp = chunk.spawns[0].settlement!;
                 kinds.add(camp.kind);
                 for (const spawn of chunk.spawns) {
                     expect(spawn.settlement).toBe(camp);
-                    expect(SETTLEMENTS[camp.kind].members).toContain(spawn.kind);
+                    expect(spawn.boss ? BOSS_KINDS : SETTLEMENTS[camp.kind].members).toContain(spawn.kind);
                     expect(Math.hypot(spawn.x - camp.x, spawn.z - camp.z)).toBeLessThan(3.1);
-                    if (spawn.boss) expect(camp.kind).toBe("cult");
+                    if (spawn.boss) { expect(camp.kind).toBe("cult"); bosses.add(spawn.kind); }
                 }
             }
         }
         expect(kinds.size).toBe(4);
+        expect(bosses.size).toBe(4);
     });
     test("positions within the same hex reuse its immutable region, including negative boundaries", () => {
         const world = new RegionalWorld("region-cache", { x: 10, z: -8 });

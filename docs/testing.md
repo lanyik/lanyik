@@ -31,6 +31,9 @@ expectations. Keep compile-time negative assertions: `tsc` checks their
 Root tests are grouped by domain: option merging belongs in `tests/helpers`, event
 dispatch in `tests/runtime`, and generation/Worker requests in `tests/world`.
 Worker mocks are scoped to their own suite and restored after each test.
+Browser combat fixtures advance through the session's normal in-flight barrier;
+they do not bypass it with direct transport calls, which could race an automatic
+save during slow screenshots. Production Worker entry points expose no fixture state.
 Regional ecology checks keep the full coordinate sweep but validate each immutable
 chunk layout once while it remains resident; reconstructed chunk instances are
 checked again. Residency, population consumption and reentry have separate checks.

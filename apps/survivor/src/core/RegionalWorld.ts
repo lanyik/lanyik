@@ -1,6 +1,6 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { Rarity } from "./Loot";
-import { ENEMY_DEFINITIONS, EnemyKind } from "./EnemyDefinitions";
+import { BOSS_KINDS, ENEMY_DEFINITIONS, EnemyKind } from "./EnemyDefinitions";
 import { WORLD_VIEW } from "./WorldView";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 import { ENCOUNTER_CELL, ENCOUNTER_EDGE, EncounterNavigation } from "./EncounterNavigation";
@@ -219,7 +219,7 @@ export class RegionalWorld {
         }
         if (bossRegion) {
             spawns.push(Object.freeze({ x: bossRegion.centerX, z: bossRegion.centerZ, region: bossRegion, settlement,
-                kind: EnemyKind.Caster, elite: true, boss: true, level: bossRegion.level + 3 }));
+                kind: new DeterministicRandom(`${this.seed}:boss:${bossRegion.x},${bossRegion.z}`).pick(BOSS_KINDS), elite: true, boss: true, level: bossRegion.level + 3 }));
         }
         let chest: RegionalChest | undefined;
         const treasure = new DeterministicRandom(`${this.seed}:chest:${key}`);

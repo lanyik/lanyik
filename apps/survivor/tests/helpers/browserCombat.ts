@@ -2,8 +2,6 @@ import { MAX_STEP_BATCH } from "../../src/worker/CombatProtocol";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
-import type { CombatTransport } from "../../src/app/CombatTransport";
-import type { CombatUpdate } from "../../src/worker/CombatProtocol";
 
 export async function inspectCombatWorker(page: Page): Promise<void> {
     const bundle = await build({ entryPoints: [fileURLToPath(new URL("./InspectableCombat.worker.ts", import.meta.url))],
@@ -30,10 +28,13 @@ export async function advanceCombat(page: Page, ticks = 0): Promise<void> {
     await page.evaluate(async ({ remaining, maxSteps }) => {
         const session = window.survivorApplication!.session;
         await session.settled;
-        const runtime = session as unknown as { client: CombatTransport; accept(update: CombatUpdate): void };
+        // Use the session's in-flight barrier so a wall-clock autosave cannot
+        // race a direct transport request during a long browser capture.
+        const runtime = session as unknown as { pendingSteps: number; pendingSnapshot: boolean; flush(): void };
         do {
             const steps = Math.min(maxSteps, remaining);
-            runtime.accept(await runtime.client.advance({ steps, commands: [], input: { x: 0, z: 0, active: false } }));
+            runtime.pendingSteps = steps; runtime.pendingSnapshot = true; runtime.flush();
+            await session.settled;
             remaining -= steps;
         } while (remaining > 0);
         session.frame(performance.now());

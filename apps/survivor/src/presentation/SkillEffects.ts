@@ -3,7 +3,7 @@ import { EffectKind, type EffectBuffer } from "../core/CombatEffects";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { AssetLoader } from "./AssetLoader";
 
-const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef"].map(color => new Color(color));
+const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#ff9954", "#ffb45e", "#c17bff", "#7fffd6", "#d9f5ff"].map(color => new Color(color));
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
@@ -41,7 +41,7 @@ export class SkillEffects {
         this.geometry.setAttribute("effectStyle", this.styles);
         this.material.onBeforeCompile = shader => {
             shader.vertexShader = "attribute vec4 effectStyle; varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.vertexShader;
-            shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", "#include <uv_vertex>\nvShapeUv = uv * 2. - 1.; vEffectStyle = effectStyle; vMapUv.x = (vMapUv.x + effectStyle.x) * .5;");
+            shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", "#include <uv_vertex>\nvShapeUv = uv * 2. - 1.; vEffectStyle = effectStyle; vMapUv = (vMapUv + vec2(mod(effectStyle.x, 3.), 1. - floor(effectStyle.x / 3.))) / vec2(3., 2.);");
             shader.vertexShader = shader.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
                 #ifdef GROUND_PASS
                     if (effectStyle.w < 8.) gl_Position = vec4(2., 2., 2., 1.);
@@ -70,7 +70,7 @@ export class SkillEffects {
                 diffuseColor.a *= mask * vEffectStyle.z;
             `);
         };
-        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v4";
+        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v5";
         this.mesh = new InstancedMesh(this.geometry, this.material, GAME_CONFIG.presentation.effectInstances);
         this.mesh.name = "skill-effects"; this.mesh.renderOrder = 3;
         this.mesh.instanceMatrix.setUsage(DynamicDrawUsage); this.mesh.setColorAt(0, COLORS[0]);
@@ -109,11 +109,48 @@ export class SkillEffects {
         const tick = seconds * GAME_CONFIG.timing.simulationHz;
         for (let i = 0; i < b.count; i++) {
             const kind = b.kind[i], t = clamp((tick - b.started[i]) / (b.endsAt[i] - b.started[i]));
-            if (kind >= EffectKind.Heal || t >= 1) continue;
-            const x = b.x[i], z = b.z[i], y = height(x, z) + .13, r = b.radius[i];
+            if (kind >= EffectKind.Heal || t >= 1 || tick < b.started[i]) continue;
+            const x = kind === EffectKind.Blades ? playerX : b.x[i], z = kind === EffectKind.Blades ? playerZ : b.z[i];
+            const y = height(x, z) + .13, r = b.radius[i];
             const fade = (1 - t) ** .7, burst = 1 - (1 - t) ** 3;
             const seed = b.started[i] * .17 + x * 2.3 + z * 1.7;
-            if (kind === EffectKind.Lightning) {
+            if (kind === EffectKind.Meteor) {
+                this.stamp(x, y, z, r * 2.42, r * 2.42, -t, kind, .35 + t * .5, 5, 0, false, true);
+                this.stamp(x, y, z, r * 2.42 * (1 - t), r * 2.42 * (1 - t), 0, -1, .8, 1, 0, false, true);
+                const lift = 8 * (1 - t * t), mx = x - (1 - t) * 2;
+                this.stamp(mx, y + lift, z, 1.3, 2.2, .4, kind, .9, 0, 2, true);
+                this.beam(mx, y + lift, z, mx - .7, y + lift + 2, z, .6, kind, .7);
+                for (let j = 0; j < 6; j++) this.stamp(mx - j * .13, y + lift + j * .3, z, .5, .5, t * 5 + j, kind, .5 - j * .06, 0, 1, true);
+            } else if (kind === EffectKind.Vortex) {
+                const spin = seconds * 2;
+                this.stamp(x, y, z, r * 2, r * 2, spin, kind, .65, 0, 5, false, true);
+                this.stamp(x, y, z, r * 1.3, r * 1.3, -spin * 1.4, kind, .7, 0, 5, false, true);
+                this.stamp(x, y + .2, z, 1, 1, spin, -1, .6, 2);
+                for (let j = 0; j < 18; j++) {
+                    const phase = (seconds * .8 + j / 18) % 1, angle = j * 2.4 + spin + phase * 3;
+                    const spread = r * (1 - phase), px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread;
+                    this.stamp(px, height(px, pz) + .15 + phase, pz, .18 + phase * .25, .4, angle, kind, Math.sin(phase * Math.PI) * .85, 0, 1, true);
+                }
+            } else if (kind === EffectKind.Blades) {
+                const spin = seconds * 4.5, opacity = Math.min(1, t * 12, (1 - t) * 12);
+                for (let j = 0; j < 3; j++) {
+                    const angle = spin + j * TAU / 3;
+                    this.stamp(x, y + .65, z, r * 2.5, r * 2.5, angle, kind, opacity * .8, 0, 4);
+                    const px = x + Math.sin(angle) * r, pz = z + Math.cos(angle) * r;
+                    this.stamp(px, height(px, pz) + .65, pz, .3, 1.2, angle, -1, opacity, 4);
+                    this.stamp(x, y, z, r * 2.5, r * 2.5, angle - .15, kind, opacity * .3, 0, 4, false, true);
+                }
+            } else if (kind === EffectKind.MeteorImpact || kind === EffectKind.Shatter) {
+                const size = r * (.2 + burst);
+                this.stamp(x, y, z, size * 2.42, size * 2.42, t, kind, fade, 1, 0, false, true);
+                this.stamp(x, y + .3, z, size * 2, size * 2, -t, kind, fade * .65, 2);
+                for (let j = 0; j < 12; j++) {
+                    const angle = j * TAU / 12 + seed, spread = r * burst * (.6 + j % 3 * .2);
+                    const px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread, lift = Math.sin(t * Math.PI) * (1 + j % 3 * .4);
+                    this.stamp(px, height(px, pz) + .2 + lift, pz, .3 + fade * .3, .6 + fade, angle, kind, fade, kind === EffectKind.Shatter ? 4 : 0, 2, true);
+                    if (kind === EffectKind.MeteorImpact && j % 2 === 0) this.stamp(px, height(px, pz) + .3 + t, pz, 1 + t, 1 + t, angle, kind, fade * .25, 0, 3, true);
+                }
+            } else if (kind === EffectKind.Lightning) {
                 const dx = b.endX[i] - x, dz = b.endZ[i] - z, length = Math.hypot(dx, dz);
                 const endY = height(b.endX[i], b.endZ[i]) + .65;
                 const normalX = length ? -dz / length : 0, normalZ = length ? dx / length : 1;
@@ -146,6 +183,10 @@ export class SkillEffects {
                 this.stamp(x, y, z, radius * 2.45, radius * 2.45, 0, kind, fade * .55, 2, 0, false, true);
                 this.stamp(x, y + .03, z, radius * 2.42, radius * 2.42, t, kind, fade * 1.1, 1, 0, false, true);
                 this.stamp(x, y + .06, z, r * 1.65, r * 1.65, (kind === EffectKind.Frost ? -1 : 1) * t * .6, kind, fade * .8, 5, 0, false, true);
+                if (kind === EffectKind.Pulse) {
+                    for (let j = 0; j < 3; j++) this.stamp(x, y + .2 + j * .15, z, radius * 2.4, radius * 2.4,
+                        seed + j * TAU / 3 - t * 2, kind, fade * .8, 0, 4);
+                }
                 if (kind === EffectKind.Frost) {
                     for (let j = 0; j < 10; j++) {
                         const angle = j / 10 * TAU + seed, spread = radius * (.76 + (j % 3) * .08);

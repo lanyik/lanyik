@@ -8,7 +8,7 @@ import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
 
 export interface CharacterCheckpoint {
-    readonly version: 1;
+    readonly version: 2;
     readonly seed: string;
     readonly origin: { readonly x: number; readonly z: number };
     readonly tick: number;
@@ -45,7 +45,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 1) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 2) throw new Error("角色存档版本与当前游戏不一致");
     const p = value.player, s = value.skills;
     if (typeof value.seed !== "string" || !value.seed.trim() || value.seed.length > 128 || !value.origin
         || !Number.isFinite(value.origin.x) || !Number.isFinite(value.origin.z) || !p || !s

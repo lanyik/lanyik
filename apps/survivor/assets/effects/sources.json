@@ -31,5 +31,49 @@
     "sha256": "f9e70b81d8cc07c4e07c9f2eff1d94fd371a06070b18cb67c651c41158ec2975",
     "bytes": 651,
     "archiveUrl": "https://kenney.nl/media/pages/assets/particle-pack/f8fe0f8cb8-1677578741/kenney_particle-pack.zip"
+  },
+  {
+    "file": "flame_01.png",
+    "source": "https://kenney.nl/assets/particle-pack",
+    "archive": "kenney_particle-pack.zip",
+    "archiveSha256": "b631d4b07f7002549fdcf155f01141ad482f79f3440e4e301eed49ce5f1d8958",
+    "archivePath": "PNG (Transparent)/flame_01.png",
+    "license": "CC0-1.0",
+    "sha256": "92a70bcb90b1e21c57b2dae42843135703b2e988abee97433f84c3119723d144",
+    "bytes": 54099,
+    "archiveUrl": "https://kenney.nl/media/pages/assets/particle-pack/f8fe0f8cb8-1677578741/kenney_particle-pack.zip"
+  },
+  {
+    "file": "smoke_04.png",
+    "source": "https://kenney.nl/assets/particle-pack",
+    "archive": "kenney_particle-pack.zip",
+    "archiveSha256": "b631d4b07f7002549fdcf155f01141ad482f79f3440e4e301eed49ce5f1d8958",
+    "archivePath": "PNG (Transparent)/smoke_04.png",
+    "license": "CC0-1.0",
+    "sha256": "2db2f69874cdb1e5203f2f86803d5debde30402590cf50a810afaba882184616",
+    "bytes": 97568,
+    "archiveUrl": "https://kenney.nl/media/pages/assets/particle-pack/f8fe0f8cb8-1677578741/kenney_particle-pack.zip"
+  },
+  {
+    "file": "slash_02.png",
+    "source": "https://kenney.nl/assets/particle-pack",
+    "archive": "kenney_particle-pack.zip",
+    "archiveSha256": "b631d4b07f7002549fdcf155f01141ad482f79f3440e4e301eed49ce5f1d8958",
+    "archivePath": "PNG (Transparent)/slash_02.png",
+    "license": "CC0-1.0",
+    "sha256": "a79a9e297790e6126b78d41015a3045cda3f1863b421c88321d2442ed6f9032e",
+    "bytes": 38224,
+    "archiveUrl": "https://kenney.nl/media/pages/assets/particle-pack/f8fe0f8cb8-1677578741/kenney_particle-pack.zip"
+  },
+  {
+    "file": "twirl_01.png",
+    "source": "https://kenney.nl/assets/particle-pack",
+    "archive": "kenney_particle-pack.zip",
+    "archiveSha256": "b631d4b07f7002549fdcf155f01141ad482f79f3440e4e301eed49ce5f1d8958",
+    "archivePath": "PNG (Transparent)/twirl_01.png",
+    "license": "CC0-1.0",
+    "sha256": "ba3f4996a5a91ea3cba6817a9b4770a385a82ef0b9350cbda5c0f140d182af7e",
+    "bytes": 51060,
+    "archiveUrl": "https://kenney.nl/media/pages/assets/particle-pack/f8fe0f8cb8-1677578741/kenney_particle-pack.zip"
   }
 ]
