@@ -4,7 +4,7 @@
 
 页内直达：[总关系图](#overview) · [文档结构](#entrypoints) · [按任务阅读](#routes) · [游戏设计与分层](#game) · [地图基础库](#foundation) · [验证与性能决策](#verification) · [测量与决策证据](#evidence) · [资产来源与许可](#assets) · [文档维护](#maintenance)
 
-“合同”指**当前实现必须遵守的规则与边界**。后续计划集中在开发重点；历史测量只用于复核对应改动，不代表当前版本的验收结果。
+“合同”指**当前实现必须遵守的规则与边界**。后续计划由开发重点排序，已展开的方案单独标明待实现并在本页登记；历史测量只用于复核对应改动，不代表当前版本的验收结果。
 
 <a id="overview"></a>
 
@@ -75,7 +75,7 @@ docs/
 
 | 要做的事 | 主要设计 → 需要联动的设计 | 代码起点 |
 |---|---|---|
-| 技能树、Buff、被动、伤害效果 | [战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；范围与顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
+| 技能树、Buff、被动、伤害效果 | 当前边界读[战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；目标方案读[四系技能树与状态设计（待实现）](game/skill-tree-and-status.md)，顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
 | 探索迷雾、地图传送、家园往返、Boss 副本 | [探索与家园](game/exploration-and-homestead.md) → [角色存档](game/character-saves.md)、[物品合同](game/items.md)、[界面设计](game/interface-design.md) | [Exploration](../apps/survivor/src/core/Exploration.ts)、[BossChallenge](../apps/survivor/src/core/BossChallenge.ts)、[CombatSession](../apps/survivor/src/app/CombatSession.ts) |
 | 装备、自动穿戴/嵌珠、套装、连携与构筑 | [物品合同](game/items.md) → [打造与灵境](game/crafting-and-spirit.md)、[战斗架构](game/combat-architecture.md) | [Equipment](../apps/survivor/src/core/Equipment.ts)、[AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts)；套装/连携尚未完整实现 |
 | 怪物行为、攻击节奏与难度 | [模拟与 AI](game/simulation-and-ai.md) → [数值平衡](game/combat-balance.md)、[技能与效果](game/skills-and-effects.md) | [EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts) |
@@ -86,7 +86,7 @@ docs/
 | 模型、动作、树木、天空与雾 | [视觉总览](game/visual-modernization.md) → [角色资产](game/actor-assets.md)或[环境资产](game/environment-assets.md)；特效读[技能与效果](game/skills-and-effects.md) | [ActorModels](../apps/survivor/src/presentation/ActorModels.ts)、[CombatEnvironment](../apps/survivor/src/adapters/CombatEnvironment.ts)、[着色器](../src/shaders/) |
 | 地图库 API、加载、恢复与资源释放 | [包边界](package-boundaries.md) → [基础设施](foundation-infrastructure.md)、[冻结合同](foundation-v1-freeze.md) → [对应专项](#foundation) | [HexMap](../src/HexMap.ts)、[runtime](../src/runtime/)、[rendering](../src/rendering/) |
 
-例：做 Buff 刷新规则，先读战斗架构中的[状态合同](game/combat-architecture.md#状态合同)，查看 `StatusSystem` 及测试，再检查技能消费者；不需要先阅读资产调研、基础库寻路和所有历史测量。
+例：做 Buff 刷新规则，先读战斗架构中的[状态合同](game/combat-architecture.md#状态合同)，查看 `StatusSystem` 及测试，再对照[目标状态规则](game/skill-tree-and-status.md#6-buff-的刷新叠层与消费)检查技能消费者；不需要先阅读资产调研、基础库寻路和所有历史测量。
 
 <a id="game"></a>
 
@@ -135,6 +135,11 @@ flowchart TB
     item -. 图标、事务与比较 .-> ui
     ui --> perf["UI 性能<br/>ui-performance.md"]
     combat -. 后续扩展 .-> plan["开发重点：计划<br/>development-priorities.md"]
+    plan --> tree["四系技能树与状态：待实现<br/>skill-tree-and-status.md"]
+    tree -. 施放与效果接点 .-> skill
+    tree -. 来源与结算接点 .-> combat
+    tree -. 树状交互方案 .-> ui
+    tree -. 新格式接入计划 .-> save
     skill -. 动作与反馈 .-> actor
     terrain -. 同源高度与树干 .-> env
 ```
@@ -149,6 +154,7 @@ flowchart TB
 | [combat-and-progression.md](game/combat-and-progression.md) | 地域、玩法驻留、奖励来源、寻宝算法、经验与属性公式 | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
 | [combat-balance.md](game/combat-balance.md) | 参考装备、承伤与击杀时间的数值期望及校准局限 | [EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[CombatBalance 测试](../apps/survivor/tests/CombatBalance.test.ts)、[报告脚本](../scripts/report-combat-balance.mjs) |
 | [skills-and-effects.md](game/skills-and-effects.md) | 技能装配、等级、释放、怪物攻击特性、特效与飘字 | [SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts)、[CombatFeedback](../apps/survivor/src/core/CombatFeedback.ts)、[SkillEffects](../apps/survivor/src/presentation/SkillEffects.ts) |
+| [skill-tree-and-status.md](game/skill-tree-and-status.md) | **待实现设计**：四系节点与侧路、点数/洗点、树状交互、Buff 叠层/来源、被动触发、性能与分阶段验收 | 现有接点为 `SkillSystem`、`StatusSystem`、`CombatResolution` 和 `SkillsPanel`；尚未实现完整树与通用状态 |
 | [items.md](game/items.md) | 装备生成与比较、物品身份、背包/穿戴/入包事务、分类回收、图标与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts) |
 | [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条打造、宝珠精炼/共鸣、打造事务与确认窗、永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
 | [character-saves.md](game/character-saves.md) | 角色检查点、自动/手动槽、灵境独立存储及读档重建边界 | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |

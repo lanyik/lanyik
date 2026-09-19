@@ -6,6 +6,8 @@
 `worker/RenderFrame.ts`、`presentation/{SkillsPanel,SkillView,SkillSlot,SkillDrag}.tsx`、`SkillEffects.ts` 与 `scripts/lib/survivor-effects.mjs`。
 怪物行为与攻击见[模拟合同](simulation-and-ai.md)，装备派生属性见[战斗数值](combat-and-progression.md)。
 
+本文记录当前八技能行为。下一阶段的四系技能树、侧路被动和效果接入见[四系技能树与状态设计（待实现）](skill-tree-and-status.md)；该方案尚未替换下述初始技能、五级上限及装配界面。
+
 ## 技能配置与成长
 
 `Skills.ts` 是技能 type/value、名称、学派、定位、说明、颜色、法力、基础冷却、解锁等级、自动施放资格及等级数值的唯一目录。
