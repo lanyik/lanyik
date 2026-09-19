@@ -35,10 +35,10 @@ export class AutoCombatThreats {
         const nearby = e.queryNearby(Component.Enemy, p.x[e.player], p.z[e.player], 14);
         for (let i = 0; i < nearby.count; i++) {
             const slot = nearby.slots[i], kind = a.kind[slot];
-            if (!e.enemy.active[slot] || kind < ActorAction.Melee || kind === ActorAction.Heal || a.endsAt[slot] < tick) continue;
+            if (!e.enemy.active[slot] || a.endsAt[slot] < tick || !this.pending(slot)) continue;
             // A crowd's ordinary melee windups must not hide a visible special attack.
             const distance = (p.x[slot] - p.x[e.player]) ** 2 + (p.z[slot] - p.z[e.player]) ** 2
-                + (kind === ActorAction.Melee ? 14 ** 2 : 0);
+                + (kind === ActorAction.Melee ? 14 ** 2 + 1 : 0);
             let index = this.count;
             while (index > 0 && (distance < this.distances[index - 1]
                 || (distance === this.distances[index - 1] && e.world.ids[slot] < e.world.ids[this.enemies[index - 1]]))) index--;
@@ -76,6 +76,19 @@ export class AutoCombatThreats {
                 }
             }
         }
+    }
+
+    /** Only attacks that can still release/contact inside the forecast may occupy a threat slot. */
+    private pending(slot: number): boolean {
+        const a = this.entities.action, kind = a.kind[slot], committed = a.committed[slot];
+        if (kind < ActorAction.Melee || kind === ActorAction.Heal || a.hitAt[slot] > this.tick + HORIZON * HZ) return false;
+        if (kind === ActorAction.Storm) return committed < ENEMY_SPECIAL.storm.waves
+            && a.hitAt[slot] + committed * ticksForSeconds(ENEMY_SPECIAL.storm.interval) < this.tick + HORIZON * HZ;
+        if (kind === ActorAction.Melee || kind === ActorAction.Cast || kind === ActorAction.Volley) return committed === 0;
+        if (kind === ActorAction.Charge) return committed === 0 && this.tick < a.hitAt[slot] + ticksForSeconds(ENEMY_SPECIAL.charge.duration);
+        const rule = kind === ActorAction.Quake ? ENEMY_SPECIAL.quake : kind === ActorAction.Fault ? ENEMY_SPECIAL.fault
+            : kind === ActorAction.Jaws ? ENEMY_SPECIAL.jaws : ENEMY_SPECIAL.reave;
+        return !(committed & 2) && this.tick <= a.hitAt[slot] + ticksForSeconds(rule.duration);
     }
 
     private forecastBolt(x: number, y: number, z: number, vx: number, vy: number, vz: number,

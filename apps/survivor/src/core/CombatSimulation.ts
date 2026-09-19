@@ -101,6 +101,7 @@ export class CombatSimulation {
     private nearbyRegions: readonly RegionInfo[];
     private inventory: InventoryItem[] = [];
     private readonly failedLoadoutReceipts = new Set<object>();
+    private automaticReceiptTick = -1;
     private failedLoadoutContext: { inventory: readonly InventoryItem[]; stats: DerivedStats; loot: LootProfile; rules: RecyclingRules } | undefined;
     private autoRecycle: RecyclingRules = EMPTY_RECYCLING;
     private orbDust = 0;
@@ -245,7 +246,7 @@ export class CombatSimulation {
         this.movementX = this.movementZ = 0;
         this.resolution.shieldCooldown = p.shieldRemaining; this.potionCooldown = p.potionRemaining;
         this.autoCombat.setEnabled(false);
-        this.failedLoadoutReceipts.clear(); this.failedLoadoutContext = undefined;
+        this.failedLoadoutReceipts.clear(); this.failedLoadoutContext = undefined; this.automaticReceiptTick = -1;
         this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
         this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.health = Math.min(p.health, this.stats.maxHealth); this.mana = Math.min(p.mana, this.stats.maxMana);
@@ -947,6 +948,11 @@ export class CombatSimulation {
                 this.failedLoadoutContext = { inventory: this.inventory, stats: this.stats, loot: this.lootProfile, rules: this.autoRecycle };
             }
             if (receipt && this.failedLoadoutReceipts.has(receipt)) return false;
+            // Bursts of loot share one planning budget; deferred sources remain intact for the next tick.
+            if (receipt) {
+                if (this.automaticReceiptTick === this.tickValue) return false;
+                this.automaticReceiptTick = this.tickValue;
+            }
             const plan = planAutomaticLoadout({ inventory: this.inventory, equipment: this.equipped, orbs: this.orbs,
                 level: this.level, attributes: this.attributes, recycling: this.autoRecycle }, incoming, protectedId);
             if (!plan.ok) {

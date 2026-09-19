@@ -9,7 +9,7 @@ export const EMPTY_RECYCLING: RecyclingRules = Object.freeze({ equipment: null, 
 export function shouldRecycle(item: InventoryItem, rules: RecyclingRules, player: EquipmentContext): boolean {
     const maximum = rules[item.type];
     return maximum !== null && RARITIES.indexOf(item.rarity) <= RARITIES.indexOf(maximum)
-        && (item.type !== "equipment" || compareEquipment(item, player).canClear);
+        && (item.type !== "equipment" || !item.locked && player.equipment[item.value] !== undefined && compareEquipment(item, player).canClear);
 }
 export interface RecycleRef { readonly id: number; readonly rarity: Rarity; readonly size: number; readonly revision?: number }
 export function recycleRef(item: InventoryItem): RecycleRef {

@@ -17,7 +17,7 @@ const branch = (test: (c: PlayerAutoCombat) => boolean, tick: (c: PlayerAutoComb
 export class PlayerAutoCombat {
     private static readonly tree = new BehaviorTree<PlayerAutoCombat>({ type: "selector", children: [
         branch(c => c.tick < c.manualUntil, c => c.stop("manual")),
-        branch(c => c.enemySlot >= 0 && (c.engaged || c.inRange()), c => { c.engaged = true; c.fight(); }),
+        branch(c => c.enemySlot >= 0 && (c.engaged || c.attackable), c => { c.engaged = true; c.fight(); }),
         branch(c => c.chooseChest(), c => c.approach("chest", c.chestX, c.chestZ, .65)),
         branch(c => c.enemySlot >= 0, c => c.fight()),
         branch(() => true, c => c.stop("idle"))
@@ -35,6 +35,7 @@ export class PlayerAutoCombat {
     private target = 0;
     private enemySlot = -1;
     private engaged = false;
+    private attackable = false;
     private chestX = 0;
     private chestZ = 0;
     private goalX = 0;
@@ -63,7 +64,7 @@ export class PlayerAutoCombat {
 
     public setEnabled(enabled: boolean): void {
         PlayerAutoCombat.tree.halt(this, 0, this.running);
-        this.enabledValue = enabled; this.target = 0; this.enemySlot = -1; this.engaged = false;
+        this.enabledValue = enabled; this.target = 0; this.enemySlot = -1; this.engaged = this.attackable = false;
         this.nextDecision = this.manualUntil = 0; this.evading = false;
         this.rejectedUntil.fill(0); this.stop(enabled ? "idle" : "off");
     }
@@ -103,7 +104,7 @@ export class PlayerAutoCombat {
 
     private rejected(x: number, z: number): boolean {
         for (let i = 0; i < this.rejectedUntil.length; i++) {
-            if (this.tick < this.rejectedUntil[i] && Math.hypot(x - this.rejectedX[i], z - this.rejectedZ[i]) < 1) return true;
+            if (this.tick < this.rejectedUntil[i] && (x - this.rejectedX[i]) ** 2 + (z - this.rejectedZ[i]) ** 2 < 1) return true;
         }
         return false;
     }
@@ -114,28 +115,32 @@ export class PlayerAutoCombat {
     }
 
     private findEnemy(): void {
-        const e = this.entities, p = e.position;
+        const e = this.entities, p = e.position, x = this.x, z = this.z, attackRange = (this.stats.attackRange * .85) ** 2;
         this.enemySlot = e.world.resolve(this.target);
+        this.attackable = false;
         if (this.engaged && this.enemySlot >= 0
-            && Math.hypot(p.x[this.enemySlot] - this.x, p.z[this.enemySlot] - this.z) <= SEARCH_RADIUS
-            && !this.rejected(p.x[this.enemySlot], p.z[this.enemySlot])) return;
+            && (p.x[this.enemySlot] - x) ** 2 + (p.z[this.enemySlot] - z) ** 2 <= SEARCH_RADIUS ** 2
+            && !this.rejected(p.x[this.enemySlot], p.z[this.enemySlot])) {
+            this.attackable = (p.x[this.enemySlot] - x) ** 2 + (p.z[this.enemySlot] - z) ** 2 <= attackRange && e.canSee(e.player, this.enemySlot, .11);
+            return;
+        }
         this.target = 0; this.enemySlot = -1; this.engaged = false;
-        const nearby = e.queryNearby(Component.Enemy, this.x, this.z, SEARCH_RADIUS);
-        let nearest = SEARCH_RADIUS ** 2;
+        const nearby = e.queryNearby(Component.Enemy, x, z, SEARCH_RADIUS);
+        let nearest = SEARCH_RADIUS ** 2, attackNearest = attackRange, attackSlot = -1;
         for (let i = 0; i < nearby.count; i++) {
-            const slot = nearby.slots[i], id = e.world.ids[slot], distance = (p.x[slot] - this.x) ** 2 + (p.z[slot] - this.z) ** 2;
-            if ((distance < nearest || (distance === nearest && (!this.target || id < this.target))) && !this.rejected(p.x[slot], p.z[slot])) {
+            const slot = nearby.slots[i], id = e.world.ids[slot], distance = (p.x[slot] - x) ** 2 + (p.z[slot] - z) ** 2;
+            if (this.rejected(p.x[slot], p.z[slot])) continue;
+            // A nearer enemy behind cover must not hide one we can already fight.
+            if ((distance < attackNearest || distance === attackNearest && (attackSlot < 0 || id < e.world.ids[attackSlot]))
+                && e.canSee(e.player, slot, .11)) { attackNearest = distance; attackSlot = slot; }
+            if (distance < nearest || distance === nearest && (!this.target || id < this.target)) {
                 nearest = distance; this.target = id; this.enemySlot = slot;
             }
         }
-    }
-    private inRange(): boolean {
-        const e = this.entities;
-        return Math.hypot(e.position.x[this.enemySlot] - this.x, e.position.z[this.enemySlot] - this.z) <= this.stats.attackRange * .85
-            && e.canSee(e.player, this.enemySlot, .11);
+        if (attackSlot >= 0) { this.enemySlot = attackSlot; this.target = e.world.ids[attackSlot]; this.attackable = true; }
     }
     private fight(): void {
-        if (this.inRange()) this.stop("fight");
+        if (this.attackable) this.stop("fight");
         else this.approach("seek", this.entities.position.x[this.enemySlot], this.entities.position.z[this.enemySlot], .35);
     }
     private chooseChest(): boolean {

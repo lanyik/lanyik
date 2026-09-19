@@ -10,6 +10,7 @@ import type { CharacterCheckpoint } from "../src/core/CharacterCheckpoint";
 import type { CombatWorld } from "../src/core/CombatWorld";
 import type { CombatRewards } from "../src/core/CombatRewards";
 import * as evaluation from "../src/core/EquipmentEvaluation";
+import * as loadout from "../src/core/AutomaticLoadout";
 import type { RegionalWorld } from "../src/core/RegionalWorld";
 
 const attributes = { might: 5, vitality: 5, agility: 5, spirit: 5 };
@@ -145,6 +146,7 @@ test("a full-bag failure is cached until an inventory change, including consumin
     for (let attempt = 0; attempt < 120; attempt++) expect(fixture.receiveItems(rewards, 0, receipt)).toBe(false);
     expect(compare.mock.calls.length).toBe(0);
     Object.assign(sim, { health: 1 }); sim.useConsumable("health");
+    sim.step({ x: 0, z: 0, active: false });
     expect(fixture.receiveItems(rewards, 0, receipt)).toBe(true);
     expect(compare.mock.calls.length).toBeGreaterThan(0); compare.mockRestore(); sim.dispose();
 });
@@ -157,4 +159,23 @@ test("idle ticks do not rescan equipment", () => {
     const compare = vi.spyOn(evaluation, "compareEquipment");
     for (let tick = 0; tick < 120; tick++) sim.step({ x: 0, z: 0, active: false });
     expect(compare).not.toHaveBeenCalled(); compare.mockRestore(); sim.dispose();
+});
+
+test("simultaneous pickups plan at most one receipt per tick and retain every deferred item", () => {
+    const { sim, fixture } = simulation([]);
+    while (fixture.entities.enemies.count) fixture.entities.remove(fixture.entities.enemies.slots[0]);
+    for (const chunk of fixture.world.chunks.values()) chunk.chestOpened = true;
+    fixture.chests.count = 0; sim.toggleAutoCombat();
+    const player = sim.getSnapshot().player;
+    for (let i = 0; i < 6; i++) fixture.rewards.drop(gear(100 + i, 20 + i, 2), player.x, player.z);
+    const plan = vi.spyOn(loadout, "planAutomaticLoadout");
+    for (let tick = 1; tick <= 6; tick++) {
+        sim.step({ x: 0, z: 0, active: false });
+        expect(plan).toHaveBeenCalledTimes(tick);
+        expect(fixture.rewards.groundItems.size).toBe(6 - tick);
+    }
+    const after = sim.getSnapshot().player;
+    expect([...after.inventory, ...Object.values(after.equipment)].filter(item => item && item.id >= 100).map(item => item!.id).sort()).toEqual([100, 101, 102, 103, 104, 105]);
+    expect(sim.drainNotices().some(notice => notice.message.includes("空间不足"))).toBe(false);
+    plan.mockRestore(); sim.dispose();
 });

@@ -92,6 +92,14 @@ describe("player auto combat", () => {
         expect(a.update(13).x).toBe(-1);
     });
 
+    test("an occluded nearest enemy cannot hide an attackable enemy behind chest priority", () => {
+        const a = arena({ ...OPEN_TERRAIN, traceAttack: (_x, _y, _z, x) => x > .5 ? .5 : Infinity });
+        a.spawn(1, 0); a.spawn(-2, 0);
+        a.chests.count = 1; a.chests.z[0] = 3; a.controller.setEnabled(true);
+        expect(a.update(1)).toMatchObject({ active: false });
+        expect(a.controller.activity).toBe("fight");
+    });
+
     test("health checks remain low frequency during held manual input", () => {
         const a = arena(); a.controller.setEnabled(true); a.e.vitals.health[a.e.player] = stats.maxHealth * .4;
         for (let tick = 1; tick <= 120; tick++) a.update(tick, { x: 1, z: 0, active: true });

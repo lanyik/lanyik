@@ -20,6 +20,21 @@ function arena(kind: EnemyKind, distance = .8, boss = false, terrain: CombatTerr
     return { entities, enemy, regions, spawn, home, step, behavior };
 }
 
+test("a decision shares player visibility across branches but refreshes it for each actor and tick", () => {
+    const { entities: e, enemy, spawn, home, behavior } = arena(3, 2);
+    const second = e.spawnEnemy({ ...spawn, x: .1 }, home);
+    let firstVisible = false;
+    const sight = vi.spyOn(e, "canSee").mockImplementation(source => source === second || firstVisible);
+    behavior.update(1);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Seek);
+    expect(e.enemy.intent[second]).toBe(MoveIntent.Retreat);
+    expect(sight).toHaveBeenCalledTimes(2);
+    firstVisible = true; sight.mockClear();
+    behavior.update(e.world.ids[enemy] % 4 + 4);
+    expect(e.enemy.intent[enemy]).toBe(MoveIntent.Retreat);
+    expect(sight).toHaveBeenCalledTimes(1);
+});
+
 test.each([0, 1, 2] as const)("melee kind %i telegraphs, locks facing and commits one hit before recovery", kind => {
     const { entities: e, enemy, step } = arena(kind);
     const definition = ENEMY_DEFINITIONS[kind];

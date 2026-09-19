@@ -126,3 +126,25 @@ test("vertical entry before a short projectile expires still counts as danger", 
     for (let tick = 1; tick <= 12; tick++) a.step(tick);
     expect(a.results().hits).toBe(1);
 });
+
+test.each([
+    { kind: ActorAction.Cast, committed: 1, hitAt: 280 },
+    { kind: ActorAction.Volley, committed: 1, hitAt: 280 },
+    { kind: ActorAction.Storm, committed: ENEMY_SPECIAL.storm.waves, hitAt: 100 },
+    { kind: ActorAction.Charge, committed: 1, hitAt: 280 },
+    { kind: ActorAction.Quake, committed: 3, hitAt: 280 },
+    { kind: ActorAction.Reave, committed: 3, hitAt: 280 },
+    { kind: ActorAction.Fault, committed: 0, hitAt: 1 },
+    { kind: ActorAction.Jaws, committed: 0, hitAt: 1 },
+    { kind: ActorAction.Cast, committed: 0, hitAt: 1000 }
+])("spent or out-of-horizon $kind attacks cannot displace a pending melee threat", ({ kind, committed, hitAt }) => {
+    const a = arena(attacks[0], true), e = a.e;
+    e.action.hitAt[a.slot] = 340; e.action.endsAt[a.slot] = 600;
+    for (let index = 0; index < 8; index++) {
+        const slot = e.spawnEnemy({ x: .1, z: 1, kind: EnemyKind.Caster, boss: false, elite: false, level: 1, region }, { resident: true });
+        e.enemy.active[slot] = 1; e.action.kind[slot] = kind; e.action.committed[slot] = committed;
+        e.action.hitAt[slot] = hitAt; e.action.endsAt[slot] = 1200; e.action.variant[slot] = 1;
+    }
+    const threats = new AutoCombatThreats(e); threats.sense(300);
+    expect(threats.risk(0, 0, stats.moveSpeed, 0, 0, 0)).toBeGreaterThan(0);
+});

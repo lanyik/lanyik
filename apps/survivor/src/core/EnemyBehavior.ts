@@ -18,19 +18,21 @@ const selector = (...children: BehaviorNode<Context>[]): BehaviorNode<Context> =
 const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Context>(selector(
     sequence(condition((c, s) => c.entities.enemy.target[s] === 0), action((c, s) => c.idle(s))),
     ...(definition.ranged ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
-        && c.distance(s) < (kind === EnemyKind.Healer ? 4 : 3.5) + (c.entities.enemy.intent[s] === MoveIntent.Retreat ? .8 : 0)
-        && c.entities.canSee(s, c.entities.player)
+        && c.distance < (kind === EnemyKind.Healer ? 4 : 3.5) + (c.entities.enemy.intent[s] === MoveIntent.Retreat ? .8 : 0)
+        && c.canSeePlayer(s)
         && !c.canReave(s) && !(c.tick >= c.entities.action.readyAt[s] && c.canHeal(s))), action((c, s) => c.move(s, MoveIntent.Retreat)))] : []),
     ...(kind === EnemyKind.Scout ? [sequence(condition((c, s) => c.entities.action.kind[s] < ActorAction.Melee
-        && c.tick < c.entities.action.readyAt[s] && c.distance(s) < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
+        && c.tick < c.entities.action.readyAt[s] && c.distance < 3), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     sequence(condition((c, s) => c.wantsAction(s)), action((c, s) => c.attack(s))),
-    ...(definition.ranged ? [sequence(condition((c, s) => c.distance(s) <= c.entities.action.reach[s] && c.entities.canSee(s, c.entities.player)), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
+    ...(definition.ranged ? [sequence(condition((c, s) => c.distance <= c.entities.action.reach[s] && c.canSeePlayer(s)), action((c, s) => c.move(s, MoveIntent.Circle)))] : []),
     action((c, s) => c.move(s, kind === EnemyKind.Scout ? MoveIntent.Flank : definition.ranged ? MoveIntent.Seek : MoveIntent.Chase))
 )));
 
 /** Sensing and the shared behavior tree only write intents and action requests. */
 export class EnemyBehavior {
     public tick = 0;
+    public distance = 0;
+    private playerVisible: boolean | undefined;
     constructor(public readonly entities: CombatWorld, private readonly regions: Pick<RegionalWorld, "residencyAt">) {}
 
     public update(tick: number): void {
@@ -44,7 +46,8 @@ export class EnemyBehavior {
             v.hitFlash[slot] = Math.max(0, v.hitFlash[slot] - COMBAT_STEP_MS / 1000);
             if (this.regions.residencyAt(p.x[slot], p.z[slot]) === "unloaded") { this.entities.remove(slot); continue; }
             const wasActive = e.active[slot], wasAwake = e.awake[slot], previousTarget = e.target[slot];
-            const distance = this.distance(slot);
+            const distance = this.distance = Math.hypot(p.x[player] - p.x[slot], p.z[player] - p.z[slot]);
+            this.playerVisible = undefined;
             // Residency is chunk based; behavior is radial and follows the player every tick.
             e.active[slot] = Number(distance <= (wasActive ? ACTIVITY.activeExitDistance : ACTIVITY.activeDistance));
             e.awake[slot] = Number(distance <= (wasAwake ? ACTIVITY.sleepDistance : ACTIVITY.awakeDistance));
@@ -76,9 +79,8 @@ export class EnemyBehavior {
         }
     }
 
-    public distance(slot: number): number {
-        const p = this.entities.position;
-        return Math.hypot(p.x[this.entities.player] - p.x[slot], p.z[this.entities.player] - p.z[slot]);
+    public canSeePlayer(slot: number): boolean {
+        return this.playerVisible ??= this.entities.canSee(slot, this.entities.player);
     }
 
     public idle(slot: number): BehaviorStatus {
@@ -179,34 +181,34 @@ export class EnemyBehavior {
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canHeal(slot) || (this.canBossSpell(slot) || this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance(slot) <= a.reach[slot])
-                && this.entities.canSee(slot, this.entities.player));
+            && (this.canHeal(slot) || (this.canBossSpell(slot) || this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance <= a.reach[slot])
+                && this.canSeePlayer(slot));
     }
     private canVolley(slot: number): boolean {
         const e = this.entities.enemy;
         return e.kind[slot] === EnemyKind.Caster && e.attackStep[slot] % 2 === 1
-            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= this.entities.action.reach[slot];
+            && this.tick >= e.specialReadyAt[slot] && this.distance <= this.entities.action.reach[slot];
     }
     private canBossSpell(slot: number): boolean {
         const e = this.entities.enemy;
         return e.boss[slot] !== 0 && this.tick >= e.specialReadyAt[slot]
-            && (e.kind[slot] === EnemyKind.StoneSovereign && this.distance(slot) <= ENEMY_SPECIAL.quake.radius
-                || e.kind[slot] === EnemyKind.StormOracle && this.distance(slot) <= this.entities.action.reach[slot]);
+            && (e.kind[slot] === EnemyKind.StoneSovereign && this.distance <= ENEMY_SPECIAL.quake.radius
+                || e.kind[slot] === EnemyKind.StormOracle && this.distance <= this.entities.action.reach[slot]);
     }
     private canFault(slot: number): boolean {
         const e = this.entities.enemy;
         return e.kind[slot] === EnemyKind.Guard && e.attackStep[slot] > 0
-            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.fault.length;
+            && this.tick >= e.specialReadyAt[slot] && this.distance <= ENEMY_SPECIAL.fault.length;
     }
     public canReave(slot: number): boolean {
         const e = this.entities.enemy;
         return e.boss[slot] !== 0 && (e.enraged[slot] !== 0 || e.kind[slot] === EnemyKind.EmberChampion)
-            && this.tick >= e.specialReadyAt[slot] && this.distance(slot) <= ENEMY_SPECIAL.reave.radius;
+            && this.tick >= e.specialReadyAt[slot] && this.distance <= ENEMY_SPECIAL.reave.radius;
     }
     private canCharge(slot: number): boolean {
         const e = this.entities.enemy;
         if (e.kind[slot] !== EnemyKind.Charger && e.kind[slot] !== EnemyKind.EmberChampion || this.tick < e.specialReadyAt[slot]) return false;
-        const distance = this.distance(slot);
+        const distance = this.distance;
         return distance >= ENEMY_SPECIAL.charge.minRange && distance <= ENEMY_SPECIAL.charge.maxRange;
     }
     public canHeal(slot: number): boolean {
